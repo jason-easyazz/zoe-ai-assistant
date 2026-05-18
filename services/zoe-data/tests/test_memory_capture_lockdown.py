@@ -11,20 +11,20 @@ if str(ROOT) not in sys.path:
 
 
 def test_fast_memory_extract_works_with_extractor_module():
-    import zoe_agent as pi_agent
+    import zoe_agent as zoe_agent
 
-    out = pi_agent._fast_memory_extract("remember that i met Sarah yesterday", "")
+    out = zoe_agent._fast_memory_extract("remember that i met Sarah yesterday", "")
     assert isinstance(out, list)
     assert out
 
 
 def test_fast_memory_extract_falls_back_when_extractor_missing(monkeypatch):
-    import zoe_agent as pi_agent
+    import zoe_agent as zoe_agent
 
     broken = types.ModuleType("memory_extractor")
     monkeypatch.setitem(sys.modules, "memory_extractor", broken)
 
-    out = pi_agent._fast_memory_extract("remember that my favourite coffee is flat white", "")
+    out = zoe_agent._fast_memory_extract("remember that my favourite coffee is flat white", "")
     assert isinstance(out, list)
     assert out
     assert any("remember" in item.lower() or "favourite" in item.lower() for item in out)

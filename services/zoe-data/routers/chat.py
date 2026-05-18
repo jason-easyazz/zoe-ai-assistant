@@ -4,13 +4,13 @@ Chat proxy router: bridges the Zoe UI (REST+SSE) to the active agent backend.
 Tiered architecture (Jetson + Pi):
 - Tier 0: Intent router — regex-matched commands (lists, calendar, HA control)
   handled directly in <5ms without any LLM.
-- Tier 1: Pi/Jetson Agent — Gemma 4 E2B with MemPalace memory, HA control,
+- Tier 1: Zoe Agent — Gemma 4 E2B with MemPalace memory, HA control,
   bash tools, and escalate_to_openclaw. True SSE streaming, first token fast.
   Active when JETSON_AGENT_MODE=true OR HERMES_FAST_PATH=false.
   Pi: CPU, 7 TPS, port 11434.  Jetson: GPU, 40+ TPS, port 11434.
 - Tier 2: OpenClaw — multi-step agentic tasks, browser, sub-agents, cloud.
   Activated via escalation from Tier 1, or force_openclaw flag.
-  Also used as direct path when Pi Agent is bypassed.
+  Also used as direct path when Zoe Agent is bypassed.
 """
 import asyncio
 import json
@@ -20,10 +20,13 @@ import re
 import time
 import uuid
 import os
+from typing import Optional
 from fastapi import APIRouter, Request, Depends
 from fastapi.responses import StreamingResponse
-from intent_router import detect_intent, detect_and_extract_intent, execute_intent, openclaw_user_message
+from intent_router import detect_intent, detect_and_extract_intent, execute_intent, openclaw_user_message, Intent
 from browser_broker import create_default_browser_broker
+from conversation_context import ConversationContext as _CC
+_CHAT_CONTEXTS: dict[str, "_CC"] = {}
 
 # Intent → touch panel navigation map (page + optional form to open).
 _INTENT_PANEL_NAV = {
@@ -382,7 +385,7 @@ _FORM_BLURB: dict[str, str] = {
     "timer_create":    "",   # timer tile speaks for itself
 }
 _MEMORY_AUTO_INGEST = os.environ.get("MEMORY_AUTO_INGEST", "false").lower() == "true"
-# Approval guard: disabled in Pi/Jetson Agent mode — Pi Agent handles safety natively
+# Approval guard: disabled in Zoe Agent mode — Zoe Agent handles safety natively
 _ZOE_AGENT_MODE    = os.environ.get("HERMES_FAST_PATH", "true").lower() != "true"
 _JETSON_AGENT_MODE = os.environ.get("JETSON_AGENT_MODE", "false").lower() == "true"
 _USE_ZOE_AGENT = _ZOE_AGENT_MODE or _JETSON_AGENT_MODE
@@ -743,7 +746,7 @@ async def _save_chat_message(session_id: str, role: str, content: str) -> None:
     """Persist a single chat turn to chat_messages.
 
     Mirrors the OpenClaw gateway pattern: the caller sends only the new message;
-    the server owns the transcript. Pi Agent reads this table for conversation
+    the server owns the transcript. Zoe Agent reads this table for conversation
     history on the next turn, enabling proper follow-on context.
     """
     if not content or not content.strip():
@@ -781,6 +784,11 @@ INTENT_LABELS = {
     "transaction_summary": "Transactions",
     "daily_briefing": "Daily Briefing",
     "ha_full_setup": "Home Assistant setup",
+    # New intents (ZOE-42, ZOE-15, ZOE-9, ZOE-10, ZOE-13)
+    "greeting": "Greeting",
+    "smart_home": "Smart Home",
+    "calculate": "Calculator",
+    "set_volume": "Volume",
 }
 
 
@@ -1245,7 +1253,7 @@ async def chat_stream_generator(
     user_role = user.get("role")
     username = user.get("username")
     await _ensure_user_and_chat_session(session_id, user_id)
-    # Persist user turn immediately — enables history for Pi Agent on the NEXT request
+    # Persist user turn immediately — enables history for Zoe Agent on the NEXT request
     await _save_chat_message(session_id, "user", message)
     # Frustration signal detection (non-blocking, session-scoped)
     _check_frustration(session_id, user_id, message)
@@ -1426,7 +1434,35 @@ async def chat_stream_generator(
             message_for_processing = message_for_processing[len("/openclaw ") :].strip()
             use_intent_fast_path = False
 
-        intent = await detect_and_extract_intent(message_for_processing, user_id) if use_intent_fast_path else None
+        _chat_ctx = _CHAT_CONTEXTS.get(session_id) or _CC()
+        intent = await detect_and_extract_intent(
+            message_for_processing, user_id, context=_chat_ctx
+        ) if use_intent_fast_path else None
+        if intent:
+            _chat_ctx.activate(intent.name, getattr(intent, "slots", {}), message_for_processing)
+            _CHAT_CONTEXTS[session_id] = _chat_ctx
+
+        # Tier 0.5: LLM classifier for short missed utterances
+        _tier05_hint: Optional[Intent] = None
+        if intent is None and use_intent_fast_path and len(message_for_processing.split()) <= 20:
+            try:
+                from intent_classifier_llm import (
+                    classify_intent_with_context as _classify,
+                    CONFIDENCE_EXECUTE_THRESHOLD,
+                    CONFIDENCE_HINT_THRESHOLD,
+                )
+                _classified = await _classify(message_for_processing, context=_chat_ctx, timeout=2.0)
+                if _classified and _classified.confidence >= CONFIDENCE_EXECUTE_THRESHOLD:
+                    intent = _classified
+                    _chat_ctx.activate(intent.name, getattr(intent, "slots", {}), message_for_processing)
+                    _CHAT_CONTEXTS[session_id] = _chat_ctx
+                    logger.info("Tier 0.5 hit: %s confidence=%.2f", intent.name, intent.confidence)
+                elif _classified and _classified.confidence >= CONFIDENCE_HINT_THRESHOLD:
+                    _tier05_hint = _classified
+                    logger.info("Tier 0.5 hint: %s confidence=%.2f", _classified.name, _classified.confidence)
+            except Exception as _e:
+                logger.debug("Tier 0.5 classifier failed (non-fatal): %s", _e)
+
         if intent:
             logger.info("Intent matched: %s slots=%s", intent.name, getattr(intent, "slots", None))
             logger.info("intent_outcome=matched intent=%s", intent.name)
@@ -1587,9 +1623,9 @@ async def chat_stream_generator(
                     )
                 )
                 yield emit(StepFinishedEvent(type=EventType.STEP_FINISHED, step_name=label))
-                # Delegation intents always go straight to OpenClaw — Pi Agent
+                # Delegation intents always go straight to OpenClaw — Zoe Agent
                 # can't run the builder skills.  For all other fallbacks, prefer
-                # Pi Agent when enabled (it will self-escalate if needed).
+                # Zoe Agent when enabled (it will self-escalate if needed).
                 _force_openclaw_here = intent.name in _OPENCLAW_DELEGATION_INTENTS
                 if _USE_ZOE_AGENT and not _force_openclaw_here:
                     yield emit(
@@ -1598,7 +1634,7 @@ async def chat_stream_generator(
                             snapshot={
                                 "status": "generating",
                                 "phase": "zoe_agent",
-                                "model": "Zoe (Pi Agent fallback)",
+                                "model": "Zoe (Zoe Agent fallback)",
                                 "detail": "Thinking…",
                             },
                         )
@@ -1606,7 +1642,7 @@ async def chat_stream_generator(
                     task = asyncio.create_task(
                         run_zoe_agent(message_for_processing, session_id, user_id)
                     )
-                    async for hb in _iter_openclaw_heartbeats(emit, task, phase_label="Pi Agent"):
+                    async for hb in _iter_openclaw_heartbeats(emit, task, phase_label="Zoe Agent"):
                         yield hb
                     response_text = await task
                 else:
@@ -1663,7 +1699,7 @@ async def chat_stream_generator(
         else:
             logger.info("intent_outcome=no_match fast_path=%s", bool(use_intent_fast_path))
             if _USE_ZOE_AGENT:
-                # ── Pi/Jetson Agent: Gemma 4 E2B with MemPalace + tools — true SSE streaming ──
+                # ── Zoe Agent: Gemma 4 E2B with MemPalace + tools — true SSE streaming ──
                 tier_label = "Jetson" if _JETSON_AGENT_MODE else "Pi"
                 yield emit(
                     StateSnapshotEvent(
@@ -1692,7 +1728,7 @@ async def chat_stream_generator(
                 )
                 full_response = ""
                 escalate_signal: str | None = None
-                # Load recent conversation history so Pi Agent has context for follow-ups ("yes", etc.)
+                # Load recent conversation history so Zoe Agent has context for follow-ups ("yes", etc.)
                 prior_history: list[dict] = []
                 try:
                     async for db in get_db():
@@ -1706,7 +1742,7 @@ async def chat_stream_generator(
                         break
                 except Exception as _he:
                     logger.debug("history load failed (non-fatal): %s", _he)
-                # Pi Agent loads MemPalace facts internally. We also load a copy here
+                # Zoe Agent loads MemPalace facts internally. We also load a copy here
                 # so that if Pi escalates to OpenClaw, the context prefix isn't blank.
                 pi_db_memory = await _mempalace_load_user_facts(user_id)
                 # Load user portrait (synthesized narrative understanding of the user).
@@ -1717,9 +1753,14 @@ async def chat_stream_generator(
                     pi_portrait = await load_portrait(user_id) or ""
                 except Exception as _pe:
                     logger.debug("chat: portrait load failed (non-fatal): %s", _pe)
-                # Apply openclaw_user_message expansion so Pi Agent has the same rich context
+                # Apply openclaw_user_message expansion so Zoe Agent has the same rich context
                 # as the OpenClaw path (includes HA device state bootstrap text when intent matched).
                 expanded_msg = openclaw_user_message(intent, message_for_processing) if intent else message_for_processing
+                if _tier05_hint is not None:
+                    expanded_msg = (
+                        f"[Intent hint: {_tier05_hint.name}, confidence {_tier05_hint.confidence:.2f}, "
+                        f"slots {_tier05_hint.slots}] "
+                    ) + expanded_msg
                 async for chunk in run_zoe_agent_streaming(
                     expanded_msg,
                     session_id,
@@ -1732,7 +1773,7 @@ async def chat_stream_generator(
                         escalate_signal = chunk
                         break
                     if chunk.startswith("__UI__:"):
-                        # Pi Agent visual tool — emit via the same zoe.ui_component CUSTOM
+                        # Zoe Agent visual tool — emit via the same zoe.ui_component CUSTOM
                         # event used by every other component path in chat.py. The frontend
                         # handler for this event mounts to messageGroup (not contentEl) so
                         # components survive RUN_FINISHED. The test also detects this event.
@@ -1769,7 +1810,7 @@ async def chat_stream_generator(
 
                     if is_hermes:
                         # Escalate to Hermes Tier 1.5 for deep reasoning
-                        logger.info("chat: Pi Agent escalating to Hermes — reason=%s", reason.strip())
+                        logger.info("chat: Zoe Agent escalating to Hermes — reason=%s", reason.strip())
                         async for chunk in _hermes_stream_generator(
                             oc_task_text, session_id, user_id,
                             username=user.get("username", ""),
@@ -1780,7 +1821,7 @@ async def chat_stream_generator(
                         response_text = oc_task_text  # approximate for memory persistence
                     elif is_background:
                         # Queue as a background task and ack immediately
-                        logger.info("chat: Pi Agent background escalation — reason=%s", reason.strip())
+                        logger.info("chat: Zoe Agent background escalation — reason=%s", reason.strip())
                         try:
                             from background_runner import enqueue_background_task
                             task_id = await enqueue_background_task(
@@ -1807,8 +1848,8 @@ async def chat_stream_generator(
                         ))
                         response_text = ack_text
                     else:
-                        # Pi Agent requested escalation to OpenClaw — stream via ACP channel
-                        logger.info("chat: Pi Agent escalating to OpenClaw (ACP) — reason=%s", reason.strip())
+                        # Zoe Agent requested escalation to OpenClaw — stream via ACP channel
+                        logger.info("chat: Zoe Agent escalating to OpenClaw (ACP) — reason=%s", reason.strip())
                         yield emit(
                             StateSnapshotEvent(
                                 type=EventType.STATE_SNAPSHOT,
@@ -1868,7 +1909,7 @@ async def chat_stream_generator(
                 else:
                     response_text = full_response
                 asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, response_text))
-                # Persist assistant reply so Pi Agent has context on the next turn
+                # Persist assistant reply so Zoe Agent has context on the next turn
                 if response_text:
                     asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text))
 
@@ -2286,7 +2327,7 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
                     max_tokens_override=voice_max_tokens,
                     voice_mode=is_voice_mode,
                 )
-                # If Pi Agent signals escalation, route accordingly
+                # If Zoe Agent signals escalation, route accordingly
                 if response_text.startswith("__ESCALATE_HERMES__:"):
                     _, escalate_body = response_text.split(":", 1)
                     _, _, hermes_task = escalate_body.partition("|")

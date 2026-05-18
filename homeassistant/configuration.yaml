@@ -12,10 +12,12 @@ homeassistant:
   time_zone: Australia/Perth
   auth_providers:
     - type: homeassistant
-    - type: oidc
-      client_id: !secret ha_oidc_client_id
-      client_secret: !secret ha_oidc_client_secret
-      discovery_url: http://authentik-server:9000/auth/application/o/home-assistant/.well-known/openid-configuration
+    # OIDC auth provider not yet available in HA core (as of 2026.5).
+    # Config retained below for when HA ships the oidc provider:
+    # - type: oidc
+    #   client_id: !secret ha_oidc_client_id
+    #   client_secret: !secret ha_oidc_client_secret
+    #   discovery_url: http://zoe.local/.well-known/openid-configuration
 
 http:
   use_x_forwarded_for: true

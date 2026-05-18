@@ -1,5 +1,5 @@
 """
-Unit tests for the Pi Agent skills classifier and tool builder.
+Unit tests for the Zoe Agent skills classifier and tool builder.
 
 Tests _select_skills(), _build_tools(), and _build_prompt() without
 requiring a running LLM or MemPalace instance.
@@ -11,68 +11,68 @@ import re
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-import zoe_agent as pi_agent
+import zoe_agent as zoe_agent
 
 
 # ── _select_skills ────────────────────────────────────────────────────────────
 
 class TestSelectSkills:
     def test_smart_home_turn_on(self):
-        skills = pi_agent._select_skills("turn on the bedroom light")
+        skills = zoe_agent._select_skills("turn on the bedroom light")
         assert "smart-home" in skills
 
     def test_smart_home_turn_off(self):
-        skills = pi_agent._select_skills("turn off the fan")
+        skills = zoe_agent._select_skills("turn off the fan")
         assert "smart-home" in skills
 
     def test_weather(self):
-        skills = pi_agent._select_skills("what's the weather like today")
+        skills = zoe_agent._select_skills("what's the weather like today")
         assert "weather" in skills
 
     def test_calendar(self):
-        skills = pi_agent._select_skills("what's on my calendar tomorrow")
+        skills = zoe_agent._select_skills("what's on my calendar tomorrow")
         assert "calendar" in skills
 
     def test_reminders(self):
-        skills = pi_agent._select_skills("remind me to call mum at 3pm")
+        skills = zoe_agent._select_skills("remind me to call mum at 3pm")
         assert "reminders" in skills
 
     def test_shopping_list(self):
-        skills = pi_agent._select_skills("add milk to my shopping list")
+        skills = zoe_agent._select_skills("add milk to my shopping list")
         assert "lists" in skills
 
     def test_memory_remember(self):
-        skills = pi_agent._select_skills("remember that I'm allergic to nuts")
+        skills = zoe_agent._select_skills("remember that I'm allergic to nuts")
         assert "memory" in skills
 
     def test_bash(self):
-        skills = pi_agent._select_skills("check disk space")
+        skills = zoe_agent._select_skills("check disk space")
         assert "bash" in skills
 
     def test_map(self):
-        skills = pi_agent._select_skills("show me on the map where perth is")
+        skills = zoe_agent._select_skills("show me on the map where perth is")
         assert "visual" in skills
 
     def test_discovery(self):
-        skills = pi_agent._select_skills("what can you do")
+        skills = zoe_agent._select_skills("what can you do")
         assert "discovery" in skills
 
     def test_fallback_to_discovery(self):
         """Pure conversational query with no skill match → discovery fallback."""
-        skills = pi_agent._select_skills("tell me a joke")
+        skills = zoe_agent._select_skills("tell me a joke")
         assert "discovery" in skills
 
     def test_multiple_skills(self):
         """A complex query can activate multiple skills."""
-        skills = pi_agent._select_skills("add dentist appointment to calendar and remind me")
+        skills = zoe_agent._select_skills("add dentist appointment to calendar and remind me")
         assert "calendar" in skills
         assert "reminders" in skills
 
     def test_force_full_context_env(self, monkeypatch):
         """FORCE_FULL_CONTEXT=true overrides classifier and returns all skills."""
-        monkeypatch.setattr(pi_agent, "_FORCE_FULL_CONTEXT", True)
-        skills = pi_agent._select_skills("hi")
-        assert skills == set(pi_agent._SKILL_TOOLS.keys())
+        monkeypatch.setattr(zoe_agent, "_FORCE_FULL_CONTEXT", True)
+        skills = zoe_agent._select_skills("hi")
+        assert skills == set(zoe_agent._SKILL_TOOLS.keys())
 
 
 # ── _build_tools ──────────────────────────────────────────────────────────────
@@ -82,25 +82,25 @@ class TestBuildTools:
         return {t["function"]["name"] for t in tools}
 
     def test_always_on_tools_present(self):
-        tools = pi_agent._build_tools(set())
+        tools = zoe_agent._build_tools(set())
         names = self._names(tools)
-        for t in pi_agent._ALWAYS_ON_TOOLS:
+        for t in zoe_agent._ALWAYS_ON_TOOLS:
             assert t in names, f"Always-on tool {t!r} missing when no skills selected"
 
     def test_weather_skill_loads_weather_tools(self):
-        tools = pi_agent._build_tools({"weather"})
+        tools = zoe_agent._build_tools({"weather"})
         names = self._names(tools)
         assert "weather_current" in names
         assert "weather_forecast" in names
 
     def test_smart_home_skill(self):
-        tools = pi_agent._build_tools({"smart-home"})
+        tools = zoe_agent._build_tools({"smart-home"})
         names = self._names(tools)
         assert "ha_control" in names
 
     def test_non_selected_tools_absent(self):
         """When only memory is selected, ha_control should not be included."""
-        tools = pi_agent._build_tools({"memory"})
+        tools = zoe_agent._build_tools({"memory"})
         names = self._names(tools)
         assert "ha_control" not in names
         assert "mempalace_search" in names
@@ -108,16 +108,16 @@ class TestBuildTools:
 
     def test_full_skill_set_matches_all_tools(self):
         """Selecting all skills should produce the full _TOOLS list."""
-        all_skills = set(pi_agent._SKILL_TOOLS.keys())
-        tools = pi_agent._build_tools(all_skills)
+        all_skills = set(zoe_agent._SKILL_TOOLS.keys())
+        tools = zoe_agent._build_tools(all_skills)
         names = self._names(tools)
-        for t in pi_agent._TOOLS:
+        for t in zoe_agent._TOOLS:
             assert t["function"]["name"] in names
 
     def test_tool_count_is_reasonable(self):
         """A typical single-skill query should load far fewer tools than the full set."""
-        tools = pi_agent._build_tools({"weather"})
-        assert len(tools) < len(pi_agent._TOOLS)
+        tools = zoe_agent._build_tools({"weather"})
+        assert len(tools) < len(zoe_agent._TOOLS)
         # weather tools (2) + always-on (2) = 4
         assert len(tools) <= 4
 
@@ -126,41 +126,41 @@ class TestBuildTools:
 
 class TestBuildPrompt:
     def test_contains_message(self):
-        result = pi_agent._build_prompt("hello there", user_id="test")
+        result = zoe_agent._build_prompt("hello there", user_id="test")
         assert "hello there" in result
 
     def test_contains_datetime_bracket(self):
-        result = pi_agent._build_prompt("hi", user_id="test")
+        result = zoe_agent._build_prompt("hi", user_id="test")
         assert result.startswith("[")
         assert "—" in result or "AM" in result or "PM" in result
 
     def test_contains_user_id(self):
-        result = pi_agent._build_prompt("hi", user_id="family-admin")
+        result = zoe_agent._build_prompt("hi", user_id="family-admin")
         assert "family-admin" in result
 
     def test_contains_username_when_provided(self):
-        result = pi_agent._build_prompt("hi", username="Zoe", user_id="family-admin")
+        result = zoe_agent._build_prompt("hi", username="Zoe", user_id="family-admin")
         assert "Zoe" in result
 
     def test_contains_memory_context(self):
-        result = pi_agent._build_prompt("hi", user_id="test", memory_context="User is allergic to nuts.")
+        result = zoe_agent._build_prompt("hi", user_id="test", memory_context="User is allergic to nuts.")
         assert "User is allergic to nuts." in result
         assert "Context:" in result
 
     def test_no_memory_context_skips_context_header(self):
-        result = pi_agent._build_prompt("hi", user_id="test", memory_context="")
+        result = zoe_agent._build_prompt("hi", user_id="test", memory_context="")
         assert "Context:" not in result
 
     def test_empty_user_id_still_works(self):
-        result = pi_agent._build_prompt("hi")
+        result = zoe_agent._build_prompt("hi")
         assert "hi" in result
 
 
 # ── Stable system prompt ──────────────────────────────────────────────────────
 
 class TestStablePrompt:
-    def test_pi_soul_static_has_no_datetime(self):
-        """_PI_SOUL_STATIC must not contain any day/time strings (KV cache stability)."""
+    def test_zoe_soul_static_has_no_datetime(self):
+        """_ZOE_SOUL_STATIC must not contain any day/time strings (KV cache stability)."""
         import datetime
         today = datetime.datetime.now()
         # Check that common day names don't appear verbatim in the static prompt
@@ -168,22 +168,22 @@ class TestStablePrompt:
         year_str = str(today.year)
         # If the day name appears in the prompt it would mean the prompt was baked
         # at import time with the current date (which would invalidate the KV cache).
-        # The _PI_SOUL_BASE content does not contain current day names, but we verify anyway.
-        assert day_name not in pi_agent._PI_SOUL_STATIC or True  # soft check
+        # The _ZOE_SOUL_BASE content does not contain current day names, but we verify anyway.
+        assert day_name not in zoe_agent._ZOE_SOUL_STATIC or True  # soft check
         # The hard check: the prompt should not contain the current hour/minute.
         time_str = today.strftime("%I:%M")
-        assert time_str not in pi_agent._PI_SOUL_STATIC
+        assert time_str not in zoe_agent._ZOE_SOUL_STATIC
 
-    def test_pi_soul_voice_exists(self):
-        assert pi_agent._PI_SOUL_VOICE
-        assert "spoken" in pi_agent._PI_SOUL_VOICE.lower() or "voice" in pi_agent._PI_SOUL_VOICE.lower() or "sentence" in pi_agent._PI_SOUL_VOICE.lower()
+    def test_zoe_soul_voice_exists(self):
+        assert zoe_agent._ZOE_SOUL_VOICE
+        assert "spoken" in zoe_agent._ZOE_SOUL_VOICE.lower() or "voice" in zoe_agent._ZOE_SOUL_VOICE.lower() or "sentence" in zoe_agent._ZOE_SOUL_VOICE.lower()
 
     def test_skill_tools_covers_all_tools(self):
         """Every tool in _TOOLS must appear in either _SKILL_TOOLS or _ALWAYS_ON_TOOLS."""
-        covered = set(pi_agent._ALWAYS_ON_TOOLS)
-        for tools in pi_agent._SKILL_TOOLS.values():
+        covered = set(zoe_agent._ALWAYS_ON_TOOLS)
+        for tools in zoe_agent._SKILL_TOOLS.values():
             covered.update(tools)
-        tool_names = {t["function"]["name"] for t in pi_agent._TOOLS}
+        tool_names = {t["function"]["name"] for t in zoe_agent._TOOLS}
         missing = tool_names - covered
         assert not missing, f"Tools not in any skill group or always-on: {missing}"
 
@@ -192,7 +192,7 @@ class TestStablePrompt:
 
 class TestBashAllowedPrefixes:
     def _allows(self, cmd):
-        return cmd.startswith(pi_agent._BASH_ALLOWED_PREFIXES)
+        return cmd.startswith(zoe_agent._BASH_ALLOWED_PREFIXES)
 
     def test_ps_aux_allowed(self):
         assert self._allows("ps aux")
@@ -231,7 +231,7 @@ class TestLlmCallSignature:
     def test_tool_choice_default_is_auto(self):
         """_llm_call must accept tool_choice kwarg defaulting to 'auto'."""
         import inspect
-        sig = inspect.signature(pi_agent._llm_call)
+        sig = inspect.signature(zoe_agent._llm_call)
         assert "tool_choice" in sig.parameters
         assert sig.parameters["tool_choice"].default == "auto"
 
@@ -241,7 +241,7 @@ class TestLlmCallSignature:
 class TestFirstTurnChoiceLogic:
     """Verify the inputs to the _first_turn_choice expression are correct.
 
-    We can't call run_pi_agent without a live LLM, so we test the components
+    We can't call run_zoe_agent without a live LLM, so we test the components
     that feed into the choice: skill selection and tool count.
     """
 
@@ -251,24 +251,24 @@ class TestFirstTurnChoiceLogic:
         'is it raining' → only 'weather' skill → 4 tools (2 weather + 2 always-on)
         which is ≤ 6, so _first_turn_choice should be 'required'.
         """
-        skills = pi_agent._select_skills("is it raining")
+        skills = zoe_agent._select_skills("is it raining")
         assert "weather" in skills
         real_skills = skills - {"discovery"}
         assert real_skills  # non-empty
-        active_tools = pi_agent._build_tools(skills)
+        active_tools = zoe_agent._build_tools(skills)
         # Single-skill queries produce ≤ 6 tools; threshold triggers 'required'
         assert len(active_tools) <= 6
 
     def test_weather_today_crossover_gives_auto_inputs(self):
         """'today' triggers calendar+weather (7 tools > 6) → should produce 'auto'."""
-        skills = pi_agent._select_skills("what's the weather today")
-        active_tools = pi_agent._build_tools(skills)
+        skills = zoe_agent._select_skills("what's the weather today")
+        active_tools = zoe_agent._build_tools(skills)
         # weather+calendar crossover → 7 tools → exceeds threshold → use 'auto'
         assert len(active_tools) > 6
 
     def test_discovery_only_gives_auto_inputs(self):
         """Discovery fallback → real_skills is empty → should produce 'auto'."""
-        skills = pi_agent._select_skills("tell me an interesting fact about penguins")
+        skills = zoe_agent._select_skills("tell me an interesting fact about penguins")
         real_skills = skills - {"discovery"}
         # Real skills may or may not match for a general query; the key check is
         # that if skills == {"discovery"}, the choice is 'auto'.
@@ -277,8 +277,8 @@ class TestFirstTurnChoiceLogic:
 
     def test_large_tool_count_gives_auto_inputs(self):
         """When all skills match, tool count exceeds 5 → should produce 'auto'."""
-        all_skills = set(pi_agent._SKILL_TOOLS.keys())
-        active_tools = pi_agent._build_tools(all_skills)
+        all_skills = set(zoe_agent._SKILL_TOOLS.keys())
+        active_tools = zoe_agent._build_tools(all_skills)
         assert len(active_tools) > 5
 
 
@@ -287,8 +287,8 @@ class TestFirstTurnChoiceLogic:
 class TestChatCapabilityShortcutExists:
     def test_function_exists_and_is_coroutine(self):
         import asyncio
-        assert hasattr(pi_agent, "_chat_capability_shortcut")
-        assert asyncio.iscoroutinefunction(pi_agent._chat_capability_shortcut)
+        assert hasattr(zoe_agent, "_chat_capability_shortcut")
+        assert asyncio.iscoroutinefunction(zoe_agent._chat_capability_shortcut)
 
     def test_weather_cues_are_substrings(self):
         """Verify a selection of the weather cue strings would match typical messages."""

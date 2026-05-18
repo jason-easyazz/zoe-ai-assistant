@@ -68,7 +68,7 @@ POST /api/proactive/pending/<pending_id>
 → {"session_id": "<new_session_id>", "message": "..."}
 ```
 
-## Pi Agent MCP Tool
+## Zoe Agent MCP Tool
 Use the `proactive_schedule` MCP tool when the user asks to be notified at a
 specific future time.  Example:
 ```json

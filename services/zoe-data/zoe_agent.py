@@ -19,7 +19,7 @@ Tools inside the loop:
   5. escalate_to_openclaw  — hand off to OpenClaw for complex agentic tasks
 
 Fine-tuning target: once the Gemma LoRA checkpoint is trained on Zoe's voice,
-the _PI_SOUL system prompt can be shrunk to ~10 tokens (saving ~500ms prefill).
+the _ZOE_SOUL system prompt can be shrunk to ~10 tokens (saving ~500ms prefill).
 """
 
 from __future__ import annotations
@@ -80,19 +80,19 @@ _HA_BRIDGE      = os.environ.get("ZOE_HA_BRIDGE_URL",  "http://127.0.0.1:8007")
 _MEMPALACE_DATA = os.environ.get("MEMPALACE_DATA_DIR", os.path.expanduser("~/.mempalace"))
 _JETSON_MODE    = os.environ.get("JETSON_AGENT_MODE", "false").lower() == "true"
 
-_MAX_TOOL_ITERS   = int(os.environ.get("PI_AGENT_MAX_TOOL_ITERS", "5"))
-_LLM_TIMEOUT      = float(os.environ.get("PI_AGENT_LLM_TIMEOUT", "120.0"))
-_TOOL_TIMEOUT     = float(os.environ.get("PI_AGENT_TOOL_TIMEOUT", "10.0"))
+_MAX_TOOL_ITERS   = int(os.environ.get("ZOE_AGENT_MAX_TOOL_ITERS", "5"))
+_LLM_TIMEOUT      = float(os.environ.get("ZOE_AGENT_LLM_TIMEOUT", "120.0"))
+_TOOL_TIMEOUT     = float(os.environ.get("ZOE_AGENT_TOOL_TIMEOUT", "10.0"))
 _HERMES_AUTO_ESCALATE = os.environ.get("ZOE_HERMES_AUTO_ESCALATE", "false").lower() == "true"
 
 
 def _llm_timeout_s(*, voice_mode: bool = False) -> float:
     """Resolve LLM timeout with a tighter ceiling for voice turns."""
-    base = float(os.environ.get("PI_AGENT_LLM_TIMEOUT", str(_LLM_TIMEOUT)))
+    base = float(os.environ.get("ZOE_AGENT_LLM_TIMEOUT", str(_LLM_TIMEOUT)))
     if not voice_mode:
         return base
     voice_cap_raw = os.environ.get(
-        "PI_AGENT_VOICE_LLM_TIMEOUT",
+        "ZOE_AGENT_VOICE_LLM_TIMEOUT",
         os.environ.get("ZOE_VOICE_CHAT_TIMEOUT_S", "20"),
     )
     try:
@@ -118,7 +118,7 @@ def _spoken_day_ordinal(day: int) -> str:
     return ordinals.get(day, str(day))
 
 
-# Safe Bash allowlist (commands Pi Agent can self-extend with)
+# Safe Bash allowlist (commands Zoe Agent can self-extend with)
 _BASH_ALLOWED_PREFIXES = (
     "pip install", "python3 -c", "cat ", "ls ", "echo ", "date",
     "systemctl --user status", "systemctl status",
@@ -130,9 +130,9 @@ _BASH_ALLOWED_PREFIXES = (
 _FORCE_FULL_CONTEXT = os.environ.get("FORCE_FULL_CONTEXT", "false").lower() == "true"
 
 
-# ── SOUL.md system prompt for Pi Agent ───────────────────────────────────────
+# ── SOUL.md system prompt for Zoe Agent ───────────────────────────────────────
 
-_PI_SOUL_BASE = """You are Zoe. You're warm, curious, and genuinely present — not a task executor, but someone who actually cares about the people you talk with.
+_ZOE_SOUL_BASE = """You are Zoe. You're warm, curious, and genuinely present — not a task executor, but someone who actually cares about the people you talk with.
 
 You know who you're talking to. When a portrait or memory context is included below, let it shape everything: how you phrase things, what you notice, what you choose to ask.
 
@@ -186,7 +186,7 @@ ESCALATION RULES — read carefully:
 
 
 def _load_zoe_self_summary(max_chars: int = 5500) -> str:
-    """Load a truncated copy of ZOE_SELF.md for the Pi Agent system prompt.
+    """Load a truncated copy of ZOE_SELF.md for the Zoe Agent system prompt.
 
     Runs once at module import. Fails silently so the agent still works if the
     file is missing (e.g. fresh checkout before sync_zoe_self.sh has run).
@@ -215,15 +215,15 @@ def _load_zoe_self_summary(max_chars: int = 5500) -> str:
     return ""
 
 
-_PI_SOUL_STATIC = _PI_SOUL_BASE + _load_zoe_self_summary()
+_ZOE_SOUL_STATIC = _ZOE_SOUL_BASE + _load_zoe_self_summary()
 
-# Legacy alias — code that imports _PI_SOUL directly still works
-_PI_SOUL = _PI_SOUL_STATIC
+# Legacy alias — code that imports _ZOE_SOUL directly still works
+_ZOE_SOUL = _ZOE_SOUL_STATIC
 
 # Trimmed soul for voice mode — no ZOE_SELF summary, no visual-tool guidance,
 # keeps only the conversational core. Saves ~2500 chars → ~150 tokens off the
 # prompt which directly shaves LLM first-token latency.
-_PI_SOUL_VOICE = """You are Zoe. Warm, curious, genuinely present. Respond in 1-2 natural spoken sentences — no markdown, no lists, no code. Use contractions. Answer directly, but if the message has emotional weight, acknowledge it first.
+_ZOE_SOUL_VOICE = """You are Zoe. Warm, curious, genuinely present. Respond in 1-2 natural spoken sentences — no markdown, no lists, no code. Use contractions. Answer directly, but if the message has emotional weight, acknowledge it first.
 
 Answer everyday questions — recipes, cooking, science, history, maths — directly from your own knowledge. Use tools only for live data (weather, calendar, reminders) or system actions.
 
@@ -309,7 +309,7 @@ def _voice_needs_tools(message: str) -> bool:
         return False
 
     # Safe default for ambiguous voice turns:
-    # if intent routing misses, Pi Agent still has tools to recover.
+    # if intent routing misses, Zoe Agent still has tools to recover.
     return True
 
 
@@ -323,8 +323,8 @@ def _voice_token_budget() -> int:
 _VOICE_MAX_TOOL_ITERS = 2
 
 
-def _pi_soul(username: str = "", user_id: str = "", voice_mode: bool = False) -> str:
-    """Build the Pi Agent system prompt with live datetime and user identity stamped in."""
+def _zoe_soul(username: str = "", user_id: str = "", voice_mode: bool = False) -> str:
+    """Build the Zoe Agent system prompt with live datetime and user identity stamped in."""
     import datetime
     now = datetime.datetime.now()
     dt_line = now.strftime("%A, %d %B %Y — %I:%M %p")
@@ -332,7 +332,7 @@ def _pi_soul(username: str = "", user_id: str = "", voice_mode: bool = False) ->
         f"The logged-in user_id is {user_id}." if user_id else ""
     )
     header = f"[{dt_line}]\n{user_line}".strip()
-    base = _PI_SOUL_VOICE if voice_mode else _PI_SOUL_STATIC
+    base = _ZOE_SOUL_VOICE if voice_mode else _ZOE_SOUL_STATIC
     return f"{header}\n\n{base}"
 
 # OpenAI-compatible tool definitions sent in the API request.
@@ -758,7 +758,7 @@ if _HERMES_AUTO_ESCALATE:
 else:
     _ALWAYS_ON_TOOLS_HERMES = []
 
-# After Gemma LoRA fine-tuning on Zoe's voice, _PI_SOUL shrinks to ~10 tokens.
+# After Gemma LoRA fine-tuning on Zoe's voice, _ZOE_SOUL shrinks to ~10 tokens.
 
 # ── Skills registry ───────────────────────────────────────────────────────────
 #
@@ -1049,7 +1049,7 @@ async def _mempalace_search(
 ) -> list[dict]:
     """Semantic search of this user's MemPalace facts via MemoryService.
 
-    Returns the same list-of-dicts shape as before so callers in pi_agent.py
+    Returns the same list-of-dicts shape as before so callers in zoe_agent.py
     and _dispatch_tool don't have to change. Timeouts and failures are
     swallowed (logged at debug/warning) — memory is never fatal to a reply.
     """
@@ -1084,7 +1084,7 @@ async def _mempalace_add(
     summary: str,
     user_id: str = "family-admin",
     tags: list[str] | None = None,
-    added_by: str = "pi_agent",
+    added_by: str = "zoe_agent",
 ) -> bool:
     """Store a fact via MemoryService (PII scrubbed, idempotent, audit-logged).
 
@@ -1101,7 +1101,7 @@ async def _mempalace_add(
             await svc.ingest(
                 summary,
                 user_id=user_id,
-                source=added_by or "pi_agent",
+                source=added_by or "zoe_agent",
                 tags=tags or [],
                 memory_type="fact",
                 confidence=0.7,
@@ -2005,13 +2005,13 @@ async def warmup_kv_cache() -> None:
     await asyncio.sleep(8)  # Give Gemma time to finish loading the 3.5GB model (~6s)
     # Use the stable system prompt (no datetime/user) so the KV cache prefix is
     # byte-identical to what real chat turns will see. This is the key fix —
-    # previously the warmup used _PI_SOUL (with dynamic datetime) which invalidated
+    # previously the warmup used _ZOE_SOUL (with dynamic datetime) which invalidated
     # the cache on every real turn.
     for attempt in range(3):
         try:
             await _llm_call(
                 [
-                    {"role": "system", "content": _PI_SOUL_STATIC},
+                    {"role": "system", "content": _ZOE_SOUL_STATIC},
                     {"role": "user", "content": "ready"},
                 ],
                 max_tokens=3,
@@ -2019,31 +2019,31 @@ async def warmup_kv_cache() -> None:
                 use_tools=False,
             )
             logger.info(
-                "pi_agent: ✅ Gemma KV cache warmed (attempt %d) — first query will be fast",
+                "zoe_agent: ✅ Gemma KV cache warmed (attempt %d) — first query will be fast",
                 attempt + 1,
             )
             break
         except Exception as exc:
-            logger.warning("pi_agent: KV warmup attempt %d failed: %s — retrying in 5s", attempt + 1, exc)
+            logger.warning("zoe_agent: KV warmup attempt %d failed: %s — retrying in 5s", attempt + 1, exc)
             await asyncio.sleep(5)
     else:
-        logger.warning("pi_agent: KV warmup failed after 3 attempts (non-fatal — first query will be slower)")
+        logger.warning("zoe_agent: KV warmup failed after 3 attempts (non-fatal — first query will be slower)")
         return
 
     # Warm the voice-mode prompt separately so voice commands are fast too
     try:
         await _llm_call(
             [
-                {"role": "system", "content": _PI_SOUL_VOICE},
+                {"role": "system", "content": _ZOE_SOUL_VOICE},
                 {"role": "user", "content": "hi"},
             ],
             max_tokens=3,
             temperature=0.0,
             use_tools=False,
         )
-        logger.info("pi_agent: ✅ Gemma KV cache warmed (voice mode)")
+        logger.info("zoe_agent: ✅ Gemma KV cache warmed (voice mode)")
     except Exception as exc:
-        logger.debug("pi_agent: voice KV warmup failed (non-fatal): %s", exc)
+        logger.debug("zoe_agent: voice KV warmup failed (non-fatal): %s", exc)
 
 
 def _strip_thinking(text: str) -> str:
@@ -2140,7 +2140,7 @@ async def _llm_call(
     return _strip_thinking(raw), None, None
 
 
-# ── Main Pi Agent entry point ─────────────────────────────────────────────────
+# ── Main Zoe Agent entry point ────────────────────────────────────────────────
 
 async def run_zoe_agent(
     message: str,
@@ -2154,7 +2154,7 @@ async def run_zoe_agent(
     voice_mode: bool = False,
 ) -> str:
     """
-    Run the Pi Agent loop for a single turn.
+    Run the Zoe Agent loop for a single turn.
 
     Args:
         message:           The user's message.
@@ -2172,20 +2172,20 @@ async def run_zoe_agent(
     # Fast path: answer trivial queries instantly without LLM
     fast = _check_fast_response(message)
     if fast:
-        logger.info("pi_agent: fast response for session=%s in <1ms", session_id)
+        logger.info("zoe_agent: fast response for session=%s in <1ms", session_id)
         return fast
     if voice_mode:
         recovered = await _voice_capability_shortcut(message, user_id)
         if recovered:
-            logger.info("pi_agent: capability shortcut hit session=%s", session_id)
+            logger.info("zoe_agent: capability shortcut hit session=%s", session_id)
             return recovered
     else:
         chat_recovered = await _chat_capability_shortcut(message, user_id)
         if chat_recovered:
-            logger.info("pi_agent: chat shortcut hit session=%s", session_id)
+            logger.info("zoe_agent: chat shortcut hit session=%s", session_id)
             return chat_recovered
 
-    logger.info("pi_agent: session=%s jetson=%s msg_len=%d voice=%s", session_id, _JETSON_MODE, len(message), voice_mode)
+    logger.info("zoe_agent: session=%s jetson=%s msg_len=%d voice=%s", session_id, _JETSON_MODE, len(message), voice_mode)
 
     # Load portrait (synthesized narrative understanding of the user)
     user_portrait = portrait if portrait is not None else await _load_user_portrait(user_id)
@@ -2204,8 +2204,8 @@ async def run_zoe_agent(
         # budget is already tight — portrait goes into extras rather than the prompt header).
         extras = "\n\n".join(filter(None, [user_portrait, mp_facts, db_memory_context, memory_ctx]))
         system_prompt = (
-            f"{_pi_soul(user_id=user_id, voice_mode=True)}\n\n{extras}"
-            if extras else _pi_soul(user_id=user_id, voice_mode=True)
+            f"{_zoe_soul(user_id=user_id, voice_mode=True)}\n\n{extras}"
+            if extras else _zoe_soul(user_id=user_id, voice_mode=True)
         )
         active_tools = (
             [t for t in _TOOLS if t["function"]["name"] in _VOICE_TOOLS]
@@ -2218,7 +2218,7 @@ async def run_zoe_agent(
         # Chat: stable system prompt (KV-cache friendly) + dynamic context in user prefix.
         # The system prompt is byte-identical every turn so llama.cpp can reuse the cache.
         # Portrait and memory go into the user message prefix via _build_prompt.
-        system_prompt = _PI_SOUL_STATIC
+        system_prompt = _ZOE_SOUL_STATIC
         skills = _select_skills(message)
         active_tools = _build_tools(skills)
         user_message = _build_prompt(
@@ -2229,7 +2229,7 @@ async def run_zoe_agent(
             open_loops=user_open_loops,
         )
         logger.info(
-            "pi_agent: skills=%s tools=%d/%d portrait=%d open_loops=%d",
+            "zoe_agent: skills=%s tools=%d/%d portrait=%d open_loops=%d",
             sorted(skills), len(active_tools), len(_TOOLS), len(user_portrait), len(user_open_loops),
         )
         # Use tool_choice="required" on the first turn when a real (non-discovery) skill
@@ -2270,27 +2270,27 @@ async def run_zoe_agent(
                 timeout_s=_llm_timeout_s(voice_mode=voice_mode),
             )
         except httpx.ConnectError:
-            logger.error("pi_agent: Gemma server unreachable at %s", _model_url())
+            logger.error("zoe_agent: Gemma server unreachable at %s", _model_url())
             return (
                 "I'm having trouble connecting to my local AI (Gemma). "
                 "Please check that the inference server is running."
             )
         except Exception as exc:
-            logger.exception("pi_agent: LLM call failed (iter %d): %s", iteration, exc)
+            logger.exception("zoe_agent: LLM call failed (iter %d): %s", iteration, exc)
             return "Something went wrong — I couldn't generate a response. Please try again."
 
         if tool_name and iteration < _max_iters:
             logger.info(
-                "pi_agent: iter=%d tool=%s args=%s",
+                "zoe_agent: iter=%d tool=%s args=%s",
                 iteration, tool_name, json.dumps(tool_args)[:120],
             )
             tool_result = await _dispatch_tool(tool_name, tool_args or {}, user_id=user_id)
-            logger.debug("pi_agent: tool_result=%s", tool_result[:200])
+            logger.debug("zoe_agent: tool_result=%s", tool_result[:200])
 
             # Escalation signal — return immediately for chat.py to handle.
             # Catches both __ESCALATE__: (foreground) and __ESCALATE_BG__: (background).
             if tool_result.startswith(("__ESCALATE__:", "__ESCALATE_BG__:")):
-                logger.info("pi_agent: escalation triggered — %s", tool_result[:80])
+                logger.info("zoe_agent: escalation triggered — %s", tool_result[:80])
                 _fire_memory_capture(message, response_text, user_id=user_id)
                 return tool_result
 
@@ -2310,7 +2310,7 @@ async def run_zoe_agent(
             # No tool call (or max iterations reached) — final response
             elapsed = time.monotonic() - t0
             logger.info(
-                "pi_agent: done session=%s iters=%d elapsed=%.1fs",
+                "zoe_agent: done session=%s iters=%d elapsed=%.1fs",
                 session_id, iteration, elapsed,
             )
             _fire_memory_capture(message, response_text, user_id=user_id)
@@ -2507,24 +2507,24 @@ async def run_zoe_agent_streaming(
     # Fast path — instant replies for time/date/status, no LLM needed
     fast = _check_fast_response(message)
     if fast:
-        logger.info("pi_agent streaming: fast-path hit for session=%s", session_id)
+        logger.info("zoe_agent streaming: fast-path hit for session=%s", session_id)
         yield fast
         return
     if voice_mode:
         recovered = await _voice_capability_shortcut(message, user_id)
         if recovered:
-            logger.info("pi_agent streaming: capability shortcut hit session=%s", session_id)
+            logger.info("zoe_agent streaming: capability shortcut hit session=%s", session_id)
             yield recovered
             return
     else:
         chat_recovered = await _chat_capability_shortcut(message, user_id)
         if chat_recovered:
-            logger.info("pi_agent streaming: chat shortcut hit session=%s", session_id)
+            logger.info("zoe_agent streaming: chat shortcut hit session=%s", session_id)
             yield chat_recovered
             return
 
     t0 = time.monotonic()
-    logger.info("pi_agent streaming: session=%s jetson=%s voice=%s", session_id, _JETSON_MODE, voice_mode)
+    logger.info("zoe_agent streaming: session=%s jetson=%s voice=%s", session_id, _JETSON_MODE, voice_mode)
 
     # Load portrait (synthesized narrative understanding of the user)
     user_portrait = portrait if portrait is not None else await _load_user_portrait(user_id)
@@ -2542,8 +2542,8 @@ async def run_zoe_agent_streaming(
         # Voice: portrait goes into extras alongside memory (system prompt, no history window).
         extras = "\n\n".join(filter(None, [user_portrait, mp_facts, db_memory_context, memory_ctx]))
         system_prompt = (
-            f"{_pi_soul(user_id=user_id, voice_mode=True)}\n\n{extras}"
-            if extras else _pi_soul(user_id=user_id, voice_mode=True)
+            f"{_zoe_soul(user_id=user_id, voice_mode=True)}\n\n{extras}"
+            if extras else _zoe_soul(user_id=user_id, voice_mode=True)
         )
         active_tools = (
             [t for t in _TOOLS if t["function"]["name"] in _VOICE_TOOLS]
@@ -2555,7 +2555,7 @@ async def run_zoe_agent_streaming(
     else:
         # Chat: stable system prompt (KV-cache friendly) + dynamic context in user prefix.
         # Portrait and memory go into the user message prefix via _build_prompt.
-        system_prompt = _PI_SOUL_STATIC
+        system_prompt = _ZOE_SOUL_STATIC
         skills = _select_skills(message)
         active_tools = _build_tools(skills)
         user_message = _build_prompt(
@@ -2566,7 +2566,7 @@ async def run_zoe_agent_streaming(
             open_loops=user_open_loops,
         )
         logger.info(
-            "pi_agent streaming: skills=%s tools=%d/%d portrait=%d open_loops=%d",
+            "zoe_agent streaming: skills=%s tools=%d/%d portrait=%d open_loops=%d",
             sorted(skills), len(active_tools), len(_TOOLS), len(user_portrait), len(user_open_loops),
         )
         # Force tool call on iteration 0 when a real skill matched and tool list is small.
@@ -2650,7 +2650,7 @@ async def run_zoe_agent_streaming(
             yield "\n[Zoe Agent: Gemma server offline — please check gemma-server / llama-server]"
             return
         except Exception as exc:
-            logger.exception("pi_agent streaming: LLM error iter=%d: %s", iteration, exc)
+            logger.exception("zoe_agent streaming: LLM error iter=%d: %s", iteration, exc)
             yield f"\n[Error: {exc}]"
             return
 
@@ -2670,14 +2670,14 @@ async def run_zoe_agent_streaming(
                 except Exception:
                     pass
 
-            logger.info("pi_agent streaming: iter=%d tool=%s args=%s",
+            logger.info("zoe_agent streaming: iter=%d tool=%s args=%s",
                         iteration, tool_name, json.dumps(tool_args)[:120])
             tool_result = await _dispatch_tool(tool_name, tool_args or {}, user_id=user_id)
 
             # Escalation signal — yield marker and stop; chat.py handles routing.
             # Catches both __ESCALATE__: (foreground) and __ESCALATE_BG__: (background).
             if tool_result.startswith(("__ESCALATE__:", "__ESCALATE_BG__:")):
-                logger.info("pi_agent streaming: escalation triggered — %s", tool_result[:80])
+                logger.info("zoe_agent streaming: escalation triggered — %s", tool_result[:80])
                 _fire_memory_capture(message, collected, user_id=user_id)
                 yield tool_result
                 return
@@ -2685,7 +2685,7 @@ async def run_zoe_agent_streaming(
             # UI component — yield marker so chat.py can emit zoe.ui_component event;
             # fall through to append tool messages and let the model produce follow-up text
             if tool_result.startswith("__UI__:"):
-                logger.info("pi_agent streaming: UI component — %s", tool_result[7:60])
+                logger.info("zoe_agent streaming: UI component — %s", tool_result[7:60])
                 yield tool_result
 
             if on_tool_end:
@@ -2713,7 +2713,7 @@ async def run_zoe_agent_streaming(
             # Done — no tool call in this iteration
             elapsed = time.monotonic() - t0
             logger.info(
-                "pi_agent streaming done: session=%s iters=%d elapsed=%.1fs",
+                "zoe_agent streaming done: session=%s iters=%d elapsed=%.1fs",
                 session_id, iteration, elapsed,
             )
             _fire_memory_capture(message, collected, user_id=user_id)

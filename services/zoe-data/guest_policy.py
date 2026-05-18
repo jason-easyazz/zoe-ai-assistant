@@ -27,6 +27,9 @@ PUBLIC_HOUSEHOLD_INTENTS: frozenset[str] = frozenset({
     "timer_create",
     "general_knowledge",
     "greeting",
+    "set_volume",
+    "calculate",
+    "smart_home",
     # Shared household operations.
     "list_show",
     "calendar_show",

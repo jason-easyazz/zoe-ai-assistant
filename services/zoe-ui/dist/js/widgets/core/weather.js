@@ -200,7 +200,7 @@ class WeatherWidget extends WidgetModule {
                     async (error) => {
                         console.warn('Geolocation failed, using saved location:', error);
                         // Fallback to saved location if geolocation fails
-                        const cacheBuster = `?_t=${Date.now()}`;
+                        const cacheBuster = `&_t=${Date.now()}`;
                         const response = await fetch(`/api/weather/current?user_id=${userId}${cacheBuster}`);
                         if (response.ok) {
                             const data = await response.json();
@@ -215,7 +215,7 @@ class WeatherWidget extends WidgetModule {
                 );
             } else {
                 // Use saved location with cache-busting timestamp
-                const cacheBuster = `?_t=${Date.now()}`;
+                const cacheBuster = `&_t=${Date.now()}`;
                 const response = await fetch(`/api/weather/current?user_id=${userId}${cacheBuster}`);
                 if (response.ok) {
                     const data = await response.json();

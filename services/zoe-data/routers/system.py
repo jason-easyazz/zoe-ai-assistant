@@ -515,11 +515,26 @@ async def trigger_agent_sync(user: dict = Depends(get_current_user)):
     """Regenerate ZOE_SELF.md and distribute to all agents (OpenClaw, Hermes, compact).
 
     Admin-only. Runs the same sync as Phase 5 of the Sunday dreaming cycle.
+    Also hot-reloads Multica autopilot schedules into APScheduler.
     """
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Admin role required")
     from agent_sync import run_agent_sync  # type: ignore[import]
     result = await run_agent_sync()
+
+    # Hot-reload Multica autopilot schedules so cron edits in Multica UI take
+    # effect without a service restart.
+    try:
+        from multica_autopilot_sync import sync_autopilots_from_multica  # type: ignore[import]
+        from proactive.scheduler import get_scheduler
+        n = await sync_autopilots_from_multica(get_scheduler())
+        if isinstance(result, dict):
+            result["multica_autopilots"] = {"jobs_registered": n}
+    except Exception as _aps_exc:
+        logger.warning("agent-sync: Multica autopilot sync failed (non-fatal): %s", _aps_exc)
+        if isinstance(result, dict):
+            result["multica_autopilots"] = {"error": str(_aps_exc)}
+
     return result
 
 
@@ -1121,6 +1136,62 @@ async def board_cancel(task_id: str, user: dict = Depends(get_current_user)):
     return {"ok": True, "task_id": task_id, "status": "cancelled"}
 
 
+@_agent_card_router.post("/board/webhook")
+async def multica_webhook(request: Request):
+    """Receive Multica webhook events and update evolution proposal status."""
+    try:
+        payload = await request.json()
+        event = payload.get("event", "")
+        issue = payload.get("issue", {})
+
+        if event == "issue.status_changed" and issue:
+            logger.info(
+                "Multica webhook: %s issue=%s status=%s",
+                event, issue.get("identifier"), issue.get("status"),
+            )
+            # If the issue maps to an evolution proposal, sync status back
+            multica_issue_id = issue.get("id")
+            new_status = issue.get("status", "")
+            if multica_issue_id and new_status:
+                _status_map = {
+                    "in_progress": "approved",
+                    "done": "validated",
+                    "cancelled": "failed",
+                }
+                proposal_status = _status_map.get(new_status)
+                if proposal_status:
+                    try:
+                        from db_pool import get_db_ctx as _get_pg_db  # type: ignore[import]
+                        async with _get_pg_db() as db:
+                            await db.execute(
+                                "UPDATE evolution_proposals SET status=$1 WHERE multica_issue_id=$2",
+                                proposal_status, multica_issue_id,
+                            )
+                            logger.info(
+                                "Multica webhook: synced proposal multica_id=%s → status=%s",
+                                multica_issue_id, proposal_status,
+                            )
+                    except Exception as db_exc:
+                        logger.warning("Multica webhook DB sync error: %s", db_exc)
+
+        elif event == "issue.assigned" and issue:
+            logger.info(
+                "Multica webhook: %s issue=%s assignee=%s",
+                event, issue.get("identifier"), issue.get("assignee_id"),
+            )
+
+        elif event == "issue.created" and issue:
+            logger.info(
+                "Multica webhook: new issue %s — %s",
+                issue.get("identifier"), issue.get("title", "")[:80],
+            )
+
+        return {"ok": True}
+    except Exception as exc:
+        logger.warning("Multica webhook error: %s", exc)
+        return {"ok": False, "error": str(exc)}
+
+
 # ── Evolution proposals ───────────────────────────────────────────────────────
 
 @_agent_card_router.get("/evolution/proposals")
@@ -1190,19 +1261,32 @@ async def evolution_proposal_action(
         proposal = dict(rows[0])
 
         if action == "approve":
-            multica_issue_id = None
+            existing_multica_id = proposal.get("multica_issue_id")
+            multica_issue_id = existing_multica_id
             try:
-                from multica_client import MULClient  # type: ignore[import]
-                client = MULClient()
-                if client.is_configured():
-                    issue = await client.create_issue(
+                from multica_client import (  # type: ignore[import]
+                    sync_evolution_proposal_to_multica,
+                    update_multica_issue_on_proposal_status_change,
+                )
+                if existing_multica_id:
+                    # Issue already created by run_evolution_notice — update status
+                    await update_multica_issue_on_proposal_status_change(
+                        existing_multica_id, "approved"
+                    )
+                else:
+                    # Create issue now (proposal pre-dates the sync or created outside NOTICE)
+                    new_id = await sync_evolution_proposal_to_multica(
+                        proposal_id=proposal_id,
                         title=proposal["title"],
                         description=proposal["description"],
-                        priority="medium",
+                        evidence=proposal.get("evidence", ""),
+                        proposal_type=proposal.get("type", "intent_pattern"),
                     )
-                    multica_issue_id = issue.get("id")
+                    if new_id:
+                        multica_issue_id = new_id
+                        await update_multica_issue_on_proposal_status_change(new_id, "approved")
             except Exception as exc:
-                logger.warning("Could not create Multica issue for proposal %s: %s", proposal_id, exc)
+                logger.warning("Could not sync Multica for proposal %s: %s", proposal_id, exc)
 
             await db.execute(
                 """UPDATE evolution_proposals
@@ -1237,6 +1321,16 @@ async def evolution_proposal_action(
                    WHERE id=$2""",
                 now, proposal_id,
             )
+            # Sync deployed status to Multica
+            existing_multica_id = proposal.get("multica_issue_id")
+            if existing_multica_id:
+                try:
+                    from multica_client import update_multica_issue_on_proposal_status_change  # type: ignore[import]
+                    await update_multica_issue_on_proposal_status_change(
+                        existing_multica_id, "deployed"
+                    )
+                except Exception as exc:
+                    logger.warning("Multica deploy sync failed for proposal %s: %s", proposal_id, exc)
             return {"ok": True, "action": "deployed", "deployed_at": now}
 
         elif action == "reject":

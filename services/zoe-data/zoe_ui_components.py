@@ -136,11 +136,11 @@ def auto_extract_components(text: str) -> list[dict]:
         components.append({"component": "price_table", "props": {"rows": price_rows}})
 
     # ── 2. Location lists → map_embed ─────────────────────────────────────────
-    # Only emit a map if the markers already have lat/lng (e.g. from Pi Agent's
+    # Only emit a map if the markers already have lat/lng (e.g. from Zoe Agent's
     # show_map tool). We skip Nominatim geocoding here to avoid adding network
     # latency to the SSE stream. Auto-geocoding can be added as a background task
     # in a future iteration.
-    # (Placeholder — no-op for auto-extraction; Pi Agent / show_map tool handles maps)
+    # (Placeholder — no-op for auto-extraction; Zoe Agent / show_map tool handles maps)
 
     # ── 3. Option lists → action_menu ─────────────────────────────────────────
     # Look for a short bulleted section at the end of the response

@@ -586,6 +586,21 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
     // Expose VoiceOverlay globally so dashboard.html inline scripts can access it.
     window.VoiceOverlay = VoiceOverlay;
 
+    // Provide ZoeVoiceCard so show_card UI actions display proper content instead
+    // of falling back to the generic "Zoe" toast. Uses the existing VoiceOverlay.
+    window.ZoeVoiceCard = {
+        renderCard: function (cardType, cardData) {
+            // Return the most descriptive available text field as plain string.
+            return (cardData.text || cardData.summary || cardData.title || '').slice(0, 300);
+        },
+        showCard: function (text, _actions) {
+            if (!text) return;
+            VoiceOverlay.onResponding(text);
+            VoiceOverlay.onDone();
+        },
+        showBar: function (_text) { /* no-op */ },
+    };
+
     function setOrbMode(mode) {
         // Drive the floating orb (orb-loader.js) if present
         const orb = document.getElementById('zoeOrb') || document.querySelector('.zoe-orb');
@@ -1211,7 +1226,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                     window.ZoeVoiceCard.showCard(html, cardActions);
                     window.ZoeVoiceCard.showBar('');
                 } else {
-                    showToast((cardData.text || cardData.title || 'Zoe').slice(0, 80));
+                    showToast((cardData.text || cardData.summary || cardData.title || 'Zoe').slice(0, 80));
                 }
                 return { status: 'success' };
             }

@@ -26,7 +26,8 @@ router = APIRouter(prefix="/api/voice", tags=["voice"])
 # Persist one session_id per panel so follow-up voice commands have context.
 # Pass 3 B3: also stores bound_user_id (resolved via daemon VID or PIN) with
 # the same 5-min TTL so mid-conversation turns don't re-challenge.
-# Dict: panel_id → {"session_id": str, "last_at": float, "bound_user_id": str|None}
+# Dict: panel_id → {"session_id": str, "last_at": float,
+#                   "bound_user_id": str|None, "context": ConversationContext}
 _VOICE_SESSIONS: dict[str, dict] = {}
 _VOICE_SESSION_TTL_S = 5 * 60  # Reset after 5 min silence
 
@@ -49,8 +50,27 @@ def _get_or_create_voice_session(panel_id: str) -> str:
     _next = {"session_id": session_id, "last_at": now}
     if entry and entry.get("bound_user_id"):
         _next["bound_user_id"] = entry["bound_user_id"]
+    if entry and entry.get("context") and entry["context"].is_fresh():
+        _next["context"] = entry["context"]
     _VOICE_SESSIONS[panel_id] = _next
     return session_id
+
+
+async def _load_voice_history(session_id: str, limit: int = 3) -> list[dict]:
+    """Load last N chat turns for voice LLM context window (mirrors chat.py pattern)."""
+    try:
+        from database import get_db
+        async for db in get_db():
+            rows = await db.execute(
+                "SELECT role, content FROM chat_messages "
+                "WHERE session_id = ? ORDER BY created_at DESC LIMIT ?",
+                (session_id, limit),
+            )
+            rows = await rows.fetchall()
+            return [{"role": r[0], "content": r[1]} for r in reversed(rows)]
+    except Exception:
+        pass
+    return []
 
 
 # ── Voice text pre-processor ───────────────────────────────────────────────
@@ -1880,8 +1900,27 @@ async def voice_command(
     # wait for 'yes/confirm' from the user before actually executing.
     try:
         from intent_router import detect_and_extract_intent as _detect_async
+        from conversation_context import ConversationContext as _CC
         _t_scope_start = time.monotonic()
-        _quick_intent = await _detect_async(text, effective_user)
+        _voice_entry = _VOICE_SESSIONS.get(panel_id, {})
+        _ctx = _voice_entry.get("context") or _CC()
+        _voice_entry["context"] = _ctx
+        if panel_id not in _VOICE_SESSIONS:
+            _VOICE_SESSIONS[panel_id] = _voice_entry
+        _quick_intent = await _detect_async(text, effective_user, context=_ctx)
+        if _quick_intent:
+            _ctx.activate(_quick_intent.name, getattr(_quick_intent, "slots", {}), text)
+        # Tier 0.5 for voice: LLM classifier on short missed utterances
+        if _quick_intent is None and len(text.split()) <= 20:
+            try:
+                from intent_classifier_llm import classify_intent_with_context as _classify_v
+                _v_classified = await _classify_v(text, context=_ctx, timeout=1.5)
+                if _v_classified and _v_classified.confidence >= 0.75:
+                    _quick_intent = _v_classified
+                    _ctx.activate(_quick_intent.name, getattr(_quick_intent, "slots", {}), text)
+                    logger.info("Voice Tier 0.5 hit: %s confidence=%.2f", _quick_intent.name, _quick_intent.confidence)
+            except Exception as _ve:
+                logger.debug("Voice Tier 0.5 failed (non-fatal): %s", _ve)
         _quick_intent_name = _quick_intent.name if _quick_intent else None
         try:
             from voice_metrics import voice_stage_seconds, voice_intent_hit_count
@@ -2452,7 +2491,11 @@ async def voice_command(
                     async def _emit_line(line: dict):
                         yield (_json.dumps(line) + "\n").encode()
 
-                    async for delta in run_zoe_agent_streaming(text, session_id, user_id=effective_user, voice_mode=True):
+                    _voice_history = await _load_voice_history(session_id, limit=3)
+                    async for delta in run_zoe_agent_streaming(
+                        text, session_id, user_id=effective_user,
+                        voice_mode=True, history=_voice_history or None
+                    ):
                         if not delta:
                             continue
                         if delta.startswith("__ESCALATE__:") or delta.startswith("__ESCALATE_BG__:"):
@@ -2548,6 +2591,8 @@ async def voice_command(
 
         collected: list[str] = []
 
+        _voice_history_nc = await _load_voice_history(session_id, limit=3)
+
         async def _stream_collect() -> None:
             nonlocal _t_first_token
             async for delta in run_zoe_agent_streaming(
@@ -2555,6 +2600,7 @@ async def voice_command(
                 session_id,
                 user_id=effective_user,
                 voice_mode=True,
+                history=_voice_history_nc or None,
             ):
                 if not delta:
                     continue

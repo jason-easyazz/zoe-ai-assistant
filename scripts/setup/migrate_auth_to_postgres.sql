@@ -173,3 +173,22 @@ CREATE TABLE IF NOT EXISTS sessions (
     expires_at TEXT,
     data TEXT
 );
+
+CREATE TABLE IF NOT EXISTS oidc_clients (
+    client_id         TEXT PRIMARY KEY,
+    client_secret_hash TEXT NOT NULL,
+    client_name       TEXT NOT NULL,
+    redirect_uris     TEXT NOT NULL,
+    scopes            TEXT NOT NULL DEFAULT 'openid profile email',
+    is_active         BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at        TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS oidc_signing_keys (
+    kid             TEXT PRIMARY KEY,
+    algorithm       TEXT NOT NULL DEFAULT 'RS256',
+    private_key_pem TEXT NOT NULL,
+    public_key_pem  TEXT NOT NULL,
+    created_at      TEXT NOT NULL,
+    is_active       BOOLEAN NOT NULL DEFAULT TRUE
+);

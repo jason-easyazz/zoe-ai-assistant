@@ -21,6 +21,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # Import routers and core managers (auth_db is now PostgreSQL-backed)
+from oidc.router import router as oidc_router
 from api.auth import router as auth_router
 from api.admin import router as admin_router
 from api.touch_panel import router as touch_panel_router
@@ -29,6 +30,7 @@ from core.sessions import session_manager
 from core.rbac import rbac_manager
 from touch_panel.cache import cache_manager
 from models.database import auth_db
+from oidc.startup import bootstrap_oidc
 
 
 @asynccontextmanager
@@ -45,6 +47,11 @@ async def lifespan(app: FastAPI):
         cache_manager.cleanup_all_caches()
     except Exception as e:
         logger.warning(f"Cleanup warning: {e}")
+
+    try:
+        bootstrap_oidc()
+    except Exception as e:
+        logger.warning(f"OIDC bootstrap warning: {e}")
 
     logger.info("Zoe Authentication Service started successfully")
 
@@ -91,6 +98,7 @@ async def log_requests(request: Request, call_next):
     return response
 
 
+app.include_router(oidc_router)
 app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(touch_panel_router)

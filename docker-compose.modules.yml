@@ -160,6 +160,10 @@ services:
     container_name: zoe-multica-backend
     ports:
       - "8080:8080"
+    networks:
+      zoe-network:
+        aliases:
+          - backend
     environment:
       DATABASE_URL: "postgresql://zoe:${POSTGRES_PASSWORD}@host.docker.internal:5432/multica?sslmode=disable"
       PORT: "8080"
@@ -172,10 +176,9 @@ services:
       ALLOW_SIGNUP: "true"
       LOCAL_UPLOAD_DIR: "/data/uploads"
       LOCAL_UPLOAD_BASE_URL: "http://localhost:8080"
-      # Uncomment after creating Multica OIDC app in Authentik:
-      # OAUTH_CLIENT_ID: ${MULTICA_OIDC_CLIENT_ID}
-      # OAUTH_CLIENT_SECRET: ${MULTICA_OIDC_CLIENT_SECRET}
-      # OAUTH_DISCOVERY_URL: http://authentik-server:9000/auth/application/o/multica/.well-known/openid-configuration
+      OAUTH_CLIENT_ID: ${MULTICA_OIDC_CLIENT_ID:-multica}
+      OAUTH_CLIENT_SECRET: ${MULTICA_OIDC_CLIENT_SECRET:-}
+      OAUTH_DISCOVERY_URL: http://zoe.local/.well-known/openid-configuration
     volumes:
       - multica-uploads:/data/uploads
     extra_hosts:
@@ -198,8 +201,8 @@ services:
     ports:
       - "3000:3000"
     environment:
-      NEXT_PUBLIC_API_URL: "http://localhost:8080"
-      NEXT_PUBLIC_WS_URL: "ws://localhost:8080"
+      NEXT_PUBLIC_API_URL: "http://zoe.local/multica-api"
+      NEXT_PUBLIC_WS_URL: "ws://zoe.local/multica-api"
     networks:
       - zoe-network
     restart: unless-stopped
@@ -208,70 +211,6 @@ services:
     depends_on:
       - multica-backend
 
-  authentik-redis:
-    image: redis:7-alpine
-    container_name: authentik-redis
-    command: --save 60 1 --loglevel warning
-    volumes:
-      - authentik-redis-data:/data
-    networks: [zoe-network]
-    restart: unless-stopped
-    mem_limit: 768m
-    profiles: ["authentik"]
-
-  authentik-server:
-    image: ghcr.io/goauthentik/server:2024.12
-    container_name: authentik-server
-    command: server
-    environment:
-      AUTHENTIK_REDIS__HOST: authentik-redis
-      AUTHENTIK_POSTGRESQL__HOST: zoe-database
-      AUTHENTIK_POSTGRESQL__USER: zoe
-      AUTHENTIK_POSTGRESQL__PASSWORD: ${POSTGRES_PASSWORD}
-      AUTHENTIK_POSTGRESQL__NAME: authentik
-      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
-      AUTHENTIK_WEB__PATH_PREFIX: "/auth"
-      AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
-      AUTHENTIK_BOOTSTRAP_EMAIL: ${AUTHENTIK_BOOTSTRAP_EMAIL}
-      AUTHENTIK_BOOTSTRAP_PASSWORD: ${AUTHENTIK_BOOTSTRAP_PASSWORD}
-      AUTHENTIK_BOOTSTRAP_TOKEN: ${AUTHENTIK_BOOTSTRAP_TOKEN}
-    volumes:
-      - authentik-media:/media
-      - authentik-templates:/templates
-    networks: [zoe-network]
-    depends_on:
-      - zoe-database
-      - authentik-redis
-    restart: unless-stopped
-    mem_limit: 768m
-    profiles: ["authentik"]
-
-  authentik-worker:
-    image: ghcr.io/goauthentik/server:2024.12
-    container_name: authentik-worker
-    command: worker
-    environment:
-      AUTHENTIK_REDIS__HOST: authentik-redis
-      AUTHENTIK_POSTGRESQL__HOST: zoe-database
-      AUTHENTIK_POSTGRESQL__USER: zoe
-      AUTHENTIK_POSTGRESQL__PASSWORD: ${POSTGRES_PASSWORD}
-      AUTHENTIK_POSTGRESQL__NAME: authentik
-      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
-      AUTHENTIK_WEB__PATH_PREFIX: "/auth"
-      AUTHENTIK_BOOTSTRAP_EMAIL: ${AUTHENTIK_BOOTSTRAP_EMAIL}
-      AUTHENTIK_BOOTSTRAP_PASSWORD: ${AUTHENTIK_BOOTSTRAP_PASSWORD}
-      AUTHENTIK_BOOTSTRAP_TOKEN: ${AUTHENTIK_BOOTSTRAP_TOKEN}
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - authentik-media:/media
-      - authentik-certs:/certs
-    networks: [zoe-network]
-    depends_on:
-      - authentik-redis
-      - zoe-database
-    restart: unless-stopped
-    mem_limit: 768m
-    profiles: ["authentik"]
 
 networks:
   zoe-network:
@@ -283,7 +222,3 @@ volumes:
   agent0-logs: null
   zoe-database-data: null
   multica-uploads: null
-  authentik-redis-data: null
-  authentik-media: null
-  authentik-templates: null
-  authentik-certs: null

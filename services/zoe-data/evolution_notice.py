@@ -86,6 +86,7 @@ async def _proposal_exists(title: str, prop_type: str, db) -> bool:
 async def run_evolution_notice() -> dict:
     """Run the NOTICE phase — returns summary dict."""
     from db_pool import get_db_ctx
+    from multica_client import sync_evolution_proposal_to_multica
 
     created = 0
     skipped = 0
@@ -105,6 +106,12 @@ async def run_evolution_notice() -> dict:
             if await _proposal_exists(title, prop_type, db):
                 skipped += 1
                 continue
+            prop_id = uuid.uuid4().hex
+            description = (
+                f"Intent router missed {len(members)} similar messages in the last "
+                f"{_LOOKBACK_DAYS} days. Representative: '{rep}'. "
+                f"Consider adding a new intent pattern or skill."
+            )
             evidence = json.dumps({
                 "miss_count": len(members),
                 "examples": members[:5],
@@ -114,20 +121,30 @@ async def run_evolution_notice() -> dict:
                 """INSERT INTO evolution_proposals
                    (id, type, title, description, evidence, target_patterns, status, proposed_at)
                    VALUES ($1,$2,$3,$4,$5,$6,'pending',$7)""",
-                uuid.uuid4().hex,
+                prop_id,
                 prop_type,
                 title,
-                (
-                    f"Intent router missed {len(members)} similar messages in the last "
-                    f"{_LOOKBACK_DAYS} days. Representative: '{rep}'. "
-                    f"Consider adding a new intent pattern or skill."
-                ),
+                description,
                 evidence,
                 target_patterns,
                 time.time(),
             )
             created += 1
             logger.info("evolution_notice: proposed intent gap '%s' (%d hits)", rep[:60], len(members))
+
+            # Sync to Multica board
+            multica_id = await sync_evolution_proposal_to_multica(
+                proposal_id=prop_id,
+                title=title,
+                description=description,
+                evidence=evidence,
+                proposal_type=prop_type,
+            )
+            if multica_id:
+                await db.execute(
+                    "UPDATE evolution_proposals SET multica_issue_id=$1 WHERE id=$2",
+                    multica_id, prop_id,
+                )
 
         # ── 2. LLM error rate spike detection ────────────────────────────────
         cutoff_24h = time.time() - 86400
@@ -150,17 +167,34 @@ async def run_evolution_notice() -> dict:
             if await _proposal_exists(title, "agent_health", db):
                 skipped += 1
                 continue
+            prop_id = uuid.uuid4().hex
+            description = f"{tier} had {errors}/{total} ({int(100*errors/total)}%) slow/error calls in 24h."
+            evidence_data = json.dumps({"agent_tier": tier, "total": total, "errors": errors})
             await db.execute(
                 """INSERT INTO evolution_proposals
                    (id, type, title, description, evidence, status, proposed_at)
                    VALUES ($1,'agent_health',$2,$3,$4,'pending',$5)""",
-                uuid.uuid4().hex,
+                prop_id,
                 title,
-                f"{tier} had {errors}/{total} ({int(100*errors/total)}%) slow/error calls in 24h.",
-                json.dumps({"agent_tier": tier, "total": total, "errors": errors}),
+                description,
+                evidence_data,
                 time.time(),
             )
             created += 1
+
+            # Sync to Multica board
+            multica_id = await sync_evolution_proposal_to_multica(
+                proposal_id=prop_id,
+                title=title,
+                description=description,
+                evidence=evidence_data,
+                proposal_type="agent_health",
+            )
+            if multica_id:
+                await db.execute(
+                    "UPDATE evolution_proposals SET multica_issue_id=$1 WHERE id=$2",
+                    multica_id, prop_id,
+                )
 
     return {"created": created, "skipped_dedup": skipped, "clusters": len(clusters)}
 
@@ -173,6 +207,7 @@ async def record_frustration_signal(
 ) -> None:
     """Write a user frustration proposal (called from chat.py inline)."""
     from db_pool import get_db_ctx
+    from multica_client import sync_evolution_proposal_to_multica
 
     title = f"User frustration: '{normalized_message[:60]}'"
     async with get_db_ctx() as db:
@@ -185,22 +220,25 @@ async def record_frustration_signal(
         if rows:
             return  # already tracked
 
+        prop_id = uuid.uuid4().hex
+        description = (
+            f"User {user_id} sent a substantially similar message {repeat_count} times "
+            f"in session {session_id} without a satisfying response."
+        )
+        evidence = json.dumps({
+            "user_id": user_id,
+            "session_id": session_id,
+            "repeat_count": repeat_count,
+            "message": normalized_message,
+        })
         await db.execute(
             """INSERT INTO evolution_proposals
                (id, type, title, description, evidence, target_patterns, status, proposed_at)
                VALUES ($1,'user_frustration',$2,$3,$4,$5,'pending',$6)""",
-            uuid.uuid4().hex,
+            prop_id,
             title,
-            (
-                f"User {user_id} sent a substantially similar message {repeat_count} times "
-                f"in session {session_id} without a satisfying response."
-            ),
-            json.dumps({
-                "user_id": user_id,
-                "session_id": session_id,
-                "repeat_count": repeat_count,
-                "message": normalized_message,
-            }),
+            description,
+            evidence,
             json.dumps([normalized_message]),
             time.time(),
         )
@@ -208,6 +246,20 @@ async def record_frustration_signal(
             "evolution_notice: frustration signal for user=%s message='%s' repeats=%d",
             user_id, normalized_message[:60], repeat_count,
         )
+
+        # Sync to Multica board
+        multica_id = await sync_evolution_proposal_to_multica(
+            proposal_id=prop_id,
+            title=title,
+            description=description,
+            evidence=evidence,
+            proposal_type="user_frustration",
+        )
+        if multica_id:
+            await db.execute(
+                "UPDATE evolution_proposals SET multica_issue_id=$1 WHERE id=$2",
+                multica_id, prop_id,
+            )
 
 
 # ── MEASURE phase ─────────────────────────────────────────────────────────────
@@ -223,6 +275,7 @@ async def run_measure_phase() -> dict:
     dropped for the targeted patterns). Sets status to 'validated' or 'failed'.
     """
     from db_pool import get_db_ctx
+    from multica_client import update_multica_issue_on_proposal_status_change
 
     now = time.time()
     results: dict = {"evaluated": 0, "validated": 0, "failed": 0}
@@ -306,5 +359,14 @@ async def run_measure_phase() -> dict:
                 "evolution_measure: proposal %s → %s (before=%d after=%d)",
                 proposal_id, new_status, miss_before, miss_after,
             )
+
+            # Sync status change to Multica board if issue is linked
+            multica_id_rows = await db.fetch(
+                "SELECT multica_issue_id FROM evolution_proposals WHERE id=$1",
+                proposal_id,
+            )
+            multica_id = multica_id_rows[0]["multica_issue_id"] if multica_id_rows else None
+            if multica_id:
+                await update_multica_issue_on_proposal_status_change(multica_id, new_status)
 
     return results

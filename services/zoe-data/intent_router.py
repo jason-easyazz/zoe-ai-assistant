@@ -18,7 +18,10 @@ import shlex
 import shutil
 import unicodedata
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from conversation_context import ConversationContext
 
 logger = logging.getLogger(__name__)
 
@@ -368,8 +371,79 @@ _LETS_TALK_RE = re.compile(
     re.IGNORECASE,
 )
 
+# === GREETING (ZOE-42, ZOE-15) ===
+# Placed after lets_talk so "let's chat" doesn't become a greeting.
+# good_morning/good_evening are kept as separate intents for the daily-briefing flow.
+_GREETING_RE = re.compile(
+    r"^(?:hello|hi|hey|howdy|heya|greetings|yo)(?:\s+(?:there|zoe|there\s+zoe))?\s*[!.,]?\s*$"
+    r"|^sup(?:\s+zoe)?\s*\??$"
+    r"|^what'?s\s+up(?:\s+zoe)?\s*\??\s*$"
+    r"|^good\s+(?:afternoon|night)(?:\s+zoe)?\s*[!.,]?\s*$",
+    re.IGNORECASE,
+)
 
-def detect_intent(text: str, log_miss: bool = True) -> Optional[Intent]:
+# === SMART HOME LIGHTS (ZOE-9) ===
+# Uses search() not match() so it works mid-sentence ("can you turn off the lights").
+_SMART_HOME_RE = re.compile(
+    r"\bturn\s+(?:on|off)\s+(?:the\s+)?(?:\w+\s+){0,3}lights?\b"
+    r"|\bswitch\s+(?:on|off)\s+(?:the\s+)?(?:\w+\s+){0,3}lights?\b"
+    r"|\bdim(?:mer)?\s+(?:the\s+)?(?:\w+\s+){0,3}lights?\b"
+    r"|\bbrighten\s+(?:the\s+)?(?:\w+\s+){0,3}lights?\b"
+    r"|\blights?\s+(?:on|off)\b"
+    r"|\ball\s+lights?\s+off\b"
+    r"|\bturn\s+off\s+everything\b",
+    re.IGNORECASE,
+)
+
+# === MATH / CALCULATION (ZOE-10) ===
+# Pure arithmetic fast-path — group 1 captures the numeric expression.
+_CALCULATE_RE = re.compile(
+    r"^(?:what(?:'?s|\s+is)\s+|calculate\s+|compute\s+|how\s+much\s+is\s+)?"
+    r"(-?\d+(?:\.\d+)?\s*(?:[+\-\*\/]\s*-?\d+(?:\.\d+)?)+)\s*[=]?\s*\??$",
+    re.IGNORECASE,
+)
+# "what is 25% of 80" → groups (1=pct, 2=base)
+_CALCULATE_PCT_RE = re.compile(
+    r"^(?:what(?:'?s|\s+is)\s+|calculate\s+)?(\d+(?:\.\d+)?)\s*(?:percent|%)\s+of\s+(\d+(?:\.\d+)?)\s*\??$",
+    re.IGNORECASE,
+)
+# "what is 10 times 3" / "10 divided by 2" → groups (1=a, 2=op_word, 3=b)
+_CALCULATE_WORDS_RE = re.compile(
+    r"^(?:what(?:'?s|\s+is)\s+)?(-?\d+(?:\.\d+)?)\s+"
+    r"(times|multiplied\s+by|divided\s+by|plus|minus)\s+"
+    r"(-?\d+(?:\.\d+)?)\s*\??$",
+    re.IGNORECASE,
+)
+
+# === TTS / SYSTEM VOLUME — Zoe's own voice (ZOE-13) ===
+# Only matches phrases clearly about Zoe's speaking volume, not the music player.
+# Placed before _AUTOGEN_UNKNOWN_GAP so these don't fall through to music_control.
+_ZOE_VOICE_VOLUME_RE = re.compile(
+    r"^(?:please\s+|can\s+you\s+|could\s+you\s+)?speak\s+(?:up|louder|more\s+loudly|quieter|softer|down|more\s+softly)\b"
+    r"|^(?:please\s+)?be\s+(?:quieter|louder|softer)\b"
+    r"|^(?:please\s+)?(?:lower|raise|increase|decrease)\s+your\s+(?:voice|volume)\b"
+    r"|(?:turn|bring|put)\s+your\s+volume\s+(?:up|down)\b"
+    r"|your\s+voice\s+is\s+too\s+(?:loud|quiet|high|low)\b"
+    # Generic bare "volume up/down" — no music context → system TTS volume
+    r"|^(?:please\s+|can\s+you\s+|could\s+you\s+)?volume\s+(?:up|down|louder|quieter)\b"
+    r"|^(?:turn\s+(?:the\s+)?volume\s+(?:up|down))\b"
+    r"|^(?:volume\s+(?:up|down))\b"
+    # Follow-up percentage commands — "make it 80%", "set it to 75%", "you make it 80"
+    # ^you? handles STT artifact where recogniser prepends "you"
+    r"|^(?:you\s+)?(?:make|set|put)\s+it\s+(?:to\s+|at\s+)?(\d{1,3})\s*%?"
+    r"|^(?:set|put)\s+(?:the\s+)?volume\s+(?:to\s+|at\s+)?(\d{1,3})\s*%?"
+    r"|^(\d{1,3})\s*(?:percent|%)\b"
+    # "turn it up/down to X%" — catches "turn it up to 80%" before music_control does
+    r"|(?:turn|bring)\s+it\s+(?:up|down)\s+to\s+(\d{1,3})\s*%?",
+    re.IGNORECASE,
+)
+
+
+def detect_intent(
+    text: str,
+    log_miss: bool = True,
+    context: "Optional[ConversationContext]" = None,
+) -> Optional[Intent]:
     t = _normalize_chat_intent_text(text)
 
     # Full Home Assistant / automation setup → OpenClaw (execute_intent returns None; chat expands message)
@@ -423,6 +497,16 @@ def detect_intent(text: str, log_miss: bool = True) -> Optional[Intent]:
     }:
         return Intent("good_evening", {})
 
+    # === GENERAL GREETING (ZOE-42, ZOE-15) — hello/hi/hey/good afternoon/etc. ===
+    # good_morning/good_evening already handled above (they trigger the daily briefing).
+    if _GREETING_RE.match(t):
+        tod = None
+        if "afternoon" in t:
+            tod = "afternoon"
+        elif "night" in t:
+            tod = "night"
+        return Intent("greeting", {"time_of_day": tod})
+
     # === CLOCK / CALENDAR QUERIES — checked before domain patterns (no slots needed) ===
 
     # Modelled on HA's HassGetCurrentTime and HassGetCurrentDate — two separate intents
@@ -431,6 +515,26 @@ def detect_intent(text: str, log_miss: bool = True) -> Optional[Intent]:
 
     if _DATE_QUERY_RE.match(t):
         return Intent("date_query", {})
+
+    # --- CALCULATE (ZOE-10) — arithmetic fast-path, no LLM needed ---
+    # Percentage form: "what is 25% of 80"
+    _pct_m = _CALCULATE_PCT_RE.match(t)
+    if _pct_m:
+        pct_val, base_val = _pct_m.group(1), _pct_m.group(2)
+        return Intent("calculate", {"expression": f"{pct_val}/100*{base_val}",
+                                    "display": f"{pct_val}% of {base_val}"})
+    # Word-operator form: "what is 10 times 3" / "10 divided by 2"
+    _words_m = _CALCULATE_WORDS_RE.match(t)
+    if _words_m:
+        a, op_word, b = _words_m.group(1), _words_m.group(2).lower(), _words_m.group(3)
+        op = {"times": "*", "multiplied by": "*",
+              "divided by": "/", "plus": "+", "minus": "-"}.get(op_word, "+")
+        return Intent("calculate", {"expression": f"{a}{op}{b}",
+                                    "display": f"{a} {op_word} {b}"})
+    # Symbolic form: "2+2", "what is 100/4", "15 * 3 = ?"
+    _calc_m = _CALCULATE_RE.match(t)
+    if _calc_m and _calc_m.group(1):
+        return Intent("calculate", {"expression": _calc_m.group(1).strip()})
 
     # === DOMAIN-SPECIFIC PATTERNS FIRST (to avoid list collisions) ===
 
@@ -621,6 +725,26 @@ def detect_intent(text: str, log_miss: bool = True) -> Optional[Intent]:
         if re.match(pattern, t):
             return Intent("daily_briefing", {})
 
+    # --- SMART HOME LIGHTS (ZOE-9) ---
+    if _SMART_HOME_RE.search(t):
+        # Determine action
+        if re.search(r'\bdim\b', t):
+            action = "dim"
+        elif re.search(r'\bbrighten\b', t):
+            action = "brighten"
+        elif re.search(r'\b(?:turn|switch|flip)\s+on\b|\blights?\s+on\b', t):
+            action = "turn_on"
+        else:
+            action = "turn_off"
+        # Attempt to extract a room name
+        _room_m = re.search(
+            r'\b(bedroom|kitchen|living\s+room|bathroom|lounge|office|'
+            r'dining\s+room|hallway|garage|backyard|garden|study)\b',
+            t, re.IGNORECASE,
+        )
+        room = _room_m.group(1).replace(" ", "_") if _room_m else None
+        return Intent("smart_home", {"action": action, "entity": "light", "room": room})
+
     # --- TIMER CREATE ---
     for pattern in [
         r"^(?:set|start|create|add) (?:a |an )?(?:(\d+)[\s\-]minute[s]?|(\d+)[\s\-]min[s]?) timer(?: (?:called|for|named) (.+))?$",
@@ -763,6 +887,16 @@ def detect_intent(text: str, log_miss: bool = True) -> Optional[Intent]:
         return Intent("music_control", {"command": cmd})
 
 
+    # --- SET VOLUME / TTS voice volume (ZOE-13) ---
+    # Checked before _AUTOGEN_UNKNOWN_GAP so "speak louder / be quieter / your volume up"
+    # routes to the system-audio path instead of the music media-player path.
+    if _ZOE_VOICE_VOLUME_RE.search(t):
+        _is_up = bool(re.search(r'\b(up|louder|raise|increase|higher|more\s+loudly)\b', t, re.IGNORECASE))
+        _lvl_m = re.search(r'\b(\d{1,3})\s*%', t)
+        _level = int(_lvl_m.group(1)) if _lvl_m else None
+        direction = "set" if _level is not None else ("up" if _is_up else "down")
+        return Intent("set_volume", {"direction": direction, "level": _level})
+
     # Conversational volume phrases — covers polite/natural speech (zoe-self-improve 2026-05-11 refined)
     _AUTOGEN_UNKNOWN_GAP = re.compile(
         r'(?:can|could|would|will)\s+you\s+.*?(?:volume|louder|quieter)'
@@ -828,6 +962,13 @@ def detect_intent(text: str, log_miss: bool = True) -> Optional[Intent]:
     if _EVOLVE_REVIEW_RE.search(t):
         return Intent("evolution_proposals_review", {})
 
+    # Context-based coreference resolution (OVOS Adapt pattern)
+    if context is not None and context.is_fresh():
+        _ctx_name, _ctx_slots = context.resolve_coreference(t)
+        if _ctx_name:
+            from conversation_context import ConversationContext as _CC  # noqa: F401 (type-check only)
+            return Intent(_ctx_name, _ctx_slots or {}, confidence=0.85)
+
     if log_miss:
         logger.info("intent_miss: %s", text)
         # Write to intent-misses file for weekly self-review (PII stripped)
@@ -848,7 +989,9 @@ def detect_intent(text: str, log_miss: bool = True) -> Optional[Intent]:
 
 
 async def detect_and_extract_intent(
-    text: str, user_id: str = "family-admin"
+    text: str,
+    user_id: str = "family-admin",
+    context: "Optional[ConversationContext]" = None,
 ) -> Optional["Intent"]:
     """
     Async wrapper around detect_intent that populates structured slots for create
@@ -865,9 +1008,9 @@ async def detect_and_extract_intent(
     functions) receive the same slot shape as before.
 
     Returns None when no intent matched OR when LLM extraction failed (caller
-    should fall through to Pi Agent).
+    should fall through to Zoe Agent).
     """
-    intent = detect_intent(text)
+    intent = detect_intent(text, context=context)
     if intent is None:
         return None
     if intent.slots and "raw" in intent.slots:
@@ -883,7 +1026,7 @@ async def detect_and_extract_intent(
                 intent.name,
                 _exc,
             )
-        # Extraction failed — let caller fall through to Pi Agent
+        # Extraction failed — let caller fall through to Zoe Agent
         return None
     return intent
 
@@ -1181,6 +1324,22 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
         except Exception as exc:
             logger.warning("portrait_refresh: failed: %s", exc)
             return "Something went wrong updating my understanding — I'll try again tonight."
+
+    # === GREETING (ZOE-42, ZOE-15) ===
+    if intent.name == "greeting":
+        return await _execute_greeting(intent, user_id)
+
+    # === SMART HOME LIGHTS (ZOE-9) ===
+    if intent.name == "smart_home":
+        return await _execute_smart_home_intent(intent, user_id)
+
+    # === CALCULATE (ZOE-10) ===
+    if intent.name == "calculate":
+        return _execute_calculate(intent)
+
+    # === TTS / SYSTEM VOLUME (ZOE-13) ===
+    if intent.name == "set_volume":
+        return await _execute_set_volume_intent(intent)
 
     # Timer and recipe intents need panel navigation — emit a nav action so the cooking
     # page opens and the timer/recipe widget is pre-filled.  The text response is spoken
@@ -1954,6 +2113,164 @@ def _format_response(intent: Intent, raw_output: str) -> str:
         return "\n".join(lines)
 
     return raw_output
+
+
+async def _execute_greeting(intent: Intent, user_id: str) -> str:
+    """Warm, time-aware greeting — instant fast-path, no LLM needed."""
+    from datetime import datetime
+    tod = intent.slots.get("time_of_day")
+    if tod is None:
+        hour = datetime.now().hour
+        if hour < 12:
+            tod = "morning"
+        elif hour < 17:
+            tod = "afternoon"
+        elif hour < 21:
+            tod = "evening"
+        else:
+            tod = "night"
+    # Try to personalise with the user's preferred name from portrait
+    name_suffix = ""
+    try:
+        from user_portrait import load_portrait_field  # type: ignore[import]
+        name = await load_portrait_field(user_id, "preferred_name")
+        if name:
+            name_suffix = f", {name}"
+    except Exception:
+        pass
+    greetings = {
+        "morning":   f"Good morning{name_suffix}! What can I help you with today?",
+        "afternoon": f"Good afternoon{name_suffix}! How can I help?",
+        "evening":   f"Good evening{name_suffix}! What can I do for you?",
+        "night":     f"Good evening{name_suffix}! Still up — what do you need?",
+    }
+    return greetings.get(tod, f"Hi{name_suffix}! How can I help?")
+
+
+async def _execute_smart_home_intent(intent: Intent, user_id: str) -> Optional[str]:
+    """Route light-control intents to the HA bridge (ZOE-9)."""
+    try:
+        import httpx as _httpx
+        ha_url = os.environ.get("ZOE_HA_BRIDGE_URL", "http://127.0.0.1:8007")
+        slots = intent.slots or {}
+        action = slots.get("action", "turn_off")
+        room = slots.get("room")
+
+        # Build the HA entity_id from room name, falling back to the group alias
+        if room:
+            entity_id = f"light.{room.lower()}"
+        else:
+            entity_id = os.environ.get("ZOE_DEFAULT_LIGHT_ENTITY", "light.all")
+
+        service_map = {
+            "turn_on":  "turn_on",
+            "turn_off": "turn_off",
+            "dim":      "turn_on",
+            "brighten": "turn_on",
+        }
+        service = service_map.get(action, "turn_on" if action == "turn_on" else "turn_off")
+        data: dict = {"entity_id": entity_id}
+        if action == "dim":
+            data["brightness_pct"] = 25
+        elif action == "brighten":
+            data["brightness_pct"] = 100
+
+        payload = {"type": "service", "domain": "light", "service": service, "data": data}
+        async with _httpx.AsyncClient(timeout=8.0) as c:
+            await c.post(f"{ha_url}/execute", json=payload)
+
+        action_labels = {
+            "turn_on":  "on",
+            "turn_off": "off",
+            "dim":      "dimmed",
+            "brighten": "brightened",
+        }
+        label = action_labels.get(action, action)
+        if room:
+            room_friendly = room.replace("_", " ").title()
+            return f"{room_friendly} lights {label}."
+        return f"Lights {label}."
+    except Exception as exc:
+        logger.warning("smart_home intent failed: %s", exc)
+        return (
+            "I couldn't reach the smart home bridge. "
+            "Make sure Home Assistant is connected — say \"set up home assistant\" to get started."
+        )
+
+
+def _execute_calculate(intent: Intent) -> str:
+    """Safe arithmetic evaluator — only pure numeric expressions are passed to eval (ZOE-10)."""
+    expr_raw = intent.slots.get("expression", "").strip()
+    display = intent.slots.get("display", expr_raw)
+    if not expr_raw:
+        return "What would you like me to calculate?"
+
+    # Strip everything that isn't a digit, operator, decimal point, or parens.
+    # This is the critical safety gate — no letters means no code injection.
+    import re as _re
+    safe = _re.sub(r"[^\d\s\+\-\*\/\.\(\)\%]", "", expr_raw).strip()
+    if not safe or _re.search(r"[a-zA-Z_]", safe):
+        return f"I can only handle numeric expressions. Try something like \"what is 2 + 2\"."
+
+    try:
+        # Restricted eval: no builtins, no globals
+        result = eval(safe, {"__builtins__": {}}, {})  # noqa: S307
+        if isinstance(result, float):
+            # Show integer when result is whole
+            result = int(result) if result == int(result) else round(result, 6)
+        return f"{display} = {result}"
+    except ZeroDivisionError:
+        return "That expression would divide by zero."
+    except Exception:
+        return f"I couldn't calculate \"{display}\". Try a simpler expression like \"what is 15 * 4\"."
+
+
+async def _execute_set_volume_intent(intent: Intent) -> str:
+    """Adjust system (ALSA) audio volume for Zoe's TTS output (ZOE-13).
+
+    Calls amixer directly to avoid the auth-gated HTTP endpoint.
+    """
+    slots = intent.slots or {}
+    direction = slots.get("direction", "up")
+    level: Optional[int] = slots.get("level")
+
+    try:
+        if direction == "set" and level is not None:
+            # Set to an absolute percentage
+            pct = max(0, min(100, level))
+            proc = await asyncio.create_subprocess_exec(
+                "amixer", "sset", "Master", f"{pct}%",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await asyncio.wait_for(proc.communicate(), timeout=5.0)
+            return f"Volume set to {pct}%."
+        else:
+            # Relative adjustment: read current level, step by 15
+            proc = await asyncio.create_subprocess_exec(
+                "amixer", "sget", "Master",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+            m = re.search(r"\[(\d+)%\]", stdout.decode(errors="replace"))
+            current = int(m.group(1)) if m else 50
+            step = 15
+            new_vol = min(100, current + step) if direction == "up" else max(0, current - step)
+            proc2 = await asyncio.create_subprocess_exec(
+                "amixer", "sset", "Master", f"{new_vol}%",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await asyncio.wait_for(proc2.communicate(), timeout=5.0)
+            label = "louder" if direction == "up" else "quieter"
+            return f"Got it, speaking a bit {label} now (volume at {new_vol}%)."
+    except Exception as exc:
+        logger.warning("set_volume intent failed: %s", exc)
+        direction_word = "up" if direction != "down" else "down"
+        if direction_word == "up":
+            return "I'll try to speak louder. You can also adjust volume in Settings."
+        return "I'll try to speak more softly. You can also adjust volume in Settings."
 
 
 def _parse_date(raw: str) -> Optional[str]:

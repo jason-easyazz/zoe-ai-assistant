@@ -839,10 +839,6 @@
                     <span class="btn-text">Sign In with PIN</span>
                 </button>
             </form>
-            <button type="button" onclick="window.location.href='/api/auth/sso/oidc/authorize'"
-                    style="width:100%;padding:12px;margin-top:10px;background:#4a90d9;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:14px;">
-              Sign in with SSO
-            </button>
             </div>
         </div>
     </div>
@@ -1179,8 +1175,14 @@
             showMessage('Welcome, ' + data.username + '!', 'success');
             
             setTimeout(() => {
-                // Always use standard dashboard; touch panels reach /touch directly
-                window.location.href = '/dashboard.html';
+                // If we were sent here from an OIDC authorize flow, complete it
+                const params = new URLSearchParams(window.location.search);
+                const oidcStateId = params.get('oidc_state_id');
+                if (oidcStateId) {
+                    window.location.href = '/application/o/authorize/complete?oidc_state_id=' + encodeURIComponent(oidcStateId);
+                } else {
+                    window.location.href = '/dashboard.html';
+                }
             }, 1000);
         }
 

@@ -140,5 +140,69 @@ fi
 echo ""
 echo -e "${GREEN}Ready to use Zoe!${NC}"
 
+# ── OIDC secret generation ─────────────────────────────────────────────────
+echo ""
+echo -e "${BLUE}========================================${NC}"
+echo -e "${BLUE}OIDC Secret Generation${NC}"
+echo -e "${BLUE}========================================${NC}"
+
+ROOT_ENV="$PROJECT_ROOT/.env"
+HA_SECRETS="$PROJECT_ROOT/homeassistant/secrets.yaml"
+
+if [ ! -f "$ROOT_ENV" ]; then
+    echo -e "${YELLOW}⚠${NC}  .env not found — skipping OIDC secret generation"
+else
+    # Generate HA_OIDC_CLIENT_SECRET if blank or missing
+    current_ha_secret=$(grep "^HA_OIDC_CLIENT_SECRET=" "$ROOT_ENV" | cut -d= -f2-)
+    if [ -z "$current_ha_secret" ]; then
+        ha_secret=$(openssl rand -hex 32)
+        # Update or append
+        if grep -q "^HA_OIDC_CLIENT_SECRET=" "$ROOT_ENV"; then
+            sed -i "s|^HA_OIDC_CLIENT_SECRET=.*|HA_OIDC_CLIENT_SECRET=${ha_secret}|" "$ROOT_ENV"
+        else
+            echo "HA_OIDC_CLIENT_SECRET=${ha_secret}" >> "$ROOT_ENV"
+        fi
+        echo -e "  ${GREEN}✓${NC} HA_OIDC_CLIENT_SECRET generated"
+    else
+        ha_secret="$current_ha_secret"
+        echo -e "  ${YELLOW}⚠${NC}  HA_OIDC_CLIENT_SECRET already set — keeping existing"
+    fi
+
+    # Generate MULTICA_OIDC_CLIENT_SECRET if blank or missing
+    current_multica_secret=$(grep "^MULTICA_OIDC_CLIENT_SECRET=" "$ROOT_ENV" | cut -d= -f2-)
+    if [ -z "$current_multica_secret" ]; then
+        multica_secret=$(openssl rand -hex 32)
+        if grep -q "^MULTICA_OIDC_CLIENT_SECRET=" "$ROOT_ENV"; then
+            sed -i "s|^MULTICA_OIDC_CLIENT_SECRET=.*|MULTICA_OIDC_CLIENT_SECRET=${multica_secret}|" "$ROOT_ENV"
+        else
+            echo "MULTICA_OIDC_CLIENT_SECRET=${multica_secret}" >> "$ROOT_ENV"
+        fi
+        echo -e "  ${GREEN}✓${NC} MULTICA_OIDC_CLIENT_SECRET generated"
+    else
+        echo -e "  ${YELLOW}⚠${NC}  MULTICA_OIDC_CLIENT_SECRET already set — keeping existing"
+    fi
+
+    # Write HA secrets.yaml if client secret is not yet set
+    if [ -f "$HA_SECRETS" ]; then
+        current_ha_yaml_secret=$(grep "^ha_oidc_client_secret:" "$HA_SECRETS" | sed 's/ha_oidc_client_secret: *//;s/"//g' | xargs)
+        if [ -z "$current_ha_yaml_secret" ]; then
+            sed -i "s|^ha_oidc_client_id:.*|ha_oidc_client_id: \"home-assistant\"|" "$HA_SECRETS"
+            sed -i "s|^ha_oidc_client_secret:.*|ha_oidc_client_secret: \"${ha_secret}\"|" "$HA_SECRETS"
+            echo -e "  ${GREEN}✓${NC} homeassistant/secrets.yaml updated with HA OIDC secret"
+        else
+            echo -e "  ${YELLOW}⚠${NC}  homeassistant/secrets.yaml already has ha_oidc_client_secret — keeping existing"
+        fi
+    fi
+
+    # Apply OIDC DDL to PostgreSQL
+    echo -e "  Applying OIDC DDL to PostgreSQL..."
+    if docker exec -i zoe-database psql -U zoe -d zoe \
+        < "$PROJECT_ROOT/scripts/setup/migrate_auth_to_postgres.sql" > /dev/null 2>&1; then
+        echo -e "  ${GREEN}✓${NC} OIDC tables verified in PostgreSQL"
+    else
+        echo -e "  ${YELLOW}⚠${NC}  Could not apply DDL (is zoe-database running?)"
+    fi
+fi
+
 
 

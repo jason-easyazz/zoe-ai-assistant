@@ -162,3 +162,8 @@ class AuthDatabase:
 
 
 auth_db = AuthDatabase()
+
+
+def get_db() -> _ConnWrapper:
+    """Return a context-manager DB connection (alias for auth_db.get_connection())."""
+    return auth_db.get_connection()

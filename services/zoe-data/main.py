@@ -205,7 +205,7 @@ async def lifespan(app: FastAPI):
         logger.info("Background task watchdog started")
     except Exception as _wd_exc:
         logger.warning("Task watchdog not started (non-fatal): %s", _wd_exc)
-    # Pi/Jetson Agent: warm Gemma's KV cache in background so first real query is fast
+    # Zoe Agent: warm Gemma's KV cache in background so first real query is fast
     # Check env directly to avoid circular import from routers.chat
     _pi_mode = os.environ.get("HERMES_FAST_PATH", "true").lower() != "true"
     _jetson_mode = os.environ.get("JETSON_AGENT_MODE", "false").lower() == "true"
@@ -242,6 +242,17 @@ async def lifespan(app: FastAPI):
         start_proactive_engine()
     except Exception as _pe_exc:
         logger.warning("Proactive engine failed to start (non-fatal): %s", _pe_exc)
+
+    # Multica autopilot schedule sync — register cron jobs from Multica into APScheduler.
+    # Must run after start_proactive_engine() so the scheduler is already running.
+    if os.environ.get("ZOE_MULTICA", "false").lower() == "true":
+        try:
+            from multica_autopilot_sync import sync_autopilots_from_multica
+            from proactive.scheduler import get_scheduler as _get_aps
+            _n = await sync_autopilots_from_multica(_get_aps())
+            logger.info("Multica autopilot sync: %d job(s) registered", _n)
+        except Exception as _mas_exc:
+            logger.warning("Multica autopilot sync skipped (non-fatal): %s", _mas_exc)
 
     # Skills filesystem watcher (live cache invalidation for peer agent cards)
     try:

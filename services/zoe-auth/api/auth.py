@@ -3,13 +3,7 @@ Authentication API Endpoints
 RESTful API for authentication, session management, and user operations
 """
 
-import secrets as _secrets_mod
-import os as _os
-from urllib.parse import urlencode as _urlencode
-
-import httpx as _httpx
 from fastapi import APIRouter, HTTPException, Depends, Request, Header
-from fastapi.responses import RedirectResponse as _RedirectResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional, List, Dict, Any
@@ -896,104 +890,4 @@ async def check_permission(permission: str, resource: Optional[str] = None,
         raise HTTPException(status_code=500, detail="Permission check failed")
 
 
-# --- OIDC SSO endpoints ---
-
-@router.get("/sso/oidc/authorize")
-async def sso_oidc_authorize(redirect_after: str = "/dashboard.html"):
-    """Redirect to Authentik (or any OIDC provider) for SSO login."""
-    issuer = _os.getenv("OIDC_ISSUER_URL", "").rstrip("/")
-    if not issuer:
-        raise HTTPException(status_code=503, detail="SSO not configured")
-    client_id = _os.getenv("OIDC_ZOE_CLIENT_ID", "")
-    base_url = _os.getenv("ZOE_BASE_URL", "http://zoe.local")
-    params = {
-        "client_id": client_id,
-        "response_type": "code",
-        "scope": "openid profile email",
-        "redirect_uri": f"{base_url}/api/auth/sso/oidc/callback",
-        "state": _secrets_mod.token_urlsafe(16),
-    }
-    # For Authentik: issuer = http://zoe.local/auth/application/o/zoe/
-    # authorize URL  = http://zoe.local/auth/application/o/zoe/authorize/
-    authorize_url = f"{issuer}/authorize/?" + _urlencode(params)
-    return _RedirectResponse(authorize_url)
-
-
-@router.get("/sso/oidc/callback")
-async def sso_oidc_callback(code: str, state: str, request: Request):
-    """Handle OIDC callback, create zoe-auth session."""
-    issuer = _os.getenv("OIDC_ISSUER_URL", "").rstrip("/")
-    client_id = _os.getenv("OIDC_ZOE_CLIENT_ID", "")
-    client_secret = _os.getenv("OIDC_ZOE_CLIENT_SECRET", "")
-    base_url = _os.getenv("ZOE_BASE_URL", "http://zoe.local")
-
-    try:
-        token_url = f"{issuer}/token/"
-        async with _httpx.AsyncClient() as client:
-            token_resp = await client.post(token_url, data={
-                "grant_type": "authorization_code",
-                "code": code,
-                "redirect_uri": f"{base_url}/api/auth/sso/oidc/callback",
-                "client_id": client_id,
-                "client_secret": client_secret,
-            })
-            if token_resp.status_code != 200:
-                raise HTTPException(status_code=401, detail="Token exchange failed")
-            tokens = token_resp.json()
-
-            userinfo_url = f"{issuer}/userinfo/"
-            info_resp = await client.get(
-                userinfo_url,
-                headers={"Authorization": f"Bearer {tokens['access_token']}"}
-            )
-            if info_resp.status_code != 200:
-                raise HTTPException(status_code=401, detail="Userinfo fetch failed")
-            userinfo = info_resp.json()
-
-        sub = userinfo.get("sub", "")
-        username = userinfo.get("preferred_username") or userinfo.get("email", sub)
-        email = userinfo.get("email", "")
-        sso_user_id = f"sso_{sub}"
-
-        # Find or create user in auth_users
-        with auth_db.get_connection() as conn:
-            row = conn.execute(
-                "SELECT user_id FROM auth_users WHERE user_id = ?", (sso_user_id,)
-            ).fetchone()
-            if not row:
-                conn.execute("""
-                    INSERT INTO auth_users (user_id, username, email, role, created_at)
-                    VALUES (?, ?, ?, 'user', ?)
-                    ON CONFLICT DO NOTHING
-                """, (sso_user_id, username, email, datetime.now().isoformat()))
-                conn.execute("""
-                    INSERT INTO users (user_id, username, email, role, is_active, is_verified, created_at)
-                    VALUES (?, ?, ?, 'user', 1, 1, ?)
-                    ON CONFLICT DO NOTHING
-                """, (sso_user_id, username, email, datetime.now().isoformat()))
-
-        # Create session
-        auth_request = AuthenticationRequest(
-            user_id=sso_user_id,
-            auth_method=AuthMethod.SSO,
-            credentials={},
-            device_info={"type": "sso", "provider": "oidc"},
-            ip_address=request.client.host if request.client else None,
-            user_agent=request.headers.get("user-agent"),
-            requested_session_type=SessionType.SSO,
-        )
-        session_result = session_manager.authenticate(auth_request)
-        if not session_result.success:
-            raise HTTPException(status_code=500, detail="Session creation failed")
-
-        redirect_to = request.query_params.get("redirect_after", "/dashboard.html")
-        response = _RedirectResponse(redirect_to)
-        response.set_cookie("zoe_session", session_result.session.session_id, httponly=True, samesite="lax")
-        return response
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"SSO callback error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="SSO login failed")
 

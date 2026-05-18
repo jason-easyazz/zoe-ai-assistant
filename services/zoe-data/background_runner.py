@@ -3,7 +3,7 @@ background_runner.py — Background task queue for Zoe.
 
 Enables "fire and forget" tasks:
   1. User says "go find hotel prices, let me know when done"
-  2. Pi Agent calls escalate_to_openclaw(background=True)
+  2. Zoe Agent calls escalate_to_openclaw(background=True)
   3. chat.py calls enqueue_background_task()
   4. This module runs the task via OpenClaw ACP, stores result
   5. Next chat load: /api/chat/tasks/pending returns results
@@ -126,6 +126,10 @@ async def _run_task(
             _proposal_id = _proposal_match.group(1)
             try:
                 async with get_db_ctx() as _db:
+                    rows = await _db.fetch(
+                        "SELECT multica_issue_id FROM evolution_proposals WHERE id=$1",
+                        _proposal_id,
+                    )
                     await _db.execute(
                         """UPDATE evolution_proposals
                            SET status='deployed', deployed_at=$1
@@ -133,6 +137,14 @@ async def _run_task(
                         time.time(), _proposal_id,
                     )
                 logger.info("background_runner: task #%d → proposal %s status=deployed", task_id, _proposal_id)
+                # Sync deployed status to Multica board
+                _multica_id = rows[0]["multica_issue_id"] if rows else None
+                if _multica_id:
+                    try:
+                        from multica_client import update_multica_issue_on_proposal_status_change  # type: ignore[import]
+                        await update_multica_issue_on_proposal_status_change(_multica_id, "deployed")
+                    except Exception as _me:
+                        logger.debug("background_runner: Multica sync failed: %s", _me)
             except Exception as _pe:
                 logger.debug("background_runner: could not mark proposal deployed: %s", _pe)
 

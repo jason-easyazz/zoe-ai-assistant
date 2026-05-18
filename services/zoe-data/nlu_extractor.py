@@ -6,7 +6,7 @@ max_tokens=120) so the model always returns structured args, never free text.
 
 Each extractor maps the LLM's tool arguments to the slot keys that
 _build_command in intent_router.py expects.  Returns None on any failure
-so callers fall through to the Pi Agent.
+so callers fall through to the Zoe Agent.
 """
 import datetime
 import json
@@ -296,7 +296,7 @@ async def extract_slots_for_intent(intent_name: str, text: str) -> Optional[dict
     Extract structured slots for a create intent via the local LLM.
 
     Returns a dict of slot key/values compatible with intent_router._build_command,
-    or None if extraction fails (caller should fall through to Pi Agent).
+    or None if extraction fails (caller should fall through to Zoe Agent).
     """
     fn = _EXTRACTORS.get(intent_name)
     if fn is None:

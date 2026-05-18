@@ -103,11 +103,11 @@ def _fake_get_collection(_path):
 
 
 # ---------------------------------------------------------------------------
-# Patch MemPalace imports before importing pi_agent
+# Patch MemPalace imports before importing zoe_agent
 # ---------------------------------------------------------------------------
 
 def _install_mempalace_stubs():
-    """Install mempalace module stubs so pi_agent doesn't require the real package."""
+    """Install mempalace module stubs so zoe_agent doesn't require the real package."""
     palace_mod = types.ModuleType("mempalace")
     palace_sub = types.ModuleType("mempalace.palace")
     palace_sub.get_collection = _fake_get_collection
@@ -127,7 +127,7 @@ def _install_mempalace_stubs():
 
 _install_mempalace_stubs()
 
-# Now we can import zoe_agent as pi_agent functions
+# Now we can import zoe_agent functions
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from zoe_agent import (
     _mempalace_add,
@@ -135,7 +135,7 @@ from zoe_agent import (
     _mempalace_load_user_facts,
     _fast_memory_extract,
     _fire_memory_capture,
-    _pi_soul,
+    _zoe_soul,
     migrate_mempalace_legacy_records,
 )
 from routers.chat import _persist_memory_candidates
@@ -160,7 +160,7 @@ def fresh_collection():
         _ms._service_singleton = None
     except Exception:
         pass
-    # Also drop pi_agent's per-turn facts cache.
+    # Also drop zoe_agent's per-turn facts cache.
     try:
         import zoe_agent as _pa
         _pa._USER_FACTS_CACHE.clear()
@@ -360,11 +360,11 @@ async def test_memory_capture_paths_pi_hermes_openclaw():
 
 
 # ---------------------------------------------------------------------------
-# 6. _pi_soul includes datetime and user_id
+# 6. _zoe_soul includes datetime and user_id
 # ---------------------------------------------------------------------------
 
-def test_pi_soul_contains_datetime():
-    soul = _pi_soul(username="Jason", user_id="jason")
+def test_zoe_soul_contains_datetime():
+    soul = _zoe_soul(username="Jason", user_id="jason")
     assert "jason" in soul.lower()
     assert "Jason" in soul
     # Check year appears (datetime stamp)
@@ -372,9 +372,9 @@ def test_pi_soul_contains_datetime():
     assert str(datetime.datetime.now().year) in soul
 
 
-def test_pi_soul_empty_user():
+def test_zoe_soul_empty_user():
     """Should not crash with empty username."""
-    soul = _pi_soul()
+    soul = _zoe_soul()
     assert "You are Zoe" in soul
 
 

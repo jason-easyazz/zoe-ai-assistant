@@ -1488,7 +1488,7 @@ async def _execute_tool(db, name: str, args: dict):
         if jetson_mode:
             agents.append("Jetson Agent (Gemma 4 GPU)")
         elif pi_mode:
-            agents.append("Pi Agent (Gemma 4 CPU)")
+            agents.append("Zoe Agent (Gemma 4 CPU)")
         else:
             agents.append("Gemma Agent (local)")
         agents.append("OpenClaw (on-demand)")
@@ -1629,7 +1629,7 @@ async def _execute_tool(db, name: str, args: dict):
         if jetson_mode:
             agents.append("Jetson Agent (Gemma 4 GPU)")
         elif pi_mode:
-            agents.append("Pi Agent (Gemma 4 CPU)")
+            agents.append("Zoe Agent (Gemma 4 CPU)")
         else:
             agents.append("Gemma Agent (local)")
         agents.append("OpenClaw (on-demand)")

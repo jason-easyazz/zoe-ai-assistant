@@ -128,3 +128,166 @@ def get_multica_client() -> MULClient:
     if _client is None:
         _client = MULClient()
     return _client
+
+
+# ── Module-level cache for workspace resource lookups ─────────────────────────
+_cached_self_imp_agent_id: str | None = None
+_cached_self_imp_project_id: str | None = None
+
+_STATUS_MAP = {
+    "approved": "in_progress",
+    "deployed": "in_review",
+    "validated": "done",
+    "failed": "cancelled",
+}
+
+
+async def _lookup_evolution_resources(client: MULClient) -> tuple[str | None, str | None]:
+    """Return (self_improvement_agent_id, self_improvement_engine_project_id).
+
+    Results are cached in module-level vars after first successful lookup.
+    """
+    global _cached_self_imp_agent_id, _cached_self_imp_project_id
+
+    if _cached_self_imp_agent_id and _cached_self_imp_project_id:
+        return _cached_self_imp_agent_id, _cached_self_imp_project_id
+
+    headers = client._headers()
+    params = {"workspace_id": client._workspace}
+    base = client._base
+
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as http:
+            # Find the Self-Improvement Agent
+            agents_resp = await http.get(f"{base}/api/agents", headers=headers, params=params)
+            if agents_resp.status_code == 200:
+                agents = agents_resp.json()
+                if isinstance(agents, list):
+                    for a in agents:
+                        if a.get("name") == "Self-Improvement Agent":
+                            _cached_self_imp_agent_id = a["id"]
+                            break
+
+            # Find Self-Improvement Engine project
+            projects_resp = await http.get(f"{base}/api/projects", headers=headers, params=params)
+            if projects_resp.status_code == 200:
+                projects = projects_resp.json()
+                items = projects if isinstance(projects, list) else projects.get("projects", [])
+                for p in items:
+                    if p.get("title") == "Self-Improvement Engine":
+                        _cached_self_imp_project_id = p["id"]
+                        break
+    except Exception as exc:
+        logger.warning("Multica: resource lookup failed: %s", exc)
+
+    return _cached_self_imp_agent_id, _cached_self_imp_project_id
+
+
+async def sync_evolution_proposal_to_multica(
+    proposal_id: str,
+    title: str,
+    description: str,
+    evidence: str,
+    proposal_type: str,
+) -> str | None:
+    """Create a Multica issue for a new evolution proposal.
+
+    Returns the Multica issue_id, or None if Multica is not configured or the
+    call fails.  Called from run_evolution_notice() after writing a new
+    proposal row to the DB.
+    """
+    client = get_multica_client()
+    if not client.is_configured():
+        logger.debug("Multica not configured — skipping sync_evolution_proposal")
+        return None
+
+    agent_id, project_id = await _lookup_evolution_resources(client)
+
+    full_desc = description
+    if evidence:
+        full_desc = f"{description}\n\n**Evidence:** {evidence}"
+
+    payload: dict[str, Any] = {
+        "title": title,
+        "description": full_desc,
+        "status": "backlog",
+        "priority": "medium",
+    }
+    if agent_id:
+        payload["assignee_id"] = agent_id
+        payload["assignee_type"] = "agent"
+    if project_id:
+        payload["project_id"] = project_id
+
+    headers = client._headers()
+    params = {"workspace_id": client._workspace}
+
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as http:
+            # Create the issue
+            resp = await http.post(
+                f"{client._base}/api/issues",
+                json=payload,
+                headers=headers,
+                params=params,
+            )
+            resp.raise_for_status()
+            issue = resp.json()
+            issue_id: str = issue.get("id", "")
+
+            # Attach evolution-proposal label
+            labels_resp = await http.get(
+                f"{client._base}/api/labels",
+                headers=headers,
+                params=params,
+            )
+            if labels_resp.status_code == 200:
+                labels = labels_resp.json()
+                if isinstance(labels, list):
+                    for lbl in labels:
+                        if lbl.get("name") == "evolution-proposal":
+                            await http.post(
+                                f"{client._base}/api/issues/{issue_id}/labels",
+                                json={"label_id": lbl["id"]},
+                                headers=headers,
+                                params=params,
+                            )
+                            break
+
+            logger.info(
+                "Multica: synced evolution proposal '%s' → issue %s",
+                title[:60], issue_id,
+            )
+            return issue_id or None
+
+    except Exception as exc:
+        logger.warning("Multica sync_evolution_proposal failed: %s", exc)
+        return None
+
+
+async def update_multica_issue_on_proposal_status_change(
+    multica_issue_id: str,
+    new_status: str,
+) -> None:
+    """Update a Multica issue when an evolution proposal changes status.
+
+    Mapping:
+      'approved'  → Multica 'in_progress'
+      'deployed'  → Multica 'in_review'
+      'validated' → Multica 'done'
+      'failed'    → Multica 'cancelled'
+    """
+    client = get_multica_client()
+    if not client.is_configured():
+        return
+
+    multica_status = _STATUS_MAP.get(new_status)
+    if not multica_status:
+        logger.debug("Multica: no status mapping for '%s' — skipping", new_status)
+        return
+
+    await client.update_issue(multica_issue_id, multica_status)
+    logger.info(
+        "Multica: updated issue %s → %s (proposal status: %s)",
+        multica_issue_id, multica_status, new_status,
+    )

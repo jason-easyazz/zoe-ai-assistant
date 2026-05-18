@@ -25,7 +25,9 @@ services:
     extra_hosts:
     - "host.docker.internal:host-gateway"
     networks:
-    - zoe-network
+      zoe-network:
+        aliases:
+          - zoe.local
     restart: unless-stopped
 
   # ── Auth ───────────────────────────────────────────────────────────────────
@@ -45,6 +47,11 @@ services:
     - PYTHONUNBUFFERED=1
     - DATABASE_PATH=/app/data/zoe.db
     - POSTGRES_URL=postgresql://zoe:${POSTGRES_PASSWORD}@zoe-database:5432/zoe
+    - ZOE_BASE_URL=${ZOE_BASE_URL:-http://zoe.local}
+    - HA_OIDC_CLIENT_ID=${HA_OIDC_CLIENT_ID:-home-assistant}
+    - HA_OIDC_CLIENT_SECRET=${HA_OIDC_CLIENT_SECRET:-}
+    - MULTICA_OIDC_CLIENT_ID=${MULTICA_OIDC_CLIENT_ID:-multica}
+    - MULTICA_OIDC_CLIENT_SECRET=${MULTICA_OIDC_CLIENT_SECRET:-}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
       interval: 30s
