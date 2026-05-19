@@ -1643,8 +1643,8 @@ async def _handle_introduce_intent(
             import uuid as _uuid
             person_id = str(_uuid.uuid4())
             await db.execute(
-                "INSERT INTO people (id, user_id, name, relationship, circle, visibility) VALUES (?,?,?,?,?,?)",
-                (person_id, user_id, name, "acquaintance", "acquaintance", "family"),
+                "INSERT INTO people (id, user_id, name, relationship, circle, context, visibility) VALUES (?,?,?,?,?,?,?)",
+                (person_id, user_id, name, "contact", "circle", "personal", "family"),
             )
             await db.commit()
     except Exception as exc:

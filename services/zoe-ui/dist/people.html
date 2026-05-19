@@ -700,13 +700,18 @@
                 <input type="text" class="modal-input" id="personName" placeholder="Enter person's name" required>
             </div>
             <div class="modal-field">
-                <label class="modal-label">Category</label>
+                <label class="modal-label">Tier</label>
                 <select class="modal-input" id="personCategory">
-                    <option value="inner">Inner Circle</option>
-                    <option value="circle">Circle</option>
-                    <option value="acquaintance">Acquaintances</option>
-                    <option value="professional">Professional</option>
-                    <option value="archive">Archive</option>
+                    <option value="circle">○ Circle</option>
+                    <option value="inner">● Inner Circle</option>
+                    <option value="public">□ Public</option>
+                </select>
+            </div>
+            <div class="modal-field">
+                <label class="modal-label">Context</label>
+                <select class="modal-input" id="personContext">
+                    <option value="personal">👤 Personal</option>
+                    <option value="work">💼 Work</option>
                 </select>
             </div>
             <div class="modal-field">
@@ -724,6 +729,10 @@
             <div class="modal-field">
                 <label class="modal-label">Address</label>
                 <input type="text" class="modal-input" id="personAddress" placeholder="123 Main Street">
+            </div>
+            <div class="modal-field">
+                <label class="modal-label">How We Met</label>
+                <input type="text" class="modal-input" id="personHowWeMet" placeholder="At a conference, through a mutual friend…">
             </div>
             <div class="modal-field">
                 <label class="modal-label">Notes</label>
@@ -876,7 +885,24 @@
         let draggedItem = null, hoveredItem = null;
         let animationFrame;
         let breathePhase = 0;
-        let activeFilters = ['inner', 'circle', 'acquaintance', 'professional'];
+        let activeFilters = ['inner', 'circle', 'public'];
+        let activeContext = 'personal';  // 'personal' | 'work' | 'all'
+
+        function setDesktopContext(ctx) {
+            activeContext = ctx;
+            updateSidebar();
+            renderCardGrid();
+        }
+
+        function toggleFilter(category) {
+            const index = activeFilters.indexOf(category);
+            if (index > -1) {
+                activeFilters.splice(index, 1);
+            } else {
+                activeFilters.push(category);
+            }
+            updateSidebar();
+        }
         let mouseDownTime = 0;
         let mouseDownItem = null;
         const DRAG_THRESHOLD = 200;
@@ -975,11 +1001,13 @@
         async function createPerson() {
             const name = document.getElementById('personName').value.trim();
             const category = document.getElementById('personCategory').value;
+            const ctx = document.getElementById('personContext')?.value || 'personal';
             const birthday = document.getElementById('personBirthday').value;
             const phone = document.getElementById('personPhone').value.trim();
             const email = document.getElementById('personEmail').value.trim();
             const address = document.getElementById('personAddress').value.trim();
             const notes = document.getElementById('personNotes').value.trim();
+            const howWeMet = document.getElementById('personHowWeMet')?.value?.trim() || null;
             const customFields = {};
             document.querySelectorAll('#personCustomFields [data-field-key]').forEach(el => {
                 if (el.value && el.value.trim() !== '') customFields[el.dataset.fieldKey] = el.value.trim();
@@ -994,10 +1022,13 @@
                 const personData = {
                     name: name,
                     relationship: category,
+                    circle: normTier(category),
+                    context: ctx,
                     birthday: birthday || null,
                     phone: phone || null,
                     email: email || null,
                     notes: notes || null,
+                    how_we_met: howWeMet || null,
                     custom_fields: customFields,
                 };
                 if (address) {
@@ -1010,8 +1041,8 @@
                 });
                 
                 if (result && result.id) {
-                    const strengthMap = { inner: 0.9, circle: 0.7, acquaintance: 0.5, professional: 0.6 };
-                    const freqMap = { inner: 7, circle: 14, acquaintance: 30, professional: 21 };
+                    const strengthMap = { inner: 0.9, circle: 0.7, public: 0.5 };
+                    const freqMap = { inner: 7, circle: 14, public: 30 };
                     const newPerson = {
                         id: 'p' + result.id,
                         name: name,
@@ -1337,13 +1368,18 @@
             
             if (isEditing) {
                 name.innerHTML = `<input type="text" id="editPersonName" value="${person.name}" class="edit-field" placeholder="Full name">`;
-                subtitle.innerHTML = `<select id="editPersonCategory" class="edit-field">
-                    <option value="inner" ${person.category === 'inner' ? 'selected' : ''}>Inner Circle</option>
-                    <option value="circle" ${person.category === 'circle' ? 'selected' : ''}>Circle</option>
-                    <option value="acquaintance" ${person.category === 'acquaintance' ? 'selected' : ''}>Acquaintances</option>
-                    <option value="professional" ${person.category === 'professional' ? 'selected' : ''}>Professional</option>
-                    <option value="archive" ${person.category === 'archive' ? 'selected' : ''}>Archive</option>
-                </select>`;
+                const _editTier = normTier(person.circle || person.category || 'circle');
+                const _editCtx = person.context || 'personal';
+                subtitle.innerHTML = `
+                    <select id="editPersonCategory" class="edit-field">
+                        <option value="circle" ${_editTier === 'circle' ? 'selected' : ''}>○ Circle</option>
+                        <option value="inner" ${_editTier === 'inner' ? 'selected' : ''}>● Inner Circle</option>
+                        <option value="public" ${_editTier === 'public' ? 'selected' : ''}>□ Public</option>
+                    </select>
+                    <select id="editPersonContext" class="edit-field" style="margin-left:6px">
+                        <option value="personal" ${_editCtx === 'personal' ? 'selected' : ''}>👤 Personal</option>
+                        <option value="work" ${_editCtx === 'work' ? 'selected' : ''}>💼 Work</option>
+                    </select>`;
             } else {
                 name.textContent = person.name;
                 subtitle.textContent = person.relationshipType || 'Friend';
@@ -1370,11 +1406,8 @@
                             <div class="stat-box"><div class="stat-label">Strength</div><div class="stat-value">${Math.round(person.strength * 100)}%</div></div>
                         </div>
                         <div class="tags-container">
-                            <span class="tag">${person.category === 'inner' ? 'Inner Circle' : 
-                                               person.category === 'circle' ? 'Circle' : 
-                                               person.category === 'acquaintance' ? 'Acquaintances' :
-                                               person.category === 'professional' ? 'Professional' :
-                                               person.category === 'archive' ? 'Archive' : person.category}</span>
+                            <span class="tag">${{'inner':'● Inner Circle','circle':'○ Circle','public':'□ Public'}[normTier(person.circle||person.category||'circle')] || '○ Circle'}</span>
+                            <span class="tag">${(person.context||'personal') === 'work' ? '💼 Work' : '👤 Personal'}</span>
                             ${person.birthday ? `<span class="tag">🎂 ${person.birthday}</span>` : ''}
                         </div>
                     </div>
@@ -1616,7 +1649,8 @@
             }
             
             const name = document.getElementById('editPersonName')?.value || person.name;
-            const category = document.getElementById('editPersonCategory')?.value || person.category;
+            const category = document.getElementById('editPersonCategory')?.value || normTier(person.circle || person.category || 'circle');
+            const editCtx = document.getElementById('editPersonContext')?.value || person.context || 'personal';
             const phone = document.getElementById('editPersonPhone')?.value || '';
             const email = document.getElementById('editPersonEmail')?.value || '';
             const birthday = document.getElementById('editPersonBirthday')?.value || '';
@@ -1636,12 +1670,11 @@
                 // Extract numeric ID from personId (remove 'p' prefix)
                 const id = personId.replace('p', '');
                 
-                // Prepare update data.
-                // Backend PersonUpdate does not accept a top-level `address`
-                // field; tuck it into `preferences` instead.
                 const updateData = {
                     name: name,
                     relationship: category,
+                    circle: normTier(category),
+                    context: editCtx,
                     phone: phone || null,
                     email: email || null,
                     birthday: birthday || null,
@@ -1661,6 +1694,8 @@
                 // Update local object
                 person.name = name;
                 person.category = category;
+                person.circle = normTier(category);
+                person.context = editCtx;
                 person.relationshipType = category;
                 person.phone = phone;
                 person.email = email;
@@ -1687,30 +1722,28 @@
             const filters = document.getElementById('filterChips');
             
             filters.innerHTML = `
-                <div class="filter-chip ${activeFilters.includes('inner') ? 'active' : ''}" onclick="toggleFilter('inner')">Inner Circle</div>
-                <div class="filter-chip ${activeFilters.includes('circle') ? 'active' : ''}" onclick="toggleFilter('circle')">Circle</div>
-                <div class="filter-chip ${activeFilters.includes('acquaintance') ? 'active' : ''}" onclick="toggleFilter('acquaintance')">Acquaintances</div>
-                <div class="filter-chip ${activeFilters.includes('professional') ? 'active' : ''}" onclick="toggleFilter('professional')">Professional</div>
-                <div class="filter-chip ${activeFilters.includes('archive') ? 'active' : ''}" onclick="toggleFilter('archive')">Archive</div>
+                <div style="display:flex;gap:4px;margin-bottom:4px;flex-wrap:wrap">
+                    <div class="filter-chip ${activeContext==='personal'?'active':''}" onclick="setDesktopContext('personal')">👤 Personal</div>
+                    <div class="filter-chip ${activeContext==='work'?'active':''}" onclick="setDesktopContext('work')">💼 Work</div>
+                    <div class="filter-chip ${activeContext==='all'?'active':''}" onclick="setDesktopContext('all')">All</div>
+                </div>
+                <div class="filter-chip ${activeFilters.includes('inner') ? 'active' : ''}" onclick="toggleFilter('inner')">● Inner</div>
+                <div class="filter-chip ${activeFilters.includes('circle') ? 'active' : ''}" onclick="toggleFilter('circle')">○ Circle</div>
+                <div class="filter-chip ${activeFilters.includes('public') ? 'active' : ''}" onclick="toggleFilter('public')">□ Public</div>
             `;
             
-            list.innerHTML = people.filter(person => activeFilters.length === 0 || activeFilters.includes(person.category)).map(person => `
+            list.innerHTML = people.filter(person => {
+                const tier = normTier(person.circle || person.category || 'circle');
+                if (activeFilters.length > 0 && !activeFilters.includes(tier)) return false;
+                if (activeContext !== 'all' && (person.context||'personal') !== activeContext) return false;
+                return true;
+            }).map(person => `
                 <div class="person-card" onclick="showPersonById('${person.id}')">
                     <div class="person-label">${person.name}</div>
                     <div class="person-text">${person.relationshipType || person.category}${person.birthday ? ` • Birthday: ${person.birthday}` : ""}</div>
                     <div class="person-action">View Details</div>
                 </div>
             `).join("");
-        }
-        
-        function toggleFilter(category) {
-            const index = activeFilters.indexOf(category);
-            if (index > -1) {
-                activeFilters.splice(index, 1);
-            } else {
-                activeFilters.push(category);
-            }
-            updateSidebar();
         }
         
         function updateLegend() {
@@ -2057,15 +2090,21 @@
         }
         
         // ── Card Grid Renderer (replaces canvas) ──────────────────
-        const _CIRC_ORDER = ['inner','friends','family','work','acquaintance','public'];
-        const _CIRC_META = {
-            inner: { label: 'Inner Circle', emoji: '💜' },
-            friends: { label: 'Friends', emoji: '🤝' },
-            family: { label: 'Family', emoji: '👨‍👩‍👧' },
-            work: { label: 'Work', emoji: '💼' },
-            acquaintance: { label: 'Acquaintances', emoji: '🌐' },
-            public: { label: 'Public', emoji: '🌍' },
+        const _TIER_ORDER = ['inner', 'circle', 'public'];
+        const _TIER_META = {
+            inner:  { label: 'Inner Circle', symbol: '●' },
+            circle: { label: 'Circle',       symbol: '○' },
+            public: { label: 'Public',       symbol: '□' },
         };
+        const _TIER_SYMBOLS = { inner: '●', circle: '○', public: '□' };
+
+        function normTier(circle) {
+            if (['inner','circle','public'].includes(circle)) return circle;
+            if (['family','friends'].includes(circle)) return 'circle';
+            if (circle === 'work') return 'circle';
+            if (['acquaintance','professional','archive'].includes(circle)) return 'public';
+            return 'circle';
+        }
 
         function _pcardGradient(name) {
             const colors = [
@@ -2101,49 +2140,45 @@
         function renderCardGrid() {
             const grid = document.getElementById('people-grid');
             if (!grid) return;
-            const allPeople = people.map(p => ({
-                ...p,
-                _cid: p.circle || _deriveCircle(p),
-            }));
+            const allPeople = people
+                .filter(p => activeContext === 'all' || (p.context||'personal') === activeContext)
+                .filter(p => !p.is_partial)
+                .map(p => ({
+                    ...p,
+                    _tier: normTier(p.circle || p.category || 'circle'),
+                    _ctx: p.context || 'personal',
+                }));
 
             let html = '';
-            for (const cid of _CIRC_ORDER) {
-                const group = allPeople.filter(p => p._cid === cid);
+            for (const tid of _TIER_ORDER) {
+                if (activeFilters.length > 0 && !activeFilters.includes(tid)) continue;
+                const group = allPeople.filter(p => p._tier === tid);
                 if (!group.length) continue;
-                const meta = _CIRC_META[cid] || { label: cid, emoji: '' };
+                const meta = _TIER_META[tid] || { label: tid, symbol: '' };
                 const cards = group.map(p => {
-                    const innerClass = cid === 'inner' ? ' inner' : '';
+                    const innerClass = tid === 'inner' ? ' inner' : '';
                     const hl = _pcardHealthLevel(p.health_score);
                     const badge = (p.notification_count > 0)
                         ? `<span class="pcard-badge">${p.notification_count}</span>` : '';
                     const ls = _pcardLastSeen(p.last_contacted_at);
+                    const ctxEmoji = p._ctx === 'work' ? '💼' : '👤';
                     return `<div class="person-card-new${innerClass}" onclick="dpOpenCard('${p.id || p.raw_id}')">
                         <span class="pcard-health ${hl}"></span>
                         ${badge}
                         <div class="pcard-avatar" style="background:${_pcardGradient(p.name)}">${_pcardInitials(p.name)}</div>
                         <div class="pcard-name">${(p.name||'').replace(/</g,'&lt;')}</div>
                         ${p.relationshipType||p.relationship ? `<div class="pcard-rel">${(p.relationshipType||p.relationship||'').replace(/</g,'&lt;')}</div>` : ''}
-                        ${ls ? `<div class="pcard-last">${ls}</div>` : ''}
+                        <div style="font-size:14px;opacity:0.7">${meta.symbol}</div>
+                        ${ls ? `<div class="pcard-last">${ctxEmoji} ${ls}</div>` : `<div class="pcard-last">${ctxEmoji}</div>`}
                     </div>`;
                 }).join('');
                 html += `<div class="circle-group-section">
-                    <div class="circle-group-title">${meta.emoji} ${meta.label} <span style="opacity:0.5">${group.length}</span></div>
+                    <div class="circle-group-title">${meta.symbol} ${meta.label} <span style="opacity:0.5">${group.length}</span></div>
                     <div class="people-card-grid">${cards}</div>
                 </div>`;
             }
             if (!html) html = '<div style="text-align:center;padding:80px;color:var(--text-tertiary)">No people yet. Click + to add.</div>';
             grid.innerHTML = html;
-        }
-
-        function _deriveCircle(p) {
-            if (p.circle) return p.circle;
-            if (p.category) return p.category;
-            const rel = (p.relationshipType || p.relationship || '').toLowerCase();
-            if (/inner|partner|spouse|wife|husband/.test(rel)) return 'inner';
-            if (/family|parent|sibling|child/.test(rel)) return 'family';
-            if (/friend|buddy|mate/.test(rel)) return 'friends';
-            if (/work|colleague|client/.test(rel)) return 'work';
-            return 'acquaintance';
         }
 
         // ── Desktop detail panel CRM tabs ──────────────────────────
@@ -2166,7 +2201,10 @@
             document.getElementById('detailIcon').textContent = _pcardInitials(person.name);
             document.getElementById('detailIcon').style.background = _pcardGradient(person.name);
             document.getElementById('detailName').textContent = person.name || '';
-            document.getElementById('detailSubtitle').textContent = [person.relationship || person.relationshipType, person.circle||person._cid].filter(Boolean).join(' · ');
+            const _tier = normTier(person.circle || person.category || 'circle');
+            const _tierSym = _TIER_SYMBOLS[_tier] || '○';
+            const _ctx = person.context || 'personal';
+            document.getElementById('detailSubtitle').textContent = [person.relationship || person.relationshipType, `${_tierSym} ${_ctx}`].filter(Boolean).join(' · ');
 
             // Reset to timeline tab
             document.querySelectorAll('.dp-tab-btn').forEach(b => b.classList.remove('active'));
@@ -2203,9 +2241,28 @@
                 const el = document.getElementById('dp-about-content');
                 if (!person) return;
                 const hs = parseFloat(person.health_score||0.5);
+
+                // Load connections
+                let relsHtml = '';
+                try {
+                    const rdata = await apiRequest(`/api/people/${id}/relationships`);
+                    const all = Object.entries(rdata.relationships||{}).flatMap(([g,arr])=>arr);
+                    if (all.length) {
+                        relsHtml = `<div style="margin-top:12px;font-size:12px;opacity:0.6;text-transform:uppercase;letter-spacing:0.05em">Connections</div>
+                            <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">
+                            ${all.map(r => `<span style="padding:6px 10px;border-radius:10px;border:1px solid rgba(255,255,255,0.2);font-size:13px;color:#fff;cursor:pointer"
+                                onclick="dpOpenCard('${r.person_id}')">
+                                ${_TIER_SYMBOLS[r.circle]||'○'} <b>${r.name.replace(/</g,'&lt;')}</b> · ${r.label}
+                            </span>`).join('')}
+                            </div>`;
+                    }
+                } catch(e) {}
+
                 el.innerHTML = `
                     ${person.phone ? `<a href="tel:${person.phone}" style="display:inline-block;margin:0 8px 8px 0;padding:8px 14px;border-radius:10px;border:1px solid rgba(255,255,255,0.2);color:#fff;text-decoration:none;font-size:13px">📞 ${person.phone}</a>` : ''}
                     ${person.email ? `<a href="mailto:${person.email}" style="display:inline-block;margin:0 8px 8px 0;padding:8px 14px;border-radius:10px;border:1px solid rgba(255,255,255,0.2);color:#fff;text-decoration:none;font-size:13px">✉️ ${person.email}</a>` : ''}
+                    ${person.how_we_met ? `<div style="margin-top:10px;font-size:12px;opacity:0.6;text-transform:uppercase;letter-spacing:0.05em">How We Met</div><div style="font-size:14px;color:#fff;opacity:0.85;margin-top:4px">${person.how_we_met.replace(/</g,'&lt;')}</div>` : ''}
+                    ${relsHtml}
                     <div style="margin-top:12px;font-size:12px;opacity:0.6;text-transform:uppercase;letter-spacing:0.05em">Relationship Health</div>
                     <div style="height:6px;border-radius:3px;background:rgba(255,255,255,0.1);margin-top:6px">
                         <div style="height:6px;border-radius:3px;width:${Math.round(hs*100)}%;background:${hs>=0.6?'#48BB78':hs>=0.35?'#ECC94B':'#FC8181'}"></div>

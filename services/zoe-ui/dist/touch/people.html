@@ -435,6 +435,13 @@
             <input id="searchInput" class="search-input" type="text" placeholder="Search by name, relationship, email, phone…" />
         </div>
 
+        <!-- Context toggle -->
+        <div style="display:flex;gap:8px;margin-bottom:10px">
+            <button id="ctxPersonal" class="circle-chip active" onclick="setContext('personal')">👤 Personal</button>
+            <button id="ctxWork"     class="circle-chip"        onclick="setContext('work')">💼 Work</button>
+            <button id="ctxAll"      class="circle-chip"        onclick="setContext('all')">✨ All</button>
+        </div>
+        <!-- Tier chips -->
         <div class="circle-filter" id="circleFilter">
             <!-- Populated by JS -->
         </div>
@@ -523,15 +530,23 @@
                         </datalist>
                     </div>
                     <div class="field">
-                        <div class="field-label">Circle</div>
+                        <div class="field-label">Tier</div>
                         <select id="fCircle" class="field-select">
-                            <option value="">Auto (from relationship)</option>
-                            <option value="inner">Inner Circle</option>
-                            <option value="family">Family</option>
-                            <option value="friends">Friends</option>
-                            <option value="work">Work</option>
-                            <option value="other">Other</option>
+                            <option value="circle">○ Circle</option>
+                            <option value="inner">● Inner Circle</option>
+                            <option value="public">□ Public</option>
                         </select>
+                    </div>
+                </div>
+                <div class="field">
+                    <div class="field-label">Context</div>
+                    <div style="display:flex;gap:12px;margin-top:4px">
+                        <label style="display:flex;align-items:center;gap:6px;font-size:14px;cursor:pointer">
+                            <input type="radio" name="fContext" value="personal" id="fCtxPersonal" checked> 👤 Personal
+                        </label>
+                        <label style="display:flex;align-items:center;gap:6px;font-size:14px;cursor:pointer">
+                            <input type="radio" name="fContext" value="work" id="fCtxWork"> 💼 Work
+                        </label>
                     </div>
                 </div>
                 <div class="two-col">
@@ -549,8 +564,12 @@
                     <input id="fBday" class="field-input" type="date" />
                 </div>
                 <div class="field">
+                    <div class="field-label">How We Met</div>
+                    <input id="fHowWeMet" class="field-input" type="text" placeholder="At a conference, through mutual friend…" />
+                </div>
+                <div class="field">
                     <div class="field-label">Notes</div>
-                    <textarea id="fNotes" class="field-textarea" placeholder="How did you meet? Kids' names? Coffee order? Anything worth remembering."></textarea>
+                    <textarea id="fNotes" class="field-textarea" placeholder="Kids' names? Coffee order? Anything worth remembering."></textarea>
                 </div>
             </div>
         </div>
@@ -562,50 +581,31 @@
     <script src="/touch/js/touch-menu.js"></script>
 
     <script>
-    const CIRCLES = [
-        { id: 'inner',   label: 'Inner Circle', emoji: '💜' },
-        { id: 'family',  label: 'Family',       emoji: '👨‍👩‍👧' },
-        { id: 'friends', label: 'Friends',      emoji: '🤝' },
-        { id: 'work',    label: 'Work',         emoji: '💼' },
-        { id: 'other',   label: 'Other',        emoji: '🌐' },
+    // 3 tiers × 2 contexts
+    const TIERS = [
+        { id: 'inner',  label: 'Inner',  symbol: '●' },
+        { id: 'circle', label: 'Circle', symbol: '○' },
+        { id: 'public', label: 'Public', symbol: '□' },
     ];
 
-    const REL_TO_CIRCLE = {
-        inner:  ['spouse','partner','wife','husband','child','son','daughter','kid',
-                 'parent','mother','father','mom','dad','sibling','brother','sister'],
-        family: ['grandparent','grandma','grandpa','grandmother','grandfather',
-                 'aunt','uncle','cousin','niece','nephew','in-law','stepparent',
-                 'stepchild','stepmother','stepfather','stepbrother','stepsister',
-                 'mother-in-law','father-in-law','brother-in-law','sister-in-law','family'],
-        friends:['friend','best friend','buddy','pal','mate','roommate','housemate','bff'],
-        work:   ['colleague','coworker','boss','manager','report','teammate','client',
-                 'customer','supplier','mentor','mentee','assistant','employee','coach',
-                 'contractor','partner (business)','business partner','investor','advisor'],
-    };
+    const TIER_SYMBOLS = { inner: '●', circle: '○', public: '□' };
+    const TIER_COLORS  = { inner: '#F6E05E', circle: 'var(--primary)', public: 'var(--text-mute)' };
 
     const state = {
         people: [],
         search: '',
-        activeCircle: 'all',
+        activeContext: 'personal',  // 'personal' | 'work' | 'all'
+        activeTier: 'all',          // 'inner' | 'circle' | 'public' | 'all'
         editingId: null,
     };
 
-    // ─────────────────────────────────────────────
-    // Circle derivation
-    function deriveCircle(person) {
-        // 1. Manual override in custom_fields.circle
-        const custom = person.custom_fields?.circle;
-        if (custom && CIRCLES.find(c => c.id === custom)) return custom;
-        // 2. preferences.circle
-        const pref = person.preferences?.circle;
-        if (pref && CIRCLES.find(c => c.id === pref)) return pref;
-        // 3. Derive from relationship
-        const rel = (person.relationship || '').toLowerCase().trim();
-        if (!rel) return 'other';
-        for (const [circle, keys] of Object.entries(REL_TO_CIRCLE)) {
-            if (keys.some(k => rel === k || rel.includes(k))) return circle;
-        }
-        return 'other';
+    // Normalise tier — map any legacy value to 3 tiers
+    function normTier(circle) {
+        if (['inner','circle','public'].includes(circle)) return circle;
+        if (['family','friends'].includes(circle)) return 'circle';
+        if (circle === 'work') return 'circle';
+        if (['acquaintance','other'].includes(circle)) return 'public';
+        return 'circle';
     }
 
     // ─────────────────────────────────────────────
@@ -643,7 +643,8 @@
             const data = await res.json();
             state.people = (data.people || []).map(p => ({
                 ...p,
-                _circle: p.circle || deriveCircle(p),
+                _tier: normTier(p.circle || 'circle'),
+                _context: p.context || 'personal',
             }));
             render();
             window.dispatchEvent(new CustomEvent('people-loaded'));
@@ -659,7 +660,8 @@
     function filteredPeople() {
         const q = state.search.toLowerCase();
         return state.people.filter(p => {
-            if (state.activeCircle !== 'all' && p._circle !== state.activeCircle) return false;
+            if (state.activeContext !== 'all' && p._context !== state.activeContext) return false;
+            if (state.activeTier !== 'all' && p._tier !== state.activeTier) return false;
             if (!q) return true;
             const hay = [p.name, p.relationship, p.email, p.phone, p.notes]
                 .filter(Boolean).join(' ').toLowerCase();
@@ -667,21 +669,31 @@
         });
     }
 
+    function setContext(ctx) {
+        state.activeContext = ctx;
+        document.querySelectorAll('#ctxPersonal,#ctxWork,#ctxAll').forEach(btn => btn.classList.remove('active'));
+        const map = { personal: 'ctxPersonal', work: 'ctxWork', all: 'ctxAll' };
+        document.getElementById(map[ctx])?.classList.add('active');
+        render();
+    }
+
     function renderFilter() {
-        const counts = { all: state.people.length };
-        for (const c of CIRCLES) counts[c.id] = 0;
-        for (const p of state.people) counts[p._circle]++;
+        const ctx = state.activeContext;
+        const visible = ctx === 'all' ? state.people : state.people.filter(p => p._context === ctx);
+        const counts = { all: visible.length };
+        for (const t of TIERS) counts[t.id] = visible.filter(p => p._tier === t.id).length;
+
         const row = document.getElementById('circleFilter');
-        const chips = [{ id: 'all', label: 'All', emoji: '✨' }, ...CIRCLES];
+        const chips = [{ id: 'all', label: 'All', symbol: '✨' }, ...TIERS];
         row.innerHTML = chips.map(c => `
-            <button class="circle-chip ${state.activeCircle === c.id ? 'active' : ''}" data-id="${c.id}">
-                <span>${c.emoji}</span>
+            <button class="circle-chip ${state.activeTier === c.id ? 'active' : ''}" data-id="${c.id}">
+                <span>${c.symbol}</span>
                 <span>${c.label}</span>
                 <span class="chip-count">${counts[c.id] || 0}</span>
             </button>`).join('');
         row.querySelectorAll('.circle-chip').forEach(chip => {
             chip.addEventListener('click', () => {
-                state.activeCircle = chip.getAttribute('data-id');
+                state.activeTier = chip.getAttribute('data-id');
                 render();
             });
         });
@@ -700,27 +712,27 @@
             return;
         }
 
-        // If filtered to a single circle, render flat
-        if (state.activeCircle !== 'all') {
-            const circle = CIRCLES.find(c => c.id === state.activeCircle);
+        // If filtered to a single tier, render flat
+        if (state.activeTier !== 'all') {
+            const tier = TIERS.find(t => t.id === state.activeTier);
             container.innerHTML = `
                 <div class="circle-group">
                     <div class="group-header">
-                        <div class="group-title"><span class="group-title-emoji">${circle.emoji}</span>${circle.label}</div>
+                        <div class="group-title"><span class="group-title-emoji">${tier.symbol}</span>${tier.label}</div>
                         <div class="group-count">${filtered.length} ${filtered.length === 1 ? 'person' : 'people'}</div>
                     </div>
                     <div class="people-grid">${filtered.map(cardHtml).join('')}</div>
                 </div>`;
         } else {
-            // Group by circle, in CIRCLES order
+            // Group by tier in TIERS order
             let html = '';
-            for (const circle of CIRCLES) {
-                const group = filtered.filter(p => p._circle === circle.id);
+            for (const tier of TIERS) {
+                const group = filtered.filter(p => p._tier === tier.id);
                 if (group.length === 0) continue;
                 html += `
                     <div class="circle-group">
                         <div class="group-header">
-                            <div class="group-title"><span class="group-title-emoji">${circle.emoji}</span>${circle.label}</div>
+                            <div class="group-title"><span class="group-title-emoji">${tier.symbol}</span>${tier.label}</div>
                             <div class="group-count">${group.length}</div>
                         </div>
                         <div class="people-grid">${group.map(cardHtml).join('')}</div>
@@ -758,12 +770,15 @@
 
     function cardHtml(p) {
         const safeName = (p.name || 'Unknown').replace(/</g, '&lt;');
-        const circle = p.circle || p._circle || 'acquaintance';
-        const innerClass = circle === 'inner' ? ' inner-circle' : '';
+        const tier = p._tier || normTier(p.circle || 'circle');
+        const innerClass = tier === 'inner' ? ' inner-circle' : '';
         const hlevel = healthLevel(p.health_score);
         const badge = (p.notification_count > 0)
             ? `<span class="notif-badge">${p.notification_count}</span>` : '';
         const lastSeen = lastSeenLabel(p.last_contacted_at);
+        const tierSymbol = TIER_SYMBOLS[tier] || '○';
+        const tierColor = TIER_COLORS[tier] || 'var(--primary)';
+        const partialBadge = p.is_partial ? `<span style="font-size:10px;color:var(--text-mute);margin-top:2px">stub</span>` : '';
         return `
             <div class="person-card${innerClass}" data-id="${p.id}">
                 <span class="health-dot health-${hlevel}"></span>
@@ -771,7 +786,9 @@
                 <div class="avatar" style="background:${avatarGradient(p.name)}">${initials(p.name)}</div>
                 <div class="person-name">${safeName}</div>
                 ${p.relationship ? `<div class="person-rel">${p.relationship.replace(/</g, '&lt;')}</div>` : ''}
+                <div style="font-size:16px;color:${tierColor};line-height:1">${tierSymbol}</div>
                 ${lastSeen ? `<div class="person-last-seen">${lastSeen}</div>` : ''}
+                ${partialBadge}
             </div>`;
     }
 
@@ -791,24 +808,29 @@
     // Editor
     function openEditor(personId) {
         state.editingId = personId || null;
-        ['fName','fRel','fEmail','fPhone','fBday','fNotes','fCircle'].forEach(id => {
+        ['fName','fRel','fEmail','fPhone','fBday','fNotes','fCircle','fHowWeMet'].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.value = '';
         });
+        document.getElementById('fCtxPersonal').checked = true;
+        document.getElementById('fCircle').value = 'circle';
 
         if (personId) {
             const p = state.people.find(x => x.id === personId);
             if (p) {
                 document.getElementById('editorTitleText').textContent = 'Edit Person';
                 document.getElementById('editorDeleteBtn').style.display = 'inline-block';
-                document.getElementById('fName').value  = p.name || '';
-                document.getElementById('fRel').value   = p.relationship || '';
-                document.getElementById('fEmail').value = p.email || '';
-                document.getElementById('fPhone').value = p.phone || '';
-                document.getElementById('fBday').value  = p.birthday || '';
-                document.getElementById('fNotes').value = p.notes || '';
-                const circleOverride = p.circle || p.custom_fields?.circle || p.preferences?.circle || '';
-                document.getElementById('fCircle').value = circleOverride;
+                document.getElementById('fName').value    = p.name || '';
+                document.getElementById('fRel').value     = p.relationship || '';
+                document.getElementById('fEmail').value   = p.email || '';
+                document.getElementById('fPhone').value   = p.phone || '';
+                document.getElementById('fBday').value    = p.birthday || '';
+                document.getElementById('fNotes').value   = p.notes || '';
+                document.getElementById('fHowWeMet').value = p.how_we_met || '';
+                const tier = normTier(p.circle || 'circle');
+                document.getElementById('fCircle').value  = tier;
+                const ctx = p.context || 'personal';
+                document.querySelector(`input[name=fContext][value="${ctx}"]`).checked = true;
             }
         } else {
             document.getElementById('editorTitleText').textContent = 'New Person';
@@ -829,16 +851,15 @@
         const payload = {
             name,
             relationship: document.getElementById('fRel').value.trim() || null,
-            email: document.getElementById('fEmail').value.trim() || null,
-            phone: document.getElementById('fPhone').value.trim() || null,
-            birthday: document.getElementById('fBday').value || null,
-            notes: document.getElementById('fNotes').value.trim() || null,
+            email:        document.getElementById('fEmail').value.trim() || null,
+            phone:        document.getElementById('fPhone').value.trim() || null,
+            birthday:     document.getElementById('fBday').value || null,
+            notes:        document.getElementById('fNotes').value.trim() || null,
+            how_we_met:   document.getElementById('fHowWeMet').value.trim() || null,
             visibility: 'family',
+            circle: document.getElementById('fCircle').value || 'circle',
+            context: document.querySelector('input[name=fContext]:checked')?.value || 'personal',
         };
-        const circleOverride = document.getElementById('fCircle').value;
-        if (circleOverride) {
-            payload.circle = circleOverride;
-        }
 
         const btn = document.getElementById('saveBtn');
         btn.disabled = true;
@@ -934,7 +955,8 @@
         av.style.background = avatarGradient(p.name);
         av.textContent = initials(p.name);
         document.getElementById('detailName').textContent = p.name || '';
-        document.getElementById('detailRel').textContent = [p.relationship, p.circle].filter(Boolean).join(' · ');
+        const tierSym = TIER_SYMBOLS[p._tier] || '○';
+        document.getElementById('detailRel').textContent = [p.relationship, `${tierSym} ${p._context||'personal'}`].filter(Boolean).join(' · ');
 
         // Reset tabs
         document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -1014,7 +1036,7 @@
         } catch (e) { console.error(e); }
     }
 
-    function renderAbout(id) {
+    async function renderAbout(id) {
         const p = state.people.find(x => x.id === id);
         if (!p) return;
         const el = document.getElementById('about-content');
@@ -1022,18 +1044,121 @@
         const email = p.email ? `<a class="contact-btn" href="mailto:${p.email}">✉️ ${p.email}</a>` : '';
         const bday  = p.birthday ? `<div class="date-row"><span>Birthday</span><span>${p.birthday}</span></div>` : '';
         const hs = parseFloat(p.health_score||0.5);
+        const tier = p._tier || normTier(p.circle||'circle');
         const hBar = `<div style="height:6px;border-radius:3px;background:var(--border);margin-top:4px">
             <div style="height:6px;border-radius:3px;width:${Math.round(hs*100)}%;background:${hs>=0.6?'#48BB78':hs>=0.35?'#ECC94B':'#FC8181'}"></div></div>`;
+
+        // Load relationships
+        let relHtml = '';
+        try {
+            const rdata = await fetch(`${API}/people/${id}/relationships`).then(r=>r.json());
+            const rels = rdata.relationships || {};
+            const all = Object.entries(rels).flatMap(([g, arr]) => arr);
+            if (all.length) {
+                relHtml = `<div class="section-title">Family &amp; Connections</div>
+                    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:4px">
+                    ${all.map(r => {
+                        const sym = TIER_SYMBOLS[r.circle] || '○';
+                        const stubBadge = r.is_partial ? ' <small style="opacity:0.5">(stub)</small>' : '';
+                        return `<span style="display:inline-flex;align-items:center;gap:6px;background:var(--card-soft);border:1px solid var(--border);border-radius:12px;padding:6px 12px;font-size:13px;cursor:pointer"
+                                    onclick="openDetail('${r.person_id}')">
+                                    <span style="color:var(--primary)">${sym}</span>
+                                    <b>${r.name.replace(/</g,'&lt;')}${stubBadge}</b>
+                                    <span style="color:var(--text-mute)">${r.label}</span>
+                                </span>`;
+                    }).join('')}
+                    </div>
+                    <button class="contact-btn" style="margin-top:4px" onclick="openAddRelSheet('${id}')">+ Add connection</button>`;
+            } else {
+                relHtml = `<div class="section-title">Family &amp; Connections</div>
+                    <button class="contact-btn" onclick="openAddRelSheet('${id}')">+ Add connection</button>`;
+            }
+        } catch(e) {
+            relHtml = '';
+        }
+
+        const howMet = p.how_we_met
+            ? `<div class="section-title">How We Met</div><p style="font-size:14px;color:var(--text)">${p.how_we_met.replace(/</g,'&lt;')}</p>` : '';
+
         el.innerHTML = `
             ${(phone||email) ? `<div class="contact-actions">${phone}${email}</div>` : ''}
             ${bday}
+            ${howMet}
+            ${relHtml}
             <div class="section-title">Relationship Health</div>
             <div style="display:flex;justify-content:space-between;font-size:13px;color:var(--text-mute)">
                 <span>Score: ${Math.round(hs*100)}%</span>
-                <span>Circle: ${p.circle||'acquaintance'}</span>
+                <span>${TIER_SYMBOLS[tier]||'○'} ${p._context||'personal'}</span>
             </div>${hBar}
             ${p.notes ? `<div class="section-title">Notes</div><p style="font-size:14px;color:var(--text)">${p.notes.replace(/</g,'&lt;')}</p>` : ''}
         `;
+    }
+
+    // ─────────────────────────────────────────────
+    // Add Relationship sheet (minimal)
+    state.relTargetId = null;
+    async function openAddRelSheet(personId) {
+        state.relTargetId = personId;
+        const p = state.people.find(x => x.id === personId);
+        const name = p ? p.name : 'this person';
+
+        let typeOpts = '';
+        try {
+            const td = await fetch(`${API}/people/relationship-types`).then(r=>r.json());
+            for (const [group, arr] of Object.entries(td.types||{})) {
+                typeOpts += `<optgroup label="${group}">`;
+                for (const t of arr) {
+                    typeOpts += `<option value="${t.key}">${t.label_a}</option>`;
+                }
+                typeOpts += `</optgroup>`;
+            }
+        } catch(e) { typeOpts = '<option value="friend">Friend</option>'; }
+
+        const sheet = document.createElement('div');
+        sheet.id = 'relSheet';
+        sheet.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);backdrop-filter:blur(8px);z-index:9000;display:flex;align-items:flex-end;justify-content:center';
+        sheet.innerHTML = `
+            <div style="background:var(--card);width:100%;max-width:600px;border-radius:20px 20px 0 0;padding:20px;display:flex;flex-direction:column;gap:12px">
+                <div style="font-size:18px;font-weight:700">Add connection for ${name.replace(/</g,'&lt;')}</div>
+                <div class="field"><div class="field-label">Their name</div>
+                    <input id="relOtherName" class="field-input" placeholder="Name or search existing contact" />
+                </div>
+                <div class="field"><div class="field-label">Relationship type</div>
+                    <select id="relType" class="field-select">${typeOpts}</select>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px">
+                    <input type="checkbox" id="relCreatePartial" checked>
+                    <label for="relCreatePartial" style="font-size:14px">Create stub if not found</label>
+                </div>
+                <div style="display:flex;gap:8px">
+                    <button class="btn-ghost" style="flex:1" onclick="document.getElementById('relSheet').remove()">Cancel</button>
+                    <button class="btn-primary" style="flex:2" onclick="saveRelationship()">Link</button>
+                </div>
+            </div>`;
+        document.body.appendChild(sheet);
+    }
+
+    async function saveRelationship() {
+        const personId = state.relTargetId;
+        const otherName = document.getElementById('relOtherName')?.value?.trim();
+        const relType = document.getElementById('relType')?.value;
+        const createPartial = document.getElementById('relCreatePartial')?.checked ?? true;
+        if (!otherName || !relType || !personId) return;
+        try {
+            const r = await fetch(`${API}/people/${personId}/relationships`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ other_person_name: otherName, rel_type: relType, create_partial: createPartial }),
+            });
+            if (!r.ok) {
+                const err = await r.json();
+                alert(err.detail || 'Failed');
+                return;
+            }
+            document.getElementById('relSheet')?.remove();
+            await loadPeople();
+            renderAbout(personId);
+        } catch(e) { console.error(e); }
     }
 
     async function loadDatesGifts(id) {

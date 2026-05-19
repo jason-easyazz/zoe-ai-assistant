@@ -1292,9 +1292,10 @@ async def _execute_tool(db, name: str, args: dict):
     elif name == "people_create":
         pid = str(uuid.uuid4())
         await db.execute(
-            "INSERT INTO people (id, user_id, name, relationship, birthday, phone, email, notes, visibility) VALUES (?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO people (id, user_id, name, relationship, birthday, phone, email, notes, visibility, circle, context) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (pid, user_id, args["name"], args.get("relationship"), args.get("birthday"),
-             args.get("phone"), args.get("email"), args.get("notes"), "family"),
+             args.get("phone"), args.get("email"), args.get("notes"), "family",
+             args.get("circle", "circle"), args.get("context", "personal")),
         )
         result = {"id": pid, "name": args["name"], "relationship": args.get("relationship")}
         await _notify_ui("all", "people:created", result)

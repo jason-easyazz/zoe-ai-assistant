@@ -1,12 +1,20 @@
 """person_health.py — Relationship health scoring.
 
 Health score = weighted combination of:
-  - Recency: exponential decay from last contact, half-life depends on circle
+  - Recency: exponential decay from last contact, half-life depends on context + tier
   - Frequency: log-scaled lifetime contact count
   - Birthday proximity boost: +0.3 if birthday within 14 days
 
 Score is in [0.0, 1.0]. Stored in people.health_score and recalculated
 whenever a person record or related activity is written.
+
+Context/tier model (replaces old 6-value circle):
+  personal:inner  — partner, kids, closest family, best friends
+  personal:circle — regular friends/family
+  personal:public — acquaintances
+  work:inner      — key colleagues, sponsor, close work friend
+  work:circle     — regular colleagues
+  work:public     — professional contacts
 """
 
 import math
@@ -16,14 +24,24 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# Half-life in days for exponential recency decay by circle
+# Half-life in days for exponential recency decay by context:tier
 _HALF_LIFE: dict[str, int] = {
-    "inner": 14,
-    "friends": 30,
-    "family": 21,
-    "work": 45,
-    "acquaintance": 60,
-    "public": 90,
+    "personal:inner":  14,   # neglect felt quickly for closest people
+    "personal:circle": 30,
+    "personal:public": 90,
+    "work:inner":      21,
+    "work:circle":     45,
+    "work:public":    120,
+}
+
+# Backward-compatibility aliases (old single-dimension circle values)
+_HALF_LIFE_LEGACY: dict[str, int] = {
+    "inner":       14,
+    "friends":     30,
+    "family":      21,
+    "work":        45,
+    "acquaintance":60,
+    "public":      90,
 }
 
 
@@ -47,16 +65,20 @@ def calc_health_score(
     contact_count: int,
     circle: str,
     next_birthday: Optional[date] = None,
+    context: str = "personal",
 ) -> float:
     """Calculate a relationship health score in [0.0, 1.0].
 
     Args:
         last_contacted_at: ISO-8601 string or None.
         contact_count: Cumulative count of logged interactions.
-        circle: One of inner / friends / family / work / acquaintance / public.
+        circle: Tier — 'inner', 'circle', or 'public'. Also accepts legacy values.
         next_birthday: Upcoming birthday date or None.
+        context: 'personal' or 'work' (default 'personal').
     """
-    half_life = _HALF_LIFE.get(circle, 60)
+    # Look up half-life by context:tier, then by legacy single-dim value
+    key = f"{context}:{circle}"
+    half_life = _HALF_LIFE.get(key) or _HALF_LIFE_LEGACY.get(circle, 60)
 
     if last_contacted_at:
         try:
@@ -93,14 +115,13 @@ async def recalc_and_save(person_id: str, user_id: str, db) -> float:
     """
     try:
         row = await (await db.execute(
-            "SELECT circle, last_contacted_at, contact_count FROM people WHERE id=$1 AND user_id=$2",
+            "SELECT circle, context, last_contacted_at, contact_count FROM people WHERE id=$1 AND user_id=$2",
             person_id, user_id,
         )).fetchone()
     except Exception:
-        # Fallback: some DB wrappers use positional ? not $1
         try:
             row = await (await db.execute(
-                "SELECT circle, last_contacted_at, contact_count FROM people WHERE id=? AND user_id=?",
+                "SELECT circle, context, last_contacted_at, contact_count FROM people WHERE id=? AND user_id=?",
                 (person_id, user_id),
             )).fetchone()
         except Exception as exc:
@@ -110,7 +131,8 @@ async def recalc_and_save(person_id: str, user_id: str, db) -> float:
     if not row:
         return 0.5
 
-    circle, last_contacted_at, contact_count = row[0], row[1], row[2] or 0
+    circle, context, last_contacted_at, contact_count = row[0], row[1], row[2], row[3] or 0
+    context = context or "personal"
 
     # Look up next birthday from person_important_dates
     try:
@@ -136,7 +158,13 @@ async def recalc_and_save(person_id: str, user_id: str, db) -> float:
         except Exception:
             pass
 
-    score = calc_health_score(last_contacted_at, contact_count, circle or "acquaintance", next_bday)
+    score = calc_health_score(
+        last_contacted_at,
+        contact_count,
+        circle or "circle",
+        next_bday,
+        context,
+    )
 
     try:
         await db.execute(

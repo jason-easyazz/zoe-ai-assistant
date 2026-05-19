@@ -710,7 +710,8 @@ class MemoryService:
         docs = (result.get("documents") or [[]])[0]
         metas = (result.get("metadatas") or [[]])[0]
         distances = (result.get("distances") or [[]])[0]
-        now_iso = datetime.datetime.utcnow().isoformat() + "Z"
+        now = datetime.datetime.utcnow()
+        now_iso = now.isoformat() + "Z"
         hits: list[MemoryRef] = []
         for rid, doc, meta, dist in zip(ids, docs, metas, distances):
             md = dict(meta) if isinstance(meta, dict) else {}
@@ -728,9 +729,40 @@ class MemoryService:
                     score=float(dist or 0.0),
                 )
             )
-            if len(hits) >= limit:
-                break
-        return hits
+
+        # Re-rank by blending semantic distance with hotness signals.
+        # load_for_prompt already does this for the metadata-only path; here we
+        # apply the same principle so frequently-accessed memories about known
+        # people/topics surface ahead of semantically-close but cold newcomers.
+        # Formula: relevance = (1 / (1 + dist)) * conf * decay + 0.05 * log1p(access)
+        # The dist→relevance inversion means lower L2 distance → higher score.
+        import math
+        _LAMBDA = math.log(2) / 70.0  # 70-day half-life, same as load_for_prompt
+        _HOTNESS_WEIGHT = float(os.environ.get("ZOE_SEARCH_HOTNESS_WEIGHT", "0.05"))
+
+        def _blend(ref: MemoryRef) -> float:
+            md = ref.metadata
+            dist = ref.score
+            try:
+                conf = float(md.get("confidence", 0.7) or 0.7)
+            except (TypeError, ValueError):
+                conf = 0.7
+            try:
+                access_count = int(md.get("access_count", 0) or 0)
+            except (TypeError, ValueError):
+                access_count = 0
+            added_at = md.get("added_at") or ""
+            try:
+                dt = datetime.datetime.fromisoformat(added_at.replace("Z", ""))
+                age_days = max(0.0, (now - dt).total_seconds() / 86400.0)
+            except Exception:
+                age_days = 0.0
+            semantic = (1.0 / (1.0 + dist)) * conf * math.exp(-_LAMBDA * age_days)
+            hotness  = _HOTNESS_WEIGHT * math.log1p(access_count)
+            return semantic + hotness
+
+        hits.sort(key=_blend, reverse=True)
+        return hits[:limit]
 
     def _list_ids_for_user(self, user_id: str) -> list[str]:
         col = self._collection()

@@ -654,6 +654,22 @@ def detect_intent(
     if m_intro:
         return Intent("people_introduce", {"name": m_intro.group(1).strip()})
 
+    # --- CONTACTS RELATE ---
+    _RELATE_RE = re.compile(
+        r"(?:link|connect|add\s+relationship|relate|set\s+up).*?"
+        r"([A-Z][a-z]{1,30}(?:\s[A-Z][a-z]{1,20})?)"
+        r".*?(?:and|with|to)\s+"
+        r"([A-Z][a-z]{1,30}(?:\s[A-Z][a-z]{1,20})?)"
+        r".*?(?:as\s+)?(spouses?|partners?|siblings?|friends?|colleagues?|parent|child|cousins?|boss|mentor|in.laws?)",
+        re.IGNORECASE,
+    )
+    m_relate = _RELATE_RE.search(t)
+    if m_relate:
+        name_a = m_relate.group(1).strip()
+        name_b = m_relate.group(2).strip()
+        role = m_relate.group(3).lower().rstrip("s")
+        return Intent("people_relate", {"name_a": name_a, "name_b": name_b, "role": role})
+
     # --- CONTACTS CREATE ---
     m = re.match(
         r"^(?:add|create|save) (?:a )?(?:contact|person|entry) (?:for |named )?(.+)$", t
@@ -661,15 +677,30 @@ def detect_intent(
     if m:
         name = m.group(1).strip()
         rel = "friend"
+        context = "personal"
+        circle = "circle"
+        for tag in ["colleague", "coworker", "co-worker", "boss", "client"]:
+            if tag in t.lower():
+                context = "work"
+                circle = "circle"
+                break
+        for tag in ["friend", "family", "neighbor", "neighbour", "partner", "spouse"]:
+            if tag in t.lower():
+                context = "personal"
+                break
         for tag in ["friend", "colleague", "family", "neighbor", "neighbour"]:
-            if tag in t:
+            if tag in t.lower():
                 rel = tag.replace("neighbour", "neighbor")
                 name = re.sub(
                     rf",?\s*(?:she'?s|he'?s|they'?re|as)?\s*(?:a |my )?{tag}\b",
                     "", name, flags=re.I,
                 ).strip()
                 break
-        return Intent("people_create", {"name": name, "relationship": rel})
+        for tag in ["inner circle", "best friend", "closest"]:
+            if tag in t.lower():
+                circle = "inner"
+                break
+        return Intent("people_create", {"name": name, "relationship": rel, "context": context, "circle": circle})
 
     # --- CONTACTS SEARCH ---
     m = re.match(r"^(?:find|search|look up) (?:a )?(?:contact|person) (?:for |named )?(.+)$", t)
@@ -2048,7 +2079,21 @@ def _build_command(intent: Intent, user_id: str) -> Optional[str]:
     if intent.name == "people_create":
         name = s.get("name", "")
         rel = s.get("relationship", "friend")
-        return f'{base} zoe-data.people_create name="{name}" relationship={rel} user_id={user_id}'
+        context = s.get("context", "personal")
+        circle = s.get("circle", "circle")
+        return (
+            f'{base} zoe-data.people_create name="{name}" relationship={rel} '
+            f'context={context} circle={circle} user_id={user_id}'
+        )
+
+    if intent.name == "people_relate":
+        name_a = s.get("name_a", "")
+        name_b = s.get("name_b", "")
+        role = s.get("role", "friend")
+        return (
+            f'{base} zoe-data.people_relate name_a="{name_a}" '
+            f'name_b="{name_b}" role="{role}" user_id={user_id}'
+        )
 
     if intent.name == "people_search":
         query = s.get("query", "")
@@ -2168,7 +2213,16 @@ def _format_response(intent: Intent, raw_output: str) -> str:
 
     if intent.name == "people_create":
         name = s.get("name", "contact")
-        return f"Added {name} to your contacts."
+        context = s.get("context", "personal")
+        circle = s.get("circle", "circle")
+        tier_symbol = {"inner": "●", "circle": "○", "public": "□"}.get(circle, "○")
+        return f"Added {name} to your {context} contacts {tier_symbol}."
+
+    if intent.name == "people_relate":
+        name_a = s.get("name_a", "")
+        name_b = s.get("name_b", "")
+        role = s.get("role", "")
+        return f"Linked {name_a} and {name_b} as {role}."
 
     if intent.name == "people_search":
         people = data.get("people", [])

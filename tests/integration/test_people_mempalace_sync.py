@@ -98,12 +98,26 @@ async def test_create_person_has_crm_columns(db_conn):
 
 @pytest.mark.asyncio
 async def test_new_tables_exist(db_conn):
-    """All 4 CRM tables must exist."""
-    for table in ['person_activities', 'person_important_dates', 'person_gift_ideas', 'person_bucket_list']:
+    """All CRM tables must exist."""
+    for table in [
+        'person_activities', 'person_important_dates',
+        'person_gift_ideas', 'person_bucket_list', 'person_relationships',
+    ]:
         row = await db_conn.fetchrow(
             "SELECT table_name FROM information_schema.tables WHERE table_name=$1", table
         )
         assert row is not None, f"Table {table} is missing"
+
+
+@pytest.mark.asyncio
+async def test_new_columns_exist(db_conn):
+    """0007 migration columns must exist on people table."""
+    for col in ['context', 'is_partial', 'how_we_met', 'first_met_date', 'introduced_by_person_id']:
+        row = await db_conn.fetchrow(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name='people' AND column_name=$1", col
+        )
+        assert row is not None, f"people.{col} column missing — run alembic upgrade head"
 
 
 @pytest.mark.asyncio
@@ -117,8 +131,8 @@ async def test_person_extractor_dual_fanout(db_conn):
 
     # Insert a test person
     await db_conn.execute(
-        "INSERT INTO people (id, user_id, name, relationship, circle, visibility) VALUES ($1,$2,$3,$4,$5,$6)",
-        person_id, test_user, person_name, "friend", "friends", "family",
+        "INSERT INTO people (id, user_id, name, relationship, circle, context, visibility) VALUES ($1,$2,$3,$4,$5,$6,$7)",
+        person_id, test_user, person_name, "friend", "circle", "personal", "family",
     )
 
     db_compat = AsyncpgCompat(db_conn)
@@ -153,9 +167,9 @@ async def test_health_score_recalc(db_conn):
     person_id = str(uuid.uuid4())
 
     await db_conn.execute(
-        "INSERT INTO people (id, user_id, name, circle, last_contacted_at, contact_count, health_score, visibility) "
-        "VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
-        person_id, test_user, f"HealthTest_{person_id[:4]}", "friends",
+        "INSERT INTO people (id, user_id, name, circle, context, last_contacted_at, contact_count, health_score, visibility) "
+        "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+        person_id, test_user, f"HealthTest_{person_id[:4]}", "circle", "personal",
         datetime.utcnow().isoformat() + "Z", 5, 0.5, "family",
     )
 

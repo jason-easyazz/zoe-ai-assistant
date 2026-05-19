@@ -65,6 +65,47 @@ _BUCKET_RE = re.compile(
 )
 
 
+# Relationship detection  e.g. "Sarah is Mike's wife" / "Mike and Sarah are siblings"
+_REL_RE = re.compile(
+    r"(?:"
+    r"(?P<a>[A-Z][a-z]{1,30}(?:\s[A-Z][a-z]{1,20})?)\s+is\s+(?P<b>[A-Z][a-z]{1,30}(?:\s[A-Z][a-z]{1,20})?)'s\s+(?P<role1>wife|husband|partner|mother|father|sister|brother|daughter|son|aunt|uncle|cousin|niece|nephew|grandparent|grandchild|boss|mentor|colleague|friend)"
+    r"|(?P<c>[A-Z][a-z]{1,30}(?:\s[A-Z][a-z]{1,20})?)\s+and\s+(?P<d>[A-Z][a-z]{1,30}(?:\s[A-Z][a-z]{1,20})?)\s+are\s+(?P<role2>siblings?|partners?|friends?|colleagues?|spouses?|twins?|cousins?)"
+    r")",
+    re.IGNORECASE,
+)
+
+# Map detected role strings → RELATIONSHIP_TYPES keys + group
+_ROLE_TO_TYPE: dict[str, tuple[str, str]] = {
+    "wife":        ("spouse",     "love"),
+    "husband":     ("spouse",     "love"),
+    "partner":     ("partner",    "love"),
+    "spouse":      ("spouse",     "love"),
+    "spouses":     ("spouse",     "love"),
+    "mother":      ("parent",     "family"),
+    "father":      ("parent",     "family"),
+    "sister":      ("sibling",    "family"),
+    "brother":     ("sibling",    "family"),
+    "siblings":    ("sibling",    "family"),
+    "sibling":     ("sibling",    "family"),
+    "twins":       ("sibling",    "family"),
+    "daughter":    ("parent",     "family"),
+    "son":         ("parent",     "family"),
+    "aunt":        ("aunt_uncle", "family"),
+    "uncle":       ("aunt_uncle", "family"),
+    "cousin":      ("cousin",     "family"),
+    "cousins":     ("cousin",     "family"),
+    "niece":       ("aunt_uncle", "family"),
+    "nephew":      ("aunt_uncle", "family"),
+    "grandparent": ("grandparent","family"),
+    "grandchild":  ("grandparent","family"),
+    "friend":      ("friend",     "friend"),
+    "friends":     ("friend",     "friend"),
+    "boss":        ("boss",       "work"),
+    "mentor":      ("mentor",     "work"),
+    "colleague":   ("colleague",  "work"),
+    "colleagues":  ("colleague",  "work"),
+}
+
 # ── Month name → int ──────────────────────────────────────────────────────────
 _MONTHS = {
     "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
@@ -264,6 +305,115 @@ async def _write_bucket(
         logger.debug("_write_bucket failed: %s", exc)
 
 
+async def _write_relationship(
+    user_id: str,
+    name_a: str,
+    name_b: str,
+    rel_type: str,
+    rel_group: str,
+    db,
+) -> None:
+    """Upsert a relationship edge, creating partial stubs for unknown people."""
+    from routers.people import RELATIONSHIP_TYPES, _WORK_GROUPS
+
+    # Resolve labels
+    lbl_a, lbl_b = rel_type.replace("_", " ").title(), rel_type.replace("_", " ").title()
+    for group, entries in RELATIONSHIP_TYPES.items():
+        for key, la, lb in entries:
+            if key == rel_type:
+                lbl_a, lbl_b = la, lb
+                break
+
+    inferred_ctx = "work" if rel_group in _WORK_GROUPS else "personal"
+    now = datetime.utcnow().isoformat() + "Z"
+
+    # Resolve or create person_a
+    pid_a = await _resolve_person_uuid(name_a, user_id, db)
+    if not pid_a:
+        pid_a = str(uuid.uuid4())
+        try:
+            try:
+                await db.execute(
+                    "INSERT INTO people (id, user_id, name, circle, context, visibility, is_partial) "
+                    "VALUES ($1,$2,$3,'circle',$4,'family',1)",
+                    pid_a, user_id, name_a, inferred_ctx,
+                )
+            except Exception:
+                await db.execute(
+                    "INSERT INTO people (id, user_id, name, circle, context, visibility, is_partial) "
+                    "VALUES (?,?,?,'circle',?,'family',1)",
+                    (pid_a, user_id, name_a, inferred_ctx),
+                )
+            await db.commit()
+        except Exception as exc:
+            logger.debug("_write_relationship: stub for %r failed: %s", name_a, exc)
+            return
+
+    # Resolve or create person_b
+    pid_b = await _resolve_person_uuid(name_b, user_id, db)
+    if not pid_b:
+        pid_b = str(uuid.uuid4())
+        try:
+            try:
+                await db.execute(
+                    "INSERT INTO people (id, user_id, name, circle, context, visibility, is_partial) "
+                    "VALUES ($1,$2,$3,'circle',$4,'family',1)",
+                    pid_b, user_id, name_b, inferred_ctx,
+                )
+            except Exception:
+                await db.execute(
+                    "INSERT INTO people (id, user_id, name, circle, context, visibility, is_partial) "
+                    "VALUES (?,?,?,'circle',?,'family',1)",
+                    (pid_b, user_id, name_b, inferred_ctx),
+                )
+            await db.commit()
+        except Exception as exc:
+            logger.debug("_write_relationship: stub for %r failed: %s", name_b, exc)
+            return
+
+    if pid_a == pid_b:
+        return
+
+    rel_id = str(uuid.uuid4())
+    try:
+        try:
+            await db.execute(
+                "INSERT INTO person_relationships "
+                "(id, user_id, person_a_id, person_b_id, rel_type, rel_a_to_b, rel_b_to_a, rel_group, created_at, updated_at) "
+                "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) "
+                "ON CONFLICT (user_id, person_a_id, person_b_id) DO NOTHING",
+                rel_id, user_id, pid_a, pid_b, rel_type, lbl_a, lbl_b, rel_group, now, now,
+            )
+        except Exception:
+            try:
+                await db.execute(
+                    "INSERT OR IGNORE INTO person_relationships "
+                    "(id, user_id, person_a_id, person_b_id, rel_type, rel_a_to_b, rel_b_to_a, rel_group, created_at, updated_at) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (rel_id, user_id, pid_a, pid_b, rel_type, lbl_a, lbl_b, rel_group, now, now),
+                )
+            except Exception as exc2:
+                logger.debug("_write_relationship: insert failed: %s", exc2)
+                return
+        await db.commit()
+        # Update context for both people
+        for pid in (pid_a, pid_b):
+            try:
+                await db.execute(
+                    "UPDATE people SET context=$1 WHERE id=$2 AND user_id=$3",
+                    inferred_ctx, pid, user_id,
+                )
+            except Exception:
+                await db.execute(
+                    "UPDATE people SET context=? WHERE id=? AND user_id=?",
+                    (inferred_ctx, pid, user_id),
+                )
+        await db.commit()
+        logger.debug("_write_relationship: %s -[%s]- %s", name_a, rel_type, name_b)
+    except Exception as exc:
+        logger.debug("_write_relationship: error: %s", exc)
+
+
 async def _post_write_hooks(
     person_id: str, user_id: str, db,
 ) -> None:
@@ -364,8 +514,27 @@ async def process_text(
             activity, name = m.group(1).strip(), m.group(2).strip()
             tasks.append((name, f"Want to {activity[:150]} with {name}", "bucket"))
 
+        # ── Relationships ────────────────────────────────────────────────────
+        for m in _REL_RE.finditer(text):
+            if m.group("role1"):
+                name_a = m.group("a").strip()
+                name_b = m.group("b").strip()
+                role = m.group("role1").lower()
+            else:
+                name_a = m.group("c").strip()
+                name_b = m.group("d").strip()
+                role = m.group("role2").lower().rstrip("s")
+            rel_info = _ROLE_TO_TYPE.get(role)
+            if rel_info:
+                rel_type, rel_group = rel_info
+                try:
+                    await _write_relationship(user_id, name_a, name_b, rel_type, rel_group, _db)
+                    written += 1
+                except Exception as exc:
+                    logger.debug("person_extractor: relationship write failed: %s", exc)
+
         if not tasks:
-            return 0
+            return written
 
         # Deduplicate names to avoid redundant DB lookups
         names = list({t[0] for t in tasks})
@@ -421,6 +590,7 @@ async def process_text(
 
     except Exception as exc:
         logger.warning("person_extractor.process_text failed for user %s: %s", user_id, exc)
+        return written
 
     return written
 

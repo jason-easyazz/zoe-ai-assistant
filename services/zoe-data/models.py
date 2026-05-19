@@ -68,7 +68,8 @@ class ListItemUpdate(BaseModel):
 class PersonCreate(BaseModel):
     name: str
     relationship: Optional[str] = None
-    circle: str = "acquaintance"
+    circle: str = "circle"
+    context: str = "personal"
     email: Optional[str] = None
     phone: Optional[str] = None
     birthday: Optional[str] = None
@@ -76,12 +77,17 @@ class PersonCreate(BaseModel):
     preferences: Optional[dict] = None
     custom_fields: Optional[dict] = None
     visibility: str = "family"
+    is_partial: bool = False
+    how_we_met: Optional[str] = None
+    first_met_date: Optional[str] = None
+    introduced_by_person_id: Optional[str] = None
 
 
 class PersonUpdate(BaseModel):
     name: Optional[str] = None
     relationship: Optional[str] = None
     circle: Optional[str] = None
+    context: Optional[str] = None
     email: Optional[str] = None
     phone: Optional[str] = None
     birthday: Optional[str] = None
@@ -89,6 +95,9 @@ class PersonUpdate(BaseModel):
     preferences: Optional[dict] = None
     custom_fields: Optional[dict] = None
     visibility: Optional[str] = None
+    how_we_met: Optional[str] = None
+    first_met_date: Optional[str] = None
+    introduced_by_person_id: Optional[str] = None
 
 
 class PeopleFieldDefinitionCreate(BaseModel):

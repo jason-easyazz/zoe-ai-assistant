@@ -2577,6 +2577,82 @@ async def _web_search_ddg(query: str, user_id: str = "") -> str:
     return f"No web results found for: {query}"
 
 
+# ── Tool output caps ──────────────────────────────────────────────────────────
+# Applied at both messages.append sites so the LLM context never blows past
+# ZOE_CONTEXT_TOKEN_BUDGET on a single noisy tool result.
+# Per-tool limits are tunable via env vars; defaults chosen to fit comfortably
+# inside a 5500-token budget alongside history, system prompt, and user message.
+
+_TOOL_CAPS: dict[str, int] = {
+    # ambient_search: JSON {"results":[...], "count":N} — trim rows + truncate
+    # transcripts before re-serializing so the model still gets valid JSON
+    "ambient_search":      int(os.environ.get("ZOE_CAP_AMBIENT_SEARCH",   "0")),   # handled specially
+    # deep_web_research: {"query":..., "raw":<big string>}
+    "deep_web_research":   int(os.environ.get("ZOE_CAP_WEB_RESEARCH",    "6000")),
+    # memory_list: {"items":[...], "count":N, "status":...}
+    "memory_list":         int(os.environ.get("ZOE_CAP_MEMORY_LIST",      "0")),   # handled specially
+    # a2a_delegate: arbitrary peer JSON
+    "a2a_delegate":        int(os.environ.get("ZOE_CAP_A2A_DELEGATE",    "3000")),
+    # zoe_self_capabilities: service/widget/page/skill lists
+    "zoe_self_capabilities": int(os.environ.get("ZOE_CAP_SELF_CAPS",     "2000")),
+}
+
+_AMBIENT_MAX_ROWS     = int(os.environ.get("ZOE_CAP_AMBIENT_ROWS",        "10"))
+_AMBIENT_TRANSCRIPT   = int(os.environ.get("ZOE_CAP_AMBIENT_TRANSCRIPT", "150"))
+_MEMORY_LIST_MAX_ROWS = int(os.environ.get("ZOE_CAP_MEMORY_LIST_ROWS",    "25"))
+
+
+def _cap_tool_result(tool_name: str, result: str) -> str:
+    """Cap noisy MCP tool results before they enter the LLM context window.
+
+    Tools like ambient_search and deep_web_research can return 10k-15k chars
+    in a single call, silently overwhelming ZOE_CONTEXT_TOKEN_BUDGET.
+    We apply per-tool limits here — at the single point where results enter
+    messages[] — rather than at the MCP layer, so OpenClaw and the intent
+    fast-path are unaffected.
+    """
+    if tool_name == "ambient_search":
+        try:
+            data = json.loads(result)
+            rows = data.get("results") or []
+            if len(rows) > _AMBIENT_MAX_ROWS or any(
+                len(r.get("transcript") or "") > _AMBIENT_TRANSCRIPT for r in rows
+            ):
+                trimmed = []
+                for r in rows[:_AMBIENT_MAX_ROWS]:
+                    entry = dict(r)
+                    if len(entry.get("transcript") or "") > _AMBIENT_TRANSCRIPT:
+                        entry["transcript"] = (entry["transcript"] or "")[:_AMBIENT_TRANSCRIPT] + "…"
+                    trimmed.append(entry)
+                data["results"] = trimmed
+                data["count"] = len(trimmed)
+                data["_capped"] = True
+                return json.dumps(data)
+        except Exception:
+            pass
+        # Fallback: plain string cap
+        cap = _AMBIENT_MAX_ROWS * (_AMBIENT_TRANSCRIPT + 60)
+        return result[:cap] + ("…" if len(result) > cap else "")
+
+    if tool_name == "memory_list":
+        try:
+            data = json.loads(result)
+            items = data.get("items") or []
+            if len(items) > _MEMORY_LIST_MAX_ROWS:
+                data["items"] = items[:_MEMORY_LIST_MAX_ROWS]
+                data["count"] = len(data["items"])
+                data["_capped"] = True
+                return json.dumps(data)
+        except Exception:
+            pass
+        return result
+
+    cap = _TOOL_CAPS.get(tool_name, 0)
+    if cap and len(result) > cap:
+        return result[:cap] + "…"
+    return result
+
+
 # ── Tool dispatch ─────────────────────────────────────────────────────────────
 
 async def _dispatch_tool(tool_name: str, args: dict, user_id: str = "family-admin") -> str:
@@ -3407,7 +3483,7 @@ async def run_zoe_agent(
             messages.append({
                 "role": "tool",
                 "tool_call_id": f"call_{iteration}",
-                "content": tool_result,
+                "content": _cap_tool_result(tool_name, tool_result),
             })
         else:
             # No tool call (or max iterations reached) — final response.
@@ -3888,7 +3964,7 @@ async def run_zoe_agent_streaming(
             messages.append({
                 "role": "tool",
                 "tool_call_id": f"call_{iteration}",
-                "content": tool_result,
+                "content": _cap_tool_result(tool_name, tool_result),
             })
             # Subsequent iterations always use "auto" — model should now produce text
             payload = _make_payload(messages, tool_choice="auto")

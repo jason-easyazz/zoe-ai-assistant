@@ -33,7 +33,7 @@ def _weeks_since(last_contacted_at: str | None) -> str:
 
 
 class PeopleHealthTrigger(ProactiveTrigger):
-    """Daily: fire for Inner Circle / friends whose health_score is low."""
+    """Daily: fire for Inner Circle people whose health_score is low."""
 
     trigger_type = "people_health"
 
@@ -44,10 +44,11 @@ class PeopleHealthTrigger(ProactiveTrigger):
 
         try:
             async with db.execute(
-                """SELECT p.id, p.name, p.user_id, p.last_contacted_at
+                """SELECT p.id, p.name, p.user_id, p.last_contacted_at, p.context
                    FROM people p
                    WHERE p.deleted = 0
-                     AND p.circle IN ('inner', 'friends')
+                     AND p.circle = 'inner'
+                     AND (p.is_partial = 0 OR p.is_partial IS NULL)
                      AND p.health_score < 0.3
                      AND (
                          p.last_contacted_at IS NULL
@@ -61,9 +62,9 @@ class PeopleHealthTrigger(ProactiveTrigger):
             # Fallback: skip 21-day check in SQL, handle in Python
             try:
                 async with db.execute(
-                    "SELECT id, name, user_id, last_contacted_at FROM people "
-                    "WHERE deleted = 0 AND circle IN ('inner', 'friends') AND health_score < 0.3 "
-                    "ORDER BY health_score ASC LIMIT 10"
+                    "SELECT id, name, user_id, last_contacted_at, context FROM people "
+                    "WHERE deleted = 0 AND circle = 'inner' AND (is_partial = 0 OR is_partial IS NULL) "
+                    "AND health_score < 0.3 ORDER BY health_score ASC LIMIT 10"
                 ) as cur:
                     rows = await cur.fetchall()
             except Exception as exc:

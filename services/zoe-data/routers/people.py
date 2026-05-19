@@ -1,12 +1,12 @@
 """
-People/contacts API router — v2 (People CRM).
+People/contacts API router — v3 (People CRM with relationships).
 
-Changes from v1:
-- circle field added to all CRUD operations
-- /fields routes moved before /{person_id} to fix live-404 route-order bug
-- Sub-resources: activities, important-dates, gift-ideas, bucket-list, mark-read
-- Health score recalculated on every write
-- Symmetric MemPalace archive on DELETE
+Changes from v2:
+- context (personal|work) + circle now 3 tiers (inner/circle/public)
+- person_relationships CRUD: GET/POST/PUT/DELETE /{person_id}/relationships
+- GET /relationship-types for UI dropdowns
+- is_partial, how_we_met, first_met_date, introduced_by_person_id fields
+- _store_person_memory updated to emit context+circle in fact text
 """
 
 import asyncio
@@ -30,7 +30,40 @@ from push import broadcaster
 
 router = APIRouter(prefix="/api/people", tags=["people"])
 
-_VALID_CIRCLES = {"inner", "friends", "family", "work", "acquaintance", "public"}
+_VALID_CIRCLES = {"inner", "circle", "public"}
+_VALID_CONTEXTS = {"personal", "work"}
+
+# Typed relationship vocabulary — no extra DB table needed.
+# Each entry: (rel_type_key, label_a_to_b, label_b_to_a)
+RELATIONSHIP_TYPES: dict[str, list[tuple[str, str, str]]] = {
+    "love": [
+        ("partner",    "Partner",    "Partner"),
+        ("spouse",     "Spouse",     "Spouse"),
+        ("ex",         "Ex-partner", "Ex-partner"),
+    ],
+    "family": [
+        ("parent",      "Parent",      "Child"),
+        ("sibling",     "Sibling",     "Sibling"),
+        ("grandparent", "Grandparent", "Grandchild"),
+        ("aunt_uncle",  "Aunt/Uncle",  "Niece/Nephew"),
+        ("cousin",      "Cousin",      "Cousin"),
+        ("in_law",      "In-law",      "In-law"),
+    ],
+    "friend": [
+        ("friend",      "Friend",       "Friend"),
+        ("best_friend", "Best friend",  "Best friend"),
+        ("met_through", "Met through",  "Introduced to"),
+    ],
+    "work": [
+        ("colleague",   "Colleague",    "Colleague"),
+        ("boss",        "Boss",         "Report"),
+        ("mentor",      "Mentor",       "Mentee"),
+        ("client",      "Client",       "Provider"),
+    ],
+}
+# Groups whose members imply context='personal' vs 'work'
+_PERSONAL_GROUPS = {"love", "family", "friend"}
+_WORK_GROUPS = {"work"}
 
 
 # ── Row helpers ────────────────────────────────────────────────────────────────
@@ -49,7 +82,8 @@ def _row_to_person(row) -> dict:
         "user_id": d.get("user_id"),
         "name": d.get("name"),
         "relationship": d.get("relationship"),
-        "circle": d.get("circle", "acquaintance"),
+        "circle": d.get("circle", "circle"),
+        "context": d.get("context", "personal"),
         "email": d.get("email"),
         "phone": d.get("phone"),
         "birthday": d.get("birthday"),
@@ -60,6 +94,10 @@ def _row_to_person(row) -> dict:
         "notification_count": d.get("notification_count", 0),
         "contact_count": d.get("contact_count", 0),
         "last_contacted_at": d.get("last_contacted_at"),
+        "is_partial": bool(d.get("is_partial", 0)),
+        "how_we_met": d.get("how_we_met"),
+        "first_met_date": d.get("first_met_date"),
+        "introduced_by_person_id": d.get("introduced_by_person_id"),
         "created_at": d.get("created_at"),
         "updated_at": d.get("updated_at"),
     }
@@ -105,8 +143,9 @@ async def _store_person_memory(db, user_id: str, person: dict, action: str):
     """Write a person-related fact to MemPalace through MemoryService."""
     summary = f"{person.get('name')} ({person.get('relationship') or 'contact'})"
     notes = person.get("notes") or ""
-    circle = person.get("circle", "acquaintance")
-    fact = f"Person in contacts: {summary}. Circle: {circle}. {notes[:200]}".strip().rstrip(".")
+    circle = person.get("circle", "circle")
+    context = person.get("context", "personal")
+    fact = f"Person in contacts: {summary}. Context: {context}, Tier: {circle}. {notes[:200]}".strip().rstrip(".")
     try:
         from memory_service import MemoryServiceError, get_memory_service
         try:
@@ -160,21 +199,30 @@ async def _get_person_or_404(db, person_id: str, user_id: str) -> dict:
 async def list_people(
     search: Optional[str] = Query(None),
     circle: Optional[str] = Query(None),
+    context: Optional[str] = Query(None),
+    include_partial: bool = Query(False),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    """List people with optional search, circle filter, limit, offset."""
+    """List people with optional search, circle/context filter, limit, offset."""
     await require_feature_access(db, user, feature="people", action="read")
     user_id = user["user_id"]
     vis = _visibility_filter_sql()
     params = [user_id]
     filters = [f"deleted = 0 AND {vis}"]
 
+    if not include_partial:
+        filters.append("(is_partial = 0 OR is_partial IS NULL)")
+
     if circle and circle in _VALID_CIRCLES:
         filters.append("circle = ?")
         params.append(circle)
+
+    if context and context in _VALID_CONTEXTS:
+        filters.append("context = ?")
+        params.append(context)
 
     if search:
         filters.append("(name LIKE ? OR email LIKE ? OR phone LIKE ? OR relationship LIKE ?)")
@@ -212,18 +260,27 @@ async def create_person(
     user_id = user["user_id"]
     person_id = str(uuid.uuid4())
     pref = json.dumps(body.preferences) if body.preferences is not None else None
-    circle = getattr(body, "circle", "acquaintance") or "acquaintance"
+    circle = getattr(body, "circle", "circle") or "circle"
     if circle not in _VALID_CIRCLES:
-        circle = "acquaintance"
+        circle = "circle"
+    context = getattr(body, "context", "personal") or "personal"
+    if context not in _VALID_CONTEXTS:
+        context = "personal"
 
     await db.execute(
         """
-        INSERT INTO people (id, user_id, name, relationship, circle, email, phone, birthday, notes, preferences, visibility)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO people (id, user_id, name, relationship, circle, context, email, phone, birthday,
+                            notes, preferences, visibility, is_partial, how_we_met, first_met_date,
+                            introduced_by_person_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            person_id, user_id, body.name, body.relationship, circle,
+            person_id, user_id, body.name, body.relationship, circle, context,
             body.email, body.phone, body.birthday, body.notes, pref, body.visibility,
+            1 if getattr(body, "is_partial", False) else 0,
+            getattr(body, "how_we_met", None),
+            getattr(body, "first_met_date", None),
+            getattr(body, "introduced_by_person_id", None),
         ),
     )
     await _upsert_custom_fields(db, person_id, body.custom_fields)
@@ -270,6 +327,24 @@ async def search_people(
     for person in people:
         person["custom_fields"] = custom_by_person.get(person["id"], {})
     return {"people": people, "count": len(people)}
+
+
+# ── /relationship-types (static, no DB) ───────────────────────────────────────
+
+@router.get("/relationship-types")
+async def get_relationship_types(
+    user: dict = Depends(get_current_user),
+):
+    """Return grouped relationship type vocabulary for UI dropdowns."""
+    return {
+        "types": {
+            group: [
+                {"key": key, "label_a": lbl_a, "label_b": lbl_b}
+                for key, lbl_a, lbl_b in entries
+            ]
+            for group, entries in RELATIONSHIP_TYPES.items()
+        }
+    }
 
 
 # ── /fields routes MUST come before /{person_id} to avoid route collision ─────
@@ -419,8 +494,19 @@ async def update_person(
     circle = getattr(body, "circle", None)
     if circle is not None:
         if circle not in _VALID_CIRCLES:
-            circle = "acquaintance"
+            circle = "circle"
         updates.append("circle = ?"); params.append(circle)
+    context = getattr(body, "context", None)
+    if context is not None:
+        if context not in _VALID_CONTEXTS:
+            context = "personal"
+        updates.append("context = ?"); params.append(context)
+    if getattr(body, "how_we_met", None) is not None:
+        updates.append("how_we_met = ?"); params.append(body.how_we_met)
+    if getattr(body, "first_met_date", None) is not None:
+        updates.append("first_met_date = ?"); params.append(body.first_met_date)
+    if getattr(body, "introduced_by_person_id", None) is not None:
+        updates.append("introduced_by_person_id = ?"); params.append(body.introduced_by_person_id)
     if body.custom_fields is not None:
         await _upsert_custom_fields(db, person_id, body.custom_fields)
 
@@ -709,6 +795,211 @@ async def add_bucket_item(
     )
     await db.commit()
     return {"ok": True, "id": row_id}
+
+
+# ── Person relationships ───────────────────────────────────────────────────────
+
+def _rel_lookup(rel_type: str) -> tuple[str, str, str] | None:
+    """Find (rel_type, label_a_to_b, label_b_to_a) for a given rel_type key."""
+    for group, entries in RELATIONSHIP_TYPES.items():
+        for key, lbl_a, lbl_b in entries:
+            if key == rel_type:
+                return (group, lbl_a, lbl_b)
+    return None
+
+
+@router.get("/{person_id}/relationships")
+async def list_relationships(
+    person_id: str,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """List all relationship edges for a person, both sides resolved."""
+    await require_feature_access(db, user, feature="people", action="read")
+    user_id = user["user_id"]
+    await _get_person_or_404(db, person_id, user_id)
+
+    cursor = await db.execute(
+        "SELECT * FROM person_relationships WHERE user_id = ? AND (person_a_id = ? OR person_b_id = ?)",
+        (user_id, person_id, person_id),
+    )
+    rows = await cursor.fetchall()
+
+    grouped: dict[str, list] = {"love": [], "family": [], "friend": [], "work": []}
+    for row in rows:
+        d = dict(row)
+        is_a = d["person_a_id"] == person_id
+        other_id = d["person_b_id"] if is_a else d["person_a_id"]
+        label = d["rel_a_to_b"] if is_a else d["rel_b_to_a"]
+
+        # Resolve name
+        async with db.execute(
+            "SELECT name, is_partial, circle, context FROM people WHERE id = ? AND deleted = 0",
+            (other_id,),
+        ) as cur:
+            other_row = await cur.fetchone()
+        if not other_row:
+            continue
+        od = dict(other_row)
+        group = d.get("rel_group", "friend")
+        if group not in grouped:
+            grouped[group] = []
+        grouped[group].append({
+            "rel_id": d["id"],
+            "person_id": other_id,
+            "name": od["name"],
+            "label": label,
+            "rel_type": d["rel_type"],
+            "rel_group": group,
+            "is_partial": bool(od.get("is_partial", 0)),
+            "circle": od.get("circle"),
+            "context": od.get("context"),
+            "notes": d.get("notes"),
+        })
+
+    return {"relationships": grouped}
+
+
+@router.post("/{person_id}/relationships")
+async def add_relationship(
+    person_id: str,
+    body: dict,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """Create a typed relationship edge.
+
+    Body:
+      other_person_id   — UUID of existing contact, OR
+      other_person_name — name string (creates a partial contact if create_partial=true)
+      rel_type          — relationship type key (see /relationship-types)
+      notes             — optional
+      create_partial    — bool, default false
+    """
+    await require_feature_access(db, user, feature="people", action="update")
+    user_id = user["user_id"]
+    await _get_person_or_404(db, person_id, user_id)
+
+    rel_type = body.get("rel_type", "")
+    lookup = _rel_lookup(rel_type)
+    if not lookup:
+        raise HTTPException(status_code=400, detail=f"Unknown rel_type: {rel_type!r}")
+    group, lbl_a, lbl_b = lookup
+
+    # Resolve other person
+    other_id = body.get("other_person_id")
+    if not other_id:
+        name = (body.get("other_person_name") or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="other_person_id or other_person_name required")
+        if body.get("create_partial", False):
+            # Create a partial stub
+            other_id = str(uuid.uuid4())
+            inferred_context = "work" if group in _WORK_GROUPS else "personal"
+            await db.execute(
+                "INSERT INTO people (id, user_id, name, circle, context, visibility, is_partial) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (other_id, user_id, name, "circle", inferred_context, "family", 1),
+            )
+            await db.commit()
+        else:
+            # Search by name
+            cursor = await db.execute(
+                "SELECT id FROM people WHERE user_id = ? AND name = ? AND deleted = 0 LIMIT 1",
+                (user_id, name),
+            )
+            row = await cursor.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail=f"Person '{name}' not found. Use create_partial=true to create a stub.")
+            other_id = dict(row)["id"]
+
+    # Prevent self-link
+    if other_id == person_id:
+        raise HTTPException(status_code=400, detail="Cannot link a person to themselves")
+
+    rel_id = str(uuid.uuid4())
+    now = datetime.utcnow().isoformat() + "Z"
+    try:
+        await db.execute(
+            """INSERT INTO person_relationships
+               (id, user_id, person_a_id, person_b_id, rel_type, rel_a_to_b, rel_b_to_a, rel_group, notes, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (rel_id, user_id, person_id, other_id, rel_type, lbl_a, lbl_b, group,
+             body.get("notes"), now, now),
+        )
+        await db.commit()
+    except Exception as exc:
+        if "unique" in str(exc).lower() or "duplicate" in str(exc).lower():
+            raise HTTPException(status_code=409, detail="Relationship already exists")
+        raise
+
+    # Auto-update context of the other person based on rel_group
+    inferred_ctx = "work" if group in _WORK_GROUPS else "personal"
+    await db.execute(
+        "UPDATE people SET context = ? WHERE id = ? AND user_id = ?",
+        (inferred_ctx, other_id, user_id),
+    )
+    await db.commit()
+
+    await broadcaster.broadcast("all", "people:updated", {"id": person_id})
+    return {"ok": True, "rel_id": rel_id, "other_person_id": other_id}
+
+
+@router.put("/{person_id}/relationships/{rel_id}")
+async def update_relationship(
+    person_id: str,
+    rel_id: str,
+    body: dict,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """Update relationship notes or type."""
+    await require_feature_access(db, user, feature="people", action="update")
+    user_id = user["user_id"]
+    await _get_person_or_404(db, person_id, user_id)
+
+    updates = []
+    params = []
+    if "notes" in body:
+        updates.append("notes = ?"); params.append(body["notes"])
+    if "rel_type" in body:
+        lookup = _rel_lookup(body["rel_type"])
+        if not lookup:
+            raise HTTPException(status_code=400, detail=f"Unknown rel_type: {body['rel_type']!r}")
+        group, lbl_a, lbl_b = lookup
+        updates.extend(["rel_type = ?", "rel_a_to_b = ?", "rel_b_to_a = ?", "rel_group = ?"])
+        params.extend([body["rel_type"], lbl_a, lbl_b, group])
+
+    if not updates:
+        return {"ok": True, "updated": False}
+
+    updates.append("updated_at = NOW()")
+    params.extend([rel_id, user_id])
+    await db.execute(
+        f"UPDATE person_relationships SET {', '.join(updates)} WHERE id = ? AND user_id = ?",
+        params,
+    )
+    await db.commit()
+    return {"ok": True, "updated": True}
+
+
+@router.delete("/{person_id}/relationships/{rel_id}")
+async def delete_relationship(
+    person_id: str,
+    rel_id: str,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """Remove a relationship edge."""
+    await require_feature_access(db, user, feature="people", action="update")
+    user_id = user["user_id"]
+    await _get_person_or_404(db, person_id, user_id)
+    await db.execute(
+        "DELETE FROM person_relationships WHERE id = ? AND user_id = ?",
+        (rel_id, user_id),
+    )
+    await db.commit()
+    return {"ok": True}
 
 
 @router.put("/{person_id}/bucket-list/{item_id}/done")
