@@ -655,19 +655,49 @@ def detect_intent(
         return Intent("people_introduce", {"name": m_intro.group(1).strip()})
 
     # --- CONTACTS RELATE ---
+    # Match: "link/connect Alice and Bob as siblings"
+    # Two names (1–3 words each), joined by and/with/to, followed by role.
+    _NAME2 = r"((?:\w+(?:\s+\w+){0,2}?))"  # 1-3 words, lazy
+    _ROLE_LIST = (
+        r"spouses?|partners?|siblings?|twins?|best\s+friends?|friends?|"
+        r"colleagues?|coworkers?|co-?workers?|boss(?:es)?|mentors?|mentees?|"
+        r"clients?|parents?|children|cousins?|in-?laws?|relatives?"
+    )
+    _RELATE_ROLE_MAP = {
+        # plurals / variants → canonical key (same as RELATIONSHIP_TYPES)
+        "spouse": "spouse",   "spouses": "spouse",
+        "partner": "partner", "partners": "partner",
+        "sibling": "sibling", "siblings": "sibling", "twins": "sibling",
+        "best friend": "best_friend", "best friends": "best_friend",
+        "friend": "friend",   "friends": "friend",
+        "colleague": "colleague", "colleagues": "colleague",
+        "coworker": "colleague", "coworkers": "colleague",
+        "co-worker": "colleague", "co-workers": "colleague",
+        "boss": "boss",       "bosses": "boss",
+        "mentor": "mentor",   "mentors": "mentor",
+        "mentee": "mentor",   "mentees": "mentor",
+        "client": "client",   "clients": "client",
+        "parent": "parent",   "parents": "parent",
+        "children": "parent", "child": "parent",
+        "cousin": "cousin",   "cousins": "cousin",
+        "in-law": "in_law",   "in-laws": "in_law",
+        "relative": "sibling","relatives": "sibling",
+    }
     _RELATE_RE = re.compile(
-        r"(?:link|connect|add\s+relationship|relate|set\s+up).*?"
-        r"([A-Z][a-z]{1,30}(?:\s[A-Z][a-z]{1,20})?)"
-        r".*?(?:and|with|to)\s+"
-        r"([A-Z][a-z]{1,30}(?:\s[A-Z][a-z]{1,20})?)"
-        r".*?(?:as\s+)?(spouses?|partners?|siblings?|friends?|colleagues?|parent|child|cousins?|boss|mentor|in.laws?)",
+        r"(?:link|connect|relate|add\s+relationship(?:\s+between)?|set\s+up)[\s,]+"
+        r"([\w]+(?:\s+[\w]+){0,2}?)"          # name_a (1–3 words)
+        r"\s+(?:and|with|to)\s+"
+        r"([\w]+(?:\s+[\w]+){0,2}?)"          # name_b (1–3 words)
+        r"\s+(?:as|are|is)\s+"
+        r"(" + _ROLE_LIST + r")",
         re.IGNORECASE,
     )
     m_relate = _RELATE_RE.search(t)
     if m_relate:
-        name_a = m_relate.group(1).strip()
-        name_b = m_relate.group(2).strip()
-        role = m_relate.group(3).lower().rstrip("s")
+        name_a = " ".join(w.capitalize() for w in m_relate.group(1).strip().split())
+        name_b = " ".join(w.capitalize() for w in m_relate.group(2).strip().split())
+        role_raw = m_relate.group(3).lower().strip()
+        role = _RELATE_ROLE_MAP.get(role_raw, role_raw.rstrip("s"))
         return Intent("people_relate", {"name_a": name_a, "name_b": name_b, "role": role})
 
     # --- CONTACTS CREATE ---
@@ -675,31 +705,57 @@ def detect_intent(
         r"^(?:add|create|save) (?:a )?(?:contact|person|entry) (?:for |named )?(.+)$", t
     )
     if m:
-        name = m.group(1).strip()
+        raw = m.group(1).strip()
+
+        # Extract just the name: stop at the first comma or pronoun ("she's / he's / who is")
+        name_part = re.split(
+            r",|\s+(?:she\'?s?|he\'?s?|they\'?re?|who\s+is|as\s+(?:a|my)?)\b",
+            raw, maxsplit=1, flags=re.I
+        )[0].strip()
+        # Capitalise each word (input text is normalised to lower)
+        name = " ".join(w.capitalize() for w in name_part.split()) if name_part else raw
+
         rel = "friend"
         context = "personal"
         circle = "circle"
-        for tag in ["colleague", "coworker", "co-worker", "boss", "client"]:
-            if tag in t.lower():
+
+        tl = t.lower()
+        # Context: work signals
+        for tag in ["colleague", "coworker", "co-worker", "boss", "client", "contractor", "vendor"]:
+            if tag in tl:
                 context = "work"
                 circle = "circle"
+                rel = tag if tag != "coworker" else "colleague"
                 break
-        for tag in ["friend", "family", "neighbor", "neighbour", "partner", "spouse"]:
-            if tag in t.lower():
-                context = "personal"
+        # Context: personal signals (only override if not already set to work)
+        if context != "work":
+            for tag in ["friend", "family", "neighbor", "neighbour", "partner", "spouse"]:
+                if tag in tl:
+                    context = "personal"
+                    break
+
+        # Relationship label
+        rel_map = [
+            ("best friend", "best friend"),
+            ("spouse",      "spouse"),
+            ("partner",     "partner"),
+            ("colleague",   "colleague"),
+            ("friend",      "friend"),
+            ("family",      "family"),
+            ("neighbor",    "neighbor"),
+            ("neighbour",   "neighbor"),
+        ]
+        for keyword, label in rel_map:
+            if keyword in tl:
+                rel = label
                 break
-        for tag in ["friend", "colleague", "family", "neighbor", "neighbour"]:
-            if tag in t.lower():
-                rel = tag.replace("neighbour", "neighbor")
-                name = re.sub(
-                    rf",?\s*(?:she'?s|he'?s|they'?re|as)?\s*(?:a |my )?{tag}\b",
-                    "", name, flags=re.I,
-                ).strip()
-                break
-        for tag in ["inner circle", "best friend", "closest"]:
-            if tag in t.lower():
+
+        # Tier
+        for tag in ["inner circle", "best friend", "closest", "partner", "spouse"]:
+            if tag in tl:
                 circle = "inner"
                 break
+
         return Intent("people_create", {"name": name, "relationship": rel, "context": context, "circle": circle})
 
     # --- CONTACTS SEARCH ---
