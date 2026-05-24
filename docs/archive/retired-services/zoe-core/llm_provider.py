@@ -81,7 +81,7 @@ class LiteLLMProvider(LLMProvider):
                         "temperature": kwargs.get("temperature", 0.7),
                         "max_tokens": kwargs.get("max_tokens", 512)
                     },
-                    headers={"Authorization": "Bearer sk-f3320300bb32df8f176495bb888ba7c8f87a0d01c2371b50f767b9ead154175f"}
+                    headers={"Authorization": "Bearer REDACTED_RETIRED_LITELLM_KEY"}
                 )
                 result = response.json()
                 return result["choices"][0]["message"]["content"]
@@ -104,7 +104,7 @@ class LiteLLMProvider(LLMProvider):
                         "temperature": kwargs.get("temperature", 0.7),
                         "max_tokens": kwargs.get("max_tokens", 512)
                     },
-                    headers={"Authorization": "Bearer sk-f3320300bb32df8f176495bb888ba7c8f87a0d01c2371b50f767b9ead154175f"}
+                    headers={"Authorization": "Bearer REDACTED_RETIRED_LITELLM_KEY"}
                 ) as response:
                     async for line in response.aiter_lines():
                         if line.startswith("data: "):

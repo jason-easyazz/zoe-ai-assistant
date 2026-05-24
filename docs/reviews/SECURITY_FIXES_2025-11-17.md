@@ -24,7 +24,7 @@ Comprehensive fix implementation addressing all 6 critical and high-severity iss
 **Before:**
 ```yaml
 healthcheck:
-  test: ["CMD-SHELL", "curl -f http://localhost:8001/health -H 'Authorization: Bearer sk-f3320300bb32df8f176495bb888ba7c8f87a0d01c2371b50f767b9ead154175f' || exit 0"]
+  test: ["CMD-SHELL", "curl -f http://localhost:8001/health -H 'Authorization: Bearer REDACTED_RETIRED_LITELLM_KEY' || exit 0"]
 ```
 
 **After:**
@@ -304,8 +304,8 @@ python3 tests/unit/test_architecture.py
 
 ```bash
 # API Keys (CRITICAL - NEVER commit these)
-OPENAI_API_KEY=sk-your-actual-key-here
-ANTHROPIC_API_KEY=sk-ant-your-actual-key-here
+OPENAI_API_KEY=replace-with-openai-key
+ANTHROPIC_API_KEY=replace-with-anthropic-key
 
 # n8n Authentication (CRITICAL - use strong random password)
 N8N_BASIC_AUTH_PASSWORD=$(openssl rand -base64 32)

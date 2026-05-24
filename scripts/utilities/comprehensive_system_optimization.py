@@ -324,7 +324,7 @@ class SystemOptimizer:
                 async with httpx.AsyncClient(timeout=30.0) as client:
                     response = await client.post(
                         f"{self.services['litellm']}/chat/completions",
-                        headers={"Authorization": "Bearer sk-1234567890abcdef"},
+                        headers={"Authorization": "Bearer replace-with-litellm-key"},
                         json={
                             "model": "gemma3-ultra-fast",  # Test with specific model
                             "messages": [
