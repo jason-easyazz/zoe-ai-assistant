@@ -1702,13 +1702,34 @@ async def _run_voice_memory_passes(
     try:
         from memory_extractor import extract_and_ingest as _mi
         from memory_digest import run_turn_digest as _td
+        from person_extractor import process_text as _person_extract
+        from person_extractor_llm import process_text_llm as _person_extract_llm
+        from latent_intent_detector import detect_and_store as _detect_suggestions
+        combined = f"{user_text}\n{reply}".strip()
         await asyncio.gather(
             _mi(user_text, reply, user_id=user_id, session_id=session_id,
                 source="voice_regex", auto_approve=True),
             _td(user_id, user_text, reply, session_id=session_id,
                 source="voice_turn_digest"),
+            _person_extract(
+                combined,
+                user_id=user_id,
+                source="voice",
+                session_id=session_id,
+            ),
+            _person_extract_llm(
+                combined,
+                user_id=user_id,
+                source="voice",
+                session_id=session_id,
+            ),
             return_exceptions=True,
         )
+        asyncio.ensure_future(_detect_suggestions(
+            user_text,
+            user_id=user_id,
+            session_id=session_id,
+        ))
     except Exception:
         pass
 
@@ -3102,17 +3123,6 @@ async def voice_command(
     if reply_text and effective_user and effective_user not in ("guest", "voice-daemon"):
         await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
         asyncio.ensure_future(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
-        # Person CRM: extract person facts (dual fan-out to DB + MemPalace)
-        try:
-            from person_extractor import process_text as _person_extract
-            asyncio.ensure_future(_person_extract(
-                f"{text}\n{reply_text}",
-                user_id=effective_user,
-                source="voice",
-                session_id=session_id,
-            ))
-        except Exception:
-            pass
 
     return {
         "ok": True,

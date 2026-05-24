@@ -1123,6 +1123,7 @@ def _build_prompt(
     portrait: str = "",
     memory_context: str = "",
     open_loops: str = "",
+    pending_suggestions: str = "",
 ) -> str:
     """Build the user message with a dynamic context prefix using named memory blocks.
 
@@ -1149,6 +1150,8 @@ def _build_prompt(
         parts.append(f"[{block_name}]\n{portrait}")
     if open_loops:
         parts.append(f"[OPEN LOOPS — threads to follow up on]\n{open_loops}")
+    if pending_suggestions:
+        parts.append(f"[OFFER TO SAVE — mention naturally if appropriate]\n{pending_suggestions}")
     ctx_parts = [f"Date/time: {dt_line}"]
     if user_line:
         ctx_parts.append(user_line)
@@ -1532,6 +1535,14 @@ async def _build_memory_context(message: str, user_id: str = "family-admin") -> 
     if person_ctx:
         result_lines.append(person_ctx)
     return "\n".join(result_lines)
+
+
+async def _load_pending_suggestions(user_id: str, session_id: str, limit: int = 3) -> str:
+    try:
+        from pending_suggestions import load_for_prompt
+        return await load_for_prompt(user_id, session_id, limit=limit)
+    except Exception:
+        return ""
 
 
 async def _load_open_loops(user_id: str, limit: int = 5) -> str:
@@ -3366,10 +3377,11 @@ async def run_zoe_agent(
     user_portrait = portrait if portrait is not None else await _load_user_portrait(user_id)
 
     # Load user facts, memory context, open loops, and context enhancement in parallel
-    mp_facts, memory_ctx, user_open_loops, enhance_ctx = await asyncio.gather(
+    mp_facts, memory_ctx, user_open_loops, pending_offers, enhance_ctx = await asyncio.gather(
         _mempalace_load_user_facts(user_id),
         _build_memory_context(message, user_id=user_id),
         _load_open_loops(user_id),
+        _load_pending_suggestions(user_id, session_id),
         _context_enhance(message, user_portrait, user_id),
     )
     memory_combined = "\n\n".join(filter(None, [mp_facts, db_memory_context, memory_ctx, enhance_ctx]))
@@ -3377,7 +3389,7 @@ async def run_zoe_agent(
     if voice_mode:
         # Voice: keep datetime+user in system prompt (voice has no history window, latency
         # budget is already tight — portrait goes into extras rather than the prompt header).
-        extras = "\n\n".join(filter(None, [user_portrait, mp_facts, db_memory_context, memory_ctx]))
+        extras = "\n\n".join(filter(None, [user_portrait, mp_facts, db_memory_context, memory_ctx, pending_offers]))
         system_prompt = (
             f"{_zoe_soul(user_id=user_id, voice_mode=True)}\n\n{extras}"
             if extras else _zoe_soul(user_id=user_id, voice_mode=True)
@@ -3398,6 +3410,7 @@ async def run_zoe_agent(
             portrait=user_portrait,
             memory_context=memory_combined,
             open_loops=user_open_loops,
+            pending_suggestions=pending_offers,
         )
         logger.info(
             "zoe_agent: skills=%s tools=%d/%d portrait=%d open_loops=%d",
@@ -3752,17 +3765,18 @@ async def run_zoe_agent_streaming(
     user_portrait = portrait if portrait is not None else await _load_user_portrait(user_id)
 
     # Load user facts, memory context, open loops, and context enhancement in parallel
-    mp_facts, memory_ctx, user_open_loops, enhance_ctx = await asyncio.gather(
+    mp_facts, memory_ctx, user_open_loops, pending_offers, enhance_ctx = await asyncio.gather(
         _mempalace_load_user_facts(user_id),
         _build_memory_context(message, user_id=user_id),
         _load_open_loops(user_id),
+        _load_pending_suggestions(user_id, session_id),
         _context_enhance(message, user_portrait, user_id),
     )
     memory_combined = "\n\n".join(filter(None, [mp_facts, db_memory_context, memory_ctx, enhance_ctx]))
 
     if voice_mode:
         # Voice: portrait goes into extras alongside memory (system prompt, no history window).
-        extras = "\n\n".join(filter(None, [user_portrait, mp_facts, db_memory_context, memory_ctx]))
+        extras = "\n\n".join(filter(None, [user_portrait, mp_facts, db_memory_context, memory_ctx, pending_offers]))
         system_prompt = (
             f"{_zoe_soul(user_id=user_id, voice_mode=True)}\n\n{extras}"
             if extras else _zoe_soul(user_id=user_id, voice_mode=True)
@@ -3788,6 +3802,7 @@ async def run_zoe_agent_streaming(
             portrait=user_portrait,
             memory_context=memory_combined,
             open_loops=user_open_loops,
+            pending_suggestions=pending_offers,
         )
         logger.info(
             "zoe_agent streaming: skills=%s tools=%d/%d portrait=%d open_loops=%d",

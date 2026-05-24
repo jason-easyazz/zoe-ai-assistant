@@ -145,11 +145,18 @@ async def create_note(
 
     # Person CRM: extract person facts from note content in background
     import asyncio as _aio
-    _note_content = (body.content or "") if hasattr(body, "content") else ""
+    _note_content = (payload.content or "") if hasattr(payload, "content") else ""
     if _note_content and user_id not in ("guest", ""):
         try:
             from person_extractor import process_text as _person_extract
+            from person_extractor_llm import process_text_llm as _person_extract_llm
             _aio.ensure_future(_person_extract(
+                _note_content,
+                user_id=user_id,
+                source="notes",
+                session_id=None,
+            ))
+            _aio.ensure_future(_person_extract_llm(
                 _note_content,
                 user_id=user_id,
                 source="notes",
