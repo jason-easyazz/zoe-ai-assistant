@@ -116,9 +116,6 @@ def classify(
 
     intent_name = getattr(intent, "name", None) if intent is not None else None
     if intent_name:
-        if intent_name in _PUBLIC_INTENTS:
-            return ScopeDecision("public", f"intent:{intent_name}", intent_name)
-
         if intent_name in ("list_add", "list_show", "list_remove", "list_update"):
             slots = getattr(intent, "slots", None) or {}
             lt = str(slots.get("list_type") or "").lower().strip()
@@ -132,16 +129,19 @@ def classify(
                 return ScopeDecision("user_scoped", f"intent:{intent_name}:personal_list", intent_name)
             return ScopeDecision(default_when_ambiguous, f"intent:{intent_name}:ambiguous", intent_name)
 
+        if intent_name in _USER_SCOPED_INTENTS:
+            return ScopeDecision("user_scoped", f"intent:{intent_name}", intent_name)
+
         if intent_name.startswith("music_"):
             if _MUSIC_USER_RE.search(t):
                 return ScopeDecision("user_scoped", f"intent:{intent_name}:my_library", intent_name)
             return ScopeDecision("public", f"intent:{intent_name}:generic", intent_name)
 
+        if intent_name in _PUBLIC_INTENTS:
+            return ScopeDecision("public", f"intent:{intent_name}", intent_name)
+
         if intent_name.startswith(("ha_", "light_", "media_", "climate_")):
             return ScopeDecision("public", f"intent:{intent_name}:ha", intent_name)
-
-        if intent_name in _USER_SCOPED_INTENTS:
-            return ScopeDecision("user_scoped", f"intent:{intent_name}", intent_name)
 
     if not t:
         return ScopeDecision(default_when_ambiguous, "empty_text", intent_name)
