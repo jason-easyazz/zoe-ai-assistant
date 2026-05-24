@@ -76,10 +76,10 @@ jobs:
             | sort | xargs python3 -m py_compile
           echo "All Python files: syntax OK"
 
-      # Run only the pure unit tests that have no local-service or heavy-dep imports.
-      # The remaining tests require Jetson-specific packages (whisper, torch, MemPalace)
-      # or start the full FastAPI lifespan — they run on the Jetson in deploy.yml.
-      - name: Unit tests (pure logic, no services)
+      # Run pure unit tests plus zoe-auth contract tests that use lightweight DB fakes.
+      # Heavy tests requiring Jetson-specific packages (whisper, torch, MemPalace)
+      # still run on the Jetson or during focused local validation.
+      - name: Unit tests (pure logic and auth contracts)
         run: |
           pip install --quiet pytest pytest-asyncio
           pytest \
@@ -87,10 +87,12 @@ jobs:
             services/zoe-data/tests/test_voice_scope.py \
             services/zoe-data/tests/test_chat_session_title.py \
             services/zoe-data/tests/test_ui_orchestrator_types.py \
+            services/zoe-auth/tests/test_auth.py \
+            services/zoe-auth/tests/test_smoke.py \
             -x -q \
             --override-ini="asyncio_mode=auto"
         env:
-          PYTHONPATH: ${{ github.workspace }}/services/zoe-data
+          PYTHONPATH: ${{ github.workspace }}/services/zoe-data:${{ github.workspace }}/services/zoe-auth
           POSTGRES_URL: postgresql://zoe:${{ env.CI_DB_PASSWORD }}@localhost:5432/zoe
           ZOE_DATA_DB: ":memory:"
           ZOE_MEMORY_STARTUP_STRICT: "false"
