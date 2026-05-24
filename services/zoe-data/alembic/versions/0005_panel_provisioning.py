@@ -35,7 +35,7 @@ def upgrade() -> None:
             status          TEXT NOT NULL DEFAULT 'pending',
             panel_id        TEXT,
             token           TEXT,
-            created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+            created_at      TEXT NOT NULL DEFAULT (to_char(timezone('UTC', now()), 'YYYY-MM-DD"T"HH24:MI:SS"Z"')),
             expires_at      TEXT NOT NULL,
             confirmed_by    TEXT
         )
