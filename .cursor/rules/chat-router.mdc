@@ -1,0 +1,26 @@
+---
+description: Zoe chat, intent, AG-UI, and agent routing constraints
+globs:
+  - services/zoe-data/routers/chat.py
+  - services/zoe-data/intent_router.py
+  - services/zoe-data/mcp_server.py
+  - services/zoe-data/zoe_agent.py
+  - services/zoe-data/openclaw_ws.py
+alwaysApply: false
+---
+
+# Chat Router
+
+Keep one production chat router: `services/zoe-data/routers/chat.py`. Do not create `chat_v2.py`, `_new`, `_fixed`, or side routers for production behavior.
+
+Natural-language handling should live in `intent_router.py`, Zoe Agent, Hermes, or OpenClaw. Avoid adding broad hardcoded phrase branches in `chat.py`; use focused intents for stable fast paths and agent routing for fuzzy language.
+
+Every new feature reachable from chat/voice needs:
+- An intent or agent/tool path.
+- A useful inline response or AG-UI card, not just a URL.
+- A backend status endpoint when it is an integration.
+- A settings or feature UI section where appropriate.
+
+Preserve AG-UI SSE event patterns already used in `chat.py`. Persist user/assistant turns and run memory extraction through existing hooks so chat, voice, and nightly digest stay consistent.
+
+For complex repair or development tasks, prefer Hermes escalation. Keep OpenClaw available for browser-heavy or fallback execution.

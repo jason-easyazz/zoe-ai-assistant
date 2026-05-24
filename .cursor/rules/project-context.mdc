@@ -1,0 +1,16 @@
+---
+description: Zoe project identity and non-negotiable architecture constraints
+alwaysApply: true
+---
+
+# Zoe Project Context
+
+Zoe production code lives in `/home/zoe/assistant`. The live web/chat API is `services/zoe-data/` running host uvicorn on port 8000. `services/zoe-core/` is retired reference code; do not extend it for new features.
+
+Use one production chat router: `services/zoe-data/routers/chat.py`. Natural-language routing belongs in `intent_router.py`, Zoe Agent, Hermes, or OpenClaw; do not add brittle command-detection branches to `chat.py`.
+
+Before file changes, follow `.zoe/AI_ASSISTANT_CHECKLIST.md`: validate structure, respect `.zoe/manifest.json`, and keep root markdown at or below 10 files. Do not delete files without the cleanup safety process.
+
+Zoe is multi-user and scope-aware. Memory writes must carry scope, credentials are per user/scope, and core code must not bake in home/family/household assumptions.
+
+Hermes is the preferred escalation path for reasoning, repair, and development workflow. Keep OpenClaw as fallback for browser-heavy or specialized workflows.

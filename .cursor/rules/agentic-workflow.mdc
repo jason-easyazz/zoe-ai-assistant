@@ -1,0 +1,16 @@
+---
+description: Zoe agentic development workflow with Graphify, opensrc, Hermes, Greptile, and verification
+alwaysApply: true
+---
+
+# Agentic Workflow
+
+For Zoe architecture or cross-module work, start with Graphify: read `graphify-out/GRAPH_REPORT.md` or use `user-graphify` MCP tools before broad source searches. Rebuild only with the safe full extract command in `graphify.mdc`; do not use `graphify update .` or Graphify hooks.
+
+For third-party libraries, prefer `opensrc` or upstream docs before guessing API behavior. Keep external source caches outside the repo, under `~/.opensrc/repos/`.
+
+For complex planning, code repair, PR review loops, and board repair, delegate to Hermes first. Use OpenClaw as fallback for browser automation, Home Assistant specific flows, or workflows Hermes cannot execute.
+
+Keep changes surgical. Prefer existing Zoe patterns, avoid backup/old/new file copies, and do not create parallel routers or duplicate feature files.
+
+Verify from a user perspective before commit: focused tests, `validate_structure.py`, `validate_critical_files.py`, live `/health` and `/api/system/status`, and any relevant systemd timers or MCP tools.

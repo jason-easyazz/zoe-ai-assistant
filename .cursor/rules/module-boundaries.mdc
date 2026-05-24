@@ -1,0 +1,20 @@
+---
+description: Rules for Zoe optional modules, skills, and add-on boundaries
+globs:
+  - modules/**/*
+  - skills/**/*
+  - docker-compose.modules.yml
+alwaysApply: false
+---
+
+# Module Boundaries
+
+Optional modules belong under `modules/` and should be self-contained: source, assets, requirements, and docs stay inside the module unless there is a clear shared contract.
+
+Do not create cross-module imports that make one optional module required by another. Shared behavior should live in an explicit common service or API boundary, not ad hoc relative imports.
+
+Register runtime modules through the established compose/module patterns. If a module adds a user-facing capability, it still needs chat/voice setup and status handling through Zoe's main surfaces.
+
+Skills are filesystem artifacts. Adding an expert or agent skill should be a file drop with clear instructions, not a hidden code branch.
+
+Avoid committing generated junk, backups, large binaries, logs, or root-level scratch files. Use git history instead of `_old`, `_backup`, `_new`, or `_fixed` copies.

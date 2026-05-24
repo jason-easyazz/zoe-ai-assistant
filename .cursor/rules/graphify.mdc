@@ -1,6 +1,9 @@
 ---
 description: graphify knowledge graph context
-alwaysApply: true
+globs:
+  - graphify-out/**/*
+  - "**/*.md"
+alwaysApply: false
 ---
 
 This project has a graphify knowledge graph at graphify-out/.

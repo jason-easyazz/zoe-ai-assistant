@@ -1,3 +1,16 @@
+# DEPRECATED FOR CURSOR AGENT MODE
+#
+# Cursor Agent mode now reads `.cursor/rules/*.mdc` instead of this legacy
+# `.cursorrules` file. Keep this file as a reference for older tools only.
+# Canonical rules live in:
+# - `.cursor/rules/project-context.mdc`
+# - `.cursor/rules/agentic-workflow.mdc`
+# - `.cursor/rules/db-safety.mdc`
+# - `.cursor/rules/chat-router.mdc`
+# - `.cursor/rules/module-boundaries.mdc`
+# - `.cursor/rules/chat-voice-first-features.mdc`
+# - `.cursor/rules/graphify.mdc`
+#
 # Zoe AI Assistant Development Rules
 # These rules ensure safe, maintainable, and efficient code
 # Updated: November 10, 2025 - Added Multi-Platform Hardware Support

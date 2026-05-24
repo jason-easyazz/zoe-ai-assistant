@@ -1,0 +1,22 @@
+---
+description: Database safety rules for Zoe migrations, models, and persistence code
+globs:
+  - services/**/*.py
+  - services/**/alembic/**/*
+  - tests/**/*db*.py
+alwaysApply: false
+---
+
+# Database Safety
+
+Use PostgreSQL as the live relational store. Do not reintroduce SQLite as a production data path unless explicitly working on archive/recovery tooling.
+
+Before schema or persistence changes, identify the active table, migration, and rollback behavior. Use Alembic migrations for schema changes and transactions for multi-step writes.
+
+Never run destructive database actions casually: no `DROP`, truncate, or broad `DELETE` without explicit approval and a verified backup. Every `DELETE` must have a scoped `WHERE`.
+
+Use parameterized queries and existing helpers such as `db_pool`, `database.get_db`, or established router patterns. Do not interpolate user input into SQL.
+
+For memory work, use `MemoryService` as the sole read/write facade. Avoid direct Chroma/MemPalace writes from new code unless you are maintaining the MCP bridge or the service itself.
+
+After changes, run focused tests plus live backup/restore verification when persistence behavior is affected.

@@ -1,0 +1,22 @@
+---
+description: Zoe feature completion rule for chat, voice, AG-UI, settings UI, and status endpoints
+globs:
+  - services/zoe-data/**/*
+  - services/zoe-ui/dist/**/*
+  - modules/**/*
+alwaysApply: false
+---
+
+# Chat And Voice First
+
+Every new Zoe feature, page, module, or integration must be configurable and operable through chat or voice, not only by visiting a page or editing config.
+
+Done means:
+- User says "set up <feature>" or a primary control phrase and Zoe responds usefully.
+- Chat/voice shows status and next steps inline, ideally as AG-UI cards or structured markdown.
+- A backend `/api/<feature>/status` endpoint exposes health/config state for chat and UI.
+- Settings or the feature page shows inline connection/configuration status and actions.
+
+Do not return a raw external URL as the only response. Keep the user in Zoe where possible, using popups for OAuth/connect flows when needed.
+
+When adding intents, prefer `intent_router.py` patterns and existing AG-UI streaming conventions. Avoid duplicating logic in the chat router.
