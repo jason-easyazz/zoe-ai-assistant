@@ -1107,12 +1107,12 @@ async def get_agent_board():
 
 @_agent_card_router.post("/board/approve")
 async def board_approve(task_id: str, user: dict = Depends(get_current_user)):
-    """Create a Multica board issue and assign to OpenClaw."""
+    """Create a Multica board issue for agent execution (Hermes by default)."""
     try:
         from multica_client import MULClient  # type: ignore[import]
         client = MULClient()
         if not client.is_configured():
-            return {"ok": False, "reason": "Multica not configured — routing directly to OpenClaw"}
+            return {"ok": False, "reason": "Multica not configured — route via Hermes manually"}
         issue = await client.create_issue(
             title=f"Task: {task_id}",
             description=f"Approved via Zoe chat. Task ID: {task_id}",

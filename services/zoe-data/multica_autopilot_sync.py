@@ -22,6 +22,11 @@ _MULTICA_BASE_URL = os.environ.get("MULTICA_BASE_URL", "").rstrip("/")
 _MULTICA_API_TOKEN = os.environ.get("MULTICA_API_TOKEN", "")
 _MULTICA_WORKSPACE_ID = os.environ.get("MULTICA_WORKSPACE_ID", "")
 _TIMEOUT = 10.0
+_HEALTH_CHECK_TIMEOUT_S = float(os.environ.get("ZOE_HEALTH_CHECK_TIMEOUT_S", "120"))
+_HERMES_AGENT_ID = os.environ.get(
+    "HERMES_MULTICA_AGENT_ID",
+    "019ae0a7-62f1-47fe-9d46-75fd0ae5d570",
+)
 _TZ = os.environ.get("ZOE_TIMEZONE", "Australia/Perth")
 
 
@@ -192,8 +197,63 @@ async def _run_reminder_scan() -> None:
 
 
 async def _run_platform_health_check() -> None:
-    """Log a platform health check execution (extend to push a health card later)."""
-    logger.info("autopilot: Platform Health Check fired")
+    """Run the host health script and open a Hermes-assigned issue on failure."""
+    import asyncio
+    from pathlib import Path
+
+    script = Path(
+        os.environ.get(
+            "ZOE_HEALTH_CHECK_SCRIPT",
+            str(Path.home() / "bin" / "zoe-health-check.sh"),
+        )
+    )
+    if not script.exists():
+        raise FileNotFoundError(f"Health check script missing: {script}")
+
+    proc = await asyncio.create_subprocess_exec(
+        "bash",
+        str(script),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    try:
+        stdout, _ = await asyncio.wait_for(
+            proc.communicate(),
+            timeout=_HEALTH_CHECK_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.communicate()
+        raise RuntimeError(
+            f"Platform health check timed out after {_HEALTH_CHECK_TIMEOUT_S:.0f}s"
+        )
+    output = (stdout or b"").decode("utf-8", errors="replace").strip()
+    tail = "\n".join(output.splitlines()[-25:])
+
+    if proc.returncode == 0:
+        logger.info("autopilot: platform health check passed")
+        return
+
+    logger.warning("autopilot: platform health check failed (exit %s)", proc.returncode)
+    if _is_configured():
+        try:
+            from multica_client import get_multica_client  # type: ignore[import]
+
+            client = get_multica_client()
+            await client.create_issue(
+                title="Platform health failures detected",
+                description=(
+                    "The scheduled Platform Health Check found failing services.\n\n"
+                    f"```\n{tail}\n```"
+                ),
+                priority="high",
+                assignee_id=_HERMES_AGENT_ID,
+                assignee_type="agent",
+            )
+        except Exception as exc:
+            logger.warning("autopilot: failed to create health failure issue: %s", exc)
+
+    raise RuntimeError(f"Platform health check failed (exit {proc.returncode})")
 
 
 # ── Title → task function mapping ────────────────────────────────────────────

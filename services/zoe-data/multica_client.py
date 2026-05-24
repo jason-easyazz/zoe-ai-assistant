@@ -50,6 +50,8 @@ class MULClient:
         title: str,
         description: str = "",
         priority: str = "medium",
+        assignee_id: str | None = None,
+        assignee_type: str | None = None,
     ) -> dict:
         """Create a Multica board issue. Returns the created issue dict."""
         if not self.is_configured():
@@ -61,6 +63,9 @@ class MULClient:
             "description": description,
             "priority": priority,
         }
+        if assignee_id:
+            payload["assignee_id"] = assignee_id
+            payload["assignee_type"] = assignee_type or "agent"
         try:
             async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
                 resp = await client.post(url, json=payload, headers=self._headers())
