@@ -168,11 +168,18 @@ async def create_entry(
 
     # Person CRM: extract person facts from journal entry in background
     import asyncio as _aio
-    _content = (body.content or "") if hasattr(body, "content") else ""
+    _content = (payload.content or "") if hasattr(payload, "content") else ""
     if _content and user_id not in ("guest", ""):
         try:
             from person_extractor import process_text as _person_extract
+            from person_extractor_llm import process_text_llm as _person_extract_llm
             _aio.ensure_future(_person_extract(
+                _content,
+                user_id=user_id,
+                source="journal",
+                session_id=None,
+            ))
+            _aio.ensure_future(_person_extract_llm(
                 _content,
                 user_id=user_id,
                 source="journal",

@@ -149,3 +149,40 @@ async def trigger_morning_brief(user: dict = Depends(get_current_user)):
         "message": message,
         "context": {k: v for k, v in ctx.items() if k not in ("portrait_snippet",)},
     }
+
+
+@router.get("/suggestions")
+async def list_pending_suggestions(
+    session_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """List unresolved save offers for the current chat session."""
+    from pending_suggestions import list_active
+
+    items = await list_active(user["user_id"], session_id)
+    return {"suggestions": items, "count": len(items)}
+
+
+@router.post("/suggestions/{suggestion_id}/accept")
+async def accept_pending_suggestion(
+    suggestion_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """Execute a pending save offer (direct API — no intent re-parse)."""
+    from pending_suggestions import execute_suggestion
+
+    result = await execute_suggestion(suggestion_id, user["user_id"])
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "failed"))
+    return result
+
+
+@router.post("/suggestions/{suggestion_id}/dismiss")
+async def dismiss_pending_suggestion(
+    suggestion_id: str,
+    user: dict = Depends(get_current_user),
+):
+    from pending_suggestions import mark_resolved
+
+    ok = await mark_resolved(suggestion_id, user["user_id"])
+    return {"ok": ok}

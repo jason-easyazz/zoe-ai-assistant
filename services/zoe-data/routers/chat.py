@@ -811,6 +811,8 @@ async def _persist_memory_candidates(user_id: str, session_id: str, user_message
         from memory_extractor import extract_and_ingest
         from memory_digest import run_turn_digest
         from person_extractor import process_text as _person_extract
+        from person_extractor_llm import process_text_llm as _person_extract_llm
+        from latent_intent_detector import detect_and_store as _detect_suggestions
 
         await asyncio.gather(
             extract_and_ingest(
@@ -834,8 +836,19 @@ async def _persist_memory_candidates(user_id: str, session_id: str, user_message
                 source="conversation",
                 session_id=session_id,
             ),
+            _person_extract_llm(
+                f"{user_message}\n{assistant_response}",
+                user_id=user_id,
+                source="conversation",
+                session_id=session_id,
+            ),
             return_exceptions=True,
         )
+        asyncio.ensure_future(_detect_suggestions(
+            user_message,
+            user_id=user_id,
+            session_id=session_id,
+        ))
     except Exception as e:
         logger.warning("Memory candidate persistence failed: %s", e)
 
@@ -2013,6 +2026,14 @@ async def chat_stream_generator(
                         message_id=assistant_message_id,
                     ),
                 )
+                try:
+                    from pending_suggestions import list_active, ui_components_for_suggestions
+                    for _scomp in ui_components_for_suggestions(
+                        await list_active(user_id, session_id)
+                    ):
+                        yield emit(CustomEvent(name="zoe.ui_component", value=_scomp))
+                except Exception as _psc:
+                    logger.debug("pending suggestion cards (non-fatal): %s", _psc)
 
                 if escalate_signal:
                     is_background = escalate_signal.startswith("__ESCALATE_BG__:")

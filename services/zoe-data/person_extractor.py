@@ -449,6 +449,73 @@ async def _post_write_hooks(
 
 # ── Main entry point ──────────────────────────────────────────────────────────
 
+async def apply_person_fact(
+    name: str,
+    fact_type: str,
+    value: str,
+    *,
+    user_id: str,
+    source: str,
+    session_id: str | None = None,
+    db=None,
+) -> bool:
+    """Apply one structured person fact (regex or LLM). Returns True if written."""
+    name = (name or "").strip()
+    value = (value or "").strip()
+    if not name or not value:
+        return False
+
+    _db, should_close = await _ensure_db(db)
+    if _db is None:
+        return False
+
+    pattern_type = fact_type.strip().lower()
+    if pattern_type == "bucket_list":
+        pattern_type = "bucket"
+
+    fact_text = value if name.lower() in value.lower() else f"{name}: {value}"
+    person_uuid = await _resolve_person_uuid(name, user_id, _db)
+    entity_id = person_uuid
+
+    mem_id = await _ingest_to_mempalace(
+        fact_text[:300],
+        user_id,
+        name,
+        entity_id,
+        memory_type="person",
+        source=source,
+        session_id=session_id,
+    )
+
+    if not person_uuid:
+        return bool(mem_id)
+
+    try:
+        if pattern_type == "preference":
+            await _write_activity(person_uuid, user_id, "fact", fact_text, source, _db, mem_id, session_id=session_id)
+        elif pattern_type == "birthday":
+            month, day, year = _parse_birthday(value)
+            await _write_date(person_uuid, user_id, f"{name}'s birthday", month, day, year, _db, mem_id)
+            await _write_activity(person_uuid, user_id, "birthday_recorded", fact_text, source, _db, mem_id, session_id=session_id)
+        elif pattern_type == "work":
+            await _write_activity(person_uuid, user_id, "fact", fact_text, source, _db, mem_id, session_id=session_id)
+        elif pattern_type == "meeting":
+            await _write_activity(person_uuid, user_id, "meeting", fact_text, source, _db, mem_id, session_id=session_id)
+        elif pattern_type == "gift_idea":
+            await _write_gift(person_uuid, user_id, value[:200], "idea", source, _db, mem_id)
+        elif pattern_type == "gift_given":
+            await _write_gift(person_uuid, user_id, value[:200], "given", source, _db, mem_id)
+        elif pattern_type == "bucket":
+            await _write_bucket(person_uuid, user_id, fact_text[:300], _db, mem_id)
+        else:
+            await _write_activity(person_uuid, user_id, "fact", fact_text, source, _db, mem_id, session_id=session_id)
+        await _post_write_hooks(person_uuid, user_id, _db)
+        return True
+    except Exception as exc:
+        logger.debug("apply_person_fact failed for %r: %s", name, exc)
+        return False
+
+
 async def process_text(
     text: str,
     *,
@@ -595,4 +662,4 @@ async def process_text(
     return written
 
 
-__all__ = ["process_text", "_resolve_person_uuid", "_parse_birthday"]
+__all__ = ["process_text", "apply_person_fact", "_resolve_person_uuid", "_parse_birthday"]
