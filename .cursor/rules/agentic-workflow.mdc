@@ -13,6 +13,6 @@ For agent delegation, use Hermes. This includes planning, code repair, architect
 
 Plan first for broad or risky work. Keep changes surgical. Prefer existing Zoe patterns, avoid backup/old/new file copies, and do not create parallel routers or duplicate feature files.
 
-Use the small-PR loop for reviewable work: split large changes, push a focused PR, let Greptile review independently, then use **Greptile MCP first** (`get_merge_request`, `list_merge_request_comments`, `trigger_code_review`) or `/home/zoe/bin/greptile-mcp.py` via `/grep-loop` before falling back to `gh` scraping or Hermes.
+Use the small-PR loop for reviewable work: split large changes, push a focused PR, let Greptile review independently, then use **Greptile MCP first** (`get_merge_request`, `list_merge_request_comments`, `trigger_code_review`) or the operator-local CLI `~/bin/greptile-mcp.py` (install path varies by host; see `/grep-loop`) before falling back to `gh` scraping or Hermes.
 
 Verify from a user perspective before commit: focused tests, `validate_structure.py`, `validate_critical_files.py`, live `/health` and `/api/system/status`, and any relevant systemd timers or MCP tools.
