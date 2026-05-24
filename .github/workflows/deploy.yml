@@ -22,9 +22,15 @@ jobs:
           cd /home/zoe/assistant
           git remote set-url origin https://github.com/jason-easyazz/zoe-ai-assistant.git
           python3 - <<'PY'
+          import re
           import subprocess
-          version = subprocess.check_output(["git", "--version"], text=True).strip().split()[-1]
-          parts = tuple(int(part) for part in version.split(".")[:3])
+          raw = subprocess.check_output(["git", "--version"], text=True).strip()
+          match = re.search(r"\bversion\s+([0-9]+(?:\.[0-9]+){1,2})", raw)
+          if not match:
+              raise SystemExit(f"could not parse git version from: {raw}")
+          version = match.group(1)
+          parts = tuple(int(part) for part in version.split("."))
+          parts = parts + (0,) * (3 - len(parts))
           if parts < (2, 31, 0):
               raise SystemExit(f"git {version} is too old for GIT_CONFIG_COUNT; need git >= 2.31.0")
           PY
