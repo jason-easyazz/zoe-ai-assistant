@@ -130,7 +130,7 @@ class ComposeGenerator:
 # Generated: {}
 # ============================================================
 
-""".format(Path.cwd())
+""".format(".")
             
             compose_yaml = yaml.dump(compose_data, default_flow_style=False, sort_keys=False)
             self.output_file.write_text(header + compose_yaml)
