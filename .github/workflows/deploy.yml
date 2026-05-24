@@ -16,12 +16,14 @@ jobs:
 
     steps:
       - name: Pull latest main
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
         run: |
           cd /home/zoe/assistant
-          git remote set-url origin \
-            https://x-access-token:${{ secrets.GH_PAT }}@github.com/jason-easyazz/zoe-ai-assistant.git
-          git fetch origin main
-          git reset --hard origin/main
+          git remote set-url origin https://github.com/jason-easyazz/zoe-ai-assistant.git
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: bearer ${GH_PAT}" \
+            fetch origin main
+          git reset --hard FETCH_HEAD
 
       - name: Install / refresh Python deps
         run: |
