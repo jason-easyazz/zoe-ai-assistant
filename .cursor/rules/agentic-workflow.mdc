@@ -15,4 +15,6 @@ Plan first for broad or risky work. Keep changes surgical. Prefer existing Zoe p
 
 Use the small-PR loop for reviewable work: split large changes, push a focused PR, let Greptile review independently, then use **Greptile MCP first** (`get_merge_request`, `list_merge_request_comments`, `trigger_code_review`) or the operator-local CLI `~/bin/greptile-mcp.py` (install path varies by host; see `/grep-loop`) before falling back to `gh` scraping or Hermes.
 
+`main` is protected. Do not push directly, bypass branch protection, or use administrator merges unless the operator explicitly asks for that emergency path. If GitHub blocks a green PR because repo auto-merge is disabled or another policy requires human action, report the blocker and keep the PR ready rather than forcing it.
+
 Verify from a user perspective before commit: focused tests, `validate_structure.py`, `validate_critical_files.py`, live `/health` and `/api/system/status`, and any relevant systemd timers or MCP tools.

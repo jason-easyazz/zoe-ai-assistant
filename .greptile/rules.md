@@ -9,6 +9,7 @@ Greptile should review Zoe as a local-first, multi-user assistant with a host-ru
 - Prefer small, surgical fixes that match existing Zoe patterns.
 - Do not suggest parallel `_new`, `_old`, `_fixed`, or backup files.
 - Treat hardcoded absolute paths outside approved Zoe roots as portability risks unless they are documented local operator paths.
+- Zoe uses a PR-first workflow with protected `main`; do not recommend direct pushes, admin bypasses, or force pushes as normal fixes.
 
 ## Architecture
 
