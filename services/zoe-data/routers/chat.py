@@ -5,11 +5,11 @@ Tiered architecture (Jetson + Pi):
 - Tier 0: Intent router — regex-matched commands (lists, calendar, HA control)
   handled directly in <5ms without any LLM.
 - Tier 1: Zoe Agent — Gemma 4 E2B with MemPalace memory, HA control,
-  bash tools, and escalate_to_openclaw. True SSE streaming, first token fast.
+  bash tools, and Hermes escalation. True SSE streaming, first token fast.
   Active when JETSON_AGENT_MODE=true OR HERMES_FAST_PATH=false.
   Pi: CPU, 7 TPS, port 11434.  Jetson: GPU, 40+ TPS, port 11434.
-- Tier 2: OpenClaw — multi-step agentic tasks, browser, sub-agents, cloud.
-  Activated via escalation from Tier 1, or force_openclaw flag.
+- Tier 2: Hermes — reasoning/review/development repair plus browser work through Zoe CloakBrowser tools.
+  Activated via escalation from Tier 1.
   Also used as direct path when Zoe Agent is bypassed.
 """
 import asyncio
@@ -20,6 +20,7 @@ import re
 import time
 import uuid
 import os
+from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, Request, Depends
 from fastapi.responses import StreamingResponse
@@ -912,15 +913,29 @@ async def run_openclaw_agent(
     user_role: str | None = None,
     username: str | None = None,
     memories: str | None = None,
+    allow_openclaw: bool = False,
 ) -> str:
-    """Route through OpenClaw for full memory, personality, and tool access."""
-    return await openclaw_cli(
+    """Legacy entry point retained for callers; routes to Hermes by default.
+
+    OpenClaw remains available, but callers must opt in explicitly. This keeps
+    old call sites from silently bypassing Hermes after future edits.
+    """
+    if allow_openclaw:
+        return await openclaw_cli(
+            message,
+            session_id,
+            user_id,
+            user_role=user_role,
+            username=username,
+            memories=memories,
+        )
+    return await _hermes_completion(
         message,
         session_id,
         user_id,
-        user_role=user_role,
-        username=username,
-        memories=memories,
+        username=username or "",
+        portrait="",
+        facts=memories or "",
     )
 
 
@@ -958,7 +973,9 @@ async def _iter_openclaw_heartbeats(emit, task: asyncio.Task, *, phase_label: st
 
 
 async def chat_inject_background(user_message: str, assistant_response: str, intent_name: str, user_id: str = "family-admin", session_id: str = "web"):
-    """Fire-and-forget: inject a summary into the correct user's OpenClaw session."""
+    """Optionally mirror an intent summary into OpenClaw for legacy debugging."""
+    if os.environ.get("ZOE_MIRROR_INTENTS_TO_OPENCLAW", "false").lower() != "true":
+        return
     try:
         summary = f"[Intent: {intent_name}] User: {user_message} | Result: {assistant_response}"
         await chat_inject(summary, user_id, session_id)
@@ -1497,8 +1514,10 @@ async def chat_stream_generator(
                 )
                 return
         if "what can you do right now" in lc or lc in {"/capabilities", "capabilities", "tools"}:
-            caps = await discover_openclaw_capabilities()
-            caps_text = json.dumps(caps.get("payload", caps), indent=2)[:12000]
+            try:
+                caps_text = Path("/home/zoe/assistant/CAPABILITIES.md").read_text()[:12000]
+            except Exception:
+                caps_text = "Hermes is the active escalation agent. Zoe tools include calendar, lists, reminders, memory, Graphify, Multica, and CloakBrowser."
             yield emit(
                 TextMessageStartEvent(
                     type=EventType.TEXT_MESSAGE_START,
@@ -1506,7 +1525,7 @@ async def chat_stream_generator(
                     role="assistant",
                 )
             )
-            async for line in iter_text_message_chunks(enc, recorder, assistant_message_id, f"OpenClaw capabilities:\n```json\n{caps_text}\n```"):
+            async for line in iter_text_message_chunks(enc, recorder, assistant_message_id, f"Hermes/Zoe capabilities:\n\n{caps_text}"):
                 yield line
             yield emit(TextMessageEndEvent(type=EventType.TEXT_MESSAGE_END, message_id=assistant_message_id))
             yield emit(RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id=session_id, run_id=run_id))
@@ -1526,7 +1545,7 @@ async def chat_stream_generator(
                 "2) Credential/session validation\n"
                 "3) QR/session handshake\n"
                 "4) Webhook and test message validation\n"
-                "I will now run this through OpenClaw with guarded confirmations."
+                "I will now run this through Hermes with guarded confirmations."
             )
             yield emit(TextMessageStartEvent(type=EventType.TEXT_MESSAGE_START, message_id=assistant_message_id, role="assistant"))
             async for line in iter_text_message_chunks(enc, recorder, assistant_message_id, flow_text):
@@ -1544,6 +1563,7 @@ async def chat_stream_generator(
             use_intent_fast_path = False
         if message_for_processing.startswith("/openclaw "):
             message_for_processing = message_for_processing[len("/openclaw ") :].strip()
+            force_openclaw = True
             use_intent_fast_path = False
 
         _chat_ctx = _CHAT_CONTEXTS.get(session_id) or _CC()
@@ -1734,12 +1754,12 @@ async def chat_stream_generator(
                 asyncio.ensure_future(_save_chat_message(session_id, "assistant", result))
             else:
                 if intent.name in _OPENCLAW_DELEGATION_INTENTS:
-                    logger.info("Intent %s delegating to OpenClaw", intent.name)
+                    logger.info("Intent %s delegating to Hermes/Multica", intent.name)
                     logger.info("intent_outcome=matched_delegated intent=%s", intent.name)
-                    _tc_status = {"status": "delegated_to_openclaw", "tool": tool_name}
+                    _tc_status = {"status": "delegated_to_hermes", "tool": tool_name}
                 else:
                     logger.warning("Intent %s execution failed, falling back to LLM", intent.name)
-                    logger.info("intent_outcome=matched_exec_failed intent=%s fallback=%s", intent.name, "zoe_agent" if _USE_ZOE_AGENT else "openclaw")
+                    logger.info("intent_outcome=matched_exec_failed intent=%s fallback=%s", intent.name, "zoe_agent" if _USE_ZOE_AGENT else "hermes")
                     _tc_status = {"status": "failed", "tool": tool_name}
                 yield emit(
                     ToolCallResultEvent(
@@ -1751,10 +1771,9 @@ async def chat_stream_generator(
                     )
                 )
                 yield emit(StepFinishedEvent(type=EventType.STEP_FINISHED, step_name=label))
-                # Delegation intents always go straight to OpenClaw — Zoe Agent
-                # can't run the builder skills.  For all other fallbacks, prefer
-                # Zoe Agent when enabled (it will self-escalate if needed).
-                _force_openclaw_here = intent.name in _OPENCLAW_DELEGATION_INTENTS
+                # Delegation intents go through Hermes/Multica by default.
+                # OpenClaw is only used for explicit /openclaw or force_agent=openclaw requests.
+                _force_openclaw_here = force_openclaw
                 if _USE_ZOE_AGENT and not _force_openclaw_here:
                     yield emit(
                         StateSnapshotEvent(
@@ -1780,8 +1799,8 @@ async def chat_stream_generator(
                             snapshot={
                                 "status": "generating",
                                 "phase": "openclaw",
-                                "model": "Zoe (LLM fallback)",
-                                "detail": "Handing off to OpenClaw…",
+                                "model": "Zoe (OpenClaw explicit fallback)",
+                                "detail": "Handing off to OpenClaw because it was explicitly requested…",
                             },
                         )
                     )
@@ -1791,7 +1810,7 @@ async def chat_stream_generator(
                             name="zoe.run_log",
                             value={
                                 "level": "info",
-                                "message": "Starting OpenClaw agent (browser and tools can take 30s to several minutes).",
+                                "message": "Starting OpenClaw explicit fallback (browser and tools can take 30s to several minutes).",
                             },
                         )
                     )
@@ -1809,6 +1828,7 @@ async def chat_stream_generator(
                             user_role=user_role,
                             username=username,
                             memories=_oc_full_mem or None,
+                            allow_openclaw=True,
                         )
                     )
                     async for hb in _iter_openclaw_heartbeats(emit, task):
@@ -1997,6 +2017,10 @@ async def chat_stream_generator(
                 if escalate_signal:
                     is_background = escalate_signal.startswith("__ESCALATE_BG__:")
                     is_hermes = escalate_signal.startswith("__ESCALATE_HERMES__:")
+                    # Operator policy: Hermes owns all foreground escalation. OpenClaw
+                    # signals are treated as Hermes tasks unless explicitly re-enabled elsewhere.
+                    if not is_background and not force_openclaw:
+                        is_hermes = True
                     _, escalate_body = escalate_signal.split(":", 1)
                     reason, _, oc_task = escalate_body.partition("|")
                     oc_task_text = oc_task or message_for_processing
@@ -2041,8 +2065,8 @@ async def chat_stream_generator(
                         ))
                         response_text = ack_text
                     else:
-                        # Zoe Agent requested escalation to OpenClaw — stream via ACP channel
-                        logger.info("chat: Zoe Agent escalating to OpenClaw (ACP) — reason=%s", reason.strip())
+                        # Explicit OpenClaw request — stream via ACP channel.
+                        logger.info("chat: Zoe Agent escalating to explicit OpenClaw fallback (ACP) — reason=%s", reason.strip())
                         # Bridging message so the user isn't left staring at silence while
                         # OpenClaw spins up (typically 3-10s before first token).
                         _bridge_id = str(uuid.uuid4())
@@ -2067,8 +2091,8 @@ async def chat_stream_generator(
                                 snapshot={
                                     "status": "generating",
                                     "phase": "openclaw",
-                                    "model": "Zoe (OpenClaw)",
-                                    "detail": f"Escalated: {reason.strip()}",
+                                    "model": "Zoe (OpenClaw explicit fallback)",
+                                    "detail": f"Explicit fallback: {reason.strip()}",
                                 },
                             )
                         )
@@ -2125,15 +2149,15 @@ async def chat_stream_generator(
                     asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text))
 
             else:
-                # ── Jetson: OpenClaw ──
+                # Explicit OpenClaw fallback path.
                 yield emit(
                     StateSnapshotEvent(
                         type=EventType.STATE_SNAPSHOT,
                         snapshot={
                             "status": "generating",
                             "phase": "openclaw",
-                            "model": "Zoe",
-                            "detail": "Starting OpenClaw agent…",
+                            "model": "Zoe (OpenClaw explicit fallback)",
+                            "detail": "Starting OpenClaw because it was explicitly requested…",
                         },
                     )
                 )
@@ -2143,7 +2167,7 @@ async def chat_stream_generator(
                         name="zoe.run_log",
                         value={
                             "level": "info",
-                            "message": "Starting OpenClaw agent (browser and tools can take 30s to several minutes).",
+                            "message": "Starting OpenClaw explicit fallback (browser and tools can take 30s to several minutes).",
                         },
                     )
                 )
@@ -2161,6 +2185,7 @@ async def chat_stream_generator(
                         user_role=user_role,
                         username=username,
                         memories=_oc2_full_mem or None,
+                        allow_openclaw=True,
                     )
                 )
                 async for hb in _iter_openclaw_heartbeats(emit, task):
@@ -2238,6 +2263,43 @@ async def _safe_load_portrait(user_id: str) -> str:
         return await load_portrait(user_id) or ""
     except Exception:
         return ""
+
+
+async def _hermes_completion(
+    message: str,
+    session_id: str,
+    user_id: str,
+    *,
+    username: str = "",
+    portrait: str = "",
+    facts: str = "",
+) -> str:
+    """Return a non-streaming Hermes response with Zoe context attached."""
+    import aiohttp
+    _zoe_compact = _load_zoe_self_compact_for_chat()
+    _ctx_parts = [_ZOE_SOUL_HERMES]
+    if _zoe_compact:
+        _ctx_parts.append(f"[System context: {_zoe_compact}]")
+    if username:
+        _ctx_parts.append(f"[Talking to: {username}]")
+    if portrait:
+        _ctx_parts.append(f"[About this person: {portrait}]")
+    if facts:
+        _ctx_parts.append(f"[Memory context:\n{facts}]")
+    _enhanced_message = "\n".join(_ctx_parts) + "\n\n" + message
+    payload = {
+        "model": _HERMES_MODEL,
+        "messages": [{"role": "user", "content": _enhanced_message}],
+        "stream": False,
+    }
+    async with aiohttp.ClientSession() as _hses:
+        async with _hses.post(
+            f"{_HERMES_API_URL}/v1/chat/completions",
+            json=payload,
+            timeout=aiohttp.ClientTimeout(total=120),
+        ) as _hr:
+            _hj = await _hr.json()
+    return _hj.get("choices", [{}])[0].get("message", {}).get("content", "") or "(no response)"
 
 
 async def _hermes_stream_generator(
@@ -2358,8 +2420,8 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
     message = body.get("message", "")
     session_id = body.get("session_id", f"web_{uuid.uuid4().hex[:8]}")
     user_id = user["user_id"]
-    force_agent: str = body.get("force_agent", "auto")  # 'auto' | 'hermes' | 'openclaw'
-    # Legacy bool flag kept for clients that haven't migrated to force_agent yet
+    force_agent: str = body.get("force_agent", "auto")  # 'auto' | 'hermes' | legacy 'openclaw'
+    # OpenClaw remains available, but only for explicit manual requests.
     force_openclaw = bool(body.get("force_openclaw", False)) or (force_agent == "openclaw")
     req_panel_id: str | None = body.get("panel_id") or None
     is_voice_mode = request.headers.get("X-Voice-Mode", "").lower() in ("true", "1", "yes")
@@ -2480,8 +2542,11 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
                     ],
                 }
         if "what can you do right now" in lc or lc in {"/capabilities", "capabilities", "tools"}:
-            caps = await discover_openclaw_capabilities()
-            return {"response": "OpenClaw capabilities:\n" + json.dumps(caps.get("payload", caps), indent=2), "session_id": session_id}
+            try:
+                caps_text = Path("/home/zoe/assistant/CAPABILITIES.md").read_text()[:12000]
+            except Exception:
+                caps_text = "Hermes is the active escalation agent. Zoe tools include calendar, lists, reminders, memory, Graphify, Multica, and CloakBrowser."
+            return {"response": "Hermes/Zoe capabilities:\n\n" + caps_text, "session_id": session_id}
 
         use_intent_fast_path = (not force_openclaw) and _ALL_TOOLS_ENABLED
         if task_class == "research":
@@ -2489,6 +2554,7 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
             use_intent_fast_path = False
         if message_for_processing.startswith("/openclaw "):
             message_for_processing = message_for_processing[len("/openclaw ") :].strip()
+            force_openclaw = True
             use_intent_fast_path = False
 
         intent = await detect_and_extract_intent(message_for_processing, user_id) if use_intent_fast_path else None
@@ -2546,38 +2612,38 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
                 if response_text.startswith("__ESCALATE_HERMES__:"):
                     _, escalate_body = response_text.split(":", 1)
                     _, _, hermes_task = escalate_body.partition("|")
-                    import aiohttp
-                    _h2_ctx = "\n\n".join(filter(None, [_ZOE_SOUL_HERMES, ns_portrait]))
-                    _h2_msg = (_h2_ctx + "\n\n" if _h2_ctx else "") + (hermes_task or message_for_processing)
-                    payload = {"model": _HERMES_MODEL, "messages": [{"role": "user", "content": _h2_msg}], "stream": False}
                     try:
-                        async with aiohttp.ClientSession() as _hses:
-                            async with _hses.post(f"{_HERMES_API_URL}/v1/chat/completions", json=payload, timeout=aiohttp.ClientTimeout(total=120)) as _hr:
-                                _hj = await _hr.json()
-                        response_text = _hj.get("choices", [{}])[0].get("message", {}).get("content", "") or "(no response)"
+                        response_text = await _hermes_completion(
+                            hermes_task or message_for_processing,
+                            session_id,
+                            user_id,
+                            username=user.get("username") or "",
+                            portrait=ns_portrait,
+                            facts=ns_full_mem or "",
+                        )
                     except Exception as _he:
                         logger.warning("Hermes non-stream escalation failed: %s", _he)
                         response_text = "I couldn't reach Hermes right now. Please try again."
                 elif response_text.startswith("__ESCALATE__:"):
                     _, escalate_body = response_text.split(":", 1)
                     _, _, oc_task = escalate_body.partition("|")
-                    response_text = await run_openclaw_agent(
+                    response_text = await _hermes_completion(
                         oc_task or message_for_processing,
                         session_id,
                         user_id,
-                        user_role=user.get("role"),
-                        username=user.get("username"),
-                        memories=ns_full_mem or None,
+                        username=user.get("username") or "",
+                        portrait=ns_portrait,
+                        facts=ns_full_mem or "",
                     )
             else:
                 oc_message = openclaw_user_message(intent, message_for_processing)
-                response_text = await run_openclaw_agent(
+                response_text = await _hermes_completion(
                     oc_message,
                     session_id,
                     user_id,
-                    user_role=user.get("role"),
-                    username=user.get("username"),
-                    memories=ns_full_mem or None,
+                    username=user.get("username") or "",
+                    portrait=ns_portrait,
+                    facts=ns_full_mem or "",
                 )
         except Exception as exc:
             if task_class != "research":
@@ -2754,8 +2820,11 @@ async def delete_session(session_id: str, user: dict = Depends(get_current_user)
 
 @router.get("/capabilities")
 async def chat_capabilities(user: dict = Depends(get_current_user)):
-    caps = await discover_openclaw_capabilities()
-    return {"ok": caps.get("ok", False), "capabilities": caps.get("payload", caps), "source_method": caps.get("source_method")}
+    try:
+        caps_text = Path("/home/zoe/assistant/CAPABILITIES.md").read_text()
+    except Exception:
+        caps_text = ""
+    return {"ok": True, "agent": "hermes", "capabilities_markdown": caps_text}
 
 
 @router.post("/whatsapp/connect")

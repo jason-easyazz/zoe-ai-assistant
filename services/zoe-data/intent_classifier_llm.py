@@ -7,7 +7,7 @@ but with a plain JSON completion prompt (no tool forcing) for maximum speed.
 
 Returns an Intent with a confidence score:
   >= 0.75  → caller should execute directly (like a Tier 0 regex match)
-  0.5-0.75 → caller should pass as a hint to Tier 1 (reduces OpenClaw escalations)
+  0.5-0.75 -> caller should pass as a hint to Tier 1 (reduces Hermes escalations)
   < 0.5    → caller should fall through to Tier 1 unchanged
   None     → timeout or parse failure (always falls through)
 """

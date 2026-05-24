@@ -98,8 +98,8 @@ def _build_zoe_self_md(
         "## Agent Tiers",
         "- **Tier 0**: intent_router.py — regex fast path, <10ms, no LLM",
         "- **Tier 1**: Zoe Agent — Gemma 4 E2B @ :11434, tool loop, escalation",
-        "- **Tier 1.5**: Hermes — GPT-5.4 via openai-codex @ :8642, 128k context",
-        "- **Tier 2**: OpenClaw — Codex + full Playwright browser @ :18789",
+        "- **Tier 1.5**: Hermes — default engineering/reasoning agent @ :8642, 128k context",
+        "- **Tier 2**: OpenClaw — installed but not an active executor unless operator-enabled",
         "",
         "## MCP Tools (via /api/mcp)",
     ]
@@ -127,7 +127,7 @@ def _build_zoe_self_md(
     lines += [
         "",
         "## Key Capabilities",
-        "- Calendar, reminders, lists, notes, people (SQLite, user-scoped)",
+        "- Calendar, reminders, lists, notes, people (PostgreSQL, user-scoped)",
         "- Home Assistant control (HA bridge)",
         "- Memory: MemPalace (ChromaDB semantic) + user portrait (SQLite)",
         "- Voice: Wyoming/Whisper transcribe + TTS",
@@ -139,8 +139,8 @@ def _build_zoe_self_md(
         "",
         "## Escalation Guide",
         "- web_search: current events, live prices, today's news",
-        "- escalate_to_openclaw: browser automation, multi-step exec, code gen, extended research",
-        "- escalate_to_hermes: complex reasoning, architecture questions (no browser needed)",
+        "- escalate_to_hermes: default for complex tasks, engineering, architecture, code review, planning, board repair, and Greptile loops",
+        "- escalate_to_openclaw: available as an explicit/manual fallback; Hermes is the default escalation path",
         "",
         "## Services & Ports",
         "- zoe-data (host uvicorn) :8000 — main chat API, AG-UI SSE, MCP server",
@@ -191,7 +191,7 @@ def _build_compact(mcp_tools: list[str], skills: list[str]) -> str:
     tool_summary = ", ".join(sorted(mcp_tools)[:12]) if mcp_tools else "calendar/reminders/lists/notes/people/HA/memory"
     skill_summary = ", ".join(skills[:5]) if skills else "widget/page/capability-extender"
     compact = (
-        f"Zoe: 3-tier AI (Gemma4/Agent :11434, Hermes/GPT-5.4 :8642, OpenClaw/Codex+browser :18789). "
+        f"Zoe: 3-tier AI (Gemma4/Agent :11434, Hermes/default engineering+browser :8642, OpenClaw available fallback :18789). "
         f"MCP tools: {tool_summary}. Skills: {skill_summary}. "
         f"web_search (DDG), show_map/chart, HA, push, builder skills (admin+staged). "
         f"Check zoe_self_capabilities MCP. Full: ZOE_SELF.md."
@@ -242,8 +242,8 @@ def _build_capabilities_md(
         "|------|-------|-------|----------|-------|",
         "| 0 | intent_router | regex | — | <10ms fast path |",
         "| 1 | Zoe Agent | Gemma 4 E2B | :11434 | tool loop, escalation |",
-        "| 1.5 | Hermes | GPT-5.4 | :8642 | 128k context, complex reasoning |",
-        "| 2 | OpenClaw | Codex + browser | :18789 | Playwright, bash, skills |",
+        "| 1.5 | Hermes | GPT-5.4 | :8642 | default engineering, planning, review, repair |",
+        "| 2 | OpenClaw | Codex + browser | :18789 | available fallback, not default route |",
         "",
         "## MCP Tools",
     ]
@@ -264,21 +264,21 @@ def _build_capabilities_md(
     lines += [
         "",
         "## Core Capabilities",
-        "- **Memory**: MemPalace (ChromaDB semantic) + user portrait (SQLite) + open loops engine",
-        "- **Calendar / Reminders / Lists / Notes / People**: SQLite, user-scoped, MCP-accessible",
+        "- **Memory**: MemPalace (ChromaDB semantic) + user portrait + open loops engine",
+        "- **Calendar / Reminders / Lists / Notes / People**: PostgreSQL, user-scoped, MCP-accessible",
         "- **Home Automation**: Home Assistant bridge (HA control, sensors, scenes)",
         "- **Voice**: Wyoming/Whisper transcription + TTS",
         "- **Push**: WebSocket /ws/push + proactive engine (morning brief, open loop follow-ups)",
         "- **Panel**: show_map, show_chart, show_image, open_touch_page, panel_browser_screenshot",
         "- **Web search**: DuckDuckGo scraping via web_search tool (no API key required)",
-        "- **Self-improvement**: intent-miss review → OpenClaw pattern proposals (`self_improve` intent)",
+        "- **Self-improvement**: intent-miss review → Hermes/Multica proposal workflow (`self_improve` intent)",
         "- **Agent sync**: POST /api/system/agent-sync regenerates this file and all agent docs",
         "- **graphify_search**: MCP tool to query Zoe's knowledge-graph wiki (built by graphify)",
         "",
         "## Escalation Guide",
         "1. `web_search` — current events, live prices, news after training cutoff",
-        "2. `escalate_to_openclaw` — browser automation, multi-step exec, code gen, scraping",
-        "3. `escalate_to_hermes` — deep reasoning, architecture analysis (no browser needed)",
+        "2. `escalate_to_hermes` — default for complex tasks, engineering, architecture, code review, planning, board repair, and Greptile loops",
+        "3. `escalate_to_openclaw` — explicit/manual fallback; Hermes remains the default route",
     ]
     return "\n".join(lines) + "\n"
 

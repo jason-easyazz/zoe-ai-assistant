@@ -9,7 +9,8 @@ OpenClaw format support (3 variants):
   C: ## Trigger conditions section
   Case variation: skill.md (lowercase)
 
-Hermes format support (2 levels):
+Hermes format support:
+  Direct skill: <skill>/SKILL.md with YAML frontmatter name:/description:
   Category: DESCRIPTION.md with YAML frontmatter description:
   Sub-skill: <category>/<skill>/SKILL.md with YAML frontmatter name:/description:
 """
@@ -154,6 +155,28 @@ def _parse_yaml_frontmatter(content: str) -> dict:
     return result
 
 
+def _parse_hermes_skill_file(skill_dir: Path, *, skill_id: str | None = None) -> dict | None:
+    """Parse a Hermes SKILL.md file into an AgentSkill dict."""
+    skill_file = skill_dir / "SKILL.md"
+    if not skill_file.exists():
+        return None
+    try:
+        content = skill_file.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+    fm = _parse_yaml_frontmatter(content)
+    skill_name = fm.get("name") or skill_dir.name.replace("-", " ").replace("_", " ").title()
+    description = fm.get("description") or f"Hermes skill: {skill_dir.name}"
+    return {
+        "id": skill_id or skill_dir.name,
+        "name": skill_name,
+        "description": description[:200],
+        "inputModes": ["text"],
+        "outputModes": ["text"],
+    }
+
+
 def _parse_hermes_category(category_dir: Path) -> list[dict]:
     """Parse one Hermes skill category — returns zero or more AgentSkill dicts."""
     skills = []
@@ -174,30 +197,15 @@ def _parse_hermes_category(category_dir: Path) -> list[dict]:
     for sub in sorted(category_dir.iterdir()):
         if not sub.is_dir():
             continue
-        skill_file = sub / "SKILL.md"
-        if not skill_file.exists():
-            continue
-        try:
-            content = skill_file.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-
-        fm = _parse_yaml_frontmatter(content)
-        skill_name = fm.get("name") or sub.name.replace("-", " ").replace("_", " ").title()
-        description = fm.get("description") or category_desc or f"Hermes skill: {sub.name}"
-
         skill_id = f"{category_dir.name}/{sub.name}"
         if skill_id in seen_ids:
             continue
-        seen_ids.add(skill_id)
-
-        skills.append({
-            "id": skill_id,
-            "name": skill_name,
-            "description": description[:200],
-            "inputModes": ["text"],
-            "outputModes": ["text"],
-        })
+        parsed = _parse_hermes_skill_file(sub, skill_id=skill_id)
+        if parsed:
+            if parsed["description"].startswith("Hermes skill:") and category_desc:
+                parsed["description"] = category_desc[:200]
+            seen_ids.add(skill_id)
+            skills.append(parsed)
 
     # If no sub-skills, expose the category itself as a skill
     if not skills and category_desc:
@@ -237,7 +245,11 @@ def parse_hermes_skills(skills_dir: str = _HERMES_SKILLS_DIR) -> list[dict]:
     for category in sorted(root.iterdir()):
         if not category.is_dir():
             continue
-        for skill in _parse_hermes_category(category):
+        direct = _parse_hermes_skill_file(category)
+        parsed_skills = [direct] if direct else _parse_hermes_category(category)
+        for skill in parsed_skills:
+            if not skill:
+                continue
             if skill["id"] not in seen_ids:
                 seen_ids.add(skill["id"])
                 skills.append(skill)

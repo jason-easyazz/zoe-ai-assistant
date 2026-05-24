@@ -27,11 +27,18 @@ agents:
   hermes:
     base_url: "http://localhost:8642"
     a2a_token: ""          # empty = Hermes uses its own auth; zoe-data calls via MCP bridge
-    description: "Hermes — GPT-5.4/Codex 128k reasoning tier"
+    description: "Hermes — default Zoe engineering and reasoning agent"
     model: "GPT-5.4/Codex"
     skills:
       - reasoning
+      - planning
+      - implementation_strategy
       - code_review
+      - development_repair
+      - greptile_pr_loop
+      - graphify_codebase_navigation
+      - multica_board_repair
+      - zoe_status_refresh
       - long_form
       - research
     skills_dir: "~/.hermes/skills"
@@ -42,13 +49,13 @@ agents:
   openclaw:
     base_url: "http://localhost:18789"
     a2a_token: ""          # OpenClaw uses ACP; A2A is a secondary path
-    description: "OpenClaw — Codex browser+bash agentic tier"
+    description: "OpenClaw — available fallback, not the default route"
     model: "Codex"
     skills:
       - browser_automation
-      - code_execution
-      - skill_builder
-      - file_management
+      - persistent_login_sessions
+      - home_assistant_ui_flows
+      - workflows_hermes_cannot_execute
     skills_dir: "~/.openclaw/workspace/skills"
     health_port: 18789
     multica_agent_id: "e2a566ab-613c-4a80-a299-965b7effaca8"
@@ -61,4 +68,4 @@ squads:
     members:
       - hermes
       - openclaw
-    routing: "leader delegates to members based on task type"
+    routing: "leader delegates to Hermes for agentic work and self-evolution by default; OpenClaw remains available only when explicitly requested"

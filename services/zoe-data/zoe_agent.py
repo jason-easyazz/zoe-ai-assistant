@@ -9,14 +9,15 @@ Model: Gemma 4 E2B (llama.cpp)
   - KV-cache warmup at startup so first real query skips re-processing the system prompt
   - Smart background memory: Gemma classifier fires AFTER response delivery (non-blocking)
   - Selective reasoning: hard queries (code, analysis) get more tokens
-  - Escalation: complex tasks handed to OpenClaw via escalate_to_openclaw tool
+  - Escalation: complex reasoning/development repair to Hermes; browser-heavy workflows to OpenClaw
 
 Tools inside the loop:
   1. mempalace_search      — recall memories by semantic query
   2. mempalace_add         — store a fact/preference/name explicitly
   3. ha_control            — control Home Assistant entities (lights, switches, media)
   4. bash                  — safe self-extension (install packages, check system status)
-  5. escalate_to_openclaw  — hand off to OpenClaw for complex agentic tasks
+  5. escalate_to_hermes    — hand off to Hermes for complex reasoning, review, and development repair
+  6. escalate_to_openclaw  — explicit/manual fallback; Hermes is the default escalation route
 
 Fine-tuning target: once the Gemma LoRA checkpoint is trained on Zoe's voice,
 the _ZOE_SOUL system prompt can be shrunk to ~10 tokens (saving ~500ms prefill).
@@ -97,9 +98,24 @@ def _hermes_available() -> bool:
         return False
     try:
         from main import _RUNTIME_HEALTH  # lazy import — main is fully loaded by call time
-        return bool(_RUNTIME_HEALTH.get("hermes", False))
+        if bool(_RUNTIME_HEALTH.get("hermes", False)):
+            return True
+        from main import _RUNTIME_LAST_PROBED  # type: ignore[import]
+        if _RUNTIME_LAST_PROBED:
+            return False
     except Exception:
-        return _HERMES_AUTO_ESCALATE  # during tests / non-main contexts, use env flag
+        pass
+    try:
+        import socket
+        with socket.create_connection(("127.0.0.1", 8642), timeout=0.1):
+            return True
+    except Exception:
+        return False
+
+
+def _openclaw_execution_enabled() -> bool:
+    """OpenClaw is available, but not selected unless the operator opts in."""
+    return os.environ.get("ZOE_ENABLE_OPENCLAW_EXECUTION", "false").lower() == "true"
 
 
 # ── Agent registry — loaded from zoe_agent_registry.py ───────────────────────
@@ -218,8 +234,8 @@ VISUAL TOOLS — call these instead of describing the result in text:
   the Discord skill would enable it."
 
 SELF-BUILDING:
-- If the user asks for a NEW widget, page, or capability that doesn't exist yet, do NOT say you can't — call list_openclaw_skills with the relevant builder highlight: "zoe-widget-builder" for widgets, "zoe-page-builder" for pages, "zoe-capability-extender" for new abilities. Then offer to escalate to OpenClaw to build it.
-- Before saying "I can't do X", consult the shared ZOE_SELF.md context below to see what Zoe actually has. If a capability gap is confirmed, escalate_to_openclaw.
+- If the user asks for a NEW widget, page, or capability that doesn't exist yet, do NOT say you can't — call list_openclaw_skills with the relevant builder highlight: "zoe-widget-builder" for widgets, "zoe-page-builder" for pages, "zoe-capability-extender" for new abilities. Then offer to escalate to Hermes to plan/build it.
+- Before saying "I can't do X", consult the shared ZOE_SELF.md context below to see what Zoe actually has. If a capability gap is confirmed, use escalate_to_hermes. Browser/session work belongs to Hermes via Zoe's CloakBrowser tools.
 
 WEB SEARCH — three tiers, pick the right one:
 
@@ -246,10 +262,9 @@ ALWAYS include location in the query. If user said "near me" — use their home 
 ALWAYS tell the user what you're doing before calling: "Looking up prices across stores in [location]…"
 The tool handles Google Maps + CloakBrowser + postcode gates + site-internal search automatically.
 
-TIER 3 — escalate_to_openclaw (for tasks beyond web research):
-- Needs login or authenticated session
-- Multi-hour background workflows, code generation, HA automation setup
-- Tasks requiring persistent browser state across sessions
+TIER 3 — escalation tools (for tasks beyond web research):
+- Use escalate_to_hermes for complex reasoning, architecture, code review, planning, development repair, and browser/session workflows through Zoe's CloakBrowser tools.
+- OpenClaw remains available as an explicit fallback, but Hermes is the default route.
 
 QUERY CONSTRUCTION for web_search — write the best query before calling:
   * Expand brand abbreviations (e.g. "emu export" → "Emu Export beer", "macca's" → "McDonald's")
@@ -261,7 +276,8 @@ QUERY CONSTRUCTION for web_search — write the best query before calling:
 ESCALATION RULES — read carefully:
 - DO NOT escalate for: geography, capitals, history, science, maths, recipes, definitions, or anything you can answer from training data.
 - DO NOT escalate for web research tasks — use web_search (fast) or deep_web_research (thorough) natively.
-- DO escalate for: login sessions, multi-hour agentic work, code generation, HA automation setup.
+- DO escalate for: login sessions, multi-hour agentic work, code review/development repair, HA automation setup.
+- Prefer Hermes for reasoning/code/planning and browser-heavy or persistent-session tasks.
 - When unsure: try deep_web_research first for local queries. Only escalate if you need persistent login.
 
 TOUCH PANELS — physical kiosk screens running Chromium:
@@ -327,7 +343,7 @@ For schedule wording like today/tomorrow/week/agenda/events, call calendar_today
 For reminder wording (open reminders, reminders today, remind me), call reminder_list or reminder_create before replying.
 When user asks to show a map or location, call show_map. When user asks to show a chart or graph, call show_chart.
 
-VOICE ESCALATION: For complex tasks (research, browsing, multi-step work, code), always escalate with background=True. Say "I'll work on that — I'll let you know when it's done" and immediately call escalate_to_openclaw with background=True. Never block voice for more than 5s on complex tasks.
+VOICE ESCALATION: For complex tasks (research, browsing, multi-step work, code), always escalate with background=True where supported. Prefer Hermes for reasoning/code/planning and OpenClaw for browser-heavy or persistent-session tasks. Say "I'll work on that — I'll let you know when it's done" and never block voice for more than 5s on complex tasks.
 
 Use tools via the function-call mechanism — never write tool JSON in your response text."""
 
@@ -348,13 +364,14 @@ _VOICE_TOOLS = [
     "weather_forecast",
     "open_touch_page",
     "web_search",
+    "escalate_to_hermes",
     "escalate_to_openclaw",
     "show_map",
     "show_chart",
     "list_openclaw_skills",
     "report_issue",
 ]
-_VOICE_ALWAYS_TOOLS = ["escalate_to_openclaw"]
+_VOICE_ALWAYS_TOOLS = ["escalate_to_hermes"]
 
 # Keywords that indicate the voice query needs a tool call.
 # Pure-conversational queries (recipes, facts, explanations) skip the 614-token
@@ -370,7 +387,7 @@ _VOICE_ACTION_WORDS = frozenset({
     "lock", "unlock", "door", "camera",
     "look up", "search", "find out", "research",
     "what can you do", "capabilities", "skills", "what can zoe do",
-    "openclaw", "open claw", "agent", "show menu",
+    "hermes", "openclaw", "open claw", "agent", "show menu",
     "do you know", "what do you know", "did i tell", "have i told",
 })
 
@@ -716,9 +733,8 @@ _TOOLS = [
             "name": "escalate_to_openclaw",
             "description": _registry_tool_description(
                 "openclaw",
-                "Hand off to OpenClaw for: browser automation (login, form fill, screenshot), "
-                "multi-step file/exec work, long agent workflows, code generation. "
-                "Do NOT use for simple web searches (use web_search) or general knowledge.",
+                "OpenClaw is available as an explicit fallback, but Hermes and Zoe CloakBrowser "
+                "tools are the default route for agentic/browser work.",
             ),
             "parameters": {
                 "type": "object",
@@ -910,7 +926,7 @@ _HERMES_TOOL = {
         "description": _registry_tool_description(
             "hermes",
             "Escalate to Hermes for complex multi-step reasoning, architectural analysis, "
-            "code review, or long-form technical questions that don't require browser or bash. "
+                "planning, code review, and development repair that don't require browser or bash. "
             "Do NOT use if OpenClaw browser automation is needed.",
         ),
         "parameters": {
@@ -937,6 +953,7 @@ _ALWAYS_ON_TOOLS_HERMES: list[str] = ["escalate_to_hermes"]
 # Tools in _ALWAYS_ON_TOOLS are always sent regardless of skill selection.
 
 _SKILL_TOOLS: dict[str, list[str]] = {
+    "hermes-default": ["escalate_to_hermes"],
     "memory":     ["mempalace_search", "mempalace_add", "memory_update"],
     "smart-home": ["ha_control"],
     "calendar":   ["calendar_today", "calendar_list_events", "calendar_create_event"],
@@ -947,10 +964,12 @@ _SKILL_TOOLS: dict[str, list[str]] = {
     "bash":       ["bash"],
     "visual":     ["show_map", "show_chart"],
     "discovery":  ["list_openclaw_plugins", "list_openclaw_skills", "setup_telegram", "show_action_menu"],
+    "openclaw-fallback": ["escalate_to_openclaw"],
 }
 
-# Always included regardless of query — escalation is universal; report_issue catches any complaint.
-_ALWAYS_ON_TOOLS: list[str] = ["web_search", "deep_web_research", "escalate_to_openclaw", "report_issue"] + _ALWAYS_ON_TOOLS_HERMES
+# Always included regardless of query. Hermes escalation is added dynamically
+# when healthy; OpenClaw is loaded only for explicit fallback/browser cases.
+_ALWAYS_ON_TOOLS: list[str] = ["web_search", "deep_web_research", "report_issue"]
 
 _SKILL_KEYWORDS: dict[str, list[str]] = {
     "memory": [
@@ -1010,6 +1029,11 @@ _SKILL_KEYWORDS: dict[str, list[str]] = {
         "capabilities", "install skill", "telegram", "discord", "notification",
         "openclaw", "open claw", "what can", "can you ", "is there a",
         "how do i", "can zoe",
+    ],
+    "openclaw-fallback": [
+        "openclaw", "open claw", "browser automation", "login session",
+        "authenticated session", "persistent session", "form fill",
+        "screenshot", "playwright", "home assistant setup",
     ],
 }
 
@@ -1076,6 +1100,18 @@ def _build_tools(skills: set[str]) -> list[dict]:
         tool_names.update(_ALWAYS_ON_TOOLS_HERMES)
     for skill in skills:
         tool_names.update(_SKILL_TOOLS.get(skill, []))
+    if not _openclaw_execution_enabled():
+        tool_names.discard("escalate_to_openclaw")
+    return [t for t in _TOOLS if t["function"]["name"] in tool_names]
+
+
+def _build_voice_tools(needs_tools: bool) -> list[dict]:
+    """Build the compact voice tool list while respecting Hermes health."""
+    tool_names = set(_VOICE_TOOLS if needs_tools else _VOICE_ALWAYS_TOOLS)
+    if not _hermes_available():
+        tool_names.discard("escalate_to_hermes")
+    if not _openclaw_execution_enabled():
+        tool_names.discard("escalate_to_openclaw")
     return [t for t in _TOOLS if t["function"]["name"] in tool_names]
 
 
@@ -3346,11 +3382,7 @@ async def run_zoe_agent(
             f"{_zoe_soul(user_id=user_id, voice_mode=True)}\n\n{extras}"
             if extras else _zoe_soul(user_id=user_id, voice_mode=True)
         )
-        active_tools = (
-            [t for t in _TOOLS if t["function"]["name"] in _VOICE_TOOLS]
-            if _voice_needs_tools(message)
-            else [t for t in _TOOLS if t["function"]["name"] in _VOICE_ALWAYS_TOOLS]
-        )
+        active_tools = _build_voice_tools(_voice_needs_tools(message))
         user_message = message
         _first_turn_choice = "auto"
     else:
@@ -3735,11 +3767,7 @@ async def run_zoe_agent_streaming(
             f"{_zoe_soul(user_id=user_id, voice_mode=True)}\n\n{extras}"
             if extras else _zoe_soul(user_id=user_id, voice_mode=True)
         )
-        active_tools = (
-            [t for t in _TOOLS if t["function"]["name"] in _VOICE_TOOLS]
-            if _voice_needs_tools(message)
-            else [t for t in _TOOLS if t["function"]["name"] in _VOICE_ALWAYS_TOOLS]
-        )
+        active_tools = _build_voice_tools(_voice_needs_tools(message))
         user_message = message
         _first_turn_choice = "auto"
     else:

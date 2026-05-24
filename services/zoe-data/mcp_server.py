@@ -1,6 +1,6 @@
 """
 MCP Server for zoe-data.
-Exposes family data tools that OpenClaw skills can call.
+Exposes Zoe tools that Hermes skills and local agents can call.
 Runs as a stdio MCP server alongside the REST API.
 """
 import asyncio
@@ -18,7 +18,7 @@ OPENWEATHERMAP_API_KEY = os.environ.get("OPENWEATHERMAP_API_KEY", "")
 _BROADCAST_URL = "http://127.0.0.1:8000/api/internal/broadcast"
 _OPENCLAW_GW = os.environ.get("ZOE_OPENCLAW_GW", "http://127.0.0.1:18789")
 # When true (rollout goal), tools/call without _user_id/user_id is rejected.
-# Until OpenClaw skills are caught up, default false logs a warning and falls
+# Until every legacy/tool caller is caught up, default false logs a warning and falls
 # back to family-admin so existing workflows don't break silently.
 _MCP_STRICT_USER_ID = os.environ.get("ZOE_MCP_STRICT_USER_ID", "false").strip().lower() == "true"
 
@@ -355,8 +355,8 @@ TOOLS = [
         "name": "a2a_delegate",
         "description": (
             "Delegate a task to a named peer agent via A2A federation. "
-            "Use agent_name='hermes' for 128k reasoning/code-review tasks, "
-            "'openclaw' for browser automation or long agentic workflows. "
+            "Use agent_name='hermes' for reasoning, code-review, browser, and long agentic workflows. "
+            "OpenClaw remains available as a manual/future fallback, but Hermes is the default escalation agent. "
             "Returns the task result or a task_id for async polling."
         ),
         "inputSchema": {
@@ -364,12 +364,17 @@ TOOLS = [
             "properties": {
                 "agent_name": {
                     "type": "string",
-                    "description": "Name of the peer agent to delegate to (hermes or openclaw)",
+                    "description": "Name of the peer agent to delegate to",
                     "enum": ["hermes", "openclaw"],
                 },
                 "task": {
                     "type": "string",
                     "description": "Natural-language task description to delegate",
+                },
+                "allow_openclaw": {
+                    "type": "boolean",
+                    "description": "Required true when agent_name is openclaw; prevents accidental non-Hermes delegation.",
+                    "default": False,
                 },
             },
             "required": ["agent_name", "task"],
@@ -645,7 +650,7 @@ TOOLS = [
     {
         "name": "panel_browser_screenshot",
         "description": (
-            "Capture a screenshot of the current page in OpenClaw's automation browser and display it "
+            "Capture a screenshot with Zoe's Hermes-owned browser backend and display it "
             "full-screen on the touch panel. Use this to show the user what Zoe is doing in the browser "
             "(e.g. during a web search, HA setup, or login flow). "
             "Optionally navigates to a URL first. Returns the panel action result."
@@ -668,6 +673,38 @@ TOOLS = [
         "name": "browser_compare_backends",
         "description": "Return side-by-side backend comparison and active recommendation.",
         "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "cloakbrowser_fetch",
+        "description": (
+            "Open a URL with Zoe's Hermes-owned CloakBrowser stealth Chromium and return "
+            "rendered visible text. Use when normal web fetch is blocked or JavaScript rendering is required."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "HTTP/HTTPS URL to open"},
+                "text_limit": {"type": "integer", "description": "Maximum visible text characters to return"},
+                "wait_until": {"type": "string", "description": "Playwright wait state: domcontentloaded or networkidle"},
+            },
+            "required": ["url"],
+        },
+    },
+    {
+        "name": "cloakbrowser_screenshot",
+        "description": (
+            "Open a URL with Zoe's Hermes-owned CloakBrowser stealth Chromium and return "
+            "a base64 PNG screenshot."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "HTTP/HTTPS URL to open"},
+                "full_page": {"type": "boolean", "description": "Capture the full page instead of viewport"},
+                "wait_until": {"type": "string", "description": "Playwright wait state: domcontentloaded or networkidle"},
+            },
+            "required": ["url"],
+        },
     },
     {
         "name": "panel_announce",
@@ -1087,7 +1124,7 @@ async def _enqueue_panel_tool(db, *, user_id_fallback: str, panel_id, action_typ
                 user_id=uid,
                 action_type=action_type,
                 payload=payload,
-                requested_by="openclaw",
+                requested_by="hermes",
                 panel_id=pid,
             )
         last = None
@@ -1097,7 +1134,7 @@ async def _enqueue_panel_tool(db, *, user_id_fallback: str, panel_id, action_typ
                 user_id=r["user_id"],
                 action_type=action_type,
                 payload=payload,
-                requested_by="openclaw",
+                requested_by="hermes",
                 panel_id=r["panel_id"],
             )
         return last
@@ -1107,7 +1144,7 @@ async def _enqueue_panel_tool(db, *, user_id_fallback: str, panel_id, action_typ
         user_id=uid,
         action_type=action_type,
         payload=payload,
-        requested_by="openclaw",
+        requested_by="hermes",
         panel_id=pid,
     )
 
@@ -1646,6 +1683,14 @@ async def _execute_tool(db, name: str, args: dict):
         task = args.get("task", "")
         if not agent_name or not task:
             return {"error": "agent_name and task are required"}
+        if agent_name == "openclaw" and not bool(args.get("allow_openclaw", False)):
+            return {
+                "error": (
+                    "OpenClaw is available only as an explicit fallback. "
+                    "Set allow_openclaw=true after the user/operator specifically asks for OpenClaw; "
+                    "otherwise use agent_name='hermes'."
+                )
+            }
         try:
             import yaml as _yaml
             import os as _os
@@ -1704,7 +1749,7 @@ async def _execute_tool(db, name: str, args: dict):
             {"name": "zoe-auth",         "port": 8001,  "up": _port_open("127.0.0.1", 8001)},
             {"name": "hermes-agent",     "port": 8642,  "up": _port_open("127.0.0.1", 8642)},
             {"name": "llama-server",     "port": 11434, "up": _port_open("127.0.0.1", 11434)},
-            {"name": "openclaw-gateway", "port": 18789, "up": _port_open("127.0.0.1", 18789)},
+            {"name": "openclaw-gateway", "port": 18789, "up": _port_open("127.0.0.1", 18789), "status": "available_not_default"},
             {"name": "nginx",            "port": 80,    "up": _port_open("127.0.0.1", 80)},
         ]
 
@@ -1718,7 +1763,7 @@ async def _execute_tool(db, name: str, args: dict):
             agents.append("Zoe Agent (Gemma 4 CPU)")
         else:
             agents.append("Gemma Agent (local)")
-        agents.append("OpenClaw (on-demand)")
+        agents.append("Hermes (CloakBrowser/browser owner)")
 
         # --- widgets from widget-manifest.json ---
         widgets: list[str] = []
@@ -2199,7 +2244,7 @@ async def _execute_tool(db, name: str, args: dict):
             user_id=user_id,
             session_id=f"mcp:{name}",
             action_class="read_only_research",
-            requested_surface="openclawLocal",
+            requested_surface="hermesCloak",
         )
         broker_result = await _BROWSER_BROKER.execute(plan)
         if not broker_result.get("ok"):
@@ -2219,19 +2264,19 @@ async def _execute_tool(db, name: str, args: dict):
                     "ok": False,
                     "degraded_mode": True,
                     "error": broker_result.get("error", "Screenshot failed"),
-                    "backend": broker_result.get("surface", "openclawLocal"),
+                    "backend": broker_result.get("surface", "hermesCloak"),
                     "plan_id": broker_result.get("plan_id"),
                     "fallback_action": "panel_navigate",
                     "queued": fallback_msg,
                 }
             return {
                 "error": broker_result.get("error", "Screenshot failed"),
-                "backend": broker_result.get("surface", "openclawLocal"),
+                "backend": broker_result.get("surface", "hermesCloak"),
                 "plan_id": broker_result.get("plan_id"),
             }
         image_b64 = str(broker_result.get("image_base64") or "").strip()
         if not image_b64:
-            return {"error": "No screenshot data in broker response", "backend": "openclawLocal"}
+            return {"error": "No screenshot data in broker response", "backend": "hermesCloak"}
 
         msg = await _enqueue_panel_tool(
             db,
@@ -2245,7 +2290,7 @@ async def _execute_tool(db, name: str, args: dict):
             "action": "panel_browser_screenshot",
             "panel_id": panel_id,
             "queued": msg,
-            "backend": broker_result.get("surface", "openclawLocal"),
+            "backend": broker_result.get("surface", "hermesCloak"),
             "plan_id": broker_result.get("plan_id"),
             "evidence": broker_result.get("evidence", {}),
         }
@@ -2260,6 +2305,68 @@ async def _execute_tool(db, name: str, args: dict):
     elif name == "browser_compare_backends":
         report = _BROWSER_BROKER.compare_backends()
         return {"ok": True, **report}
+
+    elif name == "cloakbrowser_fetch":
+        url = str(args.get("url") or "").strip()
+        if not url.startswith(("http://", "https://")):
+            return {"ok": False, "error": "url must start with http:// or https://"}
+        text_limit = int(args.get("text_limit") or 4000)
+        wait_until = str(args.get("wait_until") or "domcontentloaded")
+        try:
+            from cloakbrowser import launch_context_async  # type: ignore[import]
+        except ImportError:
+            return {"ok": False, "error": "cloakbrowser_not_installed"}
+        context = await launch_context_async(headless=True)
+        try:
+            page = await context.new_page()
+            await page.goto(url, wait_until=wait_until, timeout=30000)
+            title = await page.title()
+            try:
+                text = await page.locator("body").inner_text(timeout=5000)
+            except Exception:
+                text = ""
+            if len(text) > text_limit:
+                text = text[:text_limit] + "\n...[truncated]"
+            return {
+                "ok": True,
+                "url": url,
+                "final_url": page.url,
+                "title": title,
+                "text": text,
+                "backend": _BROWSER_BROKER.default_surface(),
+            }
+        except Exception as exc:
+            return {"ok": False, "error": f"CloakBrowser fetch failed: {exc}"}
+        finally:
+            await context.close()
+
+    elif name == "cloakbrowser_screenshot":
+        url = str(args.get("url") or "").strip()
+        if not url.startswith(("http://", "https://")):
+            return {"ok": False, "error": "url must start with http:// or https://"}
+        wait_until = str(args.get("wait_until") or "domcontentloaded")
+        full_page = bool(args.get("full_page", False))
+        try:
+            from cloakbrowser import launch_context_async  # type: ignore[import]
+        except ImportError:
+            return {"ok": False, "error": "cloakbrowser_not_installed"}
+        context = await launch_context_async(headless=True)
+        try:
+            page = await context.new_page()
+            await page.goto(url, wait_until=wait_until, timeout=30000)
+            screenshot = await page.screenshot(type="png", full_page=full_page)
+            import base64 as _base64
+            return {
+                "ok": True,
+                "url": url,
+                "final_url": page.url,
+                "image_base64": _base64.b64encode(screenshot).decode("ascii"),
+                "backend": _BROWSER_BROKER.default_surface(),
+            }
+        except Exception as exc:
+            return {"ok": False, "error": f"CloakBrowser screenshot failed: {exc}"}
+        finally:
+            await context.close()
 
     elif name == "panel_announce":
         message = str(args.get("message") or "").strip()
@@ -2814,7 +2921,7 @@ async def _execute_tool(db, name: str, args: dict):
 
 
 async def run_stdio_server():
-    """Run as MCP stdio server for OpenClaw integration."""
+    """Run as an MCP stdio server for Hermes and local agent integrations."""
     # Initialize the DB pool when running standalone (mcporter/stdio mode).
     # In FastAPI mode this is done by main.py's lifespan; here we do it ourselves.
     try:
@@ -2836,14 +2943,18 @@ async def run_stdio_server():
             msg = json.loads(line.decode())
         except json.JSONDecodeError:
             continue
+        method = msg.get("method")
+        # JSON-RPC notifications do not have ids and must not receive responses.
+        if msg.get("id") is None and method not in {"tools/list", "tools/call", "initialize"}:
+            continue
 
-        if msg.get("method") == "tools/list":
+        if method == "tools/list":
             response = {
                 "jsonrpc": "2.0",
                 "id": msg.get("id"),
                 "result": {"tools": TOOLS},
             }
-        elif msg.get("method") == "tools/call":
+        elif method == "tools/call":
             tool_name = msg["params"]["name"]
             tool_args = msg["params"].get("arguments", {})
             result_text = await handle_tool(tool_name, tool_args)
@@ -2855,7 +2966,7 @@ async def run_stdio_server():
                     "isError": False,
                 },
             }
-        elif msg.get("method") == "initialize":
+        elif method == "initialize":
             response = {
                 "jsonrpc": "2.0",
                 "id": msg.get("id"),

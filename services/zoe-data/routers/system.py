@@ -37,7 +37,7 @@ async def get_platform():
     return {
         "platform": "zoe-data",
         "version": "1.0.0",
-        "engine": "openclaw",
+        "engine": "hermes",
         "architecture": "aarch64",
     }
 
@@ -73,7 +73,7 @@ async def get_system_status(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    """System status including OpenClaw gateway health."""
+    """System status for Zoe's active runtime services."""
     gateway_status = "unknown"
     gateway_model = None
     try:
@@ -148,12 +148,14 @@ async def get_system_status(
     return {
         "database": db_status,
         "openclaw_gateway": gateway_status,
+        "openclaw_default_route": False,
+        "openclaw_manual_fallback": gateway_status == "connected",
         "openclaw_model": gateway_model,
         "llama_server": llama_status,
         "llama_model": llama_model,
         "ha_bridge": ha_bridge_status,
         "platform": "aarch64",
-        "engine": "openclaw",
+        "engine": "hermes",
         "ui_orchestrator": {
             "pending_actions": ui_actions_pending,
             "online_panels_30s": panels_online,
@@ -350,7 +352,7 @@ async def openclaw_background_loop():
 
 
 def start_openclaw_background_tasks():
-    if os.environ.get("OPENCLAW_BACKGROUND_VERSION_CHECK", "true").lower() != "true":
+    if os.environ.get("OPENCLAW_BACKGROUND_VERSION_CHECK", "false").lower() != "true":
         return None
     return asyncio.create_task(openclaw_background_loop(), name="openclaw_version_check")
 
@@ -704,7 +706,7 @@ async def a2a_task(body: _A2ATaskRequest, user: dict = Depends(get_a2a_caller)):
     A2A task intake endpoint.
 
     Accepts a natural-language task from another agent and routes it through
-    Zoe's standard pipeline (intent router → Zoe Agent → OpenClaw escalation).
+    Zoe's standard pipeline (intent router -> Zoe Agent -> Hermes escalation).
 
     Returns a task_id immediately. Results available via GET /api/agent/tasks/{task_id}.
     For streaming, POST to /api/agent/tasks/stream instead.
@@ -877,6 +879,15 @@ async def delegate_to_agent(
     agent_info = registry.get("agents", {}).get(agent_name)
     if not agent_info:
         raise HTTPException(status_code=404, detail=f"Unknown agent: {agent_name}")
+    if agent_name == "openclaw" and not bool(body.get("allow_openclaw", False)):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "OpenClaw is available only as an explicit fallback. "
+                "Set allow_openclaw=true after the user/operator specifically asks for OpenClaw; "
+                "otherwise delegate to Hermes."
+            ),
+        )
 
     from a2a_client import get_a2a_client  # type: ignore[import]
     client = get_a2a_client()

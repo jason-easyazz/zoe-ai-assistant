@@ -50,7 +50,9 @@ def build_agent_team_prompt(registry: dict[str, Any]) -> str:
         desc = info.get("description", agent_id)
         lines.append(f"- {desc}: skills={skills} → use {tool_name}")
     lines.append(
-        "Delegate to the agent whose skills best match the task. "
+        "Delegate to Hermes by default for complex tasks, engineering, planning, review, and repair. "
+        "Use Hermes plus Zoe CloakBrowser tools for browser/session workflows. "
+        "OpenClaw remains available as an explicit fallback but is not the default route. "
         "Do NOT escalate for general knowledge, maths, history, or simple web lookups."
     )
     return "\n".join(lines)
