@@ -116,13 +116,12 @@ async def _get_active_player() -> str | None:
 
 async def _ha_service(service: str, extra: dict | None = None):
     payload = {
-        "type": "service",
-        "domain": "media_player",
-        "service": service,
-        "data": {"entity_id": DEFAULT_PLAYER, **(extra or {})},
+        "entity_id": DEFAULT_PLAYER,
+        "action": service,
+        "data": extra or {},
     }
     async with httpx.AsyncClient(timeout=8.0) as c:
-        r = await c.post(f"{HA_BRIDGE_URL}/execute", json=payload)
+        r = await c.post(f"{HA_BRIDGE_URL}/devices/control", json=payload)
         r.raise_for_status()
 
 
