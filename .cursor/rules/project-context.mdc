@@ -7,6 +7,8 @@ alwaysApply: true
 
 Zoe production code lives in `/home/zoe/assistant`. The live web/chat API is `services/zoe-data/` running host uvicorn on port 8000. `services/zoe-core/` is retired reference code; do not extend it for new features.
 
+Repository changes should land through pull requests. Keep `main` protected and treat direct pushes or admin merges as emergency-only operator-approved actions.
+
 Use one production chat router: `services/zoe-data/routers/chat.py`. Natural-language routing belongs in `intent_router.py`, Zoe Agent, Hermes, or OpenClaw; do not add brittle command-detection branches to `chat.py`.
 
 Before file changes, follow `.zoe/AI_ASSISTANT_CHECKLIST.md`: validate structure, respect `.zoe/manifest.json`, and keep root markdown at or below 10 files. Do not delete files without the cleanup safety process.

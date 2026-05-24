@@ -29,11 +29,13 @@ Currently useful cached sources include FastAPI, ChromaDB, LiveKit, faster-whisp
 ## Greptile PR loop
 
 For reviewable development work:
+- Work from feature branches and open pull requests; `main` is protected.
+- Do not bypass branch protection or use administrator merges unless the operator explicitly asks for that emergency path.
 - Keep PRs small; use `/split-to-prs` when a branch grows too large.
 - Let Greptile review every PR independently.
 - Use Cursor's Greptile MCP to fetch review status/comments.
 - Use `zoe-greptile-loop` to delegate heavier fix/re-review loops to Hermes.
-- Do not treat Greptile as a replacement for local Zoe verification; run focused tests and live health checks before merging.
+- Do not treat Greptile as a replacement for local Zoe verification; run focused tests and live health checks before marking work merge-ready.
 
 ## Hermes-First Delegation
 
