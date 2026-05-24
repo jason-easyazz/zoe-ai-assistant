@@ -81,7 +81,7 @@ jobs:
       # still run on the Jetson or during focused local validation.
       - name: Unit tests (pure logic and auth contracts)
         run: |
-          pip install --quiet pytest pytest-asyncio bcrypt
+          pip install --quiet pytest pytest-asyncio bcrypt "python-jose[cryptography]"
           pytest \
             services/zoe-data/tests/test_guest_policy.py \
             services/zoe-data/tests/test_voice_scope.py \
