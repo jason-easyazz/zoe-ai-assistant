@@ -1798,17 +1798,15 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
                     _query = "music"  # final fallback
 
             payload = {
-                "type": "service",
-                "domain": "media_player",
-                "service": "play_media",
+                "entity_id": _os.environ.get("ZOE_DEFAULT_MEDIA_PLAYER", "media_player.all"),
+                "action": "play_media",
                 "data": {
-                    "entity_id": _os.environ.get("ZOE_DEFAULT_MEDIA_PLAYER", "media_player.all"),
                     "media_content_id": _query,
                     "media_content_type": "music",
                 },
             }
             async with _httpx.AsyncClient(timeout=8.0) as c:
-                await c.post(f"{ha_url}/execute", json=payload)
+                await c.post(f"{ha_url}/devices/control", json=payload)
 
             # Fire-and-forget: 5-signal play event logger
             async def _log_play_event() -> None:
@@ -1974,16 +1972,12 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
                 if cmd == "mute":    extra = {"is_volume_muted": True}
                 if cmd == "unmute":  extra = {"is_volume_muted": False}
                 payload = {
-                    "type": "service",
-                    "domain": "media_player",
-                    "service": svc,
-                    "data": {
-                        "entity_id": _os.environ.get("ZOE_DEFAULT_MEDIA_PLAYER", "media_player.all"),
-                        **extra,
-                    },
+                    "entity_id": _os.environ.get("ZOE_DEFAULT_MEDIA_PLAYER", "media_player.all"),
+                    "action": svc,
+                    "data": extra,
                 }
                 async with _httpx.AsyncClient(timeout=8.0) as c:
-                    await c.post(f"{ha_url}/execute", json=payload)
+                    await c.post(f"{ha_url}/devices/control", json=payload)
 
                 # Log skip/pause events for taste learning
                 _evt_type = None
@@ -2031,16 +2025,12 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
             level = int(slots.get("level", 50))
             vol = max(0, min(100, level)) / 100.0
             payload = {
-                "type": "service",
-                "domain": "media_player",
-                "service": "volume_set",
-                "data": {
-                    "entity_id": _os.environ.get("ZOE_DEFAULT_MEDIA_PLAYER", "media_player.all"),
-                    "volume_level": vol,
-                },
+                "entity_id": _os.environ.get("ZOE_DEFAULT_MEDIA_PLAYER", "media_player.all"),
+                "action": "volume_set",
+                "data": {"volume_level": vol},
             }
             async with _httpx.AsyncClient(timeout=8.0) as c:
-                await c.post(f"{ha_url}/execute", json=payload)
+                await c.post(f"{ha_url}/devices/control", json=payload)
             try:
                 import asyncio as _asyncio
                 from database import log_music_event as _log
@@ -2437,9 +2427,10 @@ async def _execute_smart_home_intent(intent: Intent, user_id: str) -> Optional[s
         elif action == "brighten":
             data["brightness_pct"] = 100
 
-        payload = {"type": "service", "domain": "light", "service": service, "data": data}
+        data.pop("entity_id", None)
+        payload = {"entity_id": entity_id, "action": service, "data": data}
         async with _httpx.AsyncClient(timeout=8.0) as c:
-            await c.post(f"{ha_url}/execute", json=payload)
+            await c.post(f"{ha_url}/devices/control", json=payload)
 
         action_labels = {
             "turn_on":  "on",
