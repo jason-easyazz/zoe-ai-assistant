@@ -16,12 +16,30 @@ jobs:
 
     steps:
       - name: Pull latest main
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
         run: |
           cd /home/zoe/assistant
-          git remote set-url origin \
-            https://x-access-token:${{ secrets.GH_PAT }}@github.com/jason-easyazz/zoe-ai-assistant.git
-          git fetch origin main
-          git reset --hard origin/main
+          git remote set-url origin https://github.com/jason-easyazz/zoe-ai-assistant.git
+          python3 - <<'PY'
+          import re
+          import subprocess
+          raw = subprocess.check_output(["git", "--version"], text=True).strip()
+          match = re.search(r"\bversion\s+([0-9]+(?:\.[0-9]+){1,2})", raw)
+          if not match:
+              raise SystemExit(f"could not parse git version from: {raw}")
+          version = match.group(1)
+          parts = tuple(int(part) for part in version.split("."))
+          parts = parts + (0,) * (3 - len(parts))
+          if parts < (2, 31, 0):
+              raise SystemExit(f"git {version} is too old for GIT_CONFIG_COUNT; need git >= 2.31.0")
+          PY
+          GIT_CONFIG_COUNT=1 \
+          GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+          GIT_CONFIG_VALUE_0="AUTHORIZATION: bearer ${GH_PAT}" \
+            git fetch origin main
+          unset GH_PAT
+          git reset --hard FETCH_HEAD
 
       - name: Install / refresh Python deps
         run: |
