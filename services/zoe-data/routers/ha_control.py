@@ -6,9 +6,9 @@ directly without going through the full chat → OpenClaw pipeline.
 Authenticates via session OR device token (same as voice endpoints).
 
 Routes:
-  POST /api/ha/control         — call a HA service (toggle, turn_on, turn_off, etc.)
-  GET  /api/ha/entities        — list entities for a domain / area
-  GET  /api/ha/state/{entity}  — get current state of a single entity
+  POST /api/ha/control        — call a HA service (toggle, turn_on, turn_off, etc.)
+  GET  /api/ha/entities       — list entities for a domain / area
+  GET  /api/ha/state/{entity} — get current state of a single entity
 """
 import logging
 import os
@@ -76,7 +76,7 @@ async def list_entities(
 async def get_entity_state(entity_id: str, caller: dict = Depends(_require_caller)):
     """Get current state of a single HA entity."""
     try:
-        return await _bridge_get(f"/state/{entity_id}")
+        return await _bridge_get(f"/entities/{entity_id}")
     except httpx.ConnectError:
         raise HTTPException(status_code=503, detail="HA bridge offline")
     except httpx.HTTPStatusError as exc:
