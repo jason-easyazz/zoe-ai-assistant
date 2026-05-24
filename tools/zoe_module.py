@@ -37,7 +37,7 @@ class ModuleManager:
         self.project_root = project_root or Path.cwd()
         self.modules_dir = self.project_root / "modules"
         self.config_file = self.project_root / "config" / "modules.yaml"
-        self.compose_output = self.project_root / "docker-compose.modules.yml"
+        self.compose_output = self.project_root / "docker-compose.generated-modules.yml"
     
     def discover_modules(self) -> List[Dict]:
         """Discover all available modules."""
@@ -249,7 +249,7 @@ def enable(module_name):
         click.echo(f"✓ Enabled {module_name}")
         click.echo(f"\nNext steps:")
         click.echo(f"  1. Generate compose: python tools/generate_module_compose.py")
-        click.echo(f"  2. Restart services: docker compose -f docker-compose.yml -f docker-compose.modules.yml up -d")
+        click.echo(f"  2. Restart services: docker compose -f docker-compose.yml -f docker-compose.generated-modules.yml up -d")
     else:
         click.echo(f"ℹ  {module_name} is already enabled")
 
@@ -264,7 +264,7 @@ def disable(module_name):
         click.echo(f"✓ Disabled {module_name}")
         click.echo(f"\nNext steps:")
         click.echo(f"  1. Generate compose: python tools/generate_module_compose.py")
-        click.echo(f"  2. Restart services: docker compose -f docker-compose.yml -f docker-compose.modules.yml up -d")
+        click.echo(f"  2. Restart services: docker compose -f docker-compose.yml -f docker-compose.generated-modules.yml up -d")
     else:
         click.echo(f"ℹ  {module_name} is not enabled")
 

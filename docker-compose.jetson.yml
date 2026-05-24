@@ -1,43 +1,8 @@
-# Jetson Orin NX GPU Override Configuration
-# Use with: docker-compose -f docker-compose.yml -f docker-compose.jetson.yml up
+# Retired Jetson Docker override.
+#
+# The active Jetson runtime uses host-native systemd user services for zoe-data,
+# llama-server, OpenClaw, Hermes, and Kokoro TTS. GPU/runtime flags live in those
+# unit files, not Docker Compose. This no-op overlay is kept so old documented
+# compose commands validate without reviving retired containers.
 
-services:
-  zoe-core:
-    environment:
-      - HARDWARE_PLATFORM=jetson
-  
-  zoe-llamacpp:
-    runtime: nvidia
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=all
-      - HARDWARE_PLATFORM=jetson
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              capabilities: [gpu]
-
-  zoe-whisper:
-    runtime: nvidia
-    environment:
-      - WHISPER_DEVICE=cuda
-
-  zoe-tts:
-    runtime: nvidia
-
-  zoe-litellm:
-    runtime: nvidia
-
-  # zoe-tensorrt: Service removed - not currently used
-  # If needed, uncomment and add build context or image
-  # zoe-tensorrt:
-  #   runtime: nvidia
-  #   environment:
-  #     - NVIDIA_VISIBLE_DEVICES=all
-  #     - HARDWARE_PLATFORM=jetson
-  
-  zoe-mcp-server:
-    environment:
-      - HARDWARE_PLATFORM=jetson
-
+services: {}

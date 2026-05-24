@@ -1,0 +1,9 @@
+# Zoe module generator configuration.
+#
+# `docker-compose.modules.yml` is the hand-maintained supplemental runtime compose
+# for host services such as Orbit, Music Assistant, and Multica. This file only
+# controls `tools/generate_module_compose.py`, which writes
+# `docker-compose.generated-modules.yml` for self-contained modules.
+
+enabled_modules: []
+module_config: {}

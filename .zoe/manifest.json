@@ -106,6 +106,7 @@
     "docker-compose.pi.yml",
     "docker-compose.mem-agent.yml",
     "docker-compose.modules.yml",
+    "docker-compose.generated-modules.yml",
     "docker-compose.override.yml",
     "docker-compose.secure.yml",
     "pytest.ini",
@@ -152,9 +153,9 @@
   ],
   "notes": {
     "max_root_md_files": 12,
-    "llm_backend": "llama.cpp via zoe-llamacpp container (Ollama retired Dec 2025)",
-    "primary_model": "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
-    "module_system": "Self-contained modules with docker-compose orchestration",
+    "llm_backend": "host-native llama-server user service (Dockerized zoe-llamacpp retired)",
+    "primary_model": "Gemma 4 E2B GGUF via llama-server",
+    "module_system": "Supplemental compose plus generated compose for enabled self-contained modules",
     "recent_additions": "Module system (zoe-music), MCP tool integration, voice services"
   },
   "approved_files": [

@@ -51,10 +51,12 @@ Zoe AI Assistant is designed to run across multiple ARM64 platforms with adaptiv
 - TensorRT optimization (optional)
 - `jetson_clocks` for maximum performance
 
-**Docker Configuration:**
-```bash
-docker-compose -f docker-compose.yml -f docker-compose.jetson.yml up -d
-```
+**Runtime Configuration:**
+The Jetson production stack is split between Docker and host-native user
+services. Docker runs PostgreSQL/auth/UI/HA bridge services from
+`docker-compose.yml`; `zoe-data`, `llama-server`, Hermes, OpenClaw, and Kokoro
+run as `systemctl --user` services. `docker-compose.jetson.yml` is a no-op
+compatibility overlay kept only so older compose commands validate.
 
 **Recommended Models:**
 - `llama-3.2-3b-gguf` (2.0GB, Q4_K_M)
@@ -91,10 +93,11 @@ docker-compose -f docker-compose.yml -f docker-compose.jetson.yml up -d
 - Smaller quantized models
 - Aggressive model unloading
 
-**Docker Configuration:**
-```bash
-docker-compose -f docker-compose.yml -f docker-compose.pi.yml up -d
-```
+**Runtime Configuration:**
+The Pi 5 server overlay is retired. `docker-compose.pi.yml` is a no-op
+compatibility overlay; do not use it to run server-side LLM/STT containers.
+Touch-panel and voice-device setup lives under `scripts/setup/touchscreen/` and
+the voice installer scripts.
 
 **Recommended Models:**
 - `phi3:mini` (2.2GB, Q4_K_M)

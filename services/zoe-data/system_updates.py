@@ -852,10 +852,10 @@ async def _install_zoe_platform(db: Any, user: dict) -> dict:
         "ok": True,
         "log": log,
         "restart_required": True,
-        "restart_cmd": "systemctl restart zoe-data",
+        "restart_cmd": "systemctl --user restart zoe-data.service",
         "message": (
             f"Zoe updated to {latest_tag}. "
-            "Run 'systemctl restart zoe-data' to complete the update."
+            "Run 'systemctl --user restart zoe-data.service' to complete the update."
         ),
     }
 

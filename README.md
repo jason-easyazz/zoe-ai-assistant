@@ -8,14 +8,16 @@ The active stack is intentionally split:
 
 - **Host-native services**
   - `zoe-data` FastAPI on `:8000`
+  - Hermes agent gateway on `:8642`
   - OpenClaw gateway service
   - llama-server service
 - **Docker services** (`docker-compose.yml`)
+  - `zoe-database` (PostgreSQL + pgvector)
   - `zoe-ui` (nginx frontend)
   - `zoe-auth`
   - `homeassistant`
   - `homeassistant-mcp-bridge`
-  - optional helpers (`wyoming-*`, `zoe-orbit`, etc.)
+  - optional helpers in `docker-compose.modules.yml` (`zoe-orbit`, Music Assistant, Multica)
 
 `zoe-core` and several older service trees are retired and archived under `docs/archive/retired-services/`.
 
@@ -31,10 +33,10 @@ cp .env.example .env
 Start core Docker services:
 
 ```bash
-docker compose up -d zoe-auth zoe-ui homeassistant homeassistant-mcp-bridge
+docker compose up -d zoe-database zoe-auth zoe-ui homeassistant homeassistant-mcp-bridge
 ```
 
-Then ensure host-native services are running (`zoe-data`, OpenClaw gateway, llama-server) per the runbook.
+Then ensure host-native services are running (`zoe-data`, Hermes, OpenClaw gateway, llama-server, Kokoro TTS) per the runbook.
 
 ## Endpoints
 

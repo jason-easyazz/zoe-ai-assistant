@@ -1,4 +1,8 @@
-# Prompt for AI Assistants: Help Fix Memory System to 100% Pass Rate
+# Historical Prompt for AI Assistants: Memory System Debugging
+
+> Historical reference only. This prompt describes the retired `zoe-core` /
+> SQLite / Dockerized llama.cpp architecture and should not be used for current
+> Zoe operations. Use `docs/guides/OPERATOR_RUNBOOK.md` for the active runtime.
 
 ## Context
 
