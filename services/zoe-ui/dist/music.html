@@ -934,7 +934,7 @@
     <script>
     /* ── Music Player Controller ─────────────────────────────────────────── */
 
-    const MA_WS  = 'ws://localhost:8095/ws';
+    const MA_WS  = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/modules/music-assistant/ws`;
 
     const S = {
         ws: null,
@@ -1422,7 +1422,7 @@
 
     /* ── Setup wizard ────────────────────────────────────────────────────── */
 
-    const MA_EXTERNAL_URL = `http://${window.location.hostname}:8095`;
+    const MA_EXTERNAL_URL = `${window.location.origin}/modules/music-assistant/`;
 
     // Well-known providers we always show in the setup grid.
     const KNOWN_PROVIDERS = [
