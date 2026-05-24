@@ -38,6 +38,7 @@ jobs:
           GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
           GIT_CONFIG_VALUE_0="AUTHORIZATION: bearer ${GH_PAT}" \
             git fetch origin main
+          unset GH_PAT
           git reset --hard FETCH_HEAD
 
       - name: Install / refresh Python deps
