@@ -3,9 +3,9 @@ background_runner.py — Background task queue for Zoe.
 
 Enables "fire and forget" tasks:
   1. User says "go find hotel prices, let me know when done"
-  2. Zoe Agent calls escalate_to_openclaw(background=True)
+  2. Zoe Agent queues the task for Hermes
   3. chat.py calls enqueue_background_task()
-  4. This module runs the task via OpenClaw ACP, stores result
+  4. This module runs the task via Hermes, stores result
   5. Next chat load: /api/chat/tasks/pending returns results
   6. Frontend injects them as proactive Zoe messages
 """
@@ -17,6 +17,8 @@ import os
 import time
 import uuid
 from datetime import datetime, timezone
+
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -90,9 +92,8 @@ async def _run_task(
     session_id: str | None,
     panel_id: str | None = None,
 ) -> None:
-    """Execute the task via OpenClaw ACP and store the result."""
-    from zoe_acp_client import openclaw_acp_stream as _acp_stream
-    from db_pool import get_db, get_db_ctx
+    """Execute the task via Hermes and store the result."""
+    from db_pool import get_db_ctx
 
     async def _set_status(status: str, result: str | None = None) -> None:
         now = datetime.now(timezone.utc).isoformat()
@@ -104,11 +105,7 @@ async def _run_task(
 
     await _set_status("running")
     try:
-        gateway_key = f"agent:main:zoe_bg_{user_id}_{task_id}"
-        chunks: list[str] = []
-        async for chunk in _acp_stream(task, gateway_key):
-            chunks.append(chunk)
-        result = "".join(chunks).strip()
+        result = await _run_hermes_background_task(task, user_id=user_id, task_id=task_id)
         if not result:
             result = "(No result returned)"
         await _set_status("done", result)
@@ -151,8 +148,8 @@ async def _run_task(
         # Estimate output tokens from output length (rough: ~4 chars/token)
         _est_tokens = len(result) // 4
         await _record_cost_event(
-            agent_name="openclaw",
-            model="codex",
+            agent_name="hermes",
+            model=os.environ.get("HERMES_MODEL", "hermes-agent"),
             task_id=task_id,
             user_id=user_id,
             output_tokens=_est_tokens,
@@ -188,6 +185,35 @@ async def _run_task(
             pass
     finally:
         _running.pop(task_id, None)
+
+
+async def _run_hermes_background_task(task: str, *, user_id: str, task_id: int) -> str:
+    """Run a background task through Hermes' OpenAI-compatible API."""
+    api_url = os.environ.get("HERMES_API_URL", "http://127.0.0.1:8642").rstrip("/")
+    model = os.environ.get("HERMES_MODEL", "hermes-agent")
+    timeout_s = float(os.environ.get("HERMES_BACKGROUND_TIMEOUT_S", "900"))
+    prompt = (
+        "You are Hermes running a Zoe background task. "
+        "Use Zoe tools and CloakBrowser MCP tools when needed. "
+        "Do not use OpenClaw. Do not print secrets. "
+        f"user_id={user_id}, task_id={task_id}.\n\n"
+        f"Task:\n{task}"
+    )
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": False,
+    }
+    async with httpx.AsyncClient(timeout=timeout_s) as client:
+        resp = await client.post(f"{api_url}/v1/chat/completions", json=payload)
+        resp.raise_for_status()
+        data = resp.json()
+    return (
+        data.get("choices", [{}])[0]
+        .get("message", {})
+        .get("content", "")
+        .strip()
+    )
 
 
 async def get_pending_tasks(user_id: str) -> list[dict]:

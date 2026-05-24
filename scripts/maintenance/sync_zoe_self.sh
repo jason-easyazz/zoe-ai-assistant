@@ -15,7 +15,7 @@
 set -euo pipefail
 
 ZOE_URL="${1:-${ZOE_URL:-http://localhost:8000}}"
-if [[ "$1" == "--url" ]]; then
+if [[ "${1:-}" == "--url" ]]; then
     ZOE_URL="$2"
 fi
 
@@ -34,14 +34,36 @@ fi
 HTTP_CODE=$(curl -s -o /tmp/agent_sync_response.json -w "%{http_code}" \
     -X POST "${ZOE_URL}/api/system/agent-sync" \
     -H "X-Session-ID: ${ZOE_SERVICE_SESSION:-}" \
-    2>/dev/null || echo "000")
+    2>/dev/null || true)
+HTTP_CODE="${HTTP_CODE:-000}"
 
 if [[ "$HTTP_CODE" == "200" ]]; then
     echo "✓ Agent sync complete."
     cat /tmp/agent_sync_response.json 2>/dev/null | python3 -m json.tool 2>/dev/null || true
+elif [[ "$HTTP_CODE" == "403" ]]; then
+    echo "↪ Agent sync endpoint requires admin; running local agent_sync fallback..."
+    (
+        cd "${SCRIPT_DIR}/../../services/zoe-data"
+        python3 - <<'PY'
+import asyncio
+import json
+from agent_sync import run_agent_sync
+
+print(json.dumps(asyncio.run(run_agent_sync()), indent=2))
+PY
+    )
 elif [[ "$HTTP_CODE" == "000" ]]; then
-    echo "✗ Could not connect to ${ZOE_URL} — is zoe-data running?"
-    exit 1
+    echo "↪ Could not connect to ${ZOE_URL}; running local agent_sync fallback..."
+    (
+        cd "${SCRIPT_DIR}/../../services/zoe-data"
+        python3 - <<'PY'
+import asyncio
+import json
+from agent_sync import run_agent_sync
+
+print(json.dumps(asyncio.run(run_agent_sync()), indent=2))
+PY
+    )
 else
     echo "✗ Agent sync returned HTTP ${HTTP_CODE}:"
     cat /tmp/agent_sync_response.json 2>/dev/null || true

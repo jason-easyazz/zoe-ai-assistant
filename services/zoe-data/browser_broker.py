@@ -2,7 +2,7 @@
 Browser broker for Zoe multi-surface browser orchestration.
 
 This module is intentionally lightweight for phase-1 rollout:
-- deterministic planning with a default OpenClaw surface
+- deterministic planning with a default Hermes/CloakBrowser surface
 - pluggable executor registry for each surface
 - shared evidence envelope for UI and telemetry consumers
 """
@@ -20,7 +20,7 @@ from typing import Any, Awaitable, Callable, Literal
 
 import httpx
 
-BrowserSurface = Literal["openclawLocal", "touchPanel", "userDesktop", "harness"]
+BrowserSurface = Literal["hermesCloak", "openclawLocal", "touchPanel", "userDesktop", "harness"]
 BrowserActionClass = Literal[
     "read_only_research",
     "account_navigation",
@@ -50,7 +50,7 @@ class BrowserActionPlan:
     session_id: str
     action_class: BrowserActionClass = "read_only_research"
     requested_surface: BrowserSurface | None = None
-    selected_surface: BrowserSurface = "openclawLocal"
+    selected_surface: BrowserSurface = "hermesCloak"
     policy_decision: PolicyDecision = "allowed_auto"
     plan_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     notes: list[str] = field(default_factory=list)
@@ -70,7 +70,7 @@ class BrowserBackendCapabilities:
 class BrowserBroker:
     """Simple deterministic broker used as a compatibility-safe first step."""
 
-    def __init__(self, default_surface: BrowserSurface = "openclawLocal") -> None:
+    def __init__(self, default_surface: BrowserSurface = "hermesCloak") -> None:
         self._default_surface = default_surface
         self._executors: dict[BrowserSurface, BrowserExecutor] = {}
 
@@ -82,11 +82,11 @@ class BrowserBroker:
 
     def capabilities(self) -> list[dict[str, Any]]:
         """Return a normalized capability matrix for known browser backends."""
-        known: list[BrowserSurface] = ["openclawLocal", "harness", "touchPanel", "userDesktop"]
+        known: list[BrowserSurface] = ["hermesCloak", "harness", "touchPanel", "userDesktop", "openclawLocal"]
         matrix: list[dict[str, Any]] = []
         for backend in known:
             available = backend in self._executors
-            if backend == "openclawLocal":
+            if backend == "hermesCloak":
                 caps = BrowserBackendCapabilities(
                     backend=backend,
                     available=available,
@@ -94,7 +94,17 @@ class BrowserBroker:
                     supports_screenshot=True,
                     supports_action_log=True,
                     supports_live_user_browser=False,
-                    notes=["Default deterministic backend for Zoe browser tasks."],
+                    notes=["Default backend: Hermes-owned Zoe CloakBrowser stealth Chromium."],
+                )
+            elif backend == "openclawLocal":
+                caps = BrowserBackendCapabilities(
+                    backend=backend,
+                    available=available,
+                    supports_navigation=True,
+                    supports_screenshot=True,
+                    supports_action_log=True,
+                    supports_live_user_browser=False,
+                    notes=["Disabled legacy OpenClaw backend; kept only when explicitly enabled by operator env."],
                 )
             elif backend == "harness":
                 caps = BrowserBackendCapabilities(
@@ -135,7 +145,7 @@ class BrowserBroker:
         available = [m["backend"] for m in matrix if m["available"]]
         recommendation = {
             "default": self._default_surface,
-            "rule": "Prefer openclawLocal unless workload-level benchmarks prove another backend materially better.",
+            "rule": "Use Hermes/CloakBrowser by default. OpenClaw remains available as an explicit fallback.",
             "available_backends": available,
         }
         return {"matrix": matrix, "recommendation": recommendation}
@@ -437,7 +447,7 @@ def build_cloak_executor() -> BrowserExecutor | None:
                 screenshot_bytes = await page.screenshot(type="png", full_page=False)
                 image_b64 = base64.b64encode(screenshot_bytes).decode()
                 evidence = BrowserEvidence(
-                    backend="harness",
+                    backend=plan.selected_surface,
                     final_url=final_url,
                     screenshots=[image_b64] if image_b64 else [],
                     action_log=action_log,
@@ -454,10 +464,12 @@ def build_cloak_executor() -> BrowserExecutor | None:
 
 
 def create_default_browser_broker(openclaw_gateway_url: str) -> BrowserBroker:
-    broker = BrowserBroker(default_surface="openclawLocal")
-    broker.register_executor("openclawLocal", build_openclaw_gateway_executor(openclaw_gateway_url))
-    # Register CloakBrowser as the "harness" surface if installed — used for bot-protected targets
+    broker = BrowserBroker(default_surface="hermesCloak")
+    # Register CloakBrowser as the Hermes-owned default browser surface.
     cloak_exec = build_cloak_executor()
     if cloak_exec is not None:
+        broker.register_executor("hermesCloak", cloak_exec)
         broker.register_executor("harness", cloak_exec)
+    if os.environ.get("ZOE_ENABLE_OPENCLAW_BROWSER_FALLBACK", "false").lower() == "true":
+        broker.register_executor("openclawLocal", build_openclaw_gateway_executor(openclaw_gateway_url))
     return broker

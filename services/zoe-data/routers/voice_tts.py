@@ -1713,6 +1713,44 @@ async def _run_voice_memory_passes(
         pass
 
 
+async def _run_hermes_voice_escalation(prompt: str, session_id: str, user_id: str) -> str:
+    """Use Hermes for foreground voice escalation; OpenClaw is manual-only."""
+    hermes_url = os.environ.get(
+        "HERMES_API_URL",
+        "http://127.0.0.1:8642/v1/chat/completions",
+    )
+    payload = {
+        "model": os.environ.get("HERMES_MODEL", "hermes"),
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are Hermes acting as Zoe's escalation agent for voice. "
+                    "Be concise, complete the requested task, and avoid asking the user "
+                    "to switch surfaces unless absolutely necessary."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"User id: {user_id}\n"
+                    f"Session id: {session_id}\n\n"
+                    f"{prompt}"
+                ),
+            },
+        ],
+        "temperature": 0.3,
+        "max_tokens": 900,
+        "stream": False,
+    }
+    timeout_s = float(os.environ.get("ZOE_VOICE_HERMES_TIMEOUT_S", "45"))
+    async with httpx.AsyncClient(timeout=timeout_s) as client:
+        resp = await client.post(hermes_url, json=payload)
+        resp.raise_for_status()
+        data = resp.json()
+    return (data.get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
+
+
 @router.post("/command")
 async def voice_command(
     payload: dict,
@@ -1765,7 +1803,7 @@ async def voice_command(
             _ses["bound_user_id"] = identified_user_id
 
     # Resolve effective user once so all downstream branches (intent fast path,
-    # scope checks, Pi agent, and OpenClaw fallback) share the same identity.
+    # scope checks, Zoe Agent, and Hermes escalation) share the same identity.
     _bound_user = (_VOICE_SESSIONS.get(panel_id) or {}).get("bound_user_id")
     _panel_recent_user = await _resolve_recent_panel_session_user(panel_id, db)
     if not _bound_user and _panel_recent_user:
@@ -2626,10 +2664,10 @@ async def voice_command(
 
         voice_timeout = float(os.environ.get("ZOE_VOICE_CHAT_TIMEOUT_S", "20"))
         try:
-            _openclaw_cap = float(os.environ.get("ZOE_VOICE_OPENCLAW_TIMEOUT_S", str(voice_timeout)))
+            _hermes_cap = float(os.environ.get("ZOE_VOICE_HERMES_TIMEOUT_S", str(voice_timeout)))
         except Exception:
-            _openclaw_cap = voice_timeout
-        openclaw_voice_timeout = max(5.0, min(voice_timeout, _openclaw_cap))
+            _hermes_cap = voice_timeout
+        hermes_voice_timeout = max(5.0, min(voice_timeout, _hermes_cap))
         _t_first_token: Optional[float] = None
 
         if stream:
@@ -2730,14 +2768,13 @@ async def voice_command(
                                 is_bg = delta.startswith("__ESCALATE_BG__:")
                                 _, body = delta.split(":", 1)
                                 reason, _, oc_task = body.partition("|")
-                                oc_prompt = (oc_task or text).strip()
-                                logger.info("voice/command stream escalation -> OpenClaw background=%s reason=%s", is_bg, reason or "unspecified")
+                                hermes_prompt = (oc_task or text).strip()
+                                logger.info("voice/command stream escalation -> Hermes background=%s reason=%s", is_bg, reason or "unspecified")
                                 if is_bg:
                                     from background_runner import enqueue_background_task
-                                    asyncio.ensure_future(enqueue_background_task(oc_prompt, effective_user, session_id))
+                                    asyncio.ensure_future(enqueue_background_task(hermes_prompt, effective_user, session_id))
                                     delta = "I'll work on that in the background and let you know when it's done."
                                 else:
-                                    from openclaw_ws import openclaw_cli
                                     try:
                                         await _bc_stream.broadcast("all", "voice:responding", {
                                             "panel_id": panel_id,
@@ -2747,14 +2784,14 @@ async def voice_command(
                                         pass
                                     delta = (
                                         await asyncio.wait_for(
-                                            openclaw_cli(oc_prompt, session_id, user_id=effective_user),
-                                            timeout=openclaw_voice_timeout,
+                                            _run_hermes_voice_escalation(hermes_prompt, session_id, effective_user),
+                                            timeout=hermes_voice_timeout,
                                         )
                                     ).strip()
                                     if not delta:
                                         continue
                             except Exception as esc_exc:
-                                logger.warning("voice/command OpenClaw escalation failed: %s", esc_exc)
+                                logger.warning("voice/command Hermes escalation failed: %s", esc_exc)
                                 delta = "I couldn't complete that advanced request right now. Please try again."
                         if _t_first_token is None:
                             _t_first_token = time.monotonic() - t_chat_start
@@ -2837,14 +2874,13 @@ async def voice_command(
                         is_bg = delta.startswith("__ESCALATE_BG__:")
                         _, body = delta.split(":", 1)
                         reason, _, oc_task = body.partition("|")
-                        oc_prompt = (oc_task or text).strip()
-                        logger.info("voice/command escalation -> OpenClaw background=%s reason=%s", is_bg, reason or "unspecified")
+                        hermes_prompt = (oc_task or text).strip()
+                        logger.info("voice/command escalation -> Hermes background=%s reason=%s", is_bg, reason or "unspecified")
                         if is_bg:
                             from background_runner import enqueue_background_task
-                            asyncio.ensure_future(enqueue_background_task(oc_prompt, effective_user, session_id))
+                            asyncio.ensure_future(enqueue_background_task(hermes_prompt, effective_user, session_id))
                             delta = "I'll work on that in the background and let you know when it's done."
                         else:
-                            from openclaw_ws import openclaw_cli
                             try:
                                 await _bc_escalate.broadcast("all", "voice:responding", {
                                     "panel_id": panel_id,
@@ -2854,14 +2890,14 @@ async def voice_command(
                                 pass
                             delta = (
                                 await asyncio.wait_for(
-                                    openclaw_cli(oc_prompt, session_id, user_id=effective_user),
-                                    timeout=openclaw_voice_timeout,
+                                    _run_hermes_voice_escalation(hermes_prompt, session_id, effective_user),
+                                    timeout=hermes_voice_timeout,
                                 )
                             ).strip()
                             if not delta:
                                 continue
                     except Exception as esc_exc:
-                        logger.warning("voice/command OpenClaw escalation failed: %s", esc_exc)
+                        logger.warning("voice/command Hermes escalation failed: %s", esc_exc)
                         delta = "I couldn't complete that advanced request right now. Please try again."
                 if _t_first_token is None:
                     _t_first_token = time.monotonic() - t_chat_start

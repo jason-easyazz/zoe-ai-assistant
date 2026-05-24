@@ -1,5 +1,5 @@
 """
-Tier 2 trigger: slow-loop OpenClaw-powered checks.
+Slow-loop Hermes-powered proactive checks.
 
 Subclass this to implement environment-aware triggers (e.g. low stock,
 calendar prep, weather alerts).  The engine's slow loop calls check()
@@ -18,17 +18,17 @@ from proactive.triggers.base import ProactiveTrigger, TriggerResult
 
 log = logging.getLogger(__name__)
 
-_OPENCLAW_URL = os.environ.get("OPENCLAW_API_URL", "http://localhost:9999")
+_HERMES_URL = os.environ.get("HERMES_API_URL", "http://127.0.0.1:8642/v1/chat/completions")
 _TIMEOUT = 30.0
 
 
 class OpenClawTrigger(ProactiveTrigger):
     """
-    Base for triggers that delegate their check logic to an OpenClaw agent call.
+    Backwards-compatible base for triggers that delegate check logic to Hermes.
 
     Subclasses must set:
         trigger_type  — string identifier
-        _prompt       — the OpenClaw prompt to evaluate
+        _prompt       — the Hermes prompt to evaluate
         _user_id      — which user to notify (or override get_user_ids())
     """
 
@@ -43,27 +43,39 @@ class OpenClawTrigger(ProactiveTrigger):
         """Override to customise the prompt per-check."""
         return self._prompt
 
-    async def _run_openclaw(self, prompt: str) -> dict[str, Any] | None:
+    async def _run_hermes(self, prompt: str) -> dict[str, Any] | None:
         """
-        Post a task to OpenClaw and return the parsed JSON response dict,
+        Post a task to Hermes and return the parsed JSON response dict,
         or None on failure.
         """
         try:
             async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
                 r = await client.post(
-                    f"{_OPENCLAW_URL}/v1/task",
-                    json={"prompt": prompt, "stream": False},
+                    _HERMES_URL,
+                    json={
+                        "model": os.environ.get("HERMES_MODEL", "hermes"),
+                        "messages": [
+                            {
+                                "role": "system",
+                                "content": "Return compact JSON for Zoe proactive trigger evaluation.",
+                            },
+                            {"role": "user", "content": prompt},
+                        ],
+                        "temperature": 0,
+                        "max_tokens": 600,
+                        "stream": False,
+                    },
                 )
                 r.raise_for_status()
                 data = r.json()
-                content = data.get("result") or data.get("content") or ""
+                content = (data.get("choices") or [{}])[0].get("message", {}).get("content", "")
                 # Try to parse embedded JSON.
                 try:
                     return json.loads(content)
                 except Exception:
                     return {"raw": content}
         except Exception as exc:
-            log.warning("OpenClawTrigger._run_openclaw failed: %s", exc)
+            log.warning("OpenClawTrigger._run_hermes failed: %s", exc)
             return None
 
     async def check(self, db) -> list[TriggerResult]:
@@ -72,7 +84,7 @@ class OpenClawTrigger(ProactiveTrigger):
         prompt = self._build_prompt(context)
         if not prompt:
             return results
-        data = await self._run_openclaw(prompt)
+        data = await self._run_hermes(prompt)
         if data is None:
             return results
         # Subclasses inspect `data` and decide whether to fire.

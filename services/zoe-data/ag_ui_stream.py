@@ -89,7 +89,7 @@ async def iter_openclaw_text_chunks(
     message_id: str,
     text: str,
 ) -> AsyncIterator[str]:
-    """Smaller batches than default so the UI feels responsive after OpenClaw returns."""
+    """Smaller batches than default so the UI feels responsive after agent returns."""
     async for line in iter_text_message_chunks(
         enc,
         recorder,
