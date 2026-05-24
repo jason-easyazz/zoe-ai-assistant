@@ -659,7 +659,7 @@ _AUTOPILOTS = [
     },
     {
         "title": "Platform Health Check",
-        "agent": "OpenClaw",
+        "agent": "Hermes",
         "execution_mode": "create_issue",
         "cron": "0 6 * * *",
         "issue_title_template": "Platform Health — {date}",

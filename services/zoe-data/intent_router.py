@@ -1494,7 +1494,7 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
             lines = [
                 f"**Board has {total_open} open issue(s).** Triggering the self-healing loop:\n",
                 f"- **{len(todo_issues)} todo** / **{len(in_progress)} in-progress**\n",
-                "The Board Review autopilot (OpenClaw, every 15 min) will triage and fix "
+                "The Board Review autopilot (Hermes, every 15 min) will triage and fix "
                 "eligible issues automatically. Issues needing credentials or human judgement "
                 "will trigger a push notification to you.\n",
             ]
