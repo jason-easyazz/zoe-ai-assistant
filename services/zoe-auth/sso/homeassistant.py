@@ -231,7 +231,7 @@ class HomeAssistantIntegration:
                 settings["ha_areas"] = area_ids
                 
                 conn.execute("""
-                    UPDATE users 
+                    UPDATE auth_users
                     SET settings = ?
                     WHERE user_id = ?
                 """, (json.dumps(settings), user_id))
@@ -353,7 +353,7 @@ class HomeAssistantIntegration:
                 cursor = conn.execute("""
                     SELECT user_id, updated_at FROM auth_users 
                     WHERE is_active = 1 
-                    AND updated_at > (NOW() - INTERVAL '1 hour')::text
+                    AND updated_at > to_char(NOW() - INTERVAL '1 hour', 'YYYY-MM-DD"T"HH24:MI:SS.US')
                 """)
                 
                 for row in cursor.fetchall():

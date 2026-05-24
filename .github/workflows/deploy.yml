@@ -52,6 +52,11 @@ jobs:
           cd /home/zoe/assistant
           bash scripts/deploy/migrate.sh
 
+      - name: Rebuild / restart zoe-auth
+        run: |
+          cd /home/zoe/assistant
+          docker compose up -d --build zoe-auth
+
       # zoe-data is a user service — no sudo needed.
       # XDG_RUNTIME_DIR is required so systemctl --user can reach the user session bus.
       - name: Restart zoe-data (user service)

@@ -184,7 +184,7 @@ async def update_user(
             params.append(user_id)
             
             conn.execute(f"""
-                UPDATE users 
+                UPDATE auth_users
                 SET {', '.join(updates)}
                 WHERE user_id = ?
             """, params)
@@ -658,7 +658,7 @@ async def get_system_stats(
             # Recent logins (last 24 hours)
             cursor = conn.execute("""
                 SELECT COUNT(*) FROM auth_users
-                WHERE last_login > (NOW() - INTERVAL '1 day')::text
+                WHERE last_login > to_char(NOW() - INTERVAL '1 day', 'YYYY-MM-DD"T"HH24:MI:SS.US')
             """)
             recent_logins = cursor.fetchone()[0]
 
