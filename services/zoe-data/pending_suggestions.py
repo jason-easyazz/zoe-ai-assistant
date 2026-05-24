@@ -165,13 +165,14 @@ async def _execute_action(conn, action: str, slots: dict, user_id: str) -> dict:
             list_id = lrow["id"]
         else:
             list_id = str(uuid.uuid4())
+            visibility = "personal" if lt in ("personal", "tasks") else "family"
             await conn.execute(
                 "INSERT INTO lists (id, user_id, name, list_type, visibility) VALUES ($1,$2,$3,$4,$5)",
                 list_id,
                 user_id,
                 ln,
                 lt,
-                "family",
+                visibility,
             )
         item_id = str(uuid.uuid4())
         await conn.execute(
