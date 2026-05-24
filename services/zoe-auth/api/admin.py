@@ -237,8 +237,8 @@ async def delete_user(
                 conn.execute("DELETE FROM audit_logs WHERE user_id = ?", (user_id,))
                 conn.execute("DELETE FROM auth_sessions WHERE user_id = ?", (user_id,))
                 
-                # Delete user
-                conn.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
+                # Delete auth user
+                conn.execute("DELETE FROM auth_users WHERE user_id = ?", (user_id,))
                 
                 if conn.total_changes == 0:
                     raise HTTPException(status_code=404, detail="User not found")
@@ -247,7 +247,7 @@ async def delete_user(
             else:
                 # Deactivate instead of deleting for audit purposes
                 conn.execute("""
-                    UPDATE users 
+                    UPDATE auth_users
                     SET is_active = 0, updated_at = ?
                     WHERE user_id = ?
                 """, (datetime.now().isoformat(), user_id))
@@ -645,7 +645,7 @@ async def get_system_stats(
             # User counts by role
             cursor = conn.execute("""
                 SELECT role, COUNT(*) as count
-                FROM users
+                FROM auth_users
                 WHERE is_active = 1
                 GROUP BY role
             """)
@@ -657,8 +657,8 @@ async def get_system_stats(
             
             # Recent logins (last 24 hours)
             cursor = conn.execute("""
-                SELECT COUNT(*) FROM users 
-                WHERE last_login > datetime('now', '-1 day')
+                SELECT COUNT(*) FROM auth_users
+                WHERE last_login > (NOW() - INTERVAL '1 day')::text
             """)
             recent_logins = cursor.fetchone()[0]
 
@@ -799,7 +799,7 @@ async def get_sync_data(
         with auth_db.get_connection() as conn:
             cursor = conn.execute("""
                 SELECT u.user_id, u.username, u.role, p.passcode_hash
-                FROM users u
+                FROM auth_users u
                 LEFT JOIN passcodes p ON u.user_id = p.user_id AND p.is_active = 1
                 WHERE u.is_active = 1
             """)

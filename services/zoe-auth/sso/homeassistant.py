@@ -353,7 +353,7 @@ class HomeAssistantIntegration:
                 cursor = conn.execute("""
                     SELECT user_id, updated_at FROM auth_users 
                     WHERE is_active = 1 
-                    AND updated_at > datetime('now', '-1 hour')
+                    AND updated_at > (NOW() - INTERVAL '1 hour')::text
                 """)
                 
                 for row in cursor.fetchall():

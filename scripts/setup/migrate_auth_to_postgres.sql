@@ -7,27 +7,21 @@ CREATE TABLE IF NOT EXISTS auth_users (
     email TEXT,
     password_hash TEXT,
     role TEXT DEFAULT 'user',
+    is_active SMALLINT DEFAULT 1,
+    is_verified SMALLINT DEFAULT 1,
+    failed_login_attempts INTEGER DEFAULT 0,
+    locked_until TEXT,
+    settings TEXT,
     last_login TEXT,
     created_at TEXT,
     updated_at TEXT
 );
 
-CREATE TABLE IF NOT EXISTS users (
-    user_id TEXT PRIMARY KEY,
-    username TEXT,
-    email TEXT,
-    password_hash TEXT,
-    display_name TEXT,
-    role TEXT DEFAULT 'user',
-    is_active SMALLINT DEFAULT 1,
-    is_verified SMALLINT DEFAULT 1,
-    created_at TEXT,
-    updated_at TEXT,
-    last_login TEXT,
-    settings TEXT,
-    failed_login_attempts INTEGER DEFAULT 0,
-    locked_until TEXT
-);
+ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS is_active SMALLINT DEFAULT 1;
+ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS is_verified SMALLINT DEFAULT 1;
+ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS failed_login_attempts INTEGER DEFAULT 0;
+ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS locked_until TEXT;
+ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS settings TEXT;
 
 CREATE TABLE IF NOT EXISTS auth_sessions (
     session_id TEXT PRIMARY KEY,
@@ -101,20 +95,6 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     user_agent TEXT,
     details TEXT,
     timestamp TEXT
-);
-
-CREATE TABLE IF NOT EXISTS panels (
-    panel_id TEXT PRIMARY KEY,
-    name TEXT,
-    allow_guest SMALLINT DEFAULT 1,
-    created_at TEXT
-);
-
-CREATE TABLE IF NOT EXISTS panel_user_bindings (
-    id SERIAL PRIMARY KEY,
-    panel_id TEXT,
-    user_id TEXT,
-    binding_type TEXT
 );
 
 CREATE TABLE IF NOT EXISTS rate_limits (

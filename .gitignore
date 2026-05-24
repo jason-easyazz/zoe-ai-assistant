@@ -106,6 +106,7 @@ aider_env/
 # Shell scripts (moved to backups/)
 *.sh
 !scripts/maintenance/*.sh
+!scripts/deploy/*.sh
 !scripts/permanent/*.sh
 !scripts/setup/*.sh
 !scripts/setup/jetson/*.sh
@@ -144,6 +145,7 @@ credentials/
 # API Keys and Secrets
 *.env
 .env.*
+!.env.example
 secrets/
 api_keys/
 **/api_keys.json
