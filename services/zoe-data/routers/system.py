@@ -622,7 +622,7 @@ def _build_agent_card() -> dict:
         {
             "id": "browser_automation",
             "name": "Browser Automation",
-            "description": "Delegate browser interaction, form filling, and web tasks via OpenClaw.",
+            "description": "Delegate browser interaction, form filling, and web tasks via Hermes and CloakBrowser.",
             "inputModes": ["text"],
             "outputModes": ["text", "data"],
         },
@@ -1243,7 +1243,7 @@ async def get_evolution_proposals(
 
 
 async def _hermes_review_proposal(proposal: dict) -> tuple[bool, str]:
-    """Ask Hermes to review an evolution proposal before OpenClaw implements it.
+    """Ask Hermes to review an evolution proposal before implementation is queued.
 
     Returns (approved: bool, feedback: str).
     Fails open — caller must catch all exceptions and proceed if Hermes is unavailable.
@@ -1292,7 +1292,7 @@ async def evolution_proposal_action(
 ):
     """Act on an evolution proposal: approve|reject|defer.
 
-    On approve: creates a Multica board issue and assigns to OpenClaw.
+    On approve: creates a Multica board issue and queues Hermes implementation.
     On reject: archives the proposal.
     On defer: snoozes for 7 days.
     """
@@ -1347,7 +1347,7 @@ async def evolution_proposal_action(
                    WHERE id=$3""",
                 _time.time(), multica_issue_id, proposal_id,
             )
-            # Hermes code-review gate: ask Hermes to review before handing to OpenClaw.
+            # Hermes code-review gate before queuing implementation.
             # Fails open — if Hermes is unavailable we proceed normally.
             try:
                 _h_approved, _h_feedback = await _hermes_review_proposal(proposal)
@@ -1382,7 +1382,7 @@ async def evolution_proposal_action(
                     proposal_id, exc,
                 )
 
-            # Queue an OpenClaw background task to implement the proposal;
+            # Queue a Hermes background task to implement the proposal;
             # when it completes, the task runner will advance status → deployed.
             try:
                 from background_runner import enqueue_background_task  # type: ignore[import]
@@ -1401,7 +1401,7 @@ async def evolution_proposal_action(
             return {"ok": True, "action": "approved", "multica_issue_id": multica_issue_id}
 
         elif action == "deploy":
-            # Called by background runner when OpenClaw completes implementation
+            # Called by background runner when Hermes completes implementation
             now = _time.time()
             await db.execute(
                 """UPDATE evolution_proposals

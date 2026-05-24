@@ -1,7 +1,7 @@
 """
 Intent-first router: pattern-matches common family data requests and calls
 mcporter-safe directly, bypassing the LLM for <1 second responses.
-Falls through to OpenClaw for everything else.
+Falls through to the agent path (Hermes by default; OpenClaw only when explicitly enabled).
 
 Inspired by the original Zoe HassIL intent system (Tier 0/1 classification).
 
