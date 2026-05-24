@@ -2,6 +2,12 @@
 **Date**: 2025-11-22  
 **Purpose**: Maintain system quality, prevent regressions, ensure reliability
 
+> Runtime note (May 2026): `zoe-core`, LiteLLM, and Dockerized llama.cpp are
+> retired. The active backend is host-native `zoe-data`; local agent/model
+> services run via user systemd units (`hermes-agent`, `openclaw-gateway`,
+> `llama-server`, `kokoro-tts`). Use `docs/guides/OPERATOR_RUNBOOK.md` as the
+> authoritative operations runbook.
+
 ---
 
 ## 📋 Table of Contents
@@ -35,14 +41,14 @@ print('✅ System OK' if r.status_code == 200 else '❌ System Issue')
 "
 
 # 3. Check for errors in logs (last hour)
-docker logs zoe-core --since 1h 2>&1 | grep -i "error\|exception\|failed" | tail -10
+journalctl --user -u zoe-data --since "1 hour ago" --no-pager | grep -i "error\|exception\|failed" | tail -10
 
 # 4. Monitor disk space
 df -h / | tail -1 | awk '{print "Disk Usage: " $5 " of " $2}'
 ```
 
 **Expected Results**:
-- ✅ 14+ services running
+- ✅ Core Docker containers and user services running
 - ✅ Chat API returns 200
 - ✅ No critical errors in logs
 - ✅ Disk usage <80%
@@ -67,10 +73,10 @@ python3 tools/audit/validate_structure.py
 python3 tools/audit/validate_critical_files.py
 
 # C. If docker-compose.yml changed:
-bash tools/docker/validate_networks.sh
+docker compose config --quiet
 
-# D. If model config changed:
-bash tools/audit/validate_litellm.sh
+# D. If model/user-service config changed:
+systemctl --user status llama-server hermes-agent openclaw-gateway --no-pager
 
 # E. Run relevant tests
 pytest tests/unit/ -v  # For code changes
@@ -104,7 +110,7 @@ The installed pre-commit hook (`.git/hooks/pre-commit`) automatically checks:
 
 ```bash
 # 1. Validate configuration
-bash tools/docker/validate_networks.sh
+docker compose config --quiet
 
 # 2. Check for breaking changes
 git diff docker-compose.yml | grep -E "CTX_SIZE|MODEL|network|environment"
@@ -116,31 +122,23 @@ docker compose restart <service-name>
 python3 tests/integration/test_all_systems.py
 
 # 5. Monitor logs for 5 minutes
-docker logs zoe-core -f
+docker compose logs -f <service-name>
 ```
 
-### Model Configuration Changes
+### Model / Agent Configuration Changes
 
 ```bash
-# 1. Validate LiteLLM config matches loaded model
-bash tools/audit/validate_litellm.sh
+# 1. Check active user services
+systemctl --user status llama-server hermes-agent openclaw-gateway --no-pager
 
-# 2. Check model selector alignment
-python3 -c "
-from services.zoe-core.model_config import ModelSelector
-selector = ModelSelector('jetson')
-print('Current model:', selector.current_model)
-print('Fallback chain:', selector.fallback_chain)
-"
-
-# 3. Test model routing
+# 2. Test chat path
 curl -X POST http://localhost:8000/api/chat \
   -H "Content-Type: application/json" \
   -d '{"message": "Hello", "user_id": "test"}'
 
-# 4. Verify LiteLLM service
-curl -H "Authorization: Bearer sk-f3320300bb32df8f176495bb888ba7c8f87a0d01c2371b50f767b9ead154175f" \
-  http://localhost:8001/v1/models | jq '.data | length'
+# 3. Verify local model and agent health
+curl -sf http://localhost:11434/health
+curl -sf http://localhost:18789/health
 ```
 
 ### Code Changes
@@ -152,8 +150,8 @@ pytest tests/unit/test_<relevant_module>.py -v
 # 2. Run integration tests
 pytest tests/integration/ -v
 
-# 3. Check for linter errors
-cd services/zoe-core && python3 -m pylint routers/chat.py
+# 3. Check focused backend syntax
+python3 -m py_compile services/zoe-data/routers/chat.py
 
 # 4. Test end-to-end flow
 python3 tests/integration/test_conversation_quality.py
@@ -180,10 +178,10 @@ python3 tools/audit/validate_databases.py
 # 4. Check for Configuration Drift
 git status
 git diff docker-compose.yml
-git diff services/zoe-litellm/minimal_config.yaml
+git diff services/zoe-data
 
 # 5. Review Logs for Patterns
-docker logs zoe-core --since 168h 2>&1 | \
+journalctl --user -u zoe-data --since "168 hours ago" --no-pager | \
   grep -E "ERROR|WARNING" | \
   sort | uniq -c | sort -rn | head -20
 
@@ -208,7 +206,6 @@ docker system df  # Check Docker disk usage
 # 8. Backup Critical Configs
 mkdir -p ~/backups/$(date +%Y%m%d)
 cp docker-compose.yml ~/backups/$(date +%Y%m%d)/
-cp services/zoe-litellm/minimal_config.yaml ~/backups/$(date +%Y%m%d)/
 cp .env ~/backups/$(date +%Y%m%d)/
 
 # 9. Document Changes
@@ -233,7 +230,7 @@ python3 tools/audit/comprehensive_project_audit.py > audit_$(date +%Y%m).md
 python3 tools/reports/repo_health.py
 
 # 3. Test Coverage Analysis
-pytest tests/ --cov=services/zoe-core --cov-report=html
+PYTHONPATH=/home/zoe/assistant/services/zoe-data pytest services/zoe-data/tests --cov=services/zoe-data --cov-report=html
 
 # 4. Performance Benchmarking
 python3 tools/test_zoe_performance.py
@@ -285,11 +282,9 @@ python3 tools/audit/validate_before_delete.py <filename>
 
 #### Docker & Networks
 ```bash
-# Validate Docker network configuration
-bash tools/docker/validate_networks.sh
-
-# Validate LiteLLM configuration
-bash tools/audit/validate_litellm.sh
+# Validate Docker Compose configuration
+docker compose config --quiet
+docker compose -f docker-compose.yml -f docker-compose.modules.yml config --quiet
 ```
 
 #### Database Health
@@ -337,21 +332,22 @@ python3 tests/integration/test_natural_language_full_system.py
 ```bash
 # 1. Check service status
 docker ps -a | grep zoe-
+systemctl --user status zoe-data hermes-agent openclaw-gateway llama-server --no-pager
 
 # 2. Check logs for errors
-docker logs zoe-core --tail 100
-docker logs zoe-litellm --tail 100
-docker logs zoe-llamacpp --tail 100
+journalctl --user -u zoe-data --since "30 min ago" --no-pager
+journalctl --user -u hermes-agent --since "30 min ago" --no-pager
+journalctl --user -u llama-server --since "30 min ago" --no-pager
 
 # 3. Restart services
-docker compose restart zoe-core zoe-litellm
+systemctl --user restart zoe-data hermes-agent openclaw-gateway
 
 # 4. If still failing, full restart
-docker compose down
-docker compose up -d
+docker compose up -d zoe-database zoe-auth zoe-ui homeassistant homeassistant-mcp-bridge
+systemctl --user restart llama-server hermes-agent openclaw-gateway kokoro-tts zoe-data
 
 # 5. Monitor startup
-docker logs zoe-core -f
+journalctl --user -u zoe-data -f
 ```
 
 ### Performance Degradation
@@ -361,39 +357,28 @@ docker logs zoe-core -f
 docker stats --no-stream
 
 # 2. Check llama.cpp performance
-docker logs zoe-llamacpp --tail 50 | grep "predicted_per_second"
+journalctl --user -u llama-server --since "30 min ago" --no-pager | grep "predicted_per_second"
 
-# 3. Check context window (should be 2048)
-docker exec zoe-llamacpp curl -s http://localhost:11434/api/show \
-  -d '{"name":"qwen2.5:7b"}' | jq '.model_info.ctx_size'
+# 3. Check local model server health
+curl -sf http://localhost:11434/health
 
-# 4. If <2048, update docker-compose.yml:
-# - CTX_SIZE=2048
-
-# 5. Restart llama.cpp
-docker compose restart zoe-llamacpp
+# 4. Restart llama-server if needed
+systemctl --user restart llama-server
 ```
 
-### Model Routing Failures
+### Agent / Model Routing Failures
 
 ```bash
-# 1. Check LiteLLM models available
-curl -H "Authorization: Bearer sk-f3320300bb32df8f176495bb888ba7c8f87a0d01c2371b50f767b9ead154175f" \
-  http://localhost:8001/v1/models
+# 1. Check local gateways
+curl -sf http://localhost:11434/health
+curl -sf http://localhost:18789/health
+systemctl --user status hermes-agent --no-pager
 
-# 2. Validate LiteLLM config
-bash tools/audit/validate_litellm.sh
+# 2. Check loaded local model
+journalctl --user -u llama-server --since "1 hour ago" --no-pager | grep "model"
 
-# 3. Check loaded model in llama.cpp
-docker logs zoe-llamacpp 2>&1 | grep "model:"
-
-# 4. Ensure config alignment:
-# - docker-compose.yml MODEL_PATH
-# - services/zoe-litellm/minimal_config.yaml model paths
-# - services/zoe-core/model_config.py model names
-
-# 5. Restart LiteLLM with updated config
-docker compose restart zoe-litellm
+# 3. Restart affected user services
+systemctl --user restart hermes-agent openclaw-gateway llama-server
 ```
 
 ### Rollback to Last Known Good State
@@ -407,11 +392,10 @@ git diff HEAD~1
 
 # 3. Rollback if needed
 git checkout HEAD~1 docker-compose.yml
-git checkout HEAD~1 services/zoe-litellm/minimal_config.yaml
 
 # 4. Restart services
-docker compose down
 docker compose up -d
+systemctl --user restart zoe-data hermes-agent openclaw-gateway
 
 # 5. Test
 python3 tests/integration/test_all_systems.py
@@ -482,7 +466,6 @@ python3 tests/integration/test_all_systems.py
 - `docs/governance/CLEANUP_SAFETY.md` - File safety procedures
 - `docs/governance/DOCKER_NETWORKING_RULES.md` - Network configuration rules
 - `docs/governance/CRITICAL_FILES.md` - Files that must never be deleted
-- `docs/governance/LITELLM_RULES.md` - LiteLLM configuration rules
 
 ### Architecture Docs
 - `ARCHITECTURE_DIAGRAM.md` - System architecture overview
@@ -505,13 +488,13 @@ docker ps && python3 -c "import requests; print('✅' if requests.get('http://lo
 python3 tools/audit/validate_structure.py && python3 tools/audit/validate_critical_files.py
 
 # After config change (5 minutes)
-bash tools/docker/validate_networks.sh && docker compose restart <service> && docker logs <service> -f
+docker compose config --quiet && docker compose restart <service> && docker compose logs -f <service>
 
 # Weekly test (20 minutes)
 python3 tests/integration/test_all_systems.py && docker system df
 
 # Emergency restart
-docker compose down && docker compose up -d && docker logs zoe-core -f
+docker compose up -d && systemctl --user restart zoe-data && journalctl --user -u zoe-data -f
 ```
 
 ---
@@ -555,7 +538,7 @@ Keep a simple log of maintenance activities:
 - ✅ All services running
 - ✅ Tests passing (95%)
 - ⚠️ Disk usage at 75% (monitored)
-- 📝 Updated LiteLLM config
+- 📝 Updated runtime config
 - ⏱️ Average response time: 0.8s
 
 ## 2025-11-15 - Configuration Update

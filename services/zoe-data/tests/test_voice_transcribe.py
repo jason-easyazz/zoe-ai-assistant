@@ -7,6 +7,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,26 +16,26 @@ if str(ROOT) not in sys.path:
 
 
 @pytest.fixture(autouse=True)
-def _clear_dependency_overrides():
-    import main as main_mod
+def _clear_voice_sessions():
+    from routers import voice_tts
 
-    main_mod.app.dependency_overrides.clear()
+    voice_tts._VOICE_SESSIONS.clear()
     yield
-    main_mod.app.dependency_overrides.clear()
+    voice_tts._VOICE_SESSIONS.clear()
 
 
 @pytest.fixture
 def client():
-    import main as main_mod
     from routers import voice_tts
 
     def _fake_auth():
         return {"source": "test", "panel_id": "test-panel", "user_id": "u1"}
 
-    main_mod.app.dependency_overrides[voice_tts._require_voice_auth] = _fake_auth
-    with TestClient(main_mod.app) as c:
+    app = FastAPI()
+    app.include_router(voice_tts.router)
+    app.dependency_overrides[voice_tts._require_voice_auth] = _fake_auth
+    with TestClient(app) as c:
         yield c
-    main_mod.app.dependency_overrides.pop(voice_tts._require_voice_auth, None)
 
 
 def test_transcribe_ok_with_mock_whisper(client, monkeypatch):

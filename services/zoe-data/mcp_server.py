@@ -1746,7 +1746,7 @@ async def _execute_tool(db, name: str, args: dict):
 
         services = [
             {"name": "zoe-data",         "port": 8000,  "up": _port_open("127.0.0.1", 8000)},
-            {"name": "zoe-auth",         "port": 8001,  "up": _port_open("127.0.0.1", 8001)},
+            {"name": "zoe-auth",         "port": 8002,  "up": _port_open("127.0.0.1", 8002)},
             {"name": "hermes-agent",     "port": 8642,  "up": _port_open("127.0.0.1", 8642)},
             {"name": "llama-server",     "port": 11434, "up": _port_open("127.0.0.1", 11434)},
             {"name": "openclaw-gateway", "port": 18789, "up": _port_open("127.0.0.1", 18789), "status": "available_not_default"},

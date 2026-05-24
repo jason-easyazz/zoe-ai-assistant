@@ -1,13 +1,7 @@
-# Raspberry Pi 5 CPU Override Configuration
-# Use with: docker-compose -f docker-compose.yml -f docker-compose.pi.yml up
+# Retired Raspberry Pi Docker override.
+#
+# Raspberry Pi 5 is no longer an active server target. Touch-panel/voice-device
+# setup lives under scripts/setup/touchscreen and scripts/setup/*voice*; the
+# server-side LLM/STT containers referenced by this overlay were retired.
 
-services:
-  zoe-llamacpp:
-    environment:
-      - OLLAMA_NUM_THREADS=4
-      - N_GPU_LAYERS=0
-
-  zoe-whisper:
-    environment:
-      - WHISPER_DEVICE=cpu
-
+services: {}

@@ -10,25 +10,27 @@
 Services must be started in dependency order:
 
 ```
-1. docker compose up -d zoe-auth          # Authentication (port 8002)
-2. docker compose up -d zoe-data          # Data backend (port 8000)
-3. docker compose up -d homeassistant     # Home Assistant (port 8123)
-4. docker compose up -d homeassistant-mcp-bridge  # HA bridge (port 8007)
-5. systemctl --user start llama-server    # Local LLM (port 11434)
-6. systemctl --user start openclaw-gateway  # OpenClaw (port 3000)
-7. docker compose up -d zoe-ui            # Nginx + UI (port 80/443)
+1. docker compose up -d zoe-database      # PostgreSQL + pgvector (port 5432)
+2. docker compose up -d zoe-auth          # Authentication (port 8002)
+3. systemctl --user start llama-server    # Local LLM (port 11434)
+4. systemctl --user start hermes-agent     # Hermes agent gateway (port 8642)
+5. systemctl --user start openclaw-gateway # OpenClaw gateway (port 18789)
+6. systemctl --user start kokoro-tts       # TTS sidecar (port 10201)
+7. systemctl --user start zoe-data         # Data backend (port 8000)
+8. docker compose up -d homeassistant homeassistant-mcp-bridge
+9. docker compose up -d zoe-ui             # Nginx + UI (port 80/443)
 ```
 
 **Stop order** (reverse):
 ```
 docker compose stop zoe-ui homeassistant-mcp-bridge homeassistant
-systemctl --user stop openclaw-gateway llama-server
-docker compose stop zoe-data zoe-auth
+systemctl --user stop zoe-data kokoro-tts openclaw-gateway hermes-agent llama-server
+docker compose stop zoe-auth zoe-database
 ```
 
 **Single restart** (most common):
 ```bash
-docker compose restart zoe-data           # After Python code changes
+systemctl --user restart zoe-data         # After Python code changes
 docker compose restart zoe-ui             # After nginx.conf or HTML changes
 systemctl --user restart openclaw-gateway # After openclaw.json changes
 ```
@@ -57,12 +59,12 @@ Full env matrix lives in `services/zoe-data/.env.example` and `assistant/.env`.
 
 | Change | Restart |
 |---|---|
-| Edit any `.py` file in `services/zoe-data/` | `docker compose restart zoe-data` |
+| Edit any `.py` file in `services/zoe-data/` | `systemctl --user restart zoe-data` |
 | Edit `nginx.conf` | `docker compose restart zoe-ui` |
 | Edit `dist/**/*.html` or `dist/**/*.js` | `docker compose restart zoe-ui` |
 | Edit `openclaw.json` or skills | `systemctl --user restart openclaw-gateway` |
 | Edit `homeassistant/configuration.yaml` | `docker restart homeassistant` |
-| Edit `assistant/.env` (HA_ACCESS_TOKEN etc.) | `docker compose restart homeassistant-mcp-bridge zoe-data` |
+| Edit `assistant/.env` (HA_ACCESS_TOKEN etc.) | `docker compose restart homeassistant-mcp-bridge` and `systemctl --user restart zoe-data` |
 | Update llama-server model | `systemctl --user restart llama-server` |
 | Issue/revoke device token | Service auto-loads at startup; restart `zoe-data` to pick up changes |
 | Edit Pi voice daemon `.env.voice` | `systemctl --user restart zoe-voice` (on Pi) |
@@ -145,15 +147,17 @@ Jetson must run **whisper.cpp** with paths set on **zoe-data** (host or containe
 # Example (adjust paths):
 export ZOE_WHISPER_CPP_BIN=/home/zoe/whisper.cpp/build/bin/whisper-cli
 export ZOE_WHISPER_MODEL=/path/to/ggml-base.en.bin
-docker compose restart zoe-data   # or systemctl --user restart zoe-data
+systemctl --user restart zoe-data
 ```
 The Pi daemon POSTs base64 WAV with header **`X-Device-Token`**. After issuing a new device token, restart **zoe-data** so the in-memory token cache reloads (or rely on cache update from the issue-token API).
 
 ### zoe-data won't start (import error)
 ```bash
-docker logs zoe-data --tail 50
-# Common: missing pip dependency → rebuild:
-docker compose build zoe-data && docker compose up -d zoe-data
+systemctl --user status zoe-data
+journalctl --user -u zoe-data --since "10 min ago"
+# Common: missing pip dependency → install/refresh host Python deps, then restart:
+pip3 install --user -r services/zoe-data/requirements.txt
+systemctl --user restart zoe-data
 ```
 
 ### Chat stays on "Zoe is typing…" indefinitely
@@ -187,20 +191,23 @@ cp assistant/.env assistant/.env.bak.$(date +%Y%m%d)
 ### Rollback a bad `.env` change
 ```bash
 cp assistant/.env.bak.YYYYMMDD assistant/.env
-docker compose restart zoe-data homeassistant-mcp-bridge
+docker compose restart homeassistant-mcp-bridge
+systemctl --user restart zoe-data
 ```
 
 ### Database backup
 ```bash
-sqlite3 assistant/services/zoe-data/zoe.db ".backup /tmp/zoe-backup-$(date +%Y%m%d).db"
+scripts/maintenance/postgres-nightly-backup.sh
 ```
 
 ### Restore from backup
 ```bash
-# Stop zoe-data first
-docker compose stop zoe-data
-cp /tmp/zoe-backup-YYYYMMDD.db assistant/services/zoe-data/zoe.db
-docker compose start zoe-data
+# Stop writers first
+systemctl --user stop zoe-data
+# Example restore, adjust dump path and database name.
+gunzip -c ~/.zoe-backups/postgres/zoe-YYYYMMDD-HHMMSS.dump.gz \
+  | docker exec -i zoe-database pg_restore -U zoe -d zoe --clean --if-exists
+systemctl --user start zoe-data
 ```
 
 ---
@@ -214,6 +221,8 @@ docker compose start zoe-data
 | HA bridge | `http://localhost:8007/entities` | `{"count": N}` (N > 0) |
 | HA | `http://localhost:8123` | HA login page |
 | llama-server | `http://localhost:11434/health` | `{"status":"ok"}` |
+| Hermes | `http://localhost:8642/health` | service-specific health response |
+| OpenClaw | `http://localhost:18789/health` | `{"ok":true}` |
 | nginx (HTTP) | `http://localhost/health` | 200 |
 | nginx (HTTPS) | `https://zoe.local/health` | 200 |
 
@@ -223,7 +232,8 @@ for url in \
   "http://localhost:8000/health" \
   "http://localhost:8002/health" \
   "http://localhost:8007/entities" \
-  "http://localhost:11434/health"; do
+  "http://localhost:11434/health" \
+  "http://localhost:18789/health"; do
   STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$url")
   echo "$STATUS  $url"
 done
@@ -233,7 +243,7 @@ done
 
 ## Production Checklist (per release)
 
-- [ ] Run `pytest tests/` in `services/zoe-data/` — all pass
+- [ ] Run `python3 -m pytest services/zoe-data/tests` from repo root — all pass
 - [ ] `python3 tools/audit/validate_structure.py` — clean
 - [ ] `python3 tools/audit/validate_critical_files.py` — clean
 - [ ] Manual smoke: send one chat message → streaming response visible
@@ -253,8 +263,9 @@ done
 | 8002 | zoe-auth | zoe-data |
 | 8007 | homeassistant-mcp-bridge | zoe-data, OpenClaw |
 | 8123 | Home Assistant | nginx (proxy to /ha/), OpenClaw browser |
-| 11434 | llama-server | zoe-data |
-| 3000 | openclaw-gateway | zoe-data (subprocess CLI) |
+| 8642 | Hermes agent | zoe-data, background agent workflows |
+| 11434 | llama-server | zoe-data, Hermes |
+| 18789 | openclaw-gateway | zoe-data explicit/manual fallback |
 | 80/443 | nginx | browser, Pi kiosk |
 
 Pi → Jetson: needs HTTPS (443) for `/api/voice/*` and wss for WebSocket.  

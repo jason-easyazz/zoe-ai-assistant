@@ -3,7 +3,9 @@
 Docker Compose Module Generator
 ================================
 
-Generates docker-compose.modules.yml from enabled modules in config/modules.yaml
+Generates docker-compose.generated-modules.yml from enabled modules in config/modules.yaml.
+The hand-maintained docker-compose.modules.yml is reserved for active host
+supplemental services such as Orbit, Music Assistant, and Multica.
 
 Usage:
   python tools/generate_module_compose.py
@@ -12,19 +14,20 @@ Usage:
 
 import yaml
 import sys
+import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional
 import click
 
 
 class ComposeGenerator:
-    """Generate docker-compose.modules.yml from enabled modules."""
+    """Generate docker-compose.generated-modules.yml from enabled modules."""
     
     def __init__(self, project_root: Path = None):
         self.project_root = project_root or Path.cwd()
         self.modules_dir = self.project_root / "modules"
         self.config_file = self.project_root / "config" / "modules.yaml"
-        self.output_file = self.project_root / "docker-compose.modules.yml"
+        self.output_file = self.project_root / "docker-compose.generated-modules.yml"
     
     def load_config(self) -> Dict:
         """Load modules configuration."""
@@ -66,8 +69,7 @@ class ComposeGenerator:
                 "services": {},
                 "networks": {
                     "zoe-network": {
-                        "name": "zoe-network",
-                        "external": True
+                        "name": "zoe-network"
                     }
                 }
             }
@@ -81,8 +83,7 @@ class ComposeGenerator:
             "services": {},
             "networks": {
                 "zoe-network": {
-                    "name": "zoe-network",
-                    "external": True
+                    "name": "zoe-network"
                 }
             }
         }
@@ -129,7 +130,7 @@ class ComposeGenerator:
 # Generated: {}
 # ============================================================
 
-""".format(Path.cwd())
+""".format(".")
             
             compose_yaml = yaml.dump(compose_data, default_flow_style=False, sort_keys=False)
             self.output_file.write_text(header + compose_yaml)
@@ -152,19 +153,33 @@ class ComposeGenerator:
             compose_data = yaml.safe_load(self.output_file.read_text())
             
             # Basic validation
-            if "services" not in compose_data:
-                print("❌ No services defined", file=sys.stderr)
+            if not isinstance(compose_data, dict):
+                print("❌ Compose file is not a YAML mapping", file=sys.stderr)
                 return False
+            services = compose_data.get("services", {})
             
             # Check each service has required fields
-            for service_name, service in compose_data["services"].items():
+            for service_name, service in services.items():
                 if "container_name" not in service:
                     print(f"⚠️  Service {service_name} missing container_name", file=sys.stderr)
                 
+                if service.get("network_mode") == "host":
+                    continue
                 if "networks" not in service or "zoe-network" not in service["networks"]:
                     print(f"⚠️  Service {service_name} not on zoe-network", file=sys.stderr)
             
-            print(f"✓ Compose file validated: {len(compose_data['services'])} services")
+            result = subprocess.run(
+                ["docker", "compose", "-f", str(self.output_file), "config", "--quiet"],
+                cwd=self.project_root,
+                text=True,
+                capture_output=True,
+            )
+            if result.returncode != 0:
+                output = (result.stderr or result.stdout).strip()
+                print(f"❌ Docker Compose validation failed:\n{output}", file=sys.stderr)
+                return False
+
+            print(f"✓ Compose file validated: {len(services)} services")
             return True
             
         except Exception as e:
@@ -175,7 +190,7 @@ class ComposeGenerator:
 @click.command()
 @click.option('--validate-only', '-v', is_flag=True, help='Only validate, do not generate')
 def main(validate_only):
-    """Generate docker-compose.modules.yml from enabled modules."""
+    """Generate docker-compose.generated-modules.yml from enabled modules."""
     generator = ComposeGenerator()
     
     if validate_only:
@@ -193,7 +208,7 @@ def main(validate_only):
         if generator.validate():
             print(f"\n✅ Generation complete!")
             print(f"\nTo apply changes:")
-            print(f"  docker compose -f docker-compose.yml -f docker-compose.modules.yml up -d")
+            print(f"  docker compose -f docker-compose.yml -f docker-compose.generated-modules.yml up -d")
         else:
             print(f"\n⚠️  Generated but validation failed")
             sys.exit(1)

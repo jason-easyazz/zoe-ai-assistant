@@ -30,6 +30,28 @@ services:
           - zoe.local
     restart: unless-stopped
 
+  # ── Database ───────────────────────────────────────────────────────────────
+  # PostgreSQL is required by zoe-auth and host-native zoe-data.
+  zoe-database:
+    image: pgvector/pgvector:pg17
+    container_name: zoe-database
+    environment:
+    - POSTGRES_DB=zoe
+    - POSTGRES_USER=zoe
+    - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    ports:
+    - "5432:5432"
+    volumes:
+    - zoe-database-data:/var/lib/postgresql/data
+    networks:
+    - zoe-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zoe"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # ── Auth ───────────────────────────────────────────────────────────────────
   zoe-auth:
     build: ./services/zoe-auth
@@ -170,6 +192,8 @@ services:
     image: ghcr.io/ridafkih/keeper.sh:latest
     container_name: zoe-keeper
     restart: unless-stopped
+    profiles:
+    - keeper
     ports:
     - 8787:8787
     environment:
@@ -236,4 +260,5 @@ networks:
     name: zoe-network
     driver: bridge
 
-volumes: {}
+volumes:
+  zoe-database-data: {}
