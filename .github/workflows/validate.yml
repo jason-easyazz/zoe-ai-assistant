@@ -92,7 +92,7 @@ jobs:
             -x -q \
             --override-ini="asyncio_mode=auto"
         env:
-          PYTHONPATH: ${{ github.workspace }}/services/zoe-data:${{ github.workspace }}/services/zoe-auth
+          PYTHONPATH: ${{ github.workspace }}/services/zoe-auth:${{ github.workspace }}/services/zoe-data
           POSTGRES_URL: postgresql://zoe:${{ env.CI_DB_PASSWORD }}@localhost:5432/zoe
           ZOE_DATA_DB: ":memory:"
           ZOE_MEMORY_STARTUP_STRICT: "false"
