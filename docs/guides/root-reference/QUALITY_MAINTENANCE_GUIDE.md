@@ -59,6 +59,10 @@ df -h / | tail -1 | awk '{print "Disk Usage: " $5 " of " $2}'
 
 ### Pre-Commit Checklist
 
+> Current workflow: work on feature branches, open PRs, wait for Validate /
+> GitGuardian / Greptile, and keep protected `main` merges on the normal GitHub
+> path. Admin or force-push bypasses require explicit operator approval.
+
 ```bash
 # 1. Run automated pre-commit hooks (already installed)
 git commit -m "Your message"
