@@ -34,6 +34,13 @@ fi
 mkdir -p "$BACKUP_ROOT"
 chmod 700 "$BACKUP_ROOT" 2>/dev/null || true
 
+for name in authentik-server authentik-worker authentik-redis; do
+  if docker ps -a --format '{{.Names}}' | grep -qx "$name"; then
+    echo "retire-authentik: removing container $name"
+    docker rm "$name" >/dev/null
+  fi
+done
+
 db_exists="$(docker exec -e PGPASSWORD="$POSTGRES_PASSWORD" "$CONTAINER" \
   psql -U zoe -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='authentik'" \
   2>/dev/null | tr -d '[:space:]')"
@@ -43,19 +50,16 @@ if [[ "$db_exists" == "1" ]]; then
   echo "retire-authentik: backing up authentik database -> $backup_path"
   docker exec -e PGPASSWORD="$POSTGRES_PASSWORD" "$CONTAINER" \
     pg_dump -U zoe -d authentik | gzip > "$backup_path"
+  echo "retire-authentik: terminating open authentik connections"
+  docker exec -e PGPASSWORD="$POSTGRES_PASSWORD" "$CONTAINER" \
+    psql -U zoe -d postgres -c \
+    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'authentik' AND pid <> pg_backend_pid();"
   echo "retire-authentik: dropping authentik database"
   docker exec -e PGPASSWORD="$POSTGRES_PASSWORD" "$CONTAINER" \
-    psql -U zoe -d postgres -c "DROP DATABASE authentik;"
+    psql -U zoe -d postgres -c "DROP DATABASE authentik WITH (FORCE);"
 else
   echo "retire-authentik: authentik database already absent"
 fi
-
-for name in authentik-server authentik-worker authentik-redis; do
-  if docker ps -a --format '{{.Names}}' | grep -qx "$name"; then
-    echo "retire-authentik: removing container $name"
-    docker rm "$name" >/dev/null
-  fi
-done
 
 for vol in assistant_authentik-certs assistant_authentik-media \
            assistant_authentik-redis-data assistant_authentik-templates; do
