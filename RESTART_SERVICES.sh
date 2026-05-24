@@ -1,73 +1,37 @@
 #!/bin/bash
-# Script to properly restart Zoe services with correct network configuration
-# Updated: Dec 2025 - Uses llama.cpp instead of Ollama
+# Restart the active Zoe runtime.
 
-set -e
+set -euo pipefail
 
-echo "🔄 Restarting Zoe services with fixed network configuration..."
-echo ""
+ROOT_DIR="/home/zoe/assistant"
+cd "$ROOT_DIR"
 
-# Stop all containers
-echo "⏸️  Stopping all containers..."
-docker stop $(docker ps -q) 2>/dev/null || true
+echo "Restarting Zoe containers..."
+docker compose up -d
 
-echo "🗑️  Removing zoe-core and zoe-llamacpp to recreate them..."
-docker rm -f zoe-core zoe-llamacpp 2>/dev/null || true
+echo "Restarting zoe-data user service..."
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+systemctl --user restart zoe-data.service
 
-echo "🚀 Starting services with docker-compose..."
-cd /home/zoe/assistant
+echo "Checking optional host-native agent services..."
+for service in openclaw.service llama-server.service hermes.service kokoro-tts.service; do
+  if systemctl --user list-unit-files "$service" --no-legend 2>/dev/null | grep -q "$service"; then
+    systemctl --user restart "$service" || echo "Warning: could not restart $service"
+  else
+    echo "Skipping $service (not installed)"
+  fi
+done
 
-# Use Python docker library to start services (avoids docker-compose issues)
-python3 << 'PYTHON_EOF'
-import docker
-import time
+echo "Waiting for services to initialize..."
+sleep 6
 
-client = docker.from_env()
+echo "Validating runtime..."
+bash "$ROOT_DIR/tools/docker/validate_networks.sh"
+curl -sf http://localhost:8000/health >/dev/null
+curl -sf http://localhost:8002/health >/dev/null
 
-print("📦 Starting containers from compose file...")
-
-# Start essential services in order
-services_to_start = [
-    "zoe-llamacpp",
-    "zoe-redis",
-    "zoe-auth",
-    "zoe-litellm",
-    "zoe-mcp-server",
-    "zoe-mem-agent",
-    "zoe-code-execution",
-    "zoe-core",
-    "zoe-ui"
-]
-
-for service in services_to_start:
-    try:
-        container = client.containers.get(service)
-        if container.status != "running":
-            print(f"  ▶️  Starting {service}...")
-            container.start()
-            time.sleep(2)
-        else:
-            print(f"  ✅ {service} already running")
-    except docker.errors.NotFound:
-        print(f"  ⚠️  {service} not found - will be created by compose")
-    except Exception as e:
-        print(f"  ❌ Error with {service}: {e}")
-
-print("\n✅ Services started!")
-PYTHON_EOF
-
-echo ""
-echo "⏱️  Waiting 30 seconds for services to initialize..."
-sleep 30
-
-echo ""
-echo "🔍 Verifying network configuration..."
-bash /home/zoe/assistant/tools/docker/validate_networks.sh
-
-echo ""
-echo "✅ Restart complete!"
-echo ""
+echo "Restart complete."
 echo "Next steps:"
-echo "  1. Run tests: cd /home/zoe/assistant && python3 scripts/utilities/natural_language_learning.py"
-echo "  2. Check logs: docker logs zoe-core -f"
-echo "  3. Verify connectivity: docker exec zoe-core ping -c 2 zoe-llamacpp"
+echo "  1. Check zoe-data logs: journalctl --user -u zoe-data.service -n 100 --no-pager"
+echo "  2. Check container logs: docker compose logs --tail=100 zoe-auth zoe-ui zoe-database"
+echo "  3. Run tests: PYTHONPATH=services/zoe-data python3 -m pytest services/zoe-data/tests -q"

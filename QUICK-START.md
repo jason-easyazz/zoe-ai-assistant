@@ -1,129 +1,86 @@
-# 🌟 Zoe AI Assistant - Quick Start
+# Zoe AI Assistant - Quick Start
 
-## 🆕 First-Time Setup (New Installations)
+## First-Time Setup
 
-If this is your first time installing Zoe, initialize the databases:
-
-```bash
-cd /home/zoe/assistant
-
-# Initialize databases from schemas
-./scripts/setup/init_databases.sh
-
-# Optional: Add demo data for testing
-./scripts/setup/init_databases.sh --with-seed-data
-```
-
-**Note**: Existing installations don't need this step - your databases already exist!
-
-## 🚀 How to Start Zoe
+Zoe's live database is PostgreSQL. On a new installation, start the database
+container and run Alembic migrations before starting the host-native backend:
 
 ```bash
 cd /home/zoe/assistant
-./start-zoe.sh
+
+docker compose up -d zoe-database
+bash scripts/deploy/migrate.sh
 ```
 
-## 📱 How to Use
+Existing installations normally only need migrations during deploy.
 
-1. **Open browser**: http://localhost:8090
-2. **Touch the orb** - it will show user profiles
-3. **Select a profile** - profiles will arrange along the top
-4. **Authenticate**:
-   - **PIN**: Use the number pad (default: admin/admin, user/user)  
-   - **Password**: Click "Password" tab for touch keyboard
-   - **Guest**: Click the guest profile for instant access
-
-## 🔑 Default Credentials
-
-- **Admin**: username=`admin`, password/pin=`admin`
-- **User**: username=`user`, password/pin=`user`
-- **Guest**: No credentials needed
-
-## 🛑 How to Stop Zoe
+## Start Zoe
 
 ```bash
-./stop-zoe.sh
+cd /home/zoe/assistant
+docker compose up -d
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+systemctl --user restart zoe-data.service
 ```
 
-## ✅ What's Working
-
-- ✅ Beautiful animated orb
-- ✅ Profile selection with smooth animations
-- ✅ PIN pad authentication
-- ✅ Touch keyboard for passwords
-- ✅ Guest access
-- ✅ Session management
-- ✅ Navigation between pages
-- ✅ Logout functionality
-- ✅ Responsive design for touch screens
-
-## 🐛 If Something's Wrong
-
-1. **Check if services are running**:
-   ```bash
-   curl http://localhost:8090
-   curl http://localhost:8002/health
-   ```
-
-2. **Check logs**:
-   ```bash
-   tail -f /tmp/zoe-auth.log
-   tail -f /tmp/zoe-ui.log
-   ```
-
-3. **Restart everything**:
-   ```bash
-   ./stop-zoe.sh
-   ./start-zoe.sh
-   ```
-
-## 📁 File Structure
-
-- `/home/zoe/assistant/start-zoe.sh` - Start everything
-- `/home/zoe/assistant/stop-zoe.sh` - Stop everything  
-- `/home/zoe/assistant/services/zoe-auth/` - Authentication service
-- `/home/zoe/assistant/services/zoe-ui/dist/` - Web interface
-- `/tmp/zoe-*.log` - Log files
-
-## 🔄 For Developers
-
-### Conventional Commits (Required)
-
-All commits must follow the format: `type(scope): description`
+Optional host-native services are managed separately with user services:
 
 ```bash
-git commit -m "feat(chat): Add voice command support"
-git commit -m "fix(calendar): Fix timezone handling"
-git commit -m "docs: Update API documentation"
+systemctl --user restart openclaw.service llama-server.service hermes.service kokoro-tts.service
 ```
 
-**See**: `docs/guides/CHANGE_MANAGEMENT.md` for full details
+## Use Zoe
 
-### Database Changes
+1. Open the UI: `http://localhost:8090` or the configured `zoe.local` address.
+2. Backend API health: `http://localhost:8000/health`.
+3. Auth API health: `http://localhost:8002/health`.
+4. Touch panels use the `/touch/` pages and authenticate through `zoe-auth`.
 
-After modifying database schema:
+## Stop Zoe
 
 ```bash
-# Export updated schema
-./scripts/maintenance/export_schema.sh
-
-# Commit schema files
-git add data/schema/*.sql
-git commit -m "db: Add user_preferences table"
+cd /home/zoe/assistant
+docker compose down
+systemctl --user stop zoe-data.service
 ```
 
-### Change Tracking
+## If Something's Wrong
+
+Check services:
 
 ```bash
-# See this week's changes
-./tools/reports/weekly_summary.sh
-
-# Check repository health
-python3 tools/reports/repo_health.py
-
-# Generate CHANGELOG for release
-python3 tools/generators/generate_changelog.py --version v2.4.0
+curl -sf http://localhost:8000/health
+curl -sf http://localhost:8002/health
+curl -sf http://localhost:8090/health
+systemctl --user --no-pager status zoe-data.service
+docker compose ps
 ```
 
----
-**The authentication system is now fully working with no mixed content issues!** 🎉
+Check logs:
+
+```bash
+journalctl --user -u zoe-data.service -n 100 --no-pager
+docker compose logs --tail=100 zoe-auth zoe-ui zoe-database
+```
+
+Restart the active stack:
+
+```bash
+bash RESTART_SERVICES.sh
+```
+
+## File Structure
+
+- `services/zoe-data/` - host-native FastAPI backend on port 8000.
+- `services/zoe-auth/` - auth container on port 8002.
+- `services/zoe-ui/dist/` - static UI served by nginx on port 8090/443.
+- `services/zoe-data/alembic/` - PostgreSQL schema migrations.
+- `docker-compose.yml` - core containers: UI, auth, database, HA bridge, LiveKit.
+
+## Developer Checks
+
+```bash
+python3 tools/audit/validate_structure.py
+python3 tools/audit/validate_critical_files.py
+PYTHONPATH=services/zoe-data python3 -m pytest services/zoe-data/tests -q
+```
