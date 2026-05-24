@@ -87,7 +87,8 @@
     "github": ".github/**/*",
     "training": "training/**/*",
     "graphify_out": "graphify-out/**/*",
-    "cursor_rules": ".cursor/**/*"
+    "cursor_rules": ".cursor/**/*",
+    "greptile": ".greptile/**/*"
   },
   "approved_root_files": [
     "README.md",
