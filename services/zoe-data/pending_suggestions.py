@@ -61,8 +61,8 @@ async def load_for_prompt(user_id: str, session_id: str, *, limit: int = 3) -> s
             rows = await db.fetch(
                 """SELECT id, offer_phrase, turns_elapsed, expire_after_turns
                    FROM pending_suggestions
-                   WHERE user_id = ? AND session_id = ? AND resolved = 0
-                   ORDER BY created_at ASC LIMIT ?""",
+                   WHERE user_id = $1 AND session_id = $2 AND resolved = 0
+                   ORDER BY created_at ASC LIMIT $3""",
                 user_id,
                 session_id,
                 limit,
@@ -72,12 +72,12 @@ async def load_for_prompt(user_id: str, session_id: str, *, limit: int = 3) -> s
                 expire = int(row["expire_after_turns"] or 2)
                 if turns > expire:
                     await db.execute(
-                        "UPDATE pending_suggestions SET resolved = 1 WHERE id = ?",
+                        "UPDATE pending_suggestions SET resolved = 1 WHERE id = $1",
                         row["id"],
                     )
                     continue
                 await db.execute(
-                    "UPDATE pending_suggestions SET turns_elapsed = ? WHERE id = ?",
+                    "UPDATE pending_suggestions SET turns_elapsed = $1 WHERE id = $2",
                     turns,
                     row["id"],
                 )
@@ -95,7 +95,7 @@ async def list_active(user_id: str, session_id: str) -> list[dict]:
             rows = await db.fetch(
                 """SELECT id, action_type, description, offer_phrase, pre_filled_slots
                    FROM pending_suggestions
-                   WHERE user_id = ? AND session_id = ? AND resolved = 0
+                   WHERE user_id = $1 AND session_id = $2 AND resolved = 0
                    ORDER BY created_at ASC LIMIT 5""",
                 user_id,
                 session_id,
