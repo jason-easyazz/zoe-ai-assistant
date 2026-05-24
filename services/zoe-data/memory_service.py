@@ -973,12 +973,12 @@ class MemoryService:
         Queries Chroma for documents whose metadata has entity_id=<entity_id> and
         user_id=<user_id>, then archives each one. Returns count archived.
         """
-        col = self._col()
+        col = self._collection()
         try:
             results = col.get(
                 where={"$and": [
-                    {"user_id": {"$eq": user_id}},
-                    {"entity_id": {"$eq": entity_id}},
+                    {"$or": [{"user_id": user_id}, {"wing": user_id}]},
+                    {"entity_id": entity_id},
                 ]},
                 include=["metadatas"],
             )

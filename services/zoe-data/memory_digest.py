@@ -1138,7 +1138,7 @@ Only include genuine open loops, not resolved topics. Return [] if none found.""
     return {"user_id": user_id, "extracted": stored}
 
 
-async def run_dreaming_cycle(user_id: str, db=None) -> dict:
+async def run_dreaming_cycle(user_id: str, db=None, run_agent_sync_phase: bool = True) -> dict:
     """Run the full dreaming cycle for a user.
 
     Called by nightly-training-cycle.sh after run_memory_digest.
@@ -1182,15 +1182,16 @@ async def run_dreaming_cycle(user_id: str, db=None) -> dict:
             logger.warning("dreaming: portrait synthesis failed user=%s: %s", user_id, exc)
             result["portrait"] = {"status": "error", "error": str(exc)}
 
-        # Phase 5: Agent sync — regenerate ZOE_SELF.md and distribute to all agents.
-        # Only runs for the first user (system-wide sync, not per-user).
-        try:
-            from agent_sync import run_agent_sync  # type: ignore[import]
-            sync_result = await run_agent_sync()
-            result["agent_sync"] = sync_result
-        except Exception as exc:
-            logger.warning("dreaming: agent_sync failed: %s", exc)
-            result["agent_sync"] = {"status": "error", "error": str(exc)}
+        # Phase 5: Agent sync is system-wide, not per-user.  Callers that
+        # iterate users should run it once for the first user only.
+        if run_agent_sync_phase:
+            try:
+                from agent_sync import run_agent_sync  # type: ignore[import]
+                sync_result = await run_agent_sync()
+                result["agent_sync"] = sync_result
+            except Exception as exc:
+                logger.warning("dreaming: agent_sync failed: %s", exc)
+                result["agent_sync"] = {"status": "error", "error": str(exc)}
 
     logger.info("dreaming cycle complete: %s", result)
     return result
@@ -1217,8 +1218,8 @@ async def run_dreaming_for_all(db=None) -> list[dict]:
             return []
 
     results = []
-    for uid in user_ids:
-        r = await run_dreaming_cycle(uid)
+    for idx, uid in enumerate(user_ids):
+        r = await run_dreaming_cycle(uid, db=db, run_agent_sync_phase=(idx == 0))
         results.append(r)
     return results
 

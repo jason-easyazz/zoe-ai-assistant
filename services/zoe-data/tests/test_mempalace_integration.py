@@ -55,15 +55,20 @@ class _FakeCollection:
                     return False
         return True
 
-    def get(self, where=None, include=None):
+    def get(self, ids=None, where=None, include=None, limit=None):
         results = {"ids": [], "documents": [], "metadatas": []}
-        for id_, record in self._store.items():
+        items = self._store.items()
+        if ids is not None:
+            items = [(id_, self._store[id_]) for id_ in ids if id_ in self._store]
+        for id_, record in items:
             meta = record["metadata"]
             if not self._match_where(meta, where):
                 continue
             results["ids"].append(id_)
             results["documents"].append(record["document"])
             results["metadatas"].append(meta)
+            if limit is not None and len(results["ids"]) >= limit:
+                break
         return results
 
     def query(self, query_texts, n_results=5, where=None, include=None):
@@ -139,6 +144,7 @@ from zoe_agent import (
     migrate_mempalace_legacy_records,
 )
 from routers.chat import _persist_memory_candidates
+from memory_service import MemoryService
 
 
 # ---------------------------------------------------------------------------
@@ -179,6 +185,36 @@ async def test_user_isolation_write_jason_read_family():
     await _mempalace_add("User was born on 24 March 1982", user_id="jason")
     facts_family = await _mempalace_load_user_facts("family-admin")
     assert "1982" not in facts_family, "family-admin should not see jason's memories"
+
+
+@pytest.mark.asyncio
+async def test_archive_by_entity_archives_user_and_wing_rows():
+    """Deleting a CRM entity should archive all scoped MemPalace facts for it."""
+    svc = MemoryService()
+    col = _GLOBAL_COLLECTION
+    col.upsert(
+        ids=["user-row", "wing-row", "other-entity", "other-user"],
+        documents=[
+            "Jason knows Dave",
+            "Dave is Jason's friend",
+            "Different entity",
+            "Different user same entity",
+        ],
+        metadatas=[
+            {"user_id": "jason", "wing": "jason", "entity_id": "person-1", "status": "approved"},
+            {"wing": "jason", "entity_id": "person-1", "status": "approved"},
+            {"user_id": "jason", "wing": "jason", "entity_id": "person-2", "status": "approved"},
+            {"user_id": "guest", "wing": "guest", "entity_id": "person-1", "status": "approved"},
+        ],
+    )
+
+    archived = await svc.archive_by_entity("person-1", "jason")
+
+    assert archived == 2
+    assert col._store["user-row"]["metadata"]["status"] == "archived"
+    assert col._store["wing-row"]["metadata"]["status"] == "archived"
+    assert col._store["other-entity"]["metadata"]["status"] == "approved"
+    assert col._store["other-user"]["metadata"]["status"] == "approved"
 
 
 @pytest.mark.asyncio

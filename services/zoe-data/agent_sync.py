@@ -13,6 +13,7 @@ Generates:
 Also triggers a graphify rebuild in the background after sync (requires OPENAI_API_KEY).
 """
 import asyncio
+import json
 import logging
 import os
 import re
@@ -27,6 +28,8 @@ _ZOE_COMPACT = Path.home() / ".zoe" / "zoe_self_compact.txt"
 _CAPABILITIES_MD = Path("/home/zoe/assistant/CAPABILITIES.md")
 _FEDERATION_SKILLS_MD = Path.home() / ".openclaw" / "workspace" / "FEDERATION_SKILLS.md"
 _GRAPHIFY_OUT = Path("/home/zoe/assistant/graphify-out")
+_GRAPHIFY_BIN = Path("/home/zoe/.local/share/uv/tools/graphifyy/bin/graphify")
+_GRAPHIFY_LOG = Path.home() / ".cache" / "graphify-agent-sync.log"
 _MAX_ZOE_SELF_CHARS = 6000
 _MAX_COMPACT_CHARS = 500
 
@@ -336,18 +339,22 @@ def _trigger_graphify_rebuild() -> str:
             pass
     if not openai_key:
         return "skipped (no OPENAI_API_KEY)"
+    if not _GRAPHIFY_BIN.exists():
+        return f"skipped (graphify not found at {_GRAPHIFY_BIN})"
     try:
+        _GRAPHIFY_LOG.parent.mkdir(parents=True, exist_ok=True)
         env = {**os.environ, "OPENAI_API_KEY": openai_key}
-        proc = subprocess.Popen(
-            ["graphify", "extract", ".", "--backend", "openai"],
-            cwd="/home/zoe/assistant",
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+        with _GRAPHIFY_LOG.open("ab") as log_file:
+            proc = subprocess.Popen(
+                [str(_GRAPHIFY_BIN), "extract", ".", "--backend", "openai"],
+                cwd="/home/zoe/assistant",
+                env=env,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
         logger.info("agent_sync: graphify rebuild started (pid=%d)", proc.pid)
-        return f"started (pid={proc.pid})"
+        return f"started (pid={proc.pid}, log={_GRAPHIFY_LOG})"
     except FileNotFoundError:
         return "skipped (graphify not installed)"
     except Exception as exc:
@@ -356,66 +363,73 @@ def _trigger_graphify_rebuild() -> str:
 
 def graphify_search(query: str) -> dict:
     """
-    Search the graphify wiki for content matching query.
-    Reads from graphify-out/wiki/index.md and returns relevant snippets.
+    Search graphify's report and graph JSON for content matching query.
+
+    This intentionally does not depend on graphify-out/wiki, which is optional
+    and is not built by Zoe's normal extract path.
     Called by the MCP graphify_search tool handler.
     """
-    wiki_index = _GRAPHIFY_OUT / "wiki" / "index.md"
-    if not wiki_index.exists():
+    graph_file = _GRAPHIFY_OUT / "graph.json"
+    report_file = _GRAPHIFY_OUT / "GRAPH_REPORT.md"
+    if not graph_file.exists() and not report_file.exists():
         return {
-            "error": "Graphify wiki not built yet. Run POST /api/system/agent-sync first.",
-            "hint": "After agent-sync, graphify rebuilds in the background (~2min).",
+            "error": "Graphify outputs not found.",
+            "hint": "Run graphify extract from /home/zoe/assistant.",
         }
 
-    try:
-        index_content = wiki_index.read_text(errors="replace")
-    except Exception as exc:
-        return {"error": f"Could not read wiki index: {exc}"}
-
-    # Extract wiki file links from the index (lines like: - [Title](filename.md))
-    wiki_dir = wiki_index.parent
-    link_re = re.compile(r"\[([^\]]+)\]\(([^)]+\.md)\)")
-    candidates = []
     q_lower = query.lower()
+    keywords = [k for k in re.split(r"\W+", q_lower) if len(k) >= 2]
+    results: list[dict] = []
 
-    for match in link_re.finditer(index_content):
-        title, filename = match.group(1), match.group(2)
-        if any(kw in title.lower() or kw in filename.lower() for kw in q_lower.split()):
-            candidates.append((title, filename))
-
-    # If no title matches, do a content search over all wiki files (capped)
-    if not candidates:
-        wiki_files = list(wiki_dir.glob("*.md"))[:30]
-        for wf in wiki_files:
-            if wf.name == "index.md":
-                continue
-            try:
-                text = wf.read_text(errors="replace")
-                if q_lower in text.lower():
-                    candidates.append((wf.stem, wf.name))
-            except Exception:
-                pass
-
-    if not candidates:
-        return {
-            "results": [],
-            "message": f"No wiki pages found matching '{query}'. Try broader terms.",
-        }
-
-    results = []
-    for title, filename in candidates[:3]:
-        wiki_file = wiki_dir / filename
+    if report_file.exists():
         try:
-            content = wiki_file.read_text(errors="replace")
-            # Return first 800 chars to avoid flooding context
-            snippet = content[:800]
-            if len(content) > 800:
-                snippet += "\n... (truncated)"
-            results.append({"title": title, "file": filename, "content": snippet})
+            lines = report_file.read_text(errors="replace").splitlines()
+            for i, line in enumerate(lines):
+                haystack = line.lower()
+                if keywords and not any(k in haystack for k in keywords):
+                    continue
+                start = max(0, i - 2)
+                end = min(len(lines), i + 3)
+                results.append({
+                    "title": "GRAPH_REPORT.md",
+                    "file": str(report_file),
+                    "content": "\n".join(lines[start:end])[:1200],
+                    "source": "report",
+                })
+                if len(results) >= 3:
+                    break
         except Exception as exc:
-            results.append({"title": title, "file": filename, "error": str(exc)})
+            results.append({"title": "GRAPH_REPORT.md", "error": str(exc)})
 
-    return {"results": results, "query": query, "total_candidates": len(candidates)}
+    if graph_file.exists() and len(results) < 10:
+        try:
+            graph = json.loads(graph_file.read_text(errors="replace"))
+            for node in graph.get("nodes", []):
+                text = " ".join(str(node.get(k, "")) for k in ("label", "source_file", "id", "file_type")).lower()
+                if keywords and not any(k in text for k in keywords):
+                    continue
+                results.append({
+                    "title": node.get("label") or node.get("id"),
+                    "file": node.get("source_file", ""),
+                    "content": json.dumps({
+                        "id": node.get("id"),
+                        "label": node.get("label"),
+                        "source_file": node.get("source_file"),
+                        "source_location": node.get("source_location"),
+                        "community": node.get("community"),
+                        "file_type": node.get("file_type"),
+                    }, default=str),
+                    "source": "graph_node",
+                })
+                if len(results) >= 10:
+                    break
+        except Exception as exc:
+            results.append({"title": "graph.json", "error": str(exc)})
+
+    if not results:
+        return {"results": [], "message": f"No graph nodes or report lines matched '{query}'."}
+
+    return {"results": results, "query": query, "total_candidates": len(results)}
 
 
 async def run_agent_sync() -> dict:

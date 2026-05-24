@@ -61,6 +61,7 @@ _TEMPLATE_PATTERNS: list[tuple[str, str, float]] = [
     (r"my\s+(?:lucky\s+)?number\s+is\s+(\d+)", "User's lucky number is {0}", 0.85),
 
     # User's own name and age
+    (r"my\s+full\s+name\s+is\s+([A-Za-z][A-Za-z' -]{1,80})", "User's full name is {0}", 0.93),
     (r"my\s+name\s+is\s+([A-Za-z][A-Za-z' -]{1,60})", "User's name is {0}", 0.92),
     (r"(?:people\s+)?call\s+me\s+([A-Za-z][A-Za-z' -]{1,40})", "User goes by {0}", 0.88),
     (r"i(?:'m|\s+am)\s+(\d{1,3})\s+years?\s+old", "User is {0} years old", 0.88),
@@ -166,10 +167,11 @@ def extract_candidates(user_message: str, assistant_response: str = "") -> list[
         if len(text) < 8 or key in seen:
             continue
         seen.add(key)
+        memory_type = "preference" if text.startswith(("Preference:", "Favourite:")) else "fact"
         out.append(
             MemoryCandidate(
                 text=text,
-                memory_type="fact",
+                memory_type=memory_type,
                 confidence=confidence,
                 source_excerpt=source_excerpt,
             )
