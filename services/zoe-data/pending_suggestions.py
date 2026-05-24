@@ -31,20 +31,18 @@ async def store_suggestions(
                        (id, user_id, session_id, action_type, description, list_type,
                         when_hint, amount_hint, offer_phrase, pre_filled_slots,
                         created_at, turns_elapsed, expire_after_turns, resolved)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 2, 0)""",
-                    (
-                        sid,
-                        user_id,
-                        session_id,
-                        s.get("action_type", ""),
-                        s.get("description", "")[:500],
-                        s.get("list_type"),
-                        s.get("when_hint"),
-                        s.get("amount_hint"),
-                        s.get("offer_phrase", "")[:300],
-                        json.dumps(slots),
-                        now,
-                    ),
+                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 0, 2, 0)""",
+                    sid,
+                    user_id,
+                    session_id,
+                    s.get("action_type", ""),
+                    s.get("description", "")[:500],
+                    s.get("list_type"),
+                    s.get("when_hint"),
+                    s.get("amount_hint"),
+                    s.get("offer_phrase", "")[:300],
+                    json.dumps(slots),
+                    now,
                 )
                 stored += 1
     except Exception as exc:
@@ -140,7 +138,7 @@ async def mark_resolved(suggestion_id: str, user_id: str) -> bool:
     try:
         async with get_db_ctx() as db:
             await db.execute(
-                "UPDATE pending_suggestions SET resolved = 1 WHERE id = ? AND user_id = ?",
+                "UPDATE pending_suggestions SET resolved = 1 WHERE id = $1 AND user_id = $2",
                 suggestion_id,
                 user_id,
             )

@@ -15,7 +15,7 @@ _MODEL = os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E2B-it-Q4_K_M.gguf")
 
 _EXTRACTION_PROMPT = """\
 Extract person-related facts from the text. Return ONLY a JSON array.
-Each item: {"name": "First Last", "fact_type": "preference|birthday|work|meeting|gift_idea|gift_given|bucket_list", "value": "concise fact"}
+Each item: {{"name": "First Last", "fact_type": "preference|birthday|work|meeting|gift_idea|gift_given|bucket_list", "value": "concise fact"}}
 Only include facts explicitly stated about named people. If none, return [].
 
 Text:

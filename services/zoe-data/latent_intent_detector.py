@@ -17,14 +17,14 @@ _MODEL = os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E2B-it-Q4_K_M.gguf")
 _DETECT_PROMPT = """\
 Does this user message casually mention something Zoe could save WITHOUT the user explicitly asking?
 Return ONLY a JSON array (max 2 items). Each item:
-{
+{{
   "action_type": "list_add|reminder_create|calendar_create|note_create",
   "description": "short label",
   "list_type": "shopping|tasks|personal (only for list_add)",
   "when_hint": "optional time hint or null",
   "offer_phrase": "natural question Zoe can ask",
-  "pre_filled_slots": {"item": "...", "list_type": "shopping"} 
-}
+  "pre_filled_slots": {{"item": "...", "list_type": "shopping"}}
+}}
 If the user already explicitly asked (add to list, remind me, schedule), return [].
 If nothing to offer, return [].
 
