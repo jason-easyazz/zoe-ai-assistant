@@ -141,6 +141,15 @@ def test_intent_list_show_unknown_list_type_defaults_public() -> None:
     assert d.scope == "public"
 
 
+def test_intent_list_show_stays_public_for_possessive_text() -> None:
+    d = classify(
+        "show my todo list",
+        _FakeIntent("list_show", {"list_type": "personal"}),
+    )
+    assert d.scope == "public"
+    assert d.reason == "intent:list_show"
+
+
 # ── music intents ─────────────────────────────────────────────────────────
 
 def test_intent_music_generic_is_public() -> None:
@@ -151,6 +160,13 @@ def test_intent_music_generic_is_public() -> None:
 def test_intent_music_my_library_is_user_scoped() -> None:
     d = classify("play my liked songs", _FakeIntent("music_play"))
     assert d.scope == "user_scoped"
+
+
+@pytest.mark.parametrize("intent_name", ["music_play", "music_control", "music_volume"])
+def test_public_music_intents_reach_public_policy(intent_name: str) -> None:
+    d = classify("play some jazz", _FakeIntent(intent_name))
+    assert d.scope == "public"
+    assert d.reason == f"intent:{intent_name}"
 
 
 # ── user-scoped intents ───────────────────────────────────────────────────
