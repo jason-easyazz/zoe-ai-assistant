@@ -848,7 +848,10 @@ async def _persist_memory_candidates(user_id: str, session_id: str, user_message
             user_message,
             user_id=user_id,
             session_id=session_id,
-        ))
+        )).add_done_callback(
+            lambda t: logger.warning("latent intent detection failed: %s", t.exception())
+            if t.exception() else None
+        )
     except Exception as e:
         logger.warning("Memory candidate persistence failed: %s", e)
 
@@ -2026,6 +2029,8 @@ async def chat_stream_generator(
                         message_id=assistant_message_id,
                     ),
                 )
+                # Save cards show prior-turn suggestions; current-turn detection runs
+                # in the background via _persist_memory_candidates (one-turn lag).
                 try:
                     from pending_suggestions import list_active, ui_components_for_suggestions
                     for _scomp in ui_components_for_suggestions(
