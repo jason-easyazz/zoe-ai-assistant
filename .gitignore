@@ -138,6 +138,7 @@ credentials/
 !*.config.json
 !.zoe/manifest.json
 !.greptile/config.json
+!.greptile/files.json
 !services/zoe-litellm/minimal_config.yaml
 
 # API Keys and Secrets

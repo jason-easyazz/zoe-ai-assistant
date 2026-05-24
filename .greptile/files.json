@@ -1,0 +1,40 @@
+{
+  "files": [
+    {
+      "path": ".cursor/rules/project-context.mdc",
+      "description": "Zoe project architecture and non-negotiable constraints"
+    },
+    {
+      "path": ".cursor/rules/agentic-workflow.mdc",
+      "description": "Zoe agentic development workflow and verification standards"
+    },
+    {
+      "path": ".cursor/rules/db-safety.mdc",
+      "description": "Database and persistence safety rules",
+      "scope": ["services/**/*.py", "services/**/alembic/**/*"]
+    },
+    {
+      "path": ".cursor/rules/chat-router.mdc",
+      "description": "Chat, intent, AG-UI, and agent routing rules",
+      "scope": [
+        "services/zoe-data/routers/chat.py",
+        "services/zoe-data/intent_router.py",
+        "services/zoe-data/mcp_server.py",
+        "services/zoe-data/zoe_agent.py"
+      ]
+    },
+    {
+      "path": "DATABASE_PROTECTION_RULES.md",
+      "description": "Legacy database protection reference",
+      "scope": ["services/**/*.py", "services/**/alembic/**/*"]
+    },
+    {
+      "path": "PROJECT_STRUCTURE_RULES.md",
+      "description": "Repository structure and manifest rules"
+    },
+    {
+      "path": "docs/governance/ZOE_DESIGN_PRINCIPLES.md",
+      "description": "Zoe design charter and harness constraints"
+    }
+  ]
+}

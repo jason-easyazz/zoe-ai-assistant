@@ -22,75 +22,35 @@
     "defaultOpen": true
   },
   "ignorePatterns": ".env\n.env.*\n**/*.db\n**/*.sqlite\n**/*.db-wal\n**/*.db-shm\ndata/**\nmodels/**\nbackups/**\ndocs/archive/**\ngraphify-out/**\n**/__pycache__/**\n**/*.pyc\n**/*.log\n**/*.tmp\nservices/zoe-ui/dist/**/*.min.js",
-  "customContext": {
-    "files": [
-      {
-        "path": ".cursor/rules/project-context.mdc",
-        "description": "Zoe project architecture and non-negotiable constraints"
-      },
-      {
-        "path": ".cursor/rules/agentic-workflow.mdc",
-        "description": "Zoe agentic development workflow and verification standards"
-      },
-      {
-        "path": ".cursor/rules/db-safety.mdc",
-        "description": "Database and persistence safety rules",
-        "scope": ["services/**/*.py", "services/**/alembic/**/*"]
-      },
-      {
-        "path": ".cursor/rules/chat-router.mdc",
-        "description": "Chat, intent, AG-UI, and agent routing rules",
-        "scope": [
-          "services/zoe-data/routers/chat.py",
-          "services/zoe-data/intent_router.py",
-          "services/zoe-data/mcp_server.py",
-          "services/zoe-data/zoe_agent.py"
-        ]
-      },
-      {
-        "path": "DATABASE_PROTECTION_RULES.md",
-        "description": "Legacy database protection reference",
-        "scope": ["services/**/*.py", "services/**/alembic/**/*"]
-      },
-      {
-        "path": "PROJECT_STRUCTURE_RULES.md",
-        "description": "Repository structure and manifest rules"
-      },
-      {
-        "path": "docs/governance/ZOE_DESIGN_PRINCIPLES.md",
-        "description": "Zoe design charter and harness constraints"
-      }
-    ],
-    "rules": [
-      {
-        "id": "no-production-chat-router-forks",
-        "severity": "high",
-        "scope": ["services/zoe-data/routers/**/*.py", "services/zoe-data/intent_router.py"],
-        "rule": "Do not create or extend alternate production chat routers such as chat_v2.py, chat_new.py, or chat_fixed.py. Production chat behavior belongs in services/zoe-data/routers/chat.py with intent routing in intent_router.py."
-      },
-      {
-        "id": "no-brittle-nlu-in-chat-router",
-        "severity": "medium",
-        "scope": ["services/zoe-data/routers/chat.py"],
-        "rule": "Avoid broad hardcoded natural-language command detection in chat.py. Prefer intent_router patterns for stable fast paths and Zoe Agent/Hermes/OpenClaw for fuzzy language."
-      },
-      {
-        "id": "memory-service-only",
-        "severity": "high",
-        "scope": ["services/zoe-data/**/*.py"],
-        "rule": "New memory reads and writes should go through MemoryService unless the change is explicitly maintaining the memory service or MCP bridge."
-      },
-      {
-        "id": "chat-voice-first",
-        "severity": "medium",
-        "scope": ["services/zoe-data/**/*", "services/zoe-ui/dist/**/*", "modules/**/*"],
-        "rule": "New user-facing features need chat/voice operation, AG-UI or rich inline status, a backend status endpoint for integrations, and inline settings or feature-page controls where appropriate."
-      },
-      {
-        "id": "no-junk-backups",
-        "severity": "medium",
-        "rule": "Do not add backup, old, new, fixed, tmp, log, or generated junk files. Use git history and the approved repo structure."
-      }
-    ]
-  }
+  "rules": [
+    {
+      "id": "no-production-chat-router-forks",
+      "severity": "high",
+      "scope": ["services/zoe-data/routers/**/*.py", "services/zoe-data/intent_router.py"],
+      "rule": "Do not create or extend alternate production chat routers such as chat_v2.py, chat_new.py, or chat_fixed.py. Production chat behavior belongs in services/zoe-data/routers/chat.py with intent routing in intent_router.py."
+    },
+    {
+      "id": "no-brittle-nlu-in-chat-router",
+      "severity": "medium",
+      "scope": ["services/zoe-data/routers/chat.py"],
+      "rule": "Avoid broad hardcoded natural-language command detection in chat.py. Prefer intent_router patterns for stable fast paths and Zoe Agent/Hermes/OpenClaw for fuzzy language."
+    },
+    {
+      "id": "memory-service-only",
+      "severity": "high",
+      "scope": ["services/zoe-data/**/*.py"],
+      "rule": "New memory reads and writes should go through MemoryService unless the change is explicitly maintaining the memory service or MCP bridge."
+    },
+    {
+      "id": "chat-voice-first",
+      "severity": "medium",
+      "scope": ["services/zoe-data/**/*", "services/zoe-ui/dist/**/*", "modules/**/*"],
+      "rule": "New user-facing features need chat/voice operation, AG-UI or rich inline status, a backend status endpoint for integrations, and inline settings or feature-page controls where appropriate."
+    },
+    {
+      "id": "no-junk-backups",
+      "severity": "medium",
+      "rule": "Do not add backup, old, new, fixed, tmp, log, or generated junk files. Use git history and the approved repo structure."
+    }
+  ]
 }
