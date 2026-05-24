@@ -3,11 +3,13 @@
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
 
 Rules:
-- ALWAYS read graphify-out/GRAPH_REPORT.md before reading any source files, running grep/glob searches, or answering codebase questions. The graph is your primary map of the codebase.
+- Read graphify-out/GRAPH_REPORT.md before broad source searches when it is fresh. If its "Built from commit" does not match `git rev-parse HEAD`, treat it as a rough map only and prefer `graphify query`, `graphify path`, or `graphify explain` against `graphify-out/graph.json`.
 - IF graphify-out/wiki/index.md EXISTS, navigate it instead of reading raw files
 - For cross-module "how does X relate to Y" questions, prefer `graphify query "<question>"`, `graphify path "<A>" "<B>"`, or `graphify explain "<concept>"` over grep — these traverse the graph's EXTRACTED + INFERRED edges instead of scanning files
 - To rebuild the graph after significant code or doc changes, run from /home/zoe/assistant:
   `OPENAI_API_KEY=$(grep "^OPENAI_API_KEY=" .env | cut -d= -f2-) /home/zoe/.local/share/uv/tools/graphifyy/bin/graphify extract . --backend openai`
+- To refresh only GRAPH_REPORT.md from the committed graph, run:
+  `/home/zoe/.local/share/uv/tools/graphifyy/bin/graphify cluster-only . --no-viz`
   Do NOT use `graphify update .` or `graphify hook install` — both have inflated the graph in this repo.
 
 ## opensrc
