@@ -163,6 +163,18 @@ _HA_FULL_SETUP_RE = re.compile(
     re.IGNORECASE,
 )
 
+_ENGINEERING_TASK_RE = re.compile(
+    r"^(?:offload|delegate|assign|ask)\s+(?:this\s+)?(?:to\s+)?hermes\s+(?:to\s+)?(?P<task>.+)$"
+    r"|^(?:create|start|queue)\s+(?:an?\s+)?engineering\s+task\s+(?:for\s+)?(?P<task2>.+)$",
+    re.I,
+)
+
+_ENGINEERING_STATUS_RE = re.compile(
+    r"\b(?:engineering|hermes)\s+(?:task|workflow|pr)\s+(?:status|progress)\b"
+    r"|\bwhat'?s?\s+(?:the\s+)?(?:hermes|engineering)\s+(?:status|progress)\b",
+    re.I,
+)
+
 
 def _is_ha_full_setup_message(t: str) -> bool:
     """True when the user wants the full HA bootstrap (onboarding, token, proxy trust, bridge)."""
@@ -1103,6 +1115,15 @@ def detect_intent(
     if _BOARD_RE.search(t):
         return Intent("board_status", {})
 
+    _eng_match = _ENGINEERING_TASK_RE.search(text.strip())
+    if _eng_match:
+        task_text = (_eng_match.group("task") or _eng_match.group("task2") or "").strip()
+        if task_text:
+            return Intent("engineering_task_create", {"task": task_text})
+
+    if _ENGINEERING_STATUS_RE.search(t):
+        return Intent("engineering_task_status", {})
+
     # ── Evolution proposals ────────────────────────────────────────────────────
     _EVOLVE_REVIEW_RE = re.compile(
         r'what\s+(?:needs?|could)\s+(?:be\s+)?improv(?:ing|ed|ement)\b'
@@ -1436,6 +1457,45 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
             logger.warning("board_status: %s", exc)
             return "I couldn't check the task board right now. Try again in a moment."
 
+    # ── Engineering Workflow ──────────────────────────────────────────────────
+    if intent.name == "engineering_task_create":
+        task_text = intent.slots.get("task", "").strip()
+        if not task_text:
+            return "What should Hermes work on?"
+        try:
+            from engineering_workflow import create_engineering_task  # type: ignore[import]
+            workflow = await create_engineering_task(
+                user_id=user_id or "family-admin",
+                title=task_text[:120],
+                task=task_text,
+                source="chat",
+                idempotency_key=None,
+            )
+            return (
+                "I've drafted that as a Hermes engineering workflow. It needs approval before Hermes starts changing code.\n\n"
+                f"- Workflow: `{workflow['id']}`\n"
+                f"- Phase: `{workflow['phase']}`\n"
+                "Approve it from the engineering task API or Multica board when you're ready."
+            )
+        except Exception as exc:
+            logger.warning("engineering_task_create: %s", exc)
+            return "I couldn't queue that engineering task right now."
+
+    if intent.name == "engineering_task_status":
+        try:
+            from engineering_workflow import list_engineering_tasks  # type: ignore[import]
+            tasks = await list_engineering_tasks(limit=5, status="active")
+            if not tasks:
+                return "No active Hermes engineering workflows right now."
+            lines = ["**Active Hermes engineering workflows:**"]
+            for item in tasks:
+                pr = f" | PR: {item['pr_url']}" if item.get("pr_url") else ""
+                lines.append(f"- `{item['id']}` — {item['phase']} — {item['title'][:80]}{pr}")
+            return "\n".join(lines)
+        except Exception as exc:
+            logger.warning("engineering_task_status: %s", exc)
+            return "I couldn't check Hermes engineering workflow status right now."
+
     # ── Evolution Proposals Review ─────────────────────────────────────────────
     if intent.name == "evolution_proposals_review":
         try:
@@ -1483,21 +1543,32 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
             if not mc.is_configured():
                 return (
                     "Multica isn't connected, so I can't check the board. "
-                    "The agents (Hermes, OpenClaw) have natural-language autopilots that will "
-                    "review and fix issues on the next scheduled run (every 15 minutes)."
+                    "Configure Multica before using the Hermes board-review workflow."
                 )
             todo_issues = await mc.list_issues(status="todo")
             in_progress = await mc.list_issues(status="in_progress")
             total_open = len(todo_issues) + len(in_progress)
             if total_open == 0:
                 return "Board is clear — no open issues. The agents will keep it that way."
+            try:
+                from multica_autopilot_sync import _run_board_review  # type: ignore[import]
+                await _run_board_review()
+                triggered = True
+            except Exception:
+                triggered = False
             lines = [
-                f"**Board has {total_open} open issue(s).** Triggering the self-healing loop:\n",
+                f"**Board has {total_open} open issue(s).**\n",
                 f"- **{len(todo_issues)} todo** / **{len(in_progress)} in-progress**\n",
-                "The Board Review autopilot (Hermes, every 15 min) will triage and fix "
-                "eligible issues automatically. Issues needing credentials or human judgement "
-                "will trigger a push notification to you.\n",
             ]
+            if triggered:
+                lines.append(
+                    "I triggered the Hermes board-review dispatcher for Hermes-assigned issues. "
+                    "Issues needing credentials or human judgement will be marked for review.\n"
+                )
+            else:
+                lines.append(
+                    "I could read the board, but couldn't trigger the Hermes dispatcher just now.\n"
+                )
             if todo_issues:
                 lines.append("\n**Oldest open items:**")
                 for item in todo_issues[:4]:

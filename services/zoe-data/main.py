@@ -300,7 +300,7 @@ async def lifespan(app: FastAPI):
 
                 issues = await client.list_issues(status="in_progress")
                 for issue in issues or []:
-                    # Check if linked background task completed
+                    # Check whether a linked engineering workflow has reached a terminal state.
                     issue_id = issue.get("id")
                     title = issue.get("title", "")
                     if not issue_id:
@@ -309,20 +309,28 @@ async def lifespan(app: FastAPI):
                         from db_pool import get_db_ctx  # type: ignore[import]
                         async with get_db_ctx() as _db:
                             rows = await _db.fetch(
-                                """SELECT id, status, user_id FROM background_tasks
-                                   WHERE (payload->>'multica_issue_id')=$1
-                                   ORDER BY created_at DESC LIMIT 1""",
+                                """SELECT id, phase, status, user_id FROM engineering_tasks
+                                   WHERE multica_issue_id=$1
+                                   ORDER BY updated_at DESC LIMIT 1""",
                                 str(issue_id),
                             )
-                        if rows and rows[0]["status"] == "done":
-                            await client.update_issue(issue_id, status="done")
-                            logger.info("multica_poll: closed issue %s ('%s') — task done", issue_id, title[:40])
+                        if rows and rows[0]["phase"] in ("done", "ready_for_human"):
+                            new_status = "done" if rows[0]["phase"] == "done" else "in_review"
+                            await client.update_issue(issue_id, status=new_status)
+                            logger.info(
+                                "multica_poll: advanced issue %s ('%s') — engineering phase=%s",
+                                issue_id, title[:40], rows[0]["phase"],
+                            )
                             # Push WebSocket notification to all connected clients
                             try:
                                 await broadcaster.broadcast(
                                     "all",
                                     "multica_task_done",
-                                    {"multica_issue_id": str(issue_id), "title": title},
+                                    {
+                                        "multica_issue_id": str(issue_id),
+                                        "title": title,
+                                        "phase": rows[0]["phase"],
+                                    },
                                 )
                             except Exception as _push_exc:
                                 logger.debug("multica_poll: ws push failed: %s", _push_exc)

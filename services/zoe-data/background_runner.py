@@ -61,6 +61,7 @@ async def enqueue_background_task(
     session_id: str | None = None,
     panel_id: str | None = None,
     request_depth: int = 0,
+    multica_issue_id: str | None = None,
 ) -> int:
     """Insert a task row and kick off the async runner. Returns the new task id."""
     if request_depth > _MAX_REQUEST_DEPTH:
@@ -72,16 +73,21 @@ async def enqueue_background_task(
     async with get_db_ctx() as db:
         row = await db.fetchrow(
             """INSERT INTO background_tasks
-               (user_id, session_id, panel_id, task, status, created_at, checkout_run_id, request_depth)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id""",
-            user_id, session_id, panel_id, task, "pending", now, run_id, request_depth,
+               (user_id, session_id, panel_id, task, status, created_at,
+                checkout_run_id, request_depth, multica_issue_id)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id""",
+            user_id, session_id, panel_id, task, "pending", now,
+            run_id, request_depth, multica_issue_id,
         )
         task_id: int = row["id"]
 
     # Fire off the runner coroutine
     fut = asyncio.ensure_future(_run_task(task_id, task, user_id, session_id, panel_id=panel_id))
     _running[task_id] = fut
-    logger.info("background_runner: enqueued task #%d for user=%s depth=%d", task_id, user_id, request_depth)
+    logger.info(
+        "background_runner: enqueued task #%d for user=%s depth=%d multica=%s",
+        task_id, user_id, request_depth, multica_issue_id,
+    )
     return task_id
 
 
@@ -109,6 +115,11 @@ async def _run_task(
         if not result:
             result = "(No result returned)"
         await _set_status("done", result)
+        try:
+            from engineering_workflow import reconcile_background_task  # type: ignore[import]
+            await reconcile_background_task(task_id)
+        except Exception as _ew_exc:
+            logger.debug("background_runner: engineering reconcile failed: %s", _ew_exc)
         logger.info("background_runner: task #%d completed (%d chars)", task_id, len(result))
 
         # Auto-deploy the linked evolution proposal when the task completes.
@@ -174,6 +185,11 @@ async def _run_task(
     except Exception as exc:
         logger.warning("background_runner: task #%d failed: %s", task_id, exc)
         await _set_status("error", f"Task failed: {exc}")
+        try:
+            from engineering_workflow import reconcile_background_task  # type: ignore[import]
+            await reconcile_background_task(task_id)
+        except Exception as _ew_exc:
+            logger.debug("background_runner: engineering reconcile failed: %s", _ew_exc)
         try:
             from push import broadcaster
             await broadcaster.broadcast(user_id, "background_task_error", {

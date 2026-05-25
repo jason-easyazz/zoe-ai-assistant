@@ -1,4 +1,5 @@
 import asyncio
+import hmac
 import json
 import logging
 import os
@@ -700,6 +701,22 @@ class _A2ATaskRequest(BaseModel):
     stream: bool = False
 
 
+class _EngineeringTaskRequest(BaseModel):
+    task: str
+    title: str | None = None
+    source: str = "api"
+    source_id: str | None = None
+    multica_issue_id: str | None = None
+    idempotency_key: str | None = None
+    max_rounds: int = 5
+    target_confidence: int = 5
+    start: bool = True
+
+
+class _EngineeringTaskCancelRequest(BaseModel):
+    reason: str = "cancelled by operator"
+
+
 @_agent_card_router.post("/tasks")
 async def a2a_task(body: _A2ATaskRequest, user: dict = Depends(get_a2a_caller)):
     """
@@ -799,6 +816,86 @@ async def a2a_task_result(task_id: str, user: dict = Depends(get_a2a_caller)):
         "created_at": row["created_at"],
         "completed_at": row["completed_at"],
     }
+
+
+# ── Engineering workflow tasks ────────────────────────────────────────────────
+
+@_agent_card_router.post("/engineering/tasks")
+async def create_engineering_workflow_task(
+    body: _EngineeringTaskRequest,
+    user: dict = Depends(require_admin),
+):
+    """Create and optionally start a durable Multica/Hermes/PR workflow."""
+    from engineering_workflow import create_and_start_engineering_task, create_engineering_task
+
+    kwargs = {
+        "user_id": user.get("user_id", "admin"),
+        "task": body.task,
+        "title": body.title,
+        "source": body.source,
+        "source_id": body.source_id,
+        "multica_issue_id": body.multica_issue_id,
+        "idempotency_key": body.idempotency_key,
+        "max_rounds": body.max_rounds,
+        "target_confidence": body.target_confidence,
+    }
+    task = await (create_and_start_engineering_task(**kwargs) if body.start else create_engineering_task(**kwargs))
+    return {"ok": True, "task": task}
+
+
+@_agent_card_router.get("/engineering/tasks")
+async def list_engineering_workflow_tasks(
+    limit: int = 20,
+    status: str | None = None,
+    user: dict = Depends(require_admin),
+):
+    from engineering_workflow import list_engineering_tasks
+
+    return {"tasks": await list_engineering_tasks(limit=limit, status=status)}
+
+
+@_agent_card_router.get("/engineering/tasks/{task_id}")
+async def get_engineering_workflow_task(task_id: str, user: dict = Depends(require_admin)):
+    from engineering_workflow import get_engineering_task
+
+    task = await get_engineering_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Engineering task not found")
+    return {"task": task}
+
+
+@_agent_card_router.post("/engineering/tasks/{task_id}/retry")
+async def retry_engineering_workflow_task(task_id: str, user: dict = Depends(require_admin)):
+    from engineering_workflow import retry_engineering_task
+
+    try:
+        return {"ok": True, "task": await retry_engineering_task(task_id)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@_agent_card_router.post("/engineering/tasks/{task_id}/cancel")
+async def cancel_engineering_workflow_task(
+    task_id: str,
+    body: _EngineeringTaskCancelRequest,
+    user: dict = Depends(require_admin),
+):
+    from engineering_workflow import cancel_engineering_task
+
+    try:
+        return {"ok": True, "task": await cancel_engineering_task(task_id, body.reason)}
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@_agent_card_router.post("/engineering/tasks/{task_id}/greptile/check")
+async def check_engineering_workflow_greptile(task_id: str, user: dict = Depends(require_admin)):
+    from engineering_workflow import check_greptile_for_task
+
+    try:
+        return {"ok": True, "task": await check_greptile_for_task(task_id)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 # ── A2A Registry + Peer Cards + Squad ────────────────────────────────────────
@@ -1106,10 +1203,11 @@ async def get_agent_board():
 
 
 @_agent_card_router.post("/board/approve")
-async def board_approve(task_id: str, user: dict = Depends(get_current_user)):
+async def board_approve(task_id: str, user: dict = Depends(require_admin)):
     """Create a Multica board issue for agent execution (Hermes by default)."""
     try:
         from multica_client import MULClient  # type: ignore[import]
+        from engineering_workflow import create_and_start_engineering_task  # type: ignore[import]
         client = MULClient()
         if not client.is_configured():
             return {"ok": False, "reason": "Multica not configured — route via Hermes manually"}
@@ -1118,7 +1216,19 @@ async def board_approve(task_id: str, user: dict = Depends(get_current_user)):
             description=f"Approved via Zoe chat. Task ID: {task_id}",
             priority="medium",
         )
-        return {"ok": True, "issue": issue}
+        issue_id = issue.get("id") if isinstance(issue, dict) else None
+        workflow = None
+        if issue_id:
+            workflow = await create_and_start_engineering_task(
+                user_id=user.get("user_id", "admin"),
+                title=f"Task: {task_id}",
+                task=f"Implement approved Zoe board task `{task_id}`. Open a PR and run Greptile review.",
+                source="board_approve",
+                source_id=task_id,
+                multica_issue_id=issue_id,
+                idempotency_key=f"board_approve:{task_id}",
+            )
+        return {"ok": True, "issue": issue, "engineering_task": workflow}
     except Exception as exc:
         return {"ok": False, "reason": str(exc)}
 
@@ -1145,6 +1255,19 @@ async def board_review(task_id: str, user: dict = Depends(get_current_user)):
 async def board_cancel(task_id: str, user: dict = Depends(get_current_user)):
     """Cancel a pending board task."""
     return {"ok": True, "task_id": task_id, "status": "cancelled"}
+
+
+def _multica_webhook_dispatch_allowed(request: Request) -> bool:
+    """Return True when a webhook is allowed to start code-changing work."""
+    secret = os.environ.get("MULTICA_WEBHOOK_SECRET", "").strip()
+    if not secret:
+        return False
+    auth = request.headers.get("authorization", "")
+    token = request.headers.get("x-multica-webhook-token", "")
+    return (
+        hmac.compare_digest(auth, f"Bearer {secret}")
+        or hmac.compare_digest(token, secret)
+    )
 
 
 @_agent_card_router.post("/board/webhook")
@@ -1190,6 +1313,31 @@ async def multica_webhook(request: Request):
                 "Multica webhook: %s issue=%s assignee=%s",
                 event, issue.get("identifier"), issue.get("assignee_id"),
             )
+            from multica_autopilot_sync import _HERMES_AGENT_ID as hermes_agent_id  # type: ignore[import]
+            if str(issue.get("assignee_id") or "") == hermes_agent_id:
+                if not _multica_webhook_dispatch_allowed(request):
+                    logger.warning(
+                        "Multica webhook: skipped Hermes dispatch for issue=%s; webhook dispatch auth missing",
+                        issue.get("identifier") or issue.get("id"),
+                    )
+                    return {"ok": True, "dispatched": False, "reason": "dispatch auth required"}
+                try:
+                    from engineering_workflow import create_and_start_engineering_task  # type: ignore[import]
+                    issue_id = str(issue.get("id") or "")
+                    title = issue.get("title") or issue.get("identifier") or "Multica engineering task"
+                    description = issue.get("description") or ""
+                    if issue_id:
+                        await create_and_start_engineering_task(
+                            user_id="family-admin",
+                            title=title,
+                            task=f"Work this Hermes-assigned Multica issue.\n\nTitle: {title}\n\n{description}",
+                            source="multica_webhook",
+                            source_id=issue_id,
+                            multica_issue_id=issue_id,
+                            idempotency_key=f"multica:{issue_id}",
+                        )
+                except Exception as dispatch_exc:
+                    logger.warning("Multica webhook: Hermes dispatch failed: %s", dispatch_exc)
 
         elif event == "issue.created" and issue:
             logger.info(
@@ -1382,22 +1530,29 @@ async def evolution_proposal_action(
                     proposal_id, exc,
                 )
 
-            # Queue a Hermes background task to implement the proposal;
-            # when it completes, the task runner will advance status → deployed.
+            # Queue a tracked engineering workflow to implement the proposal.
             try:
-                from background_runner import enqueue_background_task  # type: ignore[import]
+                from engineering_workflow import create_and_start_engineering_task  # type: ignore[import]
                 _task_desc = (
                     f"Implement evolution proposal {proposal_id}: "
                     f"{proposal['title']}. "
                     f"{proposal['description']}"
                 )
-                task_id = await enqueue_background_task(
-                    _task_desc,
-                    user["user_id"],
+                _workflow = await create_and_start_engineering_task(
+                    user_id=user["user_id"],
+                    title=proposal["title"],
+                    task=_task_desc,
+                    source="evolution_proposal",
+                    source_id=proposal_id,
+                    multica_issue_id=multica_issue_id,
+                    idempotency_key=f"evolution:{proposal_id}",
                 )
-                logger.info("evolution_approve: queued implement task %s for proposal %s", task_id, proposal_id)
+                logger.info(
+                    "evolution_approve: queued engineering workflow %s for proposal %s",
+                    _workflow.get("id"), proposal_id,
+                )
             except Exception as exc:
-                logger.warning("evolution_approve: could not queue implement task: %s", exc)
+                logger.warning("evolution_approve: could not queue engineering workflow: %s", exc)
             return {"ok": True, "action": "approved", "multica_issue_id": multica_issue_id}
 
         elif action == "deploy":
