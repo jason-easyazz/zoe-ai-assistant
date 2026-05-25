@@ -8,37 +8,9 @@ import tempfile
 from fastapi.testclient import TestClient
 import pytest
 
+from tests.sqlite_compat import SQLiteCompatConnection
 import models.database as db_module
 from main import app
-
-
-class SQLiteCompatConnection:
-    """Small sqlite-backed stand-in for zoe-auth's connection wrapper."""
-
-    def __init__(self, db_path: str):
-        self.conn = sqlite3.connect(db_path)
-        self.conn.row_factory = sqlite3.Row
-        self._last_rowcount = 0
-
-    def execute(self, sql: str, params=()):
-        cursor = self.conn.execute(sql, params or ())
-        self._last_rowcount = cursor.rowcount if cursor.rowcount >= 0 else 0
-        return cursor
-
-    @property
-    def total_changes(self) -> int:
-        return self._last_rowcount
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if exc_type:
-            self.conn.rollback()
-        else:
-            self.conn.commit()
-        self.conn.close()
-        return False
 
 
 def _init_auth_tables(db_path: str) -> None:

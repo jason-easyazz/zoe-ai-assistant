@@ -24,7 +24,7 @@ def issue_id_token(
         "auth_time": auth_time or now,
         "name": user_info.get("username", ""),
         "email": user_info.get("email", ""),
-        "email_verified": True,
+        "email_verified": bool(user_info.get("email_verified", False)),
         "preferred_username": user_info.get("username", ""),
         "role": user_info.get("role", "user"),
         "zoe_user_id": subject,
