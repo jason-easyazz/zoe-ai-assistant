@@ -2,8 +2,9 @@
 database.py — Database layer for zoe-data.
 
 PostgreSQL via asyncpg (Phase 4 migration complete).
-Schema is managed by Alembic; init_db() calls init_pool() and runs
-alembic upgrade head on startup to ensure schema is current.
+Schema is managed by Alembic; deploys run `alembic upgrade head`
+before restarting the service. Startup only opens the pool and seeds
+idempotent default data.
 The legacy SQLite SCHEMA string is kept as a reference comment only.
 """
 import json
@@ -55,10 +56,10 @@ async def log_music_event(
 
 
 async def init_db():
-    """Initialize the PostgreSQL connection pool and ensure schema is current.
+    """Initialize the PostgreSQL connection pool and seed default data.
 
-    Schema is managed by Alembic migrations (alembic/versions/). This function
-    runs `alembic upgrade head` to bring the database to the latest revision.
+    Schema is managed by Alembic migrations (alembic/versions/) as a deploy
+    step, not during service startup.
     Seed data (default user, capability matrix, people field definitions) is
     inserted with ON CONFLICT DO NOTHING for idempotency.
     """
@@ -76,7 +77,7 @@ async def init_db():
     await init_pool()
 
     # Schema is managed by Alembic; run `alembic upgrade head` as a separate
-    # deployment step (see deploy/migrate.sh), NOT at service startup.
+    # deployment step (see scripts/deploy/migrate.sh), NOT at service startup.
     # This avoids psycopg2/asyncio thread executor deadlocks on startup.
 
     # Seed data — idempotent via ON CONFLICT DO NOTHING

@@ -4,6 +4,12 @@
 **Date**: October 8, 2025  
 **Status**: 🔒 ENFORCED
 
+> Runtime note (May 2026): Zoe now runs `zoe-data` host-native on port 8000,
+> `zoe-auth`/UI/PostgreSQL in Docker Compose, and OpenClaw/llama/Hermes/Kokoro
+> as host-native user services. Older `zoe-core`, LiteLLM, and Dockerized
+> llama.cpp references below are historical guardrails only; do not use them
+> for current operations.
+
 This document defines the **mandatory** structure and rules for the Zoe project. All files must follow these rules. Automated checks enforce compliance.
 
 ---
@@ -14,143 +20,64 @@ This document defines the **mandatory** structure and rules for the Zoe project.
 
 ---
 
-## 🗄️ DATABASE PATH RULES - CRITICAL
+## Database Rules - Critical
 
-### ⚠️ MANDATORY: Use Environment Variables for Database Paths
+### Mandatory: Use PostgreSQL for runtime data
 
-**PROBLEM**: Docker containers map paths differently:
-- Host: `/home/zoe/assistant/data/zoe.db`
-- Container: `/app/data/zoe.db`
+**Runtime source of truth**: `POSTGRES_URL`.
 
-**SOLUTION**: Always use `os.getenv("DATABASE_PATH")`
+SQLite paths are allowed only for explicit migration tooling, module-local
+caches, or offline fixtures. New runtime code must use `db_pool.get_db()` /
+`get_db_ctx()` or an established service wrapper.
 
-### ✅ CORRECT Pattern:
+### Correct Pattern
 ```python
-import os
+from db_pool import get_db_ctx
 
-def __init__(self, db_path: str = None):
-    if db_path is None:
-        db_path = os.getenv("DATABASE_PATH", "/home/zoe/assistant/data/zoe.db")
-    self.db_path = db_path
+async with get_db_ctx() as db:
+    row = await db.fetchrow("SELECT id FROM users WHERE id = $1", user_id)
 ```
 
-### ❌ WRONG Pattern (Will Break in Docker):
+### Wrong Pattern
 ```python
-def __init__(self, db_path: str = "/home/zoe/assistant/data/zoe.db"):  # HARDCODED!
+import sqlite3
+sqlite3.connect("/app/data/zoe.db")
 ```
 
-### 🔒 Enforcement:
-- **Pre-commit hook** runs `tools/audit/check_database_paths.py`
-- **Blocks commits** with hardcoded database paths
-- **Run manually**: `python3 tools/audit/check_database_paths.py`
+### Enforcement
+- CI runs `python3 tools/audit/validate_structure.py`.
+- CI runs `python3 tools/audit/validate_critical_files.py`.
+- Alembic migrations live under `services/zoe-data/alembic/versions/`.
 
 ### 📋 Affected Files:
 - Production: `services/zoe-data/` (routers, DB access)
-- Legacy reference: `services/zoe-core/` (retired Docker tree)
+- Legacy reference: `docs/archive/retired-services/zoe-core/` (retired Docker tree)
 - Any new code that accesses databases
 
 ---
 
-## 🌐 LITELLM GATEWAY RULES - MANDATORY
+## LLM And Agent Routing Rules
 
-**Added**: 2025-11-17  
-**Status**: 🔒 ENFORCED
+**Current runtime**: intent fast path in `services/zoe-data/intent_router.py`,
+Zoe Agent/local model through host `llama-server`, Hermes engineering service,
+and OpenClaw as the tool/browser fallback.
 
-### ⚠️ CRITICAL: All LLM Calls MUST Use LiteLLM Gateway
-
-**ARCHITECTURE DECISION**: LiteLLM Gateway is the **ONLY** way to call LLMs in production.
-
-**Gateway Endpoint**: `http://zoe-litellm:8001/v1/chat/completions`
-
-**Why**:
-- ✅ Unified API for all models (local + cloud)
-- ✅ Automatic fallbacks & retries
-- ✅ Redis-backed caching (10min TTL)
-- ✅ Load balancing across workers
-- ✅ Usage tracking & cost control
-- ✅ Zero-code model switching
-
-### ✅ CORRECT Pattern:
+### Correct Pattern
 
 ```python
-# Use LiteLLMProvider (default)
-from llm_provider import get_llm_provider
+from intent_router import route_intent
 
-provider = get_llm_provider()  # Returns LiteLLMProvider
-response = await provider.generate(prompt, model="local-model")
-
-# Or direct API call
-llm_url = "http://zoe-litellm:8001/v1/chat/completions"
-response = await client.post(
-    llm_url,
-    headers={"Authorization": "Bearer <master_key>"},
-    json={"model": "local-model", "messages": [...]}
-)
+decision = route_intent(text, user_id=user_id)
 ```
 
-### ❌ WRONG Patterns (FORBIDDEN):
+### Wrong Patterns
 
 ```python
-# ❌ Direct llamacpp call
-response = await client.post("http://zoe-llamacpp:11434/v1/chat/completions", ...)
-
-# ❌ Direct OpenAI call
-response = await client.post("https://api.openai.com/v1/chat/completions", ...)
-
-# ❌ Direct Anthropic call
-response = await client.post("https://api.anthropic.com/v1/messages", ...)
-
-# ❌ Hardcoded model logic
-if task == "coding":
-    url = "https://api.openai.com/..."  # NO!
+await client.post("http://zoe-litellm:8001/v1/chat/completions", ...)
+await client.post("http://zoe-llamacpp:11434/v1/chat/completions", ...)
 ```
 
-### 🔒 Enforcement:
-
-**Validation Script**: `tools/audit/validate_litellm.sh`
-
-```bash
-# Run before every commit
-bash tools/audit/validate_litellm.sh
-```
-
-**Checks**:
-- ✅ No direct inference service calls
-- ✅ LiteLLM service is running and healthy
-- ✅ Configuration is valid
-- ✅ Models are accessible
-- ✅ Functional test passes
-
-**Violations = BLOCKED COMMIT**
-
-### 📚 Full Documentation:
-
-- **Architecture**: `docs/architecture/LITELLM_INTEGRATION.md`
-- **Development Rules**: `docs/governance/LITELLM_RULES.md`
-- **Validation Script**: `tools/audit/validate_litellm.sh`
-
-### 🔧 Configuration Management:
-
-**File**: `services/zoe-litellm/minimal_config.yaml`  
-**Mounted**: ✅ Read-only volume  
-**Updates**: Restart service (`docker restart zoe-litellm`)
-
-**Model Changes**:
-1. Edit `minimal_config.yaml`
-2. Restart: `docker restart zoe-litellm`
-3. Validate: `bash tools/audit/validate_litellm.sh`
-
-**NEVER** hardcode models in Python code!
-
-### 🚨 Emergency Bypass Protocol:
-
-If you MUST bypass LiteLLM (EMERGENCY ONLY):
-1. Create issue documenting why
-2. Add `# TODO: TECH DEBT - Issue #XXX` comment
-3. Set 48-hour deadline for fix
-4. After deadline: BLOCKS ALL NEW FEATURES
-
-See `docs/governance/LITELLM_RULES.md` for full protocol.
+Retired LiteLLM/llama.cpp Docker files remain only in `docs/archive/`.
 
 ---
 
@@ -229,7 +156,7 @@ async def get_user_data(
 │   ├── README.md                    [REQUIRED] Project overview
 │   ├── CHANGELOG.md                 [REQUIRED] Version history
 │   ├── QUICK-START.md               [REQUIRED] Getting started
-│   ├── PROJECT_STATUS.md            [REQUIRED] Current system state
+│   ├── HARDWARE_COMPATIBILITY.md    [REQUIRED] Platform deployment notes
 │   └── [Up to 6 more essential docs]
 │
 ├── 🧪 tests/
@@ -244,7 +171,7 @@ async def get_user_data(
 ├── 📜 scripts/
 │   ├── setup/                       Setup & installation scripts
 │   ├── maintenance/                 Maintenance scripts
-│   ├── deployment/                  Deployment scripts
+│   ├── deploy/                      Deployment scripts
 │   ├── security/                    Security scripts
 │   ├── utilities/                   One-off utility scripts
 │   └── [NO scripts in project root!]
@@ -266,12 +193,10 @@ async def get_user_data(
 │
 ├── 🐳 services/                     [DO NOT MODIFY STRUCTURE]
 │   ├── zoe-data/                    [PRODUCTION FastAPI + OpenClaw]
-│   ├── zoe-core/                    [RETIRED legacy — reference only]
 │   ├── zoe-ui/
 │   └── ...
 │
-├── 💾 data/                         [APPLICATION DATA - DO NOT COMMIT]
-│   └── zoe.db
+├── 💾 data/                         [LOCAL CACHE/ARTIFACTS - DO NOT COMMIT]
 │
 └── ⚙️ config/                       Configuration files
     └── *.yaml, *.json
@@ -287,7 +212,7 @@ async def get_user_data(
   - README.md (required)
   - CHANGELOG.md (required)
   - QUICK-START.md (required)
-  - PROJECT_STATUS.md (required)
+  - HARDWARE_COMPATIBILITY.md (required)
   - Up to 6 more ESSENTIAL docs
 
 ❌ FORBIDDEN in root:
@@ -371,7 +296,7 @@ async def get_user_data(
 ### Documentation Files
 ```
 ✅ GOOD:
-  - PROJECT_STATUS.md           (clear, no date)
+  - HARDWARE_COMPATIBILITY.md   (clear, no date)
   - QUICK-START.md             (clear purpose)
   - API_REFERENCE.md           (descriptive)
 
@@ -532,7 +457,7 @@ def check_no_temp_files():
 
 def check_required_docs():
     """Required documentation must exist"""
-    required = ["README.md", "CHANGELOG.md", "QUICK-START.md", "PROJECT_STATUS.md"]
+    required = ["README.md", "CHANGELOG.md", "QUICK-START.md", "HARDWARE_COMPATIBILITY.md"]
     missing = [doc for doc in required if not (PROJECT_ROOT / doc).exists()]
     
     if missing:
@@ -600,7 +525,7 @@ python3 comprehensive_audit.py
 1. `README.md` - Project overview [REQUIRED]
 2. `CHANGELOG.md` - Version history [REQUIRED]
 3. `QUICK-START.md` - Getting started [REQUIRED]
-4. `PROJECT_STATUS.md` - Current system state [REQUIRED]
+4. `HARDWARE_COMPATIBILITY.md` - Platform deployment notes [REQUIRED]
 5. Up to 6 more essential docs (e.g., security guide, contribution guide)
 
 **Process**:
@@ -777,7 +702,7 @@ ls *.md | wc -l
 
 # 3a. If < 10 and essential
 touch NEW_DOC.md
-# Update PROJECT_STATUS.md to reference it
+# Update README.md or docs/guides/OPERATOR_RUNBOOK.md to reference it
 
 # 3b. If not essential or count >= 10
 mkdir -p docs/guides
@@ -1009,7 +934,7 @@ If you need to temporarily violate a rule:
 1. Add comment explaining why
 2. Create issue to fix
 3. Set deadline (max 1 week)
-4. Add to PROJECT_STATUS.md known issues
+4. Add to Multica or the operator runbook known issues
 
 ---
 

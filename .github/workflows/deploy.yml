@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   deploy:
     # Runs on the self-hosted runner installed on the Jetson.
@@ -17,7 +20,7 @@ jobs:
     steps:
       - name: Pull latest main
         env:
-          GH_PAT: ${{ secrets.GH_PAT }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           cd /home/zoe/assistant
           git remote set-url origin https://github.com/jason-easyazz/zoe-ai-assistant.git
@@ -34,18 +37,42 @@ jobs:
           if parts < (2, 31, 0):
               raise SystemExit(f"git {version} is too old for GIT_CONFIG_COUNT; need git >= 2.31.0")
           PY
+          AUTH_HEADER="$(python3 - <<'PY'
+          import base64
+          import os
+          print(base64.b64encode(f"x-access-token:{os.environ['GITHUB_TOKEN']}".encode()).decode())
+          PY
+          )" || exit 1
+          echo "::add-mask::${AUTH_HEADER}"
           GIT_CONFIG_COUNT=1 \
           GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
-          GIT_CONFIG_VALUE_0="AUTHORIZATION: bearer ${GH_PAT}" \
+          GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${AUTH_HEADER}" \
             git fetch origin main
-          unset GH_PAT
+          unset AUTH_HEADER GITHUB_TOKEN
           git reset --hard FETCH_HEAD
 
       - name: Install / refresh Python deps
         run: |
           pip3 install --quiet --user \
             "apscheduler==3.10.4" "sqlalchemy>=2.0,<3.0" \
-            pywebpush py-vapid
+            alembic asyncpg psycopg2-binary pywebpush py-vapid
+
+      - name: Apply database migrations
+        run: |
+          cd /home/zoe/assistant
+          bash scripts/deploy/migrate.sh
+
+      - name: Rebuild / restart zoe-auth
+        run: |
+          cd /home/zoe/assistant
+          docker compose up -d --build zoe-auth
+          for attempt in {1..12}; do
+            curl -sf http://localhost:8002/health > /dev/null && exit 0
+            sleep 5
+          done
+          docker compose logs --tail=80 zoe-auth
+          echo "zoe-auth failed health check after restart"
+          exit 1
 
       # zoe-data is a user service — no sudo needed.
       # XDG_RUNTIME_DIR is required so systemctl --user can reach the user session bus.

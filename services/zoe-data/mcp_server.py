@@ -12,8 +12,6 @@ import httpx
 from datetime import date, datetime, timedelta
 import os
 
-_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.environ.get("ZOE_DATA_DB", os.path.join(_BASE_DIR, "data", "zoe.db"))
 OPENWEATHERMAP_API_KEY = os.environ.get("OPENWEATHERMAP_API_KEY", "")
 _BROADCAST_URL = "http://127.0.0.1:8000/api/internal/broadcast"
 _OPENCLAW_GW = os.environ.get("ZOE_OPENCLAW_GW", "http://127.0.0.1:18789")

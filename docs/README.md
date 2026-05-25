@@ -1,16 +1,14 @@
 # Zoe Documentation
 
-## 📖 Main Documentation (Project Root)
+## Main Documentation
 
 For current, active documentation, see the project root:
 
 - **README.md** - Project overview and features
 - **QUICK-START.md** - How to start and use Zoe
-- **PROJECT_STATUS.md** - ⭐ Current system status (consolidated)
 - **CHANGELOG.md** - Version history
-- **FIXES_APPLIED.md** - Recent technical fixes  
-- **CLEANUP_PLAN.md** - Maintenance procedures
-- **CLEANUP_SUMMARY.md** - Project cleanup report
+- **docs/guides/OPERATOR_RUNBOOK.md** - Current runtime operations
+- **HARDWARE_COMPATIBILITY.md** - Platform-specific deployment notes
 
 ---
 
@@ -36,11 +34,11 @@ Historical documentation organized by category:
 - Installation docs
 - Feature documentation
 
-### `/docs/guides/` (Future)
-User and developer guides will be placed here
+### `/docs/guides/`
+Current user, operator, and developer guides.
 
-### `/docs/api/` (Future)
-API documentation will be placed here
+### `/docs/governance/`
+Repository rules, safety guidance, and design principles.
 
 ---
 
@@ -50,10 +48,10 @@ API documentation will be placed here
 
 **Understand Zoe**: Read `../README.md`
 **Start Using Zoe**: Read `../QUICK-START.md`
-**See Current Status**: Read `../PROJECT_STATUS.md`
+**Operate Zoe**: Read `guides/OPERATOR_RUNBOOK.md`
 **Find Old Reports**: Check `archive/reports/`
 **Find Technical Docs**: Check `archive/technical/`
-**Troubleshoot**: Run `python3 ../comprehensive_audit.py`
+**Troubleshoot**: Run `python3 ../tools/audit/validate_structure.py` and `python3 ../tools/audit/validate_critical_files.py`
 
 ---
 
@@ -68,7 +66,7 @@ All archived docs are organized chronologically within their categories.
 - **Guides**: `archive/guides/`
 
 ### By Topic
-Use grep to search: `grep -r "your topic" archive/`
+Use ripgrep to search: `rg "your topic" docs/`
 
 ---
 
@@ -90,4 +88,4 @@ Use grep to search: `grep -r "your topic" archive/`
 
 ---
 
-*For the latest information, always check PROJECT_STATUS.md in the project root.*
+*For the latest operations guidance, use `docs/guides/OPERATOR_RUNBOOK.md`.*
