@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   deploy:
     # Runs on the self-hosted runner installed on the Jetson.
@@ -17,7 +20,7 @@ jobs:
     steps:
       - name: Pull latest main
         env:
-          GH_PAT: ${{ secrets.GH_PAT }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           cd /home/zoe/assistant
           git remote set-url origin https://github.com/jason-easyazz/zoe-ai-assistant.git
@@ -36,9 +39,9 @@ jobs:
           PY
           GIT_CONFIG_COUNT=1 \
           GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
-          GIT_CONFIG_VALUE_0="AUTHORIZATION: bearer ${GH_PAT}" \
+          GIT_CONFIG_VALUE_0="AUTHORIZATION: bearer ${GITHUB_TOKEN}" \
             git fetch origin main
-          unset GH_PAT
+          unset GITHUB_TOKEN
           git reset --hard FETCH_HEAD
 
       - name: Install / refresh Python deps
