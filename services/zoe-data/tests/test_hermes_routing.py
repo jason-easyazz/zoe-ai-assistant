@@ -154,9 +154,9 @@ async def test_force_hermes_uses_single_chat_run_and_persists_once(monkeypatch):
     async def fake_empty(*args, **kwargs):
         return ""
 
-    async def fake_hermes_tokens(*args, **kwargs):
-        yield "Hermes "
-        yield "answer"
+    async def fake_hermes_events(*args, **kwargs):
+        yield {"kind": "token", "text": "Hermes "}
+        yield {"kind": "token", "text": "answer"}
 
     async def fake_persist(user_id, session_id, user_text, assistant_text):
         persisted_candidates.append((user_id, session_id, user_text, assistant_text))
@@ -168,7 +168,7 @@ async def test_force_hermes_uses_single_chat_run_and_persists_once(monkeypatch):
     monkeypatch.setattr(chat_router, "_safe_load_portrait", fake_empty)
     monkeypatch.setattr(chat_router, "_mempalace_load_user_facts", fake_empty)
     monkeypatch.setattr(chat_router, "_build_memory_context", fake_empty)
-    monkeypatch.setattr(chat_router, "_iter_hermes_text_chunks", fake_hermes_tokens)
+    monkeypatch.setattr(chat_router, "_iter_hermes_stream_events", fake_hermes_events)
     monkeypatch.setattr(chat_router, "_record_run_state", fake_record_run_state)
     monkeypatch.setattr(chat_router, "_persist_ag_ui_run", fake_persist_agui)
     monkeypatch.setattr(chat_router, "_persist_memory_candidates", fake_persist)
@@ -208,6 +208,59 @@ async def test_force_hermes_uses_single_chat_run_and_persists_once(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_force_hermes_surfaces_progress_events(monkeypatch):
+    async def fake_empty(*args, **kwargs):
+        return ""
+
+    async def fake_record_run_state(*args, **kwargs):
+        return None
+
+    async def fake_hermes_events(*args, **kwargs):
+        yield {
+            "kind": "progress",
+            "event": "hermes.tool.progress",
+            "payload": {"tool": "browser", "message": "Opening docs"},
+        }
+        yield {"kind": "token", "text": "Done"}
+
+    monkeypatch.setattr(chat_router, "_ensure_user_and_chat_session", fake_empty)
+    monkeypatch.setattr(chat_router, "_save_chat_message", fake_empty)
+    monkeypatch.setattr(chat_router, "_check_frustration", lambda *_, **__: None)
+    monkeypatch.setattr(chat_router, "_GUARDED_AUTO", False)
+    monkeypatch.setattr(chat_router, "_safe_load_portrait", fake_empty)
+    monkeypatch.setattr(chat_router, "_mempalace_load_user_facts", fake_empty)
+    monkeypatch.setattr(chat_router, "_build_memory_context", fake_empty)
+    monkeypatch.setattr(chat_router, "_iter_hermes_stream_events", fake_hermes_events)
+    monkeypatch.setattr(chat_router, "_record_run_state", fake_record_run_state)
+    monkeypatch.setattr(chat_router, "_persist_ag_ui_run", fake_empty)
+    monkeypatch.setattr(chat_router, "_persist_memory_candidates", fake_empty)
+
+    blocks = [
+        block
+        async for block in chat_router.chat_stream_generator(
+            "talk to hermes",
+            "session-hermes-progress",
+            {"user_id": "user-1", "username": "Zoe"},
+            force_agent="hermes",
+        )
+    ]
+
+    events = _decode_agui_events(blocks)
+    assert any(
+        event["type"] == "STATE_SNAPSHOT"
+        and event.get("snapshot", {}).get("phase") == "hermes_tool"
+        and event.get("snapshot", {}).get("detail") == "browser: Opening docs"
+        for event in events
+    )
+    assert any(
+        event["type"] == "CUSTOM"
+        and event.get("name") == "zoe.run_log"
+        and event.get("value", {}).get("source") == "hermes"
+        for event in events
+    )
+
+
+@pytest.mark.asyncio
 async def test_force_hermes_error_records_hermes_mode(monkeypatch):
     recorded_runs = []
     agui_runs = []
@@ -218,9 +271,9 @@ async def test_force_hermes_error_records_hermes_mode(monkeypatch):
     async def fake_empty(*args, **kwargs):
         return ""
 
-    async def fake_hermes_tokens(*args, **kwargs):
+    async def fake_hermes_events(*args, **kwargs):
         raise RuntimeError("hermes down")
-        yield ""
+        yield {}
 
     async def fake_persist_agui(session_id, run_id, events):
         agui_runs.append((session_id, run_id, events))
@@ -232,7 +285,7 @@ async def test_force_hermes_error_records_hermes_mode(monkeypatch):
     monkeypatch.setattr(chat_router, "_safe_load_portrait", fake_empty)
     monkeypatch.setattr(chat_router, "_mempalace_load_user_facts", fake_empty)
     monkeypatch.setattr(chat_router, "_build_memory_context", fake_empty)
-    monkeypatch.setattr(chat_router, "_iter_hermes_text_chunks", fake_hermes_tokens)
+    monkeypatch.setattr(chat_router, "_iter_hermes_stream_events", fake_hermes_events)
     monkeypatch.setattr(chat_router, "_record_run_state", fake_record_run_state)
     monkeypatch.setattr(chat_router, "_persist_ag_ui_run", fake_persist_agui)
 
@@ -309,9 +362,9 @@ async def test_zoe_agent_hermes_escalation_stays_in_parent_agui_run(monkeypatch)
     async def fake_zoe_stream(*args, **kwargs):
         yield "__ESCALATE_HERMES__:deep work|Hermes task"
 
-    async def fake_hermes_tokens(*args, **kwargs):
-        yield "Deep "
-        yield "answer"
+    async def fake_hermes_events(*args, **kwargs):
+        yield {"kind": "token", "text": "Deep "}
+        yield {"kind": "token", "text": "answer"}
 
     async def fake_persist(user_id, session_id, user_text, assistant_text):
         persisted_candidates.append((user_id, session_id, user_text, assistant_text))
@@ -326,7 +379,7 @@ async def test_zoe_agent_hermes_escalation_stays_in_parent_agui_run(monkeypatch)
     monkeypatch.setattr(chat_router, "_mempalace_load_user_facts", fake_empty)
     monkeypatch.setattr(chat_router, "_safe_load_portrait", fake_empty)
     monkeypatch.setattr(chat_router, "run_zoe_agent_streaming", fake_zoe_stream)
-    monkeypatch.setattr(chat_router, "_iter_hermes_text_chunks", fake_hermes_tokens)
+    monkeypatch.setattr(chat_router, "_iter_hermes_stream_events", fake_hermes_events)
     monkeypatch.setattr(chat_router, "_record_run_state", fake_record_run_state)
     monkeypatch.setattr(chat_router, "_persist_ag_ui_run", fake_persist_agui)
     monkeypatch.setattr(chat_router, "_persist_memory_candidates", fake_persist)

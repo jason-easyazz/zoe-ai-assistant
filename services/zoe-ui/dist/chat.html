@@ -2962,6 +2962,7 @@
             if (t === 'CUSTOM' && data.name === 'zoe.run_log') {
                 const v = data.value || {};
                 const msg = String(v.message || '');
+                if (v.source === 'hermes') showAgentPanel('Hermes Agent');
 
                 // Always update the thinking indicator text
                 if (thinkingIndicator && thinkingIndicator.parentNode && msg) {
@@ -3023,24 +3024,27 @@
                         const phase = snap.phase ? String(snap.phase) : '';
                         if (detail) {
                             el.textContent = detail;
-                        } else if (phase === 'openclaw') {
-                            el.textContent = 'OpenClaw: ' + (snap.model || 'agent') + '…';
+                        } else if (phase === 'openclaw' || phase === 'hermes' || phase === 'hermes_tool') {
+                            const label = phase === 'openclaw' ? 'OpenClaw' : 'Hermes';
+                            el.textContent = label + ': ' + (snap.model || 'agent') + '…';
                         } else {
                             el.textContent = 'Zoe is typing… (' + (snap.model || 'AI') + ')';
                         }
                     }
                     // Update banner detail from snapshot — don't open toolTraceEl while banner is active
-                    if (snap.phase === 'openclaw' && ctx.toolTraceEl && !ctx.longRun?.started) {
+                    if ((snap.phase === 'openclaw' || snap.phase === 'hermes_tool') && ctx.toolTraceEl && !ctx.longRun?.started) {
                         ensureTraceDisclosure(ctx);
                         ctx.toolTraceEl.style.display = 'flex';
                     }
-                    // Only show agent panel for tool-calling (openclaw) runs
-                    if (snap.phase === 'openclaw') {
-                        showAgentPanel(snap.model || 'OpenClaw');
+                    const isAgentPhase = snap.phase === 'openclaw' || snap.phase === 'hermes' || snap.phase === 'hermes_tool';
+                    if (isAgentPhase) {
+                        showAgentPanel(snap.model || (snap.phase === 'openclaw' ? 'OpenClaw' : 'Hermes Agent'));
                         const liveDetail = snap.detail
                             ? String(snap.detail)
-                            : 'Zoe is using the agent system (OpenClaw) to fulfil this request. Complex tasks like building widgets, pages, or new skills can take 1–3 minutes. You can cancel at any time.';
-                        showLongRunNotice(ctx, { detail: liveDetail });
+                            : 'Zoe is using the agent system to fulfil this request. Complex tasks can take 1–3 minutes. You can cancel at any time.';
+                        if (snap.phase === 'openclaw' || snap.phase === 'hermes_tool') {
+                            showLongRunNotice(ctx, { detail: liveDetail });
+                        }
                     } else if (snap.status === 'generating') {
                         // Non-openclaw phases: only surface the tile if we've
                         // been waiting a while (>20s) — small talk shouldn't

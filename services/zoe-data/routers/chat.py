@@ -1527,7 +1527,7 @@ async def chat_stream_generator(
                 )
             )
             response_text = ""
-            async for token in _iter_hermes_text_chunks(
+            async for hermes_event in _iter_hermes_stream_events(
                 message_for_processing,
                 session_id,
                 user_id,
@@ -1535,6 +1535,14 @@ async def chat_stream_generator(
                 portrait=_h_portrait,
                 facts=_h_combined_facts,
             ):
+                if hermes_event.get("kind") == "progress":
+                    for progress_event in _hermes_progress_events(
+                        hermes_event.get("event", "hermes.progress"),
+                        hermes_event.get("payload", {}),
+                    ):
+                        yield emit(progress_event)
+                    continue
+                token = hermes_event.get("text", "")
                 response_text += token
                 yield emit(
                     TextMessageChunkEvent(
@@ -2125,7 +2133,7 @@ async def chat_stream_generator(
                             )
                         )
                         response_text = full_response
-                        async for token in _iter_hermes_text_chunks(
+                        async for hermes_event in _iter_hermes_stream_events(
                             oc_task_text,
                             session_id,
                             user_id,
@@ -2133,6 +2141,14 @@ async def chat_stream_generator(
                             portrait=pi_portrait or "",
                             facts=pi_db_memory or "",
                         ):
+                            if hermes_event.get("kind") == "progress":
+                                for progress_event in _hermes_progress_events(
+                                    hermes_event.get("event", "hermes.progress"),
+                                    hermes_event.get("payload", {}),
+                                ):
+                                    yield emit(progress_event)
+                                continue
+                            token = hermes_event.get("text", "")
                             response_text += token
                             yield recorder.emit(
                                 enc,
@@ -2408,7 +2424,56 @@ def _build_hermes_payload(
     )
 
 
-async def _iter_hermes_text_chunks(
+def _hermes_progress_message(event_name: str, payload) -> tuple[str, str]:
+    if not isinstance(payload, dict):
+        text = str(payload or event_name)
+        return "Hermes", text
+    tool = (
+        payload.get("tool")
+        or payload.get("tool_name")
+        or payload.get("name")
+        or payload.get("skill")
+        or "Hermes"
+    )
+    detail = (
+        payload.get("message")
+        or payload.get("detail")
+        or payload.get("status")
+        or payload.get("phase")
+        or payload.get("step")
+        or event_name
+    )
+    return str(tool), str(detail)
+
+
+def _hermes_progress_events(event_name: str, payload) -> list:
+    tool, detail = _hermes_progress_message(event_name, payload)
+    label = f"{tool}: {detail}" if tool and tool != "Hermes" else detail
+    return [
+        StateSnapshotEvent(
+            type=EventType.STATE_SNAPSHOT,
+            snapshot={
+                "status": "generating",
+                "phase": "hermes_tool" if tool and tool != "Hermes" else "hermes",
+                "model": "Hermes Agent",
+                "detail": label,
+                "event": event_name,
+            },
+        ),
+        CustomEvent(
+            name="zoe.run_log",
+            value={
+                "level": "info",
+                "message": label,
+                "source": "hermes",
+                "event": event_name,
+                "payload": payload if isinstance(payload, dict) else {"value": payload},
+            },
+        ),
+    ]
+
+
+async def _iter_hermes_stream_events(
     message: str,
     session_id: str,
     user_id: str,
@@ -2417,7 +2482,7 @@ async def _iter_hermes_text_chunks(
     portrait: str = "",
     facts: str = "",
 ):
-    """Yield Hermes text tokens only; callers own AG-UI lifecycle and persistence."""
+    """Yield Hermes stream events; callers own AG-UI lifecycle and persistence."""
     import aiohttp
 
     full_text: list[str] = []
@@ -2437,13 +2502,25 @@ async def _iter_hermes_text_chunks(
                 json=payload,
                 timeout=aiohttp.ClientTimeout(total=120),
             ) as resp:
+                sse_event = ""
                 async for raw_line in resp.content:
                     line = raw_line.decode("utf-8", errors="replace").strip()
+                    if line.startswith("event:"):
+                        sse_event = line[6:].strip()
+                        continue
                     if not line.startswith("data:"):
                         continue
                     data_str = line[5:].strip()
                     if data_str == "[DONE]":
                         break
+                    if sse_event and sse_event != "message":
+                        try:
+                            payload = json.loads(data_str)
+                        except json.JSONDecodeError:
+                            payload = {"message": data_str}
+                        yield {"kind": "progress", "event": sse_event, "payload": payload}
+                        sse_event = ""
+                        continue
                     try:
                         chunk = json.loads(data_str)
                         delta = chunk.get("choices", [{}])[0].get("delta", {})
@@ -2452,12 +2529,12 @@ async def _iter_hermes_text_chunks(
                         continue
                     if token:
                         full_text.append(token)
-                        yield token
+                        yield {"kind": "token", "text": token}
     except Exception as exc:
         _hermes_error = True
         error_token = f"\n\n*[Hermes Agent error: {exc}]*"
         full_text.append(error_token)
-        yield error_token
+        yield {"kind": "token", "text": error_token}
     finally:
         # Log to llm_call_log so evolution_notice can include Hermes in health checks.
         # latency_ms < 0 is used as the error signal by evolution_notice.py.
@@ -2485,6 +2562,28 @@ async def _iter_hermes_text_chunks(
                 pass
 
         asyncio.ensure_future(_log_hermes_call())
+
+
+async def _iter_hermes_text_chunks(
+    message: str,
+    session_id: str,
+    user_id: str,
+    *,
+    username: str = "",
+    portrait: str = "",
+    facts: str = "",
+):
+    """Yield Hermes text tokens only; callers own AG-UI lifecycle and persistence."""
+    async for event in _iter_hermes_stream_events(
+        message,
+        session_id,
+        user_id,
+        username=username,
+        portrait=portrait,
+        facts=facts,
+    ):
+        if event.get("kind") == "token":
+            yield event.get("text", "")
 
 def _load_zoe_self_compact_for_chat() -> str:
     """Load compact Zoe self-description from file; falls back to empty string."""
@@ -2551,7 +2650,7 @@ async def _hermes_stream_generator(
     yield recorder.emit(enc, TextMessageStartEvent(type=EventType.TEXT_MESSAGE_START, message_id=assistant_message_id, role="assistant"))
 
     full_text = []
-    async for token in _iter_hermes_text_chunks(
+    async for hermes_event in _iter_hermes_stream_events(
         message,
         session_id,
         user_id,
@@ -2559,6 +2658,14 @@ async def _hermes_stream_generator(
         portrait=portrait,
         facts=facts,
     ):
+        if hermes_event.get("kind") == "progress":
+            for progress_event in _hermes_progress_events(
+                hermes_event.get("event", "hermes.progress"),
+                hermes_event.get("payload", {}),
+            ):
+                yield recorder.emit(enc, progress_event)
+            continue
+        token = hermes_event.get("text", "")
         full_text.append(token)
         yield recorder.emit(enc, TextMessageChunkEvent(
             type=EventType.TEXT_MESSAGE_CHUNK,
