@@ -294,6 +294,12 @@ async def test_run_board_review_skips_autopilot_wrapper_issues(monkeypatch):
                     "description": "Scheduled autopilot run for: Board Review",
                 },
                 {
+                    "id": "issue-autopilot-upper",
+                    "title": "AUTOPILOT: Daily Sync",
+                    "assignee_id": multica_autopilot_sync._HERMES_AGENT_ID,
+                    "description": "Scheduled autopilot run for: Daily Sync",
+                },
+                {
                     "id": "issue-real",
                     "title": "Fix board review recursion",
                     "assignee_id": multica_autopilot_sync._HERMES_AGENT_ID,
