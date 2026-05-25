@@ -2787,15 +2787,18 @@ async def voice_command(
                         if delta.startswith(("__ESCALATE__:", "__ESCALATE_BG__:", "__ESCALATE_HERMES__:")):
                             try:
                                 is_bg = delta.startswith("__ESCALATE_BG__:")
+                                is_hermes = delta.startswith("__ESCALATE_HERMES__:")
                                 _, body = delta.split(":", 1)
                                 reason, _, oc_task = body.partition("|")
                                 hermes_prompt = (oc_task or text).strip()
-                                logger.info("voice/command stream escalation -> Hermes background=%s reason=%s", is_bg, reason or "unspecified")
+                                logger.info("voice/command stream escalation -> Hermes background=%s hermes=%s reason=%s", is_bg, is_hermes, reason or "unspecified")
                                 if is_bg:
                                     from background_runner import enqueue_background_task
                                     asyncio.ensure_future(enqueue_background_task(hermes_prompt, effective_user, session_id))
                                     delta = "I'll work on that in the background and let you know when it's done."
                                 else:
+                                    # Voice foreground turns should answer aloud when possible;
+                                    # long-running work still uses the explicit background marker.
                                     try:
                                         await _bc_stream.broadcast("all", "voice:responding", {
                                             "panel_id": panel_id,
@@ -2893,15 +2896,18 @@ async def voice_command(
                     try:
                         from push import broadcaster as _bc_escalate
                         is_bg = delta.startswith("__ESCALATE_BG__:")
+                        is_hermes = delta.startswith("__ESCALATE_HERMES__:")
                         _, body = delta.split(":", 1)
                         reason, _, oc_task = body.partition("|")
                         hermes_prompt = (oc_task or text).strip()
-                        logger.info("voice/command escalation -> Hermes background=%s reason=%s", is_bg, reason or "unspecified")
+                        logger.info("voice/command escalation -> Hermes background=%s hermes=%s reason=%s", is_bg, is_hermes, reason or "unspecified")
                         if is_bg:
                             from background_runner import enqueue_background_task
                             asyncio.ensure_future(enqueue_background_task(hermes_prompt, effective_user, session_id))
                             delta = "I'll work on that in the background and let you know when it's done."
                         else:
+                            # Voice foreground turns should answer aloud when possible;
+                            # long-running work still uses the explicit background marker.
                             try:
                                 await _bc_escalate.broadcast("all", "voice:responding", {
                                     "panel_id": panel_id,

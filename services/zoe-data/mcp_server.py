@@ -1751,11 +1751,10 @@ async def _execute_tool(db, name: str, args: dict):
                 return {"error": f"Unknown agent: {agent_name}"}
             if agent_name == "hermes":
                 from background_runner import enqueue_background_task  # type: ignore[import]
-                caller_user_id = _uid_raw or "family-admin"
                 session_id = args.get("session_id") or None
                 task_id = await enqueue_background_task(
                     task,
-                    str(caller_user_id),
+                    str(user_id),
                     session_id=str(session_id) if session_id else None,
                     request_depth=int(args.get("request_depth") or 0),
                 )
