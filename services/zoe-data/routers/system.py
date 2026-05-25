@@ -1,4 +1,5 @@
 import asyncio
+import hmac
 import json
 import logging
 import os
@@ -1256,6 +1257,19 @@ async def board_cancel(task_id: str, user: dict = Depends(get_current_user)):
     return {"ok": True, "task_id": task_id, "status": "cancelled"}
 
 
+def _multica_webhook_dispatch_allowed(request: Request) -> bool:
+    """Return True when a webhook is allowed to start code-changing work."""
+    secret = os.environ.get("MULTICA_WEBHOOK_SECRET", "").strip()
+    if not secret:
+        return False
+    auth = request.headers.get("authorization", "")
+    token = request.headers.get("x-multica-webhook-token", "")
+    return (
+        hmac.compare_digest(auth, f"Bearer {secret}")
+        or hmac.compare_digest(token, secret)
+    )
+
+
 @_agent_card_router.post("/board/webhook")
 async def multica_webhook(request: Request):
     """Receive Multica webhook events and update evolution proposal status."""
@@ -1299,11 +1313,14 @@ async def multica_webhook(request: Request):
                 "Multica webhook: %s issue=%s assignee=%s",
                 event, issue.get("identifier"), issue.get("assignee_id"),
             )
-            hermes_agent_id = os.environ.get(
-                "HERMES_MULTICA_AGENT_ID",
-                "019ae0a7-62f1-47fe-9d46-75fd0ae5d570",
-            )
+            from multica_autopilot_sync import _HERMES_AGENT_ID as hermes_agent_id  # type: ignore[import]
             if str(issue.get("assignee_id") or "") == hermes_agent_id:
+                if not _multica_webhook_dispatch_allowed(request):
+                    logger.warning(
+                        "Multica webhook: skipped Hermes dispatch for issue=%s; webhook dispatch auth missing",
+                        issue.get("identifier") or issue.get("id"),
+                    )
+                    return {"ok": True, "dispatched": False, "reason": "dispatch auth required"}
                 try:
                     from engineering_workflow import create_and_start_engineering_task  # type: ignore[import]
                     issue_id = str(issue.get("id") or "")

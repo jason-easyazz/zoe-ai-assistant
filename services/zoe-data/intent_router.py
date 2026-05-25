@@ -163,6 +163,18 @@ _HA_FULL_SETUP_RE = re.compile(
     re.IGNORECASE,
 )
 
+_ENGINEERING_TASK_RE = re.compile(
+    r"^(?:offload|delegate|assign|ask)\s+(?:this\s+)?(?:to\s+)?hermes\s+(?:to\s+)?(?P<task>.+)$"
+    r"|^(?:create|start|queue)\s+(?:an?\s+)?engineering\s+task\s+(?:for\s+)?(?P<task2>.+)$",
+    re.I,
+)
+
+_ENGINEERING_STATUS_RE = re.compile(
+    r"\b(?:engineering|hermes)\s+(?:task|workflow|pr)\s+(?:status|progress)\b"
+    r"|\bwhat'?s?\s+(?:the\s+)?(?:hermes|engineering)\s+(?:status|progress)\b",
+    re.I,
+)
+
 
 def _is_ha_full_setup_message(t: str) -> bool:
     """True when the user wants the full HA bootstrap (onboarding, token, proxy trust, bridge)."""
@@ -1103,22 +1115,12 @@ def detect_intent(
     if _BOARD_RE.search(t):
         return Intent("board_status", {})
 
-    _ENGINEERING_TASK_RE = re.compile(
-        r"^(?:offload|delegate|assign|ask)\s+(?:this\s+)?(?:to\s+)?hermes\s+(?:to\s+)?(?P<task>.+)$"
-        r"|^(?:create|start|queue)\s+(?:an?\s+)?engineering\s+task\s+(?:for\s+)?(?P<task2>.+)$",
-        re.I,
-    )
     _eng_match = _ENGINEERING_TASK_RE.search(text.strip())
     if _eng_match:
         task_text = (_eng_match.group("task") or _eng_match.group("task2") or "").strip()
         if task_text:
             return Intent("engineering_task_create", {"task": task_text})
 
-    _ENGINEERING_STATUS_RE = re.compile(
-        r"\b(?:engineering|hermes)\s+(?:task|workflow|pr)\s+(?:status|progress)\b"
-        r"|\bwhat'?s?\s+(?:the\s+)?(?:hermes|engineering)\s+(?:status|progress)\b",
-        re.I,
-    )
     if _ENGINEERING_STATUS_RE.search(t):
         return Intent("engineering_task_status", {})
 

@@ -6,6 +6,7 @@ This workflow lets Zoe track engineering work from a Multica issue through Herme
 
 - `ZOE_MULTICA=true`
 - `MULTICA_BASE_URL`, `MULTICA_API_TOKEN`, and `MULTICA_WORKSPACE_ID`
+- `MULTICA_WEBHOOK_SECRET` for any webhook path that starts Hermes
 - `HERMES_MULTICA_AGENT_ID` set to the Hermes agent ID in Multica
 - Hermes running on `HERMES_API_URL` or `http://127.0.0.1:8642`
 - GitHub auth available to Hermes through `gh` or `GITHUB_TOKEN`
@@ -19,6 +20,8 @@ This workflow lets Zoe track engineering work from a Multica issue through Herme
 4. Zoe reconciles the linked `background_tasks` row and records the PR URL.
 5. Zoe checks Greptile through MCP-compatible tools and updates workflow phase plus Multica issue status.
 6. The workflow stops at `ready_for_human`, `blocked`, `cancelled`, or `done`.
+
+Multica webhooks can sync proposal status without the secret, but they cannot start Hermes unless they send either `Authorization: Bearer $MULTICA_WEBHOOK_SECRET` or `X-Multica-Webhook-Token: $MULTICA_WEBHOOK_SECRET`.
 
 ## API Smoke Procedure
 
