@@ -2328,6 +2328,152 @@
             .send-btn:hover:not(:disabled) { transform: none; box-shadow: none; }
         }
 
+        /* Premium chat trace polish: keep execution detail available but quiet. */
+        .trace-disclosure {
+            margin: 8px 0 0 32px;
+            max-width: min(640px, calc(100% - 32px));
+            color: var(--clr-text-2);
+        }
+        .trace-disclosure > summary {
+            list-style: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 9px;
+            border-radius: 999px;
+            border: 1px solid rgba(100,116,139,0.16);
+            background: rgba(255,255,255,0.42);
+            color: var(--clr-text-3);
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            user-select: none;
+        }
+        .trace-disclosure > summary::-webkit-details-marker { display: none; }
+        .trace-disclosure > summary:hover,
+        .trace-disclosure > summary:focus-visible {
+            color: var(--clr-primary);
+            border-color: rgba(123,97,255,0.28);
+            background: rgba(123,97,255,0.07);
+            outline: none;
+        }
+        .trace-chevron { font-size: 12px; transition: transform 0.18s ease; }
+        .trace-disclosure[open] .trace-chevron { transform: rotate(90deg); }
+        .trace-body { margin-top: 7px; display: flex; flex-direction: column; gap: 6px; }
+        .run-meta-badge {
+            align-self: flex-start;
+            padding: 5px 9px;
+            border-radius: 9px;
+            background: rgba(15,23,42,0.035);
+            border: 1px solid rgba(100,116,139,0.12);
+            color: var(--clr-text-3);
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 10.5px;
+            line-height: 1.35;
+        }
+        .trace-body .subgraph-card {
+            margin: 0;
+            background: rgba(255,255,255,0.38);
+            backdrop-filter: blur(14px);
+            border: 1px solid rgba(123,97,255,0.10);
+            border-radius: 12px;
+            padding: 10px 12px;
+        }
+        .trace-body .subgraph-header { margin-bottom: 8px; }
+        .trace-body .subgraph-title { font-size: 12px; }
+        .trace-body .subgraph-icon { font-size: 13px; }
+        .trace-body .subgraph-step {
+            gap: 8px;
+            padding: 6px 8px;
+            background: rgba(255,255,255,0.36);
+            border-radius: 9px;
+            font-size: 11.5px;
+        }
+        .trace-body .subgraph-result {
+            margin-top: 8px;
+            padding: 8px 10px;
+            border-radius: 9px;
+        }
+        .trace-body .tool-trace-panel { margin: 0; }
+        .trace-body .tool-call-card {
+            background: rgba(255,255,255,0.36);
+            backdrop-filter: blur(14px);
+            border: 1px solid rgba(100,116,139,0.13);
+            border-radius: 12px;
+            transition: border-color 0.2s, background 0.2s;
+        }
+        .trace-body .tool-call-card.tool-run-log { border-color: rgba(99,102,241,0.16); }
+        .trace-body .tool-call-summary { padding: 8px 10px; }
+        .trace-body .tool-call-icon {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 34px;
+            height: 20px;
+            padding: 0 7px;
+            border-radius: 999px;
+            background: rgba(123,97,255,0.08);
+            color: var(--clr-primary);
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            opacity: 1;
+            flex-shrink: 0;
+        }
+        .trace-body .tool-call-name {
+            font-size: 11px;
+            color: var(--clr-text-2);
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .trace-body .tool-call-body { padding: 0 10px 10px; }
+        .trace-body .tool-call-args,
+        .trace-body .tool-call-result {
+            background: rgba(15,23,42,0.025);
+            border: 1px solid rgba(100,116,139,0.10);
+            border-radius: 8px;
+        }
+        .tool-call-heartbeat {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 10px;
+            border-radius: 12px;
+            background: rgba(255,255,255,0.30);
+            border: 1px solid rgba(100,116,139,0.12);
+            color: var(--clr-text-3);
+            font-size: 12px;
+        }
+        .message-actions {
+            gap: 4px;
+            flex-wrap: wrap;
+        }
+        .message-group:hover .message-actions,
+        .message-actions:focus-within {
+            opacity: 1;
+        }
+        .message-actions .action-btn {
+            padding: 5px 9px;
+            background: rgba(255,255,255,0.42);
+            border: 1px solid rgba(100,116,139,0.14);
+            border-radius: 999px;
+            color: var(--clr-text-3);
+            font-size: 11.5px;
+            font-weight: 600;
+        }
+        .message-actions .action-btn:hover {
+            background: rgba(123,97,255,0.08);
+            border-color: rgba(123,97,255,0.28);
+            color: var(--clr-primary);
+        }
+        @media (pointer: coarse) {
+            .message-actions { opacity: 1; }
+            .message-actions .action-btn { min-height: 34px; padding: 7px 11px; }
+        }
+
     </style>
 <!-- PWA Meta Tags -->
     <meta name="application-name" content="Zoe AI">
@@ -2646,18 +2792,49 @@
             });
         }
 
+        function ensureTraceDisclosure(ctx) {
+            if (!ctx || !ctx.group || !ctx.contentEl || !ctx.toolTraceEl) return null;
+            if (ctx.traceDisclosureEl) return ctx.traceDisclosureEl;
+
+            const disclosure = document.createElement('details');
+            disclosure.className = 'trace-disclosure';
+            disclosure.innerHTML =
+                '<summary aria-label="Show technical details">' +
+                    '<span class="trace-chevron">›</span>' +
+                    '<span class="trace-summary-label">Details</span>' +
+                '</summary>' +
+                '<div class="trace-body">' +
+                    '<div class="trace-meta"></div>' +
+                '</div>';
+
+            const body = disclosure.querySelector('.trace-body');
+            const meta = disclosure.querySelector('.trace-meta');
+            body.appendChild(ctx.toolTraceEl);
+            ctx.traceDisclosureEl = disclosure;
+            ctx.traceBodyEl = body;
+            ctx.traceMetaEl = meta;
+
+            if (ctx.contentEl.nextSibling) {
+                ctx.group.insertBefore(disclosure, ctx.contentEl.nextSibling);
+            } else {
+                ctx.group.appendChild(disclosure);
+            }
+            return disclosure;
+        }
+
         function ensureToolCallCard(ctx, toolCallId, toolCallName) {
             if (!ctx.toolTraceEl || !toolCallId) return null;
+            ensureTraceDisclosure(ctx);
             ctx.toolTraceEl.style.display = 'flex';
             let card = ctx.toolTraceEl.querySelector('[data-tool-call-id="' + toolCallId + '"]');
             if (!card) {
                 card = document.createElement('details');
                 card.className = 'tool-call-card';
                 card.dataset.toolCallId = toolCallId;
-                card.open = true;
+                card.open = false;
                 card.innerHTML =
                     '<summary class="tool-call-summary">' +
-                        '<span class="tool-call-icon">⚙</span>' +
+                        '<span class="tool-call-icon">Tool</span>' +
                         '<span class="tool-call-name"></span>' +
                         '<span class="tool-call-status running">running</span>' +
                         '<span class="tool-call-chevron">›</span>' +
@@ -2735,8 +2912,8 @@
             // Keep tool trace hidden after agent run — only restore message-header.
             if (ctx.group) {
                 ctx.group.classList.remove('agent-running');
-                // Permanently suppress the tool trace panel once a long run is done.
-                if (ctx.toolTraceEl) ctx.toolTraceEl.style.display = 'none';
+                // Keep trace available when it lives under the Details disclosure.
+                if (ctx.toolTraceEl && !ctx.traceDisclosureEl) ctx.toolTraceEl.style.display = 'none';
             }
         }
 
@@ -2758,12 +2935,12 @@
             if (t === 'CUSTOM' && data.name === 'zoe.run_meta') {
                 const v = data.value || {};
                 if (v.runId) {
-                    let runBadge = group.querySelector('.run-meta-badge');
+                    ensureTraceDisclosure(ctx);
+                    let runBadge = ctx.traceMetaEl && ctx.traceMetaEl.querySelector('.run-meta-badge');
                     if (!runBadge) {
                         runBadge = document.createElement('div');
                         runBadge.className = 'run-meta-badge';
-                        runBadge.style.cssText = 'font-size:0.72em;color:#94a3b8;margin:0 0 6px 0;';
-                        group.insertBefore(runBadge, ctx.toolTraceEl || contentEl);
+                        if (ctx.traceMetaEl) ctx.traceMetaEl.appendChild(runBadge);
                     }
                     runBadge.textContent = `Run ${v.runId} • mode ${v.mode || 'chat'}`;
                 }
@@ -2781,6 +2958,7 @@
 
                 const panel = ctx.toolTraceEl;
                 if (!panel) return;
+                ensureTraceDisclosure(ctx);
                 panel.style.display = 'flex';
 
                 if (v.heartbeat) {
@@ -2794,8 +2972,7 @@
                     if (!hb) {
                         hb = document.createElement('div');
                         hb.className = 'tool-call-heartbeat';
-                        hb.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 12px;font-size:12px;color:var(--clr-text-3);border-top:1px solid rgba(123,97,255,0.08);';
-                        hb.innerHTML = '<span style="animation:long-run-spin 1.4s linear infinite;display:inline-block">⏳</span><span class="hb-text"></span>';
+                        hb.innerHTML = '<span class="tool-call-icon">Live</span><span class="hb-text"></span>';
                         panel.appendChild(hb);
                     }
                     hb.querySelector('.hb-text').textContent = msg;
@@ -2807,7 +2984,7 @@
                     const lvl = (v.level || 'info').toUpperCase();
                     log.innerHTML =
                         '<summary class="tool-call-summary">' +
-                            '<span class="tool-call-icon">📋</span>' +
+                            '<span class="tool-call-icon">Log</span>' +
                             '<span class="tool-call-name">' + escapeHtml(msg.slice(0, 90)) + '</span>' +
                             '<span class="tool-call-status complete">' + escapeHtml(lvl) + '</span>' +
                             '<span class="tool-call-chevron">›</span>' +
@@ -2841,6 +3018,7 @@
                     }
                     // Update banner detail from snapshot — don't open toolTraceEl while banner is active
                     if (snap.phase === 'openclaw' && ctx.toolTraceEl && !ctx.longRun?.started) {
+                        ensureTraceDisclosure(ctx);
                         ctx.toolTraceEl.style.display = 'flex';
                     }
                     // Only show agent panel for tool-calling (openclaw) runs
@@ -2890,8 +3068,13 @@
                         '<span class="subgraph-status running">running</span>' +
                     '</div>' +
                     '<div class="subgraph-steps" data-sg-steps></div>';
-                // Insert BEFORE toolTraceEl so card appears above the tool trace panel
-                group.insertBefore(card, ctx.toolTraceEl);
+                ensureTraceDisclosure(ctx);
+                // Keep execution trace below the assistant reply, inside Details.
+                if (ctx.traceBodyEl) {
+                    ctx.traceBodyEl.insertBefore(card, ctx.toolTraceEl);
+                } else {
+                    group.insertBefore(card, ctx.toolTraceEl);
+                }
                 ctx.activeSubgraphCard = card;
                 showAgentPanel(stepName);
                 return;
@@ -3125,7 +3308,7 @@
                 badge.className = 'skill-badge';
                 badge.style.cssText = 'font-size:0.75em;color:#64b5f6;margin-bottom:4px;opacity:0.85;';
                 badge.textContent = '🎯 ' + (data.data || '') + ' (Tier ' + (data.tier || '?') + ')';
-                group.insertBefore(badge, ctx.toolTraceEl || contentEl);
+                group.insertBefore(badge, ctx.traceDisclosureEl || ctx.toolTraceEl || contentEl);
                 return;
             }
             if (t === 'agent_state_delta') {
@@ -3197,7 +3380,7 @@
                         badge.className = 'skill-badge';
                         badge.style.cssText = 'font-size:0.75em;color:#64b5f6;margin-bottom:4px;opacity:0.85;';
                         badge.textContent = si.name + ' (Tier ' + (si.tier || '?') + ')';
-                        group.insertBefore(badge, ctx.toolTraceEl || contentEl);
+                        group.insertBefore(badge, ctx.traceDisclosureEl || ctx.toolTraceEl || contentEl);
                     }
                 }
                 if (currentSessionId && stream.text) {
@@ -4033,16 +4216,16 @@
             const assistants = container.querySelectorAll('.message-group.assistant');
             const isLastAssistant = assistants.length && assistants[assistants.length - 1] === group;
             const regenBtn = (isLastAssistant && lastSubmittedUserMessage)
-                ? '<button type="button" class="action-btn" onclick="regenerateLastResponse(this)">↻ Regenerate</button>'
+                ? '<button type="button" class="action-btn" onclick="regenerateLastResponse(this)" aria-label="Regenerate response">Regenerate</button>'
                 : '';
             const actions = document.createElement('div');
             actions.className = 'message-actions';
             actions.setAttribute('data-interaction-id', interactionId || 'unknown');
             actions.innerHTML = `
-                <button type="button" class="action-btn" onclick="copyMessage(this)">📋 Copy</button>
-                <button type="button" class="action-btn" onclick="feedbackPositive(this)">👍 Good</button>
-                <button type="button" class="action-btn" onclick="feedbackNegative(this)">👎 Bad</button>
-                <button type="button" class="action-btn" onclick="correctResponse(this)">✏️ Correct</button>
+                <button type="button" class="action-btn" onclick="copyMessage(this)" aria-label="Copy response">Copy</button>
+                <button type="button" class="action-btn" onclick="feedbackPositive(this)" aria-label="Mark response as good">Good</button>
+                <button type="button" class="action-btn" onclick="feedbackNegative(this)" aria-label="Mark response as bad">Bad</button>
+                <button type="button" class="action-btn" onclick="correctResponse(this)" aria-label="Correct response">Correct</button>
                 ${regenBtn}
             `;
             group.appendChild(actions);
@@ -4144,6 +4327,8 @@
                 contentEl.appendChild(container);
             } else if (messageGroup) {
                 messageGroup.appendChild(container);
+                const trace = messageGroup.querySelector('.trace-disclosure');
+                if (trace) messageGroup.appendChild(trace);
             }
             scrollToBottom();
         }
@@ -5823,8 +6008,8 @@
             const messageGroup = btn.closest('.message-group');
             const messageText = messageGroup.querySelector('.message-content').innerText;
             navigator.clipboard.writeText(messageText).then(() => {
-                btn.textContent = '✓ Copied';
-                setTimeout(() => { btn.textContent = '📋 Copy'; }, 2000);
+                btn.textContent = 'Copied';
+                setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
             });
         }
 
