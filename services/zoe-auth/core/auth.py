@@ -171,15 +171,17 @@ class AuthManager:
                         account_verified=bool(is_verified)
                     )
 
-                if locked_until_dt and datetime.now() < locked_until_dt:
-                    self._log_auth_attempt(user_id, "password", "failure",
-                                         "account_locked", ip_address)
-                    return AuthValidationResult(
-                        success=False,
-                        error_message="Account is locked",
-                        locked_until=locked_until_dt,
-                        account_verified=bool(is_verified)
-                    )
+                if locked_until_dt:
+                    if datetime.now() < locked_until_dt:
+                        self._log_auth_attempt(user_id, "password", "failure",
+                                             "account_locked", ip_address)
+                        return AuthValidationResult(
+                            success=False,
+                            error_message="Account is locked",
+                            locked_until=locked_until_dt,
+                            account_verified=bool(is_verified)
+                        )
+                    failed_attempts = 0
 
                 # Verify password
                 if password_hash and bcrypt.checkpw(password.encode('utf-8'), password_hash.encode('utf-8')):
