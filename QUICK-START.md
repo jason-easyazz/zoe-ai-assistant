@@ -30,7 +30,7 @@ XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user restart zoe-data.service
 ```bash
 cd /home/zoe/assistant
 XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user stop zoe-data.service
-docker compose stop zoe-ui zoe-auth homeassistant homeassistant-mcp-bridge
+docker compose stop zoe-ui zoe-auth homeassistant homeassistant-mcp-bridge zoe-database
 ```
 
 ## Troubleshooting
