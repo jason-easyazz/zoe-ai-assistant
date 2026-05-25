@@ -1,426 +1,107 @@
-# Cursor & AI Assistant Best Practices for Zoe
+# Cursor And AI Assistant Best Practices For Zoe
 
-**Date**: October 18, 2025  
-**Purpose**: Prevent work duplication and ensure context awareness
+**Purpose**: Keep agent-assisted work small, reviewable, and aligned with Zoe's current architecture.
 
----
+This guide replaces the old recent-changes workflow. Use the current context sources below instead of retired snapshot files or briefing scripts.
 
-## 🎯 The Problem
+## Current Context Sources
 
-When working with AI assistants like Cursor, there's a risk of:
-- ❌ **Duplicating work** that was just completed
-- ❌ **Not knowing about new tools** that were recently added
-- ❌ **Breaking recent changes** by implementing conflicting features
-- ❌ **Wasting time** recreating what exists
+Use these sources before broad or risky work:
 
----
+- `graphify-out/GRAPH_REPORT.md` for a map of Zoe's codebase.
+- `AGENTS.md` for repo-level agent instructions.
+- `.cursor/rules/*.mdc` for Cursor-specific rules.
+- `.zoe/AI_ASSISTANT_CHECKLIST.md` and `.zoe/manifest.json` before file changes.
+- `git status --short --branch` and recent commits for branch state.
+- Focused source reads and `rg` searches for the actual files involved.
 
-## ✅ The Solution: Multi-Layer Context System
+For architecture or cross-module questions, start with Graphify. If the graph is stale, treat it as a rough map and verify against source.
 
-We've implemented a **3-layer context system** to ensure Cursor/AI always knows what's been done:
+## Development Loop
 
-### **Layer 1: RECENT_CHANGES.md (PRIMARY)**
+1. Understand the request and current branch state.
+2. Search existing code before creating new abstractions.
+3. For third-party packages, use `opensrc` or upstream source before guessing APIs.
+4. Plan first for broad, risky, or multi-file changes.
+5. Build the minimal working feature first.
+6. Run a cleanup pass for duplicated runtime mechanics after the feature works.
+7. Verify with focused tests and Zoe validators.
+8. Use a small PR and Greptile review loop for mergeable work.
 
-**Location**: `/home/zoe/assistant/RECENT_CHANGES.md`
+Keep domain policy in routes, actions, intents, and UI handlers. Move only reusable mechanics into service-layer helpers.
 
-**Purpose**: Quick snapshot of recent work
+## Source Context
 
-**Cursor Should**:
-- ✅ **Read this FIRST** before any new work
-- ✅ Check "This Week" section for latest changes
-- ✅ Check "Active Work" to avoid conflicts
-- ✅ Check "New Tools Available" to use existing features
-- ✅ Check "Don't Duplicate" list before creating new tools
-
-**Update Frequency**: After every major feature/change
-
-**Example Usage**:
-```markdown
-## 🆕 This Week (Oct 14-18)
-- ✅ Implemented project governance system
-- ✅ Created schema-based database management
-- ✅ Added 12 automated compliance checks
-
-## Don't Duplicate These (Already Done):
-- ❌ Database initialization system (exists)
-- ❌ CHANGELOG generator (exists)
-- ❌ Commit validation (exists)
-```
-
----
-
-### **Layer 2: Context Briefing Script (AUTOMATED)**
-
-**Location**: `/home/zoe/assistant/scripts/utilities/context_briefing.sh`
-
-**Purpose**: Automated context gathering
-
-**Run Before Starting Work**:
-```bash
-./scripts/utilities/context_briefing.sh
-```
-
-**Shows**:
-- 📅 Recent changes summary
-- 📊 Last 7 days activity
-- 🏥 Repository health
-- 📋 Last 10 commits
-- 🏷️ Recent version tags
-- 🔍 Uncommitted changes
-- 📐 Structure compliance
-- 🛠️ Available tools
-- 📚 Must-read docs
-
-**Benefits**:
-- Complete overview in 30 seconds
-- Identifies recent additions
-- Shows current state
-- Lists available tools
-
----
-
-### **Layer 3: Weekly Summaries (HISTORICAL)**
-
-**Command**: `./tools/reports/weekly_summary.sh [weeks_ago]`
-
-**Purpose**: See what changed over time
-
-**Usage**:
-```bash
-# Last week
-./tools/reports/weekly_summary.sh
-
-# Last 2 weeks
-./tools/reports/weekly_summary.sh 2
-
-# Last month
-./tools/reports/weekly_summary.sh 4
-```
-
-**Shows**:
-- Commit counts by type (feat, fix, db, docs, etc.)
-- Contributors
-- Files changed
-- Lines added/removed
-- Recent commits
-- Tags created
-
----
-
-## 📋 Standard Workflow for Cursor/AI
-
-### **BEFORE Starting Any New Work**
+Reference source code instead of stale docs when integrating packages or tools:
 
 ```bash
-# Step 1: Read recent changes (CRITICAL)
-cat /home/zoe/assistant/RECENT_CHANGES.md
-
-# Step 2: Run context briefing
-./scripts/utilities/context_briefing.sh
-
-# Step 3: Check specific areas
-python3 tools/reports/repo_health.py
-python3 tools/audit/enforce_structure.py
+opensrc path pypi:<package>
+opensrc path owner/repo
 ```
 
-### **DURING Work**
+Keep external source caches outside the repo under `~/.opensrc/repos/`. Do not vendor reference repos into `/home/zoe/assistant`.
+
+Avoid adding dependencies younger than 14 days unless the operator explicitly approves the risk.
+
+## Hermes And Skills
+
+Hermes is the default escalation agent for Zoe engineering, planning, review, repair, Greptile loops, Graphify-guided work, and board repair.
+
+Useful local Hermes skills live under `~/.hermes/skills`:
+
+- `zoe-engineering`
+- `source-code-context`
+- `code-structure-cleanup`
+- `github-greptile-loop`
+- `zoe-graphify`
+- `zoe-status-refresh`
+
+These are operator-level Hermes skills. Do not copy them into Zoe runtime `skills/` unless the goal is to expose them as user-facing Zoe capabilities.
+
+OpenClaw remains a manual fallback only when the operator explicitly asks for OpenClaw or Hermes lacks a needed workflow.
+
+## Review Workflow
+
+For reviewable changes:
+
+1. Work on a feature branch.
+2. Keep the diff small enough to review.
+3. Push a focused PR against `main`.
+4. Let Greptile review independently.
+5. Use Greptile MCP first, or `~/bin/greptile-mcp.py` (install path varies by host; see `/grep-loop`) if MCP tools are unavailable.
+6. Fix real correctness, security, data-loss, behavior, or test findings.
+7. Re-run focused tests and trigger Greptile re-review.
+
+Do not push directly to `main`, bypass branch protection, or force-push protected branches.
+
+## Verification
+
+Run these for most docs/rules or light backend changes:
 
 ```bash
-# Check if tool/feature already exists
-grep -r "function_name" /home/zoe/assistant/
-
-# Check recent commits for related work
-git log --all --grep="keyword" --oneline
-
-# See who worked on this area recently
-git log --since="1 week ago" -- path/to/file
+python3 tools/audit/validate_structure.py
+python3 tools/audit/validate_critical_files.py
 ```
 
-### **AFTER Making Changes**
+For backend Python changes, add focused tests and syntax checks:
 
 ```bash
-# 1. Update RECENT_CHANGES.md
-# Add your work to "This Week" section
-
-# 2. Verify structure compliance
-python3 tools/audit/enforce_structure.py
-
-# 3. Commit with conventional format
-git commit -m "feat(component): Description"
+python3 -m pytest services/zoe-data/tests/<relevant_test>.py -q
+python3 -m py_compile services/zoe-data/<changed_file>.py
 ```
 
----
+For live system changes, also check:
 
-## 🚨 Critical Checks Before Creating New Features
-
-### **1. Does It Already Exist?**
-
-**Check**:
 ```bash
-# Search codebase
-grep -r "feature_name" /home/zoe/assistant/
-
-# Check tools directory
-ls -la /home/zoe/assistant/tools/
-
-# Check scripts
-ls -la /home/zoe/assistant/scripts/
-
-# Read RECENT_CHANGES.md
-cat RECENT_CHANGES.md | grep -A 20 "New Tools"
+curl -sf http://127.0.0.1:8000/health
+curl -sf http://127.0.0.1:8000/api/system/status
 ```
 
-**Already Exists**:
-- ✅ Database initialization (`scripts/setup/init_databases.sh`)
-- ✅ CHANGELOG generator (`tools/generators/generate_changelog.py`)
-- ✅ Commit validation (`tools/audit/validate_commit_message.sh`)
-- ✅ Weekly summaries (`tools/reports/weekly_summary.sh`)
-- ✅ Repository health (`tools/reports/repo_health.py`)
-- ✅ Structure enforcement (`tools/audit/enforce_structure.py` - 12 checks)
-- ✅ Schema export (`scripts/maintenance/export_schema.sh`)
-
-### **2. Will It Conflict?**
-
-**Check**:
-```bash
-# See active work
-cat RECENT_CHANGES.md | grep -A 10 "Active Work"
-
-# Check uncommitted changes
-git status
-
-# See recent changes to same files
-git log --since="1 week ago" -- path/to/file
-```
-
-### **3. Does Documentation Cover It?**
-
-**Check**:
-```bash
-# Search all documentation
-grep -r "topic" /home/zoe/assistant/docs/
-
-# Check recent docs
-ls -lt /home/zoe/assistant/docs/guides/ | head -10
-```
-
----
-
-## 🎓 Best Practices for AI Assistants
-
-### **DO**
-- ✅ **Always** read `RECENT_CHANGES.md` first
-- ✅ **Run** context briefing before major changes
-- ✅ **Check** weekly summaries for recent activity
-- ✅ **Search** codebase before creating new tools
-- ✅ **Update** RECENT_CHANGES.md after your work
-- ✅ **Use** conventional commits format
-- ✅ **Follow** PROJECT_STRUCTURE_RULES.md
-
-### **DON'T**
-- ❌ Start work without checking context
-- ❌ Create tools that already exist
-- ❌ Ignore recent changes file
-- ❌ Skip structure validation
-- ❌ Commit without conventional format
-- ❌ Duplicate documentation
-
----
-
-## 📝 Updating RECENT_CHANGES.md
-
-### **When to Update**
-- After implementing any major feature
-- After creating new tools/scripts
-- After architectural changes
-- After breaking changes
-- Weekly (at minimum)
-
-### **What to Include**
-
-```markdown
-## 🆕 This Week (Oct XX-XX, 2025)
-
-### Major Implementation: [Feature Name] ✅
-- ✅ What was done
-- ✅ What changed
-- ✅ New tools created
-
-### New Files Created (X)
-- List each new file with brief description
-
-### Breaking Changes ⚠️
-- Any changes that affect existing functionality
-
-### New Tools Available
-- Commands and their purposes
-
-## 🚧 Active Work
-- What's currently in progress
-- Who's working on it
-- Expected completion
-
-## 📋 Next Planned
-- What's coming next
-```
-
----
-
-## 🔧 Tools for Context Awareness
-
-### **1. Context Briefing**
-```bash
-./scripts/utilities/context_briefing.sh
-```
-Shows complete project context in one command
-
-### **2. Weekly Summary**
-```bash
-./tools/reports/weekly_summary.sh
-```
-Last week's changes by type
-
-### **3. Repository Health**
-```bash
-python3 tools/reports/repo_health.py
-```
-Current state of project
-
-### **4. Structure Validation**
-```bash
-python3 tools/audit/enforce_structure.py
-```
-12 compliance checks
-
-### **5. Git Search**
-```bash
-# Search commits
-git log --all --grep="keyword"
-
-# Search code
-grep -r "pattern" /home/zoe/assistant/
-
-# Recent changes to file
-git log --since="1 week ago" -- path/file
-```
-
----
-
-## 🎯 Example Workflow
-
-### **Scenario: User Asks "Add a feature to track weekly progress"**
-
-**Bad Approach** ❌:
-```
-1. Immediately start coding
-2. Create new tool without checking
-3. Duplicate existing weekly_summary.sh
-4. Waste time on redundant work
-```
-
-**Good Approach** ✅:
-```bash
-# 1. Check context
-cat RECENT_CHANGES.md | grep -i "weekly\|progress\|tracking"
-# Found: "✅ Weekly summaries (exists)"
-
-# 2. Check if it exists
-ls -la tools/reports/
-# Found: weekly_summary.sh
-
-# 3. Test existing tool
-./tools/reports/weekly_summary.sh
-# Output: Perfect! This already does what's needed
-
-# 4. Response to user
-"The weekly progress tracking already exists!
-Run: ./tools/reports/weekly_summary.sh
-See: docs/guides/CHANGE_MANAGEMENT.md for details"
-```
-
----
-
-## 📊 Quick Reference
-
-| Question | Command |
-|----------|---------|
-| What changed recently? | `cat RECENT_CHANGES.md` |
-| Full context briefing? | `./scripts/utilities/context_briefing.sh` |
-| Last week's changes? | `./tools/reports/weekly_summary.sh` |
-| Repository health? | `python3 tools/reports/repo_health.py` |
-| Structure compliant? | `python3 tools/audit/enforce_structure.py` |
-| Does tool exist? | `ls tools/` or `grep -r "name" .` |
-| Recent commits? | `git log --oneline -10` |
-| Who changed file? | `git log -- path/file` |
-
----
-
-## 🚀 For Cursor Specifically
-
-### **Recommended Cursor Settings**
-
-In your Cursor workspace, consider:
-
-1. **Always Open Files**:
-   - `RECENT_CHANGES.md`
-   - `PROJECT_STATUS.md`
-   - `PROJECT_STRUCTURE_RULES.md`
-
-2. **Quick Commands** (Cursor Composer):
-   ```
-   @workspace Check recent changes
-   @workspace Run context briefing
-   @workspace Search for similar feature
-   ```
-
-3. **Before Any Task**:
-   - Read `RECENT_CHANGES.md`
-   - Run `./scripts/utilities/context_briefing.sh`
-   - Search codebase for related work
-
----
-
-## 🎓 Training New AI Sessions
-
-When starting a new Cursor session:
-
-```markdown
-1. Read these files in order:
-   - RECENT_CHANGES.md
-   - PROJECT_STATUS.md
-   - PROJECT_STRUCTURE_RULES.md
-   - docs/guides/CHANGE_MANAGEMENT.md
-
-2. Run context briefing:
-   ./scripts/utilities/context_briefing.sh
-
-3. Check for existing tools:
-   ls tools/
-   ls scripts/
-
-4. Review recent commits:
-   git log --oneline -20
-```
-
----
-
-## 📞 Questions?
-
-**Q: How often should RECENT_CHANGES.md be updated?**  
-A: After every major feature or at least weekly
-
-**Q: What if context briefing script fails?**  
-A: Manually check: `RECENT_CHANGES.md` + `git log` + `ls tools/`
-
-**Q: Can I skip context checks for small changes?**  
-A: No! Even small changes might duplicate existing features
-
-**Q: What's the minimum Cursor should read?**  
-A: At minimum: `RECENT_CHANGES.md` - it's the single source of truth
-
----
-
-**Remember**: 2 minutes of context checking saves 2 hours of duplicate work! 🚀
-
-
-
+## Anti-Patterns
+
+- Starting from memory when Graphify or source files should be checked.
+- Creating `*_new`, `*_fixed`, `_v2`, backup, or duplicate router files.
+- Adding broad hardcoded language branches to `services/zoe-data/routers/chat.py`.
+- Treating Greptile as a replacement for local verification.
+- Copying external source repos or Hermes operator skills into Zoe runtime folders.
+- Refactoring the whole app as part of a feature pass.
