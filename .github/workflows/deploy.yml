@@ -42,7 +42,7 @@ jobs:
           import os
           print(base64.b64encode(f"x-access-token:{os.environ['GITHUB_TOKEN']}".encode()).decode())
           PY
-          )"
+          )" || exit 1
           echo "::add-mask::${AUTH_HEADER}"
           GIT_CONFIG_COUNT=1 \
           GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
