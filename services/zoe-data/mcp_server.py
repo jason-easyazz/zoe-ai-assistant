@@ -40,6 +40,25 @@ async def _notify_ui(channel: str, event_type: str, data: dict):
         pass
 
 
+def _active_agents_list() -> list:
+    """Derive the active-agent display list from env, mirroring chat.py routing logic.
+
+    - active_agents: tier-1 local model + Hermes (the default reasoning agent)
+    - OpenClaw is NOT included here; callers that need it should use available_fallback.
+    """
+    agents: list = []
+    jetson = os.environ.get("JETSON_AGENT_MODE", "false").lower() == "true"
+    pi = os.environ.get("HERMES_FAST_PATH", "true").lower() != "true"
+    if jetson:
+        agents.append("Jetson Agent (Gemma 4 GPU)")
+    elif pi:
+        agents.append("Zoe Agent (Gemma 4 CPU)")
+    else:
+        agents.append("Gemma Agent (local)")
+    agents.append("Hermes (reasoning/default)")
+    return agents
+
+
 def _load_agents_registry() -> dict:
     """Load the local peer-agent registry used by delegation tools."""
     import yaml as _yaml
@@ -1662,18 +1681,9 @@ async def _execute_tool(db, name: str, args: dict):
         except ImportError:
             mem_info = {}
             cpu = None
-        agents = []
-        pi_mode = os.environ.get("HERMES_FAST_PATH", "true").lower() != "true"
-        jetson_mode = os.environ.get("JETSON_AGENT_MODE", "false").lower() == "true"
-        if jetson_mode:
-            agents.append("Jetson Agent (Gemma 4 GPU)")
-        elif pi_mode:
-            agents.append("Zoe Agent (Gemma 4 CPU)")
-        else:
-            agents.append("Gemma Agent (local)")
-        agents.append("OpenClaw (on-demand)")
         return {
-            "active_agents": agents,
+            "active_agents": _active_agents_list(),
+            "available_fallback": ["OpenClaw (on-demand)"],
             "platform": platform.machine(),
             "python": platform.python_version(),
             "cpu_percent": cpu,
@@ -1864,17 +1874,8 @@ async def _execute_tool(db, name: str, args: dict):
             {"name": "nginx",            "port": 80,    "up": _port_open("127.0.0.1", 80)},
         ]
 
-        # --- active agents (mirrors zoe_get_status) ---
-        agents = []
-        pi_mode = os.environ.get("HERMES_FAST_PATH", "true").lower() != "true"
-        jetson_mode = os.environ.get("JETSON_AGENT_MODE", "false").lower() == "true"
-        if jetson_mode:
-            agents.append("Jetson Agent (Gemma 4 GPU)")
-        elif pi_mode:
-            agents.append("Zoe Agent (Gemma 4 CPU)")
-        else:
-            agents.append("Gemma Agent (local)")
-        agents.append("Hermes (CloakBrowser/browser owner)")
+        # --- active agents — matches zoe_get_status ---
+        agents = _active_agents_list()
 
         # --- widgets from widget-manifest.json ---
         widgets: list[str] = []
