@@ -28,6 +28,9 @@
 - `dashboard_save_layout`
 - `flag_needs_human_review`
 - `graphify_search`
+- `greptile_pr_comments`
+- `greptile_pr_status`
+- `greptile_trigger_review`
 - `journal_create_entry`
 - `journal_get_prompts`
 - `journal_get_streak`
