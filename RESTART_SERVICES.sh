@@ -3,35 +3,28 @@
 
 set -euo pipefail
 
-ROOT_DIR="/home/zoe/assistant"
-cd "$ROOT_DIR"
+APP_DIR="${APP_DIR:-/home/zoe/assistant}"
+cd "$APP_DIR"
 
-echo "Restarting Zoe containers..."
-docker compose up -d
+echo "Restarting Docker-managed services..."
+docker compose up -d zoe-database zoe-auth zoe-ui homeassistant homeassistant-mcp-bridge
 
-echo "Restarting zoe-data user service..."
-export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+echo "Restarting host-native zoe-data..."
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 systemctl --user restart zoe-data.service
 
-echo "Checking optional host-native agent services..."
 for service in openclaw.service llama-server.service hermes.service kokoro-tts.service; do
-  if systemctl --user list-unit-files "$service" --no-legend 2>/dev/null | grep -q "$service"; then
-    systemctl --user restart "$service" || echo "Warning: could not restart $service"
-  else
-    echo "Skipping $service (not installed)"
+  if systemctl --user list-unit-files "$service" >/dev/null 2>&1; then
+    echo "Restarting optional $service..."
+    systemctl --user restart "$service" || true
   fi
 done
 
-echo "Waiting for services to initialize..."
+echo "Waiting for services..."
 sleep 6
 
-echo "Validating runtime..."
-bash "$ROOT_DIR/tools/docker/validate_networks.sh"
 curl -sf http://localhost:8000/health >/dev/null
 curl -sf http://localhost:8002/health >/dev/null
+docker compose ps
 
 echo "Restart complete."
-echo "Next steps:"
-echo "  1. Check zoe-data logs: journalctl --user -u zoe-data.service -n 100 --no-pager"
-echo "  2. Check container logs: docker compose logs --tail=100 zoe-auth zoe-ui zoe-database"
-echo "  3. Run tests: PYTHONPATH=services/zoe-data python3 -m pytest services/zoe-data/tests -q"
