@@ -158,3 +158,45 @@ async def test_reconcile_does_not_overwrite_cancelled_workflow(monkeypatch):
     updated = await engineering_workflow.reconcile_background_task(42)
 
     assert updated == workflow
+
+
+@pytest.mark.asyncio
+async def test_update_greptile_state_does_not_overwrite_terminal_workflow(monkeypatch):
+    workflow = {
+        "id": "wf-done",
+        "phase": "done",
+        "status": "done",
+        "target_confidence": 5,
+    }
+
+    class FakeDB:
+        async def fetchrow(self, sql, *args):
+            if "UPDATE engineering_tasks" in sql:
+                assert "phase NOT IN ('cancelled', 'done')" in sql
+                return None
+            if "SELECT * FROM engineering_tasks WHERE id=$1" in sql:
+                return workflow
+            raise AssertionError(f"unexpected query: {sql}")
+
+    class FakeCtx:
+        async def __aenter__(self):
+            return FakeDB()
+
+        async def __aexit__(self, *_):
+            return None
+
+    monkeypatch.setitem(sys.modules, "db_pool", types.SimpleNamespace(get_db_ctx=lambda: FakeCtx()))
+
+    async def fake_sync(*_, **__):
+        raise AssertionError("terminal workflow should not sync Greptile state")
+
+    monkeypatch.setattr(engineering_workflow, "sync_multica_issue", fake_sync)
+
+    updated = await engineering_workflow.update_greptile_state(
+        "wf-done",
+        greptile_status="clean",
+        confidence=5,
+        unaddressed_count=0,
+    )
+
+    assert updated == workflow

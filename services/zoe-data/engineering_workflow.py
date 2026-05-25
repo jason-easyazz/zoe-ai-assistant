@@ -345,7 +345,8 @@ async def update_greptile_state(
                SET greptile_status=$1, greptile_confidence=$2,
                    greptile_unaddressed_count=$3, phase=$4, status=$5,
                    updated_at=$6
-               WHERE id=$7 RETURNING *""",
+               WHERE id=$7 AND phase NOT IN ('cancelled', 'done')
+               RETURNING *""",
             greptile_status,
             confidence,
             unaddressed_count,
@@ -354,6 +355,9 @@ async def update_greptile_state(
             now,
             task_id,
         )
+    if not row:
+        current = await get_engineering_task(task_id)
+        return current or {}
     note = f"Greptile: {greptile_status}"
     if confidence is not None:
         note += f", confidence {confidence}/5"
