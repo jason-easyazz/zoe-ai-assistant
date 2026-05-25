@@ -86,3 +86,41 @@ async def test_reconcile_background_task_records_pr(monkeypatch):
     assert updated["phase"] == "pr_open"
     assert updated["pr_number"] == 77
     assert updated["pr_url"].endswith("/pull/77")
+
+
+@pytest.mark.asyncio
+async def test_start_engineering_task_returns_existing_when_already_claimed(monkeypatch):
+    existing = {
+        "id": "wf-claimed",
+        "phase": "hermes_running",
+        "background_task_id": 99,
+    }
+
+    class FakeDB:
+        async def fetchrow(self, sql, *args):
+            if "UPDATE engineering_tasks" in sql:
+                return None
+            if "SELECT * FROM engineering_tasks WHERE id=$1" in sql:
+                return existing
+            raise AssertionError(f"unexpected query: {sql}")
+
+    class FakeCtx:
+        async def __aenter__(self):
+            return FakeDB()
+
+        async def __aexit__(self, *_):
+            return None
+
+    async def fail_enqueue(*_, **__):
+        raise AssertionError("enqueue should not be called for an already claimed workflow")
+
+    monkeypatch.setitem(sys.modules, "db_pool", types.SimpleNamespace(get_db_ctx=lambda: FakeCtx()))
+    monkeypatch.setitem(
+        sys.modules,
+        "background_runner",
+        types.SimpleNamespace(enqueue_background_task=fail_enqueue),
+    )
+
+    task = await engineering_workflow.start_engineering_task("wf-claimed")
+
+    assert task == existing

@@ -165,11 +165,22 @@ async def start_engineering_task(task_id: str) -> dict[str, Any]:
     from background_runner import enqueue_background_task
     from db_pool import get_db_ctx
 
-    task = await get_engineering_task(task_id)
+    now = _now()
+    async with get_db_ctx() as db:
+        task = await db.fetchrow(
+            """UPDATE engineering_tasks
+               SET phase='hermes_running', updated_at=$1
+               WHERE id=$2 AND phase='queued' AND background_task_id IS NULL
+               RETURNING *""",
+            now,
+            task_id,
+        )
     if not task:
+        existing = await get_engineering_task(task_id)
+        if existing:
+            return existing
         raise ValueError(f"engineering task not found: {task_id}")
-    if task.get("background_task_id") and task.get("phase") != "queued":
-        return task
+    task = dict(task)
 
     prompt = build_hermes_prompt(
         task["task"],
@@ -177,20 +188,34 @@ async def start_engineering_task(task_id: str) -> dict[str, Any]:
         max_rounds=int(task.get("max_rounds") or 5),
         target_confidence=int(task.get("target_confidence") or 5),
     )
-    background_task_id = await enqueue_background_task(
-        prompt,
-        task["user_id"],
-        multica_issue_id=task.get("multica_issue_id"),
-    )
-    now = _now()
+    try:
+        background_task_id = await enqueue_background_task(
+            prompt,
+            task["user_id"],
+            multica_issue_id=task.get("multica_issue_id"),
+        )
+    except Exception as exc:
+        async with get_db_ctx() as db:
+            row = await db.fetchrow(
+                """UPDATE engineering_tasks
+                   SET phase='blocked', status='blocked', blocker_reason=$1,
+                       last_error=$1, updated_at=$2, completed_at=$2
+                   WHERE id=$3 RETURNING *""",
+                f"Hermes enqueue failed: {exc}",
+                _now(),
+                task_id,
+            )
+        if row:
+            await sync_multica_issue(dict(row), note=f"Blocked: {row['blocker_reason']}")
+        raise
     async with get_db_ctx() as db:
         row = await db.fetchrow(
             """UPDATE engineering_tasks
-               SET background_task_id=$1, phase='hermes_running', updated_at=$2
+               SET background_task_id=$1, updated_at=$2
                WHERE id=$3
                RETURNING *""",
             background_task_id,
-            now,
+            _now(),
             task_id,
         )
     await sync_multica_issue(dict(row), note="Hermes implementation started.")
