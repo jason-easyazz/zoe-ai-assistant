@@ -2562,6 +2562,7 @@
             }
             if (t === 'CUSTOM' && data.name === 'zoe.run_log') {
                 const v = data.value || {};
+                // Hermes agent-panel activation is handled by the paired STATE_SNAPSHOT.
                 if (thinkingIndicator && thinkingIndicator.parentNode && v.message) {
                     const tx = thinkingIndicator.querySelector('span:last-child');
                     if (tx) tx.textContent = String(v.message);
@@ -2603,19 +2604,20 @@
                         const phase = snap.phase ? String(snap.phase) : '';
                         if (detail) {
                             el.textContent = detail;
-                        } else if (phase === 'openclaw') {
-                            el.textContent = 'OpenClaw: ' + (snap.model || 'agent') + '…';
+                        } else if (phase === 'openclaw' || phase === 'hermes' || phase === 'hermes_tool') {
+                            const label = phase === 'openclaw' ? 'OpenClaw' : 'Hermes';
+                            el.textContent = label + ': ' + (snap.model || 'agent') + '…';
                         } else {
                             el.textContent = 'Zoe is typing… (' + (snap.model || 'AI') + ')';
                         }
                     }
-                    if (snap.phase === 'openclaw' && ctx.toolTraceEl) {
+                    if ((snap.phase === 'openclaw' || snap.phase === 'hermes_tool') && ctx.toolTraceEl) {
                         ensureTraceDisclosure(ctx);
                         ctx.toolTraceEl.style.display = 'flex';
                     }
-                    // Only show agent panel for tool-calling (openclaw) runs
-                    if (snap.phase === 'openclaw') {
-                        showAgentPanel(snap.model || 'OpenClaw');
+                    const isAgentPhase = snap.phase === 'openclaw' || snap.phase === 'hermes' || snap.phase === 'hermes_tool';
+                    if (isAgentPhase) {
+                        showAgentPanel(snap.model || (snap.phase === 'openclaw' ? 'OpenClaw' : 'Hermes Agent'));
                     }
                 }
                 return;
