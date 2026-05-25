@@ -3512,8 +3512,7 @@ async def run_zoe_agent(
             logger.debug("zoe_agent: tool_result=%s", tool_result[:200])
 
             # Escalation signal — return immediately for chat.py to handle.
-            # Catches both __ESCALATE__: (foreground) and __ESCALATE_BG__: (background).
-            if tool_result.startswith(("__ESCALATE__:", "__ESCALATE_BG__:")):
+            if tool_result.startswith(("__ESCALATE__:", "__ESCALATE_BG__:", "__ESCALATE_HERMES__:")):
                 logger.info("zoe_agent: escalation triggered — %s", tool_result[:80])
                 _fire_memory_capture(message, response_text, user_id=user_id)
                 return tool_result
@@ -3977,8 +3976,7 @@ async def run_zoe_agent_streaming(
             tool_result = await _dispatch_tool(tool_name, tool_args or {}, user_id=user_id)
 
             # Escalation signal — yield marker and stop; chat.py handles routing.
-            # Catches both __ESCALATE__: (foreground) and __ESCALATE_BG__: (background).
-            if tool_result.startswith(("__ESCALATE__:", "__ESCALATE_BG__:")):
+            if tool_result.startswith(("__ESCALATE__:", "__ESCALATE_BG__:", "__ESCALATE_HERMES__:")):
                 logger.info("zoe_agent streaming: escalation triggered — %s", tool_result[:80])
                 _fire_memory_capture(message, collected, user_id=user_id)
                 yield tool_result
