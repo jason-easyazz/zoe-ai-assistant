@@ -1,0 +1,45 @@
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+import multica_client
+
+
+def test_mul_client_reads_env_at_instantiation(monkeypatch):
+    monkeypatch.setenv("MULTICA_BASE_URL", "https://multica.example/")
+    monkeypatch.setenv("MULTICA_API_TOKEN", "token-1")
+    monkeypatch.setenv("MULTICA_WORKSPACE_ID", "workspace-1")
+
+    client = multica_client.MULClient()
+
+    assert client._base == "https://multica.example"
+    assert client._token == "token-1"
+    assert client._workspace == "workspace-1"
+    assert client.is_configured() is True
+
+
+def test_get_multica_client_refreshes_cached_client_when_env_changes(monkeypatch):
+    original_client = multica_client._client
+    try:
+        multica_client._client = None
+        monkeypatch.delenv("MULTICA_BASE_URL", raising=False)
+        monkeypatch.delenv("MULTICA_API_TOKEN", raising=False)
+        monkeypatch.delenv("MULTICA_WORKSPACE_ID", raising=False)
+
+        stale = multica_client.get_multica_client()
+        assert stale.is_configured() is False
+
+        monkeypatch.setenv("MULTICA_BASE_URL", "https://multica.example")
+        monkeypatch.setenv("MULTICA_API_TOKEN", "token-2")
+        monkeypatch.setenv("MULTICA_WORKSPACE_ID", "workspace-2")
+
+        refreshed = multica_client.get_multica_client()
+
+        assert refreshed is not stale
+        assert refreshed.is_configured() is True
+        assert refreshed._base == "https://multica.example"
+        assert refreshed._token == "token-2"
+        assert refreshed._workspace == "workspace-2"
+    finally:
+        multica_client._client = original_client
