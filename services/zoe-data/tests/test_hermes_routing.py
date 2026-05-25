@@ -255,6 +255,39 @@ async def test_force_hermes_error_records_hermes_mode(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_force_hermes_approval_rejection_records_hermes_mode(monkeypatch):
+    recorded_runs = []
+
+    async def fake_record_run_state(*args, **kwargs):
+        recorded_runs.append((args, kwargs))
+
+    async def fake_empty(*args, **kwargs):
+        return ""
+
+    monkeypatch.setattr(chat_router, "_ensure_user_and_chat_session", fake_empty)
+    monkeypatch.setattr(chat_router, "_save_chat_message", fake_empty)
+    monkeypatch.setattr(chat_router, "_check_frustration", lambda *_, **__: None)
+    monkeypatch.setattr(chat_router, "_resolve_approval", fake_empty)
+    monkeypatch.setattr(chat_router, "_record_run_state", fake_record_run_state)
+    monkeypatch.setattr(chat_router, "_persist_ag_ui_run", fake_empty)
+
+    blocks = [
+        block
+        async for block in chat_router.chat_stream_generator(
+            "/approve deadbeef",
+            "session-hermes-approval",
+            {"user_id": "user-1", "username": "Zoe"},
+            force_agent="hermes",
+        )
+    ]
+
+    events = _decode_agui_events(blocks)
+    assert any(event["type"] == "RUN_ERROR" for event in events)
+    assert recorded_runs[-1][1]["mode"] == "hermes"
+    assert recorded_runs[-1][1]["status"] == "error"
+
+
+@pytest.mark.asyncio
 async def test_zoe_agent_hermes_escalation_stays_in_parent_agui_run(monkeypatch):
     saved_messages = []
     recorded_runs = []

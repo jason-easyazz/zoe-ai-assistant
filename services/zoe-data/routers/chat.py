@@ -1444,7 +1444,7 @@ async def chat_stream_generator(
                         code="approval_invalid",
                     )
                 )
-                await _record_run_state(run_id, session_id, user_id, mode="chat", status="error", request_text=message)
+                await _record_run_state(run_id, session_id, user_id, mode=run_mode, status="error", request_text=message)
                 return
             message_for_processing = approved.get("request_text") or message_for_processing
             yield emit(
@@ -1493,7 +1493,7 @@ async def chat_stream_generator(
                     run_id,
                     session_id,
                     user_id,
-                    mode="chat",
+                    mode=run_mode,
                     status="completed",
                     request_text=message,
                     response_text="Approval required",
