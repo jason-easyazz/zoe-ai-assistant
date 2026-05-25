@@ -18,6 +18,7 @@ def test_generated_context_mentions_hermes_engineering_loop():
 
     assert "Hermes engineering loop" in zoe_self
     assert "source context" in zoe_self
+    assert "Hermes engineering loop" in capabilities
     assert "cleanup pass" in capabilities
 
 
