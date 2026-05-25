@@ -97,6 +97,20 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     timestamp TEXT
 );
 
+CREATE TABLE IF NOT EXISTS panels (
+    panel_id TEXT PRIMARY KEY,
+    name TEXT,
+    allow_guest SMALLINT DEFAULT 1,
+    created_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS panel_user_bindings (
+    id SERIAL PRIMARY KEY,
+    panel_id TEXT,
+    user_id TEXT,
+    binding_type TEXT
+);
+
 CREATE TABLE IF NOT EXISTS rate_limits (
     id SERIAL PRIMARY KEY,
     key TEXT,
