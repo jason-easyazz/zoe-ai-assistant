@@ -1,7 +1,10 @@
 """JWT token issuance for the OIDC provider."""
+import logging
 import time
 from jose import jwt
 from oidc.keys import ensure_signing_key
+
+logger = logging.getLogger(__name__)
 
 
 def issue_id_token(
@@ -83,5 +86,6 @@ def verify_access_token(token: str, issuer: str, jwks: dict) -> dict | None:
             issuer=issuer,
         )
         return claims
-    except Exception:
+    except Exception:  # noqa: BLE001 - callers treat None as an unverified token.
+        logger.debug("verify_access_token failed", exc_info=True)
         return None
