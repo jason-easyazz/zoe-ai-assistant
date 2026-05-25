@@ -2522,6 +2522,7 @@ async def _iter_hermes_stream_events(
                         yield {"kind": "progress", "event": sse_event, "payload": progress_payload}
                         sse_event = ""
                         continue
+                    sse_event = ""
                     try:
                         chunk = json.loads(data_str)
                         delta = chunk.get("choices", [{}])[0].get("delta", {})

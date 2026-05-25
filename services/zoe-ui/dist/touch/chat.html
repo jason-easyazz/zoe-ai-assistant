@@ -2562,7 +2562,7 @@
             }
             if (t === 'CUSTOM' && data.name === 'zoe.run_log') {
                 const v = data.value || {};
-                if (v.source === 'hermes' && !v.phase) showAgentPanel('Hermes Agent');
+                // Hermes agent-panel activation is handled by the paired STATE_SNAPSHOT.
                 if (thinkingIndicator && thinkingIndicator.parentNode && v.message) {
                     const tx = thinkingIndicator.querySelector('span:last-child');
                     if (tx) tx.textContent = String(v.message);

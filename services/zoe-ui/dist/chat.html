@@ -2962,7 +2962,7 @@
             if (t === 'CUSTOM' && data.name === 'zoe.run_log') {
                 const v = data.value || {};
                 const msg = String(v.message || '');
-                if (v.source === 'hermes' && !v.phase) showAgentPanel('Hermes Agent');
+                // Hermes agent-panel activation is handled by the paired STATE_SNAPSHOT.
 
                 // Always update the thinking indicator text
                 if (thinkingIndicator && thinkingIndicator.parentNode && msg) {
