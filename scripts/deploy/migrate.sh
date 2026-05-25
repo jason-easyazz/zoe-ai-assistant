@@ -44,7 +44,22 @@ print(unquote(url.password or ""))
 print(unquote((url.path or "/").lstrip("/")))
 PY
 )
-  PGPASSWORD="${PG_PARTS[3]}" psql \
+  escape_pgpass() {
+    local value="$1"
+    value="${value//\\/\\\\}"
+    value="${value//:/\\:}"
+    printf '%s' "$value"
+  }
+  PGPASSFILE="$(mktemp)"
+  trap 'rm -f "${PGPASSFILE}"' EXIT
+  printf '%s:%s:%s:%s:%s\n' \
+    "$(escape_pgpass "${PG_PARTS[0]}")" \
+    "$(escape_pgpass "${PG_PARTS[1]}")" \
+    "$(escape_pgpass "${PG_PARTS[4]}")" \
+    "$(escape_pgpass "${PG_PARTS[2]}")" \
+    "$(escape_pgpass "${PG_PARTS[3]}")" > "${PGPASSFILE}"
+  chmod 600 "${PGPASSFILE}"
+  PGPASSFILE="${PGPASSFILE}" psql \
     -h "${PG_PARTS[0]}" \
     -p "${PG_PARTS[1]}" \
     -U "${PG_PARTS[2]}" \

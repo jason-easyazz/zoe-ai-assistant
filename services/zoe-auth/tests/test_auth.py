@@ -32,7 +32,8 @@ def _init_auth_tables(db_path: str) -> None:
             is_active INTEGER DEFAULT 1,
             is_verified INTEGER DEFAULT 1,
             failed_login_attempts INTEGER DEFAULT 0,
-            locked_until TEXT
+            locked_until TEXT,
+            settings TEXT
         )
         """
     )
