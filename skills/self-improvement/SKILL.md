@@ -38,7 +38,7 @@ Runs in the background after every conversation. Activates explicitly when the u
    - Before: what Zoe did wrong
    - After: what the user wants instead
 3. **Check for duplicates** — use `GET /api/learnings` before proposing a new learning
-4. **Confirm storage** — respond with a brief acknowledgment (e.g., "Got it, I'll remember that for next time")
+4. **Acknowledge to the user** — respond with a brief acknowledgment (e.g., "Got it, I'll remember that for next time"); the self-learning pipeline handles actual persistence
 5. **Apply in future** — before generating responses, retrieve relevant learnings from `GET /api/learnings` and adjust behavior accordingly
 
 ## Example

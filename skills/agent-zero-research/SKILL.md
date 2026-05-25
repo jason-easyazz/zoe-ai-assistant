@@ -38,7 +38,7 @@ The user wants deep research, multi-source analysis, comparison studies, or any 
 1. **Identify the task type** — research (open-ended query), comparison (two+ options), or analysis (structured evaluation)
 2. **Inform the user** — tell them research is underway and may take 30–60 seconds
 3. **Submit to Agent Zero** — use the appropriate endpoint (see below)
-4. **Poll for completion** — use the submitted task ID with `GET /api/agent-zero/status/{task_id}` until the task finishes
+4. **Poll for completion** — use the submitted task ID with `GET /api/agent-zero/status/<task_id>` until the task finishes
 5. **Present findings** — format results clearly: use tables for comparisons, bullet points for research summaries, and always cite sources when available
 
 ## API Endpoints
