@@ -148,9 +148,9 @@ response = await call_litellm(model=models["fast"], ...)
 ### 3. Include Master Key
 
 ```python
-# ✅ CORRECT - Always authenticate
+# ✅ CORRECT - Always authenticate via environment variable
 import os
-LITELLM_KEY = "REDACTED_RETIRED_LITELLM_KEY"
+LITELLM_KEY = os.environ.get("LITELLM_API_KEY", "")
 
 headers = {
     "Authorization": f"Bearer {LITELLM_KEY}",
