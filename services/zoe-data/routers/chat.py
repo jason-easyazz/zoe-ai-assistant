@@ -2821,7 +2821,7 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
             missing = missing_brief_fields(message_for_processing)
             if missing:
                 followup = _research_followup_prompt(missing)
-                asyncio.ensure_future(_save_chat_message(session_id, "assistant", followup))
+                await _save_chat_message(session_id, "assistant", followup)
                 return {
                     "response": followup,
                     "session_id": session_id,
@@ -2841,7 +2841,7 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
             except Exception:
                 caps_text = "Hermes is the active escalation agent. Zoe tools include calendar, lists, reminders, memory, Graphify, Multica, and CloakBrowser."
             capabilities_text = "Hermes/Zoe capabilities:\n\n" + caps_text
-            asyncio.ensure_future(_save_chat_message(session_id, "assistant", capabilities_text))
+            await _save_chat_message(session_id, "assistant", capabilities_text)
             return {"response": capabilities_text, "session_id": session_id}
 
         use_intent_fast_path = (not force_openclaw) and _ALL_TOOLS_ENABLED
@@ -2876,7 +2876,7 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
                     chat_inject_background(message_for_processing, result, intent.name, user_id, session_id)
                 )
                 asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, result))
-                asyncio.ensure_future(_save_chat_message(session_id, "assistant", result))
+                await _save_chat_message(session_id, "assistant", result)
                 return {"response": result, "session_id": session_id}
         if _WHATSAPP_FLOW_ENABLED and is_whatsapp_connect_request(message_for_processing):
             message_for_processing = (
@@ -2991,7 +2991,7 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
             asyncio.ensure_future(_queue_ui_actions_background(actions, user_id, session_id))
         asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, response_text))
         if response_text:
-            asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text))
+            await _save_chat_message(session_id, "assistant", response_text)
         return resp
 
 
