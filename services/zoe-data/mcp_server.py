@@ -380,6 +380,48 @@ TOOLS = [
             "required": ["agent_name", "task"],
         },
     },
+    {
+        "name": "greptile_pr_status",
+        "description": "Get Greptile review status for a GitHub pull request without scraping GitHub comments.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "repo": {"type": "string", "description": "owner/repo", "default": "jason-easyazz/zoe-ai-assistant"},
+                "pr_number": {"type": "integer", "description": "Pull request number"},
+                "default_branch": {"type": "string", "default": "main"},
+            },
+            "required": ["pr_number"],
+        },
+    },
+    {
+        "name": "greptile_pr_comments",
+        "description": "List Greptile comments for a GitHub pull request, filtered to unaddressed Greptile comments by default.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "repo": {"type": "string", "description": "owner/repo", "default": "jason-easyazz/zoe-ai-assistant"},
+                "pr_number": {"type": "integer", "description": "Pull request number"},
+                "default_branch": {"type": "string", "default": "main"},
+                "greptile_only": {"type": "boolean", "default": True},
+                "unaddressed_only": {"type": "boolean", "default": True},
+            },
+            "required": ["pr_number"],
+        },
+    },
+    {
+        "name": "greptile_trigger_review",
+        "description": "Trigger a Greptile code review for a GitHub pull request.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "repo": {"type": "string", "description": "owner/repo", "default": "jason-easyazz/zoe-ai-assistant"},
+                "pr_number": {"type": "integer", "description": "Pull request number"},
+                "default_branch": {"type": "string", "default": "main"},
+                "branch": {"type": "string", "description": "Current PR branch"},
+            },
+            "required": ["pr_number"],
+        },
+    },
     # --- Journal tools ---
     {
         "name": "journal_create_entry",
@@ -1729,6 +1771,42 @@ async def _execute_tool(db, name: str, args: dict):
             return graphify_search(query)
         except Exception as exc:
             return {"error": f"Graphify search failed: {exc}"}
+
+    elif name == "greptile_pr_status":
+        try:
+            from greptile_client import get_pr_status  # type: ignore[import]
+            return await get_pr_status(
+                repo=args.get("repo") or "jason-easyazz/zoe-ai-assistant",
+                pr_number=args.get("pr_number"),
+                default_branch=args.get("default_branch") or "main",
+            )
+        except Exception as exc:
+            return {"error": f"Greptile PR status failed: {exc}"}
+
+    elif name == "greptile_pr_comments":
+        try:
+            from greptile_client import list_pr_comments  # type: ignore[import]
+            return await list_pr_comments(
+                repo=args.get("repo") or "jason-easyazz/zoe-ai-assistant",
+                pr_number=args.get("pr_number"),
+                default_branch=args.get("default_branch") or "main",
+                greptile_only=bool(args.get("greptile_only", True)),
+                unaddressed_only=bool(args.get("unaddressed_only", True)),
+            )
+        except Exception as exc:
+            return {"error": f"Greptile PR comments failed: {exc}"}
+
+    elif name == "greptile_trigger_review":
+        try:
+            from greptile_client import trigger_review  # type: ignore[import]
+            return await trigger_review(
+                repo=args.get("repo") or "jason-easyazz/zoe-ai-assistant",
+                pr_number=args.get("pr_number"),
+                default_branch=args.get("default_branch") or "main",
+                branch=args.get("branch"),
+            )
+        except Exception as exc:
+            return {"error": f"Greptile trigger review failed: {exc}"}
 
     elif name == "zoe_self_capabilities":
         import datetime

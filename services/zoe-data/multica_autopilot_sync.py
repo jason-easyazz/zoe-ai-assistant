@@ -256,6 +256,41 @@ async def _run_platform_health_check() -> None:
     raise RuntimeError(f"Platform health check failed (exit {proc.returncode})")
 
 
+async def _run_board_review() -> None:
+    """Dispatch Hermes-assigned open Multica issues into engineering workflows."""
+    try:
+        from multica_client import get_multica_client  # type: ignore[import]
+        from engineering_workflow import create_and_start_engineering_task  # type: ignore[import]
+
+        client = get_multica_client()
+        if not client.is_configured():
+            return
+        dispatched = 0
+        for status in ("todo", "in_progress"):
+            issues = await client.list_issues(status=status)
+            for issue in issues or []:
+                issue_id = str(issue.get("id") or "")
+                if not issue_id:
+                    continue
+                if str(issue.get("assignee_id") or "") != _HERMES_AGENT_ID:
+                    continue
+                title = issue.get("title") or issue.get("identifier") or "Multica engineering task"
+                description = issue.get("description") or ""
+                await create_and_start_engineering_task(
+                    user_id="family-admin",
+                    title=title,
+                    task=f"Work this Hermes-assigned Multica issue.\n\nTitle: {title}\n\n{description}",
+                    source="board_review_autopilot",
+                    source_id=issue_id,
+                    multica_issue_id=issue_id,
+                    idempotency_key=f"multica:{issue_id}",
+                )
+                dispatched += 1
+        logger.info("autopilot: board review dispatched %d issue(s)", dispatched)
+    except Exception as exc:
+        logger.warning("_run_board_review: %s", exc)
+
+
 # ── Title → task function mapping ────────────────────────────────────────────
 
 _TITLE_TO_TASK: dict[str, Callable] = {
@@ -274,6 +309,9 @@ _TITLE_TO_TASK: dict[str, Callable] = {
     "reminder scan": _run_reminder_scan,
     "platform health check": _run_platform_health_check,
     "health check": _run_platform_health_check,
+    "board review": _run_board_review,
+    "multica board review": _run_board_review,
+    "hermes board review": _run_board_review,
 }
 
 
