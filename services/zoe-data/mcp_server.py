@@ -44,9 +44,13 @@ def _load_agents_registry() -> dict:
     """Load the local peer-agent registry used by delegation tools."""
     import yaml as _yaml
 
-    reg_path = os.path.join(os.path.dirname(__file__), "agents_registry.yml")
-    with open(reg_path) as reg_file:
-        return _yaml.safe_load(reg_file) or {}
+    reg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agents_registry.yml")
+    try:
+        with open(reg_path) as reg_file:
+            return _yaml.safe_load(reg_file) or {}
+    except (FileNotFoundError, _yaml.YAMLError) as exc:
+        _mcp_log.warning("Could not load agents registry at %s: %s", reg_path, exc)
+        return {"agents": {}, "squads": {}}
 
 
 async def _get_weather_default_location(db) -> dict:

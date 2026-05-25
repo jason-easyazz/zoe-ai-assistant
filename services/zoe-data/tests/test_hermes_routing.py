@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import mcp_server
 import zoe_agent
-from routers import system
+from routers import system, voice_tts
 
 
 def _patch_agent_context(monkeypatch):
@@ -103,6 +103,28 @@ async def test_run_zoe_agent_streaming_yields_hermes_escalation_marker(monkeypat
     assert chunks[-1] == "__ESCALATE_HERMES__:deep work|Use Hermes"
 
 
+def test_voice_hermes_marker_stays_foreground():
+    is_background, reason, prompt = voice_tts._parse_voice_escalation_delta(
+        "__ESCALATE_HERMES__:deep work|Use Hermes",
+        "fallback prompt",
+    )
+
+    assert is_background is False
+    assert reason == "deep work"
+    assert prompt == "Use Hermes"
+
+
+def test_voice_background_marker_queues_work():
+    is_background, reason, prompt = voice_tts._parse_voice_escalation_delta(
+        "__ESCALATE_BG__:long task|Run later",
+        "fallback prompt",
+    )
+
+    assert is_background is True
+    assert reason == "long task"
+    assert prompt == "Run later"
+
+
 @pytest.mark.asyncio
 async def test_mcp_a2a_delegate_hermes_queues_background_task(monkeypatch):
     calls = []
@@ -162,6 +184,15 @@ async def test_mcp_a2a_delegate_hermes_queues_background_task(monkeypatch):
             "request_depth": 2,
         }
     ]
+
+
+def test_mcp_agents_registry_missing_file_fails_softly(monkeypatch):
+    def fake_open(*args, **kwargs):
+        raise FileNotFoundError("missing registry")
+
+    monkeypatch.setattr("builtins.open", fake_open)
+
+    assert mcp_server._load_agents_registry() == {"agents": {}, "squads": {}}
 
 
 @pytest.mark.asyncio
