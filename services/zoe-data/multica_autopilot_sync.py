@@ -275,6 +275,13 @@ async def _run_board_review() -> None:
                 if str(issue.get("assignee_id") or "") != _HERMES_AGENT_ID:
                     continue
                 title = issue.get("title") or issue.get("identifier") or "Multica engineering task"
+                if title.lower().startswith("autopilot:"):
+                    logger.debug(
+                        "autopilot: board review skipping wrapper issue %s (%r)",
+                        issue_id,
+                        title,
+                    )
+                    continue
                 description = issue.get("description") or ""
                 await create_and_start_engineering_task(
                     user_id="family-admin",

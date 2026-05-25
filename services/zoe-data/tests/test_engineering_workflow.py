@@ -4,6 +4,7 @@ import types
 import pytest
 
 import engineering_workflow
+import multica_autopilot_sync
 
 
 def test_build_hermes_prompt_requires_pr_contract():
@@ -274,3 +275,54 @@ async def test_cancel_engineering_task_does_not_overwrite_done_workflow(monkeypa
     updated = await engineering_workflow.cancel_engineering_task("wf-done")
 
     assert updated == workflow
+
+
+@pytest.mark.asyncio
+async def test_run_board_review_skips_autopilot_wrapper_issues(monkeypatch):
+    calls = []
+
+    class FakeClient:
+        def is_configured(self):
+            return True
+
+        async def list_issues(self, status=None):
+            return [
+                {
+                    "id": "issue-autopilot",
+                    "title": "Autopilot: Board Review",
+                    "assignee_id": multica_autopilot_sync._HERMES_AGENT_ID,
+                    "description": "Scheduled autopilot run for: Board Review",
+                },
+                {
+                    "id": "issue-autopilot-upper",
+                    "title": "AUTOPILOT: Daily Sync",
+                    "assignee_id": multica_autopilot_sync._HERMES_AGENT_ID,
+                    "description": "Scheduled autopilot run for: Daily Sync",
+                },
+                {
+                    "id": "issue-real",
+                    "title": "Fix board review recursion",
+                    "assignee_id": multica_autopilot_sync._HERMES_AGENT_ID,
+                    "description": "Investigate board review loop",
+                },
+            ] if status == "todo" else []
+
+    async def fake_create_and_start_engineering_task(**kwargs):
+        calls.append(kwargs)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "multica_client",
+        types.SimpleNamespace(get_multica_client=lambda: FakeClient()),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "engineering_workflow",
+        types.SimpleNamespace(create_and_start_engineering_task=fake_create_and_start_engineering_task),
+    )
+
+    await multica_autopilot_sync._run_board_review()
+
+    assert len(calls) == 1
+    assert calls[0]["multica_issue_id"] == "issue-real"
+    assert calls[0]["title"] == "Fix board review recursion"
