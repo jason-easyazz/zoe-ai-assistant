@@ -153,7 +153,7 @@ async def test_mcp_a2a_delegate_hermes_queues_background_task(monkeypatch):
     monkeypatch.setattr(
         mcp_server,
         "_load_agents_registry",
-        lambda: {"agents": {"hermes": {"base_url": "http://localhost:8642"}}},
+        lambda: (_ for _ in ()).throw(AssertionError("Hermes should not require agents_registry.yml")),
     )
 
     result = await mcp_server._execute_tool(
@@ -213,7 +213,7 @@ async def test_system_delegate_to_hermes_queues_background_task(monkeypatch):
     monkeypatch.setattr(
         system,
         "_load_registry",
-        lambda: {"agents": {"hermes": {"base_url": "http://localhost:8642"}}},
+        lambda: (_ for _ in ()).throw(AssertionError("Hermes should not require agents_registry.yml")),
     )
     monkeypatch.setitem(
         sys.modules,

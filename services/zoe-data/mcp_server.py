@@ -1754,10 +1754,6 @@ async def _execute_tool(db, name: str, args: dict):
                 )
             }
         try:
-            _reg = _load_agents_registry()
-            _info = _reg.get("agents", {}).get(agent_name)
-            if not _info:
-                return {"error": f"Unknown agent: {agent_name}"}
             if agent_name == "hermes":
                 from background_runner import enqueue_background_task  # type: ignore[import]
                 session_id = args.get("session_id") or None
@@ -1775,6 +1771,10 @@ async def _execute_tool(db, name: str, args: dict):
                         "result_endpoint": f"/api/agent/tasks/{task_id}",
                     },
                 }
+            _reg = _load_agents_registry()
+            _info = _reg.get("agents", {}).get(agent_name)
+            if not _info:
+                return {"error": f"Unknown agent: {agent_name}"}
             from a2a_client import get_a2a_client  # type: ignore[import]
             _client = get_a2a_client()
             result = await _client.submit_task(

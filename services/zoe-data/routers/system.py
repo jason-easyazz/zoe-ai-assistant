@@ -972,10 +972,6 @@ async def delegate_to_agent(
     if not agent_name or not task:
         raise HTTPException(status_code=400, detail="agent_name (or agent) and task (or goal) are required")
 
-    registry = _load_registry()
-    agent_info = registry.get("agents", {}).get(agent_name)
-    if not agent_info:
-        raise HTTPException(status_code=404, detail=f"Unknown agent: {agent_name}")
     if agent_name == "openclaw" and not bool(body.get("allow_openclaw", False)):
         raise HTTPException(
             status_code=400,
@@ -1004,6 +1000,11 @@ async def delegate_to_agent(
                 "result_endpoint": f"/api/agent/tasks/{task_id}",
             },
         }
+
+    registry = _load_registry()
+    agent_info = registry.get("agents", {}).get(agent_name)
+    if not agent_info:
+        raise HTTPException(status_code=404, detail=f"Unknown agent: {agent_name}")
 
     from a2a_client import get_a2a_client  # type: ignore[import]
     client = get_a2a_client()
