@@ -2447,6 +2447,13 @@
             color: var(--clr-text-3);
             font-size: 12px;
         }
+        .tool-call-heartbeat .tool-call-icon {
+            animation: trace-live-pulse 1.4s ease-in-out infinite;
+        }
+        @keyframes trace-live-pulse {
+            0%, 100% { opacity: 0.55; transform: scale(0.98); }
+            50% { opacity: 1; transform: scale(1); }
+        }
         .message-actions {
             gap: 4px;
             flex-wrap: wrap;
@@ -2799,7 +2806,7 @@
             const disclosure = document.createElement('details');
             disclosure.className = 'trace-disclosure';
             disclosure.innerHTML =
-                '<summary aria-label="Show technical details">' +
+                '<summary>' +
                     '<span class="trace-chevron">›</span>' +
                     '<span class="trace-summary-label">Details</span>' +
                 '</summary>' +
@@ -2936,11 +2943,17 @@
                 const v = data.value || {};
                 if (v.runId) {
                     ensureTraceDisclosure(ctx);
-                    let runBadge = ctx.traceMetaEl && ctx.traceMetaEl.querySelector('.run-meta-badge');
+                    let runBadge = ctx.traceMetaEl
+                        ? ctx.traceMetaEl.querySelector('.run-meta-badge')
+                        : group.querySelector('.run-meta-badge');
                     if (!runBadge) {
                         runBadge = document.createElement('div');
                         runBadge.className = 'run-meta-badge';
-                        if (ctx.traceMetaEl) ctx.traceMetaEl.appendChild(runBadge);
+                        if (ctx.traceMetaEl) {
+                            ctx.traceMetaEl.appendChild(runBadge);
+                        } else if (group && contentEl) {
+                            group.insertBefore(runBadge, contentEl);
+                        }
                     }
                     runBadge.textContent = `Run ${v.runId} • mode ${v.mode || 'chat'}`;
                 }
