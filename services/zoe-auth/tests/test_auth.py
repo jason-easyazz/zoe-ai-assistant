@@ -20,6 +20,7 @@ def _init_auth_tables(db_path: str) -> None:
         CREATE TABLE IF NOT EXISTS auth_users (
             user_id TEXT PRIMARY KEY,
             username TEXT NOT NULL,
+            email TEXT,
             role TEXT NOT NULL,
             password_hash TEXT
         )
