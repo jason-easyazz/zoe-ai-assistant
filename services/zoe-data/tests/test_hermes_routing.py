@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import sys
 import types
@@ -9,7 +10,16 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import mcp_server
 import zoe_agent
-from routers import system, voice_tts
+from routers import chat as chat_router, system, voice_tts
+
+
+def _decode_agui_events(blocks):
+    events = []
+    for block in blocks:
+        for line in block.splitlines():
+            if line.startswith("data: "):
+                events.append(json.loads(line[6:]))
+    return events
 
 
 def _patch_agent_context(monkeypatch):
@@ -123,6 +133,162 @@ def test_voice_background_marker_queues_work():
     assert is_background is True
     assert reason == "long task"
     assert prompt == "Run later"
+
+
+@pytest.mark.asyncio
+async def test_force_hermes_uses_single_chat_run_and_persists_once(monkeypatch):
+    saved_messages = []
+    recorded_runs = []
+    agui_runs = []
+    persisted_candidates = []
+
+    async def fake_save(session_id, role, content):
+        saved_messages.append((session_id, role, content))
+
+    async def fake_record_run_state(*args, **kwargs):
+        recorded_runs.append((args, kwargs))
+
+    async def fake_persist_agui(session_id, run_id, events):
+        agui_runs.append((session_id, run_id, events))
+
+    async def fake_empty(*args, **kwargs):
+        return ""
+
+    async def fake_hermes_tokens(*args, **kwargs):
+        yield "Hermes "
+        yield "answer"
+
+    async def fake_persist(user_id, session_id, user_text, assistant_text):
+        persisted_candidates.append((user_id, session_id, user_text, assistant_text))
+
+    monkeypatch.setattr(chat_router, "_ensure_user_and_chat_session", fake_empty)
+    monkeypatch.setattr(chat_router, "_save_chat_message", fake_save)
+    monkeypatch.setattr(chat_router, "_check_frustration", lambda *_, **__: None)
+    monkeypatch.setattr(chat_router, "_GUARDED_AUTO", False)
+    monkeypatch.setattr(chat_router, "_safe_load_portrait", fake_empty)
+    monkeypatch.setattr(chat_router, "_mempalace_load_user_facts", fake_empty)
+    monkeypatch.setattr(chat_router, "_build_memory_context", fake_empty)
+    monkeypatch.setattr(chat_router, "_iter_hermes_text_chunks", fake_hermes_tokens)
+    monkeypatch.setattr(chat_router, "_record_run_state", fake_record_run_state)
+    monkeypatch.setattr(chat_router, "_persist_ag_ui_run", fake_persist_agui)
+    monkeypatch.setattr(chat_router, "_persist_memory_candidates", fake_persist)
+
+    blocks = [
+        block
+        async for block in chat_router.chat_stream_generator(
+            "talk to hermes",
+            "session-hermes",
+            {"user_id": "user-1", "username": "Zoe"},
+            force_agent="hermes",
+        )
+    ]
+    await asyncio.sleep(0)
+
+    events = _decode_agui_events(blocks)
+    event_types = [event["type"] for event in events]
+    assert event_types.count("RUN_STARTED") == 1
+    assert event_types.count("RUN_FINISHED") == 1
+    assert event_types.count("TEXT_MESSAGE_START") == 1
+    assert event_types.count("TEXT_MESSAGE_END") == 1
+    assert any(
+        event["type"] == "CUSTOM"
+        and event.get("name") == "zoe.run_meta"
+        and event.get("value", {}).get("mode") == "hermes"
+        for event in events
+    )
+    assert saved_messages == [
+        ("session-hermes", "user", "talk to hermes"),
+        ("session-hermes", "assistant", "Hermes answer"),
+    ]
+    assert persisted_candidates == [("user-1", "session-hermes", "talk to hermes", "Hermes answer")]
+    assert recorded_runs[-1][1]["mode"] == "hermes"
+    assert recorded_runs[-1][1]["response_text"] == "Hermes answer"
+    assert agui_runs[-1][0] == "session-hermes"
+    assert agui_runs[-1][2][-1]["type"] == "RUN_FINISHED"
+
+
+@pytest.mark.asyncio
+async def test_zoe_agent_hermes_escalation_stays_in_parent_agui_run(monkeypatch):
+    saved_messages = []
+    recorded_runs = []
+    agui_runs = []
+    persisted_candidates = []
+
+    async def fake_save(session_id, role, content):
+        saved_messages.append((session_id, role, content))
+
+    async def fake_record_run_state(*args, **kwargs):
+        recorded_runs.append((args, kwargs))
+
+    async def fake_persist_agui(session_id, run_id, events):
+        agui_runs.append((session_id, run_id, events))
+
+    async def fake_empty(*args, **kwargs):
+        return ""
+
+    async def fake_zoe_stream(*args, **kwargs):
+        yield "__ESCALATE_HERMES__:deep work|Hermes task"
+
+    async def fake_hermes_tokens(*args, **kwargs):
+        yield "Deep "
+        yield "answer"
+
+    async def fake_persist(user_id, session_id, user_text, assistant_text):
+        persisted_candidates.append((user_id, session_id, user_text, assistant_text))
+
+    monkeypatch.setattr(chat_router, "_ensure_user_and_chat_session", fake_empty)
+    monkeypatch.setattr(chat_router, "_save_chat_message", fake_save)
+    monkeypatch.setattr(chat_router, "_check_frustration", lambda *_, **__: None)
+    monkeypatch.setattr(chat_router, "_GUARDED_AUTO", False)
+    monkeypatch.setattr(chat_router, "_ALL_TOOLS_ENABLED", False)
+    monkeypatch.setattr(chat_router, "_USE_ZOE_AGENT", True)
+    monkeypatch.setattr(chat_router, "classify_query", lambda *_: "general")
+    monkeypatch.setattr(chat_router, "_mempalace_load_user_facts", fake_empty)
+    monkeypatch.setattr(chat_router, "_safe_load_portrait", fake_empty)
+    monkeypatch.setattr(chat_router, "run_zoe_agent_streaming", fake_zoe_stream)
+    monkeypatch.setattr(chat_router, "_iter_hermes_text_chunks", fake_hermes_tokens)
+    monkeypatch.setattr(chat_router, "_record_run_state", fake_record_run_state)
+    monkeypatch.setattr(chat_router, "_persist_ag_ui_run", fake_persist_agui)
+    monkeypatch.setattr(chat_router, "_persist_memory_candidates", fake_persist)
+    monkeypatch.setitem(
+        sys.modules,
+        "pending_suggestions",
+        types.SimpleNamespace(
+            list_active=fake_empty,
+            ui_components_for_suggestions=lambda *_: [],
+        ),
+    )
+
+    blocks = [
+        block
+        async for block in chat_router.chat_stream_generator(
+            "please escalate",
+            "session-escalate",
+            {"user_id": "user-1", "username": "Zoe"},
+        )
+    ]
+    await asyncio.sleep(0)
+
+    events = _decode_agui_events(blocks)
+    event_types = [event["type"] for event in events]
+    assert event_types.count("RUN_STARTED") == 1
+    assert event_types.count("RUN_FINISHED") == 1
+    assert event_types.count("TEXT_MESSAGE_START") == 1
+    assert event_types.count("TEXT_MESSAGE_END") == 1
+    assert any(
+        event["type"] == "STATE_SNAPSHOT"
+        and event.get("snapshot", {}).get("phase") == "hermes"
+        for event in events
+    )
+    assert saved_messages == [
+        ("session-escalate", "user", "please escalate"),
+        ("session-escalate", "assistant", "Deep answer"),
+    ]
+    assert persisted_candidates == [("user-1", "session-escalate", "please escalate", "Deep answer")]
+    assert recorded_runs[-1][1]["mode"] == "chat"
+    assert recorded_runs[-1][1]["response_text"] == "Deep answer"
+    assert agui_runs[-1][0] == "session-escalate"
+    assert agui_runs[-1][2][-1]["type"] == "RUN_FINISHED"
 
 
 @pytest.mark.asyncio
