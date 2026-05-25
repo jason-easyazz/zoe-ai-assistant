@@ -40,6 +40,15 @@ async def _notify_ui(channel: str, event_type: str, data: dict):
         pass
 
 
+def _load_agents_registry() -> dict:
+    """Load the local peer-agent registry used by delegation tools."""
+    import yaml as _yaml
+
+    reg_path = os.path.join(os.path.dirname(__file__), "agents_registry.yml")
+    with open(reg_path) as reg_file:
+        return _yaml.safe_load(reg_file) or {}
+
+
 async def _get_weather_default_location(db) -> dict:
     """System-level weather fallback location (admin-configured or env default)."""
     try:
@@ -1741,11 +1750,7 @@ async def _execute_tool(db, name: str, args: dict):
                 )
             }
         try:
-            import yaml as _yaml
-            import os as _os
-            _reg_path = _os.path.join(_os.path.dirname(__file__), "agents_registry.yml")
-            with open(_reg_path) as _f:
-                _reg = _yaml.safe_load(_f)
+            _reg = _load_agents_registry()
             _info = _reg.get("agents", {}).get(agent_name)
             if not _info:
                 return {"error": f"Unknown agent: {agent_name}"}
@@ -1760,9 +1765,11 @@ async def _execute_tool(db, name: str, args: dict):
                 )
                 return {
                     "agent": "hermes",
-                    "status": "queued",
-                    "task_id": task_id,
-                    "result_endpoint": f"/api/agent/tasks/{task_id}",
+                    "result": {
+                        "status": "queued",
+                        "task_id": task_id,
+                        "result_endpoint": f"/api/agent/tasks/{task_id}",
+                    },
                 }
             from a2a_client import get_a2a_client  # type: ignore[import]
             _client = get_a2a_client()

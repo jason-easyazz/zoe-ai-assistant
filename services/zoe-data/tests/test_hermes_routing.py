@@ -128,6 +128,11 @@ async def test_mcp_a2a_delegate_hermes_queues_background_task(monkeypatch):
         "a2a_client",
         types.SimpleNamespace(get_a2a_client=lambda: (_ for _ in ()).throw(AssertionError("A2A should not be used for Hermes"))),
     )
+    monkeypatch.setattr(
+        mcp_server,
+        "_load_agents_registry",
+        lambda: {"agents": {"hermes": {"base_url": "http://localhost:8642"}}},
+    )
 
     result = await mcp_server._execute_tool(
         db=None,
@@ -143,9 +148,11 @@ async def test_mcp_a2a_delegate_hermes_queues_background_task(monkeypatch):
 
     assert result == {
         "agent": "hermes",
-        "status": "queued",
-        "task_id": 123,
-        "result_endpoint": "/api/agent/tasks/123",
+        "result": {
+            "status": "queued",
+            "task_id": 123,
+            "result_endpoint": "/api/agent/tasks/123",
+        },
     }
     assert calls == [
         {
