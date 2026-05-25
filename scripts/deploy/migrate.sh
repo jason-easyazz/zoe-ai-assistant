@@ -89,16 +89,31 @@ run_auth_ddl_with_docker_psql() {
       ;;
   esac
 
-  docker exec -i \
-    -e "PGPASSWORD=${PG_PARTS[3]}" \
-    zoe-database \
-    psql \
+  {
+    printf '%s:%s:%s:%s:%s\n' \
+      "$(escape_pgpass "127.0.0.1")" \
+      "$(escape_pgpass "${PG_PARTS[1]}")" \
+      "$(escape_pgpass "${PG_PARTS[4]}")" \
+      "$(escape_pgpass "${PG_PARTS[2]}")" \
+      "$(escape_pgpass "${PG_PARTS[3]}")"
+    cat "${AUTH_DDL}"
+  } | docker exec -i zoe-database sh -c '
+    set -eu
+    port="$1"
+    database="$2"
+    username="$3"
+    pgpassfile="$(mktemp)"
+    trap '\''rm -f "${pgpassfile}"'\'' EXIT
+    chmod 600 "${pgpassfile}"
+    IFS= read -r pgpass_entry
+    printf "%s\n" "${pgpass_entry}" > "${pgpassfile}"
+    PGPASSFILE="${pgpassfile}" psql \
       -h 127.0.0.1 \
-      -p "${PG_PARTS[1]}" \
-      -U "${PG_PARTS[2]}" \
-      -d "${PG_PARTS[4]}" \
-      -v ON_ERROR_STOP=1 \
-    < "${AUTH_DDL}"
+      -p "${port}" \
+      -U "${username}" \
+      -d "${database}" \
+      -v ON_ERROR_STOP=1
+  ' sh "${PG_PARTS[1]}" "${PG_PARTS[4]}" "${PG_PARTS[2]}"
 }
 
 database_container_running() {
