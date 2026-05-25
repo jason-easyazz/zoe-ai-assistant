@@ -37,7 +37,7 @@ Runs in the background after every conversation. Activates explicitly when the u
    - Category: `tone`, `formatting`, `factual`, `preference`, `workflow`
    - Before: what Zoe did wrong
    - After: what the user wants instead
-3. **Store via API** — `GET /api/learnings` to check for duplicates, then the learning is persisted with user ownership
+3. **Check for duplicates** — use `GET /api/learnings` before proposing a new learning
 4. **Confirm storage** — respond with a brief acknowledgment (e.g., "Got it, I'll remember that for next time")
 5. **Apply in future** — before generating responses, retrieve relevant learnings from `GET /api/learnings` and adjust behavior accordingly
 
@@ -48,7 +48,7 @@ Runs in the background after every conversation. Activates explicitly when the u
 **Steps:**
 - Detect preference signal ("I prefer")
 - Extract: category=`formatting`, before=`paragraph summaries`, after=`bullet point summaries`
-- Store the learning
+- Let the self-learning pipeline persist the learning with user ownership; this skill only uses the listed review endpoints
 - Respond: "Noted — I'll use bullet points for summaries from now on."
 
 ## Security

@@ -117,7 +117,7 @@ specific future time.  Example:
 - **API failure**: Tell the user the notification could not be scheduled and suggest retrying.
 
 ## Implementation Notes
-- APScheduler persists jobs in SQLite so they survive restarts.
+- Scheduled nudges must use Zoe's configured production persistence path; do not introduce SQLite-only storage for live reminders.
 - Quiet hours (22:00–07:00 server local) suppress non-forced notifications.
 - Tapping a push notification creates a fresh chat session pre-seeded with
   the notification message, enabling a natural follow-up conversation.

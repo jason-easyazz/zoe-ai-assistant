@@ -21,7 +21,7 @@ triggers:
 allowed_endpoints:
   - "POST /api/agent-zero/research"
   - "POST /api/agent-zero/task"
-  - "GET /api/agent-zero/status"
+  - "GET /api/agent-zero/status/*"
 tags:
   - research
   - analysis
@@ -38,7 +38,7 @@ The user wants deep research, multi-source analysis, comparison studies, or any 
 1. **Identify the task type** — research (open-ended query), comparison (two+ options), or analysis (structured evaluation)
 2. **Inform the user** — tell them research is underway and may take 30–60 seconds
 3. **Submit to Agent Zero** — use the appropriate endpoint (see below)
-4. **Poll for completion** — check `GET /api/agent-zero/status` until the task finishes
+4. **Poll for completion** — use the submitted task ID with `GET /api/agent-zero/status/{task_id}` until the task finishes
 5. **Present findings** — format results clearly: use tables for comparisons, bullet points for research summaries, and always cite sources when available
 
 ## API Endpoints
@@ -64,7 +64,7 @@ POST /api/agent-zero/task
 
 ### Check task status
 ```
-GET /api/agent-zero/status
+GET /api/agent-zero/status/<task_id>
 ```
 Returns the current state (`pending`, `running`, `completed`, `failed`) and results when complete.
 
@@ -76,7 +76,7 @@ Returns the current state (`pending`, `running`, `completed`, `failed`) and resu
 - Identify: comparison task with two items
 - Respond: "Let me research that for you — this may take about a minute."
 - Submit: `POST /api/agent-zero/task` with task and context
-- Poll: `GET /api/agent-zero/status` until `completed`
+- Poll: `GET /api/agent-zero/status/<task_id>` until `completed`
 - Present: table with capacity, price, warranty, pros/cons for each option, with source links
 
 ## Error Handling
