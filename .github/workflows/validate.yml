@@ -92,8 +92,8 @@ jobs:
           PYTHONPATH="${{ github.workspace }}/services/zoe-auth" pytest \
             services/zoe-auth/tests/test_auth.py \
             services/zoe-auth/tests/test_smoke.py \
-            -x -q \
-            --override-ini="pythonpath=${{ github.workspace }}/services/zoe-auth"
+            services/zoe-auth/tests/test_oidc_jwt.py \
+            -x -q
         env:
           PYTHONPATH: ${{ github.workspace }}/services/zoe-data
           POSTGRES_URL: postgresql://zoe:${{ env.CI_DB_PASSWORD }}@localhost:5432/zoe

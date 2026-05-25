@@ -4,7 +4,7 @@ import tempfile
 
 from fastapi.testclient import TestClient
 
-from tests.sqlite_compat import SQLiteCompatConnection
+from sqlite_compat import SQLiteCompatConnection
 from main import app
 from models import database as db_module
 

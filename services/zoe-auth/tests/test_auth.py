@@ -8,7 +8,7 @@ import tempfile
 from fastapi.testclient import TestClient
 import pytest
 
-from tests.sqlite_compat import SQLiteCompatConnection
+from sqlite_compat import SQLiteCompatConnection
 import models.database as db_module
 from main import app
 
