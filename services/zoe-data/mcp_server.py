@@ -374,6 +374,15 @@ TOOLS = [
                     "description": "Required true when agent_name is openclaw; prevents accidental non-Hermes delegation.",
                     "default": False,
                 },
+                "session_id": {
+                    "type": "string",
+                    "description": "Optional Zoe session id to associate with the delegated Hermes task.",
+                },
+                "request_depth": {
+                    "type": "integer",
+                    "description": "Delegation depth guard for nested agent calls.",
+                    "default": 0,
+                },
             },
             "required": ["agent_name", "task"],
         },
@@ -1740,6 +1749,22 @@ async def _execute_tool(db, name: str, args: dict):
             _info = _reg.get("agents", {}).get(agent_name)
             if not _info:
                 return {"error": f"Unknown agent: {agent_name}"}
+            if agent_name == "hermes":
+                from background_runner import enqueue_background_task  # type: ignore[import]
+                caller_user_id = _uid_raw or "family-admin"
+                session_id = args.get("session_id") or None
+                task_id = await enqueue_background_task(
+                    task,
+                    str(caller_user_id),
+                    session_id=str(session_id) if session_id else None,
+                    request_depth=int(args.get("request_depth") or 0),
+                )
+                return {
+                    "agent": "hermes",
+                    "status": "queued",
+                    "task_id": task_id,
+                    "result_endpoint": f"/api/agent/tasks/{task_id}",
+                }
             from a2a_client import get_a2a_client  # type: ignore[import]
             _client = get_a2a_client()
             result = await _client.submit_task(

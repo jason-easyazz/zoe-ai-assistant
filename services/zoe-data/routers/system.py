@@ -986,6 +986,25 @@ async def delegate_to_agent(
             ),
         )
 
+    if agent_name == "hermes":
+        from background_runner import enqueue_background_task  # type: ignore[import]
+        user_id = user.get("user_id", "unknown")
+        session_id = body.get("session_id") or None
+        task_id = await enqueue_background_task(
+            task,
+            user_id,
+            session_id=session_id,
+            request_depth=int(body.get("request_depth") or 0),
+        )
+        return {
+            "agent": agent_name,
+            "result": {
+                "status": "queued",
+                "task_id": task_id,
+                "result_endpoint": f"/api/agent/tasks/{task_id}",
+            },
+        }
+
     from a2a_client import get_a2a_client  # type: ignore[import]
     client = get_a2a_client()
     result = await client.submit_task(

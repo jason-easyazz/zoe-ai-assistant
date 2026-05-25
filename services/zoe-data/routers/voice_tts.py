@@ -2784,7 +2784,7 @@ async def voice_command(
                     ):
                         if not delta:
                             continue
-                        if delta.startswith("__ESCALATE__:") or delta.startswith("__ESCALATE_BG__:"):
+                        if delta.startswith(("__ESCALATE__:", "__ESCALATE_BG__:", "__ESCALATE_HERMES__:")):
                             try:
                                 is_bg = delta.startswith("__ESCALATE_BG__:")
                                 _, body = delta.split(":", 1)
@@ -2889,7 +2889,7 @@ async def voice_command(
             ):
                 if not delta:
                     continue
-                if delta.startswith("__ESCALATE__:") or delta.startswith("__ESCALATE_BG__:"):
+                if delta.startswith(("__ESCALATE__:", "__ESCALATE_BG__:", "__ESCALATE_HERMES__:")):
                     try:
                         from push import broadcaster as _bc_escalate
                         is_bg = delta.startswith("__ESCALATE_BG__:")
