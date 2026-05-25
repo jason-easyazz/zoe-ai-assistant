@@ -417,7 +417,7 @@ async def _load_todays_messages(user_id: str, db=None) -> str:
             JOIN chat_sessions cs ON cm.session_id = cs.id
             WHERE cs.user_id = ?
               AND cm.role = 'user'
-              AND DATE(cm.created_at) = DATE('now', 'localtime')
+              AND cm.created_at::timestamptz::date = CURRENT_DATE
             ORDER BY cm.created_at ASC
             LIMIT 200
             """,
@@ -706,7 +706,7 @@ async def run_digest_for_all_active_users(db=None) -> list[dict]:
             FROM chat_messages cm
             JOIN chat_sessions cs ON cm.session_id = cs.id
             WHERE cm.role = 'user'
-              AND DATE(cm.created_at) = DATE('now', 'localtime')
+              AND cm.created_at::timestamptz::date = CURRENT_DATE
             """,
         )
         rows = await rows.fetchall()

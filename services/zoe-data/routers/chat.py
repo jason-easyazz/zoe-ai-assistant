@@ -878,15 +878,35 @@ async def _save_chat_message(session_id: str, role: str, content: str) -> None:
     the server owns the transcript. Zoe Agent reads this table for conversation
     history on the next turn, enabling proper follow-on context.
     """
-    if not content or not content.strip():
+    clean_content = (content or "").strip()
+    if not clean_content:
         return
     try:
         async for db in get_db():
             await db.execute(
                 "INSERT INTO chat_messages (id, session_id, role, content) "
                 "VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
-                (uuid.uuid4().hex, session_id, role, content.strip()),
+                (uuid.uuid4().hex, session_id, role, clean_content),
             )
+            title_row = await db.execute_fetchall(
+                "SELECT title FROM chat_sessions WHERE id = ?",
+                (session_id,),
+            )
+            if title_row:
+                current_title = dict(title_row[0]).get("title") or "New Chat"
+                new_title = None
+                if title_is_weak(current_title):
+                    new_title = derive_session_title(clean_content)
+                if new_title:
+                    await db.execute(
+                        "UPDATE chat_sessions SET updated_at = NOW()::text, title = ? WHERE id = ?",
+                        (new_title, session_id),
+                    )
+                else:
+                    await db.execute(
+                        "UPDATE chat_sessions SET updated_at = NOW()::text WHERE id = ?",
+                        (session_id,),
+                    )
             await db.commit()
             break
     except Exception as _sme:
@@ -1606,12 +1626,14 @@ async def chat_stream_generator(
                     response_text=followup,
                     metadata={"task_class": task_class, "missing_constraints": missing},
                 )
+                await _save_chat_message(session_id, "assistant", followup)
                 return
         if "what can you do right now" in lc or lc in {"/capabilities", "capabilities", "tools"}:
             try:
                 caps_text = Path("/home/zoe/assistant/CAPABILITIES.md").read_text()[:12000]
             except Exception:
                 caps_text = "Hermes is the active escalation agent. Zoe tools include calendar, lists, reminders, memory, Graphify, Multica, and CloakBrowser."
+            capabilities_text = f"Hermes/Zoe capabilities:\n\n{caps_text}"
             yield emit(
                 TextMessageStartEvent(
                     type=EventType.TEXT_MESSAGE_START,
@@ -1619,11 +1641,12 @@ async def chat_stream_generator(
                     role="assistant",
                 )
             )
-            async for line in iter_text_message_chunks(enc, recorder, assistant_message_id, f"Hermes/Zoe capabilities:\n\n{caps_text}"):
+            async for line in iter_text_message_chunks(enc, recorder, assistant_message_id, capabilities_text):
                 yield line
             yield emit(TextMessageEndEvent(type=EventType.TEXT_MESSAGE_END, message_id=assistant_message_id))
             yield emit(RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id=session_id, run_id=run_id))
-            await _record_run_state(run_id, session_id, user_id, mode="chat", status="completed", request_text=message, response_text="capabilities")
+            await _record_run_state(run_id, session_id, user_id, mode="chat", status="completed", request_text=message, response_text=capabilities_text)
+            await _save_chat_message(session_id, "assistant", capabilities_text)
             return
 
         if _WHATSAPP_FLOW_ENABLED and is_whatsapp_connect_request(message_for_processing):
@@ -2798,6 +2821,7 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
             missing = missing_brief_fields(message_for_processing)
             if missing:
                 followup = _research_followup_prompt(missing)
+                asyncio.ensure_future(_save_chat_message(session_id, "assistant", followup))
                 return {
                     "response": followup,
                     "session_id": session_id,
@@ -2816,7 +2840,9 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
                 caps_text = Path("/home/zoe/assistant/CAPABILITIES.md").read_text()[:12000]
             except Exception:
                 caps_text = "Hermes is the active escalation agent. Zoe tools include calendar, lists, reminders, memory, Graphify, Multica, and CloakBrowser."
-            return {"response": "Hermes/Zoe capabilities:\n\n" + caps_text, "session_id": session_id}
+            capabilities_text = "Hermes/Zoe capabilities:\n\n" + caps_text
+            asyncio.ensure_future(_save_chat_message(session_id, "assistant", capabilities_text))
+            return {"response": capabilities_text, "session_id": session_id}
 
         use_intent_fast_path = (not force_openclaw) and _ALL_TOOLS_ENABLED
         if task_class == "research":
