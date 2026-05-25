@@ -48,6 +48,8 @@ class AuthManager:
     
     def __init__(self, password_policy: Optional[PasswordPolicy] = None):
         self.password_policy = password_policy or PasswordPolicy()
+        self.max_failed_password_attempts = 5
+        self.lockout_duration = timedelta(minutes=15)
         
         # Common passwords to reject
         self.common_passwords = {
@@ -132,7 +134,8 @@ class AuthManager:
             # Get user data
             with auth_db.get_connection() as conn:
                 cursor = conn.execute("""
-                    SELECT username, password_hash, created_at, updated_at
+                    SELECT username, password_hash, created_at, updated_at,
+                           is_active, failed_login_attempts, locked_until, is_verified
                     FROM auth_users 
                     WHERE user_id = ?
                 """, (user_id,))
@@ -146,20 +149,44 @@ class AuthManager:
                         error_message="Invalid credentials"
                     )
 
-                username, password_hash, created_at, updated_at = row
-                
-                # NOTE: auth_users table doesn't have is_active, failed_attempts, locked_until columns
-                # Assuming all users are active and not locked
-                is_active = True
-                failed_attempts = 0
-                locked_until = None
+                (
+                    username,
+                    password_hash,
+                    created_at,
+                    updated_at,
+                    is_active,
+                    failed_attempts,
+                    locked_until,
+                    is_verified,
+                ) = row
+                failed_attempts = int(failed_attempts or 0)
+                locked_until_dt = self._parse_datetime(locked_until)
+
+                if not is_active:
+                    self._log_auth_attempt(user_id, "password", "failure",
+                                         "account_inactive", ip_address)
+                    return AuthValidationResult(
+                        success=False,
+                        error_message="Account is disabled",
+                        account_verified=bool(is_verified)
+                    )
+
+                if locked_until_dt and datetime.now() < locked_until_dt:
+                    self._log_auth_attempt(user_id, "password", "failure",
+                                         "account_locked", ip_address)
+                    return AuthValidationResult(
+                        success=False,
+                        error_message="Account is locked",
+                        locked_until=locked_until_dt,
+                        account_verified=bool(is_verified)
+                    )
 
                 # Verify password
                 if password_hash and bcrypt.checkpw(password.encode('utf-8'), password_hash.encode('utf-8')):
                     # Success - update last login
                     conn.execute("""
                         UPDATE auth_users 
-                        SET last_login = ?
+                        SET last_login = ?, failed_login_attempts = 0, locked_until = NULL
                         WHERE user_id = ?
                     """, (datetime.now().isoformat(), user_id))
 
@@ -172,19 +199,35 @@ class AuthManager:
                     return AuthValidationResult(
                         success=True,
                         user_id=user_id,
-                        requires_password_change=requires_change
+                        requires_password_change=requires_change,
+                        account_verified=bool(is_verified)
                     )
                 else:
                     # Failed password
-                    # NOTE: auth_users table doesn't have failed_login_attempts or locked_until columns
-                    # Skipping account locking logic
+                    failed_attempts += 1
+                    lock_until = None
+                    if failed_attempts >= self.max_failed_password_attempts:
+                        lock_until = datetime.now() + self.lockout_duration
+
+                    conn.execute("""
+                        UPDATE auth_users
+                        SET failed_login_attempts = ?, locked_until = ?, updated_at = ?
+                        WHERE user_id = ?
+                    """, (
+                        failed_attempts,
+                        lock_until.isoformat() if lock_until else None,
+                        datetime.now().isoformat(),
+                        user_id,
+                    ))
 
                     self._log_auth_attempt(user_id, "password", "failure", 
                                          "invalid_password", ip_address)
                     
                     return AuthValidationResult(
                             success=False,
-                            error_message="Invalid password"
+                            error_message="Invalid password",
+                            locked_until=lock_until,
+                            account_verified=bool(is_verified)
                         )
 
         except Exception as e:
@@ -351,26 +394,29 @@ class AuthManager:
         try:
             with auth_db.get_connection() as conn:
                 cursor = conn.execute("""
-                    SELECT username, email, role, created_at, last_login
+                    SELECT username, email, role, is_active, is_verified,
+                           created_at, last_login, failed_login_attempts,
+                           locked_until, settings
                     FROM auth_users 
                     WHERE user_id = ?
                 """, (user_id,))
                 
                 row = cursor.fetchone()
                 if row:
+                    locked_until_dt = self._parse_datetime(row[8])
                     return {
                         "user_id": user_id,
                         "username": row[0],
                         "email": row[1],
                         "role": row[2],
-                        "is_active": True,
-                        "is_verified": True,
-                        "created_at": row[3],
-                        "last_login": row[4],
-                        "failed_login_attempts": 0,
-                        "locked_until": None,
-                        "is_locked": False,
-                        "settings": "{}"
+                        "is_active": bool(row[3]),
+                        "is_verified": bool(row[4]),
+                        "created_at": row[5],
+                        "last_login": row[6],
+                        "failed_login_attempts": int(row[7] or 0),
+                        "locked_until": row[8],
+                        "is_locked": bool(locked_until_dt and datetime.now() < locked_until_dt),
+                        "settings": row[9] or "{}"
                     }
                     
         except Exception as e:
@@ -440,6 +486,16 @@ class AuthManager:
         """Validate email format"""
         pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
         return re.match(pattern, email) is not None
+
+    def _parse_datetime(self, value: Optional[str]) -> Optional[datetime]:
+        """Parse stored auth timestamp strings."""
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            logger.warning("Invalid auth timestamp: %s", value)
+            return None
 
     def _validate_password(self, password: str, username: str, email: str) -> Tuple[bool, str]:
         """Validate password against policy"""
