@@ -10,8 +10,10 @@ import asyncio
 import sys
 import os
 
-# Add source paths
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../services/zoe-core'))
+# Add active source paths. The retired zoe-core tree lives only in docs/archive.
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, os.path.join(PROJECT_ROOT, 'services/zoe-data'))
+sys.path.insert(0, os.path.join(PROJECT_ROOT, 'services/zoe-auth'))
 
 
 @pytest.fixture(scope="session")
