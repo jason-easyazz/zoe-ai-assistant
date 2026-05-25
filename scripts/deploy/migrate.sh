@@ -93,6 +93,8 @@ run_auth_ddl_with_docker_psql() {
     -e "PGPASSWORD=${PG_PARTS[3]}" \
     zoe-database \
     psql \
+      -h 127.0.0.1 \
+      -p "${PG_PARTS[1]}" \
       -U "${PG_PARTS[2]}" \
       -d "${PG_PARTS[4]}" \
       -v ON_ERROR_STOP=1 \
