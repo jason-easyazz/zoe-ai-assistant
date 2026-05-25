@@ -399,6 +399,8 @@ async def retry_engineering_task(task_id: str) -> dict[str, Any]:
     task = await get_engineering_task(task_id)
     if not task:
         raise ValueError(f"engineering task not found: {task_id}")
+    if task.get("phase") in TERMINAL_PHASES:
+        return task
     round_count = int(task.get("round_count") or 0)
     max_rounds = int(task.get("max_rounds") or 5)
     if round_count >= max_rounds:
@@ -410,7 +412,7 @@ async def retry_engineering_task(task_id: str) -> dict[str, Any]:
                SET phase='queued', status='active', background_task_id=NULL,
                    blocker_reason=NULL, last_error=NULL, round_count=$1,
                    updated_at=$2
-               WHERE id=$3""",
+               WHERE id=$3 AND phase NOT IN ('done', 'cancelled')""",
             round_count + 1,
             now,
             task_id,
@@ -427,12 +429,16 @@ async def cancel_engineering_task(task_id: str, reason: str = "cancelled") -> di
             """UPDATE engineering_tasks
                SET phase='cancelled', status='cancelled', blocker_reason=$1,
                    updated_at=$2, completed_at=$2
-               WHERE id=$3 RETURNING *""",
+               WHERE id=$3 AND phase NOT IN ('done', 'cancelled')
+               RETURNING *""",
             reason,
             now,
             task_id,
         )
     if not row:
+        existing = await get_engineering_task(task_id)
+        if existing:
+            return existing
         raise ValueError(f"engineering task not found: {task_id}")
     await sync_multica_issue(dict(row), note=f"Cancelled: {reason}")
     return dict(row)

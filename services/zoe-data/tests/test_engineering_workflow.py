@@ -200,3 +200,77 @@ async def test_update_greptile_state_does_not_overwrite_terminal_workflow(monkey
     )
 
     assert updated == workflow
+
+
+@pytest.mark.asyncio
+async def test_retry_engineering_task_does_not_reopen_terminal_workflow(monkeypatch):
+    workflow = {
+        "id": "wf-done",
+        "phase": "done",
+        "status": "done",
+        "round_count": 1,
+        "max_rounds": 5,
+    }
+
+    class FakeDB:
+        async def fetchrow(self, sql, *args):
+            if "SELECT * FROM engineering_tasks WHERE id=$1" in sql:
+                return workflow
+            raise AssertionError(f"unexpected query: {sql}")
+
+        async def execute(self, sql, *args):
+            raise AssertionError("terminal workflow should not be reset to queued")
+
+    class FakeCtx:
+        async def __aenter__(self):
+            return FakeDB()
+
+        async def __aexit__(self, *_):
+            return None
+
+    monkeypatch.setitem(sys.modules, "db_pool", types.SimpleNamespace(get_db_ctx=lambda: FakeCtx()))
+
+    async def fail_start(*_, **__):
+        raise AssertionError("terminal workflow should not start another Hermes run")
+
+    monkeypatch.setattr(engineering_workflow, "start_engineering_task", fail_start)
+
+    updated = await engineering_workflow.retry_engineering_task("wf-done")
+
+    assert updated == workflow
+
+
+@pytest.mark.asyncio
+async def test_cancel_engineering_task_does_not_overwrite_done_workflow(monkeypatch):
+    workflow = {
+        "id": "wf-done",
+        "phase": "done",
+        "status": "done",
+    }
+
+    class FakeDB:
+        async def fetchrow(self, sql, *args):
+            if "UPDATE engineering_tasks" in sql:
+                assert "phase NOT IN ('done', 'cancelled')" in sql
+                return None
+            if "SELECT * FROM engineering_tasks WHERE id=$1" in sql:
+                return workflow
+            raise AssertionError(f"unexpected query: {sql}")
+
+    class FakeCtx:
+        async def __aenter__(self):
+            return FakeDB()
+
+        async def __aexit__(self, *_):
+            return None
+
+    monkeypatch.setitem(sys.modules, "db_pool", types.SimpleNamespace(get_db_ctx=lambda: FakeCtx()))
+
+    async def fake_sync(*_, **__):
+        raise AssertionError("already terminal workflow should not sync cancellation")
+
+    monkeypatch.setattr(engineering_workflow, "sync_multica_issue", fake_sync)
+
+    updated = await engineering_workflow.cancel_engineering_task("wf-done")
+
+    assert updated == workflow
