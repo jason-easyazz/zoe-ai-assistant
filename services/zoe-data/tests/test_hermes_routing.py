@@ -208,6 +208,53 @@ async def test_force_hermes_uses_single_chat_run_and_persists_once(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_force_hermes_error_records_hermes_mode(monkeypatch):
+    recorded_runs = []
+    agui_runs = []
+
+    async def fake_record_run_state(*args, **kwargs):
+        recorded_runs.append((args, kwargs))
+
+    async def fake_empty(*args, **kwargs):
+        return ""
+
+    async def fake_hermes_tokens(*args, **kwargs):
+        raise RuntimeError("hermes down")
+        yield ""
+
+    async def fake_persist_agui(session_id, run_id, events):
+        agui_runs.append((session_id, run_id, events))
+
+    monkeypatch.setattr(chat_router, "_ensure_user_and_chat_session", fake_empty)
+    monkeypatch.setattr(chat_router, "_save_chat_message", fake_empty)
+    monkeypatch.setattr(chat_router, "_check_frustration", lambda *_, **__: None)
+    monkeypatch.setattr(chat_router, "_GUARDED_AUTO", False)
+    monkeypatch.setattr(chat_router, "_safe_load_portrait", fake_empty)
+    monkeypatch.setattr(chat_router, "_mempalace_load_user_facts", fake_empty)
+    monkeypatch.setattr(chat_router, "_build_memory_context", fake_empty)
+    monkeypatch.setattr(chat_router, "_iter_hermes_text_chunks", fake_hermes_tokens)
+    monkeypatch.setattr(chat_router, "_record_run_state", fake_record_run_state)
+    monkeypatch.setattr(chat_router, "_persist_ag_ui_run", fake_persist_agui)
+
+    blocks = [
+        block
+        async for block in chat_router.chat_stream_generator(
+            "talk to hermes",
+            "session-hermes-error",
+            {"user_id": "user-1", "username": "Zoe"},
+            force_agent="hermes",
+        )
+    ]
+
+    events = _decode_agui_events(blocks)
+    assert any(event["type"] == "RUN_ERROR" for event in events)
+    assert recorded_runs[-1][1]["mode"] == "hermes"
+    assert recorded_runs[-1][1]["status"] == "error"
+    assert "hermes down" in recorded_runs[-1][1]["response_text"]
+    assert agui_runs[-1][0] == "session-hermes-error"
+
+
+@pytest.mark.asyncio
 async def test_zoe_agent_hermes_escalation_stays_in_parent_agui_run(monkeypatch):
     saved_messages = []
     recorded_runs = []

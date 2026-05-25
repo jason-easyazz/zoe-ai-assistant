@@ -1406,6 +1406,7 @@ async def chat_stream_generator(
     enc = EventEncoder()
     recorder = AgRunRecorder()
     run_id, assistant_message_id = new_run_ids()
+    run_mode = "hermes" if force_agent == "hermes" else "chat"
 
     def emit(ev):
         return recorder.emit(enc, ev)
@@ -1430,7 +1431,6 @@ async def chat_stream_generator(
                 value={"sessionId": session_id, "messageId": assistant_message_id},
             )
         )
-        run_mode = "hermes" if force_agent == "hermes" else "chat"
         await _record_run_state(run_id, session_id, user_id, mode=run_mode, status="running", request_text=message)
 
         approval_token, message_for_processing = _extract_approval_token(message)
@@ -2363,7 +2363,7 @@ async def chat_stream_generator(
                 code="internal_error",
             )
         )
-        await _record_run_state(run_id, session_id, user_id, mode="chat", status="error", request_text=message, response_text=str(e))
+        await _record_run_state(run_id, session_id, user_id, mode=run_mode, status="error", request_text=message, response_text=str(e))
     finally:
         await _persist_ag_ui_run(session_id, run_id, recorder.events)
 
@@ -2537,7 +2537,7 @@ async def _hermes_stream_generator(
     message: str, session_id: str, user_id: str,
     *, username: str = "", portrait: str = "", facts: str = "",
 ):
-    """Stream a response from the Hermes Agent gateway using AG-UI SSE events."""
+    """Standalone Hermes AG-UI stream; caller owns user-turn persistence."""
     enc = EventEncoder()
     recorder = AgRunRecorder()
     run_id = uuid.uuid4().hex
@@ -2572,7 +2572,6 @@ async def _hermes_stream_generator(
 
     response_text = "".join(full_text)
     if response_text.strip():
-        asyncio.ensure_future(_save_chat_message(session_id, "user", message))
         asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text))
         if user_id != "guest":
             asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message, response_text))
