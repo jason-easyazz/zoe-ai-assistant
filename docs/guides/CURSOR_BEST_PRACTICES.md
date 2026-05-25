@@ -68,7 +68,7 @@ For reviewable changes:
 2. Keep the diff small enough to review.
 3. Push a focused PR against `main`.
 4. Let Greptile review independently.
-5. Use Greptile MCP first, or `/home/zoe/bin/greptile-mcp.py` if MCP tools are unavailable.
+5. Use Greptile MCP first, or `~/bin/greptile-mcp.py` (install path varies by host; see `/grep-loop`) if MCP tools are unavailable.
 6. Fix real correctness, security, data-loss, behavior, or test findings.
 7. Re-run focused tests and trigger Greptile re-review.
 

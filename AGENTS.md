@@ -49,6 +49,6 @@ For reviewable development work:
 
 Hermes is Zoe's default engineering and browser agent. Use it for planning, code review, implementation repair, architecture analysis, Greptile loops, Graphify-guided codebase work, Multica board repair, generated knowledge refresh, and browser work through Zoe's CloakBrowser tools.
 
-Local Zoe Hermes engineering skills live under `~/.hermes/skills`, including `zoe-engineering`, `source-code-context`, `code-structure-cleanup`, and `github-greptile-loop`. They are operator-level Hermes skills, not user-facing Zoe runtime skills under `skills/`.
+Local Zoe Hermes engineering skills live under `~/.hermes/skills`, including `zoe-engineering`, `source-code-context`, `code-structure-cleanup`, `github-greptile-loop`, `zoe-graphify`, and `zoe-status-refresh`. They are operator-level Hermes skills, not user-facing Zoe runtime skills under `skills/`.
 
 OpenClaw remains installed and available as a future/manual fallback. Do not route ordinary coding, planning, review, board work, browser work, or background work to OpenClaw by default; Hermes owns those paths unless the user explicitly asks to use OpenClaw.

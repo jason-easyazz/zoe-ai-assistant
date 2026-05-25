@@ -15,7 +15,7 @@ Plan first for broad or risky work. Keep changes surgical. Prefer existing Zoe p
 
 Build the minimal working feature first. After it works, run a cleanup pass for duplicated runtime mechanics: repeated provider calls, parsing, validation, command execution, payload transforms, or business logic. Keep domain policy in routes/actions/intents and reusable mechanics in service-layer helpers.
 
-For Hermes-backed engineering work, prefer the local Hermes skills `zoe-engineering`, `source-code-context`, `code-structure-cleanup`, and `github-greptile-loop` when available. These are operator-level Hermes skills under `~/.hermes/skills`, not Zoe runtime user-facing skills.
+For Hermes-backed engineering work, prefer the local Hermes skills `zoe-engineering`, `source-code-context`, `code-structure-cleanup`, `github-greptile-loop`, `zoe-graphify`, and `zoe-status-refresh` when available. These are operator-level Hermes skills under `~/.hermes/skills`, not Zoe runtime user-facing skills.
 
 Use the small-PR loop for reviewable work: split large changes, push a focused PR, let Greptile review independently, then use **Greptile MCP first** (`get_merge_request`, `list_merge_request_comments`, `trigger_code_review`) or the operator-local CLI `~/bin/greptile-mcp.py` (install path varies by host; see `/grep-loop`) before falling back to `gh` scraping or Hermes.
 

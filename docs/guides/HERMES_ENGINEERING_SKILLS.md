@@ -50,7 +50,7 @@ services/zoe-data/skill_discovery.py
 To confirm the skills are discoverable:
 
 ```bash
-cd /home/zoe/assistant
+cd "${ZOE_HOME:-/home/zoe/assistant}"
 python3 - <<'PY'
 import sys
 sys.path.insert(0, "services/zoe-data")
@@ -61,6 +61,8 @@ for expected in [
     "source-code-context",
     "code-structure-cleanup",
     "github-greptile-loop",
+    "zoe-graphify",
+    "zoe-status-refresh",
 ]:
     print(expected, expected in ids)
 PY
