@@ -126,7 +126,9 @@
 - [clear-cache](/dist/clear-cache.html)
 - [clear-cache-v2](/dist/clear-cache-v2.html)
 - [clear-session](/dist/clear-session.html)
+- [cooking](/dist/cooking.html)
 - [dashboard](/dist/dashboard.html)
+- [games](/dist/games.html)
 - [index](/dist/index.html)
 - [journal](/dist/journal.html)
 - [lists](/dist/lists.html)
@@ -136,6 +138,7 @@
 - [offline](/dist/offline.html)
 - [people](/dist/people.html)
 - [settings](/dist/settings.html)
+- [smart-home](/dist/smart-home.html)
 - [updates](/dist/updates.html)
 - [voice](/dist/voice.html)
 - [week_planner_widget](/dist/week_planner_widget.html)
@@ -149,6 +152,7 @@
 - **Panel**: show_map, show_chart, show_image, open_touch_page, panel_browser_screenshot
 - **Web search**: DuckDuckGo scraping via web_search tool (no API key required)
 - **Self-improvement**: intent-miss review → Hermes/Multica proposal workflow (`self_improve` intent)
+- **Hermes engineering loop**: source context → small feature → cleanup pass → review/test
 - **Agent sync**: POST /api/system/agent-sync regenerates this file and all agent docs
 - **graphify_search**: MCP tool to query Zoe's knowledge-graph wiki (built by graphify)
 
