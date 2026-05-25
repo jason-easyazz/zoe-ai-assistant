@@ -2466,6 +2466,7 @@ def _hermes_progress_events(event_name: str, payload) -> list:
                 "level": "info",
                 "message": label,
                 "source": "hermes",
+                "phase": "hermes_tool" if tool and tool != "Hermes" else "hermes",
                 "event": event_name,
                 "payload": payload if isinstance(payload, dict) else {"value": payload},
             },
@@ -2515,10 +2516,10 @@ async def _iter_hermes_stream_events(
                         break
                     if sse_event and sse_event != "message":
                         try:
-                            payload = json.loads(data_str)
+                            progress_payload = json.loads(data_str)
                         except json.JSONDecodeError:
-                            payload = {"message": data_str}
-                        yield {"kind": "progress", "event": sse_event, "payload": payload}
+                            progress_payload = {"message": data_str}
+                        yield {"kind": "progress", "event": sse_event, "payload": progress_payload}
                         sse_event = ""
                         continue
                     try:
