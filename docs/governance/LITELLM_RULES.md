@@ -150,7 +150,7 @@ response = await call_litellm(model=models["fast"], ...)
 ```python
 # ✅ CORRECT - Always authenticate via environment variable
 import os
-LITELLM_KEY = os.environ.get("LITELLM_API_KEY", "")
+LITELLM_KEY = os.environ["LITELLM_API_KEY"]  # raises KeyError if missing
 
 headers = {
     "Authorization": f"Bearer {LITELLM_KEY}",
