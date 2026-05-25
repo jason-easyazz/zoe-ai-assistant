@@ -5,8 +5,15 @@
       "args": ["-m", "graphify.serve", "/home/zoe/assistant/graphify-out/graph.json"]
     },
     "zoe-tools": {
-      "command": "/usr/bin/python3",
-      "args": ["/home/zoe/bin/zoe-tools-mcp.py"],
+      "command": "/home/zoe/.local/bin/uv",
+      "args": [
+        "run",
+        "--with",
+        "fastmcp",
+        "--with",
+        "httpx",
+        "/home/zoe/bin/zoe-tools-mcp.py"
+      ],
       "env": {
         "ZOE_DATA_URL": "http://127.0.0.1:8000",
         "MULTICA_API_URL": "http://127.0.0.1:8080"
