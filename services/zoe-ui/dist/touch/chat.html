@@ -3582,7 +3582,7 @@
                     } else {
                         contentEl.innerHTML = 'Sorry, I encountered an error. Please try again.';
                     }
-                    if (currentSessionId && stream.text) {
+                    if (currentSessionId) {
                         loadSessions().catch((err) => console.warn('sessions reload:', err));
                     }
                 }
