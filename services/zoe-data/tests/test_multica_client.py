@@ -24,15 +24,19 @@ def test_get_multica_client_refreshes_cached_client_when_env_changes(monkeypatch
     original_agent_id = multica_client._cached_self_imp_agent_id
     original_project_id = multica_client._cached_self_imp_project_id
     try:
+        monkeypatch.setenv("MULTICA_BASE_URL", "https://multica.example")
+        monkeypatch.setenv("MULTICA_API_TOKEN", "token-1")
+        monkeypatch.setenv("MULTICA_WORKSPACE_ID", "workspace-1")
         multica_client._client = None
+        stale = multica_client.get_multica_client()
+
+        assert stale.is_configured() is True
+        assert stale._token == "token-1"
+        assert stale._workspace == "workspace-1"
+
+        # Simulate workspace-resource IDs cached for the initial Multica workspace.
         multica_client._cached_self_imp_agent_id = "agent-old"
         multica_client._cached_self_imp_project_id = "project-old"
-        monkeypatch.delenv("MULTICA_BASE_URL", raising=False)
-        monkeypatch.delenv("MULTICA_API_TOKEN", raising=False)
-        monkeypatch.delenv("MULTICA_WORKSPACE_ID", raising=False)
-
-        stale = multica_client.get_multica_client()
-        assert stale.is_configured() is False
 
         monkeypatch.setenv("MULTICA_BASE_URL", "https://multica.example")
         monkeypatch.setenv("MULTICA_API_TOKEN", "token-2")
