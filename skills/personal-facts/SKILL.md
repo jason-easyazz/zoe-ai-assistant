@@ -76,7 +76,8 @@ DELETE /api/memories/facts/birthday
 
 ### Update a fact
 There is no `PUT /api/memories/facts/{key}` endpoint. To update an existing
-fact after user confirmation, delete the old key and then store the new value:
+fact after user confirmation, first keep the old value in context, then delete
+the old key and store the new value:
 ```
 DELETE /api/memories/facts/birthday
 POST /api/memories/facts
@@ -118,6 +119,7 @@ PUT /api/user-data/preferences
 
 - **Fact not found on recall**: Respond "I don't have that on file yet — want to tell me?"
 - **Duplicate on store**: Show existing value and ask if the user wants to update it; if yes, `DELETE /api/memories/facts/{key}` then `POST /api/memories/facts` with the new value
+- **Update failure after delete**: If the new `POST /api/memories/facts` fails, immediately try to restore the old value with `POST /api/memories/facts`; if restore also fails, tell the user exactly what happened and ask them to provide the fact again
 - **Ambiguous key**: Ask for clarification (e.g., "Do you mean your work email or personal email?")
 
 ## Response Style
