@@ -45,6 +45,10 @@ For reviewable development work:
 - Use the `github-greptile-loop` Hermes skill to delegate heavier fix/re-review loops.
 - Do not treat Greptile as a replacement for local Zoe verification; run focused tests and live health checks before marking work merge-ready.
 
+## Cursor MCP
+
+The tracked Cursor MCP config intentionally includes only non-secret local servers. `zoe-tools` launches the operator-local helper at `/home/zoe/bin/zoe-tools-mcp.py` through `uv run --with fastmcp --with httpx`; provision that helper on Zoe hosts before relying on the repo-local MCP entry. Keep token-backed servers such as Greptile in user-global Cursor config or environment-backed local config, never in tracked repo files.
+
 ## Hermes-First Delegation
 
 Hermes is Zoe's default engineering and browser agent. Use it for planning, code review, implementation repair, architecture analysis, Greptile loops, Graphify-guided codebase work, Multica board repair, generated knowledge refresh, and browser work through Zoe's CloakBrowser tools.

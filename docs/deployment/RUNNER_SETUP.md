@@ -32,23 +32,21 @@ Replace `1000` with the output of `id -u` on the Jetson.
 loginctl enable-linger zoe
 ```
 
-## GitHub Secrets
+## GitHub Credentials
 
-Set these in **repo Settings → Secrets and variables → Actions**:
-
-| Secret | Value |
-|--------|-------|
-| `GH_PAT` | Personal Access Token with `repo` scope. Can reuse the same token from `questionable-decisions`. |
-
-No SSH keys, no `JETSON_HOST`, no tunnel config needed.
+No repo secrets, SSH keys, `JETSON_HOST`, or tunnel config are needed for deploy.
+The workflow uses GitHub Actions' built-in read-only `GITHUB_TOKEN` to fetch `main`
+on the self-hosted runner.
 
 ## Verifying a deployment
 
 After pushing to `main`, watch the Actions tab. The deploy job will:
 1. `git reset --hard origin/main` in `/home/zoe/assistant`
 2. `pip3 install --user` the pinned deps
-3. `systemctl --user restart zoe-data.service`
-4. Wait 6s then hit `GET /api/proactive/schedule` — expects HTTP 401 (auth required = service healthy)
+3. Apply Zoe data/auth database migrations
+4. Rebuild/restart `zoe-auth`
+5. `systemctl --user restart zoe-data.service`
+6. Wait 6s then hit the push and proactive health endpoints
 
 If the health check step passes, deployment succeeded.
 
@@ -59,3 +57,7 @@ If the health check step passes, deployment succeeded.
 **`systemctl --user` fails in the job:** Ensure `XDG_RUNTIME_DIR` is set in the runner `.env` and `loginctl enable-linger zoe` has been run.
 
 **`git reset --hard` fails with lock error:** A previous deploy may have crashed mid-run. SSH onto the Jetson and run `git -C /home/zoe/assistant reset --hard origin/main` manually.
+
+**`Pull latest main` fails with `invalid credentials`:** The workflow should be
+using its built-in `GITHUB_TOKEN`. Check that `deploy.yml` still grants
+`contents: read` permission and does not depend on a stale `GH_PAT` secret.
