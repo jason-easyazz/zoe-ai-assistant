@@ -7,6 +7,7 @@ Tests all optimized tools working together for Samantha-level intelligence
 import asyncio
 import httpx
 import json
+import os
 import time
 import logging
 from typing import Dict, List
@@ -188,9 +189,16 @@ class ComprehensiveIntegratedTester:
         logger.info("⚡ Testing LiteLLM integration...")
         
         try:
+            litellm_api_key = os.environ.get("LITELLM_API_KEY")
+            if not litellm_api_key:
+                return {
+                    "success": False,
+                    "error": "LITELLM_API_KEY is not set"
+                }
+
             async with httpx.AsyncClient(timeout=10.0) as client:
                 # Test LiteLLM health with proper authentication
-                headers = {"Authorization": "Bearer sk-your-secret-key-here"}
+                headers = {"Authorization": f"Bearer {litellm_api_key}"}
                 litellm_response = await client.get("http://localhost:8001/health", headers=headers)
                 
                 if litellm_response.status_code == 200:

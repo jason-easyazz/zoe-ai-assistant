@@ -113,7 +113,6 @@
     "LICENSE",
     ".gitignore",
     ".dockerignore",
-    ".env",
     ".env.example",
     ".cursorrules",
     ".graphifyignore",
@@ -122,8 +121,7 @@
     "warmup_models.py",
     "home-profile.json",
     "VERSION",
-    "CAPABILITIES.md",
-    ".env.openclaw-secrets"
+    "CAPABILITIES.md"
   ],
   "safe_to_delete_patterns": [
     "**/*.pyc",
@@ -162,7 +160,6 @@
     "CAPABILITIES.md",
     "services/zoe-ui/dist/js/widgets/core/multica-board.js",
     "services/zoe-data/proactive/triggers/evolution_weekly_digest.py",
-    ".env.openclaw-secrets",
     "services/zoe-ui/dist/touch/js/timers-global.js"
   ]
 }

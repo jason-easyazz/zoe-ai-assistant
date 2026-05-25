@@ -47,6 +47,8 @@ def get_all_project_files() -> Set[str]:
         for filename in filenames:
             full_path = Path(root) / filename
             relative_path = str(full_path.relative_to(PROJECT_ROOT))
+            if filename == '.env' or (filename.startswith('.env.') and filename != '.env.example'):
+                continue
             files.add(relative_path)
     
     return files

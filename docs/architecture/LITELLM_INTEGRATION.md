@@ -88,7 +88,7 @@ router_settings:
     powerful: [claude-3-5-sonnet, gpt-4o-mini]
 
 general_settings:
-  master_key: "sk-..."               # API authentication
+  master_key: "replace-with-litellm-key" # API authentication
   cache: true                        # Enable Redis caching
   cache_params:
     host: "zoe-redis"
@@ -118,7 +118,7 @@ provider = LiteLLMProvider()  # Default provider
 ```bash
 curl -X POST http://zoe-litellm:8001/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-f3320300bb32df8f176495bb888ba7c8f87a0d01c2371b50f767b9ead154175f" \
+  -H "Authorization: Bearer REDACTED_RETIRED_LITELLM_KEY" \
   -d '{
     "model": "local-model",
     "messages": [{"role": "user", "content": "Hello"}],

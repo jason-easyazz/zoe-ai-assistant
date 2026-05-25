@@ -19,7 +19,7 @@ class ZoeRouter:
         if self.enabled:
             # Set dummy API key if not provided (required by LiteLLM even for custom api_base)
             if not os.getenv("OPENAI_API_KEY"):
-                os.environ["OPENAI_API_KEY"] = "sk-dummy-key-for-local-llm"
+                os.environ["OPENAI_API_KEY"] = "REDACTED_DUMMY_LOCAL_LLM_KEY"
             
             # ✅ UPDATED 2025-11-18: Using TESTED OPTIMIZED models (see MODEL_TEST_ANALYSIS.md)
             # NOW using llama.cpp server (zoe-llamacpp) with tested winning models

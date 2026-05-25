@@ -1451,7 +1451,7 @@ async def generate_streaming_response(message: str, context: Dict, memories: Dic
                 # LiteLLM requires authentication
                 headers = {}
                 if "litellm" in llm_url:
-                    headers["Authorization"] = "Bearer sk-f3320300bb32df8f176495bb888ba7c8f87a0d01c2371b50f767b9ead154175f"
+                    headers["Authorization"] = "Bearer REDACTED_RETIRED_LITELLM_KEY"
                 
                 async with client.stream(
                     "POST",
@@ -1890,7 +1890,7 @@ async def generate_response(message: str, context: Dict, memories: Dict, user_co
                 # LiteLLM requires authentication
                 headers = {}
                 if "litellm" in llm_url:
-                    headers["Authorization"] = "Bearer sk-f3320300bb32df8f176495bb888ba7c8f87a0d01c2371b50f767b9ead154175f"
+                    headers["Authorization"] = "Bearer REDACTED_RETIRED_LITELLM_KEY"
                 
                 async with httpx.AsyncClient(timeout=fallback_config.timeout) as client:
                     response = await client.post(

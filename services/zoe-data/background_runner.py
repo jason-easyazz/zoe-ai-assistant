@@ -196,6 +196,7 @@ async def _run_hermes_background_task(task: str, *, user_id: str, task_id: int) 
         "You are Hermes running a Zoe background task. "
         "Use Zoe tools and CloakBrowser MCP tools when needed. "
         "Do not use OpenClaw. Do not print secrets. "
+        "For engineering tasks, use zoe-engineering: split large work, verify, and report blockers. "
         f"user_id={user_id}, task_id={task_id}.\n\n"
         f"Task:\n{task}"
     )
