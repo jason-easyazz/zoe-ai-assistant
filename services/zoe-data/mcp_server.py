@@ -1774,7 +1774,7 @@ async def _execute_tool(db, name: str, args: dict):
             )
             return result
         except Exception as exc:
-            return {"error": f"A2A delegate failed: {exc}"}
+            return {"error": f"Agent delegation failed: {exc}"}
 
     elif name == "zoe_sync_knowledge":
         try:
