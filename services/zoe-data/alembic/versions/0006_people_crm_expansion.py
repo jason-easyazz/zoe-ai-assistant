@@ -15,11 +15,11 @@ from alembic import op
 
 def upgrade():
     # ── people table: new CRM columns (all safe: NOT NULL with DEFAULT or nullable) ──
-    op.execute("ALTER TABLE people ADD COLUMN circle TEXT NOT NULL DEFAULT 'acquaintance'")
-    op.execute("ALTER TABLE people ADD COLUMN health_score REAL NOT NULL DEFAULT 0.5")
-    op.execute("ALTER TABLE people ADD COLUMN notification_count INTEGER NOT NULL DEFAULT 0")
-    op.execute("ALTER TABLE people ADD COLUMN contact_count INTEGER NOT NULL DEFAULT 0")
-    op.execute("ALTER TABLE people ADD COLUMN last_contacted_at TEXT")
+    op.execute("ALTER TABLE people ADD COLUMN IF NOT EXISTS circle TEXT NOT NULL DEFAULT 'acquaintance'")
+    op.execute("ALTER TABLE people ADD COLUMN IF NOT EXISTS health_score REAL NOT NULL DEFAULT 0.5")
+    op.execute("ALTER TABLE people ADD COLUMN IF NOT EXISTS notification_count INTEGER NOT NULL DEFAULT 0")
+    op.execute("ALTER TABLE people ADD COLUMN IF NOT EXISTS contact_count INTEGER NOT NULL DEFAULT 0")
+    op.execute("ALTER TABLE people ADD COLUMN IF NOT EXISTS last_contacted_at TEXT")
 
     # Auto-infer circle from existing relationship text
     op.execute("""

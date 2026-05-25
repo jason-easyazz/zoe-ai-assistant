@@ -107,6 +107,7 @@ aider_env/
 # Shell scripts (moved to backups/)
 *.sh
 !scripts/maintenance/*.sh
+!scripts/deploy/*.sh
 !scripts/permanent/*.sh
 !scripts/setup/*.sh
 !scripts/setup/jetson/*.sh

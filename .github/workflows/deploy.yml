@@ -45,7 +45,24 @@ jobs:
         run: |
           pip3 install --quiet --user \
             "apscheduler==3.10.4" "sqlalchemy>=2.0,<3.0" \
-            pywebpush py-vapid
+            alembic asyncpg psycopg2-binary pywebpush py-vapid
+
+      - name: Apply database migrations
+        run: |
+          cd /home/zoe/assistant
+          bash scripts/deploy/migrate.sh
+
+      - name: Rebuild / restart zoe-auth
+        run: |
+          cd /home/zoe/assistant
+          docker compose up -d --build zoe-auth
+          for attempt in {1..12}; do
+            curl -sf http://localhost:8002/health > /dev/null && exit 0
+            sleep 5
+          done
+          docker compose logs --tail=80 zoe-auth
+          echo "zoe-auth failed health check after restart"
+          exit 1
 
       # zoe-data is a user service — no sudo needed.
       # XDG_RUNTIME_DIR is required so systemctl --user can reach the user session bus.
