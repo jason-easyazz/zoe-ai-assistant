@@ -145,6 +145,7 @@ credentials/
 # API Keys and Secrets
 *.env
 .env.*
+!.env.example
 secrets/
 api_keys/
 **/api_keys.json

@@ -190,7 +190,7 @@ Expected: All checks pass ✅
 
 ```bash
 curl http://localhost:8001/v1/models \
-  -H "Authorization: Bearer sk-f3320300bb32df8f176495bb888ba7c8f87a0d01c2371b50f767b9ead154175f"
+  -H "Authorization: Bearer REDACTED_RETIRED_LITELLM_KEY"
 ```
 
 Expected: 5 models listed
@@ -200,7 +200,7 @@ Expected: 5 models listed
 ```bash
 curl -X POST http://localhost:8001/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-f3320300bb32df8f176495bb888ba7c8f87a0d01c2371b50f767b9ead154175f" \
+  -H "Authorization: Bearer REDACTED_RETIRED_LITELLM_KEY" \
   -d '{
     "model": "local-model",
     "messages": [{"role": "user", "content": "Say hello"}],
@@ -336,7 +336,7 @@ docker logs zoe-litellm --tail 50
 
 ### Master Key
 ```
-sk-f3320300bb32df8f176495bb888ba7c8f87a0d01c2371b50f767b9ead154175f
+REDACTED_RETIRED_LITELLM_KEY
 ```
 (Stored in `minimal_config.yaml`)
 

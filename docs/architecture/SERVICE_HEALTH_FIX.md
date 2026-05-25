@@ -148,7 +148,7 @@ zoe-litellm:
 
 ```yaml
 general_settings:
-  master_key: "sk-f3320300bb32df8f176495bb888ba7c8f87a0d01c2371b50f767b9ead154175f"
+  master_key: "REDACTED_RETIRED_LITELLM_KEY"
   disable_database_usage: true
   disable_spend_logs: true
   disable_otel_logging: true
