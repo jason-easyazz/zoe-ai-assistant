@@ -23,15 +23,22 @@ logger = logging.getLogger(__name__)
 _TIMEOUT = 10.0
 
 
+def _multica_env_key() -> tuple[str, str, str]:
+    """Return a comparable snapshot of the current Multica env vars."""
+    return (
+        os.environ.get("MULTICA_BASE_URL", "").rstrip("/"),
+        os.environ.get("MULTICA_API_TOKEN", ""),
+        os.environ.get("MULTICA_WORKSPACE_ID", ""),
+    )
+
+
 class MULClient:
     """Multica board client — wraps the Multica REST API."""
 
     def __init__(self) -> None:
         # Read env at instantiation time so callers that import this module
         # before EnvironmentFile/.env loading still get the live Multica config.
-        self._base = (os.environ.get("MULTICA_BASE_URL", "") or "").rstrip("/")
-        self._token = os.environ.get("MULTICA_API_TOKEN", "") or ""
-        self._workspace = os.environ.get("MULTICA_WORKSPACE_ID", "") or ""
+        self._base, self._token, self._workspace = _multica_env_key()
 
     def is_configured(self) -> bool:
         """Return True only if all required env vars are set."""
@@ -133,11 +140,7 @@ _client: MULClient | None = None
 
 def get_multica_client() -> MULClient:
     global _client, _cached_self_imp_agent_id, _cached_self_imp_project_id
-    current = (
-        (os.environ.get("MULTICA_BASE_URL", "") or "").rstrip("/"),
-        os.environ.get("MULTICA_API_TOKEN", "") or "",
-        os.environ.get("MULTICA_WORKSPACE_ID", "") or "",
-    )
+    current = _multica_env_key()
     if _client is None or (_client._base, _client._token, _client._workspace) != current:
         _client = MULClient()
         _cached_self_imp_agent_id = None
