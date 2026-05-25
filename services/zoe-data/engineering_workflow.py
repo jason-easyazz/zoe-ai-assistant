@@ -240,6 +240,8 @@ async def reconcile_background_task(background_task_id: int) -> dict[str, Any] |
         )
         if not workflow:
             return None
+        if workflow["phase"] in ("cancelled", "done"):
+            return dict(workflow)
         background = await db.fetchrow(
             "SELECT id, status, result FROM background_tasks WHERE id=$1",
             background_task_id,
@@ -253,11 +255,14 @@ async def reconcile_background_task(background_task_id: int) -> dict[str, Any] |
                 """UPDATE engineering_tasks
                    SET phase='blocked', status='blocked', blocker_reason=$1,
                        last_error=$1, updated_at=$2, completed_at=$2
-                   WHERE id=$3 RETURNING *""",
+                   WHERE id=$3 AND phase NOT IN ('cancelled', 'done')
+                   RETURNING *""",
                 background["result"] or background["status"],
                 now,
                 workflow["id"],
             )
+            if not row:
+                return dict(workflow)
             await sync_multica_issue(dict(row), note=f"Blocked: {row['blocker_reason']}")
             return dict(row)
 
@@ -272,11 +277,14 @@ async def reconcile_background_task(background_task_id: int) -> dict[str, Any] |
                 """UPDATE engineering_tasks
                    SET phase='blocked', status='blocked', blocker_reason=$1,
                        updated_at=$2, completed_at=$2
-                   WHERE id=$3 RETURNING *""",
+                   WHERE id=$3 AND phase NOT IN ('cancelled', 'done')
+                   RETURNING *""",
                 blocker,
                 now,
                 workflow["id"],
             )
+            if not row:
+                return dict(workflow)
             await sync_multica_issue(dict(row), note=f"Blocked: {blocker}")
             return dict(row)
 
@@ -286,22 +294,28 @@ async def reconcile_background_task(background_task_id: int) -> dict[str, Any] |
                    SET phase='blocked', status='blocked',
                        blocker_reason='Hermes completed without PR_URL',
                        updated_at=$1, completed_at=$1
-                   WHERE id=$2 RETURNING *""",
+                   WHERE id=$2 AND phase NOT IN ('cancelled', 'done')
+                   RETURNING *""",
                 now,
                 workflow["id"],
             )
+            if not row:
+                return dict(workflow)
             await sync_multica_issue(dict(row), note="Blocked: Hermes completed without PR_URL.")
             return dict(row)
 
         row = await db.fetchrow(
             """UPDATE engineering_tasks
                SET phase='pr_open', pr_url=$1, pr_number=$2, updated_at=$3
-               WHERE id=$4 RETURNING *""",
+               WHERE id=$4 AND phase NOT IN ('cancelled', 'done')
+               RETURNING *""",
             pr_url,
             pr_number,
             now,
             workflow["id"],
         )
+        if not row:
+            return dict(workflow)
     await sync_multica_issue(dict(row), note=f"PR opened: {pr_url}")
     return dict(row)
 

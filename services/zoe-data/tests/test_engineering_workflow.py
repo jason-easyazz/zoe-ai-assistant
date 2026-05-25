@@ -124,3 +124,37 @@ async def test_start_engineering_task_returns_existing_when_already_claimed(monk
     task = await engineering_workflow.start_engineering_task("wf-claimed")
 
     assert task == existing
+
+
+@pytest.mark.asyncio
+async def test_reconcile_does_not_overwrite_cancelled_workflow(monkeypatch):
+    workflow = {
+        "id": "wf-cancelled",
+        "phase": "cancelled",
+        "status": "cancelled",
+        "background_task_id": 42,
+    }
+
+    class FakeDB:
+        async def fetchrow(self, sql, *args):
+            if "WHERE background_task_id=$1" in sql:
+                return workflow
+            raise AssertionError(f"unexpected query after terminal workflow: {sql}")
+
+    class FakeCtx:
+        async def __aenter__(self):
+            return FakeDB()
+
+        async def __aexit__(self, *_):
+            return None
+
+    monkeypatch.setitem(sys.modules, "db_pool", types.SimpleNamespace(get_db_ctx=lambda: FakeCtx()))
+
+    async def fake_sync(*_, **__):
+        raise AssertionError("terminal workflow should not sync new state")
+
+    monkeypatch.setattr(engineering_workflow, "sync_multica_issue", fake_sync)
+
+    updated = await engineering_workflow.reconcile_background_task(42)
+
+    assert updated == workflow
