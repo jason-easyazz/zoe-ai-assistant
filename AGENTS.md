@@ -42,7 +42,7 @@ For reviewable development work:
 - Keep PRs small; use `/split-to-prs` when a branch grows too large.
 - Let Greptile review every PR independently.
 - Use Cursor's Greptile MCP to fetch review status/comments.
-- Use `zoe-greptile-loop` to delegate heavier fix/re-review loops to Hermes.
+- Use the `github-greptile-loop` Hermes skill to delegate heavier fix/re-review loops.
 - Do not treat Greptile as a replacement for local Zoe verification; run focused tests and live health checks before marking work merge-ready.
 
 ## Hermes-First Delegation
