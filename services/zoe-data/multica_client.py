@@ -132,7 +132,7 @@ _client: MULClient | None = None
 
 
 def get_multica_client() -> MULClient:
-    global _client
+    global _client, _cached_self_imp_agent_id, _cached_self_imp_project_id
     current = (
         (os.environ.get("MULTICA_BASE_URL", "") or "").rstrip("/"),
         os.environ.get("MULTICA_API_TOKEN", "") or "",
@@ -140,6 +140,8 @@ def get_multica_client() -> MULClient:
     )
     if _client is None or (_client._base, _client._token, _client._workspace) != current:
         _client = MULClient()
+        _cached_self_imp_agent_id = None
+        _cached_self_imp_project_id = None
     return _client
 
 

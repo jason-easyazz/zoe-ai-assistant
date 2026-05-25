@@ -21,8 +21,12 @@ def test_mul_client_reads_env_at_instantiation(monkeypatch):
 
 def test_get_multica_client_refreshes_cached_client_when_env_changes(monkeypatch):
     original_client = multica_client._client
+    original_agent_id = multica_client._cached_self_imp_agent_id
+    original_project_id = multica_client._cached_self_imp_project_id
     try:
         multica_client._client = None
+        multica_client._cached_self_imp_agent_id = "agent-old"
+        multica_client._cached_self_imp_project_id = "project-old"
         monkeypatch.delenv("MULTICA_BASE_URL", raising=False)
         monkeypatch.delenv("MULTICA_API_TOKEN", raising=False)
         monkeypatch.delenv("MULTICA_WORKSPACE_ID", raising=False)
@@ -41,5 +45,9 @@ def test_get_multica_client_refreshes_cached_client_when_env_changes(monkeypatch
         assert refreshed._base == "https://multica.example"
         assert refreshed._token == "token-2"
         assert refreshed._workspace == "workspace-2"
+        assert multica_client._cached_self_imp_agent_id is None
+        assert multica_client._cached_self_imp_project_id is None
     finally:
         multica_client._client = original_client
+        multica_client._cached_self_imp_agent_id = original_agent_id
+        multica_client._cached_self_imp_project_id = original_project_id
