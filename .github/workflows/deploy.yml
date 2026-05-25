@@ -37,11 +37,18 @@ jobs:
           if parts < (2, 31, 0):
               raise SystemExit(f"git {version} is too old for GIT_CONFIG_COUNT; need git >= 2.31.0")
           PY
+          AUTH_HEADER="$(python3 - <<'PY'
+          import base64
+          import os
+          print(base64.b64encode(f"x-access-token:{os.environ['GITHUB_TOKEN']}".encode()).decode())
+          PY
+          )" || exit 1
+          echo "::add-mask::${AUTH_HEADER}"
           GIT_CONFIG_COUNT=1 \
           GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
-          GIT_CONFIG_VALUE_0="AUTHORIZATION: bearer ${GITHUB_TOKEN}" \
+          GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${AUTH_HEADER}" \
             git fetch origin main
-          unset GITHUB_TOKEN
+          unset AUTH_HEADER GITHUB_TOKEN
           git reset --hard FETCH_HEAD
 
       - name: Install / refresh Python deps
