@@ -26,6 +26,14 @@ Rules:
 
 Currently useful cached sources include FastAPI, ChromaDB, LiveKit, faster-whisper, MCP/FastMCP, APScheduler, pyannote-audio, and AG-UI.
 
+## code structure cleanup
+
+Build the smallest working feature first, then run a cleanup pass before review.
+
+Use the cleanup pass to remove duplicated runtime mechanics: repeated provider calls, parsing, validation, command execution, payload transforms, or business logic. Keep product/domain policy in routes, actions, intents, and UI handlers. Move only reusable mechanics into service-layer helpers.
+
+Do not refactor the whole app as cleanup. Do not create `_new`, `_fixed`, `_v2`, `_old`, backup, or duplicate router files.
+
 ## Greptile PR loop
 
 For reviewable development work:
@@ -40,5 +48,7 @@ For reviewable development work:
 ## Hermes-First Delegation
 
 Hermes is Zoe's default engineering and browser agent. Use it for planning, code review, implementation repair, architecture analysis, Greptile loops, Graphify-guided codebase work, Multica board repair, generated knowledge refresh, and browser work through Zoe's CloakBrowser tools.
+
+Local Zoe Hermes engineering skills live under `~/.hermes/skills`, including `zoe-engineering`, `source-code-context`, `code-structure-cleanup`, and `github-greptile-loop`. They are operator-level Hermes skills, not user-facing Zoe runtime skills under `skills/`.
 
 OpenClaw remains installed and available as a future/manual fallback. Do not route ordinary coding, planning, review, board work, browser work, or background work to OpenClaw by default; Hermes owns those paths unless the user explicitly asks to use OpenClaw.

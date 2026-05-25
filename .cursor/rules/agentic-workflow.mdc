@@ -13,6 +13,10 @@ For agent delegation, use Hermes. This includes planning, code repair, architect
 
 Plan first for broad or risky work. Keep changes surgical. Prefer existing Zoe patterns, avoid backup/old/new file copies, and do not create parallel routers or duplicate feature files.
 
+Build the minimal working feature first. After it works, run a cleanup pass for duplicated runtime mechanics: repeated provider calls, parsing, validation, command execution, payload transforms, or business logic. Keep domain policy in routes/actions/intents and reusable mechanics in service-layer helpers.
+
+For Hermes-backed engineering work, prefer the local Hermes skills `zoe-engineering`, `source-code-context`, `code-structure-cleanup`, and `github-greptile-loop` when available. These are operator-level Hermes skills under `~/.hermes/skills`, not Zoe runtime user-facing skills.
+
 Use the small-PR loop for reviewable work: split large changes, push a focused PR, let Greptile review independently, then use **Greptile MCP first** (`get_merge_request`, `list_merge_request_comments`, `trigger_code_review`) or the operator-local CLI `~/bin/greptile-mcp.py` (install path varies by host; see `/grep-loop`) before falling back to `gh` scraping or Hermes.
 
 `main` is protected. Do not push directly, bypass branch protection, or use administrator merges unless the operator explicitly asks for that emergency path. If GitHub blocks a green PR because repo auto-merge is disabled or another policy requires human action, report the blocker and keep the PR ready rather than forcing it.
