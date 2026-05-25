@@ -20,11 +20,14 @@ for service in openclaw.service llama-server.service hermes.service kokoro-tts.s
   fi
 done
 
-echo "Waiting for services..."
-sleep 6
+wait_for_url() {
+  local url="$1"
+  curl -sf --retry 12 --retry-delay 5 --retry-connrefused --max-time 5 "$url" >/dev/null
+}
 
-curl -sf http://localhost:8000/health >/dev/null
-curl -sf http://localhost:8002/health >/dev/null
+echo "Waiting for services..."
+wait_for_url http://localhost:8000/health
+wait_for_url http://localhost:8002/health
 docker compose ps
 
 echo "Restart complete."
