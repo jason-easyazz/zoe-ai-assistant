@@ -34,6 +34,7 @@ data/wyoming/
 *secret*
 *password*
 *token*
+!services/zoe-auth/oidc/tokens.py
 *api_key*
 data/billing/
 data/logs/
