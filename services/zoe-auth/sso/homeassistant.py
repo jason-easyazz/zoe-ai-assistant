@@ -350,11 +350,12 @@ class HomeAssistantIntegration:
         try:
             # Check for users that need syncing
             with auth_db.get_connection() as conn:
+                sync_threshold = (datetime.now() - timedelta(hours=1)).isoformat()
                 cursor = conn.execute("""
                     SELECT user_id, updated_at FROM auth_users 
                     WHERE is_active = 1 
-                    AND updated_at > to_char(NOW() - INTERVAL '1 hour', 'YYYY-MM-DD"T"HH24:MI:SS.US')
-                """)
+                    AND updated_at > ?
+                """, (sync_threshold,))
                 
                 for row in cursor.fetchall():
                     user_id = row[0]

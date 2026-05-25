@@ -32,7 +32,25 @@ echo "Applying zoe-data Alembic migrations..."
 
 if command -v psql >/dev/null 2>&1; then
   echo "Applying zoe-auth PostgreSQL DDL..."
-  psql "${POSTGRES_URL}" -v ON_ERROR_STOP=1 -f "${ROOT_DIR}/scripts/setup/migrate_auth_to_postgres.sql"
+  mapfile -t PG_PARTS < <(python3 - <<'PY'
+import os
+from urllib.parse import unquote, urlparse
+
+url = urlparse(os.environ["POSTGRES_URL"])
+print(url.hostname or "localhost")
+print(str(url.port or 5432))
+print(unquote(url.username or ""))
+print(unquote(url.password or ""))
+print(unquote((url.path or "/").lstrip("/")))
+PY
+)
+  PGPASSWORD="${PG_PARTS[3]}" psql \
+    -h "${PG_PARTS[0]}" \
+    -p "${PG_PARTS[1]}" \
+    -U "${PG_PARTS[2]}" \
+    -d "${PG_PARTS[4]}" \
+    -v ON_ERROR_STOP=1 \
+    -f "${ROOT_DIR}/scripts/setup/migrate_auth_to_postgres.sql"
 else
   echo "psql is required to apply zoe-auth DDL" >&2
   exit 1

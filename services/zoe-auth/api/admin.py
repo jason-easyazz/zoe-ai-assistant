@@ -6,7 +6,7 @@ User management, role management, and system administration
 from fastapi import APIRouter, HTTPException, Depends, Query
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 import json
 
@@ -656,10 +656,11 @@ async def get_system_stats(
             total_users = cursor.fetchone()[0]
             
             # Recent logins (last 24 hours)
+            recent_login_threshold = (datetime.now() - timedelta(days=1)).isoformat()
             cursor = conn.execute("""
                 SELECT COUNT(*) FROM auth_users
-                WHERE last_login > to_char(NOW() - INTERVAL '1 day', 'YYYY-MM-DD"T"HH24:MI:SS.US')
-            """)
+                WHERE last_login > ?
+            """, (recent_login_threshold,))
             recent_logins = cursor.fetchone()[0]
 
         # Session statistics
