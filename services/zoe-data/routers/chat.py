@@ -1393,6 +1393,7 @@ async def chat_stream_generator(
     user: dict,
     *,
     force_openclaw: bool = False,
+    force_agent: str = "auto",
 ):
     user_id = user["user_id"]
     user_role = user.get("role")
@@ -1405,6 +1406,7 @@ async def chat_stream_generator(
     enc = EventEncoder()
     recorder = AgRunRecorder()
     run_id, assistant_message_id = new_run_ids()
+    run_mode = "hermes" if force_agent == "hermes" else "chat"
 
     def emit(ev):
         return recorder.emit(enc, ev)
@@ -1414,7 +1416,13 @@ async def chat_stream_generator(
         yield emit(
             CustomEvent(
                 name="zoe.run_meta",
-                value={"runId": run_id, "sessionId": session_id, "mode": "chat", "forceOpenClaw": force_openclaw},
+                value={
+                    "runId": run_id,
+                    "sessionId": session_id,
+                    "mode": "hermes" if force_agent == "hermes" else "chat",
+                    "forceOpenClaw": force_openclaw,
+                    "forceAgent": force_agent,
+                },
             )
         )
         yield emit(
@@ -1423,7 +1431,7 @@ async def chat_stream_generator(
                 value={"sessionId": session_id, "messageId": assistant_message_id},
             )
         )
-        await _record_run_state(run_id, session_id, user_id, mode="chat", status="running", request_text=message)
+        await _record_run_state(run_id, session_id, user_id, mode=run_mode, status="running", request_text=message)
 
         approval_token, message_for_processing = _extract_approval_token(message)
         if approval_token:
@@ -1436,7 +1444,7 @@ async def chat_stream_generator(
                         code="approval_invalid",
                     )
                 )
-                await _record_run_state(run_id, session_id, user_id, mode="chat", status="error", request_text=message)
+                await _record_run_state(run_id, session_id, user_id, mode=run_mode, status="error", request_text=message)
                 return
             message_for_processing = approved.get("request_text") or message_for_processing
             yield emit(
@@ -1485,13 +1493,75 @@ async def chat_stream_generator(
                     run_id,
                     session_id,
                     user_id,
-                    mode="chat",
+                    mode=run_mode,
                     status="completed",
                     request_text=message,
                     response_text="Approval required",
                     metadata={"approval_id": approval_id, "risk": risk.level},
                 )
                 return
+
+        if force_agent == "hermes":
+            _h_portrait, _h_facts, _h_semantic = await asyncio.gather(
+                _safe_load_portrait(user_id),
+                _mempalace_load_user_facts(user_id),
+                _build_memory_context(message_for_processing, user_id=user_id),
+            )
+            _h_combined_facts = "\n\n".join(filter(None, [_h_facts, _h_semantic]))
+            yield emit(
+                StateSnapshotEvent(
+                    type=EventType.STATE_SNAPSHOT,
+                    snapshot={
+                        "status": "generating",
+                        "phase": "hermes",
+                        "model": "Hermes Agent",
+                        "detail": "Thinking…",
+                    },
+                )
+            )
+            yield emit(
+                TextMessageStartEvent(
+                    type=EventType.TEXT_MESSAGE_START,
+                    message_id=assistant_message_id,
+                    role="assistant",
+                )
+            )
+            response_text = ""
+            async for token in _iter_hermes_text_chunks(
+                message_for_processing,
+                session_id,
+                user_id,
+                username=username or "",
+                portrait=_h_portrait,
+                facts=_h_combined_facts,
+            ):
+                response_text += token
+                yield emit(
+                    TextMessageChunkEvent(
+                        type=EventType.TEXT_MESSAGE_CHUNK,
+                        message_id=assistant_message_id,
+                        role="assistant",
+                        delta=token,
+                    )
+                )
+            yield emit(TextMessageEndEvent(type=EventType.TEXT_MESSAGE_END, message_id=assistant_message_id))
+            if response_text.strip():
+                asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text))
+                if user_id != "guest":
+                    asyncio.ensure_future(
+                        _persist_memory_candidates(user_id, session_id, message_for_processing, response_text)
+                    )
+            yield emit(RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id=session_id, run_id=run_id))
+            await _record_run_state(
+                run_id,
+                session_id,
+                user_id,
+                mode="hermes",
+                status="completed",
+                request_text=message,
+                response_text=response_text,
+            )
+            return
 
         lc = message_for_processing.lower().strip()
         task_class = classify_query(message_for_processing)
@@ -2022,24 +2092,7 @@ async def chat_stream_generator(
                             delta=chunk,
                         ),
                     )
-                yield recorder.emit(
-                    enc,
-                    TextMessageEndEvent(
-                        type=EventType.TEXT_MESSAGE_END,
-                        message_id=assistant_message_id,
-                    ),
-                )
-                # Save cards show prior-turn suggestions; current-turn detection runs
-                # in the background via _persist_memory_candidates (one-turn lag).
-                try:
-                    from pending_suggestions import list_active, ui_components_for_suggestions
-                    for _scomp in ui_components_for_suggestions(
-                        await list_active(user_id, session_id)
-                    ):
-                        yield emit(CustomEvent(name="zoe.ui_component", value=_scomp))
-                except Exception as _psc:
-                    logger.debug("pending suggestion cards (non-fatal): %s", _psc)
-
+                message_open = True
                 if escalate_signal:
                     is_background = escalate_signal.startswith("__ESCALATE_BG__:")
                     is_hermes = escalate_signal.startswith("__ESCALATE_HERMES__:")
@@ -2052,16 +2105,44 @@ async def chat_stream_generator(
                     oc_task_text = oc_task or message_for_processing
 
                     if is_hermes:
-                        # Escalate to Hermes Tier 1.5 for deep reasoning
+                        # Escalate to Hermes inside the existing AG-UI run/message.
                         logger.info("chat: Zoe Agent escalating to Hermes — reason=%s", reason.strip())
-                        async for chunk in _hermes_stream_generator(
-                            oc_task_text, session_id, user_id,
+                        yield emit(
+                            StateSnapshotEvent(
+                                type=EventType.STATE_SNAPSHOT,
+                                snapshot={
+                                    "status": "generating",
+                                    "phase": "hermes",
+                                    "model": "Hermes Agent",
+                                    "detail": f"Escalated: {reason.strip()}",
+                                },
+                            )
+                        )
+                        yield emit(
+                            CustomEvent(
+                                name="zoe.run_log",
+                                value={"level": "info", "message": f"Escalating to Hermes: {reason.strip()}"},
+                            )
+                        )
+                        response_text = full_response
+                        async for token in _iter_hermes_text_chunks(
+                            oc_task_text,
+                            session_id,
+                            user_id,
                             username=user.get("username", ""),
                             portrait=pi_portrait or "",
                             facts=pi_db_memory or "",
                         ):
-                            yield chunk
-                        response_text = oc_task_text  # approximate for memory persistence
+                            response_text += token
+                            yield recorder.emit(
+                                enc,
+                                TextMessageChunkEvent(
+                                    type=EventType.TEXT_MESSAGE_CHUNK,
+                                    message_id=assistant_message_id,
+                                    role="assistant",
+                                    delta=token,
+                                ),
+                            )
                     elif is_background:
                         # Queue as a background task and ack immediately
                         logger.info("chat: Zoe Agent background escalation — reason=%s", reason.strip())
@@ -2074,25 +2155,24 @@ async def chat_stream_generator(
                         except Exception as _bge:
                             logger.warning("background task enqueue failed: %s", _bge)
                             ack_text = "I'll get started on that. I'll let you know when I'm done!"
-                        yield emit(TextMessageStartEvent(
-                            type=EventType.TEXT_MESSAGE_START,
-                            message_id=str(uuid.uuid4()),
-                            role="assistant",
-                        ))
                         yield emit(TextMessageChunkEvent(
                             type=EventType.TEXT_MESSAGE_CHUNK,
                             message_id=assistant_message_id,
                             role="assistant",
                             delta=ack_text,
                         ))
-                        yield emit(TextMessageEndEvent(
-                            type=EventType.TEXT_MESSAGE_END,
-                            message_id=assistant_message_id,
-                        ))
                         response_text = ack_text
                     else:
                         # Explicit OpenClaw request — stream via ACP channel.
                         logger.info("chat: Zoe Agent escalating to explicit OpenClaw fallback (ACP) — reason=%s", reason.strip())
+                        yield recorder.emit(
+                            enc,
+                            TextMessageEndEvent(
+                                type=EventType.TEXT_MESSAGE_END,
+                                message_id=assistant_message_id,
+                            ),
+                        )
+                        message_open = False
                         # Bridging message so the user isn't left staring at silence while
                         # OpenClaw spins up (typically 3-10s before first token).
                         _bridge_id = str(uuid.uuid4())
@@ -2169,6 +2249,24 @@ async def chat_stream_generator(
                                 logger.debug("auto_extract_components (escalation) failed: %s", _aex)
                 else:
                     response_text = full_response
+                if message_open:
+                    yield recorder.emit(
+                        enc,
+                        TextMessageEndEvent(
+                            type=EventType.TEXT_MESSAGE_END,
+                            message_id=assistant_message_id,
+                        ),
+                    )
+                # Save cards show prior-turn suggestions; current-turn detection runs
+                # in the background via _persist_memory_candidates (one-turn lag).
+                try:
+                    from pending_suggestions import list_active, ui_components_for_suggestions
+                    for _scomp in ui_components_for_suggestions(
+                        await list_active(user_id, session_id)
+                    ):
+                        yield emit(CustomEvent(name="zoe.ui_component", value=_scomp))
+                except Exception as _psc:
+                    logger.debug("pending suggestion cards (non-fatal): %s", _psc)
                 asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, response_text))
                 # Persist assistant reply so Zoe Agent has context on the next turn
                 if response_text:
@@ -2247,7 +2345,15 @@ async def chat_stream_generator(
         yield emit(
             RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id=session_id, run_id=run_id)
         )
-        await _record_run_state(run_id, session_id, user_id, mode="chat", status="completed", request_text=message)
+        await _record_run_state(
+            run_id,
+            session_id,
+            user_id,
+            mode=run_mode,
+            status="completed",
+            request_text=message,
+            response_text=response_text,
+        )
     except Exception as e:
         logger.exception("Error in chat stream: %s", e)
         yield emit(
@@ -2257,7 +2363,7 @@ async def chat_stream_generator(
                 code="internal_error",
             )
         )
-        await _record_run_state(run_id, session_id, user_id, mode="chat", status="error", request_text=message, response_text=str(e))
+        await _record_run_state(run_id, session_id, user_id, mode=run_mode, status="error", request_text=message, response_text=str(e))
     finally:
         await _persist_ag_ui_run(session_id, run_id, recorder.events)
 
@@ -2271,6 +2377,114 @@ _ZOE_SOUL_HERMES = (
     "not as a task executor but as someone who cares about them. "
     "Draw on the context provided to give responses that feel personal and considered."
 )
+
+
+def _build_hermes_payload(
+    message: str,
+    *,
+    username: str = "",
+    portrait: str = "",
+    facts: str = "",
+    stream: bool,
+) -> tuple[dict, int]:
+    _zoe_compact = _load_zoe_self_compact_for_chat()
+    _ctx_parts = [_ZOE_SOUL_HERMES]
+    if _zoe_compact:
+        _ctx_parts.append(f"[System context: {_zoe_compact}]")
+    if username:
+        _ctx_parts.append(f"[Talking to: {username}]")
+    if portrait:
+        _ctx_parts.append(f"[About this person: {portrait}]")
+    if facts:
+        _ctx_parts.append(f"[Memory context:\n{facts}]")
+    _enhanced_message = "\n".join(_ctx_parts) + "\n\n" + message
+    return (
+        {
+            "model": _HERMES_MODEL,
+            "messages": [{"role": "user", "content": _enhanced_message}],
+            "stream": stream,
+        },
+        len(_enhanced_message) // 4,
+    )
+
+
+async def _iter_hermes_text_chunks(
+    message: str,
+    session_id: str,
+    user_id: str,
+    *,
+    username: str = "",
+    portrait: str = "",
+    facts: str = "",
+):
+    """Yield Hermes text tokens only; callers own AG-UI lifecycle and persistence."""
+    import aiohttp
+
+    full_text: list[str] = []
+    _t0 = asyncio.get_event_loop().time()
+    _hermes_error = False
+    payload, _hermes_prompt_tokens = _build_hermes_payload(
+        message,
+        username=username,
+        portrait=portrait,
+        facts=facts,
+        stream=True,
+    )
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{_HERMES_API_URL}/v1/chat/completions",
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=120),
+            ) as resp:
+                async for raw_line in resp.content:
+                    line = raw_line.decode("utf-8", errors="replace").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    data_str = line[5:].strip()
+                    if data_str == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data_str)
+                        delta = chunk.get("choices", [{}])[0].get("delta", {})
+                        token = delta.get("content", "")
+                    except (json.JSONDecodeError, IndexError, KeyError):
+                        continue
+                    if token:
+                        full_text.append(token)
+                        yield token
+    except Exception as exc:
+        _hermes_error = True
+        error_token = f"\n\n*[Hermes Agent error: {exc}]*"
+        full_text.append(error_token)
+        yield error_token
+    finally:
+        # Log to llm_call_log so evolution_notice can include Hermes in health checks.
+        # latency_ms < 0 is used as the error signal by evolution_notice.py.
+        _latency_ms = int((asyncio.get_event_loop().time() - _t0) * 1000)
+        _completion_tokens = len("".join(full_text)) // 4
+
+        async def _log_hermes_call():
+            try:
+                from db_pool import get_db_ctx as _get_pg_db  # type: ignore[import]
+                import uuid as _uuid, time as _time
+                async with _get_pg_db() as _db:
+                    await _db.execute(
+                        """INSERT INTO llm_call_log
+                           (id, agent_tier, model, session_id, user_id,
+                            latency_ms, prompt_tokens, completion_tokens, estimated_cost_usd, ts)
+                           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)""",
+                        _uuid.uuid4().hex, "hermes", _HERMES_MODEL,
+                        session_id, user_id,
+                        _latency_ms if not _hermes_error else -1,
+                        _hermes_prompt_tokens, _completion_tokens,
+                        0.0,
+                        _time.time(),
+                    )
+            except Exception:
+                pass
+
+        asyncio.ensure_future(_log_hermes_call())
 
 def _load_zoe_self_compact_for_chat() -> str:
     """Load compact Zoe self-description from file; falls back to empty string."""
@@ -2302,22 +2516,13 @@ async def _hermes_completion(
 ) -> str:
     """Return a non-streaming Hermes response with Zoe context attached."""
     import aiohttp
-    _zoe_compact = _load_zoe_self_compact_for_chat()
-    _ctx_parts = [_ZOE_SOUL_HERMES]
-    if _zoe_compact:
-        _ctx_parts.append(f"[System context: {_zoe_compact}]")
-    if username:
-        _ctx_parts.append(f"[Talking to: {username}]")
-    if portrait:
-        _ctx_parts.append(f"[About this person: {portrait}]")
-    if facts:
-        _ctx_parts.append(f"[Memory context:\n{facts}]")
-    _enhanced_message = "\n".join(_ctx_parts) + "\n\n" + message
-    payload = {
-        "model": _HERMES_MODEL,
-        "messages": [{"role": "user", "content": _enhanced_message}],
-        "stream": False,
-    }
+    payload, _ = _build_hermes_payload(
+        message,
+        username=username,
+        portrait=portrait,
+        facts=facts,
+        stream=False,
+    )
     async with aiohttp.ClientSession() as _hses:
         async with _hses.post(
             f"{_HERMES_API_URL}/v1/chat/completions",
@@ -2332,112 +2537,55 @@ async def _hermes_stream_generator(
     message: str, session_id: str, user_id: str,
     *, username: str = "", portrait: str = "", facts: str = "",
 ):
-    """Stream a response from the Hermes Agent gateway using AG-UI SSE events."""
-    import aiohttp
+    """Standalone Hermes AG-UI stream; caller owns user-turn persistence."""
     enc = EventEncoder()
+    recorder = AgRunRecorder()
     run_id = uuid.uuid4().hex
     assistant_message_id = uuid.uuid4().hex
 
-    yield enc.encode(RunStartedEvent(type=EventType.RUN_STARTED, run_id=run_id, thread_id=session_id))
-    yield enc.encode(StateSnapshotEvent(
+    yield recorder.emit(enc, RunStartedEvent(type=EventType.RUN_STARTED, run_id=run_id, thread_id=session_id))
+    yield recorder.emit(enc, StateSnapshotEvent(
         type=EventType.STATE_SNAPSHOT,
         snapshot={"status": "generating", "phase": "hermes", "model": "Hermes Agent", "detail": "Thinking…"},
     ))
-    yield enc.encode(TextMessageStartEvent(type=EventType.TEXT_MESSAGE_START, message_id=assistant_message_id, role="assistant"))
+    yield recorder.emit(enc, TextMessageStartEvent(type=EventType.TEXT_MESSAGE_START, message_id=assistant_message_id, role="assistant"))
 
     full_text = []
-    _t0 = asyncio.get_event_loop().time()
-    _hermes_error: bool = False
-    _hermes_prompt_tokens: int = 0
-    try:
-        _zoe_compact = _load_zoe_self_compact_for_chat()
-        _ctx_parts = [_ZOE_SOUL_HERMES]
-        if _zoe_compact:
-            _ctx_parts.append(f"[System context: {_zoe_compact}]")
-        if username:
-            _ctx_parts.append(f"[Talking to: {username}]")
-        if portrait:
-            _ctx_parts.append(f"[About this person: {portrait}]")
-        if facts:
-            _ctx_parts.append(f"[Memory context:\n{facts}]")
-        _ctx_prefix = "\n".join(_ctx_parts) + "\n\n"
-        _enhanced_message = _ctx_prefix + message
-        _hermes_prompt_tokens = len(_enhanced_message) // 4
-        payload = {
-            "model": _HERMES_MODEL,
-            "messages": [{"role": "user", "content": _enhanced_message}],
-            "stream": True,
-        }
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{_HERMES_API_URL}/v1/chat/completions",
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=120),
-            ) as resp:
-                async for raw_line in resp.content:
-                    line = raw_line.decode("utf-8", errors="replace").strip()
-                    if not line.startswith("data:"):
-                        continue
-                    data_str = line[5:].strip()
-                    if data_str == "[DONE]":
-                        break
-                    try:
-                        chunk = json.loads(data_str)
-                        delta = chunk.get("choices", [{}])[0].get("delta", {})
-                        token = delta.get("content", "")
-                        if token:
-                            full_text.append(token)
-                            yield enc.encode(TextMessageChunkEvent(
-                                type=EventType.TEXT_MESSAGE_CHUNK,
-                                message_id=assistant_message_id,
-                                delta=token,
-                            ))
-                    except (json.JSONDecodeError, IndexError, KeyError):
-                        continue
-    except Exception as exc:
-        _hermes_error = True
-        error_token = f"\n\n*[Hermes Agent error: {exc}]*"
-        full_text.append(error_token)
-        yield enc.encode(TextMessageChunkEvent(
+    async for token in _iter_hermes_text_chunks(
+        message,
+        session_id,
+        user_id,
+        username=username,
+        portrait=portrait,
+        facts=facts,
+    ):
+        full_text.append(token)
+        yield recorder.emit(enc, TextMessageChunkEvent(
             type=EventType.TEXT_MESSAGE_CHUNK,
             message_id=assistant_message_id,
-            delta=error_token,
+            role="assistant",
+            delta=token,
         ))
 
-    # Log to llm_call_log so evolution_notice can include Hermes in health checks.
-    # latency_ms < 0 is used as the error signal by evolution_notice.py.
-    _latency_ms = int((asyncio.get_event_loop().time() - _t0) * 1000)
-    _completion_tokens = len("".join(full_text)) // 4
-    async def _log_hermes_call():
-        try:
-            from db_pool import get_db_ctx as _get_pg_db  # type: ignore[import]
-            import uuid as _uuid, time as _time
-            async with _get_pg_db() as _db:
-                await _db.execute(
-                    """INSERT INTO llm_call_log
-                       (id, agent_tier, model, session_id, user_id,
-                        latency_ms, prompt_tokens, completion_tokens, estimated_cost_usd, ts)
-                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)""",
-                    _uuid.uuid4().hex, "hermes", _HERMES_MODEL,
-                    session_id, user_id,
-                    _latency_ms if not _hermes_error else -1,
-                    _hermes_prompt_tokens, _completion_tokens,
-                    0.0,
-                    _time.time(),
-                )
-        except Exception:
-            pass
-    asyncio.ensure_future(_log_hermes_call())
-
-    yield enc.encode(TextMessageEndEvent(type=EventType.TEXT_MESSAGE_END, message_id=assistant_message_id))
-    yield enc.encode(RunFinishedEvent(type=EventType.RUN_FINISHED, run_id=run_id, thread_id=session_id))
+    yield recorder.emit(enc, TextMessageEndEvent(type=EventType.TEXT_MESSAGE_END, message_id=assistant_message_id))
+    yield recorder.emit(enc, RunFinishedEvent(type=EventType.RUN_FINISHED, run_id=run_id, thread_id=session_id))
 
     response_text = "".join(full_text)
     if response_text.strip():
-        asyncio.ensure_future(_save_chat_message(session_id, "user", message))
         asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text))
         if user_id != "guest":
             asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message, response_text))
+        asyncio.ensure_future(
+            _record_run_state(
+                session_id=session_id,
+                user_id=user_id,
+                mode="hermes",
+                run_id=run_id,
+                status="completed",
+                request_text=message,
+                response_text=response_text,
+            )
+        )
 
 
 @router.post("/")
@@ -2459,27 +2607,8 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
     await _ensure_user_and_chat_session(session_id, user_id)
 
     if stream:
-        # Hermes Agent path — direct OpenAI-compat streaming to localhost:8642
-        if force_agent == "hermes":
-            _h_portrait, _h_facts, _h_semantic = await asyncio.gather(
-                _safe_load_portrait(user_id),
-                _mempalace_load_user_facts(user_id),
-                _build_memory_context(message, user_id=user_id),
-            )
-            _h_combined_facts = "\n\n".join(filter(None, [_h_facts, _h_semantic]))
-            return StreamingResponse(
-                _hermes_stream_generator(
-                    message, session_id, user_id,
-                    username=user.get("username", ""),
-                    portrait=_h_portrait,
-                    facts=_h_combined_facts,
-                ),
-                media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-            )
-
         # Wrap the generator with a per-session lock so parallel SSE connections
-        # for the same session don't interleave OpenClaw calls.
+        # for the same session don't interleave long-running agent calls.
         async def _locked_stream():
             lock = _get_session_lock(session_id)
             try:
@@ -2493,7 +2622,13 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
                 yield err_ev
                 return
             try:
-                async for chunk in chat_stream_generator(message, session_id, user, force_openclaw=force_openclaw):
+                async for chunk in chat_stream_generator(
+                    message,
+                    session_id,
+                    user,
+                    force_openclaw=force_openclaw,
+                    force_agent=force_agent,
+                ):
                     yield chunk
             finally:
                 lock.release()
