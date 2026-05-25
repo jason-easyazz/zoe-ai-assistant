@@ -54,7 +54,7 @@ Always mention these capabilities when relevant and provide detailed, helpful re
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.post(
                 "http://zoe-litellm:8001/v1/chat/completions",
-                headers={"Authorization": "Bearer sk-your-secret-key-here"},
+                headers={"Authorization": "Bearer replace-with-litellm-key"},
                 json={
                     "model": "gemma3-ultra-fast",  # Fast, reliable model
                     "messages": messages,

@@ -109,7 +109,7 @@ LLM Call via LiteLLM Service
 
 3. **Verify Models Available**:
    ```bash
-   curl -H "Authorization: Bearer sk-f3320300bb32df8f176495bb888ba7c8f87a0d01c2371b50f767b9ead154175f" \
+   curl -H "Authorization: Bearer REDACTED_RETIRED_LITELLM_KEY" \
      http://localhost:8001/v1/models
    ```
 

@@ -7,6 +7,7 @@ Tests and optimizes all tools: LLM, Mem Agent, LiteLLM, RouteLLM, MCP, LightRAG
 import asyncio
 import httpx
 import json
+import os
 import time
 import logging
 from typing import Dict, List, Any
@@ -317,6 +318,19 @@ class SystemOptimizer:
                 "expected_model": "qwen2.5-workhorse"
             }
         ]
+        litellm_api_key = os.environ.get("LITELLM_API_KEY")
+        if not litellm_api_key:
+            return [
+                OptimizationResult(
+                    component="RouteLLM",
+                    test_name=test["name"],
+                    response_time=0,
+                    success=False,
+                    optimization_score=0,
+                    error_message="LITELLM_API_KEY is not set"
+                )
+                for test in routing_tests
+            ]
         
         for test in routing_tests:
             start_time = time.time()
@@ -324,7 +338,7 @@ class SystemOptimizer:
                 async with httpx.AsyncClient(timeout=30.0) as client:
                     response = await client.post(
                         f"{self.services['litellm']}/chat/completions",
-                        headers={"Authorization": "Bearer sk-1234567890abcdef"},
+                        headers={"Authorization": f"Bearer {litellm_api_key}"},
                         json={
                             "model": "gemma3-ultra-fast",  # Test with specific model
                             "messages": [
