@@ -17,7 +17,7 @@ Build the minimal working feature first. After it works, run a cleanup pass for 
 
 For Hermes-backed engineering work, prefer the local Hermes skills `zoe-engineering`, `source-code-context`, `code-structure-cleanup`, `github-greptile-loop`, `zoe-graphify`, and `zoe-status-refresh` when available. These are operator-level Hermes skills under `~/.hermes/skills`, not Zoe runtime user-facing skills.
 
-Use the small-PR loop for reviewable work: split large changes, push a focused PR, let Greptile review independently, then use **Greptile MCP first** (`get_merge_request`, `list_merge_request_comments`, `trigger_code_review`) or the operator-local CLI `~/bin/greptile-mcp.py` (install path varies by host; see `/grep-loop`) before falling back to `gh` scraping or Hermes.
+Use the small-PR loop for reviewable work: split large changes, push a focused PR, let Greptile review independently, then use Zoe's Greploop guard when an engineering task id exists. Otherwise use **Greptile MCP first** (`get_merge_request`, `list_merge_request_comments`, `trigger_code_review`) or the operator-local CLI `~/bin/greptile-mcp.py` (install path varies by host; see Cursor `/grep-loop`) before falling back to `gh` scraping. For heavier repair loops, delegate to Hermes `github-greptile-loop`. Read the PR diff before fixing comments and stop to split if the PR is too large for reliable review.
 
 `main` is protected. Do not push directly, bypass branch protection, or use administrator merges unless the operator explicitly asks for that emergency path. If GitHub blocks a green PR because repo auto-merge is disabled or another policy requires human action, report the blocker and keep the PR ready rather than forcing it.
 

@@ -69,6 +69,13 @@
 
 ## 🔧 BEFORE CODE CHANGES
 
+### Agentic Engineering Loop
+- [ ] Keep the task small: one feature, one fix, or one reviewable unit
+- [ ] Search existing Zoe code before creating new abstractions
+- [ ] For uncertain package/SDK/framework APIs, use `opensrc` or upstream source before guessing
+- [ ] Build the minimal working version first; do not mix broad refactors into the feature pass
+- [ ] If the work is too large for one PR, split it before implementation
+
 ### Architecture Rules
 - [ ] Single source of truth (no duplicates)
 - [ ] Use intelligent systems (don't replace them)
@@ -87,6 +94,15 @@
 - [ ] User isolation enforced
 
 ## ✅ AFTER MAKING CHANGES
+
+### Agentic Workflow Checks:
+1. [ ] Feature or fix works locally, or blocker is clearly stated
+2. [ ] Cleanup pass checked for duplicated runtime mechanics
+3. [ ] Repeated provider calls, parsing, validation, command execution, or payload transforms were moved to service-layer helpers where appropriate
+4. [ ] Domain policy stayed in routes, actions, intents, or UI handlers
+5. [ ] For package integrations, source files/examples referenced during implementation are named in the summary
+6. [ ] Mergeable work is prepared as a small PR and sent through Greptile/review loop when appropriate
+7. [ ] Cheap-model PR repair uses a generated guard packet, never a broad "fix the PR" prompt
 
 ### Validation Steps:
 1. [ ] Run: `python3 tools/audit/validate_structure.py`
@@ -142,6 +158,9 @@ ls -1 *.md | wc -l
 - Creating prohibited patterns
 - Hardcoding database paths
 - Removing authentication from endpoints
+- Huge or unclear PR that should be split before review
+- Agent is guessing package APIs instead of checking source
+- Cleanup pass is turning into a whole-app refactor
 
 ## 📖 REFERENCE DOCS
 

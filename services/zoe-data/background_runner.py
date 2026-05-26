@@ -22,6 +22,17 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+_HERMES_API_KEY = os.environ.get("HERMES_API_KEY") or os.environ.get("API_SERVER_KEY") or ""
+
+
+def _hermes_headers(*, session_id: str | None = None) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    if _HERMES_API_KEY:
+        headers["Authorization"] = f"Bearer {_HERMES_API_KEY}"
+    if session_id:
+        headers["X-Hermes-Session-Id"] = session_id
+    return headers
+
 # Running task futures keyed by task id (to avoid duplicate runs)
 _running: dict[int, asyncio.Task] = {}
 
@@ -222,7 +233,11 @@ async def _run_hermes_background_task(task: str, *, user_id: str, task_id: int) 
         "stream": False,
     }
     async with httpx.AsyncClient(timeout=timeout_s) as client:
-        resp = await client.post(f"{api_url}/v1/chat/completions", json=payload)
+        resp = await client.post(
+            f"{api_url}/v1/chat/completions",
+            json=payload,
+            headers=_hermes_headers(session_id=f"background-task-{task_id}"),
+        )
         resp.raise_for_status()
         data = resp.json()
     return (

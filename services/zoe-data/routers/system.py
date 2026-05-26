@@ -717,6 +717,10 @@ class _EngineeringTaskCancelRequest(BaseModel):
     reason: str = "cancelled by operator"
 
 
+class _EngineeringGuardRunRequest(BaseModel):
+    packet_only: bool = False
+
+
 @_agent_card_router.post("/tasks")
 async def a2a_task(body: _A2ATaskRequest, user: dict = Depends(get_a2a_caller)):
     """
@@ -895,6 +899,44 @@ async def check_engineering_workflow_greptile(task_id: str, user: dict = Depends
     try:
         return {"ok": True, "task": await check_greptile_for_task(task_id)}
     except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@_agent_card_router.get("/engineering/tasks/{task_id}/guard")
+async def get_engineering_workflow_guard(task_id: str, user: dict = Depends(require_admin)):
+    from engineering_workflow import get_engineering_task
+    from greploop_guard import read_guard_state
+
+    task = await get_engineering_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Engineering task not found")
+    pr_number = task.get("pr_number")
+    if not pr_number:
+        return {"ok": False, "state": "NO_PR", "task": task}
+    return {"ok": True, "state": read_guard_state(int(pr_number)), "task": task}
+
+
+@_agent_card_router.post("/engineering/tasks/{task_id}/guard/once")
+async def run_engineering_workflow_guard_once(
+    task_id: str,
+    body: _EngineeringGuardRunRequest | None = None,
+    user: dict = Depends(require_admin),
+):
+    from greploop_guard import GuardError, run_guard_once
+
+    try:
+        return await run_guard_once(task_id, packet_only=bool(body.packet_only if body else False))
+    except GuardError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@_agent_card_router.post("/engineering/tasks/{task_id}/guard/packet")
+async def build_engineering_workflow_guard_packet(task_id: str, user: dict = Depends(require_admin)):
+    from greploop_guard import GuardError, run_guard_once
+
+    try:
+        return await run_guard_once(task_id, packet_only=True)
+    except GuardError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 

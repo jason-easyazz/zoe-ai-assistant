@@ -21,6 +21,7 @@ Rules:
 - Prefer `opensrc path pypi:<package>` or `opensrc path owner/repo` to locate already-fetched source.
 - Search package source directly when debugging integrations, for example:
   `rg "class FastAPI" "$(opensrc path pypi:fastapi)"`
+- When source context informs an implementation, report the package files, examples, or tests that were used.
 - Do not vendor opensrc cache contents into Zoe.
 - Be cautious with brand-new dependencies; avoid adopting packages less than about 14 days old unless the user explicitly accepts the risk.
 
@@ -32,6 +33,8 @@ Build the smallest working feature first, then run a cleanup pass before review.
 
 Use the cleanup pass to remove duplicated runtime mechanics: repeated provider calls, parsing, validation, command execution, payload transforms, or business logic. Keep product/domain policy in routes, actions, intents, and UI handlers. Move only reusable mechanics into service-layer helpers.
 
+Service helpers should be small capability blocks with explicit parameters, structured returns, consistent failure semantics, and no hidden global state or unrelated database mutation.
+
 Do not refactor the whole app as cleanup. Do not create `_new`, `_fixed`, `_v2`, `_old`, backup, or duplicate router files.
 
 ## Greptile PR loop
@@ -41,6 +44,8 @@ For reviewable development work:
 - Do not bypass branch protection or use administrator merges unless the operator explicitly asks for that emergency path.
 - Keep PRs small; use `/split-to-prs` when a branch grows too large.
 - Let Greptile review every PR independently.
+- For Zoe engineering tasks, prefer `scripts/maintenance/greploop_guard.py --packet-only` or `--once` before broad expensive-agent repair.
+- Cheap models must receive one generated fix packet for one finding or CI failure; never hand them the whole PR.
 - Use Cursor's Greptile MCP to fetch review status/comments.
 - Use the `github-greptile-loop` Hermes skill to delegate heavier fix/re-review loops.
 - Do not treat Greptile as a replacement for local Zoe verification; run focused tests and live health checks before marking work merge-ready.
@@ -53,6 +58,8 @@ The tracked Cursor MCP config intentionally includes only non-secret local serve
 
 Hermes is Zoe's default engineering and browser agent. Use it for planning, code review, implementation repair, architecture analysis, Greptile loops, Graphify-guided codebase work, Multica board repair, generated knowledge refresh, and browser work through Zoe's CloakBrowser tools.
 
-Local Zoe Hermes engineering skills live under `~/.hermes/skills`, including `zoe-engineering`, `source-code-context`, `code-structure-cleanup`, `github-greptile-loop`, `zoe-graphify`, and `zoe-status-refresh`. They are operator-level Hermes skills, not user-facing Zoe runtime skills under `skills/`.
+Local Zoe Hermes engineering skills live under `~/.hermes/skills`, including `zoe-engineering`, `agentic-engineering-workflow`, `source-code-context`, `code-structure-cleanup`, `github-greptile-loop`, `grep-loop-review-workflow`, `zoe-graphify`, and `zoe-status-refresh`. They are operator-level Hermes skills, not user-facing Zoe runtime skills under `skills/`.
+
+The `agentic-engineering-workflow` and `grep-loop-review-workflow` names are kept as compatibility entrypoints for the Micky-style workflow pack, but they map onto Zoe's Hermes-first Graphify/opensrc/Greptile process rather than introducing a second parallel system.
 
 OpenClaw remains installed and available as a future/manual fallback. Do not route ordinary coding, planning, review, board work, browser work, or background work to OpenClaw by default; Hermes owns those paths unless the user explicitly asks to use OpenClaw.

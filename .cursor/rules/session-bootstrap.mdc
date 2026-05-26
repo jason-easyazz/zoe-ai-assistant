@@ -1,0 +1,17 @@
+---
+description: Mechanical preflight for non-trivial Zoe engineering sessions
+alwaysApply: true
+---
+
+# Session Bootstrap
+
+Before non-trivial edits, report the mechanical state in a short preflight:
+
+- repo root, branch, remote, and dirty files;
+- relevant stack/key files for the task;
+- deploy or runtime path affected, if any;
+- tracker state when relevant: Multica, GitHub PR, Linear, or issue id;
+- tool availability when relevant: Graphify, Greptile MCP/CLI, `gh`, validators, Hermes;
+- risks, missing context, and whether the task should be split.
+
+For tiny one-line edits, use judgment. For PR repair, prefer Zoe's Greploop guard before broad expensive-agent repair. Cheap models must receive one validated packet at a time, never a broad "fix the PR" task.

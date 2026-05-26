@@ -11,16 +11,16 @@ These are operator-level Hermes skills. They are not Zoe runtime skills under `/
 ## Core Zoe Skills
 
 `zoe-engineering`
-: Default Zoe engineering workflow. It tells Hermes to use Graphify first, use `opensrc` for package source, keep work PR-sized, build the minimal feature first, run cleanup after the feature works, use Greptile, and verify with Zoe validators.
+: Default Zoe engineering workflow and Zoe's local umbrella equivalent of `agentic-engineering-workflow`. It tells Hermes to use Graphify first, use `opensrc` for package source, keep work PR-sized, build the minimal feature first, run cleanup after the feature works, use Greptile, and verify with Zoe validators.
 
 `source-code-context`
 : Use when integrating packages, SDKs, MCP servers, browser tools, or open-source services. It tells Hermes to inspect local source under `~/.opensrc/repos` before guessing APIs.
 
 `code-structure-cleanup`
-: Use after a feature works. It guides Hermes to extract only repeated runtime mechanics into service-layer helpers while keeping domain policy in routes, actions, intents, and UI handlers.
+: Use after a feature works. It guides Hermes to extract only repeated runtime mechanics into service-layer helpers while keeping domain policy in routes, actions, intents, and UI handlers. Service helpers should use explicit parameters, structured returns, consistent failure semantics, and no hidden global state.
 
 `github-greptile-loop`
-: Use for PR review and repair loops. It fetches live Greptile state, fixes real findings, verifies, pushes, and triggers re-review until the PR is clean or a human decision is needed.
+: Use for PR review and repair loops. It fetches live Greptile state, checks whether the PR should be split, uses Zoe's Greploop guard for bounded packet-based repair when available, fixes real findings, verifies, pushes, and triggers re-review until the PR is clean or a human decision is needed.
 
 `zoe-graphify`
 : Use for broad Zoe architecture or cross-module work. It points Hermes at `graphify-out/GRAPH_REPORT.md` and the safe Graphify refresh commands.

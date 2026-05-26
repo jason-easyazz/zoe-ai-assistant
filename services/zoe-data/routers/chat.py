@@ -2409,6 +2409,11 @@ async def chat_stream_generator(
 
 _HERMES_API_URL = os.environ.get("HERMES_API_URL", "http://127.0.0.1:8642")
 _HERMES_MODEL   = os.environ.get("HERMES_MODEL", "hermes-agent")
+_HERMES_API_KEY = (
+    os.environ.get("HERMES_API_KEY")
+    or os.environ.get("API_SERVER_KEY")
+    or ""
+)
 
 _ZOE_SOUL_HERMES = (
     "You are Zoe — a warm, curious, genuinely present AI companion. "
@@ -2497,6 +2502,15 @@ def _hermes_progress_events(event_name: str, payload) -> list:
     ]
 
 
+def _hermes_request_headers(*, session_id: str | None = None) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    if _HERMES_API_KEY:
+        headers["Authorization"] = f"Bearer {_HERMES_API_KEY}"
+    if session_id:
+        headers["X-Hermes-Session-Id"] = session_id
+    return headers
+
+
 async def _iter_hermes_stream_events(
     message: str,
     session_id: str,
@@ -2524,8 +2538,10 @@ async def _iter_hermes_stream_events(
             async with session.post(
                 f"{_HERMES_API_URL}/v1/chat/completions",
                 json=payload,
+                headers=_hermes_request_headers(session_id=session_id),
                 timeout=aiohttp.ClientTimeout(total=120),
             ) as resp:
+                resp.raise_for_status()
                 sse_event = ""
                 async for raw_line in resp.content:
                     line = raw_line.decode("utf-8", errors="replace").strip()
@@ -2651,8 +2667,10 @@ async def _hermes_completion(
         async with _hses.post(
             f"{_HERMES_API_URL}/v1/chat/completions",
             json=payload,
+            headers=_hermes_request_headers(),
             timeout=aiohttp.ClientTimeout(total=120),
         ) as _hr:
+            _hr.raise_for_status()
             _hj = await _hr.json()
     return _hj.get("choices", [{}])[0].get("message", {}).get("content", "") or "(no response)"
 

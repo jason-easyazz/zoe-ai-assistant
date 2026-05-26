@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,67 @@ DEFAULT_REPO = os.environ.get("ZOE_GITHUB_REPO", "jason-easyazz/zoe-ai-assistant
 
 class GreptileAuthError(RuntimeError):
     """Raised when Greptile credentials are unavailable."""
+
+
+_CONFIDENCE_RE = re.compile(r"(?:Confidence\s+Score|confidence)\s*:?\s*([0-5])\s*/\s*5", re.I)
+
+
+def parse_confidence_score(*sources: Any) -> int | None:
+    """Return the first Greptile confidence score found in nested text-like data."""
+    stack = list(sources)
+    while stack:
+        item = stack.pop(0)
+        if item is None:
+            continue
+        if isinstance(item, str):
+            match = _CONFIDENCE_RE.search(item)
+            if match:
+                return int(match.group(1))
+            continue
+        if isinstance(item, dict):
+            direct = item.get("confidenceScore") or item.get("confidence_score")
+            if isinstance(direct, int) and 0 <= direct <= 5:
+                return direct
+            stack.extend(item.values())
+            continue
+        if isinstance(item, list):
+            stack.extend(item)
+    return None
+
+
+def normalize_pr_comment(comment: dict[str, Any]) -> dict[str, Any]:
+    """Normalize Greptile/GitHub comment fields for guard packets."""
+    body = comment.get("body") or comment.get("text") or comment.get("content") or ""
+    path = comment.get("filePath") or comment.get("path") or comment.get("file") or ""
+    line = comment.get("line") or comment.get("startLine") or comment.get("originalLine")
+    return {
+        "id": str(comment.get("id") or comment.get("commentId") or comment.get("nodeId") or ""),
+        "file_path": path,
+        "line": line,
+        "body": body,
+        "suggested_code": comment.get("suggestedCode") or comment.get("suggestion"),
+        "has_suggestion": bool(comment.get("hasSuggestion") or comment.get("suggestedCode")),
+        "addressed": bool(comment.get("addressed", False)),
+        "raw": comment,
+    }
+
+
+def normalize_pr_comments(comments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [normalize_pr_comment(comment) for comment in comments]
+
+
+def review_is_running(status: dict[str, Any]) -> bool:
+    """Best-effort Greptile running-state check from MCP/GitHub shaped payloads."""
+    candidates = [
+        status.get("reviewCompleteness"),
+        status.get("state"),
+        status.get("status"),
+        status.get("conclusion"),
+    ]
+    for review in status.get("codeReviews") or []:
+        if isinstance(review, dict):
+            candidates.extend([review.get("status"), review.get("state"), review.get("conclusion")])
+    return any(str(value).lower() in {"running", "queued", "pending", "in_progress", "in-progress"} for value in candidates if value)
 
 
 def _load_api_key() -> str:
@@ -75,12 +137,13 @@ async def get_pr_status(
     mr = data.get("mergeRequest") or data
     analysis = mr.get("reviewAnalysis") or {}
     body = mr.get("description") or ""
-    confidence = None
-    import re
-
-    match = re.search(r"Confidence Score:\s*(\d)/5", body, re.I)
-    if match:
-        confidence = int(match.group(1))
+    confidence = parse_confidence_score(body, mr, analysis, mr.get("codeReviews") or [])
+    head_sha = (
+        mr.get("headSha")
+        or mr.get("headSHA")
+        or (mr.get("headRef") or {}).get("oid")
+        or (mr.get("head") or {}).get("sha")
+    )
     return {
         "repo": repo,
         "prNumber": pr,
@@ -91,6 +154,8 @@ async def get_pr_status(
         "hasNewCommitsSinceReview": analysis.get("hasNewCommitsSinceReview"),
         "lastReviewDate": analysis.get("lastReviewDate"),
         "confidenceScore": confidence,
+        "headSha": head_sha,
+        "reviewIsRunning": review_is_running({**mr, **analysis}),
         "codeReviews": mr.get("codeReviews") or [],
     }
 
@@ -110,7 +175,13 @@ async def list_pr_comments(
         params["addressed"] = False
     data = await _mcp_call("list_merge_request_comments", params)
     comments = data.get("comments") or []
-    return {"repo": repo, "prNumber": pr, "total": len(comments), "comments": comments}
+    return {
+        "repo": repo,
+        "prNumber": pr,
+        "total": len(comments),
+        "comments": comments,
+        "findings": normalize_pr_comments(comments),
+    }
 
 
 async def trigger_review(
