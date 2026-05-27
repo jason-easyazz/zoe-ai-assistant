@@ -38,6 +38,11 @@ def _visibility_filter_sql() -> str:
     return "(visibility = 'family' OR user_id = ?) AND deleted = 0"
 
 
+def _owner_filter_sql() -> str:
+    """SQL fragment for owner-only note mutations."""
+    return "user_id = ? AND deleted = 0"
+
+
 async def _store_note_memory(db, user_id: str, note: dict, action: str):
     """Write a note-derived fact to MemPalace through MemoryService.
 
@@ -178,7 +183,7 @@ async def update_note(
     """Update an existing note."""
     await require_feature_access(db, user, feature="notes", action="update")
     user_id = user["user_id"]
-    where = f"{_visibility_filter_sql()} AND id = ?"
+    where = f"{_owner_filter_sql()} AND id = ?"
     cursor = await db.execute(
         "SELECT * FROM notes WHERE " + where,
         [user_id, note_id],
@@ -219,6 +224,17 @@ async def update_note(
     return note
 
 
+@router.patch("/{note_id}", response_model=dict)
+async def patch_note(
+    note_id: str,
+    payload: NoteUpdate,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """Alias for update_note to support existing note editors using PATCH."""
+    return await update_note(note_id, payload, user, db)
+
+
 @router.delete("/{note_id}", response_model=dict)
 async def delete_note(
     note_id: str,
@@ -228,7 +244,7 @@ async def delete_note(
     """Soft delete a note."""
     await require_feature_access(db, user, feature="notes", action="delete")
     user_id = user["user_id"]
-    where = f"{_visibility_filter_sql()} AND id = ?"
+    where = f"{_owner_filter_sql()} AND id = ?"
     cursor = await db.execute(
         "SELECT * FROM notes WHERE " + where,
         [user_id, note_id],

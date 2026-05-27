@@ -9,6 +9,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, Request
 from auth import get_current_user
 from database import get_db
+from guest_policy import require_feature_access
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/push", tags=["push"])
@@ -50,7 +51,8 @@ def _get_vapid_keys():
 
 
 @router.get("/vapid-public-key")
-async def get_vapid_public_key():
+async def get_vapid_public_key(user: dict = Depends(get_current_user), db=Depends(get_db)):
+    await require_feature_access(db, user, feature="push", action="read")
     keys = _get_vapid_keys()
     if not keys:
         return {"error": "VAPID keys not configured"}
@@ -58,7 +60,8 @@ async def get_vapid_public_key():
 
 
 @router.post("/subscribe")
-async def subscribe(request: Request, user: dict = Depends(get_current_user)):
+async def subscribe(request: Request, user: dict = Depends(get_current_user), db=Depends(get_db)):
+    await require_feature_access(db, user, feature="push", action="subscribe")
     body = await request.json()
     subscription = body.get("subscription")
     if not subscription:
@@ -85,7 +88,8 @@ async def subscribe(request: Request, user: dict = Depends(get_current_user)):
 
 
 @router.delete("/subscribe")
-async def unsubscribe(request: Request, user: dict = Depends(get_current_user)):
+async def unsubscribe(request: Request, user: dict = Depends(get_current_user), db=Depends(get_db)):
+    await require_feature_access(db, user, feature="push", action="unsubscribe")
     body = await request.json()
     endpoint = body.get("endpoint", "")
     async for db in get_db():

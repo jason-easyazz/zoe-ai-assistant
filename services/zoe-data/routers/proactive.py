@@ -20,6 +20,7 @@ from pydantic import BaseModel
 from auth import get_current_user
 from database import get_db
 from db_pool import get_db_ctx
+from guest_policy import require_feature_access
 from proactive.session_utils import claim_pending
 from proactive.triggers.reminders import schedule_reminder, cancel_reminder
 
@@ -37,8 +38,10 @@ class ScheduleRequest(BaseModel):
 async def create_schedule(
     body: ScheduleRequest,
     user: dict = Depends(get_current_user),
+    db=Depends(get_db),
 ):
     """Schedule a one-shot proactive nudge."""
+    await require_feature_access(db, user, feature="proactive", action="create")
     caller_id = user["user_id"]
     target_id = body.user_id if body.user_id and user.get("role") == "admin" else caller_id
 
@@ -59,8 +62,9 @@ async def create_schedule(
 
 
 @router.get("/schedule")
-async def list_schedules(user: dict = Depends(get_current_user)):
+async def list_schedules(user: dict = Depends(get_current_user), db=Depends(get_db)):
     """List pending scheduled nudges for the calling user."""
+    await require_feature_access(db, user, feature="proactive", action="read")
     user_id = user["user_id"]
     async for db in get_db():
         async with db.execute(
@@ -78,8 +82,10 @@ async def list_schedules(user: dict = Depends(get_current_user)):
 async def delete_schedule(
     scheduled_id: str,
     user: dict = Depends(get_current_user),
+    db=Depends(get_db),
 ):
     """Cancel a scheduled nudge."""
+    await require_feature_access(db, user, feature="proactive", action="delete")
     async for db in get_db():
         async with db.execute(
             "SELECT user_id FROM proactive_scheduled WHERE id = ?", (scheduled_id,)
@@ -109,11 +115,12 @@ async def claim_pending_endpoint(pending_id: str):
 
 
 @router.post("/trigger-morning")
-async def trigger_morning_brief(user: dict = Depends(get_current_user)):
+async def trigger_morning_brief(user: dict = Depends(get_current_user), db=Depends(get_db)):
     """
     Manually trigger the morning brief for the calling user.
     Useful for testing Phase 3.4 without waiting for the 7:30am schedule.
     """
+    await require_feature_access(db, user, feature="proactive", action="trigger")
     from proactive.triggers.morning_checkin import _build_morning_context, _compose_morning_message
     from proactive.engine import fire_notification
 
@@ -155,8 +162,10 @@ async def trigger_morning_brief(user: dict = Depends(get_current_user)):
 async def list_pending_suggestions(
     session_id: str,
     user: dict = Depends(get_current_user),
+    db=Depends(get_db),
 ):
     """List unresolved save offers for the current chat session."""
+    await require_feature_access(db, user, feature="proactive", action="read")
     from pending_suggestions import list_active
 
     items = await list_active(user["user_id"], session_id)
@@ -167,8 +176,10 @@ async def list_pending_suggestions(
 async def accept_pending_suggestion(
     suggestion_id: str,
     user: dict = Depends(get_current_user),
+    db=Depends(get_db),
 ):
     """Execute a pending save offer (direct API — no intent re-parse)."""
+    await require_feature_access(db, user, feature="proactive", action="accept")
     from pending_suggestions import execute_suggestion
 
     result = await execute_suggestion(suggestion_id, user["user_id"])
@@ -181,7 +192,9 @@ async def accept_pending_suggestion(
 async def dismiss_pending_suggestion(
     suggestion_id: str,
     user: dict = Depends(get_current_user),
+    db=Depends(get_db),
 ):
+    await require_feature_access(db, user, feature="proactive", action="dismiss")
     from pending_suggestions import mark_resolved
 
     ok = await mark_resolved(suggestion_id, user["user_id"])
