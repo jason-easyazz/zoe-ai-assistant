@@ -888,29 +888,35 @@ async def _save_chat_message(session_id: str, role: str, content: str) -> None:
                 "VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
                 (uuid.uuid4().hex, session_id, role, clean_content),
             )
-            title_row = await db.execute_fetchall(
-                "SELECT title FROM chat_sessions WHERE id = ?",
-                (session_id,),
-            )
-            if title_row:
-                current_title = dict(title_row[0]).get("title") or "New Chat"
-                new_title = None
-                if title_is_weak(current_title):
-                    new_title = derive_session_title(clean_content)
-                if new_title:
-                    await db.execute(
-                        "UPDATE chat_sessions SET updated_at = NOW()::text, title = ? WHERE id = ?",
-                        (new_title, session_id),
-                    )
-                else:
-                    await db.execute(
-                        "UPDATE chat_sessions SET updated_at = NOW()::text WHERE id = ?",
-                        (session_id,),
-                    )
+            await _touch_chat_session(db, session_id=session_id, content=clean_content)
             await db.commit()
             break
     except Exception as _sme:
         logger.debug("_save_chat_message failed (non-fatal): %s", _sme)
+
+
+async def _touch_chat_session(db, *, session_id: str, content: str, user_id: str | None = None) -> None:
+    """Refresh session recency and promote weak titles from the saved turn."""
+    where = "id = ? AND user_id = ?" if user_id else "id = ?"
+    params = (session_id, user_id) if user_id else (session_id,)
+    title_row = await db.execute_fetchall(
+        f"SELECT title FROM chat_sessions WHERE {where}",
+        params,
+    )
+    if not title_row:
+        return
+    current_title = dict(title_row[0]).get("title") or "New Chat"
+    new_title = derive_session_title(content) if content.strip() and title_is_weak(current_title) else None
+    if new_title:
+        await db.execute(
+            f"UPDATE chat_sessions SET updated_at = NOW()::text, title = ? WHERE {where}",
+            (new_title, *params),
+        )
+    else:
+        await db.execute(
+            f"UPDATE chat_sessions SET updated_at = NOW()::text WHERE {where}",
+            params,
+        )
 
 
 INTENT_LABELS = {
@@ -3082,37 +3088,12 @@ async def save_message(session_id: str, request: Request, user: dict = Depends(g
         if not owner:
             await db.commit()
             return {"status": "error", "message": "Session not found"}
-        title_row = await db.execute_fetchall(
-            "SELECT title FROM chat_sessions WHERE id = ? AND user_id = ?",
-            (session_id, user_id),
-        )
-        current_title = dict(title_row[0])["title"] if title_row else "New Chat"
-
         await db.execute(
             "INSERT INTO chat_messages (id, session_id, role, content, metadata) VALUES (?, ?, ?, ?, ?)",
             (msg_id, session_id, role, content, metadata),
         )
 
-        new_title = None
-        if role == "user" and content.strip():
-            candidate = derive_session_title(content)
-            if title_is_weak(current_title):
-                new_title = candidate
-        elif role == "assistant" and content.strip():
-            if title_is_weak(current_title):
-                new_title = derive_session_title(content)
-
-        if new_title:
-            await db.execute(
-                """UPDATE chat_sessions SET updated_at = NOW()::text, title = ?
-                   WHERE id = ? AND user_id = ?""",
-                (new_title, session_id, user_id),
-            )
-        else:
-            await db.execute(
-                "UPDATE chat_sessions SET updated_at = NOW()::text WHERE id = ? AND user_id = ?",
-                (session_id, user_id),
-            )
+        await _touch_chat_session(db, session_id=session_id, user_id=user_id, content=content)
         await db.commit()
     return {"status": "ok", "id": msg_id}
 

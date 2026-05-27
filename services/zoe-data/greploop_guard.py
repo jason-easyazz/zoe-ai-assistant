@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
 import time
 from contextlib import contextmanager
@@ -322,8 +323,11 @@ async def _run_cheap_agent(packet: GuardPacket, *, task_id: str | None = None) -
     payload = json.dumps(packet.to_dict())
     start = time.time()
     if cmd:
-        proc = await asyncio.create_subprocess_shell(
-            cmd,
+        argv = shlex.split(cmd)
+        if not argv:
+            return "BLOCKED_CHEAP_RUNNER_NOT_CONFIGURED", "empty ZOE_CHEAP_PR_AGENT_CMD"
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,

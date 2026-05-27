@@ -86,3 +86,14 @@ async def test_cheap_runner_blocks_before_budget_exceeded(monkeypatch):
 
     assert status == "BLOCKED_BUDGET_EXCEEDED"
     assert "max_cost_usd=1.0" in output
+
+
+@pytest.mark.asyncio
+async def test_cheap_runner_command_does_not_expand_shell_metacharacters(monkeypatch):
+    monkeypatch.setenv("ZOE_CHEAP_PR_AGENT_CMD", "python3 -c 'import sys; sys.stdin.read(); print(\"$HOME\")'")
+    monkeypatch.setenv("ZOE_CHEAP_PR_AGENT_ESTIMATED_COST_USD", "0")
+
+    status, output = await greploop_guard._run_cheap_agent(_packet())
+
+    assert status == "OK"
+    assert "$HOME" in output

@@ -28,7 +28,9 @@ async def test_load_todays_messages_uses_postgres_timestamp_cast():
     text = await memory_digest._load_todays_messages("user-1", db=db)
 
     assert text == "I like quiet mornings\nI prefer tea"
-    assert "cm.created_at::timestamptz::date = CURRENT_DATE" in db.sql[0]
+    assert "(cm.created_at::timestamptz AT TIME ZONE ?)::date" in db.sql[0]
+    assert "(now() AT TIME ZONE ?)::date" in db.sql[0]
+    assert "CURRENT_DATE" not in db.sql[0]
     assert "DATE('now'" not in db.sql[0]
 
 
@@ -47,5 +49,7 @@ async def test_run_digest_for_all_active_users_uses_postgres_timestamp_cast(monk
 
     assert [item["user_id"] for item in results] == ["user-1", "user-2"]
     assert seen == ["user-1", "user-2"]
-    assert "cm.created_at::timestamptz::date = CURRENT_DATE" in db.sql[0]
+    assert "(cm.created_at::timestamptz AT TIME ZONE ?)::date" in db.sql[0]
+    assert "(now() AT TIME ZONE ?)::date" in db.sql[0]
+    assert "CURRENT_DATE" not in db.sql[0]
     assert "DATE('now'" not in db.sql[0]
