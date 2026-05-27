@@ -134,8 +134,8 @@ async def track_interaction(
         raise HTTPException(status_code=404, detail="Notification not found")
 
     await db.execute(
-        "UPDATE notifications SET delivered = 1, action_taken = ? WHERE id = ?",
-        (action, notification_id),
+        "UPDATE notifications SET delivered = 1, action_taken = ? WHERE id = ? AND user_id = ?",
+        (action, notification_id, user["user_id"]),
     )
     await db.commit()
     return {"message": f"Notification {action}ed successfully"}
