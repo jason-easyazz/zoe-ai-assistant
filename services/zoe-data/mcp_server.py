@@ -2620,7 +2620,7 @@ async def _execute_tool(db, name: str, args: dict):
             ssh_args += ["-i", ssh_key_path]
 
         ssh_args += [f"{ssh_user}@{ip}", command]
-        logger.info("panel_ssh_exec: panel=%s ip=%s cmd=%r", target_panel_id, ip, command[:120])
+        _mcp_log.info("panel_ssh_exec: panel=%s ip=%s", target_panel_id, ip)
 
         try:
             proc = await asyncio.create_subprocess_exec(

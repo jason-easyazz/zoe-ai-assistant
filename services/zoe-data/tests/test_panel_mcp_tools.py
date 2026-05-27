@@ -1,11 +1,15 @@
-"""Tests for panel_* MCP tool definitions."""
+"""Tests for panel_* MCP tool definitions and execution paths."""
 
+import asyncio
 import sys
 import os
 import json
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+import mcp_server
 from mcp_server import TOOLS
 
 
@@ -63,3 +67,173 @@ def test_all_panel_tools_have_descriptions():
     assert len(panel_tools) >= 6, f"Expected at least 6 panel tools, got {len(panel_tools)}"
     for t in panel_tools:
         assert t.get("description"), f"Tool {t['name']} is missing a description"
+
+
+class _Cursor:
+    def __init__(self, row):
+        self._row = row
+
+    async def fetchone(self):
+        return self._row
+
+
+class _Db:
+    def __init__(self, row):
+        self._row = row
+
+    async def execute(self, *_args, **_kwargs):
+        return _Cursor(self._row)
+
+
+@pytest.mark.asyncio
+async def test_panel_ssh_exec_happy_path_uses_logger_without_logging_command(monkeypatch):
+    db = _Db(
+        {
+            "ip_address": "192.168.1.61",
+            "ssh_user": "pi",
+            "ssh_key_path": "/tmp/test-key",
+            "ssh_port": 2222,
+        }
+    )
+    proc_calls = {}
+    log_lines = []
+
+    class _Proc:
+        returncode = 0
+
+        async def communicate(self):
+            return b"ok\n", b""
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        proc_calls["args"] = args
+        proc_calls["kwargs"] = kwargs
+        return _Proc()
+
+    def fake_log_info(msg, *args):
+        log_lines.append(msg % args)
+
+    monkeypatch.setattr(mcp_server.os.path, "exists", lambda path: path == "/tmp/test-key")
+    monkeypatch.setattr(mcp_server.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr(mcp_server._mcp_log, "info", fake_log_info)
+
+    result = await mcp_server._execute_tool(
+        db=db,
+        name="panel_ssh_exec",
+        args={
+            "_user_id": "test-user",
+            "panel_id": "zoe-touch-pi",
+            "command": "echo super-secret-token",
+            "timeout": 5,
+        },
+    )
+
+    assert result == {
+        "panel_id": "zoe-touch-pi",
+        "command": "echo super-secret-token",
+        "exit_code": 0,
+        "stdout": "ok",
+        "stderr": "",
+    }
+    assert proc_calls["args"] == (
+        "ssh",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "ConnectTimeout=10",
+        "-o", "BatchMode=yes",
+        "-p", "2222",
+        "-i", "/tmp/test-key",
+        "pi@192.168.1.61",
+        "echo super-secret-token",
+    )
+    assert proc_calls["kwargs"] == {
+        "stdout": asyncio.subprocess.PIPE,
+        "stderr": asyncio.subprocess.PIPE,
+    }
+    assert log_lines == ["panel_ssh_exec: panel=zoe-touch-pi ip=192.168.1.61"]
+    assert "super-secret-token" not in log_lines[0]
+
+
+@pytest.mark.asyncio
+async def test_panel_ssh_exec_timeout_kills_process(monkeypatch):
+    db = _Db(
+        {
+            "ip_address": "192.168.1.61",
+            "ssh_user": "pi",
+            "ssh_key_path": "/tmp/test-key",
+            "ssh_port": 22,
+        }
+    )
+    proc = None
+
+    class _Proc:
+        def __init__(self):
+            self.killed = False
+
+        async def communicate(self):
+            return b"", b""
+
+        def kill(self):
+            self.killed = True
+
+    async def fake_create_subprocess_exec(*_args, **_kwargs):
+        nonlocal proc
+        proc = _Proc()
+        return proc
+
+    async def fake_wait_for(awaitable, timeout):
+        awaitable.close()
+        raise asyncio.TimeoutError()
+
+    monkeypatch.setattr(mcp_server.os.path, "exists", lambda _path: False)
+    monkeypatch.setattr(mcp_server.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr(mcp_server.asyncio, "wait_for", fake_wait_for)
+
+    result = await mcp_server._execute_tool(
+        db=db,
+        name="panel_ssh_exec",
+        args={
+            "_user_id": "test-user",
+            "panel_id": "zoe-touch-pi",
+            "command": "uptime",
+            "timeout": 9,
+        },
+    )
+
+    assert result == {
+        "error": "SSH command timed out after 9s",
+        "panel_id": "zoe-touch-pi",
+    }
+    assert proc is not None
+    assert proc.killed is True
+
+
+@pytest.mark.asyncio
+async def test_panel_ssh_exec_subprocess_error_returns_tool_error(monkeypatch):
+    db = _Db(
+        {
+            "ip_address": "192.168.1.61",
+            "ssh_user": "pi",
+            "ssh_key_path": "/tmp/test-key",
+            "ssh_port": 22,
+        }
+    )
+
+    async def fake_create_subprocess_exec(*_args, **_kwargs):
+        raise RuntimeError("ssh unavailable")
+
+    monkeypatch.setattr(mcp_server.os.path, "exists", lambda _path: False)
+    monkeypatch.setattr(mcp_server.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    result = await mcp_server._execute_tool(
+        db=db,
+        name="panel_ssh_exec",
+        args={
+            "_user_id": "test-user",
+            "panel_id": "zoe-touch-pi",
+            "command": "uptime",
+        },
+    )
+
+    assert result == {
+        "error": "SSH exec failed: ssh unavailable",
+        "panel_id": "zoe-touch-pi",
+    }
