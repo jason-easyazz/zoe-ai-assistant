@@ -42,6 +42,19 @@ def _visibility_filter_sql() -> str:
     return "(visibility = 'family' OR user_id = ?) AND deleted = 0"
 
 
+async def _enforce_calendar_read_access(db, user: dict) -> str:
+    """Apply the shared calendar read gate and telemetry, then return user_id."""
+    await require_feature_access(db, user, feature="calendar", action="read")
+    user_id = user["user_id"]
+    record_policy_decision(
+        "guest_allowed" if is_guest_user(user) else "auth_ok",
+        surface="api",
+        resource="calendar",
+        action="read",
+    )
+    return user_id
+
+
 @router.get("/events", response_model=dict)
 async def list_events(
     start_date: Optional[str] = Query(None),
@@ -51,14 +64,7 @@ async def list_events(
     db=Depends(get_db),
 ):
     """List events with optional start_date, end_date, category filters."""
-    await require_feature_access(db, user, feature="calendar", action="read")
-    user_id = user["user_id"]
-    record_policy_decision(
-        "guest_allowed" if is_guest_user(user) else "auth_ok",
-        surface="api",
-        resource="calendar",
-        action="read",
-    )
+    user_id = await _enforce_calendar_read_access(db, user)
     conditions = [_visibility_filter_sql()]
     params: list = [user_id]
 
@@ -87,7 +93,7 @@ async def list_today_events(
     db=Depends(get_db),
 ):
     """Get today's events."""
-    user_id = user["user_id"]
+    user_id = await _enforce_calendar_read_access(db, user)
     today = date.today().isoformat()
     where = f"{_visibility_filter_sql()} AND start_date = ?"
     sql = f"SELECT * FROM events WHERE {where} ORDER BY start_time"
@@ -105,7 +111,7 @@ async def get_event(
     db=Depends(get_db),
 ):
     """Get a single event by ID."""
-    user_id = user["user_id"]
+    user_id = await _enforce_calendar_read_access(db, user)
     where = f"{_visibility_filter_sql()} AND id = ?"
     cursor = await db.execute(
         "SELECT * FROM events WHERE " + where,
