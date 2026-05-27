@@ -9,6 +9,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, Request
 from auth import get_current_user
 from database import get_db
+from guest_policy import require_feature_access
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/push", tags=["push"])
@@ -50,7 +51,8 @@ def _get_vapid_keys():
 
 
 @router.get("/vapid-public-key")
-async def get_vapid_public_key():
+async def get_vapid_public_key(user: dict = Depends(get_current_user), db=Depends(get_db)):
+    await require_feature_access(db, user, feature="push", action="read")
     keys = _get_vapid_keys()
     if not keys:
         return {"error": "VAPID keys not configured"}
@@ -58,42 +60,42 @@ async def get_vapid_public_key():
 
 
 @router.post("/subscribe")
-async def subscribe(request: Request, user: dict = Depends(get_current_user)):
+async def subscribe(request: Request, user: dict = Depends(get_current_user), db=Depends(get_db)):
+    await require_feature_access(db, user, feature="push", action="subscribe")
     body = await request.json()
     subscription = body.get("subscription")
     if not subscription:
         return {"error": "No subscription data"}
 
     user_id = user["user_id"]
-    async for db in get_db():
-        await db.execute(
-            """INSERT INTO push_subscriptions
-               (user_id, endpoint, keys_p256dh, keys_auth, created_at)
-               VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-               ON CONFLICT (user_id, endpoint) DO UPDATE SET
-                   keys_p256dh = EXCLUDED.keys_p256dh,
-                   keys_auth = EXCLUDED.keys_auth""",
-            (
-                user_id,
-                subscription.get("endpoint", ""),
-                subscription.get("keys", {}).get("p256dh", ""),
-                subscription.get("keys", {}).get("auth", ""),
-            ),
-        )
-        await db.commit()
+    await db.execute(
+        """INSERT INTO push_subscriptions
+           (user_id, endpoint, keys_p256dh, keys_auth, created_at)
+           VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+           ON CONFLICT (user_id, endpoint) DO UPDATE SET
+               keys_p256dh = EXCLUDED.keys_p256dh,
+               keys_auth = EXCLUDED.keys_auth""",
+        (
+            user_id,
+            subscription.get("endpoint", ""),
+            subscription.get("keys", {}).get("p256dh", ""),
+            subscription.get("keys", {}).get("auth", ""),
+        ),
+    )
+    await db.commit()
     return {"status": "subscribed"}
 
 
 @router.delete("/subscribe")
-async def unsubscribe(request: Request, user: dict = Depends(get_current_user)):
+async def unsubscribe(request: Request, user: dict = Depends(get_current_user), db=Depends(get_db)):
+    await require_feature_access(db, user, feature="push", action="unsubscribe")
     body = await request.json()
     endpoint = body.get("endpoint", "")
-    async for db in get_db():
-        await db.execute(
-            "DELETE FROM push_subscriptions WHERE user_id = ? AND endpoint = ?",
-            (user["user_id"], endpoint),
-        )
-        await db.commit()
+    await db.execute(
+        "DELETE FROM push_subscriptions WHERE user_id = ? AND endpoint = ?",
+        (user["user_id"], endpoint),
+    )
+    await db.commit()
     return {"status": "unsubscribed"}
 
 

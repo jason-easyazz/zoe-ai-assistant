@@ -8,9 +8,12 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query
 from auth import get_current_user
 from database import get_db
+from guest_policy import require_feature_access
 from push import broadcaster
 
 router = APIRouter(prefix="/api/notifications", tags=["notifications"])
+
+VALID_INTERACTION_ACTIONS = {"dismiss", "read", "click", "snooze"}
 
 
 @router.get("/", response_model=dict)
@@ -21,6 +24,7 @@ async def list_notifications(
     db=Depends(get_db),
 ):
     """List notifications for the current user."""
+    await require_feature_access(db, user, feature="notifications", action="read")
     user_id = user["user_id"]
     conditions = ["user_id = ?"]
     params = [user_id]
@@ -47,6 +51,7 @@ async def get_pending_notifications(
     db=Depends(get_db),
 ):
     """Get unread/pending notifications count and items."""
+    await require_feature_access(db, user, feature="notifications", action="read")
     user_id = user["user_id"]
     cursor = await db.execute(
         "SELECT id, type, title, message, data, created_at FROM notifications WHERE user_id = ? AND delivered = 0 ORDER BY created_at DESC LIMIT 10",
@@ -72,6 +77,7 @@ async def create_notification(
     db=Depends(get_db),
 ):
     """Create a notification."""
+    await require_feature_access(db, user, feature="notifications", action="create")
     user_id = user["user_id"]
     nid = str(uuid.uuid4())
     await db.execute(
@@ -95,10 +101,13 @@ async def mark_read(
     db=Depends(get_db),
 ):
     """Mark a notification as read/delivered."""
-    await db.execute(
+    await require_feature_access(db, user, feature="notifications", action="mark_read")
+    cursor = await db.execute(
         "UPDATE notifications SET delivered = 1, action_taken = 'read' WHERE id = ? AND user_id = ?",
         (notification_id, user["user_id"]),
     )
+    if cursor.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Notification not found")
     await db.commit()
     return {"ok": True, "id": notification_id}
 
@@ -110,17 +119,23 @@ async def track_interaction(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
+    await require_feature_access(db, user, feature="notifications", action="interact")
+    if action not in VALID_INTERACTION_ACTIONS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"action must be one of {sorted(VALID_INTERACTION_ACTIONS)}",
+        )
     cursor = await db.execute(
-        "SELECT id FROM notifications WHERE id = ?",
-        (notification_id,),
+        "SELECT id FROM notifications WHERE id = ? AND user_id = ?",
+        (notification_id, user["user_id"]),
     )
     row = await cursor.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Notification not found")
 
     await db.execute(
-        "UPDATE notifications SET delivered = 1, action_taken = ? WHERE id = ?",
-        (action, notification_id),
+        "UPDATE notifications SET delivered = 1, action_taken = ? WHERE id = ? AND user_id = ?",
+        (action, notification_id, user["user_id"]),
     )
     await db.commit()
     return {"message": f"Notification {action}ed successfully"}
@@ -133,9 +148,12 @@ async def delete_notification(
     db=Depends(get_db),
 ):
     """Delete a notification."""
-    await db.execute(
+    await require_feature_access(db, user, feature="notifications", action="delete")
+    cursor = await db.execute(
         "DELETE FROM notifications WHERE id = ? AND user_id = ?",
         (notification_id, user["user_id"]),
     )
+    if cursor.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Notification not found")
     await db.commit()
     return {"ok": True, "id": notification_id}
