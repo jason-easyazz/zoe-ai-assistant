@@ -22,6 +22,7 @@ from typing import Any
 
 DEFAULT_REPO = os.environ.get("ZOE_GITHUB_REPO", "jason-easyazz/zoe-ai-assistant")
 DEFAULT_BASE_BRANCH = os.environ.get("ZOE_GITHUB_DEFAULT_BRANCH", "main")
+REPO_ROOT = Path(os.environ.get("ZOE_ASSISTANT_ROOT", Path(__file__).resolve().parents[2]))
 STATE_ROOT = Path(os.environ.get("ZOE_PR_GUARD_STATE_DIR", "/home/zoe/assistant/.cursor/tmp/pr_guard"))
 LOCK_TTL_SECONDS = int(os.environ.get("ZOE_PR_GUARD_LOCK_TTL_SECONDS", "1800"))
 MAX_ITERATIONS = int(os.environ.get("ZOE_PR_GUARD_MAX_ITERATIONS", "5"))
@@ -158,7 +159,7 @@ def acquire_lock(pr_number: int):
 
 
 def _run_git(args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["git", *args], cwd="/home/zoe/assistant", text=True, capture_output=True, check=check)
+    return subprocess.run(["git", *args], cwd=REPO_ROOT, text=True, capture_output=True, check=check)
 
 
 def _local_head_sha() -> str | None:
@@ -331,7 +332,7 @@ async def _run_cheap_agent(packet: GuardPacket, *, task_id: str | None = None) -
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            cwd="/home/zoe/assistant",
+            cwd=REPO_ROOT,
         )
         stdout, stderr = await proc.communicate(payload.encode())
         output = (stdout + stderr).decode(errors="replace")[:MAX_OUTPUT_CHARS]
