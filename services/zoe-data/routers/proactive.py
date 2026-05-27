@@ -66,16 +66,15 @@ async def list_schedules(user: dict = Depends(get_current_user), db=Depends(get_
     """List pending scheduled nudges for the calling user."""
     await require_feature_access(db, user, feature="proactive", action="read")
     user_id = user["user_id"]
-    async for db in get_db():
-        async with db.execute(
-            """SELECT id, user_id, message, send_at, fired, created_at
-               FROM proactive_scheduled
-               WHERE user_id = ? AND fired = 0
-               ORDER BY send_at""",
-            (user_id,),
-        ) as cur:
-            rows = await cur.fetchall()
-        return [dict(r) for r in rows]
+    async with db.execute(
+        """SELECT id, user_id, message, send_at, fired, created_at
+           FROM proactive_scheduled
+           WHERE user_id = ? AND fired = 0
+           ORDER BY send_at""",
+        (user_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [dict(r) for r in rows]
 
 
 @router.delete("/schedule/{scheduled_id}")
@@ -86,11 +85,10 @@ async def delete_schedule(
 ):
     """Cancel a scheduled nudge."""
     await require_feature_access(db, user, feature="proactive", action="delete")
-    async for db in get_db():
-        async with db.execute(
-            "SELECT user_id FROM proactive_scheduled WHERE id = ?", (scheduled_id,)
-        ) as cur:
-            row = await cur.fetchone()
+    async with db.execute(
+        "SELECT user_id FROM proactive_scheduled WHERE id = ?", (scheduled_id,)
+    ) as cur:
+        row = await cur.fetchone()
 
     if row is None:
         raise HTTPException(status_code=404, detail="Scheduled nudge not found")

@@ -68,22 +68,21 @@ async def subscribe(request: Request, user: dict = Depends(get_current_user), db
         return {"error": "No subscription data"}
 
     user_id = user["user_id"]
-    async for db in get_db():
-        await db.execute(
-            """INSERT INTO push_subscriptions
-               (user_id, endpoint, keys_p256dh, keys_auth, created_at)
-               VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-               ON CONFLICT (user_id, endpoint) DO UPDATE SET
-                   keys_p256dh = EXCLUDED.keys_p256dh,
-                   keys_auth = EXCLUDED.keys_auth""",
-            (
-                user_id,
-                subscription.get("endpoint", ""),
-                subscription.get("keys", {}).get("p256dh", ""),
-                subscription.get("keys", {}).get("auth", ""),
-            ),
-        )
-        await db.commit()
+    await db.execute(
+        """INSERT INTO push_subscriptions
+           (user_id, endpoint, keys_p256dh, keys_auth, created_at)
+           VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+           ON CONFLICT (user_id, endpoint) DO UPDATE SET
+               keys_p256dh = EXCLUDED.keys_p256dh,
+               keys_auth = EXCLUDED.keys_auth""",
+        (
+            user_id,
+            subscription.get("endpoint", ""),
+            subscription.get("keys", {}).get("p256dh", ""),
+            subscription.get("keys", {}).get("auth", ""),
+        ),
+    )
+    await db.commit()
     return {"status": "subscribed"}
 
 
@@ -92,12 +91,11 @@ async def unsubscribe(request: Request, user: dict = Depends(get_current_user), 
     await require_feature_access(db, user, feature="push", action="unsubscribe")
     body = await request.json()
     endpoint = body.get("endpoint", "")
-    async for db in get_db():
-        await db.execute(
-            "DELETE FROM push_subscriptions WHERE user_id = ? AND endpoint = ?",
-            (user["user_id"], endpoint),
-        )
-        await db.commit()
+    await db.execute(
+        "DELETE FROM push_subscriptions WHERE user_id = ? AND endpoint = ?",
+        (user["user_id"], endpoint),
+    )
+    await db.commit()
     return {"status": "unsubscribed"}
 
 
