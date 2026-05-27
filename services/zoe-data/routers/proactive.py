@@ -19,7 +19,6 @@ from pydantic import BaseModel
 
 from auth import get_current_user
 from database import get_db
-from db_pool import get_db_ctx
 from guest_policy import require_feature_access
 from proactive.session_utils import claim_pending
 from proactive.triggers.reminders import schedule_reminder, cancel_reminder
@@ -127,8 +126,7 @@ async def trigger_morning_brief(user: dict = Depends(get_current_user), db=Depen
     today = datetime.now(timezone.utc).date().isoformat()
 
     try:
-        async with get_db_ctx() as db:
-            ctx = await _build_morning_context(db, user_id, today)
+        ctx = await _build_morning_context(db, user_id, today)
     except Exception as exc:
         log.error("trigger-morning: context build failed: %s", exc)
         ctx = {}
