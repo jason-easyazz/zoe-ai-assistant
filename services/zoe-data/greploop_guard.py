@@ -169,20 +169,33 @@ def _local_head_sha() -> str | None:
         return None
 
 
-def _diff_files() -> list[str]:
-    proc = _run_git(["diff", "--name-only"], check=False)
-    return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+def _diff_files(base_sha: str | None = None) -> list[str]:
+    paths: list[str] = []
+    commands = [["diff", "--name-only"]]
+    if base_sha:
+        commands.insert(0, ["diff", "--name-only", f"{base_sha}..HEAD"])
+    for args in commands:
+        proc = _run_git(args, check=False)
+        for line in proc.stdout.splitlines():
+            path = line.strip()
+            if path and path not in paths:
+                paths.append(path)
+    return paths
 
 
-def _diff_changed_lines() -> int:
-    proc = _run_git(["diff", "--numstat"], check=False)
+def _diff_changed_lines(base_sha: str | None = None) -> int:
     total = 0
-    for line in proc.stdout.splitlines():
-        parts = line.split()
-        if len(parts) >= 2:
-            for value in parts[:2]:
-                if value.isdigit():
-                    total += int(value)
+    commands = [["diff", "--numstat"]]
+    if base_sha:
+        commands.insert(0, ["diff", "--numstat", f"{base_sha}..HEAD"])
+    for args in commands:
+        proc = _run_git(args, check=False)
+        for line in proc.stdout.splitlines():
+            parts = line.split()
+            if len(parts) >= 2:
+                for value in parts[:2]:
+                    if value.isdigit():
+                        total += int(value)
     return total
 
 
@@ -231,9 +244,9 @@ def _packet_for_finding(pr_number: int, status: dict[str, Any], finding: dict[st
     return packet
 
 
-def analyze_result(packet: GuardPacket, result_text: str) -> dict[str, Any]:
-    changed = _diff_files()
-    changed_lines = _diff_changed_lines()
+def analyze_result(packet: GuardPacket, result_text: str, *, pre_run_sha: str | None = None) -> dict[str, Any]:
+    changed = _diff_files(pre_run_sha)
+    changed_lines = _diff_changed_lines(pre_run_sha)
     outside = [path for path in changed if path not in set(packet.allowed_files)]
     forbidden = [action for action in packet.forbidden_actions if action.replace("_", " ") in result_text.lower()]
     if outside or len(changed) > packet.max_files or changed_lines > packet.max_changed_lines or forbidden:
@@ -403,8 +416,9 @@ async def run_guard_once(task_id: str, *, packet_only: bool = False) -> dict[str
             state["terminal_state"] = "PACKET_READY"
             _write_json(pr_number, "status.json", state)
             return {"ok": True, "state": "PACKET_READY", "packet": packet.to_dict()}
+        pre_run_sha = _local_head_sha()
         runner_status, runner_output = await _run_cheap_agent(packet, task_id=task_id)
-        analysis = analyze_result(packet, runner_output)
+        analysis = analyze_result(packet, runner_output, pre_run_sha=pre_run_sha)
         result = {"runner_status": runner_status, "analysis": analysis, "output": runner_output[:MAX_OUTPUT_CHARS]}
         _write_json(pr_number, "last_result.json", result)
         if runner_status != "OK" or analysis["classification"] != "APPLIED":

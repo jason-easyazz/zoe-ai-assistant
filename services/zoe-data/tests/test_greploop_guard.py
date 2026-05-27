@@ -41,8 +41,8 @@ def test_redact_removes_secret_like_values():
 
 
 def test_analyze_result_rejects_files_outside_allowlist(monkeypatch):
-    monkeypatch.setattr(greploop_guard, "_diff_files", lambda: ["services/zoe-data/other.py"])
-    monkeypatch.setattr(greploop_guard, "_diff_changed_lines", lambda: 5)
+    monkeypatch.setattr(greploop_guard, "_diff_files", lambda base_sha=None: ["services/zoe-data/other.py"])
+    monkeypatch.setattr(greploop_guard, "_diff_changed_lines", lambda base_sha=None: 5)
 
     result = greploop_guard.analyze_result(_packet(), "done")
 
@@ -51,12 +51,32 @@ def test_analyze_result_rejects_files_outside_allowlist(monkeypatch):
 
 
 def test_analyze_result_accepts_focused_diff(monkeypatch):
-    monkeypatch.setattr(greploop_guard, "_diff_files", lambda: ["services/zoe-data/example.py"])
-    monkeypatch.setattr(greploop_guard, "_diff_changed_lines", lambda: 5)
+    monkeypatch.setattr(greploop_guard, "_diff_files", lambda base_sha=None: ["services/zoe-data/example.py"])
+    monkeypatch.setattr(greploop_guard, "_diff_changed_lines", lambda base_sha=None: 5)
 
     result = greploop_guard.analyze_result(_packet(), "TESTS=git diff --check")
 
     assert result["classification"] == "APPLIED"
+
+
+def test_analyze_result_checks_committed_diff_from_pre_run_sha(monkeypatch):
+    seen = {}
+
+    def fake_diff_files(base_sha=None):
+        seen["files_base_sha"] = base_sha
+        return ["services/zoe-data/other.py"]
+
+    def fake_diff_changed_lines(base_sha=None):
+        seen["lines_base_sha"] = base_sha
+        return 5
+
+    monkeypatch.setattr(greploop_guard, "_diff_files", fake_diff_files)
+    monkeypatch.setattr(greploop_guard, "_diff_changed_lines", fake_diff_changed_lines)
+
+    result = greploop_guard.analyze_result(_packet(), "done", pre_run_sha="before-sha")
+
+    assert result["classification"] == "REJECTED"
+    assert seen == {"files_base_sha": "before-sha", "lines_base_sha": "before-sha"}
 
 
 def test_lock_prevents_duplicate_runs(tmp_path, monkeypatch):
