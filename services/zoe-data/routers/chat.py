@@ -878,19 +878,45 @@ async def _save_chat_message(session_id: str, role: str, content: str) -> None:
     the server owns the transcript. Zoe Agent reads this table for conversation
     history on the next turn, enabling proper follow-on context.
     """
-    if not content or not content.strip():
+    clean_content = (content or "").strip()
+    if not clean_content:
         return
     try:
         async for db in get_db():
             await db.execute(
                 "INSERT INTO chat_messages (id, session_id, role, content) "
                 "VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
-                (uuid.uuid4().hex, session_id, role, content.strip()),
+                (uuid.uuid4().hex, session_id, role, clean_content),
             )
+            await _touch_chat_session(db, session_id=session_id, content=clean_content)
             await db.commit()
             break
     except Exception as _sme:
         logger.debug("_save_chat_message failed (non-fatal): %s", _sme)
+
+
+async def _touch_chat_session(db, *, session_id: str, content: str, user_id: str | None = None) -> None:
+    """Refresh session recency and promote weak titles from the saved turn."""
+    where = "id = ? AND user_id = ?" if user_id else "id = ?"
+    params = (session_id, user_id) if user_id else (session_id,)
+    title_row = await db.execute_fetchall(
+        f"SELECT title FROM chat_sessions WHERE {where}",
+        params,
+    )
+    if not title_row:
+        return
+    current_title = dict(title_row[0]).get("title") or "New Chat"
+    new_title = derive_session_title(content) if content.strip() and title_is_weak(current_title) else None
+    if new_title:
+        await db.execute(
+            f"UPDATE chat_sessions SET updated_at = NOW()::text, title = ? WHERE {where}",
+            (new_title, *params),
+        )
+    else:
+        await db.execute(
+            f"UPDATE chat_sessions SET updated_at = NOW()::text WHERE {where}",
+            params,
+        )
 
 
 INTENT_LABELS = {
@@ -1606,12 +1632,14 @@ async def chat_stream_generator(
                     response_text=followup,
                     metadata={"task_class": task_class, "missing_constraints": missing},
                 )
+                await _save_chat_message(session_id, "assistant", followup)
                 return
         if "what can you do right now" in lc or lc in {"/capabilities", "capabilities", "tools"}:
             try:
                 caps_text = Path("/home/zoe/assistant/CAPABILITIES.md").read_text()[:12000]
             except Exception:
                 caps_text = "Hermes is the active escalation agent. Zoe tools include calendar, lists, reminders, memory, Graphify, Multica, and CloakBrowser."
+            capabilities_text = f"Hermes/Zoe capabilities:\n\n{caps_text}"
             yield emit(
                 TextMessageStartEvent(
                     type=EventType.TEXT_MESSAGE_START,
@@ -1619,11 +1647,12 @@ async def chat_stream_generator(
                     role="assistant",
                 )
             )
-            async for line in iter_text_message_chunks(enc, recorder, assistant_message_id, f"Hermes/Zoe capabilities:\n\n{caps_text}"):
+            async for line in iter_text_message_chunks(enc, recorder, assistant_message_id, capabilities_text):
                 yield line
             yield emit(TextMessageEndEvent(type=EventType.TEXT_MESSAGE_END, message_id=assistant_message_id))
             yield emit(RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id=session_id, run_id=run_id))
-            await _record_run_state(run_id, session_id, user_id, mode="chat", status="completed", request_text=message, response_text="capabilities")
+            await _record_run_state(run_id, session_id, user_id, mode="chat", status="completed", request_text=message, response_text=capabilities_text)
+            await _save_chat_message(session_id, "assistant", capabilities_text)
             return
 
         if _WHATSAPP_FLOW_ENABLED and is_whatsapp_connect_request(message_for_processing):
@@ -2386,6 +2415,11 @@ async def chat_stream_generator(
 
 _HERMES_API_URL = os.environ.get("HERMES_API_URL", "http://127.0.0.1:8642")
 _HERMES_MODEL   = os.environ.get("HERMES_MODEL", "hermes-agent")
+_HERMES_API_KEY = (
+    os.environ.get("HERMES_API_KEY")
+    or os.environ.get("API_SERVER_KEY")
+    or ""
+)
 
 _ZOE_SOUL_HERMES = (
     "You are Zoe — a warm, curious, genuinely present AI companion. "
@@ -2474,6 +2508,15 @@ def _hermes_progress_events(event_name: str, payload) -> list:
     ]
 
 
+def _hermes_request_headers(*, session_id: str | None = None) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    if _HERMES_API_KEY:
+        headers["Authorization"] = f"Bearer {_HERMES_API_KEY}"
+    if session_id:
+        headers["X-Hermes-Session-Id"] = session_id
+    return headers
+
+
 async def _iter_hermes_stream_events(
     message: str,
     session_id: str,
@@ -2501,8 +2544,10 @@ async def _iter_hermes_stream_events(
             async with session.post(
                 f"{_HERMES_API_URL}/v1/chat/completions",
                 json=payload,
+                headers=_hermes_request_headers(session_id=session_id),
                 timeout=aiohttp.ClientTimeout(total=120),
             ) as resp:
+                resp.raise_for_status()
                 sse_event = ""
                 async for raw_line in resp.content:
                     line = raw_line.decode("utf-8", errors="replace").strip()
@@ -2628,8 +2673,10 @@ async def _hermes_completion(
         async with _hses.post(
             f"{_HERMES_API_URL}/v1/chat/completions",
             json=payload,
+            headers=_hermes_request_headers(),
             timeout=aiohttp.ClientTimeout(total=120),
         ) as _hr:
+            _hr.raise_for_status()
             _hj = await _hr.json()
     return _hj.get("choices", [{}])[0].get("message", {}).get("content", "") or "(no response)"
 
@@ -2798,6 +2845,7 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
             missing = missing_brief_fields(message_for_processing)
             if missing:
                 followup = _research_followup_prompt(missing)
+                await _save_chat_message(session_id, "assistant", followup)
                 return {
                     "response": followup,
                     "session_id": session_id,
@@ -2816,7 +2864,9 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
                 caps_text = Path("/home/zoe/assistant/CAPABILITIES.md").read_text()[:12000]
             except Exception:
                 caps_text = "Hermes is the active escalation agent. Zoe tools include calendar, lists, reminders, memory, Graphify, Multica, and CloakBrowser."
-            return {"response": "Hermes/Zoe capabilities:\n\n" + caps_text, "session_id": session_id}
+            capabilities_text = "Hermes/Zoe capabilities:\n\n" + caps_text
+            await _save_chat_message(session_id, "assistant", capabilities_text)
+            return {"response": capabilities_text, "session_id": session_id}
 
         use_intent_fast_path = (not force_openclaw) and _ALL_TOOLS_ENABLED
         if task_class == "research":
@@ -2850,7 +2900,7 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
                     chat_inject_background(message_for_processing, result, intent.name, user_id, session_id)
                 )
                 asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, result))
-                asyncio.ensure_future(_save_chat_message(session_id, "assistant", result))
+                await _save_chat_message(session_id, "assistant", result)
                 return {"response": result, "session_id": session_id}
         if _WHATSAPP_FLOW_ENABLED and is_whatsapp_connect_request(message_for_processing):
             message_for_processing = (
@@ -2965,7 +3015,7 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
             asyncio.ensure_future(_queue_ui_actions_background(actions, user_id, session_id))
         asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, response_text))
         if response_text:
-            asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text))
+            await _save_chat_message(session_id, "assistant", response_text)
         return resp
 
 
@@ -3038,37 +3088,12 @@ async def save_message(session_id: str, request: Request, user: dict = Depends(g
         if not owner:
             await db.commit()
             return {"status": "error", "message": "Session not found"}
-        title_row = await db.execute_fetchall(
-            "SELECT title FROM chat_sessions WHERE id = ? AND user_id = ?",
-            (session_id, user_id),
-        )
-        current_title = dict(title_row[0])["title"] if title_row else "New Chat"
-
         await db.execute(
             "INSERT INTO chat_messages (id, session_id, role, content, metadata) VALUES (?, ?, ?, ?, ?)",
             (msg_id, session_id, role, content, metadata),
         )
 
-        new_title = None
-        if role == "user" and content.strip():
-            candidate = derive_session_title(content)
-            if title_is_weak(current_title):
-                new_title = candidate
-        elif role == "assistant" and content.strip():
-            if title_is_weak(current_title):
-                new_title = derive_session_title(content)
-
-        if new_title:
-            await db.execute(
-                """UPDATE chat_sessions SET updated_at = NOW()::text, title = ?
-                   WHERE id = ? AND user_id = ?""",
-                (new_title, session_id, user_id),
-            )
-        else:
-            await db.execute(
-                "UPDATE chat_sessions SET updated_at = NOW()::text WHERE id = ? AND user_id = ?",
-                (session_id, user_id),
-            )
+        await _touch_chat_session(db, session_id=session_id, user_id=user_id, content=content)
         await db.commit()
     return {"status": "ok", "id": msg_id}
 

@@ -260,3 +260,4 @@ graphify-out/manifest.json
 graphify-out/cost.json
 graphify-out/cache/
 !.cursor/mcp.json
+.cursor/tmp/

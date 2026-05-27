@@ -28,7 +28,7 @@ For architecture or cross-module questions, start with Graphify. If the graph is
 7. Verify with focused tests and Zoe validators.
 8. Use a small PR and Greptile review loop for mergeable work.
 
-Keep domain policy in routes, actions, intents, and UI handlers. Move only reusable mechanics into service-layer helpers.
+Keep domain policy in routes, actions, intents, and UI handlers. Move only reusable mechanics into service-layer helpers. Service helpers should use explicit parameters, structured returns, consistent failure semantics, and avoid hidden global state or unrelated database mutation.
 
 ## Source Context
 
@@ -42,6 +42,8 @@ opensrc path owner/repo
 Keep external source caches outside the repo under `~/.opensrc/repos/`. Do not vendor reference repos into `/home/zoe/assistant`.
 
 Avoid adding dependencies younger than 14 days unless the operator explicitly approves the risk.
+
+When source context informs an implementation, name the package files, examples, or tests used in the final summary.
 
 ## Hermes And Skills
 
@@ -69,8 +71,10 @@ For reviewable changes:
 3. Push a focused PR against `main`.
 4. Let Greptile review independently.
 5. Use Greptile MCP first, or `~/bin/greptile-mcp.py` (install path varies by host; see `/grep-loop`) if MCP tools are unavailable.
-6. Fix real correctness, security, data-loss, behavior, or test findings.
-7. Re-run focused tests and trigger Greptile re-review.
+6. For Zoe engineering tasks, run `python3 scripts/maintenance/greploop_guard.py --task-id <id> --packet-only` before broad expensive-agent repair.
+7. Read the PR diff first; if it is too large or bundled, split before running the loop.
+8. Fix real correctness, security, data-loss, behavior, or test findings.
+9. Re-run focused tests and trigger Greptile re-review.
 
 Do not push directly to `main`, bypass branch protection, or force-push protected branches.
 

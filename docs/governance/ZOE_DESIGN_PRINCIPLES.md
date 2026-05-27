@@ -139,10 +139,10 @@ These bias toward caution on non-trivial work. For typo fixes and one-liners, us
 - Harness engineering overview (video): <https://www.youtube.com/watch?v=Xxuxg8PcBvc>.
 - Papers: <https://arxiv.org/abs/2603.25723>, <https://arxiv.org/abs/2603.28052v1>.
 - Related governance: `docs/governance/CRITICAL_FILES.md`, `docs/governance/DOCKER_NETWORKING_RULES.md`, `docs/governance/CLEANUP_SAFETY.md`, `docs/governance/MANIFEST_SYSTEM.md`.
-- Enforceable rule mirror: `.cursorrules` (root).
+- Enforceable rule mirrors: `.cursor/rules/*.mdc` plus legacy `.cursorrules` for older tools.
 
 ---
 
 ## Amendment process
 
-This charter is amended via a PR that (a) edits this file, (b) updates `.cursorrules` if an enforceable rule changes, and (c) states in the commit message which section was amended and why. Silent code changes must not answer an open question in section 7; either answer the question here first, or keep the code neutral.
+This charter is amended via a PR that (a) edits this file, (b) updates the relevant `.cursor/rules/*.mdc` file and legacy `.cursorrules` mirror if an enforceable rule changes, and (c) states in the commit message which section was amended and why. Silent code changes must not answer an open question in section 7; either answer the question here first, or keep the code neutral.

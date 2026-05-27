@@ -8,7 +8,7 @@
 importScripts('https://storage.googleapis.com/workbox-cdn/releases/7.0.0/workbox-sw.js');
 
 // Zoe UI Version 4.17.3 - public modules (with or without trailing path segment)
-const SW_VERSION = '4.63.6'; // tighten Hermes progress trace handling
+const SW_VERSION = '4.63.8'; // refresh chat sidebar on zero-token stream errors
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
@@ -407,7 +407,11 @@ async function _panelFetch(path) {
     const headers = { 'Content-Type': 'application/json' };
     if (_panelSessionId) headers['X-Session-ID'] = _panelSessionId;
     const resp = await fetch(path, { headers, credentials: 'include' });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    if (!resp.ok) {
+        const err = new Error(`HTTP ${resp.status}`);
+        err.status = resp.status;
+        throw err;
+    }
     return resp.json();
 }
 
@@ -482,7 +486,12 @@ async function _panelPoll() {
                 // Don't ack — let the page executor do it to avoid double-ack.
             }
         }
-    } catch (_) {
+    } catch (err) {
+        if (err && (err.status === 401 || err.status === 403)) {
+            _stopPanelPoll();
+            console.warn(`🎛️ SW panel executor stopped after auth failure: HTTP ${err.status}`);
+            return;
+        }
         // Silently retry — network may be unavailable.
     }
 }

@@ -1333,7 +1333,19 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
         state.processing = true;
         try {
             const res = await api(`/api/ui/actions/pending?panel_id=${encodeURIComponent(state.panelId)}&limit=10`);
-            if (!res.ok) return;
+            if (!res.ok) {
+                if (res.status === 401 || res.status === 403) {
+                    if (state.pollTimer) {
+                        clearInterval(state.pollTimer);
+                        state.pollTimer = null;
+                    }
+                    if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+                        navigator.serviceWorker.controller.postMessage({ type: 'STOP_PANEL_POLL' });
+                    }
+                    console.warn(`Touch action polling stopped after auth failure: HTTP ${res.status}`);
+                }
+                return;
+            }
             const data = await res.json();
             const actions = Array.isArray(data.actions) ? data.actions : [];
             for (const action of actions) {

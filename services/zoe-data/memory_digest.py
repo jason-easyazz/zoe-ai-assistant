@@ -23,6 +23,7 @@ import httpx
 logger = logging.getLogger(__name__)
 
 _GEMMA_URL = os.environ.get("GEMMA_SERVER_URL", "http://127.0.0.1:11434")
+_ZOE_TIMEZONE = os.environ.get("ZOE_TIMEZONE", "Australia/Perth")
 
 _EXTRACTION_PROMPT = """\
 You are extracting personal facts from a chat transcript. Only extract facts the user explicitly stated about themselves, their family, preferences, or life. Do NOT infer, assume, or add anything not stated directly.
@@ -417,11 +418,12 @@ async def _load_todays_messages(user_id: str, db=None) -> str:
             JOIN chat_sessions cs ON cm.session_id = cs.id
             WHERE cs.user_id = ?
               AND cm.role = 'user'
-              AND DATE(cm.created_at) = DATE('now', 'localtime')
+              AND (cm.created_at::timestamptz AT TIME ZONE ?)::date =
+                  (now() AT TIME ZONE ?)::date
             ORDER BY cm.created_at ASC
             LIMIT 200
             """,
-            (user_id,),
+            (user_id, _ZOE_TIMEZONE, _ZOE_TIMEZONE),
         )
         rows = await rows.fetchall()
         if not rows:
@@ -706,8 +708,10 @@ async def run_digest_for_all_active_users(db=None) -> list[dict]:
             FROM chat_messages cm
             JOIN chat_sessions cs ON cm.session_id = cs.id
             WHERE cm.role = 'user'
-              AND DATE(cm.created_at) = DATE('now', 'localtime')
+              AND (cm.created_at::timestamptz AT TIME ZONE ?)::date =
+                  (now() AT TIME ZONE ?)::date
             """,
+            (_ZOE_TIMEZONE, _ZOE_TIMEZONE),
         )
         rows = await rows.fetchall()
         user_ids = [row[0] for row in rows if row[0]]

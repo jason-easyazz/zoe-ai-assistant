@@ -3271,10 +3271,7 @@
                 const stopBtn = document.getElementById('stopStreamBtn');
                 if (stopBtn) { stopBtn.classList.remove('visible'); stopBtn.disabled = false; }
                 streamAbortController = null;
-                if (currentSessionId && stream.text) {
-                    saveMessageToSession('user', ctx.originalMessage);
-                    saveMessageToSession('assistant', stream.text);
-                }
+                loadSessions().catch((err) => console.warn('sessions reload:', err));
                 return;
             }
             if (t === 'RUN_ERROR') {
@@ -3400,10 +3397,7 @@
                         group.insertBefore(badge, ctx.traceDisclosureEl || ctx.toolTraceEl || contentEl);
                     }
                 }
-                if (currentSessionId && stream.text) {
-                    saveMessageToSession('user', ctx.originalMessage);
-                    saveMessageToSession('assistant', stream.text);
-                }
+                loadSessions().catch((err) => console.warn('sessions reload:', err));
                 return;
             }
             if (t === 'error') {
@@ -4152,9 +4146,8 @@
                         contentEl.innerHTML = renderMarkdown(stream.text);
                         enhanceCodeBlocks(contentEl);
                     }
-                    if (currentSessionId && stream.text) {
-                        saveMessageToSession('user', originalMessage);
-                        saveMessageToSession('assistant', stream.text);
+                    if (currentSessionId) {
+                        loadSessions().catch((err) => console.warn('sessions reload:', err));
                     }
                     streamCtx.finalized = true;
                 }
@@ -4166,9 +4159,8 @@
                     } else {
                         contentEl.innerHTML = '<span style="color:#64748b;">Generation stopped.</span>';
                     }
-                    if (currentSessionId && stream.text) {
-                        saveMessageToSession('user', originalMessage);
-                        saveMessageToSession('assistant', stream.text);
+                    if (currentSessionId) {
+                        loadSessions().catch((err) => console.warn('sessions reload:', err));
                     }
                 } else {
                     console.error('Chat error:', error);
@@ -4178,9 +4170,8 @@
                     } else {
                         contentEl.innerHTML = 'Sorry, I encountered an error. Please try again.';
                     }
-                    if (currentSessionId && stream.text) {
-                        saveMessageToSession('user', originalMessage);
-                        saveMessageToSession('assistant', stream.text);
+                    if (currentSessionId) {
+                        loadSessions().catch((err) => console.warn('sessions reload:', err));
                     }
                 }
             } finally {

@@ -19,7 +19,17 @@ from proactive.triggers.base import ProactiveTrigger, TriggerResult
 log = logging.getLogger(__name__)
 
 _HERMES_URL = os.environ.get("HERMES_API_URL", "http://127.0.0.1:8642/v1/chat/completions")
+_HERMES_API_KEY = os.environ.get("HERMES_API_KEY") or os.environ.get("API_SERVER_KEY") or ""
 _TIMEOUT = 30.0
+
+
+def _hermes_headers(*, session_id: str | None = None) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    if _HERMES_API_KEY:
+        headers["Authorization"] = f"Bearer {_HERMES_API_KEY}"
+    if session_id:
+        headers["X-Hermes-Session-Id"] = session_id
+    return headers
 
 
 class OpenClawTrigger(ProactiveTrigger):
@@ -52,6 +62,7 @@ class OpenClawTrigger(ProactiveTrigger):
             async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
                 r = await client.post(
                     _HERMES_URL,
+                    headers=_hermes_headers(session_id=f"proactive-trigger:{self.trigger_type}"),
                     json={
                         "model": os.environ.get("HERMES_MODEL", "hermes"),
                         "messages": [
