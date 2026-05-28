@@ -268,7 +268,21 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "user_id": {"type": "string", "description": "User ID"},
-                "layout": {"type": "array", "description": "Array of widget configs with id, x, y, w, h"},
+                "layout": {
+                    "type": "array",
+                    "description": "Array of widget configs with id, x, y, w, h",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string", "description": "Widget ID"},
+                            "x": {"type": "integer", "description": "Grid X position"},
+                            "y": {"type": "integer", "description": "Grid Y position"},
+                            "w": {"type": "integer", "description": "Grid width"},
+                            "h": {"type": "integer", "description": "Grid height"},
+                        },
+                        "required": ["id"],
+                    },
+                },
             },
             "required": ["layout"],
         },
