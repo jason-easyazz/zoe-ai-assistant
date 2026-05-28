@@ -83,7 +83,7 @@ async def fire_notification(
                 )
                 await db.commit()
         # Reschedule for the start of the next quiet-end window.
-        now_local = datetime.now()
+        now_local = datetime.now(_ZOE_TZ)
         next_ok = now_local.replace(hour=_QUIET_END, minute=0, second=0, microsecond=0)
         if next_ok <= now_local:
             next_ok += timedelta(days=1)

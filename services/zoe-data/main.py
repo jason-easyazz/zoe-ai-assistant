@@ -610,38 +610,38 @@ async def people_ws(websocket: WebSocket, user_id: str):
 
 @app.websocket("/api/reminders/ws/{user_id}")
 async def reminders_ws(websocket: WebSocket, user_id: str):
-    await broadcaster.connect(websocket, "all")
+    await broadcaster.connect(websocket, "reminders")
     try:
         while True:
             data = await websocket.receive_text()
             if data == "ping":
                 await websocket.send_json({"type": "pong"})
     except WebSocketDisconnect:
-        broadcaster.disconnect(websocket, "all")
+        broadcaster.disconnect(websocket, "reminders")
 
 
 @app.websocket("/api/notes/ws/{user_id}")
 async def notes_ws(websocket: WebSocket, user_id: str):
-    await broadcaster.connect(websocket, "all")
+    await broadcaster.connect(websocket, "notes")
     try:
         while True:
             data = await websocket.receive_text()
             if data == "ping":
                 await websocket.send_json({"type": "pong"})
     except WebSocketDisconnect:
-        broadcaster.disconnect(websocket, "all")
+        broadcaster.disconnect(websocket, "notes")
 
 
 @app.websocket("/api/journal/ws/{user_id}")
 async def journal_ws(websocket: WebSocket, user_id: str):
-    await broadcaster.connect(websocket, "all")
+    await broadcaster.connect(websocket, "journal")
     try:
         while True:
             data = await websocket.receive_text()
             if data == "ping":
                 await websocket.send_json({"type": "pong"})
     except WebSocketDisconnect:
-        broadcaster.disconnect(websocket, "all")
+        broadcaster.disconnect(websocket, "journal")
 
 
 async def _resolve_ws_user(session_id: str) -> str:
