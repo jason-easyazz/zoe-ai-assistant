@@ -464,6 +464,9 @@ app.include_router(portrait_router)
 from routers.ha_control import router as ha_control_router
 app.include_router(ha_control_router)
 
+from routers.auth import router as auth_router
+app.include_router(auth_router)
+
 try:
     from routers.voice_livekit import router as voice_livekit_router
     app.include_router(voice_livekit_router)
