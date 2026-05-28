@@ -570,8 +570,13 @@ async def websocket_push(
         if user is None:
             await websocket.close(1008, "Invalid session")
             return
-        # Use an allowlist to prevent fail-open when zoe-auth is unreachable.
-        # Only accept explicitly valid, authenticated roles.
+        # Role allowlist gates access for valid sessions and for degraded-pass-through
+        # sessions (role=member) when zoe-auth is temporarily unreachable.
+        # NOTE: when zoe-auth is unreachable, _resolve_ws_session returns a degraded
+        # user with role="member"; since "member" is in this allowlist the connection
+        # is still permitted. This is intentional for single-family deployments where
+        # LAN availability is assumed, but callers should not assume the allowlist
+        # prevents unauthenticated access during an auth-service outage.
         if user.get("role") not in ("member", "admin", "agent"):
             await websocket.close(1008, "Insufficient privileges")
             return
@@ -601,6 +606,11 @@ async def calendar_ws(websocket: WebSocket, user_id: str):
     if user is None or user.get("role") not in ("member", "admin", "agent"):
         await websocket.close(1008, "Unauthorized")
         return
+    # Validate user_id against the session: member role may only subscribe to their own channel.
+    # admin/agent roles may subscribe on behalf of any user (e.g. background sync).
+    if user.get("role") == "member" and user.get("user_id") and user.get("user_id") != user_id:
+        await websocket.close(1008, "Forbidden")
+        return
     await broadcaster.connect(websocket, "calendar")
     try:
         while True:
@@ -617,6 +627,10 @@ async def lists_ws_with_user(websocket: WebSocket, user_id: str):
     user = await _resolve_ws_session(session_id)
     if user is None or user.get("role") not in ("member", "admin", "agent"):
         await websocket.close(1008, "Unauthorized")
+        return
+    # Validate user_id against the session: member role may only subscribe to their own channel.
+    if user.get("role") == "member" and user.get("user_id") and user.get("user_id") != user_id:
+        await websocket.close(1008, "Forbidden")
         return
     await broadcaster.connect(websocket, "lists")
     try:
@@ -652,6 +666,10 @@ async def people_ws(websocket: WebSocket, user_id: str):
     if user is None or user.get("role") not in ("member", "admin", "agent"):
         await websocket.close(1008, "Unauthorized")
         return
+    # Validate user_id against the session: member role may only subscribe to their own channel.
+    if user.get("role") == "member" and user.get("user_id") and user.get("user_id") != user_id:
+        await websocket.close(1008, "Forbidden")
+        return
     await broadcaster.connect(websocket, "all")
     try:
         while True:
@@ -669,6 +687,10 @@ async def reminders_ws(websocket: WebSocket, user_id: str):
     if user is None or user.get("role") not in ("member", "admin", "agent"):
         await websocket.close(1008, "Unauthorized")
         return
+    # Validate user_id against the session: member role may only subscribe to their own channel.
+    if user.get("role") == "member" and user.get("user_id") and user.get("user_id") != user_id:
+        await websocket.close(1008, "Forbidden")
+        return
     await broadcaster.connect(websocket, "reminders")
     try:
         while True:
@@ -685,6 +707,10 @@ async def notes_ws(websocket: WebSocket, user_id: str):
     user = await _resolve_ws_session(session_id)
     if user is None or user.get("role") not in ("member", "admin", "agent"):
         await websocket.close(1008, "Unauthorized")
+        return
+    # Validate user_id against the session: member role may only subscribe to their own channel.
+    if user.get("role") == "member" and user.get("user_id") and user.get("user_id") != user_id:
+        await websocket.close(1008, "Forbidden")
         return
     await broadcaster.connect(websocket, "notes")
     try:
@@ -720,8 +746,12 @@ async def _resolve_ws_session(session_id: str | None) -> dict | None:
     ``None`` if the session is absent, invalid, or explicitly rejected (401/403).
 
     On transient zoe-auth failures (5xx, timeout, connection error) the function
-    returns a degraded-user dict (role=member) via auth._validate_with_auth_service
-    so that the caller's role allowlist still gates access correctly.
+    returns a degraded-user dict (role=member) via auth._validate_with_auth_service.
+    Because "member" is in every endpoint's allowlist, any caller that supplies a
+    non-empty session_id string will be granted access while zoe-auth is unreachable
+    (degraded pass-through).  This is intentional for single-family LAN deployments
+    but callers must not assume the allowlist prevents unauthenticated access during
+    an auth-service outage.
     """
     if not session_id:
         return None
