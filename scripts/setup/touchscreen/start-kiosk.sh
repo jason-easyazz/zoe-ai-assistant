@@ -57,7 +57,7 @@ if [[ ! -f "${PROVISIONED}" ]] || [[ -z "${TOKEN}" ]]; then
     --touch-events=enabled \
     --start-maximized \
     --autoplay-policy=no-user-gesture-required \
-    --user-data-dir=/home/pi/.config/chromium-provision \
+    --user-data-dir=/home/zoe/.config/chromium-provision \
     --remote-debugging-port=9222 \
     --remote-debugging-address=0.0.0.0 \
     --ignore-certificate-errors \
@@ -82,7 +82,7 @@ exec /usr/bin/chromium \
   --touch-events=enabled \
   --start-maximized \
   --autoplay-policy=no-user-gesture-required \
-  --user-data-dir=/home/pi/.config/chromium-kiosk \
+  --user-data-dir=/home/zoe/.config/chromium-kiosk \
   --remote-debugging-port=9222 \
   --remote-debugging-address=0.0.0.0 \
   --ignore-certificate-errors \
