@@ -5,14 +5,14 @@ set -euo pipefail
 #
 # Defaults target the known touchscreen device:
 #   host: 192.168.1.61
-#   user: pi
+#   user: zoe
 #
 # Example:
 #   scripts/setup/touchscreen/install_touchscreen.sh
 #   scripts/setup/touchscreen/install_touchscreen.sh --host 192.168.1.61 --user zoe
 
 HOST="192.168.1.61"
-USER_NAME="pi"
+USER_NAME="zoe"
 SSH_KEY=""
 SERVER_URL="https://192.168.1.218"
 PANEL_ID="zoe-touch-pi"

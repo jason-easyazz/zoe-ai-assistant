@@ -349,7 +349,7 @@ async def _fire_autopilot_job(
 
     1. Creates a Multica issue (if mode == 'create_issue').
     2. Runs the matching Zoe task function if one is mapped.
-    3. Marks the issue done on success or cancelled on failure.
+    3. Marks the issue done on success, or resets it to todo on failure/no-op.
     """
     logger.info(
         "autopilot fire: id=%s title=%r mode=%s",
