@@ -81,7 +81,7 @@ class ZoeOrbWidget extends WidgetModule {
             localStorage.setItem(_orbWidgetKey(), this._sessionId);
         }
         // Clear this widget's session on logout.
-        document.addEventListener('zoe:logout', (e) => {
+        this._logoutHandler = (e) => {
             try {
                 const uid = e && e.detail && e.detail.user_id;
                 const key = uid && uid !== 'guest' ? 'orbWidgetSessionId_' + uid : 'orbWidgetSessionId';
@@ -89,7 +89,8 @@ class ZoeOrbWidget extends WidgetModule {
                 localStorage.removeItem('orbWidgetSessionId');
             } catch (_) {}
             this._sessionId = null;
-        });
+        };
+        document.addEventListener('zoe:logout', this._logoutHandler);
 
         // Pre-warming via /api/chat/warm/{sid} was a zoe-core optimization
         // and is not served by zoe-data. Skip the warm-up call entirely so
@@ -489,6 +490,10 @@ class ZoeOrbWidget extends WidgetModule {
     }
     
     destroy() {
+        if (this._logoutHandler) {
+            document.removeEventListener('zoe:logout', this._logoutHandler);
+            this._logoutHandler = null;
+        }
         this.stopVoice();
         this.stopSpeaking();
         if (window.zoeWidgets) {

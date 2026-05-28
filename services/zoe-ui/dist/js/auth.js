@@ -212,7 +212,8 @@
         setSession(null);
 
         // Notify other modules (e.g. orb chat) so they can clear user-scoped state.
-        try { document.dispatchEvent(new CustomEvent('zoe:logout', { detail: { user_id: current && current.user_id } })); } catch(_){}
+        const _logoutUid = current && (current.user_id || (current.user_info && current.user_info.user_id)) || null;
+        try { document.dispatchEvent(new CustomEvent('zoe:logout', { detail: { user_id: _logoutUid } })); } catch(_){}
 
         const currentPath = window.location.pathname;
         const redirectUrl = currentPath.startsWith('/touch/') ? '/touch/index.html' : '/index.html';

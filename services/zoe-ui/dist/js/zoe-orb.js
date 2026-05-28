@@ -26,6 +26,16 @@ function getOrbStorageKey() {
 
 let orbSessionId = localStorage.getItem(getOrbStorageKey()) || null;
 
+// Lazily re-read the scoped key when auth may not have been ready at parse time.
+function _getOrbSessionId() {
+    if (orbSessionId) return orbSessionId;
+    // Try re-reading with the now-resolved user scope (auth may have loaded since parse).
+    const storedKey = getOrbStorageKey();
+    const stored = localStorage.getItem(storedKey);
+    if (stored) { orbSessionId = stored; }
+    return orbSessionId;
+}
+
 // Clear orb history when the user logs out.
 document.addEventListener('zoe:logout', function(e) {
     try {
@@ -77,11 +87,11 @@ function initOrbChat() {
     console.log('✅ Zoe orb initialized');
     
     // Pre-warm Hermes session for this orb so the first message is fast.
-    if (orbSessionId) {
+    if (_getOrbSessionId()) {
         var session = window.zoeAuth ? window.zoeAuth.getCurrentSession() : null;
         var warmHeaders = { 'Content-Type': 'application/json' };
         if (session && session.session_id) warmHeaders['X-Session-ID'] = session.session_id;
-        fetch('/api/chat/warm/' + encodeURIComponent(orbSessionId), {
+        fetch('/api/chat/warm/' + encodeURIComponent(_getOrbSessionId()), {
             method: 'POST', headers: warmHeaders
         }).catch(function() {});
     }
@@ -185,7 +195,7 @@ async function sendOrbMessage() {
             mode: 'orb_chat',
             page_context: { page: currentPage, url: location.pathname }
         };
-        if (orbSessionId) chatPayload.session_id = orbSessionId;
+        if (_getOrbSessionId()) chatPayload.session_id = _getOrbSessionId();
 
         var response;
         if (typeof apiRequest === 'function') {

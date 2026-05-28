@@ -446,6 +446,12 @@ async def update_people_field(
     return {"ok": True, "updated": True}
 
 
+@router.delete("/fields/{field_key}", dependencies=[Depends(require_admin)])
+async def delete_field_schema(field_key: str, db=Depends(get_db)):
+    await db.execute("DELETE FROM people_field_schema WHERE field_key = $1", field_key)
+    return {"deleted": True}
+
+
 # ── /{person_id} routes (must come AFTER /fields) ─────────────────────────────
 
 @router.get("/{person_id}")
