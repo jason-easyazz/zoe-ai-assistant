@@ -297,7 +297,7 @@ async def create_person(
     await _recalc_health(db, person_id, user_id)
     await db.commit()
 
-    await broadcaster.broadcast("all", "people:created", person)
+    await broadcaster.broadcast("all", "people:created", person, user_id=user_id)
     return person
 
 
@@ -524,7 +524,7 @@ async def update_person(
     await _store_person_memory(db, user_id, person, "updated")
     await _recalc_health(db, person_id, user_id)
     await db.commit()
-    await broadcaster.broadcast("all", "people:updated", {"id": person_id})
+    await broadcaster.broadcast("all", "people:updated", {"id": person_id}, user_id=user_id)
     return person
 
 
@@ -555,7 +555,7 @@ async def delete_person(
     # Archive all MemPalace facts for this entity
     asyncio.ensure_future(_archive_person_mempalace(person_id, user_id))
 
-    await broadcaster.broadcast("all", "people:deleted", {"id": person_id})
+    await broadcaster.broadcast("all", "people:deleted", {"id": person_id}, user_id=user_id)
     return {"ok": True, "id": person_id}
 
 
@@ -640,7 +640,7 @@ async def add_activity(
     await db.commit()
     await _recalc_health(db, person_id, user_id)
     await db.commit()
-    await broadcaster.broadcast("all", "people:updated", {"person_id": person_id})
+    await broadcaster.broadcast("all", "people:updated", {"person_id": person_id}, user_id=user_id)
     return {"ok": True, "id": row_id}
 
 

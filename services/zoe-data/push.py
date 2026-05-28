@@ -13,19 +13,27 @@ class PushBroadcaster:
     Clients subscribe to a named channel ("all" is global; "panel_{id}" targets
     a specific touch panel).  The caller can broadcast_to_panel() to send an
     event exclusively to one panel's channel, bypassing the global "all" fan-out.
+
+    User-scoped broadcasts: pass user_id= to broadcast() so that messages are
+    only delivered to connections owned by that user, preventing cross-user
+    data leakage.  Panel connections are exempt from user scoping (they use
+    connect_panel and broadcast_to_panel instead).
     """
 
     def __init__(self):
         self._connections: Dict[str, Set[WebSocket]] = {}
         # Track which panel_id owns each WebSocket for disconnect cleanup.
         self._ws_panels: Dict[WebSocket, str] = {}
+        # Map WebSocket → user_id for scoped delivery (None = panel/anonymous).
+        self._ws_users: Dict[WebSocket, str | None] = {}
         self._sequence = 0
 
-    async def connect(self, websocket: WebSocket, channel: str = "all"):
+    async def connect(self, websocket: WebSocket, channel: str = "all", user_id: str | None = None):
         await websocket.accept()
         if channel not in self._connections:
             self._connections[channel] = set()
         self._connections[channel].add(websocket)
+        self._ws_users[websocket] = user_id
         await websocket.send_json({
             "type": "connected",
             "channel": channel,
@@ -59,8 +67,16 @@ class PushBroadcaster:
                 self._connections[pc].discard(websocket)
             if "all" in self._connections:
                 self._connections["all"].discard(websocket)
+        self._ws_users.pop(websocket, None)
 
-    async def broadcast(self, channel: str, event_type: str, data: dict):
+    async def broadcast(self, channel: str, event_type: str, data: dict, user_id: str | None = None):
+        """Broadcast an event to all subscribers on ``channel``.
+
+        When ``user_id`` is provided only connections that were registered with
+        the same ``user_id`` receive the message, preventing cross-user leakage.
+        Panel connections (``user_id=None``) are never filtered out so that
+        touch-panel fan-outs continue to work.
+        """
         self._sequence += 1
         message = {
             "type": event_type,
@@ -73,6 +89,10 @@ class PushBroadcaster:
 
         dead = set()
         for ws in self._connections[channel]:
+            # Skip if this connection belongs to a different user.
+            ws_user = self._ws_users.get(ws)
+            if user_id is not None and ws_user is not None and ws_user != user_id:
+                continue
             try:
                 await ws.send_json(message)
             except Exception:

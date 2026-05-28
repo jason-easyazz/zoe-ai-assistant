@@ -146,7 +146,7 @@ async def create_note(
     await _store_note_memory(db, user_id, note, "created")
     await db.commit()
 
-    await broadcaster.broadcast("notes", "note_created", note)
+    await broadcaster.broadcast("notes", "note_created", note, user_id=user_id)
 
     # Person CRM: extract person facts from note content in background
     import asyncio as _aio
@@ -220,7 +220,7 @@ async def update_note(
     await _store_note_memory(db, user_id, note, "updated")
     await db.commit()
 
-    await broadcaster.broadcast("notes", "note_updated", note)
+    await broadcaster.broadcast("notes", "note_updated", note, user_id=user_id)
     return note
 
 
@@ -259,5 +259,5 @@ async def delete_note(
     )
     await db.commit()
 
-    await broadcaster.broadcast("notes", "note_deleted", {"id": note_id})
+    await broadcaster.broadcast("notes", "note_deleted", {"id": note_id}, user_id=user_id)
     return {"ok": True, "id": note_id}

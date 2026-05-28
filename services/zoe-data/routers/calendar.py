@@ -153,7 +153,7 @@ async def create_event(
     row = await cursor.fetchone()
     event = _row_to_event(row)
 
-    await broadcaster.broadcast("calendar", "event_created", event)
+    await broadcaster.broadcast("calendar", "event_created", event, user_id=user_id)
     return event
 
 
@@ -206,7 +206,7 @@ async def update_event(
     row = await cursor.fetchone()
     event = _row_to_event(row)
 
-    await broadcaster.broadcast("calendar", "event_updated", event)
+    await broadcaster.broadcast("calendar", "event_updated", event, user_id=user_id)
     return event
 
 
@@ -237,5 +237,5 @@ async def delete_event(
     event = _row_to_event(row)
     event["deleted"] = True
 
-    await broadcaster.broadcast("calendar", "event_deleted", {"id": event_id, **event})
+    await broadcaster.broadcast("calendar", "event_deleted", {"id": event_id, **event}, user_id=user_id)
     return {"ok": True, "id": event_id}

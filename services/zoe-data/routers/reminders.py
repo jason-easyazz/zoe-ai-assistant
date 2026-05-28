@@ -97,7 +97,7 @@ async def create_reminder(
     row = await cursor.fetchone()
     reminder = _row_to_dict(row)
 
-    await broadcaster.broadcast("reminders", "reminder_created", reminder)
+    await broadcaster.broadcast("reminders", "reminder_created", reminder, user_id=user_id)
     return reminder
 
 
@@ -201,7 +201,7 @@ async def update_reminder(
     row = await cursor.fetchone()
     reminder = _row_to_dict(row)
 
-    await broadcaster.broadcast("reminders", "reminder_updated", reminder)
+    await broadcaster.broadcast("reminders", "reminder_updated", reminder, user_id=user_id)
     return reminder
 
 
@@ -244,7 +244,7 @@ async def delete_reminder(
     except Exception:
         pass
 
-    await broadcaster.broadcast("reminders", "reminder_deleted", {"id": reminder_id})
+    await broadcaster.broadcast("reminders", "reminder_deleted", {"id": reminder_id}, user_id=user_id)
     return {"ok": True, "id": reminder_id}
 
 
@@ -286,7 +286,7 @@ async def snooze_reminder(
     row = await cursor.fetchone()
     reminder = _row_to_dict(row)
 
-    await broadcaster.broadcast("reminders", "reminder_snoozed", reminder)
+    await broadcaster.broadcast("reminders", "reminder_snoozed", reminder, user_id=user_id)
     return reminder
 
 
@@ -326,7 +326,7 @@ async def acknowledge_reminder(
     row = await cursor.fetchone()
     reminder = _row_to_dict(row)
 
-    await broadcaster.broadcast("reminders", "reminder_acknowledged", reminder)
+    await broadcaster.broadcast("reminders", "reminder_acknowledged", reminder, user_id=user_id)
     return reminder
 
 

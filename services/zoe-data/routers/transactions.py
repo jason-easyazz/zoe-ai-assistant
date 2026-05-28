@@ -77,7 +77,7 @@ async def create_transaction(
     row = await cursor.fetchone()
     transaction = _row_to_dict(row)
 
-    await broadcaster.broadcast("transactions", "transaction_created", transaction)
+    await broadcaster.broadcast("transactions", "transaction_created", transaction, user_id=user_id)
     return transaction
 
 
@@ -232,7 +232,7 @@ async def update_transaction(
     row = await cursor.fetchone()
     transaction = _row_to_dict(row)
 
-    await broadcaster.broadcast("transactions", "transaction_updated", transaction)
+    await broadcaster.broadcast("transactions", "transaction_updated", transaction, user_id=user_id)
     return transaction
 
 
@@ -260,7 +260,7 @@ async def delete_transaction(
     )
     await db.commit()
 
-    await broadcaster.broadcast("transactions", "transaction_deleted", {"id": transaction_id})
+    await broadcaster.broadcast("transactions", "transaction_deleted", {"id": transaction_id}, user_id=user_id)
     return {"ok": True, "id": transaction_id}
 
 
@@ -293,5 +293,5 @@ async def toggle_transaction_status(
     row = await cursor.fetchone()
     transaction = _row_to_dict(row)
 
-    await broadcaster.broadcast("transactions", "transaction_updated", transaction)
+    await broadcaster.broadcast("transactions", "transaction_updated", transaction, user_id=user_id)
     return transaction

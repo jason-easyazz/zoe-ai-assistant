@@ -101,7 +101,7 @@ async def create_list(
     row = await cursor.fetchone()
     result = _row_to_dict(row)
 
-    await broadcaster.broadcast("lists", "list_updated", {"action": "created", "list": result})
+    await broadcaster.broadcast("lists", "list_updated", {"action": "created", "list": result}, user_id=user_id)
     return result
 
 
@@ -211,7 +211,7 @@ async def update_list(
     )
     row = await cursor.fetchone()
     result = _row_to_dict(row)
-    await broadcaster.broadcast("lists", "list_updated", {"action": "updated", "list": result})
+    await broadcaster.broadcast("lists", "list_updated", {"action": "updated", "list": result}, user_id=user_id)
     return result
 
 
@@ -247,7 +247,7 @@ async def delete_list(
     )
     await db.commit()
 
-    await broadcaster.broadcast("lists", "list_updated", {"action": "deleted", "list_id": list_id})
+    await broadcaster.broadcast("lists", "list_updated", {"action": "deleted", "list_id": list_id}, user_id=user_id)
     return {"ok": True}
 
 
@@ -312,6 +312,7 @@ async def add_item(
         "lists",
         "list_updated",
         {"action": "item_added", "list_id": list_id, "item": result},
+        user_id=user_id,
     )
     return result
 
@@ -451,6 +452,7 @@ async def update_item(
         "lists",
         "list_updated",
         {"action": "item_updated", "list_id": list_id, "item": result},
+        user_id=user_id,
     )
     return result
 
@@ -500,5 +502,6 @@ async def delete_item(
         "lists",
         "list_updated",
         {"action": "item_deleted", "list_id": list_id, "item_id": item_id},
+        user_id=user_id,
     )
     return {"ok": True}
