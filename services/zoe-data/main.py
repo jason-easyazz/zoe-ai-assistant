@@ -541,10 +541,48 @@ async def websocket_push(
     panel channel (receives both global 'all' events AND panel-specific events).
     Without panel_id, falls back to the plain channel subscription.
     """
+    # -----------------------------------------------------------------
+    # WebSocket auth and session validation
+    # -----------------------------------------------------------------
+    # 1. Panel connections are exempted as long as a valid device token is present
     if panel_id:
+        token_header = websocket.headers.get("X-Device-Token", "")
+        device_info = None
+        if token_header:
+            from routers.panel_auth import lookup_device_token
+            device_info = lookup_device_token(token_header)
+        # If token missing or invalid, close immediately
+        if not device_info or device_info.get("revoked"):
+            await websocket.close(1008, "Invalid device token")
+            return
+        # Panel token verified – proceed with panel subscription
         await broadcaster.connect_panel(websocket, panel_id)
     else:
+        # Non-panel: perform lightweight session validation via cache
+        session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")
+        if not session_id:
+            await websocket.close(1008, "Missing session identifier")
+            return
+        # Attempt to get user from cache / zoe-auth
+        try:
+            from auth import get_current_user
+            from starlette.requests import Request
+            class DummyReq(Request):
+                def __init__(self, session_id):
+                    scope = {"type": "http", "headers": [(b"x-session-id", session_id.encode())]}
+                    super().__init__(scope)
+            req = DummyReq(session_id)
+            user = await get_current_user(req)
+        except Exception:
+            await websocket.close(1008, "Invalid session")
+            return
+        if user.get("role") == "guest":
+            await websocket.close(1008, "Guest access prohibited")
+            return
+        # Auth OK – connect to requested channel
         await broadcaster.connect(websocket, channel)
+    # -----------------------------------------------------------------
+    # Normal data relay loop
     try:
         while True:
             data = await websocket.receive_text()
