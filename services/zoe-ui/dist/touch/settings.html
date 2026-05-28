@@ -2787,7 +2787,7 @@
             /* ---- Skills ---- */
             async function loadSkillsList(){
                 try{
-                    const res = await fetch('/api/skills');
+                    const res = await fetch('/api/openclaw/skills');
                     if(res.ok){
                         const data = await res.json();
                         const skills = data.skills || [];
@@ -2798,10 +2798,10 @@
                 }catch(e){console.warn('Skills load failed',e);}
             }
             async function reloadSkills(){
-                try{await fetch('/api/skills/reload',{method:'POST'});loadSkillsList();}catch(e){}
+                try{await fetch('/api/openclaw/skills',{method:'GET'});loadSkillsList();}catch(e){}
             }
             async function approveSkill(name){
-                try{await fetch('/api/skills/'+name+'/activate',{method:'POST'});loadSkillsList();}catch(e){}
+                try{await fetch('/api/openclaw/skills/'+name+'/install',{method:'POST'});loadSkillsList();}catch(e){}
             }
 
             /* ---- Learnings ---- */

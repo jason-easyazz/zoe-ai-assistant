@@ -857,7 +857,8 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
     function connectPushWebSocket() {
         try {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const url = `${protocol}//${window.location.host}/ws/push?channel=all`;
+            const panelParam = state.panelId ? `?panel_id=${encodeURIComponent(state.panelId)}` : '?panel_id=unknown';
+            const url = `${protocol}//${window.location.host}/ws/push${panelParam}`;
             const ws = new WebSocket(url);
             state.pushWs = ws;
             ws.onmessage = (event) => {
@@ -940,7 +941,12 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                     // Instant UI action delivery.
                     if (msg.type === 'ui_action' && msg.data) {
                         const action = msg.data.action || msg.data;
-                        if (action && action.action_type) {
+                        // Panel-ID filter: ignore events targeting a different panel.
+                        // Events with no panel_id are global and always processed.
+                        const _uiActionPanel = (action && action.panel_id) || (msg.data && msg.data.panel_id);
+                        if (_uiActionPanel && _uiActionPanel !== state.panelId) {
+                            // Event belongs to a different panel — ignore entirely.
+                        } else if (action && action.action_type) {
                             if (!action.id) action.id = 'push_' + Date.now();
                             executeAction(action).then(r => { if (action.id && !action.id.startsWith('push_')) ackAction(action.id, r); }).catch(() => {});
                         }
