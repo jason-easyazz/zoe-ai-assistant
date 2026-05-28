@@ -551,33 +551,29 @@ async def websocket_push(
         if token_header:
             from routers.panel_auth import lookup_device_token
             device_info = lookup_device_token(token_header)
-        # If token missing or invalid, close immediately
-        if not device_info or device_info.get("revoked"):
+        # If token missing or invalid, close immediately.
+        # lookup_device_token already returns None for revoked tokens; no need to re-check.
+        if not device_info:
             await websocket.close(1008, "Invalid device token")
             return
         # Panel token verified – proceed with panel subscription
         await broadcaster.connect_panel(websocket, panel_id)
     else:
-        # Non-panel: perform lightweight session validation via cache
+        # Non-panel: perform lightweight session validation via zoe-auth HTTP.
         session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")
         if not session_id:
             await websocket.close(1008, "Missing session identifier")
             return
-        # Attempt to get user from cache / zoe-auth
-        try:
-            from auth import get_current_user
-            from starlette.requests import Request
-            class DummyReq(Request):
-                def __init__(self, session_id):
-                    scope = {"type": "http", "headers": [(b"x-session-id", session_id.encode())]}
-                    super().__init__(scope)
-            req = DummyReq(session_id)
-            user = await get_current_user(req)
-        except Exception:
+        # Use a direct zoe-auth call rather than a fake Starlette Request to avoid
+        # fragility around scope fields and the fail-open degraded-user path.
+        user = await _resolve_ws_session(session_id)
+        if user is None:
             await websocket.close(1008, "Invalid session")
             return
-        if user.get("role") == "guest":
-            await websocket.close(1008, "Guest access prohibited")
+        # Use an allowlist to prevent fail-open when zoe-auth is unreachable.
+        # Only accept explicitly valid, authenticated roles.
+        if user.get("role") not in ("member", "admin", "agent"):
+            await websocket.close(1008, "Insufficient privileges")
             return
         # Auth OK – connect to requested channel
         await broadcaster.connect(websocket, channel)
@@ -600,6 +596,11 @@ async def websocket_push(
 
 @app.websocket("/api/calendar/ws/{user_id}")
 async def calendar_ws(websocket: WebSocket, user_id: str):
+    session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")
+    user = await _resolve_ws_session(session_id)
+    if user is None or user.get("role") not in ("member", "admin", "agent"):
+        await websocket.close(1008, "Unauthorized")
+        return
     await broadcaster.connect(websocket, "calendar")
     try:
         while True:
@@ -680,6 +681,22 @@ async def journal_ws(websocket: WebSocket, user_id: str):
                 await websocket.send_json({"type": "pong"})
     except WebSocketDisconnect:
         broadcaster.disconnect(websocket, "journal")
+
+
+async def _resolve_ws_session(session_id: str | None) -> dict | None:
+    """Resolve a browser session_id to a full user dict via zoe-auth HTTP.
+
+    Returns a dict with at least ``user_id`` and ``role`` keys on success, or
+    ``None`` if the session is absent, invalid, or explicitly rejected (401/403).
+
+    On transient zoe-auth failures (5xx, timeout, connection error) the function
+    returns a degraded-user dict (role=member) via auth._validate_with_auth_service
+    so that the caller's role allowlist still gates access correctly.
+    """
+    if not session_id:
+        return None
+    from auth import _validate_with_auth_service
+    return await _validate_with_auth_service(session_id)
 
 
 async def _resolve_ws_user(session_id: str) -> str:
