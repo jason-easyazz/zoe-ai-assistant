@@ -11,11 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from auth import get_current_user
 from database import get_db
-from guest_policy import (
-    is_guest_user,
-    require_feature_access,
-    record_policy_decision,
-)
+from guest_policy import require_feature_access
 from models import EventCreate, EventUpdate
 from push import broadcaster
 
@@ -43,16 +39,9 @@ def _visibility_filter_sql() -> str:
 
 
 async def _enforce_calendar_read_access(db, user: dict) -> str:
-    """Apply the shared calendar read gate and telemetry, then return user_id."""
+    """Apply the shared calendar read gate, then return user_id."""
     await require_feature_access(db, user, feature="calendar", action="read")
-    user_id = user["user_id"]
-    record_policy_decision(
-        "guest_allowed" if is_guest_user(user) else "auth_ok",
-        surface="api",
-        resource="calendar",
-        action="read",
-    )
-    return user_id
+    return user["user_id"]
 
 
 @router.get("/events", response_model=dict)
