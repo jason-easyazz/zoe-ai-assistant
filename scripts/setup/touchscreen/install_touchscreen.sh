@@ -9,7 +9,7 @@ set -euo pipefail
 #
 # Example:
 #   scripts/setup/touchscreen/install_touchscreen.sh
-#   scripts/setup/touchscreen/install_touchscreen.sh --host 192.168.1.61 --user pi
+#   scripts/setup/touchscreen/install_touchscreen.sh --host 192.168.1.61 --user zoe
 
 HOST="192.168.1.61"
 USER_NAME="pi"

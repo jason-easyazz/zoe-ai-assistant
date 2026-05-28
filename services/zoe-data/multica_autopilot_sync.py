@@ -414,13 +414,18 @@ async def _fire_autopilot_job(
             await task_fn()
             await _update_issue_status("done")
         except Exception as exc:
-            await _update_issue_status("cancelled")
+            # Reset to 'todo' (not 'cancelled') so the issue can be retried
+            # on the next scheduled run rather than being orphaned in_progress.
+            await _update_issue_status("todo")
             logger.warning(
                 "autopilot: task function for %r raised: %s", autopilot_title, exc
             )
     else:
+        # No Zoe task is mapped for this autopilot — reset the issue to 'todo'
+        # so it does not stay orphaned in 'in_progress' with nothing to complete it.
+        await _update_issue_status("todo")
         logger.info(
-            "autopilot: no task function mapped for %r — issue created only",
+            "autopilot: no task function mapped for %r — issue reset to todo",
             autopilot_title,
         )
 
