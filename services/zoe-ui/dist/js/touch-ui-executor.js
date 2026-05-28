@@ -857,7 +857,8 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
     function connectPushWebSocket() {
         try {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const panelParam = state.panelId ? `?panel_id=${encodeURIComponent(state.panelId)}` : '?panel_id=unknown';
+            const panelId = state.panelId;
+            const panelParam = panelId ? `?panel_id=${encodeURIComponent(panelId)}` : '';
             const url = `${protocol}//${window.location.host}/ws/push${panelParam}`;
             const ws = new WebSocket(url);
             state.pushWs = ws;

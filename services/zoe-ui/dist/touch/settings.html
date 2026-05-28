@@ -2792,16 +2792,20 @@
                         const data = await res.json();
                         const skills = data.skills || [];
                         document.getElementById('skillsList').innerHTML = skills.length
-                            ? skills.map(s => `<div class="setting-item"><div class="setting-info"><div class="setting-name">${s.name} <span style="opacity:0.5;font-size:0.8em">v${s.version||'1.0'}</span></div><div class="setting-description">Triggers: ${(s.triggers||[]).slice(0,3).join(', ')}${(s.triggers||[]).length>3?'...':''}</div></div><div class="setting-control">${s.active===false?'<button class="btn" onclick="approveSkill(\''+s.name+'\')">Activate</button>':'<span style="color:#4caf50">Active</span>'}</div></div>`).join('')
+                            ? skills.map(s => `<div class="setting-item"><div class="setting-info"><div class="setting-name">${s.name} <span style="opacity:0.5;font-size:0.8em">v${s.version||'1.0'}</span></div><div class="setting-description">Triggers: ${(s.triggers||[]).slice(0,3).join(', ')}${(s.triggers||[]).length>3?'...':''}</div></div><div class="setting-control">${s.active===false?'<button class="btn" onclick="approveSkill(\''+s.name+'\')">Install from ClawHub</button>':'<span style="color:#4caf50">Active</span>'}</div></div>`).join('')
                             : '<em>No skills loaded</em>';
                     }
                 }catch(e){console.warn('Skills load failed',e);}
             }
             async function reloadSkills(){
-                try{await fetch('/api/openclaw/skills',{method:'GET'});loadSkillsList();}catch(e){}
+                loadSkillsList();
             }
             async function approveSkill(name){
-                try{await fetch('/api/openclaw/skills/'+name+'/install',{method:'POST'});loadSkillsList();}catch(e){}
+                try{
+                    const res = await fetch('/api/openclaw/skills/'+name+'/install',{method:'POST'});
+                    if(res.status===403){alert('Admin permission required');return;}
+                    loadSkillsList();
+                }catch(e){alert('Install failed: '+e);}
             }
 
             /* ---- Learnings ---- */
