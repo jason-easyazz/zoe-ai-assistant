@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from database import init_db
 from push import broadcaster
+from auth import require_internal_token
 from routers import (
     calendar_router,
     lists_router,
