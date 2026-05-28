@@ -17,7 +17,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from auth import get_current_user
+from auth import get_current_user, require_admin
 from database import get_db
 from guest_policy import require_feature_access
 from models import (
@@ -389,6 +389,7 @@ async def list_people_fields(
 async def create_people_field(
     body: PeopleFieldDefinitionCreate,
     user: dict = Depends(get_current_user),
+    _admin: dict = Depends(require_admin),
     db=Depends(get_db),
 ):
     await require_feature_access(db, user, feature="people", action="manage_fields")
@@ -414,6 +415,7 @@ async def update_people_field(
     field_key: str,
     body: PeopleFieldDefinitionUpdate,
     user: dict = Depends(get_current_user),
+    _admin: dict = Depends(require_admin),
     db=Depends(get_db),
 ):
     await require_feature_access(db, user, feature="people", action="manage_fields")
@@ -912,6 +914,18 @@ async def add_relationship(
             if not row:
                 raise HTTPException(status_code=404, detail=f"Person '{name}' not found. Use create_partial=true to create a stub.")
             other_id = dict(row)["id"]
+    else:
+        # Verify person B is owned by this user or is family-visible
+        async with db.execute(
+            "SELECT user_id, visibility FROM people WHERE id = ? AND deleted = 0",
+            (other_id,),
+        ) as cur:
+            person_b_row = await cur.fetchone()
+        if not person_b_row:
+            raise HTTPException(status_code=404, detail="Linked person not found")
+        person_b = dict(person_b_row)
+        if person_b["user_id"] != user_id and person_b.get("visibility") != "family":
+            raise HTTPException(status_code=403, detail="You do not have permission to link to that person")
 
     # Prevent self-link
     if other_id == person_id:

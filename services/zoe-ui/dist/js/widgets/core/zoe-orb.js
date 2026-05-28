@@ -65,11 +65,31 @@ class ZoeOrbWidget extends WidgetModule {
         // Stable session ID for this widget — persists across page loads so the
         // Hermes agent pool entry survives navigation and the user always gets
         // a warm response after the first message.
-        this._sessionId = localStorage.getItem('orbWidgetSessionId');
+        // The key is scoped by user ID to prevent chat history bleeding across accounts.
+        const _orbWidgetKey = () => {
+            try {
+                const s = window.zoeAuth ? window.zoeAuth.getCurrentSession() : null;
+                const uid = s && (s.user_id || (s.user_info && s.user_info.user_id));
+                if (uid && uid !== 'guest') return 'orbWidgetSessionId_' + uid;
+            } catch (_) {}
+            return 'orbWidgetSessionId';
+        };
+        this._getOrbWidgetKey = _orbWidgetKey;
+        this._sessionId = localStorage.getItem(_orbWidgetKey());
         if (!this._sessionId) {
             this._sessionId = 'orb-widget-' + Math.random().toString(36).slice(2, 10);
-            localStorage.setItem('orbWidgetSessionId', this._sessionId);
+            localStorage.setItem(_orbWidgetKey(), this._sessionId);
         }
+        // Clear this widget's session on logout.
+        document.addEventListener('zoe:logout', (e) => {
+            try {
+                const uid = e && e.detail && e.detail.user_id;
+                const key = uid && uid !== 'guest' ? 'orbWidgetSessionId_' + uid : 'orbWidgetSessionId';
+                localStorage.removeItem(key);
+                localStorage.removeItem('orbWidgetSessionId');
+            } catch (_) {}
+            this._sessionId = null;
+        });
 
         // Pre-warming via /api/chat/warm/{sid} was a zoe-core optimization
         // and is not served by zoe-data. Skip the warm-up call entirely so

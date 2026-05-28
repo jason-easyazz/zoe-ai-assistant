@@ -211,6 +211,9 @@
 
         setSession(null);
 
+        // Notify other modules (e.g. orb chat) so they can clear user-scoped state.
+        try { document.dispatchEvent(new CustomEvent('zoe:logout', { detail: { user_id: current && current.user_id } })); } catch(_){}
+
         const currentPath = window.location.pathname;
         const redirectUrl = currentPath.startsWith('/touch/') ? '/touch/index.html' : '/index.html';
 
@@ -227,12 +230,16 @@
     async function enforceAuth() {
         const currentPath = window.location.pathname;
         const search = window.location.search || '';
-        // Persist kiosk mode in localStorage so navigations within the touch UI
+        // Persist kiosk mode in sessionStorage so navigations within the touch UI
         // don't lose it (voice commands navigate to /touch/calendar.html etc. without query params).
+        // sessionStorage is tab-scoped and cleared when the browser tab closes, preventing
+        // the kiosk bypass from bleeding into non-kiosk sessions.
+        // Also clear any stale localStorage kiosk key left by older code.
+        try { localStorage.removeItem('zoe_kiosk'); } catch(_){}
         if (currentPath.startsWith('/touch/') && search.includes('kiosk=1')) {
-            try { localStorage.setItem('zoe_kiosk', '1'); } catch(_){}
+            try { sessionStorage.setItem('zoe_kiosk', '1'); } catch(_){}
         }
-        const kioskStored = currentPath.startsWith('/touch/') && (function(){ try { return localStorage.getItem('zoe_kiosk') === '1'; } catch(_){ return false; } })();
+        const kioskStored = currentPath.startsWith('/touch/') && (function(){ try { return sessionStorage.getItem('zoe_kiosk') === '1'; } catch(_){ return false; } })();
         const isKioskMode = kioskStored || (currentPath.startsWith('/touch/') && search.includes('kiosk=1'));
         const isPublicGameModule =
             currentPath === '/modules/qd' ||

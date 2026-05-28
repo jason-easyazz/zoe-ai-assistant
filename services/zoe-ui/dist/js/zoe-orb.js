@@ -10,7 +10,33 @@ let intelligenceWS = null;
 let wsRetries = 0;
 const MAX_WS_RETRIES = 2;
 let orbWebSocket = null;
-let orbSessionId = localStorage.getItem('orbSessionId') || null;
+
+/**
+ * Returns the localStorage key for the orb session, scoped by user ID to
+ * prevent chat history from bleeding across accounts.
+ */
+function getOrbStorageKey() {
+    try {
+        const session = window.zoeAuth ? window.zoeAuth.getCurrentSession() : null;
+        const uid = session && (session.user_id || (session.user_info && session.user_info.user_id));
+        if (uid && uid !== 'guest') return 'orbSessionId_' + uid;
+    } catch (_) {}
+    return 'orbSessionId';
+}
+
+let orbSessionId = localStorage.getItem(getOrbStorageKey()) || null;
+
+// Clear orb history when the user logs out.
+document.addEventListener('zoe:logout', function(e) {
+    try {
+        const uid = e && e.detail && e.detail.user_id;
+        const key = uid && uid !== 'guest' ? 'orbSessionId_' + uid : 'orbSessionId';
+        localStorage.removeItem(key);
+        // Also clear legacy unscoped key.
+        localStorage.removeItem('orbSessionId');
+    } catch (_) {}
+    orbSessionId = null;
+});
 
 /**
  * Initialize Orb Chat functionality
@@ -185,7 +211,7 @@ async function sendOrbMessage() {
 
         if (response && response.session_id) {
             orbSessionId = response.session_id;
-            localStorage.setItem('orbSessionId', orbSessionId);
+            localStorage.setItem(getOrbStorageKey(), orbSessionId);
         }
 
         if (response && response.response) {
