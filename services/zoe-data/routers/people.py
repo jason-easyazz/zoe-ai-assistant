@@ -447,9 +447,12 @@ async def update_people_field(
 
 
 @router.delete("/fields/{field_key}", dependencies=[Depends(require_admin)])
-async def delete_field_schema(field_key: str, db=Depends(get_db)):
-    await db.execute("DELETE FROM people_field_definitions WHERE field_key = ?", (field_key,))
+async def delete_field_schema(field_key: str, user: dict = Depends(get_current_user), db=Depends(get_db)):
+    await require_feature_access(db, user, feature="people", action="manage_fields")
+    cursor = await db.execute("DELETE FROM people_field_definitions WHERE field_key = ?", (field_key,))
     await db.commit()
+    if cursor.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Field definition not found")
     return {"deleted": True}
 
 
