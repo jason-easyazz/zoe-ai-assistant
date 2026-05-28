@@ -613,6 +613,11 @@ async def calendar_ws(websocket: WebSocket, user_id: str):
 
 @app.websocket("/api/lists/ws/{user_id}")
 async def lists_ws_with_user(websocket: WebSocket, user_id: str):
+    session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")
+    user = await _resolve_ws_session(session_id)
+    if user is None or user.get("role") not in ("member", "admin", "agent"):
+        await websocket.close(1008, "Unauthorized")
+        return
     await broadcaster.connect(websocket, "lists")
     try:
         while True:
@@ -625,6 +630,11 @@ async def lists_ws_with_user(websocket: WebSocket, user_id: str):
 
 @app.websocket("/api/lists/ws")
 async def lists_ws(websocket: WebSocket):
+    session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")
+    user = await _resolve_ws_session(session_id)
+    if user is None or user.get("role") not in ("member", "admin", "agent"):
+        await websocket.close(1008, "Unauthorized")
+        return
     await broadcaster.connect(websocket, "lists")
     try:
         while True:
@@ -637,6 +647,11 @@ async def lists_ws(websocket: WebSocket):
 
 @app.websocket("/api/people/ws/{user_id}")
 async def people_ws(websocket: WebSocket, user_id: str):
+    session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")
+    user = await _resolve_ws_session(session_id)
+    if user is None or user.get("role") not in ("member", "admin", "agent"):
+        await websocket.close(1008, "Unauthorized")
+        return
     await broadcaster.connect(websocket, "all")
     try:
         while True:
@@ -649,6 +664,11 @@ async def people_ws(websocket: WebSocket, user_id: str):
 
 @app.websocket("/api/reminders/ws/{user_id}")
 async def reminders_ws(websocket: WebSocket, user_id: str):
+    session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")
+    user = await _resolve_ws_session(session_id)
+    if user is None or user.get("role") not in ("member", "admin", "agent"):
+        await websocket.close(1008, "Unauthorized")
+        return
     await broadcaster.connect(websocket, "reminders")
     try:
         while True:
@@ -661,6 +681,11 @@ async def reminders_ws(websocket: WebSocket, user_id: str):
 
 @app.websocket("/api/notes/ws/{user_id}")
 async def notes_ws(websocket: WebSocket, user_id: str):
+    session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")
+    user = await _resolve_ws_session(session_id)
+    if user is None or user.get("role") not in ("member", "admin", "agent"):
+        await websocket.close(1008, "Unauthorized")
+        return
     await broadcaster.connect(websocket, "notes")
     try:
         while True:
@@ -673,6 +698,11 @@ async def notes_ws(websocket: WebSocket, user_id: str):
 
 @app.websocket("/api/journal/ws/{user_id}")
 async def journal_ws(websocket: WebSocket, user_id: str):
+    session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")
+    user = await _resolve_ws_session(session_id)
+    if user is None or user.get("role") not in ("member", "admin", "agent"):
+        await websocket.close(1008, "Unauthorized")
+        return
     await broadcaster.connect(websocket, "journal")
     try:
         while True:
