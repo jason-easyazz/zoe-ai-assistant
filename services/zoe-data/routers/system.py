@@ -812,7 +812,8 @@ async def a2a_task_result(task_id: str, user: dict = Depends(get_a2a_caller)):
             ) as cur:
                 row = await cur.fetchone()
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Database error: {exc}") from exc
+        logger.error("a2a_task_result DB error for task_id=%s: %s", task_id, exc)
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
 
     if row is None:
         raise HTTPException(status_code=404, detail="Task not found")

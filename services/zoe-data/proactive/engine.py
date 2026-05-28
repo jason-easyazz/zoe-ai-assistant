@@ -124,13 +124,15 @@ async def fire_notification(
         try:
             import uuid as _uuid
             import datetime as _dt
+            from push import broadcaster as _broadcaster  # deferred to avoid circular imports
+            _new_id = str(_uuid.uuid4())
             async with _get_compat_db() as db:
                 await db.execute(
                     """INSERT INTO notifications
-                       (id, user_id, type, title, body, delivered, created_at)
+                       (id, user_id, type, title, message, delivered, created_at)
                        VALUES (?, ?, 'reminder', ?, ?, 0, ?)""",
                     (
-                        str(_uuid.uuid4()),
+                        _new_id,
                         user_id,
                         "Reminder",
                         message,
@@ -138,6 +140,7 @@ async def fire_notification(
                     ),
                 )
                 await db.commit()
+            await _broadcaster.broadcast("all", "notification_created", {"id": _new_id, "type": "reminder", "title": "Reminder", "message": message, "delivered": False})
             log.info("reminder fallback: in-app notification created for user %s (no WS subscribers)", user_id)
         except Exception as _fe:
             log.warning("reminder fallback: in-app insert failed: %s", _fe)
