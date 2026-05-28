@@ -798,12 +798,21 @@ async def a2a_task_result(task_id: str, user: dict = Depends(get_a2a_caller)):
 
     from db_pool import get_db_ctx as _get_pg_db
 
-    async with _get_pg_db() as db:
-        async with db.execute(
-            "SELECT id, user_id, task, status, result, created_at, completed_at FROM background_tasks WHERE id=$1",
-            (task_id,),
-        ) as cur:
-            row = await cur.fetchone()
+    # task IDs are SERIAL integers; reject non-numeric IDs immediately.
+    try:
+        task_id_int = int(task_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    try:
+        async with _get_pg_db() as db:
+            async with db.execute(
+                "SELECT id, user_id, task, status, result, created_at, completed_at FROM background_tasks WHERE id=$1",
+                (task_id_int,),
+            ) as cur:
+                row = await cur.fetchone()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Database error: {exc}") from exc
 
     if row is None:
         raise HTTPException(status_code=404, detail="Task not found")

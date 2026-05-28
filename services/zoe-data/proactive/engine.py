@@ -115,9 +115,37 @@ async def fire_notification(
     )
 
     deep_link = f"/chat.html?p={pid}"
-    await _send_push(user_id=user_id, message=message, extra={"url": deep_link})
+    subscribers_reached = await _send_push(user_id=user_id, message=message, extra={"url": deep_link})
 
-    # Mark the proactive_scheduled row as fired (Tier 1 jobs only).
+    # If no WebSocket subscribers received the push, fall back to an in-app
+    # notification so the reminder appears in the notification centre when the
+    # user next opens the app.
+    if subscribers_reached == 0 and trigger_type == "reminder":
+        try:
+            import uuid as _uuid
+            import datetime as _dt
+            async with _get_compat_db() as db:
+                await db.execute(
+                    """INSERT INTO notifications
+                       (id, user_id, type, title, body, delivered, created_at)
+                       VALUES (?, ?, 'reminder', ?, ?, 0, ?)""",
+                    (
+                        str(_uuid.uuid4()),
+                        user_id,
+                        "Reminder",
+                        message,
+                        _dt.datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    ),
+                )
+                await db.commit()
+            log.info("reminder fallback: in-app notification created for user %s (no WS subscribers)", user_id)
+        except Exception as _fe:
+            log.warning("reminder fallback: in-app insert failed: %s", _fe)
+
+    # Mark the proactive_scheduled row as fired only when push was delivered
+    # (or after in-app fallback has been written).  If subscribers_reached == 0
+    # and this is NOT a reminder, still mark fired to avoid infinite retries —
+    # the proactive_pending row is already created above.
     if pending_id:
         async with _get_compat_db() as db:
             await db.execute(
@@ -126,13 +154,14 @@ async def fire_notification(
             await db.commit()
 
 
-async def _send_push(user_id: str, message: str, extra: dict | None = None) -> None:
-    """Internal: import push router and call send_push_to_user."""
+async def _send_push(user_id: str, message: str, extra: dict | None = None) -> int:
+    """Internal: import push router and call send_push_to_user. Returns subscriber count reached."""
     try:
         from routers.push import send_push_to_user  # deferred to avoid circular imports
-        await send_push_to_user(user_id=user_id, message=message, extra=extra or {})
+        return await send_push_to_user(user_id=user_id, message=message, extra=extra or {}) or 0
     except Exception as exc:
         log.error("_send_push failed for user %s: %s", user_id, exc)
+        return 0
 
 
 async def _slow_loop() -> None:
