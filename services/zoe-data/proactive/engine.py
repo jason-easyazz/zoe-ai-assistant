@@ -116,6 +116,7 @@ async def fire_notification(
 
     deep_link = f"/chat.html?p={pid}"
     subscribers_reached = await _send_push(user_id=user_id, message=message, extra={"url": deep_link})
+    in_app_fallback_ok = False
 
     # If no WebSocket subscribers received the push, fall back to an in-app
     # notification so the reminder appears in the notification centre when the
@@ -141,20 +142,24 @@ async def fire_notification(
                 )
                 await db.commit()
             await _broadcaster.broadcast("all", "notification_created", {"id": _new_id, "type": "reminder", "title": "Reminder", "message": message, "delivered": False})
+            in_app_fallback_ok = True
             log.info("reminder fallback: in-app notification created for user %s (no WS subscribers)", user_id)
         except Exception as _fe:
             log.warning("reminder fallback: in-app insert failed: %s", _fe)
 
-    # Mark the proactive_scheduled row as fired only when push was delivered
-    # (or after in-app fallback has been written).  If subscribers_reached == 0
-    # and this is NOT a reminder, still mark fired to avoid infinite retries —
-    # the proactive_pending row is already created above.
+    delivered = subscribers_reached > 0 or in_app_fallback_ok
     if pending_id:
         async with _get_compat_db() as db:
             await db.execute(
                 "UPDATE proactive_scheduled SET fired = 1 WHERE id = ?", (pending_id,)
             )
             await db.commit()
+        if trigger_type == "reminder" and not delivered:
+            log.warning(
+                "reminder scheduled %s marked fired without push/in-app delivery for user %s",
+                pending_id,
+                user_id,
+            )
 
 
 async def _send_push(user_id: str, message: str, extra: dict | None = None) -> int:

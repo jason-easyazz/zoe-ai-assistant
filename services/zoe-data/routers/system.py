@@ -575,64 +575,23 @@ def _build_agent_card() -> dict:
     # Runtime health from module-level dict (populated at startup)
     from main import _RUNTIME_HEALTH  # type: ignore[import]
 
-    skills = [
-        {
-            "id": "chat",
-            "name": "Conversational Chat",
-            "description": "Natural language conversation with persistent memory across sessions.",
-            "inputModes": ["text"],
-            "outputModes": ["text"],
-        },
-        {
-            "id": "memory_recall",
-            "name": "Memory Recall",
-            "description": "Recall personal facts, preferences, and past conversations from MemPalace.",
-            "inputModes": ["text"],
-            "outputModes": ["text", "data"],
-        },
-        {
-            "id": "home_control",
-            "name": "Home Automation",
-            "description": "Control smart home devices via Home Assistant (lights, media, climate).",
-            "inputModes": ["text"],
-            "outputModes": ["text", "data"],
-        },
-        {
-            "id": "calendar",
-            "name": "Calendar Management",
-            "description": "Manage calendar events — create, read, update, delete across connected calendars.",
-            "inputModes": ["text"],
-            "outputModes": ["text", "data"],
-        },
-        {
-            "id": "web_search",
-            "name": "Web Search",
-            "description": "Search the web for current information using DuckDuckGo.",
-            "inputModes": ["text"],
-            "outputModes": ["text"],
-        },
-        {
-            "id": "panel_display",
-            "name": "Panel Display",
-            "description": "Push rich HTML/AG-UI content to connected display panels.",
-            "inputModes": ["text", "data"],
-            "outputModes": ["text", "data"],
-        },
-        {
-            "id": "open_loops",
-            "name": "Open Loops Engine",
-            "description": "Proactive follow-up engine — tracks unresolved tasks and resurfaces them.",
-            "inputModes": ["text"],
-            "outputModes": ["text"],
-        },
-        {
-            "id": "browser_automation",
-            "name": "Browser Automation",
-            "description": "Delegate browser interaction, form filling, and web tasks via Hermes and CloakBrowser.",
-            "inputModes": ["text"],
-            "outputModes": ["text", "data"],
-        },
-    ]
+    skills = []
+    try:
+        from mcp_server import TOOLS as _mcp_tools  # type: ignore[import]
+
+        for spec in _mcp_tools:
+            tool_name = spec.get("name", "tool")
+            skills.append(
+                {
+                    "id": tool_name,
+                    "name": tool_name.replace("_", " ").title(),
+                    "description": (spec.get("description") or "")[:500],
+                    "inputModes": ["text", "data"],
+                    "outputModes": ["text", "data"],
+                }
+            )
+    except Exception:
+        skills = []
 
     agent_tiers = [
         {"tier": 0, "name": "intent_router", "latency_ms": "<10", "model": "regex", "status": "online"},
@@ -811,11 +770,11 @@ async def a2a_task_result(task_id: str, user: dict = Depends(get_a2a_caller)):
 
     try:
         async with _get_pg_db() as db:
-            async with db.execute(
-                "SELECT id, user_id, task, status, result, created_at, completed_at FROM background_tasks WHERE id=$1",
-                (task_id_int,),
-            ) as cur:
-                row = await cur.fetchone()
+            row = await db.fetchrow(
+                "SELECT id, user_id, task, status, result, created_at, completed_at "
+                "FROM background_tasks WHERE id=$1",
+                task_id_int,
+            )
     except Exception as exc:
         logger.error("a2a_task_result DB error for task_id=%s: %s", task_id, exc)
         raise HTTPException(status_code=500, detail="Internal server error") from exc
@@ -827,13 +786,16 @@ async def a2a_task_result(task_id: str, user: dict = Depends(get_a2a_caller)):
     if user.get("role") not in ("admin", "agent") and row["user_id"] != caller_user_id:
         raise HTTPException(status_code=403, detail="Not your task")
 
+    def _ts(val):
+        return val.isoformat() if hasattr(val, "isoformat") else val
+
     return {
         "task_id": task_id,
         "status": row["status"],
         "task": row["task"],
         "result": row["result"],
-        "created_at": row["created_at"],
-        "completed_at": row["completed_at"],
+        "created_at": _ts(row["created_at"]),
+        "completed_at": _ts(row["completed_at"]),
     }
 
 

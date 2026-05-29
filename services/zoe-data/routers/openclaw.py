@@ -42,6 +42,28 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/openclaw", tags=["openclaw"])
 
 _OPENCLAW_JSON = Path(os.environ.get("OPENCLAW_DIR", Path.home() / ".openclaw")) / "openclaw.json"
+_OPENCLAW_GATEWAY = os.environ.get("OPENCLAW_GATEWAY_URL", "http://127.0.0.1:18789").rstrip("/")
+
+
+@router.get("/health")
+async def openclaw_health(_user: dict = Depends(get_current_user)):
+    """Probe OpenClaw gateway beyond a bare TCP check (ZOE-4325)."""
+    status = {"gateway_url": _OPENCLAW_GATEWAY, "reachable": False, "detail": ""}
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            for path in ("/health", "/v1/health", "/"):
+                try:
+                    resp = await client.get(f"{_OPENCLAW_GATEWAY}{path}")
+                    status["reachable"] = resp.status_code < 500
+                    status["detail"] = f"{path} -> {resp.status_code}"
+                    if status["reachable"]:
+                        break
+                except Exception:
+                    continue
+    except Exception as exc:
+        status["detail"] = str(exc)
+    return status
+
 
 # ── Plugin endpoints ──────────────────────────────────────────────────────────
 

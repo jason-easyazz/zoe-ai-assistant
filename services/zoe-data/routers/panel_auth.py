@@ -26,7 +26,7 @@ from typing import Optional
 import asyncio
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
-from auth import get_current_user
+from auth import get_current_user, require_admin
 from database import get_db
 
 logger = logging.getLogger(__name__)
@@ -77,12 +77,6 @@ def _hash_token(raw: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
-def _require_admin(user: dict = Depends(get_current_user)) -> dict:
-    if user.get("role") not in ("admin",):
-        raise HTTPException(status_code=403, detail="Admin role required")
-    return user
-
-
 def lookup_device_token(raw_token: str) -> dict | None:
     """Check cache for a valid (non-revoked, non-expired) device token."""
     h = _hash_token(raw_token)
@@ -98,18 +92,33 @@ def lookup_device_token(raw_token: str) -> dict | None:
 async def _resolve_device_token_user(raw_token: str) -> dict | None:
     """Resolve a device token to a user dict for use in get_current_user().
 
-    Returns a user dict compatible with auth.py user format, or None if the
-    token is invalid. Panel device tokens get role 'member' to allow chat access.
+    Uses panel_user_bindings default user when configured (ZOE-4321).
     """
     info = lookup_device_token(raw_token)
     if not info:
         return None
     panel_id = info.get("panel_id", "unknown")
     role = info.get("role", "voice")
-    # Map device roles to user roles: voice/panel → member (can chat, not admin)
     user_role = "member" if role in ("voice", "panel", "kiosk") else "admin" if role == "admin" else "member"
+    user_id = "family-admin"
+    try:
+        from database import get_db
+
+        async for db in get_db():
+            row = await (
+                await db.execute(
+                    """SELECT user_id FROM panel_user_bindings
+                       WHERE panel_id = ? AND binding_type = 'default' LIMIT 1""",
+                    (panel_id,),
+                )
+            ).fetchone()
+            if row and row["user_id"]:
+                user_id = row["user_id"]
+            break
+    except Exception as exc:
+        logger.debug("panel binding lookup failed for %s: %s", panel_id, exc)
     return {
-        "user_id": "family-admin",  # Panel devices act as the household default user
+        "user_id": user_id,
         "role": user_role,
         "username": f"panel:{panel_id}",
         "permissions": ["chat", "voice"],
@@ -131,7 +140,7 @@ async def load_device_tokens(db) -> None:
 
 
 @router.get("")
-async def list_panels(admin: dict = Depends(_require_admin), db=Depends(get_db)):
+async def list_panels(admin: dict = Depends(require_admin), db=Depends(get_db)):
     cur = await db.execute(
         """SELECT p.panel_id, p.name, p.location, p.panel_type, p.is_active, p.allow_guest,
                   p.ip_address, p.ssh_user, p.ssh_key_path, p.ssh_port,
@@ -165,7 +174,7 @@ async def panel_public_info(panel_id: str, db=Depends(get_db)):
 
 
 @router.get("/{panel_id}/status")
-async def panel_status(panel_id: str, admin: dict = Depends(_require_admin), db=Depends(get_db)):
+async def panel_status(panel_id: str, admin: dict = Depends(require_admin), db=Depends(get_db)):
     """Live status for a panel: last_seen_at, SSH reachability, active kiosk URL, default user."""
     row = await (await db.execute(
         """SELECT p.panel_id, p.name, p.location, p.is_active, p.ip_address,
@@ -217,7 +226,7 @@ async def panel_status(panel_id: str, admin: dict = Depends(_require_admin), db=
 
 
 @router.post("/register")
-async def register_panel(payload: dict, admin: dict = Depends(_require_admin), db=Depends(get_db)):
+async def register_panel(payload: dict, admin: dict = Depends(require_admin), db=Depends(get_db)):
     """Register a new panel (kiosk device)."""
     panel_id = str(payload.get("panel_id") or f"panel-{uuid.uuid4().hex[:8]}").strip()
     name = str(payload.get("name") or panel_id).strip()
@@ -246,7 +255,7 @@ async def register_panel(payload: dict, admin: dict = Depends(_require_admin), d
 
 
 @router.patch("/{panel_id}")
-async def update_panel(panel_id: str, payload: dict, admin: dict = Depends(_require_admin), db=Depends(get_db)):
+async def update_panel(panel_id: str, payload: dict, admin: dict = Depends(require_admin), db=Depends(get_db)):
     """Update mutable panel metadata (name, location, allow_guest, notes)."""
     row = await (await db.execute("SELECT panel_id FROM panels WHERE panel_id = ?", (panel_id,))).fetchone()
     if not row:
@@ -276,7 +285,7 @@ async def update_panel(panel_id: str, payload: dict, admin: dict = Depends(_requ
 
 
 @router.get("/{panel_id}/bindings")
-async def get_panel_bindings(panel_id: str, admin: dict = Depends(_require_admin), db=Depends(get_db)):
+async def get_panel_bindings(panel_id: str, admin: dict = Depends(require_admin), db=Depends(get_db)):
     """Return the current user bindings for a panel (admin view)."""
     row = await (await db.execute(
         "SELECT panel_id, name, allow_guest FROM panels WHERE panel_id = ?", (panel_id,)
@@ -302,7 +311,7 @@ async def get_panel_bindings(panel_id: str, admin: dict = Depends(_require_admin
 
 
 @router.put("/{panel_id}/bindings")
-async def set_panel_bindings(panel_id: str, payload: dict, admin: dict = Depends(_require_admin), db=Depends(get_db)):
+async def set_panel_bindings(panel_id: str, payload: dict, admin: dict = Depends(require_admin), db=Depends(get_db)):
     """Replace the user bindings for a panel.
 
     Payload:
@@ -363,7 +372,7 @@ async def set_panel_bindings(panel_id: str, payload: dict, admin: dict = Depends
 
 
 @router.post("/{panel_id}/token")
-async def issue_token(panel_id: str, payload: dict, admin: dict = Depends(_require_admin), db=Depends(get_db)):
+async def issue_token(panel_id: str, payload: dict, admin: dict = Depends(require_admin), db=Depends(get_db)):
     """Issue a new device token for a panel daemon."""
     panel = await (await db.execute("SELECT panel_id FROM panels WHERE panel_id = ?", (panel_id,))).fetchone()
     if not panel:
@@ -404,7 +413,7 @@ async def issue_token(panel_id: str, payload: dict, admin: dict = Depends(_requi
 
 
 @router.delete("/{panel_id}/token/{token_id}")
-async def revoke_token(panel_id: str, token_id: str, admin: dict = Depends(_require_admin), db=Depends(get_db)):
+async def revoke_token(panel_id: str, token_id: str, admin: dict = Depends(require_admin), db=Depends(get_db)):
     """Revoke a device token immediately."""
     row = await (await db.execute(
         "SELECT token_hash FROM device_tokens WHERE id = ? AND panel_id = ?", (token_id, panel_id)
@@ -446,6 +455,15 @@ async def create_pin_challenge(payload: dict, user: dict = Depends(get_current_u
 
 async def create_pin_challenge_internal(panel_id: str, user_id, action_context, db) -> dict:
     """Internal version — callable from voice_tts without HTTP context."""
+    panel_row = await (
+        await db.execute(
+            "SELECT panel_id FROM panels WHERE panel_id = ? AND is_active = 1",
+            (panel_id,),
+        )
+    ).fetchone()
+    if not panel_row:
+        raise HTTPException(status_code=404, detail="Panel not found or inactive")
+
     challenge_id = uuid.uuid4().hex
     expires_at = datetime.fromtimestamp(time.time() + _CHALLENGE_TTL_S, tz=timezone.utc).isoformat()
     await db.execute(
@@ -458,18 +476,22 @@ async def create_pin_challenge_internal(panel_id: str, user_id, action_context, 
     # Broadcast modern auth action so the touch login page handles PIN.
     try:
         from push import broadcaster
-        await broadcaster.broadcast("all", "ui_action", {
-            "action": {
-                "id": f"panel_auth_{panel_id}_{challenge_id[:8]}",
-                "action_type": "panel_request_auth",
-                "payload": {
-                    "panel_id": panel_id,
-                    "challenge_id": challenge_id,
-                    "action_context": action_context,
-                    "expires_at": expires_at,
-                },
-            }
-        })
+        await broadcaster.broadcast_to_panel(
+            panel_id,
+            "ui_action",
+            {
+                "action": {
+                    "id": f"panel_auth_{panel_id}_{challenge_id[:8]}",
+                    "action_type": "panel_request_auth",
+                    "payload": {
+                        "panel_id": panel_id,
+                        "challenge_id": challenge_id,
+                        "action_context": action_context,
+                        "expires_at": expires_at,
+                    },
+                }
+            },
+        )
     except Exception as exc:
         logger.warning("panel_auth: broadcast failed: %s", exc)
 

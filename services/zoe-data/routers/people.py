@@ -297,7 +297,7 @@ async def create_person(
     await _recalc_health(db, person_id, user_id)
     await db.commit()
 
-    await broadcaster.broadcast("all", "people:created", person, user_id=user_id)
+    await broadcaster.broadcast("people", "people:created", person, user_id=user_id)
     return person
 
 
@@ -353,6 +353,7 @@ async def get_relationship_types(
 async def list_people_fields(
     active_only: bool = Query(True),
     user: dict = Depends(get_current_user),
+    _admin: dict = Depends(require_admin),
     db=Depends(get_db),
 ):
     await require_feature_access(db, user, feature="people", action="manage_fields")
@@ -536,7 +537,7 @@ async def update_person(
     await _store_person_memory(db, user_id, person, "updated")
     await _recalc_health(db, person_id, user_id)
     await db.commit()
-    await broadcaster.broadcast("all", "people:updated", {"id": person_id}, user_id=user_id)
+    await broadcaster.broadcast("people", "people:updated", {"id": person_id}, user_id=user_id)
     return person
 
 
@@ -567,7 +568,7 @@ async def delete_person(
     # Archive all MemPalace facts for this entity
     asyncio.ensure_future(_archive_person_mempalace(person_id, user_id))
 
-    await broadcaster.broadcast("all", "people:deleted", {"id": person_id}, user_id=user_id)
+    await broadcaster.broadcast("people", "people:deleted", {"id": person_id}, user_id=user_id)
     return {"ok": True, "id": person_id}
 
 
@@ -652,7 +653,7 @@ async def add_activity(
     await db.commit()
     await _recalc_health(db, person_id, user_id)
     await db.commit()
-    await broadcaster.broadcast("all", "people:updated", {"person_id": person_id}, user_id=user_id)
+    await broadcaster.broadcast("people", "people:updated", {"person_id": person_id}, user_id=user_id)
     return {"ok": True, "id": row_id}
 
 
@@ -965,7 +966,7 @@ async def add_relationship(
     )
     await db.commit()
 
-    await broadcaster.broadcast("all", "people:updated", {"id": person_id})
+    await broadcaster.broadcast("people", "people:updated", {"id": person_id}, user_id=user_id)
     return {"ok": True, "rel_id": rel_id, "other_person_id": other_id}
 
 

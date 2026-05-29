@@ -17,6 +17,9 @@ ZOE_AUTH_URL = os.environ.get("ZOE_AUTH_URL", "http://localhost:8002")
 # behaviour on trusted LAN deployments — a warning is logged on every such request
 # so the relaxation is visible in the logs.
 _UNAUTH_ROLE = os.environ.get("ZOE_UNAUTHENTICATED_ROLE", "guest").strip().lower() or "guest"
+_AUTH_FAIL_CLOSED = os.environ.get("ZOE_AUTH_FAIL_CLOSED", "true").lower() in (
+    "1", "true", "yes",
+)
 CACHE_TTL_SECONDS = 30
 DEFAULT_USER_ID = "family-admin"
 _DEGRADED_MARK = "__zoe_degraded__"
@@ -24,8 +27,10 @@ _DEGRADED_MARK = "__zoe_degraded__"
 _session_cache: Dict[str, Tuple[dict, float]] = {}
 
 
-def _degraded_user() -> Dict[str, Any]:
-    """When zoe-auth is down or erroring: serve family-admin without caching to session header."""
+def _degraded_user() -> Optional[Dict[str, Any]]:
+    """When zoe-auth is down: fail closed (None) or legacy degraded member (ZOE-4319)."""
+    if _AUTH_FAIL_CLOSED:
+        return None
     return {
         _DEGRADED_MARK: True,
         "user_id": DEFAULT_USER_ID,
@@ -88,33 +93,62 @@ async def _validate_with_auth_service(session_id: str) -> Optional[dict]:
                 if prof.status_code in (401, 403):
                     return None
                 if prof.status_code >= 500:
-                    logger.warning(
-                        "zoe-auth profile %s for session validation — using degraded user",
-                        prof.status_code,
-                    )
+                    logger.warning("zoe-auth profile %s for session validation", prof.status_code)
+                    if _AUTH_FAIL_CLOSED:
+                        raise HTTPException(
+                            status_code=503,
+                            detail="Authentication service unavailable",
+                        )
                     return _degraded_user()
-                logger.warning(
-                    "zoe-auth profile returned %s for session validation — degraded user",
-                    prof.status_code,
-                )
+                logger.warning("zoe-auth profile returned %s for session validation", prof.status_code)
+                if _AUTH_FAIL_CLOSED:
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Authentication service unavailable",
+                    )
                 return _degraded_user()
             if resp.status_code in (401, 403):
                 return None
             if resp.status_code >= 500:
-                logger.warning(
-                    "zoe-auth %s for session validation — using degraded user", resp.status_code
-                )
+                logger.warning("zoe-auth %s for session validation", resp.status_code)
+                if _AUTH_FAIL_CLOSED:
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Authentication service unavailable",
+                    )
                 return _degraded_user()
-            logger.warning("zoe-auth returned %s for session validation — degraded user", resp.status_code)
+            logger.warning("zoe-auth returned %s for session validation", resp.status_code)
+            if _AUTH_FAIL_CLOSED:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Authentication service unavailable",
+                )
             return _degraded_user()
+    except HTTPException:
+        raise
     except httpx.ConnectError:
-        logger.warning("zoe-auth unreachable, falling back to default user with member role")
+        logger.warning("zoe-auth unreachable during session validation")
+        if _AUTH_FAIL_CLOSED:
+            raise HTTPException(
+                status_code=503,
+                detail="Authentication service unavailable",
+            )
         return _degraded_user()
     except httpx.TimeoutException:
-        logger.warning("zoe-auth timeout during session validation — degraded user")
+        logger.warning("zoe-auth timeout during session validation")
+        if _AUTH_FAIL_CLOSED:
+            raise HTTPException(
+                status_code=503,
+                detail="Authentication service unavailable",
+            )
         return _degraded_user()
     except Exception as e:
-        logger.warning("Session validation error: %s — degraded user", e)
+        logger.warning("Session validation error: %s", e)
+        if _AUTH_FAIL_CLOSED:
+            raise HTTPException(
+                status_code=503,
+                detail="Authentication service unavailable",
+            )
         return _degraded_user()
 
 
@@ -179,6 +213,11 @@ async def get_current_user(request: Request) -> dict:
         logger.warning("Invalid session: %s...", session_id[:20])
         raise HTTPException(status_code=401, detail="Invalid or expired session")
     if validated.get(_DEGRADED_MARK):
+        if _AUTH_FAIL_CLOSED:
+            raise HTTPException(
+                status_code=503,
+                detail="Authentication service unavailable",
+            )
         return {k: v for k, v in validated.items() if k != _DEGRADED_MARK}
     _cache_set(session_id, validated)
     return validated
@@ -244,3 +283,21 @@ async def get_a2a_caller(request: Request) -> dict:
         )
 
     return user
+
+
+_ZOE_INTERNAL_TOKEN = os.environ.get("ZOE_INTERNAL_TOKEN", "")
+
+
+async def require_internal_token(request: Request) -> None:
+    """Dependency for internal-only endpoints (e.g. MCP → main.py bridge calls)."""
+    client_host = request.client.host if request.client else ""
+    if client_host in ("127.0.0.1", "::1", "localhost"):
+        return
+    if _ZOE_INTERNAL_TOKEN:
+        provided = request.headers.get("X-Internal-Token", "")
+        if provided and provided == _ZOE_INTERNAL_TOKEN:
+            return
+    raise HTTPException(
+        status_code=403,
+        detail="Internal endpoint: loopback or valid X-Internal-Token required",
+    )

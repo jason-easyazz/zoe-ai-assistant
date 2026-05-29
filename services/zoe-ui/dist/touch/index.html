@@ -1418,28 +1418,9 @@
                     }
                 }
             } catch (error) {
-                // Demo mode fallback
-                if ((selectedUsername === 'admin' && currentPin === 'admin') || 
-                    (selectedUsername === 'user' && currentPin === 'user') ||
-                    (selectedUserId === 'guest')) {
-                    
-                    const demoSession = {
-                        success: true,
-                        user_id: selectedUserId,
-                        username: selectedUsername,
-                        role: selectedUserId === 'guest' ? 'guest' : selectedUsername.toLowerCase(),
-                        session_id: 'demo_' + Date.now(),
-                        session_type: 'passcode',
-                        expires_at: new Date(Date.now() + 24*60*60*1000).toISOString(),
-                        demo_mode: true
-                    };
-                    
-                    handleSuccessfulAuth(demoSession);
-            } else {
-                    showAuthError('Auth service offline. Try admin/admin or user/user');
-                    currentPin = '';
-                    updatePinDisplay();
-                }
+                showAuthError('Authentication service unavailable. Try again when Zoe auth is online.');
+                currentPin = '';
+                updatePinDisplay();
             }
         }
 
@@ -1470,25 +1451,7 @@
                     showAuthError('Invalid password');
                 }
             } catch (error) {
-                // Demo mode fallback
-                if ((selectedUsername === 'admin' && password === 'admin') || 
-                    (selectedUsername === 'user' && password === 'user')) {
-                    
-                    const demoSession = {
-                        success: true,
-                        user_id: selectedUserId,
-                        username: selectedUsername,
-                        role: selectedUsername.toLowerCase(),
-                        session_id: 'demo_' + Date.now(),
-                        session_type: 'password',
-                        expires_at: new Date(Date.now() + 24*60*60*1000).toISOString(),
-                        demo_mode: true
-                    };
-                    
-                    handleSuccessfulAuth(demoSession);
-                } else {
-                    showAuthError('Auth service offline. Try admin/admin or user/user');
-                }
+                showAuthError('Authentication service unavailable. Try again when Zoe auth is online.');
             }
         }
 

@@ -179,12 +179,17 @@ async def _run_task(
         )
         try:
             from push import broadcaster
-            await broadcaster.broadcast(user_id, "background_task_done", {
-                "task_id": task_id,
-                "result": result[:500],
-                "session_id": session_id,
-                "panel_id": panel_id,
-            })
+            await broadcaster.broadcast(
+                "all",
+                "background_task_done",
+                {
+                    "task_id": task_id,
+                    "result": result[:500],
+                    "session_id": session_id,
+                    "panel_id": panel_id,
+                },
+                user_id=user_id,
+            )
             if panel_id:
                 await broadcaster.broadcast("all", "panel:announce", {
                     "panel_id": panel_id,
@@ -203,11 +208,16 @@ async def _run_task(
             logger.debug("background_runner: engineering reconcile failed: %s", _ew_exc)
         try:
             from push import broadcaster
-            await broadcaster.broadcast(user_id, "background_task_error", {
-                "task_id": task_id,
-                "error": str(exc),
-                "session_id": session_id,
-            })
+            await broadcaster.broadcast(
+                "all",
+                "background_task_error",
+                {
+                    "task_id": task_id,
+                    "error": str(exc),
+                    "session_id": session_id,
+                },
+                user_id=user_id,
+            )
         except Exception:
             pass
     finally:

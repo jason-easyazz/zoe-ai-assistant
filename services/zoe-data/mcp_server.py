@@ -2526,25 +2526,21 @@ async def _execute_tool(db, name: str, args: dict):
         action_context = str(args.get("action_context") or "Authorise action").strip()
         if not panel_id:
             return {"error": "panel_id is required"}
-        import uuid as _uuid
-        import time as _time
-        from datetime import datetime as _dt, timezone as _tz
-        challenge_id = _uuid.uuid4().hex
-        ttl = 120
-        expires_at = _dt.fromtimestamp(_time.time() + ttl, tz=_tz.utc).isoformat()
-        await db.execute(
-            """INSERT INTO panel_auth_challenges (challenge_id, panel_id, user_id, action_context, status, expires_at)
-               VALUES (?, ?, ?, ?, 'pending', ?)""",
-            (challenge_id, panel_id, user_id, action_context, expires_at),
+        from routers.panel_auth import create_pin_challenge_internal
+
+        result = await create_pin_challenge_internal(
+            panel_id=panel_id,
+            user_id=user_id,
+            action_context={"message": action_context},
+            db=db,
         )
-        await _notify_ui("all", "panel_pin_request", {
+        return {
+            "ok": True,
+            "challenge_id": result["challenge_id"],
             "panel_id": panel_id,
-            "challenge_id": challenge_id,
-            "action_context": action_context,
-            "expires_at": expires_at,
-        })
-        return {"ok": True, "challenge_id": challenge_id, "panel_id": panel_id, "expires_at": expires_at,
-                "note": "Show PIN pad to user; call panel_check_auth to confirm approval."}
+            "expires_at": result["expires_at"],
+            "note": "Show PIN pad to user; call panel_check_auth to confirm approval.",
+        }
 
     elif name == "panel_check_auth":
         challenge_id = str(args.get("challenge_id") or "").strip()

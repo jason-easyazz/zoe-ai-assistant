@@ -170,5 +170,8 @@ async def enqueue_ui_action(
         "requires_confirmation": bool(requires_confirmation),
         "confirmation_token": confirmation_token if requires_confirmation else None,
     }
-    await broadcaster.broadcast("all", "ui_action", message)
+    if panel_id:
+        await broadcaster.broadcast_to_panel(panel_id, "ui_action", message)
+    else:
+        await broadcaster.broadcast("all", "ui_action", message)
     return message

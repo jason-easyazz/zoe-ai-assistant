@@ -189,7 +189,22 @@ async def maybe_create_update_notification(db, user_id: str, current: str | None
         await broadcaster.broadcast(
             "all",
             "notification_created",
-            {"id": nid, "type": "info", "title": title, "message": message},
+            {
+                "id": nid,
+                "type": "info",
+                "title": title,
+                "message": message,
+                "url": "/updates.html?highlight=openclaw",
+            },
+        )
+        from routers.push import send_push_to_user
+
+        await send_push_to_user(
+            user_id=user_id,
+            title=title,
+            body=message,
+            url="/updates.html?highlight=openclaw",
+            extra={"kind": "openclaw_update", "latest": latest},
         )
     except Exception:
         logger.debug("notification broadcast failed", exc_info=True)

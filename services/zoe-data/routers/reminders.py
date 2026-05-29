@@ -174,6 +174,8 @@ async def update_reminder(
     row = await cursor.fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Reminder not found")
+    if dict(row).get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Not authorised to edit this reminder")
 
     updates = []
     params = []
@@ -222,6 +224,8 @@ async def delete_reminder(
     row = await cursor.fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Reminder not found")
+    if dict(row).get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Not authorised to delete this reminder")
 
     await db.execute(
         "UPDATE reminders SET deleted = 1, updated_at = NOW() WHERE id = ?",

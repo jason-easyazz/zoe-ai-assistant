@@ -50,9 +50,21 @@
     };
     document.head.appendChild(orbScript);
 
+    function _orbMsgKey() {
+        try {
+            var uid = (window.zoeAuth && window.zoeAuth.getUserId && window.zoeAuth.getUserId()) || 'guest';
+            return 'orbChatMessages_' + uid;
+        } catch (e) { return 'orbChatMessages_guest'; }
+    }
+
+    window.addEventListener('zoe:logout', function() {
+        try { localStorage.removeItem(_orbMsgKey()); } catch (e) {}
+        try { localStorage.removeItem('orbChatMessages'); } catch (e) {}
+    });
+
     function _restoreOrbState() {
         try {
-            var saved = localStorage.getItem('orbChatMessages');
+            var saved = localStorage.getItem(_orbMsgKey());
             if (!saved) return;
             var msgs = JSON.parse(saved);
             var container = document.getElementById('orbChatMessages');
@@ -78,7 +90,7 @@
             });
             if (messages.length > 1) {
                 var recent = messages.slice(-20);
-                localStorage.setItem('orbChatMessages', JSON.stringify(recent));
+                localStorage.setItem(_orbMsgKey(), JSON.stringify(recent));
             }
         } catch (e) { /* ignore */ }
     });

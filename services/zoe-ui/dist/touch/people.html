@@ -1254,13 +1254,18 @@
     // ─────────────────────────────────────────────
     // WebSocket: reload card on people:updated
     function initPeopleWS() {
-        const wsUrl = (location.protocol === 'https:' ? 'wss' : 'ws') + '://' + location.host + '/ws';
+        const uid = (window.zoeAuth && window.zoeAuth.getUserId && window.zoeAuth.getUserId()) || 'family-admin';
+        const sid = (window.zoeAuth && window.zoeAuth.getSessionId && window.zoeAuth.getSessionId()) || '';
+        const wsUrl = (location.protocol === 'https:' ? 'wss' : 'ws') + '://' + location.host
+            + '/api/people/ws/' + encodeURIComponent(uid)
+            + (sid ? ('?session_id=' + encodeURIComponent(sid)) : '');
         const ws = new WebSocket(wsUrl);
         ws.onmessage = async (evt) => {
             try {
                 const msg = JSON.parse(evt.data);
-                const type = msg.type || msg.event;
-                if (['people:updated', 'people:created', 'people:deleted'].includes(type)) {
+                const type = msg.type || (msg.data && msg.data.event) || msg.event;
+                const ev = type && String(type).includes(':') ? type : (msg.data && msg.data.type);
+                if (['people:updated', 'people:created', 'people:deleted'].includes(ev)) {
                     await loadPeople();
                     // If detail panel is open for this person, refresh its current tab
                     const pid = (msg.data||msg).person_id || (msg.data||msg).id;

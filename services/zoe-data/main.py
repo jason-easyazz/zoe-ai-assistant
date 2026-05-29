@@ -3,7 +3,7 @@ import os
 import time
 import uuid as _uuid_mod
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, Query
+from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from database import init_db
@@ -279,6 +279,14 @@ async def lifespan(app: FastAPI):
                 client = MULClient()
                 if not client.is_configured():
                     continue
+                try:
+                    from multica_autopilot_sync import close_stale_autopilot_wrappers
+
+                    _n_stale = await close_stale_autopilot_wrappers()
+                    if _n_stale:
+                        logger.info("multica_poll: close_stale_autopilot_wrappers closed %d", _n_stale)
+                except Exception as _stale_exc:
+                    logger.debug("multica_poll: stale wrapper cleanup failed: %s", _stale_exc)
                 # Fast-path: auto-close stale autopilot tracker todos (no agent needed)
                 stale_todos = await client.list_issues(status="todo")
                 _now_ts = _t.time()
@@ -306,6 +314,28 @@ async def lifespan(app: FastAPI):
                     title = issue.get("title", "")
                     if not issue_id:
                         continue
+                    if title.startswith("Autopilot:"):
+                        try:
+                            import datetime as _dt
+
+                            _created = issue.get("created_at", "")
+                            _age_h = 0.0
+                            try:
+                                _age_h = (
+                                    _dt.datetime.now(_dt.timezone.utc)
+                                    - _dt.datetime.fromisoformat(_created.replace("Z", "+00:00"))
+                                ).total_seconds() / 3600
+                            except Exception:
+                                _age_h = 2.0
+                            if _age_h >= 2:
+                                await client.update_issue(issue_id, status="done")
+                                logger.info(
+                                    "multica_poll: closed stale in_progress autopilot '%s'",
+                                    title[:50],
+                                )
+                        except Exception as _ap_exc:
+                            logger.debug("multica_poll: autopilot in_progress close: %s", _ap_exc)
+                        continue
                     try:
                         from db_pool import get_db_ctx  # type: ignore[import]
                         async with get_db_ctx() as _db:
@@ -315,6 +345,9 @@ async def lifespan(app: FastAPI):
                                    ORDER BY updated_at DESC LIMIT 1""",
                                 str(issue_id),
                             )
+                        if rows and rows[0]["phase"] == "blocked" and title.startswith("Autopilot:"):
+                            await client.update_issue(issue_id, status="done")
+                            continue
                         if rows and rows[0]["phase"] in ("done", "ready_for_human"):
                             new_status = "done" if rows[0]["phase"] == "done" else "in_review"
                             await client.update_issue(issue_id, status=new_status)
@@ -337,6 +370,19 @@ async def lifespan(app: FastAPI):
                                 logger.debug("multica_poll: ws push failed: %s", _push_exc)
                     except Exception as _inner_exc:
                         logger.debug("multica_poll: inner error for issue %s: %s", issue_id, _inner_exc)
+
+                for _review in await client.list_issues(status="in_review") or []:
+                    _rt = _review.get("title", "")
+                    _rid = _review.get("id")
+                    if _rid and _rt.startswith("Autopilot:"):
+                        try:
+                            await client.update_issue(_rid, status="done")
+                            logger.info(
+                                "multica_poll: closed in_review autopilot '%s'",
+                                _rt[:50],
+                            )
+                        except Exception as _rev_exc:
+                            logger.debug("multica_poll: in_review autopilot close: %s", _rev_exc)
             except asyncio.CancelledError:
                 return
             except Exception as _exc:
@@ -585,7 +631,9 @@ async def websocket_push(
             await websocket.close(1008, "Insufficient privileges")
             return
         # Auth OK – connect to requested channel
-        await broadcaster.connect(websocket, channel)
+        await broadcaster.connect(
+            websocket, channel, user_id=str(user.get("user_id") or "")
+        )
     # -----------------------------------------------------------------
     # Normal data relay loop
     try:
@@ -615,7 +663,9 @@ async def calendar_ws(websocket: WebSocket, user_id: str):
     if user.get("role") == "member" and user.get("user_id") and user.get("user_id") != user_id:
         await websocket.close(1008, "Forbidden")
         return
-    await broadcaster.connect(websocket, "calendar")
+    await broadcaster.connect(
+        websocket, "calendar", user_id=str(user.get("user_id") or user_id)
+    )
     try:
         while True:
             data = await websocket.receive_text()
@@ -636,7 +686,9 @@ async def lists_ws_with_user(websocket: WebSocket, user_id: str):
     if user.get("role") == "member" and user.get("user_id") and user.get("user_id") != user_id:
         await websocket.close(1008, "Forbidden")
         return
-    await broadcaster.connect(websocket, "lists")
+    await broadcaster.connect(
+        websocket, "lists", user_id=str(user.get("user_id") or user_id)
+    )
     try:
         while True:
             data = await websocket.receive_text()
@@ -653,7 +705,9 @@ async def lists_ws(websocket: WebSocket):
     if user is None or user.get("role") not in ("member", "admin", "agent"):
         await websocket.close(1008, "Unauthorized")
         return
-    await broadcaster.connect(websocket, "lists")
+    await broadcaster.connect(
+        websocket, "lists", user_id=str(user.get("user_id") or "")
+    )
     try:
         while True:
             data = await websocket.receive_text()
@@ -674,14 +728,16 @@ async def people_ws(websocket: WebSocket, user_id: str):
     if user.get("role") == "member" and user.get("user_id") and user.get("user_id") != user_id:
         await websocket.close(1008, "Forbidden")
         return
-    await broadcaster.connect(websocket, "all")
+    await broadcaster.connect(
+        websocket, "people", user_id=str(user.get("user_id") or user_id)
+    )
     try:
         while True:
             data = await websocket.receive_text()
             if data == "ping":
                 await websocket.send_json({"type": "pong"})
     except WebSocketDisconnect:
-        broadcaster.disconnect(websocket, "all")
+        broadcaster.disconnect(websocket, "people")
 
 
 @app.websocket("/api/reminders/ws/{user_id}")
@@ -695,7 +751,9 @@ async def reminders_ws(websocket: WebSocket, user_id: str):
     if user.get("role") == "member" and user.get("user_id") and user.get("user_id") != user_id:
         await websocket.close(1008, "Forbidden")
         return
-    await broadcaster.connect(websocket, "reminders")
+    await broadcaster.connect(
+        websocket, "reminders", user_id=str(user.get("user_id") or user_id)
+    )
     try:
         while True:
             data = await websocket.receive_text()
@@ -716,7 +774,9 @@ async def notes_ws(websocket: WebSocket, user_id: str):
     if user.get("role") == "member" and user.get("user_id") and user.get("user_id") != user_id:
         await websocket.close(1008, "Forbidden")
         return
-    await broadcaster.connect(websocket, "notes")
+    await broadcaster.connect(
+        websocket, "notes", user_id=str(user.get("user_id") or user_id)
+    )
     try:
         while True:
             data = await websocket.receive_text()
@@ -733,7 +793,9 @@ async def journal_ws(websocket: WebSocket, user_id: str):
     if user is None or user.get("role") not in ("member", "admin", "agent"):
         await websocket.close(1008, "Unauthorized")
         return
-    await broadcaster.connect(websocket, "journal")
+    await broadcaster.connect(
+        websocket, "journal", user_id=str(user.get("user_id") or user_id)
+    )
     try:
         while True:
             data = await websocket.receive_text()
@@ -760,7 +822,12 @@ async def _resolve_ws_session(session_id: str | None) -> dict | None:
     if not session_id:
         return None
     from auth import _validate_with_auth_service
-    return await _validate_with_auth_service(session_id)
+    from fastapi import HTTPException
+
+    try:
+        return await _validate_with_auth_service(session_id)
+    except HTTPException:
+        return None
 
 
 async def _resolve_ws_user(session_id: str) -> str:

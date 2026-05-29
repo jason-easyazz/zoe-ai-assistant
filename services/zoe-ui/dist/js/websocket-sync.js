@@ -320,6 +320,17 @@ window.ZoeWebSockets = {
             ? msg.data
             : (msg || {}));
 
+        this.push.on('background_task_done', () => {
+            if (typeof checkPendingTasks === 'function') {
+                checkPendingTasks();
+            }
+        });
+        this.push.on('background_task_error', () => {
+            if (typeof checkPendingTasks === 'function') {
+                checkPendingTasks();
+            }
+        });
+
         // ── Instant panel action delivery ──────────────────────────────────
         this.push.on('ui_action', (data) => {
             const payload = unwrapPayload(data);

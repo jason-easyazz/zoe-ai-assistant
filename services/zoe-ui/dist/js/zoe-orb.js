@@ -364,10 +364,11 @@ function initIntelligenceSSE() {
 
     setInterval(async () => {
         try {
-            const res = await fetch('/api/notifications/pending');
+            const res = await fetch('/api/notifications/pending', { credentials: 'include' });
             if (res.ok) {
-                const items = await res.json();
-                if (Array.isArray(items) && items.length > 0) {
+                const body = await res.json();
+                const items = body.notifications || (Array.isArray(body) ? body : []);
+                if (items.length > 0) {
                     items.forEach(n => handleIntelligenceEvent({
                         type: 'proactive_suggestion', data: n
                     }));
@@ -420,9 +421,9 @@ function handleIntelligenceEvent(event) {
           <div style="font-weight:600; margin-bottom:6px;">${n.title ? n.title : 'Suggestion'}</div>
           <div style="margin-bottom:10px; color:#374151;">${n.message}</div>
           <div style="display:flex; gap:8px; flex-wrap:wrap;">
-            <button class="btn" style="padding:6px 10px; border-radius:8px; border:1px solid #e5e7eb; background:#10b981; color:white;" onclick="suggestionAction(${n.id}, 'accept')">Yes</button>
-            <button class="btn" style="padding:6px 10px; border-radius:8px; border:1px solid #e5e7eb; background:white;" onclick="suggestionAction(${n.id}, 'dismiss')">Not now</button>
-            <button class="btn" style="padding:6px 10px; border-radius:8px; border:1px solid #e5e7eb; background:white;" onclick="suggestionAction(${n.id}, 'never')">Don't show again</button>
+            <button class="btn" style="padding:6px 10px; border-radius:8px; border:1px solid #e5e7eb; background:#10b981; color:white;" onclick="suggestionAction(${JSON.stringify(n.id)}, 'accept')">Yes</button>
+            <button class="btn" style="padding:6px 10px; border-radius:8px; border:1px solid #e5e7eb; background:white;" onclick="suggestionAction(${JSON.stringify(n.id)}, 'dismiss')">Not now</button>
+            <button class="btn" style="padding:6px 10px; border-radius:8px; border:1px solid #e5e7eb; background:white;" onclick="suggestionAction(${JSON.stringify(n.id)}, 'never')">Don't show again</button>
             <button class="btn" style="padding:6px 10px; border-radius:8px; border:1px solid #e5e7eb; background:#7B61FF; color:white;" onclick="handleSuggestionWithChat(window.__lastSuggestion)">💬 Discuss</button>
           </div>`;
         showOrbToast(html, true, true); // Persistent until dismissed

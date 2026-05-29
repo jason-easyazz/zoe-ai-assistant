@@ -1167,7 +1167,13 @@
             redirectToApp() {
                 const urlParams = new URLSearchParams(window.location.search);
                 const redirect = urlParams.get('redirect') || 'dashboard.html';
-                window.location.href = redirect;
+                let target = redirect.trim();
+                if (/^https?:\/\//i.test(target) || target.startsWith('//')) {
+                    target = 'dashboard.html';
+                } else if (!target.startsWith('/') && !target.endsWith('.html')) {
+                    target = 'dashboard.html';
+                }
+                window.location.href = target;
             }
 
             getLocation() {
