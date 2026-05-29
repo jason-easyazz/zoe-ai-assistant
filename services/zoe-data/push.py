@@ -69,13 +69,11 @@ class PushBroadcaster:
                 self._connections["all"].discard(websocket)
         self._ws_users.pop(websocket, None)
 
-    async def broadcast(self, channel: str, event_type: str, data: dict, user_id: str | None = None):
-        """Broadcast an event to all subscribers on ``channel``.
+    async def broadcast(self, channel: str, event_type: str, data: dict) -> int:
+        """Broadcast to all subscribers on a channel.
 
-        When ``user_id`` is provided only connections that were registered with
-        the same ``user_id`` receive the message, preventing cross-user leakage.
-        Panel connections (``user_id=None``) are never filtered out so that
-        touch-panel fan-outs continue to work.
+        Returns the number of subscribers that received the message successfully.
+        Returns 0 if the channel has no connections or all sends failed.
         """
         self._sequence += 1
         message = {
@@ -85,9 +83,10 @@ class PushBroadcaster:
             "sequence": self._sequence
         }
         if channel not in self._connections:
-            return
+            return 0
 
         dead = set()
+        delivered = 0
         for ws in self._connections[channel]:
             # Skip if this connection belongs to a different user.
             ws_user = self._ws_users.get(ws)
@@ -95,11 +94,14 @@ class PushBroadcaster:
                 continue
             try:
                 await ws.send_json(message)
+                delivered += 1
             except Exception:
                 dead.add(ws)
 
         for ws in dead:
             self._connections[channel].discard(ws)
+
+        return delivered
 
     async def broadcast_to_panel(self, panel_id: str, event_type: str, data: dict):
         """Send an event only to the named panel's dedicated channel.

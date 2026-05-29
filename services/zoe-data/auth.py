@@ -184,8 +184,11 @@ async def get_current_user(request: Request) -> dict:
     return validated
 
 
+_ADMIN_ROLES = {"admin", "family-admin"}  # ZOE-22dcd46d: honour family-admin alias
+
+
 async def require_admin(user: dict = Depends(get_current_user)) -> dict:
-    if user.get("role") != "admin":
+    if user.get("role") not in _ADMIN_ROLES:
         raise HTTPException(status_code=403, detail="Admin access required")
     return user
 
@@ -197,14 +200,28 @@ async def get_a2a_caller(request: Request) -> dict:
     """A2A-aware auth dependency.
 
     Accepts either:
-    1. ``Authorization: Bearer <ZOE_A2A_TOKEN>`` header (inbound A2A agents)
-    2. ``X-Session-ID`` / ``X-Device-Token`` (UI and voice daemon paths)
+    1. ``Authorization: Bearer <token>`` header (inbound A2A agents).
+       Requires ``ZOE_A2A_TOKEN`` to be configured; if that env-var is empty the
+       Bearer path is disabled and any Bearer request is rejected immediately so
+       that a misconfigured deployment can never silently accept unauthenticated
+       agent tasks.
+    2. ``X-Session-ID`` / ``X-Device-Token`` (UI and voice daemon paths).
 
     Returns a user dict. External A2A agents get ``user_id="a2a-agent"``,
     ``role="agent"`` so they can submit tasks but not access personal data.
+
+    Raises 401 for unauthenticated (guest) callers — A2A task submission is
+    always a privileged operation and must never be available anonymously.
     """
     auth_header = request.headers.get("Authorization", "")
-    if auth_header.startswith("Bearer ") and _ZOE_A2A_TOKEN:
+    if auth_header.startswith("Bearer "):
+        if not _ZOE_A2A_TOKEN:
+            # Token auth path is disabled (ZOE_A2A_TOKEN not configured).
+            # Reject rather than silently falling through to guest access.
+            raise HTTPException(
+                status_code=401,
+                detail="A2A bearer token auth is not configured on this server",
+            )
         token = auth_header[len("Bearer "):]
         if token == _ZOE_A2A_TOKEN:
             return {
@@ -216,4 +233,14 @@ async def get_a2a_caller(request: Request) -> dict:
         raise HTTPException(status_code=401, detail="Invalid A2A bearer token")
 
     # Fall through to standard session/device-token auth
-    return await get_current_user(request)
+    user = await get_current_user(request)
+
+    # Reject unauthenticated (guest) callers — A2A task submission is a
+    # privileged operation; anonymous access is never permitted.
+    if user.get("role") == "guest":
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required to submit agent tasks",
+        )
+
+    return user

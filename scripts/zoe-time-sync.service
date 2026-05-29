@@ -5,8 +5,8 @@ Wants=network.target
 
 [Service]
 Type=simple
-User=pi
-Group=pi
+User=zoe
+Group=zoe
 WorkingDirectory=/home/zoe/assistant
 ExecStart=/usr/bin/python3 /home/zoe/assistant/scripts/time_sync_service.py start
 Restart=always

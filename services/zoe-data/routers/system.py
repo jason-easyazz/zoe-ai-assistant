@@ -555,17 +555,22 @@ def _build_agent_card() -> dict:
 
     base_url = os.environ.get("ZOE_BASE_URL", "http://localhost:8000").rstrip("/")
 
-    # Dynamically read MCP tool count if agent_sync has already run
-    capabilities_md = _Path("/home/zoe/assistant/CAPABILITIES.md")
+    # Count only the tools registered with the MCP server (not all internal tools).
     mcp_tool_count = 0
-    if capabilities_md.exists():
-        try:
-            content = capabilities_md.read_text()
-            import re as _re
-            tool_lines = [l for l in content.splitlines() if l.startswith("- `")]
-            mcp_tool_count = len(tool_lines)
-        except Exception:
-            pass
+    try:
+        from mcp_server import TOOLS as _mcp_tools  # type: ignore[import]
+        mcp_tool_count = len(_mcp_tools)
+    except Exception:
+        # Fall back to CAPABILITIES.md line count if mcp_server is unavailable
+        capabilities_md = _Path("/home/zoe/assistant/CAPABILITIES.md")
+        if capabilities_md.exists():
+            try:
+                content = capabilities_md.read_text()
+                import re as _re
+                tool_lines = [l for l in content.splitlines() if l.startswith("- `")]
+                mcp_tool_count = len(tool_lines)
+            except Exception:
+                pass
 
     # Runtime health from module-level dict (populated at startup)
     from main import _RUNTIME_HEALTH  # type: ignore[import]
@@ -798,12 +803,22 @@ async def a2a_task_result(task_id: str, user: dict = Depends(get_a2a_caller)):
 
     from db_pool import get_db_ctx as _get_pg_db
 
-    async with _get_pg_db() as db:
-        async with db.execute(
-            "SELECT id, user_id, task, status, result, created_at, completed_at FROM background_tasks WHERE id=$1",
-            (task_id,),
-        ) as cur:
-            row = await cur.fetchone()
+    # task IDs are SERIAL integers; reject non-numeric IDs immediately.
+    try:
+        task_id_int = int(task_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    try:
+        async with _get_pg_db() as db:
+            async with db.execute(
+                "SELECT id, user_id, task, status, result, created_at, completed_at FROM background_tasks WHERE id=$1",
+                (task_id_int,),
+            ) as cur:
+                row = await cur.fetchone()
+    except Exception as exc:
+        logger.error("a2a_task_result DB error for task_id=%s: %s", task_id, exc)
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
 
     if row is None:
         raise HTTPException(status_code=404, detail="Task not found")
