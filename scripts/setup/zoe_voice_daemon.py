@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# Optional persistent log file (e.g. ZOE_VOICE_LOG=/home/pi/.zoe-voice/voice.log)
+# Optional persistent log file (e.g. ZOE_VOICE_LOG=/home/zoe/.zoe-voice/voice.log)
 _voice_log = os.environ.get("ZOE_VOICE_LOG", "").strip()
 if _voice_log:
     try:
