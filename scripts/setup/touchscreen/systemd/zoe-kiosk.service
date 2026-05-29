@@ -5,9 +5,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=pi
+User=zoe
 Environment=DISPLAY=:0
-Environment=XAUTHORITY=/home/pi/.Xauthority
+Environment=XAUTHORITY=/home/zoe/.Xauthority
 ExecStart=/opt/TouchKio/start-kiosk.sh
 Restart=always
 RestartSec=5
