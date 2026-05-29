@@ -164,7 +164,7 @@ async def create_entry(
     await _store_journal_memory(db, user_id, entry, "created")
     await db.commit()
 
-    await broadcaster.broadcast("journal", "entry_created", entry)
+    await broadcaster.broadcast("journal", "entry_created", entry, user_id=user_id)
 
     # Person CRM: extract person facts from journal entry in background
     import asyncio as _aio
@@ -367,7 +367,7 @@ async def update_entry(
     await _store_journal_memory(db, user_id, entry, "updated")
     await db.commit()
 
-    await broadcaster.broadcast("journal", "entry_updated", entry)
+    await broadcaster.broadcast("journal", "entry_updated", entry, user_id=user_id)
     return entry
 
 
@@ -394,5 +394,5 @@ async def delete_entry(
     )
     await db.commit()
 
-    await broadcaster.broadcast("journal", "entry_deleted", {"id": entry_id})
+    await broadcaster.broadcast("journal", "entry_deleted", {"id": entry_id}, user_id=user_id)
     return {"ok": True, "id": entry_id}
