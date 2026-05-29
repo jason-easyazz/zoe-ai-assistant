@@ -6,9 +6,9 @@ This directory stores version-controlled templates for the Zoe touchscreen kiosk
 
 - `config.json` -> `/opt/TouchKio/config.json`
 - `start-kiosk.sh` -> `/opt/TouchKio/start-kiosk.sh`
-- `zoe-kiosk.desktop` -> `/home/pi/.config/autostart/zoe-kiosk.desktop`
-- `display-rotation.desktop` -> `/home/pi/.config/autostart/display-rotation.desktop`
-- `force-rotate.desktop` -> `/home/pi/.config/autostart/force-rotate.desktop`
+- `zoe-kiosk.desktop` -> `/home/zoe/.config/autostart/zoe-kiosk.desktop`
+- `display-rotation.desktop` -> `/home/zoe/.config/autostart/display-rotation.desktop`
+- `force-rotate.desktop` -> `/home/zoe/.config/autostart/force-rotate.desktop`
 
 ## Deploy to touchscreen
 
@@ -17,7 +17,7 @@ This directory stores version-controlled templates for the Zoe touchscreen kiosk
 ```bash
 scripts/setup/touchscreen/install_touchscreen.sh \
   --host 192.168.1.61 \
-  --user pi \
+  --user zoe \
   --server-url https://192.168.1.218 \
   --panel-id zoe-touch-pi
 ```
@@ -32,7 +32,7 @@ scripts/setup/touchscreen/install_touchscreen.sh --ssh-key ~/.ssh/zoe_pi_key
 
 ```bash
 PI_HOST=192.168.1.61
-PI_USER=pi
+PI_USER=zoe
 
 scp scripts/setup/touchscreen/config.json "${PI_USER}@${PI_HOST}:/tmp/config.json"
 scp scripts/setup/touchscreen/start-kiosk.sh "${PI_USER}@${PI_HOST}:/tmp/start-kiosk.sh"
