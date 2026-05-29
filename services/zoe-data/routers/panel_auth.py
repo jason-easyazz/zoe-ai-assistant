@@ -26,7 +26,7 @@ from typing import Optional
 import asyncio
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
-from auth import get_current_user
+from auth import get_current_user, require_admin
 from database import get_db
 
 logger = logging.getLogger(__name__)
@@ -75,12 +75,6 @@ def _pin_clear(challenge_id: str) -> None:
 
 def _hash_token(raw: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
-
-
-def _require_admin(user: dict = Depends(get_current_user)) -> dict:
-    if user.get("role") not in ("admin", "family-admin"):
-        raise HTTPException(status_code=403, detail="Admin role required")
-    return user
 
 
 def lookup_device_token(raw_token: str) -> dict | None:
@@ -146,7 +140,7 @@ async def load_device_tokens(db) -> None:
 
 
 @router.get("")
-async def list_panels(admin: dict = Depends(_require_admin), db=Depends(get_db)):
+async def list_panels(admin: dict = Depends(require_admin), db=Depends(get_db)):
     cur = await db.execute(
         """SELECT p.panel_id, p.name, p.location, p.panel_type, p.is_active, p.allow_guest,
                   p.ip_address, p.ssh_user, p.ssh_key_path, p.ssh_port,
@@ -180,7 +174,7 @@ async def panel_public_info(panel_id: str, db=Depends(get_db)):
 
 
 @router.get("/{panel_id}/status")
-async def panel_status(panel_id: str, admin: dict = Depends(_require_admin), db=Depends(get_db)):
+async def panel_status(panel_id: str, admin: dict = Depends(require_admin), db=Depends(get_db)):
     """Live status for a panel: last_seen_at, SSH reachability, active kiosk URL, default user."""
     row = await (await db.execute(
         """SELECT p.panel_id, p.name, p.location, p.is_active, p.ip_address,
@@ -232,7 +226,7 @@ async def panel_status(panel_id: str, admin: dict = Depends(_require_admin), db=
 
 
 @router.post("/register")
-async def register_panel(payload: dict, admin: dict = Depends(_require_admin), db=Depends(get_db)):
+async def register_panel(payload: dict, admin: dict = Depends(require_admin), db=Depends(get_db)):
     """Register a new panel (kiosk device)."""
     panel_id = str(payload.get("panel_id") or f"panel-{uuid.uuid4().hex[:8]}").strip()
     name = str(payload.get("name") or panel_id).strip()
@@ -261,7 +255,7 @@ async def register_panel(payload: dict, admin: dict = Depends(_require_admin), d
 
 
 @router.patch("/{panel_id}")
-async def update_panel(panel_id: str, payload: dict, admin: dict = Depends(_require_admin), db=Depends(get_db)):
+async def update_panel(panel_id: str, payload: dict, admin: dict = Depends(require_admin), db=Depends(get_db)):
     """Update mutable panel metadata (name, location, allow_guest, notes)."""
     row = await (await db.execute("SELECT panel_id FROM panels WHERE panel_id = ?", (panel_id,))).fetchone()
     if not row:
@@ -291,7 +285,7 @@ async def update_panel(panel_id: str, payload: dict, admin: dict = Depends(_requ
 
 
 @router.get("/{panel_id}/bindings")
-async def get_panel_bindings(panel_id: str, admin: dict = Depends(_require_admin), db=Depends(get_db)):
+async def get_panel_bindings(panel_id: str, admin: dict = Depends(require_admin), db=Depends(get_db)):
     """Return the current user bindings for a panel (admin view)."""
     row = await (await db.execute(
         "SELECT panel_id, name, allow_guest FROM panels WHERE panel_id = ?", (panel_id,)
@@ -317,7 +311,7 @@ async def get_panel_bindings(panel_id: str, admin: dict = Depends(_require_admin
 
 
 @router.put("/{panel_id}/bindings")
-async def set_panel_bindings(panel_id: str, payload: dict, admin: dict = Depends(_require_admin), db=Depends(get_db)):
+async def set_panel_bindings(panel_id: str, payload: dict, admin: dict = Depends(require_admin), db=Depends(get_db)):
     """Replace the user bindings for a panel.
 
     Payload:
@@ -378,7 +372,7 @@ async def set_panel_bindings(panel_id: str, payload: dict, admin: dict = Depends
 
 
 @router.post("/{panel_id}/token")
-async def issue_token(panel_id: str, payload: dict, admin: dict = Depends(_require_admin), db=Depends(get_db)):
+async def issue_token(panel_id: str, payload: dict, admin: dict = Depends(require_admin), db=Depends(get_db)):
     """Issue a new device token for a panel daemon."""
     panel = await (await db.execute("SELECT panel_id FROM panels WHERE panel_id = ?", (panel_id,))).fetchone()
     if not panel:
@@ -419,7 +413,7 @@ async def issue_token(panel_id: str, payload: dict, admin: dict = Depends(_requi
 
 
 @router.delete("/{panel_id}/token/{token_id}")
-async def revoke_token(panel_id: str, token_id: str, admin: dict = Depends(_require_admin), db=Depends(get_db)):
+async def revoke_token(panel_id: str, token_id: str, admin: dict = Depends(require_admin), db=Depends(get_db)):
     """Revoke a device token immediately."""
     row = await (await db.execute(
         "SELECT token_hash FROM device_tokens WHERE id = ? AND panel_id = ?", (token_id, panel_id)

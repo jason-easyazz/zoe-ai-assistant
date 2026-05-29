@@ -31,15 +31,22 @@ _HERMES_AGENT_ID = os.environ.get(
 _TZ = os.environ.get("ZOE_TIMEZONE", "Australia/Perth")
 
 # Default false: do not create a Multica tracker issue on every cron fire.
-_CREATE_ISSUES = os.environ.get("ZOE_MULTICA_AUTOPIOT_CREATE_ISSUES", "false").lower() in (
-    "1", "true", "yes",
-)
+_CREATE_ISSUES = (
+    os.environ.get("ZOE_MULTICA_AUTOPILOT_CREATE_ISSUES")
+    or os.environ.get("ZOE_MULTICA_AUTOPIOT_CREATE_ISSUES", "false")
+).lower() in ("1", "true", "yes")
 _CREATE_ISSUES_FOR = {
     t.strip().lower()
-    for t in os.environ.get("ZOE_MULTICA_AUTOPIOT_CREATE_ISSUES_FOR", "Platform Health Check").split(",")
+    for t in (
+        os.environ.get("ZOE_MULTICA_AUTOPILOT_CREATE_ISSUES_FOR")
+        or os.environ.get("ZOE_MULTICA_AUTOPIOT_CREATE_ISSUES_FOR", "Platform Health Check")
+    ).split(",")
     if t.strip()
 }
-_STALE_AUTOPL_AN_HOURS = float(os.environ.get("ZOE_MULTICA_AUTOPIOT_STALE_HOURS", "2"))
+_STALE_AUTOPILOT_HOURS = float(
+    os.environ.get("ZOE_MULTICA_AUTOPILOT_STALE_HOURS")
+    or os.environ.get("ZOE_MULTICA_AUTOPIOT_STALE_HOURS", "2")
+)
 
 def _is_configured() -> bool:
     return bool(_MULTICA_BASE_URL and _MULTICA_API_TOKEN and _MULTICA_WORKSPACE_ID)
@@ -329,7 +336,7 @@ async def close_stale_autopilot_wrappers(
 ) -> int:
     if not _is_configured():
         return 0
-    min_age_hours = _STALE_AUTOPL_AN_HOURS if min_age_hours is None else min_age_hours
+    min_age_hours = _STALE_AUTOPILOT_HOURS if min_age_hours is None else min_age_hours
     closed = 0
     terminal_phases = {"done", "ready_for_human", "blocked", "cancelled"}
     now = _dt.datetime.now(_dt.timezone.utc)

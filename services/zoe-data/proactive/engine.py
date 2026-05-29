@@ -148,18 +148,18 @@ async def fire_notification(
             log.warning("reminder fallback: in-app insert failed: %s", _fe)
 
     delivered = subscribers_reached > 0 or in_app_fallback_ok
-    if pending_id and delivered:
+    if pending_id:
         async with _get_compat_db() as db:
             await db.execute(
                 "UPDATE proactive_scheduled SET fired = 1 WHERE id = ?", (pending_id,)
             )
             await db.commit()
-    elif pending_id and not delivered:
-        log.warning(
-            "proactive: not marking scheduled %s fired — no push/in-app delivery for user %s",
-            pending_id,
-            user_id,
-        )
+        if trigger_type == "reminder" and not delivered:
+            log.warning(
+                "reminder scheduled %s marked fired without push/in-app delivery for user %s",
+                pending_id,
+                user_id,
+            )
 
 
 async def _send_push(user_id: str, message: str, extra: dict | None = None) -> int:

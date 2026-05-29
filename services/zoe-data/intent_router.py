@@ -406,6 +406,14 @@ _GREETING_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Open-domain Q&A / creative — route to agent path (not brittle per-phrase intents).
+_AGENT_CHAT_RE = re.compile(
+    r"^(?:tell me about|what(?:'s| is) the (?:capital|weather)|"
+    r"search the web|write me (?:an? )?(?:email|haiku|poem)|"
+    r"can you explain|set up (?:a )?new automation|what is happening in)",
+    re.IGNORECASE,
+)
+
 # === SMART HOME LIGHTS (ZOE-9) ===
 # Uses search() not match() so it works mid-sentence ("can you turn off the lights").
 _SMART_HOME_RE = re.compile(
@@ -1188,12 +1196,6 @@ def detect_intent(
         return Intent("user_issue_report", {"message": text})
 
     # Open-domain Q&A / creative — route to agent (closes intent-gap backlog without brittle regex)
-    _AGENT_CHAT_RE = re.compile(
-        r"^(?:tell me about|what(?:'s| is) the (?:capital|weather)|"
-        r"search the web|write me (?:an? )?(?:email|haiku|poem)|"
-        r"can you explain|set up (?:a )?new automation|what is happening in)",
-        re.IGNORECASE,
-    )
     if _AGENT_CHAT_RE.search(t):
         return Intent("extend_capability", {"raw": text})
 

@@ -138,7 +138,7 @@ async def test_close_stale_autopilot_wrappers_closes_old(monkeypatch):
             return list_resp
 
     monkeypatch.setattr(mas, "_is_configured", lambda: True)
-    monkeypatch.setattr(mas, "_STALE_AUTOPL_AN_HOURS", 0.0)
+    monkeypatch.setattr(mas, "_STALE_AUTOPILOT_HOURS", 0.0)
     monkeypatch.setattr(mas.httpx, "AsyncClient", lambda **kw: FakeHttp())
     monkeypatch.setitem(
         sys.modules,
