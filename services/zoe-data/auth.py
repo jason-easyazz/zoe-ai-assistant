@@ -184,8 +184,11 @@ async def get_current_user(request: Request) -> dict:
     return validated
 
 
+_ADMIN_ROLES = {"admin", "family-admin"}  # ZOE-22dcd46d: honour family-admin alias
+
+
 async def require_admin(user: dict = Depends(get_current_user)) -> dict:
-    if user.get("role") != "admin":
+    if user.get("role") not in _ADMIN_ROLES:
         raise HTTPException(status_code=403, detail="Admin access required")
     return user
 
@@ -241,36 +244,3 @@ async def get_a2a_caller(request: Request) -> dict:
         )
 
     return user
-
-
-_ZOE_INTERNAL_TOKEN = os.environ.get("ZOE_INTERNAL_TOKEN", "")
-
-
-async def require_internal_token(request: Request) -> None:
-    """Dependency for internal-only endpoints (e.g. MCP → main.py bridge calls).
-
-    Accepts requests that satisfy *either* condition:
-    1. The caller is on the loopback interface (127.0.0.1 / ::1).
-    2. The ``X-Internal-Token`` request header matches ``ZOE_INTERNAL_TOKEN``.
-
-    If ``ZOE_INTERNAL_TOKEN`` is unset the token path is disabled and only
-    loopback callers are admitted.  This keeps the endpoint locked down by
-    default while still allowing token-based auth for containerised deployments
-    where the MCP server and the data service run in separate containers on a
-    shared network.
-    """
-    client_host = request.client.host if request.client else ""
-    is_loopback = client_host in ("127.0.0.1", "::1", "localhost")
-    if is_loopback:
-        return
-
-    # Token path — only enabled when ZOE_INTERNAL_TOKEN is configured.
-    if _ZOE_INTERNAL_TOKEN:
-        provided = request.headers.get("X-Internal-Token", "")
-        if provided and provided == _ZOE_INTERNAL_TOKEN:
-            return
-
-    raise HTTPException(
-        status_code=403,
-        detail="Internal endpoint: loopback or valid X-Internal-Token required",
-    )
