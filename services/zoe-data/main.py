@@ -541,10 +541,49 @@ async def websocket_push(
     panel channel (receives both global 'all' events AND panel-specific events).
     Without panel_id, falls back to the plain channel subscription.
     """
+    # -----------------------------------------------------------------
+    # WebSocket auth and session validation
+    # -----------------------------------------------------------------
+    # 1. Panel connections are exempted as long as a valid device token is present
     if panel_id:
+        token_header = websocket.headers.get("X-Device-Token", "")
+        device_info = None
+        if token_header:
+            from routers.panel_auth import lookup_device_token
+            device_info = lookup_device_token(token_header)
+        # If token missing or invalid, close immediately.
+        # lookup_device_token already returns None for revoked tokens; no need to re-check.
+        if not device_info:
+            await websocket.close(1008, "Invalid device token")
+            return
+        # Panel token verified – proceed with panel subscription
         await broadcaster.connect_panel(websocket, panel_id)
     else:
+        # Non-panel: perform lightweight session validation via zoe-auth HTTP.
+        session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")
+        if not session_id:
+            await websocket.close(1008, "Missing session identifier")
+            return
+        # Use a direct zoe-auth call rather than a fake Starlette Request to avoid
+        # fragility around scope fields and the fail-open degraded-user path.
+        user = await _resolve_ws_session(session_id)
+        if user is None:
+            await websocket.close(1008, "Invalid session")
+            return
+        # Role allowlist gates access for valid sessions and for degraded-pass-through
+        # sessions (role=member) when zoe-auth is temporarily unreachable.
+        # NOTE: when zoe-auth is unreachable, _resolve_ws_session returns a degraded
+        # user with role="member"; since "member" is in this allowlist the connection
+        # is still permitted. This is intentional for single-family deployments where
+        # LAN availability is assumed, but callers should not assume the allowlist
+        # prevents unauthenticated access during an auth-service outage.
+        if user.get("role") not in ("member", "admin", "agent"):
+            await websocket.close(1008, "Insufficient privileges")
+            return
+        # Auth OK – connect to requested channel
         await broadcaster.connect(websocket, channel)
+    # -----------------------------------------------------------------
+    # Normal data relay loop
     try:
         while True:
             data = await websocket.receive_text()
@@ -562,6 +601,16 @@ async def websocket_push(
 
 @app.websocket("/api/calendar/ws/{user_id}")
 async def calendar_ws(websocket: WebSocket, user_id: str):
+    session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")
+    user = await _resolve_ws_session(session_id)
+    if user is None or user.get("role") not in ("member", "admin", "agent"):
+        await websocket.close(1008, "Unauthorized")
+        return
+    # Validate user_id against the session: member role may only subscribe to their own channel.
+    # admin/agent roles may subscribe on behalf of any user (e.g. background sync).
+    if user.get("role") == "member" and user.get("user_id") and user.get("user_id") != user_id:
+        await websocket.close(1008, "Forbidden")
+        return
     await broadcaster.connect(websocket, "calendar")
     try:
         while True:
@@ -574,6 +623,15 @@ async def calendar_ws(websocket: WebSocket, user_id: str):
 
 @app.websocket("/api/lists/ws/{user_id}")
 async def lists_ws_with_user(websocket: WebSocket, user_id: str):
+    session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")
+    user = await _resolve_ws_session(session_id)
+    if user is None or user.get("role") not in ("member", "admin", "agent"):
+        await websocket.close(1008, "Unauthorized")
+        return
+    # Validate user_id against the session: member role may only subscribe to their own channel.
+    if user.get("role") == "member" and user.get("user_id") and user.get("user_id") != user_id:
+        await websocket.close(1008, "Forbidden")
+        return
     await broadcaster.connect(websocket, "lists")
     try:
         while True:
@@ -586,6 +644,11 @@ async def lists_ws_with_user(websocket: WebSocket, user_id: str):
 
 @app.websocket("/api/lists/ws")
 async def lists_ws(websocket: WebSocket):
+    session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")
+    user = await _resolve_ws_session(session_id)
+    if user is None or user.get("role") not in ("member", "admin", "agent"):
+        await websocket.close(1008, "Unauthorized")
+        return
     await broadcaster.connect(websocket, "lists")
     try:
         while True:
@@ -598,6 +661,15 @@ async def lists_ws(websocket: WebSocket):
 
 @app.websocket("/api/people/ws/{user_id}")
 async def people_ws(websocket: WebSocket, user_id: str):
+    session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")
+    user = await _resolve_ws_session(session_id)
+    if user is None or user.get("role") not in ("member", "admin", "agent"):
+        await websocket.close(1008, "Unauthorized")
+        return
+    # Validate user_id against the session: member role may only subscribe to their own channel.
+    if user.get("role") == "member" and user.get("user_id") and user.get("user_id") != user_id:
+        await websocket.close(1008, "Forbidden")
+        return
     await broadcaster.connect(websocket, "all")
     try:
         while True:
@@ -610,38 +682,81 @@ async def people_ws(websocket: WebSocket, user_id: str):
 
 @app.websocket("/api/reminders/ws/{user_id}")
 async def reminders_ws(websocket: WebSocket, user_id: str):
-    await broadcaster.connect(websocket, "all")
+    session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")
+    user = await _resolve_ws_session(session_id)
+    if user is None or user.get("role") not in ("member", "admin", "agent"):
+        await websocket.close(1008, "Unauthorized")
+        return
+    # Validate user_id against the session: member role may only subscribe to their own channel.
+    if user.get("role") == "member" and user.get("user_id") and user.get("user_id") != user_id:
+        await websocket.close(1008, "Forbidden")
+        return
+    await broadcaster.connect(websocket, "reminders")
     try:
         while True:
             data = await websocket.receive_text()
             if data == "ping":
                 await websocket.send_json({"type": "pong"})
     except WebSocketDisconnect:
-        broadcaster.disconnect(websocket, "all")
+        broadcaster.disconnect(websocket, "reminders")
 
 
 @app.websocket("/api/notes/ws/{user_id}")
 async def notes_ws(websocket: WebSocket, user_id: str):
-    await broadcaster.connect(websocket, "all")
+    session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")
+    user = await _resolve_ws_session(session_id)
+    if user is None or user.get("role") not in ("member", "admin", "agent"):
+        await websocket.close(1008, "Unauthorized")
+        return
+    # Validate user_id against the session: member role may only subscribe to their own channel.
+    if user.get("role") == "member" and user.get("user_id") and user.get("user_id") != user_id:
+        await websocket.close(1008, "Forbidden")
+        return
+    await broadcaster.connect(websocket, "notes")
     try:
         while True:
             data = await websocket.receive_text()
             if data == "ping":
                 await websocket.send_json({"type": "pong"})
     except WebSocketDisconnect:
-        broadcaster.disconnect(websocket, "all")
+        broadcaster.disconnect(websocket, "notes")
 
 
 @app.websocket("/api/journal/ws/{user_id}")
 async def journal_ws(websocket: WebSocket, user_id: str):
-    await broadcaster.connect(websocket, "all")
+    session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")
+    user = await _resolve_ws_session(session_id)
+    if user is None or user.get("role") not in ("member", "admin", "agent"):
+        await websocket.close(1008, "Unauthorized")
+        return
+    await broadcaster.connect(websocket, "journal")
     try:
         while True:
             data = await websocket.receive_text()
             if data == "ping":
                 await websocket.send_json({"type": "pong"})
     except WebSocketDisconnect:
-        broadcaster.disconnect(websocket, "all")
+        broadcaster.disconnect(websocket, "journal")
+
+
+async def _resolve_ws_session(session_id: str | None) -> dict | None:
+    """Resolve a browser session_id to a full user dict via zoe-auth HTTP.
+
+    Returns a dict with at least ``user_id`` and ``role`` keys on success, or
+    ``None`` if the session is absent, invalid, or explicitly rejected (401/403).
+
+    On transient zoe-auth failures (5xx, timeout, connection error) the function
+    returns a degraded-user dict (role=member) via auth._validate_with_auth_service.
+    Because "member" is in every endpoint's allowlist, any caller that supplies a
+    non-empty session_id string will be granted access while zoe-auth is unreachable
+    (degraded pass-through).  This is intentional for single-family LAN deployments
+    but callers must not assume the allowlist prevents unauthenticated access during
+    an auth-service outage.
+    """
+    if not session_id:
+        return None
+    from auth import _validate_with_auth_service
+    return await _validate_with_auth_service(session_id)
 
 
 async def _resolve_ws_user(session_id: str) -> str:
