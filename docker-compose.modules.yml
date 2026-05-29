@@ -59,6 +59,8 @@ services:
       FRONTEND_ORIGIN: "http://localhost:3000"
       MULTICA_APP_URL: "http://localhost:3000"
       ALLOW_SIGNUP: "true"
+      # Email verification (ZOE-48): set RESEND_API_KEY or SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS
+      # RESEND_API_KEY: "${RESEND_API_KEY:-}"
       LOCAL_UPLOAD_DIR: "/data/uploads"
       LOCAL_UPLOAD_BASE_URL: "http://localhost:8080"
       OAUTH_CLIENT_ID: ${MULTICA_OIDC_CLIENT_ID:-multica}

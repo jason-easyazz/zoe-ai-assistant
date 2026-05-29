@@ -205,6 +205,8 @@ async def update_transaction(
     row = await cursor.fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Transaction not found")
+    if dict(row).get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Not authorised to edit this transaction")
 
     updates = []
     params = []
@@ -253,6 +255,8 @@ async def delete_transaction(
     row = await cursor.fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Transaction not found")
+    if dict(row).get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Not authorised to delete this transaction")
 
     await db.execute(
         "UPDATE transactions SET deleted = 1, updated_at = NOW() WHERE id = ?",
@@ -281,6 +285,8 @@ async def toggle_transaction_status(
     row = await cursor.fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Transaction not found")
+    if dict(row).get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Not authorised to update this transaction")
 
     new_status = "completed" if row["status"] == "pending" else "pending"
     await db.execute(

@@ -167,7 +167,7 @@ async def update_list(
     user_id = user["user_id"]
     cursor = await db.execute(
         """
-        SELECT id FROM lists
+        SELECT id, user_id FROM lists
         WHERE id = ? AND list_type = ? AND deleted = 0
           AND (visibility = 'family' OR user_id = ?)
         """,
@@ -176,6 +176,8 @@ async def update_list(
     row = await cursor.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="List not found")
+    if dict(row).get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Not authorised to edit this list")
 
     updates = []
     params = []
@@ -231,7 +233,7 @@ async def delete_list(
     user_id = user["user_id"]
     cursor = await db.execute(
         """
-        SELECT id FROM lists
+        SELECT id, user_id FROM lists
         WHERE id = ? AND list_type = ? AND deleted = 0
           AND (visibility = 'family' OR user_id = ?)
         """,
@@ -240,6 +242,8 @@ async def delete_list(
     row = await cursor.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="List not found")
+    if dict(row).get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Not authorised to delete this list")
 
     await db.execute(
         "UPDATE lists SET deleted = 1, updated_at = NOW() WHERE id = ?",

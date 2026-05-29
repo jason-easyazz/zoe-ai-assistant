@@ -401,6 +401,7 @@ _GREETING_RE = re.compile(
     r"^(?:hello|hi|hey|howdy|heya|greetings|yo)(?:\s+(?:there|zoe|there\s+zoe))?\s*[!.,]?\s*$"
     r"|^sup(?:\s+zoe)?\s*\??$"
     r"|^what'?s\s+up(?:\s+zoe)?\s*\??\s*$"
+    r"|^how\s+are\s+you(?:\s+today)?(?:\s+zoe)?\s*\??\s*$"
     r"|^good\s+(?:afternoon|night)(?:\s+zoe)?\s*[!.,]?\s*$",
     re.IGNORECASE,
 )
@@ -565,6 +566,21 @@ def detect_intent(
         elif "night" in t:
             tod = "night"
         return Intent("greeting", {"time_of_day": tod})
+
+    if re.match(r"^ping\.?$", t):
+        return Intent("greeting", {})
+
+    if re.match(r"^what lists do i have\??$", t):
+        return Intent("list_show", {})
+
+    if re.match(
+        r"^(?:open|show|go to|bring up|take me to) (?:the |my )?contacts(?: page)?\??$",
+        t,
+    ):
+        return Intent("people_search", {"query": ""})
+
+    if re.match(r"^remember that\b.+", t, re.IGNORECASE):
+        return Intent("memory_remember", {"raw": text})
 
     # === CLOCK / CALENDAR QUERIES — checked before domain patterns (no slots needed) ===
 
@@ -1170,6 +1186,16 @@ def detect_intent(
     )
     if _USER_ISSUE_RE.search(t):
         return Intent("user_issue_report", {"message": text})
+
+    # Open-domain Q&A / creative — route to agent (closes intent-gap backlog without brittle regex)
+    _AGENT_CHAT_RE = re.compile(
+        r"^(?:tell me about|what(?:'s| is) the (?:capital|weather)|"
+        r"search the web|write me (?:an? )?(?:email|haiku|poem)|"
+        r"can you explain|set up (?:a )?new automation|what is happening in)",
+        re.IGNORECASE,
+    )
+    if _AGENT_CHAT_RE.search(t):
+        return Intent("extend_capability", {"raw": text})
 
     # Context-based coreference resolution (OVOS Adapt pattern)
     if context is not None and context.is_fresh():

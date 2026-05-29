@@ -858,7 +858,16 @@ async def _persist_memory_candidates(user_id: str, session_id: str, user_message
 
 async def _ensure_user_and_chat_session(session_id: str, user_id: str) -> None:
     """Create users row and chat_sessions row if missing (UI sends client session ids before POST /sessions/)."""
+    from fastapi import HTTPException
+
     async for db in get_db():
+        existing = await (
+            await db.execute(
+                "SELECT user_id FROM chat_sessions WHERE id = ?", (session_id,)
+            )
+        ).fetchone()
+        if existing and existing["user_id"] != user_id:
+            raise HTTPException(status_code=403, detail="Not your chat session")
         await db.execute(
             "INSERT INTO users (id, name, role) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
             (user_id, user_id, "member"),

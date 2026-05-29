@@ -1588,7 +1588,10 @@ async def _load_user_portrait(user_id: str) -> str:
 
     Returns '' if no portrait exists yet. Portrait is generated weekly by
     run_dreaming_cycle Phase 4 and stored in user_portraits table.
+    Guests never receive portrait context (ZOE-4320).
     """
+    if not user_id or user_id in ("guest", "anonymous"):
+        return ""
     now = time.monotonic()
     cached = _PORTRAIT_CACHE.get(user_id)
     if cached is not None and cached[0] > now:

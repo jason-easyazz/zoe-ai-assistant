@@ -10,6 +10,7 @@ to pick up schedule changes made in the Multica UI without restarting.
 """
 from __future__ import annotations
 
+import datetime as _dt
 import logging
 import os
 from typing import Callable
@@ -29,6 +30,16 @@ _HERMES_AGENT_ID = os.environ.get(
 )
 _TZ = os.environ.get("ZOE_TIMEZONE", "Australia/Perth")
 
+# Default false: do not create a Multica tracker issue on every cron fire.
+_CREATE_ISSUES = os.environ.get("ZOE_MULTICA_AUTOPIOT_CREATE_ISSUES", "false").lower() in (
+    "1", "true", "yes",
+)
+_CREATE_ISSUES_FOR = {
+    t.strip().lower()
+    for t in os.environ.get("ZOE_MULTICA_AUTOPIOT_CREATE_ISSUES_FOR", "Platform Health Check").split(",")
+    if t.strip()
+}
+_STALE_AUTOPL_AN_HOURS = float(os.environ.get("ZOE_MULTICA_AUTOPIOT_STALE_HOURS", "2"))
 
 def _is_configured() -> bool:
     return bool(_MULTICA_BASE_URL and _MULTICA_API_TOKEN and _MULTICA_WORKSPACE_ID)
@@ -298,6 +309,93 @@ async def _run_board_review() -> None:
         logger.warning("_run_board_review: %s", exc)
 
 
+def _should_create_tracker_issue(autopilot_title: str, mode: str, task_fn) -> bool:
+    if mode != "create_issue" or not _is_configured():
+        return False
+    title_lower = autopilot_title.lower().strip()
+    if title_lower in _CREATE_ISSUES_FOR:
+        return True
+    if _CREATE_ISSUES:
+        return True
+    if task_fn is not None:
+        return False
+    return False
+
+
+async def close_stale_autopilot_wrappers(
+    *,
+    min_age_hours: float | None = None,
+    statuses: tuple[str, ...] = ("todo", "in_progress", "in_review"),
+) -> int:
+    if not _is_configured():
+        return 0
+    min_age_hours = _STALE_AUTOPL_AN_HOURS if min_age_hours is None else min_age_hours
+    closed = 0
+    terminal_phases = {"done", "ready_for_human", "blocked", "cancelled"}
+    now = _dt.datetime.now(_dt.timezone.utc)
+    try:
+        from db_pool import get_db_ctx  # type: ignore[import]
+    except Exception:
+        get_db_ctx = None  # type: ignore[assignment]
+    for status in statuses:
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+                resp = await client.get(
+                    f"{_MULTICA_BASE_URL}/api/issues",
+                    headers=_headers(),
+                    params={"workspace_id": _MULTICA_WORKSPACE_ID, "status": status, "limit": 200},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+        except Exception as exc:
+            logger.debug("close_stale_autopilot_wrappers: list %s failed: %s", status, exc)
+            continue
+        issues = data if isinstance(data, list) else data.get("issues", data.get("items", []))
+        for issue in issues or []:
+            title = issue.get("title") or ""
+            issue_id = issue.get("id")
+            if not issue_id or not title.startswith("Autopilot:"):
+                continue
+            created = issue.get("created_at", "")
+            try:
+                age_h = (
+                    now - _dt.datetime.fromisoformat(created.replace("Z", "+00:00"))
+                ).total_seconds() / 3600
+            except Exception:
+                age_h = min_age_hours
+            phase = None
+            if get_db_ctx is not None:
+                try:
+                    async with get_db_ctx() as db:
+                        row = await db.fetchrow(
+                            """SELECT phase FROM engineering_tasks
+                               WHERE multica_issue_id=$1
+                               ORDER BY updated_at DESC LIMIT 1""",
+                            str(issue_id),
+                        )
+                    if row:
+                        phase = row["phase"]
+                        if phase not in terminal_phases:
+                            continue
+                except Exception:
+                    pass
+            if age_h < min_age_hours and phase is None:
+                continue
+            try:
+                from multica_client import get_multica_client  # type: ignore[import]
+                client = get_multica_client()
+                await client.update_issue(str(issue_id), status="done")
+                closed += 1
+            except Exception as exc:
+                logger.debug("close_stale_autopilot_wrappers: close %s failed: %s", issue_id, exc)
+    return closed
+
+
+async def _run_stale_issue_cleanup() -> None:
+    n = await close_stale_autopilot_wrappers()
+    logger.info("autopilot: stale issue cleanup closed %d wrapper(s)", n)
+
+
 # ── Title → task function mapping ────────────────────────────────────────────
 
 _TITLE_TO_TASK: dict[str, Callable] = {
@@ -319,6 +417,7 @@ _TITLE_TO_TASK: dict[str, Callable] = {
     "board review": _run_board_review,
     "multica board review": _run_board_review,
     "hermes board review": _run_board_review,
+    "stale issue cleanup": _run_stale_issue_cleanup,
 }
 
 
@@ -379,7 +478,9 @@ async def _fire_autopilot_job(
                 issue_id, status, autopilot_title, exc,
             )
 
-    if mode == "create_issue" and _is_configured():
+    task_fn = _zoe_task_for_autopilot(autopilot_title)
+
+    if _should_create_tracker_issue(autopilot_title, mode, task_fn):
         try:
             payload: dict = {
                 "title": f"Autopilot: {autopilot_title}",
@@ -399,35 +500,22 @@ async def _fire_autopilot_job(
                 resp.raise_for_status()
                 issue = resp.json()
                 issue_id = issue.get("id") or issue.get("identifier")
-                logger.info(
-                    "autopilot: created issue %s for %r",
-                    issue_id, autopilot_title,
-                )
+                logger.info("autopilot: created issue %s for %r", issue_id, autopilot_title)
         except Exception as exc:
-            logger.warning(
-                "autopilot: failed to create issue for %r: %s", autopilot_title, exc
-            )
+            logger.warning("autopilot: failed to create issue for %r: %s", autopilot_title, exc)
+    elif task_fn is not None:
+        logger.debug("autopilot: ran %r (no tracker issue)", autopilot_title)
 
-    task_fn = _zoe_task_for_autopilot(autopilot_title)
     if task_fn is not None:
         try:
             await task_fn()
             await _update_issue_status("done")
         except Exception as exc:
-            # Reset to 'todo' (not 'cancelled') so the issue can be retried
-            # on the next scheduled run rather than being orphaned in_progress.
-            await _update_issue_status("todo")
-            logger.warning(
-                "autopilot: task function for %r raised: %s", autopilot_title, exc
-            )
+            await _update_issue_status("cancelled")
+            logger.warning("autopilot: task function for %r raised: %s", autopilot_title, exc)
     else:
-        # No Zoe task is mapped for this autopilot — reset the issue to 'todo'
-        # so it does not stay orphaned in 'in_progress' with nothing to complete it.
-        await _update_issue_status("todo")
-        logger.info(
-            "autopilot: no task function mapped for %r — issue reset to todo",
-            autopilot_title,
-        )
+        await _update_issue_status("cancelled")
+        logger.info("autopilot: no task function mapped for %r", autopilot_title)
 
 
 # ── Main sync function ────────────────────────────────────────────────────────

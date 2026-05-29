@@ -3446,6 +3446,7 @@
 
             // Check for completed background tasks and inject proactive messages
             setTimeout(checkPendingTasks, 1500);
+            setTimeout(initChatBackgroundPush, 2000);
             setTimeout(handleVoiceListFocusParam, 900);
             setTimeout(handleVoiceCalendarPrefillParam, 950);
 
@@ -3536,6 +3537,27 @@
             }
         }
         // ── End Push Setup ────────────────────────────────────────────────────
+
+        function initChatBackgroundPush() {
+            try {
+                let sessionId = '';
+                try {
+                    const raw = localStorage.getItem('zoe_session');
+                    if (raw) sessionId = JSON.parse(raw).session_id || '';
+                } catch (_) {}
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const q = sessionId ? ('&session_id=' + encodeURIComponent(sessionId)) : '';
+                const ws = new WebSocket(protocol + '//' + window.location.host + '/ws/push?channel=all' + q);
+                ws.onmessage = (evt) => {
+                    try {
+                        const msg = JSON.parse(evt.data);
+                        if (msg.type === 'background_task_done' || msg.type === 'background_task_error') {
+                            checkPendingTasks();
+                        }
+                    } catch (_) {}
+                };
+            } catch (_) {}
+        }
 
         async function checkPendingTasks() {
             try {

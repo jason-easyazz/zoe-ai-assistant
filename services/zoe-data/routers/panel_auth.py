@@ -78,7 +78,7 @@ def _hash_token(raw: str) -> str:
 
 
 def _require_admin(user: dict = Depends(get_current_user)) -> dict:
-    if user.get("role") not in ("admin",):
+    if user.get("role") not in ("admin", "family-admin"):
         raise HTTPException(status_code=403, detail="Admin role required")
     return user
 
@@ -98,18 +98,33 @@ def lookup_device_token(raw_token: str) -> dict | None:
 async def _resolve_device_token_user(raw_token: str) -> dict | None:
     """Resolve a device token to a user dict for use in get_current_user().
 
-    Returns a user dict compatible with auth.py user format, or None if the
-    token is invalid. Panel device tokens get role 'member' to allow chat access.
+    Uses panel_user_bindings default user when configured (ZOE-4321).
     """
     info = lookup_device_token(raw_token)
     if not info:
         return None
     panel_id = info.get("panel_id", "unknown")
     role = info.get("role", "voice")
-    # Map device roles to user roles: voice/panel → member (can chat, not admin)
     user_role = "member" if role in ("voice", "panel", "kiosk") else "admin" if role == "admin" else "member"
+    user_id = "family-admin"
+    try:
+        from database import get_db
+
+        async for db in get_db():
+            row = await (
+                await db.execute(
+                    """SELECT user_id FROM panel_user_bindings
+                       WHERE panel_id = ? AND binding_type = 'default' LIMIT 1""",
+                    (panel_id,),
+                )
+            ).fetchone()
+            if row and row["user_id"]:
+                user_id = row["user_id"]
+            break
+    except Exception as exc:
+        logger.debug("panel binding lookup failed for %s: %s", panel_id, exc)
     return {
-        "user_id": "family-admin",  # Panel devices act as the household default user
+        "user_id": user_id,
         "role": user_role,
         "username": f"panel:{panel_id}",
         "permissions": ["chat", "voice"],
@@ -446,6 +461,15 @@ async def create_pin_challenge(payload: dict, user: dict = Depends(get_current_u
 
 async def create_pin_challenge_internal(panel_id: str, user_id, action_context, db) -> dict:
     """Internal version — callable from voice_tts without HTTP context."""
+    panel_row = await (
+        await db.execute(
+            "SELECT panel_id FROM panels WHERE panel_id = ? AND is_active = 1",
+            (panel_id,),
+        )
+    ).fetchone()
+    if not panel_row:
+        raise HTTPException(status_code=404, detail="Panel not found or inactive")
+
     challenge_id = uuid.uuid4().hex
     expires_at = datetime.fromtimestamp(time.time() + _CHALLENGE_TTL_S, tz=timezone.utc).isoformat()
     await db.execute(
@@ -458,18 +482,22 @@ async def create_pin_challenge_internal(panel_id: str, user_id, action_context, 
     # Broadcast modern auth action so the touch login page handles PIN.
     try:
         from push import broadcaster
-        await broadcaster.broadcast("all", "ui_action", {
-            "action": {
-                "id": f"panel_auth_{panel_id}_{challenge_id[:8]}",
-                "action_type": "panel_request_auth",
-                "payload": {
-                    "panel_id": panel_id,
-                    "challenge_id": challenge_id,
-                    "action_context": action_context,
-                    "expires_at": expires_at,
-                },
-            }
-        })
+        await broadcaster.broadcast_to_panel(
+            panel_id,
+            "ui_action",
+            {
+                "action": {
+                    "id": f"panel_auth_{panel_id}_{challenge_id[:8]}",
+                    "action_type": "panel_request_auth",
+                    "payload": {
+                        "panel_id": panel_id,
+                        "challenge_id": challenge_id,
+                        "action_context": action_context,
+                        "expires_at": expires_at,
+                    },
+                }
+            },
+        )
     except Exception as exc:
         logger.warning("panel_auth: broadcast failed: %s", exc)
 
