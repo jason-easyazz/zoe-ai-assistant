@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# sync_zoe_self.sh — Trigger agent_sync to rebuild ZOE_SELF.md, SOUL.md, AGENTS.md
-# and FEDERATION_SKILLS.md from live service state.
+# sync_zoe_self.sh — Trigger agent_sync to rebuild live architecture docs.
+# and distribute them to all agents from live service state.
 #
 # Usage:
 #   bash scripts/maintenance/sync_zoe_self.sh [--url http://localhost:8000]
@@ -8,9 +8,12 @@
 # The script calls POST /api/system/agent-sync on the running zoe-data service.
 # This triggers run_agent_sync(), which:
 #   1. Rebuilds ZOE_SELF.md from service introspection
+#      → written to ~/.openclaw/workspace/ZOE_SELF.md
 #   2. Patches the ZOE_SELF_BEGIN block in /home/zoe/.hermes/SOUL.md
-#   3. Writes FEDERATION_SKILLS.md with live skill counts per agent
+#   3. Writes ~/.zoe/zoe_self_compact.txt (compact 500-char context prefix)
 #   4. Updates CAPABILITIES.md with current MCP tool list
+#      → written to ~/assistant/CAPABILITIES.md
+#   5. Writes ~/.openclaw/workspace/FEDERATION_SKILLS.md with live skill counts per agent
 
 set -euo pipefail
 

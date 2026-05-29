@@ -60,7 +60,7 @@ fi
 
 # 2. Clean up temp files older than 7 days
 echo -e "${YELLOW}🧹 Cleaning old temp files...${NC}"
-TEMP_CLEANED=$(find /tmp -type f -mtime +7 -user pi -delete -print 2>/dev/null | wc -l)
+TEMP_CLEANED=$(find /tmp -type f -mtime +7 -user zoe -delete -print 2>/dev/null | wc -l)
 echo -e "${GREEN}  Removed $TEMP_CLEANED old temp files${NC}"
 log_message "Removed $TEMP_CLEANED temp files"
 
