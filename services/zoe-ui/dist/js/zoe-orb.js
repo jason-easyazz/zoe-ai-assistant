@@ -10,7 +10,43 @@ let intelligenceWS = null;
 let wsRetries = 0;
 const MAX_WS_RETRIES = 2;
 let orbWebSocket = null;
-let orbSessionId = localStorage.getItem('orbSessionId') || null;
+
+/**
+ * Returns the localStorage key for the orb session, scoped by user ID to
+ * prevent chat history from bleeding across accounts.
+ */
+function getOrbStorageKey() {
+    try {
+        const session = window.zoeAuth ? window.zoeAuth.getCurrentSession() : null;
+        const uid = session && (session.user_id || (session.user_info && session.user_info.user_id));
+        if (uid && uid !== 'guest') return 'orbSessionId_' + uid;
+    } catch (_) {}
+    return 'orbSessionId';
+}
+
+let orbSessionId = localStorage.getItem(getOrbStorageKey()) || null;
+
+// Lazily re-read the scoped key when auth may not have been ready at parse time.
+function _getOrbSessionId() {
+    if (orbSessionId) return orbSessionId;
+    // Try re-reading with the now-resolved user scope (auth may have loaded since parse).
+    const storedKey = getOrbStorageKey();
+    const stored = localStorage.getItem(storedKey);
+    if (stored) { orbSessionId = stored; }
+    return orbSessionId;
+}
+
+// Clear orb history when the user logs out.
+document.addEventListener('zoe:logout', function(e) {
+    try {
+        const uid = e && e.detail && e.detail.user_id;
+        const key = uid && uid !== 'guest' ? 'orbSessionId_' + uid : 'orbSessionId';
+        localStorage.removeItem(key);
+        // Also clear legacy unscoped key.
+        localStorage.removeItem('orbSessionId');
+    } catch (_) {}
+    orbSessionId = null;
+});
 
 /**
  * Initialize Orb Chat functionality
@@ -51,11 +87,11 @@ function initOrbChat() {
     console.log('✅ Zoe orb initialized');
     
     // Pre-warm Hermes session for this orb so the first message is fast.
-    if (orbSessionId) {
+    if (_getOrbSessionId()) {
         var session = window.zoeAuth ? window.zoeAuth.getCurrentSession() : null;
         var warmHeaders = { 'Content-Type': 'application/json' };
         if (session && session.session_id) warmHeaders['X-Session-ID'] = session.session_id;
-        fetch('/api/chat/warm/' + encodeURIComponent(orbSessionId), {
+        fetch('/api/chat/warm/' + encodeURIComponent(_getOrbSessionId()), {
             method: 'POST', headers: warmHeaders
         }).catch(function() {});
     }
@@ -159,7 +195,7 @@ async function sendOrbMessage() {
             mode: 'orb_chat',
             page_context: { page: currentPage, url: location.pathname }
         };
-        if (orbSessionId) chatPayload.session_id = orbSessionId;
+        if (_getOrbSessionId()) chatPayload.session_id = _getOrbSessionId();
 
         var response;
         if (typeof apiRequest === 'function') {
@@ -185,7 +221,7 @@ async function sendOrbMessage() {
 
         if (response && response.session_id) {
             orbSessionId = response.session_id;
-            localStorage.setItem('orbSessionId', orbSessionId);
+            localStorage.setItem(getOrbStorageKey(), orbSessionId);
         }
 
         if (response && response.response) {
