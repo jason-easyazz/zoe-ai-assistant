@@ -15,6 +15,7 @@ import os
 OPENWEATHERMAP_API_KEY = os.environ.get("OPENWEATHERMAP_API_KEY", "")
 _BROADCAST_URL = "http://127.0.0.1:8000/api/internal/broadcast"
 _OPENCLAW_GW = os.environ.get("ZOE_OPENCLAW_GW", "http://127.0.0.1:18789")
+_INTERNAL_TOKEN = os.environ.get("ZOE_INTERNAL_TOKEN", "").strip()
 # When true (rollout goal), tools/call without _user_id/user_id is rejected.
 # Until every legacy/tool caller is caught up, default false logs a warning and falls
 # back to family-admin so existing workflows don't break silently.
@@ -30,12 +31,15 @@ _BROWSER_BROKER = create_default_browser_broker(_OPENCLAW_GW)
 async def _notify_ui(channel: str, event_type: str, data: dict):
     """Fire-and-forget broadcast to connected UI clients via the FastAPI app."""
     try:
+        headers = {}
+        if _INTERNAL_TOKEN:
+            headers["X-Internal-Token"] = _INTERNAL_TOKEN
         async with httpx.AsyncClient(timeout=3.0) as client:
             await client.post(_BROADCAST_URL, json={
                 "channel": channel,
                 "event_type": event_type,
                 "data": data,
-            })
+            }, headers=headers)
     except Exception:
         pass
 

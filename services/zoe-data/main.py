@@ -523,7 +523,7 @@ async def prometheus_metrics():
 
 
 @app.post("/api/internal/broadcast")
-async def internal_broadcast(payload: dict):
+async def internal_broadcast(payload: dict, _: None = Depends(require_internal_token)):
     """Internal endpoint for MCP server to trigger WebSocket broadcasts."""
     channel = payload.get("channel", "all")
     event_type = payload.get("event_type", "update")
