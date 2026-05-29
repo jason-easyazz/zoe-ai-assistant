@@ -442,7 +442,9 @@ async def _post_write_hooks(
 
     try:
         from push import broadcaster
-        await broadcaster.broadcast("all", "people:updated", {"person_id": person_id})
+        await broadcaster.broadcast(
+            "people", "people:updated", {"person_id": person_id}, user_id=user_id
+        )
     except Exception:
         pass
 
