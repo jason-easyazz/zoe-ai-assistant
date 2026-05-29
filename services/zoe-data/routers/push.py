@@ -121,18 +121,19 @@ async def send_push_to_user(
 
     keys = _get_vapid_keys()
     if not keys:
-        return
+        return 0
 
     try:
         from pywebpush import webpush, WebPushException
     except ImportError:
         logger.warning("pywebpush not installed")
-        return
+        return 0
 
     payload_data: dict = {"title": title, "body": body, "url": url}
     if extra:
         payload_data.update({k: v for k, v in extra.items() if k != "url"})
 
+    sent = 0
     async for db in get_db():
         async with db.execute(
             "SELECT endpoint, keys_p256dh, keys_auth FROM push_subscriptions WHERE user_id = ?",
@@ -153,6 +154,7 @@ async def send_push_to_user(
                     vapid_claims=VAPID_CLAIMS.copy(),
                     content_encoding="aes128gcm",
                 )
+                sent += 1
             except WebPushException as e:
                 logger.warning(f"Push failed for {row['endpoint'][:40]}...: {e}")
                 if "410" in str(e) or "404" in str(e):
@@ -161,3 +163,4 @@ async def send_push_to_user(
                         (row["endpoint"],),
                     )
                     await db.commit()
+    return sent
