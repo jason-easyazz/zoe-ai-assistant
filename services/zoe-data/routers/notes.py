@@ -183,14 +183,17 @@ async def update_note(
     """Update an existing note."""
     await require_feature_access(db, user, feature="notes", action="update")
     user_id = user["user_id"]
-    where = f"{_owner_filter_sql()} AND id = ?"
+    # Fetch via visibility filter so the note is found even when family-visible,
+    # then enforce owner-only mutation with an explicit 403.
     cursor = await db.execute(
-        "SELECT * FROM notes WHERE " + where,
-        [user_id, note_id],
+        "SELECT * FROM notes WHERE id = ? AND deleted = 0",
+        [note_id],
     )
     row = await cursor.fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Note not found")
+    if dict(row)["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Not authorised to edit this note")
 
     updates = []
     params = []
@@ -244,14 +247,15 @@ async def delete_note(
     """Soft delete a note."""
     await require_feature_access(db, user, feature="notes", action="delete")
     user_id = user["user_id"]
-    where = f"{_owner_filter_sql()} AND id = ?"
     cursor = await db.execute(
-        "SELECT * FROM notes WHERE " + where,
-        [user_id, note_id],
+        "SELECT * FROM notes WHERE id = ? AND deleted = 0",
+        [note_id],
     )
     row = await cursor.fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Note not found")
+    if dict(row)["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Not authorised to delete this note")
 
     await db.execute(
         "UPDATE notes SET deleted = 1, updated_at = NOW() WHERE id = ?",

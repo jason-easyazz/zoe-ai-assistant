@@ -15,6 +15,7 @@ import os
 OPENWEATHERMAP_API_KEY = os.environ.get("OPENWEATHERMAP_API_KEY", "")
 _BROADCAST_URL = "http://127.0.0.1:8000/api/internal/broadcast"
 _OPENCLAW_GW = os.environ.get("ZOE_OPENCLAW_GW", "http://127.0.0.1:18789")
+_INTERNAL_TOKEN = os.environ.get("ZOE_INTERNAL_TOKEN", "").strip()
 # When true (rollout goal), tools/call without _user_id/user_id is rejected.
 # Until every legacy/tool caller is caught up, default false logs a warning and falls
 # back to family-admin so existing workflows don't break silently.
@@ -30,12 +31,15 @@ _BROWSER_BROKER = create_default_browser_broker(_OPENCLAW_GW)
 async def _notify_ui(channel: str, event_type: str, data: dict):
     """Fire-and-forget broadcast to connected UI clients via the FastAPI app."""
     try:
+        headers = {}
+        if _INTERNAL_TOKEN:
+            headers["X-Internal-Token"] = _INTERNAL_TOKEN
         async with httpx.AsyncClient(timeout=3.0) as client:
             await client.post(_BROADCAST_URL, json={
                 "channel": channel,
                 "event_type": event_type,
                 "data": data,
-            })
+            }, headers=headers)
     except Exception:
         pass
 
@@ -1268,7 +1272,10 @@ async def _execute_tool(db, name: str, args: dict):
         args["list_type"] = _LIST_TYPE_ALIASES.get(args["list_type"], args["list_type"])
 
     if name == "calendar_list_events":
-        sql = "SELECT id, title, start_date, start_time, end_time, category, location, all_day FROM events WHERE deleted=0 AND user_id=?"
+        sql = (
+            "SELECT id, title, start_date, start_time, end_time, category, location, all_day"
+            " FROM events WHERE (visibility = 'family' OR user_id = ?) AND deleted = 0"
+        )
         params = [user_id]
         if args.get("start_date"):
             sql += " AND start_date >= ?"
@@ -1300,7 +1307,9 @@ async def _execute_tool(db, name: str, args: dict):
     elif name == "calendar_today":
         today = date.today().isoformat()
         cursor = await db.execute(
-            "SELECT id, title, start_time, end_time, category, location FROM events WHERE start_date=? AND user_id=? AND deleted=0 ORDER BY start_time",
+            "SELECT id, title, start_time, end_time, category, location FROM events"
+            " WHERE start_date = ? AND (visibility = 'family' OR user_id = ?) AND deleted = 0"
+            " ORDER BY start_time",
             (today, user_id),
         )
         rows = await cursor.fetchall()
@@ -1356,7 +1365,7 @@ async def _execute_tool(db, name: str, args: dict):
             list_id = str(uuid.uuid4())
             await db.execute(
                 "INSERT INTO lists (id, user_id, name, list_type, visibility) VALUES (?,?,?,?,?)",
-                (list_id, user_id, ln, lt, "family"),
+                (list_id, user_id, ln, lt, "personal" if lt in {"personal", "tasks", "shopping"} else "family"),
             )
         item_id = str(uuid.uuid4())
         await db.execute(
@@ -1401,12 +1410,16 @@ async def _execute_tool(db, name: str, args: dict):
         if args.get("today_only"):
             today = date.today().isoformat()
             cursor = await db.execute(
-                "SELECT id, title, due_date, due_time, priority, category FROM reminders WHERE due_date=? AND is_active=1 AND deleted=0 AND user_id=? ORDER BY due_time",
+                "SELECT id, title, due_date, due_time, priority, category FROM reminders"
+                " WHERE due_date = ? AND (visibility = 'family' OR user_id = ?)"
+                " AND is_active = 1 AND deleted = 0 ORDER BY due_time",
                 (today, user_id),
             )
         else:
             cursor = await db.execute(
-                "SELECT id, title, due_date, due_time, priority, category FROM reminders WHERE is_active=1 AND deleted=0 AND user_id=? ORDER BY due_date, due_time LIMIT 20",
+                "SELECT id, title, due_date, due_time, priority, category FROM reminders"
+                " WHERE (visibility = 'family' OR user_id = ?)"
+                " AND is_active = 1 AND deleted = 0 ORDER BY due_date, due_time LIMIT 20",
                 (user_id,),
             )
         rows = await cursor.fetchall()
