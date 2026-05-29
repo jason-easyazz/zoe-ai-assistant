@@ -263,7 +263,7 @@ def augment_example(example: dict) -> list[dict]:
 
 def main():
     parser = argparse.ArgumentParser(description="Generate Gemma 4 / Zoe fine-tuning data")
-    parser.add_argument("--db", default="/home/pi/assistant/data/zoe.db", help="Path to zoe.db")
+    parser.add_argument("--db", default="/home/zoe/assistant/data/zoe.db", help="Path to zoe.db")
     parser.add_argument("--out", default="zoe_gemma_training.jsonl", help="Output JSONL file")
     parser.add_argument("--count", type=int, default=1000, help="Target total examples")
     parser.add_argument("--no-augment", action="store_true", help="Skip augmentation")
