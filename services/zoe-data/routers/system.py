@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from auth import get_current_user, require_admin, get_a2a_caller
 from database import get_db
+from hermes_http import hermes_auth_headers
 from openclaw_maintenance import (
     fetch_gateway_status,
     fetch_npm_latest_version,
@@ -1445,6 +1446,7 @@ async def _hermes_review_proposal(proposal: dict) -> tuple[bool, str]:
         f"Description: {proposal.get('description', '')}\n\n"
         f"Evidence: {proposal.get('evidence', '')}"
     )
+    headers = {"Content-Type": "application/json", **hermes_auth_headers()}
     async with httpx.AsyncClient(timeout=90) as client:
         async with client.stream(
             "POST",
@@ -1454,7 +1456,7 @@ async def _hermes_review_proposal(proposal: dict) -> tuple[bool, str]:
                 "messages": [{"role": "user", "content": prompt}],
                 "stream": True,
             },
-            headers={"Content-Type": "application/json"},
+            headers=headers,
         ) as resp:
             resp.raise_for_status()
             content = ""

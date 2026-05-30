@@ -20,18 +20,13 @@ from datetime import datetime, timezone
 
 import httpx
 
-logger = logging.getLogger(__name__)
+from hermes_http import hermes_auth_headers
 
-_HERMES_API_KEY = os.environ.get("HERMES_API_KEY") or os.environ.get("API_SERVER_KEY") or ""
+logger = logging.getLogger(__name__)
 
 
 def _hermes_headers(*, session_id: str | None = None) -> dict[str, str]:
-    headers: dict[str, str] = {}
-    if _HERMES_API_KEY:
-        headers["Authorization"] = f"Bearer {_HERMES_API_KEY}"
-    if session_id:
-        headers["X-Hermes-Session-Id"] = session_id
-    return headers
+    return hermes_auth_headers(session_id=session_id)
 
 # Running task futures keyed by task id (to avoid duplicate runs)
 _running: dict[int, asyncio.Task] = {}
