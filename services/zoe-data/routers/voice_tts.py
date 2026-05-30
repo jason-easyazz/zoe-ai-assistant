@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, R
 from fastapi.responses import StreamingResponse
 from auth import get_current_user
 from database import get_db
+from hermes_http import hermes_auth_headers
 
 logger = logging.getLogger(__name__)
 
@@ -1775,8 +1776,6 @@ async def _run_hermes_voice_escalation(prompt: str, session_id: str, user_id: st
         "stream": False,
     }
     timeout_s = float(os.environ.get("ZOE_VOICE_HERMES_TIMEOUT_S", "45"))
-    from hermes_http import hermes_auth_headers
-
     async with httpx.AsyncClient(timeout=timeout_s) as client:
         resp = await client.post(
             hermes_url,
