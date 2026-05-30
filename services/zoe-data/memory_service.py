@@ -48,7 +48,8 @@ try:
         memory_pii_reject_count,
     )
     _METRICS_OK = True
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
+    # memory_metrics is an optional instrumentation module; silently degrade.
     _METRICS_OK = False
 
 logger = logging.getLogger(__name__)
