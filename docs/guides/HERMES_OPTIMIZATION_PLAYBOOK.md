@@ -249,13 +249,19 @@ instructional clarity, not real tool-use success, and the judge rewards longer/m
 complete answers — so GEPA reliably pads skills. The +20% growth gate is therefore
 essential, not cosmetic. Measured first runs (budget 80, ~$0.85 each):
 
-- `github-greptile-loop`: baseline 0.954 → 0.930 (−0.024), +72% growth → **rejected**.
-- `zoe-engineering`: baseline 0.779 → 0.970 (+0.191) but +79% growth → **rejected**.
+- `github-greptile-loop`: baseline 0.954 → 0.930 (−0.024 raw), +72% growth → **rejected**.
+- `zoe-engineering`: baseline 0.779 → 0.970 (+0.191 raw) but +79% growth → **rejected**
+  (including a subtly wrong “put every endpoint in chat.py” rule).
 
 Both correctly produced no merge. Treat positive holdout delta AND passing constraints as
-*necessary, not sufficient* — a human reviews every diff. To get a mergeable gain, fold
-concision into the signal (harder length penalty / instruct GEPA to preserve size), not
-just the post-gate.
+*necessary, not sufficient* — a human reviews every diff.
+
+**Density-adjusted metric (wired in `zoe_evolve.py`).** GEPA now optimizes
+`quality × (baseline_chars / current_chars)` instead of raw judge score alone, and
+feeds GEPA reflection text when the skill body grows. Holdout reports both raw and
+density scores; the weekly loop queues on **density** improvement only. Example on the
+`zoe-engineering` run above: raw +0.191 would have become density **−0.258** — GEPA would
+not treat bloat as a win.
 
 **Eval data / privacy.** Default and only path in the driver is `--eval-source synthetic`.
 Upstream's `sessiondb` mode would mine `~/.claude/history.jsonl`,
