@@ -281,6 +281,10 @@ async def test_cancel_engineering_task_does_not_overwrite_done_workflow(monkeypa
 async def test_run_board_review_skips_autopilot_wrapper_issues(monkeypatch):
     calls = []
 
+    # Enable autopilot board review for this test (disabled by default; Hermes
+    # cron owns normal dispatch, but the test must exercise the skip logic).
+    monkeypatch.setattr(multica_autopilot_sync, "_BOARD_REVIEW_AUTOPILOT_ENABLED", True)
+
     class FakeClient:
         def is_configured(self):
             return True
