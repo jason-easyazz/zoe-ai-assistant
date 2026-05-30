@@ -69,11 +69,22 @@ class PushBroadcaster:
                 self._connections["all"].discard(websocket)
         self._ws_users.pop(websocket, None)
 
-    async def broadcast(self, channel: str, event_type: str, data: dict) -> int:
+    async def broadcast(
+        self,
+        channel: str,
+        event_type: str,
+        data: dict,
+        user_id: str | None = None,
+    ) -> int:
         """Broadcast to all subscribers on a channel.
 
-        Returns the number of subscribers that received the message successfully.
-        Returns 0 if the channel has no connections or all sends failed.
+        Pass ``user_id`` to restrict delivery to connections owned by that
+        user.  Connections without an associated user (panels, anonymous) are
+        always included so that global events still reach them.
+
+        Returns the number of subscribers that received the message
+        successfully.  Returns 0 if the channel has no connections or all
+        sends failed.
         """
         self._sequence += 1
         message = {
