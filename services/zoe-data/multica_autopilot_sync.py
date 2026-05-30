@@ -47,6 +47,16 @@ _STALE_AUTOPILOT_HOURS = float(
     os.environ.get("ZOE_MULTICA_AUTOPILOT_STALE_HOURS")
     or os.environ.get("ZOE_MULTICA_AUTOPIOT_STALE_HOURS", "2")
 )
+# Dedupe engineering dispatch: the Hermes built-in hourly cron
+# (hourly-zoe-issue-fix-greptile-merge) is the single owner of working
+# Hermes-assigned Multica issues. The Multica "Board Review" autopilot would
+# dispatch the same issue pool into engineering_workflow, so it is disabled by
+# default to avoid duplicate PRs / collisions. Set this flag true to restore the
+# autopilot as the engineering dispatcher (e.g. if the Hermes cron is paused).
+_BOARD_REVIEW_AUTOPILOT_ENABLED = (
+    os.environ.get("ZOE_BOARD_REVIEW_AUTOPILOT_ENABLED", "false").lower()
+    in ("1", "true", "yes")
+)
 
 def _is_configured() -> bool:
     return bool(_MULTICA_BASE_URL and _MULTICA_API_TOKEN and _MULTICA_WORKSPACE_ID)
@@ -275,7 +285,18 @@ async def _run_platform_health_check() -> None:
 
 
 async def _run_board_review() -> None:
-    """Dispatch Hermes-assigned open Multica issues into engineering workflows."""
+    """Dispatch Hermes-assigned open Multica issues into engineering workflows.
+
+    Disabled by default: the Hermes built-in hourly cron owns engineering
+    dispatch (see _BOARD_REVIEW_AUTOPILOT_ENABLED). This stays as an opt-in
+    fallback for when that cron is paused.
+    """
+    if not _BOARD_REVIEW_AUTOPILOT_ENABLED:
+        logger.info(
+            "autopilot: board review skipped — Hermes hourly cron owns engineering "
+            "dispatch (set ZOE_BOARD_REVIEW_AUTOPILOT_ENABLED=true to re-enable)"
+        )
+        return
     try:
         from multica_client import get_multica_client  # type: ignore[import]
         from engineering_workflow import create_and_start_engineering_task  # type: ignore[import]

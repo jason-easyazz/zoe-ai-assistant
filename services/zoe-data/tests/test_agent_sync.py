@@ -1,7 +1,13 @@
 from pathlib import Path
 
 import agent_sync
-from agent_sync import _build_capabilities_md, _build_zoe_self_md, _trigger_graphify_rebuild
+from agent_sync import (
+    _build_capabilities_md,
+    _build_zoe_self_md,
+    _build_zoe_why,
+    _patch_hermes_soul,
+    _trigger_graphify_rebuild,
+)
 
 
 def test_capabilities_snapshot_is_stable():
@@ -20,6 +26,42 @@ def test_generated_context_mentions_hermes_engineering_loop():
     assert "source context" in zoe_self
     assert "Hermes engineering loop" in capabilities
     assert "cleanup pass" in capabilities
+
+
+def test_zoe_why_block_teaches_mission_and_stays_lean():
+    why = _build_zoe_why()
+
+    # North Star + the three memory scopes
+    assert "Samantha" in why
+    assert "personal" in why and "shared" in why and "ambient" in why
+    # trust-envelope + universality + harness-first biases
+    assert "proposal path" in why
+    assert "allow-list" in why
+    assert "non-Jetson hardware" in why
+    assert "harness is the product" in why
+    # product context (the bigger why)
+    assert "the411.life" in why
+    assert "Nudge" in why
+    # kept lean per charter S9
+    assert len(why) <= agent_sync._MAX_ZOE_WHY_CHARS
+    # docstring intent: distilled/hand-curated, not dynamically read from charter file
+    assert "Distilled from" in why
+
+
+def test_patch_soul_block_is_idempotent_per_marker(tmp_path):
+    soul = tmp_path / "SOUL.md"
+    soul.write_text("You are Zoe.\n")
+
+    assert _patch_hermes_soul(soul, "self-v1", marker="ZOE_SELF")
+    assert _patch_hermes_soul(soul, _build_zoe_why(), marker="ZOE_WHY")
+    # Re-patch should replace in place, not append a second block
+    assert _patch_hermes_soul(soul, "self-v2", marker="ZOE_SELF")
+
+    text = soul.read_text()
+    assert text.count("ZOE_SELF_BEGIN") == 1
+    assert text.count("ZOE_WHY_BEGIN") == 1
+    assert "self-v2" in text and "self-v1" not in text
+    assert "the411.life" in text  # ZOE_WHY block survived the ZOE_SELF re-patch
 
 
 def test_graphify_rebuild_is_opt_in_by_default(monkeypatch):

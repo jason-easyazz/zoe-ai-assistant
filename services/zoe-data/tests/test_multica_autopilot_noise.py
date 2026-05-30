@@ -16,6 +16,41 @@ def test_should_create_tracker_issue_default_off_for_mapped_task():
         assert mas._should_create_tracker_issue("Board Review", "create_issue", fn) is False
 
 
+@pytest.mark.asyncio
+async def test_board_review_autopilot_guard_off_returns_early(monkeypatch):
+    """When _BOARD_REVIEW_AUTOPILOT_ENABLED is False (default), _run_board_review logs and
+    returns without touching multica_client or engineering_workflow."""
+    monkeypatch.setattr(mas, "_BOARD_REVIEW_AUTOPILOT_ENABLED", False)
+    result = await mas._run_board_review()
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_board_review_autopilot_guard_on_reaches_client(monkeypatch):
+    """When _BOARD_REVIEW_AUTOPILOT_ENABLED is True, _run_board_review proceeds past the
+    guard and calls get_multica_client()."""
+    import sys
+    import types
+
+    monkeypatch.setattr(mas, "_BOARD_REVIEW_AUTOPILOT_ENABLED", True)
+
+    # Stub multica_client so we don't need a real DB connection
+    fake_client = types.SimpleNamespace(is_configured=lambda: False)
+    monkeypatch.setitem(
+        sys.modules,
+        "multica_client",
+        types.SimpleNamespace(get_multica_client=lambda: fake_client),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "engineering_workflow",
+        types.SimpleNamespace(create_and_start_engineering_task=AsyncMock()),
+    )
+    # is_configured() returns False → function exits cleanly after the guard
+    result = await mas._run_board_review()
+    assert result is None
+
+
 def test_should_create_tracker_issue_allowlist():
     fn = lambda: None  # noqa: E731
     with patch.object(mas, "_is_configured", lambda: True):
