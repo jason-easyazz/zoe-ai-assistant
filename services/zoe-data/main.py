@@ -175,10 +175,31 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing zoe-data database...")
     await init_db()
     logger.info("Database initialized. zoe-data is ready.")
-    # One-time MemPalace migration: re-tag legacy records from wing="zoe" to wing="family-admin"
+    # One-time MemPalace migration: re-tag legacy records from wing="zoe" to wing="family-admin".
+    # Gated behind a DB flag so the expensive ChromaDB scan only runs on first startup.
     try:
-        from zoe_agent import migrate_mempalace_legacy_records
-        await asyncio.get_event_loop().run_in_executor(None, migrate_mempalace_legacy_records)
+        from db_pool import get_db_ctx as _get_pg_db_mig
+        _mig_flag_key = "mempalace_wing_migration_done"
+        async with _get_pg_db_mig() as _mig_db:
+            _mig_rows = await _mig_db.execute_fetchall(
+                "SELECT value FROM system_preferences WHERE key = $1",
+                (_mig_flag_key,),
+            )
+            _mig_row = _mig_rows[0] if _mig_rows else None
+        if _mig_row is None:
+            from zoe_agent import migrate_mempalace_legacy_records
+            await asyncio.get_event_loop().run_in_executor(None, migrate_mempalace_legacy_records)
+            async with _get_pg_db_mig() as _mig_db:
+                await _mig_db.execute(
+                    "INSERT INTO system_preferences (key, value, updated_by, updated_at)"
+                    " VALUES ($1, $2, $3, NOW()::text)"
+                    " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value,"
+                    " updated_at = NOW()::text",
+                    (_mig_flag_key, "true", "startup"),
+                )
+            logger.info("MemPalace migration complete; DB flag set (%s=true)", _mig_flag_key)
+        else:
+            logger.debug("MemPalace migration already done (DB flag present); skipping")
     except Exception as _mig_exc:
         logger.warning("MemPalace migration (non-fatal): %s", _mig_exc)
     # Load device tokens into memory so voice daemons can authenticate.

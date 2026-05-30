@@ -532,6 +532,42 @@ async def test_migration_retags_legacy_records(tmp_path, monkeypatch):
     assert "added_at" in col._store["old_record_1"]["metadata"]
 
 
+def test_migration_only_runs_once(tmp_path, monkeypatch):
+    """migrate_mempalace_legacy_records is idempotent: a second call must be a no-op.
+
+    This mirrors the filesystem-flag guard that the DB-flag gate in lifespan relies on.
+    We verify that calling the function twice doesn't re-process records added between
+    the two calls.
+    """
+    col = _GLOBAL_COLLECTION
+    flag_path = str(tmp_path / ".migration_v1_done")
+    import zoe_agent as _pa
+    monkeypatch.setattr(_pa, "_MIGRATION_DONE_FLAG", flag_path)
+
+    # Seed a legacy record and run once.
+    col.upsert(
+        ids=["legacy_1"],
+        documents=["Original record"],
+        metadatas=[{"wing": "zoe"}],
+    )
+    migrate_mempalace_legacy_records()
+    assert col._store["legacy_1"]["metadata"]["wing"] == "family-admin"
+    assert os.path.exists(flag_path), "filesystem flag must be written after first run"
+
+    # Add a new record after migration completes (simulates data added between restarts).
+    col.upsert(
+        ids=["new_record"],
+        documents=["New record added after migration"],
+        metadatas=[{"wing": "zoe"}],
+    )
+
+    # Second call — must be a no-op because the flag file exists.
+    migrate_mempalace_legacy_records()
+    assert col._store["new_record"]["metadata"]["wing"] == "zoe", (
+        "Second call should be a no-op; new_record's wing must remain 'zoe'"
+    )
+
+
 # ---------------------------------------------------------------------------
 # 11. _mempalace_load_user_facts returns empty string when no facts stored
 # ---------------------------------------------------------------------------
