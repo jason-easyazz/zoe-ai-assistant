@@ -15,11 +15,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from push import PushBroadcaster
 
 
-def _make_ws(user_id=None):
-    """Return a mock WebSocket with pre-registered user_id."""
+def _make_ws():
+    """Return a mock WebSocket; user_id mapping is tracked in broadcaster state."""
     ws = MagicMock()
     ws.send_json = AsyncMock()
-    ws._mock_user_id = user_id
     return ws
 
 
