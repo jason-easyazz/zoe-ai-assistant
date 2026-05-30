@@ -44,6 +44,8 @@ def test_zoe_why_block_teaches_mission_and_stays_lean():
     assert "Nudge" in why
     # kept lean per charter S9
     assert len(why) <= agent_sync._MAX_ZOE_WHY_CHARS
+    # docstring intent: distilled/hand-curated, not dynamically read from charter file
+    assert "Distilled from" in why
 
 
 def test_patch_soul_block_is_idempotent_per_marker(tmp_path):
