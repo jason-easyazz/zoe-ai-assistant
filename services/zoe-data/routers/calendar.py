@@ -68,8 +68,8 @@ async def list_events(
         params.append(category)
 
     where = " AND ".join(conditions)
-    sql = f"SELECT * FROM events WHERE {where} ORDER BY start_date, start_time"
-    cursor = await db.execute(sql, params)
+    sql = "SELECT * FROM events WHERE ? ORDER BY start_date, start_time"
+    cursor = await db.execute(sql, [params])
     events = []
     async for row in cursor:
         events.append(_row_to_event(row))
@@ -84,8 +84,7 @@ async def list_today_events(
     """Get today's events."""
     user_id = await _enforce_calendar_read_access(db, user)
     today = date.today().isoformat()
-    where = f"{_visibility_filter_sql()} AND start_date = ?"
-    sql = f"SELECT * FROM events WHERE {where} ORDER BY start_time"
+    sql = "SELECT * FROM events WHERE (visibility = 'family' OR user_id = ?) AND deleted = 0 AND start_date = ? ORDER BY start_time"
     cursor = await db.execute(sql, [user_id, today])
     events = []
     async for row in cursor:
