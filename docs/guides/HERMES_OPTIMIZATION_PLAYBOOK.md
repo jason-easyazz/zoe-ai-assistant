@@ -204,15 +204,90 @@ dead end, use skill_manage to capture the working procedure as a SKILL.md
 mechanics in skills.
 ```
 
-GEPA offline self-evolution (~$2-10/run, no GPU; companion repo
-`NousResearch/hermes-agent-self-evolution`):
+### GEPA offline self-evolution (BUILT — DSPy + GEPA)
+
+Optimizes a skill's `SKILL.md` body via DSPy + GEPA (companion repo
+`NousResearch/hermes-agent-self-evolution`). No GPU; ~$0.70 per budget-40 run on
+OpenRouter (measured), scaling roughly linearly with `--max-metric-calls`.
+
+Everything lives OUTSIDE the MIT Zoe repo:
+
+- `~/.hermes/self-evolution/` — cloned pipeline + dedicated `.venv` (DSPy 3.2.1).
+- `~/.hermes/self-evolution/zoe_evolve.py` — Zoe driver (see below).
+- `~/.hermes/self-evolution/zoe_evolve_loop.sh` — round-robin continuous loop.
+- `~/.hermes/self-evolution/zoe_evolve_apply.sh` — human-in-the-loop apply step.
+- `~/.hermes/scripts/zoe-gepa-loop.sh` — Hermes cron entrypoint.
+- `~/.hermes/zoe-skills-lab/` — local (no-remote) git repo, `skills/<name>/SKILL.md`
+  staged from `~/.hermes/skills`, giving evolved variants reviewable diffs + rollback.
+
+**Why a Zoe driver instead of `python -m evolution.skills.evolve_skill`:** upstream
+(a) calls `dspy.GEPA(max_steps=...)`, which DSPy 3.2.1 rejects (then falls back to
+MIPROv2, which needs `optuna`); (b) passes the skill body as an *input field*, so GEPA
+only mutates a wrapper signature and `optimized.skill_text` returns the original
+unchanged (the "ghost mutation" bug); and (c) never wires the strong model into GEPA.
+`zoe_evolve.py` reuses upstream's dataset builder / LLM-judge / constraints but makes
+the skill body the *optimizable instruction* (real evolution), uses the strong model as
+GEPA's `reflection_lm` and the cheap model for the task + judge, and is **synthetic-only**
+(no `sessiondb`/PII path). One local patch: `dataset_builder.py` parses with
+`strict=False` to tolerate control chars in model JSON.
+
+Run one skill manually:
+
+```bash
+cd ~/.hermes/self-evolution
+export OPENROUTER_API_KEY=$(grep '^OPENROUTER_API_KEY=' ~/.hermes/.env | cut -d= -f2-)
+.venv/bin/python zoe_evolve.py --skill github-greptile-loop --max-metric-calls 80 \
+  --optimizer-model openrouter/anthropic/claude-sonnet-4.6 \
+  --eval-model openrouter/google/gemini-2.5-flash
+# Review:  diff output/<skill>/<ts>/baseline_skill.md output/<skill>/<ts>/evolved_skill.md
+# Apply (only if better + constraints pass):  ./zoe_evolve_apply.sh <skill> <ts>
+```
+
+**Caveat — the eval is a proxy with a verbosity bias.** GEPA scores how well an LLM judge
+thinks a model *following the skill text* answered synthetic tasks. It optimizes
+instructional clarity, not real tool-use success, and the judge rewards longer/more
+complete answers — so GEPA reliably pads skills. The +20% growth gate is therefore
+essential, not cosmetic. Measured first runs (budget 80, ~$0.85 each):
+
+- `github-greptile-loop`: baseline 0.954 → 0.930 (−0.024), +72% growth → **rejected**.
+- `zoe-engineering`: baseline 0.779 → 0.970 (+0.191) but +79% growth → **rejected**.
+
+Both correctly produced no merge. Treat positive holdout delta AND passing constraints as
+*necessary, not sufficient* — a human reviews every diff. To get a mergeable gain, fold
+concision into the signal (harder length penalty / instruct GEPA to preserve size), not
+just the post-gate.
+
+**Eval data / privacy.** Default and only path in the driver is `--eval-source synthetic`.
+Upstream's `sessiondb` mode would mine `~/.claude/history.jsonl`,
+`~/.copilot/session-state/*/events.jsonl`, `~/.hermes/sessions/*.json`; its scrubber
+catches secrets but not general PII. Keep it OFF until an explicit PII review — it is not
+reachable through `zoe_evolve.py`.
+
+**Continuous loop (weekly, PAUSED until you enable it).** Registered as Hermes cron
+`weekly-zoe-gepa-skill-evolution` (`0 4 * * 1`, `--no-agent`). Each tick syncs one
+round-robin skill from live, runs a capped synthetic evolution, and — only if holdout
+improved and constraints pass — appends a candidate to
+`~/.hermes/self-evolution/REVIEW_QUEUE.md`. It NEVER auto-applies. Guards: single-flight
+`flock`, monthly OpenRouter cap (`ZOE_GEPA_MONTHLY_CAP_USD`, default $30), distinct hour
+from the hourly issue-fix cron.
+
+```bash
+hermes cron resume f4957eb425b9   # turn the weekly loop ON
+hermes cron pause  f4957eb425b9   # turn it OFF
+```
+
+**Pin critical skills** so the Curator can patch but never archive them:
 
 ```
-Set up the GEPA offline self-evolution pipeline to optimize my zoe-engineering and
-github-greptile-loop skills using my real session history in ~/.hermes/state.db.
-Generate an eval set, run the optimizer, apply the constraint gates, and open the
-best variant as a PR against the skill - never a direct commit.
+hermes curator pin zoe-engineering   # and github-greptile-loop, zoe-graphify,
+                                      # agentic-engineering-workflow, zoe-board
 ```
+
+**Darwinian Evolver (deferred, do NOT integrate).** Upstream's optional Phase-4 code
+engine (`imbue-ai/darwinian_evolver`) is **AGPL-3.0** and Zoe is **MIT**. Never import,
+vendor, or link it into the Zoe tree or a distributed Zoe image. If ever used for code
+evolution, run it strictly as an isolated external CLI (separate process/container), keep
+only its outputs, and never expose it as a networked user-facing service.
 
 ## Phase 3 — Optimize the hourly loop
 
