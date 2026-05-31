@@ -423,21 +423,28 @@ def _greptile_confidence_from_github_comments(
     """Parse Greptile confidence from PR issue comments (summary posts)."""
     from greptile_client import parse_confidence_score
 
-    proc = _run_gh(["api", f"repos/{repo}/issues/{int(pr_number)}/comments", "--paginate"])
+    proc = subprocess.run(
+        ["gh", "api", f"repos/{repo}/issues/{int(pr_number)}/comments", "--paginate"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+    )
     if proc.returncode != 0:
         return None
     try:
         rows = json.loads(proc.stdout or "[]")
     except json.JSONDecodeError:
         return None
-    best: int | None = None
     for row in reversed(rows if isinstance(rows, list) else []):
         if not isinstance(row, dict):
             continue
+        login = str((row.get("user") or {}).get("login") or "").lower()
+        if "greptile" not in login:
+            continue
         score = parse_confidence_score(row.get("body"))
         if score is not None:
-            best = score if best is None else max(best, score)
-    return best
+            return score
+    return None
 
 
 def _gh_unresolved_review_thread_count(
