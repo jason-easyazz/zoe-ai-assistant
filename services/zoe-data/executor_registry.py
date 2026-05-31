@@ -34,6 +34,10 @@ def _adapter_for_assignee(assignee_id: str | None) -> Any | None:
 
 async def dispatch_issue(issue: dict) -> dict:
     """Dispatch a Multica issue to its executor. No-op result when unrouted."""
+    title = (issue.get("title") or issue.get("identifier") or "").strip()
+    if title.lower().startswith("autopilot:"):
+        # Autopilot wrapper issues are tracker artifacts, never engineering work.
+        return {"ok": False, "reason": "autopilot wrapper issue", "skipped": True}
     adapter = _adapter_for_assignee(issue.get("assignee_id"))
     if adapter is None:
         return {"ok": False, "reason": "no executor adapter for assignee", "skipped": True}

@@ -35,6 +35,16 @@ async def test_skips_unassigned(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_skips_autopilot_wrapper_titles(monkeypatch):
+    monkeypatch.setenv("HERMES_MULTICA_AGENT_ID", "hermes-xyz")
+    out = await reg.dispatch_issue(
+        {"id": "4", "assignee_id": "hermes-xyz", "title": "Autopilot: Platform Health Check"}
+    )
+    assert out["ok"] is False
+    assert out.get("skipped") is True
+
+
+@pytest.mark.asyncio
 async def test_poll_unknown_backend():
     out = await reg.poll_ref("multica:1", backend="nope")
     assert out["found"] is False

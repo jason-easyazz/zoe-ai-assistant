@@ -1244,14 +1244,14 @@ async def get_agent_board():
 
 @_agent_card_router.post("/board/approve")
 async def board_approve(task_id: str, user: dict = Depends(require_admin)):
-    """Create a Multica board issue for agent execution (Hermes by default)."""
+    """Create a Hermes-assigned Multica issue and dispatch it via the executor seam."""
     try:
-        from multica_client import MULClient  # type: ignore[import]
-        from engineering_workflow import create_and_start_engineering_task  # type: ignore[import]
+        from multica_client import MULClient, get_engineering_multica_agent_id  # type: ignore[import]
+        from executor_registry import dispatch_issue  # type: ignore[import]
+
         client = MULClient()
         if not client.is_configured():
             return {"ok": False, "reason": "Multica not configured — route via Hermes manually"}
-        from multica_client import get_engineering_multica_agent_id  # type: ignore[import]
 
         issue = await client.create_issue(
             title=f"Task: {task_id}",
@@ -1261,18 +1261,10 @@ async def board_approve(task_id: str, user: dict = Depends(require_admin)):
             assignee_type="agent",
         )
         issue_id = issue.get("id") if isinstance(issue, dict) else None
-        workflow = None
+        dispatch = None
         if issue_id:
-            workflow = await create_and_start_engineering_task(
-                user_id=user.get("user_id", "admin"),
-                title=f"Task: {task_id}",
-                task=f"Implement approved Zoe board task `{task_id}`. Open a PR and run Greptile review.",
-                source="board_approve",
-                source_id=task_id,
-                multica_issue_id=issue_id,
-                idempotency_key=f"board_approve:{task_id}",
-            )
-        return {"ok": True, "issue": issue, "engineering_task": workflow}
+            dispatch = await dispatch_issue(issue)
+        return {"ok": True, "issue": issue, "dispatch": dispatch}
     except Exception as exc:
         return {"ok": False, "reason": str(exc)}
 
@@ -1367,20 +1359,11 @@ async def multica_webhook(request: Request):
                     )
                     return {"ok": True, "dispatched": False, "reason": "dispatch auth required"}
                 try:
-                    from engineering_workflow import create_and_start_engineering_task  # type: ignore[import]
-                    issue_id = str(issue.get("id") or "")
-                    title = issue.get("title") or issue.get("identifier") or "Multica engineering task"
-                    description = issue.get("description") or ""
-                    if issue_id:
-                        await create_and_start_engineering_task(
-                            user_id="family-admin",
-                            title=title,
-                            task=f"Work this Hermes-assigned Multica issue.\n\nTitle: {title}\n\n{description}",
-                            source="multica_webhook",
-                            source_id=issue_id,
-                            multica_issue_id=issue_id,
-                            idempotency_key=f"multica:{issue_id}",
-                        )
+                    from executor_registry import dispatch_issue  # type: ignore[import]
+
+                    if str(issue.get("id") or ""):
+                        result = await dispatch_issue(issue)
+                        return {"ok": True, "dispatched": bool(result.get("ok")), "dispatch": result}
                 except Exception as dispatch_exc:
                     logger.warning("Multica webhook: Hermes dispatch failed: %s", dispatch_exc)
 
