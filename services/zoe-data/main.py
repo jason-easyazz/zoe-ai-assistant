@@ -340,7 +340,13 @@ async def lifespan(app: FastAPI):
                             if _chain.get("found") and _chain.get("status") in ("running", "blocked"):
                                 continue
                             _emit = await emit_issue_assigned(_todo)
-                            if _emit.get("ok"):
+                            _body = _emit.get("body") or {}
+                            if _emit.get("ok") and isinstance(_body, dict) and _body.get("dispatched"):
+                                # Keep the board truthful: move dispatched work off the todo column.
+                                try:
+                                    await client.update_issue(_tid, status="in_progress")
+                                except Exception as _ip_exc:
+                                    logger.debug("multica_poll: set in_progress failed for %s: %s", _tid, _ip_exc)
                                 logger.info(
                                     "multica_poll: webhook dispatched %s",
                                     _todo.get("identifier") or _tid,
