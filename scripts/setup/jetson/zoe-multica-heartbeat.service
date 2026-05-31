@@ -1,0 +1,12 @@
+[Unit]
+Description=Reflect Zoe runtime liveness into the Multica runtime registry
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/zoe/assistant
+ExecStart=/usr/bin/python3 /home/zoe/assistant/scripts/maintenance/multica_runtime_heartbeat.py
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=60
