@@ -412,6 +412,56 @@ def _ci_status_from_rollup(rollup: list[dict[str, Any]]) -> dict[str, Any]:
     return {"ok": True, "pending": pending, "failures": failures}
 
 
+def _actionable_greptile_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Inline review comments only; PR-level Greptile summaries are not merge blockers."""
+    return [f for f in findings if (f.get("file_path") or "").strip()]
+
+
+def _gh_unresolved_review_thread_count(pr_number: int, *, repo: str = DEFAULT_REPO) -> int:
+    """Count open GitHub review threads (resolved threads clear stale Greptile addressed flags)."""
+    try:
+        owner, name = repo.split("/", 1)
+    except ValueError:
+        return 0
+    query = (
+        "query($owner:String!,$repo:String!,$pr:Int!){"
+        "repository(owner:$owner,name:$repo){pullRequest(number:$pr){"
+        "reviewThreads(first:100){nodes{isResolved}}}}}"
+    )
+    proc = subprocess.run(
+        [
+            "gh",
+            "api",
+            "graphql",
+            "-f",
+            f"query={query}",
+            "-f",
+            f"owner={owner}",
+            "-f",
+            f"repo={name}",
+            "-F",
+            f"pr={int(pr_number)}",
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+    )
+    if proc.returncode != 0:
+        return 0
+    try:
+        data = json.loads(proc.stdout or "{}")
+        nodes = (
+            data.get("data", {})
+            .get("repository", {})
+            .get("pullRequest", {})
+            .get("reviewThreads", {})
+            .get("nodes", [])
+        )
+    except (AttributeError, TypeError):
+        return 0
+    return sum(1 for node in nodes if isinstance(node, dict) and not node.get("isResolved"))
+
+
 def _gh_mergeable_state(pr_number: int, *, repo: str = DEFAULT_REPO) -> dict[str, Any]:
     proc = _run_gh(
         [
@@ -457,11 +507,15 @@ async def assess_merge_readiness(
     status = await get_pr_status(repo=repo, pr_number=pr_number, default_branch=default_branch)
     comments = await list_pr_comments(repo=repo, pr_number=pr_number, default_branch=default_branch)
     findings = comments.get("findings") or []
+    actionable = _actionable_greptile_findings(findings)
+    unresolved_threads = _gh_unresolved_review_thread_count(pr_number, repo=repo)
     blockers: list[str] = []
     if status.get("reviewIsRunning"):
         blockers.append("GREPTILE_REVIEW_RUNNING")
-    if findings:
-        blockers.append(f"GREPTILE_UNADDRESSED:{len(findings)}")
+    if unresolved_threads:
+        blockers.append(f"GREPTILE_UNRESOLVED_THREADS:{unresolved_threads}")
+    elif actionable:
+        blockers.append(f"GREPTILE_UNADDRESSED:{len(actionable)}")
     confidence = int(status.get("confidenceScore") or 0)
     if confidence < int(target_confidence):
         blockers.append(f"GREPTILE_CONFIDENCE:{confidence}<{target_confidence}")
@@ -472,7 +526,8 @@ async def assess_merge_readiness(
         "ready": not blockers,
         "blockers": blockers,
         "greptile": status,
-        "unaddressed_count": len(findings),
+        "unaddressed_count": len(actionable),
+        "unresolved_review_threads": unresolved_threads,
         "gh": gh_state,
         "target_confidence": int(target_confidence),
     }
