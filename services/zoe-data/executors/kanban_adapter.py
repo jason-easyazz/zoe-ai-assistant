@@ -1,7 +1,7 @@
 """Hermes Kanban executor adapter.
 
 Turns a Multica issue into a durable implement -> review -> closeout chain on
-the Hermes Kanban board, where cheap DeepSeek worker profiles do the work. All
+the Hermes Kanban board, where OpenRouter-routed worker profiles do the work. All
 Kanban-specific behaviour lives here so it never leaks into Zoe core.
 
 Boundary: this shells the ``hermes kanban`` CLI (same SQLite DB the in-gateway
