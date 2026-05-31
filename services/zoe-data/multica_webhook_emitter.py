@@ -49,7 +49,9 @@ async def emit_event(event: str, issue: dict[str, Any]) -> dict[str, Any]:
         "X-Multica-Webhook-Token": secret,
     }
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        # Keep below the 30s poll-loop interval so one slow loopback POST can't
+        # consume a whole cycle (compounds when ZOE_MULTICA_POLL_DISPATCH_LIMIT > 1).
+        async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.post(url, json=payload, headers=headers)
             body: Any = {}
             try:

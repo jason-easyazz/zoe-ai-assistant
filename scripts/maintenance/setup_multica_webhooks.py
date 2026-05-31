@@ -56,7 +56,8 @@ async def _probe_webhook(secret: str) -> bool:
 
     url = webhook_target_url()
     # Use a non-Hermes assignee_id so the receiver does not attempt real Kanban
-    # dispatch, but still exercises the auth path for issue.assigned.
+    # dispatch. Auth is only checked when assignee_id matches Hermes, so this
+    # probe tests endpoint reachability only, not the auth path.
     payload = {
         "event": "issue.assigned",
         "issue": {
