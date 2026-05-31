@@ -362,17 +362,17 @@ async def _run_cheap_agent(packet: GuardPacket, *, task_id: str | None = None) -
     return status, f"elapsed={elapsed:.1f}s estimated_cost_usd={estimated_cost}\n{output}"
 
 
-async def run_guard_once(task_id: str, *, packet_only: bool = False) -> dict[str, Any]:
-    from engineering_workflow import get_engineering_task, update_greptile_state
+async def run_guard_once(
+    pr_number: int, *, packet_only: bool = False, target_confidence: int = 5
+) -> dict[str, Any]:
     from greptile_client import DEFAULT_REPO, get_pr_status, list_pr_comments, trigger_review
 
-    task = await get_engineering_task(task_id)
-    if not task:
-        raise GuardError(f"engineering task not found: {task_id}")
-    pr_number = task.get("pr_number")
-    if not pr_number:
-        raise GuardError("engineering task has no PR number")
-    pr_number = int(pr_number)
+    try:
+        pr_number = int(pr_number)
+    except (TypeError, ValueError) as exc:
+        raise GuardError(f"invalid PR number: {pr_number!r}") from exc
+    task: dict[str, Any] = {"target_confidence": target_confidence}
+    task_id = f"pr-{pr_number}"
     with acquire_lock(pr_number):
         state = _load_status(pr_number)
         status = await get_pr_status(repo=DEFAULT_REPO, pr_number=pr_number, default_branch=DEFAULT_BASE_BRANCH)
@@ -385,12 +385,12 @@ async def run_guard_once(task_id: str, *, packet_only: bool = False) -> dict[str
             _write_json(pr_number, "status.json", state)
             _record_guardrail(pr_number, blocked)
             return {"ok": False, "state": blocked, "status": state}
-        await update_greptile_state(
-            task_id,
-            greptile_status=status.get("reviewCompleteness") or "reviewed",
-            confidence=status.get("confidenceScore"),
-            unaddressed_count=len(findings),
-        )
+        state["greptile"] = {
+            "status": status.get("reviewCompleteness") or "reviewed",
+            "confidence": status.get("confidenceScore"),
+            "unaddressed_count": len(findings),
+        }
+        _write_json(pr_number, "status.json", state)
         if status.get("reviewIsRunning"):
             state["terminal_state"] = "WAITING_GREPTILE"
             _write_json(pr_number, "status.json", state)

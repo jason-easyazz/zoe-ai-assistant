@@ -669,17 +669,6 @@ class _A2ATaskRequest(BaseModel):
 class _EngineeringTaskRequest(BaseModel):
     task: str
     title: str | None = None
-    source: str = "api"
-    source_id: str | None = None
-    multica_issue_id: str | None = None
-    idempotency_key: str | None = None
-    max_rounds: int = 5
-    target_confidence: int = 5
-    start: bool = True
-
-
-class _EngineeringTaskCancelRequest(BaseModel):
-    reason: str = "cancelled by operator"
 
 
 class _EngineeringGuardRunRequest(BaseModel):
@@ -800,29 +789,29 @@ async def a2a_task_result(task_id: str, user: dict = Depends(get_a2a_caller)):
     }
 
 
-# ── Engineering workflow tasks ────────────────────────────────────────────────
+# ── Engineering board (Multica SoT + Kanban execution) ────────────────────────
 
 @_agent_card_router.post("/engineering/tasks")
 async def create_engineering_workflow_task(
     body: _EngineeringTaskRequest,
     user: dict = Depends(require_admin),
 ):
-    """Create and optionally start a durable Multica/Hermes/PR workflow."""
-    from engineering_workflow import create_and_start_engineering_task, create_engineering_task
+    """Add a Hermes-assigned Multica issue and dispatch it to the Kanban seam."""
+    from executor_registry import dispatch_issue  # type: ignore[import]
+    from multica_client import MULClient, get_engineering_multica_agent_id  # type: ignore[import]
 
-    kwargs = {
-        "user_id": user.get("user_id", "admin"),
-        "task": body.task,
-        "title": body.title,
-        "source": body.source,
-        "source_id": body.source_id,
-        "multica_issue_id": body.multica_issue_id,
-        "idempotency_key": body.idempotency_key,
-        "max_rounds": body.max_rounds,
-        "target_confidence": body.target_confidence,
-    }
-    task = await (create_and_start_engineering_task(**kwargs) if body.start else create_engineering_task(**kwargs))
-    return {"ok": True, "task": task}
+    client = MULClient()
+    if not client.is_configured():
+        return {"ok": False, "reason": "Multica not configured"}
+    issue = await client.create_issue(
+        title=(body.title or body.task)[:120],
+        description=body.task,
+        priority="medium",
+        assignee_id=get_engineering_multica_agent_id(),
+        assignee_type="agent",
+    )
+    dispatch = await dispatch_issue(issue) if isinstance(issue, dict) and issue.get("id") else None
+    return {"ok": True, "issue": issue, "dispatch": dispatch}
 
 
 @_agent_card_router.get("/engineering/tasks")
@@ -831,89 +820,66 @@ async def list_engineering_workflow_tasks(
     status: str | None = None,
     user: dict = Depends(require_admin),
 ):
-    from engineering_workflow import list_engineering_tasks
+    """Status view: Hermes-assigned Multica issues with their Kanban chain state."""
+    from executor_registry import poll_ref  # type: ignore[import]
+    from multica_client import MULClient, get_engineering_multica_agent_id  # type: ignore[import]
 
-    return {"tasks": await list_engineering_tasks(limit=limit, status=status)}
-
-
-@_agent_card_router.get("/engineering/tasks/{task_id}")
-async def get_engineering_workflow_task(task_id: str, user: dict = Depends(require_admin)):
-    from engineering_workflow import get_engineering_task
-
-    task = await get_engineering_task(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Engineering task not found")
-    return {"task": task}
-
-
-@_agent_card_router.post("/engineering/tasks/{task_id}/retry")
-async def retry_engineering_workflow_task(task_id: str, user: dict = Depends(require_admin)):
-    from engineering_workflow import retry_engineering_task
-
-    try:
-        return {"ok": True, "task": await retry_engineering_task(task_id)}
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@_agent_card_router.post("/engineering/tasks/{task_id}/cancel")
-async def cancel_engineering_workflow_task(
-    task_id: str,
-    body: _EngineeringTaskCancelRequest,
-    user: dict = Depends(require_admin),
-):
-    from engineering_workflow import cancel_engineering_task
-
-    try:
-        return {"ok": True, "task": await cancel_engineering_task(task_id, body.reason)}
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    client = MULClient()
+    if not client.is_configured():
+        return {"tasks": []}
+    hermes_id = str(get_engineering_multica_agent_id())
+    statuses = [status] if status in ("todo", "in_progress", "in_review", "done") else ["in_progress", "todo"]
+    tasks: list[dict] = []
+    for st in statuses:
+        for issue in await client.list_issues(status=st) or []:
+            if str(issue.get("assignee_id") or "") != hermes_id:
+                continue
+            if (issue.get("title") or "").lower().startswith("autopilot:"):
+                continue
+            chain = await poll_ref(f"multica:{issue.get('id')}")
+            tasks.append({
+                "issue_id": issue.get("id"),
+                "identifier": issue.get("identifier"),
+                "title": issue.get("title"),
+                "multica_status": st,
+                "chain_status": chain.get("status") if chain.get("found") else None,
+                "phases": chain.get("phases"),
+                "pr_url": chain.get("pr_url"),
+                "blocker": chain.get("blocker"),
+            })
+            if len(tasks) >= limit:
+                return {"tasks": tasks}
+    return {"tasks": tasks}
 
 
-@_agent_card_router.post("/engineering/tasks/{task_id}/greptile/check")
-async def check_engineering_workflow_greptile(task_id: str, user: dict = Depends(require_admin)):
-    from engineering_workflow import check_greptile_for_task
-
-    try:
-        return {"ok": True, "task": await check_greptile_for_task(task_id)}
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@_agent_card_router.get("/engineering/tasks/{task_id}/guard")
-async def get_engineering_workflow_guard(task_id: str, user: dict = Depends(require_admin)):
-    from engineering_workflow import get_engineering_task
+@_agent_card_router.get("/engineering/guard/{pr_number}")
+async def get_engineering_guard(pr_number: int, user: dict = Depends(require_admin)):
+    """PR-keyed Greptile grep-loop guard state."""
     from greploop_guard import read_guard_state
 
-    task = await get_engineering_task(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Engineering task not found")
-    pr_number = task.get("pr_number")
-    if not pr_number:
-        return {"ok": False, "state": "NO_PR", "task": task}
-    return {"ok": True, "state": read_guard_state(int(pr_number)), "task": task}
+    return {"ok": True, "pr_number": pr_number, "state": read_guard_state(pr_number)}
 
 
-@_agent_card_router.post("/engineering/tasks/{task_id}/guard/once")
-async def run_engineering_workflow_guard_once(
-    task_id: str,
+@_agent_card_router.post("/engineering/guard/{pr_number}/once")
+async def run_engineering_guard_once(
+    pr_number: int,
     body: _EngineeringGuardRunRequest | None = None,
     user: dict = Depends(require_admin),
 ):
     from greploop_guard import GuardError, run_guard_once
 
     try:
-        return await run_guard_once(task_id, packet_only=bool(body.packet_only if body else False))
+        return await run_guard_once(pr_number, packet_only=bool(body.packet_only if body else False))
     except GuardError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@_agent_card_router.post("/engineering/tasks/{task_id}/guard/packet")
-async def build_engineering_workflow_guard_packet(task_id: str, user: dict = Depends(require_admin)):
+@_agent_card_router.post("/engineering/guard/{pr_number}/packet")
+async def build_engineering_guard_packet(pr_number: int, user: dict = Depends(require_admin)):
     from greploop_guard import GuardError, run_guard_once
 
     try:
-        return await run_guard_once(task_id, packet_only=True)
+        return await run_guard_once(pr_number, packet_only=True)
     except GuardError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1559,30 +1525,46 @@ async def evolution_proposal_action(
                     proposal_id, exc,
                 )
 
-            # Queue a tracked engineering workflow to implement the proposal.
+            # Dispatch the approved proposal to the Kanban executor (via Multica issue).
+            _dispatch = None
             try:
-                from engineering_workflow import create_and_start_engineering_task  # type: ignore[import]
-                _task_desc = (
-                    f"Implement evolution proposal {proposal_id}: "
-                    f"{proposal['title']}. "
-                    f"{proposal['description']}"
-                )
-                _workflow = await create_and_start_engineering_task(
-                    user_id=user["user_id"],
-                    title=proposal["title"],
-                    task=_task_desc,
-                    source="evolution_proposal",
-                    source_id=proposal_id,
-                    multica_issue_id=multica_issue_id,
-                    idempotency_key=f"evolution:{proposal_id}",
-                )
-                logger.info(
-                    "evolution_approve: queued engineering workflow %s for proposal %s",
-                    _workflow.get("id"), proposal_id,
-                )
+                from executor_registry import dispatch_issue  # type: ignore[import]
+                from multica_client import get_engineering_multica_agent_id  # type: ignore[import]
+
+                if multica_issue_id:
+                    _issue = {
+                        "id": multica_issue_id,
+                        "identifier": proposal_id,
+                        "title": proposal["title"],
+                        "description": (
+                            f"Implement evolution proposal {proposal_id}: "
+                            f"{proposal['title']}.\n\n{proposal['description']}"
+                        ),
+                        "assignee_id": get_engineering_multica_agent_id(),
+                    }
+                    _dispatch = await dispatch_issue(_issue)
+                    logger.info(
+                        "evolution_approve: dispatched proposal %s -> %s",
+                        proposal_id, _dispatch.get("chain") if _dispatch.get("ok") else _dispatch,
+                    )
+                else:
+                    # No Multica issue to anchor the Kanban chain (Multica
+                    # unconfigured or the issue sync failed). Surface it so the
+                    # approved proposal does not sit undispatched silently.
+                    _dispatch = {"ok": False, "reason": "no multica_issue_id; proposal approved but not dispatched"}
+                    logger.warning(
+                        "evolution_approve: proposal %s approved but NOT dispatched — %s",
+                        proposal_id, _dispatch["reason"],
+                    )
             except Exception as exc:
-                logger.warning("evolution_approve: could not queue engineering workflow: %s", exc)
-            return {"ok": True, "action": "approved", "multica_issue_id": multica_issue_id}
+                _dispatch = {"ok": False, "reason": str(exc)}
+                logger.warning("evolution_approve: could not dispatch proposal to Kanban: %s", exc)
+            return {
+                "ok": True,
+                "action": "approved",
+                "multica_issue_id": multica_issue_id,
+                "dispatch": _dispatch,
+            }
 
         elif action == "deploy":
             # Called by background runner when Hermes completes implementation

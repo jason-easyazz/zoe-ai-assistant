@@ -46,52 +46,42 @@ This should create a queued workflow that still needs approval before Hermes cha
 what's the hermes engineering status
 ```
 
-Expected state changes after approval/start:
+Expected Kanban chain progression (per Multica issue):
 
-- `queued` after task creation.
-- `hermes_running` once the background task is enqueued.
-- `pr_open` after Hermes returns a `PR_URL=...`.
-- `ready_for_human` when Greptile reports target confidence and no actionable findings.
-- `blocked` if Hermes reports `BLOCKER=...` or completes without a PR URL.
+- `implement` (`zoe-coder`) — small PR opened on a worktree.
+- `review` (`zoe-reviewer`) — verification-first checks; blocks merge if they fail.
+- `closeout` (`zoe-planner`) — Greptile grep loop, then Multica issue set to `done`.
+- The Zoe poll loop advances the Multica issue to `done` when the chain completes.
 
-## Board recovery rollout
+## Board rollout
 
 After deploying this PR on the Zoe host:
 
 1. `systemctl --user daemon-reload && systemctl --user restart zoe-data.service`
 2. `python3 scripts/maintenance/sync_hermes_env_from_zoe.py`
-3. `curl -sf -H "Authorization: Bearer $HERMES_API_KEY" http://127.0.0.1:8642/v1/models`
-4. Retry blocked workflows (Hermes HTTP 401 only):
-
-   ```bash
-   python3 scripts/maintenance/retry_blocked_engineering.py --dry-run --bucket http401
-   python3 scripts/maintenance/retry_blocked_engineering.py --limit 5 --bucket http401
-   ```
-
-5. Reassign open Self-Improvement issues:
+3. `python3 scripts/maintenance/setup_multica_webhooks.py --probe`
+4. Reassign open issues to Hermes:
 
    ```bash
    python3 scripts/maintenance/multica_reassign_open_to_hermes.py --dry-run
    python3 scripts/maintenance/multica_reassign_open_to_hermes.py --execute
    ```
 
-6. **Dispatcher:** Hermes cron `hourly-zoe-board-dispatch` (script `dispatch-hermes-board.sh`, 1 issue/hour) or manual:
+5. **Dispatcher:** Hermes cron `hourly-zoe-board-dispatch` (`dispatch-hermes-board.sh` → `sync_multica_to_kanban.py`) or the 30s Zoe poll webhook bridge:
 
    ```bash
-   python3 scripts/maintenance/dispatch_hermes_board_batch.py --dry-run --limit 1
+   python3 scripts/maintenance/sync_multica_to_kanban.py --dry-run --limit 1
    ```
 
-**Do not** run batch dispatch while many `background_tasks` are already `running`. Keep `ZOE_BOARD_REVIEW_AUTOPILOT_ENABLED=false`.
-
-**Still blocked after retry:** ~16 workflows with `dirty_tree` blockers need a clean git working tree before retry (`--bucket dirty_tree` is list-only).
+Keep `ZOE_BOARD_REVIEW_AUTOPILOT_ENABLED=false` (the Zoe poll loop and cron own dispatch).
 
 **Operator cron (outside repo):** disable Board Fix Progress Watcher; ensure Graphify refresh script path is valid under `~/.hermes/scripts/`.
 
 ## Local Verification
 
 ```bash
-python3 -m pytest services/zoe-data/tests/test_engineering_workflow.py services/zoe-data/tests/test_multica_client.py services/zoe-data/tests/test_runtime_env.py -q
-python3 -m py_compile services/zoe-data/engineering_workflow.py services/zoe-data/multica_client.py services/zoe-data/runtime_env.py
+python3 -m pytest services/zoe-data/tests/test_kanban_adapter.py services/zoe-data/tests/test_executor_registry.py services/zoe-data/tests/test_multica_webhook_emitter.py services/zoe-data/tests/test_multica_client.py services/zoe-data/tests/test_runtime_env.py -q
+python3 -m py_compile services/zoe-data/executor_registry.py services/zoe-data/executors/kanban_adapter.py services/zoe-data/multica_webhook_emitter.py services/zoe-data/multica_client.py services/zoe-data/runtime_env.py
 python3 tools/audit/validate_structure.py
 python3 tools/audit/validate_critical_files.py
 ```
