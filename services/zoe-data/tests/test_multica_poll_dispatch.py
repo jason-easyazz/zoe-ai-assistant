@@ -16,6 +16,11 @@ def test_chain_needs_dispatch_running_blocked_done():
     assert chain_needs_dispatch({"found": True, "status": "done"}) is False
 
 
+def test_chain_needs_dispatch_empty_or_missing_status():
+    assert chain_needs_dispatch({}) is False
+    assert chain_needs_dispatch({"found": True}) is False
+
+
 def test_implement_body_requires_kanban_terminal_tools():
     import executors.kanban_adapter as ka
 

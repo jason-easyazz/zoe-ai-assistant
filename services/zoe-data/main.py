@@ -320,6 +320,8 @@ async def lifespan(app: FastAPI):
                     except Exception as _se:
                         logger.debug("multica_poll: stale-todo close error: %s", _se)
 
+                in_progress_issues = await client.list_issues(status="in_progress") or []
+
                 # Webhook bridge: Hermes-assigned todos / in_progress (no chain) → issue.assigned.
                 try:
                     from multica_webhook_emitter import emit_issue_assigned, is_configured as _wh_ok
@@ -337,6 +339,7 @@ async def lifespan(app: FastAPI):
                         except ValueError:
                             _wh_limit = 1
                         _wh_dispatched = 0
+                        _wh_dispatched_ids: set[str] = set()
 
                         async def _maybe_dispatch_hermes_issue(_candidate: dict, *, from_todo: bool) -> None:
                             nonlocal _wh_dispatched
@@ -365,6 +368,7 @@ async def lifespan(app: FastAPI):
                                             _ip_exc,
                                         )
                                 _wh_dispatched += 1
+                                _wh_dispatched_ids.add(_tid)
                                 logger.info(
                                     "multica_poll: webhook dispatched %s (%s)",
                                     _candidate.get("identifier") or _tid,
@@ -379,14 +383,16 @@ async def lifespan(app: FastAPI):
                         # Backfill: in_progress Multica rows with no Kanban chain (e.g. manual
                         # status moves or dispatch that never created tasks).
                         if _wh_dispatched < _wh_limit:
-                            for _ip_issue in await client.list_issues(status="in_progress") or []:
+                            for _ip_issue in in_progress_issues:
+                                if str(_ip_issue.get("id") or "") in _wh_dispatched_ids:
+                                    continue
                                 await _maybe_dispatch_hermes_issue(_ip_issue, from_todo=False)
                                 if _wh_dispatched >= _wh_limit:
                                     break
                 except Exception as _wh_exc:
                     logger.debug("multica_poll: webhook dispatch failed: %s", _wh_exc)
 
-                issues = await client.list_issues(status="in_progress")
+                issues = in_progress_issues
                 for issue in issues or []:
                     # Check whether a linked engineering workflow has reached a terminal state.
                     issue_id = issue.get("id")
