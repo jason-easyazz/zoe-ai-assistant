@@ -1,6 +1,6 @@
 # Kanban worker GitHub authentication
 
-Hermes kanban workers (`zoe-coder`, `zoe-reviewer`, `zoe-planner`) run terminal commands in a **profile-isolated** subprocess environment. Terminal tooling sets `HOME` to `{HERMES_HOME}/profiles/<profile>/home/`, which does **not** contain the operator's `gh` login state under `~/.config/gh/`.
+Hermes kanban workers (`zoe-coder`, `zoe-reviewer`, `zoe-planner`) run terminal commands in a **profile-isolated** subprocess environment. Terminal tooling sets worker `HOME` to `{HERMES_ROOT}/profiles/<profile>/home/` (where `HERMES_ROOT` is typically `~/.hermes`) and worker `HERMES_HOME` to the profile directory. That isolated `HOME` does **not** contain the operator's `gh` login state under `~/.config/gh/`.
 
 Symptoms when auth is missing:
 
