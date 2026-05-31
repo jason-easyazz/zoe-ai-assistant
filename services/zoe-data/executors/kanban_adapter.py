@@ -22,6 +22,7 @@ import logging
 import os
 import re
 import shutil
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -57,7 +58,13 @@ def _hermes_bin() -> str:
 
 
 def _repo_root() -> str:
-    return os.environ.get("ZOE_REPO_ROOT", "/home/zoe/assistant")
+    env = os.environ.get("ZOE_REPO_ROOT", "").strip()
+    if env:
+        return env
+    # Derive the repo root from this file's location so non-standard deployments
+    # (different user/install path) work without ZOE_REPO_ROOT set:
+    # services/zoe-data/executors/kanban_adapter.py -> repo root is 3 levels up.
+    return str(Path(__file__).resolve().parents[3])
 
 
 def _board() -> str:
@@ -81,13 +88,18 @@ class KanbanAdapter:
         cmd = [_hermes_bin(), "kanban", "--board", _board(), *args]
         env = dict(os.environ)
         env.setdefault("HERMES_KANBAN_BOARD", _board())
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=_repo_root(),
-            env=env,
-        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=_repo_root(),
+                env=env,
+            )
+        except OSError as exc:
+            raise KanbanCLIError(
+                f"`hermes kanban {' '.join(args)}` could not start: {exc}"
+            ) from exc
         out, err = await proc.communicate()
         stdout = (out or b"").decode("utf-8", errors="replace").strip()
         stderr = (err or b"").decode("utf-8", errors="replace").strip()
