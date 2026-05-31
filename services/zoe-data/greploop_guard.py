@@ -525,13 +525,22 @@ async def assess_merge_readiness(
     default_branch: str = DEFAULT_BASE_BRANCH,
 ) -> dict[str, Any]:
     """Return whether a PR is safe to squash-merge via normal gh (no admin/force)."""
-    from greptile_client import get_pr_status, list_pr_comments
+    from greptile_client import get_pr_status, list_pr_comments, parse_confidence_score
 
     pr_number = int(pr_number)
     status = await get_pr_status(repo=repo, pr_number=pr_number, default_branch=default_branch)
-    comments = await list_pr_comments(repo=repo, pr_number=pr_number, default_branch=default_branch)
+    comments = await list_pr_comments(
+        repo=repo,
+        pr_number=pr_number,
+        default_branch=default_branch,
+        unaddressed_only=False,
+    )
     findings = comments.get("findings") or []
-    actionable = _actionable_greptile_findings(findings)
+    actionable = [
+        f
+        for f in _actionable_greptile_findings(findings)
+        if not f.get("addressed")
+    ]
     unresolved_threads = _gh_unresolved_review_thread_count(pr_number, repo=repo)
     blockers: list[str] = []
     if status.get("reviewIsRunning"):
@@ -541,6 +550,10 @@ async def assess_merge_readiness(
     elif unresolved_threads:
         blockers.append(f"GREPTILE_UNRESOLVED_THREADS:{unresolved_threads}")
     confidence = int(status.get("confidenceScore") or 0)
+    for row in findings:
+        score = parse_confidence_score(row.get("body"))
+        if score is not None:
+            confidence = max(confidence, score)
     if confidence < int(target_confidence):
         blockers.append(f"GREPTILE_CONFIDENCE:{confidence}<{target_confidence}")
     gh_state = _gh_mergeable_state(pr_number, repo=repo)
