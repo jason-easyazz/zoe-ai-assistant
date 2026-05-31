@@ -219,7 +219,12 @@ class KanbanAdapter:
         """Report aggregate state of a chain by idempotency-key prefix.
 
         Returns {found, status, phases:{phase:status}, pr_url, blocker}.
-        status is one of: running | blocked | done | not_found.
+        status is one of: running | blocked | done | partial | not_found.
+
+        ``partial`` means some but not all chain phases exist (e.g. a CLI error
+        interrupted chain creation). Callers treat it as re-dispatchable so the
+        idempotent ``dispatch`` can backfill the missing phases, rather than
+        leaving the chain wedged in ``running`` forever.
         """
         # `hermes kanban list` has no idempotency-prefix filter flag, so we pull
         # the board once and filter by prefix in Python. This is O(board size)
@@ -248,6 +253,11 @@ class KanbanAdapter:
             agg = "done"
         elif blocker:
             agg = "blocked"
+        elif len(phases) < len(_CHAIN):
+            # Some phases never got created (e.g. CLI error mid-chain). Report
+            # "partial" so the sync path re-dispatches and idempotently backfills
+            # the missing phases instead of skipping it as "running" forever.
+            agg = "partial"
         else:
             agg = "running"
 

@@ -89,6 +89,21 @@ async def test_poll_blocked_detected():
 
 
 @pytest.mark.asyncio
+async def test_poll_partial_chain_is_redispatchable():
+    # closeout phase never got created (e.g. CLI error mid-chain): must report
+    # "partial" (not "running") so the sync path re-dispatches instead of
+    # skipping the wedged chain forever.
+    rows = [
+        {"id": "t_i", "idempotency_key": "multica:u:implement", "status": "done"},
+        {"id": "t_r", "idempotency_key": "multica:u:review", "status": "running"},
+    ]
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:u")
+    assert out["found"] is True
+    assert out["status"] == "partial"
+
+
+@pytest.mark.asyncio
 async def test_poll_done_and_pr_extracted():
     rows = [
         {"id": "t_i", "idempotency_key": "multica:u:implement", "status": "done"},
