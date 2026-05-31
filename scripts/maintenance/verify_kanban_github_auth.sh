@@ -8,12 +8,16 @@ OPERATOR_CONFIG="${XDG_CONFIG_HOME:-${OPERATOR_HOME}/.config}"
 PROFILE="${1:-zoe-coder}"
 # HERMES_HOME in worker spawn is profile-scoped; HERMES_ROOT is the hermes tree root (~/.hermes).
 HERMES_ROOT="${HERMES_ROOT:-${OPERATOR_HOME}/.hermes}"
+PROFILE_HOME=""
 if [[ -n "${HERMES_HOME:-}" && -d "${HERMES_HOME}/profiles/${PROFILE}/home" ]]; then
   HERMES_ROOT="${HERMES_HOME}"
 elif [[ -n "${HERMES_HOME:-}" && -d "${HERMES_HOME}/home" ]]; then
-  HERMES_ROOT="$(dirname "${HERMES_HOME}")"
+  PROFILE_HOME="${HERMES_HOME}/home"
+  HERMES_ROOT="$(dirname "$(dirname "${HERMES_HOME}")")"
 fi
-PROFILE_HOME="${HERMES_ROOT}/profiles/${PROFILE}/home"
+if [[ -z "${PROFILE_HOME}" ]]; then
+  PROFILE_HOME="${HERMES_ROOT}/profiles/${PROFILE}/home"
+fi
 WORKTREE="${2:-}"
 
 if [[ ! -d "${PROFILE_HOME}" ]]; then
