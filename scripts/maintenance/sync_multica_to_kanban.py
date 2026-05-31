@@ -72,17 +72,26 @@ async def run(args: argparse.Namespace) -> int:
         if not issue_id:
             continue
 
-        existing = await poll_ref(f"multica:{issue_id}")
-        if existing.get("found") and existing.get("status") in ("running", "blocked"):
-            print(f"SKIP {ident}: chain exists status={existing['status']}")
+        # Isolate each candidate: a Kanban CLI failure (missing hermes binary,
+        # non-zero exit) on one issue must not abort the whole batch and skip
+        # the remaining candidates. Mirrors the outer try/except that guards
+        # board_approve and the Multica webhook handler.
+        try:
+            existing = await poll_ref(f"multica:{issue_id}")
+            if existing.get("found") and existing.get("status") in ("running", "blocked"):
+                print(f"SKIP {ident}: chain exists status={existing['status']}")
+                continue
+
+            if args.dry_run:
+                print(f"DRY-RUN would dispatch {ident}: {(issue.get('title') or '')[:60]}")
+                dispatched += 1
+                continue
+
+            result = await dispatch_issue(issue)
+        except Exception as exc:  # noqa: BLE001 - one bad candidate must not abort the batch
+            print(f"ERROR {ident}: dispatch failed: {exc}", file=sys.stderr)
             continue
 
-        if args.dry_run:
-            print(f"DRY-RUN would dispatch {ident}: {(issue.get('title') or '')[:60]}")
-            dispatched += 1
-            continue
-
-        result = await dispatch_issue(issue)
         if not result.get("ok"):
             print(f"SKIP {ident}: {result.get('reason')}")
             continue

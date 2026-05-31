@@ -20,6 +20,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 from typing import Any
 
@@ -208,6 +209,10 @@ class KanbanAdapter:
         Returns {found, status, phases:{phase:status}, pr_url, blocker}.
         status is one of: running | blocked | done | not_found.
         """
+        # `hermes kanban list` has no idempotency-prefix filter flag, so we pull
+        # the board once and filter by prefix in Python. This is O(board size)
+        # per candidate; acceptable while the board is small. Revisit (push the
+        # filter into the CLI) if the board grows large enough to matter.
         tasks = await self._run(["list", "--json"], expect_json=True)
         rows = tasks if isinstance(tasks, list) else (tasks or {}).get("tasks", [])
         prefix = f"{external_ref}:"
@@ -244,8 +249,6 @@ class KanbanAdapter:
 
     async def _extract_pr_url(self, phases: dict[str, dict]) -> str | None:
         """Pull a PR URL from the implement/closeout task summaries or comments."""
-        import re
-
         pattern = re.compile(r"https://github\.com/[^/\s]+/[^/\s]+/pull/\d+")
         for phase in ("closeout", "implement", "review"):
             row = phases.get(phase)
