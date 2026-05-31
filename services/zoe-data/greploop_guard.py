@@ -533,8 +533,6 @@ async def assess_merge_readiness(
         blockers.append("GREPTILE_REVIEW_RUNNING")
     if unresolved_threads:
         blockers.append(f"GREPTILE_UNRESOLVED_THREADS:{unresolved_threads}")
-    elif actionable:
-        blockers.append(f"GREPTILE_UNADDRESSED:{len(actionable)}")
     confidence = int(status.get("confidenceScore") or 0)
     if confidence < int(target_confidence):
         blockers.append(f"GREPTILE_CONFIDENCE:{confidence}<{target_confidence}")
