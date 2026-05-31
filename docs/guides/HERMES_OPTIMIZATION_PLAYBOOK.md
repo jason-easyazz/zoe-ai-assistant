@@ -22,7 +22,8 @@ phases as ready-to-run prompts.
 - Hourly engineering loop = Hermes built-in cron `hourly-zoe-issue-fix-greptile-merge`
   in `~/.hermes/cron/jobs.json` (every 60m).
 - Zoe integrates via `services/zoe-data/routers/chat.py` (`escalate_to_hermes`),
-  `background_runner.py`, and `engineering_workflow.py`.
+  `background_runner.py`, and the executor seam (`executor_registry.py` →
+  `executors/kanban_adapter.py`) that dispatches Multica issues to Hermes Kanban.
 
 ## The bigger why — the411 / Nudge
 

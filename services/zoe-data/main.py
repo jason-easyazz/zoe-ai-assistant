@@ -320,6 +320,53 @@ async def lifespan(app: FastAPI):
                     except Exception as _se:
                         logger.debug("multica_poll: stale-todo close error: %s", _se)
 
+                # Webhook bridge: Hermes-assigned todos → issue.assigned (Kanban dispatch).
+                try:
+                    from multica_webhook_emitter import emit_issue_assigned, is_configured as _wh_ok
+                    from multica_client import get_engineering_multica_agent_id  # type: ignore[import]
+                    from executor_registry import poll_ref  # type: ignore[import]
+
+                    if _wh_ok():
+                        _hermes = str(get_engineering_multica_agent_id())
+                        # Throttle first-dispatch: cap new chains per cycle so a
+                        # wave of assigned todos can't spawn N concurrent chains
+                        # (mirrors sync_multica_to_kanban --limit / kanban.max_in_progress).
+                        try:
+                            _wh_limit = int(os.environ.get("ZOE_MULTICA_POLL_DISPATCH_LIMIT", "1") or "1")
+                        except ValueError:
+                            _wh_limit = 1
+                        _wh_dispatched = 0
+                        # Reuse the todo list already fetched above for the stale
+                        # autopilot pass — avoids a second list_issues per 30s cycle.
+                        for _todo in stale_todos or []:
+                            if _wh_dispatched >= _wh_limit:
+                                break
+                            if str(_todo.get("assignee_id") or "") != _hermes:
+                                continue
+                            if (_todo.get("title") or "").lower().startswith("autopilot:"):
+                                continue
+                            _tid = str(_todo.get("id") or "")
+                            if not _tid:
+                                continue
+                            _chain = await poll_ref(f"multica:{_tid}")
+                            if _chain.get("found") and _chain.get("status") in ("running", "blocked"):
+                                continue
+                            _emit = await emit_issue_assigned(_todo)
+                            _body = _emit.get("body") or {}
+                            if _emit.get("ok") and isinstance(_body, dict) and _body.get("dispatched"):
+                                # Keep the board truthful: move dispatched work off the todo column.
+                                try:
+                                    await client.update_issue(_tid, status="in_progress")
+                                except Exception as _ip_exc:
+                                    logger.debug("multica_poll: set in_progress failed for %s: %s", _tid, _ip_exc)
+                                _wh_dispatched += 1
+                                logger.info(
+                                    "multica_poll: webhook dispatched %s",
+                                    _todo.get("identifier") or _tid,
+                                )
+                except Exception as _wh_exc:
+                    logger.debug("multica_poll: webhook dispatch failed: %s", _wh_exc)
+
                 issues = await client.list_issues(status="in_progress")
                 for issue in issues or []:
                     # Check whether a linked engineering workflow has reached a terminal state.
