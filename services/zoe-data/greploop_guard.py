@@ -417,6 +417,29 @@ def _actionable_greptile_findings(findings: list[dict[str, Any]]) -> list[dict[s
     return [f for f in findings if (f.get("file_path") or "").strip()]
 
 
+def _greptile_confidence_from_github_comments(
+    pr_number: int, *, repo: str = DEFAULT_REPO
+) -> int | None:
+    """Parse Greptile confidence from PR issue comments (summary posts)."""
+    from greptile_client import parse_confidence_score
+
+    proc = _run_gh(["api", f"repos/{repo}/issues/{int(pr_number)}/comments", "--paginate"])
+    if proc.returncode != 0:
+        return None
+    try:
+        rows = json.loads(proc.stdout or "[]")
+    except json.JSONDecodeError:
+        return None
+    best: int | None = None
+    for row in reversed(rows if isinstance(rows, list) else []):
+        if not isinstance(row, dict):
+            continue
+        score = parse_confidence_score(row.get("body"))
+        if score is not None:
+            best = score if best is None else max(best, score)
+    return best
+
+
 def _gh_unresolved_review_thread_count(
     pr_number: int, *, repo: str = DEFAULT_REPO
 ) -> int | None:
@@ -427,7 +450,7 @@ def _gh_unresolved_review_thread_count(
     try:
         owner, name = repo.split("/", 1)
     except ValueError:
-        return 0
+        return None
     query_first = (
         "query($owner:String!,$repo:String!,$pr:Int!){"
         "repository(owner:$owner,name:$repo){pullRequest(number:$pr){"
@@ -471,7 +494,7 @@ def _gh_unresolved_review_thread_count(
                 .get("pullRequest", {})
                 .get("reviewThreads", {})
             )
-        except (AttributeError, TypeError):
+        except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
             return None
         nodes = threads.get("nodes") or []
         unresolved += sum(
@@ -554,6 +577,9 @@ async def assess_merge_readiness(
         score = parse_confidence_score(row.get("body"))
         if score is not None:
             confidence = max(confidence, score)
+    gh_confidence = _greptile_confidence_from_github_comments(pr_number, repo=repo)
+    if gh_confidence is not None:
+        confidence = max(confidence, gh_confidence)
     if confidence < int(target_confidence):
         blockers.append(f"GREPTILE_CONFIDENCE:{confidence}<{target_confidence}")
     gh_state = _gh_mergeable_state(pr_number, repo=repo)
