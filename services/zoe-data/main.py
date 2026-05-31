@@ -49,7 +49,8 @@ from middleware.logging import setup_json_logging
 setup_json_logging()
 logger = logging.getLogger(__name__)
 
-_REQUEST_ID_CTX_VAR = None  # set after app creation to avoid import cycles
+# Legacy variable kept for backward compatibility during transition
+_REQUEST_ID_CTX_VAR = None
 _openclaw_bg_task = None
 _digest_bg_task = None
 _consolidation_bg_task = None
