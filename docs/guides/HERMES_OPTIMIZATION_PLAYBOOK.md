@@ -48,20 +48,14 @@ dead fallback chain plus unauthenticated health probes. Five fixes, all applied:
 ### 0.1 Rebuilt the fallback chain with healthy providers
 
 `~/.hermes/config.yaml` now uses an ordered chain of providers that have working
-creds and real models (dropped `openrouter/free` and exhausted Anthropic):
+creds and real models. The original outage fix used Sonnet/Gemini/OpenAI API
+fallbacks, but the Phase 0.7 cost-control refresh superseded that chain. The
+live fallback chain is now intentionally:
 
 ```yaml
 fallback_providers:
-# Codex (primary) emits encrypted reasoning blobs in history; OpenAI Chat
-# Completions rejects them ("Encrypted content is not supported"), so the
-# proven-compatible OpenRouter/Sonnet hop goes first. gemini next (cheap),
-# openai-api last (only succeeds when history did not originate from Codex).
 - provider: openrouter
-  model: anthropic/claude-sonnet-4.6
-- provider: gemini
-  model: gemini-2.5-flash
-- provider: openai-api
-  model: gpt-4.1
+  model: openrouter/free
 ```
 
 `model.default` stays `openai-codex / gpt-5.4` (strongest; resets ~daily) — the
@@ -138,7 +132,7 @@ Verification run after apply:
 
 - `systemctl --user restart hermes-agent.service`
 - `hermes doctor` (profiles + connectivity)
-- `curl http://127.0.0.1:8642/health`
+- `curl -sf http://127.0.0.1:8642/health`
 
 ---
 
@@ -406,7 +400,7 @@ Masterclass", and the DigitalOcean deploy guide — mapped to Zoe:
 - `hermes doctor` clean; `systemctl --user status hermes-agent.service` active.
 - Auth'd probe: `curl -s -H "Authorization: Bearer $HERMES_API_KEY" 127.0.0.1:8642/v1/models` → 200.
 - **Failover proof**: with Codex exhausted, a `/v1/chat/completions` call
-  completes on a healthy fallback (Sonnet 4.6 via OpenRouter), not `openrouter/free`.
+  completes on the controlled fallback (`openrouter/free`).
 - `zoe-watchdog.sh` reports hermes-agent UP (no false "not responding" push);
   `hermes-keepwarm.sh` returns HTTP 200.
 - Hourly cron tick completes on a healthy provider (no `HTTP 400 credit balance too low`).
