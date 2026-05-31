@@ -1,0 +1,16 @@
+import os
+
+import runtime_env
+
+
+def test_bootstrap_runtime_env_loads_hermes_key_from_service_env(monkeypatch, tmp_path):
+    env_file = tmp_path / "zoe-data.env"
+    env_file.write_text("HERMES_API_KEY=test-bootstrap-key\n", encoding="utf-8")
+    monkeypatch.setattr(runtime_env, "_ENV_FILES", (str(env_file),))
+    monkeypatch.delenv("HERMES_API_KEY", raising=False)
+    monkeypatch.delenv("API_SERVER_KEY", raising=False)
+    runtime_env._ENV_BOOTSTRAPPED = False
+
+    runtime_env.bootstrap_runtime_env()
+
+    assert os.environ.get("HERMES_API_KEY") == "test-bootstrap-key"

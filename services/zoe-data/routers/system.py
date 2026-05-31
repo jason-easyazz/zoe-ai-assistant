@@ -1251,10 +1251,14 @@ async def board_approve(task_id: str, user: dict = Depends(require_admin)):
         client = MULClient()
         if not client.is_configured():
             return {"ok": False, "reason": "Multica not configured — route via Hermes manually"}
+        from multica_client import get_engineering_multica_agent_id  # type: ignore[import]
+
         issue = await client.create_issue(
             title=f"Task: {task_id}",
             description=f"Approved via Zoe chat. Task ID: {task_id}",
             priority="medium",
+            assignee_id=get_engineering_multica_agent_id(),
+            assignee_type="agent",
         )
         issue_id = issue.get("id") if isinstance(issue, dict) else None
         workflow = None
@@ -1353,8 +1357,9 @@ async def multica_webhook(request: Request):
                 "Multica webhook: %s issue=%s assignee=%s",
                 event, issue.get("identifier"), issue.get("assignee_id"),
             )
-            from multica_autopilot_sync import _HERMES_AGENT_ID as hermes_agent_id  # type: ignore[import]
-            if str(issue.get("assignee_id") or "") == hermes_agent_id:
+            from multica_client import get_engineering_multica_agent_id  # type: ignore[import]
+
+            if str(issue.get("assignee_id") or "") == get_engineering_multica_agent_id():
                 if not _multica_webhook_dispatch_allowed(request):
                     logger.warning(
                         "Multica webhook: skipped Hermes dispatch for issue=%s; webhook dispatch auth missing",

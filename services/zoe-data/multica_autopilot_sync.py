@@ -24,10 +24,10 @@ _MULTICA_API_TOKEN = os.environ.get("MULTICA_API_TOKEN", "")
 _MULTICA_WORKSPACE_ID = os.environ.get("MULTICA_WORKSPACE_ID", "")
 _TIMEOUT = 10.0
 _HEALTH_CHECK_TIMEOUT_S = float(os.environ.get("ZOE_HEALTH_CHECK_TIMEOUT_S", "120"))
-_HERMES_AGENT_ID = os.environ.get(
-    "HERMES_MULTICA_AGENT_ID",
-    "019ae0a7-62f1-47fe-9d46-75fd0ae5d570",
-)
+def _hermes_agent_id() -> str:
+    from multica_client import get_engineering_multica_agent_id  # type: ignore[import]
+
+    return get_engineering_multica_agent_id()
 _TZ = os.environ.get("ZOE_TIMEZONE", "Australia/Perth")
 
 # Default false: do not create a Multica tracker issue on every cron fire.
@@ -275,7 +275,7 @@ async def _run_platform_health_check() -> None:
                     f"```\n{tail}\n```"
                 ),
                 priority="high",
-                assignee_id=_HERMES_AGENT_ID,
+                assignee_id=_hermes_agent_id(),
                 assignee_type="agent",
             )
         except Exception as exc:
@@ -311,7 +311,7 @@ async def _run_board_review() -> None:
                 issue_id = str(issue.get("id") or "")
                 if not issue_id:
                     continue
-                if str(issue.get("assignee_id") or "") != _HERMES_AGENT_ID:
+                if str(issue.get("assignee_id") or "") != _hermes_agent_id():
                     continue
                 title = issue.get("title") or issue.get("identifier") or "Multica engineering task"
                 if title.lower().startswith("autopilot:"):

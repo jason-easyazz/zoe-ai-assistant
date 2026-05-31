@@ -22,7 +22,7 @@ ACTIVE_PHASES = {
     "greptile_wait",
     "fixing",
 }
-TERMINAL_PHASES = {"ready_for_human", "done", "blocked", "cancelled"}
+NON_RETRYABLE_PHASES = {"done", "cancelled"}
 
 
 def _now() -> str:
@@ -89,6 +89,14 @@ async def create_engineering_task(
     if not task:
         raise ValueError("task is required")
     title = (title or task.splitlines()[0])[:160]
+    # Reject autopilot wrapper issues early so they never enter the engineering
+    # queue.  These are Multica tracker rows created by _fire_autopilot_job and
+    # have titles like "Autopilot: Board Review" — they carry no actionable
+    # engineering task and dispatching them causes recursive noise.
+    if title.lower().startswith("autopilot:"):
+        raise ValueError(
+            f"Autopilot wrapper issues must not be dispatched as engineering tasks: {title!r}"
+        )
     now = _now()
 
     async with get_db_ctx() as db:
@@ -102,10 +110,9 @@ async def create_engineering_task(
         if multica_issue_id:
             existing = await db.fetchrow(
                 """SELECT * FROM engineering_tasks
-                   WHERE multica_issue_id=$1 AND phase = ANY($2::text[])
+                   WHERE multica_issue_id=$1 AND phase NOT IN ('done', 'cancelled')
                    ORDER BY updated_at DESC LIMIT 1""",
                 multica_issue_id,
-                list(ACTIVE_PHASES),
             )
             if existing:
                 return dict(existing)
@@ -399,7 +406,7 @@ async def retry_engineering_task(task_id: str) -> dict[str, Any]:
     task = await get_engineering_task(task_id)
     if not task:
         raise ValueError(f"engineering task not found: {task_id}")
-    if task.get("phase") in TERMINAL_PHASES:
+    if task.get("phase") in NON_RETRYABLE_PHASES:
         return task
     round_count = int(task.get("round_count") or 0)
     max_rounds = int(task.get("max_rounds") or 5)
