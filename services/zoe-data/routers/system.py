@@ -1526,6 +1526,7 @@ async def evolution_proposal_action(
                 )
 
             # Dispatch the approved proposal to the Kanban executor (via Multica issue).
+            _dispatch = None
             try:
                 from executor_registry import dispatch_issue  # type: ignore[import]
                 from multica_client import get_engineering_multica_agent_id  # type: ignore[import]
@@ -1546,9 +1547,24 @@ async def evolution_proposal_action(
                         "evolution_approve: dispatched proposal %s -> %s",
                         proposal_id, _dispatch.get("chain") if _dispatch.get("ok") else _dispatch,
                     )
+                else:
+                    # No Multica issue to anchor the Kanban chain (Multica
+                    # unconfigured or the issue sync failed). Surface it so the
+                    # approved proposal does not sit undispatched silently.
+                    _dispatch = {"ok": False, "reason": "no multica_issue_id; proposal approved but not dispatched"}
+                    logger.warning(
+                        "evolution_approve: proposal %s approved but NOT dispatched — %s",
+                        proposal_id, _dispatch["reason"],
+                    )
             except Exception as exc:
+                _dispatch = {"ok": False, "reason": str(exc)}
                 logger.warning("evolution_approve: could not dispatch proposal to Kanban: %s", exc)
-            return {"ok": True, "action": "approved", "multica_issue_id": multica_issue_id}
+            return {
+                "ok": True,
+                "action": "approved",
+                "multica_issue_id": multica_issue_id,
+                "dispatch": _dispatch,
+            }
 
         elif action == "deploy":
             # Called by background runner when Hermes completes implementation
