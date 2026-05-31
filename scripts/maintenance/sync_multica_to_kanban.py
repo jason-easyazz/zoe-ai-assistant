@@ -1,0 +1,112 @@
+#!/usr/bin/env python3
+"""Sync Hermes-assigned Multica issues into Hermes Kanban chains (cheap DeepSeek).
+
+Replaces the old engineering_workflow/background_runner (Sonnet) dispatch path.
+For each Hermes-assigned ``todo`` Multica issue without an active Kanban chain,
+create an implement->review->closeout chain via the executor registry, then set
+the Multica issue to ``in_progress``.
+
+Idempotent: chains are keyed ``multica:{issue_id}:<phase>`` so re-runs are safe.
+"""
+from __future__ import annotations
+
+import argparse
+import asyncio
+import os
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "services" / "zoe-data"))
+
+
+def _load_dotenv() -> None:
+    for path in (
+        ROOT / "services" / "zoe-data" / ".env",
+        ROOT / ".env",
+        Path.home() / ".hermes" / ".env",
+    ):
+        if not path.is_file():
+            continue
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, val = line.split("=", 1)
+            os.environ.setdefault(key.strip(), val.strip().strip('"').strip("'"))
+
+
+async def run(args: argparse.Namespace) -> int:
+    from runtime_env import bootstrap_runtime_env
+
+    bootstrap_runtime_env()
+    from executor_registry import dispatch_issue, poll_ref
+    from multica_client import get_engineering_multica_agent_id, get_multica_client
+
+    hermes_id = get_engineering_multica_agent_id()
+    client = get_multica_client()
+    if not client.is_configured():
+        print("Multica not configured in Zoe env", file=sys.stderr)
+        return 1
+
+    candidates: list[dict] = []
+    for issue in await client.list_issues(status="todo") or []:
+        if str(issue.get("assignee_id") or "") != str(hermes_id):
+            continue
+        title = (issue.get("title") or issue.get("identifier") or "")
+        if title.lower().startswith("autopilot:"):
+            continue
+        candidates.append(issue)
+
+    if not candidates:
+        print("No Hermes-assigned todo issues to dispatch")
+        return 0
+
+    print(f"Found {len(candidates)} Hermes-assigned todo issue(s)")
+    dispatched = 0
+    for issue in candidates:
+        if dispatched >= args.limit:
+            break
+        issue_id = str(issue.get("id") or "")
+        ident = issue.get("identifier") or issue_id
+        if not issue_id:
+            continue
+
+        existing = await poll_ref(f"multica:{issue_id}")
+        if existing.get("found") and existing.get("status") in ("running", "blocked"):
+            print(f"SKIP {ident}: chain exists status={existing['status']}")
+            continue
+
+        if args.dry_run:
+            print(f"DRY-RUN would dispatch {ident}: {(issue.get('title') or '')[:60]}")
+            dispatched += 1
+            continue
+
+        result = await dispatch_issue(issue)
+        if not result.get("ok"):
+            print(f"SKIP {ident}: {result.get('reason')}")
+            continue
+        try:
+            await client.update_issue(issue_id, status="in_progress")
+        except Exception as exc:  # noqa: BLE001 - best-effort status sync
+            print(f"WARN {ident}: could not set in_progress: {exc}", file=sys.stderr)
+        print(f"OK {ident} -> chain {result.get('chain')} (new={result.get('created')})")
+        dispatched += 1
+
+    print(f"Dispatched {dispatched} (limit={args.limit})")
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--limit", type=int, default=1, help="Max new chains per run (default 1; respect kanban.max_in_progress)"
+    )
+    args = parser.parse_args()
+    _load_dotenv()
+    return asyncio.run(run(args))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
