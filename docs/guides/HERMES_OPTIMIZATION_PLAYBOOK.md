@@ -119,6 +119,27 @@ and whether it can run the engineering loop. Output any remaining config diff an
 
 Restart after edits: `systemctl --user restart hermes-agent.service`.
 
+### 0.7 Cost-control routing refresh (2026-06-01)
+
+Routing was tightened to match the board-cost policy:
+
+- Main Hermes (`~/.hermes/config.yaml`) now uses `openai-codex / gpt-5.4` as primary.
+- Main fallback is now a single controlled path: `openrouter / openrouter/free`.
+- Main fallback entries for direct `gemini` and `openai-api` were removed from the fallback chain.
+- Planner profile now uses `openrouter` directly (`anthropic/claude-sonnet-4.6`) instead of `provider: auto`.
+- Kanban worker profiles (`zoe-planner`, `zoe-coder`, `zoe-reviewer`) now keep fallback chains OpenRouter-only:
+  - `anthropic/claude-sonnet-4.6`
+  - `google/gemini-2.5-flash`
+  - `openrouter/free`
+- Root background auxiliaries were moved away from direct Gemini/OpenAI and `provider: auto` to `provider: openrouter` with `openrouter/free` where they are text-only (`web_extract`, `compression`, title/session/search/triage/curator/approval/MCP helpers, etc.) to avoid background calls silently routing to Codex or paid direct APIs.
+- Specialized non-engineering slots such as vision/TTS remain separate and are not part of the Kanban cost-control route.
+
+Verification run after apply:
+
+- `systemctl --user restart hermes-agent.service`
+- `hermes doctor` (profiles + connectivity)
+- `curl http://127.0.0.1:8642/health`
+
 ---
 
 ## Phase A — Give Hermes the why (DONE)
