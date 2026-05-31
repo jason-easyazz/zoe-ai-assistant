@@ -49,6 +49,18 @@ async def test_dispatch_creates_three_linked_phases():
 
 
 @pytest.mark.asyncio
+async def test_dispatch_writes_zoe_ref_marker_into_body():
+    # poll() correlates on the `zoe-ref:` body marker because the live
+    # `hermes kanban list --json` output does not expose the idempotency key.
+    a = _FakeAdapter()
+    await a.dispatch({"id": "uuid-7", "identifier": "ZOE-7", "title": "t"})
+    creates = [c for c in a.calls if c[0] == "create"]
+    for phase, create in zip(("implement", "review", "closeout"), creates):
+        body = create[create.index("--body") + 1]
+        assert f"zoe-ref: multica:uuid-7:{phase}" in body
+
+
+@pytest.mark.asyncio
 async def test_dispatch_pins_expected_skills():
     a = _FakeAdapter()
     await a.dispatch({"id": "u", "identifier": "ZOE-1", "title": "t"})
@@ -101,6 +113,56 @@ async def test_poll_partial_chain_is_redispatchable():
     out = await a.poll("multica:u")
     assert out["found"] is True
     assert out["status"] == "partial"
+
+
+def _row(phase, status, **extra):
+    """A Kanban list row shaped like the real CLI: body marker, NO idempotency_key."""
+    return {
+        "id": f"t_{phase}",
+        "body": f"Multica issue: ZOE-9 (id uuid-9)\nzoe-ref: multica:uuid-9:{phase}\nTitle: x",
+        "status": status,
+        **extra,
+    }
+
+
+@pytest.mark.asyncio
+async def test_poll_correlates_via_body_marker_when_no_idempotency_key():
+    # Regression: live `hermes kanban list --json` rows have no idempotency_key,
+    # so correlation must fall back to the `zoe-ref:` body marker — otherwise the
+    # in_progress->done auto-advance never fires.
+    rows = [
+        _row("implement", "done"),
+        _row("review", "done"),
+        _row("closeout", "done"),
+    ]
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:uuid-9")
+    assert out["found"] is True
+    assert out["status"] == "done"
+    assert out["phases"] == {"implement": "done", "review": "done", "closeout": "done"}
+
+
+@pytest.mark.asyncio
+async def test_poll_body_marker_blocked_detected():
+    rows = [
+        _row("implement", "blocked", block_reason="dirty tree"),
+        _row("review", "todo"),
+        _row("closeout", "todo"),
+    ]
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:uuid-9")
+    assert out["status"] == "blocked"
+    assert "dirty tree" in out["blocker"]
+
+
+@pytest.mark.asyncio
+async def test_poll_ignores_rows_without_marker():
+    # Foreign tasks (other dispatchers) carry neither marker nor matching key.
+    rows = [{"id": "t_x", "body": "some unrelated task body", "status": "running"}]
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:uuid-9")
+    assert out["found"] is False
+    assert out["status"] == "not_found"
 
 
 @pytest.mark.asyncio
