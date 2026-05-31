@@ -423,43 +423,62 @@ def _gh_unresolved_review_thread_count(pr_number: int, *, repo: str = DEFAULT_RE
         owner, name = repo.split("/", 1)
     except ValueError:
         return 0
-    query = (
+    query_first = (
         "query($owner:String!,$repo:String!,$pr:Int!){"
         "repository(owner:$owner,name:$repo){pullRequest(number:$pr){"
-        "reviewThreads(first:100){nodes{isResolved}}}}}"
+        "reviewThreads(first:100){"
+        "pageInfo{hasNextPage endCursor}"
+        "nodes{isResolved}}}}}"
     )
-    proc = subprocess.run(
-        [
+    query_next = (
+        "query($owner:String!,$repo:String!,$pr:Int!,$after:String!){"
+        "repository(owner:$owner,name:$repo){pullRequest(number:$pr){"
+        "reviewThreads(first:100,after:$after){"
+        "pageInfo{hasNextPage endCursor}"
+        "nodes{isResolved}}}}}"
+    )
+    unresolved = 0
+    after: str | None = None
+    for _ in range(50):  # up to 5000 threads
+        cmd = [
             "gh",
             "api",
             "graphql",
             "-f",
-            f"query={query}",
+            f"query={query_next if after else query_first}",
             "-f",
             f"owner={owner}",
             "-f",
             f"repo={name}",
             "-F",
             f"pr={int(pr_number)}",
-        ],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-    )
-    if proc.returncode != 0:
-        return 0
-    try:
-        data = json.loads(proc.stdout or "{}")
-        nodes = (
-            data.get("data", {})
-            .get("repository", {})
-            .get("pullRequest", {})
-            .get("reviewThreads", {})
-            .get("nodes", [])
+        ]
+        if after:
+            cmd.extend(["-f", f"after={after}"])
+        proc = subprocess.run(cmd, cwd=REPO_ROOT, text=True, capture_output=True)
+        if proc.returncode != 0:
+            return unresolved
+        try:
+            data = json.loads(proc.stdout or "{}")
+            threads = (
+                data.get("data", {})
+                .get("repository", {})
+                .get("pullRequest", {})
+                .get("reviewThreads", {})
+            )
+        except (AttributeError, TypeError):
+            return unresolved
+        nodes = threads.get("nodes") or []
+        unresolved += sum(
+            1 for node in nodes if isinstance(node, dict) and not node.get("isResolved")
         )
-    except (AttributeError, TypeError):
-        return 0
-    return sum(1 for node in nodes if isinstance(node, dict) and not node.get("isResolved"))
+        page_info = threads.get("pageInfo") or {}
+        if not page_info.get("hasNextPage"):
+            break
+        after = page_info.get("endCursor")
+        if not after:
+            break
+    return unresolved
 
 
 def _gh_mergeable_state(pr_number: int, *, repo: str = DEFAULT_REPO) -> dict[str, Any]:

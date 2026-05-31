@@ -82,15 +82,18 @@ def _predecessors_done(sequence: str, phase: int, by_sequence: dict[str, list[di
 
 def select_batch(
     backlog: list[dict],
-    all_assigned: list[dict],
+    all_issues: list[dict],
     count: int,
 ) -> tuple[list[dict], list[str]]:
     """Pick up to ``count`` backlog issues respecting phased ordering.
 
+    ``all_issues`` is the full Multica board (any assignee) so predecessor phases
+    are checked even when an earlier phase was completed by a non-Hermes assignee.
+
     Returns (batch, skip_reasons) where skip_reasons explains phased issues held back.
     """
     by_sequence: dict[str, list[dict]] = defaultdict(list)
-    for issue in all_assigned:
+    for issue in all_issues:
         parsed = parse_phased_title(issue.get("title") or "")
         if parsed:
             by_sequence[parsed[0]].append(issue)
@@ -147,15 +150,9 @@ async def run(args: argparse.Namespace) -> int:
         if str(i.get("assignee_id") or "") == hermes_id
         and str(i.get("assignee_type") or "agent") in ("agent", "")
     ]
-    hermes_all = [
-        i
-        for i in all_issues or []
-        if str(i.get("assignee_id") or "") == hermes_id
-        and str(i.get("assignee_type") or "agent") in ("agent", "")
-    ]
     hermes_backlog.sort(key=_issue_sort_key)
 
-    batch, skip_reasons = select_batch(hermes_backlog, hermes_all, args.count)
+    batch, skip_reasons = select_batch(hermes_backlog, all_issues or [], args.count)
 
     print(f"Hermes backlog: {len(hermes_backlog)} issue(s); batch size {args.count}; moving {len(batch)}")
     if skip_reasons:
