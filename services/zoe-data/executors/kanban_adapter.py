@@ -91,6 +91,20 @@ def _board() -> str:
     return os.environ.get("ZOE_KANBAN_BOARD", "default")
 
 
+def _greptile_mcp_bin() -> str:
+    """Locate the operator-local greptile MCP CLI; honour GREPTILE_MCP_BIN override.
+
+    This is an operator-installed binary (not in the repo), so mirror the
+    ``_hermes_bin`` pattern: prefer the env override, fall back to the standard
+    install path. Keeps the closeout worker portable across hosts/users instead
+    of silently stalling the Greptile loop when the path differs.
+    """
+    override = os.environ.get("GREPTILE_MCP_BIN", "").strip()
+    if override:
+        return override
+    return os.path.expanduser("~/bin/greptile-mcp.py")
+
+
 def _max_runtime() -> str:
     return os.environ.get("ZOE_KANBAN_MAX_RUNTIME", "45m")
 
@@ -162,8 +176,8 @@ class KanbanAdapter:
                 "- You already run on an isolated git worktree branch. Commit verified changes, then publish"
                 " the branch and open ONE small PR (do not merge) with EXACTLY these commands:\n"
                 "    git push -u origin HEAD\n"
-                "    gh pr create --base main --head \"$(git branch --show-current)\""
-                " --title \"<identifier>: <short>\" --body \"<summary>\"\n"
+                "    gh pr create --base main --title \"<identifier>: <short>\" --body \"<summary>\"\n"
+                "  (`gh pr create` defaults --head to the current branch, so do not pass --head.)\n"
                 "  A bare `git push` (no `-u origin HEAD`) FAILS with exit 128 on a fresh worktree branch"
                 " (no upstream) and the PR never opens — always push with `-u origin HEAD`.\n"
                 "- Capture the PR URL that `gh pr create` prints and report it verbatim as PR_URL=. The"
@@ -193,7 +207,8 @@ class KanbanAdapter:
             " (the guard REQUIRES --pr N; <=3 rounds, target confidence 5):\n"
             "    python3 scripts/maintenance/greploop_guard.py --pr N --packet-only\n"
             "  Re-trigger review when needed via"
-            " `/home/zoe/bin/greptile-mcp.py trigger-review jason-easyazz/zoe-ai-assistant N`.\n"
+            f" `{_greptile_mcp_bin()} trigger-review jason-easyazz/zoe-ai-assistant N`"
+            " (operator-local binary; override with GREPTILE_MCP_BIN).\n"
             "- Only when CI is green, Greptile is clear, and the reviewer approved: update the Multica issue"
             " to done with PR link + summary. Otherwise leave it in_progress/blocked with the reason.\n"
             "Final handoff MUST include:\nPR_URL=<url>\nGREPTILE=<status>\nMULTICA=<updated? done/blocked>\nSUMMARY=<short>"
