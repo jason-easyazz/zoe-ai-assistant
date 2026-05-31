@@ -233,6 +233,7 @@ class KanbanAdapter:
         if not issue_id:
             return {"ok": False, "reason": "issue has no id"}
         identifier = issue.get("identifier") or issue.get("title") or issue_id
+        # external_ref prefix for idempotency keys; full key is "multica:{issue_id}:{phase}" (multica:{id}:<phase>).
         external_ref = f"multica:{issue_id}"
 
         chain: dict[str, str] = {}
