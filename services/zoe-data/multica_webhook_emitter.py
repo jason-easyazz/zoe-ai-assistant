@@ -5,8 +5,8 @@ Zoe implements ``POST /api/agent/board/webhook`` for ``issue.assigned``,
 does not register outbound issue webhooks via REST; it only has *inbound*
 autopilot webhooks (``/api/webhooks/autopilots/{token}``).
 
-Until Multica is rebuilt with ``zoe_webhook_listener`` (see ``/home/zoe/multica``),
-this module is the **outbound bridge**: the Multica poll loop detects board
+Until Multica is rebuilt with ``zoe_webhook_listener`` (see the local Multica
+source tree), this module is the **outbound bridge**: the poll loop detects board
 changes and POSTs authenticated events to the Zoe receiver so dispatch stays
 on one code path (``executor_registry`` → Kanban).
 """

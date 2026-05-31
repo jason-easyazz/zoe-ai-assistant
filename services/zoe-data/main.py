@@ -328,7 +328,9 @@ async def lifespan(app: FastAPI):
 
                     if _wh_ok():
                         _hermes = str(get_engineering_multica_agent_id())
-                        for _todo in await client.list_issues(status="todo") or []:
+                        # Reuse the todo list already fetched above for the stale
+                        # autopilot pass — avoids a second list_issues per 30s cycle.
+                        for _todo in stale_todos or []:
                             if str(_todo.get("assignee_id") or "") != _hermes:
                                 continue
                             if (_todo.get("title") or "").lower().startswith("autopilot:"):
