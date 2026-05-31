@@ -6,7 +6,8 @@ This workflow lets Zoe track engineering work from a Multica issue through Herme
 
 - `ZOE_MULTICA=true`
 - `MULTICA_BASE_URL`, `MULTICA_API_TOKEN`, and `MULTICA_WORKSPACE_ID`
-- `MULTICA_WEBHOOK_SECRET` for any webhook path that starts Hermes
+- `MULTICA_WEBHOOK_SECRET` for any webhook path that starts Hermes (run `python3 scripts/maintenance/setup_multica_webhooks.py` once to generate)
+- Optional `MULTICA_WEBHOOK_TARGET_URL` (default `http://127.0.0.1:8000/api/agent/board/webhook`) for the Zoe-side emitter
 - `HERMES_MULTICA_AGENT_ID` set to the Hermes agent ID in Multica (or rely on [`agents_registry.yml`](../../services/zoe-data/agents_registry.yml))
 - `HERMES_API_KEY` or `API_SERVER_KEY` matching the Hermes gateway (`runtime_env.bootstrap_runtime_env()` loads service `.env`)
 - Hermes running on `HERMES_API_URL` or `http://127.0.0.1:8642`
@@ -16,14 +17,29 @@ This workflow lets Zoe track engineering work from a Multica issue through Herme
 
 ## Flow
 
-1. A user, API caller, Multica webhook, board approval, or Board Review autopilot creates an `engineering_tasks` row.
-2. Zoe queues Hermes with a structured prompt requiring `PR_URL=`, `BLOCKER=`, `TESTS=`, and `SUMMARY=`.
-3. Hermes implements on a feature branch, opens a PR, and uses `github-greptile-loop`.
-4. Zoe reconciles the linked `background_tasks` row and records the PR URL.
-5. Zoe checks Greptile through MCP-compatible tools and updates workflow phase plus Multica issue status.
-6. The workflow stops at `ready_for_human`, `blocked`, `cancelled`, or `done`.
+1. A user, API caller, authenticated Multica webhook (`issue.assigned`), board approval, or the Zoe poll bridge creates a Hermes Kanban chain (implement → review → closeout) on DeepSeek worker profiles.
+2. `zoe-coder` implements on a worktree, opens a small PR, and hands off with `PR_URL=`, `BLOCKER=`, `TESTS=`, `SUMMARY=`.
+3. `zoe-reviewer` runs verification-first checks (structure validators, focused tests, live health).
+4. `zoe-planner` closeout runs the Greptile grep loop (`github-greptile-loop`) and updates the Multica issue when merge-ready.
+5. The Zoe poll loop advances Multica `in_progress` issues to `done` when the Kanban chain completes.
 
-Multica webhooks can sync proposal status without the secret, but they cannot start Hermes unless they send either `Authorization: Bearer $MULTICA_WEBHOOK_SECRET` or `X-Multica-Webhook-Token: $MULTICA_WEBHOOK_SECRET`.
+### Webhooks (how Multica talks to Zoe)
+
+Zoe exposes `POST /api/agent/board/webhook` for `issue.assigned`, `issue.status_changed`, and `issue.created`.
+
+Stock Multica (ghcr backend) does **not** have a `/api/webhooks` registry for outbound issue events. Two paths feed the same receiver:
+
+| Path | When | How |
+|------|------|-----|
+| **Zoe poll bridge** | Always (default today) | `multica_webhook_emitter.py` in the 30s poll loop POSTs `issue.assigned` for Hermes todos |
+| **Multica push** | After rebuilding backend with `zoe_webhook_listener.go` | Multica event bus POSTs to `ZOE_BOARD_WEBHOOK_URL` from the container |
+
+Set the same secret in both places:
+
+- Zoe: `MULTICA_WEBHOOK_SECRET` in `.env` / `services/zoe-data/.env`
+- Multica container: `ZOE_BOARD_WEBHOOK_SECRET` (see `docker-compose.modules.yml`)
+
+Proposal status sync via `issue.status_changed` does not require the secret. **Starting Kanban work** requires either `Authorization: Bearer $MULTICA_WEBHOOK_SECRET` or `X-Multica-Webhook-Token: $MULTICA_WEBHOOK_SECRET`.
 
 ## API Smoke Procedure
 

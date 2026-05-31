@@ -40,8 +40,9 @@ async def run(args: argparse.Namespace) -> int:
     from runtime_env import bootstrap_runtime_env
 
     bootstrap_runtime_env()
-    from executor_registry import dispatch_issue, poll_ref
+    from executor_registry import poll_ref
     from multica_client import get_engineering_multica_agent_id, get_multica_client
+    from multica_webhook_emitter import emit_issue_assigned, is_configured as webhooks_configured
 
     hermes_id = get_engineering_multica_agent_id()
     client = get_multica_client()
@@ -72,10 +73,16 @@ async def run(args: argparse.Namespace) -> int:
         if not issue_id:
             continue
 
-        # Isolate each candidate: a Kanban CLI failure (missing hermes binary,
-        # non-zero exit) on one issue must not abort the whole batch and skip
-        # the remaining candidates. Mirrors the outer try/except that guards
-        # board_approve and the Multica webhook handler.
+        if not webhooks_configured():
+            print(
+                "ERROR: MULTICA_WEBHOOK_SECRET unset — set it in .env so dispatch uses /api/agent/board/webhook",
+                file=sys.stderr,
+            )
+            return 2
+
+        # Isolate each candidate: a poll/webhook failure on one issue must not
+        # abort the whole batch and skip the remaining candidates. Mirrors the
+        # outer try/except that guards board_approve and the Multica webhook handler.
         try:
             existing = await poll_ref(f"multica:{issue_id}")
             if existing.get("found") and existing.get("status") in ("running", "blocked"):
@@ -87,19 +94,25 @@ async def run(args: argparse.Namespace) -> int:
                 dispatched += 1
                 continue
 
-            result = await dispatch_issue(issue)
+            result = await emit_issue_assigned(issue)
         except Exception as exc:  # noqa: BLE001 - one bad candidate must not abort the batch
             print(f"ERROR {ident}: dispatch failed: {exc}", file=sys.stderr)
             continue
 
+        body = result.get("body") or {}
+        dispatch = body.get("dispatch") if isinstance(body, dict) else None
         if not result.get("ok"):
-            print(f"SKIP {ident}: {result.get('reason')}")
+            print(f"SKIP {ident}: webhook emit failed: {result.get('reason')}")
+            continue
+        if isinstance(body, dict) and body.get("dispatched") is False:
+            print(f"SKIP {ident}: {body.get('reason', 'webhook did not dispatch')}")
             continue
         try:
             await client.update_issue(issue_id, status="in_progress")
         except Exception as exc:  # noqa: BLE001 - best-effort status sync
             print(f"WARN {ident}: could not set in_progress: {exc}", file=sys.stderr)
-        print(f"OK {ident} -> chain {result.get('chain')} (new={result.get('created')})")
+        chain = (dispatch or {}).get("chain") if isinstance(dispatch, dict) else None
+        print(f"OK {ident} -> webhook dispatch chain={chain}")
         dispatched += 1
 
     print(f"Dispatched {dispatched} (limit={args.limit})")

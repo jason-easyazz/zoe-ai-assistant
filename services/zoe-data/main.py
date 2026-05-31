@@ -320,6 +320,34 @@ async def lifespan(app: FastAPI):
                     except Exception as _se:
                         logger.debug("multica_poll: stale-todo close error: %s", _se)
 
+                # Webhook bridge: Hermes-assigned todos → issue.assigned (Kanban dispatch).
+                try:
+                    from multica_webhook_emitter import emit_issue_assigned, is_configured as _wh_ok
+                    from multica_client import get_engineering_multica_agent_id  # type: ignore[import]
+                    from executor_registry import poll_ref  # type: ignore[import]
+
+                    if _wh_ok():
+                        _hermes = str(get_engineering_multica_agent_id())
+                        for _todo in await client.list_issues(status="todo") or []:
+                            if str(_todo.get("assignee_id") or "") != _hermes:
+                                continue
+                            if (_todo.get("title") or "").lower().startswith("autopilot:"):
+                                continue
+                            _tid = str(_todo.get("id") or "")
+                            if not _tid:
+                                continue
+                            _chain = await poll_ref(f"multica:{_tid}")
+                            if _chain.get("found") and _chain.get("status") in ("running", "blocked"):
+                                continue
+                            _emit = await emit_issue_assigned(_todo)
+                            if _emit.get("ok"):
+                                logger.info(
+                                    "multica_poll: webhook dispatched %s",
+                                    _todo.get("identifier") or _tid,
+                                )
+                except Exception as _wh_exc:
+                    logger.debug("multica_poll: webhook dispatch failed: %s", _wh_exc)
+
                 issues = await client.list_issues(status="in_progress")
                 for issue in issues or []:
                     # Check whether a linked engineering workflow has reached a terminal state.

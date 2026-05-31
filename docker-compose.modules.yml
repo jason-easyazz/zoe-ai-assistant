@@ -66,6 +66,10 @@ services:
       OAUTH_CLIENT_ID: ${MULTICA_OIDC_CLIENT_ID:-multica}
       OAUTH_CLIENT_SECRET: ${MULTICA_OIDC_CLIENT_SECRET:-}
       OAUTH_DISCOVERY_URL: http://zoe.local/.well-known/openid-configuration
+      # Push issue.assigned / issue.status_changed to Zoe (requires local multica build with zoe_webhook_listener.go)
+      HERMES_MULTICA_AGENT_ID: "${HERMES_MULTICA_AGENT_ID:-019ae0a7-62f1-47fe-9d46-75fd0ae5d570}"
+      ZOE_BOARD_WEBHOOK_URL: "${ZOE_BOARD_WEBHOOK_URL:-http://host.docker.internal:8000/api/agent/board/webhook}"
+      ZOE_BOARD_WEBHOOK_SECRET: "${MULTICA_WEBHOOK_SECRET:-}"
     volumes:
     - multica-uploads:/data/uploads
     extra_hosts:
