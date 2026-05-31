@@ -43,11 +43,10 @@ from routers.system import (
 from system_updates import start_zoe_update_background_tasks
 from routers.openclaw import router as openclaw_router
 import logging
+from middleware.logging import setup_json_logging
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s rid=%(request_id)s %(message)s",
-)
+# Setup JSON logging
+setup_json_logging()
 logger = logging.getLogger(__name__)
 
 _REQUEST_ID_CTX_VAR = None  # set after app creation to avoid import cycles
@@ -70,17 +69,9 @@ _RUNTIME_HEALTH: dict[str, bool] = {
 _RUNTIME_LAST_PROBED: str = ""
 
 
-class RequestIdFilter(logging.Filter):
-    """Inject request_id into every log record while a request is active."""
-    def filter(self, record):
-        record.request_id = getattr(_REQUEST_ID_CTX_VAR, "get", lambda d: d)(None) or "-"
-        return True
+# These legacy logging filters are no longer needed with the new JSON middleware
+# but kept for backward compatibility during transition
 
-
-# Apply the filter to root logger so all modules get it.
-logging.root.addFilter(RequestIdFilter())
-for _handler in logging.getLogger().handlers:
-    _handler.addFilter(RequestIdFilter())
 
 
 async def _run_memory_capture_startup_probe() -> None:
@@ -439,37 +430,12 @@ app = FastAPI(
 )
 
 
-# ── Correlation / request-id middleware ──────────────────────────────────────
-import contextvars as _cvars
-
-_request_id_ctx: _cvars.ContextVar[str | None] = _cvars.ContextVar("request_id", default=None)
-_REQUEST_ID_CTX_VAR = _request_id_ctx  # expose to filter above
 
 
-class _CorrelationMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        rid = (
-            request.headers.get("X-Request-ID")
-            or request.headers.get("X-Correlation-ID")
-            or _uuid_mod.uuid4().hex[:12]
-        )
-        token = _request_id_ctx.set(rid)
-        t0 = time.monotonic()
-        try:
-            response = await call_next(request)
-            elapsed_ms = int((time.monotonic() - t0) * 1000)
-            response.headers["X-Request-ID"] = rid
-            logger.info(
-                "%s %s → %s (%dms)",
-                request.method, request.url.path, response.status_code, elapsed_ms,
-                extra={"request_id": rid},
-            )
-            return response
-        finally:
-            _request_id_ctx.reset(token)
 
+from middleware.logging import StructuredLoggingMiddleware
 
-app.add_middleware(_CorrelationMiddleware)
+app.add_middleware(StructuredLoggingMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
