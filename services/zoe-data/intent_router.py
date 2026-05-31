@@ -1491,38 +1491,62 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
         if not task_text:
             return "What should Hermes work on?"
         try:
-            from engineering_workflow import create_engineering_task  # type: ignore[import]
-            workflow = await create_engineering_task(
-                user_id=user_id or "family-admin",
-                title=task_text[:120],
-                task=task_text,
-                source="chat",
-                idempotency_key=None,
+            from multica_client import (  # type: ignore[import]
+                get_engineering_multica_agent_id,
+                get_multica_client,
             )
+
+            client = get_multica_client()
+            if not client.is_configured():
+                return "Multica isn't connected, so I can't track that engineering task on the board."
+            issue = await client.create_issue(
+                title=task_text[:120],
+                description=task_text,
+                priority="medium",
+                assignee_id=get_engineering_multica_agent_id(),
+                assignee_type="agent",
+            )
+            ident = issue.get("identifier") or issue.get("id") or "(new)"
             return (
-                "I've drafted that as a Hermes engineering workflow. It needs approval before Hermes starts changing code.\n\n"
-                f"- Workflow: `{workflow['id']}`\n"
-                f"- Phase: `{workflow['phase']}`\n"
-                "Approve it from the engineering task API or Multica board when you're ready."
+                "I've added that to the Multica board for Hermes.\n\n"
+                f"- Issue: `{ident}`\n"
+                "It'll be picked up by the Kanban engineering loop (implement → review → closeout) "
+                "and I'll keep the board status in sync."
             )
         except Exception as exc:
             logger.warning("engineering_task_create: %s", exc)
-            return "I couldn't queue that engineering task right now."
+            return "I couldn't add that engineering task to the board right now."
 
     if intent.name == "engineering_task_status":
         try:
-            from engineering_workflow import list_engineering_tasks  # type: ignore[import]
-            tasks = await list_engineering_tasks(limit=5, status="active")
-            if not tasks:
-                return "No active Hermes engineering workflows right now."
-            lines = ["**Active Hermes engineering workflows:**"]
-            for item in tasks:
-                pr = f" | PR: {item['pr_url']}" if item.get("pr_url") else ""
-                lines.append(f"- `{item['id']}` — {item['phase']} — {item['title'][:80]}{pr}")
+            from executor_registry import poll_ref  # type: ignore[import]
+            from multica_client import get_engineering_multica_agent_id, get_multica_client  # type: ignore[import]
+
+            client = get_multica_client()
+            if not client.is_configured():
+                return "Multica isn't connected, so I can't check engineering status."
+            hermes_id = str(get_engineering_multica_agent_id())
+            active = []
+            for status in ("in_progress", "todo"):
+                for issue in await client.list_issues(status=status) or []:
+                    if str(issue.get("assignee_id") or "") != hermes_id:
+                        continue
+                    if (issue.get("title") or "").lower().startswith("autopilot:"):
+                        continue
+                    active.append((status, issue))
+            if not active:
+                return "No active Hermes engineering issues on the board right now."
+            lines = ["**Active Hermes engineering issues:**"]
+            for status, issue in active[:5]:
+                ident = issue.get("identifier") or issue.get("id")
+                chain = await poll_ref(f"multica:{issue.get('id')}")
+                phase = chain.get("status") if chain.get("found") else status
+                pr = f" | PR: {chain.get('pr_url')}" if chain.get("pr_url") else ""
+                lines.append(f"- `{ident}` — {phase} — {(issue.get('title') or '')[:80]}{pr}")
             return "\n".join(lines)
         except Exception as exc:
             logger.warning("engineering_task_status: %s", exc)
-            return "I couldn't check Hermes engineering workflow status right now."
+            return "I couldn't check Hermes engineering status right now."
 
     # ── Evolution Proposals Review ─────────────────────────────────────────────
     if intent.name == "evolution_proposals_review":

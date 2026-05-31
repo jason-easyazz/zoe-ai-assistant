@@ -121,11 +121,6 @@ async def _run_task(
         if not result:
             result = "(No result returned)"
         await _set_status("done", result)
-        try:
-            from engineering_workflow import reconcile_background_task  # type: ignore[import]
-            await reconcile_background_task(task_id)
-        except Exception as _ew_exc:
-            logger.debug("background_runner: engineering reconcile failed: %s", _ew_exc)
         logger.info("background_runner: task #%d completed (%d chars)", task_id, len(result))
 
         # Auto-deploy the linked evolution proposal when the task completes.
@@ -196,11 +191,6 @@ async def _run_task(
     except Exception as exc:
         logger.warning("background_runner: task #%d failed: %s", task_id, exc)
         await _set_status("error", f"Task failed: {exc}")
-        try:
-            from engineering_workflow import reconcile_background_task  # type: ignore[import]
-            await reconcile_background_task(task_id)
-        except Exception as _ew_exc:
-            logger.debug("background_runner: engineering reconcile failed: %s", _ew_exc)
         try:
             from push import broadcaster
             await broadcaster.broadcast(

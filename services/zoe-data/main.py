@@ -350,23 +350,16 @@ async def lifespan(app: FastAPI):
                             logger.debug("multica_poll: autopilot in_progress close: %s", _ap_exc)
                         continue
                     try:
-                        from db_pool import get_db_ctx  # type: ignore[import]
-                        async with get_db_ctx() as _db:
-                            rows = await _db.fetch(
-                                """SELECT id, phase, status, user_id FROM engineering_tasks
-                                   WHERE multica_issue_id=$1
-                                   ORDER BY updated_at DESC LIMIT 1""",
-                                str(issue_id),
-                            )
-                        if rows and rows[0]["phase"] == "blocked" and title.startswith("Autopilot:"):
+                        from executor_registry import poll_ref  # type: ignore[import]
+
+                        chain = await poll_ref(f"multica:{issue_id}")
+                        if chain.get("found") and chain.get("status") == "done":
                             await client.update_issue(issue_id, status="done")
-                            continue
-                        if rows and rows[0]["phase"] in ("done", "ready_for_human"):
-                            new_status = "done" if rows[0]["phase"] == "done" else "in_review"
-                            await client.update_issue(issue_id, status=new_status)
                             logger.info(
-                                "multica_poll: advanced issue %s ('%s') — engineering phase=%s",
-                                issue_id, title[:40], rows[0]["phase"],
+                                "multica_poll: advanced issue %s ('%s') — Kanban chain done%s",
+                                issue_id,
+                                title[:40],
+                                f" PR={chain.get('pr_url')}" if chain.get("pr_url") else "",
                             )
                             # Push WebSocket notification to all connected clients
                             try:
@@ -376,7 +369,7 @@ async def lifespan(app: FastAPI):
                                     {
                                         "multica_issue_id": str(issue_id),
                                         "title": title,
-                                        "phase": rows[0]["phase"],
+                                        "pr_url": chain.get("pr_url"),
                                     },
                                 )
                             except Exception as _push_exc:
