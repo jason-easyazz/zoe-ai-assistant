@@ -31,7 +31,7 @@ Stock Multica (ghcr backend) does **not** have a `/api/webhooks` registry for ou
 
 | Path | When | How |
 |------|------|-----|
-| **Zoe poll bridge** | Always (default today) | `multica_webhook_emitter.py` in the 30s poll loop POSTs `issue.assigned` for Hermes todos |
+| **Zoe poll bridge** | Always (default today) | `multica_webhook_emitter.py` in the 30s poll loop POSTs `issue.assigned` for Hermes **todo** issues and **backfills** Hermes **in_progress** issues that have no Kanban chain yet (`chain_needs_dispatch` in `multica_poll_dispatch.py`) |
 | **Multica push** | After rebuilding backend with `zoe_webhook_listener.go` | Multica event bus POSTs to `ZOE_BOARD_WEBHOOK_URL` from the container |
 
 Set the same secret in both places:
@@ -64,7 +64,7 @@ what's the hermes engineering status
 
 Expected Kanban chain progression (per Multica issue):
 
-- `implement` (`zoe-coder`) — small PR opened on a worktree.
+- `implement` (`zoe-coder`) — small PR opened on a worktree. The implement prompt **requires** `kanban_complete` or `kanban_block` on the last turn (no silent exit). Profile `~/.hermes/profiles/zoe-coder/config.yaml` sets `agent.max_turns: 22` so workers fail fast with `kanban_block` instead of hitting the turn ceiling and respawning.
 - `review` (`zoe-reviewer`) — verification-first checks; blocks merge if they fail.
 - `closeout` (`zoe-planner`) — Greptile grep loop, squash merge when ready, then Multica issue set to `done`.
 - The Zoe poll loop advances the Multica issue to `done` when the chain completes.
@@ -96,7 +96,7 @@ Keep `ZOE_BOARD_REVIEW_AUTOPILOT_ENABLED=false` (the Zoe poll loop and cron own 
 ## Local Verification
 
 ```bash
-python3 -m pytest services/zoe-data/tests/test_kanban_adapter.py services/zoe-data/tests/test_executor_registry.py services/zoe-data/tests/test_multica_webhook_emitter.py services/zoe-data/tests/test_multica_client.py services/zoe-data/tests/test_runtime_env.py -q
+python3 -m pytest services/zoe-data/tests/test_kanban_adapter.py services/zoe-data/tests/test_executor_registry.py services/zoe-data/tests/test_multica_webhook_emitter.py services/zoe-data/tests/test_multica_client.py services/zoe-data/tests/test_multica_poll_dispatch.py services/zoe-data/tests/test_runtime_env.py -q
 python3 -m py_compile services/zoe-data/executor_registry.py services/zoe-data/executors/kanban_adapter.py services/zoe-data/multica_webhook_emitter.py services/zoe-data/multica_client.py services/zoe-data/runtime_env.py
 python3 tools/audit/validate_structure.py
 python3 tools/audit/validate_critical_files.py

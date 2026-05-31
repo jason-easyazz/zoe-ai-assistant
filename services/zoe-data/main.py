@@ -320,11 +320,12 @@ async def lifespan(app: FastAPI):
                     except Exception as _se:
                         logger.debug("multica_poll: stale-todo close error: %s", _se)
 
-                # Webhook bridge: Hermes-assigned todos → issue.assigned (Kanban dispatch).
+                # Webhook bridge: Hermes-assigned todos / in_progress (no chain) → issue.assigned.
                 try:
                     from multica_webhook_emitter import emit_issue_assigned, is_configured as _wh_ok
                     from multica_client import get_engineering_multica_agent_id  # type: ignore[import]
                     from executor_registry import poll_ref  # type: ignore[import]
+                    from multica_poll_dispatch import chain_needs_dispatch  # type: ignore[import]
 
                     if _wh_ok():
                         _hermes = str(get_engineering_multica_agent_id())
@@ -336,34 +337,52 @@ async def lifespan(app: FastAPI):
                         except ValueError:
                             _wh_limit = 1
                         _wh_dispatched = 0
-                        # Reuse the todo list already fetched above for the stale
-                        # autopilot pass — avoids a second list_issues per 30s cycle.
-                        for _todo in stale_todos or []:
+
+                        async def _maybe_dispatch_hermes_issue(_candidate: dict, *, from_todo: bool) -> None:
+                            nonlocal _wh_dispatched
                             if _wh_dispatched >= _wh_limit:
-                                break
-                            if str(_todo.get("assignee_id") or "") != _hermes:
-                                continue
-                            if (_todo.get("title") or "").lower().startswith("autopilot:"):
-                                continue
-                            _tid = str(_todo.get("id") or "")
+                                return
+                            if str(_candidate.get("assignee_id") or "") != _hermes:
+                                return
+                            if (_candidate.get("title") or "").lower().startswith("autopilot:"):
+                                return
+                            _tid = str(_candidate.get("id") or "")
                             if not _tid:
-                                continue
+                                return
                             _chain = await poll_ref(f"multica:{_tid}")
-                            if _chain.get("found") and _chain.get("status") in ("running", "blocked"):
-                                continue
-                            _emit = await emit_issue_assigned(_todo)
+                            if not chain_needs_dispatch(_chain):
+                                return
+                            _emit = await emit_issue_assigned(_candidate)
                             _body = _emit.get("body") or {}
                             if _emit.get("ok") and isinstance(_body, dict) and _body.get("dispatched"):
-                                # Keep the board truthful: move dispatched work off the todo column.
-                                try:
-                                    await client.update_issue(_tid, status="in_progress")
-                                except Exception as _ip_exc:
-                                    logger.debug("multica_poll: set in_progress failed for %s: %s", _tid, _ip_exc)
+                                if from_todo:
+                                    try:
+                                        await client.update_issue(_tid, status="in_progress")
+                                    except Exception as _ip_exc:
+                                        logger.debug(
+                                            "multica_poll: set in_progress failed for %s: %s",
+                                            _tid,
+                                            _ip_exc,
+                                        )
                                 _wh_dispatched += 1
                                 logger.info(
-                                    "multica_poll: webhook dispatched %s",
-                                    _todo.get("identifier") or _tid,
+                                    "multica_poll: webhook dispatched %s (%s)",
+                                    _candidate.get("identifier") or _tid,
+                                    "todo" if from_todo else "in_progress-backfill",
                                 )
+
+                        # Reuse the todo list already fetched above for the stale autopilot pass.
+                        for _todo in stale_todos or []:
+                            await _maybe_dispatch_hermes_issue(_todo, from_todo=True)
+                            if _wh_dispatched >= _wh_limit:
+                                break
+                        # Backfill: in_progress Multica rows with no Kanban chain (e.g. manual
+                        # status moves or dispatch that never created tasks).
+                        if _wh_dispatched < _wh_limit:
+                            for _ip_issue in await client.list_issues(status="in_progress") or []:
+                                await _maybe_dispatch_hermes_issue(_ip_issue, from_todo=False)
+                                if _wh_dispatched >= _wh_limit:
+                                    break
                 except Exception as _wh_exc:
                     logger.debug("multica_poll: webhook dispatch failed: %s", _wh_exc)
 
