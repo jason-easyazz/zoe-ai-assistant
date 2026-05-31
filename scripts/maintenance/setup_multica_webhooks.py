@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "services" / "zoe-data"))
 
 
 def _env_paths() -> list[Path]:
@@ -51,11 +52,19 @@ def _ensure_secret(dry_run: bool) -> str:
 
 async def _probe_webhook(secret: str) -> bool:
     import httpx
+    from multica_webhook_emitter import webhook_target_url  # type: ignore[import]
 
-    url = "http://127.0.0.1:8000/api/agent/board/webhook"
+    url = webhook_target_url()
+    # Use a non-Hermes assignee_id so the receiver does not attempt real Kanban
+    # dispatch, but still exercises the auth path for issue.assigned.
     payload = {
-        "event": "issue.created",
-        "issue": {"id": "probe", "identifier": "PROBE-0", "title": "webhook probe"},
+        "event": "issue.assigned",
+        "issue": {
+            "id": "probe",
+            "identifier": "PROBE-0",
+            "title": "webhook probe",
+            "assignee_id": "__probe__",
+        },
     }
     headers = {
         "Authorization": f"Bearer {secret}",
@@ -66,7 +75,7 @@ async def _probe_webhook(secret: str) -> bool:
             resp = await client.post(url, json=payload, headers=headers)
             return resp.status_code < 500
     except Exception as exc:
-        print(f"Webhook probe failed (is zoe-data up on :8000?): {exc}", file=sys.stderr)
+        print(f"Webhook probe failed (is zoe-data up on {url}?): {exc}", file=sys.stderr)
         return False
 
 
@@ -76,10 +85,12 @@ def main() -> int:
     parser.add_argument("--probe", action="store_true", help="POST a harmless issue.created to the receiver")
     args = parser.parse_args()
 
+    from multica_webhook_emitter import webhook_target_url  # type: ignore[import]
+
     secret = _ensure_secret(args.dry_run)
     print("MULTICA_WEBHOOK_SECRET is configured.")
     print("Zoe poll + sync_multica_to_kanban will POST issue.assigned to:")
-    print("  http://127.0.0.1:8000/api/agent/board/webhook")
+    print(f"  {webhook_target_url()}")
     print("For native Multica push, rebuild multica-backend with zoe_webhook_listener.go and set:")
     print("  ZOE_BOARD_WEBHOOK_URL=http://host.docker.internal:8000/api/agent/board/webhook")
     print("  ZOE_BOARD_WEBHOOK_SECRET=<same value>")
