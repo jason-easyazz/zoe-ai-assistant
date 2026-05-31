@@ -35,11 +35,16 @@ _CREATE_ISSUES = (
     os.environ.get("ZOE_MULTICA_AUTOPILOT_CREATE_ISSUES")
     or os.environ.get("ZOE_MULTICA_AUTOPIOT_CREATE_ISSUES", "false")
 ).lower() in ("1", "true", "yes")
+# Default empty: no autopilot run creates a Multica tracker ("Autopilot: …")
+# issue wrapper. These wrappers accumulated into thousands of done rows and
+# added no signal (e.g. Platform Health Check already opens a dedicated
+# "Platform health failures detected" issue on failure). Opt back in per
+# autopilot title via this env var (comma-separated, case-insensitive).
 _CREATE_ISSUES_FOR = {
     t.strip().lower()
     for t in (
         os.environ.get("ZOE_MULTICA_AUTOPILOT_CREATE_ISSUES_FOR")
-        or os.environ.get("ZOE_MULTICA_AUTOPIOT_CREATE_ISSUES_FOR", "Platform Health Check")
+        or os.environ.get("ZOE_MULTICA_AUTOPIOT_CREATE_ISSUES_FOR", "")
     ).split(",")
     if t.strip()
 }
