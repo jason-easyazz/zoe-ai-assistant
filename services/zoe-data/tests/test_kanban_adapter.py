@@ -156,6 +156,24 @@ async def test_poll_body_marker_blocked_detected():
 
 
 @pytest.mark.asyncio
+async def test_poll_partial_chain_via_body_marker_is_redispatchable():
+    # Production path: real `hermes kanban list --json` rows expose the `zoe-ref:`
+    # body marker, NOT the idempotency key. A chain missing its closeout phase must
+    # still report "partial" so the sync path re-dispatches and backfills it. The
+    # idempotency_key-based partial test exercises the forward-compat branch only;
+    # this guards the marker regex (e.g. dropping re.MULTILINE) from silently
+    # reporting "not_found" and wedging the chain forever.
+    rows = [
+        _row("implement", "done"),
+        _row("review", "running"),
+    ]
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:uuid-9")
+    assert out["found"] is True
+    assert out["status"] == "partial"
+
+
+@pytest.mark.asyncio
 async def test_poll_ignores_rows_without_marker():
     # Foreign tasks (other dispatchers) carry neither marker nor matching key.
     rows = [{"id": "t_x", "body": "some unrelated task body", "status": "running"}]
