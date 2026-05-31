@@ -130,6 +130,69 @@ def test_ci_status_from_rollup_accepts_success():
     assert greploop_guard._ci_status_from_rollup(rollup)["ok"] is True
 
 
+def test_ci_status_from_rollup_rejects_empty_rollup():
+    out = greploop_guard._ci_status_from_rollup([])
+
+    assert out["ok"] is False
+    assert out["reason"] == "CI_NO_CHECKS"
+
+
+def test_gh_mergeable_state_blocks_non_mergeable_and_unknown_state(monkeypatch):
+    def fake_run_gh(args, *, repo=greploop_guard.DEFAULT_REPO, check=False):
+        return type(
+            "P",
+            (),
+            {
+                "returncode": 0,
+                "stdout": json.dumps(
+                    {
+                        "state": "OPEN",
+                        "mergeable": "MERGEABLE",
+                        "mergeStateStatus": "UNKNOWN",
+                        "statusCheckRollup": [
+                            {"name": "validate", "status": "COMPLETED", "conclusion": "SUCCESS"},
+                        ],
+                    }
+                ),
+                "stderr": "",
+            },
+        )()
+
+    monkeypatch.setattr(greploop_guard, "_run_gh", fake_run_gh)
+
+    out = greploop_guard._gh_mergeable_state(66)
+
+    assert out["ok"] is False
+    assert out["reason"] == "GH_NOT_MERGEABLE"
+
+
+def test_gh_mergeable_state_blocks_conflicting_mergeable(monkeypatch):
+    def fake_run_gh(args, *, repo=greploop_guard.DEFAULT_REPO, check=False):
+        return type(
+            "P",
+            (),
+            {
+                "returncode": 0,
+                "stdout": json.dumps(
+                    {
+                        "state": "OPEN",
+                        "mergeable": "CONFLICTING",
+                        "mergeStateStatus": "DIRTY",
+                        "statusCheckRollup": [],
+                    }
+                ),
+                "stderr": "",
+            },
+        )()
+
+    monkeypatch.setattr(greploop_guard, "_run_gh", fake_run_gh)
+
+    out = greploop_guard._gh_mergeable_state(66)
+
+    assert out["ok"] is False
+    assert out["reason"] == "GH_NOT_MERGEABLE"
+
+
 @pytest.mark.asyncio
 async def test_assess_merge_readiness_blocks_low_confidence(monkeypatch):
     async def fake_status(**_kwargs):

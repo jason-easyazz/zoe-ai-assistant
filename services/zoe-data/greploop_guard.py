@@ -383,10 +383,15 @@ def _parse_gh_json(proc: subprocess.CompletedProcess[str]) -> dict[str, Any]:
         raise GuardError(f"gh returned non-JSON: {exc}") from exc
 
 
+_BLOCKED_MERGE_STATE_STATUSES = frozenset({"DIRTY", "UNSTABLE", "BEHIND", "BLOCKED", "UNKNOWN"})
+
+
 def _ci_status_from_rollup(rollup: list[dict[str, Any]]) -> dict[str, Any]:
+    if not rollup:
+        return {"ok": False, "reason": "CI_NO_CHECKS", "pending": [], "failures": []}
     pending: list[str] = []
     failures: list[str] = []
-    for check in rollup or []:
+    for check in rollup:
         if not isinstance(check, dict):
             continue
         name = str(check.get("name") or "check")
@@ -423,9 +428,9 @@ def _gh_mergeable_state(pr_number: int, *, repo: str = DEFAULT_REPO) -> dict[str
     data = _parse_gh_json(proc)
     if str(data.get("state") or "").upper() == "MERGED":
         return {"ok": True, "already_merged": True, "mergeStateStatus": data.get("mergeStateStatus")}
-    mergeable = data.get("mergeable")
+    mergeable = str(data.get("mergeable") or "").upper()
     merge_state = str(data.get("mergeStateStatus") or "").upper()
-    if mergeable is False or merge_state in {"DIRTY", "UNSTABLE", "BEHIND", "BLOCKED"}:
+    if mergeable != "MERGEABLE" or merge_state in _BLOCKED_MERGE_STATE_STATUSES:
         return {
             "ok": False,
             "reason": "GH_NOT_MERGEABLE",
