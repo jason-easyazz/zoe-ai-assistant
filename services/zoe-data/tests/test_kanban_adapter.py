@@ -61,6 +61,20 @@ async def test_dispatch_writes_zoe_ref_marker_into_body():
 
 
 @pytest.mark.asyncio
+async def test_closeout_body_instructs_merge_when_ready():
+    body = ka.KanbanAdapter()._build_body(
+        "closeout",
+        {"id": "uuid-1", "identifier": "ZOE-9", "title": "Fix thing", "description": ""},
+        "ZOE-9",
+    )
+    assert "greploop_guard.py --pr N --once" in body
+    assert "--merge-when-ready" in body
+    assert "MERGE_SHA=" in body
+    assert "--packet-only" in body
+    assert "never --admin" in body
+
+
+@pytest.mark.asyncio
 async def test_dispatch_pins_expected_skills():
     a = _FakeAdapter()
     await a.dispatch({"id": "u", "identifier": "ZOE-1", "title": "t"})

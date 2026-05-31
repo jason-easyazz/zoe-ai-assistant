@@ -20,7 +20,7 @@ This workflow lets Zoe track engineering work from a Multica issue through Herme
 1. A user, API caller, authenticated Multica webhook (`issue.assigned`), board approval, or the Zoe poll bridge creates a Hermes Kanban chain (implement → review → closeout) on DeepSeek worker profiles.
 2. `zoe-coder` implements on a worktree, opens a small PR, and hands off with `PR_URL=`, `BLOCKER=`, `TESTS=`, `SUMMARY=`.
 3. `zoe-reviewer` runs verification-first checks (structure validators, focused tests, live health).
-4. `zoe-planner` closeout runs the Greptile grep loop (`github-greptile-loop`) and updates the Multica issue when merge-ready.
+4. `zoe-planner` closeout runs the Greptile grep loop (`github-greptile-loop`), squash-merges when Greptile + CI are green (`greploop_guard.py --merge-when-ready`), then updates the Multica issue to done with merge SHA.
 5. The Zoe poll loop advances Multica `in_progress` issues to `done` when the Kanban chain completes.
 
 ### Webhooks (how Multica talks to Zoe)
@@ -66,7 +66,7 @@ Expected Kanban chain progression (per Multica issue):
 
 - `implement` (`zoe-coder`) — small PR opened on a worktree.
 - `review` (`zoe-reviewer`) — verification-first checks; blocks merge if they fail.
-- `closeout` (`zoe-planner`) — Greptile grep loop, then Multica issue set to `done`.
+- `closeout` (`zoe-planner`) — Greptile grep loop, squash merge when ready, then Multica issue set to `done`.
 - The Zoe poll loop advances the Multica issue to `done` when the chain completes.
 
 ## Board rollout
