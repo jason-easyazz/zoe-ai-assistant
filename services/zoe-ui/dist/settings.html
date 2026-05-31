@@ -600,6 +600,7 @@ const NAV = [
   { group: 'Admin', admin: true, items: [
     { id: 'users',      icon: '👥', label: 'Users' },
     { id: 'system',     icon: '⚙️', label: 'System' },
+    { id: 'ai-models',  icon: '🧭', label: 'AI Models' },
   ]},
 ];
 
@@ -914,6 +915,17 @@ function buildSections() {
     <div class="card" id="system-info-card"><div class="empty"><span class="spinner"></span></div></div>
   </div>
 
+  <!-- Admin: AI Models -->
+  <div class="section" id="sec-ai-models">
+    <div class="section-title">AI Models</div>
+    <div class="section-desc">Admin: host-scoped Hermes model profile routing. API keys are never edited here.</div>
+    <div class="card" id="ai-models-card"><div class="empty"><span class="spinner"></span></div></div>
+    <div class="card">
+      <div class="card-header">Pending diff</div>
+      <pre id="ai-models-diff" style="white-space:pre-wrap;overflow:auto;max-height:320px;padding:14px 18px;margin:0;color:var(--text2);font-size:12px;"></pre>
+    </div>
+  </div>
+
   <!-- Music -->
   <div class="section" id="sec-music">
     <div class="section-title">Music</div>
@@ -1013,6 +1025,7 @@ const sectionLoaders = {
   openclaw:       loadOpenClaw,
   users:          loadUsers,
   system:         loadSystemInfo,
+  'ai-models':    loadHermesModelProfiles,
   theme:          loadTheme,
   music:          loadMusicStatus,
   evolution:      loadEvolutionProposals,
@@ -1675,6 +1688,135 @@ async function loadSystemInfo() {
       </div>`).join('');
   } catch (e) {
     card.innerHTML = `<div class="empty">Failed to load: ${e.message}</div>`;
+  }
+}
+
+/* ── Admin: AI Models ─────────────────────────────────────── */
+let hermesProfiles = [];
+
+function parseFallbacks(value) {
+  return (value || '').split('\n').map(line => line.trim()).filter(Boolean).map(line => {
+    const idx = line.indexOf(':');
+    if (idx <= 0) throw new Error('Fallbacks must use provider:model, one per line');
+    return { provider: line.slice(0, idx).trim(), model: line.slice(idx + 1).trim() };
+  });
+}
+
+function collectHermesProfiles() {
+  return hermesProfiles.map(p => ({
+    name: p.name,
+    provider: document.getElementById(`hm-provider-${p.name}`)?.value.trim() || '',
+    model: document.getElementById(`hm-model-${p.name}`)?.value.trim() || '',
+    context_length: p.context_length || undefined,
+    fallbacks: parseFallbacks(document.getElementById(`hm-fallbacks-${p.name}`)?.value || ''),
+  }));
+}
+
+function renderHermesProfiles(data) {
+  hermesProfiles = data.profiles || [];
+  const card = document.getElementById('ai-models-card');
+  if (!hermesProfiles.length) {
+    card.innerHTML = '<div class="empty">No Hermes profiles found</div>';
+    return;
+  }
+  const running = data.running_workers || 0;
+  card.innerHTML = `
+    <div class="row">
+      <div class="row-info">
+        <div class="row-label">Hermes profile state</div>
+        <div class="row-sub">${running} Kanban worker(s) running. Use Apply After Drain unless urgent.</div>
+      </div>
+    </div>
+    ${hermesProfiles.map(p => `
+      <div class="card-header">${escHtml(p.name)}</div>
+      <div class="field">
+        <label>Provider</label>
+        <input id="hm-provider-${p.name}" value="${escHtml(p.provider)}" placeholder="openrouter">
+      </div>
+      <div class="field">
+        <label>Model</label>
+        <input id="hm-model-${p.name}" value="${escHtml(p.model)}" placeholder="provider/model">
+      </div>
+      <div class="field">
+        <label>Fallbacks (provider:model, one per line)</label>
+        <textarea id="hm-fallbacks-${p.name}" rows="4">${escHtml((p.fallbacks || []).map(f => `${f.provider}:${f.model}`).join('\n'))}</textarea>
+        <div class="field-hint">Allowed providers: openai-codex, openrouter, local. API keys are not accepted here.</div>
+      </div>
+    `).join('')}
+    <div style="padding:14px 18px;display:flex;gap:10px;flex-wrap:wrap;">
+      <button class="btn btn-ghost" onclick="validateHermesProfiles()">Validate</button>
+      <button class="btn btn-primary" onclick="saveHermesProfileDraft()">Save Draft</button>
+      <button class="btn btn-primary" onclick="applyHermesProfiles(false)">Apply After Drain</button>
+      <button class="btn btn-danger" onclick="applyHermesProfiles(true)">Apply Now + Restart</button>
+      <button class="btn btn-ghost" onclick="rollbackHermesProfiles()">Roll Back Latest</button>
+    </div>
+  `;
+}
+
+async function loadHermesModelProfiles() {
+  const card = document.getElementById('ai-models-card');
+  const diffEl = document.getElementById('ai-models-diff');
+  if (diffEl) diffEl.textContent = '';
+  try {
+    const data = await apiCall('GET', '/api/system/hermes/model-profiles');
+    renderHermesProfiles(data);
+  } catch (e) {
+    card.innerHTML = `<div class="empty">Failed to load Hermes profiles: ${escHtml(e.message)}</div>`;
+  }
+}
+
+async function validateHermesProfiles() {
+  try {
+    const profiles = collectHermesProfiles();
+    const confirm_paid_auto = profiles.some(p => [p.model, ...p.fallbacks.map(f => f.model)].includes('openrouter/auto'));
+    const data = await apiCall('POST', '/api/system/hermes/model-profiles/validate', { profiles, confirm_paid_auto });
+    document.getElementById('ai-models-diff').textContent = Object.values(data.diffs || {}).join('\n');
+    toast('Hermes profiles validated', 'success');
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+async function saveHermesProfileDraft() {
+  try {
+    const profiles = collectHermesProfiles();
+    const confirm_paid_auto = profiles.some(p => [p.model, ...p.fallbacks.map(f => f.model)].includes('openrouter/auto'));
+    const data = await apiCall('PUT', '/api/system/hermes/model-profiles/draft', { profiles, confirm_paid_auto });
+    document.getElementById('ai-models-diff').textContent = Object.values(data.diffs || {}).join('\n');
+    toast('Draft saved', 'success');
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+async function applyHermesProfiles(forceRestart) {
+  try {
+    const profiles = collectHermesProfiles();
+    const paidAuto = profiles.some(p => [p.model, ...p.fallbacks.map(f => f.model)].includes('openrouter/auto'));
+    if (paidAuto && !confirm('OpenRouter Auto can spend real money. Continue?')) return;
+    const restart = !!forceRestart;
+    if (restart && !confirm('Restart Hermes now? This can interrupt running workers.')) return;
+    await apiCall('POST', '/api/system/hermes/model-profiles/apply', {
+      profiles,
+      confirm_paid_auto: paidAuto,
+      restart,
+      force_restart: restart,
+    });
+    toast('Hermes profiles applied', 'success');
+    loadHermesModelProfiles();
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+async function rollbackHermesProfiles() {
+  if (!confirm('Roll back to latest Hermes profile backup?')) return;
+  try {
+    await apiCall('POST', '/api/system/hermes/model-profiles/rollback', {});
+    toast('Rollback complete', 'success');
+    loadHermesModelProfiles();
+  } catch (e) {
+    toast(e.message, 'error');
   }
 }
 
