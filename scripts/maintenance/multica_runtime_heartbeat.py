@@ -133,9 +133,17 @@ def _update_runtime(provider: str, online: bool) -> tuple[bool, str]:
     ]
     try:
         res = subprocess.run(cmd, input=sql, capture_output=True, text=True, timeout=15)
-        if res.returncode == 0:
-            return True, res.stdout.strip()
-        return False, (res.stderr or res.stdout).strip()
+        if res.returncode != 0:
+            return False, (res.stderr or res.stdout).strip()
+        out = res.stdout.strip()
+        # psql prints the command tag "UPDATE <n>". A zero count means the
+        # WHERE clause matched no row — i.e. this provider/workspace pair has
+        # no seeded runtime to refresh. Surface that as a failure rather than
+        # reporting a phantom success, so a misconfigured provider name or
+        # workspace id is visible instead of silently no-op'ing forever.
+        if "UPDATE 0" in out:
+            return False, f"no runtime row matched (workspace={WORKSPACE_ID}, provider={provider})"
+        return True, out
     except Exception as exc:  # pragma: no cover - defensive
         return False, str(exc)
 

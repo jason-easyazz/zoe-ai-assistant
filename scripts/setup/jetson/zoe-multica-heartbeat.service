@@ -1,7 +1,10 @@
 [Unit]
 Description=Reflect Zoe runtime liveness into the Multica runtime registry
-After=network-online.target docker.service
-Wants=network-online.target
+# Installed as a `systemctl --user` unit. System-scope ordering targets
+# (docker.service, network-online.target) are not resolvable from the user
+# manager, so we deliberately omit them: the script fails gracefully if the
+# Multica DB container or Zoe API is briefly unavailable and the 60s timer
+# simply retries on the next tick.
 
 [Service]
 Type=oneshot
