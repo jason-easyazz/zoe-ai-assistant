@@ -31,6 +31,7 @@ SAME_ERROR_LIMIT = int(os.environ.get("ZOE_PR_GUARD_SAME_ERROR_LIMIT", "3"))
 MAX_COST_USD = float(os.environ.get("ZOE_PR_GUARD_MAX_COST_USD", "0.25"))
 MAX_OUTPUT_CHARS = int(os.environ.get("ZOE_PR_GUARD_MAX_OUTPUT_CHARS", "12000"))
 
+# Cheap-model repair packets must never merge or bypass hooks; use merge_pr_when_ready().
 FORBIDDEN_ACTIONS = [
     "merge_pr",
     "force_push",
@@ -39,6 +40,7 @@ FORBIDDEN_ACTIONS = [
     "amend_commit",
     "bypass_hooks",
 ]
+_CI_OK_CONCLUSIONS = frozenset({"SUCCESS", "NEUTRAL", "SKIPPED"})
 ALLOWED_TASK_TYPES = {"FIX_GREPTILE_FINDING", "FIX_CI_FAILURE", "SUMMARIZE_BLOCKER"}
 HIGH_RISK_PREFIXES = (
     ".github/workflows/",
@@ -360,6 +362,197 @@ async def _run_cheap_agent(packet: GuardPacket, *, task_id: str | None = None) -
     elapsed = time.time() - start
     await _record_cost_event(task_id, estimated_cost)
     return status, f"elapsed={elapsed:.1f}s estimated_cost_usd={estimated_cost}\n{output}"
+
+
+def _run_gh(args: list[str], *, repo: str = DEFAULT_REPO, check: bool = False) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["gh", *args, "--repo", repo],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=check,
+    )
+
+
+def _parse_gh_json(proc: subprocess.CompletedProcess[str]) -> dict[str, Any]:
+    if proc.returncode != 0:
+        raise GuardError((proc.stderr or proc.stdout or "gh command failed").strip())
+    try:
+        return json.loads(proc.stdout or "{}")
+    except json.JSONDecodeError as exc:
+        raise GuardError(f"gh returned non-JSON: {exc}") from exc
+
+
+_BLOCKED_MERGE_STATE_STATUSES = frozenset({"DIRTY", "UNSTABLE", "BEHIND", "BLOCKED", "UNKNOWN"})
+
+
+def _ci_status_from_rollup(rollup: list[dict[str, Any]]) -> dict[str, Any]:
+    if not rollup:
+        return {"ok": False, "reason": "CI_NO_CHECKS", "pending": [], "failures": []}
+    pending: list[str] = []
+    failures: list[str] = []
+    for check in rollup:
+        if not isinstance(check, dict):
+            continue
+        name = str(check.get("name") or "check")
+        status = str(check.get("status") or "").upper()
+        conclusion = str(check.get("conclusion") or "").upper()
+        if status in {"IN_PROGRESS", "PENDING", "QUEUED"}:
+            pending.append(name)
+            continue
+        if status == "COMPLETED" and conclusion:
+            if conclusion not in _CI_OK_CONCLUSIONS:
+                failures.append(f"{name}:{conclusion}")
+        elif status and status not in {"COMPLETED"}:
+            pending.append(name)
+    if pending:
+        return {"ok": False, "reason": "CI_PENDING", "pending": pending, "failures": failures}
+    if failures:
+        return {"ok": False, "reason": "CI_FAILED", "failures": failures, "pending": pending}
+    return {"ok": True, "pending": pending, "failures": failures}
+
+
+def _gh_mergeable_state(pr_number: int, *, repo: str = DEFAULT_REPO) -> dict[str, Any]:
+    proc = _run_gh(
+        [
+            "pr",
+            "view",
+            str(int(pr_number)),
+            "--json",
+            "mergeable,mergeStateStatus,state,statusCheckRollup",
+        ],
+        repo=repo,
+    )
+    if proc.returncode != 0:
+        return {"ok": False, "reason": "GH_PR_VIEW_FAILED", "detail": (proc.stderr or proc.stdout or "").strip()}
+    data = _parse_gh_json(proc)
+    if str(data.get("state") or "").upper() == "MERGED":
+        return {"ok": True, "already_merged": True, "mergeStateStatus": data.get("mergeStateStatus")}
+    mergeable = str(data.get("mergeable") or "").upper()
+    merge_state = str(data.get("mergeStateStatus") or "").upper()
+    if mergeable != "MERGEABLE" or merge_state in _BLOCKED_MERGE_STATE_STATUSES:
+        return {
+            "ok": False,
+            "reason": "GH_NOT_MERGEABLE",
+            "mergeable": mergeable,
+            "mergeStateStatus": data.get("mergeStateStatus"),
+        }
+    ci = _ci_status_from_rollup(data.get("statusCheckRollup") or [])
+    if not ci.get("ok"):
+        return {**ci, "mergeStateStatus": data.get("mergeStateStatus")}
+    return {"ok": True, "mergeStateStatus": data.get("mergeStateStatus"), "ci": ci}
+
+
+async def assess_merge_readiness(
+    pr_number: int,
+    *,
+    target_confidence: int = 5,
+    repo: str = DEFAULT_REPO,
+    default_branch: str = DEFAULT_BASE_BRANCH,
+) -> dict[str, Any]:
+    """Return whether a PR is safe to squash-merge via normal gh (no admin/force)."""
+    from greptile_client import get_pr_status, list_pr_comments
+
+    pr_number = int(pr_number)
+    status = await get_pr_status(repo=repo, pr_number=pr_number, default_branch=default_branch)
+    comments = await list_pr_comments(repo=repo, pr_number=pr_number, default_branch=default_branch)
+    findings = comments.get("findings") or []
+    blockers: list[str] = []
+    if status.get("reviewIsRunning"):
+        blockers.append("GREPTILE_REVIEW_RUNNING")
+    if findings:
+        blockers.append(f"GREPTILE_UNADDRESSED:{len(findings)}")
+    confidence = int(status.get("confidenceScore") or 0)
+    if confidence < int(target_confidence):
+        blockers.append(f"GREPTILE_CONFIDENCE:{confidence}<{target_confidence}")
+    gh_state = _gh_mergeable_state(pr_number, repo=repo)
+    if not gh_state.get("ok"):
+        blockers.append(str(gh_state.get("reason") or "GH_NOT_READY"))
+    return {
+        "ready": not blockers,
+        "blockers": blockers,
+        "greptile": status,
+        "unaddressed_count": len(findings),
+        "gh": gh_state,
+        "target_confidence": int(target_confidence),
+    }
+
+
+async def merge_pr_when_ready(
+    pr_number: int,
+    *,
+    target_confidence: int = 5,
+    repo: str = DEFAULT_REPO,
+    default_branch: str = DEFAULT_BASE_BRANCH,
+) -> dict[str, Any]:
+    """Squash-merge via `gh pr merge` when Greptile + CI are clear. Never uses admin or force."""
+    pr_number = int(pr_number)
+    with acquire_lock(pr_number):
+        assessment = await assess_merge_readiness(
+            pr_number,
+            target_confidence=target_confidence,
+            repo=repo,
+            default_branch=default_branch,
+        )
+        state = _load_status(pr_number)
+        if not assessment["ready"]:
+            state["terminal_state"] = "BLOCKED_NOT_READY"
+            state["merge_blockers"] = assessment["blockers"]
+            _write_json(pr_number, "status.json", state)
+            _record_guardrail(pr_number, f"merge blocked: {assessment['blockers']}")
+            return {
+                "ok": False,
+                "state": "BLOCKED_NOT_READY",
+                "blockers": assessment["blockers"],
+                "assessment": assessment,
+            }
+        gh_state = assessment.get("gh") or {}
+        if gh_state.get("already_merged"):
+            proc = _run_gh(
+                ["pr", "view", str(pr_number), "--json", "mergeCommit,url,state"],
+                repo=repo,
+            )
+            merged = _parse_gh_json(proc) if proc.returncode == 0 else {}
+            state["terminal_state"] = "MERGED"
+            _write_json(pr_number, "status.json", state)
+            return {
+                "ok": True,
+                "state": "MERGED",
+                "already_merged": True,
+                "merge_commit": (merged.get("mergeCommit") or {}).get("oid"),
+                "pr_url": merged.get("url"),
+            }
+        proc = _run_gh(["pr", "merge", str(pr_number), "--squash"], repo=repo)
+        if proc.returncode != 0:
+            detail = (proc.stderr or proc.stdout or "").strip()
+            state["terminal_state"] = "BLOCKED_MERGE_FAILED"
+            state["merge_error"] = detail[:2000]
+            _write_json(pr_number, "status.json", state)
+            _record_guardrail(pr_number, f"gh pr merge failed: {detail[:500]}")
+            return {
+                "ok": False,
+                "state": "BLOCKED_MERGE_FAILED",
+                "error": detail,
+                "assessment": assessment,
+            }
+        view = _run_gh(
+            ["pr", "view", str(pr_number), "--json", "mergeCommit,url,state,mergedAt"],
+            repo=repo,
+        )
+        merged = _parse_gh_json(view) if view.returncode == 0 else {}
+        state["terminal_state"] = "MERGED"
+        state["merge_commit"] = (merged.get("mergeCommit") or {}).get("oid")
+        state["pr_url"] = merged.get("url")
+        _write_json(pr_number, "status.json", state)
+        _append_progress(pr_number, f"merged squash {state.get('merge_commit') or ''}".strip())
+        return {
+            "ok": True,
+            "state": "MERGED",
+            "merge_commit": state.get("merge_commit"),
+            "pr_url": merged.get("url"),
+            "merged_at": merged.get("mergedAt"),
+            "assessment": assessment,
+        }
 
 
 async def run_guard_once(

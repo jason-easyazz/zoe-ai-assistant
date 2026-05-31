@@ -12,7 +12,7 @@ Worker profiles + pinned skills encode Zoe's agentic-engineering loop:
   - implement (zoe-coder):  zoe-engineering, zoe-graphify, source-code-context,
                             code-structure-cleanup  (graph-first, opensrc, lean)
   - review    (zoe-reviewer): zoe-engineering           (verification gate)
-  - closeout  (zoe-planner):  github-greptile-loop      (grep-loop until merge-ready)
+  - closeout  (zoe-planner):  github-greptile-loop      (grep-loop, merge, Multica done)
 """
 from __future__ import annotations
 
@@ -203,15 +203,25 @@ class KanbanAdapter:
             "You are closeout (zoe-planner, orchestration only).\n"
             "- Read the implementer's PR_URL handoff and extract the PR number N (the trailing /pull/N)."
             " If no PR was pushed/opened, leave the issue blocked with that reason — do NOT open one yourself.\n"
-            "- Drive the Greptile grep loop with the pinned github-greptile-loop skill, using EXACTLY"
-            " (the guard REQUIRES --pr N; <=3 rounds, target confidence 5):\n"
-            "    python3 scripts/maintenance/greploop_guard.py --pr N --packet-only\n"
+            "- Address every substantive Greptile finding (fix_now or won't_fix with reason). Do not stop at"
+            " merge-ready — merge when gates pass.\n"
+            "- Drive the Greptile grep loop with the pinned github-greptile-loop skill (guard REQUIRES --pr N;"
+            " <=5 rounds, target confidence 5). Each round:\n"
+            "    python3 scripts/maintenance/greploop_guard.py --pr N --once\n"
+            "  Apply fixes yourself when the guard returns ESCALATE_HERMES or PACKET_READY; use --packet-only"
+            " only to hand off to a cheap Cursor runner.\n"
             "  Re-trigger review when needed via"
             f" `{_greptile_mcp_bin()} trigger-review jason-easyazz/zoe-ai-assistant N`"
             " (operator-local binary; override with GREPTILE_MCP_BIN).\n"
-            "- Only when CI is green, Greptile is clear, and the reviewer approved: update the Multica issue"
-            " to done with PR link + summary. Otherwise leave it in_progress/blocked with the reason.\n"
-            "Final handoff MUST include:\nPR_URL=<url>\nGREPTILE=<status>\nMULTICA=<updated? done/blocked>\nSUMMARY=<short>"
+            "- When Greptile is clear (confidence 5/5, no unaddressed findings) and CI is green, squash-merge"
+            " via normal GitHub (never --admin, never force, never --no-verify):\n"
+            "    python3 scripts/maintenance/greploop_guard.py --pr N --merge-when-ready\n"
+            "  Or one iteration then merge: --once --merge-when-ready\n"
+            "  If branch protection blocks merge, leave the issue blocked with the gh error — do not admin-merge.\n"
+            "- After a successful merge: update the Multica issue to done with PR_URL, merge SHA, GREPTILE status,"
+            " and summary. If merge did not happen, leave in_progress/blocked with the blocker.\n"
+            "Final handoff MUST include:\nPR_URL=<url>\nMERGE_SHA=<sha or blank>\nGREPTILE=<status>\n"
+            "MULTICA=<updated? done/blocked>\nSUMMARY=<short>"
         )
 
     async def dispatch(self, issue: dict) -> dict:
