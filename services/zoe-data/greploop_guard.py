@@ -417,8 +417,13 @@ def _actionable_greptile_findings(findings: list[dict[str, Any]]) -> list[dict[s
     return [f for f in findings if (f.get("file_path") or "").strip()]
 
 
-def _gh_unresolved_review_thread_count(pr_number: int, *, repo: str = DEFAULT_REPO) -> int:
-    """Count open GitHub review threads (resolved threads clear stale Greptile addressed flags)."""
+def _gh_unresolved_review_thread_count(
+    pr_number: int, *, repo: str = DEFAULT_REPO
+) -> int | None:
+    """Count open GitHub review threads.
+
+    Returns ``None`` when the GitHub API check fails (caller must block merge).
+    """
     try:
         owner, name = repo.split("/", 1)
     except ValueError:
@@ -457,7 +462,7 @@ def _gh_unresolved_review_thread_count(pr_number: int, *, repo: str = DEFAULT_RE
             cmd.extend(["-f", f"after={after}"])
         proc = subprocess.run(cmd, cwd=REPO_ROOT, text=True, capture_output=True)
         if proc.returncode != 0:
-            return unresolved
+            return None
         try:
             data = json.loads(proc.stdout or "{}")
             threads = (
@@ -467,7 +472,7 @@ def _gh_unresolved_review_thread_count(pr_number: int, *, repo: str = DEFAULT_RE
                 .get("reviewThreads", {})
             )
         except (AttributeError, TypeError):
-            return unresolved
+            return None
         nodes = threads.get("nodes") or []
         unresolved += sum(
             1 for node in nodes if isinstance(node, dict) and not node.get("isResolved")
@@ -531,7 +536,9 @@ async def assess_merge_readiness(
     blockers: list[str] = []
     if status.get("reviewIsRunning"):
         blockers.append("GREPTILE_REVIEW_RUNNING")
-    if unresolved_threads:
+    if unresolved_threads is None:
+        blockers.append("GREPTILE_THREAD_CHECK_FAILED")
+    elif unresolved_threads:
         blockers.append(f"GREPTILE_UNRESOLVED_THREADS:{unresolved_threads}")
     confidence = int(status.get("confidenceScore") or 0)
     if confidence < int(target_confidence):
@@ -544,7 +551,7 @@ async def assess_merge_readiness(
         "blockers": blockers,
         "greptile": status,
         "unaddressed_count": len(actionable),
-        "unresolved_review_threads": unresolved_threads,
+        "unresolved_review_threads": unresolved_threads if unresolved_threads is not None else -1,
         "gh": gh_state,
         "target_confidence": int(target_confidence),
     }
