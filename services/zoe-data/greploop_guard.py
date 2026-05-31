@@ -412,6 +412,110 @@ def _ci_status_from_rollup(rollup: list[dict[str, Any]]) -> dict[str, Any]:
     return {"ok": True, "pending": pending, "failures": failures}
 
 
+def _actionable_greptile_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Inline review comments only; PR-level Greptile summaries are not merge blockers."""
+    return [f for f in findings if (f.get("file_path") or "").strip()]
+
+
+def _greptile_confidence_from_github_comments(
+    pr_number: int, *, repo: str = DEFAULT_REPO
+) -> int | None:
+    """Parse Greptile confidence from PR issue comments (summary posts)."""
+    from greptile_client import parse_confidence_score
+
+    proc = subprocess.run(
+        ["gh", "api", f"repos/{repo}/issues/{int(pr_number)}/comments", "--paginate"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+    )
+    if proc.returncode != 0:
+        return None
+    try:
+        rows = json.loads(proc.stdout or "[]")
+    except json.JSONDecodeError:
+        return None
+    for row in reversed(rows if isinstance(rows, list) else []):
+        if not isinstance(row, dict):
+            continue
+        login = str((row.get("user") or {}).get("login") or "").lower()
+        if "greptile" not in login:
+            continue
+        score = parse_confidence_score(row.get("body"))
+        if score is not None:
+            return score
+    return None
+
+
+def _gh_unresolved_review_thread_count(
+    pr_number: int, *, repo: str = DEFAULT_REPO
+) -> int | None:
+    """Count open GitHub review threads.
+
+    Returns ``None`` when the GitHub API check fails (caller must block merge).
+    """
+    try:
+        owner, name = repo.split("/", 1)
+    except ValueError:
+        return None
+    query_first = (
+        "query($owner:String!,$repo:String!,$pr:Int!){"
+        "repository(owner:$owner,name:$repo){pullRequest(number:$pr){"
+        "reviewThreads(first:100){"
+        "pageInfo{hasNextPage endCursor}"
+        "nodes{isResolved}}}}}"
+    )
+    query_next = (
+        "query($owner:String!,$repo:String!,$pr:Int!,$after:String!){"
+        "repository(owner:$owner,name:$repo){pullRequest(number:$pr){"
+        "reviewThreads(first:100,after:$after){"
+        "pageInfo{hasNextPage endCursor}"
+        "nodes{isResolved}}}}}"
+    )
+    unresolved = 0
+    after: str | None = None
+    for _ in range(50):  # up to 5000 threads
+        cmd = [
+            "gh",
+            "api",
+            "graphql",
+            "-f",
+            f"query={query_next if after else query_first}",
+            "-f",
+            f"owner={owner}",
+            "-f",
+            f"repo={name}",
+            "-F",
+            f"pr={int(pr_number)}",
+        ]
+        if after:
+            cmd.extend(["-f", f"after={after}"])
+        proc = subprocess.run(cmd, cwd=REPO_ROOT, text=True, capture_output=True)
+        if proc.returncode != 0:
+            return None
+        try:
+            data = json.loads(proc.stdout or "{}")
+            threads = (
+                data.get("data", {})
+                .get("repository", {})
+                .get("pullRequest", {})
+                .get("reviewThreads", {})
+            )
+        except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
+            return None
+        nodes = threads.get("nodes") or []
+        unresolved += sum(
+            1 for node in nodes if isinstance(node, dict) and not node.get("isResolved")
+        )
+        page_info = threads.get("pageInfo") or {}
+        if not page_info.get("hasNextPage"):
+            break
+        after = page_info.get("endCursor")
+        if not after:
+            break
+    return unresolved
+
+
 def _gh_mergeable_state(pr_number: int, *, repo: str = DEFAULT_REPO) -> dict[str, Any]:
     proc = _run_gh(
         [
@@ -451,18 +555,38 @@ async def assess_merge_readiness(
     default_branch: str = DEFAULT_BASE_BRANCH,
 ) -> dict[str, Any]:
     """Return whether a PR is safe to squash-merge via normal gh (no admin/force)."""
-    from greptile_client import get_pr_status, list_pr_comments
+    from greptile_client import get_pr_status, list_pr_comments, parse_confidence_score
 
     pr_number = int(pr_number)
     status = await get_pr_status(repo=repo, pr_number=pr_number, default_branch=default_branch)
-    comments = await list_pr_comments(repo=repo, pr_number=pr_number, default_branch=default_branch)
+    comments = await list_pr_comments(
+        repo=repo,
+        pr_number=pr_number,
+        default_branch=default_branch,
+        unaddressed_only=False,
+    )
     findings = comments.get("findings") or []
+    actionable = [
+        f
+        for f in _actionable_greptile_findings(findings)
+        if not f.get("addressed")
+    ]
+    unresolved_threads = _gh_unresolved_review_thread_count(pr_number, repo=repo)
     blockers: list[str] = []
     if status.get("reviewIsRunning"):
         blockers.append("GREPTILE_REVIEW_RUNNING")
-    if findings:
-        blockers.append(f"GREPTILE_UNADDRESSED:{len(findings)}")
+    if unresolved_threads is None:
+        blockers.append("GREPTILE_THREAD_CHECK_FAILED")
+    elif unresolved_threads:
+        blockers.append(f"GREPTILE_UNRESOLVED_THREADS:{unresolved_threads}")
     confidence = int(status.get("confidenceScore") or 0)
+    for row in findings:
+        score = parse_confidence_score(row.get("body"))
+        if score is not None:
+            confidence = max(confidence, score)
+    gh_confidence = _greptile_confidence_from_github_comments(pr_number, repo=repo)
+    if gh_confidence is not None:
+        confidence = max(confidence, gh_confidence)
     if confidence < int(target_confidence):
         blockers.append(f"GREPTILE_CONFIDENCE:{confidence}<{target_confidence}")
     gh_state = _gh_mergeable_state(pr_number, repo=repo)
@@ -472,7 +596,8 @@ async def assess_merge_readiness(
         "ready": not blockers,
         "blockers": blockers,
         "greptile": status,
-        "unaddressed_count": len(findings),
+        "unaddressed_count": len(actionable),
+        "unresolved_review_threads": unresolved_threads if unresolved_threads is not None else -1,
         "gh": gh_state,
         "target_confidence": int(target_confidence),
     }
