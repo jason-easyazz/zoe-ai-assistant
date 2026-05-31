@@ -44,6 +44,26 @@ _CHAIN = (
 _ACTIVE_KANBAN_STATUSES = {"triage", "todo", "ready", "running", "blocked"}
 _TERMINAL_KANBAN_STATUSES = {"done", "archived"}
 
+# Matches the `zoe-ref: multica:{id}:{phase}` marker the adapter writes into each
+# task body at dispatch. Anchored to the start of a line so it never collides with
+# prose elsewhere in the body.
+_REF_MARKER_RE = re.compile(r"^zoe-ref:\s*(\S+)", re.MULTILINE)
+
+
+def _row_ref_key(row: dict) -> str:
+    """Correlate a Kanban list row back to its ``multica:{id}:{phase}`` ref.
+
+    The live ``hermes kanban list --json`` output does NOT expose the idempotency
+    key, so poll() cannot filter on it. We parse the ``zoe-ref:`` marker the adapter
+    writes into the task body instead. A top-level ``idempotency_key`` field is
+    preferred when present so this stays correct if a future CLI exposes it.
+    """
+    key = (row or {}).get("idempotency_key") or ""
+    if key:
+        return key
+    match = _REF_MARKER_RE.search((row or {}).get("body") or "")
+    return match.group(1) if match else ""
+
 
 def _hermes_bin() -> str:
     """Locate the hermes CLI; honour HERMES_BIN override."""
@@ -117,8 +137,14 @@ class KanbanAdapter:
     def _build_body(self, phase: str, issue: dict, identifier: str) -> str:
         title = issue.get("title") or identifier
         description = issue.get("description") or ""
+        # `zoe-ref:` is a machine marker that lets poll() correlate this task back
+        # to its Multica issue + phase. The live `hermes kanban list --json` output
+        # does NOT expose the idempotency key, so the body (which it does expose) is
+        # the durable correlation channel. Keep the value identical to the
+        # --idempotency-key so both stay in lockstep: multica:{id}:{phase}.
         common = (
             f"Multica issue: {identifier} (id {issue.get('id')})\n"
+            f"zoe-ref: multica:{issue.get('id')}:{phase}\n"
             f"Repo: {_repo_root()}  |  Base branch: main  |  Workspace: git worktree\n\n"
             f"Title: {title}\n\n{description}\n\n"
         )
@@ -226,16 +252,17 @@ class KanbanAdapter:
         idempotent ``dispatch`` can backfill the missing phases, rather than
         leaving the chain wedged in ``running`` forever.
         """
-        # `hermes kanban list` has no idempotency-prefix filter flag, so we pull
-        # the board once and filter by prefix in Python. This is O(board size)
-        # per candidate; acceptable while the board is small. Revisit (push the
-        # filter into the CLI) if the board grows large enough to matter.
+        # `hermes kanban list` has no idempotency-prefix filter flag (and does not
+        # even surface the idempotency key), so we pull the board once and correlate
+        # each row via _row_ref_key (the `zoe-ref:` body marker) in Python. This is
+        # O(board size) per candidate; acceptable while the board is small. Revisit
+        # (push the filter into the CLI) if the board grows large enough to matter.
         tasks = await self._run(["list", "--json"], expect_json=True)
         rows = tasks if isinstance(tasks, list) else (tasks or {}).get("tasks", [])
         prefix = f"{external_ref}:"
         phases: dict[str, dict] = {}
         for row in rows:
-            key = (row or {}).get("idempotency_key") or ""
+            key = _row_ref_key(row)
             if key.startswith(prefix):
                 phases[key[len(prefix):]] = row
         if not phases:
