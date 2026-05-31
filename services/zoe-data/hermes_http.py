@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import os
 
+from runtime_env import bootstrap_runtime_env
+
 
 def hermes_api_key() -> str:
+    bootstrap_runtime_env()
     return (
         os.environ.get("HERMES_API_KEY")
         or os.environ.get("API_SERVER_KEY")

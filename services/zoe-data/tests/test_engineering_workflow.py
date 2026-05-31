@@ -6,6 +6,8 @@ import pytest
 import engineering_workflow
 import multica_autopilot_sync
 
+_HERMES_TEST_AGENT_ID = "019ae0a7-62f1-47fe-9d46-75fd0ae5d570"
+
 
 def test_build_hermes_prompt_requires_pr_contract():
     prompt = engineering_workflow.build_hermes_prompt(
@@ -278,6 +280,88 @@ async def test_cancel_engineering_task_does_not_overwrite_done_workflow(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_create_engineering_task_rejects_autopilot_wrapper_title():
+    with pytest.raises(ValueError, match="Autopilot wrapper"):
+        await engineering_workflow.create_engineering_task(
+            user_id="family-admin",
+            task="noop",
+            title="Autopilot: Board Review",
+        )
+
+
+@pytest.mark.asyncio
+async def test_retry_engineering_task_reopens_blocked(monkeypatch):
+    workflow = {
+        "id": "wf-blocked",
+        "phase": "blocked",
+        "round_count": 1,
+        "max_rounds": 5,
+        "blocker_reason": "401 Unauthorized",
+    }
+    started = {"id": "wf-blocked", "phase": "hermes_running", "background_task_id": 88}
+
+    class FakeDB:
+        async def execute(self, sql, *args):
+            assert "phase='queued'" in sql
+
+    class FakeCtx:
+        async def __aenter__(self):
+            return FakeDB()
+
+        async def __aexit__(self, *_):
+            return None
+
+    async def fake_get(task_id):
+        return workflow
+
+    async def fake_start(task_id):
+        return started
+
+    monkeypatch.setitem(sys.modules, "db_pool", types.SimpleNamespace(get_db_ctx=lambda: FakeCtx()))
+    monkeypatch.setattr(engineering_workflow, "get_engineering_task", fake_get)
+    monkeypatch.setattr(engineering_workflow, "start_engineering_task", fake_start)
+
+    updated = await engineering_workflow.retry_engineering_task("wf-blocked")
+
+    assert updated["phase"] == "hermes_running"
+
+
+@pytest.mark.asyncio
+async def test_create_engineering_task_dedupes_blocked_multica_issue(monkeypatch):
+    existing = {
+        "id": "wf-existing",
+        "phase": "blocked",
+        "multica_issue_id": "mc-99",
+        "task": "old",
+    }
+
+    class FakeDB:
+        async def fetchrow(self, sql, *args):
+            if "multica_issue_id=$1" in sql:
+                assert "phase NOT IN ('done', 'cancelled')" in sql
+                return existing
+            raise AssertionError(f"unexpected query: {sql}")
+
+    class FakeCtx:
+        async def __aenter__(self):
+            return FakeDB()
+
+        async def __aexit__(self, *_):
+            return None
+
+    monkeypatch.setitem(sys.modules, "db_pool", types.SimpleNamespace(get_db_ctx=lambda: FakeCtx()))
+
+    row = await engineering_workflow.create_engineering_task(
+        user_id="family-admin",
+        task="new attempt",
+        multica_issue_id="mc-99",
+    )
+
+    assert row["id"] == "wf-existing"
+    assert row["phase"] == "blocked"
+
+
+@pytest.mark.asyncio
 async def test_run_board_review_skips_autopilot_wrapper_issues(monkeypatch):
     calls = []
 
@@ -294,19 +378,19 @@ async def test_run_board_review_skips_autopilot_wrapper_issues(monkeypatch):
                 {
                     "id": "issue-autopilot",
                     "title": "Autopilot: Board Review",
-                    "assignee_id": multica_autopilot_sync._HERMES_AGENT_ID,
+                    "assignee_id": _HERMES_TEST_AGENT_ID,
                     "description": "Scheduled autopilot run for: Board Review",
                 },
                 {
                     "id": "issue-autopilot-upper",
                     "title": "AUTOPILOT: Daily Sync",
-                    "assignee_id": multica_autopilot_sync._HERMES_AGENT_ID,
+                    "assignee_id": _HERMES_TEST_AGENT_ID,
                     "description": "Scheduled autopilot run for: Daily Sync",
                 },
                 {
                     "id": "issue-real",
                     "title": "Fix board review recursion",
-                    "assignee_id": multica_autopilot_sync._HERMES_AGENT_ID,
+                    "assignee_id": _HERMES_TEST_AGENT_ID,
                     "description": "Investigate board review loop",
                 },
             ] if status == "todo" else []
@@ -317,7 +401,10 @@ async def test_run_board_review_skips_autopilot_wrapper_issues(monkeypatch):
     monkeypatch.setitem(
         sys.modules,
         "multica_client",
-        types.SimpleNamespace(get_multica_client=lambda: FakeClient()),
+        types.SimpleNamespace(
+            get_multica_client=lambda: FakeClient(),
+            get_engineering_multica_agent_id=lambda: _HERMES_TEST_AGENT_ID,
+        ),
     )
     monkeypatch.setitem(
         sys.modules,
