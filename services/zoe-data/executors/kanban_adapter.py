@@ -140,11 +140,14 @@ class KanbanAdapter:
         # `zoe-ref:` is a machine marker that lets poll() correlate this task back
         # to its Multica issue + phase. The live `hermes kanban list --json` output
         # does NOT expose the idempotency key, so the body (which it does expose) is
-        # the durable correlation channel. Keep the value identical to the
-        # --idempotency-key so both stay in lockstep: multica:{id}:{phase}.
+        # the durable correlation channel. Strip the id the same way dispatch() does
+        # so the marker stays byte-identical to the --idempotency-key (otherwise a
+        # whitespace-padded id would desync the marker from external_ref and poll()
+        # would never match): multica:{id}:{phase}.
+        issue_id = str(issue.get("id") or "").strip()
         common = (
-            f"Multica issue: {identifier} (id {issue.get('id')})\n"
-            f"zoe-ref: multica:{issue.get('id')}:{phase}\n"
+            f"Multica issue: {identifier} (id {issue_id})\n"
+            f"zoe-ref: multica:{issue_id}:{phase}\n"
             f"Repo: {_repo_root()}  |  Base branch: main  |  Workspace: git worktree\n\n"
             f"Title: {title}\n\n{description}\n\n"
         )
