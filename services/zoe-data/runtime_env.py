@@ -7,15 +7,17 @@ from pathlib import Path
 
 _ENV_BOOTSTRAPPED = False
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 # Order matters: service .env first, then repo root, then Hermes home.
 _ENV_FILES = (
-    "/home/zoe/assistant/services/zoe-data/.env",
-    "/home/zoe/assistant/.env",
-    "/home/zoe/.hermes/.env",
+    _REPO_ROOT / "services" / "zoe-data" / ".env",
+    _REPO_ROOT / ".env",
+    Path.home() / ".hermes" / ".env",
 )
 
 # Keys MCP/background workers need when spawned without systemd EnvironmentFile.
-_BOOTSTRAP_KEYS = (
+_BOOTSTRAP_KEYS = frozenset({
     "HERMES_API_KEY",
     "API_SERVER_KEY",
     "HERMES_API_URL",
@@ -24,11 +26,11 @@ _BOOTSTRAP_KEYS = (
     "MULTICA_WORKSPACE_ID",
     "POSTGRES_URL",
     "ZOE_INTERNAL_TOKEN",
-)
+})
 
 
 def bootstrap_runtime_env() -> None:
-    """Populate missing env vars from known Zoe/Hermes .env files."""
+    """Populate missing bootstrap keys from known Zoe/Hermes .env files."""
     global _ENV_BOOTSTRAPPED
     if _ENV_BOOTSTRAPPED:
         return
@@ -45,7 +47,7 @@ def bootstrap_runtime_env() -> None:
                     continue
                 key, value = line.split("=", 1)
                 key = key.strip()
-                if not key or key in os.environ:
+                if not key or key not in _BOOTSTRAP_KEYS or key in os.environ:
                     continue
                 os.environ[key] = value.strip().strip('"').strip("'")
         except OSError:

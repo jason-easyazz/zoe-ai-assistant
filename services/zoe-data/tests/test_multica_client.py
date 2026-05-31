@@ -12,7 +12,7 @@ def test_get_engineering_multica_agent_id_prefers_env(monkeypatch):
     assert multica_client.get_engineering_multica_agent_id() == "env-hermes-id"
 
 
-def test_get_engineering_multica_agent_id_falls_back_to_registry(monkeypatch):
+def test_get_engineering_multica_agent_id_falls_back_to_default(monkeypatch):
     monkeypatch.delenv("HERMES_MULTICA_AGENT_ID", raising=False)
     multica_client._cached_engineering_agent_id = None
     assert multica_client.get_engineering_multica_agent_id() == "019ae0a7-62f1-47fe-9d46-75fd0ae5d570"

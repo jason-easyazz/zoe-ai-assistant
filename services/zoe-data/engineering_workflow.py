@@ -22,7 +22,7 @@ ACTIVE_PHASES = {
     "greptile_wait",
     "fixing",
 }
-NON_RETRYABLE_PHASES = {"done", "cancelled"}
+NON_RETRYABLE_PHASES = {"ready_for_human", "done", "cancelled"}
 
 
 def _now() -> str:

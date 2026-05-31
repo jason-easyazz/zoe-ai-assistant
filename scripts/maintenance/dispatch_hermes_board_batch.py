@@ -100,7 +100,7 @@ async def run(args: argparse.Namespace) -> int:
                 continue
 
             workflow = await create_and_start_engineering_task(
-                user_id="family-admin",
+                user_id=os.environ.get("ZOE_DISPATCH_USER", "family-admin"),
                 title=title,
                 task=(
                     f"Work this Hermes-assigned Multica issue.\n\n"
