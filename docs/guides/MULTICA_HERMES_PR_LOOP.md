@@ -17,11 +17,12 @@ This workflow lets Zoe track engineering work from a Multica issue through Herme
 
 ## Flow
 
-1. A user, API caller, authenticated Multica webhook (`issue.assigned`), board approval, or the Zoe poll bridge creates a Hermes Kanban chain (implement → review → closeout) on OpenRouter-routed worker profiles.
-2. `zoe-coder` implements on a worktree, opens a small PR, and hands off with `PR_URL=`, `BLOCKER=`, `TESTS=`, `SUMMARY=`.
-3. `zoe-reviewer` runs verification-first checks (structure validators, focused tests, live health).
-4. `zoe-planner` closeout runs the Greptile grep loop (`github-greptile-loop`), squash-merges when Greptile + CI are green (`greploop_guard.py --merge-when-ready`), then updates the Multica issue to done with merge SHA.
-5. The Zoe poll loop advances Multica `in_progress` issues to `done` when the Kanban chain completes.
+1. A user, API caller, authenticated Multica webhook (`issue.assigned`), board approval, or the Zoe poll bridge creates a Hermes Kanban chain (**implement → verify → review → closeout**) on OpenRouter-routed worker profiles. Legacy in-flight chains may still be on the older **implement → review → closeout** path; poll treats them as complete when closeout finishes.
+2. `zoe-coder` implements on a worktree, opens a small PR, and hands off with `PR_URL=`, `BLOCKER=`, `TESTS=`, `TOOLS_USED=`, `SUMMARY=`.
+3. `zoe-reviewer` **verify** runs the objective evidence gate (structure validators, focused tests, live health) before review spends tokens.
+4. `zoe-reviewer` **review** checks diff scope and verify-phase evidence; blocks or requests changes when evidence is missing.
+5. `zoe-planner` **closeout** runs the Greptile grep loop (`github-greptile-loop`), squash-merges when Greptile + CI are green (`greploop_guard.py --merge-when-ready`), then updates the Multica issue.
+6. The Zoe poll loop advances Multica `in_progress` issues to `done` when the Kanban chain completes. Structured evidence uses the `pipeline_evidence` contract; fail-closed gates block phase advancement when required evidence is absent.
 
 ## Model Routing Policy (Phase 0 cost control)
 
@@ -77,10 +78,12 @@ what's the hermes engineering status
 
 Expected Kanban chain progression (per Multica issue):
 
-- `implement` (`zoe-coder`) — small PR opened on a worktree. The implement prompt **requires** `kanban_complete` or `kanban_block` on the last turn (no silent exit). Profile `~/.hermes/profiles/zoe-coder/config.yaml` sets `agent.max_turns: 22` so workers fail fast with `kanban_block` instead of hitting the turn ceiling and respawning.
-- `review` (`zoe-reviewer`) — verification-first checks; blocks merge if they fail.
-- `closeout` (`zoe-planner`) — Greptile grep loop, squash merge when ready, then Multica issue set to `done`.
-- The Zoe poll loop advances the Multica issue to `done` when the chain completes.
+- `implement` (`zoe-coder`) — graphify/opensrc first, smallest reviewable change, small PR on a worktree. Terminal protocol: `kanban_complete` or `kanban_block` on the last turn. Handoff metadata must include `PR_URL`, `TESTS`, `TOOLS_USED`, `SUMMARY`.
+- `verify` (`zoe-reviewer`) — objective test/evidence gate before review; records validator + test outcomes. Fail-closed: missing evidence blocks advancement.
+- `review` (`zoe-reviewer`) — diff/scope/architecture check against verify evidence; may loop back to implement via revision metadata.
+- `closeout` (`zoe-planner`) — Greptile grep loop, squash merge when ready, Multica status update.
+- Engineering mode: `ZOE_ENGINEERING_MODE=interactive|overnight` (or issue `engineering_mode` metadata) adjusts worker runtime and cost preference.
+- The Zoe poll loop advances the Multica issue to `done` when closeout (or retro, when present) completes.
 
 ## Board rollout
 
@@ -109,7 +112,7 @@ Keep `ZOE_BOARD_REVIEW_AUTOPILOT_ENABLED=false` (the Zoe poll loop and cron own 
 ## Local Verification
 
 ```bash
-python3 -m pytest services/zoe-data/tests/test_kanban_adapter.py services/zoe-data/tests/test_executor_registry.py services/zoe-data/tests/test_multica_webhook_emitter.py services/zoe-data/tests/test_multica_client.py services/zoe-data/tests/test_multica_poll_dispatch.py services/zoe-data/tests/test_runtime_env.py -q
+python3 -m pytest services/zoe-data/tests/test_kanban_adapter.py services/zoe-data/tests/test_pipeline_evidence.py services/zoe-data/tests/test_executor_registry.py services/zoe-data/tests/test_multica_webhook_emitter.py services/zoe-data/tests/test_multica_client.py services/zoe-data/tests/test_multica_poll_dispatch.py services/zoe-data/tests/test_runtime_env.py -q
 python3 -m py_compile services/zoe-data/executor_registry.py services/zoe-data/executors/kanban_adapter.py services/zoe-data/multica_webhook_emitter.py services/zoe-data/multica_client.py services/zoe-data/runtime_env.py
 python3 tools/audit/validate_structure.py
 python3 tools/audit/validate_critical_files.py
