@@ -1,5 +1,6 @@
 """Tests for Multica poll-loop dispatch helpers."""
 from multica_poll_dispatch import chain_needs_dispatch
+import executors.kanban_adapter as ka
 
 
 def test_chain_needs_dispatch_not_found():
@@ -42,3 +43,12 @@ def test_implement_body_requires_kanban_terminal_tools():
     assert "kanban_block" in body
     assert "kanban_show" in body
     assert "TERMINAL PROTOCOL" in body
+
+
+def test_chain_needs_dispatch_false_when_blocked_protocol_violation():
+    chain = {
+        "found": True,
+        "status": "blocked",
+        "blocker": "BLOCKER=PROTOCOL_VIOLATION: worker exited without kanban_complete/kanban_block",
+    }
+    assert chain_needs_dispatch(chain) is False

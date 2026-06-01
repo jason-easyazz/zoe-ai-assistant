@@ -56,6 +56,10 @@ _V2_CHAIN_PHASES = ("implement", "verify", "review", "closeout")
 _ACTIVE_KANBAN_STATUSES = {"triage", "todo", "ready", "running", "blocked"}
 _TERMINAL_KANBAN_STATUSES = {"done", "archived"}
 
+_PROTOCOL_VIOLATION_LIMIT = max(
+    1, int(os.environ.get("ZOE_KANBAN_PROTOCOL_VIOLATION_LIMIT", "2") or "2")
+)
+
 # Matches the `zoe-ref: multica:{id}:{phase}` marker the adapter writes into each
 # task body at dispatch. Anchored to the start of a line so it never collides with
 # prose elsewhere in the body.
@@ -195,6 +199,13 @@ def _chain_for_issue(issue: dict) -> tuple[tuple[str, str, tuple[str, ...]], ...
     if _skip_scout(issue):
         phases = tuple(p for p in phases if p[0] != "scout")
     return phases
+
+
+def _protocol_violation_count(detail: dict[str, Any]) -> int:
+    events = detail.get("events") if isinstance(detail.get("events"), list) else []
+    return sum(
+        1 for event in events if isinstance(event, dict) and event.get("kind") == "protocol_violation"
+    )
 
 
 def _expected_phases(phases: dict[str, dict]) -> set[str]:
@@ -400,8 +411,47 @@ class KanbanAdapter:
             "- After a successful merge: update the Multica issue to done with PR_URL, merge SHA, GREPTILE status,"
             " and summary. If merge did not happen, leave in_progress/blocked with the blocker.\n"
             "Final handoff MUST include:\nPR_URL=<url>\nMERGE_SHA=<sha or blank>\nGREPTILE=<status>\n"
-            "MULTICA=<updated? done/blocked>\nSUMMARY=<short>"
+            "MULTICA=<updated? done/blocked>\nSUMMARY=<short>\n"
+            "- TERMINAL PROTOCOL: you MUST end with `kanban_complete` or `kanban_block` (no silent exit)."
         )
+
+    async def _maybe_auto_block_protocol_violation(
+        self,
+        task_id: str,
+        phase: str,
+        row: dict[str, Any],
+        detail: dict[str, Any],
+    ) -> bool:
+        """Block a task after repeated Hermes protocol violations (silent worker exit)."""
+        status = (row.get("status") or "").lower()
+        if status in _TERMINAL_KANBAN_STATUSES or status == "blocked":
+            return False
+        violations = _protocol_violation_count(detail)
+        if violations < _PROTOCOL_VIOLATION_LIMIT:
+            return False
+        reason = (
+            "BLOCKER=PROTOCOL_VIOLATION: worker exited without kanban_complete/kanban_block "
+            f"({violations} violations on {phase})"
+        )
+        try:
+            await self._run(["block", task_id, reason])
+        except KanbanCLIError as exc:
+            logger.warning(
+                "kanban_adapter: protocol auto-block failed for %s (%s): %s",
+                task_id,
+                phase,
+                exc,
+            )
+            return False
+        row["status"] = "blocked"
+        row["block_reason"] = reason
+        logger.info(
+            "kanban_adapter: auto-blocked %s (%s) after %d protocol violations",
+            task_id,
+            phase,
+            violations,
+        )
+        return True
 
     async def dispatch(self, issue: dict) -> dict:
         """Create (idempotently) the scout->implement->verify->review->closeout->retro chain.
@@ -510,6 +560,21 @@ class KanbanAdapter:
                 phases[key[len(prefix):]] = row
         if not phases:
             return {"found": False, "status": "not_found", "phases": {}, "pr_url": None, "blocker": None}
+
+        for phase, row in list(phases.items()):
+            task_id = row.get("id")
+            if not task_id:
+                continue
+            status = (row.get("status") or "").lower()
+            if status in _TERMINAL_KANBAN_STATUSES or status == "blocked":
+                continue
+            try:
+                detail = await self._run(["show", task_id, "--json"], expect_json=True)
+            except KanbanCLIError as exc:
+                logger.debug("kanban_adapter: show failed for %s: %s", task_id, exc)
+                continue
+            if await self._maybe_auto_block_protocol_violation(task_id, phase, row, detail):
+                phases[phase] = row
 
         statuses = {p: (r.get("status") or "") for p, r in phases.items()}
         blocker = None
