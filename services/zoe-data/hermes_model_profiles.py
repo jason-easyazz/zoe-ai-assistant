@@ -226,8 +226,8 @@ def count_running_workers() -> int:
             capture_output=True,
             timeout=5,
         )
-    except (OSError, subprocess.TimeoutExpired):
-        return 0
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise OSError("Unable to determine running Kanban workers") from exc
     return len([line for line in result.stdout.splitlines() if "work kanban task" in line])
 
 
@@ -244,9 +244,10 @@ def apply_profiles(
         raise ValueError("No profiles supplied and no draft exists")
     diff = build_diff(selected, confirm_paid_auto=confirm_paid_auto)
 
-    running_workers = count_running_workers()
-    if restart and running_workers and not force_restart:
-        raise RuntimeError(f"{running_workers} Kanban worker(s) running; retry after drain or force restart")
+    if restart and not force_restart:
+        running_workers = count_running_workers()
+        if running_workers:
+            raise RuntimeError(f"{running_workers} Kanban worker(s) running; retry after drain or force restart")
 
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     backup_root = rollback_dir() / ts

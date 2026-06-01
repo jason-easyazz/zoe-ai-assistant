@@ -1,4 +1,5 @@
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -93,6 +94,23 @@ def test_restart_apply_blocks_when_workers_are_running(hermes_home, monkeypatch)
             actor="tester",
             restart=True,
         )
+
+
+def test_restart_apply_fails_closed_when_worker_count_times_out(hermes_home, monkeypatch):
+    def timeout_run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd="pgrep", timeout=5)
+
+    monkeypatch.setattr(hmp.subprocess, "run", timeout_run)
+
+    with pytest.raises(OSError, match="Unable to determine"):
+        hmp.apply_profiles(
+            [{"name": "main", "provider": "openrouter", "model": "changed/model", "fallbacks": []}],
+            actor="tester",
+            restart=True,
+        )
+
+    data = yaml.safe_load((hermes_home / "config.yaml").read_text(encoding="utf-8"))
+    assert data["model"]["default"] == "openrouter/free"
 
 
 def test_rollback_restores_latest_backup(hermes_home, monkeypatch):

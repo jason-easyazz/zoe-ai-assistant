@@ -242,11 +242,14 @@ def _hermes_profile_error(exc: Exception) -> HTTPException:
 async def get_hermes_model_profiles_status(user: dict = Depends(require_admin)):
     from hermes_model_profiles import count_running_workers, draft_path
 
-    return {
-        "ok": True,
-        "running_workers": count_running_workers(),
-        "draft_exists": draft_path().exists(),
-    }
+    try:
+        return {
+            "ok": True,
+            "running_workers": count_running_workers(),
+            "draft_exists": draft_path().exists(),
+        }
+    except OSError as exc:
+        raise _hermes_profile_error(exc) from exc
 
 
 @router.get("/hermes/model-profiles")
@@ -256,12 +259,13 @@ async def get_hermes_model_profiles(user: dict = Depends(require_admin)):
     try:
         draft = load_draft()
         profiles = list_profiles()
+        running_workers = count_running_workers()
     except (ValueError, TypeError, OSError) as exc:
         raise _hermes_profile_error(exc) from exc
     return {
         "profiles": profiles,
         "draft": draft,
-        "running_workers": count_running_workers(),
+        "running_workers": running_workers,
     }
 
 
