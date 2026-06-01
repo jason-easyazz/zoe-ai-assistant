@@ -209,15 +209,39 @@ def test_verify_validator_hash_must_match_implement():
             summary="impl",
             content_hash="aaa",
             passed=True,
-            metadata={"phase": "implement", "source": "harness"},
+            metadata={"phase": "implement", "source": "handoff"},
         ),
         EvidenceItem(
             kind="validator",
             summary="verify",
             content_hash="bbb",
             passed=True,
-            metadata={"phase": "verify", "source": "harness"},
+            metadata={"phase": "verify", "source": "handoff"},
         ),
     )
     assert verify_validator_hash_matches(state) is False
+
+
+def test_verify_validator_hash_ignores_harness_sync_mismatch():
+    from pipeline_evidence import verify_validator_hash_matches
+
+    state = PipelineState(task_ref="multica:1", phase="verify")
+    state = with_evidence(
+        state,
+        EvidenceItem(
+            kind="validator",
+            summary="impl harness",
+            content_hash="aaa",
+            passed=True,
+            metadata={"phase": "implement", "source": "harness"},
+        ),
+        EvidenceItem(
+            kind="validator",
+            summary="verify harness",
+            content_hash="bbb",
+            passed=True,
+            metadata={"phase": "verify", "source": "harness"},
+        ),
+    )
+    assert verify_validator_hash_matches(state) is True
 

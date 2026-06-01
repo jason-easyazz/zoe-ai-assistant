@@ -258,7 +258,13 @@ async def sync_pipeline_from_chain(
             return state
 
         try:
-            state = transition(state, outcome)  # type: ignore[arg-type]
+            trans_reason = block_reason if outcome in {
+                "block",
+                "verification_failed",
+                "request_changes",
+                "merge_blocked",
+            } else None
+            state = transition(state, outcome, reason=trans_reason)  # type: ignore[arg-type]
         except ValueError as exc:
             await _run_io(
                 partial(
@@ -275,7 +281,7 @@ async def sync_pipeline_from_chain(
                 save_state,
                 state,
                 event="transition",
-                extra={"outcome": outcome, "from_phase": phase},
+                extra={"outcome": outcome, "from_phase": phase, "block_reason": block_reason},
             )
         )
         if state.status in {"blocked", "done"}:

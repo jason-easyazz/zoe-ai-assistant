@@ -187,17 +187,17 @@ def missing_required_evidence(state: PipelineState, phase: PipelinePhase | None 
 
 
 def implement_validator_hash(state: PipelineState) -> str | None:
-    """Latest harness-run validator hash recorded during implement."""
+    """Latest handoff-recorded validator hash from implement (ignores sync-time harness runs)."""
     for item in reversed(state.evidence):
         if item.kind != "validator" or item.passed is not True or not item.content_hash:
             continue
-        if item.metadata.get("phase") == "implement":
+        if item.metadata.get("phase") == "implement" and item.metadata.get("source") == "handoff":
             return item.content_hash
     return None
 
 
 def verify_validator_hash_matches(state: PipelineState) -> bool:
-    """Verify-phase validator hash must match implement run when both are harness-sourced."""
+    """Verify handoff validator hash must match implement when both are worker-sourced."""
     impl_hash = implement_validator_hash(state)
     if not impl_hash:
         return True
@@ -208,6 +208,7 @@ def verify_validator_hash_matches(state: PipelineState) -> bool:
         and item.passed is True
         and item.content_hash
         and item.metadata.get("phase") == "verify"
+        and item.metadata.get("source") == "handoff"
     ]
     if not verify_hashes:
         return True

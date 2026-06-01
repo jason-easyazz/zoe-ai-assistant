@@ -80,4 +80,15 @@ def test_block_reason_from_handoff_ignores_dynamic_log_tail():
         "latest_summary": "",
         "comments": [{"body": "Error: WORKTREE_NOT_READY\nbranch has no upstream"}],
     }
+    reason = block_reason_from_handoff(detail)
+    assert reason == "WORKTREE_NOT_READY"
+
+
+def test_block_reason_ignores_dynamic_log_tail_without_stable_token():
+    from pipeline_handoff import block_reason_from_handoff
+
+    detail = {
+        "latest_summary": "",
+        "comments": [{"body": "retry 3 at 2026-06-01T12:00:00Z\nstill waiting..."}],
+    }
     assert block_reason_from_handoff(detail) == ""
