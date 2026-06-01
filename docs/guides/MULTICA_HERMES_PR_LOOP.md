@@ -35,7 +35,8 @@ Worker-chain routing is intentionally different from main chat routing:
   - Fallback: `openrouter / openrouter/free`
 - **Kanban workers** (`zoe-planner`, `zoe-coder`, `zoe-reviewer`):
   - Primary/fallbacks are OpenRouter-only (no direct `gemini` or `openai-api` provider entries)
-  - Current fallback order: `anthropic/claude-sonnet-4.6` → `google/gemini-2.5-flash` → `openrouter/free`
+  - Planner/reviewer primary: `minimax/minimax-m3`; coder primary: `deepseek/deepseek-chat-v3.1`
+  - Fallback order: `minimax/minimax-m3` → `google/gemini-2.5-flash` → `openrouter/free`
 
 This keeps board execution off Codex usage while preserving a deterministic low-cost fallback path.
 

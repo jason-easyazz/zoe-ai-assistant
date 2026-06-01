@@ -18,9 +18,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 
-import httpx
-
-from hermes_http import hermes_auth_headers
+from hermes_http import hermes_auth_headers, hermes_bin, zoe_repo_root
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +31,22 @@ _running: dict[int, asyncio.Task] = {}
 
 # Max A2A delegation depth to prevent infinite loops
 _MAX_REQUEST_DEPTH = 3
+
+# Background tasks run through a Kanban worker profile (OpenRouter), not the main
+# Codex gateway. Override with HERMES_BACKGROUND_PROFILE or HERMES_BACKGROUND_MODEL.
+_DEFAULT_BACKGROUND_PROFILE = "zoe-coder"
+
+
+def _background_profile() -> str:
+    for key in ("HERMES_BACKGROUND_PROFILE", "HERMES_BACKGROUND_MODEL"):
+        val = os.environ.get(key, "").strip()
+        if val:
+            return val
+    # Legacy HERMES_MODEL only when explicitly set to a worker profile / OpenRouter id.
+    legacy = os.environ.get("HERMES_MODEL", "").strip()
+    if legacy and legacy not in {"hermes-agent", "hermes"}:
+        return legacy
+    return _DEFAULT_BACKGROUND_PROFILE
 
 
 async def _record_cost_event(
@@ -161,11 +175,11 @@ async def _run_task(
         _est_tokens = len(result) // 4
         await _record_cost_event(
             agent_name="hermes",
-            model=os.environ.get("HERMES_MODEL", "hermes-agent"),
+            model=_background_profile(),
             task_id=task_id,
             user_id=user_id,
             output_tokens=_est_tokens,
-            estimated_cost_usd=_est_tokens * 0.000015,  # rough codex output rate
+            estimated_cost_usd=_est_tokens * 0.000002,  # rough OpenRouter worker output rate
         )
         try:
             from push import broadcaster
@@ -210,10 +224,15 @@ async def _run_task(
 
 
 async def _run_hermes_background_task(task: str, *, user_id: str, task_id: int) -> str:
-    """Run a background task through Hermes' OpenAI-compatible API."""
-    api_url = os.environ.get("HERMES_API_URL", "http://127.0.0.1:8642").rstrip("/")
-    model = os.environ.get("HERMES_MODEL", "hermes-agent")
+    """Run a background task via ``hermes -p <worker-profile> -z`` (OpenRouter path).
+
+    The main gateway API ignores per-request model overrides and always uses the
+    Codex default, so background work is routed through a Kanban worker profile
+    (default ``zoe-coder`` / DeepSeek on OpenRouter) instead.
+    """
+    profile = _background_profile()
     timeout_s = float(os.environ.get("HERMES_BACKGROUND_TIMEOUT_S", "900"))
+    repo_root = zoe_repo_root()
     prompt = (
         "You are Hermes running a Zoe background task. "
         "Use Zoe tools and CloakBrowser MCP tools when needed. "
@@ -222,25 +241,37 @@ async def _run_hermes_background_task(task: str, *, user_id: str, task_id: int) 
         f"user_id={user_id}, task_id={task_id}.\n\n"
         f"Task:\n{task}"
     )
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "stream": False,
-    }
-    async with httpx.AsyncClient(timeout=timeout_s) as client:
-        resp = await client.post(
-            f"{api_url}/v1/chat/completions",
-            json=payload,
-            headers=_hermes_headers(session_id=f"background-task-{task_id}"),
-        )
-        resp.raise_for_status()
-        data = resp.json()
-    return (
-        data.get("choices", [{}])[0]
-        .get("message", {})
-        .get("content", "")
-        .strip()
+    cmd = [
+        hermes_bin(),
+        "-p",
+        profile,
+        "--accept-hooks",
+        "-z",
+        prompt,
+    ]
+    env = dict(os.environ)
+    env.setdefault("HERMES_YOLO_MODE", "1")
+    env["HERMES_SESSION_ID"] = f"background-task-{task_id}"
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        cwd=repo_root,
+        env=env,
     )
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise TimeoutError(f"Background Hermes task timed out after {timeout_s:.0f}s")
+    stdout = (out or b"").decode("utf-8", errors="replace").strip()
+    stderr = (err or b"").decode("utf-8", errors="replace").strip()
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"hermes -p {profile} -z exited {proc.returncode}: {stderr or stdout or 'no output'}"
+        )
+    return stdout or "(No result returned)"
 
 
 async def get_pending_tasks(user_id: str) -> list[dict]:
