@@ -31,26 +31,33 @@ class _FakeAdapter(ka.KanbanAdapter):
 
 
 @pytest.mark.asyncio
-async def test_dispatch_creates_four_linked_phases():
+async def test_dispatch_creates_six_linked_phases():
     a = _FakeAdapter()
     issue = {"id": "uuid-1", "identifier": "ZOE-9", "title": "Fix thing", "description": "do it"}
     result = await a.dispatch(issue)
     assert result["ok"] is True
     assert result["external_ref"] == "multica:uuid-1"
-    assert set(result["chain"]) == {"implement", "verify", "review", "closeout"}
+    assert set(result["chain"]) == {
+        "scout",
+        "implement",
+        "verify",
+        "review",
+        "closeout",
+        "retro",
+    }
     creates = [c for c in a.calls if c[0] == "create"]
-    assert len(creates) == 4
-    # verify + review + closeout must be linked to a parent
-    assert "--parent" in creates[1]
-    assert "--parent" in creates[2]
-    assert "--parent" in creates[3]
-    # idempotency keys are phase-scoped
+    assert len(creates) == 6
+    # verify + review + closeout + retro must be linked to a parent
+    for create in creates[1:]:
+        assert "--parent" in create
     keys = [c[c.index("--idempotency-key") + 1] for c in creates]
     assert keys == [
+        "multica:uuid-1:scout",
         "multica:uuid-1:implement",
         "multica:uuid-1:verify",
         "multica:uuid-1:review",
         "multica:uuid-1:closeout",
+        "multica:uuid-1:retro",
     ]
     assert result["mode"] == "interactive"
 
@@ -70,9 +77,9 @@ async def test_dispatch_overnight_mode_extends_runtime(monkeypatch):
 
     creates = [c for c in a.calls if c[0] == "create"]
     runtimes = [c[c.index("--max-runtime") + 1] for c in creates]
-    body = creates[0][creates[0].index("--body") + 1]
+    body = creates[1][creates[1].index("--body") + 1]
     assert result["mode"] == "overnight"
-    assert runtimes == ["8h", "8h", "8h", "8h"]
+    assert runtimes == ["8h"] * 6
     assert "latency is secondary" in body
 
 
@@ -84,8 +91,8 @@ async def test_dispatch_interactive_mode_uses_default_runtime(monkeypatch):
     await a.dispatch({"id": "uuid-fast", "identifier": "ZOE-FAST", "title": "Immediate work"})
 
     creates = [c for c in a.calls if c[0] == "create"]
-    assert creates[0][creates[0].index("--max-runtime") + 1] == "30m"
-    body = creates[0][creates[0].index("--body") + 1]
+    assert creates[1][creates[1].index("--max-runtime") + 1] == "30m"
+    body = creates[1][creates[1].index("--body") + 1]
     assert "Engineering mode: interactive" in body
 
 
@@ -113,13 +120,38 @@ async def test_dispatch_overnight_mode_from_env(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_dispatch_skip_scout_when_env_set(monkeypatch):
+    monkeypatch.setenv("ZOE_KANBAN_SKIP_SCOUT", "1")
+    a = _FakeAdapter()
+    result = await a.dispatch({"id": "uuid-skip", "identifier": "ZOE-SKIP", "title": "t"})
+    assert "scout" not in result["chain"]
+    assert set(result["chain"]) == {"implement", "verify", "review", "closeout", "retro"}
+
+
+@pytest.mark.asyncio
+async def test_dispatch_quality_escalation_mode(monkeypatch):
+    monkeypatch.setenv("ZOE_KANBAN_ESCALATION_MAX_RUNTIME", "75m")
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {"id": "uuid-q", "identifier": "ZOE-Q", "title": "Hard task", "engineering_mode": "quality-escalation"}
+    )
+    creates = [c for c in a.calls if c[0] == "create"]
+    assert result["mode"] == "quality-escalation"
+    assert creates[0][creates[0].index("--max-runtime") + 1] == "75m"
+    body = creates[1][creates[1].index("--body") + 1]
+    assert "quality-escalation" in body
+
+
+@pytest.mark.asyncio
 async def test_dispatch_writes_zoe_ref_marker_into_body():
     # poll() correlates on the `zoe-ref:` body marker because the live
     # `hermes kanban list --json` output does not expose the idempotency key.
     a = _FakeAdapter()
     await a.dispatch({"id": "uuid-7", "identifier": "ZOE-7", "title": "t"})
     creates = [c for c in a.calls if c[0] == "create"]
-    for phase, create in zip(("implement", "verify", "review", "closeout"), creates):
+    for phase, create in zip(
+        ("scout", "implement", "verify", "review", "closeout", "retro"), creates
+    ):
         body = create[create.index("--body") + 1]
         assert f"zoe-ref: multica:uuid-7:{phase}" in body
 
@@ -136,6 +168,100 @@ async def test_closeout_body_instructs_merge_when_ready():
     assert "MERGE_SHA=" in body
     assert "--packet-only" in body
     assert "never --admin" in body
+
+
+@pytest.mark.asyncio
+async def test_scout_body_is_read_only():
+    body = ka.KanbanAdapter()._build_body(
+        "scout",
+        {"id": "uuid-1", "identifier": "ZOE-9", "title": "Fix thing", "description": ""},
+        "ZOE-9",
+    )
+    assert "read-only" in body
+    assert "Do NOT edit code" in body
+    assert "TOOLS_USED" in body
+
+
+@pytest.mark.asyncio
+async def test_retro_body_captures_learnings():
+    body = ka.KanbanAdapter()._build_body(
+        "retro",
+        {"id": "uuid-1", "identifier": "ZOE-9", "title": "Fix thing", "description": ""},
+        "ZOE-9",
+    )
+    assert "RETRO=" in body or "LEARNINGS=" in body
+    assert "Do NOT merge" in body
+
+
+@pytest.mark.asyncio
+async def test_poll_done_when_retro_completes():
+    rows = [
+        _row("scout", "done", v3=True),
+        _row("implement", "done", v3=True),
+        _row("verify", "done", v3=True),
+        _row("review", "done", v3=True),
+        _row("closeout", "done", v3=True),
+        _row("retro", "done", v3=True),
+    ]
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:uuid-9")
+    assert out["status"] == "done"
+    assert out["phases"]["retro"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_poll_v2_chain_done_at_closeout_without_retro():
+    rows = [
+        _row("implement", "done"),
+        _row("verify", "done"),
+        _row("review", "done"),
+        _row("closeout", "done"),
+    ]
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:uuid-9")
+    assert out["status"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_poll_skip_scout_v3_chain_done_when_retro_completes():
+    rows = [
+        _row("implement", "done", v3=True),
+        _row("verify", "done", v3=True),
+        _row("review", "done", v3=True),
+        _row("closeout", "done", v3=True),
+        _row("retro", "done", v3=True),
+    ]
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:uuid-9")
+    assert out["status"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_poll_running_when_closeout_done_but_retro_pending():
+    rows = [
+        _row("scout", "done", v3=True),
+        _row("implement", "done", v3=True),
+        _row("verify", "done", v3=True),
+        _row("review", "done", v3=True),
+        _row("closeout", "done", v3=True),
+        _row("retro", "todo", v3=True),
+    ]
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:uuid-9")
+    assert out["status"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_poll_skip_scout_v3_partial_missing_retro_is_redispatchable():
+    rows = [
+        _row("implement", "done", v3=True),
+        _row("verify", "done", v3=True),
+        _row("review", "done", v3=True),
+        _row("closeout", "done", v3=True),
+    ]
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:uuid-9")
+    assert out["status"] == "partial"
 
 
 @pytest.mark.asyncio
@@ -168,12 +294,16 @@ async def test_dispatch_pins_expected_skills():
     a = _FakeAdapter()
     await a.dispatch({"id": "u", "identifier": "ZOE-1", "title": "t"})
     creates = [c for c in a.calls if c[0] == "create"]
-    impl_skills = [creates[0][i + 1] for i, v in enumerate(creates[0]) if v == "--skill"]
-    verify_skills = [creates[1][i + 1] for i, v in enumerate(creates[1]) if v == "--skill"]
-    closeout_skills = [creates[3][i + 1] for i, v in enumerate(creates[3]) if v == "--skill"]
+    impl_skills = [creates[1][i + 1] for i, v in enumerate(creates[1]) if v == "--skill"]
+    scout_skills = [creates[0][i + 1] for i, v in enumerate(creates[0]) if v == "--skill"]
+    verify_skills = [creates[2][i + 1] for i, v in enumerate(creates[2]) if v == "--skill"]
+    closeout_skills = [creates[4][i + 1] for i, v in enumerate(creates[4]) if v == "--skill"]
+    retro_skills = [creates[5][i + 1] for i, v in enumerate(creates[5]) if v == "--skill"]
+    assert "zoe-graphify" in scout_skills
     assert "zoe-graphify" in impl_skills and "code-structure-cleanup" in impl_skills
     assert "zoe-engineering" in verify_skills
     assert "github-greptile-loop" in closeout_skills
+    assert "zoe-status-refresh" in retro_skills
 
 
 @pytest.mark.asyncio
@@ -222,9 +352,12 @@ async def test_poll_partial_chain_is_redispatchable():
 
 def _row(phase, status, **extra):
     """A Kanban list row shaped like the real CLI: body marker, NO idempotency_key."""
+    body = f"Multica issue: ZOE-9 (id uuid-9)\nzoe-ref: multica:uuid-9:{phase}\nTitle: x"
+    if extra.pop("v3", False):
+        body = f"Multica issue: ZOE-9 (id uuid-9)\nzoe-ref: multica:uuid-9:{phase}\nzoe-chain: v3\nTitle: x"
     return {
         "id": f"t_{phase}",
-        "body": f"Multica issue: ZOE-9 (id uuid-9)\nzoe-ref: multica:uuid-9:{phase}\nTitle: x",
+        "body": body,
         "status": status,
         **extra,
     }
