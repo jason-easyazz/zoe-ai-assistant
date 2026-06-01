@@ -44,3 +44,16 @@ def test_ensure_worktree_is_idempotent(git_repo):
     second = wb.ensure_worktree("t_dup")
     assert first == second
     assert first.exists()
+
+
+def test_ensure_worktree_rejects_invalid_task_id():
+    with pytest.raises(ValueError, match="invalid characters"):
+        wb.ensure_worktree("../escape")
+
+
+def test_ensure_worktree_raises_when_repo_not_git(tmp_path, monkeypatch):
+    monkeypatch.setenv("ZOE_REPO_ROOT", str(tmp_path / "not-git"))
+    monkeypatch.setenv("ZOE_WORKTREE_ROOT", str(tmp_path / "worktrees"))
+    (tmp_path / "not-git").mkdir()
+    with pytest.raises(RuntimeError, match="git worktree add failed"):
+        wb.ensure_worktree("t_badrepo")

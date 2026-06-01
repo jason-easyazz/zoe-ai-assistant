@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import subprocess
 from pathlib import Path
 
 from hermes_http import zoe_repo_root
 
 logger = logging.getLogger(__name__)
+
+_TASK_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 def worktree_root() -> Path:
@@ -27,6 +30,37 @@ def worktree_branch(task_id: str) -> str:
     return f"wt/{task_id}"
 
 
+def _validate_task_id(task_id: str) -> str:
+    cleaned = task_id.strip()
+    if not cleaned:
+        raise ValueError("task_id is required")
+    if not _TASK_ID_RE.fullmatch(cleaned):
+        raise ValueError(f"task_id contains invalid characters: {task_id!r}")
+    return cleaned
+
+
+def _worktree_registered(repo: Path, wt_path: Path) -> bool:
+    listed = subprocess.run(
+        ["git", "worktree", "list", "--porcelain"],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if listed.returncode != 0:
+        return False
+    target = str(wt_path.resolve())
+    block_path = ""
+    for line in listed.stdout.splitlines():
+        if line.startswith("worktree "):
+            block_path = line.removeprefix("worktree ").strip()
+            continue
+        if block_path == target and line.startswith("branch "):
+            return True
+    return False
+
+
 def ensure_worktree(task_id: str, *, base_branch: str = "main") -> Path:
     """Create ``~/.worktrees/<task_id>`` on ``wt/<task_id>`` if missing.
 
@@ -34,15 +68,13 @@ def ensure_worktree(task_id: str, *, base_branch: str = "main") -> Path:
     run ``git worktree add``. Workers used to self-bootstrap; Zoe pre-creates
     the tree at dispatch so implement does not block with WORKTREE_NOT_READY.
     """
-    task_id = task_id.strip()
-    if not task_id:
-        raise ValueError("task_id is required")
+    task_id = _validate_task_id(task_id)
 
     wt_path = worktree_path(task_id)
     branch = worktree_branch(task_id)
     repo = Path(zoe_repo_root())
 
-    if wt_path.exists() and (wt_path / ".git").exists():
+    if _worktree_registered(repo, wt_path):
         return wt_path
 
     wt_path.parent.mkdir(parents=True, exist_ok=True)
