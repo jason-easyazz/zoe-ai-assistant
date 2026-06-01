@@ -258,12 +258,7 @@ def block_reason_from_handoff(detail: dict[str, Any], *, row_block_reason: str |
     for chunk in _haystacks(detail):
         fields.update(_parse_kv_fields(chunk))
     reason = (fields.get("BLOCKER") or row_block_reason or "").strip()
-    if reason:
-        return reason
-    tail = _log_tail_snippet(detail)
-    if tail:
-        return tail[:500]
-    return ""
+    return reason
 
 
 def infer_outcome(phase: PipelinePhase, row_status: str, detail: dict[str, Any]) -> str | None:

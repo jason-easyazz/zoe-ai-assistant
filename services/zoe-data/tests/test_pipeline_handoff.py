@@ -73,12 +73,11 @@ def test_closeout_greptile_from_pinned_skill():
     assert greptile[0].passed is None
 
 
-def test_block_reason_from_log_tail_when_blocker_missing():
+def test_block_reason_from_handoff_ignores_dynamic_log_tail():
     from pipeline_handoff import block_reason_from_handoff
 
     detail = {
         "latest_summary": "",
         "comments": [{"body": "Error: WORKTREE_NOT_READY\nbranch has no upstream"}],
     }
-    reason = block_reason_from_handoff(detail)
-    assert "WORKTREE_NOT_READY" in reason
+    assert block_reason_from_handoff(detail) == ""

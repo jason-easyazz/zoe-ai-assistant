@@ -123,7 +123,7 @@ async def bootstrap_state(
     return state
 
 
-def _append_harness_validators(state: PipelineState, phase: PipelinePhase) -> PipelineState:
+async def _append_harness_validators(state: PipelineState, phase: PipelinePhase) -> PipelineState:
     """Run repo validators when handoff lacks them; tag hash with phase."""
     if any(
         item.kind == "validator" and item.metadata.get("phase") == phase for item in state.evidence
@@ -131,7 +131,7 @@ def _append_harness_validators(state: PipelineState, phase: PipelinePhase) -> Pi
         return state
     from pipeline_validators import run_repo_validators, validator_evidence_item
 
-    result = run_repo_validators()
+    result = await _run_io(run_repo_validators)
     return with_evidence(state, validator_evidence_item(result, phase=phase))
 
 
@@ -191,7 +191,7 @@ async def sync_pipeline_from_chain(
         skills = _PHASE_SKILLS.get(phase, ())
 
         if phase == state.phase and row_status not in _TERMINAL and phase == "verify":
-            state = await _run_io(_append_harness_validators, state, "verify")
+            state = await _append_harness_validators(state, "verify")
 
         if row_status not in _TERMINAL:
             continue
@@ -208,9 +208,9 @@ async def sync_pipeline_from_chain(
             state = with_evidence(state, item)
 
         if phase == "implement" and row_status in {"done", "archived"}:
-            state = await _run_io(_append_harness_validators, state, "implement")
+            state = await _append_harness_validators(state, "implement")
         if phase == "verify" and row_status in {"done", "archived"}:
-            state = await _run_io(_append_harness_validators, state, "verify")
+            state = await _append_harness_validators(state, "verify")
 
         outcome = infer_outcome(phase, row_status, detail)  # type: ignore[arg-type]
         if not outcome:
