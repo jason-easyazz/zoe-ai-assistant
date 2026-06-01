@@ -11,6 +11,7 @@ surface-agnostic.
 Worker profiles + pinned skills encode Zoe's agentic-engineering loop:
   - implement (zoe-coder):  zoe-engineering, zoe-graphify, source-code-context,
                             code-structure-cleanup  (graph-first, opensrc, lean)
+  - verify    (zoe-reviewer): zoe-engineering           (tests/evidence gate)
   - review    (zoe-reviewer): zoe-engineering           (verification gate)
   - closeout  (zoe-planner):  github-greptile-loop      (grep-loop, merge, Multica done)
 """
@@ -37,9 +38,11 @@ _CHAIN = (
         "zoe-coder",
         ("zoe-engineering", "zoe-graphify", "source-code-context", "code-structure-cleanup"),
     ),
+    ("verify", "zoe-reviewer", ("zoe-engineering",)),
     ("review", "zoe-reviewer", ("zoe-engineering",)),
     ("closeout", "zoe-planner", ("github-greptile-loop",)),
 )
+_LEGACY_CHAIN_PHASES = ("implement", "review", "closeout")
 
 _ACTIVE_KANBAN_STATUSES = {"triage", "todo", "ready", "running", "blocked"}
 _TERMINAL_KANBAN_STATUSES = {"done", "archived"}
@@ -200,14 +203,29 @@ class KanbanAdapter:
                 "PR_URL=<url or blank>\nBLOCKER=<reason or blank>\nTESTS=<checks run>\nSUMMARY=<short>\n"
                 "Changed files + branch/worktree details for the reviewer."
             )
+        if phase == "verify":
+            return common + (
+                "You are verify (zoe-reviewer). This is the objective test/evidence gate before review.\n"
+                "- Start with `kanban_show` to read the implementer handoff and PR_URL.\n"
+                "- Do not redesign or refactor. Run the declared tests and the minimum extra checks needed"
+                " for the touched surface.\n"
+                "- Always run and record `python3 tools/audit/validate_structure.py` and"
+                " `python3 tools/audit/validate_critical_files.py` in VALIDATORS unless the task"
+                " is explicitly audit-only with no code/config changes.\n"
+                "- Required evidence in your final `kanban_complete` metadata: TESTS, VALIDATORS,"
+                " PR_URL, and a pass/fail summary. Include exact commands and outcomes.\n"
+                "- If tests fail, evidence is missing, the PR is absent for a code task, or the task needs"
+                " product clarification, call `kanban_block` with BLOCKER= and the failing output.\n"
+                "- TERMINAL PROTOCOL: end with `kanban_complete` or `kanban_block` (no silent exit)."
+            )
         if phase == "review":
             return common + (
-                "You are the reviewer (zoe-reviewer). Verification-first — a task is not done until verified.\n"
+                "You are the reviewer (zoe-reviewer). Review the diff, scope, and verify-phase evidence.\n"
                 "- Confirm the change is small and in scope. Audit-only / doc-only handoffs with blank PR_URL"
                 " need a short verification note, then `kanban_complete` — do not re-implement or burn turns"
                 " re-exploring the tree.\n"
-                "- Run `validate_structure.py`, `validate_critical_files.py`, focused tests,"
-                " and live `/health` + `/api/system/status` when code changed.\n"
+                "- Do not approve if verify-phase evidence is missing, stale, or inconsistent with the diff."
+                " Block with a concrete reason instead.\n"
                 "- TERMINAL PROTOCOL: end with `kanban_complete` or `kanban_block` (no silent exit).\n"
                 "- Do NOT approve if verification or the Greptile gate is unavailable; set the task blocked"
                 " with an explicit reason instead.\n"
@@ -242,7 +260,7 @@ class KanbanAdapter:
         )
 
     async def dispatch(self, issue: dict) -> dict:
-        """Create (idempotently) the implement->review->closeout chain for a Multica issue.
+        """Create (idempotently) the implement->verify->review->closeout chain for a Multica issue.
 
         Returns {ok, external_ref, chain:{phase:task_id}, created:[phases]}.
         """
@@ -298,6 +316,8 @@ class KanbanAdapter:
             return f"{identifier}: {base}"[:140]
         if phase == "review":
             return f"Review {identifier}"[:140]
+        if phase == "verify":
+            return f"Verify {identifier}"[:140]
         return f"Closeout {identifier}"[:140]
 
     async def poll(self, external_ref: str) -> dict:
@@ -335,11 +355,17 @@ class KanbanAdapter:
                 break
 
         closeout = phases.get("closeout", {})
+        # Format invariant: new chains are created serially as implement->verify->review->closeout.
+        # If `verify` is absent, the row set is either a legacy 3-phase chain or a partial
+        # new chain that failed before verify; both are safe to evaluate against the legacy
+        # required set so re-dispatch can backfill only genuinely missing phases.
+        expected = set(tuple(p for p, _, _ in _CHAIN) if "verify" in phases else _LEGACY_CHAIN_PHASES)
+        missing = expected - set(phases)
         if (closeout.get("status") or "") in _TERMINAL_KANBAN_STATUSES:
             agg = "done"
         elif blocker:
             agg = "blocked"
-        elif len(phases) < len(_CHAIN):
+        elif missing:
             # Some phases never got created (e.g. CLI error mid-chain). Report
             # "partial" so the sync path re-dispatches and idempotently backfills
             # the missing phases instead of skipping it as "running" forever.
@@ -358,7 +384,7 @@ class KanbanAdapter:
     async def _extract_pr_url(self, phases: dict[str, dict]) -> str | None:
         """Pull a PR URL from the implement/closeout task summaries or comments."""
         pattern = re.compile(r"https://github\.com/[^/\s]+/[^/\s]+/pull/\d+")
-        for phase in ("closeout", "implement", "review"):
+        for phase in ("closeout", "implement", "verify", "review"):
             row = phases.get(phase)
             if not row:
                 continue

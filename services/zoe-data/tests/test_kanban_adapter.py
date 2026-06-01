@@ -31,21 +31,27 @@ class _FakeAdapter(ka.KanbanAdapter):
 
 
 @pytest.mark.asyncio
-async def test_dispatch_creates_three_linked_phases():
+async def test_dispatch_creates_four_linked_phases():
     a = _FakeAdapter()
     issue = {"id": "uuid-1", "identifier": "ZOE-9", "title": "Fix thing", "description": "do it"}
     result = await a.dispatch(issue)
     assert result["ok"] is True
     assert result["external_ref"] == "multica:uuid-1"
-    assert set(result["chain"]) == {"implement", "review", "closeout"}
+    assert set(result["chain"]) == {"implement", "verify", "review", "closeout"}
     creates = [c for c in a.calls if c[0] == "create"]
-    assert len(creates) == 3
-    # review + closeout must be linked to a parent
+    assert len(creates) == 4
+    # verify + review + closeout must be linked to a parent
     assert "--parent" in creates[1]
     assert "--parent" in creates[2]
+    assert "--parent" in creates[3]
     # idempotency keys are phase-scoped
     keys = [c[c.index("--idempotency-key") + 1] for c in creates]
-    assert keys == ["multica:uuid-1:implement", "multica:uuid-1:review", "multica:uuid-1:closeout"]
+    assert keys == [
+        "multica:uuid-1:implement",
+        "multica:uuid-1:verify",
+        "multica:uuid-1:review",
+        "multica:uuid-1:closeout",
+    ]
 
 
 @pytest.mark.asyncio
@@ -55,7 +61,7 @@ async def test_dispatch_writes_zoe_ref_marker_into_body():
     a = _FakeAdapter()
     await a.dispatch({"id": "uuid-7", "identifier": "ZOE-7", "title": "t"})
     creates = [c for c in a.calls if c[0] == "create"]
-    for phase, create in zip(("implement", "review", "closeout"), creates):
+    for phase, create in zip(("implement", "verify", "review", "closeout"), creates):
         body = create[create.index("--body") + 1]
         assert f"zoe-ref: multica:uuid-7:{phase}" in body
 
@@ -75,13 +81,40 @@ async def test_closeout_body_instructs_merge_when_ready():
 
 
 @pytest.mark.asyncio
+async def test_verify_body_requires_evidence_gate():
+    body = ka.KanbanAdapter()._build_body(
+        "verify",
+        {"id": "uuid-1", "identifier": "ZOE-9", "title": "Fix thing", "description": ""},
+        "ZOE-9",
+    )
+    assert "objective test/evidence gate" in body
+    assert "TESTS" in body
+    assert "VALIDATORS" in body
+    assert "validate_structure.py" in body
+    assert "validate_critical_files.py" in body
+
+
+@pytest.mark.asyncio
+async def test_review_body_requires_verify_evidence():
+    body = ka.KanbanAdapter()._build_body(
+        "review",
+        {"id": "uuid-1", "identifier": "ZOE-9", "title": "Fix thing", "description": ""},
+        "ZOE-9",
+    )
+    assert "verify-phase evidence" in body
+    assert "Block" in body or "block" in body
+
+
+@pytest.mark.asyncio
 async def test_dispatch_pins_expected_skills():
     a = _FakeAdapter()
     await a.dispatch({"id": "u", "identifier": "ZOE-1", "title": "t"})
     creates = [c for c in a.calls if c[0] == "create"]
     impl_skills = [creates[0][i + 1] for i, v in enumerate(creates[0]) if v == "--skill"]
-    closeout_skills = [creates[2][i + 1] for i, v in enumerate(creates[2]) if v == "--skill"]
+    verify_skills = [creates[1][i + 1] for i, v in enumerate(creates[1]) if v == "--skill"]
+    closeout_skills = [creates[3][i + 1] for i, v in enumerate(creates[3]) if v == "--skill"]
     assert "zoe-graphify" in impl_skills and "code-structure-cleanup" in impl_skills
+    assert "zoe-engineering" in verify_skills
     assert "github-greptile-loop" in closeout_skills
 
 
@@ -157,6 +190,21 @@ async def test_poll_correlates_via_body_marker_when_no_idempotency_key():
 
 
 @pytest.mark.asyncio
+async def test_poll_current_chain_includes_verify_phase():
+    rows = [
+        _row("implement", "done"),
+        _row("verify", "done"),
+        _row("review", "running"),
+        _row("closeout", "todo"),
+    ]
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:uuid-9")
+    assert out["found"] is True
+    assert out["status"] == "running"
+    assert out["phases"]["verify"] == "done"
+
+
+@pytest.mark.asyncio
 async def test_poll_body_marker_blocked_detected():
     rows = [
         _row("implement", "blocked", block_reason="dirty tree"),
@@ -180,6 +228,18 @@ async def test_poll_partial_chain_via_body_marker_is_redispatchable():
     rows = [
         _row("implement", "done"),
         _row("review", "running"),
+    ]
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:uuid-9")
+    assert out["found"] is True
+    assert out["status"] == "partial"
+
+
+@pytest.mark.asyncio
+async def test_poll_current_partial_chain_with_verify_is_redispatchable():
+    rows = [
+        _row("implement", "done"),
+        _row("verify", "running"),
     ]
     a = _FakeAdapter(list_rows=rows)
     out = await a.poll("multica:uuid-9")
