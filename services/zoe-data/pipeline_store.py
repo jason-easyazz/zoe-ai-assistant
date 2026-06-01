@@ -170,7 +170,7 @@ async def sync_pipeline_from_chain(
     issue: dict | None = None,
 ) -> PipelineState:
     """Advance pipeline state from terminal Kanban phase rows and parsed handoffs."""
-    from pipeline_handoff import block_reason_from_handoff, evidence_from_handoff, infer_outcome
+    from pipeline_handoff import audit_only_from_handoff, block_reason_from_handoff, evidence_from_handoff, infer_outcome
 
     state = await bootstrap_state(task_ref, start_phase=start_phase, issue=issue)
     if state.status == "done":
@@ -206,6 +206,9 @@ async def sync_pipeline_from_chain(
 
         for item in evidence_from_handoff(phase, detail, skills=skills):  # type: ignore[arg-type]
             state = with_evidence(state, item)
+
+        if phase == "implement" and audit_only_from_handoff(detail):
+            state = state.model_copy(update={"evidence_profile": "audit"})
 
         if phase == "implement" and row_status in {"done", "archived"}:
             state = await _append_harness_validators(state, "implement")

@@ -11,7 +11,7 @@ import executors.kanban_adapter as ka
 def _mock_ensure_worktree(monkeypatch):
     """Dispatch tests must not run real git worktree subprocesses."""
     monkeypatch.setattr(
-        "worktree_bootstrap.ensure_worktree",
+        "worktree_bootstrap.prepare_kanban_worktree",
         lambda task_id, **kwargs: Path(f"/tmp/worktrees/{task_id}"),
     )
 

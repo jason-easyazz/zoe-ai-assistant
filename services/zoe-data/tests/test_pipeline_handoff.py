@@ -92,3 +92,11 @@ def test_block_reason_ignores_dynamic_log_tail_without_stable_token():
         "comments": [{"body": "retry 3 at 2026-06-01T12:00:00Z\nstill waiting..."}],
     }
     assert block_reason_from_handoff(detail) == ""
+
+
+def test_audit_only_from_handoff_detects_kv_field():
+    from pipeline_handoff import audit_only_from_handoff
+
+    detail = {"latest_summary": "AUDIT_ONLY=1\nSUMMARY=findings only", "comments": []}
+    assert audit_only_from_handoff(detail) is True
+    assert audit_only_from_handoff({"latest_summary": "SUMMARY=code change", "comments": []}) is False

@@ -182,16 +182,28 @@ def _max_runtime(mode: str = "interactive") -> str:
     return os.environ.get("ZOE_KANBAN_MAX_RUNTIME", "45m")
 
 
+_SKIP_SCOUT_TAG_RE = re.compile(r"skip_scout:\s*(true|yes|1)", re.I)
+
+
 def _skip_scout(issue: dict | None = None) -> bool:
     issue = issue or {}
     if str(os.environ.get("ZOE_KANBAN_SKIP_SCOUT", "")).strip().lower() in {"1", "true", "yes"}:
         return True
     meta = issue.get("metadata") or {}
-    return str(meta.get("skip_scout") or issue.get("skip_scout") or "").strip().lower() in {
+    if str(meta.get("skip_scout") or issue.get("skip_scout") or "").strip().lower() in {
         "1",
         "true",
         "yes",
-    }
+    }:
+        return True
+    haystack = " ".join(
+        [
+            str(issue.get("title") or ""),
+            str(issue.get("description") or ""),
+            json.dumps(meta),
+        ]
+    )
+    return bool(_SKIP_SCOUT_TAG_RE.search(haystack))
 
 
 def _chain_for_issue(issue: dict) -> tuple[tuple[str, str, tuple[str, ...]], ...]:
@@ -500,9 +512,9 @@ class KanbanAdapter:
             if not (result or {}).get("deduplicated"):
                 created.append(phase)
             if phase in {"implement", "verify"}:
-                from worktree_bootstrap import ensure_worktree
+                from worktree_bootstrap import prepare_kanban_worktree
 
-                await asyncio.to_thread(ensure_worktree, str(task_id))
+                await asyncio.to_thread(prepare_kanban_worktree, str(task_id))
             parent = task_id
 
         logger.info(
