@@ -46,8 +46,8 @@ class EvidenceItem(BaseModel):
     @field_validator("metadata")
     @classmethod
     def _no_secret_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
-        forbidden = {"api_key", "token", "password", "secret"}
-        leaked = sorted(k for k in value if k.lower() in forbidden)
+        forbidden = {"api_key", "token", "password", "secret", "bearer", "credential", "auth"}
+        leaked = sorted(k for k in value if any(marker in k.lower() for marker in forbidden))
         if leaked:
             raise ValueError(f"Evidence metadata may not contain secret fields: {', '.join(leaked)}")
         return value
@@ -79,7 +79,7 @@ class PipelineState(BaseModel):
 
 
 def evidence_kinds(state: PipelineState) -> set[EvidenceKind]:
-    return {item.kind for item in state.evidence if item.passed is not False}
+    return {item.kind for item in state.evidence if item.passed is True}
 
 
 def missing_required_evidence(state: PipelineState, phase: PipelinePhase | None = None) -> set[EvidenceKind]:
@@ -129,5 +129,8 @@ def transition(state: PipelineState, outcome: TransitionOutcome, *, reason: str 
         *state.history,
         TransitionRecord(from_phase=state.phase, to_phase=next_phase, outcome=outcome, reason=reason),
     ]
-    return state.model_copy(update={"phase": next_phase, "status": next_status, "attempts": attempts, "history": history})
+    evidence = [] if outcome in {"request_changes", "verification_failed"} else state.evidence
+    return state.model_copy(
+        update={"phase": next_phase, "status": next_status, "attempts": attempts, "evidence": evidence, "history": history}
+    )
 
