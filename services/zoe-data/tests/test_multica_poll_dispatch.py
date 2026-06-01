@@ -16,6 +16,15 @@ def test_chain_needs_dispatch_running_blocked_done():
     assert chain_needs_dispatch({"found": True, "status": "done"}) is False
 
 
+def test_chain_needs_dispatch_suppressed_on_fingerprint_abort():
+    chain = {
+        "found": True,
+        "status": "partial",
+        "pipeline": {"terminal_block": True, "fingerprint_abort": True},
+    }
+    assert chain_needs_dispatch(chain) is False
+
+
 def test_chain_needs_dispatch_empty_or_missing_status():
     assert chain_needs_dispatch({}) is False
     assert chain_needs_dispatch({"found": True}) is False

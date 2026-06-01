@@ -171,3 +171,53 @@ def test_block_fingerprint_aborts_after_two_identical():
     assert abort is True
     assert state.repeated_block_count == 2
 
+
+def test_issue_evidence_profile_audit_from_metadata():
+    from pipeline_evidence import issue_evidence_profile, missing_required_evidence
+
+    issue = {"metadata": {"evidence_profile": "audit"}}
+    assert issue_evidence_profile(issue) == "audit"
+    state = PipelineState(task_ref="multica:1", phase="verify", evidence_profile="audit")
+    state = with_evidence(
+        state,
+        EvidenceItem(kind="validator", summary="validate_structure pass", passed=True),
+    )
+    assert missing_required_evidence(state) == set()
+
+
+def test_audit_profile_verify_does_not_require_test():
+    from pipeline_evidence import issue_evidence_profile
+
+    issue = {"description": "audit-only map of chat router"}
+    assert issue_evidence_profile(issue) == "audit"
+    state = PipelineState(task_ref="multica:1", phase="verify", evidence_profile="audit")
+    state = with_evidence(
+        state,
+        EvidenceItem(kind="validator", summary="validators pass", passed=True),
+    )
+    assert missing_required_evidence(state) == set()
+
+
+def test_verify_validator_hash_must_match_implement():
+    from pipeline_evidence import verify_validator_hash_matches
+
+    state = PipelineState(task_ref="multica:1", phase="verify")
+    state = with_evidence(
+        state,
+        EvidenceItem(
+            kind="validator",
+            summary="impl",
+            content_hash="aaa",
+            passed=True,
+            metadata={"phase": "implement", "source": "harness"},
+        ),
+        EvidenceItem(
+            kind="validator",
+            summary="verify",
+            content_hash="bbb",
+            passed=True,
+            metadata={"phase": "verify", "source": "harness"},
+        ),
+    )
+    assert verify_validator_hash_matches(state) is False
+

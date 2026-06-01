@@ -16,6 +16,26 @@ def _mock_ensure_worktree(monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def _isolated_pipeline_store(tmp_path, monkeypatch):
+    monkeypatch.setenv("ZOE_PIPELINE_STORE_PATH", str(tmp_path / "pipeline_runs.jsonl"))
+
+
+@pytest.fixture(autouse=True)
+def _mock_repo_validators(monkeypatch):
+    from pipeline_validators import ValidatorRunResult
+
+    monkeypatch.setattr(
+        "pipeline_validators.run_repo_validators",
+        lambda **kwargs: ValidatorRunResult(
+            exit_code=0,
+            summary="validate_structure: exit 0",
+            content_hash="deadbeef",
+            passed=True,
+        ),
+    )
+
+
 class _FakeAdapter(ka.KanbanAdapter):
     """KanbanAdapter with the CLI replaced by a scripted recorder."""
 

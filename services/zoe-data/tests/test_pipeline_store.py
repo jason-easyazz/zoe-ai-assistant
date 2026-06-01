@@ -57,13 +57,62 @@ async def test_sync_pipeline_advances_on_complete_handoff(isolated_store):
 
 
 @pytest.mark.asyncio
-async def test_sync_pipeline_gate_blocks_missing_evidence(isolated_store):
-    await store.bootstrap_state("multica:gate")
+async def test_sync_pipeline_gate_blocks_verify_without_test(isolated_store):
+    await store.bootstrap_state("multica:verify-gate")
+
+    async def fetch_detail(task_id: str):
+        if task_id == "t_impl":
+            return {
+                "latest_summary": "TOOLS_USED=graphify\nPR_URL=https://github.com/o/r/pull/1",
+                "comments": [],
+            }
+        return {"latest_summary": "VALIDATORS=pass", "comments": []}
+
+    phases = {
+        "implement": {"id": "t_impl", "status": "done"},
+        "verify": {"id": "t_verify", "status": "done"},
+    }
+    state = await store.sync_pipeline_from_chain("multica:verify-gate", phases, fetch_detail)
+    assert state.phase == "verify"
+    assert any("gate_blocked" in line for line in isolated_store.read_text(encoding="utf-8").splitlines())
+
+
+@pytest.mark.asyncio
+async def test_sync_pipeline_fingerprint_abort(isolated_store):
+    await store.bootstrap_state("multica:fp")
 
     async def fetch_detail(_task_id: str):
-        return {"latest_summary": "SUMMARY=no tools listed", "comments": []}
+        return {"latest_summary": "BLOCKER=WORKTREE_NOT_READY", "comments": []}
+
+    phases = {"implement": {"id": "t1", "status": "blocked", "block_reason": "WORKTREE_NOT_READY"}}
+    state = await store.sync_pipeline_from_chain("multica:fp", phases, fetch_detail)
+    assert state.status == "blocked"
+    assert state.repeated_block_count == 1
+
+    state = await store.sync_pipeline_from_chain("multica:fp", phases, fetch_detail)
+    assert state.status == "blocked"
+    assert any("fingerprint_abort" in (rec.reason or "") for rec in state.history)
+    assert any("fingerprint_abort" in line for line in isolated_store.read_text(encoding="utf-8").splitlines())
+
+
+@pytest.mark.asyncio
+async def test_sync_pipeline_auto_validators_on_implement_done(isolated_store, monkeypatch):
+    await store.bootstrap_state("multica:val")
+
+    async def fetch_detail(_task_id: str):
+        return {
+            "latest_summary": "TOOLS_USED=graphify\nTESTS=pytest -q pass\nPR_URL=https://github.com/o/r/pull/9",
+            "comments": [],
+        }
+
+    from pipeline_validators import ValidatorRunResult
+
+    monkeypatch.setattr(
+        "pipeline_validators.run_repo_validators",
+        lambda: ValidatorRunResult(exit_code=0, summary="ok", content_hash="abc123", passed=True),
+    )
 
     phases = {"implement": {"id": "t1", "status": "done"}}
-    state = await store.sync_pipeline_from_chain("multica:gate", phases, fetch_detail)
-    assert state.phase == "implement"
-    assert any("gate_blocked" in line for line in isolated_store.read_text(encoding="utf-8").splitlines())
+    state = await store.sync_pipeline_from_chain("multica:val", phases, fetch_detail)
+    assert state.phase == "verify"
+    assert any(item.kind == "validator" and item.metadata.get("phase") == "implement" for item in state.evidence)
