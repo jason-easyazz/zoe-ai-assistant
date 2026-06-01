@@ -136,6 +136,59 @@ def _engineering_mode(issue: dict | None = None) -> str:
     return "interactive"
 
 
+def _model_escalation_active(issue: dict | None, mode: str) -> bool:
+    """True when review/verify/closeout may use stronger models after cheap paths fail."""
+    issue = issue or {}
+    meta = issue.get("metadata") or {}
+    if str(meta.get("model_escalation") or issue.get("model_escalation") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }:
+        return True
+    return mode == "quality-escalation"
+
+
+def _escalation_model_hint(issue: dict | None) -> str:
+    """Paid-model escalation guard — never suggest openrouter/auto without explicit opt-in."""
+    issue = issue or {}
+    meta = issue.get("metadata") or {}
+    paid_auto_ok = str(meta.get("confirm_paid_auto") or issue.get("confirm_paid_auto") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    lines = [
+        "Model escalation: if profile defaults and fallbacks"
+        " (minimax/minimax-m3, google/gemini-2.5-flash, openrouter/free) fail twice on this phase,"
+        " you MAY switch to anthropic/claude-sonnet-4.6 for this task only.",
+    ]
+    if paid_auto_ok:
+        lines.append(
+            "Operator confirmed paid auto-routing: openrouter/auto is allowed as a last resort"
+            " when Sonnet also fails."
+        )
+    else:
+        lines.append(
+            "Do NOT use openrouter/auto on this task — confirm_paid_auto is not set on the issue."
+        )
+    return "\n".join(lines) + "\n"
+
+
+def _overnight_implement_cost_hint() -> str:
+    return (
+        "Overnight cost routing: prefer profile defaults first; after two failures on the same check,"
+        " retry with openrouter/free before any paid escalation.\n"
+    )
+
+
+def _retro_cost_hint() -> str:
+    return (
+        "Retro cost routing: summaries only — prefer google/gemini-2.5-flash or openrouter/free;"
+        " do not burn premium models on long re-reads.\n"
+    )
+
+
 def _max_runtime(mode: str = "interactive") -> str:
     if mode == "overnight":
         return os.environ.get("ZOE_KANBAN_OVERNIGHT_MAX_RUNTIME", "6h")
@@ -240,10 +293,13 @@ class KanbanAdapter:
         # whitespace-padded id would desync the marker from external_ref and poll()
         # would never match): multica:{id}:{phase}.
         issue_id = str(issue.get("id") or "").strip()
+        escalation = _model_escalation_active(issue, mode)
+        escalation_marker = "zoe-model-escalation: true\n" if escalation else ""
         common = (
             f"Multica issue: {identifier} (id {issue_id})\n"
             f"zoe-ref: multica:{issue_id}:{phase}\n"
             f"zoe-chain: v3\n"
+            f"{escalation_marker}"
             f"{mode_note}"
             f"Repo: {_repo_root()}  |  Base branch: main  |  Workspace: git worktree\n\n"
             f"Title: {title}\n\n{description}\n\n"
@@ -259,7 +315,8 @@ class KanbanAdapter:
                 "- TERMINAL PROTOCOL: end with `kanban_complete` or `kanban_block` (no silent exit)."
             )
         if phase == "implement":
-            return common + (
+            overnight_hint = _overnight_implement_cost_hint() if mode == "overnight" else ""
+            return common + overnight_hint + (
                 "You are the implementer (zoe-coder). Start with `kanban_show` to confirm this task id.\n"
                 "- Read the charter + graphify map first (graphify query/path/explain over raw grep).\n"
                 "- Use opensrc for any third-party library source before guessing APIs.\n"
@@ -294,7 +351,8 @@ class KanbanAdapter:
                 "Changed files + branch/worktree details for the reviewer."
             )
         if phase == "verify":
-            return common + (
+            escalation_hint = _escalation_model_hint(issue) if escalation else ""
+            return common + escalation_hint + (
                 "You are verify (zoe-reviewer). This is the objective test/evidence gate before review.\n"
                 "- Start with `kanban_show` to read the implementer handoff and PR_URL.\n"
                 "- Do not redesign or refactor. Run the declared tests and the minimum extra checks needed"
@@ -309,7 +367,8 @@ class KanbanAdapter:
                 "- TERMINAL PROTOCOL: end with `kanban_complete` or `kanban_block` (no silent exit)."
             )
         if phase == "review":
-            return common + (
+            escalation_hint = _escalation_model_hint(issue) if escalation else ""
+            return common + escalation_hint + (
                 "You are the reviewer (zoe-reviewer). Review the diff, scope, and verify-phase evidence.\n"
                 "- Confirm the change is small and in scope. Audit-only / doc-only handoffs with blank PR_URL"
                 " need a short verification note, then `kanban_complete` — do not re-implement or burn turns"
@@ -322,7 +381,7 @@ class KanbanAdapter:
                 "- Record findings (pass/fail/concern) and a merge-readiness verdict in your handoff."
             )
         if phase == "retro":
-            return common + (
+            return common + _retro_cost_hint() + (
                 "You are retro (zoe-planner). Capture learnings after closeout — no silent prod changes.\n"
                 "- Read closeout/implement handoffs and any Greptile or validator notes.\n"
                 "- Summarize what worked, what failed, and one small harness improvement proposal.\n"
@@ -333,7 +392,8 @@ class KanbanAdapter:
                 "- TERMINAL PROTOCOL: end with `kanban_complete` or `kanban_block`."
             )
         # closeout
-        return common + (
+        escalation_hint = _escalation_model_hint(issue) if escalation else ""
+        return common + escalation_hint + (
             "You are closeout (zoe-planner, orchestration only).\n"
             "- Read the implementer's PR_URL handoff and extract the PR number N (the trailing /pull/N)."
             " If AUDIT_ONLY=1 or audit-only with blank PR_URL, `kanban_complete` and note Multica done"

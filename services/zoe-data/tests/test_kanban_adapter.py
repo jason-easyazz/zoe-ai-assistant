@@ -140,6 +140,48 @@ async def test_dispatch_quality_escalation_mode(monkeypatch):
     assert creates[0][creates[0].index("--max-runtime") + 1] == "75m"
     body = creates[1][creates[1].index("--body") + 1]
     assert "quality-escalation" in body
+    verify_body = creates[2][creates[2].index("--body") + 1]
+    assert "zoe-model-escalation: true" in verify_body
+    assert "anthropic/claude-sonnet-4.6" in verify_body
+    assert "Do NOT use openrouter/auto" in verify_body
+
+
+@pytest.mark.asyncio
+async def test_dispatch_model_escalation_from_metadata():
+    a = _FakeAdapter()
+    await a.dispatch(
+        {
+            "id": "uuid-meta-esc",
+            "identifier": "ZOE-ESC",
+            "title": "Escalate on metadata",
+            "metadata": {"model_escalation": True},
+        }
+    )
+    creates = [c for c in a.calls if c[0] == "create"]
+    review_body = creates[3][creates[3].index("--body") + 1]
+    assert "zoe-model-escalation: true" in review_body
+    assert "anthropic/claude-sonnet-4.6" in review_body
+
+
+@pytest.mark.asyncio
+async def test_dispatch_overnight_implement_mentions_free_fallback():
+    a = _FakeAdapter()
+    await a.dispatch(
+        {"id": "uuid-night2", "identifier": "ZOE-N2", "title": "Night work", "engineering_mode": "overnight"}
+    )
+    creates = [c for c in a.calls if c[0] == "create"]
+    impl_body = creates[1][creates[1].index("--body") + 1]
+    assert "openrouter/free" in impl_body
+
+
+@pytest.mark.asyncio
+async def test_retro_body_prefers_cheap_summary_models():
+    body = ka.KanbanAdapter()._build_body(
+        "retro",
+        {"id": "uuid-1", "identifier": "ZOE-9", "title": "Fix thing", "description": ""},
+        "ZOE-9",
+    )
+    assert "gemini-2.5-flash" in body or "openrouter/free" in body
 
 
 @pytest.mark.asyncio

@@ -22,7 +22,8 @@ phases as ready-to-run prompts.
 - Hourly engineering loop = Hermes built-in cron `hourly-zoe-issue-fix-greptile-merge`
   in `~/.hermes/cron/jobs.json` (every 60m).
 - Zoe integrates via `services/zoe-data/routers/chat.py` (`escalate_to_hermes`),
-  `background_runner.py`, and the executor seam (`executor_registry.py` →
+  `background_runner.py` (background tasks via `hermes -p zoe-coder -z`, not the
+  Codex gateway API), and the executor seam (`executor_registry.py` →
   `executors/kanban_adapter.py`) that dispatches Multica issues to Hermes Kanban.
 
 ## The bigger why — the411 / Nudge
@@ -120,9 +121,9 @@ Routing was tightened to match the board-cost policy:
 - Main Hermes (`~/.hermes/config.yaml`) now uses `openai-codex / gpt-5.4` as primary.
 - Main fallback is now a single controlled path: `openrouter / openrouter/free`.
 - Main fallback entries for direct `gemini` and `openai-api` were removed from the fallback chain.
-- Planner profile now uses `openrouter` directly (`anthropic/claude-sonnet-4.6`) instead of `provider: auto`.
+- Planner profile now uses `openrouter` directly (`minimax/minimax-m3`) instead of `provider: auto`.
 - Kanban worker profiles (`zoe-planner`, `zoe-coder`, `zoe-reviewer`) now keep fallback chains OpenRouter-only:
-  - `anthropic/claude-sonnet-4.6`
+  - `minimax/minimax-m3` (planner/reviewer primary; first fallback for coder)
   - `google/gemini-2.5-flash`
   - `openrouter/free`
 - Root background auxiliaries were moved away from direct Gemini/OpenAI and `provider: auto` to `provider: openrouter` with `openrouter/free` where they are text-only (`web_extract`, `compression`, title/session/search/triage/curator/approval/MCP helpers, etc.) to avoid background calls silently routing to Codex or paid direct APIs.
