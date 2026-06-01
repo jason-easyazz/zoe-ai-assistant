@@ -1,9 +1,19 @@
 """Tests for the Hermes Kanban executor adapter (CLI mocked)."""
 import json
+from pathlib import Path
 
 import pytest
 
 import executors.kanban_adapter as ka
+
+
+@pytest.fixture(autouse=True)
+def _mock_ensure_worktree(monkeypatch):
+    """Dispatch tests must not run real git worktree subprocesses."""
+    monkeypatch.setattr(
+        "worktree_bootstrap.ensure_worktree",
+        lambda task_id, **kwargs: Path(f"/tmp/worktrees/{task_id}"),
+    )
 
 
 class _FakeAdapter(ka.KanbanAdapter):
