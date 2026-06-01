@@ -41,7 +41,9 @@ _CHAIN = (
     (
         "implement",
         "zoe-coder",
-        ("zoe-engineering", "zoe-graphify", "source-code-context", "code-structure-cleanup"),
+        # Keep preloaded skills minimal — full guidance lives in zoe-engineering; large
+        # preload exceeds OpenRouter per-request prompt caps (~30k tokens).
+        ("zoe-engineering",),
     ),
     ("verify", "zoe-reviewer", ("zoe-engineering",)),
     ("review", "zoe-reviewer", ("zoe-engineering",)),
@@ -295,6 +297,8 @@ class KanbanAdapter:
             )
         if phase == "implement":
             overnight_hint = _overnight_implement_cost_hint() if mode == "overnight" else ""
+            # Implement body intentionally omits full prior-phase logs; workers should
+            # call kanban_show and read SCOUT_SUMMARY= from scout metadata when present.
             return common + overnight_hint + (
                 "You are the implementer (zoe-coder). Start with `kanban_show` to confirm this task id.\n"
                 "- Read the charter + graphify map first (graphify query/path/explain over raw grep).\n"
@@ -460,6 +464,7 @@ class KanbanAdapter:
             await bootstrap_state(
                 external_ref,
                 start_phase="implement" if _skip_scout(issue) else "scout",
+                issue=issue,
             )
         except Exception as exc:
             logger.debug("kanban_adapter: pipeline bootstrap skipped for %s: %s", external_ref, exc)
@@ -545,6 +550,9 @@ class KanbanAdapter:
             pipeline_info = pipeline_summary(state)
             if pipeline_info.get("missing_evidence") and agg == "running":
                 pipeline_info["gate"] = "evidence_required"
+            if pipeline_info.get("terminal_block") and agg not in {"done", "blocked"}:
+                agg = "blocked"
+                blocker = blocker or f"pipeline terminal block at {pipeline_info.get('phase')}"
         except Exception as exc:
             logger.debug("kanban_adapter: pipeline sync skipped for %s: %s", external_ref, exc)
 

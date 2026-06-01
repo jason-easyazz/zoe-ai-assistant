@@ -47,3 +47,37 @@ def test_infer_outcome_blocked_verify_loops():
 
 def test_infer_outcome_done_without_blocker_completes():
     assert infer_outcome("review", "done", {"latest_summary": "SUMMARY=approved", "comments": []}) == "complete"
+
+
+def test_evidence_from_skills_when_handoff_omits_tools():
+    detail = {"latest_summary": "SUMMARY=scout complete", "comments": []}
+    items = evidence_from_handoff("scout", detail, skills=("zoe-graphify", "zoe-engineering"))
+    assert any(item.kind == "tool" and item.metadata.get("source") == "skills" for item in items)
+
+
+def test_evidence_from_implement_skills_graphify():
+    detail = {"latest_summary": "SUMMARY=done", "comments": []}
+    items = evidence_from_handoff(
+        "implement",
+        detail,
+        skills=("zoe-engineering", "zoe-graphify", "source-code-context"),
+    )
+    assert any(item.kind == "tool" for item in items)
+
+
+def test_closeout_greptile_from_pinned_skill():
+    detail = {"latest_summary": "PR_URL=https://github.com/o/r/pull/2\nSUMMARY=merged", "comments": []}
+    items = evidence_from_handoff("closeout", detail, skills=("github-greptile-loop",))
+    greptile = [item for item in items if item.kind == "greptile"]
+    assert greptile
+    assert greptile[0].passed is None
+
+
+def test_block_reason_from_handoff_ignores_dynamic_log_tail():
+    from pipeline_handoff import block_reason_from_handoff
+
+    detail = {
+        "latest_summary": "",
+        "comments": [{"body": "Error: WORKTREE_NOT_READY\nbranch has no upstream"}],
+    }
+    assert block_reason_from_handoff(detail) == ""

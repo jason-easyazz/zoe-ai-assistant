@@ -16,6 +16,26 @@ def _mock_ensure_worktree(monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def _isolated_pipeline_store(tmp_path, monkeypatch):
+    monkeypatch.setenv("ZOE_PIPELINE_STORE_PATH", str(tmp_path / "pipeline_runs.jsonl"))
+
+
+@pytest.fixture(autouse=True)
+def _mock_repo_validators(monkeypatch):
+    from pipeline_validators import ValidatorRunResult
+
+    monkeypatch.setattr(
+        "pipeline_validators.run_repo_validators",
+        lambda **kwargs: ValidatorRunResult(
+            exit_code=0,
+            summary="validate_structure: exit 0",
+            content_hash="deadbeef",
+            passed=True,
+        ),
+    )
+
+
 class _FakeAdapter(ka.KanbanAdapter):
     """KanbanAdapter with the CLI replaced by a scripted recorder."""
 
@@ -352,7 +372,7 @@ async def test_dispatch_pins_expected_skills():
     closeout_skills = [creates[4][i + 1] for i, v in enumerate(creates[4]) if v == "--skill"]
     retro_skills = [creates[5][i + 1] for i, v in enumerate(creates[5]) if v == "--skill"]
     assert "zoe-graphify" in scout_skills
-    assert "zoe-graphify" in impl_skills and "code-structure-cleanup" in impl_skills
+    assert impl_skills == ["zoe-engineering"]
     assert "zoe-engineering" in verify_skills
     assert "github-greptile-loop" in closeout_skills
     assert "zoe-status-refresh" in retro_skills

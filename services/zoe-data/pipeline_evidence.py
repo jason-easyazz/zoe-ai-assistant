@@ -7,6 +7,8 @@ defines the contract; the verify-phase integration can adopt it in a smaller PR.
 from __future__ import annotations
 
 import hashlib
+import json
+import re
 from datetime import datetime, timezone
 from typing import Any, Literal
 
@@ -15,6 +17,7 @@ from pydantic import BaseModel, Field, field_validator
 PipelinePhase = Literal["scout", "implement", "verify", "review", "closeout", "retro"]
 PipelineStatus = Literal["todo", "running", "blocked", "done"]
 EvidenceKind = Literal["tool", "test", "validator", "pr", "greptile", "human", "log"]
+EvidenceProfile = Literal["default", "audit", "code", "health"]
 TransitionOutcome = Literal[
     "start",
     "complete",
@@ -41,6 +44,29 @@ _REQUIRED_EVIDENCE: dict[PipelinePhase, set[EvidenceKind]] = {
     "closeout": {"greptile"},
     "retro": {"log"},
 }
+
+_EVIDENCE_PROFILES: dict[EvidenceProfile, dict[PipelinePhase, set[EvidenceKind]]] = {
+    "default": _REQUIRED_EVIDENCE,
+    "code": _REQUIRED_EVIDENCE,
+    "audit": {
+        "scout": {"tool"},
+        "implement": {"tool"},
+        "verify": {"validator"},
+        "review": {"human"},
+        "closeout": {"greptile"},
+        "retro": {"log"},
+    },
+    "health": {
+        "scout": {"tool"},
+        "implement": {"tool"},
+        "verify": {"validator", "tool"},
+        "review": {"human"},
+        "closeout": {"greptile"},
+        "retro": {"log"},
+    },
+}
+
+_PROFILE_TAG_RE = re.compile(r"evidence_profile:\s*(\w+)", re.I)
 
 
 class EvidenceItem(BaseModel):
@@ -76,6 +102,7 @@ class PipelineState(BaseModel):
     task_ref: str
     phase: PipelinePhase = "implement"
     status: PipelineStatus = "todo"
+    evidence_profile: EvidenceProfile = "default"
     attempts: dict[PipelinePhase, int] = Field(default_factory=dict)
     evidence: list[EvidenceItem] = Field(default_factory=list)
     history: list[TransitionRecord] = Field(default_factory=list)
@@ -117,13 +144,82 @@ def record_block_fingerprint(state: PipelineState, fingerprint: str) -> tuple[Pi
     return updated, count >= 2
 
 
+def issue_evidence_profile(issue: dict | None) -> EvidenceProfile:
+    """Resolve per-issue evidence requirements from Multica metadata or description tags."""
+    issue = issue or {}
+    meta = issue.get("metadata") or {}
+    explicit = str(meta.get("evidence_profile") or issue.get("evidence_profile") or "").strip().lower()
+    if explicit in _EVIDENCE_PROFILES:
+        return explicit  # type: ignore[return-value]
+
+    haystack = " ".join(
+        [
+            str(issue.get("title") or ""),
+            str(issue.get("description") or ""),
+            json.dumps(meta),
+        ]
+    ).lower()
+    tag_match = _PROFILE_TAG_RE.search(haystack)
+    if tag_match:
+        tagged = tag_match.group(1).lower()
+        if tagged in _EVIDENCE_PROFILES:
+            return tagged  # type: ignore[return-value]
+
+    if (
+        "audit-only" in haystack
+        or str(meta.get("audit_only") or issue.get("audit_only") or "").strip().lower() in {"1", "true", "yes"}
+    ):
+        return "audit"
+    if "health check" in haystack or str(meta.get("health") or "").strip().lower() in {"1", "true", "yes"}:
+        return "health"
+    return "default"
+
+
+def required_evidence_for(state: PipelineState, phase: PipelinePhase | None = None) -> set[EvidenceKind]:
+    selected = phase or state.phase
+    profile_map = _EVIDENCE_PROFILES.get(state.evidence_profile, _REQUIRED_EVIDENCE)
+    return profile_map.get(selected, set())
+
+
 def missing_required_evidence(state: PipelineState, phase: PipelinePhase | None = None) -> set[EvidenceKind]:
     selected = phase or state.phase
-    return _REQUIRED_EVIDENCE.get(selected, set()) - evidence_kinds(state)
+    return required_evidence_for(state, selected) - evidence_kinds(state)
+
+
+def implement_validator_hash(state: PipelineState) -> str | None:
+    """Latest harness-run validator hash recorded during implement."""
+    for item in reversed(state.evidence):
+        if item.kind != "validator" or item.passed is not True or not item.content_hash:
+            continue
+        if item.metadata.get("phase") == "implement":
+            return item.content_hash
+    return None
+
+
+def verify_validator_hash_matches(state: PipelineState) -> bool:
+    """Verify-phase validator hash must match implement run when both are harness-sourced."""
+    impl_hash = implement_validator_hash(state)
+    if not impl_hash:
+        return True
+    verify_hashes = [
+        item.content_hash
+        for item in state.evidence
+        if item.kind == "validator"
+        and item.passed is True
+        and item.content_hash
+        and item.metadata.get("phase") == "verify"
+    ]
+    if not verify_hashes:
+        return True
+    return impl_hash in verify_hashes
 
 
 def can_complete_phase(state: PipelineState) -> bool:
-    return not missing_required_evidence(state)
+    if missing_required_evidence(state):
+        return False
+    if state.phase == "verify" and not verify_validator_hash_matches(state):
+        return False
+    return True
 
 
 def with_evidence(state: PipelineState, *items: EvidenceItem) -> PipelineState:
