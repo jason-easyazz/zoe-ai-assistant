@@ -12,7 +12,7 @@ from pipeline_evidence import (
 
 def test_evidence_metadata_rejects_secret_fields():
     with pytest.raises(ValueError, match="secret fields"):
-        EvidenceItem(kind="tool", summary="used graphify", metadata={"token": "abc"})
+        EvidenceItem(kind="tool", summary="used graphify", metadata={"access_token": "abc"})
 
 
 def test_implement_requires_tool_evidence_before_complete():
@@ -51,12 +51,26 @@ def test_failed_evidence_does_not_satisfy_gate():
     assert missing_required_evidence(state) == {"test"}
 
 
+def test_indeterminate_evidence_does_not_satisfy_gate():
+    state = PipelineState(task_ref="multica:1", phase="verify")
+    state = with_evidence(
+        state,
+        EvidenceItem(kind="test", summary="pytest command recorded"),
+        EvidenceItem(kind="validator", summary="validator passed", passed=True),
+    )
+
+    assert missing_required_evidence(state) == {"test"}
+
+
 def test_review_change_request_loops_to_implement():
     state = PipelineState(task_ref="multica:1", phase="review", status="running")
+    state = with_evidence(state, EvidenceItem(kind="tool", summary="old implementation evidence", passed=True))
     next_state = transition(state, "request_changes", reason="missing rollback test")
 
     assert next_state.phase == "implement"
     assert next_state.status == "todo"
+    assert next_state.evidence == []
+    assert can_complete_phase(next_state) is False
     assert next_state.history[-1].reason == "missing rollback test"
 
 
