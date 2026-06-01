@@ -6,7 +6,7 @@ import json
 import re
 from typing import Any
 
-from pipeline_evidence import EvidenceItem, PipelinePhase
+from pipeline_evidence import EvidenceItem, PipelinePhase, content_hash
 
 _KV_RE = re.compile(r"^([A-Z_]+)=(.*)$", re.MULTILINE)
 _TOOL_NAMES = (
@@ -74,13 +74,25 @@ def evidence_from_handoff(phase: PipelinePhase, detail: dict[str, Any]) -> list[
     tests_raw = fields.get("TESTS") or ""
     if tests_raw and phase in {"implement", "verify"}:
         passed = "fail" not in tests_raw.lower()
-        items.append(EvidenceItem(kind="test", summary=tests_raw[:500], passed=passed))
+        items.append(
+            EvidenceItem(
+                kind="test",
+                summary=tests_raw[:500],
+                content_hash=content_hash(tests_raw),
+                passed=passed,
+            )
+        )
 
     validators_raw = fields.get("VALIDATORS") or ""
     if validators_raw and phase in {"implement", "verify"}:
         passed = "fail" not in validators_raw.lower()
         items.append(
-            EvidenceItem(kind="validator", summary=validators_raw[:500], passed=passed)
+            EvidenceItem(
+                kind="validator",
+                summary=validators_raw[:500],
+                content_hash=content_hash(validators_raw),
+                passed=passed,
+            )
         )
 
     if phase == "review":
@@ -111,6 +123,13 @@ def evidence_from_handoff(phase: PipelinePhase, detail: dict[str, Any]) -> list[
                 break
 
     return items
+
+
+def block_reason_from_handoff(detail: dict[str, Any], *, row_block_reason: str | None = None) -> str:
+    fields: dict[str, str] = {}
+    for chunk in _haystacks(detail):
+        fields.update(_parse_kv_fields(chunk))
+    return (fields.get("BLOCKER") or row_block_reason or "").strip()
 
 
 def infer_outcome(phase: PipelinePhase, row_status: str, detail: dict[str, Any]) -> str | None:

@@ -6,6 +6,7 @@ defines the contract; the verify-phase integration can adopt it in a smaller PR.
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timezone
 from typing import Any, Literal
 
@@ -47,6 +48,7 @@ class EvidenceItem(BaseModel):
     summary: str = Field(min_length=1, max_length=500)
     command: str | None = Field(default=None, max_length=500)
     artifact: str | None = Field(default=None, max_length=1000)
+    content_hash: str | None = Field(default=None, max_length=64)
     passed: bool | None = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -77,6 +79,8 @@ class PipelineState(BaseModel):
     attempts: dict[PipelinePhase, int] = Field(default_factory=dict)
     evidence: list[EvidenceItem] = Field(default_factory=list)
     history: list[TransitionRecord] = Field(default_factory=list)
+    last_block_fingerprint: str | None = None
+    repeated_block_count: int = 0
 
     @field_validator("task_ref")
     @classmethod
@@ -88,6 +92,29 @@ class PipelineState(BaseModel):
 
 def evidence_kinds(state: PipelineState) -> set[EvidenceKind]:
     return {item.kind for item in state.evidence if item.passed is True}
+
+
+def content_hash(text: str) -> str:
+    """Stable SHA-256 hex digest for validator/test stdout or handoff bodies."""
+    return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
+
+
+def block_fingerprint(phase: PipelinePhase, reason: str) -> str:
+    """Fingerprint a blocked transition so identical failures can abort loops."""
+    normalized = f"{phase}:{reason.strip().lower()}"
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+
+
+def record_block_fingerprint(state: PipelineState, fingerprint: str) -> tuple[PipelineState, bool]:
+    """Track repeated identical block fingerprints; return (state, should_abort)."""
+    if fingerprint and fingerprint == state.last_block_fingerprint:
+        count = state.repeated_block_count + 1
+    else:
+        count = 1
+    updated = state.model_copy(
+        update={"last_block_fingerprint": fingerprint, "repeated_block_count": count}
+    )
+    return updated, count >= 2
 
 
 def missing_required_evidence(state: PipelineState, phase: PipelinePhase | None = None) -> set[EvidenceKind]:

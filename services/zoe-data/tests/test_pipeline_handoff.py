@@ -22,6 +22,16 @@ def test_evidence_from_verify_handoff_parses_validators():
     }
     items = evidence_from_handoff("verify", detail)
     assert {item.kind for item in items} >= {"validator", "test"}
+    validator = next(item for item in items if item.kind == "validator")
+    assert validator.content_hash
+    assert len(validator.content_hash) == 64
+
+
+def test_block_reason_from_handoff_prefers_blocker_field():
+    from pipeline_handoff import block_reason_from_handoff
+
+    detail = {"latest_summary": "BLOCKER=WORKTREE_NOT_READY", "comments": []}
+    assert block_reason_from_handoff(detail) == "WORKTREE_NOT_READY"
 
 
 def test_infer_outcome_blocked_verify_loops():

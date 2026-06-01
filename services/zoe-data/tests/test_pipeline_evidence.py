@@ -3,8 +3,11 @@ import pytest
 from pipeline_evidence import (
     EvidenceItem,
     PipelineState,
+    block_fingerprint,
     can_complete_phase,
+    content_hash,
     missing_required_evidence,
+    record_block_fingerprint,
     transition,
     with_evidence,
 )
@@ -148,4 +151,23 @@ def test_retro_complete_marks_pipeline_done():
 
     assert done.phase == "retro"
     assert done.status == "done"
+
+
+def test_content_hash_is_stable():
+    assert content_hash("validate_structure passed") == content_hash("validate_structure passed")
+    assert content_hash("a") != content_hash("b")
+
+
+def test_block_fingerprint_aborts_after_two_identical():
+    reason = "WORKTREE_NOT_READY: missing worktree"
+    fp = block_fingerprint("implement", reason)
+    state = PipelineState(task_ref="multica:1", phase="implement", status="running")
+
+    state, abort = record_block_fingerprint(state, fp)
+    assert abort is False
+    assert state.repeated_block_count == 1
+
+    state, abort = record_block_fingerprint(state, fp)
+    assert abort is True
+    assert state.repeated_block_count == 2
 
