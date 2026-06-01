@@ -38,11 +38,15 @@ Use `--skip-scout` with kanban modes to set `ZOE_KANBAN_SKIP_SCOUT=1` on dispatc
 Recorded in findings; **fail exit** when any of:
 
 - `fingerprint_abort`
+- `scope_split_required`
 - `WORKTREE_NOT_READY` (or embedded in row)
 - `block_reason` null while status is `blocked`
 - Repeated `gate_blocked` (≥5) for same `task_ref` + phase in the tail window
 
 Individual `gate_blocked` rows are counted in `gate_blocked_count` for triage but do not alone fail the run.
+`scope_split_required` means the parent Multica ticket is intentionally blocked with
+a machine-readable `split_packet`; create a smaller child ticket or escalate to an
+operator instead of redispatching the same broad implement phase.
 
 ## Usage
 

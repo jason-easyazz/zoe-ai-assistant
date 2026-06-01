@@ -89,6 +89,25 @@ Expected Kanban chain progression (per Multica issue):
 - `retro` (`zoe-planner`) — learnings + optional follow-up issue; pipeline completes when retro finishes.
 - Engineering mode: `ZOE_ENGINEERING_MODE=interactive|overnight|quality-escalation` (or issue metadata) adjusts worker runtime and cost preference.
 
+### Hard-ticket split policy
+
+Hard or broad tickets should fail cleanly instead of burning retries. If `implement`
+cannot fit the work into one small PR, hits repeated protocol/turn-budget failures,
+or needs a product/architecture split, it must block with:
+
+```text
+NEEDS_SPLIT=1
+SPLIT_PACKET={"child_issue_template":{"title":"<parent>: <small deliverable>","description":"Scope + acceptance criteria + evidence"},"reason":"<why split is required>"}
+```
+
+The pipeline records `block_classification=scope_split_required`, persists the
+`split_packet` in `~/.zoe/engineering_pipeline_runs.jsonl`, and suppresses
+redispatch. Downstream verify/review/closeout phases must not be treated as ready
+until a smaller child issue is created or an operator deliberately clears the block.
+Repeated implement `PROTOCOL_VIOLATION`, `TURN_BUDGET`, `CONTEXT_LIMIT`, or
+`TOKEN_LIMIT` fingerprints are classified the same way even if the worker did not
+write an explicit packet.
+
 ## Board rollout
 
 After deploying this PR on the Zoe host:

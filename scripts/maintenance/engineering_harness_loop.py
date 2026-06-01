@@ -34,7 +34,7 @@ FOCUSED_TESTS = [
     "services/zoe-data/tests/test_greploop_guard.py",
 ]
 
-CRITICAL_EVENTS = frozenset({"gate_blocked", "fingerprint_abort"})
+CRITICAL_EVENTS = frozenset({"gate_blocked", "fingerprint_abort", "scope_split_required"})
 CRITICAL_BLOCK_REASONS = frozenset({"WORKTREE_NOT_READY"})
 
 DEFAULT_PIPELINE_TAIL = 200
@@ -151,6 +151,15 @@ def parse_pipeline_findings(*, tail_lines: int = DEFAULT_PIPELINE_TAIL) -> list[
                     "task_ref": task_ref,
                     "phase": phase,
                     "meta": row.get("meta"),
+                }
+            )
+        if isinstance(state, dict) and state.get("block_classification") == "scope_split_required":
+            findings.append(
+                {
+                    "kind": "scope_split_required",
+                    "task_ref": task_ref,
+                    "phase": phase,
+                    "split_packet": state.get("split_packet"),
                 }
             )
 
@@ -272,7 +281,14 @@ def build_report(
     critical = [
         f
         for f in findings
-        if f.get("kind") in {"fingerprint_abort", "critical_block_reason", "block_reason_null", "gate_blocked_repeated"}
+        if f.get("kind")
+        in {
+            "fingerprint_abort",
+            "scope_split_required",
+            "critical_block_reason",
+            "block_reason_null",
+            "gate_blocked_repeated",
+        }
     ]
     gate_blocked_count = sum(1 for f in findings if f.get("kind") == "gate_blocked")
 

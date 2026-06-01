@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field, field_validator
 
 PipelinePhase = Literal["scout", "implement", "verify", "review", "closeout", "retro"]
 PipelineStatus = Literal["todo", "running", "blocked", "done"]
+BlockClassification = Literal["scope_split_required"]
 EvidenceKind = Literal["tool", "test", "validator", "pr", "greptile", "human", "log"]
 EvidenceProfile = Literal["default", "audit", "code", "health"]
 TransitionOutcome = Literal[
@@ -67,6 +68,11 @@ _EVIDENCE_PROFILES: dict[EvidenceProfile, dict[PipelinePhase, set[EvidenceKind]]
 }
 
 _PROFILE_TAG_RE = re.compile(r"evidence_profile:\s*(\w+)", re.I)
+_SCOPE_SPLIT_REASON_RE = re.compile(
+    r"\b(?:PROTOCOL_VIOLATION|TURN_BUDGET|CONTEXT_LIMIT|TOKEN_LIMIT|TOO_BROAD|"
+    r"SCOPE_SPLIT_REQUIRED|NEEDS_SPLIT)\b",
+    re.I,
+)
 
 
 class EvidenceItem(BaseModel):
@@ -108,6 +114,8 @@ class PipelineState(BaseModel):
     history: list[TransitionRecord] = Field(default_factory=list)
     last_block_fingerprint: str | None = None
     repeated_block_count: int = 0
+    block_classification: BlockClassification | None = None
+    split_packet: dict[str, Any] | None = None
 
     @field_validator("task_ref")
     @classmethod
@@ -142,6 +150,62 @@ def record_block_fingerprint(state: PipelineState, fingerprint: str) -> tuple[Pi
         update={"last_block_fingerprint": fingerprint, "repeated_block_count": count}
     )
     return updated, count >= 2
+
+
+def scope_split_required(
+    phase: PipelinePhase,
+    reason: str,
+    *,
+    repeated: bool = False,
+    explicit: bool = False,
+) -> bool:
+    """Classify broad implement failures that should become split/escalation packets."""
+    if phase != "implement":
+        return False
+    if explicit:
+        return True
+    return repeated and bool(_SCOPE_SPLIT_REASON_RE.search(reason or ""))
+
+
+def build_scope_split_packet(
+    task_ref: str,
+    phase: PipelinePhase,
+    reason: str,
+    *,
+    source: str,
+    existing: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Machine-readable handoff for creating smaller child Multica issues."""
+    packet = dict(existing or {})
+    packet.update(
+        {
+            "schema_version": 1,
+            "kind": "scope_split_required",
+            "parent_task_ref": task_ref,
+            "blocked_phase": phase,
+            "reason": (reason or "scope split required")[:1000],
+            "source": source,
+            "recommended_action": (
+                "Create one or more child Multica issues with narrow acceptance criteria, "
+                "then link them to this blocked parent."
+            ),
+        }
+    )
+    packet.setdefault(
+        "child_issue_template",
+        {
+            "title": "<parent identifier>: <small deliverable>",
+            "description": (
+                "Scope: <one narrow behavior or file area>\n"
+                "Acceptance criteria:\n"
+                "- <observable outcome>\n"
+                "Evidence required:\n"
+                "- focused tests or validators"
+            ),
+            "labels": ["hermes", "needs-split"],
+        },
+    )
+    return packet
 
 
 def issue_evidence_profile(issue: dict | None) -> EvidenceProfile:

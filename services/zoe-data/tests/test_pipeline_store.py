@@ -118,6 +118,58 @@ async def test_sync_pipeline_fingerprint_abort(isolated_store):
 
 
 @pytest.mark.asyncio
+async def test_sync_pipeline_fingerprint_abort_creates_split_packet_for_protocol(isolated_store):
+    await store.bootstrap_state("multica:hard")
+
+    async def fetch_detail(_task_id: str):
+        return {"latest_summary": "BLOCKER=PROTOCOL_VIOLATION", "comments": []}
+
+    phases = {
+        "implement": {
+            "id": "t1",
+            "status": "blocked",
+            "block_reason": "PROTOCOL_VIOLATION",
+        }
+    }
+    await store.sync_pipeline_from_chain("multica:hard", phases, fetch_detail)
+    state = await store.sync_pipeline_from_chain("multica:hard", phases, fetch_detail)
+    summary = store.pipeline_summary(state)
+
+    assert state.block_classification == "scope_split_required"
+    assert summary["needs_split"] is True
+    assert state.split_packet["parent_task_ref"] == "multica:hard"
+    assert state.split_packet["kind"] == "scope_split_required"
+
+
+@pytest.mark.asyncio
+async def test_sync_pipeline_explicit_split_packet_blocks_terminal(isolated_store):
+    await store.bootstrap_state("multica:explicit")
+
+    async def fetch_detail(_task_id: str):
+        return {
+            "latest_summary": (
+                "BLOCKER=SCOPE_SPLIT_REQUIRED: too broad\n"
+                'NEEDS_SPLIT=1\nSPLIT_PACKET={"child_issue_template":{"title":"ZOE-5287: isolate contract parser"}}'
+            ),
+            "comments": [],
+        }
+
+    phases = {
+        "implement": {
+            "id": "t1",
+            "status": "blocked",
+            "block_reason": "SCOPE_SPLIT_REQUIRED: too broad",
+        }
+    }
+    state = await store.sync_pipeline_from_chain("multica:explicit", phases, fetch_detail)
+
+    assert state.status == "blocked"
+    assert state.block_classification == "scope_split_required"
+    assert state.split_packet["child_issue_template"]["title"] == "ZOE-5287: isolate contract parser"
+    assert "scope_split_required" in isolated_store.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
 async def test_sync_pipeline_blocked_records_reason_in_history(isolated_store):
     await store.bootstrap_state("multica:block-reason")
 
