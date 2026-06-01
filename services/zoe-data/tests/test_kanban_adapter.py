@@ -57,6 +57,8 @@ class _FakeAdapter(ka.KanbanAdapter):
             return self._list_rows
         if verb == "show":
             return self._show_map.get(args[1], {"comments": [], "latest_summary": ""})
+        if verb == "block":
+            return ""
         return ""
 
 
@@ -537,3 +539,44 @@ async def test_poll_done_and_pr_extracted():
     out = await a.poll("multica:u")
     assert out["status"] == "done"
     assert out["pr_url"] == "https://github.com/o/r/pull/42"
+
+
+def test_protocol_violation_count():
+    detail = {
+        "events": [
+            {"kind": "claimed"},
+            {"kind": "protocol_violation", "payload": {"exit_code": 0}},
+            {"kind": "protocol_violation", "payload": {"exit_code": 0}},
+        ]
+    }
+    assert ka._protocol_violation_count(detail) == 2
+
+
+@pytest.mark.asyncio
+async def test_poll_auto_blocks_after_protocol_violations(monkeypatch):
+    monkeypatch.setattr(ka, "_PROTOCOL_VIOLATION_LIMIT", 2)
+    rows = [_row("implement", "running")]
+    show = {
+        "t_implement": {
+            "events": [
+                {"kind": "protocol_violation", "payload": {"exit_code": 0}},
+                {"kind": "protocol_violation", "payload": {"exit_code": 0}},
+            ]
+        }
+    }
+    a = _FakeAdapter(list_rows=rows, show_map=show)
+    out = await a.poll("multica:uuid-9")
+    assert out["status"] == "blocked"
+    assert "PROTOCOL_VIOLATION" in (out["blocker"] or "")
+    assert any(c[0] == "block" for c in a.calls)
+
+
+def test_closeout_body_requires_terminal_protocol():
+    body = ka.KanbanAdapter()._build_body(
+        "closeout",
+        {"id": "uuid-1", "identifier": "ZOE-9", "title": "Fix thing", "description": ""},
+        "ZOE-9",
+    )
+    assert "TERMINAL PROTOCOL" in body
+    assert "kanban_complete" in body
+    assert "kanban_block" in body
