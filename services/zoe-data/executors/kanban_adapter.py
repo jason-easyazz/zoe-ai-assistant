@@ -239,6 +239,9 @@ class KanbanAdapter:
                 "- Start with `kanban_show` to read the implementer handoff and PR_URL.\n"
                 "- Do not redesign or refactor. Run the declared tests and the minimum extra checks needed"
                 " for the touched surface.\n"
+                "- Always run and record `python3 tools/audit/validate_structure.py` and"
+                " `python3 tools/audit/validate_critical_files.py` in VALIDATORS unless the task"
+                " is explicitly audit-only with no code/config changes.\n"
                 "- Required evidence in your final `kanban_complete` metadata: TESTS, VALIDATORS,"
                 " PR_URL, and a pass/fail summary. Include exact commands and outcomes.\n"
                 "- If tests fail, evidence is missing, the PR is absent for a code task, or the task needs"
@@ -383,6 +386,10 @@ class KanbanAdapter:
                 break
 
         closeout = phases.get("closeout", {})
+        # Format invariant: new chains are created serially as implement->verify->review->closeout.
+        # If `verify` is absent, the row set is either a legacy 3-phase chain or a partial
+        # new chain that failed before verify; both are safe to evaluate against the legacy
+        # required set so re-dispatch can backfill only genuinely missing phases.
         expected = set(tuple(p for p, _, _ in _CHAIN) if "verify" in phases else _LEGACY_CHAIN_PHASES)
         missing = expected - set(phases)
         if (closeout.get("status") or "") in _TERMINAL_KANBAN_STATUSES:
