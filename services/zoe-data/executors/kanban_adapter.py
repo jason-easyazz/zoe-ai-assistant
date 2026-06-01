@@ -118,7 +118,6 @@ def _engineering_mode(issue: dict | None = None) -> str:
     issue = issue or {}
     raw = (
         issue.get("engineering_mode")
-        or issue.get("mode")
         or (issue.get("metadata") or {}).get("engineering_mode")
         or os.environ.get("ZOE_ENGINEERING_MODE")
         or "interactive"
@@ -174,10 +173,10 @@ class KanbanAdapter:
         except json.JSONDecodeError as exc:
             raise KanbanCLIError(f"non-JSON output from kanban {args[0]}: {exc}: {stdout[:200]}")
 
-    def _build_body(self, phase: str, issue: dict, identifier: str) -> str:
+    def _build_body(self, phase: str, issue: dict, identifier: str, *, mode: str | None = None) -> str:
         title = issue.get("title") or identifier
         description = issue.get("description") or ""
-        mode = _engineering_mode(issue)
+        mode = mode or _engineering_mode(issue)
         mode_note = (
             "Engineering mode: overnight. Prioritize free/reliable local or OpenRouter-low-cost routes;"
             " latency is secondary to evidence quality.\n"
@@ -290,7 +289,7 @@ class KanbanAdapter:
     async def dispatch(self, issue: dict) -> dict:
         """Create (idempotently) the implement->verify->review->closeout chain for a Multica issue.
 
-        Returns {ok, external_ref, chain:{phase:task_id}, created:[phases]}.
+        Returns {ok, external_ref, chain:{phase:task_id}, created:[phases], mode}.
         """
         issue_id = str(issue.get("id") or "").strip()
         if not issue_id:
@@ -318,7 +317,7 @@ class KanbanAdapter:
                 "--created-by",
                 "zoe-bridge",
                 "--body",
-                self._build_body(phase, issue, identifier),
+                self._build_body(phase, issue, identifier, mode=mode),
                 "--json",
             ]
             for skill in skills:
