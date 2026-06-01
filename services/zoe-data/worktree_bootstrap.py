@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import sqlite3
 import subprocess
 from pathlib import Path
 
@@ -44,6 +45,45 @@ def worktree_path(task_id: str) -> Path:
 
 def worktree_branch(task_id: str) -> str:
     return f"wt/{task_id}"
+
+
+def kanban_db_path() -> Path:
+    """Path to the Hermes Kanban SQLite DB for the active board."""
+    override = os.environ.get("ZOE_KANBAN_DB_PATH", "").strip()
+    if override:
+        return Path(override).expanduser()
+    board = os.environ.get("ZOE_KANBAN_BOARD", "default").strip() or "default"
+    home = Path.home() / ".hermes"
+    if board == "default":
+        return home / "kanban.db"
+    return home / "kanban" / "boards" / board / "kanban.db"
+
+
+def pin_kanban_workspace(task_id: str, wt_path: Path | None = None) -> Path:
+    """Persist the absolute worktree path on a Kanban task before claim.
+
+    Hermes defaults unset worktree paths to ``<dispatcher-cwd>/.worktrees/<id>``.
+    Zoe bootstrap uses ``~/.worktrees/<id>`` (or ``ZOE_WORKTREE_ROOT``). Pin
+    the bootstrap path on the task row so workers and ``ensure_worktree`` agree.
+    """
+    task_id = _validate_task_id(task_id)
+    path = (wt_path or worktree_path(task_id)).resolve()
+    abs_path = str(path)
+    db = kanban_db_path()
+    if not db.exists():
+        raise RuntimeError(f"kanban db not found: {db}")
+
+    with sqlite3.connect(str(db)) as conn:
+        cur = conn.execute(
+            "UPDATE tasks SET workspace_path = ? WHERE id = ? AND workspace_kind = 'worktree'",
+            (abs_path, task_id),
+        )
+        conn.commit()
+        if cur.rowcount == 0:
+            raise RuntimeError(f"kanban task {task_id!r} not found or not a worktree task in {db}")
+
+    logger.info("worktree_bootstrap: pinned kanban workspace %s -> %s", task_id, abs_path)
+    return path
 
 
 def _validate_task_id(task_id: str) -> str:
@@ -118,3 +158,10 @@ def ensure_worktree(task_id: str, *, base_branch: str = "main") -> Path:
 
     stderr = (retry.stderr or result.stderr or "").strip()
     raise RuntimeError(f"git worktree add failed for {task_id}: {stderr or 'unknown error'}")
+
+
+def prepare_kanban_worktree(task_id: str, *, base_branch: str = "main") -> Path:
+    """Create the git worktree and pin its path on the Kanban task row."""
+    wt_path = ensure_worktree(task_id, base_branch=base_branch)
+    pin_kanban_workspace(task_id, wt_path)
+    return wt_path

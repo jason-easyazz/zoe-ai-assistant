@@ -78,6 +78,28 @@ async def test_sync_pipeline_gate_blocks_verify_without_test(isolated_store):
 
 
 @pytest.mark.asyncio
+async def test_sync_pipeline_audit_only_verify_skips_test_gate(isolated_store):
+    await store.bootstrap_state("multica:audit-gate")
+
+    async def fetch_detail(task_id: str):
+        if task_id == "t_impl":
+            return {
+                "latest_summary": "AUDIT_ONLY=1\nTOOLS_USED=graphify\nSUMMARY=audit complete",
+                "comments": [],
+            }
+        return {"latest_summary": "VALIDATORS=validate_structure pass", "comments": []}
+
+    phases = {
+        "implement": {"id": "t_impl", "status": "done"},
+        "verify": {"id": "t_verify", "status": "done"},
+    }
+    state = await store.sync_pipeline_from_chain("multica:audit-gate", phases, fetch_detail)
+    assert state.phase == "review"
+    assert state.evidence_profile == "audit"
+    assert not any("gate_blocked" in line for line in isolated_store.read_text(encoding="utf-8").splitlines())
+
+
+@pytest.mark.asyncio
 async def test_sync_pipeline_fingerprint_abort(isolated_store):
     await store.bootstrap_state("multica:fp")
 

@@ -168,6 +168,7 @@ def issue_evidence_profile(issue: dict | None) -> EvidenceProfile:
     if (
         "audit-only" in haystack
         or str(meta.get("audit_only") or issue.get("audit_only") or "").strip().lower() in {"1", "true", "yes"}
+        or str(meta.get("AUDIT_ONLY") or issue.get("AUDIT_ONLY") or "").strip().lower() in {"1", "true", "yes"}
     ):
         return "audit"
     if "health check" in haystack or str(meta.get("health") or "").strip().lower() in {"1", "true", "yes"}:

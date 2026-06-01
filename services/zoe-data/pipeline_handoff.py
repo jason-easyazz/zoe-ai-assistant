@@ -172,6 +172,20 @@ def _greptile_from_closeout(detail: dict[str, Any], skills: tuple[str, ...] | li
     )
 
 
+def audit_only_from_handoff(detail: dict[str, Any]) -> bool:
+    """True when implement/verify handoff marks the task as audit-only (no PR/tests)."""
+    fields: dict[str, str] = {}
+    for chunk in _haystacks(detail):
+        fields.update(_parse_kv_fields(chunk))
+    if fields.get("AUDIT_ONLY", "").strip().lower() in {"1", "true", "yes"}:
+        return True
+    metadata = detail.get("metadata") or {}
+    if isinstance(metadata, dict):
+        raw = metadata.get("AUDIT_ONLY") or metadata.get("audit_only") or ""
+        return str(raw).strip().lower() in {"1", "true", "yes"}
+    return False
+
+
 def evidence_from_handoff(
     phase: PipelinePhase,
     detail: dict[str, Any],
