@@ -48,29 +48,42 @@ def _pipeline_store_path() -> Path:
     return Path.home() / ".zoe" / "engineering_pipeline_runs.jsonl"
 
 
-def _run_command(cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None) -> dict[str, Any]:
+def _run_command(
+    cmd: list[str],
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    timeout: int | None = 300,
+) -> dict[str, Any]:
     merged = os.environ.copy()
     if env:
         merged.update(env)
-    proc = subprocess.run(
-        cmd,
-        cwd=cwd or ROOT,
-        env=merged,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=cwd or ROOT,
+            env=merged,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        timed_out = False
+    except subprocess.TimeoutExpired as exc:
+        proc = exc
+        timed_out = True
     return {
         "cmd": cmd,
-        "ok": proc.returncode == 0,
-        "exit_code": proc.returncode,
-        "stdout": proc.stdout[-4000:] if proc.stdout else "",
-        "stderr": proc.stderr[-4000:] if proc.stderr else "",
+        "ok": (not timed_out) and proc.returncode == 0,
+        "exit_code": getattr(proc, "returncode", -1),
+        "stdout": (proc.stdout or "")[-4000:] if getattr(proc, "stdout", None) else "",
+        "stderr": (proc.stderr or "")[-4000:] if getattr(proc, "stderr", None) else "",
+        "timed_out": timed_out,
     }
 
 
 def run_pytest() -> dict[str, Any]:
     cmd = [sys.executable, "-m", "pytest", *FOCUSED_TESTS, "-q"]
-    result = _run_command(cmd)
+    result = _run_command(cmd, timeout=300)
     result["step"] = "pytest"
     return result
 
@@ -78,7 +91,7 @@ def run_pytest() -> dict[str, Any]:
 def run_validators() -> dict[str, Any]:
     steps: list[dict[str, Any]] = []
     for rel in ("tools/audit/validate_structure.py", "tools/audit/validate_critical_files.py"):
-        step = _run_command([sys.executable, rel])
+        step = _run_command([sys.executable, rel], timeout=120)
         step["step"] = rel
         steps.append(step)
     ok = all(s["ok"] for s in steps)
@@ -194,7 +207,7 @@ def run_kanban_dispatch(*, dry_run: bool, limit: int = 1, skip_scout: bool = Fal
     if dry_run:
         cmd.append("--dry-run")
     env = {"ZOE_KANBAN_SKIP_SCOUT": "1"} if skip_scout else None
-    result = _run_command(cmd, env=env)
+    result = _run_command(cmd, env=env, timeout=120)
     result["step"] = "kanban_dry" if dry_run else "kanban_live"
     result["skip_scout"] = skip_scout
     return result
