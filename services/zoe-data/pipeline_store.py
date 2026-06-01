@@ -128,7 +128,7 @@ async def sync_pipeline_from_chain(
     from pipeline_handoff import block_reason_from_handoff, evidence_from_handoff, infer_outcome
 
     state = await bootstrap_state(task_ref, start_phase=start_phase)
-    if state.status == "done":
+    if state.status in {"done", "blocked"}:
         return state
 
     for phase in ("scout", "implement", "verify", "review", "closeout", "retro"):
