@@ -99,7 +99,7 @@ def _stable_block_reason_from_text(text: str) -> str:
         err = re.match(r"^Error:\s*([A-Z][A-Z0-9_]+)", stripped)
         if err:
             return err.group(1)
-        code = re.match(r"^([A-Z][A-Z0-9_]{2,})(?::|\s|$)", stripped)
+        code = re.match(r"^([A-Z][A-Z0-9_]{5,})(?::|\s|$)", stripped)
         if code:
             return code.group(1)
     return ""

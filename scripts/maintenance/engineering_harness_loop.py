@@ -156,7 +156,13 @@ def parse_pipeline_findings(*, tail_lines: int = DEFAULT_PIPELINE_TAIL) -> list[
 
         meta = row.get("meta") if isinstance(row.get("meta"), dict) else {}
         reason = str(meta.get("reason") or "")
-        if reason in CRITICAL_BLOCK_REASONS or "WORKTREE_NOT_READY" in json.dumps(row):
+        active_reason_parts = [reason, str(meta.get("block_reason") or "")]
+        if isinstance(state, dict) and status == "blocked":
+            active_reason_parts.append(str(state.get("block_reason") or ""))
+        active_blob = " ".join(part for part in active_reason_parts if part)
+        if reason in CRITICAL_BLOCK_REASONS or any(
+            token in active_blob for token in CRITICAL_BLOCK_REASONS
+        ):
             findings.append(
                 {
                     "kind": "critical_block_reason",
