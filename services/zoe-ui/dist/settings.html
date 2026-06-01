@@ -1747,7 +1747,7 @@ function renderHermesProfiles(data) {
       <button class="btn btn-ghost" onclick="validateHermesProfiles()">Validate</button>
       <button class="btn btn-primary" onclick="saveHermesProfileDraft()">Save Draft</button>
       <button class="btn btn-primary" onclick="applyHermesProfiles(false)">Apply After Drain</button>
-      <button class="btn btn-danger" onclick="applyHermesProfiles(true)">Apply Now + Restart</button>
+      <button class="btn btn-danger" onclick="applyHermesProfiles(true)">Apply + Restart After Drain</button>
       <button class="btn btn-ghost" onclick="rollbackHermesProfiles()">Roll Back Latest</button>
     </div>
   `;
@@ -1800,7 +1800,7 @@ async function applyHermesProfiles(forceRestart) {
       profiles,
       confirm_paid_auto: paidAuto,
       restart,
-      force_restart: restart,
+      force_restart: false,
     });
     toast('Hermes profiles applied', 'success');
     loadHermesModelProfiles();

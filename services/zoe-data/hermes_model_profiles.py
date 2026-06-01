@@ -44,6 +44,12 @@ def rollback_dir() -> Path:
     return hermes_home() / "rollback" / "model-profiles"
 
 
+def _append_audit(record: dict[str, Any]) -> None:
+    audit_path().parent.mkdir(parents=True, exist_ok=True)
+    with audit_path().open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(record, sort_keys=True) + "\n")
+
+
 def _profile_path(profile: str) -> Path:
     if profile not in PROFILE_PATHS:
         raise ValueError(f"Unknown profile: {profile}")
@@ -245,12 +251,35 @@ def apply_profiles(
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     backup_root = rollback_dir() / ts
     backup_root.mkdir(parents=True, exist_ok=True)
-    for profile in diff["profiles"]:
-        path = _profile_path(profile["name"])
-        backup_path = backup_root / profile["name"] / path.name
-        backup_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(path, backup_path)
-        _dump_yaml(path, _apply_to_yaml(_load_yaml(path), profile))
+    written: list[str] = []
+    try:
+        for profile in diff["profiles"]:
+            path = _profile_path(profile["name"])
+            backup_path = backup_root / profile["name"] / path.name
+            backup_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, backup_path)
+            _dump_yaml(path, _apply_to_yaml(_load_yaml(path), profile))
+            written.append(profile["name"])
+    except Exception as exc:
+        restored: list[str] = []
+        for profile_name in written:
+            backup_file = backup_root / profile_name / _profile_path(profile_name).name
+            if backup_file.exists():
+                shutil.copy2(backup_file, _profile_path(profile_name))
+                restored.append(profile_name)
+        _append_audit(
+            {
+                "timestamp": ts,
+                "actor": actor,
+                "status": "failed",
+                "error": str(exc),
+                "profiles": [p["name"] for p in diff["profiles"]],
+                "written": written,
+                "restored": restored,
+                "backup_dir": str(backup_root),
+            }
+        )
+        raise
 
     restart_result = None
     if restart:
@@ -269,14 +298,13 @@ def apply_profiles(
     audit = {
         "timestamp": ts,
         "actor": actor,
+        "status": "applied",
         "profiles": [p["name"] for p in diff["profiles"]],
         "restart": restart,
         "force_restart": force_restart,
         "backup_dir": str(backup_root),
     }
-    audit_path().parent.mkdir(parents=True, exist_ok=True)
-    with audit_path().open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(audit, sort_keys=True) + "\n")
+    _append_audit(audit)
     return {**diff, "backup_dir": str(backup_root), "restart": restart_result}
 
 
@@ -289,7 +317,7 @@ def rollback_profiles(backup_dir_value: str | None, *, actor: str) -> dict[str, 
         if not backups:
             raise ValueError("No rollback backups found")
         selected = backups[-1].resolve()
-    if root not in selected.parents and selected != root:
+    if root not in selected.parents:
         raise ValueError("Rollback path escapes Hermes rollback directory")
 
     restored = []
@@ -309,8 +337,6 @@ def rollback_profiles(backup_dir_value: str | None, *, actor: str) -> dict[str, 
         "rollback_dir": str(selected),
         "restored": restored,
     }
-    audit_path().parent.mkdir(parents=True, exist_ok=True)
-    with audit_path().open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(audit, sort_keys=True) + "\n")
+    _append_audit(audit)
     return {"ok": True, "rollback_dir": str(selected), "restored": restored}
 

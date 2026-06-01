@@ -110,3 +110,40 @@ def test_rollback_restores_latest_backup(hermes_home, monkeypatch):
     assert restored["restored"] == ["main"]
     assert data["model"]["default"] == "openrouter/free"
 
+
+def test_apply_failure_writes_failed_audit_and_restores_written_profiles(hermes_home, monkeypatch):
+    monkeypatch.setattr(hmp, "count_running_workers", lambda: 0)
+    original_dump = hmp._dump_yaml
+    calls = {"count": 0}
+
+    def flaky_dump(path, data):
+        calls["count"] += 1
+        if calls["count"] == 2:
+            raise OSError("disk full")
+        return original_dump(path, data)
+
+    monkeypatch.setattr(hmp, "_dump_yaml", flaky_dump)
+
+    with pytest.raises(OSError, match="disk full"):
+        hmp.apply_profiles(
+            [
+                {"name": "main", "provider": "openrouter", "model": "changed/main", "fallbacks": []},
+                {"name": "zoe-coder", "provider": "openrouter", "model": "changed/coder", "fallbacks": []},
+            ],
+            actor="tester",
+        )
+
+    main = yaml.safe_load((hermes_home / "config.yaml").read_text(encoding="utf-8"))
+    audit = json.loads((hermes_home / "model-profile-audit.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+    assert main["model"]["default"] == "openrouter/free"
+    assert audit["status"] == "failed"
+    assert audit["restored"] == ["main"]
+
+
+def test_rollback_rejects_rollback_root(hermes_home):
+    root = hmp.rollback_dir()
+    root.mkdir(parents=True)
+
+    with pytest.raises(ValueError, match="escapes"):
+        hmp.rollback_profiles(str(root), actor="tester")
+

@@ -229,7 +229,12 @@ class HermesProfilesRollbackRequest(BaseModel):
 
 
 def _hermes_profile_error(exc: Exception) -> HTTPException:
-    status = 409 if isinstance(exc, RuntimeError) else 400
+    if isinstance(exc, RuntimeError):
+        status = 409
+    elif isinstance(exc, OSError):
+        status = 503
+    else:
+        status = 400
     return HTTPException(status_code=status, detail=str(exc))
 
 
@@ -250,10 +255,11 @@ async def get_hermes_model_profiles(user: dict = Depends(require_admin)):
 
     try:
         draft = load_draft()
-    except Exception:
-        draft = None
+        profiles = list_profiles()
+    except (ValueError, TypeError, OSError) as exc:
+        raise _hermes_profile_error(exc) from exc
     return {
-        "profiles": list_profiles(),
+        "profiles": profiles,
         "draft": draft,
         "running_workers": count_running_workers(),
     }
@@ -268,7 +274,7 @@ async def put_hermes_model_profiles_draft(
 
     try:
         return save_draft(body.profiles, confirm_paid_auto=body.confirm_paid_auto)
-    except (ValueError, TypeError) as exc:
+    except (ValueError, TypeError, OSError) as exc:
         raise _hermes_profile_error(exc) from exc
 
 
@@ -281,7 +287,7 @@ async def post_hermes_model_profiles_validate(
 
     try:
         return build_diff(body.profiles, confirm_paid_auto=body.confirm_paid_auto)
-    except (ValueError, TypeError) as exc:
+    except (ValueError, TypeError, OSError) as exc:
         raise _hermes_profile_error(exc) from exc
 
 
@@ -301,7 +307,7 @@ async def post_hermes_model_profiles_apply(
             restart=body.restart,
             force_restart=body.force_restart,
         )
-    except (RuntimeError, ValueError, TypeError) as exc:
+    except (RuntimeError, ValueError, TypeError, OSError) as exc:
         raise _hermes_profile_error(exc) from exc
 
 
@@ -315,7 +321,7 @@ async def post_hermes_model_profiles_rollback(
     actor = str(user.get("user_id") or user.get("username") or "unknown")
     try:
         return rollback_profiles(body.backup_dir, actor=actor)
-    except (ValueError, TypeError) as exc:
+    except (ValueError, TypeError, OSError) as exc:
         raise _hermes_profile_error(exc) from exc
 
 
