@@ -9,6 +9,7 @@ from __future__ import annotations
 import difflib
 import json
 import os
+import re
 import shutil
 import subprocess
 from datetime import datetime, timezone
@@ -69,8 +70,118 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     return data
 
 
-def _dump_yaml(path: Path, data: dict[str, Any]) -> None:
-    text = yaml.safe_dump(data, sort_keys=False, allow_unicode=False)
+def _yaml_scalar(value: Any) -> str:
+    dumped = yaml.safe_dump(value, default_flow_style=True, allow_unicode=False, sort_keys=False)
+    return "\n".join(line for line in dumped.splitlines() if line != "...").strip()
+
+
+def _format_yaml_list(items: list[dict[str, Any]]) -> list[str]:
+    dumped = yaml.safe_dump(items, sort_keys=False, allow_unicode=False)
+    return dumped.rstrip("\n").splitlines()
+
+
+def _split_inline_comment(value: str) -> tuple[str, str]:
+    match = re.search(r"\s+#", value)
+    if not match:
+        return value.rstrip(), ""
+    return value[: match.start()].rstrip(), value[match.start() :]
+
+
+def _find_top_level_section(lines: list[str], key: str) -> tuple[int, int] | None:
+    start = None
+    for idx, line in enumerate(lines):
+        if re.match(rf"^{re.escape(key)}:(?:\s.*)?$", line):
+            start = idx
+            break
+    if start is None:
+        return None
+
+    end = len(lines)
+    for idx in range(start + 1, len(lines)):
+        line = lines[idx]
+        if re.match(r"^[^\s#-][^:]*:", line):
+            end = idx
+            break
+    return start, end
+
+
+def _replace_nested_scalar(lines: list[str], section: tuple[int, int], key: str, value: Any) -> bool:
+    start, end = section
+    for idx in range(start + 1, end):
+        match = re.match(r"^(\s+)" + re.escape(key) + r":(.*)$", lines[idx])
+        if not match:
+            continue
+        _, comment = _split_inline_comment(match.group(2))
+        lines[idx] = f"{match.group(1)}{key}: {_yaml_scalar(value)}{comment}"
+        return True
+    return False
+
+
+def _apply_to_yaml_text(text: str, profile: dict[str, Any]) -> str:
+    loaded = yaml.safe_load(text) or {}
+    if not isinstance(loaded, dict):
+        raise ValueError(f"Expected YAML mapping for {profile['name']}")
+    data = _apply_to_yaml(loaded, profile)
+
+    lines = text.splitlines()
+    model_section = _find_top_level_section(lines, "model")
+    if model_section is None:
+        lines.extend(
+            [
+                "model:",
+                f"  provider: {_yaml_scalar(profile['provider'])}",
+                f"  default: {_yaml_scalar(profile['model'])}",
+            ]
+        )
+    else:
+        model_value = lines[model_section[0]].split(":", 1)[1]
+        if model_value.strip() and not model_value.lstrip().startswith("#"):
+            lines[model_section[0]] = "model:"
+        insert_at = model_section[1]
+        if not _replace_nested_scalar(lines, model_section, "provider", profile["provider"]):
+            lines.insert(insert_at, f"  provider: {_yaml_scalar(profile['provider'])}")
+            insert_at += 1
+            model_section = (model_section[0], model_section[1] + 1)
+        if not _replace_nested_scalar(lines, model_section, "default", profile["model"]):
+            lines.insert(insert_at, f"  default: {_yaml_scalar(profile['model'])}")
+            insert_at += 1
+            model_section = (model_section[0], model_section[1] + 1)
+        if "context_length" in profile and not _replace_nested_scalar(
+            lines, model_section, "context_length", profile["context_length"]
+        ):
+            lines.insert(insert_at, f"  context_length: {_yaml_scalar(profile['context_length'])}")
+
+    fallback_section = _find_top_level_section(lines, "fallback_providers")
+    fallback_comment = ""
+    fallback_preserved_comments: list[str] = []
+    if fallback_section is None:
+        if lines and lines[-1] != "":
+            lines.append("")
+    else:
+        _, fallback_comment = _split_inline_comment(lines[fallback_section[0]].split(":", 1)[1])
+        fallback_preserved_comments = [
+            line
+            for line in lines[fallback_section[0] + 1 : fallback_section[1]]
+            if line.lstrip().startswith("#")
+        ]
+
+    if data["fallback_providers"]:
+        fallback_lines = [f"fallback_providers:{fallback_comment}"]
+        fallback_lines.extend(fallback_preserved_comments)
+        fallback_lines.extend(f"  {line}" for line in _format_yaml_list(data["fallback_providers"]))
+    else:
+        fallback_lines = [f"fallback_providers: []{fallback_comment}"]
+
+    if fallback_section is None:
+        lines.extend(fallback_lines)
+    else:
+        lines[fallback_section[0] : fallback_section[1]] = fallback_lines
+
+    return "\n".join(lines) + ("\n" if text.endswith("\n") else "")
+
+
+def _dump_yaml(path: Path, profile: dict[str, Any]) -> None:
+    text = _apply_to_yaml_text(path.read_text(encoding="utf-8"), profile)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(text, encoding="utf-8")
     tmp.replace(path)
@@ -188,8 +299,7 @@ def _apply_to_yaml(data: dict[str, Any], profile: dict[str, Any]) -> dict[str, A
 def _diff_for_profile(profile: dict[str, Any]) -> str:
     path = _profile_path(profile["name"])
     old = path.read_text(encoding="utf-8").splitlines(keepends=True)
-    new_data = _apply_to_yaml(_load_yaml(path), profile)
-    new = yaml.safe_dump(new_data, sort_keys=False, allow_unicode=False).splitlines(keepends=True)
+    new = _apply_to_yaml_text(path.read_text(encoding="utf-8"), profile).splitlines(keepends=True)
     return "".join(difflib.unified_diff(old, new, fromfile=str(path), tofile=str(path)))
 
 
@@ -259,7 +369,7 @@ def apply_profiles(
             backup_path = backup_root / profile["name"] / path.name
             backup_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(path, backup_path)
-            _dump_yaml(path, _apply_to_yaml(_load_yaml(path), profile))
+            _dump_yaml(path, profile)
             written.append(profile["name"])
     except Exception as exc:
         restored: list[str] = []
@@ -305,8 +415,12 @@ def apply_profiles(
         "force_restart": force_restart,
         "backup_dir": str(backup_root),
     }
-    _append_audit(audit)
-    return {**diff, "backup_dir": str(backup_root), "restart": restart_result}
+    audit_warning = None
+    try:
+        _append_audit(audit)
+    except OSError as exc:
+        audit_warning = f"Profiles applied, but audit append failed: {exc}"
+    return {**diff, "backup_dir": str(backup_root), "restart": restart_result, "audit_warning": audit_warning}
 
 
 def rollback_profiles(backup_dir_value: str | None, *, actor: str) -> dict[str, Any]:

@@ -85,6 +85,72 @@ def test_apply_profiles_writes_atomically_and_keeps_other_yaml(hermes_home, monk
     assert json.loads(audit.splitlines()[-1])["actor"] == "tester"
 
 
+def test_apply_profiles_preserves_unrelated_yaml_comments(hermes_home, monkeypatch):
+    monkeypatch.setattr(hmp, "count_running_workers", lambda: 0)
+    config = hermes_home / "profiles/zoe-coder/config.yaml"
+    config.write_text(
+        """# operator notes stay
+model: # model selection
+  # provider rationale
+  provider: openrouter # keep provider note
+  default: openrouter/free # keep default note
+  context_length: 128000
+
+fallback_providers: # failover order
+  # fallback rationale
+  - provider: openrouter
+    model: openrouter/free
+
+kept:
+  # unrelated nested note
+  value: true
+""",
+        encoding="utf-8",
+    )
+
+    hmp.apply_profiles(
+        [
+            {
+                "name": "zoe-coder",
+                "provider": "openai-codex",
+                "model": "gpt-5.5-medium",
+                "fallbacks": [{"provider": "openrouter", "model": "openrouter/auto"}],
+            }
+        ],
+        actor="tester",
+        confirm_paid_auto=True,
+    )
+
+    text = config.read_text(encoding="utf-8")
+    assert "# operator notes stay" in text
+    assert "# provider rationale" in text
+    assert "provider: openai-codex # keep provider note" in text
+    assert "default: gpt-5.5-medium # keep default note" in text
+    assert "fallback_providers: # failover order" in text
+    assert "# fallback rationale" in text
+    assert "# unrelated nested note" in text
+    parsed = yaml.safe_load(text)
+    assert parsed["fallback_providers"] == [{"provider": "openrouter", "model": "openrouter/auto"}]
+
+
+def test_apply_profiles_returns_audit_warning_after_successful_write(hermes_home, monkeypatch):
+    monkeypatch.setattr(hmp, "count_running_workers", lambda: 0)
+
+    def fail_audit(record):
+        raise OSError("audit read-only")
+
+    monkeypatch.setattr(hmp, "_append_audit", fail_audit)
+
+    result = hmp.apply_profiles(
+        [{"name": "main", "provider": "openrouter", "model": "changed/model", "fallbacks": []}],
+        actor="tester",
+    )
+
+    data = yaml.safe_load((hermes_home / "config.yaml").read_text(encoding="utf-8"))
+    assert data["model"]["default"] == "changed/model"
+    assert result["audit_warning"] == "Profiles applied, but audit append failed: audit read-only"
+
+
 def test_restart_apply_blocks_when_workers_are_running(hermes_home, monkeypatch):
     monkeypatch.setattr(hmp, "count_running_workers", lambda: 2)
 
