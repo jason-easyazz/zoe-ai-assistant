@@ -321,13 +321,26 @@ def rollback_profiles(backup_dir_value: str | None, *, actor: str) -> dict[str, 
         raise ValueError("Rollback path escapes Hermes rollback directory")
 
     restored = []
-    for profile_name in PROFILE_PATHS:
-        backup_file = selected / profile_name / _profile_path(profile_name).name
-        if not backup_file.exists():
-            continue
-        target = _profile_path(profile_name)
-        shutil.copy2(backup_file, target)
-        restored.append(profile_name)
+    try:
+        for profile_name in PROFILE_PATHS:
+            backup_file = selected / profile_name / _profile_path(profile_name).name
+            if not backup_file.exists():
+                continue
+            target = _profile_path(profile_name)
+            shutil.copy2(backup_file, target)
+            restored.append(profile_name)
+    except Exception as exc:
+        _append_audit(
+            {
+                "timestamp": datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
+                "actor": actor,
+                "status": "rollback_failed",
+                "error": str(exc),
+                "rollback_dir": str(selected),
+                "restored": restored,
+            }
+        )
+        raise
     if not restored:
         raise ValueError("Selected rollback backup contains no known profile configs")
 

@@ -147,3 +147,23 @@ def test_rollback_rejects_rollback_root(hermes_home):
     with pytest.raises(ValueError, match="escapes"):
         hmp.rollback_profiles(str(root), actor="tester")
 
+
+def test_rollback_failure_writes_failed_audit(hermes_home, monkeypatch):
+    monkeypatch.setattr(hmp, "count_running_workers", lambda: 0)
+    result = hmp.apply_profiles(
+        [{"name": "main", "provider": "openrouter", "model": "changed/model", "fallbacks": []}],
+        actor="tester",
+    )
+
+    def fail_copy(src, dst):
+        raise OSError("restore failed")
+
+    monkeypatch.setattr(hmp.shutil, "copy2", fail_copy)
+
+    with pytest.raises(OSError, match="restore failed"):
+        hmp.rollback_profiles(result["backup_dir"], actor="tester")
+
+    audit = json.loads((hermes_home / "model-profile-audit.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+    assert audit["status"] == "rollback_failed"
+    assert audit["rollback_dir"] == result["backup_dir"]
+
