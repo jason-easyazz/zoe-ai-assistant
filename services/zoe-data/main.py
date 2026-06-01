@@ -172,6 +172,19 @@ async def _runtime_health_refresh_loop() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _openclaw_bg_task, _digest_bg_task, _zoe_update_bg_task, _consolidation_bg_task, _runtime_health_task
+    try:
+        from runtime_env import bootstrap_runtime_env  # type: ignore[import]
+        from hermes_http import hermes_api_key  # type: ignore[import]
+
+        bootstrap_runtime_env()
+        if not hermes_api_key():
+            logger.error(
+                "HERMES_API_KEY/API_SERVER_KEY missing after bootstrap — "
+                "engineering/Hermes background tasks may fail with 401"
+            )
+    except Exception as _env_exc:
+        logger.warning("runtime_env bootstrap (non-fatal): %s", _env_exc)
+
     logger.info("Initializing zoe-data database...")
     await init_db()
     logger.info("Database initialized. zoe-data is ready.")
@@ -307,7 +320,79 @@ async def lifespan(app: FastAPI):
                     except Exception as _se:
                         logger.debug("multica_poll: stale-todo close error: %s", _se)
 
-                issues = await client.list_issues(status="in_progress")
+                in_progress_issues = await client.list_issues(status="in_progress") or []
+
+                # Webhook bridge: Hermes-assigned todos / in_progress (no chain) → issue.assigned.
+                try:
+                    from multica_webhook_emitter import emit_issue_assigned, is_configured as _wh_ok
+                    from multica_client import get_engineering_multica_agent_id  # type: ignore[import]
+                    from executor_registry import poll_ref  # type: ignore[import]
+                    from multica_poll_dispatch import chain_needs_dispatch  # type: ignore[import]
+
+                    if _wh_ok():
+                        _hermes = str(get_engineering_multica_agent_id())
+                        # Throttle first-dispatch: cap new chains per cycle so a
+                        # wave of assigned todos can't spawn N concurrent chains
+                        # (mirrors sync_multica_to_kanban --limit / kanban.max_in_progress).
+                        try:
+                            _wh_limit = int(os.environ.get("ZOE_MULTICA_POLL_DISPATCH_LIMIT", "1") or "1")
+                        except ValueError:
+                            _wh_limit = 1
+                        _wh_dispatched = 0
+                        _wh_dispatched_ids: set[str] = set()
+
+                        async def _maybe_dispatch_hermes_issue(_candidate: dict, *, from_todo: bool) -> None:
+                            nonlocal _wh_dispatched
+                            if _wh_dispatched >= _wh_limit:
+                                return
+                            if str(_candidate.get("assignee_id") or "") != _hermes:
+                                return
+                            if (_candidate.get("title") or "").lower().startswith("autopilot:"):
+                                return
+                            _tid = str(_candidate.get("id") or "")
+                            if not _tid:
+                                return
+                            _chain = await poll_ref(f"multica:{_tid}")
+                            if not chain_needs_dispatch(_chain):
+                                return
+                            _emit = await emit_issue_assigned(_candidate)
+                            _body = _emit.get("body") or {}
+                            if _emit.get("ok") and isinstance(_body, dict) and _body.get("dispatched"):
+                                if from_todo:
+                                    try:
+                                        await client.update_issue(_tid, status="in_progress")
+                                    except Exception as _ip_exc:
+                                        logger.debug(
+                                            "multica_poll: set in_progress failed for %s: %s",
+                                            _tid,
+                                            _ip_exc,
+                                        )
+                                _wh_dispatched += 1
+                                _wh_dispatched_ids.add(_tid)
+                                logger.info(
+                                    "multica_poll: webhook dispatched %s (%s)",
+                                    _candidate.get("identifier") or _tid,
+                                    "todo" if from_todo else "in_progress-backfill",
+                                )
+
+                        # Reuse the todo list already fetched above for the stale autopilot pass.
+                        for _todo in stale_todos or []:
+                            await _maybe_dispatch_hermes_issue(_todo, from_todo=True)
+                            if _wh_dispatched >= _wh_limit:
+                                break
+                        # Backfill: in_progress Multica rows with no Kanban chain (e.g. manual
+                        # status moves or dispatch that never created tasks).
+                        if _wh_dispatched < _wh_limit:
+                            for _ip_issue in in_progress_issues:
+                                if str(_ip_issue.get("id") or "") in _wh_dispatched_ids:
+                                    continue
+                                await _maybe_dispatch_hermes_issue(_ip_issue, from_todo=False)
+                                if _wh_dispatched >= _wh_limit:
+                                    break
+                except Exception as _wh_exc:
+                    logger.debug("multica_poll: webhook dispatch failed: %s", _wh_exc)
+
+                issues = in_progress_issues
                 for issue in issues or []:
                     # Check whether a linked engineering workflow has reached a terminal state.
                     issue_id = issue.get("id")
@@ -337,23 +422,16 @@ async def lifespan(app: FastAPI):
                             logger.debug("multica_poll: autopilot in_progress close: %s", _ap_exc)
                         continue
                     try:
-                        from db_pool import get_db_ctx  # type: ignore[import]
-                        async with get_db_ctx() as _db:
-                            rows = await _db.fetch(
-                                """SELECT id, phase, status, user_id FROM engineering_tasks
-                                   WHERE multica_issue_id=$1
-                                   ORDER BY updated_at DESC LIMIT 1""",
-                                str(issue_id),
-                            )
-                        if rows and rows[0]["phase"] == "blocked" and title.startswith("Autopilot:"):
+                        from executor_registry import poll_ref  # type: ignore[import]
+
+                        chain = await poll_ref(f"multica:{issue_id}")
+                        if chain.get("found") and chain.get("status") == "done":
                             await client.update_issue(issue_id, status="done")
-                            continue
-                        if rows and rows[0]["phase"] in ("done", "ready_for_human"):
-                            new_status = "done" if rows[0]["phase"] == "done" else "in_review"
-                            await client.update_issue(issue_id, status=new_status)
                             logger.info(
-                                "multica_poll: advanced issue %s ('%s') — engineering phase=%s",
-                                issue_id, title[:40], rows[0]["phase"],
+                                "multica_poll: advanced issue %s ('%s') — Kanban chain done%s",
+                                issue_id,
+                                title[:40],
+                                f" PR={chain.get('pr_url')}" if chain.get("pr_url") else "",
                             )
                             # Push WebSocket notification to all connected clients
                             try:
@@ -363,7 +441,7 @@ async def lifespan(app: FastAPI):
                                     {
                                         "multica_issue_id": str(issue_id),
                                         "title": title,
-                                        "phase": rows[0]["phase"],
+                                        "pr_url": chain.get("pr_url"),
                                     },
                                 )
                             except Exception as _push_exc:

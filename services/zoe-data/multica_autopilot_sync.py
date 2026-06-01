@@ -24,10 +24,10 @@ _MULTICA_API_TOKEN = os.environ.get("MULTICA_API_TOKEN", "")
 _MULTICA_WORKSPACE_ID = os.environ.get("MULTICA_WORKSPACE_ID", "")
 _TIMEOUT = 10.0
 _HEALTH_CHECK_TIMEOUT_S = float(os.environ.get("ZOE_HEALTH_CHECK_TIMEOUT_S", "120"))
-_HERMES_AGENT_ID = os.environ.get(
-    "HERMES_MULTICA_AGENT_ID",
-    "019ae0a7-62f1-47fe-9d46-75fd0ae5d570",
-)
+def _hermes_agent_id() -> str:
+    from multica_client import get_engineering_multica_agent_id  # type: ignore[import]
+
+    return get_engineering_multica_agent_id()
 _TZ = os.environ.get("ZOE_TIMEZONE", "Australia/Perth")
 
 # Default false: do not create a Multica tracker issue on every cron fire.
@@ -35,11 +35,16 @@ _CREATE_ISSUES = (
     os.environ.get("ZOE_MULTICA_AUTOPILOT_CREATE_ISSUES")
     or os.environ.get("ZOE_MULTICA_AUTOPIOT_CREATE_ISSUES", "false")
 ).lower() in ("1", "true", "yes")
+# Default empty: no autopilot run creates a Multica tracker ("Autopilot: …")
+# issue wrapper. These wrappers accumulated into thousands of done rows and
+# added no signal (e.g. Platform Health Check already opens a dedicated
+# "Platform health failures detected" issue on failure). Opt back in per
+# autopilot title via this env var (comma-separated, case-insensitive).
 _CREATE_ISSUES_FOR = {
     t.strip().lower()
     for t in (
         os.environ.get("ZOE_MULTICA_AUTOPILOT_CREATE_ISSUES_FOR")
-        or os.environ.get("ZOE_MULTICA_AUTOPIOT_CREATE_ISSUES_FOR", "Platform Health Check")
+        or os.environ.get("ZOE_MULTICA_AUTOPIOT_CREATE_ISSUES_FOR", "")
     ).split(",")
     if t.strip()
 }
@@ -47,12 +52,12 @@ _STALE_AUTOPILOT_HOURS = float(
     os.environ.get("ZOE_MULTICA_AUTOPILOT_STALE_HOURS")
     or os.environ.get("ZOE_MULTICA_AUTOPIOT_STALE_HOURS", "2")
 )
-# Dedupe engineering dispatch: the Hermes built-in hourly cron
-# (hourly-zoe-issue-fix-greptile-merge) is the single owner of working
+# Dedupe engineering dispatch: the Zoe poll webhook bridge + the hourly Hermes
+# cron (dispatch-hermes-board.sh -> sync_multica_to_kanban.py) are the owners of
 # Hermes-assigned Multica issues. The Multica "Board Review" autopilot would
-# dispatch the same issue pool into engineering_workflow, so it is disabled by
-# default to avoid duplicate PRs / collisions. Set this flag true to restore the
-# autopilot as the engineering dispatcher (e.g. if the Hermes cron is paused).
+# dispatch the same issue pool through the executor seam, so it is disabled by
+# default to avoid duplicate Kanban chains. Set this flag true to restore the
+# autopilot as the engineering dispatcher (e.g. if the cron + poll loop are paused).
 _BOARD_REVIEW_AUTOPILOT_ENABLED = (
     os.environ.get("ZOE_BOARD_REVIEW_AUTOPILOT_ENABLED", "false").lower()
     in ("1", "true", "yes")
@@ -275,7 +280,7 @@ async def _run_platform_health_check() -> None:
                     f"```\n{tail}\n```"
                 ),
                 priority="high",
-                assignee_id=_HERMES_AGENT_ID,
+                assignee_id=_hermes_agent_id(),
                 assignee_type="agent",
             )
         except Exception as exc:
@@ -299,7 +304,7 @@ async def _run_board_review() -> None:
         return
     try:
         from multica_client import get_multica_client  # type: ignore[import]
-        from engineering_workflow import create_and_start_engineering_task  # type: ignore[import]
+        from executor_registry import dispatch_issue, poll_ref  # type: ignore[import]
 
         client = get_multica_client()
         if not client.is_configured():
@@ -311,7 +316,7 @@ async def _run_board_review() -> None:
                 issue_id = str(issue.get("id") or "")
                 if not issue_id:
                     continue
-                if str(issue.get("assignee_id") or "") != _HERMES_AGENT_ID:
+                if str(issue.get("assignee_id") or "") != _hermes_agent_id():
                     continue
                 title = issue.get("title") or issue.get("identifier") or "Multica engineering task"
                 if title.lower().startswith("autopilot:"):
@@ -321,17 +326,12 @@ async def _run_board_review() -> None:
                         title,
                     )
                     continue
-                description = issue.get("description") or ""
-                await create_and_start_engineering_task(
-                    user_id="family-admin",
-                    title=title,
-                    task=f"Work this Hermes-assigned Multica issue.\n\nTitle: {title}\n\n{description}",
-                    source="board_review_autopilot",
-                    source_id=issue_id,
-                    multica_issue_id=issue_id,
-                    idempotency_key=f"multica:{issue_id}",
-                )
-                dispatched += 1
+                existing = await poll_ref(f"multica:{issue_id}")
+                if existing.get("found") and existing.get("status") in ("running", "blocked"):
+                    continue
+                result = await dispatch_issue(issue)
+                if result.get("ok"):
+                    dispatched += 1
         logger.info("autopilot: board review dispatched %d issue(s)", dispatched)
     except Exception as exc:
         logger.warning("_run_board_review: %s", exc)
@@ -359,12 +359,7 @@ async def close_stale_autopilot_wrappers(
         return 0
     min_age_hours = _STALE_AUTOPILOT_HOURS if min_age_hours is None else min_age_hours
     closed = 0
-    terminal_phases = {"done", "ready_for_human", "blocked", "cancelled"}
     now = _dt.datetime.now(_dt.timezone.utc)
-    try:
-        from db_pool import get_db_ctx  # type: ignore[import]
-    except Exception:
-        get_db_ctx = None  # type: ignore[assignment]
     for status in statuses:
         try:
             async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
@@ -391,23 +386,7 @@ async def close_stale_autopilot_wrappers(
                 ).total_seconds() / 3600
             except Exception:
                 age_h = min_age_hours
-            phase = None
-            if get_db_ctx is not None:
-                try:
-                    async with get_db_ctx() as db:
-                        row = await db.fetchrow(
-                            """SELECT phase FROM engineering_tasks
-                               WHERE multica_issue_id=$1
-                               ORDER BY updated_at DESC LIMIT 1""",
-                            str(issue_id),
-                        )
-                    if row:
-                        phase = row["phase"]
-                        if phase not in terminal_phases:
-                            continue
-                except Exception:
-                    pass
-            if age_h < min_age_hours and phase is None:
+            if age_h < min_age_hours:
                 continue
             try:
                 from multica_client import get_multica_client  # type: ignore[import]

@@ -1,26 +1,77 @@
-"""
-Unit tests for background_runner.py.
-
-Tests cover:
-  - depth-guard rejects requests beyond _MAX_REQUEST_DEPTH
-  - enqueue_background_task inserts a row and returns a task_id
-  - duplicate enqueue does not re-run a task already in _running
-  - _run_task marks status done on success
-  - _run_task marks status error on failure
-"""
+"""Tests for background_runner enqueue, task lifecycle, and Hermes routing."""
 from __future__ import annotations
 
 import asyncio
 import sys
 import types
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
 import background_runner
+import background_runner as br
+from hermes_http import zoe_repo_root
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Hermes worker-profile routing (main)
 # ---------------------------------------------------------------------------
+
+
+def test_background_profile_defaults_to_zoe_coder(monkeypatch):
+    monkeypatch.delenv("HERMES_BACKGROUND_PROFILE", raising=False)
+    monkeypatch.delenv("HERMES_BACKGROUND_MODEL", raising=False)
+    monkeypatch.delenv("HERMES_MODEL", raising=False)
+    assert br._background_profile() == "zoe-coder"
+
+
+def test_background_profile_honours_env_override(monkeypatch):
+    monkeypatch.setenv("HERMES_BACKGROUND_PROFILE", "zoe-planner")
+    assert br._background_profile() == "zoe-planner"
+
+
+def test_zoe_repo_root_is_portable(monkeypatch):
+    monkeypatch.delenv("ZOE_REPO_ROOT", raising=False)
+    root = zoe_repo_root()
+    assert (Path(root) / "services" / "zoe-data").is_dir()
+
+
+@pytest.mark.asyncio
+async def test_run_hermes_background_task_uses_worker_cli(monkeypatch):
+    captured = {}
+
+    async def fake_communicate():
+        return b"done", b""
+
+    proc = MagicMock()
+    proc.communicate = fake_communicate
+    proc.returncode = 0
+    proc.kill = MagicMock()
+    proc.wait = AsyncMock()
+
+    async def fake_exec(*cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["kwargs"] = kwargs
+        return proc
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setenv("HERMES_BACKGROUND_PROFILE", "zoe-coder")
+
+    result = await br._run_hermes_background_task("audit validators only", user_id="u1", task_id=99)
+
+    assert result == "done"
+    cmd = captured["cmd"]
+    assert "-p" in cmd and "zoe-coder" in cmd
+    assert "--accept-hooks" in cmd and "-z" in cmd
+    assert "audit validators only" in cmd[-1]
+    assert captured["kwargs"]["cwd"] == zoe_repo_root()
+
+
+# ---------------------------------------------------------------------------
+# enqueue / depth-guard / _run_task lifecycle
+# ---------------------------------------------------------------------------
+
 
 class _FakeDB:
     """Minimal async DB context that records calls."""
@@ -52,12 +103,13 @@ class _FakeCtx:
         return None
 
 
-# ---------------------------------------------------------------------------
-# depth-guard
-# ---------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def _isolate_running_dict(monkeypatch):
+    monkeypatch.setattr(background_runner, "_running", {})
+
 
 @pytest.mark.asyncio
-async def test_enqueue_rejects_excessive_depth(monkeypatch):
+async def test_enqueue_rejects_excessive_depth():
     """Requests beyond _MAX_REQUEST_DEPTH must raise ValueError immediately."""
     with pytest.raises(ValueError, match="depth"):
         await background_runner.enqueue_background_task(
@@ -76,14 +128,14 @@ async def test_enqueue_accepts_max_depth(monkeypatch):
         "db_pool",
         types.SimpleNamespace(get_db_ctx=lambda: _FakeCtx(db)),
     )
-    # Prevent the runner coroutine from actually executing
+
     async def _noop(*_a, **_kw):
         pass
 
     monkeypatch.setattr(background_runner, "_run_task", _noop)
 
-    # Patch ensure_future so the coroutine doesn't leak
     cancelled = []
+
     def fake_ensure_future(coro):
         fut = asyncio.get_event_loop().create_future()
         fut.cancel()
@@ -98,15 +150,10 @@ async def test_enqueue_accepts_max_depth(monkeypatch):
         request_depth=background_runner._MAX_REQUEST_DEPTH,
     )
     assert task_id == 42
-    # Cancel any leaked coroutines
     for c in cancelled:
         if hasattr(c, "close"):
             c.close()
 
-
-# ---------------------------------------------------------------------------
-# enqueue stores a row and returns an id
-# ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
 async def test_enqueue_inserts_row_and_returns_id(monkeypatch):
@@ -124,6 +171,7 @@ async def test_enqueue_inserts_row_and_returns_id(monkeypatch):
     monkeypatch.setattr(background_runner, "_run_task", _noop)
 
     coros = []
+
     def fake_ensure_future(coro):
         fut = asyncio.get_event_loop().create_future()
         fut.cancel()
@@ -139,17 +187,15 @@ async def test_enqueue_inserts_row_and_returns_id(monkeypatch):
     )
 
     assert task_id == 42
-    assert any("fetchrow" in str(call) or "INSERT" in str(call) for call in db.executions), \
-        f"Expected INSERT fetchrow in {db.executions}"
+    assert any(
+        "INSERT" in str(call) and "background_tasks" in str(call)
+        for call in db.executions
+    ), f"Expected INSERT into background_tasks in {db.executions}"
 
     for c in coros:
         if hasattr(c, "close"):
             c.close()
 
-
-# ---------------------------------------------------------------------------
-# _run_task marks done on success
-# ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
 async def test_run_task_marks_done_on_success(monkeypatch):
@@ -178,14 +224,9 @@ async def test_run_task_marks_done_on_success(monkeypatch):
 
     await background_runner._run_task(99, "find hotels", "user-x", "sess-2")
 
-    # Should have called UPDATE with status='done'
     done_calls = [c for c in db.executions if "done" in str(c)]
     assert done_calls, f"Expected status=done in DB calls, got: {db.executions}"
 
-
-# ---------------------------------------------------------------------------
-# _run_task marks error on failure
-# ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
 async def test_run_task_marks_error_on_failure(monkeypatch):
@@ -217,10 +258,6 @@ async def test_run_task_marks_error_on_failure(monkeypatch):
     error_calls = [c for c in db.executions if "error" in str(c)]
     assert error_calls, f"Expected status=error in DB calls, got: {db.executions}"
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 async def _noop_async(*_a, **_kw):
     pass

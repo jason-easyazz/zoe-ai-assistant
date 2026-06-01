@@ -108,6 +108,152 @@ async def test_cheap_runner_blocks_before_budget_exceeded(monkeypatch):
     assert "max_cost_usd=1.0" in output
 
 
+def test_ci_status_from_rollup_flags_pending_and_failed():
+    rollup = [
+        {"name": "validate", "status": "IN_PROGRESS", "conclusion": ""},
+        {"name": "Greptile Review", "status": "COMPLETED", "conclusion": "FAILURE"},
+    ]
+
+    out = greploop_guard._ci_status_from_rollup(rollup)
+
+    assert out["ok"] is False
+    assert out["reason"] == "CI_PENDING"
+    assert "validate" in out["pending"]
+
+
+def test_ci_status_from_rollup_accepts_success():
+    rollup = [
+        {"name": "validate", "status": "COMPLETED", "conclusion": "SUCCESS"},
+        {"name": "Greptile Review", "status": "COMPLETED", "conclusion": "SUCCESS"},
+    ]
+
+    assert greploop_guard._ci_status_from_rollup(rollup)["ok"] is True
+
+
+def test_ci_status_from_rollup_rejects_empty_rollup():
+    out = greploop_guard._ci_status_from_rollup([])
+
+    assert out["ok"] is False
+    assert out["reason"] == "CI_NO_CHECKS"
+
+
+def test_gh_mergeable_state_blocks_non_mergeable_and_unknown_state(monkeypatch):
+    def fake_run_gh(args, *, repo=greploop_guard.DEFAULT_REPO, check=False):
+        return type(
+            "P",
+            (),
+            {
+                "returncode": 0,
+                "stdout": json.dumps(
+                    {
+                        "state": "OPEN",
+                        "mergeable": "MERGEABLE",
+                        "mergeStateStatus": "UNKNOWN",
+                        "statusCheckRollup": [
+                            {"name": "validate", "status": "COMPLETED", "conclusion": "SUCCESS"},
+                        ],
+                    }
+                ),
+                "stderr": "",
+            },
+        )()
+
+    monkeypatch.setattr(greploop_guard, "_run_gh", fake_run_gh)
+
+    out = greploop_guard._gh_mergeable_state(66)
+
+    assert out["ok"] is False
+    assert out["reason"] == "GH_NOT_MERGEABLE"
+
+
+def test_gh_mergeable_state_blocks_conflicting_mergeable(monkeypatch):
+    def fake_run_gh(args, *, repo=greploop_guard.DEFAULT_REPO, check=False):
+        return type(
+            "P",
+            (),
+            {
+                "returncode": 0,
+                "stdout": json.dumps(
+                    {
+                        "state": "OPEN",
+                        "mergeable": "CONFLICTING",
+                        "mergeStateStatus": "DIRTY",
+                        "statusCheckRollup": [],
+                    }
+                ),
+                "stderr": "",
+            },
+        )()
+
+    monkeypatch.setattr(greploop_guard, "_run_gh", fake_run_gh)
+
+    out = greploop_guard._gh_mergeable_state(66)
+
+    assert out["ok"] is False
+    assert out["reason"] == "GH_NOT_MERGEABLE"
+
+
+@pytest.mark.asyncio
+async def test_assess_merge_readiness_blocks_low_confidence(monkeypatch):
+    async def fake_status(**_kwargs):
+        return {"confidenceScore": 3, "reviewIsRunning": False, "headSha": "abc"}
+
+    async def fake_comments(**_kwargs):
+        return {"findings": []}
+
+    monkeypatch.setattr("greptile_client.get_pr_status", fake_status)
+    monkeypatch.setattr("greptile_client.list_pr_comments", fake_comments)
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_mergeable_state",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: {"ok": True},
+    )
+
+    out = await greploop_guard.assess_merge_readiness(66, target_confidence=5)
+
+    assert out["ready"] is False
+    assert any("GREPTILE_CONFIDENCE" in b for b in out["blockers"])
+
+
+@pytest.mark.asyncio
+async def test_merge_pr_when_ready_merges_when_assessment_passes(tmp_path, monkeypatch):
+    async def fake_assess(_pr_number, **_kwargs):
+        return {"ready": True, "blockers": [], "greptile": {}, "gh": {"ok": True}}
+
+    calls: list[list[str]] = []
+
+    def fake_run_gh(args, *, repo=greploop_guard.DEFAULT_REPO, check=False):
+        calls.append(list(args))
+        if args[:2] == ["pr", "merge"]:
+            return type("P", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        return type(
+            "P",
+            (),
+            {
+                "returncode": 0,
+                "stdout": json.dumps(
+                    {
+                        "mergeCommit": {"oid": "deadbeef"},
+                        "url": "https://github.com/o/r/pull/66",
+                        "state": "MERGED",
+                    }
+                ),
+                "stderr": "",
+            },
+        )()
+
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(greploop_guard, "assess_merge_readiness", fake_assess)
+    monkeypatch.setattr(greploop_guard, "_run_gh", fake_run_gh)
+
+    out = await greploop_guard.merge_pr_when_ready(66)
+
+    assert out["ok"] is True
+    assert out["state"] == "MERGED"
+    assert out["merge_commit"] == "deadbeef"
+    assert ["pr", "merge", "66", "--squash"] in calls
+
+
 @pytest.mark.asyncio
 async def test_cheap_runner_command_does_not_expand_shell_metacharacters(monkeypatch):
     monkeypatch.setenv("ZOE_CHEAP_PR_AGENT_CMD", "python3 -c 'import sys; sys.stdin.read(); print(\"$HOME\")'")

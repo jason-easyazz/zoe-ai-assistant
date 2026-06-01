@@ -21,6 +21,36 @@ import httpx
 logger = logging.getLogger(__name__)
 
 _TIMEOUT = 10.0
+_DEFAULT_HERMES_MULTICA_AGENT_ID = "019ae0a7-62f1-47fe-9d46-75fd0ae5d570"
+_SELF_IMPROVEMENT_MULTICA_AGENT_ID = "ee8596da-3a08-4e10-98e8-d058e57ea3ff"
+_cached_engineering_agent_id: str | None = None
+
+
+def get_engineering_multica_agent_id() -> str:
+    """Return the Multica agent UUID used for board engineering dispatch (Hermes)."""
+    global _cached_engineering_agent_id
+    env_id = os.environ.get("HERMES_MULTICA_AGENT_ID", "").strip()
+    if env_id:
+        return env_id
+    if _cached_engineering_agent_id:
+        return _cached_engineering_agent_id
+    try:
+        from zoe_agent_registry import load_agent_registry
+
+        registry = load_agent_registry()
+        hermes = (registry.get("agents") or {}).get("hermes") or {}
+        reg_id = str(hermes.get("multica_agent_id") or "").strip()
+        if reg_id:
+            _cached_engineering_agent_id = reg_id
+            return reg_id
+    except Exception as exc:
+        logger.debug("get_engineering_multica_agent_id: registry lookup failed: %s", exc)
+    return _DEFAULT_HERMES_MULTICA_AGENT_ID
+
+
+def get_self_improvement_multica_agent_id() -> str:
+    """Legacy Self-Improvement Agent UUID (reassign scripts filter from this)."""
+    return _SELF_IMPROVEMENT_MULTICA_AGENT_ID
 
 
 def _multica_env_key() -> tuple[str, str, str]:
@@ -220,7 +250,8 @@ async def sync_evolution_proposal_to_multica(
         logger.debug("Multica not configured — skipping sync_evolution_proposal")
         return None
 
-    agent_id, project_id = await _lookup_evolution_resources(client)
+    _agent_id, project_id = await _lookup_evolution_resources(client)
+    hermes_id = get_engineering_multica_agent_id()
 
     full_desc = description
     if evidence:
@@ -231,10 +262,9 @@ async def sync_evolution_proposal_to_multica(
         "description": full_desc,
         "status": "backlog",
         "priority": "medium",
+        "assignee_id": hermes_id,
+        "assignee_type": "agent",
     }
-    if agent_id:
-        payload["assignee_id"] = agent_id
-        payload["assignee_type"] = "agent"
     if project_id:
         payload["project_id"] = project_id
 

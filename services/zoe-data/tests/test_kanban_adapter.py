@@ -1,0 +1,582 @@
+"""Tests for the Hermes Kanban executor adapter (CLI mocked)."""
+import json
+from pathlib import Path
+
+import pytest
+
+import executors.kanban_adapter as ka
+
+
+@pytest.fixture(autouse=True)
+def _mock_ensure_worktree(monkeypatch):
+    """Dispatch tests must not run real git worktree subprocesses."""
+    monkeypatch.setattr(
+        "worktree_bootstrap.prepare_kanban_worktree",
+        lambda task_id, **kwargs: Path(f"/tmp/worktrees/{task_id}"),
+    )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_pipeline_store(tmp_path, monkeypatch):
+    monkeypatch.setenv("ZOE_PIPELINE_STORE_PATH", str(tmp_path / "pipeline_runs.jsonl"))
+
+
+@pytest.fixture(autouse=True)
+def _mock_repo_validators(monkeypatch):
+    from pipeline_validators import ValidatorRunResult
+
+    monkeypatch.setattr(
+        "pipeline_validators.run_repo_validators",
+        lambda **kwargs: ValidatorRunResult(
+            exit_code=0,
+            summary="validate_structure: exit 0",
+            content_hash="deadbeef",
+            passed=True,
+        ),
+    )
+
+
+class _FakeAdapter(ka.KanbanAdapter):
+    """KanbanAdapter with the CLI replaced by a scripted recorder."""
+
+    def __init__(self, list_rows=None, show_map=None):
+        self.calls = []
+        self._list_rows = list_rows or []
+        self._show_map = show_map or {}
+        self._create_seq = 0
+
+    async def _run(self, args, *, expect_json=False):
+        self.calls.append(args)
+        verb = args[0]
+        if verb == "create":
+            self._create_seq += 1
+            # idempotency-key arg lets us derive a stable id per phase
+            key = args[args.index("--idempotency-key") + 1]
+            return {"id": f"t_{key.split(':')[-1]}", "deduplicated": False}
+        if verb == "list":
+            return self._list_rows
+        if verb == "show":
+            return self._show_map.get(args[1], {"comments": [], "latest_summary": ""})
+        if verb == "block":
+            return ""
+        return ""
+
+
+@pytest.mark.asyncio
+async def test_dispatch_creates_six_linked_phases():
+    a = _FakeAdapter()
+    issue = {"id": "uuid-1", "identifier": "ZOE-9", "title": "Fix thing", "description": "do it"}
+    result = await a.dispatch(issue)
+    assert result["ok"] is True
+    assert result["external_ref"] == "multica:uuid-1"
+    assert set(result["chain"]) == {
+        "scout",
+        "implement",
+        "verify",
+        "review",
+        "closeout",
+        "retro",
+    }
+    creates = [c for c in a.calls if c[0] == "create"]
+    assert len(creates) == 6
+    # verify + review + closeout + retro must be linked to a parent
+    for create in creates[1:]:
+        assert "--parent" in create
+    keys = [c[c.index("--idempotency-key") + 1] for c in creates]
+    assert keys == [
+        "multica:uuid-1:scout",
+        "multica:uuid-1:implement",
+        "multica:uuid-1:verify",
+        "multica:uuid-1:review",
+        "multica:uuid-1:closeout",
+        "multica:uuid-1:retro",
+    ]
+    assert result["mode"] == "interactive"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_overnight_mode_extends_runtime(monkeypatch):
+    monkeypatch.setenv("ZOE_KANBAN_OVERNIGHT_MAX_RUNTIME", "8h")
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {
+            "id": "uuid-night",
+            "identifier": "ZOE-NIGHT",
+            "title": "Slow cheap work",
+            "engineering_mode": "overnight",
+        }
+    )
+
+    creates = [c for c in a.calls if c[0] == "create"]
+    runtimes = [c[c.index("--max-runtime") + 1] for c in creates]
+    body = creates[1][creates[1].index("--body") + 1]
+    assert result["mode"] == "overnight"
+    assert runtimes == ["8h"] * 6
+    assert "latency is secondary" in body
+
+
+@pytest.mark.asyncio
+async def test_dispatch_interactive_mode_uses_default_runtime(monkeypatch):
+    monkeypatch.setenv("ZOE_KANBAN_MAX_RUNTIME", "30m")
+    monkeypatch.delenv("ZOE_ENGINEERING_MODE", raising=False)
+    a = _FakeAdapter()
+    await a.dispatch({"id": "uuid-fast", "identifier": "ZOE-FAST", "title": "Immediate work"})
+
+    creates = [c for c in a.calls if c[0] == "create"]
+    assert creates[1][creates[1].index("--max-runtime") + 1] == "30m"
+    body = creates[1][creates[1].index("--body") + 1]
+    assert "Engineering mode: interactive" in body
+
+
+@pytest.mark.asyncio
+async def test_dispatch_overnight_mode_from_metadata(monkeypatch):
+    monkeypatch.setenv("ZOE_KANBAN_OVERNIGHT_MAX_RUNTIME", "7h")
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {"id": "uuid-meta", "identifier": "ZOE-META", "title": "Background work", "metadata": {"engineering_mode": "overnight"}}
+    )
+    creates = [c for c in a.calls if c[0] == "create"]
+    assert result["mode"] == "overnight"
+    assert creates[0][creates[0].index("--max-runtime") + 1] == "7h"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_overnight_mode_from_env(monkeypatch):
+    monkeypatch.setenv("ZOE_ENGINEERING_MODE", "self_evolution")
+    monkeypatch.setenv("ZOE_KANBAN_OVERNIGHT_MAX_RUNTIME", "9h")
+    a = _FakeAdapter()
+    result = await a.dispatch({"id": "uuid-env", "identifier": "ZOE-ENV", "title": "Env work"})
+    creates = [c for c in a.calls if c[0] == "create"]
+    assert result["mode"] == "overnight"
+    assert creates[0][creates[0].index("--max-runtime") + 1] == "9h"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_skip_scout_when_env_set(monkeypatch):
+    monkeypatch.setenv("ZOE_KANBAN_SKIP_SCOUT", "1")
+    a = _FakeAdapter()
+    result = await a.dispatch({"id": "uuid-skip", "identifier": "ZOE-SKIP", "title": "t"})
+    assert "scout" not in result["chain"]
+    assert set(result["chain"]) == {"implement", "verify", "review", "closeout", "retro"}
+
+
+@pytest.mark.asyncio
+async def test_dispatch_quality_escalation_mode(monkeypatch):
+    monkeypatch.setenv("ZOE_KANBAN_ESCALATION_MAX_RUNTIME", "75m")
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {"id": "uuid-q", "identifier": "ZOE-Q", "title": "Hard task", "engineering_mode": "quality-escalation"}
+    )
+    creates = [c for c in a.calls if c[0] == "create"]
+    assert result["mode"] == "quality-escalation"
+    assert creates[0][creates[0].index("--max-runtime") + 1] == "75m"
+    body = creates[1][creates[1].index("--body") + 1]
+    assert "quality-escalation" in body
+    verify_body = creates[2][creates[2].index("--body") + 1]
+    assert "zoe-model-escalation: true" in verify_body
+    assert "anthropic/claude-sonnet-4.6" in verify_body
+    assert "Do NOT use openrouter/auto" in verify_body
+
+
+@pytest.mark.asyncio
+async def test_dispatch_model_escalation_from_metadata():
+    a = _FakeAdapter()
+    await a.dispatch(
+        {
+            "id": "uuid-meta-esc",
+            "identifier": "ZOE-ESC",
+            "title": "Escalate on metadata",
+            "metadata": {"model_escalation": True},
+        }
+    )
+    creates = [c for c in a.calls if c[0] == "create"]
+    review_body = creates[3][creates[3].index("--body") + 1]
+    assert "zoe-model-escalation: true" in review_body
+    assert "anthropic/claude-sonnet-4.6" in review_body
+
+
+@pytest.mark.asyncio
+async def test_dispatch_overnight_implement_mentions_free_fallback():
+    a = _FakeAdapter()
+    await a.dispatch(
+        {"id": "uuid-night2", "identifier": "ZOE-N2", "title": "Night work", "engineering_mode": "overnight"}
+    )
+    creates = [c for c in a.calls if c[0] == "create"]
+    impl_body = creates[1][creates[1].index("--body") + 1]
+    assert "openrouter/free" in impl_body
+
+
+@pytest.mark.asyncio
+async def test_retro_body_prefers_cheap_summary_models():
+    body = ka.KanbanAdapter()._build_body(
+        "retro",
+        {"id": "uuid-1", "identifier": "ZOE-9", "title": "Fix thing", "description": ""},
+        "ZOE-9",
+    )
+    assert "gemini-2.5-flash" in body or "openrouter/free" in body
+
+
+@pytest.mark.asyncio
+async def test_dispatch_writes_zoe_ref_marker_into_body():
+    # poll() correlates on the `zoe-ref:` body marker because the live
+    # `hermes kanban list --json` output does not expose the idempotency key.
+    a = _FakeAdapter()
+    await a.dispatch({"id": "uuid-7", "identifier": "ZOE-7", "title": "t"})
+    creates = [c for c in a.calls if c[0] == "create"]
+    for phase, create in zip(
+        ("scout", "implement", "verify", "review", "closeout", "retro"), creates
+    ):
+        body = create[create.index("--body") + 1]
+        assert f"zoe-ref: multica:uuid-7:{phase}" in body
+
+
+@pytest.mark.asyncio
+async def test_closeout_body_instructs_merge_when_ready():
+    body = ka.KanbanAdapter()._build_body(
+        "closeout",
+        {"id": "uuid-1", "identifier": "ZOE-9", "title": "Fix thing", "description": ""},
+        "ZOE-9",
+    )
+    assert "greploop_guard.py --pr N --once" in body
+    assert "--merge-when-ready" in body
+    assert "MERGE_SHA=" in body
+    assert "--packet-only" in body
+    assert "never --admin" in body
+
+
+@pytest.mark.asyncio
+async def test_scout_body_is_read_only():
+    body = ka.KanbanAdapter()._build_body(
+        "scout",
+        {"id": "uuid-1", "identifier": "ZOE-9", "title": "Fix thing", "description": ""},
+        "ZOE-9",
+    )
+    assert "read-only" in body
+    assert "Do NOT edit code" in body
+    assert "TOOLS_USED" in body
+
+
+@pytest.mark.asyncio
+async def test_retro_body_captures_learnings():
+    body = ka.KanbanAdapter()._build_body(
+        "retro",
+        {"id": "uuid-1", "identifier": "ZOE-9", "title": "Fix thing", "description": ""},
+        "ZOE-9",
+    )
+    assert "RETRO=" in body or "LEARNINGS=" in body
+    assert "Do NOT merge" in body
+
+
+@pytest.mark.asyncio
+async def test_poll_done_when_retro_completes():
+    rows = [
+        _row("scout", "done", v3=True),
+        _row("implement", "done", v3=True),
+        _row("verify", "done", v3=True),
+        _row("review", "done", v3=True),
+        _row("closeout", "done", v3=True),
+        _row("retro", "done", v3=True),
+    ]
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:uuid-9")
+    assert out["status"] == "done"
+    assert out["phases"]["retro"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_poll_v2_chain_done_at_closeout_without_retro():
+    rows = [
+        _row("implement", "done"),
+        _row("verify", "done"),
+        _row("review", "done"),
+        _row("closeout", "done"),
+    ]
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:uuid-9")
+    assert out["status"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_poll_skip_scout_v3_chain_done_when_retro_completes():
+    rows = [
+        _row("implement", "done", v3=True),
+        _row("verify", "done", v3=True),
+        _row("review", "done", v3=True),
+        _row("closeout", "done", v3=True),
+        _row("retro", "done", v3=True),
+    ]
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:uuid-9")
+    assert out["status"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_poll_running_when_closeout_done_but_retro_pending():
+    rows = [
+        _row("scout", "done", v3=True),
+        _row("implement", "done", v3=True),
+        _row("verify", "done", v3=True),
+        _row("review", "done", v3=True),
+        _row("closeout", "done", v3=True),
+        _row("retro", "todo", v3=True),
+    ]
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:uuid-9")
+    assert out["status"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_poll_skip_scout_v3_partial_missing_retro_is_redispatchable():
+    rows = [
+        _row("implement", "done", v3=True),
+        _row("verify", "done", v3=True),
+        _row("review", "done", v3=True),
+        _row("closeout", "done", v3=True),
+    ]
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:uuid-9")
+    assert out["status"] == "partial"
+
+
+@pytest.mark.asyncio
+async def test_verify_body_requires_evidence_gate():
+    body = ka.KanbanAdapter()._build_body(
+        "verify",
+        {"id": "uuid-1", "identifier": "ZOE-9", "title": "Fix thing", "description": ""},
+        "ZOE-9",
+    )
+    assert "objective test/evidence gate" in body
+    assert "TESTS" in body
+    assert "VALIDATORS" in body
+    assert "validate_structure.py" in body
+    assert "validate_critical_files.py" in body
+
+
+@pytest.mark.asyncio
+async def test_review_body_requires_verify_evidence():
+    body = ka.KanbanAdapter()._build_body(
+        "review",
+        {"id": "uuid-1", "identifier": "ZOE-9", "title": "Fix thing", "description": ""},
+        "ZOE-9",
+    )
+    assert "verify-phase evidence" in body
+    assert "Block" in body or "block" in body
+
+
+@pytest.mark.asyncio
+async def test_dispatch_pins_expected_skills():
+    a = _FakeAdapter()
+    await a.dispatch({"id": "u", "identifier": "ZOE-1", "title": "t"})
+    creates = [c for c in a.calls if c[0] == "create"]
+    impl_skills = [creates[1][i + 1] for i, v in enumerate(creates[1]) if v == "--skill"]
+    scout_skills = [creates[0][i + 1] for i, v in enumerate(creates[0]) if v == "--skill"]
+    verify_skills = [creates[2][i + 1] for i, v in enumerate(creates[2]) if v == "--skill"]
+    closeout_skills = [creates[4][i + 1] for i, v in enumerate(creates[4]) if v == "--skill"]
+    retro_skills = [creates[5][i + 1] for i, v in enumerate(creates[5]) if v == "--skill"]
+    assert "zoe-graphify" in scout_skills
+    assert impl_skills == ["zoe-engineering"]
+    assert "zoe-engineering" in verify_skills
+    assert "github-greptile-loop" in closeout_skills
+    assert "zoe-status-refresh" in retro_skills
+
+
+@pytest.mark.asyncio
+async def test_dispatch_requires_issue_id():
+    a = _FakeAdapter()
+    result = await a.dispatch({"identifier": "ZOE-2"})
+    assert result["ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_poll_not_found():
+    a = _FakeAdapter(list_rows=[{"id": "t_x", "idempotency_key": "other:1:implement"}])
+    out = await a.poll("multica:uuid-1")
+    assert out["found"] is False
+    assert out["status"] == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_poll_blocked_detected():
+    rows = [
+        {"id": "t_i", "idempotency_key": "multica:u:implement", "status": "blocked", "block_reason": "dirty tree"},
+        {"id": "t_r", "idempotency_key": "multica:u:review", "status": "todo"},
+        {"id": "t_c", "idempotency_key": "multica:u:closeout", "status": "todo"},
+    ]
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:u")
+    assert out["found"] is True
+    assert out["status"] == "blocked"
+    assert "dirty tree" in out["blocker"]
+
+
+@pytest.mark.asyncio
+async def test_poll_partial_chain_is_redispatchable():
+    # closeout phase never got created (e.g. CLI error mid-chain): must report
+    # "partial" (not "running") so the sync path re-dispatches instead of
+    # skipping the wedged chain forever.
+    rows = [
+        {"id": "t_i", "idempotency_key": "multica:u:implement", "status": "done"},
+        {"id": "t_r", "idempotency_key": "multica:u:review", "status": "running"},
+    ]
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:u")
+    assert out["found"] is True
+    assert out["status"] == "partial"
+
+
+def _row(phase, status, **extra):
+    """A Kanban list row shaped like the real CLI: body marker, NO idempotency_key."""
+    body = f"Multica issue: ZOE-9 (id uuid-9)\nzoe-ref: multica:uuid-9:{phase}\nTitle: x"
+    if extra.pop("v3", False):
+        body = f"Multica issue: ZOE-9 (id uuid-9)\nzoe-ref: multica:uuid-9:{phase}\nzoe-chain: v3\nTitle: x"
+    return {
+        "id": f"t_{phase}",
+        "body": body,
+        "status": status,
+        **extra,
+    }
+
+
+@pytest.mark.asyncio
+async def test_poll_correlates_via_body_marker_when_no_idempotency_key():
+    # Regression: live `hermes kanban list --json` rows have no idempotency_key,
+    # so correlation must fall back to the `zoe-ref:` body marker — otherwise the
+    # in_progress->done auto-advance never fires.
+    rows = [
+        _row("implement", "done"),
+        _row("review", "done"),
+        _row("closeout", "done"),
+    ]
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:uuid-9")
+    assert out["found"] is True
+    assert out["status"] == "done"
+    assert out["phases"] == {"implement": "done", "review": "done", "closeout": "done"}
+
+
+@pytest.mark.asyncio
+async def test_poll_current_chain_includes_verify_phase():
+    rows = [
+        _row("implement", "done"),
+        _row("verify", "done"),
+        _row("review", "running"),
+        _row("closeout", "todo"),
+    ]
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:uuid-9")
+    assert out["found"] is True
+    assert out["status"] == "running"
+    assert out["phases"]["verify"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_poll_body_marker_blocked_detected():
+    rows = [
+        _row("implement", "blocked", block_reason="dirty tree"),
+        _row("review", "todo"),
+        _row("closeout", "todo"),
+    ]
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:uuid-9")
+    assert out["status"] == "blocked"
+    assert "dirty tree" in out["blocker"]
+
+
+@pytest.mark.asyncio
+async def test_poll_partial_chain_via_body_marker_is_redispatchable():
+    # Production path: real `hermes kanban list --json` rows expose the `zoe-ref:`
+    # body marker, NOT the idempotency key. A chain missing its closeout phase must
+    # still report "partial" so the sync path re-dispatches and backfills it. The
+    # idempotency_key-based partial test exercises the forward-compat branch only;
+    # this guards the marker regex (e.g. dropping re.MULTILINE) from silently
+    # reporting "not_found" and wedging the chain forever.
+    rows = [
+        _row("implement", "done"),
+        _row("review", "running"),
+    ]
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:uuid-9")
+    assert out["found"] is True
+    assert out["status"] == "partial"
+
+
+@pytest.mark.asyncio
+async def test_poll_current_partial_chain_with_verify_is_redispatchable():
+    rows = [
+        _row("implement", "done"),
+        _row("verify", "running"),
+    ]
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:uuid-9")
+    assert out["found"] is True
+    assert out["status"] == "partial"
+
+
+@pytest.mark.asyncio
+async def test_poll_ignores_rows_without_marker():
+    # Foreign tasks (other dispatchers) carry neither marker nor matching key.
+    rows = [{"id": "t_x", "body": "some unrelated task body", "status": "running"}]
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:uuid-9")
+    assert out["found"] is False
+    assert out["status"] == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_poll_done_and_pr_extracted():
+    rows = [
+        {"id": "t_i", "idempotency_key": "multica:u:implement", "status": "done"},
+        {"id": "t_r", "idempotency_key": "multica:u:review", "status": "done"},
+        {"id": "t_c", "idempotency_key": "multica:u:closeout", "status": "done"},
+    ]
+    show = {
+        "t_c": {
+            "latest_summary": "",
+            "comments": [{"body": "Merged via https://github.com/o/r/pull/42 — done"}],
+        }
+    }
+    a = _FakeAdapter(list_rows=rows, show_map=show)
+    out = await a.poll("multica:u")
+    assert out["status"] == "done"
+    assert out["pr_url"] == "https://github.com/o/r/pull/42"
+
+
+def test_protocol_violation_count():
+    detail = {
+        "events": [
+            {"kind": "claimed"},
+            {"kind": "protocol_violation", "payload": {"exit_code": 0}},
+            {"kind": "protocol_violation", "payload": {"exit_code": 0}},
+        ]
+    }
+    assert ka._protocol_violation_count(detail) == 2
+
+
+@pytest.mark.asyncio
+async def test_poll_auto_blocks_after_protocol_violations(monkeypatch):
+    monkeypatch.setattr(ka, "_PROTOCOL_VIOLATION_LIMIT", 2)
+    rows = [_row("implement", "running")]
+    show = {
+        "t_implement": {
+            "events": [
+                {"kind": "protocol_violation", "payload": {"exit_code": 0}},
+                {"kind": "protocol_violation", "payload": {"exit_code": 0}},
+            ]
+        }
+    }
+    a = _FakeAdapter(list_rows=rows, show_map=show)
+    out = await a.poll("multica:uuid-9")
+    assert out["status"] == "blocked"
+    assert "PROTOCOL_VIOLATION" in (out["blocker"] or "")
+    assert any(c[0] == "block" for c in a.calls)
+
+
+def test_closeout_body_requires_terminal_protocol():
+    body = ka.KanbanAdapter()._build_body(
+        "closeout",
+        {"id": "uuid-1", "identifier": "ZOE-9", "title": "Fix thing", "description": ""},
+        "ZOE-9",
+    )
+    assert "TERMINAL PROTOCOL" in body
+    assert "kanban_complete" in body
+    assert "kanban_block" in body
