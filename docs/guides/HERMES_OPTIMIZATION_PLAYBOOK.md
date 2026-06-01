@@ -126,7 +126,8 @@ Routing was tightened to match the board-cost policy:
   - `google/gemini-2.5-flash`
   - `openrouter/free`
 - Root background auxiliaries were moved away from direct Gemini/OpenAI and `provider: auto` to `provider: openrouter` with `openrouter/free` where they are text-only (`web_extract`, `compression`, title/session/search/triage/curator/approval/MCP helpers, etc.) to avoid background calls silently routing to Codex or paid direct APIs.
-- Specialized non-engineering slots such as vision/TTS remain separate and are not part of the Kanban cost-control route.
+- `auxiliary.vision` was the last remaining `provider: auto` slot; it now uses `openrouter / openrouter/free` (2026-06-01 verification pass).
+- Specialized non-engineering slots such as TTS remain separate and are not part of the Kanban cost-control route.
 
 Verification run after apply:
 

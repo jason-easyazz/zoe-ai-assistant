@@ -45,3 +45,24 @@ commands. Attach the resulting JSON to the PR or Multica issue summary.
 - If the candidate increases cost, complexity, or dependency gravity without a
   measurable reliability gain, close it as "do not adopt."
 
+## 2026-06-01 baseline packets (Jetson host)
+
+Packets generated after the native evidence path landed (PR #127). Artifacts live
+outside the repo under `/tmp/zoe-agent-spikes/`:
+
+| Candidate | Available | Recommendation |
+|-----------|-----------|----------------|
+| Forge | no (proxy not installed) | Defer until `llama-server` + Forge proxy spike is scheduled |
+| Caveman | no (npm plugin not installed) | Defer; evaluate in disposable profile only if compression need is measured |
+| Babysitter | no (not installed) | Reference-only; Zoe owns orchestration via Kanban + `pipeline_store` |
+
+Commands used:
+
+```bash
+python3 scripts/maintenance/agent_spike_metrics.py forge --task "..." --output /tmp/zoe-agent-spikes/forge-spike.json
+python3 scripts/maintenance/agent_spike_metrics.py caveman --task "..." --output /tmp/zoe-agent-spikes/caveman-spike.json
+python3 scripts/maintenance/agent_spike_metrics.py babysitter --task "..." --output /tmp/zoe-agent-spikes/babysitter-spike.json
+```
+
+Do not install Babysitter, Forge, or Caveman into production from these packets alone.
+
