@@ -445,6 +445,10 @@ class KanbanAdapter:
             chain[phase] = task_id
             if not (result or {}).get("deduplicated"):
                 created.append(phase)
+            if phase in {"implement", "verify"}:
+                from worktree_bootstrap import ensure_worktree
+
+                await asyncio.to_thread(ensure_worktree, str(task_id))
             parent = task_id
 
         logger.info(
