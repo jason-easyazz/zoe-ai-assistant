@@ -15,6 +15,22 @@ logger = logging.getLogger(__name__)
 _TASK_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
+def _run_git(args: list[str], *, cwd: str, timeout: int) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            args,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"git command timed out after {timeout}s: {' '.join(args)}"
+        ) from exc
+
+
 def worktree_root() -> Path:
     override = os.environ.get("ZOE_WORKTREE_ROOT", "").strip()
     if override:
@@ -40,13 +56,10 @@ def _validate_task_id(task_id: str) -> str:
 
 
 def _worktree_registered(repo: Path, wt_path: Path) -> bool:
-    listed = subprocess.run(
+    listed = _run_git(
         ["git", "worktree", "list", "--porcelain"],
         cwd=str(repo),
-        capture_output=True,
-        text=True,
         timeout=30,
-        check=False,
     )
     if listed.returncode != 0:
         return False
@@ -88,26 +101,16 @@ def ensure_worktree(task_id: str, *, base_branch: str = "main") -> Path:
         branch,
         base_branch,
     ]
-    result = subprocess.run(
-        add_cmd,
-        cwd=str(repo),
-        capture_output=True,
-        text=True,
-        timeout=120,
-        check=False,
-    )
+    result = _run_git(add_cmd, cwd=str(repo), timeout=120)
     if result.returncode == 0:
         logger.info("worktree_bootstrap: created %s on %s", wt_path, branch)
         return wt_path
 
     # Branch may already exist from a prior partial run — attach worktree to it.
-    retry = subprocess.run(
+    retry = _run_git(
         ["git", "worktree", "add", str(wt_path), branch],
         cwd=str(repo),
-        capture_output=True,
-        text=True,
         timeout=120,
-        check=False,
     )
     if retry.returncode == 0:
         logger.info("worktree_bootstrap: attached %s to existing %s", wt_path, branch)
