@@ -108,7 +108,29 @@ def _greptile_mcp_bin() -> str:
     return os.path.expanduser("~/bin/greptile-mcp.py")
 
 
-def _max_runtime() -> str:
+def _engineering_mode(issue: dict | None = None) -> str:
+    """Resolve the engineering execution mode for a Kanban chain.
+
+    Interactive is the default for user-visible work. Overnight mode allows
+    slower, cheaper runs by extending worker runtime and making the cost
+    preference explicit in every worker prompt.
+    """
+    issue = issue or {}
+    raw = (
+        issue.get("engineering_mode")
+        or (issue.get("metadata") or {}).get("engineering_mode")
+        or os.environ.get("ZOE_ENGINEERING_MODE")
+        or "interactive"
+    )
+    mode = str(raw).strip().lower()
+    if mode in {"overnight", "background", "self_evolution", "self-evolution"}:
+        return "overnight"
+    return "interactive"
+
+
+def _max_runtime(mode: str = "interactive") -> str:
+    if mode == "overnight":
+        return os.environ.get("ZOE_KANBAN_OVERNIGHT_MAX_RUNTIME", "6h")
     return os.environ.get("ZOE_KANBAN_MAX_RUNTIME", "45m")
 
 
@@ -151,9 +173,16 @@ class KanbanAdapter:
         except json.JSONDecodeError as exc:
             raise KanbanCLIError(f"non-JSON output from kanban {args[0]}: {exc}: {stdout[:200]}")
 
-    def _build_body(self, phase: str, issue: dict, identifier: str) -> str:
+    def _build_body(self, phase: str, issue: dict, identifier: str, *, mode: str | None = None) -> str:
         title = issue.get("title") or identifier
         description = issue.get("description") or ""
+        mode = mode or _engineering_mode(issue)
+        mode_note = (
+            "Engineering mode: overnight. Prioritize free/reliable local or OpenRouter-low-cost routes;"
+            " latency is secondary to evidence quality.\n"
+            if mode == "overnight"
+            else "Engineering mode: interactive. Keep user-visible latency and review size tight.\n"
+        )
         # `zoe-ref:` is a machine marker that lets poll() correlate this task back
         # to its Multica issue + phase. The live `hermes kanban list --json` output
         # does NOT expose the idempotency key, so the body (which it does expose) is
@@ -165,6 +194,7 @@ class KanbanAdapter:
         common = (
             f"Multica issue: {identifier} (id {issue_id})\n"
             f"zoe-ref: multica:{issue_id}:{phase}\n"
+            f"{mode_note}"
             f"Repo: {_repo_root()}  |  Base branch: main  |  Workspace: git worktree\n\n"
             f"Title: {title}\n\n{description}\n\n"
         )
@@ -262,7 +292,7 @@ class KanbanAdapter:
     async def dispatch(self, issue: dict) -> dict:
         """Create (idempotently) the implement->verify->review->closeout chain for a Multica issue.
 
-        Returns {ok, external_ref, chain:{phase:task_id}, created:[phases]}.
+        Returns {ok, external_ref, chain:{phase:task_id}, created:[phases], mode}.
         """
         issue_id = str(issue.get("id") or "").strip()
         if not issue_id:
@@ -274,6 +304,7 @@ class KanbanAdapter:
         chain: dict[str, str] = {}
         created: list[str] = []
         parent: str | None = None
+        mode = _engineering_mode(issue)
         for phase, assignee, skills in _CHAIN:
             args = [
                 "create",
@@ -285,11 +316,11 @@ class KanbanAdapter:
                 "--idempotency-key",
                 f"{external_ref}:{phase}",
                 "--max-runtime",
-                _max_runtime(),
+                _max_runtime(mode),
                 "--created-by",
                 "zoe-bridge",
                 "--body",
-                self._build_body(phase, issue, identifier),
+                self._build_body(phase, issue, identifier, mode=mode),
                 "--json",
             ]
             for skill in skills:
@@ -308,7 +339,7 @@ class KanbanAdapter:
         logger.info(
             "kanban_adapter: dispatched %s -> chain=%s (new=%s)", identifier, chain, created
         )
-        return {"ok": True, "external_ref": external_ref, "chain": chain, "created": created}
+        return {"ok": True, "external_ref": external_ref, "chain": chain, "created": created, "mode": mode}
 
     def _title(self, phase: str, identifier: str, issue: dict) -> str:
         base = issue.get("title") or identifier
