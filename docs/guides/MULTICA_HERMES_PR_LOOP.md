@@ -113,6 +113,23 @@ Keep `ZOE_BOARD_REVIEW_AUTOPILOT_ENABLED=false` (the Zoe poll loop and cron own 
 
 **Operator cron (outside repo):** disable Board Fix Progress Watcher; ensure Graphify refresh script path is valid under `~/.hermes/scripts/`.
 
+## Contributor quick reference (ZOE-5378)
+
+Use this when dispatching or reviewing a Hermes Kanban chain on Multica:
+
+| Control | Where to set | Effect |
+|---------|--------------|--------|
+| `skip_scout: true` | Issue description or `metadata.skip_scout` | Omits scout phase; chain starts at implement |
+| `evidence_profile: audit` | Issue description or `metadata.evidence_profile` | Verify gate accepts audit-only handoffs (no PR required) |
+| `ZOE_KANBAN_SKIP_SCOUT=1` | `services/zoe-data/.env` | Global skip-scout for all new chains |
+| `ZOE_MULTICA_POLL_DISPATCH_LIMIT=1` | `services/zoe-data/.env` | Poll bridge dispatches one Hermes todo issue per cycle (default when unset; use `0` to disable dispatch) |
+
+**Idempotency:** Kanban tasks are keyed `multica:{issue_uuid}:{phase}`. Re-dispatch is safe when poll reports `not_found` or `partial`; active `running`/`blocked` chains are left alone.
+
+**Greptile closeout:** Closeout runs `github-greptile-loop` / `greploop_guard.py --merge-when-ready` only when implement recorded `PR_URL=` on a pushed branch. Audit-only issues should hand off with `AUDIT_ONLY=1` and blank `PR_URL`.
+
+**Terminal protocol:** Every worker phase must end with `kanban_complete` or `kanban_block`. Silent exits trigger dispatcher retries and may auto-block after two protocol violations (`ZOE_KANBAN_PROTOCOL_VIOLATION_LIMIT`, default 2).
+
 ## Local Verification
 
 ```bash
