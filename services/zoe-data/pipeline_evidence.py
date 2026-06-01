@@ -11,7 +11,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-PipelinePhase = Literal["implement", "verify", "review", "closeout", "retro"]
+PipelinePhase = Literal["scout", "implement", "verify", "review", "closeout", "retro"]
 PipelineStatus = Literal["todo", "running", "blocked", "done"]
 EvidenceKind = Literal["tool", "test", "validator", "pr", "greptile", "human", "log"]
 TransitionOutcome = Literal[
@@ -23,9 +23,17 @@ TransitionOutcome = Literal[
     "merge_blocked",
 ]
 
-PHASE_ORDER: tuple[PipelinePhase, ...] = ("implement", "verify", "review", "closeout", "retro")
+PHASE_ORDER: tuple[PipelinePhase, ...] = (
+    "scout",
+    "implement",
+    "verify",
+    "review",
+    "closeout",
+    "retro",
+)
 
 _REQUIRED_EVIDENCE: dict[PipelinePhase, set[EvidenceKind]] = {
+    "scout": {"tool"},
     "implement": {"tool"},
     "verify": {"test", "validator"},
     "review": {"human"},
