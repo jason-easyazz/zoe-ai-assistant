@@ -339,6 +339,12 @@ class KanbanAdapter:
         logger.info(
             "kanban_adapter: dispatched %s -> chain=%s (new=%s)", identifier, chain, created
         )
+        try:
+            from pipeline_store import bootstrap_state
+
+            await bootstrap_state(external_ref, start_phase="implement")
+        except Exception as exc:
+            logger.debug("kanban_adapter: pipeline bootstrap skipped for %s: %s", external_ref, exc)
         return {"ok": True, "external_ref": external_ref, "chain": chain, "created": created, "mode": mode}
 
     def _title(self, phase: str, identifier: str, issue: dict) -> str:
@@ -404,12 +410,30 @@ class KanbanAdapter:
         else:
             agg = "running"
 
+        pipeline_info: dict = {"tracked": False}
+        try:
+            from pipeline_store import pipeline_summary, sync_pipeline_from_chain
+
+            async def _fetch_detail(task_id: str) -> dict:
+                return await self._run(["show", task_id, "--json"], expect_json=True)
+
+            start_phase = "scout" if "scout" in phases else "implement"
+            state = await sync_pipeline_from_chain(
+                external_ref, phases, _fetch_detail, start_phase=start_phase  # type: ignore[arg-type]
+            )
+            pipeline_info = pipeline_summary(state)
+            if pipeline_info.get("missing_evidence") and agg == "running":
+                pipeline_info["gate"] = "evidence_required"
+        except Exception as exc:
+            logger.debug("kanban_adapter: pipeline sync skipped for %s: %s", external_ref, exc)
+
         return {
             "found": True,
             "status": agg,
             "phases": statuses,
             "pr_url": await self._extract_pr_url(phases),
             "blocker": blocker,
+            "pipeline": pipeline_info,
         }
 
     async def _extract_pr_url(self, phases: dict[str, dict]) -> str | None:

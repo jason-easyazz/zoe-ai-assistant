@@ -16,7 +16,7 @@ def test_evidence_metadata_rejects_secret_fields():
 
 
 def test_implement_requires_tool_evidence_before_complete():
-    state = PipelineState(task_ref="multica:1")
+    state = PipelineState(task_ref="multica:1", phase="implement")
 
     assert can_complete_phase(state) is False
     assert missing_required_evidence(state) == {"tool"}
@@ -90,7 +90,7 @@ def test_loop_back_outcomes_are_phase_scoped():
 
 
 def test_start_records_attempts_per_phase():
-    state = PipelineState(task_ref="multica:1")
+    state = PipelineState(task_ref="multica:1", phase="implement")
 
     state = transition(state, "start")
     state = transition(state, "start")
@@ -130,6 +130,14 @@ def test_merge_blocked_is_closeout_only_and_can_restart():
 
     with pytest.raises(ValueError, match="only valid from closeout"):
         transition(PipelineState(task_ref="multica:1", phase="retro"), "merge_blocked")
+
+
+def test_scout_requires_tool_evidence_before_complete():
+    state = PipelineState(task_ref="multica:1", phase="scout")
+    assert can_complete_phase(state) is False
+    state = with_evidence(state, EvidenceItem(kind="tool", summary="graphify path query", passed=True))
+    next_state = transition(state, "complete")
+    assert next_state.phase == "implement"
 
 
 def test_retro_complete_marks_pipeline_done():
