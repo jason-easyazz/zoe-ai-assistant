@@ -1,9 +1,39 @@
 """Tests for the Hermes Kanban executor adapter (CLI mocked)."""
 import json
+from pathlib import Path
 
 import pytest
 
 import executors.kanban_adapter as ka
+
+
+@pytest.fixture(autouse=True)
+def _mock_ensure_worktree(monkeypatch):
+    """Dispatch tests must not run real git worktree subprocesses."""
+    monkeypatch.setattr(
+        "worktree_bootstrap.prepare_kanban_worktree",
+        lambda task_id, **kwargs: Path(f"/tmp/worktrees/{task_id}"),
+    )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_pipeline_store(tmp_path, monkeypatch):
+    monkeypatch.setenv("ZOE_PIPELINE_STORE_PATH", str(tmp_path / "pipeline_runs.jsonl"))
+
+
+@pytest.fixture(autouse=True)
+def _mock_repo_validators(monkeypatch):
+    from pipeline_validators import ValidatorRunResult
+
+    monkeypatch.setattr(
+        "pipeline_validators.run_repo_validators",
+        lambda **kwargs: ValidatorRunResult(
+            exit_code=0,
+            summary="validate_structure: exit 0",
+            content_hash="deadbeef",
+            passed=True,
+        ),
+    )
 
 
 class _FakeAdapter(ka.KanbanAdapter):
@@ -27,6 +57,8 @@ class _FakeAdapter(ka.KanbanAdapter):
             return self._list_rows
         if verb == "show":
             return self._show_map.get(args[1], {"comments": [], "latest_summary": ""})
+        if verb == "block":
+            return ""
         return ""
 
 
@@ -342,7 +374,7 @@ async def test_dispatch_pins_expected_skills():
     closeout_skills = [creates[4][i + 1] for i, v in enumerate(creates[4]) if v == "--skill"]
     retro_skills = [creates[5][i + 1] for i, v in enumerate(creates[5]) if v == "--skill"]
     assert "zoe-graphify" in scout_skills
-    assert "zoe-graphify" in impl_skills and "code-structure-cleanup" in impl_skills
+    assert impl_skills == ["zoe-engineering"]
     assert "zoe-engineering" in verify_skills
     assert "github-greptile-loop" in closeout_skills
     assert "zoe-status-refresh" in retro_skills
@@ -507,3 +539,44 @@ async def test_poll_done_and_pr_extracted():
     out = await a.poll("multica:u")
     assert out["status"] == "done"
     assert out["pr_url"] == "https://github.com/o/r/pull/42"
+
+
+def test_protocol_violation_count():
+    detail = {
+        "events": [
+            {"kind": "claimed"},
+            {"kind": "protocol_violation", "payload": {"exit_code": 0}},
+            {"kind": "protocol_violation", "payload": {"exit_code": 0}},
+        ]
+    }
+    assert ka._protocol_violation_count(detail) == 2
+
+
+@pytest.mark.asyncio
+async def test_poll_auto_blocks_after_protocol_violations(monkeypatch):
+    monkeypatch.setattr(ka, "_PROTOCOL_VIOLATION_LIMIT", 2)
+    rows = [_row("implement", "running")]
+    show = {
+        "t_implement": {
+            "events": [
+                {"kind": "protocol_violation", "payload": {"exit_code": 0}},
+                {"kind": "protocol_violation", "payload": {"exit_code": 0}},
+            ]
+        }
+    }
+    a = _FakeAdapter(list_rows=rows, show_map=show)
+    out = await a.poll("multica:uuid-9")
+    assert out["status"] == "blocked"
+    assert "PROTOCOL_VIOLATION" in (out["blocker"] or "")
+    assert any(c[0] == "block" for c in a.calls)
+
+
+def test_closeout_body_requires_terminal_protocol():
+    body = ka.KanbanAdapter()._build_body(
+        "closeout",
+        {"id": "uuid-1", "identifier": "ZOE-9", "title": "Fix thing", "description": ""},
+        "ZOE-9",
+    )
+    assert "TERMINAL PROTOCOL" in body
+    assert "kanban_complete" in body
+    assert "kanban_block" in body

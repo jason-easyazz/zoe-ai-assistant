@@ -82,7 +82,7 @@ what's the hermes engineering status
 Expected Kanban chain progression (per Multica issue):
 
 - `scout` (`zoe-planner`) — Graphify/opensrc/Multica context only; `TOOLS_USED=` + `SCOUT_SUMMARY=` handoff.
-- `implement` (`zoe-coder`) — graphify/opensrc first, smallest reviewable change, small PR on a worktree. Terminal protocol: `kanban_complete` or `kanban_block` on the last turn. Handoff metadata must include `PR_URL`, `TESTS`, `TOOLS_USED`, `SUMMARY`.
+- `implement` (`zoe-coder`) — graphify/opensrc first, smallest reviewable change, small PR on a worktree at `~/.worktrees/<kanban_task_id>` (override root with `ZOE_WORKTREE_ROOT`). Zoe pins this path on the Kanban row at dispatch so workers do not default to `<repo>/.worktrees/`. Terminal protocol: `kanban_complete` or `kanban_block` on the last turn. Handoff metadata must include `PR_URL`, `TESTS`, `TOOLS_USED`, `SUMMARY`. Pure audit/doc tasks: `AUDIT_ONLY=1` with blank `PR_URL`.
 - `verify` (`zoe-reviewer`) — objective test/evidence gate before review; records validator + test outcomes. Fail-closed: missing evidence blocks advancement.
 - `review` (`zoe-reviewer`) — diff/scope/architecture check against verify evidence; may loop back to implement via revision metadata.
 - `closeout` (`zoe-planner`) — Greptile grep loop, squash merge when ready, Multica status update.
@@ -131,6 +131,15 @@ Use this when dispatching or reviewing a Hermes Kanban chain on Multica:
 **Terminal protocol:** Every worker phase must end with `kanban_complete` or `kanban_block`. Silent exits trigger dispatcher retries and may auto-block after two protocol violations (`ZOE_KANBAN_PROTOCOL_VIOLATION_LIMIT`, default 2).
 
 ## Local Verification
+
+```bash
+python3 scripts/maintenance/engineering_harness_loop.py --mode full
+python3 scripts/maintenance/engineering_harness_loop.py --mode kanban-dry --skip-scout
+```
+
+See [ENGINEERING_HARNESS_LOOP.md](./ENGINEERING_HARNESS_LOOP.md) for modes, exit codes, and pipeline JSONL findings.
+
+Legacy one-liners (subset of the harness):
 
 ```bash
 python3 -m pytest services/zoe-data/tests/test_kanban_adapter.py services/zoe-data/tests/test_pipeline_evidence.py services/zoe-data/tests/test_executor_registry.py services/zoe-data/tests/test_multica_webhook_emitter.py services/zoe-data/tests/test_multica_client.py services/zoe-data/tests/test_multica_poll_dispatch.py services/zoe-data/tests/test_runtime_env.py -q
