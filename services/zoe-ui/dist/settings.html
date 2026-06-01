@@ -1796,13 +1796,17 @@ async function applyHermesProfiles(forceRestart) {
     if (paidAuto && !confirm('OpenRouter Auto can spend real money. Continue?')) return;
     const restart = !!forceRestart;
     if (restart && !confirm('Restart Hermes now? This can interrupt running workers.')) return;
-    await apiCall('POST', '/api/system/hermes/model-profiles/apply', {
+    const data = await apiCall('POST', '/api/system/hermes/model-profiles/apply', {
       profiles,
       confirm_paid_auto: paidAuto,
       restart,
       force_restart: false,
     });
-    toast('Hermes profiles applied', 'success');
+    if (data.restart && data.restart.returncode !== 0) {
+      toast('Profiles applied, but Hermes restart failed: ' + (data.restart.stderr || 'unknown error'), 'error');
+    } else {
+      toast(restart ? 'Hermes profiles applied and restart requested' : 'Hermes profiles applied', 'success');
+    }
     loadHermesModelProfiles();
   } catch (e) {
     toast(e.message, 'error');
