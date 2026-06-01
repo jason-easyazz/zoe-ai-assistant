@@ -15,6 +15,14 @@
     const MAX_VISIBLE       = 5;   // collapsed max
     const TITLE_MAX_CHARS   = 58;
 
+    function _esc(s) {
+        return String(s)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     function shortTitle(raw) {
@@ -43,7 +51,7 @@
         switch (status) {
             case 'running':
             case 'pending':
-                return { cls: 'aa-running', icon: '<span class="aa-spinner"></span>', label: status };
+                return { cls: 'aa-running', icon: '<span class="aa-spinner"></span>', label: _esc(status) };
             case 'done':
                 return { cls: 'aa-done',    icon: '✓', label: 'done' };
             case 'error':
@@ -51,7 +59,7 @@
             case 'blocked':
                 return { cls: 'aa-blocked', icon: '⊘', label: 'blocked' };
             default:
-                return { cls: 'aa-idle',    icon: '·', label: status || '?' };
+                return { cls: 'aa-idle',    icon: '·', label: _esc(status || '?') };
         }
     }
 
@@ -69,6 +77,22 @@
         init() {
             this._injectStyles();
             this._ensureContainer();
+            if (this._container && !this._container.dataset.aaBound) {
+                this._container.dataset.aaBound = '1';
+                this._container.addEventListener('click', (e) => {
+                    const row = e.target.closest('.aa-item');
+                    if (!row) return;
+                    const taskId = row.dataset.taskId;
+                    if (taskId) this._select(taskId);
+                });
+                this._container.addEventListener('keydown', (e) => {
+                    if (e.key !== 'Enter') return;
+                    const row = e.target.closest('.aa-item');
+                    if (!row) return;
+                    const taskId = row.dataset.taskId;
+                    if (taskId) this._select(taskId);
+                });
+            }
             this._poll();
 
             // Refresh on push WS events
@@ -151,10 +175,8 @@
                 const when  = timeAgo(t.created_at);
                 return `
                 <div class="session-item aa-item ${cls}"
-                     data-task-id="${t.task_id}"
-                     role="button" tabindex="0"
-                     onclick="window.agentActivity._select('${t.task_id}')"
-                     onkeydown="if(event.key==='Enter')window.agentActivity._select('${t.task_id}')">
+                     data-task-id="${_esc(t.task_id)}"
+                     role="button" tabindex="0">
                     <div class="aa-row-top">
                         <span class="aa-status-icon ${cls}">${icon}</span>
                         <span class="aa-title">${_esc(title)}</span>
@@ -194,13 +216,25 @@
             this._render();
         }
 
-        _select(taskId) {
-            const task = this._tasks.find(t => t.task_id === taskId);
-            if (!task) return;
-            // Highlight selected item
+        async _select(taskId) {
+            const summary = this._tasks.find(t => t.task_id === taskId);
+            if (!summary) return;
+            let task = summary;
+            try {
+                if (window.apiRequest) {
+                    task = await window.apiRequest(`/api/agent/tasks/${taskId}`);
+                } else {
+                    const session = window.zoeAuth?.getCurrentSession();
+                    const r = await fetch(`/api/agent/tasks/${taskId}`, {
+                        headers: { 'X-Session-ID': session?.session_id || '' }
+                    });
+                    if (r.ok) task = await r.json();
+                }
+            } catch (err) {
+                console.warn('[agent-activity] task detail error:', err);
+            }
             document.querySelectorAll('.aa-item').forEach(el => el.classList.remove('active'));
-            document.querySelector(`.aa-item[data-task-id="${taskId}"]`)?.classList.add('active');
-            // Emit event for chat.html to render the result panel
+            document.querySelector(`.aa-item[data-task-id="${CSS.escape(taskId)}"]`)?.classList.add('active');
             window.dispatchEvent(new CustomEvent('zoe:agent_activity_select', { detail: task }));
         }
 
@@ -314,14 +348,6 @@
                 }`;
             document.head.appendChild(style);
         }
-    }
-
-    function _esc(s) {
-        return String(s)
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;');
     }
 
     // ── Boot ─────────────────────────────────────────────────────────────────

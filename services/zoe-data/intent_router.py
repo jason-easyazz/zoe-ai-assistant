@@ -1139,6 +1139,16 @@ def detect_intent(
     if _BOARD_RE.search(t):
         return Intent("board_status", {})
 
+    _AGENT_ACTIVITY_RE = re.compile(
+        r"show\s+(?:me\s+)?(?:my\s+)?(?:agent\s+)?activity\b"
+        r"|what(?:'s| is)\s+running\s+in\s+the\s+background\b"
+        r"|(?:any\s+)?background\s+tasks?\s+(?:running|active|pending)\b"
+        r"|list\s+(?:my\s+)?(?:agent\s+)?(?:background\s+)?tasks?\b",
+        re.I,
+    )
+    if _AGENT_ACTIVITY_RE.search(t):
+        return Intent("agent_tasks_status", {})
+
     _eng_match = _ENGINEERING_TASK_RE.search(text.strip())
     if _eng_match:
         task_text = (_eng_match.group("task") or _eng_match.group("task2") or "").strip()
@@ -1451,6 +1461,33 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
                     "Hermes runs on port 8642, OpenClaw on port 18789.")
 
     # ── Multica Board Status ───────────────────────────────────────────────────
+    if intent.name == "agent_tasks_status":
+        try:
+            from db_pool import get_db_ctx as _get_pg_db
+
+            async with _get_pg_db() as db:
+                rows = await db.fetch(
+                    "SELECT id, task, status, created_at "
+                    "FROM background_tasks WHERE user_id=$1 "
+                    "ORDER BY created_at DESC LIMIT 10",
+                    user_id,
+                )
+
+            if not rows:
+                return "No background agent tasks right now."
+
+            lines = ["**Agent activity** — recent tasks:\n"]
+            for row in rows[:10]:
+                title = (row["task"] or "task").split("\n", 1)[0][:72]
+                when = row["created_at"]
+                if hasattr(when, "isoformat"):
+                    when = when.isoformat()
+                lines.append(f"- **{title}** — `{row['status']}` ({when})")
+            return "\n".join(lines)
+        except Exception as exc:
+            logger.warning("agent_tasks_status: %s", exc)
+            return "I couldn't load agent activity right now. Check the sidebar or try again."
+
     if intent.name == "board_status":
         try:
             import httpx as _httpx

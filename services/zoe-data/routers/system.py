@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import re
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
@@ -866,7 +866,7 @@ async def a2a_task_stream(body: _A2ATaskRequest, user: dict = Depends(get_a2a_ca
 @_agent_card_router.get("/tasks")
 async def list_agent_tasks(
     limit: int = 20,
-    status: str | None = None,
+    status: Literal["running", "pending", "done", "error", "blocked"] | None = None,
     user: dict = Depends(get_current_user),
 ):
     """List recent background tasks for the current user."""
@@ -883,14 +883,14 @@ async def list_agent_tasks(
         async with _get_pg_db() as db:
             if status:
                 rows = await db.fetch(
-                    "SELECT id, task, status, result, created_at, completed_at, multica_issue_id "
+                    "SELECT id, task, status, created_at, completed_at, multica_issue_id "
                     "FROM background_tasks WHERE user_id=$1 AND status=$2 "
                     "ORDER BY created_at DESC LIMIT $3",
                     user_id, status, limit,
                 )
             else:
                 rows = await db.fetch(
-                    "SELECT id, task, status, result, created_at, completed_at, multica_issue_id "
+                    "SELECT id, task, status, created_at, completed_at, multica_issue_id "
                     "FROM background_tasks WHERE user_id=$1 "
                     "ORDER BY created_at DESC LIMIT $2",
                     user_id, limit,
@@ -905,7 +905,6 @@ async def list_agent_tasks(
                 "task_id": str(r["id"]),
                 "task": r["task"],
                 "status": r["status"],
-                "result": r["result"],
                 "created_at": _ts(r["created_at"]),
                 "completed_at": _ts(r["completed_at"]),
                 "multica_issue_id": r["multica_issue_id"],

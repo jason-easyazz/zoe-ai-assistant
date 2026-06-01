@@ -68,8 +68,8 @@ async def list_events(
         params.append(category)
 
     where = " AND ".join(conditions)
-    sql = "SELECT * FROM events WHERE ? ORDER BY start_date, start_time"
-    cursor = await db.execute(sql, [params])
+    sql = f"SELECT * FROM events WHERE {where} ORDER BY start_date, start_time"
+    cursor = await db.execute(sql, params)
     events = []
     async for row in cursor:
         events.append(_row_to_event(row))
