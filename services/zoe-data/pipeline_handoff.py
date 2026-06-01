@@ -6,7 +6,7 @@ import json
 import re
 from typing import Any
 
-from pipeline_evidence import EvidenceItem, EvidenceKind, PipelinePhase
+from pipeline_evidence import EvidenceItem, PipelinePhase
 
 _KV_RE = re.compile(r"^([A-Z_]+)=(.*)$", re.MULTILINE)
 _TOOL_NAMES = (

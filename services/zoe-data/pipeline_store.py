@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
+import fcntl
 import json
 import os
 import threading
+from functools import partial
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from pipeline_evidence import (
     PipelinePhase,
     PipelineState,
-    TransitionOutcome,
     can_complete_phase,
     missing_required_evidence,
     transition,
@@ -38,7 +40,11 @@ def append_record(record: dict[str, Any]) -> None:
     with _LOCK:
         _ensure_parent(path)
         with path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record, sort_keys=True) + "\n")
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                handle.write(json.dumps(record, sort_keys=True) + "\n")
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def load_latest_state(task_ref: str) -> PipelineState | None:
@@ -47,7 +53,13 @@ def load_latest_state(task_ref: str) -> PipelineState | None:
         return None
     latest: PipelineState | None = None
     with _LOCK:
-        for line in path.read_text(encoding="utf-8").splitlines():
+        with path.open("r", encoding="utf-8") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
+            try:
+                lines = handle.read().splitlines()
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        for line in lines:
             if not line.strip():
                 continue
             try:
@@ -61,8 +73,13 @@ def load_latest_state(task_ref: str) -> PipelineState | None:
     return latest
 
 
+async def _run_io(func, *args):
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, func, *args)
+
+
 def save_state(state: PipelineState, *, event: str, extra: dict[str, Any] | None = None) -> PipelineState:
-    record = {
+    record: dict[str, Any] = {
         "event": event,
         "task_ref": state.task_ref,
         "phase": state.phase,
@@ -70,17 +87,18 @@ def save_state(state: PipelineState, *, event: str, extra: dict[str, Any] | None
         "state": state.model_dump(),
     }
     if extra:
-        record.update(extra)
+        record["meta"] = extra
     append_record(record)
     return state
 
 
-def bootstrap_state(task_ref: str, *, start_phase: PipelinePhase = "implement") -> PipelineState:
-    existing = load_latest_state(task_ref)
+async def bootstrap_state(task_ref: str, *, start_phase: PipelinePhase = "implement") -> PipelineState:
+    existing = await _run_io(load_latest_state, task_ref)
     if existing:
         return existing
     state = PipelineState(task_ref=task_ref, phase=start_phase)
-    return save_state(state, event="bootstrap")
+    await _run_io(partial(save_state, state, event="bootstrap"))
+    return state
 
 
 def pipeline_summary(state: PipelineState | None) -> dict[str, Any]:
@@ -107,7 +125,7 @@ async def sync_pipeline_from_chain(
     """Advance pipeline state from terminal Kanban phase rows and parsed handoffs."""
     from pipeline_handoff import evidence_from_handoff, infer_outcome
 
-    state = bootstrap_state(task_ref, start_phase=start_phase)
+    state = await bootstrap_state(task_ref, start_phase=start_phase)
     if state.status == "done":
         return state
 
@@ -135,23 +153,40 @@ async def sync_pipeline_from_chain(
             continue
 
         if outcome == "complete" and not can_complete_phase(state):
-            save_state(
-                state,
-                event="gate_blocked",
-                extra={
-                    "phase": phase,
-                    "missing": sorted(missing_required_evidence(state)),
-                },
+            await _run_io(
+                partial(
+                    save_state,
+                    state,
+                    event="gate_blocked",
+                    extra={
+                        "row_phase": phase,
+                        "missing": sorted(missing_required_evidence(state)),
+                    },
+                )
             )
             return state
 
         try:
             state = transition(state, outcome)  # type: ignore[arg-type]
         except ValueError as exc:
-            save_state(state, event="transition_rejected", extra={"phase": phase, "reason": str(exc)})
+            await _run_io(
+                partial(
+                    save_state,
+                    state,
+                    event="transition_rejected",
+                    extra={"row_phase": phase, "reason": str(exc)},
+                )
+            )
             return state
 
-        save_state(state, event="transition", extra={"outcome": outcome, "from_phase": phase})
+        await _run_io(
+            partial(
+                save_state,
+                state,
+                event="transition",
+                extra={"outcome": outcome, "from_phase": phase},
+            )
+        )
         if state.status in {"blocked", "done"}:
             break
 

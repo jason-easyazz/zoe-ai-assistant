@@ -16,7 +16,9 @@ def isolated_store(tmp_path, monkeypatch):
 
 
 def test_bootstrap_and_reload(isolated_store):
-    state = store.bootstrap_state("multica:abc")
+    import asyncio
+
+    state = asyncio.run(store.bootstrap_state("multica:abc"))
     assert state.task_ref == "multica:abc"
     assert state.phase == "implement"
 
@@ -35,7 +37,7 @@ def test_pipeline_summary_reports_missing_evidence(isolated_store):
 
 @pytest.mark.asyncio
 async def test_sync_pipeline_advances_on_complete_handoff(isolated_store):
-    store.bootstrap_state("multica:sync")
+    await store.bootstrap_state("multica:sync")
 
     async def fetch_detail(_task_id: str):
         return {
@@ -56,7 +58,7 @@ async def test_sync_pipeline_advances_on_complete_handoff(isolated_store):
 
 @pytest.mark.asyncio
 async def test_sync_pipeline_gate_blocks_missing_evidence(isolated_store):
-    store.bootstrap_state("multica:gate")
+    await store.bootstrap_state("multica:gate")
 
     async def fetch_detail(_task_id: str):
         return {"latest_summary": "SUMMARY=no tools listed", "comments": []}

@@ -342,7 +342,7 @@ class KanbanAdapter:
         try:
             from pipeline_store import bootstrap_state
 
-            bootstrap_state(external_ref, start_phase="implement")
+            await bootstrap_state(external_ref, start_phase="implement")
         except Exception as exc:
             logger.debug("kanban_adapter: pipeline bootstrap skipped for %s: %s", external_ref, exc)
         return {"ok": True, "external_ref": external_ref, "chain": chain, "created": created, "mode": mode}
