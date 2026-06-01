@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-import sqlite3
+import sqlite3  # operator-local Hermes Kanban DB (~/.hermes), not Zoe PostgreSQL
 import subprocess
 from pathlib import Path
 
@@ -65,6 +65,9 @@ def pin_kanban_workspace(task_id: str, wt_path: Path | None = None) -> Path:
     Hermes defaults unset worktree paths to ``<dispatcher-cwd>/.worktrees/<id>``.
     Zoe bootstrap uses ``~/.worktrees/<id>`` (or ``ZOE_WORKTREE_ROOT``). Pin
     the bootstrap path on the task row so workers and ``ensure_worktree`` agree.
+
+    Writes operator-local ``~/.hermes/kanban.db`` (Hermes Kanban), not Zoe's
+    PostgreSQL store.
     """
     task_id = _validate_task_id(task_id)
     path = (wt_path or worktree_path(task_id)).resolve()
@@ -73,6 +76,8 @@ def pin_kanban_workspace(task_id: str, wt_path: Path | None = None) -> Path:
     if not db.exists():
         raise RuntimeError(f"kanban db not found: {db}")
 
+    # Hermes ``hermes kanban create --workspace worktree`` sets workspace_kind to
+    # ``worktree``; fall back to id-only update if the row uses another value.
     with sqlite3.connect(str(db)) as conn:
         cur = conn.execute(
             "UPDATE tasks SET workspace_path = ? WHERE id = ? AND workspace_kind = 'worktree'",
@@ -80,7 +85,21 @@ def pin_kanban_workspace(task_id: str, wt_path: Path | None = None) -> Path:
         )
         conn.commit()
         if cur.rowcount == 0:
-            raise RuntimeError(f"kanban task {task_id!r} not found or not a worktree task in {db}")
+            logger.warning(
+                "worktree_bootstrap: no row for %s with workspace_kind='worktree' in %s; "
+                "retrying id-only workspace_path update",
+                task_id,
+                db,
+            )
+            cur = conn.execute(
+                "UPDATE tasks SET workspace_path = ? WHERE id = ?",
+                (abs_path, task_id),
+            )
+            conn.commit()
+            if cur.rowcount == 0:
+                raise RuntimeError(
+                    f"kanban task {task_id!r} not found in {db}"
+                )
 
     logger.info("worktree_bootstrap: pinned kanban workspace %s -> %s", task_id, abs_path)
     return path
@@ -163,5 +182,13 @@ def ensure_worktree(task_id: str, *, base_branch: str = "main") -> Path:
 def prepare_kanban_worktree(task_id: str, *, base_branch: str = "main") -> Path:
     """Create the git worktree and pin its path on the Kanban task row."""
     wt_path = ensure_worktree(task_id, base_branch=base_branch)
-    pin_kanban_workspace(task_id, wt_path)
+    try:
+        pin_kanban_workspace(task_id, wt_path)
+    except RuntimeError as exc:
+        # Pin is best-effort: dispatch must not orphan an already-created chain.
+        logger.warning(
+            "worktree_bootstrap: could not pin kanban workspace for %s: %s",
+            task_id,
+            exc,
+        )
     return wt_path
