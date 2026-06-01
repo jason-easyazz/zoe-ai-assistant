@@ -38,6 +38,11 @@ _LOG_TOOL_MARKERS = (
     "validate_structure",
     "validate_critical_files",
 )
+_STABLE_BLOCKER_RE = re.compile(
+    r"\b(?:WORKTREE_NOT_READY|GATE_BLOCKED|PROTOCOL_VIOLATION|MERGE_BLOCKED|"
+    r"VERIFICATION_FAILED|HTTP_402|PAYMENT_REQUIRED|CREDITS_EXHAUSTED)\b",
+    re.I,
+)
 
 
 def _haystacks(detail: dict[str, Any]) -> list[str]:
@@ -77,6 +82,26 @@ def _log_tail_snippet(detail: dict[str, Any], *, max_lines: int = 8) -> str:
         lines = [ln.strip() for ln in chunk.splitlines() if ln.strip()]
         if lines:
             return "\n".join(lines[-max_lines:])
+    return ""
+
+
+def _stable_block_reason_from_text(text: str) -> str:
+    """Extract a stable blocker token for fingerprinting (ignore dynamic log tails)."""
+    if not text:
+        return ""
+    match = _STABLE_BLOCKER_RE.search(text)
+    if match:
+        return match.group(0).upper()
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        err = re.match(r"^Error:\s*([A-Z][A-Z0-9_]+)", stripped)
+        if err:
+            return err.group(1)
+        code = re.match(r"^([A-Z][A-Z0-9_]{2,})(?::|\s|$)", stripped)
+        if code:
+            return code.group(1)
     return ""
 
 
@@ -258,7 +283,14 @@ def block_reason_from_handoff(detail: dict[str, Any], *, row_block_reason: str |
     for chunk in _haystacks(detail):
         fields.update(_parse_kv_fields(chunk))
     reason = (fields.get("BLOCKER") or row_block_reason or "").strip()
-    return reason
+    if reason:
+        return reason
+    tail = _log_tail_snippet(detail)
+    if tail:
+        stable = _stable_block_reason_from_text(tail)
+        if stable:
+            return stable
+    return ""
 
 
 def infer_outcome(phase: PipelinePhase, row_status: str, detail: dict[str, Any]) -> str | None:

@@ -226,6 +226,7 @@ def monitor_pipeline(*, task_ref_prefix: str | None, seconds: int = 90) -> dict[
                 if task_ref_prefix and not str(row.get("task_ref") or "").startswith(task_ref_prefix):
                     continue
                 seen.append({"event": row.get("event"), "phase": row.get("phase"), "task_ref": row.get("task_ref")})
+        start_size = size
 
     return {"step": "monitor", "ok": True, "events": seen[-20:]}
 
