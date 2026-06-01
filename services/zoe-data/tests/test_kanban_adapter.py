@@ -31,7 +31,7 @@ class _FakeAdapter(ka.KanbanAdapter):
 
 
 @pytest.mark.asyncio
-async def test_dispatch_creates_three_linked_phases():
+async def test_dispatch_creates_four_linked_phases():
     a = _FakeAdapter()
     issue = {"id": "uuid-1", "identifier": "ZOE-9", "title": "Fix thing", "description": "do it"}
     result = await a.dispatch(issue)
@@ -90,6 +90,19 @@ async def test_verify_body_requires_evidence_gate():
     assert "objective test/evidence gate" in body
     assert "TESTS" in body
     assert "VALIDATORS" in body
+    assert "validate_structure.py" in body
+    assert "validate_critical_files.py" in body
+
+
+@pytest.mark.asyncio
+async def test_review_body_requires_verify_evidence():
+    body = ka.KanbanAdapter()._build_body(
+        "review",
+        {"id": "uuid-1", "identifier": "ZOE-9", "title": "Fix thing", "description": ""},
+        "ZOE-9",
+    )
+    assert "verify-phase evidence" in body
+    assert "Block" in body or "block" in body
 
 
 @pytest.mark.asyncio
@@ -215,6 +228,18 @@ async def test_poll_partial_chain_via_body_marker_is_redispatchable():
     rows = [
         _row("implement", "done"),
         _row("review", "running"),
+    ]
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:uuid-9")
+    assert out["found"] is True
+    assert out["status"] == "partial"
+
+
+@pytest.mark.asyncio
+async def test_poll_current_partial_chain_with_verify_is_redispatchable():
+    rows = [
+        _row("implement", "done"),
+        _row("verify", "running"),
     ]
     a = _FakeAdapter(list_rows=rows)
     out = await a.poll("multica:uuid-9")
