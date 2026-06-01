@@ -7,8 +7,9 @@ import pytest
 def _load_module():
     path = Path(__file__).resolve().parents[3] / "scripts/maintenance/agent_spike_metrics.py"
     spec = importlib.util.spec_from_file_location("agent_spike_metrics", path)
-    module = importlib.util.module_from_spec(spec)
+    assert spec is not None, f"Could not locate module at {path}"
     assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
