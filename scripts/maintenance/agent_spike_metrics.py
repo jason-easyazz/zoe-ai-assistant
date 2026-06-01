@@ -50,7 +50,9 @@ def tool_available(candidate: str) -> bool:
         "caveman": "caveman",
         "babysitter": "babysitter",
         "local-model": "llama-server",
-    }[candidate]
+    }.get(candidate)
+    if command is None:
+        return False
     return shutil.which(command) is not None
 
 

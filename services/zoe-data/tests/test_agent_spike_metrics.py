@@ -1,6 +1,8 @@
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 
 def _load_module():
     path = Path(__file__).resolve().parents[3] / "scripts/maintenance/agent_spike_metrics.py"
@@ -27,10 +29,6 @@ def test_build_packet_contains_cost_policy_and_required_evidence(monkeypatch):
 def test_unknown_candidate_is_rejected():
     module = _load_module()
 
-    try:
+    with pytest.raises(ValueError, match="unknown candidate"):
         module.build_packet("unknown", task="x")
-    except ValueError as exc:
-        assert "unknown candidate" in str(exc)
-    else:
-        raise AssertionError("expected ValueError")
 

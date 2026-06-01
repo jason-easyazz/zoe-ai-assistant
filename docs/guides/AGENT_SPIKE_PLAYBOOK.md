@@ -31,7 +31,7 @@ Generate a packet before each spike:
 ```bash
 python3 scripts/maintenance/agent_spike_metrics.py forge \
   --task "verify local model tool-call rescue on a small Zoe PR" \
-  --output .zoe/tmp/forge-spike.json
+  --output /tmp/zoe-agent-spikes/forge-spike.json
 ```
 
 The packet records availability, cost policy, required evidence, and suggested
