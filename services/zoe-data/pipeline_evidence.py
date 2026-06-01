@@ -106,6 +106,8 @@ def transition(state: PipelineState, outcome: TransitionOutcome, *, reason: str 
         next_phase = "implement"
         next_status = "todo"
     elif outcome == "merge_blocked":
+        if state.phase != "closeout":
+            raise ValueError("merge_blocked is only valid from closeout")
         next_phase = "closeout"
         next_status = "blocked"
     elif outcome == "complete":

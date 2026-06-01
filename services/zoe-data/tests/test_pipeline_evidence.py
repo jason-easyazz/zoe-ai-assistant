@@ -84,6 +84,39 @@ def test_start_records_attempts_per_phase():
     assert state.attempts["implement"] == 2
 
 
+def test_block_preserves_phase_and_evidence_until_restarted():
+    state = PipelineState(task_ref="multica:1", phase="verify", status="running")
+    state = with_evidence(state, EvidenceItem(kind="test", summary="pytest passed", passed=True))
+
+    blocked = transition(state, "block", reason="validator unavailable")
+    restarted = transition(blocked, "start")
+
+    assert blocked.phase == "verify"
+    assert blocked.status == "blocked"
+    assert blocked.evidence == state.evidence
+    assert restarted.phase == "verify"
+    assert restarted.status == "running"
+    assert restarted.attempts["verify"] == 1
+
+
+def test_merge_blocked_is_closeout_only_and_can_restart():
+    state = PipelineState(task_ref="multica:1", phase="closeout", status="running")
+    state = with_evidence(state, EvidenceItem(kind="greptile", summary="review passed", passed=True))
+
+    blocked = transition(state, "merge_blocked", reason="branch policy")
+    restarted = transition(blocked, "start")
+
+    assert blocked.phase == "closeout"
+    assert blocked.status == "blocked"
+    assert blocked.evidence == state.evidence
+    assert restarted.phase == "closeout"
+    assert restarted.status == "running"
+    assert restarted.attempts["closeout"] == 1
+
+    with pytest.raises(ValueError, match="only valid from closeout"):
+        transition(PipelineState(task_ref="multica:1", phase="retro"), "merge_blocked")
+
+
 def test_retro_complete_marks_pipeline_done():
     state = PipelineState(task_ref="multica:1", phase="retro")
     state = with_evidence(state, EvidenceItem(kind="log", summary="retro captured", passed=True))
