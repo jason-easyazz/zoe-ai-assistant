@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import re
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
@@ -861,6 +861,57 @@ async def a2a_task_stream(body: _A2ATaskRequest, user: dict = Depends(get_a2a_ca
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@_agent_card_router.get("/tasks")
+async def list_agent_tasks(
+    limit: int = 20,
+    status: Literal["running", "pending", "done", "error", "blocked"] | None = None,
+    user: dict = Depends(get_current_user),
+):
+    """List recent background tasks for the current user."""
+    from db_pool import get_db_ctx as _get_pg_db
+
+    user_id = user.get("user_id", "")
+    if limit < 1 or limit > 100:
+        limit = 20
+
+    def _ts(val):
+        return val.isoformat() if hasattr(val, "isoformat") else val
+
+    try:
+        async with _get_pg_db() as db:
+            if status:
+                rows = await db.fetch(
+                    "SELECT id, task, status, created_at, completed_at, multica_issue_id "
+                    "FROM background_tasks WHERE user_id=$1 AND status=$2 "
+                    "ORDER BY created_at DESC LIMIT $3",
+                    user_id, status, limit,
+                )
+            else:
+                rows = await db.fetch(
+                    "SELECT id, task, status, created_at, completed_at, multica_issue_id "
+                    "FROM background_tasks WHERE user_id=$1 "
+                    "ORDER BY created_at DESC LIMIT $2",
+                    user_id, limit,
+                )
+    except Exception as exc:
+        logger.error("list_agent_tasks DB error for user=%s: %s", user_id, exc)
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
+
+    return {
+        "tasks": [
+            {
+                "task_id": str(r["id"]),
+                "task": r["task"],
+                "status": r["status"],
+                "created_at": _ts(r["created_at"]),
+                "completed_at": _ts(r["completed_at"]),
+                "multica_issue_id": r["multica_issue_id"],
+            }
+            for r in rows
+        ]
+    }
 
 
 @_agent_card_router.get("/tasks/{task_id}")
