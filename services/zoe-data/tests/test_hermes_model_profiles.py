@@ -109,6 +109,8 @@ def test_rollback_restores_latest_backup(hermes_home, monkeypatch):
     data = yaml.safe_load((hermes_home / "config.yaml").read_text(encoding="utf-8"))
     assert restored["restored"] == ["main"]
     assert data["model"]["default"] == "openrouter/free"
+    audit = json.loads((hermes_home / "model-profile-audit.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+    assert audit["status"] == "rolled_back"
 
 
 def test_apply_failure_writes_failed_audit_and_restores_written_profiles(hermes_home, monkeypatch):

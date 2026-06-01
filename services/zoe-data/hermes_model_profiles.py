@@ -347,6 +347,7 @@ def rollback_profiles(backup_dir_value: str | None, *, actor: str) -> dict[str, 
     audit = {
         "timestamp": datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
         "actor": actor,
+        "status": "rolled_back",
         "rollback_dir": str(selected),
         "restored": restored,
     }

@@ -1795,7 +1795,7 @@ async function applyHermesProfiles(forceRestart) {
     const paidAuto = profiles.some(p => [p.model, ...p.fallbacks.map(f => f.model)].includes('openrouter/auto'));
     if (paidAuto && !confirm('OpenRouter Auto can spend real money. Continue?')) return;
     const restart = !!forceRestart;
-    if (restart && !confirm('Restart Hermes now? This can interrupt running workers.')) return;
+    if (restart && !confirm('Restart Hermes after applying profiles? This will fail if Kanban workers are still running.')) return;
     const data = await apiCall('POST', '/api/system/hermes/model-profiles/apply', {
       profiles,
       confirm_paid_auto: paidAuto,
