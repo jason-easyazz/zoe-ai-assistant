@@ -52,6 +52,40 @@ async def test_dispatch_creates_three_linked_phases():
         "multica:uuid-1:review",
         "multica:uuid-1:closeout",
     ]
+    assert result["mode"] == "interactive"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_overnight_mode_extends_runtime(monkeypatch):
+    monkeypatch.setenv("ZOE_KANBAN_OVERNIGHT_MAX_RUNTIME", "8h")
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {
+            "id": "uuid-night",
+            "identifier": "ZOE-NIGHT",
+            "title": "Slow cheap work",
+            "engineering_mode": "overnight",
+        }
+    )
+
+    creates = [c for c in a.calls if c[0] == "create"]
+    runtimes = [c[c.index("--max-runtime") + 1] for c in creates]
+    body = creates[0][creates[0].index("--body") + 1]
+    assert result["mode"] == "overnight"
+    assert runtimes == ["8h", "8h", "8h", "8h"]
+    assert "latency is secondary" in body
+
+
+@pytest.mark.asyncio
+async def test_dispatch_interactive_mode_uses_default_runtime(monkeypatch):
+    monkeypatch.setenv("ZOE_KANBAN_MAX_RUNTIME", "30m")
+    a = _FakeAdapter()
+    await a.dispatch({"id": "uuid-fast", "identifier": "ZOE-FAST", "title": "Immediate work"})
+
+    creates = [c for c in a.calls if c[0] == "create"]
+    assert creates[0][creates[0].index("--max-runtime") + 1] == "30m"
+    body = creates[0][creates[0].index("--body") + 1]
+    assert "Engineering mode: interactive" in body
 
 
 @pytest.mark.asyncio
