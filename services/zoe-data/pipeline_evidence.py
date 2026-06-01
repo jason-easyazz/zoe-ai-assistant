@@ -102,7 +102,14 @@ def transition(state: PipelineState, outcome: TransitionOutcome, *, reason: str 
     elif outcome == "block":
         next_phase = state.phase
         next_status = "blocked"
-    elif outcome in {"request_changes", "verification_failed"}:
+    elif outcome == "request_changes":
+        if state.phase != "review":
+            raise ValueError("request_changes is only valid from review")
+        next_phase = "implement"
+        next_status = "todo"
+    elif outcome == "verification_failed":
+        if state.phase != "verify":
+            raise ValueError("verification_failed is only valid from verify")
         next_phase = "implement"
         next_status = "todo"
     elif outcome == "merge_blocked":

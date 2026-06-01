@@ -74,6 +74,21 @@ def test_review_change_request_loops_to_implement():
     assert next_state.history[-1].reason == "missing rollback test"
 
 
+def test_loop_back_outcomes_are_phase_scoped():
+    with pytest.raises(ValueError, match="request_changes is only valid from review"):
+        transition(PipelineState(task_ref="multica:1", phase="verify"), "request_changes")
+
+    with pytest.raises(ValueError, match="verification_failed is only valid from verify"):
+        transition(PipelineState(task_ref="multica:1", phase="closeout"), "verification_failed")
+
+    state = PipelineState(task_ref="multica:1", phase="verify", status="running")
+    next_state = transition(state, "verification_failed", reason="pytest failed")
+
+    assert next_state.phase == "implement"
+    assert next_state.status == "todo"
+    assert next_state.history[-1].reason == "pytest failed"
+
+
 def test_start_records_attempts_per_phase():
     state = PipelineState(task_ref="multica:1")
 
