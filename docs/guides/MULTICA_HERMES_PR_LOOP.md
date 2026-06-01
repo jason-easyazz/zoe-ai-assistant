@@ -17,11 +17,24 @@ This workflow lets Zoe track engineering work from a Multica issue through Herme
 
 ## Flow
 
-1. A user, API caller, authenticated Multica webhook (`issue.assigned`), board approval, or the Zoe poll bridge creates a Hermes Kanban chain (implement → review → closeout) on DeepSeek worker profiles.
+1. A user, API caller, authenticated Multica webhook (`issue.assigned`), board approval, or the Zoe poll bridge creates a Hermes Kanban chain (implement → review → closeout) on OpenRouter-routed worker profiles.
 2. `zoe-coder` implements on a worktree, opens a small PR, and hands off with `PR_URL=`, `BLOCKER=`, `TESTS=`, `SUMMARY=`.
 3. `zoe-reviewer` runs verification-first checks (structure validators, focused tests, live health).
 4. `zoe-planner` closeout runs the Greptile grep loop (`github-greptile-loop`), squash-merges when Greptile + CI are green (`greploop_guard.py --merge-when-ready`), then updates the Multica issue to done with merge SHA.
 5. The Zoe poll loop advances Multica `in_progress` issues to `done` when the Kanban chain completes.
+
+## Model Routing Policy (Phase 0 cost control)
+
+Worker-chain routing is intentionally different from main chat routing:
+
+- **Main Hermes** (`~/.hermes/config.yaml`):
+  - Primary: `openai-codex / gpt-5.4`
+  - Fallback: `openrouter / openrouter/free`
+- **Kanban workers** (`zoe-planner`, `zoe-coder`, `zoe-reviewer`):
+  - Primary/fallbacks are OpenRouter-only (no direct `gemini` or `openai-api` provider entries)
+  - Current fallback order: `anthropic/claude-sonnet-4.6` → `google/gemini-2.5-flash` → `openrouter/free`
+
+This keeps board execution off Codex usage while preserving a deterministic low-cost fallback path.
 
 ### Webhooks (how Multica talks to Zoe)
 
