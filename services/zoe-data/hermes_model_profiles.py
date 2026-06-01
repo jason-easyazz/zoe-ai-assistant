@@ -51,6 +51,14 @@ def _append_audit(record: dict[str, Any]) -> None:
         fh.write(json.dumps(record, sort_keys=True) + "\n")
 
 
+def _append_audit_best_effort(record: dict[str, Any]) -> str | None:
+    try:
+        _append_audit(record)
+    except OSError as exc:
+        return str(exc)
+    return None
+
+
 def _profile_path(profile: str) -> Path:
     if profile not in PROFILE_PATHS:
         raise ValueError(f"Unknown profile: {profile}")
@@ -373,12 +381,16 @@ def apply_profiles(
             written.append(profile["name"])
     except Exception as exc:
         restored: list[str] = []
+        restore_errors: list[dict[str, str]] = []
         for profile_name in written:
-            backup_file = backup_root / profile_name / _profile_path(profile_name).name
-            if backup_file.exists():
-                shutil.copy2(backup_file, _profile_path(profile_name))
-                restored.append(profile_name)
-        _append_audit(
+            try:
+                backup_file = backup_root / profile_name / _profile_path(profile_name).name
+                if backup_file.exists():
+                    shutil.copy2(backup_file, _profile_path(profile_name))
+                    restored.append(profile_name)
+            except Exception as restore_exc:
+                restore_errors.append({"profile": profile_name, "error": str(restore_exc)})
+        _append_audit_best_effort(
             {
                 "timestamp": ts,
                 "actor": actor,
@@ -387,6 +399,7 @@ def apply_profiles(
                 "profiles": [p["name"] for p in diff["profiles"]],
                 "written": written,
                 "restored": restored,
+                "restore_errors": restore_errors,
                 "backup_dir": str(backup_root),
             }
         )
@@ -423,10 +436,9 @@ def apply_profiles(
         "restart_result": restart_result,
     }
     audit_warning = None
-    try:
-        _append_audit(audit)
-    except OSError as exc:
-        audit_warning = f"Profiles applied, but audit append failed: {exc}"
+    audit_error = _append_audit_best_effort(audit)
+    if audit_error:
+        audit_warning = f"Profiles applied, but audit append failed: {audit_error}"
     return {**diff, "backup_dir": str(backup_root), "restart": restart_result, "audit_warning": audit_warning}
 
 
@@ -452,7 +464,7 @@ def rollback_profiles(backup_dir_value: str | None, *, actor: str) -> dict[str, 
             shutil.copy2(backup_file, target)
             restored.append(profile_name)
     except Exception as exc:
-        _append_audit(
+        _append_audit_best_effort(
             {
                 "timestamp": datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
                 "actor": actor,
@@ -464,6 +476,16 @@ def rollback_profiles(backup_dir_value: str | None, *, actor: str) -> dict[str, 
         )
         raise
     if not restored:
+        _append_audit_best_effort(
+            {
+                "timestamp": datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
+                "actor": actor,
+                "status": "rollback_failed",
+                "error": "no known profile configs in backup",
+                "rollback_dir": str(selected),
+                "restored": [],
+            }
+        )
         raise ValueError("Selected rollback backup contains no known profile configs")
 
     audit = {
@@ -473,6 +495,7 @@ def rollback_profiles(backup_dir_value: str | None, *, actor: str) -> dict[str, 
         "rollback_dir": str(selected),
         "restored": restored,
     }
-    _append_audit(audit)
-    return {"ok": True, "rollback_dir": str(selected), "restored": restored}
+    audit_error = _append_audit_best_effort(audit)
+    audit_warning = f"Rollback succeeded, but audit append failed: {audit_error}" if audit_error else None
+    return {"ok": True, "rollback_dir": str(selected), "restored": restored, "audit_warning": audit_warning}
 

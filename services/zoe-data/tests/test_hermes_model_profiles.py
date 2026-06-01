@@ -248,6 +248,59 @@ def test_apply_failure_writes_failed_audit_and_restores_written_profiles(hermes_
     assert audit["restored"] == ["main"]
 
 
+def test_apply_failure_preserves_original_error_when_audit_fails(hermes_home, monkeypatch):
+    monkeypatch.setattr(hmp, "count_running_workers", lambda: 0)
+
+    def fail_dump(path, profile):
+        raise OSError("disk full")
+
+    def fail_audit(record):
+        raise OSError("audit read-only")
+
+    monkeypatch.setattr(hmp, "_dump_yaml", fail_dump)
+    monkeypatch.setattr(hmp, "_append_audit", fail_audit)
+
+    with pytest.raises(OSError, match="disk full"):
+        hmp.apply_profiles(
+            [{"name": "main", "provider": "openrouter", "model": "changed/main", "fallbacks": []}],
+            actor="tester",
+        )
+
+
+def test_apply_failure_preserves_original_error_when_restore_fails(hermes_home, monkeypatch):
+    monkeypatch.setattr(hmp, "count_running_workers", lambda: 0)
+    original_dump = hmp._dump_yaml
+    original_copy = hmp.shutil.copy2
+    calls = {"count": 0}
+
+    def flaky_dump(path, profile):
+        calls["count"] += 1
+        if calls["count"] == 2:
+            raise OSError("disk full")
+        return original_dump(path, profile)
+
+    def flaky_copy(src, dst):
+        if "rollback/model-profiles" in str(src):
+            raise OSError("restore failed")
+        return original_copy(src, dst)
+
+    monkeypatch.setattr(hmp, "_dump_yaml", flaky_dump)
+    monkeypatch.setattr(hmp.shutil, "copy2", flaky_copy)
+
+    with pytest.raises(OSError, match="disk full"):
+        hmp.apply_profiles(
+            [
+                {"name": "main", "provider": "openrouter", "model": "changed/main", "fallbacks": []},
+                {"name": "zoe-coder", "provider": "openrouter", "model": "changed/coder", "fallbacks": []},
+            ],
+            actor="tester",
+        )
+
+    audit = json.loads((hermes_home / "model-profile-audit.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+    assert audit["status"] == "failed"
+    assert audit["restore_errors"] == [{"profile": "main", "error": "restore failed"}]
+
+
 def test_rollback_rejects_rollback_root(hermes_home):
     root = hmp.rollback_dir()
     root.mkdir(parents=True)
@@ -274,4 +327,24 @@ def test_rollback_failure_writes_failed_audit(hermes_home, monkeypatch):
     audit = json.loads((hermes_home / "model-profile-audit.jsonl").read_text(encoding="utf-8").splitlines()[-1])
     assert audit["status"] == "rollback_failed"
     assert audit["rollback_dir"] == result["backup_dir"]
+
+
+def test_rollback_failure_preserves_original_error_when_audit_fails(hermes_home, monkeypatch):
+    monkeypatch.setattr(hmp, "count_running_workers", lambda: 0)
+    result = hmp.apply_profiles(
+        [{"name": "main", "provider": "openrouter", "model": "changed/model", "fallbacks": []}],
+        actor="tester",
+    )
+
+    def fail_copy(src, dst):
+        raise OSError("restore failed")
+
+    def fail_audit(record):
+        raise OSError("audit read-only")
+
+    monkeypatch.setattr(hmp.shutil, "copy2", fail_copy)
+    monkeypatch.setattr(hmp, "_append_audit", fail_audit)
+
+    with pytest.raises(OSError, match="restore failed"):
+        hmp.rollback_profiles(result["backup_dir"], actor="tester")
 
