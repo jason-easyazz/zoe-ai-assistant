@@ -394,17 +394,23 @@ def apply_profiles(
 
     restart_result = None
     if restart:
-        restarted = subprocess.run(
-            ["systemctl", "--user", "restart", "hermes-agent.service"],
-            check=False,
-            text=True,
-            capture_output=True,
-            timeout=30,
-        )
-        restart_result = {
-            "returncode": restarted.returncode,
-            "stderr": restarted.stderr[-4000:],
-        }
+        try:
+            restarted = subprocess.run(
+                ["systemctl", "--user", "restart", "hermes-agent.service"],
+                check=False,
+                text=True,
+                capture_output=True,
+                timeout=30,
+            )
+            restart_result = {
+                "returncode": restarted.returncode,
+                "stderr": restarted.stderr[-4000:],
+            }
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            restart_result = {
+                "returncode": -1,
+                "stderr": f"hermes-agent.service restart failed after profiles applied: {exc}",
+            }
 
     audit = {
         "timestamp": ts,
@@ -414,6 +420,7 @@ def apply_profiles(
         "restart": restart,
         "force_restart": force_restart,
         "backup_dir": str(backup_root),
+        "restart_result": restart_result,
     }
     audit_warning = None
     try:
