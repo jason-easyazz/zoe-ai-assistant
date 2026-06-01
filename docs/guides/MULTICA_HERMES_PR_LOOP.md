@@ -116,6 +116,15 @@ Keep `ZOE_BOARD_REVIEW_AUTOPILOT_ENABLED=false` (the Zoe poll loop and cron own 
 ## Local Verification
 
 ```bash
+python3 scripts/maintenance/engineering_harness_loop.py --mode full
+python3 scripts/maintenance/engineering_harness_loop.py --mode kanban-dry --skip-scout
+```
+
+See [ENGINEERING_HARNESS_LOOP.md](./ENGINEERING_HARNESS_LOOP.md) for modes, exit codes, and pipeline JSONL findings.
+
+Legacy one-liners (subset of the harness):
+
+```bash
 python3 -m pytest services/zoe-data/tests/test_kanban_adapter.py services/zoe-data/tests/test_pipeline_evidence.py services/zoe-data/tests/test_executor_registry.py services/zoe-data/tests/test_multica_webhook_emitter.py services/zoe-data/tests/test_multica_client.py services/zoe-data/tests/test_multica_poll_dispatch.py services/zoe-data/tests/test_runtime_env.py -q
 python3 -m py_compile services/zoe-data/executor_registry.py services/zoe-data/executors/kanban_adapter.py services/zoe-data/multica_webhook_emitter.py services/zoe-data/multica_client.py services/zoe-data/runtime_env.py
 python3 tools/audit/validate_structure.py

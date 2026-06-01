@@ -96,6 +96,22 @@ async def test_sync_pipeline_fingerprint_abort(isolated_store):
 
 
 @pytest.mark.asyncio
+async def test_sync_pipeline_blocked_records_reason_in_history(isolated_store):
+    await store.bootstrap_state("multica:block-reason")
+
+    async def fetch_detail(_task_id: str):
+        return {"latest_summary": "BLOCKER=dirty tree", "comments": []}
+
+    phases = {"implement": {"id": "t1", "status": "blocked", "block_reason": "dirty tree"}}
+    state = await store.sync_pipeline_from_chain("multica:block-reason", phases, fetch_detail)
+    assert state.status == "blocked"
+    assert state.history[-1].reason == "dirty tree"
+
+    last = json.loads(isolated_store.read_text(encoding="utf-8").strip().splitlines()[-1])
+    assert last["meta"]["block_reason"] == "dirty tree"
+
+
+@pytest.mark.asyncio
 async def test_sync_pipeline_auto_validators_on_implement_done(isolated_store, monkeypatch):
     await store.bootstrap_state("multica:val")
 
