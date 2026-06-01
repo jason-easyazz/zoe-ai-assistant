@@ -1,10 +1,12 @@
 """Tests for background_runner Hermes worker-profile routing."""
 import asyncio
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 import background_runner as br
+from hermes_http import zoe_repo_root
 
 
 def test_background_profile_defaults_to_zoe_coder(monkeypatch):
@@ -17,6 +19,12 @@ def test_background_profile_defaults_to_zoe_coder(monkeypatch):
 def test_background_profile_honours_env_override(monkeypatch):
     monkeypatch.setenv("HERMES_BACKGROUND_PROFILE", "zoe-planner")
     assert br._background_profile() == "zoe-planner"
+
+
+def test_zoe_repo_root_is_portable(monkeypatch):
+    monkeypatch.delenv("ZOE_REPO_ROOT", raising=False)
+    root = zoe_repo_root()
+    assert (Path(root) / "services" / "zoe-data").is_dir()
 
 
 @pytest.mark.asyncio
@@ -47,3 +55,4 @@ async def test_run_hermes_background_task_uses_worker_cli(monkeypatch):
     assert "-p" in cmd and "zoe-coder" in cmd
     assert "--accept-hooks" in cmd and "-z" in cmd
     assert "audit validators only" in cmd[-1]
+    assert captured["kwargs"]["cwd"] == zoe_repo_root()

@@ -14,12 +14,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import shutil
 import time
 import uuid
 from datetime import datetime, timezone
 
-from hermes_http import hermes_auth_headers
+from hermes_http import hermes_auth_headers, hermes_bin, zoe_repo_root
 
 logger = logging.getLogger(__name__)
 
@@ -36,16 +35,6 @@ _MAX_REQUEST_DEPTH = 3
 # Background tasks run through a Kanban worker profile (OpenRouter), not the main
 # Codex gateway. Override with HERMES_BACKGROUND_PROFILE or HERMES_BACKGROUND_MODEL.
 _DEFAULT_BACKGROUND_PROFILE = "zoe-coder"
-
-
-def _hermes_bin() -> str:
-    override = os.environ.get("HERMES_BIN", "").strip()
-    if override:
-        return override
-    found = shutil.which("hermes")
-    if found:
-        return found
-    return os.path.expanduser("~/.local/bin/hermes")
 
 
 def _background_profile() -> str:
@@ -243,7 +232,7 @@ async def _run_hermes_background_task(task: str, *, user_id: str, task_id: int) 
     """
     profile = _background_profile()
     timeout_s = float(os.environ.get("HERMES_BACKGROUND_TIMEOUT_S", "900"))
-    repo_root = os.environ.get("ZOE_REPO_ROOT", "/home/zoe/assistant")
+    repo_root = zoe_repo_root()
     prompt = (
         "You are Hermes running a Zoe background task. "
         "Use Zoe tools and CloakBrowser MCP tools when needed. "
@@ -253,7 +242,7 @@ async def _run_hermes_background_task(task: str, *, user_id: str, task_id: int) 
         f"Task:\n{task}"
     )
     cmd = [
-        _hermes_bin(),
+        hermes_bin(),
         "-p",
         profile,
         "--accept-hooks",

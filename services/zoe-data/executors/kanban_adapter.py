@@ -25,9 +25,10 @@ import json
 import logging
 import os
 import re
-import shutil
 from pathlib import Path
 from typing import Any
+
+from hermes_http import hermes_bin, zoe_repo_root
 
 logger = logging.getLogger(__name__)
 
@@ -74,28 +75,6 @@ def _row_ref_key(row: dict) -> str:
     return match.group(1) if match else ""
 
 
-def _hermes_bin() -> str:
-    """Locate the hermes CLI; honour HERMES_BIN override."""
-    override = os.environ.get("HERMES_BIN", "").strip()
-    if override:
-        return override
-    found = shutil.which("hermes")
-    if found:
-        return found
-    candidate = os.path.expanduser("~/.local/bin/hermes")
-    return candidate
-
-
-def _repo_root() -> str:
-    env = os.environ.get("ZOE_REPO_ROOT", "").strip()
-    if env:
-        return env
-    # Derive the repo root from this file's location so non-standard deployments
-    # (different user/install path) work without ZOE_REPO_ROOT set:
-    # services/zoe-data/executors/kanban_adapter.py -> repo root is 3 levels up.
-    return str(Path(__file__).resolve().parents[3])
-
-
 def _board() -> str:
     return os.environ.get("ZOE_KANBAN_BOARD", "default")
 
@@ -104,7 +83,7 @@ def _greptile_mcp_bin() -> str:
     """Locate the operator-local greptile MCP CLI; honour GREPTILE_MCP_BIN override.
 
     This is an operator-installed binary (not in the repo), so mirror the
-    ``_hermes_bin`` pattern: prefer the env override, fall back to the standard
+    ``hermes_bin`` pattern: prefer the env override, fall back to the standard
     install path. Keeps the closeout worker portable across hosts/users instead
     of silently stalling the Greptile loop when the path differs.
     """
@@ -243,7 +222,7 @@ class KanbanAdapter:
     name = NAME
 
     async def _run(self, args: list[str], *, expect_json: bool = False) -> Any:
-        cmd = [_hermes_bin(), "kanban", "--board", _board(), *args]
+        cmd = [hermes_bin(), "kanban", "--board", _board(), *args]
         env = dict(os.environ)
         env.setdefault("HERMES_KANBAN_BOARD", _board())
         try:
@@ -251,7 +230,7 @@ class KanbanAdapter:
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                cwd=_repo_root(),
+                cwd=zoe_repo_root(),
                 env=env,
             )
         except OSError as exc:
@@ -301,7 +280,7 @@ class KanbanAdapter:
             f"zoe-chain: v3\n"
             f"{escalation_marker}"
             f"{mode_note}"
-            f"Repo: {_repo_root()}  |  Base branch: main  |  Workspace: git worktree\n\n"
+            f"Repo: {zoe_repo_root()}  |  Base branch: main  |  Workspace: git worktree\n\n"
             f"Title: {title}\n\n{description}\n\n"
         )
         if phase == "scout":
