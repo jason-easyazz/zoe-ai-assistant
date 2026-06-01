@@ -165,10 +165,14 @@ def _chain_for_issue(issue: dict) -> tuple[tuple[str, str, tuple[str, ...]], ...
 
 def _expected_phases(phases: dict[str, dict]) -> set[str]:
     present = set(phases)
+    bodies = [(phases[p].get("body") or "") for p in present]
+    v3_chain = any("zoe-chain: v3" in body for body in bodies)
     if present <= set(_LEGACY_CHAIN_PHASES) and "verify" not in present:
         return set(_LEGACY_CHAIN_PHASES)
     if "scout" in present:
         return {p for p, _, _ in _CHAIN}
+    if v3_chain:
+        return set(_V2_CHAIN_PHASES) | {"retro"}
     if "retro" in present:
         return set(_V2_CHAIN_PHASES) | {"retro"}
     if "verify" in present:
@@ -239,6 +243,7 @@ class KanbanAdapter:
         common = (
             f"Multica issue: {identifier} (id {issue_id})\n"
             f"zoe-ref: multica:{issue_id}:{phase}\n"
+            f"zoe-chain: v3\n"
             f"{mode_note}"
             f"Repo: {_repo_root()}  |  Base branch: main  |  Workspace: git worktree\n\n"
             f"Title: {title}\n\n{description}\n\n"
@@ -356,7 +361,7 @@ class KanbanAdapter:
         )
 
     async def dispatch(self, issue: dict) -> dict:
-        """Create (idempotently) the implement->verify->review->closeout chain for a Multica issue.
+        """Create (idempotently) the scout->implement->verify->review->closeout->retro chain.
 
         Returns {ok, external_ref, chain:{phase:task_id}, created:[phases], mode}.
         """

@@ -196,12 +196,12 @@ async def test_retro_body_captures_learnings():
 @pytest.mark.asyncio
 async def test_poll_done_when_retro_completes():
     rows = [
-        _row("scout", "done"),
-        _row("implement", "done"),
-        _row("verify", "done"),
-        _row("review", "done"),
-        _row("closeout", "done"),
-        _row("retro", "done"),
+        _row("scout", "done", v3=True),
+        _row("implement", "done", v3=True),
+        _row("verify", "done", v3=True),
+        _row("review", "done", v3=True),
+        _row("closeout", "done", v3=True),
+        _row("retro", "done", v3=True),
     ]
     a = _FakeAdapter(list_rows=rows)
     out = await a.poll("multica:uuid-9")
@@ -223,18 +223,45 @@ async def test_poll_v2_chain_done_at_closeout_without_retro():
 
 
 @pytest.mark.asyncio
+async def test_poll_skip_scout_v3_chain_done_when_retro_completes():
+    rows = [
+        _row("implement", "done", v3=True),
+        _row("verify", "done", v3=True),
+        _row("review", "done", v3=True),
+        _row("closeout", "done", v3=True),
+        _row("retro", "done", v3=True),
+    ]
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:uuid-9")
+    assert out["status"] == "done"
+
+
+@pytest.mark.asyncio
 async def test_poll_running_when_closeout_done_but_retro_pending():
     rows = [
-        _row("scout", "done"),
-        _row("implement", "done"),
-        _row("verify", "done"),
-        _row("review", "done"),
-        _row("closeout", "done"),
-        _row("retro", "todo"),
+        _row("scout", "done", v3=True),
+        _row("implement", "done", v3=True),
+        _row("verify", "done", v3=True),
+        _row("review", "done", v3=True),
+        _row("closeout", "done", v3=True),
+        _row("retro", "todo", v3=True),
     ]
     a = _FakeAdapter(list_rows=rows)
     out = await a.poll("multica:uuid-9")
     assert out["status"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_poll_skip_scout_v3_partial_missing_retro_is_redispatchable():
+    rows = [
+        _row("implement", "done", v3=True),
+        _row("verify", "done", v3=True),
+        _row("review", "done", v3=True),
+        _row("closeout", "done", v3=True),
+    ]
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:uuid-9")
+    assert out["status"] == "partial"
 
 
 @pytest.mark.asyncio
@@ -325,9 +352,12 @@ async def test_poll_partial_chain_is_redispatchable():
 
 def _row(phase, status, **extra):
     """A Kanban list row shaped like the real CLI: body marker, NO idempotency_key."""
+    body = f"Multica issue: ZOE-9 (id uuid-9)\nzoe-ref: multica:uuid-9:{phase}\nTitle: x"
+    if extra.pop("v3", False):
+        body = f"Multica issue: ZOE-9 (id uuid-9)\nzoe-ref: multica:uuid-9:{phase}\nzoe-chain: v3\nTitle: x"
     return {
         "id": f"t_{phase}",
-        "body": f"Multica issue: ZOE-9 (id uuid-9)\nzoe-ref: multica:uuid-9:{phase}\nTitle: x",
+        "body": body,
         "status": status,
         **extra,
     }
