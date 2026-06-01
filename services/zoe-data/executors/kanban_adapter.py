@@ -41,7 +41,9 @@ _CHAIN = (
     (
         "implement",
         "zoe-coder",
-        ("zoe-engineering", "zoe-graphify", "source-code-context", "code-structure-cleanup"),
+        # Keep preloaded skills minimal — full guidance lives in zoe-engineering; large
+        # preload exceeds OpenRouter per-request prompt caps (~30k tokens).
+        ("zoe-engineering",),
     ),
     ("verify", "zoe-reviewer", ("zoe-engineering",)),
     ("review", "zoe-reviewer", ("zoe-engineering",)),

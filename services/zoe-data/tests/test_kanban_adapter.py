@@ -372,7 +372,7 @@ async def test_dispatch_pins_expected_skills():
     closeout_skills = [creates[4][i + 1] for i, v in enumerate(creates[4]) if v == "--skill"]
     retro_skills = [creates[5][i + 1] for i, v in enumerate(creates[5]) if v == "--skill"]
     assert "zoe-graphify" in scout_skills
-    assert "zoe-graphify" in impl_skills and "code-structure-cleanup" in impl_skills
+    assert impl_skills == ["zoe-engineering"]
     assert "zoe-engineering" in verify_skills
     assert "github-greptile-loop" in closeout_skills
     assert "zoe-status-refresh" in retro_skills

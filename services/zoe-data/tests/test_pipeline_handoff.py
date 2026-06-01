@@ -68,7 +68,9 @@ def test_evidence_from_implement_skills_graphify():
 def test_closeout_greptile_from_pinned_skill():
     detail = {"latest_summary": "PR_URL=https://github.com/o/r/pull/2\nSUMMARY=merged", "comments": []}
     items = evidence_from_handoff("closeout", detail, skills=("github-greptile-loop",))
-    assert any(item.kind == "greptile" for item in items)
+    greptile = [item for item in items if item.kind == "greptile"]
+    assert greptile
+    assert greptile[0].passed is None
 
 
 def test_block_reason_from_log_tail_when_blocker_missing():

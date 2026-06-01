@@ -142,7 +142,7 @@ def _greptile_from_closeout(detail: dict[str, Any], skills: tuple[str, ...] | li
     return EvidenceItem(
         kind="greptile",
         summary="github-greptile-loop pinned for closeout",
-        passed=True,
+        passed=None,
         metadata={"source": "skills"},
     )
 
