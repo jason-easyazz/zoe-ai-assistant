@@ -1,19 +1,22 @@
 """Hermes Kanban executor adapter.
 
-Turns a Multica issue into a durable implement -> review -> closeout chain on
-the Hermes Kanban board, where OpenRouter-routed worker profiles do the work. All
-Kanban-specific behaviour lives here so it never leaks into Zoe core.
+Turns a Multica issue into a durable scout -> implement -> verify -> review ->
+closeout -> retro chain on the Hermes Kanban board, where OpenRouter-routed worker
+profiles do the work. All Kanban-specific behaviour lives here so it never leaks
+into Zoe core.
 
 Boundary: this shells the ``hermes kanban`` CLI (same SQLite DB the in-gateway
 dispatcher reads) rather than importing Hermes internals — keeping Zoe
 surface-agnostic.
 
 Worker profiles + pinned skills encode Zoe's agentic-engineering loop:
+  - scout     (zoe-planner):  zoe-graphify, zoe-engineering     (read-only context)
   - implement (zoe-coder):  zoe-engineering, zoe-graphify, source-code-context,
                             code-structure-cleanup  (graph-first, opensrc, lean)
   - verify    (zoe-reviewer): zoe-engineering           (tests/evidence gate)
   - review    (zoe-reviewer): zoe-engineering           (verification gate)
   - closeout  (zoe-planner):  github-greptile-loop      (grep-loop, merge, Multica done)
+  - retro     (zoe-planner):  zoe-status-refresh        (learnings, optional loop)
 """
 from __future__ import annotations
 
@@ -33,6 +36,7 @@ NAME = "kanban"
 # Phases of the per-issue chain, in order. Each maps to a worker profile and the
 # skills it must load. Keys double as the idempotency-key suffix (multica:{id}:<phase>).
 _CHAIN = (
+    ("scout", "zoe-planner", ("zoe-graphify", "zoe-engineering")),
     (
         "implement",
         "zoe-coder",
@@ -41,8 +45,10 @@ _CHAIN = (
     ("verify", "zoe-reviewer", ("zoe-engineering",)),
     ("review", "zoe-reviewer", ("zoe-engineering",)),
     ("closeout", "zoe-planner", ("github-greptile-loop",)),
+    ("retro", "zoe-planner", ("zoe-status-refresh",)),
 )
 _LEGACY_CHAIN_PHASES = ("implement", "review", "closeout")
+_V2_CHAIN_PHASES = ("implement", "verify", "review", "closeout")
 
 _ACTIVE_KANBAN_STATUSES = {"triage", "todo", "ready", "running", "blocked"}
 _TERMINAL_KANBAN_STATUSES = {"done", "archived"}
@@ -125,13 +131,49 @@ def _engineering_mode(issue: dict | None = None) -> str:
     mode = str(raw).strip().lower()
     if mode in {"overnight", "background", "self_evolution", "self-evolution"}:
         return "overnight"
+    if mode in {"quality-escalation", "quality_escalation", "escalation"}:
+        return "quality-escalation"
     return "interactive"
 
 
 def _max_runtime(mode: str = "interactive") -> str:
     if mode == "overnight":
         return os.environ.get("ZOE_KANBAN_OVERNIGHT_MAX_RUNTIME", "6h")
+    if mode == "quality-escalation":
+        return os.environ.get("ZOE_KANBAN_ESCALATION_MAX_RUNTIME", "90m")
     return os.environ.get("ZOE_KANBAN_MAX_RUNTIME", "45m")
+
+
+def _skip_scout(issue: dict | None = None) -> bool:
+    issue = issue or {}
+    if str(os.environ.get("ZOE_KANBAN_SKIP_SCOUT", "")).strip().lower() in {"1", "true", "yes"}:
+        return True
+    meta = issue.get("metadata") or {}
+    return str(meta.get("skip_scout") or issue.get("skip_scout") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+
+
+def _chain_for_issue(issue: dict) -> tuple[tuple[str, str, tuple[str, ...]], ...]:
+    phases = _CHAIN
+    if _skip_scout(issue):
+        phases = tuple(p for p in phases if p[0] != "scout")
+    return phases
+
+
+def _expected_phases(phases: dict[str, dict]) -> set[str]:
+    present = set(phases)
+    if present <= set(_LEGACY_CHAIN_PHASES) and "verify" not in present:
+        return set(_LEGACY_CHAIN_PHASES)
+    if "scout" in present:
+        return {p for p, _, _ in _CHAIN}
+    if "retro" in present:
+        return set(_V2_CHAIN_PHASES) | {"retro"}
+    if "verify" in present:
+        return set(_V2_CHAIN_PHASES)
+    return {p for p, _, _ in _CHAIN}
 
 
 class KanbanCLIError(RuntimeError):
@@ -181,6 +223,9 @@ class KanbanAdapter:
             "Engineering mode: overnight. Prioritize free/reliable local or OpenRouter-low-cost routes;"
             " latency is secondary to evidence quality.\n"
             if mode == "overnight"
+            else "Engineering mode: quality-escalation. Paid quality routes are allowed only after"
+            " evidence shows cheaper paths failed or architecture sensitivity requires it.\n"
+            if mode == "quality-escalation"
             else "Engineering mode: interactive. Keep user-visible latency and review size tight.\n"
         )
         # `zoe-ref:` is a machine marker that lets poll() correlate this task back
@@ -198,6 +243,16 @@ class KanbanAdapter:
             f"Repo: {_repo_root()}  |  Base branch: main  |  Workspace: git worktree\n\n"
             f"Title: {title}\n\n{description}\n\n"
         )
+        if phase == "scout":
+            return common + (
+                "You are scout (zoe-planner, read-only). Gather context before any code changes.\n"
+                "- Start with `kanban_show` and read the Multica issue acceptance criteria.\n"
+                "- Use Graphify (query/path/explain) and existing docs before raw repo scanning.\n"
+                "- Use opensrc for third-party APIs; reference Multica comments/state as source of truth.\n"
+                "- Do NOT edit code, open PRs, or mutate production config.\n"
+                "- Hand off with `kanban_complete` metadata including TOOLS_USED= and SCOUT_SUMMARY=.\n"
+                "- TERMINAL PROTOCOL: end with `kanban_complete` or `kanban_block` (no silent exit)."
+            )
         if phase == "implement":
             return common + (
                 "You are the implementer (zoe-coder). Start with `kanban_show` to confirm this task id.\n"
@@ -261,6 +316,17 @@ class KanbanAdapter:
                 " with an explicit reason instead.\n"
                 "- Record findings (pass/fail/concern) and a merge-readiness verdict in your handoff."
             )
+        if phase == "retro":
+            return common + (
+                "You are retro (zoe-planner). Capture learnings after closeout — no silent prod changes.\n"
+                "- Read closeout/implement handoffs and any Greptile or validator notes.\n"
+                "- Summarize what worked, what failed, and one small harness improvement proposal.\n"
+                "- Do NOT merge, refactor broadly, or change production behavior from this phase.\n"
+                "- Hand off with `kanban_complete` metadata: RETRO= or LEARNINGS= plus TOOLS_USED=.\n"
+                "- If a concrete follow-up needs code, note it for a NEW Multica issue — do not loop here"
+                " unless the operator explicitly marked this issue for a revision cycle.\n"
+                "- TERMINAL PROTOCOL: end with `kanban_complete` or `kanban_block`."
+            )
         # closeout
         return common + (
             "You are closeout (zoe-planner, orchestration only).\n"
@@ -305,7 +371,8 @@ class KanbanAdapter:
         created: list[str] = []
         parent: str | None = None
         mode = _engineering_mode(issue)
-        for phase, assignee, skills in _CHAIN:
+        phase_plan = _chain_for_issue(issue)
+        for phase, assignee, skills in phase_plan:
             args = [
                 "create",
                 self._title(phase, identifier, issue),
@@ -342,19 +409,26 @@ class KanbanAdapter:
         try:
             from pipeline_store import bootstrap_state
 
-            await bootstrap_state(external_ref, start_phase="implement")
+            await bootstrap_state(
+                external_ref,
+                start_phase="implement" if _skip_scout(issue) else "scout",
+            )
         except Exception as exc:
             logger.debug("kanban_adapter: pipeline bootstrap skipped for %s: %s", external_ref, exc)
         return {"ok": True, "external_ref": external_ref, "chain": chain, "created": created, "mode": mode}
 
     def _title(self, phase: str, identifier: str, issue: dict) -> str:
         base = issue.get("title") or identifier
+        if phase == "scout":
+            return f"Scout {identifier}"[:140]
         if phase == "implement":
             return f"{identifier}: {base}"[:140]
         if phase == "review":
             return f"Review {identifier}"[:140]
         if phase == "verify":
             return f"Verify {identifier}"[:140]
+        if phase == "retro":
+            return f"Retro {identifier}"[:140]
         return f"Closeout {identifier}"[:140]
 
     async def poll(self, external_ref: str) -> dict:
@@ -392,13 +466,12 @@ class KanbanAdapter:
                 break
 
         closeout = phases.get("closeout", {})
-        # Format invariant: new chains are created serially as implement->verify->review->closeout.
-        # If `verify` is absent, the row set is either a legacy 3-phase chain or a partial
-        # new chain that failed before verify; both are safe to evaluate against the legacy
-        # required set so re-dispatch can backfill only genuinely missing phases.
-        expected = set(tuple(p for p, _, _ in _CHAIN) if "verify" in phases else _LEGACY_CHAIN_PHASES)
+        retro = phases.get("retro", {})
+        expected = _expected_phases(phases)
         missing = expected - set(phases)
-        if (closeout.get("status") or "") in _TERMINAL_KANBAN_STATUSES:
+        if retro and (retro.get("status") or "") in _TERMINAL_KANBAN_STATUSES:
+            agg = "done"
+        elif (closeout.get("status") or "") in _TERMINAL_KANBAN_STATUSES and "retro" not in expected:
             agg = "done"
         elif blocker:
             agg = "blocked"
@@ -439,7 +512,7 @@ class KanbanAdapter:
     async def _extract_pr_url(self, phases: dict[str, dict]) -> str | None:
         """Pull a PR URL from the implement/closeout task summaries or comments."""
         pattern = re.compile(r"https://github\.com/[^/\s]+/[^/\s]+/pull/\d+")
-        for phase in ("closeout", "implement", "verify", "review"):
+        for phase in ("closeout", "retro", "implement", "verify", "review", "scout"):
             row = phases.get(phase)
             if not row:
                 continue

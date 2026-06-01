@@ -17,12 +17,14 @@ This workflow lets Zoe track engineering work from a Multica issue through Herme
 
 ## Flow
 
-1. A user, API caller, authenticated Multica webhook (`issue.assigned`), board approval, or the Zoe poll bridge creates a Hermes Kanban chain (**implement → verify → review → closeout**) on OpenRouter-routed worker profiles. Legacy in-flight chains may still be on the older **implement → review → closeout** path; poll treats them as complete when closeout finishes.
-2. `zoe-coder` implements on a worktree, opens a small PR, and hands off with `PR_URL=`, `BLOCKER=`, `TESTS=`, `TOOLS_USED=`, `SUMMARY=`.
-3. `zoe-reviewer` **verify** runs the objective evidence gate (structure validators, focused tests, live health) before review spends tokens.
-4. `zoe-reviewer` **review** checks diff scope and verify-phase evidence; blocks or requests changes when evidence is missing.
-5. `zoe-planner` **closeout** runs the Greptile grep loop (`github-greptile-loop`), squash-merges when Greptile + CI are green (`greploop_guard.py --merge-when-ready`), then updates the Multica issue.
-6. The Zoe poll loop advances Multica `in_progress` issues to `done` when the Kanban chain completes. Structured evidence uses the `pipeline_evidence` contract; fail-closed gates block phase advancement when required evidence is absent.
+1. A user, API caller, authenticated Multica webhook (`issue.assigned`), board approval, or the Zoe poll bridge creates a Hermes Kanban chain (**scout → implement → verify → review → closeout → retro**) on OpenRouter-routed worker profiles. Set `ZOE_KANBAN_SKIP_SCOUT=1` or issue `skip_scout` metadata to omit scout on well-scoped tasks. Legacy in-flight chains may still be on older paths; poll treats them as complete when closeout (or retro, when present) finishes.
+2. `zoe-planner` **scout** gathers Graphify/opensrc/Multica context read-only (no code changes).
+3. `zoe-coder` **implement** opens a small PR and hands off with `PR_URL=`, `BLOCKER=`, `TESTS=`, `TOOLS_USED=`, `SUMMARY=`.
+4. `zoe-reviewer` **verify** runs the objective evidence gate (structure validators, focused tests, live health) before review spends tokens.
+5. `zoe-reviewer` **review** checks diff scope and verify-phase evidence; blocks or requests changes when evidence is missing.
+6. `zoe-planner` **closeout** runs the Greptile grep loop (`github-greptile-loop`), squash-merges when Greptile + CI are green (`greploop_guard.py --merge-when-ready`), then updates the Multica issue.
+7. `zoe-planner` **retro** captures learnings and optional harness improvements (no silent production changes).
+8. The Zoe poll loop advances Multica `in_progress` issues to `done` when retro completes (or closeout for legacy/v2 chains without retro). Structured evidence uses `pipeline_evidence` + JSONL `pipeline_store`; fail-closed gates block phase advancement when required evidence is absent.
 
 ## Model Routing Policy (Phase 0 cost control)
 
@@ -78,12 +80,13 @@ what's the hermes engineering status
 
 Expected Kanban chain progression (per Multica issue):
 
+- `scout` (`zoe-planner`) — Graphify/opensrc/Multica context only; `TOOLS_USED=` + `SCOUT_SUMMARY=` handoff.
 - `implement` (`zoe-coder`) — graphify/opensrc first, smallest reviewable change, small PR on a worktree. Terminal protocol: `kanban_complete` or `kanban_block` on the last turn. Handoff metadata must include `PR_URL`, `TESTS`, `TOOLS_USED`, `SUMMARY`.
 - `verify` (`zoe-reviewer`) — objective test/evidence gate before review; records validator + test outcomes. Fail-closed: missing evidence blocks advancement.
 - `review` (`zoe-reviewer`) — diff/scope/architecture check against verify evidence; may loop back to implement via revision metadata.
 - `closeout` (`zoe-planner`) — Greptile grep loop, squash merge when ready, Multica status update.
-- Engineering mode: `ZOE_ENGINEERING_MODE=interactive|overnight` (or issue `engineering_mode` metadata) adjusts worker runtime and cost preference.
-- The Zoe poll loop advances the Multica issue to `done` when closeout (or retro, when present) completes.
+- `retro` (`zoe-planner`) — learnings + optional follow-up issue; pipeline completes when retro finishes.
+- Engineering mode: `ZOE_ENGINEERING_MODE=interactive|overnight|quality-escalation` (or issue metadata) adjusts worker runtime and cost preference.
 
 ## Board rollout
 
