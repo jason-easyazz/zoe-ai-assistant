@@ -64,7 +64,8 @@ def invalidate_cache() -> None:
 def _read_local_version() -> str:
     """Read the installed Zoe platform version from the VERSION file."""
     try:
-        return open(VERSION_FILE, encoding="utf-8").read().strip()
+        with open(VERSION_FILE, encoding="utf-8") as fh:
+            return fh.read().strip()
     except OSError:
         return "dev"
 
