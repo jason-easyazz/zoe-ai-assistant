@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import re
-from typing import Optional
+from typing import Any, Optional
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
@@ -210,6 +210,123 @@ def _load_skills_and_cron():
 
 
 _DEFAULT_OPENCLAW_PREFS = {"openclaw_auto_update": "notify"}
+
+
+class HermesProfilesRequest(BaseModel):
+    profiles: list[dict[str, Any]]
+    confirm_paid_auto: bool = False
+
+
+class HermesProfilesApplyRequest(BaseModel):
+    profiles: list[dict[str, Any]] | None = None
+    confirm_paid_auto: bool = False
+    restart: bool = False
+    force_restart: bool = False
+
+
+class HermesProfilesRollbackRequest(BaseModel):
+    backup_dir: str | None = None
+
+
+def _hermes_profile_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, RuntimeError):
+        status = 409
+    elif isinstance(exc, OSError):
+        status = 503
+    else:
+        status = 400
+    return HTTPException(status_code=status, detail=str(exc))
+
+
+@router.get("/hermes/model-profiles/status")
+async def get_hermes_model_profiles_status(user: dict = Depends(require_admin)):
+    from hermes_model_profiles import count_running_workers, draft_path
+
+    try:
+        return {
+            "ok": True,
+            "running_workers": count_running_workers(),
+            "draft_exists": draft_path().exists(),
+        }
+    except OSError as exc:
+        raise _hermes_profile_error(exc) from exc
+
+
+@router.get("/hermes/model-profiles")
+async def get_hermes_model_profiles(user: dict = Depends(require_admin)):
+    from hermes_model_profiles import count_running_workers, list_profiles, load_draft
+
+    try:
+        draft = load_draft()
+        profiles = list_profiles()
+        running_workers = count_running_workers()
+    except (ValueError, TypeError, OSError) as exc:
+        raise _hermes_profile_error(exc) from exc
+    return {
+        "profiles": profiles,
+        "draft": draft,
+        "running_workers": running_workers,
+    }
+
+
+@router.put("/hermes/model-profiles/draft")
+async def put_hermes_model_profiles_draft(
+    body: HermesProfilesRequest,
+    user: dict = Depends(require_admin),
+):
+    from hermes_model_profiles import save_draft
+
+    try:
+        return save_draft(body.profiles, confirm_paid_auto=body.confirm_paid_auto)
+    except (ValueError, TypeError, OSError) as exc:
+        raise _hermes_profile_error(exc) from exc
+
+
+@router.post("/hermes/model-profiles/validate")
+async def post_hermes_model_profiles_validate(
+    body: HermesProfilesRequest,
+    user: dict = Depends(require_admin),
+):
+    from hermes_model_profiles import build_diff
+
+    try:
+        return build_diff(body.profiles, confirm_paid_auto=body.confirm_paid_auto)
+    except (ValueError, TypeError, OSError) as exc:
+        raise _hermes_profile_error(exc) from exc
+
+
+@router.post("/hermes/model-profiles/apply")
+async def post_hermes_model_profiles_apply(
+    body: HermesProfilesApplyRequest,
+    user: dict = Depends(require_admin),
+):
+    from hermes_model_profiles import apply_profiles
+
+    actor = str(user.get("user_id") or user.get("username") or "unknown")
+    try:
+        return apply_profiles(
+            body.profiles,
+            actor=actor,
+            confirm_paid_auto=body.confirm_paid_auto,
+            restart=body.restart,
+            force_restart=body.force_restart,
+        )
+    except (RuntimeError, ValueError, TypeError, OSError) as exc:
+        raise _hermes_profile_error(exc) from exc
+
+
+@router.post("/hermes/model-profiles/rollback")
+async def post_hermes_model_profiles_rollback(
+    body: HermesProfilesRollbackRequest,
+    user: dict = Depends(require_admin),
+):
+    from hermes_model_profiles import rollback_profiles
+
+    actor = str(user.get("user_id") or user.get("username") or "unknown")
+    try:
+        return rollback_profiles(body.backup_dir, actor=actor)
+    except (ValueError, TypeError, OSError) as exc:
+        raise _hermes_profile_error(exc) from exc
 
 
 @router.get("/openclaw/preferences")
