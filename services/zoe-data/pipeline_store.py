@@ -14,8 +14,10 @@ from typing import Any, Awaitable, Callable
 from pipeline_evidence import (
     PipelinePhase,
     PipelineState,
+    block_fingerprint,
     can_complete_phase,
     missing_required_evidence,
+    record_block_fingerprint,
     transition,
     with_evidence,
 )
@@ -123,7 +125,7 @@ async def sync_pipeline_from_chain(
     start_phase: PipelinePhase = "implement",
 ) -> PipelineState:
     """Advance pipeline state from terminal Kanban phase rows and parsed handoffs."""
-    from pipeline_handoff import evidence_from_handoff, infer_outcome
+    from pipeline_handoff import block_reason_from_handoff, evidence_from_handoff, infer_outcome
 
     state = await bootstrap_state(task_ref, start_phase=start_phase)
     if state.status == "done":
@@ -151,6 +153,25 @@ async def sync_pipeline_from_chain(
         outcome = infer_outcome(phase, row_status, detail)  # type: ignore[arg-type]
         if not outcome:
             continue
+
+        block_reason = None
+        if outcome in {"block", "verification_failed", "request_changes", "merge_blocked"}:
+            block_reason = block_reason_from_handoff(
+                detail, row_block_reason=row.get("block_reason")
+            ) or outcome
+            fingerprint = block_fingerprint(phase, str(block_reason))  # type: ignore[arg-type]
+            state, should_abort = record_block_fingerprint(state, fingerprint)
+            if should_abort:
+                state = transition(state, "block", reason=f"fingerprint_abort:{fingerprint}")
+                await _run_io(
+                    partial(
+                        save_state,
+                        state,
+                        event="fingerprint_abort",
+                        extra={"row_phase": phase, "fingerprint": fingerprint, "reason": block_reason},
+                    )
+                )
+                return state
 
         if outcome == "complete" and not can_complete_phase(state):
             await _run_io(
