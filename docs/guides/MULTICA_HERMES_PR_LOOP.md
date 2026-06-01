@@ -122,7 +122,7 @@ Use this when dispatching or reviewing a Hermes Kanban chain on Multica:
 | `skip_scout: true` | Issue description or `metadata.skip_scout` | Omits scout phase; chain starts at implement |
 | `evidence_profile: audit` | Issue description or `metadata.evidence_profile` | Verify gate accepts audit-only handoffs (no PR required) |
 | `ZOE_KANBAN_SKIP_SCOUT=1` | `services/zoe-data/.env` | Global skip-scout for all new chains |
-| `ZOE_MULTICA_POLL_DISPATCH_LIMIT=1` | `services/zoe-data/.env` | Poll bridge dispatches one Hermes todo issue per cycle (use `0` in steady state) |
+| `ZOE_MULTICA_POLL_DISPATCH_LIMIT=1` | `services/zoe-data/.env` | Poll bridge dispatches one Hermes todo issue per cycle (default when unset; use `0` to disable dispatch) |
 
 **Idempotency:** Kanban tasks are keyed `multica:{issue_uuid}:{phase}`. Re-dispatch is safe when poll reports `not_found` or `partial`; active `running`/`blocked` chains are left alone.
 
