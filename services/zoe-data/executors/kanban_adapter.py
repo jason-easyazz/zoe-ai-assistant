@@ -561,6 +561,7 @@ class KanbanAdapter:
         if not phases:
             return {"found": False, "status": "not_found", "phases": {}, "pr_url": None, "blocker": None}
 
+        detail_cache: dict[str, dict[str, Any]] = {}
         for phase, row in list(phases.items()):
             task_id = row.get("id")
             if not task_id:
@@ -573,6 +574,7 @@ class KanbanAdapter:
             except KanbanCLIError as exc:
                 logger.debug("kanban_adapter: show failed for %s: %s", task_id, exc)
                 continue
+            detail_cache[task_id] = detail
             if await self._maybe_auto_block_protocol_violation(task_id, phase, row, detail):
                 phases[phase] = row
 
@@ -606,7 +608,12 @@ class KanbanAdapter:
             from pipeline_store import pipeline_summary, sync_pipeline_from_chain
 
             async def _fetch_detail(task_id: str) -> dict:
-                return await self._run(["show", task_id, "--json"], expect_json=True)
+                cached = detail_cache.get(task_id)
+                if cached is not None:
+                    return cached
+                detail = await self._run(["show", task_id, "--json"], expect_json=True)
+                detail_cache[task_id] = detail
+                return detail
 
             start_phase = "scout" if "scout" in phases else "implement"
             state = await sync_pipeline_from_chain(
@@ -625,14 +632,20 @@ class KanbanAdapter:
             "found": True,
             "status": agg,
             "phases": statuses,
-            "pr_url": await self._extract_pr_url(phases),
+            "pr_url": await self._extract_pr_url(phases, detail_cache=detail_cache),
             "blocker": blocker,
             "pipeline": pipeline_info,
         }
 
-    async def _extract_pr_url(self, phases: dict[str, dict]) -> str | None:
+    async def _extract_pr_url(
+        self,
+        phases: dict[str, dict],
+        *,
+        detail_cache: dict[str, dict[str, Any]] | None = None,
+    ) -> str | None:
         """Pull a PR URL from the implement/closeout task summaries or comments."""
         pattern = re.compile(r"https://github\.com/[^/\s]+/[^/\s]+/pull/\d+")
+        cache = detail_cache or {}
         for phase in ("closeout", "retro", "implement", "verify", "review", "scout"):
             row = phases.get(phase)
             if not row:
@@ -640,10 +653,12 @@ class KanbanAdapter:
             task_id = row.get("id")
             if not task_id:
                 continue
-            try:
-                detail = await self._run(["show", task_id, "--json"], expect_json=True)
-            except KanbanCLIError:
-                continue
+            detail = cache.get(task_id)
+            if detail is None:
+                try:
+                    detail = await self._run(["show", task_id, "--json"], expect_json=True)
+                except KanbanCLIError:
+                    continue
             haystacks = [json.dumps(detail.get("latest_summary") or "")]
             for c in detail.get("comments", []) or []:
                 haystacks.append(str(c.get("body") or c.get("text") or ""))

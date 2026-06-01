@@ -554,7 +554,7 @@ def test_protocol_violation_count():
 
 @pytest.mark.asyncio
 async def test_poll_auto_blocks_after_protocol_violations(monkeypatch):
-    monkeypatch.setenv("ZOE_KANBAN_PROTOCOL_VIOLATION_LIMIT", "2")
+    monkeypatch.setattr(ka, "_PROTOCOL_VIOLATION_LIMIT", 2)
     rows = [_row("implement", "running")]
     show = {
         "t_implement": {
