@@ -195,6 +195,26 @@ async def test_sync_pipeline_explicit_split_packet_blocks_terminal(isolated_stor
 
 
 @pytest.mark.asyncio
+async def test_sync_pipeline_non_implement_split_request_is_visible(isolated_store):
+    await store.bootstrap_state("multica:verify-split", start_phase="verify")
+
+    async def fetch_detail(_task_id: str):
+        return {"latest_summary": "NEEDS_SPLIT=1\nSPLIT_PACKET={\"reason\":\"verify found broad scope\"}", "comments": []}
+
+    phases = {
+        "verify": {
+            "id": "t1",
+            "status": "blocked",
+            "block_reason": "SCOPE_SPLIT_REQUIRED: verify found broad scope",
+        }
+    }
+    state = await store.sync_pipeline_from_chain("multica:verify-split", phases, fetch_detail)
+
+    assert state.block_classification is None
+    assert "ignored_scope_split_request" in isolated_store.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
 async def test_sync_pipeline_blocked_records_reason_in_history(isolated_store):
     await store.bootstrap_state("multica:block-reason")
 

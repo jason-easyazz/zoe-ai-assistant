@@ -4,6 +4,7 @@ from pipeline_evidence import (
     EvidenceItem,
     PipelineState,
     block_fingerprint,
+    build_scope_split_packet,
     can_complete_phase,
     content_hash,
     missing_required_evidence,
@@ -16,6 +17,22 @@ from pipeline_evidence import (
 def test_evidence_metadata_rejects_secret_fields():
     with pytest.raises(ValueError, match="secret fields"):
         EvidenceItem(kind="tool", summary="used graphify", metadata={"access_token": "abc"})
+
+
+def test_build_scope_split_packet_preserves_worker_reason():
+    packet = build_scope_split_packet(
+        "multica:1",
+        "implement",
+        "SCOPE_SPLIT_REQUIRED: too broad",
+        source="handoff",
+        existing={
+            "reason": "Separate backend schema work from UI wiring",
+            "child_issue_template": {"title": "ZOE-1: schema child"},
+        },
+    )
+    assert packet["reason"] == "Separate backend schema work from UI wiring"
+    assert packet["block_reason"] == "SCOPE_SPLIT_REQUIRED: too broad"
+    assert packet["child_issue_template"]["title"] == "ZOE-1: schema child"
 
 
 def test_implement_requires_tool_evidence_before_complete():
@@ -244,4 +261,3 @@ def test_verify_validator_hash_ignores_harness_sync_mismatch():
         ),
     )
     assert verify_validator_hash_matches(state) is True
-

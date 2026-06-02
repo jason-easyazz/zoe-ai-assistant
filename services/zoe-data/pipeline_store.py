@@ -273,6 +273,20 @@ async def sync_pipeline_from_chain(
                     )
                 )
                 return state
+            if split_requested:
+                await _run_io(
+                    partial(
+                        save_state,
+                        state,
+                        event="ignored_scope_split_request",
+                        extra={
+                            "row_phase": phase,
+                            "reason": block_reason,
+                            "block_reason": block_reason,
+                            "split_packet": handoff_split_packet,
+                        },
+                    )
+                )
             if should_abort:
                 state = transition(state, "block", reason=f"fingerprint_abort:{fingerprint}")
                 if scope_split_required(

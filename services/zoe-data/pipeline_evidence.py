@@ -177,13 +177,16 @@ def build_scope_split_packet(
 ) -> dict[str, Any]:
     """Machine-readable handoff for creating smaller child Multica issues."""
     packet = dict(existing or {})
+    worker_reason = packet.get("reason")
+    block_reason = (reason or "scope split required")[:1000]
     packet.update(
         {
             "schema_version": 1,
             "kind": "scope_split_required",
             "parent_task_ref": task_ref,
             "blocked_phase": phase,
-            "reason": (reason or "scope split required")[:1000],
+            "reason": worker_reason or block_reason,
+            "block_reason": block_reason,
             "source": source,
             "recommended_action": (
                 "Create one or more child Multica issues with narrow acceptance criteria, "
@@ -339,4 +342,3 @@ def transition(state: PipelineState, outcome: TransitionOutcome, *, reason: str 
     return state.model_copy(
         update={"phase": next_phase, "status": next_status, "attempts": attempts, "evidence": evidence, "history": history}
     )
-
