@@ -164,7 +164,7 @@ def pipeline_summary(state: PipelineState | None) -> dict[str, Any]:
         "terminal_block": terminal_block,
         "fingerprint_abort": fingerprint_abort,
         "block_classification": state.block_classification,
-        "needs_split": state.block_classification == "scope_split_required",
+        "needs_split": state.status == "blocked" and state.block_classification == "scope_split_required",
         "split_packet": state.split_packet,
         "validator_hash_ok": hash_ok,
     }

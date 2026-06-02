@@ -47,6 +47,19 @@ def test_pipeline_summary_split_packet_alone_is_not_terminal(isolated_store):
     assert summary["needs_split"] is False
 
 
+def test_pipeline_summary_needs_split_requires_blocked_status(isolated_store):
+    state = PipelineState(
+        task_ref="multica:resumed",
+        phase="implement",
+        status="todo",
+        block_classification="scope_split_required",
+        split_packet={"kind": "scope_split_required"},
+    )
+    summary = store.pipeline_summary(state)
+    assert summary["terminal_block"] is False
+    assert summary["needs_split"] is False
+
+
 @pytest.mark.asyncio
 async def test_sync_pipeline_advances_on_complete_handoff(isolated_store):
     await store.bootstrap_state("multica:sync")

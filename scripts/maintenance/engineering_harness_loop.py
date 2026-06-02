@@ -28,6 +28,7 @@ FOCUSED_TESTS = [
     "services/zoe-data/tests/test_pipeline_handoff.py",
     "services/zoe-data/tests/test_pipeline_evidence.py",
     "services/zoe-data/tests/test_pipeline_store.py",
+    "services/zoe-data/tests/test_engineering_harness_loop.py",
     "services/zoe-data/tests/test_worktree_bootstrap.py",
     "services/zoe-data/tests/test_background_runner.py",
     "services/zoe-data/tests/test_multica_poll_dispatch.py",
