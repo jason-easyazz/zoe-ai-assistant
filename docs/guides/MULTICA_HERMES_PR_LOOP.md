@@ -17,14 +17,14 @@ This workflow lets Zoe track engineering work from a Multica issue through Herme
 
 ## Flow
 
-1. A user, API caller, authenticated Multica webhook (`issue.assigned`), board approval, or the Zoe poll bridge creates a Hermes Kanban chain (**scout → implement → verify → review → closeout → retro**) on OpenRouter-routed worker profiles. Set `ZOE_KANBAN_SKIP_SCOUT=1` or issue `skip_scout` metadata to omit scout on well-scoped tasks. Legacy in-flight chains may still be on older paths; poll treats them as complete when closeout (or retro, when present) finishes.
-2. `zoe-planner` **scout** gathers Graphify/opensrc/Multica context read-only (no code changes).
-3. `zoe-coder` **implement** opens a small PR and hands off with `PR_URL=`, `BLOCKER=`, `TESTS=`, `TOOLS_USED=`, `SUMMARY=`.
-4. `zoe-reviewer` **verify** runs the objective evidence gate (structure validators, focused tests, live health) before review spends tokens.
-5. `zoe-reviewer` **review** checks diff scope and verify-phase evidence; blocks or requests changes when evidence is missing.
+1. A user, API caller, authenticated Multica webhook (`issue.assigned`), board approval, or the Zoe poll bridge asks Zoe to dispatch a Hermes-assigned issue. For new `zoe-chain: v4` runs, Zoe creates only the current ready phase from the JSONL pipeline journal. It does **not** pre-create the full chain.
+2. Zoe bootstraps or replays `pipeline_store` state and emits one Hermes Kanban task for the current phase (`scout`, or `implement` when scout is skipped).
+3. Hermes executes that single bounded phase and must end with `kanban_complete` or `kanban_block`.
+4. Zoe polls the phase row, parses evidence, and advances the journal only when `pipeline_evidence` requirements pass.
+5. When the journal moves to a new `todo` phase and no Kanban row exists for that phase, the poll bridge or compatibility script may dispatch exactly that next phase.
 6. `zoe-planner` **closeout** runs the Greptile grep loop (`github-greptile-loop`), squash-merges when Greptile + CI are green (`greploop_guard.py --merge-when-ready`), then updates the Multica issue.
 7. `zoe-planner` **retro** captures learnings and optional harness improvements (no silent production changes).
-8. The Zoe poll loop advances Multica `in_progress` issues to `done` when retro completes (or closeout for legacy/v2 chains without retro). Structured evidence uses `pipeline_evidence` + JSONL `pipeline_store`; fail-closed gates block phase advancement when required evidence is absent.
+8. Legacy v2/v3 chains are still recognized while in-flight board work drains; poll treats them as complete when closeout (or retro, when present) finishes.
 
 ## Model Routing Policy (Phase 0 cost control)
 

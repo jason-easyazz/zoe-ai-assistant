@@ -1359,21 +1359,44 @@ async def get_llm_stats(
 
 @_agent_card_router.get("/board")
 async def get_agent_board():
-    """Return active Multica board issues for AG-UI display.
+    """Return Multica engineering ticket state for AG-UI display.
 
     Falls back gracefully if Multica is not configured or unavailable.
     """
     try:
-        from multica_client import MULClient  # type: ignore[import]
+        from executor_registry import poll_ref  # type: ignore[import]
+        from multica_client import MULClient, get_engineering_multica_agent_id  # type: ignore[import]
+
         client = MULClient()
         if not client.is_configured():
-            return {"active": [], "available": False, "reason": "Multica not configured"}
-        issues = await client.list_issues(status="in_progress")
-        return {"active": issues, "available": True}
+            return {"active": [], "groups": {}, "available": False, "reason": "Multica not configured"}
+
+        statuses = ("backlog", "todo", "in_progress", "blocked", "in_review")
+        hermes_id = str(get_engineering_multica_agent_id())
+        groups: dict[str, list[dict]] = {status: [] for status in statuses}
+        active: list[dict] = []
+
+        for status in statuses:
+            for issue in await client.list_issues(status=status) or []:
+                enriched = dict(issue)
+                if str(issue.get("assignee_id") or "") == hermes_id:
+                    chain = await poll_ref(f"multica:{issue.get('id')}")
+                    enriched["chain"] = chain
+                    pipeline = chain.get("pipeline") if isinstance(chain, dict) else None
+                    if isinstance(pipeline, dict):
+                        enriched["phase"] = pipeline.get("phase")
+                        enriched["needs_split"] = pipeline.get("needs_split")
+                        enriched["split_packet"] = pipeline.get("split_packet")
+                    enriched["blocker"] = chain.get("blocker") if isinstance(chain, dict) else None
+                    enriched["pr_url"] = chain.get("pr_url") if isinstance(chain, dict) else None
+                groups[status].append(enriched)
+                active.append(enriched)
+
+        return {"active": active, "groups": groups, "available": True}
     except ImportError:
-        return {"active": [], "available": False, "reason": "Multica client not installed"}
+        return {"active": [], "groups": {}, "available": False, "reason": "Multica client not installed"}
     except Exception as exc:
-        return {"active": [], "available": False, "reason": str(exc)}
+        return {"active": [], "groups": {}, "available": False, "reason": str(exc)}
 
 
 @_agent_card_router.post("/board/approve")
