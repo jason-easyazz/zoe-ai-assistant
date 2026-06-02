@@ -155,7 +155,7 @@ def parse_pipeline_findings(*, tail_lines: int = DEFAULT_PIPELINE_TAIL) -> list[
                 }
             )
         if (
-            event != "scope_split_required"
+            event not in CRITICAL_EVENTS
             and isinstance(state, dict)
             and state.get("block_classification") == "scope_split_required"
         ):
