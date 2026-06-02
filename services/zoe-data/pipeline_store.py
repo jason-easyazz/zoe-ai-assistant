@@ -151,7 +151,6 @@ def pipeline_summary(state: PipelineState | None) -> dict[str, Any]:
     terminal_block = state.status == "blocked" and (
         fingerprint_abort
         or state.block_classification == "scope_split_required"
-        or state.split_packet is not None
     )
     hash_ok = verify_validator_hash_matches(state) if state.phase == "verify" else True
     return {

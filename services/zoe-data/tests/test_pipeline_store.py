@@ -35,6 +35,18 @@ def test_pipeline_summary_reports_missing_evidence(isolated_store):
     assert "tool" in summary["missing_evidence"]
 
 
+def test_pipeline_summary_split_packet_alone_is_not_terminal(isolated_store):
+    state = PipelineState(
+        task_ref="multica:packet-only",
+        phase="implement",
+        status="blocked",
+        split_packet={"kind": "scope_split_required"},
+    )
+    summary = store.pipeline_summary(state)
+    assert summary["terminal_block"] is False
+    assert summary["needs_split"] is False
+
+
 @pytest.mark.asyncio
 async def test_sync_pipeline_advances_on_complete_handoff(isolated_store):
     await store.bootstrap_state("multica:sync")

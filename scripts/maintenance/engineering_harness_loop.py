@@ -153,7 +153,11 @@ def parse_pipeline_findings(*, tail_lines: int = DEFAULT_PIPELINE_TAIL) -> list[
                     "meta": row.get("meta"),
                 }
             )
-        if isinstance(state, dict) and state.get("block_classification") == "scope_split_required":
+        if (
+            event != "scope_split_required"
+            and isinstance(state, dict)
+            and state.get("block_classification") == "scope_split_required"
+        ):
             findings.append(
                 {
                     "kind": "scope_split_required",
