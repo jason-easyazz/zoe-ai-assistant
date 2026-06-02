@@ -207,6 +207,18 @@ async def test_dispatch_overnight_implement_mentions_free_fallback():
 
 
 @pytest.mark.asyncio
+async def test_implement_body_mentions_scope_split_packet():
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {"id": "uuid-1", "identifier": "ZOE-9", "title": "Hard thing", "description": ""},
+        "ZOE-9",
+    )
+    assert "NEEDS_SPLIT=1" in body
+    assert "SPLIT_PACKET=" in body
+    assert "scope-split packet" in body
+
+
+@pytest.mark.asyncio
 async def test_retro_body_prefers_cheap_summary_models():
     body = ka.KanbanAdapter()._build_body(
         "retro",

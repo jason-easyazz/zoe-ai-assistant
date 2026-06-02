@@ -40,7 +40,8 @@ _LOG_TOOL_MARKERS = (
 )
 _STABLE_BLOCKER_RE = re.compile(
     r"\b(?:WORKTREE_NOT_READY|GATE_BLOCKED|PROTOCOL_VIOLATION|MERGE_BLOCKED|"
-    r"VERIFICATION_FAILED|HTTP_402|PAYMENT_REQUIRED|CREDITS_EXHAUSTED)\b",
+    r"VERIFICATION_FAILED|HTTP_402|PAYMENT_REQUIRED|CREDITS_EXHAUSTED|"
+    r"TURN_BUDGET|CONTEXT_LIMIT|TOKEN_LIMIT|SCOPE_SPLIT_REQUIRED|NEEDS_SPLIT)\b",
     re.I,
 )
 
@@ -70,6 +71,42 @@ def _parse_kv_fields(text: str) -> dict[str, str]:
         if value:
             out[key] = value
     return out
+
+
+def _json_field_value(text: str, key: str) -> str:
+    """Extract a JSON object value from ``KEY=...``, allowing multiline JSON."""
+    match = re.search(rf"^{re.escape(key)}=", text or "", re.MULTILINE)
+    if not match:
+        return ""
+    tail = (text or "")[match.end():]
+    first = next((idx for idx, char in enumerate(tail) if not char.isspace()), None)
+    if first is None or tail[first] != "{":
+        return tail.splitlines()[0].strip() if tail else ""
+
+    depth = 0
+    in_string = False
+    escaped = False
+    end = first
+    for idx, char in enumerate(tail[first:], start=first):
+        end = idx + 1
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if char == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                break
+    return tail[first:end].strip()
 
 
 def _tool_summary(raw: str) -> str:
@@ -184,6 +221,51 @@ def audit_only_from_handoff(detail: dict[str, Any]) -> bool:
         raw = metadata.get("AUDIT_ONLY") or metadata.get("audit_only") or ""
         return str(raw).strip().lower() in {"1", "true", "yes"}
     return False
+
+
+def split_request_from_handoff(detail: dict[str, Any]) -> tuple[bool, dict[str, Any] | None]:
+    """Return explicit scope-split request and optional machine packet from handoff text."""
+    fields: dict[str, str] = {}
+    for chunk in _haystacks(detail):
+        fields.update(_parse_kv_fields(chunk))
+
+    packet: dict[str, Any] | None = None
+    raw_packet = ""
+    for chunk in _haystacks(detail):
+        raw_packet = _json_field_value(chunk, "SPLIT_PACKET") or raw_packet
+    raw_packet = (raw_packet or fields.get("SPLIT_PACKET") or "").strip()
+    if raw_packet:
+        try:
+            parsed = json.loads(raw_packet)
+            if isinstance(parsed, dict):
+                packet = parsed
+            else:
+                packet = {"raw": raw_packet[:1000], "parse_error": "not_object"}
+        except json.JSONDecodeError:
+            packet = {"raw": raw_packet[:1000], "parse_error": "invalid_json"}
+
+    requested = packet is not None
+    for key in ("NEEDS_SPLIT", "SCOPE_SPLIT_REQUIRED"):
+        if fields.get(key, "").strip().lower() in {"1", "true", "yes"}:
+            requested = True
+
+    blocker = fields.get("BLOCKER") or ""
+    if _STABLE_BLOCKER_RE.search(blocker) and any(
+        token in blocker.upper() for token in ("SCOPE_SPLIT_REQUIRED", "NEEDS_SPLIT")
+    ):
+        requested = True
+
+    metadata = detail.get("metadata") or {}
+    if isinstance(metadata, dict):
+        meta_packet = metadata.get("SPLIT_PACKET") or metadata.get("split_packet")
+        if isinstance(meta_packet, dict):
+            packet = meta_packet
+            requested = True
+        for key in ("NEEDS_SPLIT", "needs_split", "SCOPE_SPLIT_REQUIRED", "scope_split_required"):
+            if str(metadata.get(key) or "").strip().lower() in {"1", "true", "yes"}:
+                requested = True
+
+    return requested, packet
 
 
 def evidence_from_handoff(

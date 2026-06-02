@@ -100,3 +100,39 @@ def test_audit_only_from_handoff_detects_kv_field():
     detail = {"latest_summary": "AUDIT_ONLY=1\nSUMMARY=findings only", "comments": []}
     assert audit_only_from_handoff(detail) is True
     assert audit_only_from_handoff({"latest_summary": "SUMMARY=code change", "comments": []}) is False
+
+
+def test_split_request_from_handoff_parses_packet():
+    from pipeline_handoff import split_request_from_handoff
+
+    detail = {
+        "latest_summary": (
+            'NEEDS_SPLIT=1\nSPLIT_PACKET={"child_issue_template":{"title":"ZOE-1: narrow child"}}'
+        ),
+        "comments": [],
+    }
+    requested, packet = split_request_from_handoff(detail)
+    assert requested is True
+    assert packet["child_issue_template"]["title"] == "ZOE-1: narrow child"
+
+
+def test_split_request_from_handoff_parses_multiline_packet():
+    from pipeline_handoff import split_request_from_handoff
+
+    detail = {
+        "latest_summary": (
+            "NEEDS_SPLIT=1\n"
+            "SPLIT_PACKET={\n"
+            '  "child_issue_template": {\n'
+            '    "title": "ZOE-1: multiline child"\n'
+            "  },\n"
+            '  "reason": "too broad"\n'
+            "}\n"
+            "SUMMARY=blocked cleanly"
+        ),
+        "comments": [],
+    }
+    requested, packet = split_request_from_handoff(detail)
+    assert requested is True
+    assert packet["child_issue_template"]["title"] == "ZOE-1: multiline child"
+    assert packet["reason"] == "too broad"

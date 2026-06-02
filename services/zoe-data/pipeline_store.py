@@ -15,10 +15,12 @@ from pipeline_evidence import (
     PipelinePhase,
     PipelineState,
     block_fingerprint,
+    build_scope_split_packet,
     can_complete_phase,
     issue_evidence_profile,
     missing_required_evidence,
     record_block_fingerprint,
+    scope_split_required,
     transition,
     verify_validator_hash_matches,
     with_evidence,
@@ -139,12 +141,16 @@ def pipeline_summary(state: PipelineState | None) -> dict[str, Any]:
     if not state:
         return {"tracked": False}
     missing = sorted(missing_required_evidence(state))
-    terminal_block = state.status == "blocked" and (
+    fingerprint_abort = state.status == "blocked" and (
         state.repeated_block_count >= 2
         or any(
             (rec.reason or "").startswith("fingerprint_abort:")
             for rec in state.history
         )
+    )
+    terminal_block = state.status == "blocked" and (
+        fingerprint_abort
+        or state.block_classification == "scope_split_required"
     )
     hash_ok = verify_validator_hash_matches(state) if state.phase == "verify" else True
     return {
@@ -156,7 +162,10 @@ def pipeline_summary(state: PipelineState | None) -> dict[str, Any]:
         "missing_evidence": missing,
         "attempts": dict(state.attempts),
         "terminal_block": terminal_block,
-        "fingerprint_abort": terminal_block,
+        "fingerprint_abort": fingerprint_abort,
+        "block_classification": state.block_classification,
+        "needs_split": state.status == "blocked" and state.block_classification == "scope_split_required",
+        "split_packet": state.split_packet,
         "validator_hash_ok": hash_ok,
     }
 
@@ -170,7 +179,13 @@ async def sync_pipeline_from_chain(
     issue: dict | None = None,
 ) -> PipelineState:
     """Advance pipeline state from terminal Kanban phase rows and parsed handoffs."""
-    from pipeline_handoff import audit_only_from_handoff, block_reason_from_handoff, evidence_from_handoff, infer_outcome
+    from pipeline_handoff import (
+        audit_only_from_handoff,
+        block_reason_from_handoff,
+        evidence_from_handoff,
+        infer_outcome,
+        split_request_from_handoff,
+    )
 
     state = await bootstrap_state(task_ref, start_phase=start_phase, issue=issue)
     if state.status == "done":
@@ -220,14 +235,73 @@ async def sync_pipeline_from_chain(
             continue
 
         block_reason = None
+        split_requested = False
+        handoff_split_packet: dict[str, Any] | None = None
         if outcome in {"block", "verification_failed", "request_changes", "merge_blocked"}:
             block_reason = block_reason_from_handoff(
                 detail, row_block_reason=row.get("block_reason")
             ) or outcome
+            split_requested, handoff_split_packet = split_request_from_handoff(detail)
             fingerprint = block_fingerprint(phase, str(block_reason))  # type: ignore[arg-type]
             state, should_abort = record_block_fingerprint(state, fingerprint)
+            explicit_split = scope_split_required(
+                phase, str(block_reason), explicit=split_requested  # type: ignore[arg-type]
+            )
+            if explicit_split:
+                packet = build_scope_split_packet(
+                    state.task_ref,
+                    phase,  # type: ignore[arg-type]
+                    str(block_reason),
+                    source="handoff",
+                    existing=handoff_split_packet,
+                )
+                state = transition(state, "block", reason=f"scope_split_required:{block_reason}")
+                state = state.model_copy(
+                    update={"block_classification": "scope_split_required", "split_packet": packet}
+                )
+                await _run_io(
+                    partial(
+                        save_state,
+                        state,
+                        event="scope_split_required",
+                        extra={
+                            "row_phase": phase,
+                            "reason": block_reason,
+                            "block_reason": block_reason,
+                            "split_packet": packet,
+                        },
+                    )
+                )
+                return state
+            if split_requested:
+                await _run_io(
+                    partial(
+                        save_state,
+                        state,
+                        event="ignored_scope_split_request",
+                        extra={
+                            "row_phase": phase,
+                            "reason": block_reason,
+                            "block_reason": block_reason,
+                            "split_packet": handoff_split_packet,
+                        },
+                    )
+                )
             if should_abort:
                 state = transition(state, "block", reason=f"fingerprint_abort:{fingerprint}")
+                if scope_split_required(
+                    phase, str(block_reason), repeated=True  # type: ignore[arg-type]
+                ):
+                    packet = build_scope_split_packet(
+                        state.task_ref,
+                        phase,  # type: ignore[arg-type]
+                        str(block_reason),
+                        source="fingerprint_abort",
+                        existing=handoff_split_packet,
+                    )
+                    state = state.model_copy(
+                        update={"block_classification": "scope_split_required", "split_packet": packet}
+                    )
                 await _run_io(
                     partial(
                         save_state,
@@ -238,6 +312,9 @@ async def sync_pipeline_from_chain(
                             "fingerprint": fingerprint,
                             "reason": block_reason,
                             "block_reason": block_reason,
+                            "block_classification": state.block_classification,
+                            "needs_split": state.block_classification == "scope_split_required",
+                            "split_packet": state.split_packet,
                         },
                     )
                 )

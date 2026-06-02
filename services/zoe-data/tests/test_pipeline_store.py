@@ -35,6 +35,31 @@ def test_pipeline_summary_reports_missing_evidence(isolated_store):
     assert "tool" in summary["missing_evidence"]
 
 
+def test_pipeline_summary_split_packet_alone_is_not_terminal(isolated_store):
+    state = PipelineState(
+        task_ref="multica:packet-only",
+        phase="implement",
+        status="blocked",
+        split_packet={"kind": "scope_split_required"},
+    )
+    summary = store.pipeline_summary(state)
+    assert summary["terminal_block"] is False
+    assert summary["needs_split"] is False
+
+
+def test_pipeline_summary_needs_split_requires_blocked_status(isolated_store):
+    state = PipelineState(
+        task_ref="multica:resumed",
+        phase="implement",
+        status="todo",
+        block_classification="scope_split_required",
+        split_packet={"kind": "scope_split_required"},
+    )
+    summary = store.pipeline_summary(state)
+    assert summary["terminal_block"] is False
+    assert summary["needs_split"] is False
+
+
 @pytest.mark.asyncio
 async def test_sync_pipeline_advances_on_complete_handoff(isolated_store):
     await store.bootstrap_state("multica:sync")
@@ -115,6 +140,78 @@ async def test_sync_pipeline_fingerprint_abort(isolated_store):
     assert state.status == "blocked"
     assert any("fingerprint_abort" in (rec.reason or "") for rec in state.history)
     assert any("fingerprint_abort" in line for line in isolated_store.read_text(encoding="utf-8").splitlines())
+
+
+@pytest.mark.asyncio
+async def test_sync_pipeline_fingerprint_abort_creates_split_packet_for_protocol(isolated_store):
+    await store.bootstrap_state("multica:hard")
+
+    async def fetch_detail(_task_id: str):
+        return {"latest_summary": "BLOCKER=PROTOCOL_VIOLATION", "comments": []}
+
+    phases = {
+        "implement": {
+            "id": "t1",
+            "status": "blocked",
+            "block_reason": "PROTOCOL_VIOLATION",
+        }
+    }
+    await store.sync_pipeline_from_chain("multica:hard", phases, fetch_detail)
+    state = await store.sync_pipeline_from_chain("multica:hard", phases, fetch_detail)
+    summary = store.pipeline_summary(state)
+
+    assert state.block_classification == "scope_split_required"
+    assert summary["needs_split"] is True
+    assert state.split_packet["parent_task_ref"] == "multica:hard"
+    assert state.split_packet["kind"] == "scope_split_required"
+
+
+@pytest.mark.asyncio
+async def test_sync_pipeline_explicit_split_packet_blocks_terminal(isolated_store):
+    await store.bootstrap_state("multica:explicit")
+
+    async def fetch_detail(_task_id: str):
+        return {
+            "latest_summary": (
+                "BLOCKER=SCOPE_SPLIT_REQUIRED: too broad\n"
+                'NEEDS_SPLIT=1\nSPLIT_PACKET={"child_issue_template":{"title":"ZOE-5287: isolate contract parser"}}'
+            ),
+            "comments": [],
+        }
+
+    phases = {
+        "implement": {
+            "id": "t1",
+            "status": "blocked",
+            "block_reason": "SCOPE_SPLIT_REQUIRED: too broad",
+        }
+    }
+    state = await store.sync_pipeline_from_chain("multica:explicit", phases, fetch_detail)
+
+    assert state.status == "blocked"
+    assert state.block_classification == "scope_split_required"
+    assert state.split_packet["child_issue_template"]["title"] == "ZOE-5287: isolate contract parser"
+    assert "scope_split_required" in isolated_store.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_sync_pipeline_non_implement_split_request_is_visible(isolated_store):
+    await store.bootstrap_state("multica:verify-split", start_phase="verify")
+
+    async def fetch_detail(_task_id: str):
+        return {"latest_summary": "NEEDS_SPLIT=1\nSPLIT_PACKET={\"reason\":\"verify found broad scope\"}", "comments": []}
+
+    phases = {
+        "verify": {
+            "id": "t1",
+            "status": "blocked",
+            "block_reason": "SCOPE_SPLIT_REQUIRED: verify found broad scope",
+        }
+    }
+    state = await store.sync_pipeline_from_chain("multica:verify-split", phases, fetch_detail)
+
+    assert state.block_classification is None
+    assert "ignored_scope_split_request" in isolated_store.read_text(encoding="utf-8")
 
 
 @pytest.mark.asyncio
