@@ -73,6 +73,42 @@ def _parse_kv_fields(text: str) -> dict[str, str]:
     return out
 
 
+def _json_field_value(text: str, key: str) -> str:
+    """Extract a JSON object value from ``KEY=...``, allowing multiline JSON."""
+    match = re.search(rf"^{re.escape(key)}=", text or "", re.MULTILINE)
+    if not match:
+        return ""
+    tail = (text or "")[match.end():]
+    first = next((idx for idx, char in enumerate(tail) if not char.isspace()), None)
+    if first is None or tail[first] != "{":
+        return tail.splitlines()[0].strip() if tail else ""
+
+    depth = 0
+    in_string = False
+    escaped = False
+    end = first
+    for idx, char in enumerate(tail[first:], start=first):
+        end = idx + 1
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if char == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                break
+    return tail[first:end].strip()
+
+
 def _tool_summary(raw: str) -> str:
     cleaned = raw.strip()
     return cleaned[:500] if cleaned else "tools recorded in handoff"
@@ -194,7 +230,10 @@ def split_request_from_handoff(detail: dict[str, Any]) -> tuple[bool, dict[str, 
         fields.update(_parse_kv_fields(chunk))
 
     packet: dict[str, Any] | None = None
-    raw_packet = (fields.get("SPLIT_PACKET") or "").strip()
+    raw_packet = ""
+    for chunk in _haystacks(detail):
+        raw_packet = _json_field_value(chunk, "SPLIT_PACKET") or raw_packet
+    raw_packet = (raw_packet or fields.get("SPLIT_PACKET") or "").strip()
     if raw_packet:
         try:
             parsed = json.loads(raw_packet)

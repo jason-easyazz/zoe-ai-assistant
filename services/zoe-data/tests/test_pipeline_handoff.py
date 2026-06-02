@@ -114,3 +114,25 @@ def test_split_request_from_handoff_parses_packet():
     requested, packet = split_request_from_handoff(detail)
     assert requested is True
     assert packet["child_issue_template"]["title"] == "ZOE-1: narrow child"
+
+
+def test_split_request_from_handoff_parses_multiline_packet():
+    from pipeline_handoff import split_request_from_handoff
+
+    detail = {
+        "latest_summary": (
+            "NEEDS_SPLIT=1\n"
+            "SPLIT_PACKET={\n"
+            '  "child_issue_template": {\n'
+            '    "title": "ZOE-1: multiline child"\n'
+            "  },\n"
+            '  "reason": "too broad"\n'
+            "}\n"
+            "SUMMARY=blocked cleanly"
+        ),
+        "comments": [],
+    }
+    requested, packet = split_request_from_handoff(detail)
+    assert requested is True
+    assert packet["child_issue_template"]["title"] == "ZOE-1: multiline child"
+    assert packet["reason"] == "too broad"
