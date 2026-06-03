@@ -1358,7 +1358,7 @@ async def get_llm_stats(
 
 
 @_agent_card_router.get("/board")
-async def get_agent_board(user: dict = Depends(get_current_user)):
+async def get_agent_board(user: dict = Depends(get_current_user)):  # noqa: ARG001 - auth-only
     """Return Multica engineering ticket state for AG-UI display.
 
     Falls back gracefully if Multica is not configured or unavailable.
@@ -1377,8 +1377,14 @@ async def get_agent_board(user: dict = Depends(get_current_user)):
         active: list[dict] = []
         hermes_issues: list[dict] = []
 
-        for status in statuses:
-            for issue in await client.list_issues(status=status) or []:
+        status_results = await asyncio.gather(
+            *(client.list_issues(status=status) for status in statuses),
+            return_exceptions=True,
+        )
+        for status, issues_or_exc in zip(statuses, status_results):
+            if isinstance(issues_or_exc, Exception):
+                continue
+            for issue in issues_or_exc or []:
                 enriched = dict(issue)
                 if status in {"in_progress", "in_review"} and str(issue.get("assignee_id") or "") == hermes_id:
                     hermes_issues.append(enriched)
