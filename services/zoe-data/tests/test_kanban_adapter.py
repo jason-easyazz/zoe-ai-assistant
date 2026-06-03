@@ -561,6 +561,15 @@ async def test_poll_v4_done_phase_with_ready_next_phase_is_partial():
 
 
 @pytest.mark.asyncio
+async def test_poll_v4_does_not_promote_kanban_blocked_to_partial():
+    rows = [_row("implement", "blocked", chain_version="v4", block_reason="dirty tree")]
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:uuid-9")
+    assert out["status"] == "blocked"
+    assert "dirty tree" in (out["blocker"] or "")
+
+
+@pytest.mark.asyncio
 async def test_poll_current_partial_chain_with_verify_is_redispatchable():
     rows = [
         _row("implement", "done"),

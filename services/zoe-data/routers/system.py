@@ -1358,7 +1358,7 @@ async def get_llm_stats(
 
 
 @_agent_card_router.get("/board")
-async def get_agent_board():
+async def get_agent_board(user: dict = Depends(get_current_user)):
     """Return Multica engineering ticket state for AG-UI display.
 
     Falls back gracefully if Multica is not configured or unavailable.

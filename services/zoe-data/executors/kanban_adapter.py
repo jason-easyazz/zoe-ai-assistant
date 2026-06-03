@@ -724,7 +724,7 @@ class KanbanAdapter:
             if pipeline_info.get("terminal_block") and agg not in {"done", "blocked"}:
                 agg = "blocked"
                 blocker = blocker or f"pipeline terminal block at {pipeline_info.get('phase')}"
-            elif any("zoe-chain: v4" in (row.get("body") or "") for row in phases.values()):
+            elif agg not in {"done", "blocked"} and any("zoe-chain: v4" in (row.get("body") or "") for row in phases.values()):
                 current_phase = pipeline_info.get("phase")
                 current_status = pipeline_info.get("status")
                 if current_status == "done":
