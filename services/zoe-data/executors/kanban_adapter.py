@@ -521,7 +521,14 @@ class KanbanAdapter:
             )
         except Exception as exc:
             logger.warning("kanban_adapter: pipeline bootstrap failed for %s: %s", external_ref, exc)
-            state = None
+            return {
+                "ok": False,
+                "external_ref": external_ref,
+                "reason": "pipeline bootstrap failed",
+                "chain": {},
+                "created": [],
+                "mode": mode,
+            }
 
         if state is not None and state.status in {"blocked", "done"}:
             return {

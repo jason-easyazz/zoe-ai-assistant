@@ -1383,7 +1383,8 @@ async def get_agent_board(user: dict = Depends(get_current_user)):
                 if str(issue.get("assignee_id") or "") == hermes_id:
                     hermes_issues.append(enriched)
                 groups[status].append(enriched)
-                active.append(enriched)
+                if status in {"in_progress", "in_review"}:
+                    active.append(enriched)
 
         async def enrich_chain(issue: dict) -> None:
             try:

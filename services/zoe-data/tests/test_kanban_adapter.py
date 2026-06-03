@@ -81,6 +81,20 @@ async def test_dispatch_creates_one_ready_phase():
 
 
 @pytest.mark.asyncio
+async def test_dispatch_refuses_to_create_without_pipeline_journal(monkeypatch):
+    async def fail_bootstrap(*args, **kwargs):
+        raise RuntimeError("store offline")
+
+    monkeypatch.setattr("pipeline_store.bootstrap_state", fail_bootstrap)
+    a = _FakeAdapter()
+    result = await a.dispatch({"id": "uuid-no-journal", "identifier": "ZOE-NJ", "title": "No journal"})
+
+    assert result["ok"] is False
+    assert result["reason"] == "pipeline bootstrap failed"
+    assert [c for c in a.calls if c[0] == "create"] == []
+
+
+@pytest.mark.asyncio
 async def test_dispatch_after_scout_evidence_creates_next_phase():
     from pipeline_store import bootstrap_state, save_state
     from pipeline_evidence import EvidenceItem, transition, with_evidence
