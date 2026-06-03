@@ -11,6 +11,8 @@ agent or executor is never the workflow authority.
 - A phase advances only after Zoe records required evidence.
 - Broad tickets block the parent and produce a split packet instead of continuing.
 - PR changes merge only after CI, Greptile confidence, and review-thread gates pass.
+- If an external review gate is unavailable or cancelled, dispatch stays paused
+  and the PR does not merge.
 - Risky or destructive work requires operator approval.
 
 ## Current Executor
