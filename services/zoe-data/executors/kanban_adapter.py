@@ -618,7 +618,7 @@ class KanbanAdapter:
                     extra={"phase": phase, "task_id": task_id},
                 )
             except Exception as exc:
-                logger.debug("kanban_adapter: effect_requested save skipped for %s: %s", external_ref, exc)
+                logger.warning("kanban_adapter: effect_requested save skipped for %s: %s", external_ref, exc)
 
         logger.info(
             "kanban_adapter: dispatched %s -> phase=%s chain=%s (new=%s)", identifier, phase, chain, created
@@ -746,9 +746,15 @@ class KanbanAdapter:
                     agg = "running"
         except Exception as exc:
             logger.warning("kanban_adapter: pipeline sync failed for %s: %s", external_ref, exc)
-            pipeline_info = {"tracked": False, "error": str(exc)}
+            pipeline_info = {
+                "tracked": False,
+                "error": str(exc),
+                "terminal_block": True,
+                "block_reason": "pipeline_store_unavailable",
+            }
             if is_v4 and agg not in {"done", "blocked"}:
-                agg = "partial"
+                agg = "blocked"
+                blocker = blocker or "pipeline_store_unavailable"
 
         return {
             "found": True,

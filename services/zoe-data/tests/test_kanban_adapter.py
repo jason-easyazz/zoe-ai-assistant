@@ -575,7 +575,7 @@ async def test_poll_v4_done_phase_with_ready_next_phase_is_partial():
 
 
 @pytest.mark.asyncio
-async def test_poll_v4_pipeline_sync_failure_is_partial(monkeypatch):
+async def test_poll_v4_pipeline_sync_failure_blocks_redispatch(monkeypatch):
     async def fail_sync(*args, **kwargs):
         raise RuntimeError("pipeline store unavailable")
 
@@ -584,8 +584,10 @@ async def test_poll_v4_pipeline_sync_failure_is_partial(monkeypatch):
     a = _FakeAdapter(list_rows=rows)
     out = await a.poll("multica:uuid-9")
 
-    assert out["status"] == "partial"
+    assert out["status"] == "blocked"
+    assert out["blocker"] == "pipeline_store_unavailable"
     assert out["pipeline"]["tracked"] is False
+    assert out["pipeline"]["terminal_block"] is True
     assert "pipeline store unavailable" in out["pipeline"]["error"]
 
 
