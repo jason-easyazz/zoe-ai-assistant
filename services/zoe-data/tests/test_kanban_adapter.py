@@ -575,6 +575,21 @@ async def test_poll_v4_done_phase_with_ready_next_phase_is_partial():
 
 
 @pytest.mark.asyncio
+async def test_poll_v4_pipeline_sync_failure_is_partial(monkeypatch):
+    async def fail_sync(*args, **kwargs):
+        raise RuntimeError("pipeline store unavailable")
+
+    monkeypatch.setattr("pipeline_store.sync_pipeline_from_chain", fail_sync)
+    rows = [_row("scout", "done", chain_version="v4")]
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:uuid-9")
+
+    assert out["status"] == "partial"
+    assert out["pipeline"]["tracked"] is False
+    assert "pipeline store unavailable" in out["pipeline"]["error"]
+
+
+@pytest.mark.asyncio
 async def test_poll_v4_does_not_promote_kanban_blocked_to_partial():
     rows = [_row("implement", "blocked", chain_version="v4", block_reason="dirty tree")]
     a = _FakeAdapter(list_rows=rows)

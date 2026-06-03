@@ -693,6 +693,7 @@ class KanbanAdapter:
 
         closeout = phases.get("closeout", {})
         retro = phases.get("retro", {})
+        is_v4 = any("zoe-chain: v4" in (row.get("body") or "") for row in phases.values())
         expected = _expected_phases(phases)
         missing = expected - set(phases)
         if retro and (retro.get("status") or "") in _TERMINAL_KANBAN_STATUSES:
@@ -731,7 +732,7 @@ class KanbanAdapter:
             if pipeline_info.get("terminal_block") and agg not in {"done", "blocked"}:
                 agg = "blocked"
                 blocker = blocker or f"pipeline terminal block at {pipeline_info.get('phase')}"
-            elif agg not in {"done", "blocked"} and any("zoe-chain: v4" in (row.get("body") or "") for row in phases.values()):
+            elif agg not in {"done", "blocked"} and is_v4:
                 current_phase = pipeline_info.get("phase")
                 current_status = pipeline_info.get("status")
                 if current_status == "done":
@@ -744,7 +745,10 @@ class KanbanAdapter:
                 else:
                     agg = "running"
         except Exception as exc:
-            logger.debug("kanban_adapter: pipeline sync skipped for %s: %s", external_ref, exc)
+            logger.warning("kanban_adapter: pipeline sync failed for %s: %s", external_ref, exc)
+            pipeline_info = {"tracked": False, "error": str(exc)}
+            if is_v4 and agg not in {"done", "blocked"}:
+                agg = "partial"
 
         return {
             "found": True,

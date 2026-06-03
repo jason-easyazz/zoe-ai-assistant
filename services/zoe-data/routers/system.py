@@ -1380,7 +1380,7 @@ async def get_agent_board(user: dict = Depends(get_current_user)):
         for status in statuses:
             for issue in await client.list_issues(status=status) or []:
                 enriched = dict(issue)
-                if str(issue.get("assignee_id") or "") == hermes_id:
+                if status in {"in_progress", "in_review"} and str(issue.get("assignee_id") or "") == hermes_id:
                     hermes_issues.append(enriched)
                 groups[status].append(enriched)
                 if status in {"in_progress", "in_review"}:
