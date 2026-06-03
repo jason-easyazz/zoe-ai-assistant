@@ -1375,22 +1375,33 @@ async def get_agent_board(user: dict = Depends(get_current_user)):
         hermes_id = str(get_engineering_multica_agent_id())
         groups: dict[str, list[dict]] = {status: [] for status in statuses}
         active: list[dict] = []
+        hermes_issues: list[dict] = []
 
         for status in statuses:
             for issue in await client.list_issues(status=status) or []:
                 enriched = dict(issue)
                 if str(issue.get("assignee_id") or "") == hermes_id:
-                    chain = await poll_ref(f"multica:{issue.get('id')}")
-                    enriched["chain"] = chain
-                    pipeline = chain.get("pipeline") if isinstance(chain, dict) else None
-                    if isinstance(pipeline, dict):
-                        enriched["phase"] = pipeline.get("phase")
-                        enriched["needs_split"] = pipeline.get("needs_split")
-                        enriched["split_packet"] = pipeline.get("split_packet")
-                    enriched["blocker"] = chain.get("blocker") if isinstance(chain, dict) else None
-                    enriched["pr_url"] = chain.get("pr_url") if isinstance(chain, dict) else None
+                    hermes_issues.append(enriched)
                 groups[status].append(enriched)
                 active.append(enriched)
+
+        async def enrich_chain(issue: dict) -> None:
+            try:
+                chain = await poll_ref(f"multica:{issue.get('id')}")
+            except Exception as exc:
+                issue["chain_error"] = str(exc)
+                return
+            issue["chain"] = chain
+            pipeline = chain.get("pipeline") if isinstance(chain, dict) else None
+            if isinstance(pipeline, dict):
+                issue["phase"] = pipeline.get("phase")
+                issue["needs_split"] = pipeline.get("needs_split")
+                issue["split_packet"] = pipeline.get("split_packet")
+            issue["blocker"] = chain.get("blocker") if isinstance(chain, dict) else None
+            issue["pr_url"] = chain.get("pr_url") if isinstance(chain, dict) else None
+
+        if hermes_issues:
+            await asyncio.gather(*(enrich_chain(issue) for issue in hermes_issues))
 
         return {"active": active, "groups": groups, "available": True}
     except ImportError:

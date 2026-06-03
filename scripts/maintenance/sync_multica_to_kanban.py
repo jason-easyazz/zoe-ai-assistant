@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Sync Hermes-assigned Multica issues into Hermes Kanban chains (cheap DeepSeek).
+"""Sync Hermes-assigned Multica issues into active Hermes Kanban phases (cheap DeepSeek).
 
 Replaces the old engineering_workflow/background_runner (Sonnet) dispatch path.
-For each Hermes-assigned ``todo`` Multica issue without an active Kanban chain,
-create an implement->review->closeout chain via the executor registry, then set
-the Multica issue to ``in_progress``.
+For each Hermes-assigned ``todo`` Multica issue whose current ready phase has no
+Kanban row yet, dispatch exactly that one phase via the executor registry, then
+set the Multica issue to ``in_progress``.
 
-Idempotent: chains are keyed ``multica:{issue_id}:<phase>`` so re-runs are safe.
+Idempotent: phases are keyed ``multica:{issue_id}:<phase>`` so re-runs are safe.
 """
 from __future__ import annotations
 
