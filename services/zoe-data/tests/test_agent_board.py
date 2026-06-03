@@ -47,6 +47,7 @@ async def test_agent_board_keeps_active_and_chain_enrichment_bounded(monkeypatch
 
     assert [issue["id"] for issue in board["active"]] == ["progress-1", "review-1"]
     assert sorted(board["groups"]) == ["backlog", "blocked", "in_progress", "in_review", "todo"]
-    assert polled_refs == ["multica:progress-1", "multica:review-1"]
+    assert polled_refs == ["multica:progress-1", "multica:blocked-1", "multica:review-1"]
     assert board["groups"]["backlog"][0].get("chain") is None
     assert board["groups"]["in_progress"][0]["phase"] == "implement"
+    assert board["groups"]["blocked"][0]["phase"] == "implement"

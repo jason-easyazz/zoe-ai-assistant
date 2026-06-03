@@ -215,6 +215,12 @@ def issue_evidence_profile(issue: dict | None) -> EvidenceProfile:
     """Resolve per-issue evidence requirements from Multica metadata or description tags."""
     issue = issue or {}
     meta = issue.get("metadata") or {}
+    try:
+        from multica_ticket_contract import parse_ticket_block
+
+        meta = {**parse_ticket_block(issue.get("description") or ""), **meta}
+    except Exception:
+        pass
     explicit = str(meta.get("evidence_profile") or issue.get("evidence_profile") or "").strip().lower()
     if explicit in _EVIDENCE_PROFILES:
         return explicit  # type: ignore[return-value]
