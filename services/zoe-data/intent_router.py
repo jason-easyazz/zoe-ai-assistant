@@ -1545,10 +1545,9 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
             )
             ident = issue.get("identifier") or issue.get("id") or "(new)"
             return (
-                "I've added that to the Multica board for Hermes.\n\n"
+                "I've added that to Multica for Zoe's engineering driver.\n\n"
                 f"- Issue: `{ident}`\n"
-                "It'll be picked up by the Kanban engineering loop (implement → review → closeout) "
-                "and I'll keep the board status in sync."
+                "Zoe will dispatch one bounded Hermes phase at a time and keep the ticket status in sync."
             )
         except Exception as exc:
             logger.warning("engineering_task_create: %s", exc)

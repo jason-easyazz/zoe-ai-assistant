@@ -3,10 +3,11 @@ from __future__ import annotations
 
 
 def chain_needs_dispatch(chain: dict) -> bool:
-    """Return True when a Hermes-assigned Multica issue should receive a Kanban chain.
+    """Return True when a Hermes-assigned Multica issue should receive a Kanban phase.
 
-    The poll bridge dispatches when there is no active chain yet (``not_found``) or
-    when a prior dispatch was interrupted (``partial``). Active ``running`` /
+    The poll bridge dispatches when there is no active run yet (``not_found``) or
+    when the journal has a next ready phase with no Kanban row yet (``partial``).
+    Legacy interrupted chains also report ``partial``. Active ``running`` /
     ``blocked`` chains and completed ``done`` chains are left alone.
 
     Pipeline ``fingerprint_abort`` / ``terminal_block`` also suppresses redispatch.

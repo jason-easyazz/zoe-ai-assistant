@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Sync Hermes-assigned Multica issues into Hermes Kanban chains (cheap DeepSeek).
+"""Sync Hermes-assigned Multica issues into active Hermes Kanban phases (cheap DeepSeek).
 
 Replaces the old engineering_workflow/background_runner (Sonnet) dispatch path.
-For each Hermes-assigned ``todo`` Multica issue without an active Kanban chain,
-create an implement->review->closeout chain via the executor registry, then set
-the Multica issue to ``in_progress``.
+For each Hermes-assigned ``todo`` Multica issue whose current ready phase has no
+Kanban row yet, dispatch exactly that one phase via the executor registry, then
+set the Multica issue to ``in_progress``.
 
-Idempotent: chains are keyed ``multica:{issue_id}:<phase>`` so re-runs are safe.
+Idempotent: phases are keyed ``multica:{issue_id}:<phase>`` so re-runs are safe.
 """
 from __future__ import annotations
 
@@ -42,6 +42,7 @@ async def run(args: argparse.Namespace) -> int:
     bootstrap_runtime_env()
     from executor_registry import poll_ref
     from multica_client import get_engineering_multica_agent_id, get_multica_client
+    from multica_poll_dispatch import chain_needs_dispatch
     from multica_webhook_emitter import emit_issue_assigned, is_configured as webhooks_configured
 
     hermes_id = get_engineering_multica_agent_id()
@@ -63,9 +64,9 @@ async def run(args: argparse.Namespace) -> int:
         print("No Hermes-assigned todo issues to dispatch")
         return 0
 
-    # Dispatch routes through the Zoe board webhook receiver; the secret is a
-    # batch-wide prerequisite, so check it once up front rather than per candidate.
-    if not webhooks_configured():
+    # Live dispatch routes through the Zoe board webhook receiver; the secret is
+    # a batch-wide prerequisite. Dry runs should still work without webhook auth.
+    if not args.dry_run and not webhooks_configured():
         print(
             "ERROR: MULTICA_WEBHOOK_SECRET unset — set it in .env so dispatch uses /api/agent/board/webhook",
             file=sys.stderr,
@@ -87,8 +88,8 @@ async def run(args: argparse.Namespace) -> int:
         # outer try/except that guards board_approve and the Multica webhook handler.
         try:
             existing = await poll_ref(f"multica:{issue_id}")
-            if existing.get("found") and existing.get("status") in ("running", "blocked"):
-                print(f"SKIP {ident}: chain exists status={existing['status']}")
+            if not chain_needs_dispatch(existing):
+                print(f"SKIP {ident}: chain status={existing.get('status')}")
                 continue
 
             if args.dry_run:

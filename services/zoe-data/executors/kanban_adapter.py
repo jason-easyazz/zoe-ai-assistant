@@ -1,9 +1,9 @@
 """Hermes Kanban executor adapter.
 
-Turns a Multica issue into a durable scout -> implement -> verify -> review ->
-closeout -> retro chain on the Hermes Kanban board, where OpenRouter-routed worker
-profiles do the work. All Kanban-specific behaviour lives here so it never leaks
-into Zoe core.
+Turns a Multica issue into a durable evidence-gated engineering run. New runs
+create only the current ready phase; pipeline_store owns phase advancement and a
+later dispatch call creates the next phase. Legacy in-flight chains are still
+recognized while the board drains.
 
 Boundary: this shells the ``hermes kanban`` CLI (same SQLite DB the in-gateway
 dispatcher reads) rather than importing Hermes internals — keeping Zoe
@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 NAME = "kanban"
 
-# Phases of the per-issue chain, in order. Each maps to a worker profile and the
+# Phases of the per-issue run, in order. Each maps to a worker profile and the
 # skills it must load. Keys double as the idempotency-key suffix (multica:{id}:<phase>).
 _CHAIN = (
     ("scout", "zoe-planner", ("zoe-graphify", "zoe-engineering")),
@@ -213,6 +213,13 @@ def _chain_for_issue(issue: dict) -> tuple[tuple[str, str, tuple[str, ...]], ...
     return phases
 
 
+def _phase_plan_entry(phase: str, issue: dict) -> tuple[str, str, tuple[str, ...]] | None:
+    for entry in _chain_for_issue(issue):
+        if entry[0] == phase:
+            return entry
+    return None
+
+
 def _protocol_violation_count(detail: dict[str, Any]) -> int:
     events = detail.get("events") if isinstance(detail.get("events"), list) else []
     return sum(
@@ -223,6 +230,8 @@ def _protocol_violation_count(detail: dict[str, Any]) -> int:
 def _expected_phases(phases: dict[str, dict]) -> set[str]:
     present = set(phases)
     bodies = [(phases[p].get("body") or "") for p in present]
+    if any("zoe-chain: v4" in body for body in bodies):
+        return set(present)
     v3_chain = any("zoe-chain: v3" in body for body in bodies)
     if present <= set(_LEGACY_CHAIN_PHASES) and "verify" not in present:
         return set(_LEGACY_CHAIN_PHASES)
@@ -276,6 +285,17 @@ class KanbanAdapter:
         except json.JSONDecodeError as exc:
             raise KanbanCLIError(f"non-JSON output from kanban {args[0]}: {exc}: {stdout[:200]}")
 
+    async def _phases_for_ref(self, external_ref: str) -> dict[str, dict]:
+        tasks = await self._run(["list", "--json"], expect_json=True)
+        rows = tasks if isinstance(tasks, list) else (tasks or {}).get("tasks", [])
+        prefix = f"{external_ref}:"
+        phases: dict[str, dict] = {}
+        for row in rows:
+            key = _row_ref_key(row)
+            if key.startswith(prefix):
+                phases[key[len(prefix):]] = row
+        return phases
+
     def _build_body(self, phase: str, issue: dict, identifier: str, *, mode: str | None = None) -> str:
         title = issue.get("title") or identifier
         description = issue.get("description") or ""
@@ -302,7 +322,7 @@ class KanbanAdapter:
         common = (
             f"Multica issue: {identifier} (id {issue_id})\n"
             f"zoe-ref: multica:{issue_id}:{phase}\n"
-            f"zoe-chain: v3\n"
+            f"zoe-chain: v4\n"
             f"{escalation_marker}"
             f"{mode_note}"
             f"Repo: {zoe_repo_root()}  |  Base branch: main  |  Workspace: git worktree\n\n"
@@ -473,9 +493,11 @@ class KanbanAdapter:
         return True
 
     async def dispatch(self, issue: dict) -> dict:
-        """Create (idempotently) the scout->implement->verify->review->closeout->retro chain.
+        """Create the single current ready phase for a Multica engineering run.
 
-        Returns {ok, external_ref, chain:{phase:task_id}, created:[phases], mode}.
+        Returns {ok, external_ref, chain:{phase:task_id}, created:[phase], mode}.
+        Repeated calls are idempotent: if the current phase already has a Kanban
+        row, dispatch reports it without creating downstream phases.
         """
         issue_id = str(issue.get("id") or "").strip()
         if not issue_id:
@@ -486,58 +508,130 @@ class KanbanAdapter:
 
         chain: dict[str, str] = {}
         created: list[str] = []
-        parent: str | None = None
         mode = _engineering_mode(issue)
-        phase_plan = _chain_for_issue(issue)
-        for phase, assignee, skills in phase_plan:
-            args = [
-                "create",
-                self._title(phase, identifier, issue),
-                "--assignee",
-                assignee,
-                "--workspace",
-                "worktree",
-                "--idempotency-key",
-                f"{external_ref}:{phase}",
-                "--max-runtime",
-                _max_runtime(mode),
-                "--created-by",
-                "zoe-bridge",
-                "--body",
-                self._build_body(phase, issue, identifier, mode=mode),
-                "--json",
-            ]
-            for skill in skills:
-                args += ["--skill", skill]
-            if parent:
-                args += ["--parent", parent]
-            result = await self._run(args, expect_json=True)
-            task_id = (result or {}).get("id") or (result or {}).get("task", {}).get("id")
-            if not task_id:
-                raise KanbanCLIError(f"create returned no id for phase={phase}: {result}")
-            chain[phase] = task_id
-            if not (result or {}).get("deduplicated"):
-                created.append(phase)
-            if phase in {"implement", "verify"}:
-                from worktree_bootstrap import prepare_kanban_worktree
 
-                await asyncio.to_thread(prepare_kanban_worktree, str(task_id))
-            parent = task_id
-
-        logger.info(
-            "kanban_adapter: dispatched %s -> chain=%s (new=%s)", identifier, chain, created
-        )
         try:
-            from pipeline_store import bootstrap_state
+            from pipeline_evidence import transition
+            from pipeline_store import bootstrap_state, save_state
 
-            await bootstrap_state(
+            state = await bootstrap_state(
                 external_ref,
                 start_phase="implement" if _skip_scout(issue) else "scout",
                 issue=issue,
             )
         except Exception as exc:
-            logger.debug("kanban_adapter: pipeline bootstrap skipped for %s: %s", external_ref, exc)
-        return {"ok": True, "external_ref": external_ref, "chain": chain, "created": created, "mode": mode}
+            logger.warning("kanban_adapter: pipeline bootstrap failed for %s: %s", external_ref, exc)
+            return {
+                "ok": False,
+                "external_ref": external_ref,
+                "reason": "pipeline bootstrap failed",
+                "chain": {},
+                "created": [],
+                "mode": mode,
+            }
+
+        if state is not None and state.status in {"blocked", "done"}:
+            return {
+                "ok": False,
+                "external_ref": external_ref,
+                "reason": f"pipeline {state.status}",
+                "phase": state.phase,
+                "chain": {},
+                "created": [],
+                "mode": mode,
+            }
+
+        phase = state.phase if state is not None else ("implement" if _skip_scout(issue) else "scout")
+        entry = _phase_plan_entry(phase, issue)
+        if entry is None:
+            return {
+                "ok": False,
+                "external_ref": external_ref,
+                "reason": f"phase {phase} is not in this issue plan",
+                "phase": phase,
+                "chain": {},
+                "created": [],
+                "mode": mode,
+            }
+
+        existing_phases = await self._phases_for_ref(external_ref)
+        existing_row = existing_phases.get(phase)
+        if existing_row and existing_row.get("id"):
+            return {
+                "ok": True,
+                "external_ref": external_ref,
+                "chain": {phase: existing_row["id"]},
+                "created": [],
+                "mode": mode,
+                "phase": phase,
+                "ready_phase_only": True,
+            }
+
+        phase_order = [p for p, _, _ in _chain_for_issue(issue)]
+        parent: str | None = None
+        if phase in phase_order:
+            idx = phase_order.index(phase)
+            if idx > 0:
+                previous = existing_phases.get(phase_order[idx - 1]) or {}
+                parent = previous.get("id")
+
+        phase, assignee, skills = entry
+        args = [
+            "create",
+            self._title(phase, identifier, issue),
+            "--assignee",
+            assignee,
+            "--workspace",
+            "worktree",
+            "--idempotency-key",
+            f"{external_ref}:{phase}",
+            "--max-runtime",
+            _max_runtime(mode),
+            "--created-by",
+            "zoe-bridge",
+            "--body",
+            self._build_body(phase, issue, identifier, mode=mode),
+            "--json",
+        ]
+        for skill in skills:
+            args += ["--skill", skill]
+        if parent:
+            args += ["--parent", parent]
+        result = await self._run(args, expect_json=True)
+        task_id = (result or {}).get("id") or (result or {}).get("task", {}).get("id")
+        if not task_id:
+            raise KanbanCLIError(f"create returned no id for phase={phase}: {result}")
+        chain[phase] = task_id
+        if not (result or {}).get("deduplicated"):
+            created.append(phase)
+        if phase in {"implement", "verify"}:
+            from worktree_bootstrap import prepare_kanban_worktree
+
+            await asyncio.to_thread(prepare_kanban_worktree, str(task_id))
+        if state is not None and state.status == "todo":
+            try:
+                running = transition(state, "start")
+                await asyncio.to_thread(
+                    save_state,
+                    running,
+                    event="effect_requested",
+                    extra={"phase": phase, "task_id": task_id},
+                )
+            except Exception as exc:
+                logger.warning("kanban_adapter: effect_requested save skipped for %s: %s", external_ref, exc)
+
+        logger.info(
+            "kanban_adapter: dispatched %s -> phase=%s chain=%s (new=%s)", identifier, phase, chain, created
+        )
+        return {
+            "ok": True,
+            "external_ref": external_ref,
+            "chain": {phase: task_id},
+            "created": created,
+            "mode": mode,
+            "phase": phase,
+            "ready_phase_only": True,
+        }
 
     def _title(self, phase: str, identifier: str, issue: dict) -> str:
         base = issue.get("title") or identifier
@@ -569,14 +663,7 @@ class KanbanAdapter:
         # each row via _row_ref_key (the `zoe-ref:` body marker) in Python. This is
         # O(board size) per candidate; acceptable while the board is small. Revisit
         # (push the filter into the CLI) if the board grows large enough to matter.
-        tasks = await self._run(["list", "--json"], expect_json=True)
-        rows = tasks if isinstance(tasks, list) else (tasks or {}).get("tasks", [])
-        prefix = f"{external_ref}:"
-        phases: dict[str, dict] = {}
-        for row in rows:
-            key = _row_ref_key(row)
-            if key.startswith(prefix):
-                phases[key[len(prefix):]] = row
+        phases = await self._phases_for_ref(external_ref)
         if not phases:
             return {"found": False, "status": "not_found", "phases": {}, "pr_url": None, "blocker": None}
 
@@ -606,6 +693,7 @@ class KanbanAdapter:
 
         closeout = phases.get("closeout", {})
         retro = phases.get("retro", {})
+        is_v4 = any("zoe-chain: v4" in (row.get("body") or "") for row in phases.values())
         expected = _expected_phases(phases)
         missing = expected - set(phases)
         if retro and (retro.get("status") or "") in _TERMINAL_KANBAN_STATUSES:
@@ -644,8 +732,29 @@ class KanbanAdapter:
             if pipeline_info.get("terminal_block") and agg not in {"done", "blocked"}:
                 agg = "blocked"
                 blocker = blocker or f"pipeline terminal block at {pipeline_info.get('phase')}"
+            elif agg not in {"done", "blocked"} and is_v4:
+                current_phase = pipeline_info.get("phase")
+                current_status = pipeline_info.get("status")
+                if current_status == "done":
+                    agg = "done"
+                elif current_status == "blocked":
+                    agg = "blocked"
+                    blocker = blocker or f"pipeline blocked at {current_phase}"
+                elif current_status == "todo" and current_phase not in phases:
+                    agg = "partial"
+                else:
+                    agg = "running"
         except Exception as exc:
-            logger.debug("kanban_adapter: pipeline sync skipped for %s: %s", external_ref, exc)
+            logger.warning("kanban_adapter: pipeline sync failed for %s: %s", external_ref, exc)
+            pipeline_info = {
+                "tracked": False,
+                "error": str(exc),
+                "terminal_block": True,
+                "block_reason": "pipeline_store_unavailable",
+            }
+            if is_v4 and agg not in {"done", "blocked"}:
+                agg = "blocked"
+                blocker = blocker or "pipeline_store_unavailable"
 
         return {
             "found": True,

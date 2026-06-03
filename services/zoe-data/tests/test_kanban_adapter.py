@@ -63,35 +63,58 @@ class _FakeAdapter(ka.KanbanAdapter):
 
 
 @pytest.mark.asyncio
-async def test_dispatch_creates_six_linked_phases():
+async def test_dispatch_creates_one_ready_phase():
     a = _FakeAdapter()
     issue = {"id": "uuid-1", "identifier": "ZOE-9", "title": "Fix thing", "description": "do it"}
     result = await a.dispatch(issue)
     assert result["ok"] is True
     assert result["external_ref"] == "multica:uuid-1"
-    assert set(result["chain"]) == {
-        "scout",
-        "implement",
-        "verify",
-        "review",
-        "closeout",
-        "retro",
-    }
+    assert result["phase"] == "scout"
+    assert result["ready_phase_only"] is True
+    assert set(result["chain"]) == {"scout"}
     creates = [c for c in a.calls if c[0] == "create"]
-    assert len(creates) == 6
-    # verify + review + closeout + retro must be linked to a parent
-    for create in creates[1:]:
-        assert "--parent" in create
+    assert len(creates) == 1
+    assert "--parent" not in creates[0]
     keys = [c[c.index("--idempotency-key") + 1] for c in creates]
-    assert keys == [
-        "multica:uuid-1:scout",
-        "multica:uuid-1:implement",
-        "multica:uuid-1:verify",
-        "multica:uuid-1:review",
-        "multica:uuid-1:closeout",
-        "multica:uuid-1:retro",
-    ]
+    assert keys == ["multica:uuid-1:scout"]
     assert result["mode"] == "interactive"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_refuses_to_create_without_pipeline_journal(monkeypatch):
+    async def fail_bootstrap(*args, **kwargs):
+        raise RuntimeError("store offline")
+
+    monkeypatch.setattr("pipeline_store.bootstrap_state", fail_bootstrap)
+    a = _FakeAdapter()
+    result = await a.dispatch({"id": "uuid-no-journal", "identifier": "ZOE-NJ", "title": "No journal"})
+
+    assert result["ok"] is False
+    assert result["reason"] == "pipeline bootstrap failed"
+    assert [c for c in a.calls if c[0] == "create"] == []
+
+
+@pytest.mark.asyncio
+async def test_dispatch_after_scout_evidence_creates_next_phase():
+    from pipeline_store import bootstrap_state, save_state
+    from pipeline_evidence import EvidenceItem, transition, with_evidence
+
+    state = await bootstrap_state("multica:uuid-next", start_phase="scout")
+    state = with_evidence(state, EvidenceItem(kind="tool", summary="graphify map", passed=True))
+    state = transition(state, "complete")
+    save_state(state, event="transition", extra={"row_phase": "scout"})
+
+    rows = [_row("scout", "done", chain_version="v4", issue_id="uuid-next")]
+    a = _FakeAdapter(list_rows=rows)
+    result = await a.dispatch({"id": "uuid-next", "identifier": "ZOE-NEXT", "title": "Fix thing"})
+
+    creates = [c for c in a.calls if c[0] == "create"]
+    assert result["phase"] == "implement"
+    assert set(result["chain"]) == {"implement"}
+    assert len(creates) == 1
+    assert creates[0][creates[0].index("--idempotency-key") + 1] == "multica:uuid-next:implement"
+    assert "--parent" in creates[0]
+    assert creates[0][creates[0].index("--parent") + 1] == "t_scout"
 
 
 @pytest.mark.asyncio
@@ -109,9 +132,9 @@ async def test_dispatch_overnight_mode_extends_runtime(monkeypatch):
 
     creates = [c for c in a.calls if c[0] == "create"]
     runtimes = [c[c.index("--max-runtime") + 1] for c in creates]
-    body = creates[1][creates[1].index("--body") + 1]
+    body = creates[0][creates[0].index("--body") + 1]
     assert result["mode"] == "overnight"
-    assert runtimes == ["8h"] * 6
+    assert runtimes == ["8h"]
     assert "latency is secondary" in body
 
 
@@ -123,8 +146,8 @@ async def test_dispatch_interactive_mode_uses_default_runtime(monkeypatch):
     await a.dispatch({"id": "uuid-fast", "identifier": "ZOE-FAST", "title": "Immediate work"})
 
     creates = [c for c in a.calls if c[0] == "create"]
-    assert creates[1][creates[1].index("--max-runtime") + 1] == "30m"
-    body = creates[1][creates[1].index("--body") + 1]
+    assert creates[0][creates[0].index("--max-runtime") + 1] == "30m"
+    body = creates[0][creates[0].index("--body") + 1]
     assert "Engineering mode: interactive" in body
 
 
@@ -157,7 +180,7 @@ async def test_dispatch_skip_scout_when_env_set(monkeypatch):
     a = _FakeAdapter()
     result = await a.dispatch({"id": "uuid-skip", "identifier": "ZOE-SKIP", "title": "t"})
     assert "scout" not in result["chain"]
-    assert set(result["chain"]) == {"implement", "verify", "review", "closeout", "retro"}
+    assert set(result["chain"]) == {"implement"}
 
 
 @pytest.mark.asyncio
@@ -170,9 +193,18 @@ async def test_dispatch_quality_escalation_mode(monkeypatch):
     creates = [c for c in a.calls if c[0] == "create"]
     assert result["mode"] == "quality-escalation"
     assert creates[0][creates[0].index("--max-runtime") + 1] == "75m"
-    body = creates[1][creates[1].index("--body") + 1]
+    body = creates[0][creates[0].index("--body") + 1]
     assert "quality-escalation" in body
-    verify_body = creates[2][creates[2].index("--body") + 1]
+    verify_body = ka.KanbanAdapter()._build_body(
+        "verify",
+        {
+            "id": "uuid-q",
+            "identifier": "ZOE-Q",
+            "title": "Hard task",
+            "engineering_mode": "quality-escalation",
+        },
+        "ZOE-Q",
+    )
     assert "zoe-model-escalation: true" in verify_body
     assert "anthropic/claude-sonnet-4.6" in verify_body
     assert "Do NOT use openrouter/auto" in verify_body
@@ -189,20 +221,29 @@ async def test_dispatch_model_escalation_from_metadata():
             "metadata": {"model_escalation": True},
         }
     )
-    creates = [c for c in a.calls if c[0] == "create"]
-    review_body = creates[3][creates[3].index("--body") + 1]
+    review_body = ka.KanbanAdapter()._build_body(
+        "review",
+        {
+            "id": "uuid-meta-esc",
+            "identifier": "ZOE-ESC",
+            "title": "Escalate on metadata",
+            "metadata": {"model_escalation": True},
+        },
+        "ZOE-ESC",
+    )
     assert "zoe-model-escalation: true" in review_body
     assert "anthropic/claude-sonnet-4.6" in review_body
 
 
 @pytest.mark.asyncio
-async def test_dispatch_overnight_implement_mentions_free_fallback():
+async def test_dispatch_overnight_implement_mentions_free_fallback(monkeypatch):
+    monkeypatch.setenv("ZOE_KANBAN_SKIP_SCOUT", "1")
     a = _FakeAdapter()
     await a.dispatch(
         {"id": "uuid-night2", "identifier": "ZOE-N2", "title": "Night work", "engineering_mode": "overnight"}
     )
     creates = [c for c in a.calls if c[0] == "create"]
-    impl_body = creates[1][creates[1].index("--body") + 1]
+    impl_body = creates[0][creates[0].index("--body") + 1]
     assert "openrouter/free" in impl_body
 
 
@@ -235,11 +276,10 @@ async def test_dispatch_writes_zoe_ref_marker_into_body():
     a = _FakeAdapter()
     await a.dispatch({"id": "uuid-7", "identifier": "ZOE-7", "title": "t"})
     creates = [c for c in a.calls if c[0] == "create"]
-    for phase, create in zip(
-        ("scout", "implement", "verify", "review", "closeout", "retro"), creates
-    ):
-        body = create[create.index("--body") + 1]
-        assert f"zoe-ref: multica:uuid-7:{phase}" in body
+    assert len(creates) == 1
+    body = creates[0][creates[0].index("--body") + 1]
+    assert "zoe-ref: multica:uuid-7:scout" in body
+    assert "zoe-chain: v4" in body
 
 
 @pytest.mark.asyncio
@@ -380,16 +420,18 @@ async def test_dispatch_pins_expected_skills():
     a = _FakeAdapter()
     await a.dispatch({"id": "u", "identifier": "ZOE-1", "title": "t"})
     creates = [c for c in a.calls if c[0] == "create"]
-    impl_skills = [creates[1][i + 1] for i, v in enumerate(creates[1]) if v == "--skill"]
     scout_skills = [creates[0][i + 1] for i, v in enumerate(creates[0]) if v == "--skill"]
-    verify_skills = [creates[2][i + 1] for i, v in enumerate(creates[2]) if v == "--skill"]
-    closeout_skills = [creates[4][i + 1] for i, v in enumerate(creates[4]) if v == "--skill"]
-    retro_skills = [creates[5][i + 1] for i, v in enumerate(creates[5]) if v == "--skill"]
     assert "zoe-graphify" in scout_skills
+
+
+@pytest.mark.asyncio
+async def test_dispatch_pins_implement_skill_when_scout_skipped(monkeypatch):
+    monkeypatch.setenv("ZOE_KANBAN_SKIP_SCOUT", "1")
+    a = _FakeAdapter()
+    await a.dispatch({"id": "u", "identifier": "ZOE-1", "title": "t"})
+    creates = [c for c in a.calls if c[0] == "create"]
+    impl_skills = [creates[0][i + 1] for i, v in enumerate(creates[0]) if v == "--skill"]
     assert impl_skills == ["zoe-engineering"]
-    assert "zoe-engineering" in verify_skills
-    assert "github-greptile-loop" in closeout_skills
-    assert "zoe-status-refresh" in retro_skills
 
 
 @pytest.mark.asyncio
@@ -438,9 +480,17 @@ async def test_poll_partial_chain_is_redispatchable():
 
 def _row(phase, status, **extra):
     """A Kanban list row shaped like the real CLI: body marker, NO idempotency_key."""
-    body = f"Multica issue: ZOE-9 (id uuid-9)\nzoe-ref: multica:uuid-9:{phase}\nTitle: x"
+    issue_id = extra.pop("issue_id", "uuid-9")
+    body = f"Multica issue: ZOE-9 (id {issue_id})\nzoe-ref: multica:{issue_id}:{phase}\nTitle: x"
+    chain_version = extra.pop("chain_version", None)
+    if chain_version:
+        body = (
+            f"Multica issue: ZOE-9 (id {issue_id})\n"
+            f"zoe-ref: multica:{issue_id}:{phase}\n"
+            f"zoe-chain: {chain_version}\nTitle: x"
+        )
     if extra.pop("v3", False):
-        body = f"Multica issue: ZOE-9 (id uuid-9)\nzoe-ref: multica:uuid-9:{phase}\nzoe-chain: v3\nTitle: x"
+        body = f"Multica issue: ZOE-9 (id {issue_id})\nzoe-ref: multica:{issue_id}:{phase}\nzoe-chain: v3\nTitle: x"
     return {
         "id": f"t_{phase}",
         "body": body,
@@ -510,6 +560,44 @@ async def test_poll_partial_chain_via_body_marker_is_redispatchable():
     out = await a.poll("multica:uuid-9")
     assert out["found"] is True
     assert out["status"] == "partial"
+
+
+@pytest.mark.asyncio
+async def test_poll_v4_done_phase_with_ready_next_phase_is_partial():
+    rows = [_row("scout", "done", chain_version="v4")]
+    show = {"t_scout": {"latest_summary": "TOOLS_USED=graphify\nSCOUT_SUMMARY=small", "comments": []}}
+    a = _FakeAdapter(list_rows=rows, show_map=show)
+    out = await a.poll("multica:uuid-9")
+    assert out["found"] is True
+    assert out["status"] == "partial"
+    assert out["pipeline"]["phase"] == "implement"
+    assert out["pipeline"]["status"] == "todo"
+
+
+@pytest.mark.asyncio
+async def test_poll_v4_pipeline_sync_failure_blocks_redispatch(monkeypatch):
+    async def fail_sync(*args, **kwargs):
+        raise RuntimeError("pipeline store unavailable")
+
+    monkeypatch.setattr("pipeline_store.sync_pipeline_from_chain", fail_sync)
+    rows = [_row("scout", "done", chain_version="v4")]
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:uuid-9")
+
+    assert out["status"] == "blocked"
+    assert out["blocker"] == "pipeline_store_unavailable"
+    assert out["pipeline"]["tracked"] is False
+    assert out["pipeline"]["terminal_block"] is True
+    assert "pipeline store unavailable" in out["pipeline"]["error"]
+
+
+@pytest.mark.asyncio
+async def test_poll_v4_does_not_promote_kanban_blocked_to_partial():
+    rows = [_row("implement", "blocked", chain_version="v4", block_reason="dirty tree")]
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:uuid-9")
+    assert out["status"] == "blocked"
+    assert "dirty tree" in (out["blocker"] or "")
 
 
 @pytest.mark.asyncio

@@ -1358,22 +1358,63 @@ async def get_llm_stats(
 
 
 @_agent_card_router.get("/board")
-async def get_agent_board():
-    """Return active Multica board issues for AG-UI display.
+async def get_agent_board(user: dict = Depends(get_current_user)):  # noqa: ARG001 - auth-only
+    """Return Multica engineering ticket state for AG-UI display.
 
     Falls back gracefully if Multica is not configured or unavailable.
     """
     try:
-        from multica_client import MULClient  # type: ignore[import]
+        from executor_registry import poll_ref  # type: ignore[import]
+        from multica_client import MULClient, get_engineering_multica_agent_id  # type: ignore[import]
+
         client = MULClient()
         if not client.is_configured():
-            return {"active": [], "available": False, "reason": "Multica not configured"}
-        issues = await client.list_issues(status="in_progress")
-        return {"active": issues, "available": True}
+            return {"active": [], "groups": {}, "available": False, "reason": "Multica not configured"}
+
+        statuses = ("backlog", "todo", "in_progress", "blocked", "in_review")
+        hermes_id = str(get_engineering_multica_agent_id())
+        groups: dict[str, list[dict]] = {status: [] for status in statuses}
+        active: list[dict] = []
+        hermes_issues: list[dict] = []
+
+        status_results = await asyncio.gather(
+            *(client.list_issues(status=status) for status in statuses),
+            return_exceptions=True,
+        )
+        for status, issues_or_exc in zip(statuses, status_results):
+            if isinstance(issues_or_exc, Exception):
+                continue
+            for issue in issues_or_exc or []:
+                enriched = dict(issue)
+                if status in {"in_progress", "in_review"} and str(issue.get("assignee_id") or "") == hermes_id:
+                    hermes_issues.append(enriched)
+                groups[status].append(enriched)
+                if status in {"in_progress", "in_review"}:
+                    active.append(enriched)
+
+        async def enrich_chain(issue: dict) -> None:
+            try:
+                chain = await poll_ref(f"multica:{issue.get('id')}")
+            except Exception as exc:
+                issue["chain_error"] = str(exc)
+                return
+            issue["chain"] = chain
+            pipeline = chain.get("pipeline") if isinstance(chain, dict) else None
+            if isinstance(pipeline, dict):
+                issue["phase"] = pipeline.get("phase")
+                issue["needs_split"] = pipeline.get("needs_split")
+                issue["split_packet"] = pipeline.get("split_packet")
+            issue["blocker"] = chain.get("blocker") if isinstance(chain, dict) else None
+            issue["pr_url"] = chain.get("pr_url") if isinstance(chain, dict) else None
+
+        if hermes_issues:
+            await asyncio.gather(*(enrich_chain(issue) for issue in hermes_issues))
+
+        return {"active": active, "groups": groups, "available": True}
     except ImportError:
-        return {"active": [], "available": False, "reason": "Multica client not installed"}
+        return {"active": [], "groups": {}, "available": False, "reason": "Multica client not installed"}
     except Exception as exc:
-        return {"active": [], "available": False, "reason": str(exc)}
+        return {"active": [], "groups": {}, "available": False, "reason": str(exc)}
 
 
 @_agent_card_router.post("/board/approve")
