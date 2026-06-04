@@ -442,10 +442,10 @@ class KanbanAdapter:
         return common + escalation_hint + (
             "You are closeout (zoe-planner, orchestration only).\n"
             "- Read the implementer's PR_URL handoff and extract the PR number N (the trailing /pull/N)."
-            " If AUDIT_ONLY=1 or audit-only with blank PR_URL, `kanban_complete` and note Multica done"
+            " If AUDIT_ONLY=1 or audit-only with blank PR_URL, `kanban_complete` with closeout evidence"
             " — no grep loop or merge.\n"
-            "- For smoke/audit tickets with no code/config changes and no PR_URL, update the Multica issue"
-            " to done with completion reason, then `kanban_complete`; do not wait for Greptile.\n"
+            "- For smoke/audit tickets with no code/config changes and no PR_URL, report the closeout"
+            " completion reason, then `kanban_complete`; do not wait for Greptile.\n"
             "- If a code task has no PR, leave the issue blocked — do NOT open one yourself.\n"
             "- Address every substantive Greptile finding (fix_now or won't_fix with reason). Do not stop at"
             " merge-ready — merge when gates pass.\n"
@@ -462,10 +462,11 @@ class KanbanAdapter:
             "    python3 scripts/maintenance/greploop_guard.py --pr N --merge-when-ready\n"
             "  Or one iteration then merge: --once --merge-when-ready\n"
             "  If branch protection blocks merge, leave the issue blocked with the gh error — do not admin-merge.\n"
-            "- After a successful merge: update the Multica issue to done with PR_URL, merge SHA, GREPTILE status,"
-            " and summary. If merge did not happen, leave in_progress/blocked with the blocker.\n"
+            "- After a successful merge: report PR_URL, merge SHA, GREPTILE status, and summary in your"
+            " handoff. Zoe will update Multica after the retro phase completes. If merge did not happen,"
+            " leave the issue in_progress/blocked with the blocker.\n"
             "Final handoff MUST include:\nPR_URL=<url>\nMERGE_SHA=<sha or blank>\nGREPTILE=<status>\n"
-            "MULTICA=<updated? done/blocked>\nSUMMARY=<short>\n"
+            "MULTICA=<Zoe updates after retro; report blocker if any>\nSUMMARY=<short>\n"
             "- TERMINAL PROTOCOL: you MUST end with `kanban_complete` or `kanban_block` (no silent exit)."
         )
 

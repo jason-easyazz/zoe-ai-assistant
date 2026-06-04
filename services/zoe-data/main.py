@@ -85,10 +85,12 @@ for _handler in logging.getLogger().handlers:
 
 async def _record_completed_multica_chain(client, issue_id: str, chain: dict) -> None:
     """Persist operator-visible completion metadata for a finished Multica chain."""
+    pipeline = chain.get("pipeline") or {}
+    phase = pipeline.get("phase") or "closeout"
     await client.record_progress(
         issue_id,
-        phase="closeout",
-        evidence="Kanban chain done",
+        phase=phase,
+        evidence="Kanban chain done after retro" if phase == "retro" else "Kanban chain done",
         pr_url=chain.get("pr_url"),
         clear_blocker=True,
         status="done",
