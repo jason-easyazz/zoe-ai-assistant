@@ -680,3 +680,19 @@ def test_closeout_body_requires_terminal_protocol():
     assert "TERMINAL PROTOCOL" in body
     assert "kanban_complete" in body
     assert "kanban_block" in body
+
+
+def test_audit_no_pr_phases_have_bounded_completion_path():
+    adapter = ka.KanbanAdapter()
+    issue = {"id": "uuid-1", "identifier": "ZOE-9", "title": "Audit smoke", "description": ""}
+    verify = adapter._build_body("verify", issue, "ZOE-9")
+    review = adapter._build_body("review", issue, "ZOE-9")
+    closeout = adapter._build_body("closeout", issue, "ZOE-9")
+
+    assert "audit-only, smoke" in verify
+    assert "no PR_URL" in verify
+    assert "VERIFY_BUDGET" in verify
+    assert "audit-only/no-code" in review
+    assert "REVIEW_BUDGET" in review
+    assert "For smoke/audit tickets" in closeout
+    assert "do not wait for Greptile" in closeout
