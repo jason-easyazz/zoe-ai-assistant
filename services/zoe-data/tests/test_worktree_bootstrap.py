@@ -39,11 +39,47 @@ def test_ensure_worktree_creates_branch_and_path(git_repo, monkeypatch):
     assert branch == "wt/t_test123"
 
 
-def test_ensure_worktree_is_idempotent(git_repo):
+def test_ensure_worktree_uses_origin_main_when_local_main_is_stale(git_repo, tmp_path):
+    remote = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+    subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=git_repo, check=True)
+    subprocess.run(["git", "push", "-u", "origin", "main"], cwd=git_repo, check=True, capture_output=True)
+
+    (git_repo / "REMOTE_ONLY.md").write_text("remote tip\n", encoding="utf-8")
+    subprocess.run(["git", "add", "REMOTE_ONLY.md"], cwd=git_repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "remote tip"], cwd=git_repo, check=True, capture_output=True)
+    subprocess.run(["git", "push", "origin", "main"], cwd=git_repo, check=True, capture_output=True)
+    subprocess.run(["git", "reset", "--hard", "HEAD~1"], cwd=git_repo, check=True, capture_output=True)
+
+    wt = wb.ensure_worktree("t_remote")
+    assert (wt / "REMOTE_ONLY.md").read_text(encoding="utf-8") == "remote tip\n"
+
+
+def test_base_ref_warns_when_fetch_fails(git_repo, caplog):
+    caplog.set_level("WARNING")
+
+    ref = wb._base_ref(git_repo, "main")
+
+    assert ref == "main"
+    assert "fetch origin/main failed" in caplog.text
+
+
+def test_ensure_worktree_is_idempotent(git_repo, monkeypatch):
     first = wb.ensure_worktree("t_dup")
+
+    calls = []
+    original_run_git = wb._run_git
+
+    def spy_run_git(args, *, cwd, timeout):
+        calls.append(args)
+        return original_run_git(args, cwd=cwd, timeout=timeout)
+
+    monkeypatch.setattr(wb, "_run_git", spy_run_git)
+
     second = wb.ensure_worktree("t_dup")
     assert first == second
     assert first.exists()
+    assert not any(args[:3] == ["git", "fetch", "origin"] for args in calls)
 
 
 def test_ensure_worktree_rejects_invalid_task_id():

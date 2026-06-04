@@ -133,6 +133,22 @@ def _worktree_registered(repo: Path, wt_path: Path) -> bool:
     return False
 
 
+def _base_ref(repo: Path, base_branch: str) -> str:
+    """Prefer the remote base branch so task worktrees do not start from stale local main."""
+    fetch_result = _run_git(["git", "fetch", "origin", base_branch], cwd=str(repo), timeout=120)
+    if fetch_result.returncode != 0:
+        logger.warning(
+            "worktree_bootstrap: fetch origin/%s failed (rc=%d); "
+            "falling back to local tracking ref or branch: %s",
+            base_branch,
+            fetch_result.returncode,
+            (fetch_result.stderr or "").strip(),
+        )
+    remote_ref = f"origin/{base_branch}"
+    check = _run_git(["git", "rev-parse", "--verify", remote_ref], cwd=str(repo), timeout=30)
+    return remote_ref if check.returncode == 0 else base_branch
+
+
 def ensure_worktree(task_id: str, *, base_branch: str = "main") -> Path:
     """Create ``~/.worktrees/<task_id>`` on ``wt/<task_id>`` if missing.
 
@@ -145,9 +161,10 @@ def ensure_worktree(task_id: str, *, base_branch: str = "main") -> Path:
     wt_path = worktree_path(task_id)
     branch = worktree_branch(task_id)
     repo = Path(zoe_repo_root())
-
     if _worktree_registered(repo, wt_path):
         return wt_path
+
+    base_ref = _base_ref(repo, base_branch)
 
     wt_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -158,7 +175,7 @@ def ensure_worktree(task_id: str, *, base_branch: str = "main") -> Path:
         str(wt_path),
         "-b",
         branch,
-        base_branch,
+        base_ref,
     ]
     result = _run_git(add_cmd, cwd=str(repo), timeout=120)
     if result.returncode == 0:
