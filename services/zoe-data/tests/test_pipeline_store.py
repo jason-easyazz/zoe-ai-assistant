@@ -251,3 +251,37 @@ async def test_sync_pipeline_auto_validators_on_implement_done(isolated_store, m
     state = await store.sync_pipeline_from_chain("multica:val", phases, fetch_detail)
     assert state.phase == "verify"
     assert any(item.kind == "validator" and item.metadata.get("phase") == "implement" for item in state.evidence)
+
+
+def test_pipeline_summary_surfaces_latest_retro_followup(isolated_store):
+    state = PipelineState(task_ref="multica:retro", phase="retro", status="done")
+    state = with_evidence(
+        state,
+        EvidenceItem(
+            kind="log",
+            summary="retro captured",
+            passed=True,
+            metadata={"phase": "retro", "follow_up": {"title": "Tighten retry guard", "description": "Add coverage"}},
+        ),
+    )
+
+    summary = store.pipeline_summary(state)
+
+    assert summary["retro_followup"]["title"] == "Tighten retry guard"
+
+
+def test_pipeline_summary_ignores_non_retro_followup_metadata(isolated_store):
+    state = PipelineState(task_ref="multica:non-retro", phase="verify", status="running")
+    state = with_evidence(
+        state,
+        EvidenceItem(
+            kind="log",
+            summary="not retro",
+            passed=True,
+            metadata={"phase": "verify", "follow_up": {"title": "Ignore me"}},
+        ),
+    )
+
+    summary = store.pipeline_summary(state)
+
+    assert summary["retro_followup"] is None
