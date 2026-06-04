@@ -332,10 +332,14 @@ class KanbanAdapter:
             return common + (
                 "You are scout (zoe-planner, read-only). Gather context before any code changes.\n"
                 "- Start with `kanban_show` and read the Multica issue acceptance criteria.\n"
-                "- Use Graphify (query/path/explain) and existing docs before raw repo scanning.\n"
+                "- Keep this phase bounded: run at most one focused Graphify/doc lookup and no broad repo crawl.\n"
+                "- For smoke, audit-only, or harness-check tickets, do not over-investigate; summarize the"
+                " observed contract and complete the scout handoff.\n"
                 "- Use opensrc for third-party APIs; reference Multica comments/state as source of truth.\n"
                 "- Do NOT edit code, open PRs, or mutate production config.\n"
                 "- Hand off with `kanban_complete` metadata including TOOLS_USED= and SCOUT_SUMMARY=.\n"
+                "- If you cannot finish context gathering within 8 tool/model steps, call `kanban_block`"
+                " with BLOCKER=SCOUT_BUDGET and the missing information instead of timing out.\n"
                 "- TERMINAL PROTOCOL: end with `kanban_complete` or `kanban_block` (no silent exit)."
             )
         if phase == "implement":

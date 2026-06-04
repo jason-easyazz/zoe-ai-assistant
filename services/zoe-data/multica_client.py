@@ -98,9 +98,12 @@ class MULClient:
             logger.debug("Multica not configured — skipping create_issue")
             return {}
         if metadata:
-            from multica_ticket_contract import write_ticket_block
+            from multica_ticket_contract import normalize_ticket_metadata, parse_ticket_block, write_ticket_block
 
-            description = write_ticket_block(description, metadata)
+            ticket_metadata = parse_ticket_block(description)
+            ticket_metadata.update(metadata)
+            ticket_metadata.pop("updated_at", None)
+            description = write_ticket_block(description, normalize_ticket_metadata(ticket_metadata))
         url = f"{self._base}/api/issues"
         payload: dict[str, Any] = {
             "title": title,
