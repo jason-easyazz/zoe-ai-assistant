@@ -27,6 +27,84 @@ def test_evidence_from_verify_handoff_parses_validators():
     assert len(validator.content_hash) == 64
 
 
+def test_evidence_from_review_metadata_records_human_approval():
+    detail = {
+        "latest_summary": "APPROVE ZOE-5401. PR is merge-ready.",
+        "comments": [],
+        "metadata": {
+            "merge_readiness": "merge_ready",
+            "approver": "zoe-reviewer",
+        },
+    }
+
+    items = evidence_from_handoff("review", detail)
+
+    human = next(item for item in items if item.kind == "human")
+    assert human.passed is True
+    assert human.metadata["source"] == "kanban_metadata"
+    assert human.metadata["approver"] == "zoe-reviewer"
+
+
+def test_evidence_from_review_metadata_accepts_approved_readiness():
+    detail = {
+        "latest_summary": "Approved after review.",
+        "comments": [],
+        "metadata": {
+            "merge_readiness": "approved",
+            "approved_by": "zoe-reviewer",
+        },
+    }
+
+    items = evidence_from_handoff("review", detail)
+
+    human = next(item for item in items if item.kind == "human")
+    assert human.passed is True
+    assert human.metadata["approver"] == "zoe-reviewer"
+    assert human.metadata["merge_readiness"] == "approved"
+
+
+def test_evidence_from_review_ignores_summary_without_approver():
+    detail = {
+        "latest_summary": "APPROVE ZOE-5401. PR is merge-ready.",
+        "comments": [],
+        "metadata": {},
+    }
+
+    items = evidence_from_handoff("review", detail)
+
+    assert not any(item.kind == "human" for item in items)
+
+
+def test_evidence_from_review_ignores_generic_pass_readiness():
+    detail = {
+        "latest_summary": "Reviewer pass note",
+        "comments": [],
+        "metadata": {
+            "merge_readiness": "pass",
+            "approver": "zoe-reviewer",
+        },
+    }
+
+    items = evidence_from_handoff("review", detail)
+
+    assert not any(item.kind == "human" for item in items)
+
+
+def test_evidence_from_review_ignores_reviewer_assignment():
+    detail = {
+        "latest_summary": "Review assigned and PR looks ready.",
+        "comments": [],
+        "metadata": {
+            "merge_readiness": "merge_ready",
+            "reviewer": "zoe-reviewer",
+        },
+    }
+
+    items = evidence_from_handoff("review", detail)
+
+    assert not any(item.kind == "human" for item in items)
+
+
 def test_block_reason_from_handoff_prefers_blocker_field():
     from pipeline_handoff import block_reason_from_handoff
 

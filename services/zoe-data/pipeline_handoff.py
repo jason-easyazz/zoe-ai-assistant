@@ -174,6 +174,34 @@ def _tool_from_log_markers(detail: dict[str, Any]) -> EvidenceItem | None:
     return None
 
 
+def _human_review_from_metadata(detail: dict[str, Any]) -> EvidenceItem | None:
+    metadata = detail.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+
+    readiness = str(metadata.get("merge_readiness") or "").strip().lower()
+    approver = str(
+        metadata.get("approver")
+        or metadata.get("approved_by")
+        or ""
+    ).strip()
+    summary = str(detail.get("latest_summary") or "").strip()
+
+    if readiness in {"merge_ready", "approved"} and approver:
+        return EvidenceItem(
+            kind="human",
+            summary=(summary or f"review approved by {approver}")[:500],
+            passed=True,
+            metadata={
+                "source": "kanban_metadata",
+                "approver": approver,
+                "merge_readiness": readiness,
+            },
+        )
+
+    return None
+
+
 def _greptile_from_closeout(detail: dict[str, Any], skills: tuple[str, ...] | list[str]) -> EvidenceItem | None:
     fields: dict[str, str] = {}
     for chunk in _haystacks(detail):
@@ -343,6 +371,10 @@ def evidence_from_handoff(
         review_note = fields.get("SUMMARY") or fields.get("REVIEW") or ""
         if review_note:
             items.append(EvidenceItem(kind="human", summary=review_note[:500], passed=True))
+        else:
+            review_item = _human_review_from_metadata(detail)
+            if review_item:
+                items.append(review_item)
 
     if phase == "closeout":
         greptile_item = _greptile_from_closeout(detail, skills)
