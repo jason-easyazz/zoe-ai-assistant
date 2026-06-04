@@ -88,6 +88,8 @@ async def test_create_issue_metadata_preserves_existing_ticket_fields():
             evidence_expectations=["chain exists"],
             source="initial",
         )
+        description = update_ticket_progress(description, evidence="old evidence")
+        old_updated_at = parse_ticket_block(description)["updated_at"]
         client = Client()
         client._base = "http://multica"
         client._token = "token"
@@ -100,3 +102,5 @@ async def test_create_issue_metadata_preserves_existing_ticket_fields():
     assert metadata["acceptance_criteria"] == ["dispatch once"]
     assert metadata["evidence_expectations"] == ["chain exists"]
     assert metadata["source"] == "override"
+    assert metadata["last_evidence"] == "old evidence"
+    assert metadata["updated_at"] != old_updated_at
