@@ -310,7 +310,7 @@ class MULClient:
             assignee_type=template.get("assignee_type") or parent.get("assignee_type") or "agent",
         )
         child_id = str(child.get("id") or "")
-        for label in template.get("labels") or ["needs-split"]:
+        for label in template.get("labels") or []:
             if child_id:
                 await self.attach_label(child_id, str(label))
         return child

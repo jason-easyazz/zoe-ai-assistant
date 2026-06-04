@@ -34,3 +34,11 @@ def test_progress_and_children_patch_metadata_only():
     assert meta["phase"] == "verify"
     assert meta["pr_url"] == "https://github/pr/1"
     assert meta["child_issue_ids"] == ["child-1"]
+
+
+def test_block_only_description_does_not_gain_leading_blank_lines():
+    description = describe_ticket("", zoe_kind="bug")
+    updated = write_ticket_block(description, {"schema": 1, "zoe_kind": "child"})
+
+    assert updated.startswith("```zoe-ticket")
+    assert not updated.startswith("\n")

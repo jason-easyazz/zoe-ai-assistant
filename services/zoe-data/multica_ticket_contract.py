@@ -68,9 +68,10 @@ def write_ticket_block(description: str | None, metadata: dict[str, Any]) -> str
     match = _BLOCK_RE.search(text)
     if match:
         start, end = match.span()
-        prefix = text[:start]
+        prefix = text[:start].rstrip()
         suffix = text[end:]
-        return f"{prefix.rstrip()}\n\n{block}{suffix}"
+        separator = "\n\n" if prefix else ""
+        return f"{prefix}{separator}{block}{suffix}"
     if not text:
         return block
     return f"{text}\n\n{block}"
