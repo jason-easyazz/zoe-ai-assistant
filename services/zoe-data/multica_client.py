@@ -316,6 +316,7 @@ class MULClient:
             status=str(template.get("status") or "backlog"),
             assignee_id=template.get("assignee_id") or parent.get("assignee_id"),
             assignee_type=template.get("assignee_type") or parent.get("assignee_type") or "agent",
+            project_id=template.get("project_id") or parent.get("project_id"),
         )
         child_id = str(child.get("id") or "")
         for label in template.get("labels") or []:

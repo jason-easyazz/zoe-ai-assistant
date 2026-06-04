@@ -125,11 +125,6 @@ async def _cmd_split_ticket(args: argparse.Namespace) -> dict[str, Any]:
         child = await client.create_child_issue(parent, template)
         if child.get("id"):
             children.append(child)
-    state = load_latest_state(args.task_ref) if args.task_ref else None
-    if state:
-        state = state.model_copy(update={"block_classification": "scope_split_required", "split_packet": packet})
-        state = transition(state, "block", reason=args.reason or "scope_split_required")
-        save_state(state, event="split_ticket", extra={"parent_issue_id": args.parent_issue_id, "children": children})
     child_ids = [str(child.get("id")) for child in children if child.get("id")]
     if not child_ids:
         return {
@@ -138,6 +133,11 @@ async def _cmd_split_ticket(args: argparse.Namespace) -> dict[str, Any]:
             "child_issue_ids": [],
             "reason": "no child issues created",
         }
+    state = load_latest_state(args.task_ref) if args.task_ref else None
+    if state:
+        state = state.model_copy(update={"block_classification": "scope_split_required", "split_packet": packet})
+        state = transition(state, "block", reason=args.reason or "scope_split_required")
+        save_state(state, event="split_ticket", extra={"parent_issue_id": args.parent_issue_id, "children": children})
     await client.update_issue(
         args.parent_issue_id,
         status="blocked",

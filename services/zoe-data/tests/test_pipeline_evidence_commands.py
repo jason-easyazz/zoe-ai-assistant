@@ -75,3 +75,42 @@ def test_split_ticket_does_not_block_parent_when_children_fail(monkeypatch, caps
     assert out["ok"] is False
     assert out["reason"] == "no child issues created"
     assert out["child_issue_ids"] == []
+
+
+def test_split_ticket_does_not_save_pipeline_block_when_children_fail(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("ZOE_PIPELINE_STORE_PATH", str(tmp_path / "runs.jsonl"))
+    import asyncio
+
+    asyncio.run(bootstrap_state("multica:split-fail", start_phase="implement"))
+
+    class FakeClient:
+        def is_configured(self):
+            return True
+
+        async def get_issue(self, issue_id):
+            return {"id": issue_id, "description": "parent"}
+
+        async def create_child_issue(self, parent, template):
+            return {}
+
+        async def update_issue(self, *args, **kwargs):
+            raise AssertionError("parent must not be mutated when no child was created")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "multica_client",
+        types.SimpleNamespace(get_multica_client=lambda: FakeClient()),
+    )
+
+    assert main([
+        "split-ticket",
+        "parent-1",
+        "--task-ref",
+        "multica:split-fail",
+        "--packet",
+        '{"child_issue_template":{"title":"child"}}',
+    ]) == 1
+    json.loads(capsys.readouterr().out)
+    state = load_latest_state("multica:split-fail")
+    assert state is not None
+    assert state.status == "todo"
