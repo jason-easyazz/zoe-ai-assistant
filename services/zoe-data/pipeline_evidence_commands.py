@@ -131,6 +131,13 @@ async def _cmd_split_ticket(args: argparse.Namespace) -> dict[str, Any]:
         state = transition(state, "block", reason=args.reason or "scope_split_required")
         save_state(state, event="split_ticket", extra={"parent_issue_id": args.parent_issue_id, "children": children})
     child_ids = [str(child.get("id")) for child in children if child.get("id")]
+    if not child_ids:
+        return {
+            "ok": False,
+            "parent_issue_id": args.parent_issue_id,
+            "child_issue_ids": [],
+            "reason": "no child issues created",
+        }
     await client.update_issue(
         args.parent_issue_id,
         status="blocked",
