@@ -269,12 +269,16 @@ class MULClient:
         from multica_ticket_contract import write_ticket_block
 
         issue = await self.get_issue(issue_id)
+        if not issue.get("id"):
+            return {}
         original = issue.get("description") or ""
         return await self.update_issue(issue_id, description=write_ticket_block(original, metadata))
 
     async def append_issue_note(self, issue_id: str, note: str) -> dict:
         """Append a visible progress note while preserving existing description."""
         issue = await self.get_issue(issue_id)
+        if not issue.get("id"):
+            return {}
         original = (issue.get("description") or "").rstrip()
         updated = f"{original}\n\nZoe note: {note.strip()}" if original else f"Zoe note: {note.strip()}"
         return await self.update_issue(issue_id, description=updated)
@@ -331,6 +335,8 @@ class MULClient:
         from multica_ticket_contract import update_ticket_progress
 
         issue = await self.get_issue(issue_id)
+        if not issue.get("id"):
+            return {}
         updated_description = update_ticket_progress(
             issue.get("description") or "",
             phase=phase,
