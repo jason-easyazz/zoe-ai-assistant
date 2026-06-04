@@ -11,12 +11,11 @@ surface-agnostic.
 
 Worker profiles + pinned skills encode Zoe's agentic-engineering loop:
   - scout     (zoe-planner):  zoe-graphify, zoe-engineering     (read-only context)
-  - implement (zoe-coder):  zoe-engineering, zoe-graphify, source-code-context,
-                            code-structure-cleanup  (graph-first, opensrc, lean)
-  - verify    (zoe-reviewer): zoe-engineering           (tests/evidence gate; no preloaded skill for audit/no-PR)
-  - review    (zoe-reviewer): zoe-engineering           (verification gate)
-  - closeout  (zoe-planner):  github-greptile-loop      (grep-loop, merge, Multica done)
-  - retro     (zoe-planner):  zoe-status-refresh        (learnings, optional loop)
+  - implement (zoe-coder):  zoe-engineering             (no preloaded skill for audit/no-PR)
+  - verify    (zoe-reviewer): zoe-engineering           (no preloaded skill for audit/no-PR)
+  - review    (zoe-reviewer): zoe-engineering           (no preloaded skill for audit/no-PR)
+  - closeout  (zoe-planner):  github-greptile-loop      (no preloaded skill for audit/no-PR)
+  - retro     (zoe-planner):  zoe-status-refresh        (no preloaded skill for audit/no-PR)
 """
 from __future__ import annotations
 
@@ -228,10 +227,7 @@ def _audit_no_pr_issue(issue: dict | None = None) -> bool:
 def _chain_for_issue(issue: dict) -> tuple[tuple[str, str, tuple[str, ...]], ...]:
     phases = _CHAIN
     if _audit_no_pr_issue(issue):
-        phases = tuple(
-            (phase, assignee, () if phase in {"verify", "closeout"} else skills)
-            for phase, assignee, skills in phases
-        )
+        phases = tuple((phase, assignee, ()) for phase, assignee, _skills in phases)
     if _skip_scout(issue):
         phases = tuple(p for p in phases if p[0] != "scout")
     return phases
@@ -371,12 +367,13 @@ class KanbanAdapter:
             # Implement body intentionally omits full prior-phase logs; workers should
             # call kanban_show and read SCOUT_SUMMARY= from scout metadata when present.
             return common + overnight_hint + (
-                "You are the implementer (zoe-coder). Start with `kanban_show` to confirm this task id.\n"
+                "You are the implementer (zoe-coder).\n"
                 "- AUDIT/SMOKE FAST PATH: only if the title/body explicitly says audit-only, smoke test,"
                 " no code change, or uses trace/map with an audit/no-code qualifier, do not run Graphify"
                 " or repo exploration first. Complete in one bounded handoff with"
                 " TOOLS_USED=audit-read, PR_URL= blank, AUDIT_ONLY=1, TESTS=not applicable/audit-only,"
                 " and SUMMARY= findings. Do not open a PR.\n"
+                "- Start with `kanban_show` to confirm this task id.\n"
                 "- For code-changing tickets only: read the charter + graphify map first"
                 " (graphify query/path/explain over raw grep).\n"
                 "- Use opensrc for any third-party library source before guessing APIs.\n"
@@ -441,6 +438,9 @@ class KanbanAdapter:
             escalation_hint = _escalation_model_hint(issue) if escalation else ""
             return common + escalation_hint + (
                 "You are the reviewer (zoe-reviewer). Review the diff, scope, and verify-phase evidence.\n"
+                "- AUDIT/NO-PR FAST PATH: for audit-only/no-code handoffs with blank PR_URL, do not load"
+                " broad skills or explore the tree. Use `kanban_show`, compare verify evidence to the"
+                " acceptance criteria, then `kanban_complete` with a short verification note.\n"
                 "- Confirm the change is small and in scope. Audit-only / doc-only handoffs with blank PR_URL"
                 " need a short verification note, then `kanban_complete` — do not re-implement or burn turns"
                 " re-exploring the tree.\n"
@@ -458,6 +458,8 @@ class KanbanAdapter:
         if phase == "retro":
             return common + _retro_cost_hint() + (
                 "You are retro (zoe-planner). Capture learnings after closeout — no silent prod changes.\n"
+                "- AUDIT/NO-PR FAST PATH: if this was an audit-only/no-code run, keep retro to one"
+                " short handoff and do not load broad skills or inspect unrelated repo state.\n"
                 "- Read closeout/implement handoffs and any Greptile or validator notes.\n"
                 "- Summarize what worked, what failed, and one small harness improvement proposal.\n"
                 "- Do NOT merge, refactor broadly, or change production behavior from this phase.\n"

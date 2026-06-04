@@ -731,7 +731,7 @@ def test_implement_body_puts_audit_fast_path_before_graphify():
     assert body.index("AUDIT/SMOKE FAST PATH") < body.index("graphify map")
 
 
-def test_audit_no_pr_verify_and_closeout_do_not_preload_broad_skills():
+def test_audit_no_pr_phases_do_not_preload_broad_skills():
     from executors.kanban_adapter import _phase_plan_entry
 
     audit_issue = {"title": "audit-only lifecycle", "description": "operator audit"}
@@ -743,13 +743,19 @@ def test_audit_no_pr_verify_and_closeout_do_not_preload_broad_skills():
         "description": "code change required; no code change needed in legacy adapter",
     }
 
-    assert _phase_plan_entry("verify", audit_issue)[2] == ()
-    assert _phase_plan_entry("verify", no_code_issue)[2] == ()
-    assert _phase_plan_entry("verify", smoke_only_issue)[2] == ()
+    for phase in ("scout", "implement", "verify", "review", "closeout", "retro"):
+        assert _phase_plan_entry(phase, audit_issue)[2] == ()
+        assert _phase_plan_entry(phase, no_code_issue)[2] == ()
+        assert _phase_plan_entry(phase, smoke_only_issue)[2] == ()
+
+    assert _phase_plan_entry("implement", code_smoke_issue)[2] == ("zoe-engineering",)
+    assert _phase_plan_entry("review", code_smoke_issue)[2] == ("zoe-engineering",)
+    assert _phase_plan_entry("retro", code_smoke_issue)[2] == ("zoe-status-refresh",)
+    assert _phase_plan_entry("implement", code_clause_issue)[2] == ("zoe-engineering",)
+    assert _phase_plan_entry("review", code_clause_issue)[2] == ("zoe-engineering",)
+    assert _phase_plan_entry("retro", code_clause_issue)[2] == ("zoe-status-refresh",)
+
     assert _phase_plan_entry("verify", code_smoke_issue)[2] == ("zoe-engineering",)
     assert _phase_plan_entry("verify", code_clause_issue)[2] == ("zoe-engineering",)
-    assert _phase_plan_entry("closeout", audit_issue)[2] == ()
-    assert _phase_plan_entry("closeout", no_code_issue)[2] == ()
-    assert _phase_plan_entry("closeout", smoke_only_issue)[2] == ()
     assert _phase_plan_entry("closeout", code_smoke_issue)[2] == ("github-greptile-loop",)
     assert _phase_plan_entry("closeout", code_clause_issue)[2] == ("github-greptile-loop",)
