@@ -446,7 +446,7 @@ class KanbanAdapter:
             " — no grep loop or merge.\n"
             "- For smoke/audit tickets with no code/config changes and no PR_URL, update the Multica issue"
             " to done with completion reason, then `kanban_complete`; do not wait for Greptile.\n"
-            " If a code task has no PR, leave the issue blocked — do NOT open one yourself.\n"
+            "- If a code task has no PR, leave the issue blocked — do NOT open one yourself.\n"
             "- Address every substantive Greptile finding (fix_now or won't_fix with reason). Do not stop at"
             " merge-ready — merge when gates pass.\n"
             "- Drive the Greptile grep loop with the pinned github-greptile-loop skill (guard REQUIRES --pr N;"

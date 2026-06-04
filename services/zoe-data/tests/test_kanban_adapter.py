@@ -696,3 +696,4 @@ def test_audit_no_pr_phases_have_bounded_completion_path():
     assert "REVIEW_BUDGET" in review
     assert "For smoke/audit tickets" in closeout
     assert "do not wait for Greptile" in closeout
+    assert "- If a code task has no PR" in closeout
