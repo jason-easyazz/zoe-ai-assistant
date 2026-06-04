@@ -616,6 +616,48 @@ async def test_poll_non_v4_pipeline_terminal_block_stays_blocked():
     assert "pipeline terminal block" in out["blocker"]
 
 
+
+
+@pytest.mark.asyncio
+async def test_poll_v4_running_pipeline_clears_stale_recovered_blocker():
+    from pipeline_evidence import EvidenceItem, PipelineState
+    from pipeline_store import save_state
+
+    state = PipelineState(
+        task_ref="multica:uuid-9",
+        phase="verify",
+        status="running",
+        evidence_profile="audit",
+        attempts={"implement": 1, "verify": 1},
+        evidence=[
+            EvidenceItem(
+                kind="tool",
+                summary="audit/no-PR implement auto-recovered",
+                passed=True,
+                metadata={"source": "audit_protocol_recovery", "phase": "implement"},
+            ),
+            EvidenceItem(
+                kind="validator",
+                summary="verify pending",
+                passed=True,
+                metadata={"phase": "verify"},
+            ),
+        ],
+    )
+    save_state(state, event="effect_requested")
+    rows = [
+        _row("implement", "blocked", chain_version="v4", block_reason="implement blocked"),
+        _row("verify", "running", chain_version="v4"),
+    ]
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:uuid-9")
+
+    assert out["status"] == "running"
+    assert out["blocker"] is None
+    assert out["pipeline"]["phase"] == "verify"
+    assert out["pipeline"]["status"] == "running"
+
+
 @pytest.mark.asyncio
 async def test_poll_v4_audit_protocol_recovery_reports_partial_for_next_phase():
     from pipeline_store import bootstrap_state
