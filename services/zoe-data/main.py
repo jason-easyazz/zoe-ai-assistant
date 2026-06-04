@@ -426,12 +426,20 @@ async def lifespan(app: FastAPI):
 
                         chain = await poll_ref(f"multica:{issue_id}")
                         if chain.get("found") and chain.get("status") == "done":
-                            await client.update_issue(issue_id, status="done")
+                            pr_url = chain.get("pr_url")
+                            await client.record_progress(
+                                issue_id,
+                                phase="closeout",
+                                evidence="Kanban chain done",
+                                pr_url=pr_url,
+                                clear_blocker=True,
+                                status="done",
+                            )
                             logger.info(
-                                "multica_poll: advanced issue %s ('%s') — Kanban chain done%s",
+                                "multica_poll: advanced issue %s (%s) - Kanban chain done%s",
                                 issue_id,
                                 title[:40],
-                                f" PR={chain.get('pr_url')}" if chain.get("pr_url") else "",
+                                f" PR={pr_url}" if pr_url else "",
                             )
                             # Push WebSocket notification to all connected clients
                             try:
