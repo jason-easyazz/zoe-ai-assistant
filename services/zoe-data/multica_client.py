@@ -280,8 +280,12 @@ class MULClient:
         return await self.update_issue(issue_id, description=updated)
 
     async def create_child_issue(self, parent: dict, template: dict[str, Any]) -> dict:
-        """Create a child issue linked to a parent via the Zoe ticket block."""
-        from multica_ticket_contract import append_child_id, describe_ticket, parse_ticket_block
+        """Create a child issue linked to a parent via the Zoe ticket block.
+
+        Parent ``child_issue_ids`` updates are caller-owned so multi-child split
+        commands can write one consistent final parent state.
+        """
+        from multica_ticket_contract import describe_ticket, parse_ticket_block
 
         parent_id = str(parent.get("id") or "")
         parent_meta = parse_ticket_block(parent.get("description") or "")
@@ -306,12 +310,6 @@ class MULClient:
             assignee_type=template.get("assignee_type") or parent.get("assignee_type") or "agent",
         )
         child_id = str(child.get("id") or "")
-        if child_id and parent_id:
-            await self.update_issue(
-                parent_id,
-                description=append_child_id(parent.get("description") or "", child_id),
-                status="blocked",
-            )
         for label in template.get("labels") or ["needs-split"]:
             if child_id:
                 await self.attach_label(child_id, str(label))

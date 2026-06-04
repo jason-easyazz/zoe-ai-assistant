@@ -1712,7 +1712,7 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
                 )
                 if issue.get("id"):
                     await client.attach_label(str(issue["id"]), "user-feedback")
-                return _random.choice(_acks)
+                    return _random.choice(_acks)
         except Exception as _exc:
             logger.warning("user_issue_report: Multica capture failed: %s", _exc)
         try:

@@ -62,7 +62,7 @@ def record_evidence(
 
 def _cmd_mark_tested(args: argparse.Namespace) -> dict[str, Any]:
     output = _read_text(args.output, file_path=args.output_file)
-    passed = args.passed and not args.failed
+    passed = bool(args.passed)
     summary = args.summary or ("tests passed" if passed else "tests failed")
     return record_evidence(
         args.task_ref,
@@ -154,8 +154,9 @@ def build_parser() -> argparse.ArgumentParser:
     tested.add_argument("--artifact")
     tested.add_argument("--output")
     tested.add_argument("--output-file")
-    tested.add_argument("--passed", action="store_true", default=True)
-    tested.add_argument("--failed", action="store_true")
+    tested_result = tested.add_mutually_exclusive_group(required=True)
+    tested_result.add_argument("--passed", action="store_true")
+    tested_result.add_argument("--failed", action="store_true")
     tested.set_defaults(func=_cmd_mark_tested)
 
     reviewed = sub.add_parser("mark-reviewed")

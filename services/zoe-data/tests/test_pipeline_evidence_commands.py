@@ -9,7 +9,7 @@ def test_mark_tested_records_hashed_evidence(tmp_path, monkeypatch, capsys):
     import asyncio
 
     asyncio.run(bootstrap_state("multica:test", start_phase="verify"))
-    assert main(["mark-tested", "multica:test", "--summary", "pytest passed", "--output", "ok"]) == 0
+    assert main(["mark-tested", "multica:test", "--passed", "--summary", "pytest passed", "--output", "ok"]) == 0
 
     out = json.loads(capsys.readouterr().out)
     state = load_latest_state("multica:test")

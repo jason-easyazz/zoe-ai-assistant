@@ -51,7 +51,8 @@ async def run(*, ensure_shape: bool = False) -> dict:
     if ensure_shape:
         for label in required_labels:
             await client.ensure_label(label)
-    present_labels = {str(label.get("name") or "").lower() for label in await client.list_labels()}
+        labels = await client.list_labels()
+    present_labels = {str(label.get("name") or "").lower() for label in labels}
     report["checks"]["required_labels"] = {
         label: label.lower() in present_labels for label in required_labels
     }
