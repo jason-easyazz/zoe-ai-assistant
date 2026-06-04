@@ -1,6 +1,6 @@
 /**
  * Multica Board Widget
- * Shows active in-progress issues from the Multica evolution board.
+ * Shows active work tracked in Multica tickets.
  * Version: 1.0.0
  */
 
@@ -16,13 +16,13 @@ class MulticaBoardWidget extends WidgetModule {
     getTemplate() {
         return `
             <div class="widget-header">
-                <div class="widget-title">Evolution Board</div>
+                <div class="widget-title">Multica Tickets</div>
                 <div class="widget-badge" id="mulBoardCount">0</div>
             </div>
             <div class="widget-content">
                 <div id="mulBoardContent" class="loading-widget">
                     <div class="spinner"></div>
-                    Loading board...
+                    Loading tickets...
                 </div>
             </div>
         `;
@@ -51,7 +51,7 @@ class MulticaBoardWidget extends WidgetModule {
             if (content) content.classList.remove('loading-widget');
 
             if (!data.available) {
-                if (content) content.innerHTML = `<div style="text-align:center;color:#888;font-style:italic;font-size:13px;">Board unavailable<br><small>${data.reason || ''}</small></div>`;
+                if (content) content.innerHTML = `<div style="text-align:center;color:#888;font-style:italic;font-size:13px;">Tickets unavailable<br><small>${data.reason || ''}</small></div>`;
                 if (badge) badge.textContent = '0';
                 return;
             }
@@ -60,7 +60,7 @@ class MulticaBoardWidget extends WidgetModule {
             if (badge) badge.textContent = String(issues.length);
 
             if (!issues.length) {
-                if (content) content.innerHTML = '<div style="text-align:center;color:#888;font-style:italic;font-size:13px;">No active board items</div>';
+                if (content) content.innerHTML = '<div style="text-align:center;color:#888;font-style:italic;font-size:13px;">No active tickets</div>';
                 return;
             }
 
@@ -85,7 +85,7 @@ class MulticaBoardWidget extends WidgetModule {
             console.error('[MulticaBoardWidget] load failed:', err);
             if (content) {
                 content.classList.remove('loading-widget');
-                content.innerHTML = '<div style="text-align:center;color:#888;font-style:italic;font-size:13px;">Board unavailable</div>';
+                content.innerHTML = '<div style="text-align:center;color:#888;font-style:italic;font-size:13px;">Tickets unavailable</div>';
             }
             if (badge) badge.textContent = '0';
         }
