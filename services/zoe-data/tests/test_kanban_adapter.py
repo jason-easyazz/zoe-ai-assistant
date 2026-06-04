@@ -725,3 +725,22 @@ def test_implement_body_puts_audit_fast_path_before_graphify():
     assert "explicitly says audit-only" in body
     assert "uses trace/map with an audit/no-code qualifier" in body
     assert body.index("AUDIT/SMOKE FAST PATH") < body.index("graphify map")
+
+
+def test_audit_closeout_does_not_preload_greptile_skill():
+    from executors.kanban_adapter import _phase_plan_entry
+
+    audit_issue = {"title": "audit-only lifecycle", "description": "operator audit"}
+    no_code_issue = {"title": "no code/config changes only", "description": "operator check"}
+    smoke_only_issue = {"title": "smoke test only", "description": "operator check"}
+    code_smoke_issue = {"title": "add smoke test coverage", "description": "code change required"}
+    code_clause_issue = {
+        "title": "refactor auth flow",
+        "description": "code change required; no code change needed in legacy adapter",
+    }
+
+    assert _phase_plan_entry("closeout", audit_issue)[2] == ()
+    assert _phase_plan_entry("closeout", no_code_issue)[2] == ()
+    assert _phase_plan_entry("closeout", smoke_only_issue)[2] == ()
+    assert _phase_plan_entry("closeout", code_smoke_issue)[2] == ("github-greptile-loop",)
+    assert _phase_plan_entry("closeout", code_clause_issue)[2] == ("github-greptile-loop",)

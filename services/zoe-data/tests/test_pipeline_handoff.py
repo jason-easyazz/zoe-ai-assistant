@@ -344,3 +344,37 @@ def test_retro_handoff_ignores_undocumented_followup_description_aliases():
 
     log = next(item for item in items if item.kind == "log")
     assert log.metadata["follow_up"]["description"] == "Document prompt contract"
+
+
+def test_closeout_audit_only_handoff_records_log_evidence():
+    detail = {"latest_summary": """AUDIT_ONLY=1
+SUMMARY=audit-only closeout completed
+PR_URL=""", "comments": []}
+
+    items = evidence_from_handoff("closeout", detail, skills=())
+
+    log = next(item for item in items if item.kind == "log")
+    assert log.passed is True
+    assert log.summary == "audit-only closeout completed"
+    assert log.metadata["phase"] == "closeout"
+    assert log.metadata["audit_only"] is True
+    assert not any(item.kind == "greptile" for item in items)
+
+
+def test_closeout_infers_audit_log_only_from_audit_summary_without_pr():
+    detail = {"latest_summary": """SUMMARY=audit-only closeout completed
+PR_URL=""", "comments": []}
+
+    items = evidence_from_handoff("closeout", detail, skills=())
+
+    log = next(item for item in items if item.kind == "log")
+    assert log.metadata["audit_only"] is True
+
+
+def test_closeout_does_not_infer_audit_log_from_generic_summary_without_pr():
+    detail = {"latest_summary": """SUMMARY=closeout finished
+PR_URL=""", "comments": []}
+
+    items = evidence_from_handoff("closeout", detail, skills=())
+
+    assert not any(item.kind == "log" for item in items)

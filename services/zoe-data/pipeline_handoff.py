@@ -413,6 +413,22 @@ def evidence_from_handoff(
                 items.append(review_item)
 
     if phase == "closeout":
+        summary_raw = fields.get("SUMMARY") or fields.get("CLOSEOUT") or ""
+        audit_only = (fields.get("AUDIT_ONLY") or "").strip().lower() in {"1", "true", "yes"}
+        # Some audit/no-code closeout workers omit AUDIT_ONLY but still report an
+        # audit-only summary and no PR. Treat only that explicit audit wording as inferred audit.
+        inferred_audit = bool(
+            summary_raw and "audit" in summary_raw.lower() and not (fields.get("PR_URL") or "").strip()
+        )
+        if audit_only or inferred_audit:
+            items.append(
+                EvidenceItem(
+                    kind="log",
+                    summary=(summary_raw or "audit-only closeout completed")[:500],
+                    passed=True,
+                    metadata={"source": "handoff", "phase": "closeout", "audit_only": audit_only or inferred_audit},
+                )
+            )
         greptile_item = _greptile_from_closeout(detail, skills)
         if greptile_item:
             items.append(greptile_item)

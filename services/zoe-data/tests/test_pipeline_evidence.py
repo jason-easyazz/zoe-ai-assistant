@@ -261,3 +261,10 @@ def test_verify_validator_hash_ignores_harness_sync_mismatch():
         ),
     )
     assert verify_validator_hash_matches(state) is True
+
+
+def test_audit_profile_closeout_requires_log_not_greptile():
+    state = PipelineState(task_ref="multica:1", phase="closeout", evidence_profile="audit")
+    assert missing_required_evidence(state) == {"log"}
+    state = with_evidence(state, EvidenceItem(kind="log", summary="audit-only closeout", passed=True))
+    assert missing_required_evidence(state) == set()

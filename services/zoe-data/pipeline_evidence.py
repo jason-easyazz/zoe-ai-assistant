@@ -54,7 +54,7 @@ _EVIDENCE_PROFILES: dict[EvidenceProfile, dict[PipelinePhase, set[EvidenceKind]]
         "implement": {"tool"},
         "verify": {"validator"},
         "review": {"human"},
-        "closeout": {"greptile"},
+        "closeout": {"log"},
         "retro": {"log"},
     },
     "health": {
