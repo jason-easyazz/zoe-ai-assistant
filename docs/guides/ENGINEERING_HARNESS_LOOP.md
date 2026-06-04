@@ -38,7 +38,7 @@ Use `--skip-scout` with kanban modes to set `ZOE_KANBAN_SKIP_SCOUT=1` on dispatc
 Hermes task worktrees are created from `origin/main` by default to ensure fresh base branches. The worktree bootstrap process:
 
 1. Attempts `git fetch origin <base_branch>` (default `main`)
-2. If fetch fails, logs a warning: "fetch origin/<base_branch> failed; falling back to local tracking ref or branch"
+2. If fetch fails, logs a warning: `"worktree_bootstrap: fetch origin/<base_branch> failed (rc=<N>); falling back to local tracking ref or branch: <stderr>"`
 3. Creates worktree using the fetched remote reference when available
 
 This prevents task worktrees from starting from stale local main branches. The fetch fallback warning indicates a possible stale base branch, which could affect task execution.
