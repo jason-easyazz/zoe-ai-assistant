@@ -13,7 +13,7 @@ Worker profiles + pinned skills encode Zoe's agentic-engineering loop:
   - scout     (zoe-planner):  zoe-graphify, zoe-engineering     (read-only context)
   - implement (zoe-coder):  zoe-engineering, zoe-graphify, source-code-context,
                             code-structure-cleanup  (graph-first, opensrc, lean)
-  - verify    (zoe-reviewer): zoe-engineering           (tests/evidence gate)
+  - verify    (zoe-reviewer): zoe-engineering           (tests/evidence gate; no preloaded skill for audit/no-PR)
   - review    (zoe-reviewer): zoe-engineering           (verification gate)
   - closeout  (zoe-planner):  github-greptile-loop      (grep-loop, merge, Multica done)
   - retro     (zoe-planner):  zoe-status-refresh        (learnings, optional loop)
@@ -229,7 +229,7 @@ def _chain_for_issue(issue: dict) -> tuple[tuple[str, str, tuple[str, ...]], ...
     phases = _CHAIN
     if _audit_no_pr_issue(issue):
         phases = tuple(
-            (phase, assignee, () if phase == "closeout" else skills)
+            (phase, assignee, () if phase in {"verify", "closeout"} else skills)
             for phase, assignee, skills in phases
         )
     if _skip_scout(issue):
@@ -418,10 +418,12 @@ class KanbanAdapter:
             escalation_hint = _escalation_model_hint(issue) if escalation else ""
             return common + escalation_hint + (
                 "You are verify (zoe-reviewer). This is the objective test/evidence gate before review.\n"
+                "- AUDIT/NO-PR FAST PATH: if this is audit-only, smoke, or has no code/config changes"
+                " and no PR_URL, do not load broad skills, hunt for a PR, or explore the repo. Run"
+                " `kanban_show`, compare the implementer handoff to the Multica acceptance criteria,"
+                " then call `kanban_complete` in this turn with TESTS=not applicable/audit evidence,"
+                " VALIDATORS=not applicable/audit-only, PR_URL= blank, and a short pass/fail summary.\n"
                 "- Start with `kanban_show` to read the implementer handoff and PR_URL.\n"
-                "- If this is audit-only, smoke, or has no code/config changes and no PR_URL, do not hunt"
-                " for a PR. Check the handoff against the Multica acceptance criteria, record TESTS=not"
-                " applicable/audit evidence, VALIDATORS=not applicable/audit-only, and `kanban_complete`.\n"
                 "- Do not redesign or refactor. Run the declared tests and the minimum extra checks needed"
                 " for the touched surface.\n"
                 "- Always run and record `python3 tools/audit/validate_structure.py` and"
