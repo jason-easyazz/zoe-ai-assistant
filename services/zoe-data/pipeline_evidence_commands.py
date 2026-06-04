@@ -125,7 +125,12 @@ async def _cmd_split_ticket(args: argparse.Namespace) -> dict[str, Any]:
     packet = json.loads(raw_packet)
     if not isinstance(packet, dict):
         raise SystemExit(f"split-ticket packet must be a JSON object, got {type(packet).__name__}")
-    templates = packet.get("children") or [packet.get("child_issue_template") or {}]
+    children_raw = packet.get("children")
+    if children_raw is None:
+        children_raw = [packet.get("child_issue_template") or {}]
+    templates = [template for template in children_raw if isinstance(template, dict) and template]
+    if not templates:
+        raise SystemExit("split-ticket packet must contain at least one child template")
     children = []
     for template in templates:
         if not isinstance(template, dict):

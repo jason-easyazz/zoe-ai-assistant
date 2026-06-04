@@ -226,6 +226,56 @@ def test_split_ticket_requires_object_packet(monkeypatch):
         raise AssertionError("split-ticket with a non-object packet should fail")
 
 
+def test_split_ticket_requires_at_least_one_child_template(monkeypatch):
+    class FakeClient:
+        def is_configured(self):
+            return True
+
+        async def get_issue(self, issue_id):
+            return {"id": issue_id, "description": "parent"}
+
+        async def create_child_issue(self, parent, template):
+            raise AssertionError("empty children list must not create a fallback child")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "multica_client",
+        types.SimpleNamespace(get_multica_client=lambda: FakeClient()),
+    )
+
+    try:
+        main(["split-ticket", "parent-1", "--packet", '{"children":[]}'])
+    except SystemExit as exc:
+        assert "at least one child template" in str(exc)
+    else:
+        raise AssertionError("split-ticket should reject empty children lists")
+
+
+def test_split_ticket_rejects_empty_child_template(monkeypatch):
+    class FakeClient:
+        def is_configured(self):
+            return True
+
+        async def get_issue(self, issue_id):
+            return {"id": issue_id, "description": "parent"}
+
+        async def create_child_issue(self, parent, template):
+            raise AssertionError("empty child template must not create a fallback child")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "multica_client",
+        types.SimpleNamespace(get_multica_client=lambda: FakeClient()),
+    )
+
+    try:
+        main(["split-ticket", "parent-1", "--packet", '{"child_issue_template":{}}'])
+    except SystemExit as exc:
+        assert "at least one child template" in str(exc)
+    else:
+        raise AssertionError("split-ticket should reject empty child templates")
+
+
 def test_split_ticket_reports_unreadable_packet_file(monkeypatch):
     class FakeClient:
         def is_configured(self):
