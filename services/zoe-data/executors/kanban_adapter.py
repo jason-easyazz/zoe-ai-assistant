@@ -432,9 +432,10 @@ class KanbanAdapter:
                 "- Read closeout/implement handoffs and any Greptile or validator notes.\n"
                 "- Summarize what worked, what failed, and one small harness improvement proposal.\n"
                 "- Do NOT merge, refactor broadly, or change production behavior from this phase.\n"
+                "- If the run revealed a concrete harness improvement, include FOLLOW_UP_TITLE= and"
+                " FOLLOW_UP_DESCRIPTION= in the handoff; Zoe will create exactly one backlog ticket.\n"
                 "- Hand off with `kanban_complete` metadata: RETRO= or LEARNINGS= plus TOOLS_USED=.\n"
-                "- If a concrete follow-up needs code, note it for a NEW Multica issue — do not loop here"
-                " unless the operator explicitly marked this issue for a revision cycle.\n"
+                "- Do not change production behavior here; the follow-up ticket is the loop.\n"
                 "- TERMINAL PROTOCOL: end with `kanban_complete` or `kanban_block`."
             )
         # closeout

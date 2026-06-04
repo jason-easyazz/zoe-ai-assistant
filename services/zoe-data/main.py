@@ -95,6 +95,42 @@ async def _record_completed_multica_chain(client, issue_id: str, chain: dict) ->
         clear_blocker=True,
         status="done",
     )
+    follow_up = pipeline.get("retro_followup") if isinstance(pipeline, dict) else None
+    if phase != "retro" or not isinstance(follow_up, dict) or not follow_up.get("title"):
+        return
+    try:
+        from multica_ticket_contract import describe_ticket
+
+        parent = await client.get_issue(issue_id)
+        parent_ident = parent.get("identifier") or issue_id
+        description = describe_ticket(
+            str(follow_up.get("description") or follow_up.get("title")),
+            zoe_kind="harness_fix",
+            evidence_profile="code",
+            engineering_mode="interactive",
+            acceptance_criteria=["Address the retro-identified harness improvement in a small, reviewable change."],
+            evidence_expectations=["Focused tests or validators", "PR URL when code changes are made"],
+            source="retro_followup",
+            parent_issue_id=issue_id,
+        )
+        issue = await client.create_issue(
+            title=str(follow_up.get("title"))[:140],
+            description=description,
+            priority="medium",
+            status="backlog",
+            assignee_id=parent.get("assignee_id"),
+            assignee_type=parent.get("assignee_type") or "agent",
+            project_id=parent.get("project_id"),
+        )
+        child_id = str(issue.get("id") or "")
+        if child_id:
+            await client.attach_label(child_id, "harness-fix")
+            await client.append_issue_note(
+                issue_id,
+                f"Retro follow-up created: {issue.get('identifier') or child_id} from {parent_ident}",
+            )
+    except Exception as exc:
+        logger.warning("multica_poll: retro follow-up creation failed for %s: %s", issue_id, exc)
 
 
 async def _run_memory_capture_startup_probe() -> None:

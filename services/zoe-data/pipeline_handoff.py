@@ -114,6 +114,23 @@ def _tool_summary(raw: str) -> str:
     return cleaned[:500] if cleaned else "tools recorded in handoff"
 
 
+def _retro_followup_metadata(fields: dict[str, str]) -> dict[str, Any]:
+    """Return optional retro-created follow-up ticket metadata from handoff fields."""
+    title = (fields.get("FOLLOW_UP_TITLE") or fields.get("FOLLOWUP_TITLE") or "").strip()
+    description = (
+        fields.get("FOLLOW_UP_DESCRIPTION")
+        or fields.get("FOLLOWUP_DESCRIPTION")
+        or ""
+    ).strip()
+    if not title:
+        return {}
+    return {
+        "title": title[:140],
+        "description": description[:2000] or title[:500],
+        "source": "retro",
+    }
+
+
 def _log_tail_snippet(detail: dict[str, Any], *, max_lines: int = 8) -> str:
     for chunk in reversed(_haystacks(detail)):
         lines = [ln.strip() for ln in chunk.splitlines() if ln.strip()]
@@ -395,7 +412,11 @@ def evidence_from_handoff(
 
     retro_raw = fields.get("RETRO") or fields.get("LEARNINGS") or fields.get("SUMMARY") or ""
     if retro_raw and phase == "retro":
-        items.append(EvidenceItem(kind="log", summary=retro_raw[:500], passed=True))
+        metadata = {"source": "handoff", "phase": "retro"}
+        follow_up = _retro_followup_metadata(fields)
+        if follow_up:
+            metadata["follow_up"] = follow_up
+        items.append(EvidenceItem(kind="log", summary=retro_raw[:500], passed=True, metadata=metadata))
 
     pr_url = fields.get("PR_URL") or ""
     if pr_url and phase in {"implement", "verify", "closeout"}:

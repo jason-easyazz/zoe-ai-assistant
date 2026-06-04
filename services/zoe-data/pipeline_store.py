@@ -137,6 +137,19 @@ async def _append_harness_validators(state: PipelineState, phase: PipelinePhase)
     return with_evidence(state, validator_evidence_item(result, phase=phase))
 
 
+def _latest_retro_followup(state: PipelineState) -> dict[str, Any] | None:
+    for item in reversed(state.evidence):
+        if item.kind != "log":
+            continue
+        metadata = item.metadata if isinstance(item.metadata, dict) else {}
+        if metadata.get("phase") != "retro":
+            continue
+        follow_up = metadata.get("follow_up")
+        if isinstance(follow_up, dict) and follow_up.get("title"):
+            return follow_up
+    return None
+
+
 def pipeline_summary(state: PipelineState | None) -> dict[str, Any]:
     if not state:
         return {"tracked": False}
@@ -167,6 +180,7 @@ def pipeline_summary(state: PipelineState | None) -> dict[str, Any]:
         "needs_split": state.status == "blocked" and state.block_classification == "scope_split_required",
         "split_packet": state.split_packet,
         "validator_hash_ok": hash_ok,
+        "retro_followup": _latest_retro_followup(state),
     }
 
 

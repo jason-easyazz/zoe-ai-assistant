@@ -261,3 +261,45 @@ def test_split_request_from_handoff_parses_multiline_packet():
     assert requested is True
     assert packet["child_issue_template"]["title"] == "ZOE-1: multiline child"
     assert packet["reason"] == "too broad"
+
+
+def test_retro_handoff_can_request_followup_ticket():
+    detail = {
+        "latest_summary": (
+            "RETRO=Worktree guard prevented drift\n"
+            "FOLLOW_UP_TITLE=Add regression for retro follow-up tickets\n"
+            "FOLLOW_UP_DESCRIPTION=Create a focused test so retro follow-up metadata keeps creating backlog tickets."
+        ),
+        "comments": [],
+    }
+
+    items = evidence_from_handoff("retro", detail)
+
+    log = next(item for item in items if item.kind == "log")
+    assert log.metadata["follow_up"]["title"] == "Add regression for retro follow-up tickets"
+    assert log.metadata["follow_up"]["source"] == "retro"
+
+
+def test_retro_handoff_without_followup_title_only_logs():
+    detail = {"latest_summary": "RETRO=No harness change needed", "comments": []}
+
+    items = evidence_from_handoff("retro", detail)
+
+    log = next(item for item in items if item.kind == "log")
+    assert "follow_up" not in log.metadata
+
+
+def test_retro_handoff_ignores_undocumented_followup_description_aliases():
+    detail = {
+        "latest_summary": (
+            "RETRO=Captured learnings\n"
+            "FOLLOW_UP_TITLE=Document prompt contract\n"
+            "FOLLOW_UP=This should not become the ticket description"
+        ),
+        "comments": [],
+    }
+
+    items = evidence_from_handoff("retro", detail)
+
+    log = next(item for item in items if item.kind == "log")
+    assert log.metadata["follow_up"]["description"] == "Document prompt contract"
