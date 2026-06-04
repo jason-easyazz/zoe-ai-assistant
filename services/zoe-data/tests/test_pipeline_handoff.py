@@ -45,6 +45,53 @@ def test_evidence_from_review_metadata_records_human_approval():
     assert human.metadata["approver"] == "zoe-reviewer"
 
 
+def test_evidence_from_review_run_metadata_records_human_approval():
+    detail = {
+        "latest_summary": "APPROVE ZOE-5401. PR is merge-ready.",
+        "comments": [],
+        "runs": [
+            {
+                "metadata": {
+                    "merge_readiness": "merge_ready",
+                    "approver": "zoe-reviewer",
+                }
+            }
+        ],
+    }
+
+    items = evidence_from_handoff("review", detail)
+
+    human = next(item for item in items if item.kind == "human")
+    assert human.passed is True
+    assert human.metadata["source"] == "kanban_run_metadata"
+    assert human.metadata["approver"] == "zoe-reviewer"
+
+
+def test_evidence_from_review_prefers_top_level_metadata_over_run_metadata():
+    detail = {
+        "latest_summary": "APPROVE ZOE-5401. PR is merge-ready.",
+        "comments": [],
+        "metadata": {
+            "merge_readiness": "merge_ready",
+            "approver": "top-level-reviewer",
+        },
+        "runs": [
+            {
+                "metadata": {
+                    "merge_readiness": "merge_ready",
+                    "approver": "run-reviewer",
+                }
+            }
+        ],
+    }
+
+    items = evidence_from_handoff("review", detail)
+
+    human = next(item for item in items if item.kind == "human")
+    assert human.metadata["source"] == "kanban_metadata"
+    assert human.metadata["approver"] == "top-level-reviewer"
+
+
 def test_evidence_from_review_metadata_accepts_approved_readiness():
     detail = {
         "latest_summary": "Approved after review.",
