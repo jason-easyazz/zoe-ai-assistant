@@ -15,7 +15,10 @@ from pipeline_store import load_latest_state, save_state
 
 def _read_text(value: str | None, *, file_path: str | None) -> str:
     if file_path:
-        return Path(file_path).read_text(encoding="utf-8", errors="replace")
+        try:
+            return Path(file_path).read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            raise SystemExit(f"Cannot read file {file_path!r}: {exc}") from exc
     if value:
         return value
     if not sys.stdin.isatty():
@@ -114,7 +117,7 @@ async def _cmd_split_ticket(args: argparse.Namespace) -> dict[str, Any]:
     if not client.is_configured():
         raise SystemExit("Multica is not configured")
     parent = await client.get_issue(args.parent_issue_id)
-    if not parent:
+    if not parent.get("id"):
         raise SystemExit(f"Parent issue not found: {args.parent_issue_id}")
     raw_packet = _read_text(args.packet, file_path=args.packet_file)
     if not raw_packet:

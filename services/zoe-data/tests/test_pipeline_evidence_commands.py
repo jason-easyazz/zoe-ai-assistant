@@ -182,6 +182,28 @@ def test_split_ticket_requires_packet(monkeypatch):
         raise AssertionError("split-ticket without a packet should fail")
 
 
+def test_split_ticket_requires_parent_id(monkeypatch):
+    class FakeClient:
+        def is_configured(self):
+            return True
+
+        async def get_issue(self, issue_id):
+            return {"error": "not_found"}
+
+    monkeypatch.setitem(
+        sys.modules,
+        "multica_client",
+        types.SimpleNamespace(get_multica_client=lambda: FakeClient()),
+    )
+
+    try:
+        main(["split-ticket", "parent-1", "--packet", '{"child_issue_template":{"title":"child"}}'])
+    except SystemExit as exc:
+        assert "Parent issue not found" in str(exc)
+    else:
+        raise AssertionError("split-ticket should reject parent responses without an id")
+
+
 def test_split_ticket_requires_object_packet(monkeypatch):
     class FakeClient:
         def is_configured(self):
@@ -202,3 +224,25 @@ def test_split_ticket_requires_object_packet(monkeypatch):
         assert "must be a JSON object" in str(exc)
     else:
         raise AssertionError("split-ticket with a non-object packet should fail")
+
+
+def test_split_ticket_reports_unreadable_packet_file(monkeypatch):
+    class FakeClient:
+        def is_configured(self):
+            return True
+
+        async def get_issue(self, issue_id):
+            return {"id": issue_id, "description": "parent"}
+
+    monkeypatch.setitem(
+        sys.modules,
+        "multica_client",
+        types.SimpleNamespace(get_multica_client=lambda: FakeClient()),
+    )
+
+    try:
+        main(["split-ticket", "parent-1", "--packet-file", "/tmp/zoe-missing-split-packet.json"])
+    except SystemExit as exc:
+        assert "Cannot read file" in str(exc)
+    else:
+        raise AssertionError("split-ticket should report unreadable packet files cleanly")
