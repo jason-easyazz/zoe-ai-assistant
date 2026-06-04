@@ -124,6 +124,72 @@ async def test_sync_pipeline_audit_only_verify_skips_test_gate(isolated_store):
     assert not any("gate_blocked" in line for line in isolated_store.read_text(encoding="utf-8").splitlines())
 
 
+
+
+@pytest.mark.asyncio
+async def test_sync_pipeline_recovers_audit_protocol_only_block(isolated_store):
+    await store.bootstrap_state(
+        "multica:audit-protocol",
+        issue={"description": "evidence_profile: audit"},
+    )
+
+    async def fetch_detail(_task_id: str):
+        return {
+            "latest_summary": "",
+            "comments": [],
+            "events": [{"kind": "protocol_violation", "payload": {"exit_code": 0}}],
+            "runs": [
+                {
+                    "status": "crashed",
+                    "outcome": "crashed",
+                    "error": "worker exited cleanly without calling kanban_complete",
+                }
+            ],
+        }
+
+    phases = {"implement": {"id": "t1", "status": "blocked", "block_reason": "implement blocked"}}
+    state = await store.sync_pipeline_from_chain("multica:audit-protocol", phases, fetch_detail)
+
+    assert state.phase == "verify"
+    assert state.status == "todo"
+    assert any(
+        item.kind == "tool" and item.metadata.get("source") == "audit_protocol_recovery"
+        for item in state.evidence
+    )
+    assert "audit_protocol_recovered" in isolated_store.read_text(encoding="utf-8")
+
+
+
+
+@pytest.mark.asyncio
+async def test_sync_pipeline_does_not_recover_mixed_protocol_and_real_block(isolated_store):
+    await store.bootstrap_state(
+        "multica:audit-mixed-block",
+        issue={"description": "evidence_profile: audit"},
+    )
+
+    async def fetch_detail(_task_id: str):
+        return {
+            "latest_summary": "",
+            "comments": [],
+            "events": [{"kind": "protocol_violation", "payload": {"exit_code": 0}}],
+            "runs": [
+                {
+                    "status": "crashed",
+                    "outcome": "crashed",
+                    "error": "dirty tree prevented evidence collection",
+                }
+            ],
+        }
+
+    phases = {"implement": {"id": "t1", "status": "blocked", "block_reason": "dirty tree"}}
+    state = await store.sync_pipeline_from_chain("multica:audit-mixed-block", phases, fetch_detail)
+
+    assert state.phase == "implement"
+    assert state.status == "blocked"
+    assert "audit_protocol_recovered" not in isolated_store.read_text(encoding="utf-8")
+
+
 @pytest.mark.asyncio
 async def test_sync_pipeline_fingerprint_abort(isolated_store):
     await store.bootstrap_state("multica:fp")

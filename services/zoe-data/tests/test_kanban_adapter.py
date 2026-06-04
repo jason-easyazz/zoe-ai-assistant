@@ -591,6 +591,63 @@ async def test_poll_v4_pipeline_sync_failure_blocks_redispatch(monkeypatch):
     assert "pipeline store unavailable" in out["pipeline"]["error"]
 
 
+
+
+
+
+@pytest.mark.asyncio
+async def test_poll_non_v4_pipeline_terminal_block_stays_blocked():
+    from pipeline_evidence import PipelineState
+    from pipeline_store import save_state
+
+    state = PipelineState(
+        task_ref="multica:uuid-9",
+        phase="implement",
+        status="blocked",
+        repeated_block_count=2,
+        last_block_fingerprint="abc123",
+    )
+    save_state(state, event="fingerprint_abort")
+    rows = [_row("implement", "running")]
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:uuid-9")
+
+    assert out["status"] == "blocked"
+    assert "pipeline terminal block" in out["blocker"]
+
+
+@pytest.mark.asyncio
+async def test_poll_v4_audit_protocol_recovery_reports_partial_for_next_phase():
+    from pipeline_store import bootstrap_state
+
+    await bootstrap_state(
+        "multica:uuid-9",
+        issue={"description": "evidence_profile: audit"},
+    )
+    rows = [_row("implement", "blocked", chain_version="v4", block_reason="implement blocked")]
+    show = {
+        "t_implement": {
+            "latest_summary": "",
+            "comments": [],
+            "events": [{"kind": "protocol_violation", "payload": {"exit_code": 0}}],
+            "runs": [
+                {
+                    "status": "crashed",
+                    "outcome": "crashed",
+                    "error": "worker exited cleanly without calling kanban_complete",
+                }
+            ],
+        }
+    }
+    a = _FakeAdapter(list_rows=rows, show_map=show)
+    out = await a.poll("multica:uuid-9")
+
+    assert out["status"] == "partial"
+    assert out["blocker"] is None
+    assert out["pipeline"]["phase"] == "verify"
+    assert out["pipeline"]["status"] == "todo"
+
+
 @pytest.mark.asyncio
 async def test_poll_v4_does_not_promote_kanban_blocked_to_partial():
     rows = [_row("implement", "blocked", chain_version="v4", block_reason="dirty tree")]

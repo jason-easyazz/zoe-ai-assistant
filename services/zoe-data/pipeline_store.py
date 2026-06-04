@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from pipeline_evidence import (
+    EvidenceItem,
     PipelinePhase,
     PipelineState,
     block_fingerprint,
@@ -137,6 +138,66 @@ async def _append_harness_validators(state: PipelineState, phase: PipelinePhase)
     return with_evidence(state, validator_evidence_item(result, phase=phase))
 
 
+def _protocol_only_block(detail: dict[str, Any]) -> bool:
+    """True when Hermes only failed the terminal protocol for a no-op phase."""
+    protocol_seen = False
+
+    def classify(text: str) -> bool | None:
+        lowered = text.strip().lower()
+        if not lowered:
+            return None
+        if "protocol violation" in lowered or "without calling kanban_complete" in lowered:
+            return True
+        if lowered in {"crashed", "failed"}:
+            return None
+        return False
+
+    for event in detail.get("events") or []:
+        if not isinstance(event, dict):
+            continue
+        if event.get("kind") == "protocol_violation":
+            protocol_seen = True
+        payload = event.get("payload")
+        if isinstance(payload, dict):
+            for value in (payload.get("error"), payload.get("trigger_outcome"), payload.get("reason")):
+                verdict = classify(str(value or ""))
+                if verdict is False:
+                    return False
+                protocol_seen = protocol_seen or verdict is True
+    for run in detail.get("runs") or []:
+        if not isinstance(run, dict):
+            continue
+        for value in (run.get("error"), run.get("outcome"), run.get("status")):
+            verdict = classify(str(value or ""))
+            if verdict is False:
+                return False
+            protocol_seen = protocol_seen or verdict is True
+    return protocol_seen
+
+
+def _append_audit_protocol_recovery_evidence(state: PipelineState, phase: PipelinePhase) -> PipelineState:
+    kind_by_phase = {
+        "scout": "tool",
+        "implement": "tool",
+        "verify": "validator",
+        "review": "human",
+        "closeout": "log",
+        "retro": "log",
+    }
+    kind = kind_by_phase[phase]
+    if any(item.kind == kind and item.metadata.get("phase") == phase for item in state.evidence):
+        return state
+    return with_evidence(
+        state,
+        EvidenceItem(
+            kind=kind,  # type: ignore[arg-type]
+            summary=f"audit/no-PR {phase} auto-recovered after protocol-only Hermes exit",
+            passed=True,
+            metadata={"source": "audit_protocol_recovery", "phase": phase},
+        ),
+    )
+
+
 def _latest_retro_followup(state: PipelineState) -> dict[str, Any] | None:
     for item in reversed(state.evidence):
         if item.kind != "log":
@@ -247,6 +308,22 @@ async def sync_pipeline_from_chain(
         outcome = infer_outcome(phase, row_status, detail)  # type: ignore[arg-type]
         if not outcome:
             continue
+        if (
+            state.evidence_profile == "audit"
+            and outcome in {"block", "verification_failed", "request_changes", "merge_blocked"}
+            and _protocol_only_block(detail)
+        ):
+            state = _append_audit_protocol_recovery_evidence(state, phase)  # type: ignore[arg-type]
+            if can_complete_phase(state):
+                await _run_io(
+                    partial(
+                        save_state,
+                        state,
+                        event="audit_protocol_recovered",
+                        extra={"row_phase": phase, "outcome": outcome},
+                    )
+                )
+                outcome = "complete"
 
         block_reason = None
         split_requested = False

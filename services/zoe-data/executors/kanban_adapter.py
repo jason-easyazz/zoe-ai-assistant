@@ -777,20 +777,22 @@ class KanbanAdapter:
             pipeline_info = pipeline_summary(state)
             if pipeline_info.get("missing_evidence") and agg == "running":
                 pipeline_info["gate"] = "evidence_required"
-            if pipeline_info.get("terminal_block") and agg not in {"done", "blocked"}:
+            current_phase = pipeline_info.get("phase")
+            current_status = pipeline_info.get("status")
+            if is_v4 and current_status == "done":
+                agg = "done"
+                blocker = None
+            elif pipeline_info.get("terminal_block"):
                 agg = "blocked"
-                blocker = blocker or f"pipeline terminal block at {pipeline_info.get('phase')}"
-            elif agg not in {"done", "blocked"} and is_v4:
-                current_phase = pipeline_info.get("phase")
-                current_status = pipeline_info.get("status")
-                if current_status == "done":
-                    agg = "done"
-                elif current_status == "blocked":
+                blocker = blocker or f"pipeline terminal block at {current_phase}"
+            elif is_v4:
+                if current_status == "blocked":
                     agg = "blocked"
                     blocker = blocker or f"pipeline blocked at {current_phase}"
                 elif current_status == "todo" and current_phase not in phases:
                     agg = "partial"
-                else:
+                    blocker = None
+                elif agg not in {"done", "blocked"}:
                     agg = "running"
         except Exception as exc:
             logger.warning("kanban_adapter: pipeline sync failed for %s: %s", external_ref, exc)
