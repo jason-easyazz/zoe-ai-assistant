@@ -176,3 +176,75 @@ async def test_record_completed_multica_chain_swallow_followup_creation_failure(
     )
 
     assert client.calls[0][1]["phase"] == "retro"
+
+
+@pytest.mark.asyncio
+async def test_record_blocked_multica_chain_records_terminal_block_metadata():
+    from main import _record_blocked_multica_chain
+
+    client = RecordingClient()
+
+    await _record_blocked_multica_chain(
+        client,
+        "issue-blocked",
+        {
+            "status": "blocked",
+            "blocker": "implement blocked",
+            "pr_url": "https://github.com/o/r/pull/7",
+            "pipeline": {"phase": "implement", "terminal_block": True},
+        },
+    )
+
+    assert client.calls == [
+        (
+            ("issue-blocked",),
+            {
+                "phase": "implement",
+                "evidence": "Kanban chain blocked",
+                "pr_url": "https://github.com/o/r/pull/7",
+                "blocker": "terminal block: implement blocked",
+                "status": "blocked",
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_record_blocked_multica_chain_uses_non_terminal_block_reason_without_prefix():
+    from main import _record_blocked_multica_chain
+
+    client = RecordingClient()
+
+    blocker = await _record_blocked_multica_chain(
+        client,
+        "issue-non-terminal",
+        {"pipeline": {"phase": "verify", "block_reason": "tests failed"}},
+    )
+
+    assert blocker == "tests failed"
+    assert client.calls[0][1]["phase"] == "verify"
+    assert client.calls[0][1]["blocker"] == "tests failed"
+    assert not client.calls[0][1]["blocker"].startswith("terminal block:")
+
+
+@pytest.mark.asyncio
+async def test_record_blocked_multica_chain_falls_back_to_classification_and_default():
+    from main import _record_blocked_multica_chain
+
+    client = RecordingClient()
+
+    classified = await _record_blocked_multica_chain(
+        client,
+        "issue-classified",
+        {"pipeline": {"phase": "review", "block_classification": "blocked_external"}},
+    )
+    defaulted = await _record_blocked_multica_chain(
+        client,
+        "issue-defaulted",
+        {"pipeline": {"phase": "retro"}},
+    )
+
+    assert classified == "blocked_external"
+    assert defaulted == "pipeline blocked at retro"
+    assert client.calls[0][1]["blocker"] == "blocked_external"
+    assert client.calls[1][1]["blocker"] == "pipeline blocked at retro"

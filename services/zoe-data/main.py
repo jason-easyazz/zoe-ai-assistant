@@ -133,6 +133,36 @@ async def _record_completed_multica_chain(client, issue_id: str, chain: dict) ->
         logger.warning("multica_poll: retro follow-up creation failed for %s: %s", issue_id, exc)
 
 
+def _blocked_multica_chain_reason(chain: dict) -> str:
+    """Return the operator-visible reason for a blocked engineering chain."""
+    pipeline = chain.get("pipeline") or {}
+    phase = pipeline.get("phase") or "implement"
+    blocker = (
+        chain.get("blocker")
+        or pipeline.get("block_reason")
+        or pipeline.get("block_classification")
+        or f"pipeline blocked at {phase}"
+    )
+    if pipeline.get("terminal_block") and "terminal" not in str(blocker).lower():
+        blocker = f"terminal block: {blocker}"
+    return str(blocker)
+
+
+async def _record_blocked_multica_chain(client, issue_id: str, chain: dict) -> str:
+    """Persist operator-visible block metadata for a stopped Multica chain."""
+    pipeline = chain.get("pipeline") or {}
+    phase = pipeline.get("phase") or "implement"
+    blocker = _blocked_multica_chain_reason(chain)
+    await client.record_progress(
+        issue_id,
+        phase=phase,
+        evidence="Kanban chain blocked",
+        pr_url=chain.get("pr_url"),
+        blocker=blocker,
+        status="blocked",
+    )
+    return blocker
+
 async def _run_memory_capture_startup_probe() -> None:
     """Validate memory capture plumbing at startup.
 
@@ -497,6 +527,26 @@ async def lifespan(app: FastAPI):
                                 )
                             except Exception as _push_exc:
                                 logger.debug("multica_poll: ws push failed: %s", _push_exc)
+                        elif chain.get("found") and chain.get("status") == "blocked":
+                            blocker = await _record_blocked_multica_chain(client, str(issue_id), chain)
+                            logger.info(
+                                "multica_poll: blocked issue %s (%s) - %s",
+                                issue_id,
+                                title[:40],
+                                blocker,
+                            )
+                            try:
+                                await broadcaster.broadcast(
+                                    "all",
+                                    "multica_task_blocked",
+                                    {
+                                        "multica_issue_id": str(issue_id),
+                                        "title": title,
+                                        "blocker": blocker,
+                                    },
+                                )
+                            except Exception as _push_exc:
+                                logger.debug("multica_poll: ws block push failed: %s", _push_exc)
                     except Exception as _inner_exc:
                         logger.debug("multica_poll: inner error for issue %s: %s", issue_id, _inner_exc)
 
