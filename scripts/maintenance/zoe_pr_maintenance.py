@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -19,17 +18,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "services" / "zoe-d
 
 
 def _run_guard(pr: int, *, merge_when_ready: bool) -> dict:
-    guard = Path(__file__).resolve().parents[2] / "services" / "zoe-data" / "greploop_guard.py"
-    cmd = [sys.executable, str(guard), "--pr", str(pr)]
-    if merge_when_ready:
-        cmd.append("--merge-when-ready")
-    proc = subprocess.run(cmd, text=True, capture_output=True, check=False)
-    output = (proc.stdout or proc.stderr or "").strip()
+    from greploop_guard import merge_pr_when_ready as _merge_pr_when_ready
+    from greploop_guard import run_guard_once
+
+    async def _run() -> dict:
+        if merge_when_ready:
+            return await _merge_pr_when_ready(pr)
+        # Maintenance status checks should surface the next bounded repair packet
+        # without launching a cheap-model repair agent from this wrapper.
+        return await run_guard_once(pr, packet_only=True)
+
     try:
-        parsed = json.loads(output)
-    except json.JSONDecodeError:
-        parsed = {"ok": False, "state": "ERROR", "output": output}
-    parsed.setdefault("exit_code", proc.returncode)
+        parsed = asyncio.run(_run())
+    except Exception as exc:  # noqa: BLE001 - maintenance must report guard failures as JSON.
+        parsed = {"ok": False, "state": "ERROR", "output": str(exc)}
+    parsed.setdefault("exit_code", 0 if parsed.get("ok") else 1)
     return parsed
 
 
