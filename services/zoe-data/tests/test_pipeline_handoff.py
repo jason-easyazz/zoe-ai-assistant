@@ -92,6 +92,32 @@ def test_evidence_from_review_prefers_top_level_metadata_over_run_metadata():
     assert human.metadata["approver"] == "top-level-reviewer"
 
 
+def test_evidence_from_live_review_run_metadata_accepts_merge_ready_verdict():
+    detail = {
+        "latest_summary": "APPROVE ZOE-5408 audit-only E2E.",
+        "comments": [],
+        "task": {"assignee": "zoe-reviewer"},
+        "runs": [
+            {
+                "metadata": {
+                    "verdict": "approve",
+                    "merge_ready": True,
+                    "audit_only": True,
+                }
+            }
+        ],
+    }
+
+    items = evidence_from_handoff("review", detail)
+
+    human = next(item for item in items if item.kind == "human")
+    assert human.passed is True
+    assert human.metadata["source"] == "kanban_run_metadata"
+    assert human.metadata["approver"] == "zoe-reviewer"
+    assert human.metadata["merge_readiness"] == "merge_ready"
+    assert human.metadata["verdict"] == "approve"
+
+
 def test_evidence_from_review_metadata_accepts_approved_readiness():
     detail = {
         "latest_summary": "Approved after review.",
@@ -115,6 +141,21 @@ def test_evidence_from_review_ignores_summary_without_approver():
         "latest_summary": "APPROVE ZOE-5401. PR is merge-ready.",
         "comments": [],
         "metadata": {},
+    }
+
+    items = evidence_from_handoff("review", detail)
+
+    assert not any(item.kind == "human" for item in items)
+
+
+def test_evidence_from_review_ignores_legacy_readiness_with_only_task_assignee():
+    detail = {
+        "latest_summary": "APPROVE ZOE-5401. PR is merge-ready.",
+        "comments": [],
+        "task": {"assignee": "zoe-reviewer"},
+        "metadata": {
+            "merge_readiness": "merge_ready",
+        },
     }
 
     items = evidence_from_handoff("review", detail)

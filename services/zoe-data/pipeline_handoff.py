@@ -210,9 +210,15 @@ def _human_review_from_metadata(detail: dict[str, Any]) -> EvidenceItem | None:
 
     for source, metadata in _review_metadata_candidates(detail):
         readiness = str(metadata.get("merge_readiness") or "").strip().lower()
+        verdict = str(metadata.get("verdict") or "").strip().lower()
+        explicit_verdict_ready = metadata.get("merge_ready") is True and verdict in {"approve", "approved"}
+        if explicit_verdict_ready:
+            readiness = "merge_ready"
+        task = detail.get("task") if isinstance(detail.get("task"), dict) else {}
+        explicit_approver = metadata.get("approver") or metadata.get("approved_by")
         approver = str(
-            metadata.get("approver")
-            or metadata.get("approved_by")
+            explicit_approver
+            or (task.get("assignee") if explicit_verdict_ready else "")
             or ""
         ).strip()
 
@@ -225,6 +231,7 @@ def _human_review_from_metadata(detail: dict[str, Any]) -> EvidenceItem | None:
                     "source": source,
                     "approver": approver,
                     "merge_readiness": readiness,
+                    "verdict": verdict or None,
                 },
             )
 
