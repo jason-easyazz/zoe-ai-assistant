@@ -83,6 +83,18 @@ for _handler in logging.getLogger().handlers:
     _handler.addFilter(RequestIdFilter())
 
 
+async def _record_completed_multica_chain(client, issue_id: str, chain: dict) -> None:
+    """Persist operator-visible completion metadata for a finished Multica chain."""
+    await client.record_progress(
+        issue_id,
+        phase="closeout",
+        evidence="Kanban chain done",
+        pr_url=chain.get("pr_url"),
+        clear_blocker=True,
+        status="done",
+    )
+
+
 async def _run_memory_capture_startup_probe() -> None:
     """Validate memory capture plumbing at startup.
 
@@ -427,14 +439,7 @@ async def lifespan(app: FastAPI):
                         chain = await poll_ref(f"multica:{issue_id}")
                         if chain.get("found") and chain.get("status") == "done":
                             pr_url = chain.get("pr_url")
-                            await client.record_progress(
-                                issue_id,
-                                phase="closeout",
-                                evidence="Kanban chain done",
-                                pr_url=pr_url,
-                                clear_blocker=True,
-                                status="done",
-                            )
+                            await _record_completed_multica_chain(client, str(issue_id), chain)
                             logger.info(
                                 "multica_poll: advanced issue %s (%s) - Kanban chain done%s",
                                 issue_id,
