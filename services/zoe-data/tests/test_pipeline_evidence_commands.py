@@ -69,7 +69,7 @@ def test_split_ticket_does_not_block_parent_when_children_fail(monkeypatch, caps
         types.SimpleNamespace(get_multica_client=lambda: FakeClient()),
     )
 
-    main(["split-ticket", "parent-1", "--packet", '{"child_issue_template":{"title":"child"}}'])
+    assert main(["split-ticket", "parent-1", "--packet", '{"child_issue_template":{"title":"child"}}']) == 1
 
     out = json.loads(capsys.readouterr().out)
     assert out["ok"] is False

@@ -200,7 +200,7 @@ def main(argv: list[str] | None = None) -> int:
     if asyncio.iscoroutine(result):
         result = asyncio.run(result)
     print(json.dumps(result, sort_keys=True))
-    return 0
+    return 0 if result.get("ok", True) else 1
 
 
 if __name__ == "__main__":

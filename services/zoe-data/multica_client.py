@@ -189,12 +189,16 @@ class MULClient:
             logger.warning("Multica list_labels failed: %s", exc)
             return []
 
-    async def ensure_label(self, name: str) -> dict:
-        """Return a label by name, creating it when possible."""
+    async def ensure_label(self, name: str, *, existing: list[dict] | None = None) -> dict:
+        """Return a label by name, creating it when possible.
+
+        Pass ``existing`` from a prior ``list_labels`` call when ensuring many
+        labels in a loop.
+        """
         wanted = name.strip()
         if not wanted or not self.is_configured():
             return {}
-        for label in await self.list_labels():
+        for label in (existing if existing is not None else await self.list_labels()):
             if str(label.get("name") or "").lower() == wanted.lower():
                 return label
         try:
