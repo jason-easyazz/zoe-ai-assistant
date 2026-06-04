@@ -174,30 +174,42 @@ def _tool_from_log_markers(detail: dict[str, Any]) -> EvidenceItem | None:
     return None
 
 
-def _human_review_from_metadata(detail: dict[str, Any]) -> EvidenceItem | None:
+def _review_metadata_candidates(detail: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    candidates: list[tuple[str, dict[str, Any]]] = []
     metadata = detail.get("metadata") or {}
-    if not isinstance(metadata, dict):
-        metadata = {}
+    if isinstance(metadata, dict):
+        candidates.append(("kanban_metadata", metadata))
+    for run in detail.get("runs") or []:
+        if not isinstance(run, dict):
+            continue
+        run_metadata = run.get("metadata") or {}
+        if isinstance(run_metadata, dict):
+            candidates.append(("kanban_run_metadata", run_metadata))
+    return candidates
 
-    readiness = str(metadata.get("merge_readiness") or "").strip().lower()
-    approver = str(
-        metadata.get("approver")
-        or metadata.get("approved_by")
-        or ""
-    ).strip()
+
+def _human_review_from_metadata(detail: dict[str, Any]) -> EvidenceItem | None:
     summary = str(detail.get("latest_summary") or "").strip()
 
-    if readiness in {"merge_ready", "approved"} and approver:
-        return EvidenceItem(
-            kind="human",
-            summary=(summary or f"review approved by {approver}")[:500],
-            passed=True,
-            metadata={
-                "source": "kanban_metadata",
-                "approver": approver,
-                "merge_readiness": readiness,
-            },
-        )
+    for source, metadata in _review_metadata_candidates(detail):
+        readiness = str(metadata.get("merge_readiness") or "").strip().lower()
+        approver = str(
+            metadata.get("approver")
+            or metadata.get("approved_by")
+            or ""
+        ).strip()
+
+        if readiness in {"merge_ready", "approved"} and approver:
+            return EvidenceItem(
+                kind="human",
+                summary=(summary or f"review approved by {approver}")[:500],
+                passed=True,
+                metadata={
+                    "source": source,
+                    "approver": approver,
+                    "merge_readiness": readiness,
+                },
+            )
 
     return None
 
