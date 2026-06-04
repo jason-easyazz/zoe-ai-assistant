@@ -1532,17 +1532,35 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
                 get_engineering_multica_agent_id,
                 get_multica_client,
             )
+            from multica_ticket_contract import describe_ticket  # type: ignore[import]
 
             client = get_multica_client()
             if not client.is_configured():
                 return "Multica isn't connected, so I can't track that engineering task on the board."
+            description = describe_ticket(
+                task_text,
+                zoe_kind="operator_task",
+                evidence_profile="code",
+                engineering_mode="interactive",
+                acceptance_criteria=["Deliver the requested behavior in a small, reviewable change."],
+                evidence_expectations=["Focused tests or validators", "PR URL when code changes are made"],
+                source="chat_engineering_task",
+            )
             issue = await client.create_issue(
                 title=task_text[:120],
-                description=task_text,
+                description=description,
                 priority="medium",
+                status="todo",
                 assignee_id=get_engineering_multica_agent_id(),
                 assignee_type="agent",
             )
+            if issue.get("id"):
+                await client.attach_label(str(issue["id"]), "operator-task")
+            else:
+                return (
+                    "I tried to add that engineering task to Multica, but the API didn't return an issue. "
+                    "Please try again."
+                )
             ident = issue.get("identifier") or issue.get("id") or "(new)"
             return (
                 "I've added that to Multica for Zoe's engineering driver.\n\n"
@@ -1670,15 +1688,42 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
     if intent.name == "user_issue_report":
         import random as _random
         _acks = [
-            "Got it, I've made a note of that.",
-            "Noted — I'll look into it.",
-            "Thanks for letting me know, I'll flag that for review.",
-            "I've logged that. I'll work on it.",
+            "Got it, I've logged that for review.",
+            "Noted. I've added that to the ticket backlog.",
+            "Thanks for letting me know. I've captured it so it can be triaged properly.",
+            "I've logged that as feedback rather than letting it disappear into chat.",
         ]
+        message = intent.slots.get("message", "")
+        try:
+            from multica_client import get_multica_client  # type: ignore[import]
+            from multica_ticket_contract import describe_ticket  # type: ignore[import]
+
+            client = get_multica_client()
+            if client.is_configured():
+                description = describe_ticket(
+                    f"User reported:\n\n{message}",
+                    zoe_kind="bug",
+                    evidence_profile="code",
+                    engineering_mode="interactive",
+                    acceptance_criteria=["Reproduce or explain the reported behavior.", "Propose a safe fix or mark blocked with reason."],
+                    evidence_expectations=["Issue triage note", "Test or validator if code changes are made"],
+                    source=f"chat_user_issue:{user_id}",
+                )
+                issue = await client.create_issue(
+                    title=f"User feedback: {message[:95]}",
+                    description=description,
+                    priority="medium",
+                    status="backlog",
+                )
+                if issue.get("id"):
+                    await client.attach_label(str(issue["id"]), "user-feedback")
+                    return _random.choice(_acks)
+        except Exception as _exc:
+            logger.warning("user_issue_report: Multica capture failed: %s", _exc)
         try:
             from evolution_notice import record_user_issue  # type: ignore[import]
             await record_user_issue(
-                message=intent.slots.get("message", ""),
+                message=message,
                 user_id=user_id,
             )
         except Exception as _exc:

@@ -1386,7 +1386,7 @@ async def get_agent_board(user: dict = Depends(get_current_user)):  # noqa: ARG0
                 continue
             for issue in issues_or_exc or []:
                 enriched = dict(issue)
-                if status in {"in_progress", "in_review"} and str(issue.get("assignee_id") or "") == hermes_id:
+                if status in {"in_progress", "blocked", "in_review"} and str(issue.get("assignee_id") or "") == hermes_id:
                     hermes_issues.append(enriched)
                 groups[status].append(enriched)
                 if status in {"in_progress", "in_review"}:
