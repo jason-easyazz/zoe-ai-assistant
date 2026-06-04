@@ -709,3 +709,19 @@ def test_closeout_body_defers_multica_done_until_retro():
     assert "update the Multica issue to done" not in body
     assert "note Multica done" not in body
     assert "MULTICA=<Zoe updates after retro; report blocker if any>" in body
+
+
+def test_implement_body_puts_audit_fast_path_before_graphify():
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {"id": "uuid-1", "identifier": "ZOE-9", "title": "Audit driver", "description": "evidence_profile: audit"},
+        "ZOE-9",
+    )
+
+    assert "AUDIT/SMOKE FAST PATH" in body
+    assert "TOOLS_USED=audit-read" in body
+    assert "TESTS=not applicable/audit-only" in body
+    assert "graphify map" in body
+    assert "explicitly says audit-only" in body
+    assert "uses trace/map with an audit/no-code qualifier" in body
+    assert body.index("AUDIT/SMOKE FAST PATH") < body.index("graphify map")
