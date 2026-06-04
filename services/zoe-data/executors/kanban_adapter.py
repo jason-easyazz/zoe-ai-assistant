@@ -54,6 +54,7 @@ _V2_CHAIN_PHASES = ("implement", "verify", "review", "closeout")
 
 _ACTIVE_KANBAN_STATUSES = {"triage", "todo", "ready", "running", "blocked"}
 _TERMINAL_KANBAN_STATUSES = {"done", "archived"}
+_BLOCKING_PARENT_STATUSES = {"blocked", "cancelled", "error", "failed"}
 
 _PROTOCOL_VIOLATION_LIMIT = max(
     1, int(os.environ.get("ZOE_KANBAN_PROTOCOL_VIOLATION_LIMIT", "2") or "2")
@@ -621,7 +622,8 @@ class KanbanAdapter:
             idx = phase_order.index(phase)
             if idx > 0:
                 previous = existing_phases.get(phase_order[idx - 1]) or {}
-                parent = previous.get("id")
+                if (previous.get("status") or "").lower() not in _BLOCKING_PARENT_STATUSES:
+                    parent = previous.get("id")
 
         phase, assignee, skills = entry
         args = [

@@ -94,6 +94,88 @@ async def test_dispatch_refuses_to_create_without_pipeline_journal(monkeypatch):
     assert [c for c in a.calls if c[0] == "create"] == []
 
 
+
+
+@pytest.mark.asyncio
+async def test_dispatch_does_not_parent_recovered_phase_to_blocked_prior_row():
+    from pipeline_evidence import EvidenceItem, PipelineState
+    from pipeline_store import save_state
+
+    state = PipelineState(
+        task_ref="multica:uuid-recovered-parent",
+        phase="verify",
+        status="todo",
+        evidence_profile="audit",
+        attempts={"implement": 1},
+        evidence=[
+            EvidenceItem(
+                kind="tool",
+                summary="audit/no-PR implement auto-recovered",
+                passed=True,
+                metadata={"source": "audit_protocol_recovery", "phase": "implement"},
+            )
+        ],
+    )
+    save_state(state, event="transition")
+    rows = [_row("implement", "blocked", chain_version="v4", issue_id="uuid-recovered-parent")]
+    a = _FakeAdapter(list_rows=rows)
+    result = await a.dispatch(
+        {
+            "id": "uuid-recovered-parent",
+            "identifier": "ZOE-REC",
+            "title": "audit-only recovered parent",
+            "description": "evidence_profile: audit",
+        }
+    )
+
+    creates = [c for c in a.calls if c[0] == "create"]
+    assert result["ok"] is True
+    assert result["phase"] == "verify"
+    assert len(creates) == 1
+    assert "--parent" not in creates[0]
+
+
+
+
+@pytest.mark.asyncio
+async def test_dispatch_does_not_parent_recovered_phase_to_terminal_like_prior_row():
+    from pipeline_evidence import EvidenceItem, PipelineState
+    from pipeline_store import save_state
+
+    state = PipelineState(
+        task_ref="multica:uuid-recovered-error-parent",
+        phase="verify",
+        status="todo",
+        evidence_profile="audit",
+        attempts={"implement": 1},
+        evidence=[
+            EvidenceItem(
+                kind="tool",
+                summary="audit/no-PR implement auto-recovered",
+                passed=True,
+                metadata={"source": "audit_protocol_recovery", "phase": "implement"},
+            )
+        ],
+    )
+    save_state(state, event="transition")
+    rows = [_row("implement", "error", chain_version="v4", issue_id="uuid-recovered-error-parent")]
+    a = _FakeAdapter(list_rows=rows)
+    result = await a.dispatch(
+        {
+            "id": "uuid-recovered-error-parent",
+            "identifier": "ZOE-REC",
+            "title": "audit-only recovered parent",
+            "description": "evidence_profile: audit",
+        }
+    )
+
+    creates = [c for c in a.calls if c[0] == "create"]
+    assert result["ok"] is True
+    assert result["phase"] == "verify"
+    assert len(creates) == 1
+    assert "--parent" not in creates[0]
+
+
 @pytest.mark.asyncio
 async def test_dispatch_after_scout_evidence_creates_next_phase():
     from pipeline_store import bootstrap_state, save_state
