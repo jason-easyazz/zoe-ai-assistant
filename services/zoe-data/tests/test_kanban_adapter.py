@@ -697,3 +697,15 @@ def test_audit_no_pr_phases_have_bounded_completion_path():
     assert "For smoke/audit tickets" in closeout
     assert "do not wait for Greptile" in closeout
     assert "- If a code task has no PR" in closeout
+
+
+def test_closeout_body_defers_multica_done_until_retro():
+    body = ka.KanbanAdapter()._build_body(
+        "closeout",
+        {"id": "uuid-1", "identifier": "ZOE-9", "title": "Fix thing", "description": ""},
+        "ZOE-9",
+    )
+    assert "Zoe will update Multica after the retro phase completes" in body
+    assert "update the Multica issue to done" not in body
+    assert "note Multica done" not in body
+    assert "MULTICA=<Zoe updates after retro; report blocker if any>" in body
