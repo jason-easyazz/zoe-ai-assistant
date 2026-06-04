@@ -784,21 +784,26 @@ class KanbanAdapter:
             if is_v4 and current_status == "done":
                 agg = "done"
                 blocker = None
-            elif pipeline_info.get("terminal_block"):
-                agg = "blocked"
-                blocker = blocker or f"pipeline terminal block at {current_phase}"
             elif is_v4:
-                if current_status == "blocked":
+                if pipeline_info.get("terminal_block"):
                     agg = "blocked"
-                    blocker = blocker or f"pipeline blocked at {current_phase}"
-                elif current_status == "todo" and current_phase not in phases:
-                    agg = "partial"
+                    blocker = f"pipeline terminal block at {current_phase}"
+                elif current_status == "blocked":
+                    agg = "blocked"
+                    current_row = phases.get(str(current_phase or ""), {})
+                    blocker = current_row.get("block_reason") or f"pipeline blocked at {current_phase}"
+                elif current_status == "todo":
+                    agg = "partial" if current_phase not in phases else "running"
                     blocker = None
                 elif current_status == "running":
                     agg = "running"
                     blocker = None
                 elif agg not in {"done", "blocked"}:
                     agg = "running"
+                    blocker = None
+            elif pipeline_info.get("terminal_block"):
+                agg = "blocked"
+                blocker = blocker or f"pipeline terminal block at {current_phase}"
         except Exception as exc:
             logger.warning("kanban_adapter: pipeline sync failed for %s: %s", external_ref, exc)
             pipeline_info = {
