@@ -131,6 +131,14 @@ async def _cmd_split_ticket(args: argparse.Namespace) -> dict[str, Any]:
     templates = [template for template in children_raw if isinstance(template, dict) and template]
     if not templates:
         raise SystemExit("split-ticket packet must contain at least one child template")
+    state = load_latest_state(args.task_ref) if args.task_ref else None
+    if args.task_ref and state is None:
+        return {
+            "ok": False,
+            "parent_issue_id": args.parent_issue_id,
+            "child_issue_ids": [],
+            "reason": f"pipeline state not found for task ref: {args.task_ref}",
+        }
     children = []
     for template in templates:
         if not isinstance(template, dict):
@@ -162,7 +170,6 @@ async def _cmd_split_ticket(args: argparse.Namespace) -> dict[str, Any]:
             "child_issue_ids": child_ids,
             "reason": "parent update failed; children created but parent not linked",
         }
-    state = load_latest_state(args.task_ref) if args.task_ref else None
     if state:
         state = state.model_copy(update={"block_classification": "scope_split_required", "split_packet": packet})
         state = transition(state, "block", reason=args.reason or "scope_split_required")

@@ -332,6 +332,7 @@ class MULClient:
         evidence: str | None = None,
         pr_url: str | None = None,
         blocker: str | None = None,
+        clear_blocker: bool = False,
         greptile_status: str | None = None,
         merge_sha: str | None = None,
         status: str | None = None,
@@ -348,6 +349,7 @@ class MULClient:
             evidence=evidence,
             pr_url=pr_url,
             blocker=blocker,
+            clear_blocker=clear_blocker,
             greptile_status=greptile_status,
             merge_sha=merge_sha,
         )

@@ -50,6 +50,7 @@ async def _record_issue_progress(issue_id: str | None, result: dict) -> None:
         greptile_status=str(result.get("greptile") or result.get("state") or ""),
         merge_sha=result.get("merge_commit"),
         blocker=blocker,
+        clear_blocker=status in {"done", "in_review"},
         status=status,
     )
 

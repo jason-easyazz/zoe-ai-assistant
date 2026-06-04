@@ -111,6 +111,7 @@ def update_ticket_progress(
     evidence: str | None = None,
     pr_url: str | None = None,
     blocker: str | None = None,
+    clear_blocker: bool = False,
     greptile_status: str | None = None,
     merge_sha: str | None = None,
     child_issue_ids: list[str] | None = None,
@@ -124,7 +125,9 @@ def update_ticket_progress(
         metadata["last_evidence"] = evidence
     if pr_url is not None:
         metadata["pr_url"] = pr_url
-    if blocker is not None:
+    if clear_blocker:
+        metadata["blocked_reason"] = None
+    elif blocker is not None:
         metadata["blocked_reason"] = blocker
     if greptile_status is not None:
         metadata["greptile_status"] = greptile_status

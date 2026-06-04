@@ -160,6 +160,42 @@ def test_split_ticket_does_not_save_pipeline_block_when_parent_update_fails(tmp_
     assert state.status == "todo"
 
 
+def test_split_ticket_rejects_missing_task_ref_before_multica_mutation(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("ZOE_PIPELINE_STORE_PATH", str(tmp_path / "runs.jsonl"))
+
+    class FakeClient:
+        def is_configured(self):
+            return True
+
+        async def get_issue(self, issue_id):
+            return {"id": issue_id, "description": "parent"}
+
+        async def create_child_issue(self, parent, template):
+            raise AssertionError("missing task-ref must stop before child creation")
+
+        async def update_issue(self, *args, **kwargs):
+            raise AssertionError("missing task-ref must stop before parent update")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "multica_client",
+        types.SimpleNamespace(get_multica_client=lambda: FakeClient()),
+    )
+
+    assert main([
+        "split-ticket",
+        "parent-1",
+        "--task-ref",
+        "multica:missing",
+        "--packet",
+        '{"child_issue_template":{"title":"child"}}',
+    ]) == 1
+
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is False
+    assert out["reason"] == "pipeline state not found for task ref: multica:missing"
+
+
 def test_split_ticket_requires_packet(monkeypatch):
     class FakeClient:
         def is_configured(self):
