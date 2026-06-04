@@ -183,6 +183,10 @@ def _max_runtime(mode: str = "interactive") -> str:
 
 
 _SKIP_SCOUT_TAG_RE = re.compile(r"skip_scout:\s*(true|yes|1)", re.I)
+_AUDIT_NO_PR_RE = re.compile(
+    r"\b(?:audit-only|smoke test only|no code change only|no code/config changes only|evidence_profile:\s*audit)\b",
+    re.I,
+)
 
 
 def _skip_scout(issue: dict | None = None) -> bool:
@@ -206,8 +210,28 @@ def _skip_scout(issue: dict | None = None) -> bool:
     return bool(_SKIP_SCOUT_TAG_RE.search(haystack))
 
 
+def _audit_no_pr_issue(issue: dict | None = None) -> bool:
+    issue = issue or {}
+    meta = issue.get("metadata") or {}
+    if str(meta.get("evidence_profile") or "").strip().lower() == "audit":
+        return True
+    haystack = " ".join(
+        [
+            str(issue.get("title") or ""),
+            str(issue.get("description") or ""),
+            json.dumps(meta),
+        ]
+    )
+    return bool(_AUDIT_NO_PR_RE.search(haystack))
+
+
 def _chain_for_issue(issue: dict) -> tuple[tuple[str, str, tuple[str, ...]], ...]:
     phases = _CHAIN
+    if _audit_no_pr_issue(issue):
+        phases = tuple(
+            (phase, assignee, () if phase == "closeout" else skills)
+            for phase, assignee, skills in phases
+        )
     if _skip_scout(issue):
         phases = tuple(p for p in phases if p[0] != "scout")
     return phases
