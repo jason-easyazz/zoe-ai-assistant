@@ -792,6 +792,9 @@ class KanbanAdapter:
                 elif current_status == "todo" and current_phase not in phases:
                     agg = "partial"
                     blocker = None
+                elif current_status == "running":
+                    agg = "running"
+                    blocker = None
                 elif agg not in {"done", "blocked"}:
                     agg = "running"
         except Exception as exc:
