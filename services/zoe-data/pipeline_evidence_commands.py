@@ -116,7 +116,10 @@ async def _cmd_split_ticket(args: argparse.Namespace) -> dict[str, Any]:
     parent = await client.get_issue(args.parent_issue_id)
     if not parent:
         raise SystemExit(f"Parent issue not found: {args.parent_issue_id}")
-    packet = json.loads(_read_text(args.packet, file_path=args.packet_file) or "{}")
+    raw_packet = _read_text(args.packet, file_path=args.packet_file)
+    if not raw_packet:
+        raise SystemExit("split-ticket requires --packet, --packet-file, or piped JSON on stdin")
+    packet = json.loads(raw_packet)
     templates = packet.get("children") or [packet.get("child_issue_template") or {}]
     children = []
     for template in templates:

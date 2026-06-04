@@ -114,3 +114,25 @@ def test_split_ticket_does_not_save_pipeline_block_when_children_fail(tmp_path, 
     state = load_latest_state("multica:split-fail")
     assert state is not None
     assert state.status == "todo"
+
+
+def test_split_ticket_requires_packet(monkeypatch):
+    class FakeClient:
+        def is_configured(self):
+            return True
+
+        async def get_issue(self, issue_id):
+            return {"id": issue_id, "description": "parent"}
+
+    monkeypatch.setitem(
+        sys.modules,
+        "multica_client",
+        types.SimpleNamespace(get_multica_client=lambda: FakeClient()),
+    )
+
+    try:
+        main(["split-ticket", "parent-1"])
+    except SystemExit as exc:
+        assert "requires --packet" in str(exc)
+    else:
+        raise AssertionError("split-ticket without a packet should fail")
