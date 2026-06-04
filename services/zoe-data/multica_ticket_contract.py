@@ -70,6 +70,7 @@ def write_ticket_block(description: str | None, metadata: dict[str, Any]) -> str
         start, end = match.span()
         prefix = text[:start].rstrip()
         suffix = text[end:]
+        suffix = ("\n" + suffix) if suffix and not suffix.startswith("\n") else suffix
         separator = "\n\n" if prefix else ""
         return f"{prefix}{separator}{block}{suffix}"
     if not text:

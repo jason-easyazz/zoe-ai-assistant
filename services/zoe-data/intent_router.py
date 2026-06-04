@@ -1556,6 +1556,11 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
             )
             if issue.get("id"):
                 await client.attach_label(str(issue["id"]), "operator-task")
+            else:
+                return (
+                    "I tried to add that engineering task to Multica, but the API didn't return an issue. "
+                    "Please try again."
+                )
             ident = issue.get("identifier") or issue.get("id") or "(new)"
             return (
                 "I've added that to Multica for Zoe's engineering driver.\n\n"

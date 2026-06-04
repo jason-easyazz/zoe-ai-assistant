@@ -42,3 +42,10 @@ def test_block_only_description_does_not_gain_leading_blank_lines():
 
     assert updated.startswith("```zoe-ticket")
     assert not updated.startswith("\n")
+
+
+def test_replacing_middle_block_preserves_suffix_newline():
+    description = "Intro\n\n```zoe-ticket\n{\"schema\": 1}\n```\nTrailing prose"
+    updated = write_ticket_block(description, {"schema": 1, "zoe_kind": "bug"})
+
+    assert "```\nTrailing prose" in updated
