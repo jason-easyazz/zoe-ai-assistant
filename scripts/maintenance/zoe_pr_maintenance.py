@@ -24,6 +24,8 @@ def _run_guard(pr: int, *, merge_when_ready: bool) -> dict:
     async def _run() -> dict:
         if merge_when_ready:
             return await _merge_pr_when_ready(pr)
+        # Maintenance status checks should surface the next bounded repair packet
+        # without launching a cheap-model repair agent from this wrapper.
         return await run_guard_once(pr, packet_only=True)
 
     try:
