@@ -48,6 +48,7 @@ def record_evidence(
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Append a command-written evidence item to a pipeline state."""
+    saved = None
     for attempt in range(2):
         state = _load_state(task_ref)
         item = EvidenceItem(
@@ -69,6 +70,7 @@ def record_evidence(
         except PipelineStateConflict:
             if attempt:
                 raise
+    assert saved is not None
     return {"ok": True, "task_ref": task_ref, "phase": saved.phase, "status": saved.status, "evidence": item.model_dump()}
 
 
@@ -180,9 +182,34 @@ async def _cmd_split_ticket(args: argparse.Namespace) -> dict[str, Any]:
             "reason": "parent update failed; children created but parent not linked",
         }
     if state:
-        state = state.model_copy(update={"block_classification": "scope_split_required", "split_packet": packet})
-        state = transition(state, "block", reason=args.reason or "scope_split_required")
-        save_state(state, event="split_ticket", extra={"parent_issue_id": args.parent_issue_id, "children": children})
+        for attempt in range(2):
+            latest_state = load_latest_state(args.task_ref)
+            if latest_state is None:
+                raise RuntimeError(f"pipeline disappeared during split: {args.task_ref}")
+            blocked_state = latest_state.model_copy(
+                update={
+                    "block_classification": "scope_split_required",
+                    "split_packet": packet,
+                }
+            )
+            blocked_state = transition(
+                blocked_state,
+                "block",
+                reason=args.reason or "scope_split_required",
+            )
+            try:
+                save_state(
+                    blocked_state,
+                    event="split_ticket",
+                    extra={
+                        "parent_issue_id": args.parent_issue_id,
+                        "children": children,
+                    },
+                )
+                break
+            except PipelineStateConflict:
+                if attempt:
+                    raise
     return {"ok": True, "parent_issue_id": args.parent_issue_id, "child_issue_ids": child_ids}
 
 

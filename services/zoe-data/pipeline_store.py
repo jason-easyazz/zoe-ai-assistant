@@ -117,7 +117,7 @@ def save_state(
                         f"latest revision {latest.journal_revision}"
                     )
                 base_state = latest if incoming_is_stale and latest else state
-                if latest:
+                if incoming_is_stale and latest:
                     evidence_by_key = {
                         json.dumps(
                             item.model_dump(exclude={"created_at"}),
@@ -174,7 +174,13 @@ async def bootstrap_state(
         phase=start_phase,
         evidence_profile=issue_evidence_profile(issue),
     )
-    return await _run_io(partial(save_state, state, event="bootstrap"))
+    try:
+        return await _run_io(partial(save_state, state, event="bootstrap"))
+    except PipelineStateConflict:
+        existing = await _run_io(load_latest_state, task_ref)
+        if existing is None:
+            raise
+        return existing
 
 
 def resume_pipeline(

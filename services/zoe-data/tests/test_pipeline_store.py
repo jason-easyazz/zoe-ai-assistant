@@ -167,6 +167,57 @@ def test_concurrent_evidence_merge_deduplicates_created_at_only(isolated_store):
     assert len([item for item in reloaded.evidence if item.kind == "human"]) == 1
 
 
+def test_non_stale_transition_can_clear_prior_evidence(isolated_store):
+    initial = store.save_state(
+        PipelineState(
+            task_ref="multica:revision",
+            phase="review",
+            status="running",
+            evidence=[
+                EvidenceItem(
+                    kind="human",
+                    summary="review evidence that must be re-earned",
+                    passed=False,
+                )
+            ],
+        ),
+        event="review_blocked",
+    )
+    revised = store.transition(initial, "request_changes", reason="fix requested")
+    saved = store.save_state(revised, event="transition")
+
+    assert saved.phase == "implement"
+    assert saved.evidence == []
+    reloaded = store.load_latest_state(initial.task_ref)
+    assert reloaded is not None
+    assert reloaded.evidence == []
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_returns_concurrently_created_state(isolated_store, monkeypatch):
+    existing = PipelineState(
+        task_ref="multica:bootstrap-race",
+        phase="scout",
+        journal_revision=1,
+    )
+    load_calls = 0
+
+    def racing_load(_task_ref):
+        nonlocal load_calls
+        load_calls += 1
+        return None if load_calls == 1 else existing
+
+    def conflicting_save(*_args, **_kwargs):
+        raise store.PipelineStateConflict("simulated first-write race")
+
+    monkeypatch.setattr(store, "load_latest_state", racing_load)
+    monkeypatch.setattr(store, "save_state", conflicting_save)
+
+    result = await store.bootstrap_state("multica:bootstrap-race")
+
+    assert result is existing
+
+
 def test_pipeline_summary_reports_missing_evidence(isolated_store):
     state = PipelineState(task_ref="multica:1", phase="implement", status="running")
     summary = store.pipeline_summary(state)

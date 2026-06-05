@@ -191,6 +191,62 @@ def test_split_ticket_does_not_save_pipeline_block_when_parent_update_fails(tmp_
     assert state.status == "todo"
 
 
+def test_split_ticket_retries_pipeline_conflict_without_duplicate_children(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("ZOE_PIPELINE_STORE_PATH", str(tmp_path / "runs.jsonl"))
+    import asyncio
+
+    asyncio.run(bootstrap_state("multica:split-race", start_phase="implement"))
+
+    class FakeClient:
+        child_calls = 0
+
+        def is_configured(self):
+            return True
+
+        async def get_issue(self, issue_id):
+            return {"id": issue_id, "description": "parent"}
+
+        async def create_child_issue(self, parent, template):
+            self.child_calls += 1
+            return {"id": "child-1", "description": "child"}
+
+        async def update_issue(self, issue_id, **kwargs):
+            return {"id": issue_id, **kwargs}
+
+    client = FakeClient()
+    monkeypatch.setitem(
+        sys.modules,
+        "multica_client",
+        types.SimpleNamespace(get_multica_client=lambda: client),
+    )
+    original_save = commands.save_state
+    save_calls = 0
+
+    def conflict_once(*args, **kwargs):
+        nonlocal save_calls
+        save_calls += 1
+        if save_calls == 1:
+            raise PipelineStateConflict("simulated split race")
+        return original_save(*args, **kwargs)
+
+    monkeypatch.setattr(commands, "save_state", conflict_once)
+
+    assert main([
+        "split-ticket",
+        "parent-1",
+        "--task-ref",
+        "multica:split-race",
+        "--packet",
+        '{"child_issue_template":{"title":"child"}}',
+    ]) == 0
+    json.loads(capsys.readouterr().out)
+
+    assert client.child_calls == 1
+    assert save_calls == 2
+
+
 def test_split_ticket_rejects_missing_task_ref_before_multica_mutation(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("ZOE_PIPELINE_STORE_PATH", str(tmp_path / "runs.jsonl"))
 
