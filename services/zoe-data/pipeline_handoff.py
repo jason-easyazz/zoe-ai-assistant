@@ -326,9 +326,6 @@ def implementation_required_from_handoff(detail: dict[str, Any]) -> bool | None:
     if raw in {"0", "false", "no"}:
         return False
 
-    acceptance = (structured_fields.get("ACCEPTANCE_STATUS") or "").strip().lower()
-    if acceptance in {"met", "already_met", "met_by_merged_prs"}:
-        return False
     return None
 
 

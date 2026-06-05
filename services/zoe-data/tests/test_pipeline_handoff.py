@@ -34,12 +34,12 @@ def test_implementation_required_from_structured_scout_handoff():
     assert implementation_required_from_handoff(detail) is False
 
 
-def test_implementation_required_supports_existing_acceptance_status():
+def test_acceptance_status_is_not_a_routing_signal():
     detail = {
         "runs": [{"metadata": {"ACCEPTANCE_STATUS": "met_by_merged_PRs"}}]
     }
 
-    assert implementation_required_from_handoff(detail) is False
+    assert implementation_required_from_handoff(detail) is None
 
 
 def test_acceptance_status_in_free_text_does_not_skip_implementation():
