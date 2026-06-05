@@ -379,6 +379,77 @@ def test_retro_handoff_can_request_followup_ticket():
     assert log.metadata["follow_up"]["source"] == "retro"
 
 
+def test_retro_run_metadata_records_log_and_followup_evidence():
+    detail = {
+        "latest_summary": "Retro complete for ZOE-5347.",
+        "comments": [],
+        "runs": [
+            {
+                "metadata": {
+                    "RETRO": "Closeout reached the merge guard too late.",
+                    "LEARNINGS": "Front-load deterministic guard commands.",
+                    "TOOLS_USED": "kanban_show,terminal",
+                    "FOLLOW_UP_TITLE": "Reduce closeout orchestration overhead",
+                    "FOLLOW_UP_DESCRIPTION": "Run the merge guard before broad repository inspection.",
+                    "changed_files": ["ignored.py"],
+                }
+            }
+        ],
+    }
+
+    items = evidence_from_handoff("retro", detail)
+
+    log = next(item for item in items if item.kind == "log")
+    tool = next(item for item in items if item.kind == "tool")
+    assert log.summary == "Closeout reached the merge guard too late."
+    assert log.metadata["follow_up"]["title"] == "Reduce closeout orchestration overhead"
+    assert tool.summary == "kanban_show,terminal"
+
+
+def test_retro_top_level_metadata_records_log_evidence():
+    detail = {
+        "latest_summary": "Retro complete.",
+        "comments": [],
+        "metadata": {
+            "RETRO": "Top-level structured retro evidence.",
+            "TOOLS_USED": "kanban_show",
+        },
+    }
+
+    items = evidence_from_handoff("retro", detail)
+
+    log = next(item for item in items if item.kind == "log")
+    tool = next(item for item in items if item.kind == "tool")
+    assert log.summary == "Top-level structured retro evidence."
+    assert tool.summary == "kanban_show"
+
+
+def test_retro_generic_run_metadata_does_not_create_log_evidence():
+    detail = {
+        "latest_summary": "Retro complete.",
+        "comments": [],
+        "runs": [{"metadata": {"changed_files": ["ignored.py"], "tests_run": "2"}}],
+    }
+
+    items = evidence_from_handoff("retro", detail)
+
+    assert not any(item.kind == "log" for item in items)
+
+
+def test_review_structured_summary_does_not_bypass_approver_gate():
+    detail = {
+        "latest_summary": "Review task completed.",
+        "comments": [],
+        "task": {"assignee": "zoe-reviewer"},
+        "metadata": {"SUMMARY": "approved"},
+        "runs": [{"metadata": {"REVIEW": "approved"}}],
+    }
+
+    items = evidence_from_handoff("review", detail)
+
+    assert not any(item.kind == "human" for item in items)
+
+
 def test_retro_handoff_without_followup_title_only_logs():
     detail = {"latest_summary": "RETRO=No harness change needed", "comments": []}
 
