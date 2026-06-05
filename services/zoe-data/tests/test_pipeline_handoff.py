@@ -1,6 +1,10 @@
 """Tests for Kanban handoff → pipeline evidence parsing."""
 
-from pipeline_handoff import evidence_from_handoff, infer_outcome
+from pipeline_handoff import (
+    evidence_from_handoff,
+    implementation_required_from_handoff,
+    infer_outcome,
+)
 
 
 def test_evidence_from_implement_handoff_parses_tools_and_tests():
@@ -13,6 +17,29 @@ def test_evidence_from_implement_handoff_parses_tools_and_tests():
     assert "tool" in kinds
     assert "test" in kinds
     assert "pr" in kinds
+
+
+def test_implementation_required_from_structured_scout_handoff():
+    detail = {
+        "runs": [
+            {
+                "metadata": {
+                    "IMPLEMENTATION_REQUIRED": "false",
+                    "SCOUT_SUMMARY": "Acceptance is already satisfied by PR #173.",
+                }
+            }
+        ]
+    }
+
+    assert implementation_required_from_handoff(detail) is False
+
+
+def test_implementation_required_supports_existing_acceptance_status():
+    detail = {
+        "runs": [{"metadata": {"ACCEPTANCE_STATUS": "met_by_merged_PRs"}}]
+    }
+
+    assert implementation_required_from_handoff(detail) is False
 
 
 def test_evidence_from_verify_handoff_parses_validators():

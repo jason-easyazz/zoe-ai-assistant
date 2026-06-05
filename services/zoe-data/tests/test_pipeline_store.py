@@ -96,6 +96,27 @@ def test_resume_pipeline_can_reset_false_duplicate_fingerprint(isolated_store):
     assert store.pipeline_summary(resumed)["terminal_block"] is False
 
 
+def test_skip_blocked_implementation_moves_to_verify(isolated_store):
+    state = PipelineState(
+        task_ref="multica:no-code",
+        phase="implement",
+        status="blocked",
+        last_block_fingerprint="old",
+        repeated_block_count=1,
+    )
+    store.save_state(state, event="blocked")
+
+    skipped = store.skip_blocked_implementation(
+        "multica:no-code",
+        reason="scout confirmed acceptance is already met by merged PRs",
+    )
+
+    assert skipped.phase == "verify"
+    assert skipped.status == "todo"
+    assert skipped.last_block_fingerprint is None
+    assert "operator_skipped_implementation" in isolated_store.read_text(encoding="utf-8")
+
+
 @pytest.mark.asyncio
 async def test_sync_pipeline_advances_on_complete_handoff(isolated_store):
     await store.bootstrap_state("multica:sync")
@@ -115,6 +136,37 @@ async def test_sync_pipeline_advances_on_complete_handoff(isolated_store):
     assert len(lines) >= 2
     last = json.loads(lines[-1])
     assert last["event"] in {"transition", "gate_blocked"}
+
+
+@pytest.mark.asyncio
+async def test_sync_pipeline_skips_implementation_when_scout_marks_it_unneeded(isolated_store):
+    await store.bootstrap_state("multica:already-done", start_phase="scout")
+
+    async def fetch_detail(_task_id: str):
+        return {
+            "latest_summary": "TOOLS_USED=graphify",
+            "comments": [],
+            "runs": [
+                {
+                    "metadata": {
+                        "IMPLEMENTATION_REQUIRED": "false",
+                        "SCOUT_SUMMARY": "Acceptance is already met by merged PR #173.",
+                    }
+                }
+            ],
+        }
+
+    phases = {"scout": {"id": "t_scout", "status": "done"}}
+    state = await store.sync_pipeline_from_chain(
+        "multica:already-done",
+        phases,
+        fetch_detail,
+        start_phase="scout",
+    )
+
+    assert state.phase == "verify"
+    assert state.status == "todo"
+    assert state.history[-1].outcome == "skip_implementation"
 
 
 @pytest.mark.asyncio
