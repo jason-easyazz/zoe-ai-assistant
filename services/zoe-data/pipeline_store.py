@@ -126,6 +126,38 @@ async def bootstrap_state(
     return state
 
 
+def resume_pipeline(
+    task_ref: str,
+    *,
+    reason: str = "operator retry",
+    reset_fingerprint: bool = False,
+) -> PipelineState:
+    """Journal an explicit retry of a blocked phase without erasing prior evidence."""
+    state = load_latest_state(task_ref)
+    if state is None:
+        raise ValueError(f"pipeline not found: {task_ref}")
+    if state.status != "blocked":
+        raise ValueError(f"pipeline is not blocked: {task_ref} ({state.status})")
+    resumed = state.model_copy(
+        update={
+            "status": "todo",
+            "last_block_fingerprint": None if reset_fingerprint else state.last_block_fingerprint,
+            "repeated_block_count": 0 if reset_fingerprint else state.repeated_block_count,
+            "block_classification": None,
+            "split_packet": None,
+        }
+    )
+    return save_state(
+        resumed,
+        event="operator_resumed",
+        extra={
+            "reason": reason,
+            "phase": resumed.phase,
+            "reset_fingerprint": reset_fingerprint,
+        },
+    )
+
+
 async def _append_harness_validators(state: PipelineState, phase: PipelinePhase) -> PipelineState:
     """Run repo validators when handoff lacks them; tag hash with phase."""
     if any(
@@ -215,13 +247,7 @@ def pipeline_summary(state: PipelineState | None) -> dict[str, Any]:
     if not state:
         return {"tracked": False}
     missing = sorted(missing_required_evidence(state))
-    fingerprint_abort = state.status == "blocked" and (
-        state.repeated_block_count >= 2
-        or any(
-            (rec.reason or "").startswith("fingerprint_abort:")
-            for rec in state.history
-        )
-    )
+    fingerprint_abort = state.status == "blocked" and state.repeated_block_count >= 2
     terminal_block = state.status == "blocked" and (
         fingerprint_abort
         or state.block_classification == "scope_split_required"
@@ -334,6 +360,8 @@ async def sync_pipeline_from_chain(
             ) or outcome
             split_requested, handoff_split_packet = split_request_from_handoff(detail)
             fingerprint = block_fingerprint(phase, str(block_reason))  # type: ignore[arg-type]
+            if state.status == "blocked" and fingerprint == state.last_block_fingerprint:
+                return state
             state, should_abort = record_block_fingerprint(state, fingerprint)
             explicit_split = scope_split_required(
                 phase, str(block_reason), explicit=split_requested  # type: ignore[arg-type]
