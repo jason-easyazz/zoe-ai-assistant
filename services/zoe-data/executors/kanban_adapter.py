@@ -375,8 +375,13 @@ class KanbanAdapter:
                 " TOOLS_USED=audit-read, PR_URL= blank, AUDIT_ONLY=1, TESTS=not applicable/audit-only,"
                 " and SUMMARY= findings. Do not open a PR.\n"
                 "- Start with `kanban_show` to confirm this task id.\n"
-                "- For code-changing tickets only: read the charter + graphify map first"
-                " (graphify query/path/explain over raw grep).\n"
+                "- SMALL EXPLICIT CODE FAST PATH: when the ticket names the exact file, helper,"
+                " function, or focused test to change, inspect only those named files plus the"
+                " nearest existing test. Do not run a broad Graphify query, repo crawl, or unrelated"
+                " search. Start editing within 6 tool/model steps; if the change is still unclear by"
+                " then, call `kanban_block` with BLOCKER=IMPLEMENT_BUDGET instead of exploring further.\n"
+                "- For broad or ambiguous code-changing tickets only: read the charter and run at"
+                " most one focused Graphify map (graphify query/path/explain over raw grep).\n"
                 "- Use opensrc for any third-party library source before guessing APIs.\n"
                 "- Make the smallest reviewable change; do NOT rewrite existing functions into bloat;"
                 " reuse service-layer helpers.\n"
@@ -645,6 +650,10 @@ class KanbanAdapter:
             f"{external_ref}:{phase}",
             "--max-runtime",
             _max_runtime(mode),
+            # Hermes trips the circuit breaker on the Nth failure; 1 means one
+            # total attempt and zero automatic retries.
+            "--max-retries",
+            "1",
             "--created-by",
             "zoe-bridge",
             "--body",

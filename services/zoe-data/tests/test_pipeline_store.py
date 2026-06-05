@@ -60,6 +60,42 @@ def test_pipeline_summary_needs_split_requires_blocked_status(isolated_store):
     assert summary["needs_split"] is False
 
 
+def test_resume_pipeline_can_reset_false_duplicate_fingerprint(isolated_store):
+    from pipeline_evidence import TransitionRecord
+
+    state = PipelineState(
+        task_ref="multica:false-duplicate",
+        phase="implement",
+        status="blocked",
+        last_block_fingerprint="abc123",
+        repeated_block_count=2,
+        history=[
+            TransitionRecord(
+                from_phase="implement",
+                to_phase="implement",
+                outcome="block",
+                reason="fingerprint_abort:abc123",
+            )
+        ],
+    )
+    store.save_state(state, event="fingerprint_abort")
+
+    resumed = store.resume_pipeline(
+        "multica:false-duplicate",
+        reason="duplicate poll guard deployed",
+        reset_fingerprint=True,
+    )
+
+    assert resumed.status == "todo"
+    assert resumed.last_block_fingerprint is None
+    assert resumed.repeated_block_count == 0
+    assert not any(
+        (record.reason or "").startswith("fingerprint_abort:")
+        for record in resumed.history
+    )
+    assert store.pipeline_summary(resumed)["terminal_block"] is False
+
+
 @pytest.mark.asyncio
 async def test_sync_pipeline_advances_on_complete_handoff(isolated_store):
     await store.bootstrap_state("multica:sync")
@@ -191,7 +227,7 @@ async def test_sync_pipeline_does_not_recover_mixed_protocol_and_real_block(isol
 
 
 @pytest.mark.asyncio
-async def test_sync_pipeline_fingerprint_abort(isolated_store):
+async def test_sync_pipeline_blocked_poll_is_idempotent(isolated_store):
     await store.bootstrap_state("multica:fp")
 
     async def fetch_detail(_task_id: str):
@@ -204,6 +240,23 @@ async def test_sync_pipeline_fingerprint_abort(isolated_store):
 
     state = await store.sync_pipeline_from_chain("multica:fp", phases, fetch_detail)
     assert state.status == "blocked"
+    assert state.repeated_block_count == 1
+    assert "fingerprint_abort" not in isolated_store.read_text(encoding="utf-8")
+
+@pytest.mark.asyncio
+async def test_sync_pipeline_fingerprint_abort_after_two_real_attempts(isolated_store):
+    await store.bootstrap_state("multica:fp-repeat")
+
+    async def fetch_detail(_task_id: str):
+        return {"latest_summary": "BLOCKER=WORKTREE_NOT_READY", "comments": []}
+
+    phases = {"implement": {"id": "t1", "status": "blocked", "block_reason": "WORKTREE_NOT_READY"}}
+    await store.sync_pipeline_from_chain("multica:fp-repeat", phases, fetch_detail)
+    resumed = store.resume_pipeline("multica:fp-repeat", reason="retry after repair")
+    assert resumed.status == "todo"
+    assert resumed.repeated_block_count == 1
+
+    state = await store.sync_pipeline_from_chain("multica:fp-repeat", phases, fetch_detail)
     assert any("fingerprint_abort" in (rec.reason or "") for rec in state.history)
     assert any("fingerprint_abort" in line for line in isolated_store.read_text(encoding="utf-8").splitlines())
 
@@ -223,6 +276,8 @@ async def test_sync_pipeline_fingerprint_abort_creates_split_packet_for_protocol
         }
     }
     await store.sync_pipeline_from_chain("multica:hard", phases, fetch_detail)
+    resumed = store.resume_pipeline("multica:hard", reason="retry after prompt repair")
+    assert resumed.repeated_block_count == 1
     state = await store.sync_pipeline_from_chain("multica:hard", phases, fetch_detail)
     summary = store.pipeline_summary(state)
 
