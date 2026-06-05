@@ -516,13 +516,20 @@ async def lifespan(app: FastAPI):
                     in_progress_issues,
                     in_review_issues,
                 )
-                for issue in issues or []:
+                in_review_ids = {
+                    str(issue.get("id") or "")
+                    for issue in in_review_issues
+                    if issue.get("id")
+                }
+                for issue in issues:
                     # Check whether a linked engineering workflow has reached a terminal state.
                     issue_id = issue.get("id")
                     title = issue.get("title", "")
                     if not issue_id:
                         continue
                     if title.startswith("Autopilot:"):
+                        if str(issue_id) in in_review_ids:
+                            continue
                         try:
                             import datetime as _dt
 
@@ -538,8 +545,9 @@ async def lifespan(app: FastAPI):
                             if _age_h >= 2:
                                 await client.update_issue(issue_id, status="done")
                                 logger.info(
-                                    "multica_poll: closed stale in_progress autopilot '%s'",
+                                    "multica_poll: closed stale autopilot '%s' (was %s)",
                                     title[:50],
+                                    issue.get("status", "in_progress"),
                                 )
                         except Exception as _ap_exc:
                             logger.debug("multica_poll: autopilot in_progress close: %s", _ap_exc)
