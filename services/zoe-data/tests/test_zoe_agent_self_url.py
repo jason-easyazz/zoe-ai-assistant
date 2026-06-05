@@ -4,12 +4,13 @@ import ast
 from pathlib import Path
 
 
-AGENT_PATH = Path(__file__).resolve().parents[1] / "zoe_agent.py"
 LOCAL_URL = "http://localhost:8000"
 
 
 def test_localhost_default_only_exists_in_zoe_base_url() -> None:
-    tree = ast.parse(AGENT_PATH.read_text(encoding="utf-8"))
+    agent_path = Path(__file__).resolve().parents[1] / "zoe_agent.py"
+    assert agent_path.is_file(), f"Zoe agent source not found: {agent_path}"
+    tree = ast.parse(agent_path.read_text(encoding="utf-8"))
     helper = next(
         (
             node
