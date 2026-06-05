@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from hermes_http import hermes_bin, zoe_repo_root
+from kanban_phase_budget import phase_budget_reason, terminate_running_workers
 
 logger = logging.getLogger(__name__)
 
@@ -486,7 +487,7 @@ class KanbanAdapter:
             " completion reason, then `kanban_complete`; do not wait for Greptile.\n"
             "- If a code task has no PR, leave the issue blocked — do NOT open one yourself.\n"
             "- COST/ITERATION FAST PATH: after extracting N, make the first repository command:\n"
-            "    python3 scripts/maintenance/greploop_guard.py --pr N --merge-when-ready\n"
+            "    scripts/maintenance/run_greploop_guard.sh --pr N --merge-when-ready\n"
             "  If it reports ok=true, hand off and `kanban_complete` immediately. Do not run broad git"
             " log/show/diff, worktree inventories, duplicate `gh pr view`, or separate comment queries"
             " before this guard; it is the source of truth for Greptile, threads, CI, and merge state.\n"
@@ -497,7 +498,7 @@ class KanbanAdapter:
             " merge-ready — merge when gates pass.\n"
             "- Drive the Greptile grep loop with the pinned github-greptile-loop skill (guard REQUIRES --pr N;"
             " <=5 rounds, target confidence 5). Each round:\n"
-            "    python3 scripts/maintenance/greploop_guard.py --pr N --once\n"
+            "    scripts/maintenance/run_greploop_guard.sh --pr N --once\n"
             "  Apply fixes yourself when the guard returns ESCALATE_HERMES or PACKET_READY; use --packet-only"
             " only to hand off to a cheap Cursor runner.\n"
             "  Re-trigger review when needed via"
@@ -505,7 +506,7 @@ class KanbanAdapter:
             " (operator-local binary; override with GREPTILE_MCP_BIN).\n"
             "- When Greptile is clear (confidence 5/5, no unaddressed findings) and CI is green, squash-merge"
             " via normal GitHub (never --admin, never force, never --no-verify):\n"
-            "    python3 scripts/maintenance/greploop_guard.py --pr N --merge-when-ready\n"
+            "    scripts/maintenance/run_greploop_guard.sh --pr N --merge-when-ready\n"
             "  Or one iteration then merge: --once --merge-when-ready\n"
             "  If branch protection blocks merge, leave the issue blocked with the gh error — do not admin-merge.\n"
             "- After a successful merge: report PR_URL, merge SHA, GREPTILE status, and summary in your"
@@ -552,6 +553,36 @@ class KanbanAdapter:
             phase,
             violations,
         )
+        return True
+
+    async def _maybe_auto_block_phase_budget(
+        self,
+        task_id: str,
+        phase: str,
+        row: dict[str, Any],
+        detail: dict[str, Any],
+    ) -> bool:
+        """Stop a running worker when its code-enforced phase budget is exhausted."""
+        status = (row.get("status") or "").lower()
+        if status in _TERMINAL_KANBAN_STATUSES or status == "blocked":
+            return False
+        reason = phase_budget_reason(task_id, phase, detail)
+        if not reason:
+            return False
+        try:
+            await self._run(["block", task_id, reason])
+        except KanbanCLIError as exc:
+            logger.warning(
+                "kanban_adapter: budget auto-block failed for %s (%s): %s",
+                task_id,
+                phase,
+                exc,
+            )
+            return False
+        terminate_running_workers(detail)
+        row["status"] = "blocked"
+        row["block_reason"] = reason
+        logger.warning("kanban_adapter: stopped %s (%s): %s", task_id, phase, reason)
         return True
 
     async def dispatch(self, issue: dict) -> dict:
@@ -748,6 +779,9 @@ class KanbanAdapter:
                 logger.debug("kanban_adapter: show failed for %s: %s", task_id, exc)
                 continue
             detail_cache[task_id] = detail
+            if await self._maybe_auto_block_phase_budget(task_id, phase, row, detail):
+                phases[phase] = row
+                continue
             if await self._maybe_auto_block_protocol_violation(task_id, phase, row, detail):
                 phases[phase] = row
 
