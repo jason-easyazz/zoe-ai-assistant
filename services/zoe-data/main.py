@@ -397,6 +397,7 @@ async def lifespan(app: FastAPI):
                 # Fast-path: auto-close stale autopilot tracker todos (no agent needed)
                 stale_todos = await client.list_issues(status="todo")
                 _now_ts = _t.time()
+                _closed_stale_ids: set[str] = set()
                 for _stale in stale_todos or []:
                     _stale_title = _stale.get("title", "")
                     _stale_id = _stale.get("id")
@@ -410,9 +411,16 @@ async def lifespan(app: FastAPI):
                         )).total_seconds() / 3600
                         if _age_h >= 2:
                             await client.update_issue(_stale_id, status="done")
+                            _closed_stale_ids.add(str(_stale_id))
                             logger.info("multica_poll: auto-closed stale todo '%s'", _stale_title[:50])
                     except Exception as _se:
                         logger.debug("multica_poll: stale-todo close error: %s", _se)
+                if _closed_stale_ids:
+                    stale_todos = [
+                        issue
+                        for issue in stale_todos
+                        if str(issue.get("id") or "") not in _closed_stale_ids
+                    ]
 
                 in_progress_issues = await client.list_issues(status="in_progress") or []
                 in_review_issues = await client.list_issues(status="in_review") or []

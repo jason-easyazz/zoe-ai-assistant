@@ -28,12 +28,18 @@ def parse_phased_title(title: str) -> tuple[str, int] | None:
     return None
 
 
-def ticket_is_dispatch_approved(issue: dict[str, Any], *, hermes_agent_id: str) -> bool:
+def ticket_is_dispatch_approved(
+    issue: dict[str, Any],
+    *,
+    hermes_agent_id: str,
+    metadata: dict[str, Any] | None = None,
+) -> bool:
     if str(issue.get("assignee_id") or "") != str(hermes_agent_id):
         return False
     if str(issue.get("assignee_type") or "agent") not in {"", "agent"}:
         return False
-    metadata = parse_ticket_block(issue.get("description") or "")
+    if metadata is None:
+        metadata = parse_ticket_block(issue.get("description") or "")
     if metadata.get("schema") != 1 or metadata.get("parse_error"):
         return False
     if metadata.get("dispatch_approved") is not True:
@@ -77,21 +83,25 @@ def select_next_approved_issue(
         if parsed:
             by_sequence[parsed[0]].append(issue)
 
-    eligible = [
-        issue
-        for issue in backlog
-        if ticket_is_dispatch_approved(issue, hermes_agent_id=hermes_agent_id)
-    ]
+    eligible: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for issue in backlog:
+        metadata = parse_ticket_block(issue.get("description") or "")
+        if ticket_is_dispatch_approved(
+            issue,
+            hermes_agent_id=hermes_agent_id,
+            metadata=metadata,
+        ):
+            eligible.append((issue, metadata))
     eligible.sort(
-        key=lambda issue: (
-            int(parse_ticket_block(issue.get("description") or "").get("queue_order") or 1_000_000),
-            _PRIORITY.get(str(issue.get("priority") or "none").lower(), 4),
-            str(issue.get("identifier") or issue.get("id") or ""),
+        key=lambda item: (
+            int(item[1].get("queue_order") or 1_000_000),
+            _PRIORITY.get(str(item[0].get("priority") or "none").lower(), 4),
+            str(item[0].get("identifier") or item[0].get("id") or ""),
         )
     )
 
     held: list[str] = []
-    for issue in eligible:
+    for issue, _metadata in eligible:
         parsed = parse_phased_title(issue.get("title") or "")
         if parsed and not _predecessors_done(parsed[0], parsed[1], by_sequence):
             held.append(

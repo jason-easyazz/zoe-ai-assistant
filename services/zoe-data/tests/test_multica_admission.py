@@ -1,5 +1,6 @@
 """Tests for safe production backlog admission."""
 
+import multica_admission
 from multica_admission import select_next_approved_issue, ticket_is_dispatch_approved
 from multica_ticket_contract import describe_ticket, parse_ticket_block, write_ticket_block
 
@@ -59,6 +60,29 @@ def test_selects_one_approved_issue_by_queue_order():
 
     assert selected == first
     assert held == []
+
+
+def test_ticket_metadata_is_parsed_once_per_backlog_issue(monkeypatch):
+    first = _issue("ZOE-1", "First fix", dispatch_approved=True, queue_order=1)
+    second = _issue("ZOE-2", "Second fix", dispatch_approved=True, queue_order=2)
+    real_parse = multica_admission.parse_ticket_block
+    calls = 0
+
+    def counting_parse(description):
+        nonlocal calls
+        calls += 1
+        return real_parse(description)
+
+    monkeypatch.setattr(multica_admission, "parse_ticket_block", counting_parse)
+
+    selected, _held = select_next_approved_issue(
+        [second, first],
+        [second, first],
+        hermes_agent_id=HERMES,
+    )
+
+    assert selected == first
+    assert calls == 2
 
 
 def test_phased_ticket_waits_for_predecessor():
