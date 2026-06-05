@@ -137,16 +137,13 @@ def _timestamp(value: Any) -> float | None:
 
 def _started_timestamp(detail: dict[str, Any]) -> float | None:
     task = detail.get("task") if isinstance(detail.get("task"), dict) else {}
-    timestamps = [
-        timestamp
-        for run in detail.get("runs") or []
-        if isinstance(run, dict)
-        and (timestamp := _timestamp(run.get("started_at"))) is not None
-    ]
-    task_timestamp = _timestamp(task.get("started_at"))
-    if task_timestamp is not None:
-        timestamps.append(task_timestamp)
-    return max(timestamps) if timestamps else None
+    for run in reversed(detail.get("runs") or []):
+        if not isinstance(run, dict):
+            continue
+        timestamp = _timestamp(run.get("started_at"))
+        if timestamp is not None:
+            return timestamp
+    return _timestamp(task.get("started_at"))
 
 
 def phase_budget_reason(

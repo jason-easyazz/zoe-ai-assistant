@@ -1023,7 +1023,7 @@ def test_latest_attempt_timestamp_wins_before_run_reaches_running():
     detail = {
         "task": {"started_at": 100},
         "runs": [
-            {"status": "blocked", "started_at": 100},
+            {"status": "blocked", "started_at": 300},
             {"status": "claimed", "started_at": 200},
         ],
     }
