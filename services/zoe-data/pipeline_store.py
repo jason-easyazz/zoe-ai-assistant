@@ -40,6 +40,10 @@ _LOCK = threading.Lock()
 _TERMINAL = {"done", "archived", "blocked"}
 
 
+class PipelineStateConflict(RuntimeError):
+    """Raised when a caller tries to persist a stale pipeline mutation."""
+
+
 def store_path() -> Path:
     override = os.environ.get("ZOE_PIPELINE_STORE_PATH", "").strip()
     if override:
@@ -49,18 +53,6 @@ def store_path() -> Path:
 
 def _ensure_parent(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-
-
-def append_record(record: dict[str, Any]) -> None:
-    path = store_path()
-    with _LOCK:
-        _ensure_parent(path)
-        with path.open("a", encoding="utf-8") as handle:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-            try:
-                handle.write(json.dumps(record, sort_keys=True) + "\n")
-            finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _latest_state_from_lines(lines: list[str], task_ref: str) -> PipelineState | None:
@@ -97,7 +89,13 @@ async def _run_io(func, *args):
     return await loop.run_in_executor(None, func, *args)
 
 
-def save_state(state: PipelineState, *, event: str, extra: dict[str, Any] | None = None) -> PipelineState:
+def save_state(
+    state: PipelineState,
+    *,
+    event: str,
+    extra: dict[str, Any] | None = None,
+    allow_stale_evidence_merge: bool = False,
+) -> PipelineState:
     path = store_path()
     with _LOCK:
         _ensure_parent(path)
@@ -112,6 +110,12 @@ def save_state(state: PipelineState, *, event: str, extra: dict[str, Any] | None
                 incoming_is_stale = bool(
                     latest and state.journal_revision < latest.journal_revision
                 )
+                if incoming_is_stale and not allow_stale_evidence_merge:
+                    raise PipelineStateConflict(
+                        f"stale pipeline state for {state.task_ref}: "
+                        f"incoming revision {state.journal_revision}, "
+                        f"latest revision {latest.journal_revision}"
+                    )
                 base_state = latest if incoming_is_stale and latest else state
                 if latest:
                     evidence_by_key = {
@@ -180,38 +184,44 @@ def resume_pipeline(
     reset_fingerprint: bool = False,
 ) -> PipelineState:
     """Journal an explicit retry of a blocked phase without erasing prior evidence."""
-    state = load_latest_state(task_ref)
-    if state is None:
-        raise ValueError(f"pipeline not found: {task_ref}")
-    if state.status != "blocked":
-        raise ValueError(f"pipeline is not blocked: {task_ref} ({state.status})")
-    resumed = state.model_copy(
-        update={
-            "status": "todo",
-            "last_block_fingerprint": None if reset_fingerprint else state.last_block_fingerprint,
-            "repeated_block_count": 0 if reset_fingerprint else state.repeated_block_count,
-            "block_classification": None,
-            "split_packet": None,
-            "history": (
-                [
-                    record
-                    for record in state.history
-                    if not (record.reason or "").startswith("fingerprint_abort:")
-                ]
-                if reset_fingerprint
-                else state.history
-            ),
-        }
-    )
-    return save_state(
-        resumed,
-        event="operator_resumed",
-        extra={
-            "reason": reason,
-            "phase": resumed.phase,
-            "reset_fingerprint": reset_fingerprint,
-        },
-    )
+    for attempt in range(2):
+        state = load_latest_state(task_ref)
+        if state is None:
+            raise ValueError(f"pipeline not found: {task_ref}")
+        if state.status != "blocked":
+            raise ValueError(f"pipeline is not blocked: {task_ref} ({state.status})")
+        resumed = state.model_copy(
+            update={
+                "status": "todo",
+                "last_block_fingerprint": None if reset_fingerprint else state.last_block_fingerprint,
+                "repeated_block_count": 0 if reset_fingerprint else state.repeated_block_count,
+                "block_classification": None,
+                "split_packet": None,
+                "history": (
+                    [
+                        record
+                        for record in state.history
+                        if not (record.reason or "").startswith("fingerprint_abort:")
+                    ]
+                    if reset_fingerprint
+                    else state.history
+                ),
+            }
+        )
+        try:
+            return save_state(
+                resumed,
+                event="operator_resumed",
+                extra={
+                    "reason": reason,
+                    "phase": resumed.phase,
+                    "reset_fingerprint": reset_fingerprint,
+                },
+            )
+        except PipelineStateConflict:
+            if attempt:
+                raise
+    raise AssertionError("unreachable")
 
 
 def skip_blocked_implementation(
@@ -220,32 +230,38 @@ def skip_blocked_implementation(
     reason: str,
 ) -> PipelineState:
     """Journal an operator-confirmed no-code recovery into verification."""
-    state = load_latest_state(task_ref)
-    if state is None:
-        raise ValueError(f"pipeline not found: {task_ref}")
-    if state.phase != "implement" or state.status != "blocked":
-        raise ValueError(
-            f"pipeline is not a blocked implementation: {task_ref} "
-            f"({state.phase}/{state.status})"
+    for attempt in range(2):
+        state = load_latest_state(task_ref)
+        if state is None:
+            raise ValueError(f"pipeline not found: {task_ref}")
+        if state.phase != "implement" or state.status != "blocked":
+            raise ValueError(
+                f"pipeline is not a blocked implementation: {task_ref} "
+                f"({state.phase}/{state.status})"
+            )
+        if not any(item.kind == "tool" and item.passed is True for item in state.evidence):
+            raise ValueError(
+                f"pipeline lacks passed scout/tool evidence required for a no-code skip: {task_ref}"
+            )
+        skipped = transition(state, "skip_implementation", reason=reason)
+        skipped = skipped.model_copy(
+            update={
+                "last_block_fingerprint": None,
+                "repeated_block_count": 0,
+                "block_classification": None,
+                "split_packet": None,
+            }
         )
-    if not any(item.kind == "tool" and item.passed is True for item in state.evidence):
-        raise ValueError(
-            f"pipeline lacks passed scout/tool evidence required for a no-code skip: {task_ref}"
-        )
-    skipped = transition(state, "skip_implementation", reason=reason)
-    skipped = skipped.model_copy(
-        update={
-            "last_block_fingerprint": None,
-            "repeated_block_count": 0,
-            "block_classification": None,
-            "split_packet": None,
-        }
-    )
-    return save_state(
-        skipped,
-        event="operator_skipped_implementation",
-        extra={"reason": reason, "from_phase": "implement", "to_phase": "verify"},
-    )
+        try:
+            return save_state(
+                skipped,
+                event="operator_skipped_implementation",
+                extra={"reason": reason, "from_phase": "implement", "to_phase": "verify"},
+            )
+        except PipelineStateConflict:
+            if attempt:
+                raise
+    raise AssertionError("unreachable")
 
 
 async def _append_harness_validators(state: PipelineState, phase: PipelinePhase) -> PipelineState:
@@ -555,6 +571,7 @@ async def sync_pipeline_from_chain(
                     state,
                     event="gate_blocked",
                     extra=extra,
+                    allow_stale_evidence_merge=True,
                 )
             )
             return state

@@ -49,7 +49,12 @@ def test_stale_save_preserves_concurrently_written_evidence(isolated_store):
         ),
     )
     store.save_state(current, event="evidence_human")
-    store.save_state(stale, event="gate_blocked", extra={"missing": ["human"]})
+    store.save_state(
+        stale,
+        event="gate_blocked",
+        extra={"missing": ["human"]},
+        allow_stale_evidence_merge=True,
+    )
 
     reloaded = store.load_latest_state(state.task_ref)
     assert reloaded is not None
@@ -75,12 +80,53 @@ def test_stale_save_cannot_regress_pipeline_phase(isolated_store):
 
     advanced = initial.model_copy(update={"phase": "closeout", "status": "todo"})
     advanced = store.save_state(advanced, event="transition")
-    persisted = store.save_state(stale, event="gate_blocked")
+    persisted = store.save_state(
+        stale,
+        event="gate_blocked",
+        allow_stale_evidence_merge=True,
+    )
 
     assert advanced.journal_revision == 2
     assert persisted.phase == "closeout"
     assert persisted.status == "todo"
     assert persisted.journal_revision == 3
+
+
+def test_stale_mutation_raises_conflict(isolated_store):
+    initial = store.save_state(
+        PipelineState(task_ref="multica:stale-mutation", status="blocked"),
+        event="blocked",
+    )
+    store.save_state(
+        initial.model_copy(update={"block_classification": "external"}),
+        event="classified",
+    )
+
+    with pytest.raises(store.PipelineStateConflict, match="stale pipeline state"):
+        store.save_state(
+            initial.model_copy(update={"status": "todo"}),
+            event="operator_resumed",
+        )
+
+
+def test_resume_pipeline_retries_after_conflict(isolated_store, monkeypatch):
+    state = PipelineState(task_ref="multica:resume-race", status="blocked")
+    store.save_state(state, event="blocked")
+    original_save = store.save_state
+    calls = 0
+
+    def conflict_once(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise store.PipelineStateConflict("simulated race")
+        return original_save(*args, **kwargs)
+
+    monkeypatch.setattr(store, "save_state", conflict_once)
+    resumed = store.resume_pipeline("multica:resume-race")
+
+    assert calls == 2
+    assert resumed.status == "todo"
 
 
 def test_concurrent_evidence_merge_deduplicates_created_at_only(isolated_store):
