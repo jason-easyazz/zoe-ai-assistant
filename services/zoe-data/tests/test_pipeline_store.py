@@ -122,6 +122,7 @@ def test_skip_blocked_implementation_moves_to_verify(isolated_store):
 
     assert skipped.phase == "verify"
     assert skipped.status == "todo"
+    assert skipped.evidence_profile == "audit"
     assert skipped.last_block_fingerprint is None
     assert skipped.repeated_block_count == 0
     assert skipped.block_classification is None
@@ -193,6 +194,7 @@ async def test_sync_pipeline_skips_implementation_when_scout_marks_it_unneeded(i
 
     assert state.phase == "verify"
     assert state.status == "todo"
+    assert state.evidence_profile == "audit"
     assert state.history[-1].outcome == "skip_implementation"
     assert state.history[-1].reason == "scout proved implementation not required"
 

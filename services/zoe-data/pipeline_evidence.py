@@ -354,6 +354,14 @@ def transition(state: PipelineState, outcome: TransitionOutcome, *, reason: str 
         TransitionRecord(from_phase=state.phase, to_phase=next_phase, outcome=outcome, reason=reason),
     ]
     evidence = [] if outcome in {"request_changes", "verification_failed"} else state.evidence
+    evidence_profile = "audit" if outcome == "skip_implementation" else state.evidence_profile
     return state.model_copy(
-        update={"phase": next_phase, "status": next_status, "attempts": attempts, "evidence": evidence, "history": history}
+        update={
+            "phase": next_phase,
+            "status": next_status,
+            "attempts": attempts,
+            "evidence": evidence,
+            "evidence_profile": evidence_profile,
+            "history": history,
+        }
     )
