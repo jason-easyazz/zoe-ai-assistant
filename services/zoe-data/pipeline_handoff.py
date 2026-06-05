@@ -364,7 +364,7 @@ def evidence_from_handoff(
     skills: tuple[str, ...] | list[str] = (),
 ) -> list[EvidenceItem]:
     """Best-effort extraction of structured evidence from a Kanban task show payload."""
-    fields = _structured_handoff_fields(detail)
+    fields = _structured_handoff_fields(detail) if phase == "retro" else {}
     for chunk in _haystacks(detail):
         fields.update(_parse_kv_fields(chunk))
 
