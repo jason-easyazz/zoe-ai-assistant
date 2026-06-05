@@ -1103,6 +1103,26 @@ async def test_poll_does_not_apply_previous_attempt_budget_to_ready_task(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_poll_does_not_apply_previous_protocol_violations_to_ready_task(monkeypatch):
+    monkeypatch.setattr(ka, "_PROTOCOL_VIOLATION_LIMIT", 2)
+    rows = [_row("scout", "ready")]
+    show = {
+        "t_scout": {
+            "events": [
+                {"kind": "protocol_violation", "payload": {"exit_code": 0}},
+                {"kind": "protocol_violation", "payload": {"exit_code": 0}},
+            ]
+        }
+    }
+    a = _FakeAdapter(list_rows=rows, show_map=show)
+
+    out = await a.poll("multica:uuid-9")
+
+    assert out["status"] == "partial"
+    assert not any(call[0] == "block" for call in a.calls)
+
+
+@pytest.mark.asyncio
 async def test_poll_auto_blocks_after_protocol_violations(monkeypatch):
     monkeypatch.setattr(ka, "_PROTOCOL_VIOLATION_LIMIT", 2)
     rows = [_row("implement", "running")]

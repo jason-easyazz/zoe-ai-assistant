@@ -526,7 +526,7 @@ class KanbanAdapter:
     ) -> bool:
         """Block a task after repeated Hermes protocol violations (silent worker exit)."""
         status = (row.get("status") or "").lower()
-        if status in _TERMINAL_KANBAN_STATUSES or status == "blocked":
+        if status != "running":
             return False
         violations = _protocol_violation_count(detail)
         if violations < _PROTOCOL_VIOLATION_LIMIT:
