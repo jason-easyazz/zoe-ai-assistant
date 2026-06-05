@@ -89,6 +89,7 @@ jobs:
             services/zoe-data/tests/test_ui_orchestrator_types.py \
             services/zoe-data/tests/test_greptile_client.py \
             services/zoe-data/tests/test_greploop_guard.py \
+            services/zoe-data/tests/test_zoe_agent_self_url.py \
             -x -q \
             --override-ini="asyncio_mode=auto"
           PYTHONPATH="${{ github.workspace }}/services/zoe-auth:${{ github.workspace }}/services/zoe-auth/tests" pytest \
