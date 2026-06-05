@@ -51,7 +51,7 @@ class MulticaBoardWidget extends WidgetModule {
             if (content) content.classList.remove('loading-widget');
 
             if (!data.available) {
-                if (content) content.innerHTML = `<div style="text-align:center;color:#888;font-style:italic;font-size:13px;">Tickets unavailable<br><small>${data.reason || ''}</small></div>`;
+                if (content) content.innerHTML = `<div style="text-align:center;color:#888;font-style:italic;font-size:13px;">Tickets unavailable<br><small>${this._esc(data.reason || '')}</small></div>`;
                 if (badge) badge.textContent = '0';
                 return;
             }
@@ -82,7 +82,7 @@ class MulticaBoardWidget extends WidgetModule {
                     const statusColor = statusColors[status] || '#94a3b8';
                     const phase = issue.phase || (issue.chain && issue.chain.pipeline && issue.chain.pipeline.phase) || '';
                     const blocker = issue.blocker || '';
-                    const prUrl = issue.pr_url || '';
+                    const prUrl = this._safeHttpUrl(issue.pr_url);
                     const childCount = Number(issue.child_count || 0);
                     return `
                         <div style="padding:10px 12px;border-radius:8px;margin-bottom:6px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);">
@@ -114,6 +114,15 @@ class MulticaBoardWidget extends WidgetModule {
             .replace(/</g, '&lt;')
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;');
+    }
+
+    _safeHttpUrl(value) {
+        try {
+            const url = new URL(String(value || ''), window.location.origin);
+            return ['http:', 'https:'].includes(url.protocol) ? url.href : '';
+        } catch (_error) {
+            return '';
+        }
     }
 }
 

@@ -1528,7 +1528,7 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
                 board = resp.json()
 
             available = board.get("available", False)
-            active = board.get("active", [])
+            groups = board.get("groups") or {}
 
             if not available:
                 reason = board.get("reason", "Multica not configured")
@@ -1540,15 +1540,36 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
                     "will appear here for your approval."
                 )
 
-            if not active:
-                return ("**Multica Board** — nothing active right now.\n\n"
-                        "Ask me to build something (a widget, a page, a new skill) and I'll "
-                        "create a board item for your approval before starting.")
+            ordered_statuses = ("blocked", "in_progress", "in_review", "todo", "backlog")
+            open_items = [
+                (status, item)
+                for status in ordered_statuses
+                for item in groups.get(status, [])
+            ]
+            if not open_items:
+                return (
+                    "**Multica Tickets** — nothing open right now.\n\n"
+                    "New requests are captured in Multica and wait for approval before entering "
+                    "the one-ticket engineering lane."
+                )
 
-            lines = [f"**Multica Board** — {len(active)} active item(s):\n"]
-            for item in active[:5]:
-                lines.append(f"- **{item.get('title','?')}** — `{item.get('status','?')}` "
-                              f"| {item.get('description','')[:60]}")
+            lines = [f"**Multica Tickets** — {len(open_items)} open item(s):\n"]
+            for status, item in open_items[:10]:
+                metadata = [
+                    value
+                    for value in (
+                        f"phase: {item.get('phase')}" if item.get("phase") else "",
+                        f"blocked: {item.get('blocker')}" if item.get("blocker") else "",
+                        f"children: {item.get('child_count')}" if item.get("child_count") else "",
+                        f"PR: {item.get('pr_url')}" if item.get("pr_url") else "",
+                    )
+                    if value
+                ]
+                suffix = f" | {' | '.join(metadata)}" if metadata else ""
+                lines.append(
+                    f"- `{item.get('identifier') or item.get('id')}` "
+                    f"**{item.get('title', '?')}** — `{status}`{suffix}"
+                )
             return "\n".join(lines)
         except Exception as exc:
             logger.warning("board_status: %s", exc)
