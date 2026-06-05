@@ -54,10 +54,20 @@ def tool_step_count(task_id: str) -> int:
         lines = _log_path(task_id).read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return 0
+    query_starts = [index for index, line in enumerate(lines) if line.startswith("Query:")]
+    if query_starts:
+        lines = lines[query_starts[-1]:]
     count = sum(1 for line in lines if _STEP_LINE_RE.match(line))
     if not count:
         count = sum(1 for line in lines if _FALLBACK_STEP_RE.match(line))
-    if not count and lines and task_id not in _ZERO_STEP_WARNED:
+    unparsed_activity = any(
+        line.strip()
+        and not line.startswith("Query:")
+        and "Initializing agent" not in line
+        and not set(line.strip()) <= {"─"}
+        for line in lines
+    )
+    if not count and unparsed_activity and task_id not in _ZERO_STEP_WARNED:
         _ZERO_STEP_WARNED.add(task_id)
         logger.warning(
             "kanban_phase_budget: could not identify tool steps in non-empty log for %s",
