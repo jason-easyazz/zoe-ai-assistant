@@ -433,6 +433,35 @@ async def lifespan(app: FastAPI):
                             _wh_limit = int(os.environ.get("ZOE_MULTICA_POLL_DISPATCH_LIMIT", "1") or "1")
                         except ValueError:
                             _wh_limit = 1
+                        if (
+                            _wh_limit > 0
+                            and os.environ.get("ZOE_MULTICA_AUTO_ADMIT", "false").lower() == "true"
+                            and not stale_todos
+                            and not in_progress_issues
+                            and not in_review_issues
+                        ):
+                            from multica_admission import select_next_approved_issue
+
+                            _backlog = await client.list_issues(status="backlog") or []
+                            _all_issues = await client.list_issues() or []
+                            _admitted, _held = select_next_approved_issue(
+                                _backlog,
+                                _all_issues,
+                                hermes_agent_id=_hermes,
+                            )
+                            for _reason in _held:
+                                logger.info("multica_poll: admission held %s", _reason)
+                            if _admitted and _admitted.get("id"):
+                                _admitted = await client.update_issue(
+                                    str(_admitted["id"]),
+                                    status="todo",
+                                )
+                                if _admitted.get("id"):
+                                    stale_todos.append(_admitted)
+                                    logger.info(
+                                        "multica_poll: admitted %s from backlog into the single ticket lane",
+                                        _admitted.get("identifier") or _admitted.get("id"),
+                                    )
                         _chain_cache: dict[str, dict] = {}
 
                         async def _poll_chain(_tid: str) -> dict:
