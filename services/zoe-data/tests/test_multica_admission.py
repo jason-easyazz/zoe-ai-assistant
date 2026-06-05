@@ -85,6 +85,32 @@ def test_ticket_metadata_is_parsed_once_per_backlog_issue(monkeypatch):
     assert calls == 2
 
 
+def test_malformed_queue_order_cannot_wedge_admission():
+    malformed = _issue("ZOE-1", "Malformed", dispatch_approved=True, queue_order="soon")
+    ordered = _issue("ZOE-2", "Ordered", dispatch_approved=True, queue_order=2)
+
+    selected, _held = select_next_approved_issue(
+        [malformed, ordered],
+        [malformed, ordered],
+        hermes_agent_id=HERMES,
+    )
+
+    assert selected == ordered
+
+
+def test_zero_queue_order_is_highest_priority():
+    later = _issue("ZOE-2", "Later", dispatch_approved=True, queue_order=1)
+    first = _issue("ZOE-1", "First", dispatch_approved=True, queue_order=0)
+
+    selected, _held = select_next_approved_issue(
+        [later, first],
+        [later, first],
+        hermes_agent_id=HERMES,
+    )
+
+    assert selected == first
+
+
 def test_phased_ticket_waits_for_predecessor():
     phase_one = _issue(
         "ZOE-1",

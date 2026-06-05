@@ -14,6 +14,13 @@ _GENERIC_PHASE_RE = re.compile(r"(?i)^([\w][\w-]*)\s*:\s*phase\s*(\d+)")
 _PRIORITY = {"urgent": 0, "high": 1, "medium": 2, "low": 3, "none": 4}
 
 
+def _queue_position(value: Any) -> int:
+    try:
+        return int(value) if value is not None else 1_000_000
+    except (TypeError, ValueError):
+        return 1_000_000
+
+
 def parse_phased_title(title: str) -> tuple[str, int] | None:
     text = (title or "").strip()
     match = _CARD_UPGRADE_RE.match(text)
@@ -94,7 +101,7 @@ def select_next_approved_issue(
             eligible.append((issue, metadata))
     eligible.sort(
         key=lambda item: (
-            int(item[1].get("queue_order") or 1_000_000),
+            _queue_position(item[1].get("queue_order")),
             _PRIORITY.get(str(item[0].get("priority") or "none").lower(), 4),
             str(item[0].get("identifier") or item[0].get("id") or ""),
         )
