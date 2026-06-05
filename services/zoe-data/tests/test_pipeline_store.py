@@ -98,7 +98,7 @@ def test_stale_mutation_raises_conflict(isolated_store):
         event="blocked",
     )
     store.save_state(
-        initial.model_copy(update={"block_classification": "external"}),
+        initial.model_copy(update={"block_classification": "scope_split_required"}),
         event="classified",
     )
 
@@ -156,7 +156,11 @@ def test_concurrent_evidence_merge_deduplicates_created_at_only(isolated_store):
             ]
         }
     )
-    store.save_state(duplicate, event="evidence_human")
+    store.save_state(
+        duplicate,
+        event="evidence_human",
+        allow_stale_evidence_merge=True,
+    )
 
     reloaded = store.load_latest_state(initial.task_ref)
     assert reloaded is not None
