@@ -510,6 +510,7 @@ async def test_review_body_requires_verify_evidence():
     assert "verify-phase evidence" in body
     assert "Block" in body or "block" in body
     assert "pipeline_evidence_commands.py mark-reviewed multica:uuid-1" in body
+    assert "--critical-count <N>" in body
     assert "REVIEW=<approved or blocked>" in body
 
 

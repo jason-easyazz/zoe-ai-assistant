@@ -37,8 +37,10 @@ def test_stale_save_preserves_concurrently_written_evidence(isolated_store):
     stale = store.load_latest_state(state.task_ref)
     assert stale is not None
 
+    current_state = store.load_latest_state(state.task_ref)
+    assert current_state is not None
     current = with_evidence(
-        store.load_latest_state(state.task_ref),
+        current_state,
         EvidenceItem(
             kind="human",
             summary="mechanical review approval",
@@ -57,6 +59,62 @@ def test_stale_save_preserves_concurrently_written_evidence(isolated_store):
         and item.metadata.get("source") == "command"
         for item in reloaded.evidence
     )
+    assert reloaded.journal_revision == 3
+
+
+def test_stale_save_cannot_regress_pipeline_phase(isolated_store):
+    initial = store.save_state(
+        PipelineState(
+            task_ref="multica:concurrent-transition",
+            phase="review",
+            status="running",
+        ),
+        event="effect_requested",
+    )
+    stale = initial.model_copy(deep=True)
+
+    advanced = initial.model_copy(update={"phase": "closeout", "status": "todo"})
+    advanced = store.save_state(advanced, event="transition")
+    persisted = store.save_state(stale, event="gate_blocked")
+
+    assert advanced.journal_revision == 2
+    assert persisted.phase == "closeout"
+    assert persisted.status == "todo"
+    assert persisted.journal_revision == 3
+
+
+def test_concurrent_evidence_merge_deduplicates_created_at_only(isolated_store):
+    initial = store.save_state(
+        PipelineState(task_ref="multica:evidence-dedup"),
+        event="bootstrap",
+    )
+    first = with_evidence(
+        initial,
+        EvidenceItem(
+            kind="human",
+            summary="review approved",
+            passed=True,
+            metadata={"source": "command", "phase": "review"},
+        ),
+    )
+    store.save_state(first, event="evidence_human")
+    duplicate = first.model_copy(
+        update={
+            "evidence": [
+                EvidenceItem(
+                    kind="human",
+                    summary="review approved",
+                    passed=True,
+                    metadata={"source": "command", "phase": "review"},
+                )
+            ]
+        }
+    )
+    store.save_state(duplicate, event="evidence_human")
+
+    reloaded = store.load_latest_state(initial.task_ref)
+    assert reloaded is not None
+    assert len([item for item in reloaded.evidence if item.kind == "human"]) == 1
 
 
 def test_pipeline_summary_reports_missing_evidence(isolated_store):

@@ -109,12 +109,19 @@ def save_state(state: PipelineState, *, event: str, extra: dict[str, Any] | None
                     handle.read().splitlines(),
                     state.task_ref,
                 )
+                incoming_is_stale = bool(
+                    latest and state.journal_revision < latest.journal_revision
+                )
+                base_state = latest if incoming_is_stale and latest else state
                 if latest:
                     evidence_by_key = {
-                        json.dumps(item.model_dump(), sort_keys=True): item
+                        json.dumps(
+                            item.model_dump(exclude={"created_at"}),
+                            sort_keys=True,
+                        ): item
                         for item in [*latest.evidence, *state.evidence]
                     }
-                    state = state.model_copy(
+                    base_state = base_state.model_copy(
                         update={
                             "evidence": sorted(
                                 evidence_by_key.values(),
@@ -122,6 +129,15 @@ def save_state(state: PipelineState, *, event: str, extra: dict[str, Any] | None
                             )
                         }
                     )
+                state = base_state.model_copy(
+                    update={
+                        "journal_revision": (
+                            latest.journal_revision + 1
+                            if latest
+                            else max(1, state.journal_revision)
+                        )
+                    }
+                )
 
                 record: dict[str, Any] = {
                     "event": event,
@@ -154,8 +170,7 @@ async def bootstrap_state(
         phase=start_phase,
         evidence_profile=issue_evidence_profile(issue),
     )
-    await _run_io(partial(save_state, state, event="bootstrap"))
-    return state
+    return await _run_io(partial(save_state, state, event="bootstrap"))
 
 
 def resume_pipeline(
@@ -429,7 +444,7 @@ async def sync_pipeline_from_chain(
         ):
             state = _append_audit_protocol_recovery_evidence(state, phase)  # type: ignore[arg-type]
             if can_complete_phase(state):
-                await _run_io(
+                state = await _run_io(
                     partial(
                         save_state,
                         state,
@@ -466,7 +481,7 @@ async def sync_pipeline_from_chain(
                 state = state.model_copy(
                     update={"block_classification": "scope_split_required", "split_packet": packet}
                 )
-                await _run_io(
+                state = await _run_io(
                     partial(
                         save_state,
                         state,
@@ -481,7 +496,7 @@ async def sync_pipeline_from_chain(
                 )
                 return state
             if split_requested:
-                await _run_io(
+                state = await _run_io(
                     partial(
                         save_state,
                         state,
@@ -509,7 +524,7 @@ async def sync_pipeline_from_chain(
                     state = state.model_copy(
                         update={"block_classification": "scope_split_required", "split_packet": packet}
                     )
-                await _run_io(
+                state = await _run_io(
                     partial(
                         save_state,
                         state,
@@ -534,7 +549,7 @@ async def sync_pipeline_from_chain(
             }
             if state.phase == "verify" and not verify_validator_hash_matches(state):
                 extra["validator_hash_mismatch"] = True
-            await _run_io(
+            state = await _run_io(
                 partial(
                     save_state,
                     state,
@@ -558,7 +573,7 @@ async def sync_pipeline_from_chain(
                 trans_reason = None
             state = transition(state, outcome, reason=trans_reason)  # type: ignore[arg-type]
         except ValueError as exc:
-            await _run_io(
+            state = await _run_io(
                 partial(
                     save_state,
                     state,
@@ -568,7 +583,7 @@ async def sync_pipeline_from_chain(
             )
             return state
 
-        await _run_io(
+        state = await _run_io(
             partial(
                 save_state,
                 state,
