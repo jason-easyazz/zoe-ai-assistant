@@ -22,6 +22,7 @@ EvidenceProfile = Literal["default", "audit", "code", "health"]
 TransitionOutcome = Literal[
     "start",
     "complete",
+    "skip_implementation",
     "block",
     "request_changes",
     "verification_failed",
@@ -334,6 +335,14 @@ def transition(state: PipelineState, outcome: TransitionOutcome, *, reason: str 
         else:
             next_phase = PHASE_ORDER[current_idx + 1]
             next_status = "todo"
+    elif outcome == "skip_implementation":
+        if state.phase not in {"scout", "implement"}:
+            raise ValueError("skip_implementation is only valid from scout or implement")
+        if not can_complete_phase(state):
+            missing = ", ".join(sorted(missing_required_evidence(state)))
+            raise ValueError(f"{state.phase} is missing required evidence: {missing}")
+        next_phase = "verify"
+        next_status = "todo"
     else:
         raise ValueError(f"Unsupported outcome: {outcome}")
 

@@ -167,6 +167,40 @@ def resume_pipeline(
     )
 
 
+def skip_blocked_implementation(
+    task_ref: str,
+    *,
+    reason: str,
+) -> PipelineState:
+    """Journal an operator-confirmed no-code recovery into verification."""
+    state = load_latest_state(task_ref)
+    if state is None:
+        raise ValueError(f"pipeline not found: {task_ref}")
+    if state.phase != "implement" or state.status != "blocked":
+        raise ValueError(
+            f"pipeline is not a blocked implementation: {task_ref} "
+            f"({state.phase}/{state.status})"
+        )
+    if not any(item.kind == "tool" and item.passed is True for item in state.evidence):
+        raise ValueError(
+            f"pipeline lacks passed scout/tool evidence required for a no-code skip: {task_ref}"
+        )
+    skipped = transition(state, "skip_implementation", reason=reason)
+    skipped = skipped.model_copy(
+        update={
+            "last_block_fingerprint": None,
+            "repeated_block_count": 0,
+            "block_classification": None,
+            "split_packet": None,
+        }
+    )
+    return save_state(
+        skipped,
+        event="operator_skipped_implementation",
+        extra={"reason": reason, "from_phase": "implement", "to_phase": "verify"},
+    )
+
+
 async def _append_harness_validators(state: PipelineState, phase: PipelinePhase) -> PipelineState:
     """Run repo validators when handoff lacks them; tag hash with phase."""
     if any(
@@ -300,6 +334,7 @@ async def sync_pipeline_from_chain(
         block_reason_from_handoff,
         evidence_from_handoff,
         infer_outcome,
+        implementation_required_from_handoff,
         split_request_from_handoff,
     )
 
@@ -349,6 +384,12 @@ async def sync_pipeline_from_chain(
         outcome = infer_outcome(phase, row_status, detail)  # type: ignore[arg-type]
         if not outcome:
             continue
+        if (
+            phase == "scout"
+            and outcome == "complete"
+            and implementation_required_from_handoff(detail) is False
+        ):
+            outcome = "skip_implementation"
         if (
             state.evidence_profile == "audit"
             and outcome in {"block", "verification_failed", "request_changes", "merge_blocked"}
@@ -454,7 +495,7 @@ async def sync_pipeline_from_chain(
                 )
                 return state
 
-        if outcome == "complete" and not can_complete_phase(state):
+        if outcome in {"complete", "skip_implementation"} and not can_complete_phase(state):
             extra: dict[str, Any] = {
                 "row_phase": phase,
                 "missing": sorted(missing_required_evidence(state)),
@@ -472,12 +513,17 @@ async def sync_pipeline_from_chain(
             return state
 
         try:
-            trans_reason = block_reason if outcome in {
+            if outcome == "skip_implementation":
+                trans_reason = "scout proved implementation not required"
+            elif outcome in {
                 "block",
                 "verification_failed",
                 "request_changes",
                 "merge_blocked",
-            } else None
+            }:
+                trans_reason = block_reason
+            else:
+                trans_reason = None
             state = transition(state, outcome, reason=trans_reason)  # type: ignore[arg-type]
         except ValueError as exc:
             await _run_io(

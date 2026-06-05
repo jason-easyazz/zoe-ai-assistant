@@ -312,6 +312,23 @@ def audit_only_from_handoff(detail: dict[str, Any]) -> bool:
     return False
 
 
+def implementation_required_from_handoff(detail: dict[str, Any]) -> bool | None:
+    """Return an explicit scout decision about whether code changes are required."""
+    fields: dict[str, str] = {}
+    for chunk in _haystacks(detail):
+        fields.update(_parse_kv_fields(chunk))
+    structured_fields = _structured_handoff_fields(detail)
+    fields.update(structured_fields)
+
+    raw = (fields.get("IMPLEMENTATION_REQUIRED") or "").strip().lower()
+    if raw in {"1", "true", "yes"}:
+        return True
+    if raw in {"0", "false", "no"}:
+        return False
+
+    return None
+
+
 def split_request_from_handoff(detail: dict[str, Any]) -> tuple[bool, dict[str, Any] | None]:
     """Return explicit scope-split request and optional machine packet from handoff text."""
     fields: dict[str, str] = {}
