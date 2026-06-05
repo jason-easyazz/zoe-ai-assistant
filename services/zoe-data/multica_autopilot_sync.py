@@ -52,12 +52,10 @@ _STALE_AUTOPILOT_HOURS = float(
     os.environ.get("ZOE_MULTICA_AUTOPILOT_STALE_HOURS")
     or os.environ.get("ZOE_MULTICA_AUTOPIOT_STALE_HOURS", "2")
 )
-# Dedupe engineering dispatch: the Zoe poll webhook bridge + the hourly Hermes
-# cron (dispatch-hermes-board.sh -> sync_multica_to_kanban.py) are the owners of
-# Hermes-assigned Multica issues. The Multica "Board Review" autopilot would
-# dispatch the same issue pool through the executor seam, so it is disabled by
-# default to avoid duplicate Kanban chains. Set this flag true to restore the
-# autopilot as the engineering dispatcher (e.g. if the cron + poll loop are paused).
+# Dedupe engineering dispatch: Zoe's poll bridge and compatibility sync command
+# share the deterministic driver gate. The Multica "Board Review" autopilot
+# would dispatch the same issue pool through the executor seam, so it remains
+# disabled by default to avoid duplicate phase effects.
 _BOARD_REVIEW_AUTOPILOT_ENABLED = (
     os.environ.get("ZOE_BOARD_REVIEW_AUTOPILOT_ENABLED", "false").lower()
     in ("1", "true", "yes")

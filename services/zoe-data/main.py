@@ -438,7 +438,7 @@ async def lifespan(app: FastAPI):
                         _hermes = str(get_engineering_multica_agent_id())
                         # Throttle first-dispatch: cap new chains per cycle so a
                         # wave of assigned todos can't spawn N concurrent chains
-                        # (mirrors sync_multica_to_kanban --limit / kanban.max_in_progress).
+                        # (mirrors the compatibility sync limit / kanban.max_in_progress).
                         try:
                             _wh_limit = int(os.environ.get("ZOE_MULTICA_POLL_DISPATCH_LIMIT", "1") or "1")
                         except ValueError:

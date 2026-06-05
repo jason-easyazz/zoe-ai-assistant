@@ -90,7 +90,7 @@ def main() -> int:
 
     secret = _ensure_secret(args.dry_run)
     print("MULTICA_WEBHOOK_SECRET is configured.")
-    print("Zoe poll + sync_multica_to_kanban will POST issue.assigned to:")
+    print("Zoe poll + the compatibility sync command will POST issue.assigned to:")
     print(f"  {webhook_target_url()}")
     print("For native Multica push, rebuild multica-backend with zoe_webhook_listener.go and set:")
     print("  ZOE_BOARD_WEBHOOK_URL=http://host.docker.internal:8000/api/agent/board/webhook")

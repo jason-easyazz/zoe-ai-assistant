@@ -1767,7 +1767,7 @@ async def evolution_proposal_action(
                         proposal_id, _dispatch.get("chain") if _dispatch.get("ok") else _dispatch,
                     )
                 else:
-                    # No Multica issue to anchor the Kanban chain (Multica
+                    # No Multica issue to anchor the journaled engineering run (Multica
                     # unconfigured or the issue sync failed). Surface it so the
                     # approved proposal does not sit undispatched silently.
                     _dispatch = {"ok": False, "reason": "no multica_issue_id; proposal approved but not dispatched"}
