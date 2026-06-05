@@ -564,7 +564,7 @@ class KanbanAdapter:
     ) -> bool:
         """Stop a running worker when its code-enforced phase budget is exhausted."""
         status = (row.get("status") or "").lower()
-        if status in _TERMINAL_KANBAN_STATUSES or status == "blocked":
+        if status != "running":
             return False
         reason = phase_budget_reason(task_id, phase, detail)
         if not reason:
