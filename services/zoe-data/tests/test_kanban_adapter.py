@@ -994,6 +994,19 @@ def test_tool_step_count_only_measures_latest_task_run(tmp_path, monkeypatch):
     assert kb.tool_step_count("t_scout") == 2
 
 
+def test_fresh_resumed_run_with_no_steps_does_not_warn(tmp_path, monkeypatch, caplog):
+    log_path = tmp_path / "task.log"
+    log_path.write_text(
+        "Query: work kanban task t_scout\nInitializing agent...\n────────────────\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(kb, "_log_path", lambda _task_id: log_path)
+    kb._ZERO_STEP_WARNED.discard("t_scout")
+
+    assert kb.tool_step_count("t_scout") == 0
+    assert "could not identify tool steps" not in caplog.text
+
+
 def test_running_worker_pids_require_expected_hermes_command(monkeypatch):
     monkeypatch.setattr(kb, "_is_expected_worker", lambda pid: pid == 4242)
     detail = {
