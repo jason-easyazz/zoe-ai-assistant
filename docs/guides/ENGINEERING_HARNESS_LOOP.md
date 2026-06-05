@@ -104,8 +104,9 @@ Before editing harness code, merging PRs, or running a controlled E2E, pause aut
 ZOE_MULTICA_POLL_DISPATCH_LIMIT=0
 systemctl --user restart zoe-data.service
 
-# 2. Pause hourly board cron
-hermes cron pause hourly-zoe-board-dispatch
+# 2. Pause the shared runtime gate
+PYTHONPATH=services/zoe-data python3 -c \
+  'from multica_dispatch_control import pause_dispatch; pause_dispatch("operator maintenance")'
 
 # 3. Block or reclaim any active Kanban task (example)
 hermes kanban block t_<task_id>
@@ -125,9 +126,22 @@ After a controlled E2E completes, re-enable dispatch one issue at a time:
 ZOE_MULTICA_POLL_DISPATCH_LIMIT=1
 systemctl --user restart zoe-data.service
 
-hermes cron resume hourly-zoe-board-dispatch
+PYTHONPATH=services/zoe-data python3 -c \
+  'from multica_dispatch_control import resume_dispatch; resume_dispatch()'
 
 python3 scripts/maintenance/sync_multica_to_kanban.py --limit 1
 ```
 
 Monitor with `hermes kanban show t_<id> --json`, pipeline JSONL (`~/.zoe/engineering_pipeline_runs.jsonl`), and `engineering_harness_loop.py --mode report`. Pause again when done.
+
+## Prompt Contract Eval
+
+Run the zero-token worker prompt contract before changing Hermes guidance:
+
+```bash
+python3 scripts/maintenance/evaluate_engineering_prompts.py
+```
+
+It checks all six phase packets for mandatory evidence commands, terminal
+protocols, split handling, Greptile closeout, bounded size, and retired workflow
+language. Prompt or skill changes must keep this at 100%.

@@ -1126,6 +1126,49 @@ def detect_intent(
         return Intent("a2a_federation_status", {})
 
     # ── Multica board visibility ───────────────────────────────────────────────
+    if re.search(r"\b(?:pause|stop)\s+(?:multica\s+|engineering\s+)?dispatch\b", t, re.I):
+        return Intent("engineering_dispatch_pause", {})
+    if re.search(r"\bresume\s+(?:multica\s+|engineering\s+)?dispatch\b", t, re.I):
+        return Intent("engineering_dispatch_resume", {})
+    _MOVE_TODO_RE = re.search(
+        r"\bmove\s+(?P<reference>ZOE-\d+|[0-9a-f-]{32,36})\s+to\s+todo\b",
+        text,
+        re.I,
+    )
+    if _MOVE_TODO_RE:
+        return Intent(
+            "engineering_ticket_move_todo",
+            {"reference": _MOVE_TODO_RE.group("reference")},
+        )
+    _SPLIT_TICKET_RE = re.search(
+        r"\bsplit\s+(?P<reference>ZOE-\d+|[0-9a-f-]{32,36})\s+into\s+(?P<title>.+)$",
+        text.strip(),
+        re.I,
+    )
+    if _SPLIT_TICKET_RE:
+        return Intent(
+            "engineering_ticket_split",
+            {
+                "reference": _SPLIT_TICKET_RE.group("reference"),
+                "title": _SPLIT_TICKET_RE.group("title").strip(),
+            },
+        )
+    if re.search(r"\b(?:show|list)\s+(?:the\s+)?multica\s+backlog\b", t, re.I):
+        return Intent("engineering_ticket_list", {"status": "backlog"})
+    _BARE_BLOCKED_RE = re.fullmatch(
+        r"\s*(?:what(?:'s| is)|show|list)\s+(?:currently\s+)?blocked\s*[?.!]?\s*",
+        text,
+        re.I,
+    )
+    _QUALIFIED_BLOCKED_RE = re.search(
+        r"\b(?:show|list|what(?:'s| is))\b.*\b(?:multica|engineering|tickets?)\b.*\bblocked\b"
+        r"|\b(?:show|list|what(?:'s| is))\b.*\bblocked\b.*\b(?:multica|engineering|tickets?)\b",
+        text,
+        re.I,
+    )
+    if _BARE_BLOCKED_RE or _QUALIFIED_BLOCKED_RE:
+        return Intent("engineering_ticket_list", {"status": "blocked"})
+
     _BOARD_RE = re.compile(
         r"what'?s?\s+on\s+(?:the\s+)?(?:multica\s+)?board\b"
         r"|show\s+(?:the\s+)?(?:multica\s+)?(?:active\s+)?(?:board|tasks?)\b"
@@ -1496,7 +1539,7 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
                 board = resp.json()
 
             available = board.get("available", False)
-            active = board.get("active", [])
+            groups = board.get("groups") or {}
 
             if not available:
                 reason = board.get("reason", "Multica not configured")
@@ -1508,15 +1551,36 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
                     "will appear here for your approval."
                 )
 
-            if not active:
-                return ("**Multica Board** — nothing active right now.\n\n"
-                        "Ask me to build something (a widget, a page, a new skill) and I'll "
-                        "create a board item for your approval before starting.")
+            ordered_statuses = ("blocked", "in_progress", "in_review", "todo", "backlog")
+            open_items = [
+                (status, item)
+                for status in ordered_statuses
+                for item in groups.get(status, [])
+            ]
+            if not open_items:
+                return (
+                    "**Multica Tickets** — nothing open right now.\n\n"
+                    "New requests are captured in Multica and wait for approval before entering "
+                    "the one-ticket engineering lane."
+                )
 
-            lines = [f"**Multica Board** — {len(active)} active item(s):\n"]
-            for item in active[:5]:
-                lines.append(f"- **{item.get('title','?')}** — `{item.get('status','?')}` "
-                              f"| {item.get('description','')[:60]}")
+            lines = [f"**Multica Tickets** — {len(open_items)} open item(s):\n"]
+            for status, item in open_items[:10]:
+                metadata = [
+                    value
+                    for value in (
+                        f"phase: {item.get('phase')}" if item.get("phase") else "",
+                        f"blocked: {item.get('blocker')}" if item.get("blocker") else "",
+                        f"children: {item.get('child_count')}" if item.get("child_count") else "",
+                        f"PR: {item.get('pr_url')}" if item.get("pr_url") else "",
+                    )
+                    if value
+                ]
+                suffix = f" | {' | '.join(metadata)}" if metadata else ""
+                lines.append(
+                    f"- `{item.get('identifier') or item.get('id')}` "
+                    f"**{item.get('title', '?')}** — `{status}`{suffix}"
+                )
             return "\n".join(lines)
         except Exception as exc:
             logger.warning("board_status: %s", exc)
@@ -1601,6 +1665,82 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
         except Exception as exc:
             logger.warning("engineering_task_status: %s", exc)
             return "I couldn't check Hermes engineering status right now."
+
+    if intent.name == "engineering_dispatch_pause":
+        try:
+            from multica_dispatch_control import pause_dispatch
+
+            pause_dispatch(f"paused from chat by {user_id}")
+            return "Engineering dispatch is paused. Active work can finish, but no new ticket will start."
+        except Exception as exc:
+            logger.warning("engineering_dispatch_pause: %s", exc)
+            return "I couldn't pause engineering dispatch right now."
+
+    if intent.name == "engineering_dispatch_resume":
+        try:
+            from multica_dispatch_control import resume_dispatch
+
+            changed = resume_dispatch()
+            return (
+                "Engineering dispatch is running again; the next approved ticket can enter the single lane."
+                if changed
+                else "Engineering dispatch was already running."
+            )
+        except Exception as exc:
+            logger.warning("engineering_dispatch_resume: %s", exc)
+            return "I couldn't resume engineering dispatch right now."
+
+    if intent.name == "engineering_ticket_move_todo":
+        try:
+            from multica_operator import move_to_todo
+
+            issue = await move_to_todo(intent.slots.get("reference", ""), approve=True)
+            if not issue.get("id"):
+                return "I couldn't find or update that Multica ticket."
+            return (
+                f"Moved `{issue.get('identifier') or issue.get('id')}` to todo and approved it for "
+                "the one-ticket engineering lane."
+            )
+        except Exception as exc:
+            logger.warning("engineering_ticket_move_todo: %s", exc)
+            return "I couldn't update that Multica ticket right now."
+
+    if intent.name == "engineering_ticket_split":
+        try:
+            from multica_operator import split_ticket
+
+            child = await split_ticket(
+                intent.slots.get("reference", ""),
+                child_title=intent.slots.get("title", ""),
+            )
+            if not child.get("id"):
+                return "I couldn't split that Multica ticket."
+            return (
+                f"Created child ticket `{child.get('identifier') or child.get('id')}` and blocked the parent "
+                "until its children are complete."
+            )
+        except Exception as exc:
+            logger.warning("engineering_ticket_split: %s", exc)
+            return "I couldn't split that Multica ticket right now."
+
+    if intent.name == "engineering_ticket_list":
+        status = intent.slots.get("status", "backlog")
+        try:
+            from multica_client import get_multica_client
+
+            issues = await get_multica_client().list_issues(status=status)
+            if not issues:
+                return f"No Multica tickets are currently `{status}`."
+            lines = [f"**Multica {status}:**"]
+            for issue in issues[:10]:
+                lines.append(
+                    f"- `{issue.get('identifier') or issue.get('id')}` — "
+                    f"{(issue.get('title') or 'Untitled')[:90]}"
+                )
+            return "\n".join(lines)
+        except Exception as exc:
+            logger.warning("engineering_ticket_list: %s", exc)
+            return f"I couldn't list Multica tickets in `{status}` right now."
 
     # ── Evolution Proposals Review ─────────────────────────────────────────────
     if intent.name == "evolution_proposals_review":

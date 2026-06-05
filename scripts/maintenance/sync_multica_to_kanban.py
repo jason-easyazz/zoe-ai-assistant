@@ -42,6 +42,7 @@ async def run(args: argparse.Namespace) -> int:
     bootstrap_runtime_env()
     from executor_registry import poll_ref
     from multica_client import get_engineering_multica_agent_id, get_multica_client
+    from multica_dispatch_control import dispatch_is_paused, pause_reason
     from multica_poll_dispatch import chain_needs_dispatch
     from multica_webhook_emitter import emit_issue_assigned, is_configured as webhooks_configured
 
@@ -50,6 +51,9 @@ async def run(args: argparse.Namespace) -> int:
     if not client.is_configured():
         print("Multica not configured in Zoe env", file=sys.stderr)
         return 1
+    if dispatch_is_paused() and not args.dry_run:
+        print(f"Dispatch paused: {pause_reason()}", file=sys.stderr)
+        return 3
 
     candidates: list[dict] = []
     for issue in await client.list_issues(status="todo") or []:
@@ -109,7 +113,7 @@ async def run(args: argparse.Namespace) -> int:
             continue
         # Receiver returns {"ok": True} with no "dispatched" key if its own
         # dispatch raised; treat any non-truthy "dispatched" as "not dispatched"
-        # so we never mark the issue in_progress without a Kanban chain.
+        # so we never mark the issue in_progress without a journaled phase task.
         if not (isinstance(body, dict) and body.get("dispatched")):
             print(f"SKIP {ident}: {(body or {}).get('reason', 'webhook did not dispatch')}")
             continue

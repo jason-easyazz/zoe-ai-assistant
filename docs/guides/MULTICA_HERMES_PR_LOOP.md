@@ -1,6 +1,7 @@
-# Multica Hermes PR Loop
+# Multica-First Engineering Driver
 
-This workflow lets Zoe track engineering work from a Multica issue through Hermes implementation, GitHub PR creation, Greptile review, and human merge readiness.
+Multica is the operator-visible source of truth. Zoe owns deterministic phase
+control and the append-only journal; Hermes executes one bounded phase at a time.
 
 ## Required Setup
 
@@ -22,9 +23,10 @@ This workflow lets Zoe track engineering work from a Multica issue through Herme
 3. Hermes executes that single bounded phase and must end with `kanban_complete` or `kanban_block`.
 4. Zoe polls the phase row, parses evidence, and advances the journal only when `pipeline_evidence` requirements pass.
 5. When the journal moves to a new `todo` phase and no Kanban row exists for that phase, the poll bridge or compatibility script may dispatch exactly that next phase.
-6. `zoe-planner` **closeout** runs the Greptile grep loop (`github-greptile-loop`), squash-merges when Greptile + CI are green (`greploop_guard.py --merge-when-ready`), then updates the Multica issue.
+6. `zoe-planner` **closeout** runs the Greptile grep loop (`github-greptile-loop`) and squash-merges when Greptile + CI are green (`greploop_guard.py --merge-when-ready`).
 7. `zoe-planner` **retro** captures learnings and optional harness improvements (no silent production changes).
-8. Legacy v2/v3 chains are still recognized while in-flight board work drains; poll treats them as complete when closeout (or retro, when present) finishes.
+8. Zoe marks the Multica issue done only after retro completes, then admits the next explicitly approved backlog ticket.
+9. Legacy v2/v3 chains are still recognized while in-flight board work drains; poll treats them as complete when closeout (or retro, when present) finishes.
 
 ## Model Routing Policy (Phase 0 cost control)
 
@@ -48,7 +50,7 @@ Stock Multica (ghcr backend) does **not** have a `/api/webhooks` registry for ou
 
 | Path | When | How |
 |------|------|-----|
-| **Zoe poll bridge** | Always (default today) | `multica_webhook_emitter.py` in the 30s poll loop POSTs `issue.assigned` for Hermes **todo** issues and **backfills** Hermes **in_progress** issues that have no Kanban chain yet (`chain_needs_dispatch` in `multica_poll_dispatch.py`) |
+| **Zoe poll bridge** | Always (default today) | `multica_webhook_emitter.py` in the 30s poll loop POSTs `issue.assigned` for Hermes **todo** issues and backfills an **in_progress** issue whose current journal phase has no Kanban task (`chain_needs_dispatch` in `multica_poll_dispatch.py`) |
 | **Multica push** | After rebuilding backend with `zoe_webhook_listener.go` | Multica event bus POSTs to `ZOE_BOARD_WEBHOOK_URL` from the container |
 
 Set the same secret in both places:
@@ -79,7 +81,7 @@ This should create a queued workflow that still needs approval before Hermes cha
 what's the hermes engineering status
 ```
 
-Expected Kanban chain progression (per Multica issue):
+Expected journal phase progression (one Kanban task exists at a time):
 
 - `scout` (`zoe-planner`) — Graphify/opensrc/Multica context only; `TOOLS_USED=` + `SCOUT_SUMMARY=` handoff.
 - `implement` (`zoe-coder`) — graphify/opensrc first, smallest reviewable change, small PR on a worktree at `~/.worktrees/<kanban_task_id>` (override root with `ZOE_WORKTREE_ROOT`). Zoe pins this path on the Kanban row at dispatch so workers do not default to `<repo>/.worktrees/`. Terminal protocol: `kanban_complete` or `kanban_block` on the last turn. Handoff metadata must include `PR_URL`, `TESTS`, `TOOLS_USED`, `SUMMARY`. Pure audit/doc tasks: `AUDIT_ONLY=1` with blank `PR_URL`.
@@ -122,7 +124,7 @@ After deploying this PR on the Zoe host:
    python3 scripts/maintenance/multica_reassign_open_to_hermes.py --execute
    ```
 
-5. **Dispatcher:** Hermes cron `hourly-zoe-board-dispatch` (`dispatch-hermes-board.sh` → `sync_multica_to_kanban.py`) or the 30s Zoe poll webhook bridge:
+5. **Dispatcher:** the 30-second Zoe poll bridge is authoritative. The compatibility CLI calls the same decision gate:
 
    ```bash
    python3 scripts/maintenance/sync_multica_to_kanban.py --dry-run --limit 1
@@ -134,7 +136,7 @@ Keep `ZOE_BOARD_REVIEW_AUTOPILOT_ENABLED=false` (the Zoe poll loop and cron own 
 
 ## Contributor quick reference (ZOE-5378)
 
-Use this when dispatching or reviewing a Hermes Kanban chain on Multica:
+Use this when dispatching or reviewing a Multica ticket:
 
 | Control | Where to set | Effect |
 |---------|--------------|--------|
@@ -144,6 +146,10 @@ Use this when dispatching or reviewing a Hermes Kanban chain on Multica:
 | `ZOE_MULTICA_POLL_DISPATCH_LIMIT=1` | `services/zoe-data/.env` | Poll bridge dispatches one Hermes todo issue per cycle (default when unset; use `0` to disable dispatch) |
 
 **Idempotency:** Kanban tasks are keyed `multica:{issue_uuid}:{phase}`. Re-dispatch is safe when poll reports `not_found` or `partial`; active `running`/`blocked` chains are left alone.
+
+**Runtime pause:** `pause engineering dispatch` creates
+`~/.zoe/multica_dispatch_paused`; `resume engineering dispatch` removes it.
+Both the poll bridge and compatibility CLI obey the same sentinel.
 
 **Greptile closeout:** Closeout runs `github-greptile-loop` / `greploop_guard.py --merge-when-ready` only when implement recorded `PR_URL=` on a pushed branch. Audit-only issues should hand off with `AUDIT_ONLY=1` and blank `PR_URL`.
 

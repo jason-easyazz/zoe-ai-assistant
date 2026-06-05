@@ -62,4 +62,4 @@ Local Zoe Hermes engineering skills live under `~/.hermes/skills`, including `zo
 
 The `agentic-engineering-workflow` and `grep-loop-review-workflow` names are kept as compatibility entrypoints for the Micky-style workflow pack, but they map onto Zoe's Hermes-first Graphify/opensrc/Greptile process rather than introducing a second parallel system.
 
-OpenClaw remains installed and available as a future/manual fallback. Do not route ordinary coding, planning, review, board work, browser work, or background work to OpenClaw by default; Hermes owns those paths unless the user explicitly asks to use OpenClaw.
+OpenClaw remains installed and available as a future/manual fallback. Do not route ordinary coding, planning, review, board work, browser work, or background work to OpenClaw by default. Zoe's Multica-first engineering driver owns workflow state and phase advancement; Hermes executes the one ready phase unless the user explicitly asks to use OpenClaw.

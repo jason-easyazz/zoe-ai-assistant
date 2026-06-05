@@ -90,7 +90,7 @@ async def _record_completed_multica_chain(client, issue_id: str, chain: dict) ->
     await client.record_progress(
         issue_id,
         phase=phase,
-        evidence="Kanban chain done after retro" if phase == "retro" else "Kanban chain done",
+        evidence="Engineering run done after retro" if phase == "retro" else "Engineering run done",
         pr_url=chain.get("pr_url"),
         clear_blocker=True,
         status="done",
@@ -170,7 +170,7 @@ async def _record_blocked_multica_chain(client, issue_id: str, chain: dict) -> s
     await client.record_progress(
         issue_id,
         phase=phase,
-        evidence="Kanban chain blocked",
+        evidence="Engineering run blocked",
         pr_url=chain.get("pr_url"),
         blocker=blocker,
         status="blocked",
@@ -431,12 +431,14 @@ async def lifespan(app: FastAPI):
                     from multica_client import get_engineering_multica_agent_id  # type: ignore[import]
                     from executor_registry import poll_ref  # type: ignore[import]
                     from multica_poll_dispatch import chain_is_running, chain_needs_dispatch  # type: ignore[import]
+                    from multica_dispatch_control import dispatch_is_paused, pause_reason
 
-                    if _wh_ok():
+                    _dispatch_paused = dispatch_is_paused()
+                    if _wh_ok() and not _dispatch_paused:
                         _hermes = str(get_engineering_multica_agent_id())
                         # Throttle first-dispatch: cap new chains per cycle so a
                         # wave of assigned todos can't spawn N concurrent chains
-                        # (mirrors sync_multica_to_kanban --limit / kanban.max_in_progress).
+                        # (mirrors the compatibility sync limit / kanban.max_in_progress).
                         try:
                             _wh_limit = int(os.environ.get("ZOE_MULTICA_POLL_DISPATCH_LIMIT", "1") or "1")
                         except ValueError:
@@ -546,6 +548,11 @@ async def lifespan(app: FastAPI):
                                 await _maybe_dispatch_hermes_issue(_todo, from_todo=True)
                                 if _wh_dispatched >= _wh_limit:
                                     break
+                    elif _dispatch_paused:
+                        logger.info(
+                            "multica_poll: runtime dispatch pause active (%s)",
+                            pause_reason(),
+                        )
                 except Exception as _wh_exc:
                     logger.debug("multica_poll: webhook dispatch failed: %s", _wh_exc)
 
@@ -597,7 +604,7 @@ async def lifespan(app: FastAPI):
                             pr_url = chain.get("pr_url")
                             await _record_completed_multica_chain(client, str(issue_id), chain)
                             logger.info(
-                                "multica_poll: advanced issue %s (%s) - Kanban chain done%s",
+                                "multica_poll: advanced issue %s (%s) - engineering run done%s",
                                 issue_id,
                                 title[:40],
                                 f" PR={pr_url}" if pr_url else "",

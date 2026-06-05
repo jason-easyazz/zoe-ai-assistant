@@ -1,5 +1,7 @@
 """Tests for main.py Multica poll-loop helpers."""
 
+from pathlib import Path
+
 import pytest
 
 
@@ -10,6 +12,15 @@ class RecordingClient:
     async def record_progress(self, *args, **kwargs):
         self.calls.append((args, kwargs))
         return {"id": args[0], **kwargs}
+
+
+def test_poll_dispatches_ready_work_only_when_runtime_pause_is_inactive():
+    source = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
+    active_branch = source.index("if _wh_ok() and not _dispatch_paused:")
+    backfill = source.index("# Backfill existing in-progress runs", active_branch)
+    paused_branch = source.index("elif _dispatch_paused:", active_branch)
+
+    assert active_branch < backfill < paused_branch
 
 
 def test_tracked_multica_engineering_issues_includes_review_and_deduplicates():
@@ -49,7 +60,7 @@ async def test_record_completed_multica_chain_records_explicit_retro_completion_
             ("issue-1",),
             {
                 "phase": "retro",
-                "evidence": "Kanban chain done after retro",
+                "evidence": "Engineering run done after retro",
                 "pr_url": "https://github.com/o/r/pull/1",
                 "clear_blocker": True,
                 "status": "done",
@@ -68,7 +79,7 @@ async def test_record_completed_multica_chain_preserves_legacy_closeout_completi
 
     assert client.calls[0][1]["pr_url"] is None
     assert client.calls[0][1]["phase"] == "closeout"
-    assert client.calls[0][1]["evidence"] == "Kanban chain done"
+    assert client.calls[0][1]["evidence"] == "Engineering run done"
     assert client.calls[0][1]["status"] == "done"
 
 
@@ -85,7 +96,7 @@ async def test_record_completed_multica_chain_records_non_retro_pipeline_phase()
     )
 
     assert client.calls[0][1]["phase"] == "closeout"
-    assert client.calls[0][1]["evidence"] == "Kanban chain done"
+    assert client.calls[0][1]["evidence"] == "Engineering run done"
     assert client.calls[0][1]["status"] == "done"
 
 
@@ -216,7 +227,7 @@ async def test_record_blocked_multica_chain_records_terminal_block_metadata():
             ("issue-blocked",),
             {
                 "phase": "implement",
-                "evidence": "Kanban chain blocked",
+                "evidence": "Engineering run blocked",
                 "pr_url": "https://github.com/o/r/pull/7",
                 "blocker": "terminal block: implement blocked",
                 "status": "blocked",
