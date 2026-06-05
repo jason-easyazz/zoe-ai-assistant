@@ -49,9 +49,12 @@ def _log_path(task_id: str) -> Path:
     return hermes_home / "kanban" / "logs" / f"{task_id}.log"
 
 
-def tool_step_count(task_id: str) -> int:
+def tool_step_count(task_id: str, *, since: float | None = None) -> int:
+    path = _log_path(task_id)
     try:
-        lines = _log_path(task_id).read_text(encoding="utf-8", errors="replace").splitlines()
+        if since is not None and path.stat().st_mtime < since:
+            return 0
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return 0
     query_starts = [index for index, line in enumerate(lines) if line.startswith("Query:")]
@@ -132,6 +135,17 @@ def _timestamp(value: Any) -> float | None:
     return parsed.timestamp()
 
 
+def _started_timestamp(detail: dict[str, Any]) -> float | None:
+    running = [
+        run
+        for run in detail.get("runs") or []
+        if isinstance(run, dict) and str(run.get("status") or "").lower() == "running"
+    ]
+    task = detail.get("task") if isinstance(detail.get("task"), dict) else {}
+    started_at = (running[-1].get("started_at") if running else None) or task.get("started_at")
+    return _timestamp(started_at)
+
+
 def phase_budget_reason(
     task_id: str,
     phase: str,
@@ -139,7 +153,8 @@ def phase_budget_reason(
     *,
     now: float | None = None,
 ) -> str | None:
-    tool_steps = tool_step_count(task_id)
+    started_ts = _started_timestamp(detail)
+    tool_steps = tool_step_count(task_id, since=started_ts)
     tool_limit = _limit(phase, "tools")
     if tool_steps > tool_limit:
         return (
@@ -147,16 +162,6 @@ def phase_budget_reason(
             f"(steps={tool_steps}, limit={tool_limit})"
         )
 
-    task = detail.get("task") if isinstance(detail.get("task"), dict) else {}
-    started_at = task.get("started_at")
-    if not started_at:
-        running = [
-            run
-            for run in detail.get("runs") or []
-            if isinstance(run, dict) and str(run.get("status") or "").lower() == "running"
-        ]
-        started_at = running[-1].get("started_at") if running else None
-    started_ts = _timestamp(started_at)
     if started_ts is None:
         return None
     elapsed = (now if now is not None else time.time()) - started_ts
