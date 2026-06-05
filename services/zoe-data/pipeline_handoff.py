@@ -73,6 +73,29 @@ def _parse_kv_fields(text: str) -> dict[str, str]:
     return out
 
 
+def _structured_handoff_fields(detail: dict[str, Any]) -> dict[str, str]:
+    """Extract explicit KEY=value equivalents from Kanban metadata."""
+    out: dict[str, str] = {}
+    candidates = [detail.get("metadata")]
+    candidates.extend(
+        run.get("metadata")
+        for run in detail.get("runs") or []
+        if isinstance(run, dict)
+    )
+    for metadata in candidates:
+        if not isinstance(metadata, dict):
+            continue
+        for key, value in metadata.items():
+            if not isinstance(key, str) or not re.fullmatch(r"[A-Z_]+", key):
+                continue
+            if value is None or isinstance(value, (dict, list)):
+                continue
+            text = str(value).strip()
+            if text:
+                out[key] = text
+    return out
+
+
 def _json_field_value(text: str, key: str) -> str:
     """Extract a JSON object value from ``KEY=...``, allowing multiline JSON."""
     match = re.search(rf"^{re.escape(key)}=", text or "", re.MULTILINE)
@@ -341,7 +364,7 @@ def evidence_from_handoff(
     skills: tuple[str, ...] | list[str] = (),
 ) -> list[EvidenceItem]:
     """Best-effort extraction of structured evidence from a Kanban task show payload."""
-    fields: dict[str, str] = {}
+    fields = _structured_handoff_fields(detail)
     for chunk in _haystacks(detail):
         fields.update(_parse_kv_fields(chunk))
 
