@@ -988,7 +988,7 @@ async def list_engineering_workflow_tasks(
     status: str | None = None,
     user: dict = Depends(require_admin),
 ):
-    """Status view: Hermes-assigned Multica issues with their Kanban chain state."""
+    """Status view: Hermes-assigned Multica issues with journaled driver state."""
     from executor_registry import poll_ref  # type: ignore[import]
     from multica_client import MULClient, get_engineering_multica_agent_id  # type: ignore[import]
 
@@ -1386,6 +1386,16 @@ async def get_agent_board(user: dict = Depends(get_current_user)):  # noqa: ARG0
                 continue
             for issue in issues_or_exc or []:
                 enriched = dict(issue)
+                try:
+                    from multica_ticket_contract import parse_ticket_block
+
+                    ticket = parse_ticket_block(issue.get("description") or "")
+                except Exception:
+                    ticket = {}
+                enriched["phase"] = ticket.get("phase")
+                enriched["blocker"] = ticket.get("blocked_reason")
+                enriched["pr_url"] = ticket.get("pr_url")
+                enriched["child_count"] = len(ticket.get("child_issue_ids") or [])
                 if status in {"in_progress", "blocked", "in_review"} and str(issue.get("assignee_id") or "") == hermes_id:
                     hermes_issues.append(enriched)
                 groups[status].append(enriched)

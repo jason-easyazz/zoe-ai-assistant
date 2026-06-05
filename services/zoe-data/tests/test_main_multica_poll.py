@@ -49,7 +49,7 @@ async def test_record_completed_multica_chain_records_explicit_retro_completion_
             ("issue-1",),
             {
                 "phase": "retro",
-                "evidence": "Kanban chain done after retro",
+                "evidence": "Engineering run done after retro",
                 "pr_url": "https://github.com/o/r/pull/1",
                 "clear_blocker": True,
                 "status": "done",
@@ -68,7 +68,7 @@ async def test_record_completed_multica_chain_preserves_legacy_closeout_completi
 
     assert client.calls[0][1]["pr_url"] is None
     assert client.calls[0][1]["phase"] == "closeout"
-    assert client.calls[0][1]["evidence"] == "Kanban chain done"
+    assert client.calls[0][1]["evidence"] == "Engineering run done"
     assert client.calls[0][1]["status"] == "done"
 
 
@@ -85,7 +85,7 @@ async def test_record_completed_multica_chain_records_non_retro_pipeline_phase()
     )
 
     assert client.calls[0][1]["phase"] == "closeout"
-    assert client.calls[0][1]["evidence"] == "Kanban chain done"
+    assert client.calls[0][1]["evidence"] == "Engineering run done"
     assert client.calls[0][1]["status"] == "done"
 
 
@@ -216,7 +216,7 @@ async def test_record_blocked_multica_chain_records_terminal_block_metadata():
             ("issue-blocked",),
             {
                 "phase": "implement",
-                "evidence": "Kanban chain blocked",
+                "evidence": "Engineering run blocked",
                 "pr_url": "https://github.com/o/r/pull/7",
                 "blocker": "terminal block: implement blocked",
                 "status": "blocked",

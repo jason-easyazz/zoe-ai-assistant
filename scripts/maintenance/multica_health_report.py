@@ -10,7 +10,22 @@ import os
 import sys
 from pathlib import Path
 
+import httpx
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "services" / "zoe-data"))
+
+
+async def _probe(url: str, *, headers: dict[str, str] | None = None) -> dict:
+    try:
+        async with httpx.AsyncClient(timeout=5.0, follow_redirects=True) as client:
+            response = await client.get(url, headers=headers)
+        return {
+            "ok": response.status_code < 500,
+            "status": response.status_code,
+            "url": url,
+        }
+    except Exception as exc:
+        return {"ok": False, "url": url, "error": str(exc)}
 
 
 async def run(*, ensure_shape: bool = False) -> dict:
@@ -23,6 +38,12 @@ async def run(*, ensure_shape: bool = False) -> dict:
         "workspace_id": bool(os.environ.get("MULTICA_WORKSPACE_ID")),
         "api_token": bool(os.environ.get("MULTICA_API_TOKEN")),
         "webhook_secret": bool(os.environ.get("MULTICA_WEBHOOK_SECRET")),
+        "oidc_client_id": bool(os.environ.get("MULTICA_OIDC_CLIENT_ID", "multica")),
+        "oidc_client_secret": bool(os.environ.get("MULTICA_OIDC_CLIENT_SECRET")),
+        "uploads_configured": True,
+        "email_configured": bool(
+            os.environ.get("RESEND_API_KEY") or os.environ.get("SMTP_HOST")
+        ),
         "hermes_agent_id": get_engineering_multica_agent_id(),
         "checks": {},
     }
@@ -36,6 +57,23 @@ async def run(*, ensure_shape: bool = False) -> dict:
     report["checks"]["issues_api"] = isinstance(issues, list)
     report["checks"]["labels_api"] = isinstance(labels, list)
     report["checks"]["projects_api"] = isinstance(projects, list)
+    base_url = os.environ.get("MULTICA_BASE_URL", "").rstrip("/")
+    report["checks"]["backend_health"] = await _probe(f"{base_url}/health")
+    report["checks"]["web_direct"] = await _probe(
+        os.environ.get("MULTICA_WEB_URL", "http://127.0.0.1:3000")
+    )
+    report["checks"]["web_proxy"] = await _probe(
+        os.environ.get("MULTICA_PROXY_URL", "http://127.0.0.1/multica/")
+    )
+    report["checks"]["api_proxy"] = await _probe(
+        os.environ.get("MULTICA_API_PROXY_HEALTH_URL", "http://127.0.0.1/multica-api/health")
+    )
+    report["checks"]["oidc_discovery"] = await _probe(
+        os.environ.get(
+            "MULTICA_OIDC_DISCOVERY_URL",
+            "http://127.0.0.1/.well-known/openid-configuration",
+        )
+    )
 
     required_labels = [
         "needs-split",
@@ -63,6 +101,21 @@ async def run(*, ensure_shape: bool = False) -> dict:
         and report["checks"]["projects_api"]
         and all(report["checks"]["required_labels"].values())
         and report["webhook_secret"]
+        and all(
+            report["checks"][name]["ok"]
+            for name in (
+                "backend_health",
+                "web_direct",
+                "web_proxy",
+                "api_proxy",
+                "oidc_discovery",
+            )
+        )
+        and report["uploads_configured"]
+        and (
+            report["email_configured"]
+            or os.environ.get("MULTICA_REQUIRE_EMAIL", "false").lower() != "true"
+        )
     )
     return report
 

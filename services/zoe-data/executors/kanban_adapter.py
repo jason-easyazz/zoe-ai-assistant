@@ -101,7 +101,7 @@ def _greptile_mcp_bin() -> str:
 
 
 def _engineering_mode(issue: dict | None = None) -> str:
-    """Resolve the engineering execution mode for a Kanban chain.
+    """Resolve the engineering execution mode for a journaled phase run.
 
     Interactive is the default for user-visible work. Overnight mode allows
     slower, cheaper runs by extending worker runtime and making the cost

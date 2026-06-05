@@ -90,7 +90,7 @@ async def _record_completed_multica_chain(client, issue_id: str, chain: dict) ->
     await client.record_progress(
         issue_id,
         phase=phase,
-        evidence="Kanban chain done after retro" if phase == "retro" else "Kanban chain done",
+        evidence="Engineering run done after retro" if phase == "retro" else "Engineering run done",
         pr_url=chain.get("pr_url"),
         clear_blocker=True,
         status="done",
@@ -170,7 +170,7 @@ async def _record_blocked_multica_chain(client, issue_id: str, chain: dict) -> s
     await client.record_progress(
         issue_id,
         phase=phase,
-        evidence="Kanban chain blocked",
+        evidence="Engineering run blocked",
         pr_url=chain.get("pr_url"),
         blocker=blocker,
         status="blocked",
@@ -431,8 +431,9 @@ async def lifespan(app: FastAPI):
                     from multica_client import get_engineering_multica_agent_id  # type: ignore[import]
                     from executor_registry import poll_ref  # type: ignore[import]
                     from multica_poll_dispatch import chain_is_running, chain_needs_dispatch  # type: ignore[import]
+                    from multica_dispatch_control import dispatch_is_paused, pause_reason
 
-                    if _wh_ok():
+                    if _wh_ok() and not dispatch_is_paused():
                         _hermes = str(get_engineering_multica_agent_id())
                         # Throttle first-dispatch: cap new chains per cycle so a
                         # wave of assigned todos can't spawn N concurrent chains
@@ -529,6 +530,11 @@ async def lifespan(app: FastAPI):
                                     _candidate.get("identifier") or _tid,
                                     "todo" if from_todo else "in_progress-backfill",
                                 )
+                    elif dispatch_is_paused():
+                        logger.info(
+                            "multica_poll: runtime dispatch pause active (%s)",
+                            pause_reason(),
+                        )
 
                         # Backfill existing in-progress runs before starting fresh todo work.
                         # A partial chain owns the one active ticket lane but still needs this
@@ -597,7 +603,7 @@ async def lifespan(app: FastAPI):
                             pr_url = chain.get("pr_url")
                             await _record_completed_multica_chain(client, str(issue_id), chain)
                             logger.info(
-                                "multica_poll: advanced issue %s (%s) - Kanban chain done%s",
+                                "multica_poll: advanced issue %s (%s) - engineering run done%s",
                                 issue_id,
                                 title[:40],
                                 f" PR={pr_url}" if pr_url else "",
