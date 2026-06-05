@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 import executors.kanban_adapter as ka
+import kanban_phase_budget as kb
 
 
 @pytest.fixture(autouse=True)
@@ -380,7 +381,7 @@ async def test_closeout_body_instructs_merge_when_ready():
         {"id": "uuid-1", "identifier": "ZOE-9", "title": "Fix thing", "description": ""},
         "ZOE-9",
     )
-    assert "greploop_guard.py --pr N --once" in body
+    assert "run_greploop_guard.sh --pr N --once" in body
     assert "--merge-when-ready" in body
     assert "MERGE_SHA=" in body
     assert "--packet-only" in body
@@ -927,6 +928,61 @@ def test_protocol_violation_count():
     assert ka._protocol_violation_count(detail) == 2
 
 
+def test_phase_budget_reason_enforces_tool_and_runtime_limits(tmp_path, monkeypatch):
+    log_path = tmp_path / "task.log"
+    log_path.write_text("\n".join(["  ┊ tool call"] * 9), encoding="utf-8")
+    monkeypatch.setattr(kb, "_log_path", lambda _task_id: log_path)
+    monkeypatch.setenv("ZOE_KANBAN_SCOUT_TOOL_BUDGET", "8")
+
+    reason = kb.phase_budget_reason(
+        "t_scout",
+        "scout",
+        {"task": {"started_at": 100}},
+        now=110,
+    )
+
+    assert reason is not None
+    assert "SCOUT_BUDGET" in reason
+    assert "steps=9" in reason
+
+    log_path.write_text("", encoding="utf-8")
+    monkeypatch.setenv("ZOE_KANBAN_SCOUT_RUNTIME_BUDGET_SECONDS", "5")
+    reason = kb.phase_budget_reason(
+        "t_scout",
+        "scout",
+        {"runs": [{"status": "running", "started_at": 100, "worker_pid": 123}]},
+        now=106,
+    )
+    assert reason is not None
+    assert "runtime budget exceeded" in reason
+
+
+@pytest.mark.asyncio
+async def test_poll_auto_blocks_and_terminates_worker_after_phase_budget(monkeypatch):
+    rows = [_row("scout", "running")]
+    show = {
+        "t_scout": {
+            "task": {"started_at": 100},
+            "runs": [{"status": "running", "started_at": 100, "worker_pid": 4242}],
+        }
+    }
+    stopped = []
+    monkeypatch.setattr(
+        ka,
+        "phase_budget_reason",
+        lambda *_args, **_kwargs: "BLOCKER=SCOUT_BUDGET: test limit",
+    )
+    monkeypatch.setattr(ka, "terminate_running_workers", lambda detail: stopped.extend(kb.running_worker_pids(detail)))
+    a = _FakeAdapter(list_rows=rows, show_map=show)
+
+    out = await a.poll("multica:uuid-9")
+
+    assert out["status"] == "blocked"
+    assert "SCOUT_BUDGET" in (out["blocker"] or "")
+    assert stopped == [4242]
+    assert any(call[0] == "block" for call in a.calls)
+
+
 @pytest.mark.asyncio
 async def test_poll_auto_blocks_after_protocol_violations(monkeypatch):
     monkeypatch.setattr(ka, "_PROTOCOL_VIOLATION_LIMIT", 2)
@@ -955,6 +1011,17 @@ def test_closeout_body_requires_terminal_protocol():
     assert "TERMINAL PROTOCOL" in body
     assert "kanban_complete" in body
     assert "kanban_block" in body
+
+
+def test_closeout_body_uses_supported_greploop_launcher():
+    body = ka.KanbanAdapter()._build_body(
+        "closeout",
+        {"id": "uuid-1", "identifier": "ZOE-9", "title": "Fix thing", "description": ""},
+        "ZOE-9",
+    )
+
+    assert "scripts/maintenance/run_greploop_guard.sh --pr N --merge-when-ready" in body
+    assert "python3 scripts/maintenance/greploop_guard.py" not in body
 
 
 def test_audit_no_pr_phases_have_bounded_completion_path():
