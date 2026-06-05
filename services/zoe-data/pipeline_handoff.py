@@ -381,9 +381,10 @@ def evidence_from_handoff(
     skills: tuple[str, ...] | list[str] = (),
 ) -> list[EvidenceItem]:
     """Best-effort extraction of structured evidence from a Kanban task show payload."""
-    fields: dict[str, str] = {}
+    text_fields: dict[str, str] = {}
     for chunk in _haystacks(detail):
-        fields.update(_parse_kv_fields(chunk))
+        text_fields.update(_parse_kv_fields(chunk))
+    fields = dict(text_fields)
     fields.update(_structured_handoff_fields(detail))
 
     items: list[EvidenceItem] = []
@@ -451,7 +452,7 @@ def evidence_from_handoff(
         )
 
     if phase == "review":
-        review_note = fields.get("SUMMARY") or fields.get("REVIEW") or ""
+        review_note = text_fields.get("SUMMARY") or text_fields.get("REVIEW") or ""
         if review_note:
             items.append(EvidenceItem(kind="human", summary=review_note[:500], passed=True))
         else:

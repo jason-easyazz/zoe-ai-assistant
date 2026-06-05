@@ -159,7 +159,6 @@ async def test_sync_pipeline_advances_on_complete_handoff(isolated_store):
     state = await store.sync_pipeline_from_chain("multica:sync", phases, fetch_detail)
     assert state.phase == "verify"
     assert state.status == "todo"
-    assert state.evidence_profile == "audit"
 
     lines = isolated_store.read_text(encoding="utf-8").strip().splitlines()
     assert len(lines) >= 2
@@ -195,6 +194,7 @@ async def test_sync_pipeline_skips_implementation_when_scout_marks_it_unneeded(i
 
     assert state.phase == "verify"
     assert state.status == "todo"
+    assert state.evidence_profile == "audit"
     assert state.history[-1].outcome == "skip_implementation"
     assert state.history[-1].reason == "scout proved implementation not required"
 
