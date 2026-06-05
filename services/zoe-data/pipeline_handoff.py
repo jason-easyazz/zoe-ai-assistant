@@ -381,9 +381,10 @@ def evidence_from_handoff(
     skills: tuple[str, ...] | list[str] = (),
 ) -> list[EvidenceItem]:
     """Best-effort extraction of structured evidence from a Kanban task show payload."""
-    fields = _structured_handoff_fields(detail) if phase == "retro" else {}
+    fields: dict[str, str] = {}
     for chunk in _haystacks(detail):
         fields.update(_parse_kv_fields(chunk))
+    fields.update(_structured_handoff_fields(detail))
 
     items: list[EvidenceItem] = []
 
@@ -421,7 +422,11 @@ def evidence_from_handoff(
 
     tests_raw = fields.get("TESTS") or ""
     if tests_raw and phase in {"implement", "verify"}:
-        passed = "fail" not in tests_raw.lower()
+        lowered = tests_raw.lower()
+        passed = not any(
+            marker in lowered
+            for marker in ("fail", "block", "not applicable", "n/a", "no tests")
+        )
         items.append(
             EvidenceItem(
                 kind="test",

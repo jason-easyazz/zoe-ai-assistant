@@ -69,6 +69,41 @@ def test_evidence_from_verify_handoff_parses_validators():
     assert len(validator.content_hash) == 64
 
 
+def test_verify_evidence_reads_structured_run_metadata():
+    detail = {
+        "runs": [
+            {
+                "metadata": {
+                    "TESTS": "pytest -q passed",
+                    "VALIDATORS": "validate_structure.py passed",
+                }
+            }
+        ]
+    }
+
+    items = evidence_from_handoff("verify", detail)
+
+    assert {item.kind for item in items if item.passed is True} >= {"test", "validator"}
+
+
+def test_not_applicable_tests_do_not_count_as_passed():
+    detail = {
+        "runs": [
+            {
+                "metadata": {
+                    "TESTS": "not applicable — audit-only no-code verification",
+                    "VALIDATORS": "validate_structure.py passed",
+                }
+            }
+        ]
+    }
+
+    items = evidence_from_handoff("verify", detail)
+    test_item = next(item for item in items if item.kind == "test")
+
+    assert test_item.passed is False
+
+
 def test_evidence_from_review_metadata_records_human_approval():
     detail = {
         "latest_summary": "APPROVE ZOE-5401. PR is merge-ready.",

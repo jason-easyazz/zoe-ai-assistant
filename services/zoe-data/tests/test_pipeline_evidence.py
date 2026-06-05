@@ -304,3 +304,16 @@ def test_skip_implementation_rejects_invalid_phase():
         match="skip_implementation is only valid from scout or implement",
     ):
         transition(state, "skip_implementation")
+
+
+def test_skip_implementation_uses_audit_evidence_profile():
+    state = PipelineState(task_ref="multica:no-code", phase="scout", status="running")
+    state = with_evidence(
+        state,
+        EvidenceItem(kind="tool", summary="merged work inspected", passed=True),
+    )
+
+    skipped = transition(state, "skip_implementation")
+
+    assert skipped.phase == "verify"
+    assert skipped.evidence_profile == "audit"
