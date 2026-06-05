@@ -26,10 +26,9 @@ def pause_dispatch(reason: str = "operator requested pause") -> Path:
 
 def resume_dispatch() -> bool:
     path = pause_path()
-    if not path.exists():
-        return False
-    path.unlink()
-    return True
+    existed = path.exists()
+    path.unlink(missing_ok=True)
+    return existed
 
 
 def pause_reason() -> str | None:

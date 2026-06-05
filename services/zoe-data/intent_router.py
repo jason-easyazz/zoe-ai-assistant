@@ -1656,60 +1656,80 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
             return "I couldn't check Hermes engineering status right now."
 
     if intent.name == "engineering_dispatch_pause":
-        from multica_dispatch_control import pause_dispatch
+        try:
+            from multica_dispatch_control import pause_dispatch
 
-        pause_dispatch(f"paused from chat by {user_id}")
-        return "Engineering dispatch is paused. Active work can finish, but no new ticket will start."
+            pause_dispatch(f"paused from chat by {user_id}")
+            return "Engineering dispatch is paused. Active work can finish, but no new ticket will start."
+        except Exception as exc:
+            logger.warning("engineering_dispatch_pause: %s", exc)
+            return "I couldn't pause engineering dispatch right now."
 
     if intent.name == "engineering_dispatch_resume":
-        from multica_dispatch_control import resume_dispatch
+        try:
+            from multica_dispatch_control import resume_dispatch
 
-        changed = resume_dispatch()
-        return (
-            "Engineering dispatch is running again; the next approved ticket can enter the single lane."
-            if changed
-            else "Engineering dispatch was already running."
-        )
+            changed = resume_dispatch()
+            return (
+                "Engineering dispatch is running again; the next approved ticket can enter the single lane."
+                if changed
+                else "Engineering dispatch was already running."
+            )
+        except Exception as exc:
+            logger.warning("engineering_dispatch_resume: %s", exc)
+            return "I couldn't resume engineering dispatch right now."
 
     if intent.name == "engineering_ticket_move_todo":
-        from multica_operator import move_to_todo
+        try:
+            from multica_operator import move_to_todo
 
-        issue = await move_to_todo(intent.slots.get("reference", ""), approve=True)
-        if not issue.get("id"):
-            return "I couldn't find or update that Multica ticket."
-        return (
-            f"Moved `{issue.get('identifier') or issue.get('id')}` to todo and approved it for "
-            "the one-ticket engineering lane."
-        )
+            issue = await move_to_todo(intent.slots.get("reference", ""), approve=True)
+            if not issue.get("id"):
+                return "I couldn't find or update that Multica ticket."
+            return (
+                f"Moved `{issue.get('identifier') or issue.get('id')}` to todo and approved it for "
+                "the one-ticket engineering lane."
+            )
+        except Exception as exc:
+            logger.warning("engineering_ticket_move_todo: %s", exc)
+            return "I couldn't update that Multica ticket right now."
 
     if intent.name == "engineering_ticket_split":
-        from multica_operator import split_ticket
+        try:
+            from multica_operator import split_ticket
 
-        child = await split_ticket(
-            intent.slots.get("reference", ""),
-            child_title=intent.slots.get("title", ""),
-        )
-        if not child.get("id"):
-            return "I couldn't split that Multica ticket."
-        return (
-            f"Created child ticket `{child.get('identifier') or child.get('id')}` and blocked the parent "
-            "until its children are complete."
-        )
+            child = await split_ticket(
+                intent.slots.get("reference", ""),
+                child_title=intent.slots.get("title", ""),
+            )
+            if not child.get("id"):
+                return "I couldn't split that Multica ticket."
+            return (
+                f"Created child ticket `{child.get('identifier') or child.get('id')}` and blocked the parent "
+                "until its children are complete."
+            )
+        except Exception as exc:
+            logger.warning("engineering_ticket_split: %s", exc)
+            return "I couldn't split that Multica ticket right now."
 
     if intent.name == "engineering_ticket_list":
-        from multica_client import get_multica_client
-
         status = intent.slots.get("status", "backlog")
-        issues = await get_multica_client().list_issues(status=status)
-        if not issues:
-            return f"No Multica tickets are currently `{status}`."
-        lines = [f"**Multica {status}:**"]
-        for issue in issues[:10]:
-            lines.append(
-                f"- `{issue.get('identifier') or issue.get('id')}` — "
-                f"{(issue.get('title') or 'Untitled')[:90]}"
-            )
-        return "\n".join(lines)
+        try:
+            from multica_client import get_multica_client
+
+            issues = await get_multica_client().list_issues(status=status)
+            if not issues:
+                return f"No Multica tickets are currently `{status}`."
+            lines = [f"**Multica {status}:**"]
+            for issue in issues[:10]:
+                lines.append(
+                    f"- `{issue.get('identifier') or issue.get('id')}` — "
+                    f"{(issue.get('title') or 'Untitled')[:90]}"
+                )
+            return "\n".join(lines)
+        except Exception as exc:
+            logger.warning("engineering_ticket_list: %s", exc)
+            return f"I couldn't list Multica tickets in `{status}` right now."
 
     # ── Evolution Proposals Review ─────────────────────────────────────────────
     if intent.name == "evolution_proposals_review":

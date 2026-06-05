@@ -14,6 +14,7 @@ def test_multica_widget_uses_ticket_language():
     assert "Loading tickets" in widget
     assert "Evolution Board" not in widget
     assert "_safeHttpUrl" in widget
+    assert "if (!value) return '';" in widget
     assert "this._esc(data.reason || '')" in widget
     assert "evolution board" not in widget.lower()
     assert "Loading board" not in widget

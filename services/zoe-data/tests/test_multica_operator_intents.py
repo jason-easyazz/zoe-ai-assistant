@@ -1,6 +1,8 @@
 import pytest
 
 from intent_router import Intent, detect_intent, execute_intent
+import multica_client
+import multica_operator
 
 
 def test_detects_multica_operator_commands():
@@ -64,3 +66,44 @@ async def test_board_status_reports_lifecycle_metadata(monkeypatch):
     assert "blocked: Greptile comment" in result
     assert "children: 2" in result
     assert "pull/1" in result
+
+
+@pytest.mark.asyncio
+async def test_operator_commands_report_multica_failures(monkeypatch, caplog):
+    async def fail_move(*_args, **_kwargs):
+        raise RuntimeError("move unavailable")
+
+    async def fail_split(*_args, **_kwargs):
+        raise RuntimeError("split unavailable")
+
+    class FailingClient:
+        async def list_issues(self, **_kwargs):
+            raise RuntimeError("list unavailable")
+
+    monkeypatch.setattr(multica_operator, "move_to_todo", fail_move)
+    monkeypatch.setattr(multica_operator, "split_ticket", fail_split)
+    monkeypatch.setattr(multica_client, "get_multica_client", lambda: FailingClient())
+
+    move = await execute_intent(Intent("engineering_ticket_move_todo", {"reference": "ZOE-1"}))
+    split = await execute_intent(
+        Intent("engineering_ticket_split", {"reference": "ZOE-1", "title": "child"})
+    )
+    listed = await execute_intent(Intent("engineering_ticket_list", {"status": "blocked"}))
+
+    assert move == "I couldn't update that Multica ticket right now."
+    assert split == "I couldn't split that Multica ticket right now."
+    assert listed == "I couldn't list Multica tickets in `blocked` right now."
+    assert "move unavailable" in caplog.text
+    assert "split unavailable" in caplog.text
+    assert "list unavailable" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_find_issue_accepts_empty_issue_response(monkeypatch):
+    class EmptyClient:
+        async def list_issues(self):
+            return None
+
+    monkeypatch.setattr(multica_operator, "get_multica_client", lambda: EmptyClient())
+
+    assert await multica_operator.find_issue("ZOE-1") == {}

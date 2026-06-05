@@ -30,6 +30,10 @@ def _uploads_configured() -> bool:
     )
 
 
+def _oidc_client_id_configured() -> bool:
+    return bool(os.environ.get("MULTICA_OIDC_CLIENT_ID"))
+
+
 async def _probe(url: str, *, headers: dict[str, str] | None = None) -> dict:
     try:
         async with httpx.AsyncClient(timeout=5.0, follow_redirects=True) as client:
@@ -53,7 +57,7 @@ async def run(*, ensure_shape: bool = False) -> dict:
         "workspace_id": bool(os.environ.get("MULTICA_WORKSPACE_ID")),
         "api_token": bool(os.environ.get("MULTICA_API_TOKEN")),
         "webhook_secret": bool(os.environ.get("MULTICA_WEBHOOK_SECRET")),
-        "oidc_client_id": bool(os.environ.get("MULTICA_OIDC_CLIENT_ID", "multica")),
+        "oidc_client_id": _oidc_client_id_configured(),
         "oidc_client_secret": bool(os.environ.get("MULTICA_OIDC_CLIENT_SECRET")),
         "uploads_configured": _uploads_configured(),
         "email_configured": bool(

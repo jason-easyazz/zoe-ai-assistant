@@ -41,3 +41,12 @@ def test_upload_check_reads_the_runtime_compose_contract():
     module = _module()
 
     assert module._uploads_configured() is True
+
+
+def test_oidc_client_id_requires_explicit_configuration(monkeypatch):
+    module = _module()
+    monkeypatch.delenv("MULTICA_OIDC_CLIENT_ID", raising=False)
+
+    assert module._oidc_client_id_configured() is False
+    monkeypatch.setenv("MULTICA_OIDC_CLIENT_ID", "multica")
+    assert module._oidc_client_id_configured() is True

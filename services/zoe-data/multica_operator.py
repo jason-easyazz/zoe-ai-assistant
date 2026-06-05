@@ -16,7 +16,7 @@ from multica_ticket_contract import (
 async def find_issue(reference: str) -> dict[str, Any]:
     wanted = reference.strip().lower()
     client = get_multica_client()
-    for issue in await client.list_issues():
+    for issue in await client.list_issues() or []:
         if wanted in {
             str(issue.get("id") or "").lower(),
             str(issue.get("identifier") or "").lower(),
