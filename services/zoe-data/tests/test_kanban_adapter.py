@@ -1081,6 +1081,48 @@ async def test_poll_auto_blocks_and_terminates_worker_after_phase_budget(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_poll_does_not_apply_previous_attempt_budget_to_ready_task(monkeypatch):
+    rows = [_row("scout", "ready")]
+    show = {
+        "t_scout": {
+            "task": {"started_at": 100},
+            "runs": [{"status": "blocked", "started_at": 100}],
+        }
+    }
+    monkeypatch.setattr(
+        ka,
+        "phase_budget_reason",
+        lambda *_args, **_kwargs: pytest.fail("ready task must not be budgeted"),
+    )
+    a = _FakeAdapter(list_rows=rows, show_map=show)
+
+    out = await a.poll("multica:uuid-9")
+
+    assert out["status"] == "partial"
+    assert not any(call[0] == "block" for call in a.calls)
+
+
+@pytest.mark.asyncio
+async def test_poll_does_not_apply_previous_protocol_violations_to_ready_task(monkeypatch):
+    monkeypatch.setattr(ka, "_PROTOCOL_VIOLATION_LIMIT", 2)
+    rows = [_row("scout", "ready")]
+    show = {
+        "t_scout": {
+            "events": [
+                {"kind": "protocol_violation", "payload": {"exit_code": 0}},
+                {"kind": "protocol_violation", "payload": {"exit_code": 0}},
+            ]
+        }
+    }
+    a = _FakeAdapter(list_rows=rows, show_map=show)
+
+    out = await a.poll("multica:uuid-9")
+
+    assert out["status"] == "partial"
+    assert not any(call[0] == "block" for call in a.calls)
+
+
+@pytest.mark.asyncio
 async def test_poll_auto_blocks_after_protocol_violations(monkeypatch):
     monkeypatch.setattr(ka, "_PROTOCOL_VIOLATION_LIMIT", 2)
     rows = [_row("implement", "running")]
