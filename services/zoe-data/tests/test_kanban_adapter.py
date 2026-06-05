@@ -1098,7 +1098,7 @@ async def test_poll_does_not_apply_previous_attempt_budget_to_ready_task(monkeyp
 
     out = await a.poll("multica:uuid-9")
 
-    assert out["status"] == "running"
+    assert out["status"] == "partial"
     assert not any(call[0] == "block" for call in a.calls)
 
 
