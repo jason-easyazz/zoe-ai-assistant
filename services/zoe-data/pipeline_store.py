@@ -181,6 +181,10 @@ def skip_blocked_implementation(
             f"pipeline is not a blocked implementation: {task_ref} "
             f"({state.phase}/{state.status})"
         )
+    if not any(item.kind == "tool" and item.passed is True for item in state.evidence):
+        raise ValueError(
+            f"pipeline lacks passed scout/tool evidence required for a no-code skip: {task_ref}"
+        )
     skipped = transition(state, "skip_implementation", reason=reason)
     skipped = skipped.model_copy(
         update={

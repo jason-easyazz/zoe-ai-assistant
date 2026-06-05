@@ -105,6 +105,13 @@ def test_skip_blocked_implementation_moves_to_verify(isolated_store):
         repeated_block_count=1,
         block_classification="scope_split_required",
         split_packet={"kind": "scope_split_required"},
+        evidence=[
+            EvidenceItem(
+                kind="tool",
+                summary="scout proved merged work already satisfies acceptance",
+                passed=True,
+            )
+        ],
     )
     store.save_state(state, event="blocked")
 
@@ -120,6 +127,21 @@ def test_skip_blocked_implementation_moves_to_verify(isolated_store):
     assert skipped.block_classification is None
     assert skipped.split_packet is None
     assert "operator_skipped_implementation" in isolated_store.read_text(encoding="utf-8")
+
+
+def test_skip_blocked_implementation_requires_tool_evidence(isolated_store):
+    state = PipelineState(
+        task_ref="multica:no-evidence",
+        phase="implement",
+        status="blocked",
+    )
+    store.save_state(state, event="blocked")
+
+    with pytest.raises(ValueError, match="lacks passed scout/tool evidence"):
+        store.skip_blocked_implementation(
+            "multica:no-evidence",
+            reason="operator attempted an unsupported skip",
+        )
 
 
 @pytest.mark.asyncio
@@ -173,6 +195,30 @@ async def test_sync_pipeline_skips_implementation_when_scout_marks_it_unneeded(i
     assert state.status == "todo"
     assert state.history[-1].outcome == "skip_implementation"
     assert state.history[-1].reason == "scout proved implementation not required"
+
+
+@pytest.mark.asyncio
+async def test_sync_pipeline_keeps_normal_implementation_route(isolated_store):
+    await store.bootstrap_state("multica:needs-code", start_phase="scout")
+
+    async def fetch_detail(_task_id: str):
+        return {
+            "latest_summary": "TOOLS_USED=graphify",
+            "comments": [],
+            "runs": [{"metadata": {"IMPLEMENTATION_REQUIRED": "true"}}],
+        }
+
+    phases = {"scout": {"id": "t_scout", "status": "done"}}
+    state = await store.sync_pipeline_from_chain(
+        "multica:needs-code",
+        phases,
+        fetch_detail,
+        start_phase="scout",
+    )
+
+    assert state.phase == "implement"
+    assert state.status == "todo"
+    assert state.history[-1].outcome == "complete"
 
 
 @pytest.mark.asyncio
