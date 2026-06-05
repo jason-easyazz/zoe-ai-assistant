@@ -27,6 +27,38 @@ def test_bootstrap_and_reload(isolated_store):
     assert reloaded.phase == "implement"
 
 
+def test_stale_save_preserves_concurrently_written_evidence(isolated_store):
+    state = PipelineState(
+        task_ref="multica:concurrent-evidence",
+        phase="review",
+        status="running",
+    )
+    store.save_state(state, event="effect_requested")
+    stale = store.load_latest_state(state.task_ref)
+    assert stale is not None
+
+    current = with_evidence(
+        store.load_latest_state(state.task_ref),
+        EvidenceItem(
+            kind="human",
+            summary="mechanical review approval",
+            passed=True,
+            metadata={"source": "command", "phase": "review"},
+        ),
+    )
+    store.save_state(current, event="evidence_human")
+    store.save_state(stale, event="gate_blocked", extra={"missing": ["human"]})
+
+    reloaded = store.load_latest_state(state.task_ref)
+    assert reloaded is not None
+    assert any(
+        item.kind == "human"
+        and item.passed is True
+        and item.metadata.get("source") == "command"
+        for item in reloaded.evidence
+    )
+
+
 def test_pipeline_summary_reports_missing_evidence(isolated_store):
     state = PipelineState(task_ref="multica:1", phase="implement", status="running")
     summary = store.pipeline_summary(state)

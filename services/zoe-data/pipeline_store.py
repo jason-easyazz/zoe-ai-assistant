@@ -63,11 +63,25 @@ def append_record(record: dict[str, Any]) -> None:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
+def _latest_state_from_lines(lines: list[str], task_ref: str) -> PipelineState | None:
+    latest: PipelineState | None = None
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if payload.get("task_ref") != task_ref or "state" not in payload:
+            continue
+        latest = PipelineState.model_validate(payload["state"])
+    return latest
+
+
 def load_latest_state(task_ref: str) -> PipelineState | None:
     path = store_path()
     if not path.exists():
         return None
-    latest: PipelineState | None = None
     with _LOCK:
         with path.open("r", encoding="utf-8") as handle:
             fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
@@ -75,18 +89,7 @@ def load_latest_state(task_ref: str) -> PipelineState | None:
                 lines = handle.read().splitlines()
             finally:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-        for line in lines:
-            if not line.strip():
-                continue
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if payload.get("task_ref") != task_ref:
-                continue
-            if "state" in payload:
-                latest = PipelineState.model_validate(payload["state"])
-    return latest
+    return _latest_state_from_lines(lines, task_ref)
 
 
 async def _run_io(func, *args):
@@ -95,16 +98,45 @@ async def _run_io(func, *args):
 
 
 def save_state(state: PipelineState, *, event: str, extra: dict[str, Any] | None = None) -> PipelineState:
-    record: dict[str, Any] = {
-        "event": event,
-        "task_ref": state.task_ref,
-        "phase": state.phase,
-        "status": state.status,
-        "state": state.model_dump(),
-    }
-    if extra:
-        record["meta"] = extra
-    append_record(record)
+    path = store_path()
+    with _LOCK:
+        _ensure_parent(path)
+        with path.open("a+", encoding="utf-8") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                handle.seek(0)
+                latest = _latest_state_from_lines(
+                    handle.read().splitlines(),
+                    state.task_ref,
+                )
+                if latest:
+                    evidence_by_key = {
+                        json.dumps(item.model_dump(), sort_keys=True): item
+                        for item in [*latest.evidence, *state.evidence]
+                    }
+                    state = state.model_copy(
+                        update={
+                            "evidence": sorted(
+                                evidence_by_key.values(),
+                                key=lambda item: item.created_at,
+                            )
+                        }
+                    )
+
+                record: dict[str, Any] = {
+                    "event": event,
+                    "task_ref": state.task_ref,
+                    "phase": state.phase,
+                    "status": state.status,
+                    "state": state.model_dump(),
+                }
+                if extra:
+                    record["meta"] = extra
+                handle.seek(0, os.SEEK_END)
+                handle.write(json.dumps(record, sort_keys=True) + "\n")
+                handle.flush()
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
     return state
 
 

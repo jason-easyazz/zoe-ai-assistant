@@ -509,6 +509,8 @@ async def test_review_body_requires_verify_evidence():
     )
     assert "verify-phase evidence" in body
     assert "Block" in body or "block" in body
+    assert "pipeline_evidence_commands.py mark-reviewed multica:uuid-1" in body
+    assert "REVIEW=<approved or blocked>" in body
 
 
 @pytest.mark.asyncio
@@ -1150,6 +1152,7 @@ def test_closeout_body_requires_terminal_protocol():
     assert "TERMINAL PROTOCOL" in body
     assert "kanban_complete" in body
     assert "kanban_block" in body
+    assert "AUDIT_ONLY=<1 for no-PR audit closeout, otherwise 0>" in body
 
 
 def test_closeout_body_uses_supported_greploop_launcher():

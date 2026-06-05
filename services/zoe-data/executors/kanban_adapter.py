@@ -460,10 +460,15 @@ class KanbanAdapter:
                 " Block with a concrete reason instead.\n"
                 "- If you cannot reach a pass/block decision within 8 tool/model steps, call"
                 " `kanban_block` with BLOCKER=REVIEW_BUDGET and the missing evidence.\n"
+                "- On approval, write the mechanical review marker before completing:\n"
+                f"    PYTHONPATH={zoe_repo_root()}/services/zoe-data python3"
+                f" {zoe_repo_root()}/services/zoe-data/pipeline_evidence_commands.py"
+                f" mark-reviewed multica:{issue_id} --critical-count 0 --summary \"<short verdict>\"\n"
                 "- TERMINAL PROTOCOL: end with `kanban_complete` or `kanban_block` (no silent exit).\n"
                 "- Do NOT approve if verification or the Greptile gate is unavailable; set the task blocked"
                 " with an explicit reason instead.\n"
-                "- Record findings (pass/fail/concern) and a merge-readiness verdict in your handoff."
+                "- Record findings (pass/fail/concern) and a merge-readiness verdict in your handoff.\n"
+                "Final handoff MUST include:\nREVIEW=<approved or blocked>\nSUMMARY=<short verdict>"
             )
         if phase == "retro":
             return common + _retro_cost_hint() + (
@@ -516,7 +521,8 @@ class KanbanAdapter:
             " handoff. Zoe will update Multica after the retro phase completes. If merge did not happen,"
             " leave the issue in_progress/blocked with the blocker.\n"
             "Final handoff MUST include:\nPR_URL=<url>\nMERGE_SHA=<sha or blank>\nGREPTILE=<status>\n"
-            "MULTICA=<Zoe updates after retro; report blocker if any>\nSUMMARY=<short>\n"
+            "MULTICA=<Zoe updates after retro; report blocker if any>\nAUDIT_ONLY=<1 for no-PR audit"
+            " closeout, otherwise 0>\nSUMMARY=<short>\n"
             "- TERMINAL PROTOCOL: you MUST end with `kanban_complete` or `kanban_block` (no silent exit)."
         )
 
