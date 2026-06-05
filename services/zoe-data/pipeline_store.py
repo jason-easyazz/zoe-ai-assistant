@@ -509,12 +509,17 @@ async def sync_pipeline_from_chain(
             return state
 
         try:
-            trans_reason = block_reason if outcome in {
+            if outcome == "skip_implementation":
+                trans_reason = "scout proved implementation not required"
+            elif outcome in {
                 "block",
                 "verification_failed",
                 "request_changes",
                 "merge_blocked",
-            } else None
+            }:
+                trans_reason = block_reason
+            else:
+                trans_reason = None
             state = transition(state, outcome, reason=trans_reason)  # type: ignore[arg-type]
         except ValueError as exc:
             await _run_io(

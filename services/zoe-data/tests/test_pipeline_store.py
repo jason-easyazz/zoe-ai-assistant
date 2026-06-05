@@ -172,6 +172,7 @@ async def test_sync_pipeline_skips_implementation_when_scout_marks_it_unneeded(i
     assert state.phase == "verify"
     assert state.status == "todo"
     assert state.history[-1].outcome == "skip_implementation"
+    assert state.history[-1].reason == "scout proved implementation not required"
 
 
 @pytest.mark.asyncio
