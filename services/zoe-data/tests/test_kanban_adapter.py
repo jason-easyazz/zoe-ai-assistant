@@ -234,6 +234,15 @@ async def test_dispatch_interactive_mode_uses_default_runtime(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_dispatch_blocks_on_first_worker_failure():
+    a = _FakeAdapter()
+    await a.dispatch({"id": "uuid-cost", "identifier": "ZOE-COST", "title": "Bound paid retries"})
+
+    creates = [c for c in a.calls if c[0] == "create"]
+    assert creates[0][creates[0].index("--max-retries") + 1] == "1"
+
+
+@pytest.mark.asyncio
 async def test_dispatch_overnight_mode_from_metadata(monkeypatch):
     monkeypatch.setenv("ZOE_KANBAN_OVERNIGHT_MAX_RUNTIME", "7h")
     a = _FakeAdapter()
@@ -981,7 +990,7 @@ def test_closeout_body_defers_multica_done_until_retro():
     assert "MULTICA=<Zoe updates after retro; report blocker if any>" in body
 
 
-def test_implement_body_puts_audit_fast_path_before_graphify():
+def test_implement_body_puts_bounded_fast_paths_before_graphify():
     body = ka.KanbanAdapter()._build_body(
         "implement",
         {"id": "uuid-1", "identifier": "ZOE-9", "title": "Audit driver", "description": "evidence_profile: audit"},
@@ -991,10 +1000,15 @@ def test_implement_body_puts_audit_fast_path_before_graphify():
     assert "AUDIT/SMOKE FAST PATH" in body
     assert "TOOLS_USED=audit-read" in body
     assert "TESTS=not applicable/audit-only" in body
-    assert "graphify map" in body
+    assert "Graphify map" in body
     assert "explicitly says audit-only" in body
     assert "uses trace/map with an audit/no-code qualifier" in body
-    assert body.index("AUDIT/SMOKE FAST PATH") < body.index("graphify map")
+    assert "SMALL EXPLICIT CODE FAST PATH" in body
+    assert "Start editing within 6 tool/model steps" in body
+    assert "BLOCKER=IMPLEMENT_BUDGET" in body
+    assert "broad or ambiguous code-changing tickets only" in body
+    assert body.index("AUDIT/SMOKE FAST PATH") < body.index("Graphify map")
+    assert body.index("SMALL EXPLICIT CODE FAST PATH") < body.index("Graphify map")
 
 
 def test_audit_no_pr_phases_do_not_preload_broad_skills():
