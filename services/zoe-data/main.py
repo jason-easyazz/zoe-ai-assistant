@@ -407,7 +407,7 @@ async def lifespan(app: FastAPI):
                     from multica_webhook_emitter import emit_issue_assigned, is_configured as _wh_ok
                     from multica_client import get_engineering_multica_agent_id  # type: ignore[import]
                     from executor_registry import poll_ref  # type: ignore[import]
-                    from multica_poll_dispatch import chain_needs_dispatch  # type: ignore[import]
+                    from multica_poll_dispatch import chain_is_running, chain_needs_dispatch  # type: ignore[import]
 
                     if _wh_ok():
                         _hermes = str(get_engineering_multica_agent_id())
@@ -418,8 +418,31 @@ async def lifespan(app: FastAPI):
                             _wh_limit = int(os.environ.get("ZOE_MULTICA_POLL_DISPATCH_LIMIT", "1") or "1")
                         except ValueError:
                             _wh_limit = 1
-                        _wh_dispatched = 0
+                        _chain_cache: dict[str, dict] = {}
+
+                        async def _poll_chain(_tid: str) -> dict:
+                            if _tid not in _chain_cache:
+                                _chain_cache[_tid] = await poll_ref(f"multica:{_tid}")
+                            return _chain_cache[_tid]
+
+                        _running_chains = 0
+                        for _ip_issue in in_progress_issues:
+                            if str(_ip_issue.get("assignee_id") or "") != _hermes:
+                                continue
+                            if (_ip_issue.get("title") or "").lower().startswith("autopilot:"):
+                                continue
+                            _ip_tid = str(_ip_issue.get("id") or "")
+                            if _ip_tid and chain_is_running(await _poll_chain(_ip_tid)):
+                                _running_chains += 1
+
+                        _wh_dispatched = min(_running_chains, _wh_limit)
                         _wh_dispatched_ids: set[str] = set()
+                        if _running_chains >= _wh_limit:
+                            logger.info(
+                                "multica_poll: dispatch paused; %d running Hermes chain(s) already at limit %d",
+                                _running_chains,
+                                _wh_limit,
+                            )
 
                         async def _maybe_dispatch_hermes_issue(_candidate: dict, *, from_todo: bool) -> None:
                             nonlocal _wh_dispatched
@@ -432,7 +455,7 @@ async def lifespan(app: FastAPI):
                             _tid = str(_candidate.get("id") or "")
                             if not _tid:
                                 return
-                            _chain = await poll_ref(f"multica:{_tid}")
+                            _chain = await _poll_chain(_tid)
                             if not chain_needs_dispatch(_chain):
                                 return
                             _emit = await emit_issue_assigned(_candidate)
@@ -455,18 +478,20 @@ async def lifespan(app: FastAPI):
                                     "todo" if from_todo else "in_progress-backfill",
                                 )
 
-                        # Reuse the todo list already fetched above for the stale autopilot pass.
-                        for _todo in stale_todos or []:
-                            await _maybe_dispatch_hermes_issue(_todo, from_todo=True)
-                            if _wh_dispatched >= _wh_limit:
-                                break
-                        # Backfill: in_progress Multica rows with no Kanban chain (e.g. manual
-                        # status moves or dispatch that never created tasks).
+                        # Backfill existing in-progress runs before starting fresh todo work.
+                        # A partial chain owns the one active ticket lane but still needs this
+                        # dispatch path to create its next ready phase.
                         if _wh_dispatched < _wh_limit:
                             for _ip_issue in in_progress_issues:
                                 if str(_ip_issue.get("id") or "") in _wh_dispatched_ids:
                                     continue
                                 await _maybe_dispatch_hermes_issue(_ip_issue, from_todo=False)
+                                if _wh_dispatched >= _wh_limit:
+                                    break
+                        # Reuse the todo list already fetched above for the stale autopilot pass.
+                        if _wh_dispatched < _wh_limit:
+                            for _todo in stale_todos or []:
+                                await _maybe_dispatch_hermes_issue(_todo, from_todo=True)
                                 if _wh_dispatched >= _wh_limit:
                                     break
                 except Exception as _wh_exc:

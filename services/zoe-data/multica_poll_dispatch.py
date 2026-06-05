@@ -25,3 +25,34 @@ def chain_needs_dispatch(chain: dict) -> bool:
     if not chain.get("found"):
         return status == "not_found"
     return False
+
+
+def _pipeline_suppressed(chain: dict) -> bool:
+    pipeline = chain.get("pipeline") or {}
+    return bool(pipeline.get("terminal_block") or pipeline.get("fingerprint_abort"))
+
+
+def chain_is_active(chain: dict) -> bool:
+    """Return True when a chain belongs to the one-ticket-at-a-time lane.
+
+    ``running`` is actively executing. ``partial`` means the journal has an
+    existing run with a ready next phase that still needs dispatch, so it must
+    also stay in the active lane. Terminal pipeline flags suppress dispatch and
+    therefore also suppress occupying a slot.
+    """
+    if not chain or _pipeline_suppressed(chain):
+        return False
+    if chain.get("status") in ("running", "partial"):
+        return True
+    pipeline = chain.get("pipeline") or {}
+    return pipeline.get("status") in ("running", "todo")
+
+
+def chain_is_running(chain: dict) -> bool:
+    """Return True only for active chains that do not need another dispatch."""
+    if not chain or _pipeline_suppressed(chain):
+        return False
+    if chain.get("status") == "running":
+        return True
+    pipeline = chain.get("pipeline") or {}
+    return pipeline.get("status") == "running"

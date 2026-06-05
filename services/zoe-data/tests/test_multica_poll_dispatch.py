@@ -1,5 +1,5 @@
 """Tests for Multica poll-loop dispatch helpers."""
-from multica_poll_dispatch import chain_needs_dispatch
+from multica_poll_dispatch import chain_is_active, chain_is_running, chain_needs_dispatch
 import executors.kanban_adapter as ka
 
 
@@ -52,3 +52,28 @@ def test_chain_needs_dispatch_false_when_blocked_protocol_violation():
         "blocker": "BLOCKER=PROTOCOL_VIOLATION: worker exited without kanban_complete/kanban_block",
     }
     assert chain_needs_dispatch(chain) is False
+
+
+def test_chain_is_active_counts_running_and_partial():
+    assert chain_is_active({"found": True, "status": "running"}) is True
+    assert chain_is_active({"found": True, "status": "partial"}) is True
+    assert chain_is_active({"found": True, "status": "blocked"}) is False
+    assert chain_is_active({"found": True, "status": "done"}) is False
+    assert chain_is_active({"found": False, "status": "not_found"}) is False
+
+
+def test_chain_is_active_counts_journal_ready_phase_without_terminal_block():
+    assert chain_is_active({"pipeline": {"status": "todo"}}) is True
+    assert chain_is_active({"pipeline": {"status": "running"}}) is True
+    assert chain_is_active({"status": "partial", "pipeline": {"terminal_block": True}}) is False
+    assert chain_is_active({"status": "partial", "pipeline": {"fingerprint_abort": True}}) is False
+    assert chain_is_active({"pipeline": {"status": "todo", "terminal_block": True}}) is False
+    assert chain_is_active({"pipeline": {"status": "todo", "fingerprint_abort": True}}) is False
+
+
+def test_chain_is_running_excludes_partial_backfill_work():
+    assert chain_is_running({"found": True, "status": "running"}) is True
+    assert chain_is_running({"found": True, "status": "partial"}) is False
+    assert chain_is_running({"pipeline": {"status": "running"}}) is True
+    assert chain_is_running({"pipeline": {"status": "todo"}}) is False
+    assert chain_is_running({"status": "running", "pipeline": {"terminal_block": True}}) is False
