@@ -650,6 +650,8 @@ class KanbanAdapter:
             f"{external_ref}:{phase}",
             "--max-runtime",
             _max_runtime(mode),
+            # Hermes trips the circuit breaker on the Nth failure; 1 means one
+            # total attempt and zero automatic retries.
             "--max-retries",
             "1",
             "--created-by",

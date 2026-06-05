@@ -145,6 +145,15 @@ def resume_pipeline(
             "repeated_block_count": 0 if reset_fingerprint else state.repeated_block_count,
             "block_classification": None,
             "split_packet": None,
+            "history": (
+                [
+                    record
+                    for record in state.history
+                    if not (record.reason or "").startswith("fingerprint_abort:")
+                ]
+                if reset_fingerprint
+                else state.history
+            ),
         }
     )
     return save_state(
@@ -247,7 +256,13 @@ def pipeline_summary(state: PipelineState | None) -> dict[str, Any]:
     if not state:
         return {"tracked": False}
     missing = sorted(missing_required_evidence(state))
-    fingerprint_abort = state.status == "blocked" and state.repeated_block_count >= 2
+    fingerprint_abort = state.status == "blocked" and (
+        state.repeated_block_count >= 2
+        or any(
+            (record.reason or "").startswith("fingerprint_abort:")
+            for record in state.history
+        )
+    )
     terminal_block = state.status == "blocked" and (
         fingerprint_abort
         or state.block_classification == "scope_split_required"

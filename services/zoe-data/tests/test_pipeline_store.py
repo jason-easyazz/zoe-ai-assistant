@@ -61,12 +61,22 @@ def test_pipeline_summary_needs_split_requires_blocked_status(isolated_store):
 
 
 def test_resume_pipeline_can_reset_false_duplicate_fingerprint(isolated_store):
+    from pipeline_evidence import TransitionRecord
+
     state = PipelineState(
         task_ref="multica:false-duplicate",
         phase="implement",
         status="blocked",
         last_block_fingerprint="abc123",
         repeated_block_count=2,
+        history=[
+            TransitionRecord(
+                from_phase="implement",
+                to_phase="implement",
+                outcome="block",
+                reason="fingerprint_abort:abc123",
+            )
+        ],
     )
     store.save_state(state, event="fingerprint_abort")
 
@@ -79,6 +89,10 @@ def test_resume_pipeline_can_reset_false_duplicate_fingerprint(isolated_store):
     assert resumed.status == "todo"
     assert resumed.last_block_fingerprint is None
     assert resumed.repeated_block_count == 0
+    assert not any(
+        (record.reason or "").startswith("fingerprint_abort:")
+        for record in resumed.history
+    )
     assert store.pipeline_summary(resumed)["terminal_block"] is False
 
 
