@@ -268,3 +268,14 @@ def test_audit_profile_closeout_requires_log_not_greptile():
     assert missing_required_evidence(state) == {"log"}
     state = with_evidence(state, EvidenceItem(kind="log", summary="audit-only closeout", passed=True))
     assert missing_required_evidence(state) == set()
+
+
+def test_skip_implementation_rejects_implement_without_evidence():
+    state = PipelineState(
+        task_ref="multica:no-code",
+        phase="implement",
+        status="blocked",
+    )
+
+    with pytest.raises(ValueError, match="implement is missing required evidence: tool"):
+        transition(state, "skip_implementation")

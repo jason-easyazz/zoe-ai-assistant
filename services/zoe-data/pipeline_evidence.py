@@ -338,9 +338,9 @@ def transition(state: PipelineState, outcome: TransitionOutcome, *, reason: str 
     elif outcome == "skip_implementation":
         if state.phase not in {"scout", "implement"}:
             raise ValueError("skip_implementation is only valid from scout or implement")
-        if state.phase == "scout" and not can_complete_phase(state):
+        if not can_complete_phase(state):
             missing = ", ".join(sorted(missing_required_evidence(state)))
-            raise ValueError(f"scout is missing required evidence: {missing}")
+            raise ValueError(f"{state.phase} is missing required evidence: {missing}")
         next_phase = "verify"
         next_status = "todo"
     else:
