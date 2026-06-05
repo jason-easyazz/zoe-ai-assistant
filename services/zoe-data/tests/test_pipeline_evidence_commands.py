@@ -2,8 +2,9 @@ import json
 import sys
 import types
 
+import pipeline_evidence_commands as commands
 from pipeline_evidence_commands import main
-from pipeline_store import bootstrap_state, load_latest_state
+from pipeline_store import PipelineStateConflict, bootstrap_state, load_latest_state
 
 
 def test_mark_tested_records_hashed_evidence(tmp_path, monkeypatch, capsys):
@@ -47,6 +48,36 @@ def test_mark_greptile_passes_only_on_five_of_five(tmp_path, monkeypatch, capsys
     assert state is not None
     assert state.evidence[-1].kind == "greptile"
     assert state.evidence[-1].passed is True
+
+
+def test_record_evidence_retries_once_after_journal_conflict(tmp_path, monkeypatch):
+    monkeypatch.setenv("ZOE_PIPELINE_STORE_PATH", str(tmp_path / "runs.jsonl"))
+    import asyncio
+
+    asyncio.run(bootstrap_state("multica:evidence-race", start_phase="review"))
+    original_save = commands.save_state
+    calls = 0
+
+    def conflict_once(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise PipelineStateConflict("simulated race")
+        return original_save(*args, **kwargs)
+
+    monkeypatch.setattr(commands, "save_state", conflict_once)
+    result = commands.record_evidence(
+        "multica:evidence-race",
+        kind="human",
+        summary="review passed",
+        passed=True,
+    )
+
+    state = load_latest_state("multica:evidence-race")
+    assert calls == 2
+    assert result["ok"] is True
+    assert state is not None
+    assert state.evidence[-1].summary == "review passed"
 
 
 def test_split_ticket_does_not_block_parent_when_children_fail(monkeypatch, capsys):
