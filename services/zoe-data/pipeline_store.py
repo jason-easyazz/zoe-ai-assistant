@@ -397,8 +397,8 @@ async def sync_pipeline_from_chain(
     start_phase: PipelinePhase = "implement",
     issue: dict | None = None,
 ) -> PipelineState:
-    """Retry one poll reconciliation when a command wins the journal race."""
-    for attempt in range(2):
+    """Retry poll reconciliation, then defer safely to the next poll cycle."""
+    for _attempt in range(3):
         try:
             return await _sync_pipeline_from_chain_once(
                 task_ref,
@@ -408,9 +408,11 @@ async def sync_pipeline_from_chain(
                 issue=issue,
             )
         except PipelineStateConflict:
-            if attempt:
-                raise
-    raise AssertionError("unreachable")
+            continue
+    latest = await _run_io(load_latest_state, task_ref)
+    if latest is None:
+        raise RuntimeError(f"pipeline disappeared during reconciliation: {task_ref}")
+    return latest
 
 
 async def _sync_pipeline_from_chain_once(

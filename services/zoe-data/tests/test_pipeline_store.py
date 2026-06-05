@@ -397,6 +397,43 @@ async def test_sync_pipeline_retries_a_concurrent_transition_write(
 
 
 @pytest.mark.asyncio
+async def test_sync_pipeline_defers_after_sustained_journal_conflicts(
+    isolated_store, monkeypatch
+):
+    initial = await store.bootstrap_state("multica:sync-contention")
+    original_save = store.save_state
+    transition_calls = 0
+
+    def always_conflict_transition(state, *, event, **kwargs):
+        nonlocal transition_calls
+        if event == "transition":
+            transition_calls += 1
+            raise store.PipelineStateConflict("sustained command writes")
+        return original_save(state, event=event, **kwargs)
+
+    monkeypatch.setattr(store, "save_state", always_conflict_transition)
+
+    async def fetch_detail(_task_id: str):
+        return {
+            "latest_summary": (
+                "TOOLS_USED=graphify\n"
+                "TESTS=pytest -q pass\n"
+                "PR_URL=https://github.com/o/r/pull/9"
+            ),
+            "comments": [],
+        }
+
+    state = await store.sync_pipeline_from_chain(
+        "multica:sync-contention",
+        {"implement": {"id": "t1", "status": "done"}},
+        fetch_detail,
+    )
+
+    assert transition_calls == 3
+    assert state == initial
+
+
+@pytest.mark.asyncio
 async def test_sync_pipeline_skips_implementation_when_scout_marks_it_unneeded(isolated_store):
     await store.bootstrap_state("multica:already-done", start_phase="scout")
 
