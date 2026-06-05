@@ -2856,7 +2856,8 @@ async def _dispatch_tool(tool_name: str, args: dict, user_id: str = "family-admi
     if tool_name == "list_openclaw_plugins":
         try:
             async with httpx.AsyncClient(timeout=5) as client:
-                r = await client.get("http://localhost:8000/api/openclaw/plugins")
+                base_url = str(os.environ.get("ZOE_CHAT_URL", "http://localhost:8000")).rstrip("/")
+                r = await client.get(f"{base_url}/api/openclaw/plugins")
                 plugin_data = r.json() if r.status_code == 200 else {"plugins": []}
         except Exception:
             plugin_data = {"plugins": []}
@@ -2869,7 +2870,8 @@ async def _dispatch_tool(tool_name: str, args: dict, user_id: str = "family-admi
     if tool_name == "list_openclaw_skills":
         try:
             async with httpx.AsyncClient(timeout=8) as client:
-                r = await client.get("http://localhost:8000/api/openclaw/skills")
+                base_url = str(os.environ.get("ZOE_CHAT_URL", "http://localhost:8000")).rstrip("/")
+                r = await client.get(f"{base_url}/api/openclaw/skills")
                 skill_data = r.json() if r.status_code == 200 else {"skills": []}
         except Exception:
             skill_data = {"skills": []}
