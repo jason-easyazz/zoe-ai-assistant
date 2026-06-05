@@ -1007,6 +1007,30 @@ def test_fresh_resumed_run_with_no_steps_does_not_warn(tmp_path, monkeypatch, ca
     assert "could not identify tool steps" not in caplog.text
 
 
+def test_stale_log_is_ignored_until_resumed_worker_writes(tmp_path, monkeypatch):
+    log_path = tmp_path / "task.log"
+    log_path.write_text(
+        "Query: work kanban task t_scout\n" + "\n".join(["  ┊ old tool call"] * 9),
+        encoding="utf-8",
+    )
+    log_path.touch()
+    monkeypatch.setattr(kb, "_log_path", lambda _task_id: log_path)
+
+    assert kb.tool_step_count("t_scout", since=log_path.stat().st_mtime + 1) == 0
+
+
+def test_current_running_attempt_timestamp_wins_over_original_task_start():
+    detail = {
+        "task": {"started_at": 100},
+        "runs": [
+            {"status": "blocked", "started_at": 100},
+            {"status": "running", "started_at": 200},
+        ],
+    }
+
+    assert kb._started_timestamp(detail) == 200
+
+
 def test_running_worker_pids_require_expected_hermes_command(monkeypatch):
     monkeypatch.setattr(kb, "_is_expected_worker", lambda pid: pid == 4242)
     detail = {
