@@ -39,7 +39,7 @@ async def _probe(url: str, *, headers: dict[str, str] | None = None) -> dict:
         async with httpx.AsyncClient(timeout=5.0, follow_redirects=True) as client:
             response = await client.get(url, headers=headers)
         return {
-            "ok": response.status_code < 500,
+            "ok": 200 <= response.status_code < 300,
             "status": response.status_code,
             "url": url,
         }

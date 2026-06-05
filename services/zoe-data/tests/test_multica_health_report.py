@@ -37,6 +37,28 @@ def test_probe_reports_http_status(monkeypatch):
     assert result["status"] == 200
 
 
+def test_probe_rejects_client_errors(monkeypatch):
+    module = _module()
+
+    class Response:
+        status_code = 404
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, *_args, **_kwargs):
+            return Response()
+
+    monkeypatch.setattr(module.httpx, "AsyncClient", lambda **_kwargs: Client())
+    result = asyncio.run(module._probe("http://example.test/missing"))
+    assert result["ok"] is False
+    assert result["status"] == 404
+
+
 def test_upload_check_reads_the_runtime_compose_contract():
     module = _module()
 

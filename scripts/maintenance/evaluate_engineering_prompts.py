@@ -47,7 +47,7 @@ def evaluate() -> dict:
     checks = []
     for scenario, issue in scenarios.items():
         for phase, markers in REQUIRED.items():
-            body = adapter._build_body(phase, issue, str(issue["identifier"]))
+            body = adapter.build_phase_prompt(phase, issue, str(issue["identifier"]))
             missing = [marker for marker in markers if marker not in body]
             forbidden = [marker for marker in FORBIDDEN if marker.lower() in body.lower()]
             checks.append(

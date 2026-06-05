@@ -1155,7 +1155,18 @@ def detect_intent(
         )
     if re.search(r"\b(?:show|list)\s+(?:the\s+)?multica\s+backlog\b", t, re.I):
         return Intent("engineering_ticket_list", {"status": "backlog"})
-    if re.search(r"\b(?:what(?:'s| is)|show|list)\s+(?:currently\s+)?blocked\b", t, re.I):
+    _BARE_BLOCKED_RE = re.fullmatch(
+        r"\s*(?:what(?:'s| is)|show|list)\s+(?:currently\s+)?blocked\s*[?.!]?\s*",
+        text,
+        re.I,
+    )
+    _QUALIFIED_BLOCKED_RE = re.search(
+        r"\b(?:show|list|what(?:'s| is))\b.*\b(?:multica|engineering|tickets?)\b.*\bblocked\b"
+        r"|\b(?:show|list|what(?:'s| is))\b.*\bblocked\b.*\b(?:multica|engineering|tickets?)\b",
+        text,
+        re.I,
+    )
+    if _BARE_BLOCKED_RE or _QUALIFIED_BLOCKED_RE:
         return Intent("engineering_ticket_list", {"status": "blocked"})
 
     _BOARD_RE = re.compile(

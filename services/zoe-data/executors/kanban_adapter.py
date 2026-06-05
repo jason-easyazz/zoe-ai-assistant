@@ -318,6 +318,17 @@ class KanbanAdapter:
                 phases[key[len(prefix):]] = row
         return phases
 
+    def build_phase_prompt(
+        self,
+        phase: str,
+        issue: dict,
+        identifier: str,
+        *,
+        mode: str | None = None,
+    ) -> str:
+        """Build the supported Hermes prompt contract for one engineering phase."""
+        return self._build_body(phase, issue, identifier, mode=mode)
+
     def _build_body(self, phase: str, issue: dict, identifier: str, *, mode: str | None = None) -> str:
         title = issue.get("title") or identifier
         description = issue.get("description") or ""

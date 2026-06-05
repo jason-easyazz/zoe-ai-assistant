@@ -16,6 +16,9 @@ def test_detects_multica_operator_commands():
     assert split.slots["title"] == "add the health probe"
     assert detect_intent("show Multica backlog").slots["status"] == "backlog"
     assert detect_intent("what is blocked").slots["status"] == "blocked"
+    assert detect_intent("show blocked engineering tickets").slots["status"] == "blocked"
+    unrelated = detect_intent("what is blocked in the calendar?")
+    assert unrelated is None or unrelated.name != "engineering_ticket_list"
 
 
 def test_natural_problem_report_routes_to_multica_capture():
