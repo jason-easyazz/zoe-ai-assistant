@@ -106,6 +106,7 @@ class TransitionRecord(BaseModel):
 
 class PipelineState(BaseModel):
     schema_version: int = 1
+    journal_revision: int = 0
     task_ref: str
     phase: PipelinePhase = "implement"
     status: PipelineStatus = "todo"

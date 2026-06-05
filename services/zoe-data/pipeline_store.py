@@ -40,6 +40,10 @@ _LOCK = threading.Lock()
 _TERMINAL = {"done", "archived", "blocked"}
 
 
+class PipelineStateConflict(RuntimeError):
+    """Raised when a caller tries to persist a stale pipeline mutation."""
+
+
 def store_path() -> Path:
     override = os.environ.get("ZOE_PIPELINE_STORE_PATH", "").strip()
     if override:
@@ -51,23 +55,25 @@ def _ensure_parent(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
 
-def append_record(record: dict[str, Any]) -> None:
-    path = store_path()
-    with _LOCK:
-        _ensure_parent(path)
-        with path.open("a", encoding="utf-8") as handle:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-            try:
-                handle.write(json.dumps(record, sort_keys=True) + "\n")
-            finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+def _latest_state_from_lines(lines: list[str], task_ref: str) -> PipelineState | None:
+    latest: PipelineState | None = None
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if payload.get("task_ref") != task_ref or "state" not in payload:
+            continue
+        latest = PipelineState.model_validate(payload["state"])
+    return latest
 
 
 def load_latest_state(task_ref: str) -> PipelineState | None:
     path = store_path()
     if not path.exists():
         return None
-    latest: PipelineState | None = None
     with _LOCK:
         with path.open("r", encoding="utf-8") as handle:
             fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
@@ -75,18 +81,7 @@ def load_latest_state(task_ref: str) -> PipelineState | None:
                 lines = handle.read().splitlines()
             finally:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-        for line in lines:
-            if not line.strip():
-                continue
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if payload.get("task_ref") != task_ref:
-                continue
-            if "state" in payload:
-                latest = PipelineState.model_validate(payload["state"])
-    return latest
+    return _latest_state_from_lines(lines, task_ref)
 
 
 async def _run_io(func, *args):
@@ -94,17 +89,74 @@ async def _run_io(func, *args):
     return await loop.run_in_executor(None, func, *args)
 
 
-def save_state(state: PipelineState, *, event: str, extra: dict[str, Any] | None = None) -> PipelineState:
-    record: dict[str, Any] = {
-        "event": event,
-        "task_ref": state.task_ref,
-        "phase": state.phase,
-        "status": state.status,
-        "state": state.model_dump(),
-    }
-    if extra:
-        record["meta"] = extra
-    append_record(record)
+def save_state(
+    state: PipelineState,
+    *,
+    event: str,
+    extra: dict[str, Any] | None = None,
+    allow_stale_evidence_merge: bool = False,
+) -> PipelineState:
+    path = store_path()
+    with _LOCK:
+        _ensure_parent(path)
+        with path.open("a+", encoding="utf-8") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                handle.seek(0)
+                latest = _latest_state_from_lines(
+                    handle.read().splitlines(),
+                    state.task_ref,
+                )
+                incoming_is_stale = bool(
+                    latest and state.journal_revision < latest.journal_revision
+                )
+                if incoming_is_stale and not allow_stale_evidence_merge:
+                    raise PipelineStateConflict(
+                        f"stale pipeline state for {state.task_ref}: "
+                        f"incoming revision {state.journal_revision}, "
+                        f"latest revision {latest.journal_revision}"
+                    )
+                base_state = latest if incoming_is_stale and latest else state
+                if incoming_is_stale and latest:
+                    evidence_by_key = {
+                        json.dumps(
+                            item.model_dump(exclude={"created_at"}),
+                            sort_keys=True,
+                        ): item
+                        for item in [*latest.evidence, *state.evidence]
+                    }
+                    base_state = base_state.model_copy(
+                        update={
+                            "evidence": sorted(
+                                evidence_by_key.values(),
+                                key=lambda item: item.created_at,
+                            )
+                        }
+                    )
+                state = base_state.model_copy(
+                    update={
+                        "journal_revision": (
+                            latest.journal_revision + 1
+                            if latest
+                            else max(1, state.journal_revision)
+                        )
+                    }
+                )
+
+                record: dict[str, Any] = {
+                    "event": event,
+                    "task_ref": state.task_ref,
+                    "phase": state.phase,
+                    "status": state.status,
+                    "state": state.model_dump(),
+                }
+                if extra:
+                    record["meta"] = extra
+                handle.seek(0, os.SEEK_END)
+                handle.write(json.dumps(record, sort_keys=True) + "\n")
+                handle.flush()
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
     return state
 
 
@@ -122,8 +174,13 @@ async def bootstrap_state(
         phase=start_phase,
         evidence_profile=issue_evidence_profile(issue),
     )
-    await _run_io(partial(save_state, state, event="bootstrap"))
-    return state
+    try:
+        return await _run_io(partial(save_state, state, event="bootstrap"))
+    except PipelineStateConflict:
+        existing = await _run_io(load_latest_state, task_ref)
+        if existing is None:
+            raise
+        return existing
 
 
 def resume_pipeline(
@@ -133,38 +190,44 @@ def resume_pipeline(
     reset_fingerprint: bool = False,
 ) -> PipelineState:
     """Journal an explicit retry of a blocked phase without erasing prior evidence."""
-    state = load_latest_state(task_ref)
-    if state is None:
-        raise ValueError(f"pipeline not found: {task_ref}")
-    if state.status != "blocked":
-        raise ValueError(f"pipeline is not blocked: {task_ref} ({state.status})")
-    resumed = state.model_copy(
-        update={
-            "status": "todo",
-            "last_block_fingerprint": None if reset_fingerprint else state.last_block_fingerprint,
-            "repeated_block_count": 0 if reset_fingerprint else state.repeated_block_count,
-            "block_classification": None,
-            "split_packet": None,
-            "history": (
-                [
-                    record
-                    for record in state.history
-                    if not (record.reason or "").startswith("fingerprint_abort:")
-                ]
-                if reset_fingerprint
-                else state.history
-            ),
-        }
-    )
-    return save_state(
-        resumed,
-        event="operator_resumed",
-        extra={
-            "reason": reason,
-            "phase": resumed.phase,
-            "reset_fingerprint": reset_fingerprint,
-        },
-    )
+    for attempt in range(2):
+        state = load_latest_state(task_ref)
+        if state is None:
+            raise ValueError(f"pipeline not found: {task_ref}")
+        if state.status != "blocked":
+            raise ValueError(f"pipeline is not blocked: {task_ref} ({state.status})")
+        resumed = state.model_copy(
+            update={
+                "status": "todo",
+                "last_block_fingerprint": None if reset_fingerprint else state.last_block_fingerprint,
+                "repeated_block_count": 0 if reset_fingerprint else state.repeated_block_count,
+                "block_classification": None,
+                "split_packet": None,
+                "history": (
+                    [
+                        record
+                        for record in state.history
+                        if not (record.reason or "").startswith("fingerprint_abort:")
+                    ]
+                    if reset_fingerprint
+                    else state.history
+                ),
+            }
+        )
+        try:
+            return save_state(
+                resumed,
+                event="operator_resumed",
+                extra={
+                    "reason": reason,
+                    "phase": resumed.phase,
+                    "reset_fingerprint": reset_fingerprint,
+                },
+            )
+        except PipelineStateConflict:
+            if attempt:
+                raise
+    raise AssertionError("unreachable")
 
 
 def skip_blocked_implementation(
@@ -173,32 +236,38 @@ def skip_blocked_implementation(
     reason: str,
 ) -> PipelineState:
     """Journal an operator-confirmed no-code recovery into verification."""
-    state = load_latest_state(task_ref)
-    if state is None:
-        raise ValueError(f"pipeline not found: {task_ref}")
-    if state.phase != "implement" or state.status != "blocked":
-        raise ValueError(
-            f"pipeline is not a blocked implementation: {task_ref} "
-            f"({state.phase}/{state.status})"
+    for attempt in range(2):
+        state = load_latest_state(task_ref)
+        if state is None:
+            raise ValueError(f"pipeline not found: {task_ref}")
+        if state.phase != "implement" or state.status != "blocked":
+            raise ValueError(
+                f"pipeline is not a blocked implementation: {task_ref} "
+                f"({state.phase}/{state.status})"
+            )
+        if not any(item.kind == "tool" and item.passed is True for item in state.evidence):
+            raise ValueError(
+                f"pipeline lacks passed scout/tool evidence required for a no-code skip: {task_ref}"
+            )
+        skipped = transition(state, "skip_implementation", reason=reason)
+        skipped = skipped.model_copy(
+            update={
+                "last_block_fingerprint": None,
+                "repeated_block_count": 0,
+                "block_classification": None,
+                "split_packet": None,
+            }
         )
-    if not any(item.kind == "tool" and item.passed is True for item in state.evidence):
-        raise ValueError(
-            f"pipeline lacks passed scout/tool evidence required for a no-code skip: {task_ref}"
-        )
-    skipped = transition(state, "skip_implementation", reason=reason)
-    skipped = skipped.model_copy(
-        update={
-            "last_block_fingerprint": None,
-            "repeated_block_count": 0,
-            "block_classification": None,
-            "split_packet": None,
-        }
-    )
-    return save_state(
-        skipped,
-        event="operator_skipped_implementation",
-        extra={"reason": reason, "from_phase": "implement", "to_phase": "verify"},
-    )
+        try:
+            return save_state(
+                skipped,
+                event="operator_skipped_implementation",
+                extra={"reason": reason, "from_phase": "implement", "to_phase": "verify"},
+            )
+        except PipelineStateConflict:
+            if attempt:
+                raise
+    raise AssertionError("unreachable")
 
 
 async def _append_harness_validators(state: PipelineState, phase: PipelinePhase) -> PipelineState:
@@ -328,6 +397,32 @@ async def sync_pipeline_from_chain(
     start_phase: PipelinePhase = "implement",
     issue: dict | None = None,
 ) -> PipelineState:
+    """Retry poll reconciliation, then defer safely to the next poll cycle."""
+    for _attempt in range(3):
+        try:
+            return await _sync_pipeline_from_chain_once(
+                task_ref,
+                phases,
+                fetch_detail,
+                start_phase=start_phase,
+                issue=issue,
+            )
+        except PipelineStateConflict:
+            continue
+    latest = await _run_io(load_latest_state, task_ref)
+    if latest is None:
+        raise RuntimeError(f"pipeline disappeared during reconciliation: {task_ref}")
+    return latest
+
+
+async def _sync_pipeline_from_chain_once(
+    task_ref: str,
+    phases: dict[str, dict],
+    fetch_detail: Callable[[str], Awaitable[dict[str, Any]]],
+    *,
+    start_phase: PipelinePhase = "implement",
+    issue: dict | None = None,
+) -> PipelineState:
     """Advance pipeline state from terminal Kanban phase rows and parsed handoffs."""
     from pipeline_handoff import (
         audit_only_from_handoff,
@@ -397,7 +492,7 @@ async def sync_pipeline_from_chain(
         ):
             state = _append_audit_protocol_recovery_evidence(state, phase)  # type: ignore[arg-type]
             if can_complete_phase(state):
-                await _run_io(
+                state = await _run_io(
                     partial(
                         save_state,
                         state,
@@ -434,7 +529,7 @@ async def sync_pipeline_from_chain(
                 state = state.model_copy(
                     update={"block_classification": "scope_split_required", "split_packet": packet}
                 )
-                await _run_io(
+                state = await _run_io(
                     partial(
                         save_state,
                         state,
@@ -449,7 +544,7 @@ async def sync_pipeline_from_chain(
                 )
                 return state
             if split_requested:
-                await _run_io(
+                state = await _run_io(
                     partial(
                         save_state,
                         state,
@@ -477,7 +572,7 @@ async def sync_pipeline_from_chain(
                     state = state.model_copy(
                         update={"block_classification": "scope_split_required", "split_packet": packet}
                     )
-                await _run_io(
+                state = await _run_io(
                     partial(
                         save_state,
                         state,
@@ -502,12 +597,13 @@ async def sync_pipeline_from_chain(
             }
             if state.phase == "verify" and not verify_validator_hash_matches(state):
                 extra["validator_hash_mismatch"] = True
-            await _run_io(
+            state = await _run_io(
                 partial(
                     save_state,
                     state,
                     event="gate_blocked",
                     extra=extra,
+                    allow_stale_evidence_merge=True,
                 )
             )
             return state
@@ -526,7 +622,7 @@ async def sync_pipeline_from_chain(
                 trans_reason = None
             state = transition(state, outcome, reason=trans_reason)  # type: ignore[arg-type]
         except ValueError as exc:
-            await _run_io(
+            state = await _run_io(
                 partial(
                     save_state,
                     state,
@@ -536,7 +632,7 @@ async def sync_pipeline_from_chain(
             )
             return state
 
-        await _run_io(
+        state = await _run_io(
             partial(
                 save_state,
                 state,

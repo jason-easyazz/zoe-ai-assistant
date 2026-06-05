@@ -27,6 +27,197 @@ def test_bootstrap_and_reload(isolated_store):
     assert reloaded.phase == "implement"
 
 
+def test_stale_save_preserves_concurrently_written_evidence(isolated_store):
+    state = PipelineState(
+        task_ref="multica:concurrent-evidence",
+        phase="review",
+        status="running",
+    )
+    store.save_state(state, event="effect_requested")
+    stale = store.load_latest_state(state.task_ref)
+    assert stale is not None
+
+    current_state = store.load_latest_state(state.task_ref)
+    assert current_state is not None
+    current = with_evidence(
+        current_state,
+        EvidenceItem(
+            kind="human",
+            summary="mechanical review approval",
+            passed=True,
+            metadata={"source": "command", "phase": "review"},
+        ),
+    )
+    store.save_state(current, event="evidence_human")
+    store.save_state(
+        stale,
+        event="gate_blocked",
+        extra={"missing": ["human"]},
+        allow_stale_evidence_merge=True,
+    )
+
+    reloaded = store.load_latest_state(state.task_ref)
+    assert reloaded is not None
+    assert any(
+        item.kind == "human"
+        and item.passed is True
+        and item.metadata.get("source") == "command"
+        for item in reloaded.evidence
+    )
+    assert reloaded.journal_revision == 3
+
+
+def test_stale_save_cannot_regress_pipeline_phase(isolated_store):
+    initial = store.save_state(
+        PipelineState(
+            task_ref="multica:concurrent-transition",
+            phase="review",
+            status="running",
+        ),
+        event="effect_requested",
+    )
+    stale = initial.model_copy(deep=True)
+
+    advanced = initial.model_copy(update={"phase": "closeout", "status": "todo"})
+    advanced = store.save_state(advanced, event="transition")
+    persisted = store.save_state(
+        stale,
+        event="gate_blocked",
+        allow_stale_evidence_merge=True,
+    )
+
+    assert advanced.journal_revision == 2
+    assert persisted.phase == "closeout"
+    assert persisted.status == "todo"
+    assert persisted.journal_revision == 3
+
+
+def test_stale_mutation_raises_conflict(isolated_store):
+    initial = store.save_state(
+        PipelineState(task_ref="multica:stale-mutation", status="blocked"),
+        event="blocked",
+    )
+    store.save_state(
+        initial.model_copy(update={"block_classification": "scope_split_required"}),
+        event="classified",
+    )
+
+    with pytest.raises(store.PipelineStateConflict, match="stale pipeline state"):
+        store.save_state(
+            initial.model_copy(update={"status": "todo"}),
+            event="operator_resumed",
+        )
+
+
+def test_resume_pipeline_retries_after_conflict(isolated_store, monkeypatch):
+    state = PipelineState(task_ref="multica:resume-race", status="blocked")
+    store.save_state(state, event="blocked")
+    original_save = store.save_state
+    calls = 0
+
+    def conflict_once(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise store.PipelineStateConflict("simulated race")
+        return original_save(*args, **kwargs)
+
+    monkeypatch.setattr(store, "save_state", conflict_once)
+    resumed = store.resume_pipeline("multica:resume-race")
+
+    assert calls == 2
+    assert resumed.status == "todo"
+
+
+def test_concurrent_evidence_merge_deduplicates_created_at_only(isolated_store):
+    initial = store.save_state(
+        PipelineState(task_ref="multica:evidence-dedup"),
+        event="bootstrap",
+    )
+    first = with_evidence(
+        initial,
+        EvidenceItem(
+            kind="human",
+            summary="review approved",
+            passed=True,
+            metadata={"source": "command", "phase": "review"},
+        ),
+    )
+    store.save_state(first, event="evidence_human")
+    duplicate = first.model_copy(
+        update={
+            "evidence": [
+                EvidenceItem(
+                    kind="human",
+                    summary="review approved",
+                    passed=True,
+                    metadata={"source": "command", "phase": "review"},
+                )
+            ]
+        }
+    )
+    store.save_state(
+        duplicate,
+        event="evidence_human",
+        allow_stale_evidence_merge=True,
+    )
+
+    reloaded = store.load_latest_state(initial.task_ref)
+    assert reloaded is not None
+    assert len([item for item in reloaded.evidence if item.kind == "human"]) == 1
+
+
+def test_non_stale_transition_can_clear_prior_evidence(isolated_store):
+    initial = store.save_state(
+        PipelineState(
+            task_ref="multica:revision",
+            phase="review",
+            status="running",
+            evidence=[
+                EvidenceItem(
+                    kind="human",
+                    summary="review evidence that must be re-earned",
+                    passed=False,
+                )
+            ],
+        ),
+        event="review_blocked",
+    )
+    revised = store.transition(initial, "request_changes", reason="fix requested")
+    saved = store.save_state(revised, event="transition")
+
+    assert saved.phase == "implement"
+    assert saved.evidence == []
+    reloaded = store.load_latest_state(initial.task_ref)
+    assert reloaded is not None
+    assert reloaded.evidence == []
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_returns_concurrently_created_state(isolated_store, monkeypatch):
+    existing = PipelineState(
+        task_ref="multica:bootstrap-race",
+        phase="scout",
+        journal_revision=1,
+    )
+    load_calls = 0
+
+    def racing_load(_task_ref):
+        nonlocal load_calls
+        load_calls += 1
+        return None if load_calls == 1 else existing
+
+    def conflicting_save(*_args, **_kwargs):
+        raise store.PipelineStateConflict("simulated first-write race")
+
+    monkeypatch.setattr(store, "load_latest_state", racing_load)
+    monkeypatch.setattr(store, "save_state", conflicting_save)
+
+    result = await store.bootstrap_state("multica:bootstrap-race")
+
+    assert result is existing
+
+
 def test_pipeline_summary_reports_missing_evidence(isolated_store):
     state = PipelineState(task_ref="multica:1", phase="implement", status="running")
     summary = store.pipeline_summary(state)
@@ -164,6 +355,82 @@ async def test_sync_pipeline_advances_on_complete_handoff(isolated_store):
     assert len(lines) >= 2
     last = json.loads(lines[-1])
     assert last["event"] in {"transition", "gate_blocked"}
+
+
+@pytest.mark.asyncio
+async def test_sync_pipeline_retries_a_concurrent_transition_write(
+    isolated_store, monkeypatch
+):
+    await store.bootstrap_state("multica:sync-race")
+    original_save = store.save_state
+    transition_calls = 0
+
+    def conflict_first_transition(state, *, event, **kwargs):
+        nonlocal transition_calls
+        if event == "transition":
+            transition_calls += 1
+            if transition_calls == 1:
+                raise store.PipelineStateConflict("simulated command race")
+        return original_save(state, event=event, **kwargs)
+
+    monkeypatch.setattr(store, "save_state", conflict_first_transition)
+
+    async def fetch_detail(_task_id: str):
+        return {
+            "latest_summary": (
+                "TOOLS_USED=graphify\n"
+                "TESTS=pytest -q pass\n"
+                "PR_URL=https://github.com/o/r/pull/9"
+            ),
+            "comments": [],
+        }
+
+    state = await store.sync_pipeline_from_chain(
+        "multica:sync-race",
+        {"implement": {"id": "t1", "status": "done"}},
+        fetch_detail,
+    )
+
+    assert transition_calls == 2
+    assert state.phase == "verify"
+    assert state.status == "todo"
+
+
+@pytest.mark.asyncio
+async def test_sync_pipeline_defers_after_sustained_journal_conflicts(
+    isolated_store, monkeypatch
+):
+    initial = await store.bootstrap_state("multica:sync-contention")
+    original_save = store.save_state
+    transition_calls = 0
+
+    def always_conflict_transition(state, *, event, **kwargs):
+        nonlocal transition_calls
+        if event == "transition":
+            transition_calls += 1
+            raise store.PipelineStateConflict("sustained command writes")
+        return original_save(state, event=event, **kwargs)
+
+    monkeypatch.setattr(store, "save_state", always_conflict_transition)
+
+    async def fetch_detail(_task_id: str):
+        return {
+            "latest_summary": (
+                "TOOLS_USED=graphify\n"
+                "TESTS=pytest -q pass\n"
+                "PR_URL=https://github.com/o/r/pull/9"
+            ),
+            "comments": [],
+        }
+
+    state = await store.sync_pipeline_from_chain(
+        "multica:sync-contention",
+        {"implement": {"id": "t1", "status": "done"}},
+        fetch_detail,
+    )
+
+    assert transition_calls == 3
+    assert state == initial
 
 
 @pytest.mark.asyncio
