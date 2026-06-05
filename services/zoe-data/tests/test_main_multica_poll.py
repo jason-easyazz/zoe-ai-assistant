@@ -12,6 +12,22 @@ class RecordingClient:
         return {"id": args[0], **kwargs}
 
 
+def test_tracked_multica_engineering_issues_includes_review_and_deduplicates():
+    from main import _tracked_multica_engineering_issues
+
+    in_progress = [{"id": "one", "status": "in_progress"}]
+    in_review = [
+        {"id": "one", "status": "in_review"},
+        {"id": "two", "status": "in_review"},
+        {"title": "missing id"},
+    ]
+
+    assert _tracked_multica_engineering_issues(in_progress, in_review) == [
+        in_progress[0],
+        in_review[1],
+    ]
+
+
 @pytest.mark.asyncio
 async def test_record_completed_multica_chain_records_explicit_retro_completion_metadata():
     from main import _record_completed_multica_chain

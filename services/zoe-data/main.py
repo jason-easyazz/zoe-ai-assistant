@@ -133,6 +133,20 @@ async def _record_completed_multica_chain(client, issue_id: str, chain: dict) ->
         logger.warning("multica_poll: retro follow-up creation failed for %s: %s", issue_id, exc)
 
 
+def _tracked_multica_engineering_issues(*groups: list[dict]) -> list[dict]:
+    """Return unique active/review issues whose engineering chain needs reconciliation."""
+    tracked: list[dict] = []
+    seen: set[str] = set()
+    for group in groups:
+        for issue in group or []:
+            issue_id = str(issue.get("id") or "")
+            if not issue_id or issue_id in seen:
+                continue
+            seen.add(issue_id)
+            tracked.append(issue)
+    return tracked
+
+
 def _blocked_multica_chain_reason(chain: dict) -> str:
     """Return the operator-visible reason for a blocked engineering chain."""
     pipeline = chain.get("pipeline") or {}
@@ -401,6 +415,7 @@ async def lifespan(app: FastAPI):
                         logger.debug("multica_poll: stale-todo close error: %s", _se)
 
                 in_progress_issues = await client.list_issues(status="in_progress") or []
+                in_review_issues = await client.list_issues(status="in_review") or []
 
                 # Webhook bridge: Hermes-assigned todos / in_progress (no chain) → issue.assigned.
                 try:
@@ -497,14 +512,24 @@ async def lifespan(app: FastAPI):
                 except Exception as _wh_exc:
                     logger.debug("multica_poll: webhook dispatch failed: %s", _wh_exc)
 
-                issues = in_progress_issues
-                for issue in issues or []:
+                issues = _tracked_multica_engineering_issues(
+                    in_progress_issues,
+                    in_review_issues,
+                )
+                in_review_ids = {
+                    str(issue.get("id") or "")
+                    for issue in in_review_issues
+                    if issue.get("id")
+                }
+                for issue in issues:
                     # Check whether a linked engineering workflow has reached a terminal state.
                     issue_id = issue.get("id")
                     title = issue.get("title", "")
                     if not issue_id:
                         continue
                     if title.startswith("Autopilot:"):
+                        if str(issue_id) in in_review_ids:
+                            continue
                         try:
                             import datetime as _dt
 
@@ -520,8 +545,9 @@ async def lifespan(app: FastAPI):
                             if _age_h >= 2:
                                 await client.update_issue(issue_id, status="done")
                                 logger.info(
-                                    "multica_poll: closed stale in_progress autopilot '%s'",
+                                    "multica_poll: closed stale autopilot '%s' (was %s)",
                                     title[:50],
+                                    issue.get("status", "in_progress"),
                                 )
                         except Exception as _ap_exc:
                             logger.debug("multica_poll: autopilot in_progress close: %s", _ap_exc)
@@ -575,7 +601,7 @@ async def lifespan(app: FastAPI):
                     except Exception as _inner_exc:
                         logger.debug("multica_poll: inner error for issue %s: %s", issue_id, _inner_exc)
 
-                for _review in await client.list_issues(status="in_review") or []:
+                for _review in in_review_issues:
                     _rt = _review.get("title", "")
                     _rid = _review.get("id")
                     if _rid and _rt.startswith("Autopilot:"):
