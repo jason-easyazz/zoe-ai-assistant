@@ -1019,19 +1019,19 @@ def test_stale_log_is_ignored_until_resumed_worker_writes(tmp_path, monkeypatch)
     assert kb.tool_step_count("t_scout", since=log_path.stat().st_mtime + 1) == 0
 
 
-def test_current_running_attempt_timestamp_wins_over_original_task_start():
+def test_latest_attempt_timestamp_wins_before_run_reaches_running():
     detail = {
         "task": {"started_at": 100},
         "runs": [
             {"status": "blocked", "started_at": 100},
-            {"status": "running", "started_at": 200},
+            {"status": "claimed", "started_at": 200},
         ],
     }
 
     assert kb._started_timestamp(detail) == 200
 
 
-def test_running_attempt_without_timestamp_falls_back_to_task_start():
+def test_attempt_without_timestamp_falls_back_to_task_start():
     detail = {
         "task": {"started_at": 100},
         "runs": [{"status": "running", "worker_pid": 4242}],
