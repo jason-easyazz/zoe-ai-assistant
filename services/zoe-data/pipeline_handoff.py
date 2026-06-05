@@ -317,7 +317,8 @@ def implementation_required_from_handoff(detail: dict[str, Any]) -> bool | None:
     fields: dict[str, str] = {}
     for chunk in _haystacks(detail):
         fields.update(_parse_kv_fields(chunk))
-    fields.update(_structured_handoff_fields(detail))
+    structured_fields = _structured_handoff_fields(detail)
+    fields.update(structured_fields)
 
     raw = (fields.get("IMPLEMENTATION_REQUIRED") or "").strip().lower()
     if raw in {"1", "true", "yes"}:
@@ -325,7 +326,7 @@ def implementation_required_from_handoff(detail: dict[str, Any]) -> bool | None:
     if raw in {"0", "false", "no"}:
         return False
 
-    acceptance = (fields.get("ACCEPTANCE_STATUS") or "").strip().lower()
+    acceptance = (structured_fields.get("ACCEPTANCE_STATUS") or "").strip().lower()
     if acceptance in {"met", "already_met", "met_by_merged_prs"}:
         return False
     return None

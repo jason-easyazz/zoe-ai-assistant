@@ -42,6 +42,12 @@ def test_implementation_required_supports_existing_acceptance_status():
     assert implementation_required_from_handoff(detail) is False
 
 
+def test_acceptance_status_in_free_text_does_not_skip_implementation():
+    detail = {"latest_summary": "ACCEPTANCE_STATUS=met_by_merged_PRs"}
+
+    assert implementation_required_from_handoff(detail) is None
+
+
 def test_structured_implementation_decision_wins_over_text():
     detail = {
         "latest_summary": "IMPLEMENTATION_REQUIRED=true",
