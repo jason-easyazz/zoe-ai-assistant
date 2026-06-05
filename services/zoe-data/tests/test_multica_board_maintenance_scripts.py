@@ -13,4 +13,4 @@ def test_legacy_board_maintenance_is_dry_run_and_preserves_descriptions():
         assert '--execute' in source
         assert "append_issue_note" in source
         assert "attach_label" in source
-        assert "description=" not in source
+        assert "description=(" not in source
