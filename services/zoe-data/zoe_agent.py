@@ -2705,6 +2705,10 @@ def _cap_tool_result(tool_name: str, result: str) -> str:
 
 # ── Tool dispatch ─────────────────────────────────────────────────────────────
 
+def _zoe_base_url() -> str:
+    return str(os.environ.get("ZOE_CHAT_URL", "http://localhost:8000")).rstrip("/")
+
+
 async def _dispatch_tool(tool_name: str, args: dict, user_id: str = "family-admin") -> str:
     """Dispatch a tool call and return result as string."""
     if tool_name in {
@@ -2731,7 +2735,7 @@ async def _dispatch_tool(tool_name: str, args: dict, user_id: str = "family-admi
     if tool_name == "open_touch_page":
         page = str((args or {}).get("page", "")).strip().lower()
         panel_id = str((args or {}).get("panel_id") or os.environ.get("ZOE_PANEL_ID", "zoe-touch-pi")).strip()
-        base_url = str(os.environ.get("ZOE_CHAT_URL", "http://localhost:8000")).rstrip("/")
+        base_url = _zoe_base_url()
         page_map = {
             "weather": f"{base_url}/touch/weather.html",
             "calendar": f"{base_url}/touch/calendar.html",
@@ -2856,7 +2860,7 @@ async def _dispatch_tool(tool_name: str, args: dict, user_id: str = "family-admi
     if tool_name == "list_openclaw_plugins":
         try:
             async with httpx.AsyncClient(timeout=5) as client:
-                base_url = str(os.environ.get("ZOE_CHAT_URL", "http://localhost:8000")).rstrip("/")
+                base_url = _zoe_base_url()
                 r = await client.get(f"{base_url}/api/openclaw/plugins")
                 plugin_data = r.json() if r.status_code == 200 else {"plugins": []}
         except Exception:
@@ -2870,7 +2874,7 @@ async def _dispatch_tool(tool_name: str, args: dict, user_id: str = "family-admi
     if tool_name == "list_openclaw_skills":
         try:
             async with httpx.AsyncClient(timeout=8) as client:
-                base_url = str(os.environ.get("ZOE_CHAT_URL", "http://localhost:8000")).rstrip("/")
+                base_url = _zoe_base_url()
                 r = await client.get(f"{base_url}/api/openclaw/skills")
                 skill_data = r.json() if r.status_code == 200 else {"skills": []}
         except Exception:
