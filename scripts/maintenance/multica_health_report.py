@@ -15,6 +15,21 @@ import httpx
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "services" / "zoe-data"))
 
 
+def _uploads_configured() -> bool:
+    if os.environ.get("LOCAL_UPLOAD_DIR") and os.environ.get("LOCAL_UPLOAD_BASE_URL"):
+        return True
+    compose_path = Path(__file__).resolve().parents[2] / "docker-compose.modules.yml"
+    try:
+        compose = compose_path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return (
+        'LOCAL_UPLOAD_DIR: "/data/uploads"' in compose
+        and 'LOCAL_UPLOAD_BASE_URL: "http://localhost:8080"' in compose
+        and "multica-uploads:/data/uploads" in compose
+    )
+
+
 async def _probe(url: str, *, headers: dict[str, str] | None = None) -> dict:
     try:
         async with httpx.AsyncClient(timeout=5.0, follow_redirects=True) as client:
@@ -40,7 +55,7 @@ async def run(*, ensure_shape: bool = False) -> dict:
         "webhook_secret": bool(os.environ.get("MULTICA_WEBHOOK_SECRET")),
         "oidc_client_id": bool(os.environ.get("MULTICA_OIDC_CLIENT_ID", "multica")),
         "oidc_client_secret": bool(os.environ.get("MULTICA_OIDC_CLIENT_SECRET")),
-        "uploads_configured": True,
+        "uploads_configured": _uploads_configured(),
         "email_configured": bool(
             os.environ.get("RESEND_API_KEY") or os.environ.get("SMTP_HOST")
         ),

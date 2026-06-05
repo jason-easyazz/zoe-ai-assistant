@@ -35,3 +35,9 @@ def test_probe_reports_http_status(monkeypatch):
     result = asyncio.run(module._probe("http://example.test/health"))
     assert result["ok"] is True
     assert result["status"] == 200
+
+
+def test_upload_check_reads_the_runtime_compose_contract():
+    module = _module()
+
+    assert module._uploads_configured() is True

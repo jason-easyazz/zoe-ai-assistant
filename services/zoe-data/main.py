@@ -433,7 +433,8 @@ async def lifespan(app: FastAPI):
                     from multica_poll_dispatch import chain_is_running, chain_needs_dispatch  # type: ignore[import]
                     from multica_dispatch_control import dispatch_is_paused, pause_reason
 
-                    if _wh_ok() and not dispatch_is_paused():
+                    _dispatch_paused = dispatch_is_paused()
+                    if _wh_ok() and not _dispatch_paused:
                         _hermes = str(get_engineering_multica_agent_id())
                         # Throttle first-dispatch: cap new chains per cycle so a
                         # wave of assigned todos can't spawn N concurrent chains
@@ -530,11 +531,6 @@ async def lifespan(app: FastAPI):
                                     _candidate.get("identifier") or _tid,
                                     "todo" if from_todo else "in_progress-backfill",
                                 )
-                    elif dispatch_is_paused():
-                        logger.info(
-                            "multica_poll: runtime dispatch pause active (%s)",
-                            pause_reason(),
-                        )
 
                         # Backfill existing in-progress runs before starting fresh todo work.
                         # A partial chain owns the one active ticket lane but still needs this
@@ -552,6 +548,11 @@ async def lifespan(app: FastAPI):
                                 await _maybe_dispatch_hermes_issue(_todo, from_todo=True)
                                 if _wh_dispatched >= _wh_limit:
                                     break
+                    elif _dispatch_paused:
+                        logger.info(
+                            "multica_poll: runtime dispatch pause active (%s)",
+                            pause_reason(),
+                        )
                 except Exception as _wh_exc:
                     logger.debug("multica_poll: webhook dispatch failed: %s", _wh_exc)
 
