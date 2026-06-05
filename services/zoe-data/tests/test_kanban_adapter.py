@@ -957,6 +957,37 @@ def test_phase_budget_reason_enforces_tool_and_runtime_limits(tmp_path, monkeypa
     assert "runtime budget exceeded" in reason
 
 
+def test_phase_budget_accepts_iso_timestamp_and_ascii_step_logs(tmp_path, monkeypatch):
+    log_path = tmp_path / "task.log"
+    log_path.write_text("| shell command  0.2s\n", encoding="utf-8")
+    monkeypatch.setattr(kb, "_log_path", lambda _task_id: log_path)
+    monkeypatch.setenv("ZOE_KANBAN_SCOUT_TOOL_BUDGET", "5")
+    monkeypatch.setenv("ZOE_KANBAN_SCOUT_RUNTIME_BUDGET_SECONDS", "5")
+
+    assert kb.tool_step_count("t_scout") == 1
+    reason = kb.phase_budget_reason(
+        "t_scout",
+        "scout",
+        {"task": {"started_at": "2026-06-05T12:00:00Z"}},
+        now=kb._timestamp("2026-06-05T12:00:06Z"),
+    )
+    assert reason is not None
+    assert "runtime budget exceeded" in reason
+
+
+def test_running_worker_pids_require_expected_hermes_command(monkeypatch):
+    monkeypatch.setattr(kb, "_is_expected_worker", lambda pid: pid == 4242)
+    detail = {
+        "runs": [
+            {"status": "running", "worker_pid": 2},
+            {"status": "running", "worker_pid": 4242},
+            {"status": "done", "worker_pid": 5252},
+        ]
+    }
+
+    assert kb.running_worker_pids(detail) == [4242]
+
+
 @pytest.mark.asyncio
 async def test_poll_auto_blocks_and_terminates_worker_after_phase_budget(monkeypatch):
     rows = [_row("scout", "running")]
@@ -972,6 +1003,7 @@ async def test_poll_auto_blocks_and_terminates_worker_after_phase_budget(monkeyp
         "phase_budget_reason",
         lambda *_args, **_kwargs: "BLOCKER=SCOUT_BUDGET: test limit",
     )
+    monkeypatch.setattr(kb, "_is_expected_worker", lambda pid: pid == 4242)
     monkeypatch.setattr(ka, "terminate_running_workers", lambda detail: stopped.extend(kb.running_worker_pids(detail)))
     a = _FakeAdapter(list_rows=rows, show_map=show)
 

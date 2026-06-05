@@ -7,6 +7,7 @@ import os
 import re
 import signal
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,9 @@ _RUNTIME_DEFAULTS = {
     "closeout": 900,
     "retro": 300,
 }
+_STEP_LINE_RE = re.compile(r"^\s*(?:┊|\|)\s+\S")
+_FALLBACK_STEP_RE = re.compile(r"^\s*\S.*\s+\d+(?:\.\d+)?s(?:\s+\[.*\])?\s*$")
+_ZERO_STEP_WARNED: set[str] = set()
 
 
 def _limit(phase: str, kind: str) -> int:
@@ -50,7 +54,29 @@ def tool_step_count(task_id: str) -> int:
         lines = _log_path(task_id).read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return 0
-    return sum(1 for line in lines if re.match(r"^\s*┊\s+\S", line))
+    count = sum(1 for line in lines if _STEP_LINE_RE.match(line))
+    if not count:
+        count = sum(1 for line in lines if _FALLBACK_STEP_RE.match(line))
+    if not count and lines and task_id not in _ZERO_STEP_WARNED:
+        _ZERO_STEP_WARNED.add(task_id)
+        logger.warning(
+            "kanban_phase_budget: could not identify tool steps in non-empty log for %s",
+            task_id,
+        )
+    return count
+
+
+def _is_expected_worker(pid: int) -> bool:
+    if pid <= 100:
+        return False
+    try:
+        command = (Path("/proc") / str(pid) / "cmdline").read_bytes().replace(b"\0", b" ").decode(
+            "utf-8",
+            errors="replace",
+        )
+    except OSError:
+        return False
+    return "hermes" in command and "work kanban task" in command
 
 
 def running_worker_pids(detail: dict[str, Any]) -> list[int]:
@@ -62,7 +88,7 @@ def running_worker_pids(detail: dict[str, Any]) -> list[int]:
             pid = int(run.get("worker_pid") or 0)
         except (TypeError, ValueError):
             continue
-        if pid > 1:
+        if _is_expected_worker(pid):
             pids.append(pid)
     return pids
 
@@ -75,6 +101,25 @@ def terminate_running_workers(detail: dict[str, Any]) -> None:
             continue
         except OSError as exc:
             logger.warning("kanban_phase_budget: failed to stop worker pid=%s: %s", pid, exc)
+
+
+def _timestamp(value: Any) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        pass
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
 
 
 def phase_budget_reason(
@@ -101,10 +146,10 @@ def phase_budget_reason(
             if isinstance(run, dict) and str(run.get("status") or "").lower() == "running"
         ]
         started_at = running[-1].get("started_at") if running else None
-    try:
-        elapsed = (now if now is not None else time.time()) - float(started_at)
-    except (TypeError, ValueError):
+    started_ts = _timestamp(started_at)
+    if started_ts is None:
         return None
+    elapsed = (now if now is not None else time.time()) - started_ts
     runtime_limit = _limit(phase, "runtime")
     if elapsed > runtime_limit:
         return (
