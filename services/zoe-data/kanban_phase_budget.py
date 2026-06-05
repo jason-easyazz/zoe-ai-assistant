@@ -142,7 +142,7 @@ def _started_timestamp(detail: dict[str, Any]) -> float | None:
         if isinstance(run, dict) and str(run.get("status") or "").lower() == "running"
     ]
     task = detail.get("task") if isinstance(detail.get("task"), dict) else {}
-    started_at = running[-1].get("started_at") if running else task.get("started_at")
+    started_at = (running[-1].get("started_at") if running else None) or task.get("started_at")
     return _timestamp(started_at)
 
 

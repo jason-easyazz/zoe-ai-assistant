@@ -1031,6 +1031,15 @@ def test_current_running_attempt_timestamp_wins_over_original_task_start():
     assert kb._started_timestamp(detail) == 200
 
 
+def test_running_attempt_without_timestamp_falls_back_to_task_start():
+    detail = {
+        "task": {"started_at": 100},
+        "runs": [{"status": "running", "worker_pid": 4242}],
+    }
+
+    assert kb._started_timestamp(detail) == 100
+
+
 def test_running_worker_pids_require_expected_hermes_command(monkeypatch):
     monkeypatch.setattr(kb, "_is_expected_worker", lambda pid: pid == 4242)
     detail = {
