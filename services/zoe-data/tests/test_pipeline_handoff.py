@@ -42,6 +42,15 @@ def test_implementation_required_supports_existing_acceptance_status():
     assert implementation_required_from_handoff(detail) is False
 
 
+def test_structured_implementation_decision_wins_over_text():
+    detail = {
+        "latest_summary": "IMPLEMENTATION_REQUIRED=true",
+        "runs": [{"metadata": {"IMPLEMENTATION_REQUIRED": "false"}}],
+    }
+
+    assert implementation_required_from_handoff(detail) is False
+
+
 def test_evidence_from_verify_handoff_parses_validators():
     detail = {
         "latest_summary": "VALIDATORS=validate_structure.py pass\nTESTS=pytest services/zoe-data/tests -q pass",

@@ -314,9 +314,10 @@ def audit_only_from_handoff(detail: dict[str, Any]) -> bool:
 
 def implementation_required_from_handoff(detail: dict[str, Any]) -> bool | None:
     """Return an explicit scout decision about whether code changes are required."""
-    fields = _structured_handoff_fields(detail)
+    fields: dict[str, str] = {}
     for chunk in _haystacks(detail):
         fields.update(_parse_kv_fields(chunk))
+    fields.update(_structured_handoff_fields(detail))
 
     raw = (fields.get("IMPLEMENTATION_REQUIRED") or "").strip().lower()
     if raw in {"1", "true", "yes"}:

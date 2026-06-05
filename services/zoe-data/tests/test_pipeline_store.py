@@ -103,6 +103,8 @@ def test_skip_blocked_implementation_moves_to_verify(isolated_store):
         status="blocked",
         last_block_fingerprint="old",
         repeated_block_count=1,
+        block_classification="scope_split_required",
+        split_packet={"kind": "scope_split_required"},
     )
     store.save_state(state, event="blocked")
 
@@ -114,6 +116,9 @@ def test_skip_blocked_implementation_moves_to_verify(isolated_store):
     assert skipped.phase == "verify"
     assert skipped.status == "todo"
     assert skipped.last_block_fingerprint is None
+    assert skipped.repeated_block_count == 0
+    assert skipped.block_classification is None
+    assert skipped.split_packet is None
     assert "operator_skipped_implementation" in isolated_store.read_text(encoding="utf-8")
 
 
