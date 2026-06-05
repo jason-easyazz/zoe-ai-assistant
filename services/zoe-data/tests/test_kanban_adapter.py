@@ -376,6 +376,10 @@ async def test_closeout_body_instructs_merge_when_ready():
     assert "MERGE_SHA=" in body
     assert "--packet-only" in body
     assert "never --admin" in body
+    assert "COST/ITERATION FAST PATH" in body
+    assert "make the first repository command" in body
+    assert "Do not repeat the rebase/guard cycle" in body
+    assert "duplicate `gh pr view`" in body
 
 
 @pytest.mark.asyncio
