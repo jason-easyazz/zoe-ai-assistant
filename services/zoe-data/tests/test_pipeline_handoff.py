@@ -118,6 +118,30 @@ def test_evidence_from_live_review_run_metadata_accepts_merge_ready_verdict():
     assert human.metadata["verdict"] == "approve"
 
 
+def test_evidence_from_live_review_run_metadata_accepts_explicit_approved_ready():
+    detail = {
+        "latest_summary": "APPROVE ZOE-5347. Merge-ready.",
+        "comments": [],
+        "task": {"assignee": "zoe-reviewer"},
+        "runs": [
+            {
+                "metadata": {
+                    "approved": True,
+                    "merge_readiness": "ready",
+                }
+            }
+        ],
+    }
+
+    items = evidence_from_handoff("review", detail)
+
+    human = next(item for item in items if item.kind == "human")
+    assert human.passed is True
+    assert human.metadata["source"] == "kanban_run_metadata"
+    assert human.metadata["approver"] == "zoe-reviewer"
+    assert human.metadata["merge_readiness"] == "merge_ready"
+
+
 def test_evidence_from_review_metadata_accepts_approved_readiness():
     detail = {
         "latest_summary": "Approved after review.",
@@ -156,6 +180,40 @@ def test_evidence_from_review_ignores_legacy_readiness_with_only_task_assignee()
         "metadata": {
             "merge_readiness": "merge_ready",
         },
+    }
+
+    items = evidence_from_handoff("review", detail)
+
+    assert not any(item.kind == "human" for item in items)
+
+
+def test_evidence_from_review_ignores_ready_without_explicit_approval():
+    detail = {
+        "latest_summary": "Reviewer says this looks ready.",
+        "comments": [],
+        "task": {"assignee": "zoe-reviewer"},
+        "metadata": {
+            "merge_readiness": "ready",
+        },
+    }
+
+    items = evidence_from_handoff("review", detail)
+
+    assert not any(item.kind == "human" for item in items)
+
+
+def test_evidence_from_review_run_ignores_ready_without_explicit_approval():
+    detail = {
+        "latest_summary": "Reviewer says this looks ready.",
+        "comments": [],
+        "task": {"assignee": "zoe-reviewer"},
+        "runs": [
+            {
+                "metadata": {
+                    "merge_readiness": "ready",
+                }
+            }
+        ],
     }
 
     items = evidence_from_handoff("review", detail)

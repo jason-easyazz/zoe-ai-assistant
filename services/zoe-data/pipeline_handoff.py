@@ -212,13 +212,15 @@ def _human_review_from_metadata(detail: dict[str, Any]) -> EvidenceItem | None:
         readiness = str(metadata.get("merge_readiness") or "").strip().lower()
         verdict = str(metadata.get("verdict") or "").strip().lower()
         explicit_verdict_ready = metadata.get("merge_ready") is True and verdict in {"approve", "approved"}
-        if explicit_verdict_ready:
+        explicit_approved_ready = metadata.get("approved") is True and readiness == "ready"
+        explicit_approval = explicit_verdict_ready or explicit_approved_ready
+        if explicit_approval:
             readiness = "merge_ready"
         task = detail.get("task") if isinstance(detail.get("task"), dict) else {}
         explicit_approver = metadata.get("approver") or metadata.get("approved_by")
         approver = str(
             explicit_approver
-            or (task.get("assignee") if explicit_verdict_ready else "")
+            or (task.get("assignee") if explicit_approval else "")
             or ""
         ).strip()
 
