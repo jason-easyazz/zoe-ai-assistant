@@ -202,6 +202,25 @@ def test_evidence_from_review_ignores_ready_without_explicit_approval():
     assert not any(item.kind == "human" for item in items)
 
 
+def test_evidence_from_review_run_ignores_ready_without_explicit_approval():
+    detail = {
+        "latest_summary": "Reviewer says this looks ready.",
+        "comments": [],
+        "task": {"assignee": "zoe-reviewer"},
+        "runs": [
+            {
+                "metadata": {
+                    "merge_readiness": "ready",
+                }
+            }
+        ],
+    }
+
+    items = evidence_from_handoff("review", detail)
+
+    assert not any(item.kind == "human" for item in items)
+
+
 def test_evidence_from_review_ignores_generic_pass_readiness():
     detail = {
         "latest_summary": "Reviewer pass note",
