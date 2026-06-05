@@ -358,6 +358,45 @@ async def test_sync_pipeline_advances_on_complete_handoff(isolated_store):
 
 
 @pytest.mark.asyncio
+async def test_sync_pipeline_retries_a_concurrent_transition_write(
+    isolated_store, monkeypatch
+):
+    await store.bootstrap_state("multica:sync-race")
+    original_save = store.save_state
+    transition_calls = 0
+
+    def conflict_first_transition(state, *, event, **kwargs):
+        nonlocal transition_calls
+        if event == "transition":
+            transition_calls += 1
+            if transition_calls == 1:
+                raise store.PipelineStateConflict("simulated command race")
+        return original_save(state, event=event, **kwargs)
+
+    monkeypatch.setattr(store, "save_state", conflict_first_transition)
+
+    async def fetch_detail(_task_id: str):
+        return {
+            "latest_summary": (
+                "TOOLS_USED=graphify\n"
+                "TESTS=pytest -q pass\n"
+                "PR_URL=https://github.com/o/r/pull/9"
+            ),
+            "comments": [],
+        }
+
+    state = await store.sync_pipeline_from_chain(
+        "multica:sync-race",
+        {"implement": {"id": "t1", "status": "done"}},
+        fetch_detail,
+    )
+
+    assert transition_calls == 2
+    assert state.phase == "verify"
+    assert state.status == "todo"
+
+
+@pytest.mark.asyncio
 async def test_sync_pipeline_skips_implementation_when_scout_marks_it_unneeded(isolated_store):
     await store.bootstrap_state("multica:already-done", start_phase="scout")
 

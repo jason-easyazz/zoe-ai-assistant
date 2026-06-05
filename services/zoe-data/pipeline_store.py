@@ -397,6 +397,30 @@ async def sync_pipeline_from_chain(
     start_phase: PipelinePhase = "implement",
     issue: dict | None = None,
 ) -> PipelineState:
+    """Retry one poll reconciliation when a command wins the journal race."""
+    for attempt in range(2):
+        try:
+            return await _sync_pipeline_from_chain_once(
+                task_ref,
+                phases,
+                fetch_detail,
+                start_phase=start_phase,
+                issue=issue,
+            )
+        except PipelineStateConflict:
+            if attempt:
+                raise
+    raise AssertionError("unreachable")
+
+
+async def _sync_pipeline_from_chain_once(
+    task_ref: str,
+    phases: dict[str, dict],
+    fetch_detail: Callable[[str], Awaitable[dict[str, Any]]],
+    *,
+    start_phase: PipelinePhase = "implement",
+    issue: dict | None = None,
+) -> PipelineState:
     """Advance pipeline state from terminal Kanban phase rows and parsed handoffs."""
     from pipeline_handoff import (
         audit_only_from_handoff,
