@@ -104,6 +104,43 @@ def test_not_applicable_tests_do_not_count_as_passed():
     assert test_item.passed is False
 
 
+def test_not_applicable_validators_do_not_count_as_passed():
+    detail = {
+        "runs": [
+            {
+                "metadata": {
+                    "VALIDATORS": "not applicable — validators were not run",
+                }
+            }
+        ]
+    }
+
+    items = evidence_from_handoff("verify", detail)
+    validator = next(item for item in items if item.kind == "validator")
+
+    assert validator.passed is False
+
+
+def test_blocked_validator_does_not_count_as_passed():
+    detail = {"latest_summary": "VALIDATORS=gate blocked pending repository access"}
+
+    items = evidence_from_handoff("verify", detail)
+    validator = next(item for item in items if item.kind == "validator")
+
+    assert validator.passed is False
+
+
+def test_block_substrings_do_not_reject_successful_test_evidence():
+    detail = {
+        "latest_summary": "TESTS=unblocked blockchain tests; pytest passed",
+    }
+
+    items = evidence_from_handoff("verify", detail)
+    test_item = next(item for item in items if item.kind == "test")
+
+    assert test_item.passed is True
+
+
 def test_evidence_from_review_metadata_records_human_approval():
     detail = {
         "latest_summary": "APPROVE ZOE-5401. PR is merge-ready.",
