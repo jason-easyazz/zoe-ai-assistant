@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 _TOOL_DEFAULTS = {
     "scout": 8,
     "implement": 24,
+    "implement_revision": 30,
     "verify": 16,
     "review": 10,
     "closeout": 12,
@@ -25,6 +26,7 @@ _TERMINAL_GRACE_DEFAULT = 2
 _RUNTIME_DEFAULTS = {
     "scout": 300,
     "implement": 1800,
+    "implement_revision": 1800,
     "verify": 600,
     "review": 600,
     "closeout": 900,
@@ -39,10 +41,22 @@ def _limit(phase: str, kind: str) -> int:
     defaults = _TOOL_DEFAULTS if kind == "tools" else _RUNTIME_DEFAULTS
     suffix = "TOOL_BUDGET" if kind == "tools" else "RUNTIME_BUDGET_SECONDS"
     raw = os.environ.get(f"ZOE_KANBAN_{phase.upper()}_{suffix}", "")
+    if phase == "implement_revision" and not raw:
+        raw = os.environ.get(f"ZOE_KANBAN_IMPLEMENT_{suffix}", "")
     try:
         return max(1, int(raw)) if raw else defaults.get(phase, 10)
     except ValueError:
         return defaults.get(phase, 10)
+
+
+def _budget_phase(phase: str, detail: dict[str, Any]) -> str:
+    if phase != "implement":
+        return phase
+    task = detail.get("task") if isinstance(detail.get("task"), dict) else {}
+    body = str(task.get("body") or "")
+    if "EXISTING PR REVISION FAST PATH" in body:
+        return "implement_revision"
+    return phase
 
 
 def _log_path(task_id: str) -> Path:
@@ -156,7 +170,8 @@ def phase_budget_reason(
 ) -> str | None:
     started_ts = _started_timestamp(detail)
     tool_steps = tool_step_count(task_id, since=started_ts)
-    tool_limit = _limit(phase, "tools")
+    budget_phase = _budget_phase(phase, detail)
+    tool_limit = _limit(budget_phase, "tools")
     try:
         terminal_grace = max(
             0,
@@ -174,7 +189,7 @@ def phase_budget_reason(
     if started_ts is None:
         return None
     elapsed = (now if now is not None else time.time()) - started_ts
-    runtime_limit = _limit(phase, "runtime")
+    runtime_limit = _limit(budget_phase, "runtime")
     if elapsed > runtime_limit:
         return (
             f"BLOCKER={phase.upper()}_BUDGET: code-enforced runtime budget exceeded "
