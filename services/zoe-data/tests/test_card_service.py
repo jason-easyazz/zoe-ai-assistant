@@ -135,3 +135,38 @@ def test_global_card_service_instance():
         assert card_service.get_domain_builder("generic") is builder
     finally:
         card_service._domain_builders.clear()
+        card_service.register_domain_builder("calendar_timeline", card_service.build_calendar_timeline_card)
+        card_service.register_domain_builder("calendar_event_editor", card_service.build_calendar_event_editor_card)
+
+
+def test_card_service_build_calendar_timeline_card():
+    service = CardService()
+    card = service.build_calendar_timeline_card({"qualifier": "tomorrow", "events": [{"title": "School"}]})
+
+    assert card["card_type"] == CardType.GENERIC.value
+    assert card["producer"] == "zoe-calendar"
+    assert card["content"]["view"] == "timeline"
+    assert card["content"]["qualifier"] == "tomorrow"
+    assert card["content"]["events"] == [{"title": "School"}]
+
+
+def test_card_service_build_calendar_event_editor_card():
+    service = CardService()
+    card = service.build_calendar_event_editor_card({"title": "Dentist", "date": "tomorrow", "time": "9am"})
+
+    assert card["card_type"] == CardType.ACTION_FORM.value
+    assert card["producer"] == "zoe-calendar"
+    assert card["content"]["form_id"] == "calendar_event_editor"
+    assert card["content"]["values"]["title"] == "Dentist"
+    assert card["content"]["values"]["date"] == "tomorrow"
+    assert {field["name"] for field in card["content"]["fields"]} >= {"title", "date", "time"}
+
+
+def test_global_card_service_registers_calendar_builders():
+    timeline = card_service.get_domain_builder("calendar_timeline")
+    editor = card_service.get_domain_builder("calendar_event_editor")
+
+    assert callable(timeline)
+    assert callable(editor)
+    assert timeline({"qualifier": "today"})["content"]["view"] == "timeline"
+    assert editor({"title": "Dentist"})["content"]["form_id"] == "calendar_event_editor"
