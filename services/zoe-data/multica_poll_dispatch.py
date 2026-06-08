@@ -7,10 +7,13 @@ def chain_needs_dispatch(chain: dict) -> bool:
 
     The poll bridge dispatches when there is no active run yet (``not_found``) or
     when the journal has a next ready phase with no Kanban row yet (``partial``).
-    Legacy interrupted chains also report ``partial``. Active ``running`` /
-    ``blocked`` chains and completed ``done`` chains are left alone.
+    Legacy interrupted chains also report ``partial``. Active ``running`` and
+    completed ``done`` chains are left alone. ``blocked`` chains are also left
+    alone unless the pipeline has been reset to ``todo`` by an operator, in
+    which case the stale executor row is treated as resumable.
 
-    Pipeline ``fingerprint_abort`` / ``terminal_block`` also suppresses redispatch.
+    Pipeline ``fingerprint_abort`` / ``terminal_block`` suppresses redispatch
+    regardless of executor or pipeline status.
     """
     if not chain:
         return False
@@ -18,6 +21,8 @@ def chain_needs_dispatch(chain: dict) -> bool:
     if pipeline.get("terminal_block") or pipeline.get("fingerprint_abort"):
         return False
     status = chain.get("status")
+    if status == "blocked" and pipeline.get("status") == "todo":
+        return True
     if status in ("running", "blocked", "done"):
         return False
     if status == "partial":
