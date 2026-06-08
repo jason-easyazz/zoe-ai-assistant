@@ -6,6 +6,7 @@ import os
 import time
 import logging
 import httpx
+import hmac
 from fastapi import Request, HTTPException, Depends
 from typing import Any, Optional, Dict, Tuple
 
@@ -295,7 +296,7 @@ async def require_internal_token(request: Request) -> None:
         return
     if _ZOE_INTERNAL_TOKEN:
         provided = request.headers.get("X-Internal-Token", "")
-        if provided and provided == _ZOE_INTERNAL_TOKEN:
+        if provided and hmac.compare_digest(provided, _ZOE_INTERNAL_TOKEN):
             return
     raise HTTPException(
         status_code=403,
