@@ -1558,11 +1558,11 @@ async def _run_faster_whisper(wav_path: str) -> str:
     if model is None:
         raise RuntimeError("faster-whisper not available; install with: pip install faster-whisper")
     lang = (os.environ.get("ZOE_WHISPER_LANG") or "en").strip()
-    vad_threshold = float(os.environ.get("ZOE_WHISPER_VAD_THRESHOLD", "0.50"))
-    min_speech_ms = int(os.environ.get("ZOE_WHISPER_MIN_SPEECH_MS", "120"))
-    min_silence_ms = int(os.environ.get("ZOE_WHISPER_MIN_SILENCE_MS", "350"))
-    speech_pad_ms = int(os.environ.get("ZOE_WHISPER_SPEECH_PAD_MS", "220"))
-    timeout = float(os.environ.get("ZOE_WHISPER_TIMEOUT_S", "20"))
+    vad_threshold = _env_float("ZOE_WHISPER_VAD_THRESHOLD", 0.50)
+    min_speech_ms = _env_int("ZOE_WHISPER_MIN_SPEECH_MS", 120)
+    min_silence_ms = _env_int("ZOE_WHISPER_MIN_SILENCE_MS", 350)
+    speech_pad_ms = _env_int("ZOE_WHISPER_SPEECH_PAD_MS", 220)
+    timeout = _env_float("ZOE_WHISPER_TIMEOUT_S", 20.0)
 
     _MAX_STT_OOM_RETRIES = 2
 
@@ -1606,6 +1606,20 @@ async def _run_faster_whisper(wav_path: str) -> str:
 
 
 
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
 def _voice_stt_log_path() -> Path:
     configured = (os.environ.get("ZOE_VOICE_STT_LOG") or "").strip()
     if configured:
@@ -1622,6 +1636,21 @@ def _wav_duration_seconds(wav_path: str) -> float | None:
             return round(wf.getnframes() / float(rate), 3)
     except Exception:
         return None
+
+
+def _rotate_voice_stt_log(path: Path) -> None:
+    max_bytes = _env_int("ZOE_VOICE_STT_LOG_MAX_BYTES", 5_000_000)
+    if max_bytes <= 0 or not path.exists():
+        return
+    try:
+        if path.stat().st_size < max_bytes:
+            return
+        rotated = path.with_name(path.name + ".1")
+        if rotated.exists():
+            rotated.unlink()
+        path.replace(rotated)
+    except OSError as exc:
+        logger.debug("voice STT audit rotation failed: %s", exc)
 
 
 def _log_voice_stt_sample(
@@ -1651,13 +1680,14 @@ def _log_voice_stt_sample(
             "model": (os.environ.get("ZOE_WHISPER_MODEL") or "base.en").strip(),
             "device": (os.environ.get("ZOE_WHISPER_DEVICE") or "").strip(),
             "compute_type": (os.environ.get("ZOE_WHISPER_COMPUTE_TYPE") or "").strip(),
-            "vad_threshold": os.environ.get("ZOE_WHISPER_VAD_THRESHOLD", "0.50"),
-            "min_speech_ms": os.environ.get("ZOE_WHISPER_MIN_SPEECH_MS", "120"),
-            "min_silence_ms": os.environ.get("ZOE_WHISPER_MIN_SILENCE_MS", "350"),
-            "speech_pad_ms": os.environ.get("ZOE_WHISPER_SPEECH_PAD_MS", "220"),
+            "vad_threshold": _env_float("ZOE_WHISPER_VAD_THRESHOLD", 0.50),
+            "min_speech_ms": _env_int("ZOE_WHISPER_MIN_SPEECH_MS", 120),
+            "min_silence_ms": _env_int("ZOE_WHISPER_MIN_SILENCE_MS", 350),
+            "speech_pad_ms": _env_int("ZOE_WHISPER_SPEECH_PAD_MS", 220),
         }
         if error:
             record["error"] = error[:500]
+        _rotate_voice_stt_log(path)
         with path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, ensure_ascii=False) + "\n")
     except Exception as exc:
@@ -1698,6 +1728,9 @@ async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_
     elif len(raw) >= 2 and raw[:2] == b"\xff\xfb":
         suffix = ".mp3"
 
+    duration_s: float | None = None
+    stt_s: float | None = None
+    t_stt_start: float | None = None
     try:
         text = ""
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
@@ -1744,13 +1777,46 @@ async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_
         except Exception:
             pass
         return {"ok": True, "panel_id": panel_id, "text": stripped}
-    except asyncio.TimeoutError:
+    except asyncio.TimeoutError as exc:
+        if t_stt_start is not None:
+            stt_s = time.monotonic() - t_stt_start
+        _log_voice_stt_sample(
+            route="transcribe",
+            panel_id=panel_id,
+            audio_bytes=len(raw),
+            suffix=suffix,
+            duration_seconds=duration_s,
+            stt_seconds=stt_s,
+            error=str(exc) or "Transcription timed out",
+        )
         logger.warning("voice/transcribe timeout panel=%s", panel_id)
         raise HTTPException(status_code=504, detail="Transcription timed out") from None
     except RuntimeError as exc:
+        if t_stt_start is not None:
+            stt_s = time.monotonic() - t_stt_start
+        _log_voice_stt_sample(
+            route="transcribe",
+            panel_id=panel_id,
+            audio_bytes=len(raw),
+            suffix=suffix,
+            duration_seconds=duration_s,
+            stt_seconds=stt_s,
+            error=str(exc),
+        )
         logger.warning("voice/transcribe unavailable: %s", exc)
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
+        if t_stt_start is not None:
+            stt_s = time.monotonic() - t_stt_start
+        _log_voice_stt_sample(
+            route="transcribe",
+            panel_id=panel_id,
+            audio_bytes=len(raw),
+            suffix=suffix,
+            duration_seconds=duration_s,
+            stt_seconds=stt_s,
+            error=str(exc),
+        )
         logger.error("voice/transcribe error: %s", exc)
         raise HTTPException(status_code=500, detail="Transcription failed") from exc
 
@@ -3294,6 +3360,7 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth),
 
     # ── Phase 1: STT ──
     t_stt_start = time.monotonic()
+    duration_s: float | None = None
     try:
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp.write(raw)
@@ -3307,6 +3374,16 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth),
             except OSError:
                 pass
     except Exception as exc:
+        t_stt = time.monotonic() - t_stt_start
+        _log_voice_stt_sample(
+            route="turn",
+            panel_id=panel_id,
+            audio_bytes=len(raw),
+            suffix=suffix,
+            duration_seconds=duration_s,
+            stt_seconds=t_stt,
+            error=str(exc),
+        )
         logger.error("voice/turn STT failed: %s", exc)
         try:
             from voice_metrics import voice_turn_count, voice_failure_reason_count
