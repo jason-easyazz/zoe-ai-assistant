@@ -2099,6 +2099,43 @@ def test_implement_body_always_completes_after_pr_creation_even_for_security_rev
     assert "CODE-AUDIT FAST PATH" not in body
 
 
+def test_implement_body_documents_existing_pr_revision_fast_path_before_new_pr_creation(monkeypatch):
+    monkeypatch.setenv("GREPTILE_MCP_BIN", "/opt/zoe/greptile-mcp")
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {
+            "id": "uuid-pr-revision",
+            "identifier": "ZOE-5354",
+            "title": "GET /metrics endpoint is unauthenticated",
+            "description": """```zoe-ticket
+{"pr_url":"https://github.com/jason-easyazz/zoe-ai-assistant/pull/213","last_evidence":"Revision required from verify"}
+```""",
+            "metadata": {
+                "zoe_kind": "bug",
+                "source": "code_audit_p0_security",
+                "acceptance_criteria": ["Require admin or internal token on /metrics"],
+            },
+        },
+        "ZOE-5354",
+    )
+
+    assert "EXISTING PR REVISION FAST PATH" in body
+    assert "Do not rediscover the original fix and do not create a new PR" in body
+    assert "/opt/zoe/greptile-mcp pr-comments --unaddressed-only" in body
+    assert "gh pr checkout <number>" in body
+    assert "report the SAME PR_URL" in body
+    assert "BLOCKER=PR_REVISION_BLOCKED" in body
+    assert body.index("EXISTING PR REVISION FAST PATH") < body.index("open ONE small PR")
+
+    generic_body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {"id": "uuid-generic", "identifier": "ZOE-GEN", "title": "Generic feature"},
+        "ZOE-GEN",
+    )
+    assert "EXISTING PR REVISION FAST PATH" in generic_body
+    assert "if the ticket block already contains `pr_url`/PR_URL" in generic_body
+
+
 def test_implement_body_puts_bounded_fast_paths_before_graphify():
     body = ka.KanbanAdapter()._build_body(
         "implement",
