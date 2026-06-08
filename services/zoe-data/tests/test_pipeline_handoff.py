@@ -86,7 +86,25 @@ def test_verify_evidence_reads_structured_run_metadata():
     assert {item.kind for item in items if item.passed is True} >= {"test", "validator"}
 
 
-def test_not_applicable_tests_do_not_count_as_passed():
+def test_generic_not_applicable_tests_do_not_count_as_passed():
+    detail = {
+        "runs": [
+            {
+                "metadata": {
+                    "TESTS": "not applicable",
+                    "VALIDATORS": "validate_structure.py passed",
+                }
+            }
+        ]
+    }
+
+    items = evidence_from_handoff("verify", detail)
+    test_item = next(item for item in items if item.kind == "test")
+
+    assert test_item.passed is False
+
+
+def test_audit_no_code_verify_tests_count_as_passed():
     detail = {
         "runs": [
             {
@@ -101,7 +119,7 @@ def test_not_applicable_tests_do_not_count_as_passed():
     items = evidence_from_handoff("verify", detail)
     test_item = next(item for item in items if item.kind == "test")
 
-    assert test_item.passed is False
+    assert test_item.passed is True
 
 
 def test_not_applicable_validators_do_not_count_as_passed():
@@ -602,6 +620,23 @@ PR_URL=""", "comments": []}
     assert log.metadata["phase"] == "closeout"
     assert log.metadata["audit_only"] is True
     assert not any(item.kind == "greptile" for item in items)
+
+
+def test_closeout_audit_only_handoff_accepts_indented_log_lines():
+    detail = {"log_tail": """
+     PR_URL=
+     MERGE_SHA=
+     GREPTILE=n/a (no-code plan)
+     AUDIT_ONLY=1
+     SUMMARY=4-phase card producer adoption plan approved; no code changes
+""", "comments": []}
+
+    items = evidence_from_handoff("closeout", detail, skills=("github-greptile-loop",))
+
+    log = next(item for item in items if item.kind == "log")
+    assert log.passed is True
+    assert log.summary == "4-phase card producer adoption plan approved; no code changes"
+    assert log.metadata["audit_only"] is True
 
 
 def test_closeout_infers_audit_log_only_from_audit_summary_without_pr():

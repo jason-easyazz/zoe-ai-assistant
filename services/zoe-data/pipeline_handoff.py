@@ -8,7 +8,7 @@ from typing import Any
 
 from pipeline_evidence import EvidenceItem, PipelinePhase, content_hash
 
-_KV_RE = re.compile(r"^([A-Z_]+)=(.*)$", re.MULTILINE)
+_KV_RE = re.compile(r"^[ \t]*([A-Z_]+)=(.*)$", re.MULTILINE)
 _TOOL_NAMES = (
     "graphify",
     "opensrc",
@@ -81,6 +81,26 @@ def _reported_evidence_passed(raw: str, *, unavailable_markers: tuple[str, ...])
             for marker in ("fail", "not applicable", "n/a", *unavailable_markers)
         )
         or re.search(r"\bblock(?:ed)?\b", lowered)
+    )
+
+
+def _reported_test_evidence_passed(raw: str, *, phase: PipelinePhase) -> bool:
+    lowered = raw.lower()
+    if phase == "verify" and "not applicable" in lowered:
+        no_code_markers = (
+            "audit-only",
+            "audit only",
+            "no-code",
+            "no code",
+            "scout/plan",
+            "planning",
+            "plan deliverable",
+        )
+        if any(marker in lowered for marker in no_code_markers):
+            return True
+    return _reported_evidence_passed(
+        raw,
+        unavailable_markers=("no tests",),
     )
 
 
@@ -434,10 +454,7 @@ def evidence_from_handoff(
 
     tests_raw = fields.get("TESTS") or ""
     if tests_raw and phase in {"implement", "verify"}:
-        passed = _reported_evidence_passed(
-            tests_raw,
-            unavailable_markers=("no tests",),
-        )
+        passed = _reported_test_evidence_passed(tests_raw, phase=phase)
         items.append(
             EvidenceItem(
                 kind="test",
