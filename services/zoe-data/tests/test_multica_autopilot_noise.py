@@ -77,17 +77,19 @@ async def test_platform_health_failure_reuses_open_issue(monkeypatch, tmp_path):
     script.chmod(0o755)
     updates = []
     creates = []
+    list_calls = []
 
     class FakeClient:
-        async def list_issues(self, *, limit=None):
+        async def list_issues(self, status=None, *, limit=None):
             assert limit == 1000
+            list_calls.append(status)
             return [
                 {
                     "id": "health-1",
                     "title": "Platform health failures detected",
                     "status": "blocked",
                 }
-            ]
+            ] if status == "blocked" else []
 
         async def update_issue(self, issue_id, status=None, **kwargs):
             updates.append((issue_id, status, kwargs))
@@ -109,6 +111,7 @@ async def test_platform_health_failure_reuses_open_issue(monkeypatch, tmp_path):
         await mas._run_platform_health_check()
 
     assert creates == []
+    assert list_calls == ["backlog", "todo", "in_progress", "blocked", "in_review"]
     assert updates == [
         (
             "health-1",

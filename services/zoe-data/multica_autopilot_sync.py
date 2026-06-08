@@ -276,12 +276,14 @@ async def _run_platform_health_check() -> None:
                 "The scheduled Platform Health Check found failing services.\n\n"
                 f"```\n{tail}\n```"
             )
+            open_issues = []
+            for status in ("backlog", "todo", "in_progress", "blocked", "in_review"):
+                open_issues.extend(await client.list_issues(status=status, limit=1000))
             existing = next(
                 (
                     issue
-                    for issue in await client.list_issues(limit=1000)
+                    for issue in open_issues
                     if issue.get("title") == title
-                    and issue.get("status") not in {"done", "cancelled", "archived"}
                 ),
                 None,
             )

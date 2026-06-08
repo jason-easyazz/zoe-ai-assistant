@@ -33,7 +33,9 @@ check_json_health() {
 if ! docker info >/dev/null 2>&1; then
     fail "Docker daemon is unreachable"
 else
+    container_count=0
     while IFS=$'\t' read -r name status health; do
+        ((container_count++)) || true
         if [[ "$status" != "running" ]]; then
             fail "Docker container $name is $status"
         elif [[ -n "$health" && "$health" != "healthy" ]]; then
@@ -46,7 +48,9 @@ else
                     sed 's#^/##'
             done
     )
-    if [[ "$failed" -eq 0 ]]; then
+    if [[ "$container_count" -eq 0 ]]; then
+        fail "Docker returned zero running containers"
+    elif [[ "$failed" -eq 0 ]]; then
         pass "required Docker containers are running"
     fi
 fi
