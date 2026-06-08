@@ -591,6 +591,45 @@ def test_infer_outcome_blocked_verify_loops():
     )
 
 
+def test_infer_outcome_verify_budget_surfaces_block():
+    assert (
+        infer_outcome(
+            "verify",
+            "blocked",
+            {"latest_summary": "BLOCKER=VERIFY_BUDGET: code-enforced tool budget exceeded", "comments": []},
+        )
+        == "block"
+    )
+
+
+def test_infer_outcome_pr_review_required_surfaces_block():
+    assert (
+        infer_outcome(
+            "verify",
+            "blocked",
+            {
+                "latest_summary": (
+                    "BLOCKER=PR_REVIEW_REQUIRED: Greptile has unresolved comments\n"
+                    "PR_URL=https://github.com/o/r/pull/213"
+                ),
+                "comments": [],
+            },
+        )
+        == "block"
+    )
+
+
+def test_infer_outcome_done_with_verify_budget_surfaces_block():
+    assert (
+        infer_outcome(
+            "verify",
+            "done",
+            {"latest_summary": "BLOCKER=VERIFY_BUDGET: exceeded\nTESTS=not completed", "comments": []},
+        )
+        == "block"
+    )
+
+
 def test_later_empty_blocker_clears_older_blocked_run():
     detail = {
         "latest_summary": "PR_URL=https://github.com/o/r/pull/213\nBLOCKER=\nTESTS=validate_structure.py passed",

@@ -808,6 +808,26 @@ async def test_sync_pipeline_blocked_records_reason_in_history(isolated_store):
 
 
 @pytest.mark.asyncio
+async def test_sync_pipeline_verify_budget_blocks_without_revision(isolated_store):
+    state = PipelineState(task_ref="multica:verify-budget", phase="verify", status="running")
+    store.save_state(state, event="effect_requested")
+
+    async def fetch_detail(_task_id: str):
+        return {
+            "latest_summary": "BLOCKER=VERIFY_BUDGET: code-enforced tool budget exceeded",
+            "comments": [],
+        }
+
+    phases = {"verify": {"id": "t_verify", "status": "blocked"}}
+    state = await store.sync_pipeline_from_chain("multica:verify-budget", phases, fetch_detail)
+
+    assert state.phase == "verify"
+    assert state.status == "blocked"
+    assert state.history[-1].outcome == "block"
+    assert "VERIFY_BUDGET" in (state.history[-1].reason or "")
+
+
+@pytest.mark.asyncio
 async def test_sync_pipeline_auto_validators_on_implement_done(isolated_store, monkeypatch):
     await store.bootstrap_state("multica:val")
 
