@@ -100,6 +100,26 @@ def _greptile_mcp_bin() -> str:
     return os.path.expanduser("~/bin/greptile-mcp.py")
 
 
+def _ticket_metadata(issue: dict | None = None) -> dict[str, Any]:
+    issue = issue or {}
+    cached = issue.get("_zoe_ticket_metadata_cache")
+    if isinstance(cached, dict):
+        return dict(cached)
+
+    meta = dict(issue.get("metadata") or {})
+    if issue.get("description"):
+        try:
+            from multica_ticket_contract import parse_ticket_block
+
+            parsed = parse_ticket_block(issue.get("description") or "")
+            if isinstance(parsed, dict):
+                meta = {**parsed, **meta}
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("_ticket_metadata: parse_ticket_block failed: %s", exc)
+    issue["_zoe_ticket_metadata_cache"] = dict(meta)
+    return meta
+
+
 def _engineering_mode(issue: dict | None = None) -> str:
     """Resolve the engineering execution mode for a journaled phase run.
 
@@ -110,7 +130,7 @@ def _engineering_mode(issue: dict | None = None) -> str:
     issue = issue or {}
     raw = (
         issue.get("engineering_mode")
-        or (issue.get("metadata") or {}).get("engineering_mode")
+        or _ticket_metadata(issue).get("engineering_mode")
         or os.environ.get("ZOE_ENGINEERING_MODE")
         or "interactive"
     )
@@ -125,7 +145,7 @@ def _engineering_mode(issue: dict | None = None) -> str:
 def _model_escalation_active(issue: dict | None, mode: str) -> bool:
     """True when review/verify/closeout may use stronger models after cheap paths fail."""
     issue = issue or {}
-    meta = issue.get("metadata") or {}
+    meta = _ticket_metadata(issue)
     if str(meta.get("model_escalation") or issue.get("model_escalation") or "").strip().lower() in {
         "1",
         "true",
@@ -138,7 +158,7 @@ def _model_escalation_active(issue: dict | None, mode: str) -> bool:
 def _escalation_model_hint(issue: dict | None) -> str:
     """Paid-model escalation guard — never suggest openrouter/auto without explicit opt-in."""
     issue = issue or {}
-    meta = issue.get("metadata") or {}
+    meta = _ticket_metadata(issue)
     paid_auto_ok = str(meta.get("confirm_paid_auto") or issue.get("confirm_paid_auto") or "").strip().lower() in {
         "1",
         "true",
@@ -194,7 +214,7 @@ def _skip_scout(issue: dict | None = None) -> bool:
     issue = issue or {}
     if str(os.environ.get("ZOE_KANBAN_SKIP_SCOUT", "")).strip().lower() in {"1", "true", "yes"}:
         return True
-    meta = issue.get("metadata") or {}
+    meta = _ticket_metadata(issue)
     if str(meta.get("skip_scout") or issue.get("skip_scout") or "").strip().lower() in {
         "1",
         "true",
@@ -219,7 +239,7 @@ def _skip_scout(issue: dict | None = None) -> bool:
 
 def _audit_no_pr_issue(issue: dict | None = None) -> bool:
     issue = issue or {}
-    meta = issue.get("metadata") or {}
+    meta = _ticket_metadata(issue)
     if str(meta.get("evidence_profile") or "").strip().lower() == "audit":
         return True
     haystack = " ".join(

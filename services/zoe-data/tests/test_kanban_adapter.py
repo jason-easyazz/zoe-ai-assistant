@@ -295,6 +295,21 @@ async def test_dispatch_skips_scout_for_scope_split_child():
 
 
 @pytest.mark.asyncio
+async def test_dispatch_skips_scout_for_scope_split_child_ticket_block():
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {
+            "id": "uuid-child-block",
+            "identifier": "ZOE-5439",
+            "title": "calendar child",
+            "description": '```zoe-ticket\n{"zoe_kind":"child","source":"scope_split","acceptance_criteria":["calendar builder"]}\n```',
+        }
+    )
+    assert "scout" not in result["chain"]
+    assert set(result["chain"]) == {"implement"}
+
+
+@pytest.mark.asyncio
 async def test_dispatch_keeps_scout_for_under_specified_scope_split_child():
     a = _FakeAdapter()
     result = await a.dispatch(
@@ -362,6 +377,20 @@ async def test_dispatch_model_escalation_from_metadata():
     )
     assert "zoe-model-escalation: true" in review_body
     assert "anthropic/claude-sonnet-4.6" in review_body
+
+
+@pytest.mark.asyncio
+async def test_model_escalation_from_ticket_block():
+    issue = {
+        "id": "uuid-block-esc",
+        "identifier": "ZOE-ESC",
+        "title": "Escalate from block",
+        "description": "```zoe-ticket\n{\"model_escalation\":true,\"confirm_paid_auto\":true}\n```",
+    }
+    review_body = ka.KanbanAdapter()._build_body("review", issue, "ZOE-ESC")
+    assert "zoe-model-escalation: true" in review_body
+    assert "anthropic/claude-sonnet-4.6" in review_body
+    assert "openrouter/auto is allowed" in review_body
 
 
 @pytest.mark.asyncio
