@@ -17,6 +17,7 @@ from .panel_auth import router as panel_auth_router
 from .panel_provision import router as panel_provision_router
 from .capability_matrix import router as capability_matrix_router
 from .music import router as music_router
+from .skybridge import router as skybridge_router
 
 __all__ = [
     "people_router",
@@ -38,4 +39,5 @@ __all__ = [
     "panel_provision_router",
     "capability_matrix_router",
     "music_router",
+    "skybridge_router",
 ]

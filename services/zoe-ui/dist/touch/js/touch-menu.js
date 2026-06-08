@@ -15,6 +15,7 @@ const TouchMenu = (() => {
 
     const PRIMARY = [
         { id: 'dashboard', path: '/touch/dashboard.html',  label: 'Home'     },
+        { id: 'skybridge', path: '/touch/skybridge.html',  label: 'Skybridge' },
         { id: 'calendar',  path: '/touch/calendar.html',   label: 'Calendar' },
         { id: 'lists',     path: '/touch/lists.html',      label: 'Lists'    },
         { id: 'chat',      path: '/touch/chat.html',       label: 'Chat'     },
@@ -22,6 +23,7 @@ const TouchMenu = (() => {
 
     const ALL_PAGES = [
         { id: 'dashboard',  path: '/touch/dashboard.html',  icon: '🏠', label: 'Home'       },
+        { id: 'skybridge',  path: '/touch/skybridge.html',  icon: '◇',  label: 'Skybridge'  },
         { id: 'calendar',   path: '/touch/calendar.html',   icon: '📅', label: 'Calendar'   },
         { id: 'lists',      path: '/touch/lists.html',      icon: '☰',  label: 'Lists'      },
         { id: 'notes',      path: '/touch/notes.html',      icon: '📝', label: 'Notes'      },
@@ -535,7 +537,7 @@ html.dark-mode .ztm-ctx-item { color: rgba(255,255,255,0.88); border-bottom-colo
             const p = u.pathname || '/';
             const base = p.split('/').pop() || '';
             const allowed = new Set([
-                'dashboard.html', 'calendar.html', 'lists.html', 'chat.html', 'notes.html',
+                'dashboard.html', 'skybridge.html', 'calendar.html', 'lists.html', 'chat.html', 'notes.html',
                 'journal.html', 'people.html', 'music.html', 'smart-home.html', 'weather.html',
                 'settings.html', 'memories.html', 'cooking.html', 'timers.html', 'updates.html',
                 'index.html'
