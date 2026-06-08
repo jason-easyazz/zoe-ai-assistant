@@ -276,6 +276,43 @@ async def test_dispatch_skip_scout_when_env_set(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_dispatch_skips_scout_for_scope_split_child():
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {
+            "id": "uuid-child",
+            "identifier": "ZOE-5438",
+            "title": "card_service foundation",
+            "metadata": {
+                "zoe_kind": "child",
+                "source": "scope_split",
+                "acceptance_criteria": ["card_service.py foundation"],
+            },
+        }
+    )
+    assert "scout" not in result["chain"]
+    assert set(result["chain"]) == {"implement"}
+
+
+@pytest.mark.asyncio
+async def test_dispatch_keeps_scout_for_under_specified_scope_split_child():
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {
+            "id": "uuid-child-empty",
+            "identifier": "ZOE-EMPTY",
+            "title": "under-specified child",
+            "metadata": {
+                "zoe_kind": "child",
+                "source": "scope_split",
+                "acceptance_criteria": [],
+            },
+        }
+    )
+    assert set(result["chain"]) == {"scout"}
+
+
+@pytest.mark.asyncio
 async def test_dispatch_quality_escalation_mode(monkeypatch):
     monkeypatch.setenv("ZOE_KANBAN_ESCALATION_MAX_RUNTIME", "75m")
     a = _FakeAdapter()
