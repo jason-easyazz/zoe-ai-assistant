@@ -65,6 +65,8 @@ def parse_semver(version: str) -> tuple[int, int, int]:
         raise CardContractError("schema_version must use MAJOR.MINOR.PATCH")
     if any(part != part.strip() for part in parts):
         raise CardContractError("schema_version must contain numeric semver parts")
+    if any(len(part) > 1 and part.startswith("0") for part in parts):
+        raise CardContractError("schema_version cannot contain leading-zero semver parts")
     try:
         major, minor, patch = (int(part) for part in parts)
     except ValueError as exc:
