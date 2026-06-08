@@ -128,6 +128,11 @@ def test_validate_card_contract_always_rejects_invalid_semver():
         validate_card_contract(_contract(schema_version="not-semver"))
 
 
+def test_validate_card_contract_rejects_whitespace_padded_semver():
+    with pytest.raises(CardContractError, match="numeric semver parts"):
+        validate_card_contract(_contract(schema_version=" 1.0.0 "))
+
+
 def test_normalized_content_does_not_share_nested_mutable_values():
     payload = _contract(content={"form_id": "reminder", "title": "Reminder", "fields": []})
 
