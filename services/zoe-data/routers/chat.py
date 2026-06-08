@@ -58,7 +58,7 @@ def _intent_card_data(intent) -> dict:
     slots = intent.slots or {}
     name = intent.name
     if name == "calendar_create":
-        return {
+        payload = {
             "type": "calendar",
             "data": {
                 "action": "Event added",
@@ -67,14 +67,28 @@ def _intent_card_data(intent) -> dict:
                 "time": slots.get("time") or "",
             },
         }
+        try:
+            from card_service import card_service
+
+            payload["card"] = card_service.build_calendar_event_editor_card(slots)
+        except Exception as exc:
+            logger.debug("calendar_create card contract build failed: %s", exc)
+        return payload
     if name == "calendar_show":
-        return {
+        payload = {
             "type": "calendar",
             "data": {
                 "action": "Showing calendar",
                 "qualifier": slots.get("qualifier") or "today",
             },
         }
+        try:
+            from card_service import card_service
+
+            payload["card"] = card_service.build_calendar_timeline_card(slots)
+        except Exception as exc:
+            logger.debug("calendar_show card contract build failed: %s", exc)
+        return payload
     if name == "list_add":
         return {
             "type": "list",
@@ -187,6 +201,8 @@ async def _broadcast_intent_nav(intent, panel_id: str | None = None) -> None:
                 # Also emit show_card for the dashboard bar.
                 card = _intent_card_data(intent)
                 card_payload: dict = {"type": card["type"], "data": card["data"]}
+                if card.get("card"):
+                    card_payload["card"] = card["card"]
                 if panel_id:
                     card_payload["panel_id"] = panel_id
                 await broadcaster.broadcast("all", "ui_action", {
@@ -224,6 +240,8 @@ async def _broadcast_intent_nav(intent, panel_id: str | None = None) -> None:
             })
         card = _intent_card_data(intent)
         card_payload_nav: dict = {"type": card["type"], "data": card["data"]}
+        if card.get("card"):
+            card_payload_nav["card"] = card["card"]
         if panel_id:
             card_payload_nav["panel_id"] = panel_id
         await broadcaster.broadcast("all", "ui_action", {
@@ -234,7 +252,7 @@ async def _broadcast_intent_nav(intent, panel_id: str | None = None) -> None:
             }
         })
     except Exception as exc:
-        logger.debug("_broadcast_intent_nav failed (non-fatal): %s", exc)
+        logger.warning("_broadcast_intent_nav failed (non-fatal): %s", exc)
 from openclaw_ws import openclaw_cli, chat_inject, discover_openclaw_capabilities, _zoe_context_prefix
 from zoe_acp_client import openclaw_acp_stream as _acp_stream
 from zoe_agent import (

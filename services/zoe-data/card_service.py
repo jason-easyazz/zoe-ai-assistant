@@ -7,8 +7,59 @@ from typing import Any
 from card_contract import (
     validate_card_contract,
     CardContractError,
+    CardType,
     renderer_accepts,
 )
+
+
+def _text(value: Any, default: str = "") -> str:
+    text = str(value or "").strip()
+    return text or default
+
+
+def build_calendar_timeline_content(slots: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Build canonical content for a calendar timeline summary card."""
+    slots = slots or {}
+    qualifier = _text(slots.get("qualifier") or slots.get("date"), "today")
+    events = slots.get("events") or []
+    if not isinstance(events, list):
+        events = [events]
+    return {
+        "title": f"Calendar for {qualifier}",
+        "summary": "Showing calendar",
+        "qualifier": qualifier,
+        "events": events,
+        "view": "timeline",
+        "source": "calendar_show",
+    }
+
+
+def build_calendar_event_editor_content(slots: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Build canonical content for a calendar event editor card."""
+    slots = slots or {}
+    title = _text(slots.get("title") or slots.get("event"), "New event")
+    return {
+        "form_id": "calendar_event_editor",
+        "title": "New Calendar Event",
+        "fields": [
+            {"name": "title", "label": "Title", "type": "text", "value": title},
+            {"name": "date", "label": "Date", "type": "date", "value": _text(slots.get("date"))},
+            {"name": "time", "label": "Time", "type": "time", "value": _text(slots.get("time"))},
+            {"name": "duration", "label": "Duration", "type": "text", "value": _text(slots.get("duration"))},
+            {"name": "location", "label": "Location", "type": "text", "value": _text(slots.get("location"))},
+            {"name": "notes", "label": "Notes", "type": "textarea", "value": _text(slots.get("notes"))},
+        ],
+        "values": {
+            "title": title,
+            "date": _text(slots.get("date")),
+            "time": _text(slots.get("time")),
+            "duration": _text(slots.get("duration")),
+            "location": _text(slots.get("location")),
+            "notes": _text(slots.get("notes")),
+            "category": _text(slots.get("category"), "general"),
+        },
+        "source": "calendar_create",
+    }
 
 
 class CardService:
@@ -103,5 +154,23 @@ class CardService:
         return self._domain_builders.get(card_type)
 
 
+    def build_calendar_timeline_card(self, slots: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self.build_card(
+            CardType.GENERIC.value,
+            build_calendar_timeline_content(slots),
+            producer="zoe-calendar",
+        )
+
+    def build_calendar_event_editor_card(self, slots: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self.build_card(
+            CardType.ACTION_FORM.value,
+            build_calendar_event_editor_content(slots),
+            producer="zoe-calendar",
+        )
+
+
+
 # Global singleton instance
 card_service = CardService()
+card_service.register_domain_builder("calendar_timeline", card_service.build_calendar_timeline_card)
+card_service.register_domain_builder("calendar_event_editor", card_service.build_calendar_event_editor_card)
