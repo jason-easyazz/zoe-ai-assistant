@@ -694,7 +694,7 @@ def infer_outcome(phase: PipelinePhase, row_status: str, detail: dict[str, Any])
         return None
 
     if explicit_blocker:
-        if _SURFACED_BLOCKER_RE.search(blocker):
+        if _SURFACED_BLOCKER_RE.search(explicit_blocker):
             return "block"
         if phase == "verify":
             return "verification_failed"

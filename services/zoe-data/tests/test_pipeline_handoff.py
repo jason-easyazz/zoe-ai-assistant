@@ -602,6 +602,17 @@ def test_infer_outcome_verify_budget_surfaces_block():
     )
 
 
+def test_infer_outcome_freeform_verify_budget_surfaces_block():
+    assert (
+        infer_outcome(
+            "verify",
+            "blocked",
+            {"latest_summary": "VERIFY_BUDGET: code-enforced tool budget exceeded", "comments": []},
+        )
+        == "block"
+    )
+
+
 def test_infer_outcome_pr_review_required_surfaces_block():
     assert (
         infer_outcome(
