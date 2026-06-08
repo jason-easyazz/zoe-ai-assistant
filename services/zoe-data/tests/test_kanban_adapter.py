@@ -1850,6 +1850,68 @@ def test_closeout_body_defers_multica_done_until_retro():
     assert "MULTICA=<Zoe updates after retro; report blocker if any>" in body
 
 
+def test_implement_body_adds_code_audit_fast_path_for_actionable_bug():
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {
+            "id": "uuid-code-audit",
+            "identifier": "ZOE-5354",
+            "title": "GET /metrics endpoint is unauthenticated",
+            "metadata": {
+                "zoe_kind": "bug",
+                "source": "code_audit_p0_security",
+                "acceptance_criteria": ["Require admin or internal token on /metrics"],
+            },
+        },
+        "ZOE-5354",
+    )
+
+    assert "CODE-AUDIT FAST PATH" in body
+    assert "Do not re-audit the whole repo" in body
+    assert "Apply the smallest patch" in body
+    assert "Spend no more than 3 tool calls hunting for tests" in body
+    assert "git push -u origin HEAD" in body
+    assert body.index("CODE-AUDIT FAST PATH") < body.index("AUDIT/SMOKE FAST PATH")
+    assert body.index("CODE-AUDIT FAST PATH") < body.index("Graphify map")
+
+
+def test_implement_body_omits_code_audit_fast_path_without_acceptance_criteria():
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {
+            "id": "uuid-code-audit-open",
+            "identifier": "ZOE-OPEN",
+            "title": "Investigate unauthenticated endpoint",
+            "metadata": {
+                "zoe_kind": "bug",
+                "source": "code_audit_p0_security",
+            },
+        },
+        "ZOE-OPEN",
+    )
+
+    assert "CODE-AUDIT FAST PATH" not in body
+
+
+def test_implement_body_omits_code_audit_fast_path_for_non_code_audit():
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {
+            "id": "uuid-harness",
+            "identifier": "ZOE-5449",
+            "title": "Harness: follow up ITERATION_BUDGET",
+            "metadata": {
+                "zoe_kind": "harness_fix",
+                "source": "engineering_blocker_followup",
+                "acceptance_criteria": ["Focused tests cover blocker path"],
+            },
+        },
+        "ZOE-5449",
+    )
+
+    assert "CODE-AUDIT FAST PATH" not in body
+
+
 def test_implement_body_puts_bounded_fast_paths_before_graphify():
     body = ka.KanbanAdapter()._build_body(
         "implement",

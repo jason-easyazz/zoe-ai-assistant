@@ -210,6 +210,15 @@ _AUDIT_NO_PR_RE = re.compile(
 )
 
 
+def _is_code_audit_actionable(meta: dict[str, Any]) -> bool:
+    """Return True for code-audit bug tickets that already have acceptance criteria."""
+    return (
+        str(meta.get("zoe_kind") or "").strip().lower() == "bug"
+        and str(meta.get("source") or "").strip().lower().startswith("code_audit_")
+        and bool(meta.get("acceptance_criteria"))
+    )
+
+
 def _skip_scout(issue: dict | None = None) -> bool:
     issue = issue or {}
     if str(os.environ.get("ZOE_KANBAN_SKIP_SCOUT", "")).strip().lower() in {"1", "true", "yes"}:
@@ -232,11 +241,7 @@ def _skip_scout(issue: dict | None = None) -> bool:
         and bool(meta.get("acceptance_criteria"))
     ):
         return True
-    if (
-        str(meta.get("zoe_kind") or "").strip().lower() == "bug"
-        and str(meta.get("source") or "").strip().lower().startswith("code_audit_")
-        and bool(meta.get("acceptance_criteria"))
-    ):
+    if _is_code_audit_actionable(meta):
         return True
     haystack = " ".join(
         [
@@ -246,6 +251,26 @@ def _skip_scout(issue: dict | None = None) -> bool:
         ]
     )
     return bool(_SKIP_SCOUT_TAG_RE.search(haystack))
+
+
+def _code_audit_implement_hint(issue: dict | None = None) -> str:
+    """Return extra bounded instructions for actionable code-audit tickets."""
+    meta = _ticket_metadata(issue)
+    if not _is_code_audit_actionable(meta):
+        return ""
+    return (
+        "- CODE-AUDIT FAST PATH: this is an actionable code-audit bug with acceptance criteria. "
+        "Do not re-audit the whole repo, compare every possible helper, or search broadly for patterns. "
+        "After `kanban_show`, inspect only the named vulnerable file/endpoint plus at most one nearest "
+        "focused test file. Apply the smallest patch that satisfies the acceptance criteria before the "
+        "8th model/tool step. If the ticket lists acceptable alternatives, choose the least invasive "
+        "in-process guard unless the acceptance criteria requires a different one. Spend no more than "
+        "3 tool calls hunting for tests; if no focused test is obvious, run `python3 tools/audit/validate_structure.py`, "
+        "commit the patch, run `git push -u origin HEAD`, open the PR, and report TESTS=validate_structure.py only. "
+        "If a product/security "
+        "decision is still missing after the named file is inspected, call `kanban_block` with "
+        "BLOCKER=IMPLEMENT_BUDGET and the missing decision.\n"
+    )
 
 
 def _audit_no_pr_issue(issue: dict | None = None) -> bool:
@@ -436,10 +461,12 @@ class KanbanAdapter:
             )
         if phase == "implement":
             overnight_hint = _overnight_implement_cost_hint() if mode == "overnight" else ""
+            code_audit_hint = _code_audit_implement_hint(issue)
             # Implement body intentionally omits full prior-phase logs; workers should
             # call kanban_show and read SCOUT_SUMMARY= from scout metadata when present.
             return common + overnight_hint + (
                 "You are the implementer (zoe-coder).\n"
+                f"{code_audit_hint}"
                 "- AUDIT/SMOKE FAST PATH: only if the title/body explicitly says audit-only, smoke test,"
                 " no code change, or uses trace/map with an audit/no-code qualifier, do not run Graphify"
                 " or repo exploration first. Complete in one bounded handoff with"
