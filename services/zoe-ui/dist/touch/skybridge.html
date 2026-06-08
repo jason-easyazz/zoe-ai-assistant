@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <script>
+    (function(){
+        if (localStorage.getItem('zoe_kiosk') === '1') return;
+        var p = new URLSearchParams(location.search);
+        if (p.get('kiosk') === '1') localStorage.setItem('zoe_kiosk', '1');
+    })();
+    (function(){
+        var s = localStorage.getItem('zoe_theme') || 'auto';
+        var h = new Date().getHours();
+        var dark = s === 'dark' || (s === 'auto' && (h < 7 || h >= 19));
+        if (dark) document.documentElement.classList.add('dark-mode');
+    })();
+    window.prompt = function(msg, def) { return def || ''; };
+    window.alert = function() {};
+    window.confirm = function() { return true; };
+    </script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0b0d12">
+    <title>Zoe Skybridge</title>
+    <link rel="stylesheet" href="/touch/css/touch-adapter.css">
+    <script src="/lib/livekit/livekit-client.umd.min.js" onerror="console.warn('LiveKit client not loaded')"></script>
+    <style>
+        :root {
+            --sky-bg: #0b0d12;
+            --sky-panel: rgba(19, 23, 31, 0.78);
+            --sky-panel-strong: rgba(24, 30, 42, 0.94);
+            --sky-border: rgba(255, 255, 255, 0.1);
+            --sky-text: #f6f8fb;
+            --sky-muted: rgba(246, 248, 251, 0.64);
+            --sky-soft: rgba(246, 248, 251, 0.1);
+            --sky-blue: #5fc6ff;
+            --sky-green: #66d19e;
+            --sky-amber: #f7bf5f;
+            --sky-coral: #ff7b7b;
+            --sky-violet: #8c7dff;
+            --sky-radius: 8px;
+        }
+
+        * { box-sizing: border-box; }
+        html, body {
+            width: 100%;
+            min-height: 100%;
+            margin: 0;
+            background:
+                radial-gradient(circle at 14% 12%, rgba(95, 198, 255, 0.16), transparent 30%),
+                radial-gradient(circle at 88% 18%, rgba(102, 209, 158, 0.12), transparent 28%),
+                linear-gradient(145deg, #0b0d12 0%, #11151d 48%, #080a0e 100%);
+            color: var(--sky-text);
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", system-ui, sans-serif;
+            overflow: hidden;
+            touch-action: manipulation;
+            padding-top: var(--ta-nav-h, 64px);
+        }
+
+        body {
+            display: grid;
+            grid-template-rows: auto 1fr auto;
+            height: 100dvh;
+        }
+
+        .sky-topbar {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 18px;
+            align-items: center;
+            padding: 18px 28px 12px;
+        }
+
+        .sky-title {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            min-width: 0;
+        }
+
+        .sky-mark {
+            width: 42px;
+            height: 42px;
+            border-radius: 50%;
+            background:
+                radial-gradient(circle at 35% 30%, #ffffff 0%, rgba(255,255,255,0.35) 12%, transparent 30%),
+                conic-gradient(from 210deg, var(--sky-blue), var(--sky-green), var(--sky-amber), var(--sky-violet), var(--sky-blue));
+            box-shadow: 0 0 34px rgba(95, 198, 255, 0.24);
+            flex: 0 0 auto;
+        }
+
+        .sky-heading {
+            min-width: 0;
+        }
+
+        .sky-heading h1 {
+            margin: 0;
+            font-size: 24px;
+            line-height: 1.05;
+            font-weight: 700;
+            letter-spacing: 0;
+        }
+
+        .sky-heading p {
+            margin: 5px 0 0;
+            color: var(--sky-muted);
+            font-size: 13px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .sky-status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 12px;
+            border: 1px solid var(--sky-border);
+            background: rgba(255, 255, 255, 0.06);
+            border-radius: var(--sky-radius);
+            min-height: 44px;
+        }
+
+        .sky-status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--sky-green);
+            box-shadow: 0 0 18px rgba(102, 209, 158, 0.72);
+        }
+
+        .sky-status-text {
+            font-size: 13px;
+            color: var(--sky-muted);
+        }
+
+        .sky-shell {
+            display: grid;
+            grid-template-columns: minmax(300px, 34vw) minmax(0, 1fr);
+            gap: 22px;
+            min-height: 0;
+            padding: 8px 28px 18px;
+        }
+
+        .sky-orb-panel,
+        .sky-stage {
+            min-height: 0;
+            border: 1px solid var(--sky-border);
+            background: linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.035));
+            backdrop-filter: blur(22px);
+            -webkit-backdrop-filter: blur(22px);
+            border-radius: var(--sky-radius);
+            box-shadow: 0 22px 80px rgba(0, 0, 0, 0.32);
+        }
+
+        .sky-orb-panel {
+            display: grid;
+            grid-template-rows: minmax(0, 1fr) auto;
+            overflow: hidden;
+            position: relative;
+        }
+
+        #skyOrb {
+            width: 100%;
+            height: 100%;
+            min-height: 320px;
+            display: block;
+        }
+
+        .sky-listening-copy {
+            position: absolute;
+            left: 22px;
+            right: 22px;
+            bottom: 112px;
+            text-align: center;
+            color: var(--sky-muted);
+            font-size: 15px;
+            line-height: 1.45;
+            pointer-events: none;
+        }
+
+        .sky-transcript {
+            display: grid;
+            gap: 8px;
+            padding: 16px;
+            border-top: 1px solid var(--sky-border);
+            background: rgba(0, 0, 0, 0.14);
+            max-height: 190px;
+            overflow: auto;
+        }
+
+        .sky-line {
+            font-size: 13px;
+            line-height: 1.45;
+            color: var(--sky-muted);
+        }
+
+        .sky-line strong {
+            color: var(--sky-text);
+            font-weight: 650;
+        }
+
+        .sky-stage {
+            display: grid;
+            grid-template-rows: auto 1fr;
+            overflow: hidden;
+        }
+
+        .sky-stage-header {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 16px;
+            align-items: center;
+            padding: 16px 18px;
+            border-bottom: 1px solid var(--sky-border);
+        }
+
+        .sky-context h2 {
+            margin: 0;
+            font-size: 18px;
+            font-weight: 700;
+            letter-spacing: 0;
+        }
+
+        .sky-context p {
+            margin: 4px 0 0;
+            color: var(--sky-muted);
+            font-size: 13px;
+        }
+
+        .sky-mode-toggle {
+            display: flex;
+            gap: 6px;
+            padding: 4px;
+            border: 1px solid var(--sky-border);
+            background: rgba(0,0,0,0.16);
+            border-radius: var(--sky-radius);
+        }
+
+        .sky-mode-toggle button,
+        .sky-card button,
+        .sky-command button {
+            min-height: 44px;
+            border: 0;
+            border-radius: 7px;
+            color: var(--sky-text);
+            background: rgba(255,255,255,0.08);
+            padding: 0 14px;
+            font: inherit;
+            cursor: pointer;
+        }
+
+        .sky-mode-toggle button.active {
+            background: rgba(95, 198, 255, 0.2);
+            color: #d9f4ff;
+        }
+
+        .sky-card-stack {
+            min-height: 0;
+            overflow: auto;
+            padding: 18px;
+            display: grid;
+            grid-template-columns: repeat(12, minmax(0, 1fr));
+            align-content: start;
+            gap: 14px;
+        }
+
+        .sky-card {
+            grid-column: span 6;
+            min-height: 168px;
+            border: 1px solid var(--sky-border);
+            border-radius: var(--sky-radius);
+            background: var(--sky-panel);
+            padding: 16px;
+            display: grid;
+            gap: 12px;
+            align-content: start;
+            box-shadow: 0 12px 30px rgba(0,0,0,0.2);
+        }
+
+        .sky-card.wide { grid-column: span 12; }
+        .sky-card.compact { grid-column: span 4; min-height: 132px; }
+
+        .sky-card-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+        }
+
+        .sky-card-title {
+            margin: 0;
+            font-size: 17px;
+            font-weight: 700;
+            letter-spacing: 0;
+        }
+
+        .sky-card-kicker {
+            margin: 0 0 4px;
+            color: var(--sky-muted);
+            font-size: 12px;
+            text-transform: uppercase;
+        }
+
+        .sky-badge {
+            flex: 0 0 auto;
+            border-radius: 999px;
+            border: 1px solid var(--sky-border);
+            padding: 5px 9px;
+            color: var(--sky-muted);
+            font-size: 12px;
+            background: rgba(255,255,255,0.05);
+        }
+
+        .sky-card-body {
+            color: rgba(246,248,251,0.78);
+            font-size: 14px;
+            line-height: 1.45;
+        }
+
+        .sky-card-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+        }
+
+        .sky-field {
+            border: 1px solid var(--sky-border);
+            background: rgba(0,0,0,0.14);
+            border-radius: 7px;
+            padding: 10px;
+            min-width: 0;
+        }
+
+        .sky-field span {
+            display: block;
+            color: var(--sky-muted);
+            font-size: 12px;
+            margin-bottom: 5px;
+        }
+
+        .sky-field strong {
+            display: block;
+            font-size: 14px;
+            overflow-wrap: anywhere;
+        }
+
+        .sky-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-self: start;
+        }
+
+        .sky-actions button.primary {
+            background: linear-gradient(135deg, rgba(95,198,255,0.88), rgba(102,209,158,0.88));
+            color: #071017;
+            font-weight: 700;
+        }
+
+        .sky-actions button.warn {
+            background: rgba(255, 123, 123, 0.18);
+            color: #ffd5d5;
+        }
+
+        .sky-command {
+            display: grid;
+            grid-template-columns: auto minmax(0, 1fr) auto auto;
+            gap: 10px;
+            align-items: center;
+            padding: 12px 28px max(18px, env(safe-area-inset-bottom, 18px));
+            background: rgba(5, 7, 10, 0.72);
+            border-top: 1px solid var(--sky-border);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+        }
+
+        .sky-command input {
+            width: 100%;
+            min-height: 48px;
+            border: 1px solid var(--sky-border);
+            border-radius: var(--sky-radius);
+            background: rgba(255,255,255,0.08);
+            color: var(--sky-text);
+            padding: 0 14px;
+            font: inherit;
+            outline: none;
+        }
+
+        .sky-command input:focus {
+            border-color: rgba(95, 198, 255, 0.7);
+            box-shadow: 0 0 0 3px rgba(95, 198, 255, 0.12);
+        }
+
+        .sky-command .primary {
+            background: var(--sky-green);
+            color: #071017;
+            font-weight: 700;
+        }
+
+        .sky-command .recording {
+            background: var(--sky-coral);
+            color: #190707;
+        }
+
+        @media (max-width: 980px) {
+            .sky-shell {
+                grid-template-columns: 1fr;
+            }
+            .sky-orb-panel {
+                min-height: 330px;
+            }
+            #skyOrb {
+                min-height: 260px;
+            }
+            .sky-card { grid-column: span 12; }
+            .sky-card.compact { grid-column: span 6; }
+        }
+
+        @media (max-width: 640px) {
+            body { overflow-y: auto; overflow-x: hidden; height: auto; max-width: 100vw; }
+            .sky-topbar,
+            .sky-shell,
+            .sky-command {
+                padding-left: 14px;
+                padding-right: 14px;
+            }
+            .sky-topbar,
+            .sky-stage-header,
+            .sky-command {
+                grid-template-columns: 1fr;
+            }
+            #ztm-tabs {
+                overflow-x: auto;
+                scrollbar-width: none;
+            }
+            #ztm-tabs::-webkit-scrollbar {
+                display: none;
+            }
+            #ztm-right {
+                display: none;
+            }
+            .sky-heading p,
+            .sky-listening-copy {
+                white-space: normal;
+                overflow: visible;
+                overflow-wrap: anywhere;
+                text-overflow: clip;
+            }
+            .sky-heading p {
+                max-width: 270px;
+            }
+            .sky-listening-copy {
+                left: 38px;
+                right: auto;
+                transform: none;
+                width: 300px;
+                font-size: 14px;
+            }
+            .sky-mode-toggle {
+                justify-self: start;
+            }
+            .sky-card.compact { grid-column: span 12; }
+        }
+    </style>
+</head>
+<body>
+    <header class="sky-topbar">
+        <div class="sky-title">
+            <div class="sky-mark" aria-hidden="true"></div>
+            <div class="sky-heading">
+                <h1>Skybridge</h1>
+                <p id="skySubtitle">Voice-first control for Zoe's pages, settings, and live cards.</p>
+            </div>
+        </div>
+        <div class="sky-status" aria-live="polite">
+            <span class="sky-status-dot" id="skyStatusDot"></span>
+            <span class="sky-status-text" id="skyStatusText">Starting</span>
+        </div>
+    </header>
+
+    <main class="sky-shell">
+        <section class="sky-orb-panel" aria-label="Voice state">
+            <canvas id="skyOrb"></canvas>
+            <div class="sky-listening-copy" id="skyListeningCopy">Say what you need. Skybridge will shape the screen around it.</div>
+            <div class="sky-transcript" id="skyTranscript" aria-live="polite"></div>
+        </section>
+
+        <section class="sky-stage" aria-label="Skybridge cards">
+            <div class="sky-stage-header">
+                <div class="sky-context">
+                    <h2 id="skyContextTitle">Home surface</h2>
+                    <p id="skyContextDetail">Cards appear here as Zoe understands the request.</p>
+                </div>
+                <div class="sky-mode-toggle" aria-label="Voice transport">
+                    <button type="button" data-mode="local">Local</button>
+                    <button type="button" data-mode="livekit">LiveKit</button>
+                </div>
+            </div>
+            <div class="sky-card-stack" id="skyCards"></div>
+        </section>
+    </main>
+
+    <form class="sky-command" id="skyCommandForm">
+        <button type="button" id="skyHomeBtn" title="Show home cards">Home</button>
+        <input id="skyCommandInput" autocomplete="off" placeholder="Ask Zoe to show or change anything..." aria-label="Ask Zoe">
+        <button type="button" id="skyMicBtn">Speak</button>
+        <button type="submit" class="primary">Send</button>
+    </form>
+
+    <script src="/js/websocket-sync.js"></script>
+    <script src="/touch/js/gestures.js"></script>
+    <script src="/touch/js/touch-menu.js"></script>
+    <script src="/js/touch-ui-executor.js"></script>
+    <script src="/touch/js/skybridge-capabilities.js"></script>
+    <script src="/touch/js/skybridge-renderer.js"></script>
+    <script src="/touch/js/skybridge-voice.js"></script>
+    <script src="/touch/js/skybridge.js"></script>
+</body>
+</html>
