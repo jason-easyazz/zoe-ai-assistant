@@ -15,6 +15,10 @@ def _mock_ensure_worktree(monkeypatch):
         "worktree_bootstrap.prepare_kanban_worktree",
         lambda task_id, **kwargs: Path(f"/tmp/worktrees/{task_id}"),
     )
+    monkeypatch.setattr(
+        "worktree_bootstrap.prepare_existing_pr_revision_worktree",
+        lambda task_id, pr_url, **kwargs: Path(f"/tmp/worktrees/{task_id}"),
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -93,6 +97,87 @@ async def test_dispatch_refuses_to_create_without_pipeline_journal(monkeypatch):
     assert result["ok"] is False
     assert result["reason"] == "pipeline bootstrap failed"
     assert [c for c in a.calls if c[0] == "create"] == []
+
+
+@pytest.mark.asyncio
+async def test_dispatch_prepares_existing_pr_revision_worktree(monkeypatch):
+    monkeypatch.setenv("ZOE_KANBAN_SKIP_SCOUT", "1")
+    calls = []
+
+    def fake_prepare(task_id, pr_url, **kwargs):
+        calls.append((task_id, pr_url, kwargs))
+        return Path(f"/tmp/worktrees/{task_id}")
+
+    monkeypatch.setattr("worktree_bootstrap.prepare_existing_pr_revision_worktree", fake_prepare)
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {
+            "id": "uuid-pr-revision",
+            "identifier": "ZOE-5354",
+            "title": "Metrics auth revision",
+            "description": """```zoe-ticket
+{"pr_url":"https://github.com/jason-easyazz/zoe-ai-assistant/pull/213"}
+```""",
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["phase"] == "implement"
+    assert calls == [
+        ("t_implement", "https://github.com/jason-easyazz/zoe-ai-assistant/pull/213", {})
+    ]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_blocks_existing_pr_revision_when_precheckout_fails(monkeypatch):
+    monkeypatch.setenv("ZOE_KANBAN_SKIP_SCOUT", "1")
+
+    def fail_prepare(*args, **kwargs):
+        raise RuntimeError("fetch failed")
+
+    monkeypatch.setattr("worktree_bootstrap.prepare_existing_pr_revision_worktree", fail_prepare)
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {
+            "id": "uuid-pr-revision-fail",
+            "identifier": "ZOE-5354",
+            "title": "Metrics auth revision",
+            "description": """```zoe-ticket
+{"pr_url":"https://github.com/jason-easyazz/zoe-ai-assistant/pull/213"}
+```""",
+        }
+    )
+
+    assert result["ok"] is False
+    assert result["reason"] == "existing PR worktree preparation failed"
+    block_calls = [c for c in a.calls if c[0] == "block"]
+    assert len(block_calls) == 1
+    assert "BLOCKER=PR_REVISION_CHECKOUT_FAILED" in block_calls[0][2]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_blocks_regular_worktree_failures_with_generic_reason(monkeypatch):
+    monkeypatch.setenv("ZOE_KANBAN_SKIP_SCOUT", "1")
+
+    def fail_prepare(*args, **kwargs):
+        raise RuntimeError("worktree add failed")
+
+    monkeypatch.setattr("worktree_bootstrap.prepare_kanban_worktree", fail_prepare)
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {
+            "id": "uuid-regular-worktree-fail",
+            "identifier": "ZOE-WT",
+            "title": "Regular implement task",
+        }
+    )
+
+    assert result["ok"] is False
+    assert result["reason"] == "kanban worktree preparation failed"
+    block_calls = [c for c in a.calls if c[0] == "block"]
+    assert len(block_calls) == 1
+    assert "BLOCKER=WORKTREE_PREPARATION_FAILED" in block_calls[0][2]
+    assert "PR_REVISION_CHECKOUT_FAILED" not in block_calls[0][2]
 
 
 
@@ -2199,18 +2284,15 @@ def test_implement_body_documents_existing_pr_revision_fast_path_before_new_pr_c
     assert "do not read, grep, or edit files until the existing PR checkout below succeeds" in body
     assert "/opt/zoe/greptile-mcp pr-comments --unaddressed-only" in body
     assert "may exit nonzero when it prints unresolved comments" in body
-    assert "branch=pr-<number>-$(date +%s)-$$" in body
-    assert "unique slash-free local copy" in body
-    assert "git checkout -B $branch" in body
-    assert "git fetch origin pull/<number>/head" in body
-    assert "git reset --hard FETCH_HEAD" in body
-    assert "do not use `gh pr checkout`" in body
+    assert "Zoe dispatch pre-checks this task worktree to the existing PR head" in body
+    assert "headRefOid" in body
+    assert "git rev-parse HEAD" in body
+    assert "Do not run `gh pr checkout`, `git checkout`, `git fetch`, or `git reset` yourself" in body
     assert "git push origin HEAD:<headRefName>" in body
     assert "report the SAME PR_URL" in body
     assert "PYTHONPATH=services/zoe-data python3 -m pytest" in body
     assert "patch the module variable with monkeypatch/setattr after import" in body
     assert "BLOCKER=PR_REVISION_CHECKOUT_FAILED" in body
-    assert "do not inspect or edit files on the original worktree branch" in body
     assert "BLOCKER=PR_REVISION_BLOCKED" in body
     assert body.index("BLOCKER=PR_REVISION_CHECKOUT_FAILED") < body.index("BLOCKER=PR_REVISION_BLOCKED")
     assert body.index("EXISTING PR REVISION FAST PATH") < body.index("open ONE small PR")
