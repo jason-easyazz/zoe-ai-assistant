@@ -245,7 +245,7 @@ async def test_dispatch_resumed_todo_reports_archive_failure_without_create():
     assert [c for c in a.calls if c[0] == "archive"] == [["archive", "t_implement"]]
     assert [c for c in a.calls if c[0] == "create"] == []
     assert result["ok"] is False
-    assert result["reason"] == "stale blocked phase archive failed"
+    assert result["reason"] == "stale phase archive failed"
     assert result["phase"] == "implement"
 
 
@@ -554,6 +554,48 @@ async def test_dispatch_keeps_scout_for_non_bug_code_audit_ticket():
         }
     )
     assert set(result["chain"]) == {"scout"}
+
+
+@pytest.mark.asyncio
+async def test_dispatch_archives_stale_terminal_revision_phase_row():
+    from pipeline_evidence import PipelineState
+    from pipeline_store import load_latest_state, save_state
+
+    save_state(
+        PipelineState(
+            task_ref="multica:uuid-revision-terminal",
+            phase="implement",
+            status="todo",
+            evidence_profile="code",
+        ),
+        event="verification_failed",
+    )
+    rows = [
+        _row("implement", "done", chain_version="v4", issue_id="uuid-revision-terminal"),
+        _row("verify", "blocked", chain_version="v4", issue_id="uuid-revision-terminal"),
+    ]
+    a = _FakeAdapter(list_rows=rows)
+
+    result = await a.dispatch(
+        {
+            "id": "uuid-revision-terminal",
+            "identifier": "ZOE-5354",
+            "title": "Fix metrics auth",
+            "metadata": {
+                "zoe_kind": "bug",
+                "source": "code_audit_p0_security",
+                "acceptance_criteria": ["Require internal token"],
+            },
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["phase"] == "implement"
+    assert result["created"] == ["implement"]
+    assert ["archive", "t_implement"] in a.calls
+    latest = load_latest_state("multica:uuid-revision-terminal")
+    assert latest.phase == "implement"
+    assert latest.status == "running"
 
 
 @pytest.mark.asyncio
@@ -1223,6 +1265,48 @@ async def test_poll_v4_done_phase_with_ready_next_phase_is_partial():
     assert out["status"] == "partial"
     assert out["pipeline"]["phase"] == "implement"
     assert out["pipeline"]["status"] == "todo"
+
+
+@pytest.mark.asyncio
+async def test_poll_ignores_stale_terminal_row_for_revision_phase():
+    from pipeline_evidence import PipelineState
+    from pipeline_store import save_state
+
+    save_state(
+        PipelineState(
+            task_ref="multica:uuid-revision-poll",
+            phase="implement",
+            status="todo",
+            evidence_profile="code",
+        ),
+        event="verification_failed",
+    )
+    rows = [
+        _row("implement", "done", chain_version="v4", issue_id="uuid-revision-poll"),
+        _row("verify", "blocked", chain_version="v4", issue_id="uuid-revision-poll"),
+    ]
+    a = _FakeAdapter(list_rows=rows)
+
+    out = await a.poll(
+        "multica:uuid-revision-poll",
+        issue={
+            "id": "uuid-revision-poll",
+            "identifier": "ZOE-5354",
+            "title": "Fix metrics auth",
+            "metadata": {
+                "zoe_kind": "bug",
+                "source": "code_audit_p0_security",
+                "acceptance_criteria": ["Require internal token"],
+            },
+        },
+    )
+
+    assert out["status"] == "partial"
+    assert out["pipeline"]["phase"] == "implement"
+    assert out["pipeline"]["status"] == "todo"
+    assert out["pipeline"]["stale_executor_phase"] == "implement"
+    assert out["pipeline"]["stale_executor_status"] == "done"
+    assert out["blocker"] is None
 
 
 @pytest.mark.asyncio

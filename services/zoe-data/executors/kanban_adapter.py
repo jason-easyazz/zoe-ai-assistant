@@ -788,14 +788,19 @@ class KanbanAdapter:
         entry = next((plan_entry for plan_entry in plan if plan_entry[0] == phase), None)
         current_row = existing_phases.get(phase) or {}
         current_status = (current_row.get("status") or "").lower()
-        if state is not None and state.status == "todo" and current_status == "blocked":
+        if (
+            state is not None
+            and state.status == "todo"
+            and (current_status == "blocked" or current_status in _TERMINAL_KANBAN_STATUSES)
+        ):
             task_id = current_row.get("id")
             if task_id:
                 try:
                     await self._run(["archive", str(task_id)])
                 except KanbanCLIError as exc:
                     logger.warning(
-                        "kanban_adapter: archive of stale blocked task %s failed for %s: %s",
+                        "kanban_adapter: archive of stale %s task %s failed for %s: %s",
+                        current_status,
                         task_id,
                         external_ref,
                         exc,
@@ -803,7 +808,7 @@ class KanbanAdapter:
                     return {
                         "ok": False,
                         "external_ref": external_ref,
-                        "reason": "stale blocked phase archive failed",
+                        "reason": "stale phase archive failed",
                         "phase": phase,
                         "chain": {},
                         "created": [],
@@ -1003,7 +1008,7 @@ class KanbanAdapter:
                     else:
                         current_row = phases.get(str(existing_state.phase or "")) or {}
                         current_status = (current_row.get("status") or "").lower()
-                        if current_status == "blocked":
+                        if current_status == "blocked" or current_status in _TERMINAL_KANBAN_STATUSES:
                             stale_executor_phase = str(existing_state.phase or "")
                             stale_executor_status = current_status
                             phases = {
@@ -1011,7 +1016,11 @@ class KanbanAdapter:
                                 for phase, row in phases.items()
                                 if phase != stale_executor_phase
                             }
-                    if stale_executor_phase and (stale_executor_status == "blocked" or not phases):
+                    if stale_executor_phase and (
+                        stale_executor_status == "blocked"
+                        or stale_executor_status in _TERMINAL_KANBAN_STATUSES
+                        or not phases
+                    ):
                         pipeline = {
                             **pipeline_summary(existing_state),
                             "stale_executor_phase": stale_executor_phase,
