@@ -231,6 +231,7 @@ async def test_record_blocked_multica_chain_records_terminal_block_metadata():
                 "pr_url": "https://github.com/o/r/pull/7",
                 "blocker": "terminal block: implement blocked",
                 "status": "blocked",
+                "dispatch_approved": False,
             },
         )
     ]
@@ -251,6 +252,7 @@ async def test_record_blocked_multica_chain_uses_non_terminal_block_reason_witho
     assert blocker == "tests failed"
     assert client.calls[0][1]["phase"] == "verify"
     assert client.calls[0][1]["blocker"] == "tests failed"
+    assert client.calls[0][1]["dispatch_approved"] is False
     assert not client.calls[0][1]["blocker"].startswith("terminal block:")
 
 
@@ -274,4 +276,6 @@ async def test_record_blocked_multica_chain_falls_back_to_classification_and_def
     assert classified == "blocked_external"
     assert defaulted == "pipeline blocked at retro"
     assert client.calls[0][1]["blocker"] == "blocked_external"
+    assert client.calls[0][1]["dispatch_approved"] is False
     assert client.calls[1][1]["blocker"] == "pipeline blocked at retro"
+    assert client.calls[1][1]["dispatch_approved"] is False

@@ -115,6 +115,7 @@ def update_ticket_progress(
     greptile_status: str | None = None,
     merge_sha: str | None = None,
     child_issue_ids: list[str] | None = None,
+    dispatch_approved: bool | None = None,
 ) -> str:
     """Patch progress fields inside the Zoe block without touching prose."""
     current = parse_ticket_block(description)
@@ -135,6 +136,8 @@ def update_ticket_progress(
         metadata["merge_sha"] = merge_sha
     if child_issue_ids is not None:
         metadata["child_issue_ids"] = child_issue_ids
+    if dispatch_approved is not None:
+        metadata["dispatch_approved"] = dispatch_approved
     metadata["updated_at"] = datetime.now(timezone.utc).isoformat()
     return write_ticket_block(description, metadata)
 

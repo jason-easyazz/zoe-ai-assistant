@@ -961,11 +961,15 @@ class KanbanAdapter:
             elif is_v4:
                 if pipeline_info.get("terminal_block"):
                     agg = "blocked"
-                    blocker = f"pipeline terminal block at {current_phase}"
+                    blocker = pipeline_info.get("block_reason") or f"pipeline terminal block at {current_phase}"
                 elif current_status == "blocked":
                     agg = "blocked"
                     current_row = phases.get(str(current_phase or ""), {})
-                    blocker = current_row.get("block_reason") or f"pipeline blocked at {current_phase}"
+                    blocker = (
+                        pipeline_info.get("block_reason")
+                        or current_row.get("block_reason")
+                        or f"pipeline blocked at {current_phase}"
+                    )
                 elif current_status == "todo":
                     agg = "partial" if current_phase not in phases else "running"
                     blocker = None

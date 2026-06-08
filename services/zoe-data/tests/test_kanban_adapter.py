@@ -1171,6 +1171,36 @@ async def test_poll_v4_does_not_promote_kanban_blocked_to_partial():
 
 
 @pytest.mark.asyncio
+async def test_poll_v4_prefers_journal_block_reason_over_kanban_row():
+    rows = [
+        _row(
+            "implement",
+            "blocked",
+            chain_version="v4",
+            block_reason="pipeline blocked at implement",
+        )
+    ]
+    show = {
+        "t_implement": {
+            "latest_summary": (
+                "BLOCKER=IMPLEMENT_BUDGET: code-enforced tool budget exceeded "
+                "(steps=17, guidance_limit=14, hard_limit=16)"
+            ),
+            "comments": [],
+        }
+    }
+    a = _FakeAdapter(list_rows=rows, show_map=show)
+    out = await a.poll("multica:uuid-9")
+
+    assert out["status"] == "blocked"
+    assert out["blocker"] == (
+        "IMPLEMENT_BUDGET: code-enforced tool budget exceeded "
+        "(steps=17, guidance_limit=14, hard_limit=16)"
+    )
+    assert out["pipeline"]["block_reason"] == out["blocker"]
+
+
+@pytest.mark.asyncio
 async def test_poll_current_partial_chain_with_verify_is_redispatchable():
     rows = [
         _row("implement", "done"),

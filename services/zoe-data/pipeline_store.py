@@ -359,6 +359,12 @@ def pipeline_summary(state: PipelineState | None) -> dict[str, Any]:
     if not state:
         return {"tracked": False}
     missing = sorted(missing_required_evidence(state))
+    block_reason = None
+    if state.status == "blocked":
+        for record in reversed(state.history):
+            if record.outcome in {"block", "verification_failed", "request_changes", "merge_blocked"}:
+                block_reason = record.reason
+                break
     fingerprint_abort = state.status == "blocked" and (
         state.repeated_block_count >= 2
         or any(
@@ -381,6 +387,7 @@ def pipeline_summary(state: PipelineState | None) -> dict[str, Any]:
         "attempts": dict(state.attempts),
         "terminal_block": terminal_block,
         "fingerprint_abort": fingerprint_abort,
+        "block_reason": block_reason,
         "block_classification": state.block_classification,
         "needs_split": state.status == "blocked" and state.block_classification == "scope_split_required",
         "split_packet": state.split_packet,

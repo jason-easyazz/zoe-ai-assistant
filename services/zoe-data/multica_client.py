@@ -346,6 +346,7 @@ class MULClient:
         greptile_status: str | None = None,
         merge_sha: str | None = None,
         status: str | None = None,
+        dispatch_approved: bool | None = None,
     ) -> dict:
         """Record operator-visible Zoe progress on a Multica issue."""
         from multica_ticket_contract import update_ticket_progress
@@ -362,6 +363,7 @@ class MULClient:
             clear_blocker=clear_blocker,
             greptile_status=greptile_status,
             merge_sha=merge_sha,
+            dispatch_approved=dispatch_approved,
         )
         return await self.update_issue(issue_id, status=status, description=updated_description)
 
