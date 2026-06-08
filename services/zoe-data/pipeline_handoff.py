@@ -480,9 +480,9 @@ def evidence_from_handoff(
     text_fields: dict[str, str] = {}
     for chunk in _haystacks(detail):
         text_fields.update(_parse_kv_fields(chunk))
-    task_body = _task_body(detail)
-    if task_body:
-        text_fields.update(_parse_kv_fields(task_body))
+    task_fields = _parse_kv_fields(_task_body(detail))
+    if task_fields.get("PR_URL") and not text_fields.get("PR_URL"):
+        text_fields["PR_URL"] = task_fields["PR_URL"]
     fields = dict(text_fields)
     fields.update(_structured_handoff_fields(detail))
 

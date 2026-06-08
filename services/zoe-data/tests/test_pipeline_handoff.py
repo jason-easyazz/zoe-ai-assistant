@@ -86,6 +86,32 @@ PR_URL=https://github.com/jason-easyazz/zoe-ai-assistant/pull/213
     assert any(item.kind == "pr" for item in items)
 
 
+def test_task_body_tests_do_not_override_run_metadata_recovery():
+    detail = {
+        "latest_summary": "Fixed the requested implementation.",
+        "task": {
+            "body": """Multica issue: ZOE-5354
+TESTS=old ticket template says pending
+PR_URL=https://github.com/jason-easyazz/zoe-ai-assistant/pull/213"""
+        },
+        "runs": [
+            {
+                "metadata": {
+                    "tests_run": 2,
+                    "tests_passed": 2,
+                },
+            }
+        ],
+    }
+
+    items = evidence_from_handoff("implement", detail, skills=())
+
+    test_item = next(item for item in items if item.kind == "test")
+    assert test_item.passed is True
+    assert test_item.metadata.get("source") == "kanban_run_metadata"
+    assert "tests_run=2" in test_item.summary
+
+
 def test_run_metadata_test_evidence_requires_all_tests_to_pass():
     detail = {
         "runs": [
