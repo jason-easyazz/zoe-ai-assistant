@@ -21,8 +21,20 @@
         bindEvents();
         startOrb();
         renderHome();
+        loadBackendStatus();
         setMode(mode);
         if (typeof TouchMenu !== 'undefined') TouchMenu.init({ page: 'skybridge' });
+    }
+
+    async function loadBackendStatus() {
+        try {
+            const resp = await fetch('/api/skybridge/status', { headers: { 'Accept': 'application/json' } });
+            if (!resp.ok) return;
+            const data = await resp.json();
+            if (data && data.status === 'ready') setStatus('Skybridge runtime ready');
+        } catch (_) {
+            // The interface can still render local cards if the API is offline.
+        }
     }
 
     function cacheEls() {

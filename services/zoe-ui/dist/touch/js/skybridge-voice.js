@@ -29,6 +29,9 @@
             this.maxRecordedRms = 0;
             this.silenceTimer = null;
             this.autoListenTimer = null;
+            this.reconnectTimer = null;
+            this.reconnectDelayMs = 1000;
+            this.stopped = true;
             this.silenceThreshold = 0.01;
             this.silenceMs = 1600;
         }
@@ -38,6 +41,7 @@
         }
 
         async start() {
+            this.stopped = false;
             if (this.mode === 'livekit') {
                 await this.connectLiveKit();
             } else {
@@ -46,6 +50,8 @@
         }
 
         stop() {
+            this.stopped = true;
+            clearTimeout(this.reconnectTimer);
             clearTimeout(this.autoListenTimer);
             clearTimeout(this.silenceTimer);
             if (this.ws) this.ws.close();
@@ -60,22 +66,41 @@
         }
 
         connectLocal() {
+            clearTimeout(this.reconnectTimer);
             const proto = location.protocol === 'https:' ? 'wss' : 'ws';
             const wsUrl = proto + '://' + location.host + '/ws/voice/?session_id=' + encodeURIComponent(getSessionId());
             this.ws = new WebSocket(wsUrl);
             this.ws.binaryType = 'arraybuffer';
-            this.ws.onopen = () => this.emit({ type: 'ready', mode: 'local' });
+            this.ws.onopen = () => {
+                this.reconnectDelayMs = 1000;
+                this.emit({ type: 'ready', mode: 'local' });
+            };
             this.ws.onmessage = event => {
                 try {
                     const msg = typeof event.data === 'string' ? JSON.parse(event.data) : null;
                     if (msg) this.handleServerEvent(msg);
-                } catch (_) {}
+                } catch (err) {
+                    console.warn('Skybridge voice event parse failed', err);
+                    this.emit({ type: 'error', message: 'Malformed server event' });
+                }
             };
             this.ws.onclose = () => {
+                this.ws = null;
                 this.serverBusy = false;
                 this.emit({ type: 'state', state: 'ambient' });
                 this.emit({ type: 'error', message: 'Voice disconnected' });
+                this.scheduleReconnect();
             };
+        }
+
+        scheduleReconnect() {
+            if (this.stopped || this.mode !== 'local') return;
+            clearTimeout(this.reconnectTimer);
+            const delay = this.reconnectDelayMs;
+            this.reconnectDelayMs = Math.min(this.reconnectDelayMs * 2, 15000);
+            this.reconnectTimer = setTimeout(() => {
+                if (!this.stopped && this.mode === 'local') this.connectLocal();
+            }, delay);
         }
 
         async connectLiveKit() {
@@ -221,6 +246,10 @@
                 }
             } else if (this.ws && this.ws.readyState === WebSocket.OPEN) {
                 this.ws.send(await blob.arrayBuffer());
+            } else {
+                this.serverBusy = false;
+                this.emit({ type: 'state', state: 'ambient' });
+                this.emit({ type: 'error', message: 'Voice transport unavailable' });
             }
         }
 

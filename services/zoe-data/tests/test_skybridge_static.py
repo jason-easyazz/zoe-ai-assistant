@@ -28,6 +28,7 @@ def test_skybridge_page_loads_required_modules_in_order():
     assert "/js/touch-ui-executor.js" in html
     assert "id=\"skyCards\"" in html
     assert "id=\"skyCommandForm\"" in html
+    assert "window.confirm = function() { return true; }" not in html
 
 
 def test_skybridge_capability_registry_covers_core_touch_pages():
@@ -69,6 +70,16 @@ def test_skybridge_voice_normalizes_both_transports():
     assert "connectLiveKit()" in voice
     assert "handleServerEvent(msg)" in voice
     assert "this.emit({ type: 'card'" in voice
+    assert "scheduleReconnect()" in voice
+    assert "Malformed server event" in voice
+    assert "Voice transport unavailable" in voice
+
+
+def test_skybridge_uses_backend_status_contract():
+    app = read(UI / "js" / "skybridge.js")
+
+    assert "/api/skybridge/status" in app
+    assert "Skybridge runtime ready" in app
 
 
 def test_skybridge_is_registered_in_touch_menu():
