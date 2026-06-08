@@ -269,6 +269,43 @@ async def test_record_blocked_multica_chain_records_terminal_block_metadata():
 
 
 @pytest.mark.asyncio
+async def test_record_blocked_multica_chain_creates_iteration_budget_followup():
+    from main import _record_blocked_multica_chain
+    from multica_ticket_contract import parse_ticket_block
+
+    client = RecordingClient()
+    client.issues["parent-iteration"] = {
+        "id": "parent-iteration",
+        "identifier": "ZOE-ITER",
+        "status": "blocked",
+        "description": "Parent description",
+        "assignee_id": "agent-1",
+        "assignee_type": "agent",
+        "project_id": "project-1",
+    }
+
+    blocker = await _record_blocked_multica_chain(
+        client,
+        "parent-iteration",
+        {
+            "pipeline": {"phase": "implement", "block_reason": "ITERATION_BUDGET"},
+        },
+    )
+
+    assert blocker == "ITERATION_BUDGET"
+    assert len(client.created) == 1
+    child = client.created[0]
+    metadata = parse_ticket_block(child["description"])
+    assert child["title"] == "Harness: follow up ITERATION_BUDGET for ZOE-ITER"
+    assert metadata["source"] == "engineering_blocker_followup"
+    assert metadata["source_blocker"] == "ITERATION_BUDGET"
+    assert metadata["parent_issue_id"] == "parent-iteration"
+    assert ("child-1", "harness-fix") in client.labels
+    assert ("child-1", "iteration-budget") in client.labels
+    assert client.notes == [("parent-iteration", "Harness follow-up created for ITERATION_BUDGET: ZOE-C1")]
+
+
+@pytest.mark.asyncio
 async def test_record_blocked_multica_chain_uses_non_terminal_block_reason_without_prefix():
     from main import _record_blocked_multica_chain
 

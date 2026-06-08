@@ -41,7 +41,7 @@ _LOG_TOOL_MARKERS = (
 _STABLE_BLOCKER_RE = re.compile(
     r"\b(?:WORKTREE_NOT_READY|GATE_BLOCKED|PROTOCOL_VIOLATION|MERGE_BLOCKED|"
     r"VERIFICATION_FAILED|HTTP_402|PAYMENT_REQUIRED|CREDITS_EXHAUSTED|"
-    r"TURN_BUDGET|CONTEXT_LIMIT|TOKEN_LIMIT|SCOPE_SPLIT_REQUIRED|NEEDS_SPLIT)\b",
+    r"TURN_BUDGET|ITERATION_BUDGET|CONTEXT_LIMIT|TOKEN_LIMIT|SCOPE_SPLIT_REQUIRED|NEEDS_SPLIT)\b",
     re.I,
 )
 
@@ -61,6 +61,22 @@ def _haystacks(detail: dict[str, Any]) -> list[str]:
     logs = detail.get("logs") or detail.get("log") or detail.get("log_tail")
     if logs:
         parts.append(logs if isinstance(logs, str) else json.dumps(logs))
+    for run in detail.get("runs") or []:
+        if not isinstance(run, dict):
+            continue
+        run_error = run.get("error")
+        if run_error:
+            parts.append(
+                f"ITERATION_BUDGET: {run_error}"
+                if "iteration budget" in str(run_error).lower()
+                else str(run_error)
+            )
+        run_summary = run.get("summary")
+        if run_summary:
+            parts.append(str(run_summary))
+        run_metadata = run.get("metadata")
+        if run_metadata:
+            parts.append(json.dumps(run_metadata))
     return parts
 
 
@@ -182,14 +198,6 @@ def _retro_followup_metadata(fields: dict[str, str]) -> dict[str, Any]:
         "description": description[:2000] or title[:500],
         "source": "retro",
     }
-
-
-def _log_tail_snippet(detail: dict[str, Any], *, max_lines: int = 8) -> str:
-    for chunk in reversed(_haystacks(detail)):
-        lines = [ln.strip() for ln in chunk.splitlines() if ln.strip()]
-        if lines:
-            return "\n".join(lines[-max_lines:])
-    return ""
 
 
 def _stable_block_reason_from_text(text: str) -> str:
@@ -546,9 +554,8 @@ def block_reason_from_handoff(detail: dict[str, Any], *, row_block_reason: str |
     reason = (fields.get("BLOCKER") or row_block_reason or "").strip()
     if reason:
         return reason
-    tail = _log_tail_snippet(detail)
-    if tail:
-        stable = _stable_block_reason_from_text(tail)
+    for chunk in _haystacks(detail):
+        stable = _stable_block_reason_from_text(chunk)
         if stable:
             return stable
     return ""

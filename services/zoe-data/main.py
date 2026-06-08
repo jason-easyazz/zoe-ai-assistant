@@ -168,7 +168,7 @@ def _blocker_followup_marker(phase: str, blocker: str) -> str | None:
     if phase != "implement":
         return None
     upper = blocker.upper()
-    for marker in ("IMPLEMENT_BUDGET", "PROTOCOL_VIOLATION"):
+    for marker in ("IMPLEMENT_BUDGET", "ITERATION_BUDGET", "PROTOCOL_VIOLATION"):
         if marker in upper:
             return marker
     return None

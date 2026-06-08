@@ -474,6 +474,24 @@ def test_block_reason_from_handoff_ignores_dynamic_log_tail():
     assert reason == "WORKTREE_NOT_READY"
 
 
+def test_block_reason_from_handoff_extracts_iteration_budget_from_run_error():
+    from pipeline_handoff import block_reason_from_handoff
+
+    detail = {
+        "latest_summary": "",
+        "comments": [],
+        "runs": [
+            {
+                "outcome": "gave_up",
+                "error": "Iteration budget exhausted (22/22) — task could not complete within the allowed iterations",
+                "metadata": {"trigger_outcome": "timed_out"},
+            }
+        ],
+    }
+
+    assert block_reason_from_handoff(detail) == "ITERATION_BUDGET"
+
+
 def test_block_reason_ignores_dynamic_log_tail_without_stable_token():
     from pipeline_handoff import block_reason_from_handoff
 
