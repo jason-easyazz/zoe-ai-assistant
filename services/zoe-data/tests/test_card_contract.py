@@ -1,7 +1,9 @@
 """Tests for Zoe card contract validation."""
 
+import json
 import os
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -16,6 +18,9 @@ from card_contract import (
     reserved_field_names,
     validate_card_contract,
 )
+
+
+FIXTURE_DIR = Path(__file__).parent / "fixtures"
 
 
 def _contract(**overrides):
@@ -33,6 +38,10 @@ def _contract(**overrides):
     return payload
 
 
+def _load_fixture(name):
+    return json.loads((FIXTURE_DIR / name).read_text(encoding="utf-8"))
+
+
 def test_valid_card_contract_normalizes_core_fields():
     normalized = validate_card_contract(_contract(), supported_major=1)
 
@@ -40,6 +49,31 @@ def test_valid_card_contract_normalizes_core_fields():
     assert normalized["card_id"] == "550e8400-e29b-41d4-a716-446655440000"
     assert normalized["created_at"] == "2026-06-08T04:00:00Z"
     assert normalized["idempotency_key"] == "card:reminder:1"
+
+
+def test_valid_card_contract_fixtures_normalize_without_unknown_envelope_fields():
+    for case in _load_fixture("card_contract_valid.json"):
+        normalized = validate_card_contract(case["card"], supported_major=1)
+
+        assert normalized["card_id"] == case["card"]["card_id"]
+        assert normalized["schema_version"] == case["card"]["schema_version"]
+        assert normalized["card_type"] == case["card"]["card_type"]
+        assert normalized["producer"] == case["card"]["producer"]
+        assert "name" not in normalized
+
+
+def test_invalid_card_contract_fixtures_return_actionable_errors():
+    for case in _load_fixture("card_contract_invalid.json"):
+        with pytest.raises(CardContractError) as exc_info:
+            validate_card_contract(
+                case["card"],
+                supported_major=case.get("supported_major"),
+            )
+
+        message = str(exc_info.value)
+        assert case["error_contains"] in message
+        assert "Traceback" not in message
+        assert "card_contract.py" not in message
 
 
 def test_missing_required_field_is_rejected():

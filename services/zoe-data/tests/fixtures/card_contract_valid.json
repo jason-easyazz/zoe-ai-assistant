@@ -1,0 +1,57 @@
+[
+  {
+    "name": "generic status",
+    "card": {
+      "card_id": "550e8400-e29b-41d4-a716-446655440020",
+      "schema_version": "1.0.0",
+      "card_type": "generic",
+      "content": {
+        "title": "System Status",
+        "summary": "All services healthy"
+      },
+      "producer": "zoe-data",
+      "producer_version": "2026.06.08",
+      "created_at": "2026-06-08T04:00:00Z"
+    }
+  },
+  {
+    "name": "action form",
+    "card": {
+      "card_id": "550e8400-e29b-41d4-a716-446655440021",
+      "schema_version": "1.0.0",
+      "card_type": "action_form",
+      "content": {
+        "form_id": "reminder",
+        "title": "Create Reminder",
+        "fields": [
+          {
+            "name": "when",
+            "type": "datetime"
+          }
+        ]
+      },
+      "producer": "zoe-data",
+      "producer_version": "2026.06.08",
+      "created_at": "2026-06-08T04:00:00Z",
+      "idempotency_key": "card:reminder:fixture"
+    }
+  },
+  {
+    "name": "list card",
+    "card": {
+      "card_id": "550e8400-e29b-41d4-a716-446655440022",
+      "schema_version": "1.0.0",
+      "card_type": "list",
+      "content": {
+        "list_id": "shopping",
+        "items": [
+          "milk",
+          "bread"
+        ]
+      },
+      "producer": "zoe-data",
+      "producer_version": "2026.06.08",
+      "created_at": "2026-06-08T04:00:00Z"
+    }
+  }
+]

@@ -1,0 +1,65 @@
+[
+  {
+    "name": "missing action form fields",
+    "error_contains": "content for action_form is missing required field(s): fields",
+    "card": {
+      "card_id": "550e8400-e29b-41d4-a716-446655440010",
+      "schema_version": "1.0.0",
+      "card_type": "action_form",
+      "content": {
+        "form_id": "reminder",
+        "title": "Reminder"
+      },
+      "producer": "zoe-data",
+      "producer_version": "2026.06.08",
+      "created_at": "2026-06-08T04:00:00Z"
+    }
+  },
+  {
+    "name": "invalid card id",
+    "error_contains": "card_id must be a UUID string",
+    "card": {
+      "card_id": "not-a-uuid",
+      "schema_version": "1.0.0",
+      "card_type": "generic",
+      "content": {
+        "title": "Status"
+      },
+      "producer": "zoe-data",
+      "producer_version": "2026.06.08",
+      "created_at": "2026-06-08T04:00:00Z"
+    }
+  },
+  {
+    "name": "blank producer",
+    "error_contains": "producer cannot be empty",
+    "card": {
+      "card_id": "550e8400-e29b-41d4-a716-446655440011",
+      "schema_version": "1.0.0",
+      "card_type": "list",
+      "content": {
+        "list_id": "shopping",
+        "items": []
+      },
+      "producer": "   ",
+      "producer_version": "2026.06.08",
+      "created_at": "2026-06-08T04:00:00Z"
+    }
+  },
+  {
+    "name": "unsupported renderer major",
+    "supported_major": 1,
+    "error_contains": "renderer supports MAJOR 1, cannot accept schema_version 2.0.0",
+    "card": {
+      "card_id": "550e8400-e29b-41d4-a716-446655440012",
+      "schema_version": "2.0.0",
+      "card_type": "generic",
+      "content": {
+        "title": "Future Card"
+      },
+      "producer": "zoe-data",
+      "producer_version": "2026.06.08",
+      "created_at": "2026-06-08T04:00:00Z"
+    }
+  }
+]
