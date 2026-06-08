@@ -2197,7 +2197,13 @@ def test_implement_body_documents_existing_pr_revision_fast_path_before_new_pr_c
     assert "EXISTING PR REVISION FAST PATH" in body
     assert "Do not rediscover the original fix and do not create a new PR" in body
     assert "/opt/zoe/greptile-mcp pr-comments --unaddressed-only" in body
-    assert "gh pr checkout <number>" in body
+    assert "may exit nonzero when it prints unresolved comments" in body
+    assert 'branch=pr-<number>-$(basename "$PWD")' in body
+    assert "git checkout -B $branch" in body
+    assert "git fetch origin pull/<number>/head" in body
+    assert "git reset --hard FETCH_HEAD" in body
+    assert "do not use `gh pr checkout`" in body
+    assert "git push origin HEAD:<headRefName>" in body
     assert "report the SAME PR_URL" in body
     assert "PYTHONPATH=services/zoe-data python3 -m pytest" in body
     assert "patch the module variable with monkeypatch/setattr after import" in body
