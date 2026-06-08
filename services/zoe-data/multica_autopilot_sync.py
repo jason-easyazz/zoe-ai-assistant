@@ -279,7 +279,7 @@ async def _run_platform_health_check() -> None:
             existing = next(
                 (
                     issue
-                    for issue in await client.list_issues()
+                    for issue in await client.list_issues(limit=1000)
                     if issue.get("title") == title
                     and issue.get("status") not in {"done", "cancelled", "archived"}
                 ),

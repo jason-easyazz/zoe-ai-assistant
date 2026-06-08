@@ -4,6 +4,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import multica_client
+import pytest
 
 
 def test_get_engineering_multica_agent_id_prefers_env(monkeypatch):
@@ -29,6 +30,42 @@ def test_mul_client_reads_env_at_instantiation(monkeypatch):
     assert client._token == "token-1"
     assert client._workspace == "workspace-1"
     assert client.is_configured() is True
+
+
+@pytest.mark.asyncio
+async def test_list_issues_forwards_explicit_limit(monkeypatch):
+    requests = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"issues": []}
+
+    class FakeHttpClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url, **kwargs):
+            requests.append((url, kwargs))
+            return FakeResponse()
+
+    monkeypatch.setenv("MULTICA_BASE_URL", "https://multica.example")
+    monkeypatch.setenv("MULTICA_API_TOKEN", "token-1")
+    monkeypatch.setenv("MULTICA_WORKSPACE_ID", "workspace-1")
+    monkeypatch.setattr(
+        multica_client.httpx,
+        "AsyncClient",
+        lambda **_kwargs: FakeHttpClient(),
+    )
+
+    await multica_client.MULClient().list_issues(status="backlog", limit=1000)
+
+    assert requests[0][1]["params"] == {"status": "backlog", "limit": 1000}
 
 
 def test_get_multica_client_refreshes_cached_client_when_env_changes(monkeypatch):

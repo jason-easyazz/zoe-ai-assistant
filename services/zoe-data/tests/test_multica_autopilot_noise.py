@@ -79,7 +79,8 @@ async def test_platform_health_failure_reuses_open_issue(monkeypatch, tmp_path):
     creates = []
 
     class FakeClient:
-        async def list_issues(self):
+        async def list_issues(self, *, limit=None):
+            assert limit == 1000
             return [
                 {
                     "id": "health-1",
