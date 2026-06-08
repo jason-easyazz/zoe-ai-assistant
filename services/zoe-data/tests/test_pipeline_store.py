@@ -748,6 +748,7 @@ async def test_sync_pipeline_blocked_records_reason_in_history(isolated_store):
     state = await store.sync_pipeline_from_chain("multica:block-reason", phases, fetch_detail)
     assert state.status == "blocked"
     assert state.history[-1].reason == "dirty tree"
+    assert store.pipeline_summary(state)["block_reason"] == "dirty tree"
 
     last = json.loads(isolated_store.read_text(encoding="utf-8").strip().splitlines()[-1])
     assert last["meta"]["block_reason"] == "dirty tree"

@@ -48,6 +48,29 @@ async def test_record_progress_can_clear_blocker():
     assert metadata["phase"] == "closeout"
 
 
+def test_update_ticket_progress_can_clear_dispatch_approval():
+    from multica_ticket_contract import parse_ticket_block, update_ticket_progress, write_ticket_block
+
+    description = write_ticket_block(
+        "Human prose",
+        {
+            "schema": 1,
+            "dispatch_approved": True,
+            "blocked_reason": None,
+        },
+    )
+
+    updated = update_ticket_progress(
+        description,
+        blocker="IMPLEMENT_BUDGET: code-enforced tool budget exceeded",
+        dispatch_approved=False,
+    )
+
+    metadata = parse_ticket_block(updated)
+    assert metadata["dispatch_approved"] is False
+    assert metadata["blocked_reason"] == "IMPLEMENT_BUDGET: code-enforced tool budget exceeded"
+
+
 @pytest.mark.asyncio
 async def test_create_issue_metadata_preserves_existing_ticket_fields():
     created_payload = {}

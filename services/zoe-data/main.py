@@ -175,6 +175,7 @@ async def _record_blocked_multica_chain(client, issue_id: str, chain: dict) -> s
         pr_url=chain.get("pr_url"),
         blocker=blocker,
         status="blocked",
+        dispatch_approved=False,
     )
     return blocker
 
