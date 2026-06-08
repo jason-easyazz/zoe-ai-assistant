@@ -938,6 +938,7 @@
                 fetch('/api/weather/forecast'),
             ]);
             if (curRes.ok) {
+                if (fc) fc.style.opacity = '';
                 let curData;
                 try { curData = await curRes.json(); } catch (_) { curData = null; }
                 if (curData) renderCurrent(curData);
@@ -953,7 +954,6 @@
                 return;
             }
             if (fcRes.ok) {
-                if (fc) fc.style.opacity = '';
                 try { renderForecast(await fcRes.json()); } catch (_) {}
             }
             _lastFetch = Date.now();
