@@ -227,6 +227,11 @@ def _skip_scout(issue: dict | None = None) -> bool:
         and bool(meta.get("acceptance_criteria"))
     ):
         return True
+    if (
+        str(meta.get("zoe_kind") or "").strip().lower() == "harness_fix"
+        and bool(meta.get("acceptance_criteria"))
+    ):
+        return True
     haystack = " ".join(
         [
             str(issue.get("title") or ""),
