@@ -59,6 +59,73 @@ def test_should_create_tracker_issue_allowlist():
                 assert mas._should_create_tracker_issue("Platform Health Check", "create_issue", fn) is True
 
 
+def test_platform_health_never_creates_wrapper_issue():
+    with patch.object(mas, "_is_configured", lambda: True):
+        with patch.object(mas, "_CREATE_ISSUES", True):
+            with patch.object(mas, "_CREATE_ISSUES_FOR", {"platform health check"}):
+                assert mas._should_create_tracker_issue(
+                    "Platform Health Check",
+                    "create_issue",
+                    mas._run_platform_health_check,
+                ) is False
+
+
+@pytest.mark.asyncio
+async def test_platform_health_failure_reuses_open_issue(monkeypatch, tmp_path):
+    script = tmp_path / "health.sh"
+    script.write_text("#!/bin/sh\necho broken\nexit 1\n", encoding="utf-8")
+    script.chmod(0o755)
+    updates = []
+    creates = []
+    list_calls = []
+
+    class FakeClient:
+        async def list_issues(self, status=None, *, limit=None):
+            assert limit == 1000
+            list_calls.append(status)
+            return [
+                {
+                    "id": "health-1",
+                    "title": "Platform health failures detected",
+                    "status": "blocked",
+                }
+            ] if status == "blocked" else []
+
+        async def update_issue(self, issue_id, status=None, **kwargs):
+            updates.append((issue_id, status, kwargs))
+            return {"id": issue_id}
+
+        async def create_issue(self, **kwargs):
+            creates.append(kwargs)
+            return {"id": "new"}
+
+    monkeypatch.setenv("ZOE_HEALTH_CHECK_SCRIPT", str(script))
+    monkeypatch.setattr(mas, "_is_configured", lambda: True)
+    monkeypatch.setitem(
+        sys.modules,
+        "multica_client",
+        types.SimpleNamespace(get_multica_client=lambda: FakeClient()),
+    )
+
+    with pytest.raises(RuntimeError, match="Platform health check failed"):
+        await mas._run_platform_health_check()
+
+    assert creates == []
+    assert list_calls == ["backlog", "todo", "in_progress", "blocked", "in_review"]
+    assert updates == [
+        (
+            "health-1",
+            None,
+            {
+                "description": (
+                    "The scheduled Platform Health Check found failing services.\n\n"
+                    "```\nbroken\n```"
+                ),
+            },
+        )
+    ]
+
+
 @pytest.mark.asyncio
 async def test_fire_autopilot_job_skips_create_when_disabled(monkeypatch):
     posts: list = []

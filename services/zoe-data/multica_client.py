@@ -140,7 +140,12 @@ class MULClient:
             logger.warning("Multica get_issue(%s) failed: %s", issue_id, exc)
             return {}
 
-    async def list_issues(self, status: str | None = None) -> list[dict]:
+    async def list_issues(
+        self,
+        status: str | None = None,
+        *,
+        limit: int | None = None,
+    ) -> list[dict]:
         """List issues in the workspace, optionally filtered by status."""
         if not self.is_configured():
             return []
@@ -148,6 +153,8 @@ class MULClient:
         params = {}
         if status:
             params["status"] = status
+        if limit is not None:
+            params["limit"] = max(1, int(limit))
         try:
             async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
                 resp = await client.get(url, params=params, headers=self._headers())

@@ -62,6 +62,51 @@ def test_selects_one_approved_issue_by_queue_order():
     assert held == []
 
 
+def test_approved_blocked_ticket_halts_single_ticket_lane():
+    blocked = _issue(
+        "ZOE-1",
+        "First fix",
+        status="blocked",
+        dispatch_approved=True,
+        queue_order=1,
+    )
+    next_issue = _issue(
+        "ZOE-2",
+        "Second fix",
+        dispatch_approved=True,
+        queue_order=2,
+    )
+
+    selected, held = select_next_approved_issue(
+        [next_issue],
+        [blocked, next_issue],
+        hermes_agent_id=HERMES,
+    )
+
+    assert selected is None
+    assert held == ["single ticket lane halted by approved blocked ticket(s): ZOE-1"]
+
+
+def test_non_hermes_blocked_ticket_does_not_halt_lane():
+    blocked = _issue(
+        "ZOE-1",
+        "Other workflow",
+        status="blocked",
+        dispatch_approved=True,
+    )
+    blocked["assignee_id"] = "another-agent"
+    next_issue = _issue("ZOE-2", "Hermes fix", dispatch_approved=True)
+
+    selected, held = select_next_approved_issue(
+        [next_issue],
+        [blocked, next_issue],
+        hermes_agent_id=HERMES,
+    )
+
+    assert selected == next_issue
+    assert held == []
+
+
 def test_ticket_metadata_is_parsed_once_per_backlog_issue(monkeypatch):
     first = _issue("ZOE-1", "First fix", dispatch_approved=True, queue_order=1)
     second = _issue("ZOE-2", "Second fix", dispatch_approved=True, queue_order=2)

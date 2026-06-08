@@ -944,9 +944,20 @@ def test_phase_budget_reason_enforces_tool_and_runtime_limits(tmp_path, monkeypa
         now=110,
     )
 
+    assert reason is None
+
+    log_path.write_text("\n".join(["  ┊ tool call"] * 11), encoding="utf-8")
+    reason = kb.phase_budget_reason(
+        "t_scout",
+        "scout",
+        {"task": {"started_at": 100}},
+        now=110,
+    )
     assert reason is not None
     assert "SCOUT_BUDGET" in reason
-    assert "steps=9" in reason
+    assert "steps=11" in reason
+    assert "guidance_limit=8" in reason
+    assert "hard_limit=10" in reason
 
     log_path.write_text("", encoding="utf-8")
     monkeypatch.setenv("ZOE_KANBAN_SCOUT_RUNTIME_BUDGET_SECONDS", "5")
