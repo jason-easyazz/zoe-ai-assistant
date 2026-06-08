@@ -342,7 +342,7 @@ async def _run_board_review() -> None:
                         title,
                     )
                     continue
-                existing = await poll_ref(f"multica:{issue_id}")
+                existing = await poll_ref(f"multica:{issue_id}", issue=issue)
                 if existing.get("found") and existing.get("status") in ("running", "blocked"):
                     continue
                 result = await dispatch_issue(issue)

@@ -476,9 +476,10 @@ async def lifespan(app: FastAPI):
                                     )
                         _chain_cache: dict[str, dict] = {}
 
-                        async def _poll_chain(_tid: str) -> dict:
+                        async def _poll_chain(_issue: dict) -> dict:
+                            _tid = str(_issue.get("id") or "")
                             if _tid not in _chain_cache:
-                                _chain_cache[_tid] = await poll_ref(f"multica:{_tid}")
+                                _chain_cache[_tid] = await poll_ref(f"multica:{_tid}", issue=_issue)
                             return _chain_cache[_tid]
 
                         _running_chains = 0
@@ -488,7 +489,7 @@ async def lifespan(app: FastAPI):
                             if (_ip_issue.get("title") or "").lower().startswith("autopilot:"):
                                 continue
                             _ip_tid = str(_ip_issue.get("id") or "")
-                            if _ip_tid and chain_is_running(await _poll_chain(_ip_tid)):
+                            if _ip_tid and chain_is_running(await _poll_chain(_ip_issue)):
                                 _running_chains += 1
 
                         _wh_dispatched = min(_running_chains, _wh_limit)
@@ -511,7 +512,7 @@ async def lifespan(app: FastAPI):
                             _tid = str(_candidate.get("id") or "")
                             if not _tid:
                                 return
-                            _chain = await _poll_chain(_tid)
+                            _chain = await _poll_chain(_candidate)
                             if not chain_needs_dispatch(_chain):
                                 return
                             _emit = await emit_issue_assigned(_candidate)
@@ -601,7 +602,7 @@ async def lifespan(app: FastAPI):
                     try:
                         from executor_registry import poll_ref  # type: ignore[import]
 
-                        chain = await poll_ref(f"multica:{issue_id}")
+                        chain = await poll_ref(f"multica:{issue_id}", issue=issue)
                         if chain.get("found") and chain.get("status") == "done":
                             pr_url = chain.get("pr_url")
                             await _record_completed_multica_chain(client, str(issue_id), chain)

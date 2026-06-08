@@ -1657,7 +1657,7 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
             lines = ["**Active Hermes engineering issues:**"]
             for status, issue in active[:5]:
                 ident = issue.get("identifier") or issue.get("id")
-                chain = await poll_ref(f"multica:{issue.get('id')}")
+                chain = await poll_ref(f"multica:{issue.get('id')}", issue=issue)
                 phase = chain.get("status") if chain.get("found") else status
                 pr = f" | PR: {chain.get('pr_url')}" if chain.get("pr_url") else ""
                 lines.append(f"- `{ident}` — {phase} — {(issue.get('title') or '')[:80]}{pr}")

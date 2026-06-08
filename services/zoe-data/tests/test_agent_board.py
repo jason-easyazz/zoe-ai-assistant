@@ -23,7 +23,7 @@ async def test_agent_board_keeps_active_and_chain_enrichment_bounded(monkeypatch
         async def list_issues(self, *, status):
             return issues_by_status[status]
 
-    async def fake_poll_ref(ref):
+    async def fake_poll_ref(ref, **_kwargs):
         polled_refs.append(ref)
         return {
             "status": "running",
