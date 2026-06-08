@@ -353,6 +353,138 @@ async def test_dispatch_adjusts_stale_scout_journal_for_scope_split_child():
 
 
 @pytest.mark.asyncio
+async def test_dispatch_adjusts_running_scout_journal_when_scout_row_is_archived():
+    from pipeline_evidence import PipelineState
+    from pipeline_store import load_latest_state, save_state
+
+    save_state(
+        PipelineState(
+            task_ref="multica:uuid-child-running-archived-scout",
+            phase="scout",
+            status="running",
+            evidence_profile="code",
+            attempts={"scout": 1},
+        ),
+        event="effect_requested",
+    )
+    rows = [
+        _row(
+            "scout",
+            "archived",
+            chain_version="v4",
+            issue_id="uuid-child-running-archived-scout",
+        )
+    ]
+    a = _FakeAdapter(list_rows=rows)
+
+    result = await a.dispatch(
+        {
+            "id": "uuid-child-running-archived-scout",
+            "identifier": "ZOE-5439",
+            "title": "calendar child",
+            "description": """```zoe-ticket
+{"zoe_kind":"child","source":"scope_split","acceptance_criteria":["calendar builder"]}
+```""",
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["phase"] == "implement"
+    assert set(result["chain"]) == {"implement"}
+    latest = load_latest_state("multica:uuid-child-running-archived-scout")
+    assert latest.phase == "implement"
+    assert latest.status == "running"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_adjusts_running_scout_journal_when_scout_row_is_done():
+    from pipeline_evidence import PipelineState
+    from pipeline_store import load_latest_state, save_state
+
+    save_state(
+        PipelineState(
+            task_ref="multica:uuid-child-running-done-scout",
+            phase="scout",
+            status="running",
+            evidence_profile="code",
+            attempts={"scout": 1},
+        ),
+        event="effect_requested",
+    )
+    rows = [
+        _row(
+            "scout",
+            "done",
+            chain_version="v4",
+            issue_id="uuid-child-running-done-scout",
+        )
+    ]
+    a = _FakeAdapter(list_rows=rows)
+
+    result = await a.dispatch(
+        {
+            "id": "uuid-child-running-done-scout",
+            "identifier": "ZOE-5439",
+            "title": "calendar child",
+            "description": """```zoe-ticket
+{"zoe_kind":"child","source":"scope_split","acceptance_criteria":["calendar builder"]}
+```""",
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["phase"] == "implement"
+    assert set(result["chain"]) == {"implement"}
+    latest = load_latest_state("multica:uuid-child-running-done-scout")
+    assert latest.phase == "implement"
+    assert latest.status == "running"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_does_not_adjust_running_scout_journal_with_active_row():
+    from pipeline_evidence import PipelineState
+    from pipeline_store import load_latest_state, save_state
+
+    save_state(
+        PipelineState(
+            task_ref="multica:uuid-child-running-active-scout",
+            phase="scout",
+            status="running",
+            evidence_profile="code",
+            attempts={"scout": 1},
+        ),
+        event="effect_requested",
+    )
+    rows = [
+        _row(
+            "scout",
+            "running",
+            chain_version="v4",
+            issue_id="uuid-child-running-active-scout",
+        )
+    ]
+    a = _FakeAdapter(list_rows=rows)
+
+    result = await a.dispatch(
+        {
+            "id": "uuid-child-running-active-scout",
+            "identifier": "ZOE-5439",
+            "title": "calendar child",
+            "description": """```zoe-ticket
+{"zoe_kind":"child","source":"scope_split","acceptance_criteria":["calendar builder"]}
+```""",
+        }
+    )
+
+    assert result["ok"] is False
+    assert result["reason"] == "phase scout is not in this issue plan"
+    assert [call for call in a.calls if call[0] == "create"] == []
+    latest = load_latest_state("multica:uuid-child-running-active-scout")
+    assert latest.phase == "scout"
+    assert latest.status == "running"
+
+
+@pytest.mark.asyncio
 async def test_dispatch_keeps_scout_for_under_specified_scope_split_child():
     a = _FakeAdapter()
     result = await a.dispatch(
