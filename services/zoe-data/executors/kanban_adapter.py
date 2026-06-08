@@ -273,6 +273,13 @@ def _code_audit_implement_hint(issue: dict | None = None) -> str:
     )
 
 
+def _goal_mode_args(phase: str, issue: dict | None = None) -> list[str]:
+    """Return bounded Hermes goal-mode args for phases that benefit from one continuation."""
+    if phase == "implement" and _is_code_audit_actionable(_ticket_metadata(issue)):
+        return ["--goal", "--goal-max-turns", "2"]
+    return []
+
+
 def _audit_no_pr_issue(issue: dict | None = None) -> bool:
     issue = issue or {}
     meta = _ticket_metadata(issue)
@@ -870,6 +877,7 @@ class KanbanAdapter:
             # total attempt and zero automatic retries.
             "--max-retries",
             "1",
+            *_goal_mode_args(phase, issue),
             "--created-by",
             "zoe-bridge",
             "--body",

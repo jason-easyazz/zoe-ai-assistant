@@ -434,6 +434,52 @@ async def test_dispatch_keeps_scout_for_harness_fix_without_acceptance_criteria(
 
 
 @pytest.mark.asyncio
+async def test_dispatch_uses_bounded_goal_mode_for_actionable_code_audit_implement():
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {
+            "id": "uuid-code-audit-goal",
+            "identifier": "ZOE-5354",
+            "title": "GET /metrics endpoint is unauthenticated",
+            "metadata": {
+                "zoe_kind": "bug",
+                "source": "code_audit_p0_security",
+                "acceptance_criteria": ["Require admin or internal token on /metrics"],
+            },
+        }
+    )
+
+    creates = [c for c in a.calls if c[0] == "create"]
+    assert result["phase"] == "implement"
+    assert len(creates) == 1
+    assert "--goal" in creates[0]
+    assert creates[0][creates[0].index("--goal-max-turns") + 1] == "2"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_omits_goal_mode_for_non_code_audit_implement():
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {
+            "id": "uuid-harness-goal",
+            "identifier": "ZOE-5449",
+            "title": "Harness: follow up ITERATION_BUDGET",
+            "metadata": {
+                "zoe_kind": "harness_fix",
+                "source": "engineering_blocker_followup",
+                "acceptance_criteria": ["Focused tests cover blocker path"],
+            },
+        }
+    )
+
+    creates = [c for c in a.calls if c[0] == "create"]
+    assert result["phase"] == "implement"
+    assert len(creates) == 1
+    assert "--goal" not in creates[0]
+    assert "--goal-max-turns" not in creates[0]
+
+
+@pytest.mark.asyncio
 async def test_dispatch_skips_scout_for_code_audit_ticket_with_acceptance_criteria():
     a = _FakeAdapter()
     result = await a.dispatch(
