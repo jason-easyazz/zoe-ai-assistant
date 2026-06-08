@@ -258,7 +258,14 @@
                     this.emit({ type: 'error', message: 'Voice upload failed' });
                 }
             } else if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-                this.ws.send(await blob.arrayBuffer());
+                const ab = await blob.arrayBuffer();
+                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                    this.ws.send(ab);
+                } else {
+                    this.serverBusy = false;
+                    this.emit({ type: 'state', state: 'ambient' });
+                    this.emit({ type: 'error', message: 'Voice transport unavailable' });
+                }
             } else {
                 this.serverBusy = false;
                 this.emit({ type: 'state', state: 'ambient' });

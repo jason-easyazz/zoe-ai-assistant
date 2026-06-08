@@ -75,6 +75,8 @@ def test_skybridge_voice_normalizes_both_transports():
     assert "Skybridge LiveKit event parse failed" in voice
     assert "Voice transport unavailable" in voice
     assert "this.mediaRecorder.onstop = null" in voice
+    assert "const ab = await blob.arrayBuffer()" in voice
+    assert "this.ws.send(ab)" in voice
 
 
 def test_skybridge_renderer_keeps_button_actions_functional():
