@@ -95,6 +95,20 @@ def test_validate_card_contract_rejects_unsupported_major():
         validate_card_contract(_contract(schema_version="2.0.0"), supported_major=1)
 
 
+def test_validate_card_contract_always_rejects_invalid_semver():
+    with pytest.raises(CardContractError, match="MAJOR.MINOR.PATCH"):
+        validate_card_contract(_contract(schema_version="not-semver"))
+
+
+def test_normalized_content_does_not_share_nested_mutable_values():
+    payload = _contract(content={"form_id": "reminder", "title": "Reminder", "fields": []})
+
+    normalized = validate_card_contract(payload)
+    normalized["content"]["fields"].append({"name": "when"})
+
+    assert payload["content"]["fields"] == []
+
+
 def test_parse_semver_is_strict():
     assert parse_semver("1.2.3") == (1, 2, 3)
     with pytest.raises(CardContractError):

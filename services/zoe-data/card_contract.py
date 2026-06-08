@@ -6,6 +6,7 @@ renderers should accept before card-specific adoption work begins.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
@@ -118,7 +119,7 @@ def _validate_content(card_type: CardType, content: Any) -> dict[str, Any]:
         raise CardContractError(
             f"content for {card_type.value} is missing required field(s): {', '.join(missing)}"
         )
-    return dict(content)
+    return deepcopy(content)
 
 
 def validate_card_contract(contract: dict[str, Any], *, supported_major: int | None = None) -> dict[str, Any]:
@@ -135,6 +136,7 @@ def validate_card_contract(contract: dict[str, Any], *, supported_major: int | N
         raise CardContractError(f"missing required field(s): {', '.join(missing)}")
 
     schema_version = str(contract["schema_version"])
+    parse_semver(schema_version)
     if supported_major is not None and not renderer_accepts(schema_version, supported_major=supported_major):
         raise CardContractError(
             f"renderer supports MAJOR {supported_major}, cannot accept schema_version {schema_version}"
