@@ -7,6 +7,7 @@ import re
 import shutil
 import tempfile
 import time
+import wave
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -1604,6 +1605,65 @@ async def _run_faster_whisper(wav_path: str) -> str:
     return text
 
 
+
+def _voice_stt_log_path() -> Path:
+    configured = (os.environ.get("ZOE_VOICE_STT_LOG") or "").strip()
+    if configured:
+        return Path(configured)
+    return Path.home() / ".zoe-voice" / "voice_stt.jsonl"
+
+
+def _wav_duration_seconds(wav_path: str) -> float | None:
+    try:
+        with wave.open(wav_path, "rb") as wf:
+            rate = wf.getframerate() or 0
+            if rate <= 0:
+                return None
+            return round(wf.getnframes() / float(rate), 3)
+    except Exception:
+        return None
+
+
+def _log_voice_stt_sample(
+    *,
+    route: str,
+    panel_id: str,
+    audio_bytes: int,
+    suffix: str,
+    transcript: str = "",
+    duration_seconds: float | None = None,
+    stt_seconds: float | None = None,
+    error: str | None = None,
+) -> None:
+    try:
+        path = _voice_stt_log_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        record = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "route": route,
+            "panel_id": panel_id,
+            "audio_bytes": audio_bytes,
+            "audio_suffix": suffix,
+            "audio_duration_seconds": duration_seconds,
+            "stt_seconds": round(stt_seconds, 3) if stt_seconds is not None else None,
+            "transcript": transcript,
+            "transcript_chars": len(transcript or ""),
+            "model": (os.environ.get("ZOE_WHISPER_MODEL") or "base.en").strip(),
+            "device": (os.environ.get("ZOE_WHISPER_DEVICE") or "").strip(),
+            "compute_type": (os.environ.get("ZOE_WHISPER_COMPUTE_TYPE") or "").strip(),
+            "vad_threshold": os.environ.get("ZOE_WHISPER_VAD_THRESHOLD", "0.50"),
+            "min_speech_ms": os.environ.get("ZOE_WHISPER_MIN_SPEECH_MS", "120"),
+            "min_silence_ms": os.environ.get("ZOE_WHISPER_MIN_SILENCE_MS", "350"),
+            "speech_pad_ms": os.environ.get("ZOE_WHISPER_SPEECH_PAD_MS", "220"),
+        }
+        if error:
+            record["error"] = error[:500]
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception as exc:
+        logger.debug("voice STT audit log failed: %s", exc)
+
+
 async def _transcribe_audio(wav_path: str) -> str:
     """
     Transcription waterfall:
@@ -1643,6 +1703,8 @@ async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp.write(raw)
             wav_path = tmp.name
+        duration_s = _wav_duration_seconds(wav_path) if suffix == ".wav" else None
+        t_stt_start = time.monotonic()
         try:
             text = await _transcribe_audio(wav_path)
         finally:
@@ -1650,9 +1712,22 @@ async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_
                 os.unlink(wav_path)
             except OSError:
                 pass
-        logger.info("voice/transcribe panel=%s chars=%d", panel_id, len(text))
-        # Broadcast the transcribed user text so the UI shows what was heard.
         stripped = text.strip()
+        stt_s = time.monotonic() - t_stt_start
+        _log_voice_stt_sample(
+            route="transcribe",
+            panel_id=panel_id,
+            audio_bytes=len(raw),
+            suffix=suffix,
+            transcript=stripped,
+            duration_seconds=duration_s,
+            stt_seconds=stt_s,
+        )
+        logger.info(
+            "voice/transcribe panel=%s audio=%.2fs STT=%.2fs chars=%d",
+            panel_id, duration_s or 0.0, stt_s, len(stripped),
+        )
+        # Broadcast the transcribed user text so the UI shows what was heard.
         if stripped:
             try:
                 from push import broadcaster
@@ -3223,6 +3298,7 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth),
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp.write(raw)
             wav_path = tmp.name
+        duration_s = _wav_duration_seconds(wav_path) if suffix == ".wav" else None
         try:
             transcript = await _transcribe_audio(wav_path)
         finally:
@@ -3252,6 +3328,15 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth),
         pass
 
     transcript = transcript.strip()
+    _log_voice_stt_sample(
+        route="turn",
+        panel_id=panel_id,
+        audio_bytes=len(raw),
+        suffix=suffix,
+        transcript=transcript,
+        duration_seconds=duration_s,
+        stt_seconds=t_stt,
+    )
     if not transcript:
         try:
             from voice_metrics import voice_turn_count, voice_failure_reason_count

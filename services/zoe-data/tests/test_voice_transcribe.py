@@ -2,6 +2,7 @@
 
 import base64
 import asyncio
+import json
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -56,6 +57,32 @@ def test_transcribe_ok_with_mock_whisper(client, monkeypatch):
     data = r.json()
     assert data.get("ok") is True
     assert data.get("text") == "hello world"
+
+
+def test_transcribe_writes_stt_audit_log(client, monkeypatch, tmp_path):
+    from routers import voice_tts
+
+    async def _fake_run(path: str) -> str:
+        return "hello audit"
+
+    log_path = tmp_path / "voice_stt.jsonl"
+    monkeypatch.setenv("ZOE_VOICE_STT_LOG", str(log_path))
+    monkeypatch.setenv("ZOE_WHISPER_MODEL", "small.en")
+    monkeypatch.setattr(voice_tts, "_transcribe_audio", _fake_run)
+    wav = b"RIFF" + b"\x00" * 12
+
+    r = client.post(
+        "/api/voice/transcribe",
+        json={"audio_base64": base64.b64encode(wav).decode(), "panel_id": "p-audit"},
+    )
+
+    assert r.status_code == 200
+    record = json.loads(log_path.read_text().strip())
+    assert record["route"] == "transcribe"
+    assert record["panel_id"] == "p-audit"
+    assert record["transcript"] == "hello audit"
+    assert record["model"] == "small.en"
+    assert record["audio_bytes"] == len(wav)
 
 
 def test_transcribe_missing_body_400(client):

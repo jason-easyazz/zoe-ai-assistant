@@ -59,8 +59,9 @@ DEVICE_TOKEN = os.environ.get("DEVICE_TOKEN", "")
 AUDIO_DEVICE = os.environ.get("AUDIO_DEVICE", "default")
 SAMPLE_RATE = int(os.environ.get("SAMPLE_RATE", "16000"))
 CHUNK_SIZE = int(os.environ.get("CHUNK_SIZE", "1280"))
-RECORD_SECONDS = int(os.environ.get("RECORD_SECONDS_MAX", "5"))
-SILENCE_TIMEOUT_S = float(os.environ.get("SILENCE_TIMEOUT_S", "1.0"))
+RECORD_SECONDS = int(os.environ.get("RECORD_SECONDS_MAX", "8"))
+SILENCE_TIMEOUT_S = float(os.environ.get("SILENCE_TIMEOUT_S", "1.5"))
+RECORD_SILENCE_AMPLITUDE = int(os.environ.get("RECORD_SILENCE_AMPLITUDE", "300"))
 # Default 0.28 — 0.35 misses many real mics/rooms; tune via WAKEWORD_THRESHOLD.
 WAKEWORD_THRESHOLD = float(os.environ.get("WAKEWORD_THRESHOLD", "0.28"))
 VERIFY_SSL = os.environ.get("VERIFY_SSL", "true").lower() not in ("false", "0", "no")
@@ -587,20 +588,27 @@ def record_command(pa: pyaudio.PyAudio) -> bytes | None:
             time.sleep(wait_s)
     frames = []
     silent_chunks = 0
+    stop_reason = "max_duration"
     max_silent = int(SILENCE_TIMEOUT_S * SAMPLE_RATE / CHUNK_SIZE)
     max_chunks = int(RECORD_SECONDS * SAMPLE_RATE / CHUNK_SIZE)
     for _ in range(max_chunks):
         data = stream.read(CHUNK_SIZE, exception_on_overflow=False)
         frames.append(data)
         amplitude = np.abs(np.frombuffer(data, dtype=np.int16)).mean()
-        if amplitude < 300:
+        if amplitude < RECORD_SILENCE_AMPLITUDE:
             silent_chunks += 1
             if silent_chunks >= max_silent and len(frames) > int(0.5 * SAMPLE_RATE / CHUNK_SIZE):
+                stop_reason = "silence"
                 break
         else:
             silent_chunks = 0
     stream.stop_stream()
     stream.close()
+    duration_s = len(frames) * CHUNK_SIZE / float(SAMPLE_RATE)
+    log.info(
+        "Recorded command: duration=%.2fs chunks=%d stop=%s silence_timeout=%.2fs silence_amp=%d",
+        duration_s, len(frames), stop_reason, SILENCE_TIMEOUT_S, RECORD_SILENCE_AMPLITUDE,
+    )
     if len(frames) < int(0.3 * SAMPLE_RATE / CHUNK_SIZE):
         log.info("Command too short, ignoring.")
         return None
@@ -833,20 +841,27 @@ def _follow_up_listen(pa: pyaudio.PyAudio) -> bytes | None:
         log.info("Recording follow-up command (max %ds)...", RECORD_SECONDS)
         frames = list(pre_frames)
         silent_chunks = 0
+        stop_reason = "max_duration"
         max_silent = int(SILENCE_TIMEOUT_S * SAMPLE_RATE / CHUNK_SIZE)
         max_chunks = int(RECORD_SECONDS * SAMPLE_RATE / CHUNK_SIZE)
         for _ in range(max_chunks):
             data = stream.read(CHUNK_SIZE, exception_on_overflow=False)
             frames.append(data)
             amplitude = np.abs(np.frombuffer(data, dtype=np.int16)).mean()
-            if amplitude < 300:
+            if amplitude < RECORD_SILENCE_AMPLITUDE:
                 silent_chunks += 1
                 if silent_chunks >= max_silent and len(frames) > int(0.5 * SAMPLE_RATE / CHUNK_SIZE):
+                    stop_reason = "silence"
                     break
             else:
                 silent_chunks = 0
         stream.stop_stream()
         stream.close()
+        duration_s = len(frames) * CHUNK_SIZE / float(SAMPLE_RATE)
+        log.info(
+            "Recorded follow-up: duration=%.2fs chunks=%d stop=%s silence_timeout=%.2fs silence_amp=%d",
+            duration_s, len(frames), stop_reason, SILENCE_TIMEOUT_S, RECORD_SILENCE_AMPLITUDE,
+        )
 
         if len(frames) < int(0.3 * SAMPLE_RATE / CHUNK_SIZE):
             log.info("Follow-up too short, ignoring.")
