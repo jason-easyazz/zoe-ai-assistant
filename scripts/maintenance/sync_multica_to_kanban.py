@@ -91,7 +91,7 @@ async def run(args: argparse.Namespace) -> int:
         # abort the whole batch and skip the remaining candidates. Mirrors the
         # outer try/except that guards board_approve and the Multica webhook handler.
         try:
-            existing = await poll_ref(f"multica:{issue_id}")
+            existing = await poll_ref(f"multica:{issue_id}", issue=issue)
             if not chain_needs_dispatch(existing):
                 print(f"SKIP {ident}: chain status={existing.get('status')}")
                 continue

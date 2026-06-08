@@ -1140,6 +1140,39 @@ async def test_poll_v4_partial_clears_stale_prior_phase_blocker():
 
 
 @pytest.mark.asyncio
+async def test_poll_v4_resumed_skip_scout_ignores_stale_scout_blocker():
+    from pipeline_evidence import PipelineState
+    from pipeline_store import save_state
+
+    state = PipelineState(
+        task_ref="multica:uuid-9",
+        phase="scout",
+        status="todo",
+        evidence_profile="code",
+        attempts={"scout": 1},
+    )
+    save_state(state, event="operator_resumed")
+    rows = [_row("scout", "blocked", chain_version="v4", block_reason="SCOUT_BUDGET")]
+    issue = {
+        "id": "uuid-9",
+        "identifier": "ZOE-5446",
+        "title": "Harness follow-up",
+        "metadata": {
+            "zoe_kind": "harness_fix",
+            "acceptance_criteria": ["budget blockers create one follow-up ticket"],
+        },
+    }
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:uuid-9", issue=issue)
+
+    assert out["status"] == "partial"
+    assert out["blocker"] is None
+    assert out["pipeline"]["phase"] == "scout"
+    assert out["pipeline"]["status"] == "todo"
+    assert out["pipeline"]["stale_executor_phase"] == "scout"
+
+
+@pytest.mark.asyncio
 async def test_poll_v4_todo_existing_phase_clears_stale_prior_blocker():
     from pipeline_evidence import EvidenceItem, PipelineState
     from pipeline_store import save_state

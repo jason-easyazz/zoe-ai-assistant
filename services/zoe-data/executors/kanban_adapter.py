@@ -873,7 +873,7 @@ class KanbanAdapter:
             return f"Retro {identifier}"[:140]
         return f"Closeout {identifier}"[:140]
 
-    async def poll(self, external_ref: str) -> dict:
+    async def poll(self, external_ref: str, *, issue: dict | None = None) -> dict:
         """Report aggregate state of a chain by idempotency-key prefix.
 
         Returns {found, status, phases:{phase:status}, pr_url, blocker}.
@@ -892,6 +892,37 @@ class KanbanAdapter:
         phases = await self._phases_for_ref(external_ref)
         if not phases:
             return {"found": False, "status": "not_found", "phases": {}, "pr_url": None, "blocker": None}
+
+        if issue:
+            try:
+                from pipeline_store import load_latest_state, pipeline_summary
+
+                existing_state = await asyncio.to_thread(load_latest_state, external_ref)
+                expected_phase_names = {entry[0] for entry in _chain_for_issue(issue)}
+                if (
+                    existing_state is not None
+                    and existing_state.status == "todo"
+                    and existing_state.phase not in expected_phase_names
+                ):
+                    phases = {
+                        phase: row
+                        for phase, row in phases.items()
+                        if phase in expected_phase_names
+                    }
+                    if not phases:
+                        return {
+                            "found": True,
+                            "status": "partial",
+                            "phases": {},
+                            "pr_url": None,
+                            "blocker": None,
+                            "pipeline": {
+                                **pipeline_summary(existing_state),
+                                "stale_executor_phase": existing_state.phase,
+                            },
+                        }
+            except Exception as exc:
+                logger.debug("kanban_adapter: stale phase filter skipped for %s: %s", external_ref, exc)
 
         detail_cache: dict[str, dict[str, Any]] = {}
         for phase, row in list(phases.items()):
