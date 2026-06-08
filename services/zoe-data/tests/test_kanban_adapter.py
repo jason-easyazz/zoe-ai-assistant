@@ -1765,6 +1765,81 @@ def test_verify_phase_budget_allows_pr_validation_headroom(tmp_path, monkeypatch
     assert "hard_limit=18" in reason
 
 
+def test_existing_pr_revision_implement_budget_has_scoped_headroom(tmp_path, monkeypatch):
+    log_path = tmp_path / "task.log"
+    monkeypatch.setattr(kb, "_log_path", lambda _task_id: log_path)
+    monkeypatch.delenv("ZOE_KANBAN_IMPLEMENT_TOOL_BUDGET", raising=False)
+    monkeypatch.delenv("ZOE_KANBAN_IMPLEMENT_REVISION_TOOL_BUDGET", raising=False)
+
+    log_path.write_text("\n".join(["  ┊ tool call"] * 27), encoding="utf-8")
+    normal = kb.phase_budget_reason(
+        "t_implement",
+        "implement",
+        {"task": {"started_at": 100, "body": "plain implement task"}},
+        now=110,
+    )
+    revision = kb.phase_budget_reason(
+        "t_revision",
+        "implement",
+        {"task": {"started_at": 100, "body": "EXISTING PR REVISION FAST PATH"}},
+        now=110,
+    )
+
+    assert normal is not None
+    assert "guidance_limit=24" in normal
+    assert revision is None
+
+    log_path.write_text("\n".join(["  ┊ tool call"] * 33), encoding="utf-8")
+    revision = kb.phase_budget_reason(
+        "t_revision",
+        "implement",
+        {"task": {"started_at": 100, "body": "EXISTING PR REVISION FAST PATH"}},
+        now=110,
+    )
+
+    assert revision is not None
+    assert "IMPLEMENT_BUDGET" in revision
+    assert "guidance_limit=30" in revision
+    assert "hard_limit=32" in revision
+
+    log_path.write_text("\n".join(["  ┊ tool call"] * 27), encoding="utf-8")
+    top_level_only = kb.phase_budget_reason(
+        "t_top_level",
+        "implement",
+        {"task": {"started_at": 100}, "body": "EXISTING PR REVISION FAST PATH"},
+        now=110,
+    )
+    assert top_level_only is not None
+    assert "guidance_limit=24" in top_level_only
+
+
+def test_existing_pr_revision_budget_inherits_generic_override(tmp_path, monkeypatch):
+    log_path = tmp_path / "task.log"
+    monkeypatch.setattr(kb, "_log_path", lambda _task_id: log_path)
+    monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_TOOL_BUDGET", "28")
+    monkeypatch.delenv("ZOE_KANBAN_IMPLEMENT_REVISION_TOOL_BUDGET", raising=False)
+
+    log_path.write_text("\n".join(["  ┊ tool call"] * 31), encoding="utf-8")
+    inherited = kb.phase_budget_reason(
+        "t_revision",
+        "implement",
+        {"task": {"started_at": 100, "body": "EXISTING PR REVISION FAST PATH"}},
+        now=110,
+    )
+    assert inherited is not None
+    assert "guidance_limit=28" in inherited
+    assert "hard_limit=30" in inherited
+
+    monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_REVISION_TOOL_BUDGET", "34")
+    specific = kb.phase_budget_reason(
+        "t_revision",
+        "implement",
+        {"task": {"started_at": 100, "body": "EXISTING PR REVISION FAST PATH"}},
+        now=110,
+    )
+    assert specific is None
+
+
 def test_phase_budget_accepts_iso_timestamp_and_ascii_step_logs(tmp_path, monkeypatch):
     log_path = tmp_path / "task.log"
     log_path.write_text("| shell command  0.2s\n", encoding="utf-8")
@@ -2124,6 +2199,8 @@ def test_implement_body_documents_existing_pr_revision_fast_path_before_new_pr_c
     assert "/opt/zoe/greptile-mcp pr-comments --unaddressed-only" in body
     assert "gh pr checkout <number>" in body
     assert "report the SAME PR_URL" in body
+    assert "PYTHONPATH=services/zoe-data python3 -m pytest" in body
+    assert "patch the module variable with monkeypatch/setattr after import" in body
     assert "BLOCKER=PR_REVISION_BLOCKED" in body
     assert body.index("EXISTING PR REVISION FAST PATH") < body.index("open ONE small PR")
 
