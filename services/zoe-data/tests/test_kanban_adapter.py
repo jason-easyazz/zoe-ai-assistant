@@ -1216,6 +1216,7 @@ def test_review_body_has_post_merge_fast_path_and_terminal_marker_guidance():
     assert "do not explore broad worktrees" in body
     assert "do not call `--help` after it" in body
     assert "immediately call `kanban_complete` in the same turn" in body
+    assert body.index("POST-MERGE FAST PATH") < body.index("AUDIT/NO-PR FAST PATH")
 
 
 def test_closeout_body_defers_multica_done_until_retro():
