@@ -38,12 +38,43 @@ _LOG_TOOL_MARKERS = (
     "validate_structure",
     "validate_critical_files",
 )
-_STABLE_BLOCKER_RE = re.compile(
-    r"\b(?:WORKTREE_NOT_READY|GATE_BLOCKED|PROTOCOL_VIOLATION|MERGE_BLOCKED|"
-    r"VERIFICATION_FAILED|HTTP_402|PAYMENT_REQUIRED|CREDITS_EXHAUSTED|"
-    r"TURN_BUDGET|ITERATION_BUDGET|CONTEXT_LIMIT|TOKEN_LIMIT|SCOPE_SPLIT_REQUIRED|NEEDS_SPLIT)\b",
-    re.I,
+_STABLE_BLOCKER_TOKENS = (
+    "WORKTREE_NOT_READY",
+    "GATE_BLOCKED",
+    "PROTOCOL_VIOLATION",
+    "MERGE_BLOCKED",
+    "VERIFICATION_FAILED",
+    "HTTP_402",
+    "PAYMENT_REQUIRED",
+    "CREDITS_EXHAUSTED",
+    "TURN_BUDGET",
+    "ITERATION_BUDGET",
+    "CONTEXT_LIMIT",
+    "TOKEN_LIMIT",
+    "SCOPE_SPLIT_REQUIRED",
+    "NEEDS_SPLIT",
 )
+_SURFACED_BLOCKER_TOKENS = (
+    "VERIFY_BUDGET",
+    "REVIEW_BUDGET",
+    "CLOSEOUT_BUDGET",
+    "IMPLEMENT_BUDGET",
+    "PR_REVIEW_REQUIRED",
+    "PR_REVISION_BLOCKED",
+    "PR_REVISION_CHECKOUT_FAILED",
+    "WORKTREE_PREPARATION_FAILED",
+    "WORKTREE_NOT_READY",
+    "PROTOCOL_VIOLATION",
+    "TURN_BUDGET",
+    "ITERATION_BUDGET",
+    "CONTEXT_LIMIT",
+    "TOKEN_LIMIT",
+    "HTTP_402",
+    "PAYMENT_REQUIRED",
+    "CREDITS_EXHAUSTED",
+)
+_STABLE_BLOCKER_RE = re.compile(rf"\b(?:{'|'.join(_STABLE_BLOCKER_TOKENS)})\b", re.I)
+_SURFACED_BLOCKER_RE = re.compile(rf"\b(?:{'|'.join(_SURFACED_BLOCKER_TOKENS)})\b", re.I)
 
 
 def _task_body(detail: dict[str, Any]) -> str:
@@ -638,7 +669,20 @@ def block_reason_from_handoff(detail: dict[str, Any], *, row_block_reason: str |
 def infer_outcome(phase: PipelinePhase, row_status: str, detail: dict[str, Any]) -> str | None:
     """Map a terminal Kanban row to a pipeline transition outcome when inferrable."""
     status = (row_status or "").lower()
+    fields: dict[str, str] = {}
+    for chunk in _haystacks(detail):
+        fields.update(_parse_kv_fields(chunk))
+    explicit_blocker = (fields.get("BLOCKER") or "").strip()
+    blocker = explicit_blocker
+    if status == "blocked" and not blocker:
+        for chunk in _haystacks(detail):
+            blocker = _stable_block_reason_from_text(chunk)
+            if blocker:
+                break
+
     if status == "blocked":
+        if _SURFACED_BLOCKER_RE.search(blocker):
+            return "block"
         if phase == "verify":
             return "verification_failed"
         if phase == "review":
@@ -649,11 +693,9 @@ def infer_outcome(phase: PipelinePhase, row_status: str, detail: dict[str, Any])
     if status not in {"done", "archived"}:
         return None
 
-    fields: dict[str, str] = {}
-    for chunk in _haystacks(detail):
-        fields.update(_parse_kv_fields(chunk))
-    blocker = fields.get("BLOCKER") or ""
-    if blocker:
+    if explicit_blocker:
+        if _SURFACED_BLOCKER_RE.search(explicit_blocker):
+            return "block"
         if phase == "verify":
             return "verification_failed"
         if phase == "review":

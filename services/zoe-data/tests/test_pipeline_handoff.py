@@ -591,6 +591,95 @@ def test_infer_outcome_blocked_verify_loops():
     )
 
 
+def test_infer_outcome_verify_budget_surfaces_block():
+    assert (
+        infer_outcome(
+            "verify",
+            "blocked",
+            {"latest_summary": "BLOCKER=VERIFY_BUDGET: code-enforced tool budget exceeded", "comments": []},
+        )
+        == "block"
+    )
+
+
+def test_infer_outcome_freeform_verify_budget_surfaces_block():
+    assert (
+        infer_outcome(
+            "verify",
+            "blocked",
+            {"latest_summary": "VERIFY_BUDGET: code-enforced tool budget exceeded", "comments": []},
+        )
+        == "block"
+    )
+
+
+def test_infer_outcome_pr_review_required_surfaces_block():
+    assert (
+        infer_outcome(
+            "verify",
+            "blocked",
+            {
+                "latest_summary": (
+                    "BLOCKER=PR_REVIEW_REQUIRED: Greptile has unresolved comments\n"
+                    "PR_URL=https://github.com/o/r/pull/213"
+                ),
+                "comments": [],
+            },
+        )
+        == "block"
+    )
+
+
+def test_infer_outcome_review_budget_surfaces_block():
+    assert (
+        infer_outcome(
+            "review",
+            "blocked",
+            {"latest_summary": "BLOCKER=REVIEW_BUDGET: reviewer exceeded budget", "comments": []},
+        )
+        == "block"
+    )
+
+
+def test_infer_outcome_closeout_budget_surfaces_block():
+    assert (
+        infer_outcome(
+            "closeout",
+            "blocked",
+            {"latest_summary": "BLOCKER=CLOSEOUT_BUDGET: closeout exceeded budget", "comments": []},
+        )
+        == "block"
+    )
+
+
+def test_infer_outcome_done_with_verify_budget_surfaces_block():
+    assert (
+        infer_outcome(
+            "verify",
+            "done",
+            {"latest_summary": "BLOCKER=VERIFY_BUDGET: exceeded\nTESTS=not completed", "comments": []},
+        )
+        == "block"
+    )
+
+
+def test_infer_outcome_done_ignores_freeform_stable_blocker_text():
+    assert (
+        infer_outcome(
+            "verify",
+            "done",
+            {
+                "latest_summary": (
+                    "SUMMARY=verification completed\n"
+                    "Log excerpt: GATE_BLOCKED: old text from a previous attempt"
+                ),
+                "comments": [],
+            },
+        )
+        == "complete"
+    )
+
+
 def test_later_empty_blocker_clears_older_blocked_run():
     detail = {
         "latest_summary": "PR_URL=https://github.com/o/r/pull/213\nBLOCKER=\nTESTS=validate_structure.py passed",
