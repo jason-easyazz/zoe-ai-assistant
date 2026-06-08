@@ -619,6 +619,28 @@ def test_infer_outcome_pr_review_required_surfaces_block():
     )
 
 
+def test_infer_outcome_review_budget_surfaces_block():
+    assert (
+        infer_outcome(
+            "review",
+            "blocked",
+            {"latest_summary": "BLOCKER=REVIEW_BUDGET: reviewer exceeded budget", "comments": []},
+        )
+        == "block"
+    )
+
+
+def test_infer_outcome_closeout_budget_surfaces_block():
+    assert (
+        infer_outcome(
+            "closeout",
+            "blocked",
+            {"latest_summary": "BLOCKER=CLOSEOUT_BUDGET: closeout exceeded budget", "comments": []},
+        )
+        == "block"
+    )
+
+
 def test_infer_outcome_done_with_verify_budget_surfaces_block():
     assert (
         infer_outcome(
