@@ -672,6 +672,11 @@ def test_closeout_audit_only_handoff_accepts_indented_log_lines():
     assert log.summary == "4-phase card producer adoption plan approved; no code changes"
     assert log.metadata["audit_only"] is True
 
+    greptile_items = [item for item in items if item.kind == "greptile"]
+    assert not any(item.passed is True for item in greptile_items), (
+        "GREPTILE=n/a should not produce a passed=True greptile evidence item"
+    )
+
 
 def test_closeout_infers_audit_log_only_from_audit_summary_without_pr():
     detail = {"latest_summary": """SUMMARY=audit-only closeout completed

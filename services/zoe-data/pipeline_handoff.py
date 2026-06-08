@@ -300,7 +300,7 @@ def _greptile_from_closeout(detail: dict[str, Any], skills: tuple[str, ...] | li
 
     greptile_raw = fields.get("GREPTILE") or ""
     if greptile_raw:
-        passed = "fail" not in greptile_raw.lower() and "block" not in greptile_raw.lower()
+        passed = _reported_evidence_passed(greptile_raw, unavailable_markers=())
         return EvidenceItem(
             kind="greptile",
             summary=greptile_raw[:500],
