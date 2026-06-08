@@ -920,7 +920,7 @@ async def app_settings():
 
 
 @app.get("/metrics")
-async def prometheus_metrics():
+async def prometheus_metrics(_: None = Depends(require_internal_token)):
     """Prometheus scrape endpoint.
 
     Exposes counters/gauges from `memory_metrics.REGISTRY` (MemPalace ingest,
