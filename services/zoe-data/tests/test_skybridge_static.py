@@ -7,6 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 UI = ROOT / "zoe-ui" / "dist" / "touch"
+DATA = ROOT / "zoe-data"
 
 
 def read(path: Path) -> str:
@@ -77,6 +78,16 @@ def test_skybridge_voice_normalizes_both_transports():
     assert "this.mediaRecorder.onstop = null" in voice
     assert "const ab = await blob.arrayBuffer()" in voice
     assert "this.ws.send(ab)" in voice
+    assert "this.mode === 'livekit'" in voice
+    assert "publishData(payload, { reliable: true })" in voice
+
+
+def test_livekit_voice_router_accepts_text_commands():
+    router = read(DATA / "routers" / "voice_livekit.py")
+
+    assert "async def _run_text_pipeline" in router
+    assert "elif msg_type == \"text\"" in router
+    assert "run_zoe_agent(message, session_id, user_id, voice_mode=True)" in router
 
 
 def test_skybridge_renderer_keeps_button_actions_functional():

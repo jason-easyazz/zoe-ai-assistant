@@ -162,11 +162,26 @@
             }
         }
 
-        sendText(message) {
+        async sendText(message) {
             const text = String(message || '').trim();
             if (!text) return;
             this.emit({ type: 'transcript', role: 'user', text });
-            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            if (this.mode === 'livekit' && this.room && this.room.localParticipant) {
+                this.serverBusy = true;
+                this.emit({ type: 'state', state: 'thinking' });
+                try {
+                    const payload = new TextEncoder().encode(JSON.stringify({
+                        type: 'text',
+                        message: text,
+                        session_id: getSessionId()
+                    }));
+                    await this.room.localParticipant.publishData(payload, { reliable: true });
+                } catch (err) {
+                    this.serverBusy = false;
+                    this.emit({ type: 'state', state: 'ambient' });
+                    this.emit({ type: 'error', message: 'Voice transport unavailable' });
+                }
+            } else if (this.ws && this.ws.readyState === WebSocket.OPEN) {
                 this.serverBusy = true;
                 this.emit({ type: 'state', state: 'thinking' });
                 this.ws.send(JSON.stringify({ type: 'text', message: text }));

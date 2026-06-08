@@ -190,6 +190,41 @@ async def _run_pipeline(local_participant, frames: list[bytes], user_id: str, se
     await _send_data(local_participant, {"type": "done"})
 
 
+async def _run_text_pipeline(local_participant, message: str, user_id: str, session_id: str) -> None:
+    """LLM → TTS pipeline for text commands sent over the LiveKit data channel."""
+    message = (message or "").strip()
+    if not message:
+        await _send_data(local_participant, {"type": "state", "state": "ambient"})
+        return
+
+    await _send_data(local_participant, {"type": "state", "state": "thinking"})
+    await _send_data(local_participant, {"type": "transcript", "role": "user", "text": message})
+
+    response = "Sorry, I had trouble with that."
+    try:
+        from zoe_agent import run_zoe_agent
+        response = await run_zoe_agent(message, session_id, user_id, voice_mode=True)
+    except Exception as exc:
+        logger.error("LiveKit text LLM error: %s", exc)
+
+    await _send_data(local_participant, {"type": "state", "state": "responding"})
+    await _send_data(local_participant, {"type": "transcript", "role": "zoe", "text": response})
+
+    try:
+        from routers.voice_tts import synthesize as _synth
+        tts_resp = await _synth({"text": response}, caller={"source": "livekit", "user_id": user_id})
+        await _send_data(local_participant, {
+            "type": "audio",
+            "audio_base64": base64.b64encode(tts_resp.body).decode("ascii"),
+            "content_type": tts_resp.media_type,
+        })
+    except Exception as exc:
+        logger.warning("LiveKit text TTS failed: %s", exc)
+        await _send_data(local_participant, {"type": "text", "content": response})
+
+    await _send_data(local_participant, {"type": "done"})
+
+
 async def _collect_audio_stream(
     track,
     sid: str,
@@ -418,6 +453,24 @@ def _build_room_handlers(room, participant_state: dict, audio_tasks: dict) -> No
                 ps["speech_count"] = 0
                 ps["silence_count"] = 0
                 logger.debug("LiveKit VAD [%s]: playback_done → IDLE", sid[:8])
+
+        elif msg_type == "text":
+            message = str(msg.get("message") or msg.get("text") or "").strip()
+            if not message:
+                return
+            ps["state"] = _ParticipantState.PROCESSING
+            task = asyncio.ensure_future(
+                _run_text_pipeline(
+                    room.local_participant,
+                    message,
+                    ps.get("user_id", "guest"),
+                    msg.get("session_id") or ps.get("session_id", f"livekit-{sid[:8]}"),
+                )
+            )
+            ps["pipeline_task"] = task
+            task.add_done_callback(
+                lambda _t, _sid=sid, _ps=ps: _on_pipeline_done(_sid, _ps)
+            )
 
 
 async def _agent_loop() -> None:
