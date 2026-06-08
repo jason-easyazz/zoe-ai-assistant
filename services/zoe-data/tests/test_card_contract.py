@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from card_contract import (
     CardContractError,
     CardType,
+    CONTENT_REQUIRED_FIELDS,
     parse_semver,
     renderer_accepts,
     reserved_field_names,
@@ -79,6 +80,19 @@ def test_content_required_fields_are_per_card_type():
         )
     )
     assert normalized["content"]["items"] == ["milk"]
+
+
+@pytest.mark.parametrize("card_type", list(CardType))
+def test_every_card_type_has_minimal_valid_content(card_type):
+    content = {
+        field: [] if field in {"devices", "fields", "items", "sections"} else f"{field}-value"
+        for field in CONTENT_REQUIRED_FIELDS[card_type]
+    }
+
+    normalized = validate_card_contract(_contract(card_type=card_type.value, content=content))
+
+    assert normalized["card_type"] == card_type.value
+    assert set(CONTENT_REQUIRED_FIELDS[card_type]).issubset(normalized["content"])
 
 
 def test_unknown_fields_are_tolerated_for_forward_compatibility():
