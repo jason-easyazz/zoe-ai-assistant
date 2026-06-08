@@ -708,7 +708,34 @@ class KanbanAdapter:
             }
 
         phase = state.phase if state is not None else ("implement" if _skip_scout(issue) else "scout")
-        entry = _phase_plan_entry(phase, issue)
+        plan = _chain_for_issue(issue)
+        phase_order = [p for p, _, _ in plan]
+        entry = next((plan_entry for plan_entry in plan if plan_entry[0] == phase), None)
+        # Only adjust not-yet-started phases. A stale running phase may still
+        # have an active worker/effect, so leave it blocked for operator review.
+        if entry is None and state is not None and state.status == "todo" and phase_order:
+            previous_phase = phase
+            phase = phase_order[0]
+            entry = next((plan_entry for plan_entry in plan if plan_entry[0] == phase), None)
+            try:
+                state = state.model_copy(update={"phase": phase})
+                state = await asyncio.to_thread(
+                    save_state,
+                    state,
+                    event="plan_adjusted",
+                    extra={
+                        "from_phase": previous_phase,
+                        "to_phase": phase,
+                        "reason": "current issue plan no longer includes journal phase",
+                    },
+                )
+            except Exception as exc:
+                logger.warning(
+                    "kanban_adapter: plan_adjusted save skipped for %s: %s; "
+                    "phase adjustment will still be applied via effect_requested",
+                    external_ref,
+                    exc,
+                )
         if entry is None:
             return {
                 "ok": False,
@@ -733,7 +760,6 @@ class KanbanAdapter:
                 "ready_phase_only": True,
             }
 
-        phase_order = [p for p, _, _ in _chain_for_issue(issue)]
         parent: str | None = None
         if phase in phase_order:
             idx = phase_order.index(phase)
