@@ -35,3 +35,19 @@ def test_panel_set_mode_allowed():
 def test_existing_types_not_broken():
     for t in ("navigate", "open_panel", "focus", "fill", "notify", "refresh", "click"):
         assert t in ALLOWED_ACTION_TYPES, f"Broken: {t} missing from ALLOWED_ACTION_TYPES"
+
+
+def test_panel_show_action_form_allowed():
+    assert "panel_show_action_form" in ALLOWED_ACTION_TYPES
+
+
+def test_panel_update_field_allowed():
+    assert "panel_update_field" in ALLOWED_ACTION_TYPES
+
+
+def test_panel_list_update_allowed():
+    assert "panel_list_update" in ALLOWED_ACTION_TYPES
+
+
+def test_panel_close_action_form_allowed():
+    assert "panel_close_action_form" in ALLOWED_ACTION_TYPES

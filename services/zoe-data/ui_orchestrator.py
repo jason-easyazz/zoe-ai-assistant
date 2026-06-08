@@ -33,6 +33,10 @@ ALLOWED_ACTION_TYPES = {
     "panel_open_form",
     "panel_stream_text",
     "panel_dismiss_ambient",
+    "panel_close_action_form",
+    "panel_list_update",
+    "panel_show_action_form",
+    "panel_update_field",
     "show_card",
 }
 DANGEROUS_ACTION_TYPES = {"delete_record"}
