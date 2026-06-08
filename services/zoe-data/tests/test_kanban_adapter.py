@@ -1781,6 +1781,85 @@ def test_protocol_violation_count():
     assert ka._protocol_violation_count(detail) == 2
 
 
+def test_phase_budget_reason_recovers_hermes_iteration_budget_log(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 📖 read      services/zoe-data/main.py  0.1s\n"
+        "⚠ Iteration budget reached (22/22) — response may be incomplete\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.phase_budget_reason_from_log("t_impl", "implement")
+
+    assert reason == (
+        "BLOCKER=ITERATION_BUDGET: Hermes iteration budget reached during implement "
+        "(steps=22, limit=22)"
+    )
+
+
+def test_phase_budget_reason_ignores_stale_iteration_budget_log_session(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "⚠ Iteration budget reached (22/22) — response may be incomplete\n"
+        "Query: work kanban task t_impl\n"
+        "  ┊ ✅ kanban_block  0.1s\n",
+        encoding="utf-8",
+    )
+
+    assert kb.phase_budget_reason_from_log("t_impl", "implement") is None
+
+
+@pytest.mark.asyncio
+async def test_poll_v4_blocked_protocol_violation_recovers_iteration_budget_from_log(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_implement.log").write_text(
+        "Query: work kanban task t_implement\n"
+        "  ┊ 🔎 grep      ITERATION_BUDGET  0.1s\n"
+        "⚠ Iteration budget reached (22/22) — response may be incomplete\n",
+        encoding="utf-8",
+    )
+    rows = [_row("implement", "blocked", chain_version="v4")]
+    show = {
+        "t_implement": {
+            "latest_summary": "",
+            "comments": [],
+            "events": [{"kind": "protocol_violation", "payload": {"exit_code": 0}}],
+            "runs": [
+                {
+                    "status": "crashed",
+                    "outcome": "crashed",
+                    "error": "worker exited cleanly without calling kanban_complete",
+                }
+            ],
+        }
+    }
+    a = _FakeAdapter(list_rows=rows, show_map=show)
+
+    out = await a.poll("multica:uuid-9")
+
+    assert out["status"] == "blocked"
+    assert out["blocker"] == (
+        "ITERATION_BUDGET: Hermes iteration budget reached during implement "
+        "(steps=22, limit=22)"
+    )
+    assert out["pipeline"]["status"] == "blocked"
+    assert out["pipeline"]["block_reason"] == (
+        "ITERATION_BUDGET: Hermes iteration budget reached during implement "
+        "(steps=22, limit=22)"
+    )
+
+
 def test_phase_budget_reason_enforces_tool_and_runtime_limits(tmp_path, monkeypatch):
     log_path = tmp_path / "task.log"
     log_path.write_text("\n".join(["  ┊ tool call"] * 9), encoding="utf-8")

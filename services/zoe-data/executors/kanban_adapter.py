@@ -28,7 +28,12 @@ from pathlib import Path
 from typing import Any
 
 from hermes_http import hermes_bin, zoe_repo_root
-from kanban_phase_budget import phase_budget_reason, terminate_running_workers
+from kanban_phase_budget import (
+    phase_budget_reason,
+    phase_budget_reason_from_log,
+    task_log_tail,
+    terminate_running_workers,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -335,6 +340,21 @@ def _protocol_violation_count(detail: dict[str, Any]) -> int:
     return sum(
         1 for event in events if isinstance(event, dict) and event.get("kind") == "protocol_violation"
     )
+
+
+def _with_recovered_log_budget(task_id: str, phase: str, detail: dict[str, Any]) -> dict[str, Any]:
+    """Attach Hermes log evidence when a silent exit was really a budget stop."""
+    reason = phase_budget_reason_from_log(task_id, phase)
+    if not reason:
+        return detail
+    enriched = dict(detail)
+    latest = str(enriched.get("latest_summary") or "").strip()
+    enriched["latest_summary"] = f"{latest}\n{reason}".strip() if latest else reason
+    if not (enriched.get("logs") or enriched.get("log") or enriched.get("log_tail")):
+        tail = task_log_tail(task_id)
+        if tail:
+            enriched["log_tail"] = tail
+    return enriched
 
 
 def _expected_phases(phases: dict[str, dict]) -> set[str]:
@@ -1118,6 +1138,7 @@ class KanbanAdapter:
             except KanbanCLIError as exc:
                 logger.debug("kanban_adapter: show failed for %s: %s", task_id, exc)
                 continue
+            detail = _with_recovered_log_budget(task_id, phase, detail)
             detail_cache[task_id] = detail
             if await self._maybe_auto_block_phase_budget(task_id, phase, row, detail):
                 phases[phase] = row
@@ -1160,6 +1181,12 @@ class KanbanAdapter:
                 if cached is not None:
                     return cached
                 detail = await self._run(["show", task_id, "--json"], expect_json=True)
+                phase = next(
+                    (phase for phase, row in phases.items() if row.get("id") == task_id),
+                    "",
+                )
+                if phase:
+                    detail = _with_recovered_log_budget(task_id, phase, detail)
                 detail_cache[task_id] = detail
                 return detail
 
