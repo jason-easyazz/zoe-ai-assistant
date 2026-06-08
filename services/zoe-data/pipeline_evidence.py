@@ -161,11 +161,11 @@ def scope_split_required(
     repeated: bool = False,
     explicit: bool = False,
 ) -> bool:
-    """Classify broad implement failures that should become split/escalation packets."""
+    """Classify broad failures that should become split/escalation packets."""
+    if explicit:
+        return phase in {"scout", "implement"}
     if phase != "implement":
         return False
-    if explicit:
-        return True
     return repeated and bool(_SCOPE_SPLIT_REASON_RE.search(reason or ""))
 
 

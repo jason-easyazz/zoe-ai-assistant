@@ -661,6 +661,35 @@ async def test_sync_pipeline_fingerprint_abort_creates_split_packet_for_protocol
 
 
 @pytest.mark.asyncio
+async def test_sync_pipeline_explicit_scout_split_packet_blocks_terminal(isolated_store):
+    await store.bootstrap_state("multica:scout-split", start_phase="scout")
+
+    async def fetch_detail(_task_id: str):
+        return {
+            "latest_summary": (
+                "BLOCKER=SCOPE_SPLIT_REQUIRED: parent has too many surfaces\n"
+                'NEEDS_SPLIT=1\nSPLIT_PACKET={"child_issue_template":{"title":"ZOE-5288: card_service base"}}'
+            ),
+            "comments": [],
+        }
+
+    phases = {
+        "scout": {
+            "id": "t1",
+            "status": "blocked",
+            "block_reason": "SCOPE_SPLIT_REQUIRED: parent has too many surfaces",
+        }
+    }
+    state = await store.sync_pipeline_from_chain("multica:scout-split", phases, fetch_detail)
+
+    assert state.status == "blocked"
+    assert state.block_classification == "scope_split_required"
+    assert state.split_packet["blocked_phase"] == "scout"
+    assert state.split_packet["child_issue_template"]["title"] == "ZOE-5288: card_service base"
+    assert "ignored_scope_split_request" not in isolated_store.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
 async def test_sync_pipeline_explicit_split_packet_blocks_terminal(isolated_store):
     await store.bootstrap_state("multica:explicit")
 
