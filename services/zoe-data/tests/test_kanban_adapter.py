@@ -454,6 +454,7 @@ async def test_dispatch_uses_bounded_goal_mode_for_actionable_code_audit_impleme
     assert len(creates) == 1
     assert "--goal" in creates[0]
     assert creates[0][creates[0].index("--goal-max-turns") + 1] == "2"
+    assert creates[0][creates[0].index("--max-retries") + 1] == "2"
 
 
 @pytest.mark.asyncio
@@ -477,6 +478,7 @@ async def test_dispatch_omits_goal_mode_for_non_code_audit_implement():
     assert len(creates) == 1
     assert "--goal" not in creates[0]
     assert "--goal-max-turns" not in creates[0]
+    assert creates[0][creates[0].index("--max-retries") + 1] == "1"
 
 
 @pytest.mark.asyncio

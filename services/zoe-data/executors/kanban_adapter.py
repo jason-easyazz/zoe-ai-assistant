@@ -273,11 +273,24 @@ def _code_audit_implement_hint(issue: dict | None = None) -> str:
     )
 
 
+def _is_bounded_goal_phase(phase: str, issue: dict | None = None) -> bool:
+    """Return True when this phase should run in bounded goal mode with one retry."""
+    return phase == "implement" and _is_code_audit_actionable(_ticket_metadata(issue))
+
+
 def _goal_mode_args(phase: str, issue: dict | None = None) -> list[str]:
     """Return bounded Hermes goal-mode args for phases that benefit from one continuation."""
-    if phase == "implement" and _is_code_audit_actionable(_ticket_metadata(issue)):
+    if _is_bounded_goal_phase(phase, issue):
         return ["--goal", "--goal-max-turns", "2"]
     return []
+
+
+def _max_retries_for_phase(phase: str, issue: dict | None = None) -> str:
+    """Return the Hermes consecutive-failure limit for this task."""
+    if _is_bounded_goal_phase(phase, issue):
+        # Goal mode gives these tickets one bounded continuation in the same worktree.
+        return "2"
+    return "1"
 
 
 def _audit_no_pr_issue(issue: dict | None = None) -> bool:
@@ -874,9 +887,11 @@ class KanbanAdapter:
             "--max-runtime",
             _max_runtime(mode),
             # Hermes trips the circuit breaker on the Nth failure; 1 means one
-            # total attempt and zero automatic retries.
+            # total attempt and zero automatic retries. Code-audit goal tasks get
+            # one same-worktree continuation so a first turn that made a patch can
+            # still commit/push instead of starting over.
             "--max-retries",
-            "1",
+            _max_retries_for_phase(phase, issue),
             *_goal_mode_args(phase, issue),
             "--created-by",
             "zoe-bridge",
