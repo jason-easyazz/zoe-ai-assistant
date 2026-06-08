@@ -288,10 +288,7 @@ async def _run_platform_health_check() -> None:
             if existing and existing.get("id"):
                 await client.update_issue(
                     str(existing["id"]),
-                    status="backlog",
                     description=description,
-                    assignee_id=None,
-                    assignee_type=None,
                 )
             else:
                 await client.create_issue(

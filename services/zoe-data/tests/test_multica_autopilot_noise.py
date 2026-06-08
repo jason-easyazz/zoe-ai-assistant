@@ -111,14 +111,12 @@ async def test_platform_health_failure_reuses_open_issue(monkeypatch, tmp_path):
     assert updates == [
         (
             "health-1",
-            "backlog",
+            None,
             {
                 "description": (
                     "The scheduled Platform Health Check found failing services.\n\n"
                     "```\nbroken\n```"
                 ),
-                "assignee_id": None,
-                "assignee_type": None,
             },
         )
     ]

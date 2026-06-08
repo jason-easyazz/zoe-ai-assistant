@@ -30,22 +30,25 @@ check_json_health() {
     fi
 }
 
-while IFS=$'\t' read -r name status health; do
-    if [[ "$status" != "running" ]]; then
-        fail "Docker container $name is $status"
-    elif [[ -n "$health" && "$health" != "healthy" ]]; then
-        fail "Docker container $name health is $health"
+if ! docker info >/dev/null 2>&1; then
+    fail "Docker daemon is unreachable"
+else
+    while IFS=$'\t' read -r name status health; do
+        if [[ "$status" != "running" ]]; then
+            fail "Docker container $name is $status"
+        elif [[ -n "$health" && "$health" != "healthy" ]]; then
+            fail "Docker container $name health is $health"
+        fi
+    done < <(
+        docker ps --format '{{.Names}}' |
+            while read -r name; do
+                docker inspect --format '{{.Name}}{{"\t"}}{{.State.Status}}{{"\t"}}{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$name" |
+                    sed 's#^/##'
+            done
+    )
+    if [[ "$failed" -eq 0 ]]; then
+        pass "required Docker containers are running"
     fi
-done < <(
-    docker ps --format '{{.Names}}' |
-        while read -r name; do
-            docker inspect --format '{{.Name}}{{"\t"}}{{.State.Status}}{{"\t"}}{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$name" |
-                sed 's#^/##'
-        done
-)
-
-if [[ "$failed" -eq 0 ]]; then
-    pass "required Docker containers are running"
 fi
 
 if docker exec zoe-database pg_isready -U zoe -d zoe >/dev/null 2>&1; then
