@@ -310,6 +310,49 @@ async def test_dispatch_skips_scout_for_scope_split_child_ticket_block():
 
 
 @pytest.mark.asyncio
+async def test_dispatch_adjusts_stale_scout_journal_for_scope_split_child():
+    from pipeline_evidence import PipelineState
+    from pipeline_store import load_latest_state, save_state
+
+    save_state(
+        PipelineState(
+            task_ref="multica:uuid-child-stale-scout",
+            phase="scout",
+            status="todo",
+            evidence_profile="code",
+        ),
+        event="bootstrap",
+    )
+    rows = [
+        _row(
+            "scout",
+            "archived",
+            chain_version="v4",
+            issue_id="uuid-child-stale-scout",
+        )
+    ]
+    a = _FakeAdapter(list_rows=rows)
+
+    result = await a.dispatch(
+        {
+            "id": "uuid-child-stale-scout",
+            "identifier": "ZOE-5439",
+            "title": "calendar child",
+            "description": """```zoe-ticket
+{"zoe_kind":"child","source":"scope_split","acceptance_criteria":["calendar builder"]}
+```""",
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["phase"] == "implement"
+    assert set(result["chain"]) == {"implement"}
+    latest = load_latest_state("multica:uuid-child-stale-scout")
+    assert latest.phase == "implement"
+    assert latest.status == "running"
+
+
+@pytest.mark.asyncio
 async def test_dispatch_keeps_scout_for_under_specified_scope_split_child():
     a = _FakeAdapter()
     result = await a.dispatch(
