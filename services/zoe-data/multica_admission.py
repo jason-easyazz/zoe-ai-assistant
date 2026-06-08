@@ -88,6 +88,8 @@ def select_next_approved_issue(
     for issue in all_issues:
         if issue.get("status") != "blocked":
             continue
+        if str(issue.get("assignee_id") or "") != str(hermes_agent_id):
+            continue
         metadata = parse_ticket_block(issue.get("description") or "")
         if metadata.get("dispatch_approved") is True:
             blocked_approved.append(

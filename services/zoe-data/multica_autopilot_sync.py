@@ -271,15 +271,35 @@ async def _run_platform_health_check() -> None:
             from multica_client import get_multica_client  # type: ignore[import]
 
             client = get_multica_client()
-            await client.create_issue(
-                title="Platform health failures detected",
-                description=(
-                    "The scheduled Platform Health Check found failing services.\n\n"
-                    f"```\n{tail}\n```"
-                ),
-                priority="high",
-                status="backlog",
+            title = "Platform health failures detected"
+            description = (
+                "The scheduled Platform Health Check found failing services.\n\n"
+                f"```\n{tail}\n```"
             )
+            existing = next(
+                (
+                    issue
+                    for issue in await client.list_issues()
+                    if issue.get("title") == title
+                    and issue.get("status") not in {"done", "cancelled", "archived"}
+                ),
+                None,
+            )
+            if existing and existing.get("id"):
+                await client.update_issue(
+                    str(existing["id"]),
+                    status="backlog",
+                    description=description,
+                    assignee_id=None,
+                    assignee_type=None,
+                )
+            else:
+                await client.create_issue(
+                    title=title,
+                    description=description,
+                    priority="high",
+                    status="backlog",
+                )
         except Exception as exc:
             logger.warning("autopilot: failed to create health failure issue: %s", exc)
 
