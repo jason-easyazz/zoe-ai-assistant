@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 _TOOL_DEFAULTS = {
     "scout": 8,
     "implement": 24,
-    "verify": 10,
+    "verify": 16,
     "review": 10,
     "closeout": 12,
     "retro": 8,

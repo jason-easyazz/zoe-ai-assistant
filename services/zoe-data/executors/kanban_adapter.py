@@ -548,6 +548,10 @@ class KanbanAdapter:
                 " `kanban_show`, compare the implementer handoff to the Multica acceptance criteria,"
                 " then call `kanban_complete` in this turn with TESTS=not applicable/audit evidence,"
                 " VALIDATORS=not applicable/audit-only, PR_URL= blank, and a short pass/fail summary.\n"
+                "- PR_URL FAST PATH: if `kanban_show` or the ticket block includes PR_URL, do not"
+                " hunt branches or commits. Use `gh pr view <url> --json url,headRefName,headRefOid,"
+                "mergeStateStatus,statusCheckRollup` and inspect the PR diff/checks directly, then"
+                " run the validators below and complete/block from that evidence.\n"
                 "- Start with `kanban_show` to read the implementer handoff and PR_URL.\n"
                 "- Do not redesign or refactor. Run the declared tests and the minimum extra checks needed"
                 " for the touched surface.\n"
@@ -558,7 +562,12 @@ class KanbanAdapter:
                 " PR_URL, and a pass/fail summary. Include exact commands and outcomes.\n"
                 "- If tests fail, evidence is missing, the PR is absent for a code task, or the task needs"
                 " product clarification, call `kanban_block` with BLOCKER= and the failing output.\n"
-                "- If you cannot reach a pass/block decision within 8 tool/model steps, call"
+                "- If Greptile/CI has unresolved comments or failures, call `kanban_block` with"
+                " BLOCKER=PR_REVIEW_REQUIRED, PR_URL, and a concise action list; do not spend this"
+                " phase rewriting the PR.\n"
+                "- If you cannot reach a pass/block decision within 14 tool/model steps, call"
+                # Keep in sync with _TOOL_DEFAULTS["verify"] - terminal grace
+                # in kanban_phase_budget.py.
                 " `kanban_block` with BLOCKER=VERIFY_BUDGET and the missing evidence.\n"
                 "- TERMINAL PROTOCOL: end with `kanban_complete` or `kanban_block` (no silent exit)."
             )
