@@ -1025,6 +1025,20 @@ async def test_verify_body_requires_evidence_gate():
 
 
 @pytest.mark.asyncio
+async def test_verify_body_uses_pr_url_fast_path_before_generic_work():
+    body = ka.KanbanAdapter()._build_body(
+        "verify",
+        {"id": "uuid-1", "identifier": "ZOE-9", "title": "Fix thing", "description": ""},
+        "ZOE-9",
+    )
+    assert "PR_URL FAST PATH" in body
+    assert "do not hunt branches or commits" in body
+    assert "gh pr view <url>" in body
+    assert "PR_REVIEW_REQUIRED" in body
+    assert body.index("PR_URL FAST PATH") < body.index("Start with `kanban_show`")
+
+
+@pytest.mark.asyncio
 async def test_review_body_requires_verify_evidence():
     body = ka.KanbanAdapter()._build_body(
         "review",
@@ -1636,6 +1650,35 @@ def test_phase_budget_reason_enforces_tool_and_runtime_limits(tmp_path, monkeypa
     )
     assert reason is not None
     assert "runtime budget exceeded" in reason
+
+
+def test_verify_phase_budget_allows_pr_validation_headroom(tmp_path, monkeypatch):
+    log_path = tmp_path / "task.log"
+    monkeypatch.setattr(kb, "_log_path", lambda _task_id: log_path)
+    monkeypatch.delenv("ZOE_KANBAN_VERIFY_TOOL_BUDGET", raising=False)
+
+    log_path.write_text("\n".join(["  ┊ tool call"] * 17), encoding="utf-8")
+    reason = kb.phase_budget_reason(
+        "t_verify",
+        "verify",
+        {"task": {"started_at": 100}},
+        now=110,
+    )
+
+    assert reason is None
+
+    log_path.write_text("\n".join(["  ┊ tool call"] * 19), encoding="utf-8")
+    reason = kb.phase_budget_reason(
+        "t_verify",
+        "verify",
+        {"task": {"started_at": 100}},
+        now=110,
+    )
+
+    assert reason is not None
+    assert "VERIFY_BUDGET" in reason
+    assert "guidance_limit=16" in reason
+    assert "hard_limit=18" in reason
 
 
 def test_phase_budget_accepts_iso_timestamp_and_ascii_step_logs(tmp_path, monkeypatch):
