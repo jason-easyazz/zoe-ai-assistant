@@ -74,6 +74,7 @@ def test_skybridge_voice_normalizes_both_transports():
     assert "Malformed server event" in voice
     assert "Skybridge LiveKit event parse failed" in voice
     assert "Voice transport unavailable" in voice
+    assert "this.mediaRecorder.onstop = null" in voice
 
 
 def test_skybridge_uses_backend_status_contract():

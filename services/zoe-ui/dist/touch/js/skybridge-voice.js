@@ -54,12 +54,18 @@
             clearTimeout(this.reconnectTimer);
             clearTimeout(this.autoListenTimer);
             clearTimeout(this.silenceTimer);
+            if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
+                this.mediaRecorder.onstop = null;
+                this.mediaRecorder.stop();
+            }
+            this.audioChunks = [];
             if (this.ws) this.ws.close();
             if (this.room) this.room.disconnect();
             if (this.micStream) this.micStream.getTracks().forEach(track => track.stop());
             this.ws = null;
             this.room = null;
             this.micStream = null;
+            this.mediaRecorder = null;
             this.isRecording = false;
             this.serverBusy = false;
             this.emit({ type: 'state', state: 'ambient' });
