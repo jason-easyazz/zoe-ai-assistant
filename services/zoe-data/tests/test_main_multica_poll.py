@@ -388,6 +388,46 @@ async def test_record_blocked_multica_chain_creates_budget_followup_once():
 
 
 @pytest.mark.asyncio
+async def test_record_blocked_multica_chain_does_not_create_recursive_harness_followup():
+    from main import _record_blocked_multica_chain
+    from multica_ticket_contract import describe_ticket
+
+    client = RecordingClient()
+    client.issues["issue-budget"] = {
+        "id": "issue-budget",
+        "identifier": "ZOE-5448",
+        "description": describe_ticket(
+            "Existing harness follow-up",
+            zoe_kind="harness_fix",
+            source="engineering_blocker_followup",
+            parent_issue_id="parent-root",
+            acceptance_criteria=["Focused tests cover blocker path"],
+            evidence_expectations=["Focused tests", "PR URL"],
+        ),
+        "assignee_id": "hermes",
+        "assignee_type": "agent",
+        "project_id": "project-1",
+    }
+
+    blocker = await _record_blocked_multica_chain(
+        client,
+        "issue-budget",
+        {
+            "pipeline": {
+                "phase": "implement",
+                "block_reason": "ITERATION_BUDGET: Hermes iteration budget reached",
+            }
+        },
+    )
+
+    assert blocker == "ITERATION_BUDGET: Hermes iteration budget reached"
+    assert client.calls[0][1]["dispatch_approved"] is False
+    assert client.created == []
+    assert client.labels == []
+    assert client.notes == []
+
+
+@pytest.mark.asyncio
 async def test_record_blocked_multica_chain_reuses_existing_in_progress_budget_followup():
     from main import _record_blocked_multica_chain
     from multica_ticket_contract import describe_ticket, parse_ticket_block, write_ticket_block

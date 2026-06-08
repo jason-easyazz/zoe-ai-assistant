@@ -192,6 +192,14 @@ async def _ensure_blocker_followup_ticket(client, issue_id: str, chain: dict, bl
         parent = await client.get_issue(issue_id)
         if not parent.get("id"):
             return {}
+        parent_metadata = parse_ticket_block(parent.get("description") or "")
+        if parent_metadata.get("source") == "engineering_blocker_followup":
+            logger.info(
+                "multica_poll: not creating recursive harness follow-up for %s (%s)",
+                parent.get("identifier") or issue_id,
+                marker,
+            )
+            return {}
         parent_ident = parent.get("identifier") or issue_id
         for status in ("backlog", "todo", "in_progress", "blocked", "in_review"):
             for candidate in await client.list_issues(status=status, limit=1000) or []:
