@@ -93,7 +93,7 @@ def _reported_test_evidence_passed(raw: str, *, phase: PipelinePhase) -> bool:
             "no-code",
             "no code",
             "scout/plan",
-            "planning",
+            "no-code planning",
             "plan deliverable",
         )
         if any(marker in lowered for marker in no_code_markers):

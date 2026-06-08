@@ -122,6 +122,23 @@ def test_audit_no_code_verify_tests_count_as_passed():
     assert test_item.passed is True
 
 
+def test_audit_no_code_test_exemption_is_verify_only():
+    detail = {
+        "runs": [
+            {
+                "metadata": {
+                    "TESTS": "not applicable — audit-only no-code verification",
+                }
+            }
+        ]
+    }
+
+    items = evidence_from_handoff("implement", detail)
+    test_item = next(item for item in items if item.kind == "test")
+
+    assert test_item.passed is False
+
+
 def test_not_applicable_validators_do_not_count_as_passed():
     detail = {
         "runs": [
