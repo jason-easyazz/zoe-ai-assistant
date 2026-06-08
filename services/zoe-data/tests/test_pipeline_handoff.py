@@ -630,6 +630,23 @@ def test_infer_outcome_done_with_verify_budget_surfaces_block():
     )
 
 
+def test_infer_outcome_done_ignores_freeform_stable_blocker_text():
+    assert (
+        infer_outcome(
+            "verify",
+            "done",
+            {
+                "latest_summary": (
+                    "SUMMARY=verification completed\n"
+                    "Log excerpt: GATE_BLOCKED: old text from a previous attempt"
+                ),
+                "comments": [],
+            },
+        )
+        == "complete"
+    )
+
+
 def test_later_empty_blocker_clears_older_blocked_run():
     detail = {
         "latest_summary": "PR_URL=https://github.com/o/r/pull/213\nBLOCKER=\nTESTS=validate_structure.py passed",
