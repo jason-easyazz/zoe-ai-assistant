@@ -120,6 +120,12 @@ def _ticket_metadata(issue: dict | None = None) -> dict[str, Any]:
     return meta
 
 
+def _existing_pr_url(issue: dict | None = None) -> str:
+    issue = issue or {}
+    raw = issue.get("pr_url") or _ticket_metadata(issue).get("pr_url") or ""
+    return str(raw).strip()
+
+
 def _engineering_mode(issue: dict | None = None) -> str:
     """Resolve the engineering execution mode for a journaled phase run.
 
@@ -512,25 +518,23 @@ class KanbanAdapter:
                 " this is a revision task. Do not rediscover the original fix and do not create a new PR."
                 " This revision path takes precedence over all file inspection: after `kanban_show`,"
                 " do not read, grep, or edit files until the existing PR checkout below succeeds."
-                " Run `gh pr view <PR_URL> --json url,number,headRefName,"
+                " Zoe dispatch pre-checks this task worktree to the existing PR head before the worker"
+                " starts. Run `gh pr view <PR_URL> --json url,number,headRefName,headRefOid,"
                 f"headRepositoryOwner,mergeStateStatus,statusCheckRollup` and `{_greptile_mcp_bin()}"
                 " pr-comments --unaddressed-only jason-easyazz/zoe-ai-assistant <number>`."
                 " That Greptile command may exit nonzero when it prints unresolved comments; read stdout"
-                " as the action list instead of treating the nonzero exit alone as failure."
-                " Immediately check out a unique slash-free local copy of the PR with"
-                " `branch=pr-<number>-$(date +%s)-$$ && git checkout -B $branch &&"
-                " git fetch origin pull/<number>/head && git reset --hard FETCH_HEAD`; do not use"
-                " `gh pr checkout` because the PR head branch may already"
-                " be checked out in another worktree. Address only the"
-                " unresolved review/Greptile/CI action list, run focused tests plus validators, commit,"
+                " as the action list instead of treating the nonzero exit alone as failure. Run"
+                " `git rev-parse HEAD` and compare it to the gh `headRefOid`; if it does not match,"
+                " immediately call `kanban_block` with BLOCKER=PR_REVISION_CHECKOUT_FAILED."
+                " Do not run `gh pr checkout`, `git checkout`, `git fetch`, or `git reset` yourself"
+                " in this phase; if the pre-checked worktree is wrong, block instead of repairing it."
+                " Address only the unresolved review/Greptile/CI action list, run focused tests plus validators, commit,"
                 " `git push origin HEAD:<headRefName>` (use headRefName from the gh pr view output above),"
                 " and report the SAME PR_URL. Run Python tests with"
                 " `PYTHONPATH=services/zoe-data python3 -m pytest ...`. For tests involving module-level"
                 " env-derived constants, patch the module variable with monkeypatch/setattr after import;"
                 " do not set os.environ after importing the module and expect the already-loaded constant"
-                " to change. If checkout, fetch, or reset fails, immediately call `kanban_block` with"
-                " BLOCKER=PR_REVISION_CHECKOUT_FAILED; do not inspect or edit files on the original"
-                " worktree branch. If the action list is ambiguous, call `kanban_block` with"
+                " to change. If the action list is ambiguous, call `kanban_block` with"
                 " BLOCKER=PR_REVISION_BLOCKED.\n"
                 "- You already run on an isolated git worktree branch. Commit verified changes, then publish"
                 " the branch and open ONE small PR (do not merge) with EXACTLY these commands:\n"
@@ -951,9 +955,48 @@ class KanbanAdapter:
         if not (result or {}).get("deduplicated"):
             created.append(phase)
         if phase in {"implement", "verify"}:
-            from worktree_bootstrap import prepare_kanban_worktree
+            from worktree_bootstrap import prepare_existing_pr_revision_worktree, prepare_kanban_worktree
 
-            await asyncio.to_thread(prepare_kanban_worktree, str(task_id))
+            pr_url = _existing_pr_url(issue)
+            worktree_failure_reason = "kanban worktree preparation failed"
+            worktree_blocker = "BLOCKER=WORKTREE_PREPARATION_FAILED"
+            try:
+                if phase == "implement" and pr_url:
+                    worktree_failure_reason = "existing PR worktree preparation failed"
+                    worktree_blocker = "BLOCKER=PR_REVISION_CHECKOUT_FAILED"
+                    await asyncio.to_thread(
+                        prepare_existing_pr_revision_worktree,
+                        str(task_id),
+                        pr_url,
+                    )
+                else:
+                    await asyncio.to_thread(prepare_kanban_worktree, str(task_id))
+            except Exception as exc:  # noqa: BLE001
+                reason = f"{worktree_blocker}: {exc}"
+                logger.warning(
+                    "kanban_adapter: worktree preparation failed for %s (%s): %s",
+                    task_id,
+                    phase,
+                    exc,
+                )
+                try:
+                    await self._run(["block", str(task_id), reason[:1000]])
+                except KanbanCLIError as block_exc:
+                    logger.warning(
+                        "kanban_adapter: failed to block %s after worktree preparation failure: %s",
+                        task_id,
+                        block_exc,
+                    )
+                return {
+                    "ok": False,
+                    "external_ref": external_ref,
+                    "reason": worktree_failure_reason,
+                    "phase": phase,
+                    "chain": {phase: task_id},
+                    "created": created,
+                    "mode": mode,
+                    "ready_phase_only": True,
+                }
         if state is not None and state.status == "todo":
             try:
                 running = transition(state, "start")
