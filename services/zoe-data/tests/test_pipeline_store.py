@@ -358,6 +358,59 @@ async def test_sync_pipeline_advances_on_complete_handoff(isolated_store):
 
 
 @pytest.mark.asyncio
+async def test_sync_pipeline_advances_with_live_run_metadata_recovery(isolated_store):
+    await store.bootstrap_state("multica:sync-live-metadata")
+
+    async def fetch_detail(_task_id: str):
+        return {
+            "latest_summary": (
+                "Fixed timing-attack vulnerability in auth.py token comparison — "
+                "replaced vulnerable == with hmac.compare_digest."
+            ),
+            "task": {
+                "body": """Multica issue: ZOE-5354
+```zoe-ticket
+{"pr_url":"https://github.com/jason-easyazz/zoe-ai-assistant/pull/213"}
+```"""
+            },
+            "runs": [
+                {
+                    "summary": "Fixed timing-attack vulnerability in auth.py token comparison.",
+                    "metadata": {
+                        "changed_files": ["services/zoe-data/auth.py"],
+                        "tests_run": 1,
+                        "tests_passed": 1,
+                    },
+                }
+            ],
+            "comments": [],
+        }
+
+    phases = {"implement": {"id": "t_live", "status": "archived"}}
+    state = await store.sync_pipeline_from_chain(
+        "multica:sync-live-metadata",
+        phases,
+        fetch_detail,
+    )
+
+    assert state.phase == "verify"
+    assert state.status == "todo"
+    assert "zoe-engineering" in store._PHASE_SKILLS["implement"]
+    assert any(
+        item.kind == "tool"
+        and item.passed is True
+        and item.metadata.get("source") == "skills"
+        for item in state.evidence
+    )
+    assert any(item.kind == "test" and item.passed is True for item in state.evidence)
+    assert any(
+        item.kind == "pr"
+        and item.artifact == "https://github.com/jason-easyazz/zoe-ai-assistant/pull/213"
+        for item in state.evidence
+    )
+
+
+@pytest.mark.asyncio
 async def test_sync_pipeline_retries_a_concurrent_transition_write(
     isolated_store, monkeypatch
 ):
