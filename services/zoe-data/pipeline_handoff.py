@@ -91,7 +91,6 @@ def _reported_test_evidence_passed(raw: str, *, phase: PipelinePhase) -> bool:
             "audit-only",
             "audit only",
             "no-code",
-            "no code",
             "scout/plan",
             "no-code planning",
             "plan deliverable",
