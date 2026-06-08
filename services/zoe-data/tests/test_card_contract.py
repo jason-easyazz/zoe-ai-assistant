@@ -62,6 +62,12 @@ def test_producer_fields_require_non_empty_text(field):
         validate_card_contract(_contract(**{field: "   "}))
 
 
+def test_idempotency_key_is_optional_but_not_blank():
+    assert "idempotency_key" not in validate_card_contract(_contract(idempotency_key=None))
+    with pytest.raises(CardContractError, match="idempotency_key"):
+        validate_card_contract(_contract(idempotency_key="   "))
+
+
 def test_content_required_fields_are_per_card_type():
     with pytest.raises(CardContractError, match="fields"):
         validate_card_contract(_contract(content={"form_id": "x", "title": "Missing fields"}))

@@ -162,7 +162,7 @@ def validate_card_contract(contract: dict[str, Any], *, supported_major: int | N
         "created_at": _parse_created_at(contract["created_at"]).isoformat().replace("+00:00", "Z"),
     }
     if contract.get("idempotency_key") is not None:
-        normalized["idempotency_key"] = str(contract["idempotency_key"])
+        normalized["idempotency_key"] = _required_text(contract["idempotency_key"], "idempotency_key")
     return normalized
 
 
