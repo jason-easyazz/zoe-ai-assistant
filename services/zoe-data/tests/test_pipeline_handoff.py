@@ -19,6 +19,109 @@ def test_evidence_from_implement_handoff_parses_tools_and_tests():
     assert "pr" in kinds
 
 
+def test_implement_evidence_recovers_live_run_metadata_and_ticket_pr_url():
+    detail = {
+        "latest_summary": (
+            "Fixed timing-attack vulnerability in auth.py token comparison — "
+            "replaced vulnerable == with hmac.compare_digest for constant-time security."
+        ),
+        "task": {
+            "body": """Multica issue: ZOE-5354
+```zoe-ticket
+{"pr_url":"https://github.com/jason-easyazz/zoe-ai-assistant/pull/213"}
+```"""
+        },
+        "runs": [
+            {
+                "summary": "Fixed timing-attack vulnerability in auth.py token comparison.",
+                "metadata": {
+                    "changed_files": ["services/zoe-data/auth.py"],
+                    "tests_run": 1,
+                    "tests_passed": 1,
+                },
+            }
+        ],
+    }
+
+    items = evidence_from_handoff("implement", detail, skills=("zoe-engineering",))
+
+    assert any(item.kind == "tool" and item.passed is True for item in items)
+    assert any(
+        item.kind == "test"
+        and item.passed is True
+        and item.metadata.get("source") == "kanban_run_metadata"
+        for item in items
+    )
+    assert any(
+        item.kind == "pr"
+        and item.artifact == "https://github.com/jason-easyazz/zoe-ai-assistant/pull/213"
+        for item in items
+    )
+
+
+def test_run_metadata_test_evidence_requires_all_tests_to_pass():
+    detail = {
+        "runs": [
+            {
+                "metadata": {
+                    "tests_run": 5,
+                    "tests_passed": 3,
+                }
+            }
+        ],
+    }
+
+    items = evidence_from_handoff("implement", detail, skills=("zoe-engineering",))
+    test_item = next(item for item in items if item.kind == "test")
+    assert test_item.passed is False
+
+
+def test_run_metadata_test_evidence_uses_latest_qualifying_run():
+    detail = {
+        "runs": [
+            {
+                "metadata": {
+                    "tests_run": 1,
+                    "tests_passed": 1,
+                }
+            },
+            {
+                "metadata": {
+                    "tests_run": 5,
+                    "tests_passed": 3,
+                }
+            },
+        ],
+    }
+
+    items = evidence_from_handoff("implement", detail, skills=("zoe-engineering",))
+    test_item = next(item for item in items if item.kind == "test")
+    assert test_item.passed is False
+    assert "tests_run=5" in test_item.summary
+    assert "tests_passed=3" in test_item.summary
+
+
+def test_closeout_ticket_pr_url_prevents_inferred_audit_only_evidence():
+    detail = {
+        "latest_summary": "SUMMARY=audit closeout completed without prose PR field",
+        "task": {
+            "body": """Multica issue: ZOE-5354
+```zoe-ticket
+{"pr_url":"https://github.com/jason-easyazz/zoe-ai-assistant/pull/213"}
+```"""
+        },
+    }
+
+    items = evidence_from_handoff("closeout", detail)
+
+    assert any(item.kind == "pr" for item in items)
+    assert not any(
+        item.kind == "log"
+        and item.metadata.get("audit_only") is True
+        for item in items
+    )
+
+
 def test_implementation_required_from_structured_scout_handoff():
     detail = {
         "runs": [
