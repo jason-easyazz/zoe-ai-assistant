@@ -72,6 +72,7 @@ def test_skybridge_voice_normalizes_both_transports():
     assert "this.emit({ type: 'card'" in voice
     assert "scheduleReconnect()" in voice
     assert "Malformed server event" in voice
+    assert "Skybridge LiveKit event parse failed" in voice
     assert "Voice transport unavailable" in voice
 
 

@@ -123,7 +123,10 @@
                     try {
                         const text = new TextDecoder().decode(payload);
                         this.handleServerEvent(JSON.parse(text));
-                    } catch (_) {}
+                    } catch (err) {
+                        console.warn('Skybridge LiveKit event parse failed', err);
+                        this.emit({ type: 'error', message: 'Malformed server event' });
+                    }
                 });
                 await room.connect(data.url, data.token);
                 this.room = room;

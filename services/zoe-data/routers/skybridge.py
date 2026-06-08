@@ -30,7 +30,7 @@ async def get_skybridge_status():
         },
         "capabilities": {
             "pages": 15,
-            "settings": 23,
+            "settings": 22,
             "dynamic_cards": True,
         },
     }

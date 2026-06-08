@@ -30,3 +30,4 @@ def test_skybridge_status_endpoint_returns_runtime_contract():
     assert data["card_contract"] == "ag-ui-compatible"
     assert data["transports"]["local_ws"] is True
     assert "livekit" in data["transports"]
+    assert data["capabilities"]["settings"] == 22
