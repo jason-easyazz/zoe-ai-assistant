@@ -361,6 +361,81 @@ async def test_dispatch_keeps_scout_for_harness_fix_without_acceptance_criteria(
 
 
 @pytest.mark.asyncio
+async def test_dispatch_skips_scout_for_code_audit_ticket_with_acceptance_criteria():
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {
+            "id": "uuid-code-audit",
+            "identifier": "ZOE-5354",
+            "title": "GET /metrics endpoint is unauthenticated",
+            "metadata": {
+                "zoe_kind": "bug",
+                "source": "code_audit_p0_security",
+                "acceptance_criteria": ["Require admin or internal token on /metrics"],
+            },
+        }
+    )
+    assert "scout" not in result["chain"]
+    assert set(result["chain"]) == {"implement"}
+
+
+@pytest.mark.asyncio
+async def test_dispatch_skips_scout_for_code_audit_ticket_block():
+    from multica_ticket_contract import parse_ticket_block
+
+    description = (
+        "```zoe-ticket\n"
+        '{"zoe_kind":"bug","source":"code_audit_p0_security",'
+        '"acceptance_criteria":["Add security headers"]}'
+        "\n```"
+    )
+    assert parse_ticket_block(description)["source"] == "code_audit_p0_security"
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {
+            "id": "uuid-code-audit-block",
+            "identifier": "ZOE-5355",
+            "title": "nginx.conf missing HTTP security headers",
+            "description": description,
+        }
+    )
+    assert "scout" not in result["chain"]
+    assert set(result["chain"]) == {"implement"}
+
+
+@pytest.mark.asyncio
+async def test_dispatch_keeps_scout_for_code_audit_without_acceptance_criteria():
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {
+            "id": "uuid-code-audit-no-criteria",
+            "identifier": "ZOE-5356",
+            "title": "CORS misconfiguration",
+            "metadata": {"zoe_kind": "bug", "source": "code_audit_p0_security"},
+        }
+    )
+    assert set(result["chain"]) == {"scout"}
+
+
+@pytest.mark.asyncio
+async def test_dispatch_keeps_scout_for_non_bug_code_audit_ticket():
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {
+            "id": "uuid-code-audit-feature",
+            "identifier": "ZOE-5366",
+            "title": "Automated issue prioritization workflow",
+            "metadata": {
+                "zoe_kind": "feature",
+                "source": "code_audit_meta",
+                "acceptance_criteria": ["Design the prioritization workflow"],
+            },
+        }
+    )
+    assert set(result["chain"]) == {"scout"}
+
+
+@pytest.mark.asyncio
 async def test_dispatch_adjusts_stale_scout_journal_for_scope_split_child():
     from pipeline_evidence import PipelineState
     from pipeline_store import load_latest_state, save_state

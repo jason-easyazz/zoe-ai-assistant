@@ -232,6 +232,12 @@ def _skip_scout(issue: dict | None = None) -> bool:
         and bool(meta.get("acceptance_criteria"))
     ):
         return True
+    if (
+        str(meta.get("zoe_kind") or "").strip().lower() == "bug"
+        and str(meta.get("source") or "").strip().lower().startswith("code_audit_")
+        and bool(meta.get("acceptance_criteria"))
+    ):
+        return True
     haystack = " ".join(
         [
             str(issue.get("title") or ""),
