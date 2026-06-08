@@ -501,7 +501,8 @@ class KanbanAdapter:
             return common + _retro_cost_hint() + (
                 "You are retro (zoe-planner). Capture learnings after closeout — no silent prod changes.\n"
                 "- POST-CLOSEOUT FAST PATH: if closeout already records PR_URL, MERGE_SHA, and"
-                " GREPTILE=5/5 or already_merged, do not inspect worktrees, branch history, or GitHub."
+                " GREPTILE/greptile_status=5/5 or already_merged, do not inspect worktrees,"
+                " branch history, or GitHub."
                 " Use `kanban_show`, summarize one learning, and `kanban_complete`.\n"
                 "- AUDIT/NO-PR FAST PATH: if this was an audit-only/no-code run, keep retro to one"
                 " short handoff and do not load broad skills or inspect unrelated repo state.\n"

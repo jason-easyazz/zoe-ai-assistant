@@ -1281,7 +1281,7 @@ def test_retro_body_has_post_closeout_fast_path():
 
     assert "POST-CLOSEOUT FAST PATH" in body
     assert "PR_URL, MERGE_SHA" in body
-    assert "GREPTILE=5/5 or already_merged" in body
+    assert "GREPTILE/greptile_status=5/5 or already_merged" in body
     assert "GREPTILE=5/5/already_merged" not in body
     assert "do not inspect worktrees, branch history, or GitHub" in body
     assert "Use `kanban_show`, summarize one learning, and `kanban_complete`" in body
