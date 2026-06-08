@@ -1272,6 +1272,27 @@ def test_scout_body_has_child_followup_fast_path():
     assert body.index("CHILD/FOLLOW-UP FAST PATH") < body.index("Keep this phase bounded")
 
 
+def test_scout_body_has_broad_parent_split_fast_path():
+    # This is a static prompt-contract assertion, not conditional broad-ticket detection.
+    body = ka.KanbanAdapter()._build_body(
+        "scout",
+        {
+            "id": "uuid-1",
+            "identifier": "ZOE-5288",
+            "title": "card-upgrade: backend service, registry, and domain builders",
+            "description": "Wire chat.py, intent_router.py, zoe_agent.py, ui_orchestrator.py, and mcp_server.py",
+        },
+        "ZOE-5288",
+    )
+
+    assert "BROAD PARENT SPLIT FAST PATH" in body
+    assert "BLOCKER=SCOPE_SPLIT_REQUIRED" in body
+    assert "NEEDS_SPLIT=1" in body
+    assert "SPLIT_PACKET={" in body
+    assert "child_issue_template" in body
+    assert body.index("BROAD PARENT SPLIT FAST PATH") < body.index("Keep this phase bounded")
+
+
 def test_retro_body_has_post_closeout_fast_path():
     body = ka.KanbanAdapter()._build_body(
         "retro",

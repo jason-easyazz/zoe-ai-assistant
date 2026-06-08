@@ -9,6 +9,7 @@ from pipeline_evidence import (
     content_hash,
     missing_required_evidence,
     record_block_fingerprint,
+    scope_split_required,
     transition,
     with_evidence,
 )
@@ -17,6 +18,22 @@ from pipeline_evidence import (
 def test_evidence_metadata_rejects_secret_fields():
     with pytest.raises(ValueError, match="secret fields"):
         EvidenceItem(kind="tool", summary="used graphify", metadata={"access_token": "abc"})
+
+
+def test_explicit_scope_split_is_allowed_from_scout():
+    assert scope_split_required(
+        "scout",
+        "SCOPE_SPLIT_REQUIRED: parent has several deliverables",
+        explicit=True,
+    ) is True
+
+
+def test_repeated_scope_split_is_still_implement_only():
+    assert scope_split_required(
+        "scout",
+        "SCOPE_SPLIT_REQUIRED: repeated scout budget",
+        repeated=True,
+    ) is False
 
 
 def test_build_scope_split_packet_preserves_worker_reason():
