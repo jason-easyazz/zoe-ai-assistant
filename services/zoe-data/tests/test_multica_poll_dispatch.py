@@ -17,6 +17,34 @@ def test_chain_needs_dispatch_running_blocked_done():
     assert chain_needs_dispatch({"found": True, "status": "done"}) is False
 
 
+def test_chain_needs_dispatch_for_operator_resumed_blocked_executor_row():
+    chain = {
+        "found": True,
+        "status": "blocked",
+        "blocker": "SCOUT_BUDGET: stale blocked row from before a plan adjustment",
+        "pipeline": {"status": "todo", "terminal_block": False, "fingerprint_abort": False},
+    }
+    assert chain_needs_dispatch(chain) is True
+
+
+def test_chain_needs_dispatch_does_not_resume_terminal_blocked_pipeline():
+    chain = {
+        "found": True,
+        "status": "blocked",
+        "pipeline": {"status": "todo", "terminal_block": True, "fingerprint_abort": False},
+    }
+    assert chain_needs_dispatch(chain) is False
+
+
+def test_chain_needs_dispatch_does_not_resume_fingerprint_blocked_pipeline():
+    chain = {
+        "found": True,
+        "status": "blocked",
+        "pipeline": {"status": "todo", "terminal_block": False, "fingerprint_abort": True},
+    }
+    assert chain_needs_dispatch(chain) is False
+
+
 def test_chain_needs_dispatch_suppressed_on_fingerprint_abort():
     chain = {
         "found": True,
