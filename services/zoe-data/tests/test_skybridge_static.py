@@ -88,3 +88,4 @@ def test_skybridge_is_registered_in_touch_menu():
     assert "{ id: 'skybridge'" in menu
     assert "/touch/skybridge.html" in menu
     assert "'skybridge.html'" in menu
+    assert "'dashboard', 'skybridge', 'calendar'" not in menu

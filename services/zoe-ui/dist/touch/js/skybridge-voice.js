@@ -161,6 +161,10 @@
                 this.serverBusy = true;
                 this.emit({ type: 'state', state: 'thinking' });
                 this.ws.send(JSON.stringify({ type: 'text', message: text }));
+            } else {
+                this.serverBusy = false;
+                this.emit({ type: 'state', state: 'ambient' });
+                this.emit({ type: 'error', message: 'Voice transport unavailable' });
             }
         }
 

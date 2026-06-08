@@ -40,7 +40,7 @@ const TouchMenu = (() => {
         { id: 'settings',   path: '/touch/settings.html',   icon: '⚙️', label: 'Settings'   },
     ];
     const GUEST_ALLOWED_PAGE_IDS = new Set([
-        'dashboard', 'skybridge', 'calendar', 'lists', 'chat', 'weather', 'smarthome', 'timers', 'music',
+        'dashboard', 'calendar', 'lists', 'chat', 'weather', 'smarthome', 'timers', 'music',
     ]); // Fallback if matrix is unavailable.
 
     let _pageId = 'dashboard';
