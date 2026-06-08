@@ -52,12 +52,11 @@
             ['Kind', props.kind || 'page'],
             ['Actions', (props.actions || []).join(', ')]
         ].map(pair => '<div class="sky-field"><span>' + escapeHtml(pair[0]) + '</span><strong>' + escapeHtml(pair[1]) + '</strong></div>').join('');
-        return cardFrame(Object.assign({
-            actions: [
-                { label: 'Open page', route: props.route, type: 'open' },
-                { label: 'Show related settings', query: props.title + ' settings' }
-            ]
-        }, props), '<div class="sky-card-body">' + escapeHtml(props.summary || '') + '</div><div class="sky-card-grid">' + fields + '</div>', { wide: true });
+        var cardActions = [
+            { label: 'Open page', route: props.route, type: 'open' },
+            { label: 'Show related settings', query: props.title + ' settings' }
+        ];
+        return cardFrame(Object.assign({}, props, { actions: cardActions }), '<div class="sky-card-body">' + escapeHtml(props.summary || '') + '</div><div class="sky-card-grid">' + fields + '</div>', { wide: true });
     }
 
     function renderSetting(props) {
@@ -68,13 +67,11 @@
             ['Domain', props.domain || 'settings'],
             ['Section', props.id || '']
         ].map(pair => '<div class="sky-field"><span>' + escapeHtml(pair[0]) + '</span><strong>' + escapeHtml(pair[1]) + '</strong></div>').join('');
-        return cardFrame(Object.assign({
-            status: risk,
-            actions: [
-                { label: 'Open settings', route: props.route, type: 'open' },
-                { label: changeLabel, query: 'change ' + props.title, kind: risk === 'critical' ? 'warn' : 'normal' }
-            ]
-        }, props), '<div class="sky-card-body">' + escapeHtml(props.summary || '') + '</div><div class="sky-card-grid">' + fields + '</div>', { wide: true });
+        var settingActions = [
+            { label: 'Open settings', route: props.route, type: 'open' },
+            { label: changeLabel, query: 'change ' + props.title, kind: risk === 'critical' ? 'warn' : 'normal' }
+        ];
+        return cardFrame(Object.assign({ status: risk }, props, { actions: settingActions }), '<div class="sky-card-body">' + escapeHtml(props.summary || '') + '</div><div class="sky-card-grid">' + fields + '</div>', { wide: true });
     }
 
     function renderPageGrid(props) {

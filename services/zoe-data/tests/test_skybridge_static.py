@@ -77,6 +77,13 @@ def test_skybridge_voice_normalizes_both_transports():
     assert "this.mediaRecorder.onstop = null" in voice
 
 
+def test_skybridge_renderer_keeps_button_actions_functional():
+    renderer = read(UI / "js" / "skybridge-renderer.js")
+
+    assert "Object.assign({}, props, { actions: cardActions })" in renderer
+    assert "Object.assign({ status: risk }, props, { actions: settingActions })" in renderer
+
+
 def test_skybridge_uses_backend_status_contract():
     app = read(UI / "js" / "skybridge.js")
 
