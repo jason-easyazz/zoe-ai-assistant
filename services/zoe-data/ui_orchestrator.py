@@ -79,6 +79,8 @@ async def enqueue_ui_action(
     chat_session_id: Optional[str] = None,
     idempotency_key: Optional[str] = None,
     confirmation_token: Optional[str] = None,
+    commit: bool = True,
+    broadcast: bool = True,
 ) -> Dict[str, Any]:
     if action_type not in ALLOWED_ACTION_TYPES:
         raise ValueError(f"Unsupported action type: {action_type}")
@@ -161,7 +163,8 @@ async def enqueue_ui_action(
             "requires_confirmation": bool(requires_confirmation),
         },
     )
-    await db.commit()
+    if commit:
+        await db.commit()
 
     message = {
         "action_id": action_id,
@@ -174,8 +177,9 @@ async def enqueue_ui_action(
         "requires_confirmation": bool(requires_confirmation),
         "confirmation_token": confirmation_token if requires_confirmation else None,
     }
-    if panel_id:
-        await broadcaster.broadcast_to_panel(panel_id, "ui_action", message)
-    else:
-        await broadcaster.broadcast("all", "ui_action", message)
+    if broadcast:
+        if panel_id:
+            await broadcaster.broadcast_to_panel(panel_id, "ui_action", message)
+        else:
+            await broadcaster.broadcast("all", "ui_action", message)
     return message
