@@ -659,8 +659,8 @@ _AUTOPILOTS = [
     },
     {
         "title": "Platform Health Check",
-        "agent": "Hermes",
-        "execution_mode": "create_issue",
+        "agent": "Zoe Core",
+        "execution_mode": "run_only",
         "cron": "0 6 * * *",
         "issue_title_template": "Platform Health — {date}",
     },

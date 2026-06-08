@@ -59,6 +59,17 @@ def test_should_create_tracker_issue_allowlist():
                 assert mas._should_create_tracker_issue("Platform Health Check", "create_issue", fn) is True
 
 
+def test_platform_health_never_creates_wrapper_issue():
+    with patch.object(mas, "_is_configured", lambda: True):
+        with patch.object(mas, "_CREATE_ISSUES", True):
+            with patch.object(mas, "_CREATE_ISSUES_FOR", {"platform health check"}):
+                assert mas._should_create_tracker_issue(
+                    "Platform Health Check",
+                    "create_issue",
+                    mas._run_platform_health_check,
+                ) is False
+
+
 @pytest.mark.asyncio
 async def test_fire_autopilot_job_skips_create_when_disabled(monkeypatch):
     posts: list = []

@@ -235,7 +235,7 @@ async def _run_platform_health_check() -> None:
     script = Path(
         os.environ.get(
             "ZOE_HEALTH_CHECK_SCRIPT",
-            str(Path.home() / "bin" / "zoe-health-check.sh"),
+            str(Path.home() / "assistant" / "scripts" / "maintenance" / "platform_health_check.sh"),
         )
     )
     if not script.exists():
@@ -278,8 +278,7 @@ async def _run_platform_health_check() -> None:
                     f"```\n{tail}\n```"
                 ),
                 priority="high",
-                assignee_id=_hermes_agent_id(),
-                assignee_type="agent",
+                status="backlog",
             )
         except Exception as exc:
             logger.warning("autopilot: failed to create health failure issue: %s", exc)
@@ -339,6 +338,8 @@ def _should_create_tracker_issue(autopilot_title: str, mode: str, task_fn) -> bo
     if mode != "create_issue" or not _is_configured():
         return False
     title_lower = autopilot_title.lower().strip()
+    if task_fn is _run_platform_health_check:
+        return False
     if title_lower in _CREATE_ISSUES_FOR:
         return True
     if _CREATE_ISSUES:

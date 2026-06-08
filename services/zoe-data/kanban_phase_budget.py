@@ -21,6 +21,7 @@ _TOOL_DEFAULTS = {
     "closeout": 12,
     "retro": 8,
 }
+_TERMINAL_GRACE_DEFAULT = 2
 _RUNTIME_DEFAULTS = {
     "scout": 300,
     "implement": 1800,
@@ -156,10 +157,18 @@ def phase_budget_reason(
     started_ts = _started_timestamp(detail)
     tool_steps = tool_step_count(task_id, since=started_ts)
     tool_limit = _limit(phase, "tools")
-    if tool_steps > tool_limit:
+    try:
+        terminal_grace = max(
+            0,
+            int(os.environ.get("ZOE_KANBAN_TERMINAL_TOOL_GRACE", _TERMINAL_GRACE_DEFAULT)),
+        )
+    except ValueError:
+        terminal_grace = _TERMINAL_GRACE_DEFAULT
+    hard_limit = tool_limit + terminal_grace
+    if tool_steps > hard_limit:
         return (
             f"BLOCKER={phase.upper()}_BUDGET: code-enforced tool budget exceeded "
-            f"(steps={tool_steps}, limit={tool_limit})"
+            f"(steps={tool_steps}, guidance_limit={tool_limit}, hard_limit={hard_limit})"
         )
 
     if started_ts is None:

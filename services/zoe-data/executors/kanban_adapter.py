@@ -374,8 +374,11 @@ class KanbanAdapter:
                 "and IMPLEMENTATION_REQUIRED=true|false.\n"
                 "- Set IMPLEMENTATION_REQUIRED=false only when the acceptance criteria are already "
                 "satisfied by identified merged changes; Zoe will route directly to verification.\n"
-                "- If you cannot finish context gathering within 8 tool/model steps, call `kanban_block`"
-                " with BLOCKER=SCOUT_BUDGET and the missing information instead of timing out.\n"
+                "- Finish context gathering within 8 tool/model steps. Reserve the final 2 calls for"
+                " `kanban_complete` or `kanban_block`; do not spend that terminal-call headroom on"
+                " more exploration.\n"
+                "- If the answer is still unclear at step 8, call `kanban_block` with"
+                " BLOCKER=SCOUT_BUDGET and the missing information instead of exploring further.\n"
                 "- TERMINAL PROTOCOL: end with `kanban_complete` or `kanban_block` (no silent exit)."
             )
         if phase == "implement":

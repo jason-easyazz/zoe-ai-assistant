@@ -84,6 +84,21 @@ def select_next_approved_issue(
     hermes_agent_id: str,
 ) -> tuple[dict[str, Any] | None, list[str]]:
     """Return one approved backlog ticket, preserving phased predecessor order."""
+    blocked_approved = []
+    for issue in all_issues:
+        if issue.get("status") != "blocked":
+            continue
+        metadata = parse_ticket_block(issue.get("description") or "")
+        if metadata.get("dispatch_approved") is True:
+            blocked_approved.append(
+                str(issue.get("identifier") or issue.get("id") or "unknown")
+            )
+    if blocked_approved:
+        return None, [
+            "single ticket lane halted by approved blocked ticket(s): "
+            + ", ".join(sorted(blocked_approved))
+        ]
+
     by_sequence: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for issue in all_issues:
         parsed = parse_phased_title(issue.get("title") or "")
