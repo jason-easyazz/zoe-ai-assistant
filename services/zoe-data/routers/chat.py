@@ -90,13 +90,38 @@ def _intent_card_data(intent) -> dict:
             logger.debug("calendar_show card contract build failed: %s", exc)
         return payload
     if name == "list_add":
-        return {
+        payload = {
             "type": "list",
             "data": {
                 "list_name": slots.get("list_name") or "List",
                 "item": slots.get("item") or slots.get("text") or "",
             },
         }
+        try:
+            from card_service import card_service
+
+            payload["card"] = card_service.build_shopping_item_editor_card(slots)
+        except Exception as exc:
+            logger.debug("list_add card contract build failed: %s", exc)
+        return payload
+    if name == "list_show":
+        items = slots.get("items") or []
+        if items and not isinstance(items, list):
+            items = [items]
+        payload = {
+            "type": "list",
+            "data": {
+                "list_name": slots.get("list_name") or "Shopping",
+                "items": items,
+            },
+        }
+        try:
+            from card_service import card_service
+
+            payload["card"] = card_service.build_shopping_list_card(slots)
+        except Exception as exc:
+            logger.debug("list_show card contract build failed: %s", exc)
+        return payload
     if name == "timer_create":
         return {
             "type": "timer",

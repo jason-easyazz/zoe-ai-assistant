@@ -100,6 +100,58 @@ def build_calendar_event_editor_content(slots: dict[str, Any] | None = None) -> 
     }
 
 
+def _list_items(slots: dict[str, Any]) -> list[str]:
+    raw_items = slots.get("items")
+    if isinstance(raw_items, list):
+        items = raw_items
+    elif raw_items:
+        items = [raw_items]
+    else:
+        item = slots.get("item") or slots.get("text")
+        items = [item] if item else []
+    return [_text(item) for item in items if _text(item)]
+
+
+def build_shopping_list_content(slots: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Build canonical content for a shopping/list view card."""
+    slots = slots or {}
+    list_name = _text(slots.get("list_name") or slots.get("list_type"), "Shopping")
+    items = _list_items(slots)
+    return {
+        "title": f"{list_name} List",
+        "list_name": list_name,
+        "items": items,
+        "item_count": len(items),
+        "view": "list",
+        "source": "list_show",
+    }
+
+
+def build_shopping_item_editor_content(slots: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Build canonical content for a shopping/list item editor card."""
+    slots = slots or {}
+    list_name = _text(slots.get("list_name") or slots.get("list_type"), "Shopping")
+    item = _text(slots.get("item") or slots.get("text"))
+    return {
+        "form_id": "shopping_item_editor",
+        "title": "Add List Item",
+        "fields": [
+            {"name": "item", "label": "Item", "type": "text", "value": item},
+            {"name": "list_name", "label": "List", "type": "text", "value": list_name},
+            {"name": "quantity", "label": "Quantity", "type": "text", "value": _text(slots.get("quantity"))},
+            {"name": "notes", "label": "Notes", "type": "textarea", "value": _text(slots.get("notes"))},
+        ],
+        "values": {
+            "item": item,
+            "list_name": list_name,
+            "list_type": _text(slots.get("list_type"), "shopping"),
+            "quantity": _text(slots.get("quantity")),
+            "notes": _text(slots.get("notes")),
+        },
+        "source": "list_add",
+    }
+
+
 class CardService:
     """Service layer for Zoe card operations."""
 
@@ -221,6 +273,21 @@ class CardService:
         )
 
 
+    def build_shopping_list_card(self, slots: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self.build_card(
+            CardType.GENERIC.value,
+            build_shopping_list_content(slots),
+            producer="zoe-shopping",
+        )
+
+    def build_shopping_item_editor_card(self, slots: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self.build_card(
+            CardType.ACTION_FORM.value,
+            build_shopping_item_editor_content(slots),
+            producer="zoe-shopping",
+        )
+
+
 
 # Global singleton instance
 card_service = CardService()
@@ -228,3 +295,5 @@ card_service.register_domain_builder("calendar_timeline", card_service.build_cal
 card_service.register_domain_builder("calendar_event_editor", card_service.build_calendar_event_editor_card)
 card_service.register_domain_builder("weather_current", card_service.build_weather_current_card)
 card_service.register_domain_builder("weather_forecast", card_service.build_weather_forecast_card)
+card_service.register_domain_builder("shopping_list", card_service.build_shopping_list_card)
+card_service.register_domain_builder("shopping_item_editor", card_service.build_shopping_item_editor_card)
