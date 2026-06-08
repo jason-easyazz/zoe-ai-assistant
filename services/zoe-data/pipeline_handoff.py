@@ -562,7 +562,11 @@ def evidence_from_handoff(
             if review_item:
                 items.append(review_item)
 
-    ticket_pr_url = _pr_url_from_ticket_block(detail)
+    ticket_pr_url = (
+        _pr_url_from_ticket_block(detail)
+        if phase in {"implement", "verify", "closeout"}
+        else ""
+    )
 
     if phase == "closeout":
         summary_raw = fields.get("SUMMARY") or fields.get("CLOSEOUT") or ""

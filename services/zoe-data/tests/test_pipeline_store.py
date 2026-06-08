@@ -395,7 +395,13 @@ async def test_sync_pipeline_advances_with_live_run_metadata_recovery(isolated_s
 
     assert state.phase == "verify"
     assert state.status == "todo"
-    assert any(item.kind == "tool" and item.passed is True for item in state.evidence)
+    assert "zoe-engineering" in store._PHASE_SKILLS["implement"]
+    assert any(
+        item.kind == "tool"
+        and item.passed is True
+        and item.metadata.get("source") == "skills"
+        for item in state.evidence
+    )
     assert any(item.kind == "test" and item.passed is True for item in state.evidence)
     assert any(
         item.kind == "pr"
