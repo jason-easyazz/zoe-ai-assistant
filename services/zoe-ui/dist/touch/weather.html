@@ -932,6 +932,8 @@
 
     async function fetchWeather() {
         try {
+            const fc = document.getElementById('forecastSection');
+            if (fc) fc.style.opacity = '';
             const [curRes, fcRes] = await Promise.all([
                 fetch('/api/weather/current'),
                 fetch('/api/weather/forecast'),
@@ -943,9 +945,12 @@
                 else document.getElementById('heroSection').innerHTML = `
                     <div class="weather-error"><div class="err-icon">🌐</div><div>Weather data unavailable</div></div>`;
             } else if (curRes.status === 401 || curRes.status === 403) {
-                // Session expired — redirect to login (preserve destination).
-                try { sessionStorage.setItem('zoe_redirect_after_login', window.location.pathname + window.location.search); } catch (_) {}
-                window.location.assign('/touch/index.html');
+                document.getElementById('heroSection').innerHTML = `
+                    <div class="weather-error">
+                        <div class="err-icon">🔒</div>
+                        <div>Sign in to view weather</div>
+                    </div>`;
+                if (fc) fc.style.opacity = '0.35';
                 return;
             }
             if (fcRes.ok) {
