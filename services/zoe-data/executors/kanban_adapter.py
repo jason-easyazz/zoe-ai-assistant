@@ -708,25 +708,41 @@ class KanbanAdapter:
             }
 
         phase = state.phase if state is not None else ("implement" if _skip_scout(issue) else "scout")
+        existing_phases = await self._phases_for_ref(external_ref)
         plan = _chain_for_issue(issue)
         phase_order = [p for p, _, _ in plan]
         entry = next((plan_entry for plan_entry in plan if plan_entry[0] == phase), None)
-        # Only adjust not-yet-started phases. A stale running phase may still
-        # have an active worker/effect, so leave it blocked for operator review.
-        if entry is None and state is not None and state.status == "todo" and phase_order:
+        current_row = existing_phases.get(phase) or {}
+        current_status = (current_row.get("status") or "").lower()
+        can_adjust_stale_phase = bool(
+            state is not None
+            and phase_order
+            and (
+                state.status == "todo"
+                or (state.status == "running" and current_status in _TERMINAL_KANBAN_STATUSES)
+            )
+        )
+        # Only adjust phases with no active effect. A stale running journal is
+        # reset only when its Kanban row is terminal; active rows stay blocked
+        # for operator review.
+        if entry is None and can_adjust_stale_phase:
             previous_phase = phase
+            previous_status = state.status
             phase = phase_order[0]
             entry = next((plan_entry for plan_entry in plan if plan_entry[0] == phase), None)
             try:
-                state = state.model_copy(update={"phase": phase})
+                state = state.model_copy(update={"phase": phase, "status": "todo"})
                 state = await asyncio.to_thread(
                     save_state,
                     state,
                     event="plan_adjusted",
                     extra={
                         "from_phase": previous_phase,
+                        "from_status": previous_status,
                         "to_phase": phase,
-                        "reason": "current issue plan no longer includes journal phase",
+                        "to_status": "todo",
+                        "terminal_kanban_status": current_status or None,
+                        "reason": "current issue plan no longer includes inactive journal phase",
                     },
                 )
             except Exception as exc:
@@ -747,7 +763,6 @@ class KanbanAdapter:
                 "mode": mode,
             }
 
-        existing_phases = await self._phases_for_ref(external_ref)
         existing_row = existing_phases.get(phase)
         if existing_row and existing_row.get("id"):
             return {
