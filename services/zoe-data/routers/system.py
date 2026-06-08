@@ -1004,7 +1004,7 @@ async def list_engineering_workflow_tasks(
                 continue
             if (issue.get("title") or "").lower().startswith("autopilot:"):
                 continue
-            chain = await poll_ref(f"multica:{issue.get('id')}")
+            chain = await poll_ref(f"multica:{issue.get('id')}", issue=issue)
             tasks.append({
                 "issue_id": issue.get("id"),
                 "identifier": issue.get("identifier"),
@@ -1404,7 +1404,7 @@ async def get_agent_board(user: dict = Depends(get_current_user)):  # noqa: ARG0
 
         async def enrich_chain(issue: dict) -> None:
             try:
-                chain = await poll_ref(f"multica:{issue.get('id')}")
+                chain = await poll_ref(f"multica:{issue.get('id')}", issue=issue)
             except Exception as exc:
                 issue["chain_error"] = str(exc)
                 return
