@@ -2196,9 +2196,11 @@ def test_implement_body_documents_existing_pr_revision_fast_path_before_new_pr_c
 
     assert "EXISTING PR REVISION FAST PATH" in body
     assert "Do not rediscover the original fix and do not create a new PR" in body
+    assert "do not read, grep, or edit files until the existing PR checkout below succeeds" in body
     assert "/opt/zoe/greptile-mcp pr-comments --unaddressed-only" in body
     assert "may exit nonzero when it prints unresolved comments" in body
-    assert 'branch=pr-<number>-$(basename "$PWD")' in body
+    assert "branch=pr-<number>-$(date +%s)-$$" in body
+    assert "unique slash-free local copy" in body
     assert "git checkout -B $branch" in body
     assert "git fetch origin pull/<number>/head" in body
     assert "git reset --hard FETCH_HEAD" in body
@@ -2207,7 +2209,10 @@ def test_implement_body_documents_existing_pr_revision_fast_path_before_new_pr_c
     assert "report the SAME PR_URL" in body
     assert "PYTHONPATH=services/zoe-data python3 -m pytest" in body
     assert "patch the module variable with monkeypatch/setattr after import" in body
+    assert "BLOCKER=PR_REVISION_CHECKOUT_FAILED" in body
+    assert "do not inspect or edit files on the original worktree branch" in body
     assert "BLOCKER=PR_REVISION_BLOCKED" in body
+    assert body.index("BLOCKER=PR_REVISION_CHECKOUT_FAILED") < body.index("BLOCKER=PR_REVISION_BLOCKED")
     assert body.index("EXISTING PR REVISION FAST PATH") < body.index("open ONE small PR")
 
     generic_body = ka.KanbanAdapter()._build_body(
