@@ -435,6 +435,24 @@ def test_infer_outcome_blocked_verify_loops():
     )
 
 
+def test_later_empty_blocker_clears_older_blocked_run():
+    detail = {
+        "latest_summary": "PR_URL=https://github.com/o/r/pull/213\nBLOCKER=\nTESTS=validate_structure.py passed",
+        "runs": [
+            {
+                "status": "blocked",
+                "summary": "BLOCKER=review-required: PR opened but worker blocked",
+            },
+            {
+                "status": "completed",
+                "summary": "PR_URL=https://github.com/o/r/pull/213\nBLOCKER=\nTESTS=validate_structure.py passed",
+            },
+        ],
+    }
+
+    assert infer_outcome("implement", "done", detail) == "complete"
+
+
 def test_infer_outcome_done_without_blocker_completes():
     assert infer_outcome("review", "done", {"latest_summary": "SUMMARY=approved", "comments": []}) == "complete"
 

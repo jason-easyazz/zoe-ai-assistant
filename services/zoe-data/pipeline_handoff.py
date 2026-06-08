@@ -84,7 +84,7 @@ def _parse_kv_fields(text: str) -> dict[str, str]:
     out: dict[str, str] = {}
     for match in _KV_RE.finditer(text or ""):
         key, value = match.group(1), match.group(2).strip()
-        if value:
+        if value or key == "BLOCKER":
             out[key] = value
     return out
 
