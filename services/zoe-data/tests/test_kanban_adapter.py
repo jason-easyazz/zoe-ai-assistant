@@ -1960,6 +1960,18 @@ def test_implement_body_omits_code_audit_fast_path_for_non_code_audit():
     assert "CODE-AUDIT FAST PATH" not in body
 
 
+def test_implement_body_always_completes_after_pr_creation_even_for_security_review():
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {"id": "uuid-generic", "identifier": "ZOE-GEN", "title": "Generic feature", "description": "Add a small endpoint"},
+        "ZOE-GEN",
+    )
+
+    assert "Security-sensitive changes still complete implement after the PR is opened" in body
+    assert "Do not call `kanban_block` merely because a human/security reviewer should inspect the PR" in body
+    assert "CODE-AUDIT FAST PATH" not in body
+
+
 def test_implement_body_puts_bounded_fast_paths_before_graphify():
     body = ka.KanbanAdapter()._build_body(
         "implement",

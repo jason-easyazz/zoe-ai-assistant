@@ -532,6 +532,8 @@ class KanbanAdapter:
                 " `kanban_complete(summary=..., metadata={...})` OR `kanban_block(reason=...)`."
                 " Exiting without either is a protocol violation and the dispatcher will retry forever.\n"
                 "- Success: `kanban_complete` after push+PR with metadata including PR_URL, TESTS, SUMMARY.\n"
+                "  Security-sensitive changes still complete implement after the PR is opened; PR review/Greptile is the review gate.\n"
+                "  Do not call `kanban_block` merely because a human/security reviewer should inspect the PR.\n"
                 "- Failure/stuck: `kanban_block` with a clear reason (prefix BLOCKER= when applicable).\n\n"
                 "Summary text should still include:\n"
                 "PR_URL=<url or blank>\nBLOCKER=<reason or blank>\nTESTS=<checks run>\nSUMMARY=<short>\n"
