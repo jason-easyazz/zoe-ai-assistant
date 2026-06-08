@@ -163,6 +163,98 @@ def _blocked_multica_chain_reason(chain: dict) -> str:
     return str(blocker)
 
 
+def _blocker_followup_marker(phase: str, blocker: str) -> str | None:
+    """Return the harness blocker class that should create a follow-up ticket."""
+    if phase != "implement":
+        return None
+    upper = blocker.upper()
+    for marker in ("IMPLEMENT_BUDGET", "PROTOCOL_VIOLATION"):
+        if marker in upper:
+            return marker
+    return None
+
+
+async def _ensure_blocker_followup_ticket(client, issue_id: str, chain: dict, blocker: str) -> dict:
+    """Create or reuse one harness-fix follow-up for implement budget/protocol blocks."""
+    pipeline = chain.get("pipeline") or {}
+    phase = str(pipeline.get("phase") or "implement")
+    marker = _blocker_followup_marker(phase, blocker)
+    if marker is None:
+        return {}
+
+    try:
+        from multica_ticket_contract import (
+            append_child_id,
+            describe_ticket,
+            parse_ticket_block,
+        )
+
+        parent = await client.get_issue(issue_id)
+        if not parent.get("id"):
+            return {}
+        parent_ident = parent.get("identifier") or issue_id
+        for status in ("backlog", "todo", "in_progress", "blocked", "in_review"):
+            for candidate in await client.list_issues(status=status, limit=1000) or []:
+                metadata = parse_ticket_block(candidate.get("description") or "")
+                if (
+                    metadata.get("source") == "engineering_blocker_followup"
+                    and str(metadata.get("parent_issue_id") or "") == str(issue_id)
+                    and metadata.get("source_blocker") == marker
+                ):
+                    return candidate
+
+        description = describe_ticket(
+            (
+                f"Follow up from {parent_ident}: the engineering driver blocked in "
+                f"implement with {marker}. Fix the harness so this class of block "
+                "is surfaced or prevented without manual product-ticket rescue."
+            ),
+            zoe_kind="harness_fix",
+            evidence_profile="code",
+            engineering_mode="interactive",
+            acceptance_criteria=[
+                f"{marker} implement blockers create or surface exactly one harness follow-up",
+                "Blocked source ticket remains dispatch_approved=false",
+                "Repeated poll cycles do not create duplicate follow-ups",
+                "Focused tests cover the blocker path",
+                "PR URL is recorded for code changes",
+            ],
+            evidence_expectations=["Focused tests", "Greptile 5/5", "PR URL"],
+            source="engineering_blocker_followup",
+            parent_issue_id=issue_id,
+        )
+        metadata = parse_ticket_block(description)
+        metadata["source_blocker"] = marker
+        metadata["source_block_reason"] = blocker
+        from multica_ticket_contract import write_ticket_block
+
+        issue = await client.create_issue(
+            title=f"Harness: follow up {marker} for {parent_ident}"[:140],
+            description=write_ticket_block(description, metadata),
+            priority="medium",
+            status="backlog",
+            assignee_id=parent.get("assignee_id"),
+            assignee_type=parent.get("assignee_type") or "agent",
+            project_id=parent.get("project_id"),
+        )
+        child_id = str(issue.get("id") or "")
+        if child_id:
+            await client.attach_label(child_id, "harness-fix")
+            await client.attach_label(child_id, marker.lower().replace("_", "-"))
+            await client.update_issue(
+                issue_id,
+                description=append_child_id(parent.get("description") or "", child_id),
+            )
+            await client.append_issue_note(
+                issue_id,
+                f"Harness follow-up created for {marker}: {issue.get('identifier') or child_id}",
+            )
+        return issue
+    except Exception as exc:
+        logger.warning("multica_poll: blocker follow-up creation failed for %s: %s", issue_id, exc)
+        return {}
+
+
 async def _record_blocked_multica_chain(client, issue_id: str, chain: dict) -> str:
     """Persist operator-visible block metadata for a stopped Multica chain."""
     pipeline = chain.get("pipeline") or {}
@@ -177,6 +269,7 @@ async def _record_blocked_multica_chain(client, issue_id: str, chain: dict) -> s
         status="blocked",
         dispatch_approved=False,
     )
+    await _ensure_blocker_followup_ticket(client, issue_id, chain, blocker)
     return blocker
 
 async def _run_memory_capture_startup_probe() -> None:
