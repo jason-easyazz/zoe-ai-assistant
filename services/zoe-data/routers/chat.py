@@ -93,7 +93,7 @@ def _intent_card_data(intent) -> dict:
         payload = {
             "type": "list",
             "data": {
-                "list_name": slots.get("list_name") or "List",
+                "list_name": slots.get("list_name") or slots.get("list_type") or "Shopping",
                 "item": slots.get("item") or slots.get("text") or "",
             },
         }
@@ -105,9 +105,15 @@ def _intent_card_data(intent) -> dict:
             logger.debug("list_add card contract build failed: %s", exc)
         return payload
     if name == "list_show":
-        items = slots.get("items") or []
-        if items and not isinstance(items, list):
-            items = [items]
+        raw_items = slots.get("items")
+        if isinstance(raw_items, list):
+            items = raw_items
+        elif raw_items:
+            items = [raw_items]
+        elif slots.get("item") or slots.get("text"):
+            items = [slots.get("item") or slots.get("text")]
+        else:
+            items = []
         payload = {
             "type": "list",
             "data": {

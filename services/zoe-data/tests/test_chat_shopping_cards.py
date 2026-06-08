@@ -24,3 +24,17 @@ def test_list_add_payload_keeps_compat_shape_and_adds_editor_contract():
     assert payload["card"]["content"]["form_id"] == "shopping_item_editor"
     assert payload["card"]["content"]["values"]["item"] == "milk"
     assert payload["card"]["content"]["values"]["list_name"] == "Groceries"
+
+
+def test_list_add_payload_defaults_match_contract():
+    payload = _intent_card_data(Intent("list_add", {"item": "milk"}))
+
+    assert payload["data"]["list_name"] == "Shopping"
+    assert payload["card"]["content"]["values"]["list_name"] == "Shopping"
+
+
+def test_list_show_payload_singular_item_matches_contract():
+    payload = _intent_card_data(Intent("list_show", {"item": "milk"}))
+
+    assert payload["data"]["items"] == ["milk"]
+    assert payload["card"]["content"]["items"] == ["milk"]
