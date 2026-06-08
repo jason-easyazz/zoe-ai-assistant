@@ -178,6 +178,79 @@ async def test_dispatch_does_not_parent_recovered_phase_to_terminal_like_prior_r
 
 
 @pytest.mark.asyncio
+async def test_dispatch_resumed_todo_archives_blocked_current_phase_before_retry():
+    from pipeline_evidence import PipelineState
+    from pipeline_store import save_state
+
+    state = PipelineState(
+        task_ref="multica:uuid-retry-current",
+        phase="implement",
+        status="todo",
+        attempts={"implement": 1},
+    )
+    save_state(state, event="operator_resumed")
+    rows = [_row("implement", "blocked", chain_version="v4", issue_id="uuid-retry-current")]
+    a = _FakeAdapter(list_rows=rows)
+    result = await a.dispatch(
+        {
+            "id": "uuid-retry-current",
+            "identifier": "ZOE-RETRY",
+            "title": "Harness: retry current phase",
+            "metadata": {"zoe_kind": "harness_fix", "acceptance_criteria": ["retry"]},
+        }
+    )
+
+    archives = [c for c in a.calls if c[0] == "archive"]
+    creates = [c for c in a.calls if c[0] == "create"]
+    assert archives == [["archive", "t_implement"]]
+    assert len(creates) == 1
+    assert creates[0][creates[0].index("--idempotency-key") + 1] == "multica:uuid-retry-current:implement"
+    assert result["ok"] is True
+    assert result["phase"] == "implement"
+    assert result["created"] == ["implement"]
+    assert result["chain"] == {"implement": "t_implement"}
+
+
+
+@pytest.mark.asyncio
+async def test_dispatch_resumed_todo_reports_archive_failure_without_create():
+    from pipeline_evidence import PipelineState
+    from pipeline_store import save_state
+
+    class ArchiveFailAdapter(_FakeAdapter):
+        async def _run(self, args, *, expect_json=False):
+            if args[0] == "archive":
+                self.calls.append(args)
+                raise ka.KanbanCLIError("archive failed")
+            return await super()._run(args, expect_json=expect_json)
+
+    state = PipelineState(
+        task_ref="multica:uuid-archive-fail",
+        phase="implement",
+        status="todo",
+        attempts={"implement": 1},
+    )
+    save_state(state, event="operator_resumed")
+    rows = [_row("implement", "blocked", chain_version="v4", issue_id="uuid-archive-fail")]
+    a = ArchiveFailAdapter(list_rows=rows)
+    result = await a.dispatch(
+        {
+            "id": "uuid-archive-fail",
+            "identifier": "ZOE-ARCHIVE",
+            "title": "Harness: retry current phase",
+            "metadata": {"zoe_kind": "harness_fix", "acceptance_criteria": ["retry"]},
+        }
+    )
+
+    assert [c for c in a.calls if c[0] == "archive"] == [["archive", "t_implement"]]
+    assert [c for c in a.calls if c[0] == "create"] == []
+    assert result["ok"] is False
+    assert result["reason"] == "stale blocked phase archive failed"
+    assert result["phase"] == "implement"
+
+
+
+@pytest.mark.asyncio
 async def test_dispatch_after_scout_evidence_creates_next_phase():
     from pipeline_store import bootstrap_state, save_state
     from pipeline_evidence import EvidenceItem, transition, with_evidence
@@ -1172,6 +1245,72 @@ async def test_poll_v4_running_pipeline_clears_stale_recovered_blocker():
     assert out["blocker"] is None
     assert out["pipeline"]["phase"] == "verify"
     assert out["pipeline"]["status"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_poll_v4_resumed_todo_ignores_stale_blocked_current_phase():
+    from pipeline_evidence import PipelineState
+    from pipeline_store import save_state
+
+    state = PipelineState(
+        task_ref="multica:uuid-resume-current",
+        phase="implement",
+        status="todo",
+        attempts={"implement": 1},
+    )
+    save_state(state, event="operator_resumed")
+    rows = [_row("implement", "blocked", chain_version="v4", issue_id="uuid-resume-current")]
+    issue = {
+        "id": "uuid-resume-current",
+        "identifier": "ZOE-RESUME",
+        "title": "Harness: retry current phase",
+        "metadata": {"zoe_kind": "harness_fix", "acceptance_criteria": ["retry"]},
+    }
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:uuid-resume-current", issue=issue)
+
+    assert out["status"] == "partial"
+    assert out["blocker"] is None
+    assert out["phases"] == {}
+    assert out["pipeline"]["phase"] == "implement"
+    assert out["pipeline"]["status"] == "todo"
+    assert out["pipeline"]["stale_executor_phase"] == "implement"
+    assert out["pipeline"]["stale_executor_status"] == "blocked"
+
+
+
+@pytest.mark.asyncio
+async def test_poll_v4_resumed_todo_ignores_stale_blocked_current_phase_with_prior_done():
+    from pipeline_evidence import PipelineState
+    from pipeline_store import save_state
+
+    state = PipelineState(
+        task_ref="multica:uuid-resume-after-scout",
+        phase="implement",
+        status="todo",
+        attempts={"scout": 1, "implement": 1},
+    )
+    save_state(state, event="operator_resumed")
+    rows = [
+        _row("scout", "done", chain_version="v4", issue_id="uuid-resume-after-scout"),
+        _row("implement", "blocked", chain_version="v4", issue_id="uuid-resume-after-scout"),
+    ]
+    issue = {
+        "id": "uuid-resume-after-scout",
+        "identifier": "ZOE-RESUME",
+        "title": "Code ticket after scout",
+    }
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:uuid-resume-after-scout", issue=issue)
+
+    assert out["status"] == "partial"
+    assert out["blocker"] is None
+    assert out["phases"] == {"scout": "done"}
+    assert out["pipeline"]["phase"] == "implement"
+    assert out["pipeline"]["status"] == "todo"
+    assert out["pipeline"]["stale_executor_phase"] == "implement"
+    assert out["pipeline"]["stale_executor_status"] == "blocked"
+
 
 
 @pytest.mark.asyncio
