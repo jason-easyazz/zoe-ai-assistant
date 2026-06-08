@@ -1199,6 +1199,25 @@ def test_audit_no_pr_phases_have_bounded_completion_path():
     assert "- If a code task has no PR" in closeout
 
 
+def test_review_body_has_post_merge_fast_path_and_terminal_marker_guidance():
+    body = ka.KanbanAdapter()._build_body(
+        "review",
+        {
+            "id": "uuid-1",
+            "identifier": "ZOE-9",
+            "title": "Review merged change",
+            "description": "",
+        },
+        "ZOE-9",
+    )
+
+    assert "POST-MERGE FAST PATH" in body
+    assert "GREPTILE/greptile_status=5/5" in body
+    assert "do not explore broad worktrees" in body
+    assert "do not call `--help` after it" in body
+    assert "immediately call `kanban_complete` in the same turn" in body
+
+
 def test_closeout_body_defers_multica_done_until_retro():
     body = ka.KanbanAdapter()._build_body(
         "closeout",
