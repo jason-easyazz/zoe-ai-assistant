@@ -76,8 +76,10 @@
             if (!btn) return;
             const route = btn.dataset.route;
             const query = btn.dataset.query;
-            if (route) {
+            if (route && route.startsWith('/')) {
                 location.href = route;
+            } else if (route) {
+                showError('Unsupported card route');
             } else if (query) {
                 submitCommand(query);
             }

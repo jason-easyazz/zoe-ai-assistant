@@ -80,6 +80,8 @@ def test_skybridge_uses_backend_status_contract():
 
     assert "/api/skybridge/status" in app
     assert "Skybridge runtime ready" in app
+    assert "route && route.startsWith('/')" in app
+    assert "Unsupported card route" in app
 
 
 def test_skybridge_is_registered_in_touch_menu():
