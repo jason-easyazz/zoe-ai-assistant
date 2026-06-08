@@ -933,7 +933,6 @@
     async function fetchWeather() {
         try {
             const fc = document.getElementById('forecastSection');
-            if (fc) fc.style.opacity = '';
             const [curRes, fcRes] = await Promise.all([
                 fetch('/api/weather/current'),
                 fetch('/api/weather/forecast'),
@@ -954,6 +953,7 @@
                 return;
             }
             if (fcRes.ok) {
+                if (fc) fc.style.opacity = '';
                 try { renderForecast(await fcRes.json()); } catch (_) {}
             }
             _lastFetch = Date.now();
