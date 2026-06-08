@@ -8,10 +8,41 @@ import pytest
 class RecordingClient:
     def __init__(self):
         self.calls = []
+        self.issues = {}
+        self.created = []
+        self.labels = []
+        self.notes = []
 
     async def record_progress(self, *args, **kwargs):
         self.calls.append((args, kwargs))
         return {"id": args[0], **kwargs}
+
+    async def get_issue(self, issue_id):
+        return self.issues.get(issue_id, {})
+
+    async def list_issues(self, status=None, *, limit=None):
+        issues = list(self.issues.values()) + list(self.created)
+        if status is not None:
+            issues = [issue for issue in issues if issue.get("status") == status]
+        return issues[:limit] if limit is not None else issues
+
+    async def create_issue(self, **kwargs):
+        issue = {"id": f"child-{len(self.created) + 1}", "identifier": f"ZOE-C{len(self.created) + 1}", **kwargs}
+        self.created.append(issue)
+        return issue
+
+    async def attach_label(self, issue_id, label):
+        self.labels.append((issue_id, label))
+        return {"ok": True}
+
+    async def update_issue(self, issue_id, **kwargs):
+        issue = self.issues.setdefault(issue_id, {"id": issue_id})
+        issue.update(kwargs)
+        return issue
+
+    async def append_issue_note(self, issue_id, note):
+        self.notes.append((issue_id, note))
+        return {"ok": True}
 
 
 def test_poll_dispatches_ready_work_only_when_runtime_pause_is_inactive():
@@ -279,3 +310,192 @@ async def test_record_blocked_multica_chain_falls_back_to_classification_and_def
     assert client.calls[0][1]["dispatch_approved"] is False
     assert client.calls[1][1]["blocker"] == "pipeline blocked at retro"
     assert client.calls[1][1]["dispatch_approved"] is False
+
+
+@pytest.mark.asyncio
+async def test_record_blocked_multica_chain_creates_budget_followup_once():
+    from main import _record_blocked_multica_chain
+    from multica_ticket_contract import parse_ticket_block
+
+    client = RecordingClient()
+    client.issues["issue-budget"] = {
+        "id": "issue-budget",
+        "identifier": "ZOE-1",
+        "description": "Parent prose",
+        "assignee_id": "hermes",
+        "assignee_type": "agent",
+        "project_id": "project-1",
+    }
+    chain = {
+        "pipeline": {
+            "phase": "implement",
+            "block_reason": "IMPLEMENT_BUDGET: code-enforced tool budget exceeded",
+        }
+    }
+
+    blocker = await _record_blocked_multica_chain(client, "issue-budget", chain)
+
+    assert blocker == "IMPLEMENT_BUDGET: code-enforced tool budget exceeded"
+    assert client.calls[0][1]["dispatch_approved"] is False
+    assert len(client.created) == 1
+    created = client.created[0]
+    metadata = parse_ticket_block(created["description"])
+    assert metadata["source"] == "engineering_blocker_followup"
+    assert metadata["source_blocker"] == "IMPLEMENT_BUDGET"
+    assert metadata["parent_issue_id"] == "issue-budget"
+    assert ("child-1", "harness-fix") in client.labels
+    assert ("child-1", "implement-budget") in client.labels
+    parent_metadata = parse_ticket_block(client.issues["issue-budget"]["description"])
+    assert parent_metadata["child_issue_ids"] == ["child-1"]
+    assert client.notes
+
+
+@pytest.mark.asyncio
+async def test_record_blocked_multica_chain_reuses_existing_in_progress_budget_followup():
+    from main import _record_blocked_multica_chain
+    from multica_ticket_contract import describe_ticket, parse_ticket_block, write_ticket_block
+
+    client = RecordingClient()
+    client.issues["issue-budget"] = {
+        "id": "issue-budget",
+        "identifier": "ZOE-1",
+        "description": "Parent prose",
+        "assignee_id": "hermes",
+    }
+    existing_description = describe_ticket(
+        "Existing follow-up",
+        zoe_kind="harness_fix",
+        source="engineering_blocker_followup",
+        parent_issue_id="issue-budget",
+    )
+    existing_metadata = parse_ticket_block(existing_description)
+    existing_metadata["source_blocker"] = "IMPLEMENT_BUDGET"
+    client.issues["existing-child"] = {
+        "id": "existing-child",
+        "identifier": "ZOE-C1",
+        "status": "in_progress",
+        "description": write_ticket_block(existing_description, existing_metadata),
+    }
+
+    await _record_blocked_multica_chain(
+        client,
+        "issue-budget",
+        {
+            "pipeline": {
+                "phase": "implement",
+                "block_reason": "IMPLEMENT_BUDGET: code-enforced tool budget exceeded",
+            }
+        },
+    )
+
+    assert client.created == []
+    assert client.labels == []
+    assert client.notes == []
+
+
+@pytest.mark.asyncio
+async def test_record_blocked_multica_chain_reopens_after_done_budget_followup():
+    from main import _record_blocked_multica_chain
+    from multica_ticket_contract import describe_ticket, parse_ticket_block, write_ticket_block
+
+    client = RecordingClient()
+    client.issues["issue-budget"] = {
+        "id": "issue-budget",
+        "identifier": "ZOE-1",
+        "description": "Parent prose",
+        "assignee_id": "hermes",
+    }
+    existing_description = describe_ticket(
+        "Done follow-up",
+        zoe_kind="harness_fix",
+        source="engineering_blocker_followup",
+        parent_issue_id="issue-budget",
+    )
+    existing_metadata = parse_ticket_block(existing_description)
+    existing_metadata["source_blocker"] = "IMPLEMENT_BUDGET"
+    client.issues["done-child"] = {
+        "id": "done-child",
+        "identifier": "ZOE-C-DONE",
+        "status": "done",
+        "description": write_ticket_block(existing_description, existing_metadata),
+    }
+
+    await _record_blocked_multica_chain(
+        client,
+        "issue-budget",
+        {
+            "pipeline": {
+                "phase": "implement",
+                "block_reason": "IMPLEMENT_BUDGET: code-enforced tool budget exceeded",
+            }
+        },
+    )
+
+    assert len(client.created) == 1
+    metadata = parse_ticket_block(client.created[0]["description"])
+    assert metadata["source_blocker"] == "IMPLEMENT_BUDGET"
+
+
+@pytest.mark.asyncio
+async def test_record_blocked_multica_chain_creates_protocol_followup():
+    from main import _record_blocked_multica_chain
+    from multica_ticket_contract import parse_ticket_block
+
+    client = RecordingClient()
+    client.issues["issue-protocol"] = {
+        "id": "issue-protocol",
+        "identifier": "ZOE-2",
+        "description": "Parent prose",
+        "assignee_id": "hermes",
+        "status": "blocked",
+    }
+
+    await _record_blocked_multica_chain(
+        client,
+        "issue-protocol",
+        {"pipeline": {"phase": "implement", "block_reason": "PROTOCOL_VIOLATION: missing terminal handoff"}},
+    )
+
+    assert len(client.created) == 1
+    metadata = parse_ticket_block(client.created[0]["description"])
+    assert metadata["source_blocker"] == "PROTOCOL_VIOLATION"
+    assert metadata["parent_issue_id"] == "issue-protocol"
+    assert ("child-1", "protocol-violation") in client.labels
+
+
+@pytest.mark.asyncio
+async def test_record_blocked_multica_chain_reuses_existing_protocol_followup():
+    from main import _record_blocked_multica_chain
+    from multica_ticket_contract import describe_ticket, parse_ticket_block, write_ticket_block
+
+    client = RecordingClient()
+    client.issues["issue-protocol"] = {
+        "id": "issue-protocol",
+        "identifier": "ZOE-2",
+        "description": "Parent prose",
+        "assignee_id": "hermes",
+    }
+    existing_description = describe_ticket(
+        "Existing protocol follow-up",
+        zoe_kind="harness_fix",
+        source="engineering_blocker_followup",
+        parent_issue_id="issue-protocol",
+    )
+    existing_metadata = parse_ticket_block(existing_description)
+    existing_metadata["source_blocker"] = "PROTOCOL_VIOLATION"
+    client.issues["existing-protocol-child"] = {
+        "id": "existing-protocol-child",
+        "identifier": "ZOE-C2",
+        "status": "backlog",
+        "description": write_ticket_block(existing_description, existing_metadata),
+    }
+
+    await _record_blocked_multica_chain(
+        client,
+        "issue-protocol",
+        {"pipeline": {"phase": "implement", "block_reason": "PROTOCOL_VIOLATION: missing terminal handoff"}},
+    )
+
+    assert client.created == []
+    assert client.labels == []
+    assert client.notes == []
