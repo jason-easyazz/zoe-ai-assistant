@@ -310,6 +310,57 @@ async def test_dispatch_skips_scout_for_scope_split_child_ticket_block():
 
 
 @pytest.mark.asyncio
+async def test_dispatch_skips_scout_for_harness_fix_with_acceptance_criteria():
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {
+            "id": "uuid-harness-fix",
+            "identifier": "ZOE-5446",
+            "title": "Harness follow-up for implement budget blocks",
+            "description": (
+                "```zoe-ticket\n"
+                '{"zoe_kind":"harness_fix","acceptance_criteria":["idempotent follow-up ticket"]}'
+                "\n```"
+            ),
+        }
+    )
+    assert "scout" not in result["chain"]
+    assert set(result["chain"]) == {"implement"}
+
+
+@pytest.mark.asyncio
+async def test_dispatch_skips_scout_for_harness_fix_metadata_with_acceptance_criteria():
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {
+            "id": "uuid-harness-fix-meta",
+            "identifier": "ZOE-5447",
+            "title": "Harness follow-up for scout budget blocks",
+            "metadata": {
+                "zoe_kind": "harness_fix",
+                "acceptance_criteria": ["budget blockers create one follow-up ticket"],
+            },
+        }
+    )
+    assert "scout" not in result["chain"]
+    assert set(result["chain"]) == {"implement"}
+
+
+@pytest.mark.asyncio
+async def test_dispatch_keeps_scout_for_harness_fix_without_acceptance_criteria():
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {
+            "id": "uuid-harness-fix-no-criteria",
+            "identifier": "ZOE-5448",
+            "title": "Harness follow-up without a concrete contract",
+            "metadata": {"zoe_kind": "harness_fix"},
+        }
+    )
+    assert set(result["chain"]) == {"scout"}
+
+
+@pytest.mark.asyncio
 async def test_dispatch_adjusts_stale_scout_journal_for_scope_split_child():
     from pipeline_evidence import PipelineState
     from pipeline_store import load_latest_state, save_state
