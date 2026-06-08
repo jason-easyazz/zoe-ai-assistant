@@ -54,6 +54,14 @@ def test_invalid_card_type_is_rejected():
         validate_card_contract(_contract(card_type="unknown"))
 
 
+@pytest.mark.parametrize("field", ["producer", "producer_version"])
+def test_producer_fields_require_non_empty_text(field):
+    with pytest.raises(CardContractError, match=field):
+        validate_card_contract(_contract(**{field: None}))
+    with pytest.raises(CardContractError, match=field):
+        validate_card_contract(_contract(**{field: "   "}))
+
+
 def test_content_required_fields_are_per_card_type():
     with pytest.raises(CardContractError, match="fields"):
         validate_card_contract(_contract(content={"form_id": "x", "title": "Missing fields"}))

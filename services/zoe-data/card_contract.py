@@ -103,6 +103,15 @@ def _validate_uuid(value: str) -> str:
         raise CardContractError("card_id must be a UUID string") from exc
 
 
+def _required_text(value: Any, field_name: str) -> str:
+    if value is None:
+        raise CardContractError(f"{field_name} is required")
+    text = str(value).strip()
+    if not text:
+        raise CardContractError(f"{field_name} cannot be empty")
+    return text
+
+
 def _card_type(value: str) -> CardType:
     try:
         return CardType(str(value))
@@ -148,8 +157,8 @@ def validate_card_contract(contract: dict[str, Any], *, supported_major: int | N
         "schema_version": schema_version,
         "card_type": card_type.value,
         "content": _validate_content(card_type, contract["content"]),
-        "producer": str(contract["producer"]),
-        "producer_version": str(contract["producer_version"]),
+        "producer": _required_text(contract["producer"], "producer"),
+        "producer_version": _required_text(contract["producer_version"], "producer_version"),
         "created_at": _parse_created_at(contract["created_at"]).isoformat().replace("+00:00", "Z"),
     }
     if contract.get("idempotency_key") is not None:
