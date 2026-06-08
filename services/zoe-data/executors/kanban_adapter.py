@@ -730,6 +730,30 @@ class KanbanAdapter:
         entry = next((plan_entry for plan_entry in plan if plan_entry[0] == phase), None)
         current_row = existing_phases.get(phase) or {}
         current_status = (current_row.get("status") or "").lower()
+        if state is not None and state.status == "todo" and current_status == "blocked":
+            task_id = current_row.get("id")
+            if task_id:
+                try:
+                    await self._run(["archive", str(task_id)])
+                except KanbanCLIError as exc:
+                    logger.warning(
+                        "kanban_adapter: archive of stale blocked task %s failed for %s: %s",
+                        task_id,
+                        external_ref,
+                        exc,
+                    )
+                    return {
+                        "ok": False,
+                        "external_ref": external_ref,
+                        "reason": "stale blocked phase archive failed",
+                        "phase": phase,
+                        "chain": {},
+                        "created": [],
+                        "mode": mode,
+                    }
+            existing_phases.pop(phase, None)
+            current_row = {}
+            current_status = ""
         can_adjust_stale_phase = bool(
             state is not None
             and phase_order
@@ -905,27 +929,41 @@ class KanbanAdapter:
 
                 existing_state = await asyncio.to_thread(load_latest_state, external_ref)
                 expected_phase_names = {entry[0] for entry in _chain_for_issue(issue)}
-                if (
-                    existing_state is not None
-                    and existing_state.status == "todo"
-                    and existing_state.phase not in expected_phase_names
-                ):
-                    phases = {
-                        phase: row
-                        for phase, row in phases.items()
-                        if phase in expected_phase_names
-                    }
-                    if not phases:
+                if existing_state is not None and existing_state.status == "todo":
+                    stale_executor_phase = None
+                    stale_executor_status = None
+                    if existing_state.phase not in expected_phase_names:
+                        stale_executor_phase = existing_state.phase
+                        phases = {
+                            phase: row
+                            for phase, row in phases.items()
+                            if phase in expected_phase_names
+                        }
+                    else:
+                        current_row = phases.get(str(existing_state.phase or "")) or {}
+                        current_status = (current_row.get("status") or "").lower()
+                        if current_status == "blocked":
+                            stale_executor_phase = str(existing_state.phase or "")
+                            stale_executor_status = current_status
+                            phases = {
+                                phase: row
+                                for phase, row in phases.items()
+                                if phase != stale_executor_phase
+                            }
+                    if stale_executor_phase and (stale_executor_status == "blocked" or not phases):
+                        pipeline = {
+                            **pipeline_summary(existing_state),
+                            "stale_executor_phase": stale_executor_phase,
+                        }
+                        if stale_executor_status:
+                            pipeline["stale_executor_status"] = stale_executor_status
                         return {
                             "found": True,
                             "status": "partial",
-                            "phases": {},
+                            "phases": {phase: (row.get("status") or "") for phase, row in phases.items()},
                             "pr_url": None,
                             "blocker": None,
-                            "pipeline": {
-                                **pipeline_summary(existing_state),
-                                "stale_executor_phase": existing_state.phase,
-                            },
+                            "pipeline": pipeline,
                         }
             except Exception as exc:
                 logger.debug("kanban_adapter: stale phase filter skipped for %s: %s", external_ref, exc)
