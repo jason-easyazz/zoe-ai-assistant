@@ -335,7 +335,12 @@ class KanbanAdapter:
 
     async def _phases_for_ref(self, external_ref: str) -> dict[str, dict]:
         tasks = await self._run(["list", "--json"], expect_json=True)
-        rows = tasks if isinstance(tasks, list) else (tasks or {}).get("tasks", [])
+        if isinstance(tasks, list):
+            rows = tasks
+        elif isinstance(tasks, dict) and isinstance(tasks.get("tasks"), list):
+            rows = tasks["tasks"]
+        else:
+            raise KanbanCLIError(f"kanban list returned malformed JSON: {tasks!r}")
         prefix = f"{external_ref}:"
         phases: dict[str, dict] = {}
         for row in rows:
@@ -719,12 +724,15 @@ class KanbanAdapter:
             and phase_order
             and (
                 state.status == "todo"
-                or (state.status == "running" and current_status in _TERMINAL_KANBAN_STATUSES)
+                or (
+                    state.status == "running"
+                    and (not current_row or current_status in _TERMINAL_KANBAN_STATUSES)
+                )
             )
         )
         # Only adjust phases with no active effect. A stale running journal is
-        # reset only when its Kanban row is terminal; active rows stay blocked
-        # for operator review.
+        # reset only when its Kanban row is absent/terminal; active rows stay
+        # blocked for operator review.
         if entry is None and can_adjust_stale_phase:
             previous_phase = phase
             previous_status = state.status
@@ -741,6 +749,7 @@ class KanbanAdapter:
                         "from_status": previous_status,
                         "to_phase": phase,
                         "to_status": "todo",
+                        "kanban_row_absent": not bool(current_row),
                         "terminal_kanban_status": current_status or None,
                         "reason": "current issue plan no longer includes inactive journal phase",
                     },

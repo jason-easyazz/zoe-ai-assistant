@@ -485,6 +485,42 @@ async def test_dispatch_does_not_adjust_running_scout_journal_with_active_row():
 
 
 @pytest.mark.asyncio
+async def test_dispatch_adjusts_running_scout_journal_when_scout_row_is_missing():
+    from pipeline_evidence import PipelineState
+    from pipeline_store import load_latest_state, save_state
+
+    save_state(
+        PipelineState(
+            task_ref="multica:uuid-child-running-missing-scout",
+            phase="scout",
+            status="running",
+            evidence_profile="code",
+            attempts={"scout": 1},
+        ),
+        event="effect_requested",
+    )
+    a = _FakeAdapter(list_rows=[])
+
+    result = await a.dispatch(
+        {
+            "id": "uuid-child-running-missing-scout",
+            "identifier": "ZOE-5439",
+            "title": "calendar child",
+            "description": """```zoe-ticket
+{"zoe_kind":"child","source":"scope_split","acceptance_criteria":["calendar builder"]}
+```""",
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["phase"] == "implement"
+    assert set(result["chain"]) == {"implement"}
+    latest = load_latest_state("multica:uuid-child-running-missing-scout")
+    assert latest.phase == "implement"
+    assert latest.status == "running"
+
+
+@pytest.mark.asyncio
 async def test_dispatch_keeps_scout_for_under_specified_scope_split_child():
     a = _FakeAdapter()
     result = await a.dispatch(
@@ -787,6 +823,20 @@ async def test_poll_not_found():
     out = await a.poll("multica:uuid-1")
     assert out["found"] is False
     assert out["status"] == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_poll_fails_closed_on_malformed_kanban_list():
+    class _BadListAdapter(_FakeAdapter):
+        async def _run(self, args, *, expect_json=False):
+            self.calls.append(args)
+            if args[0] == "list":
+                return None
+            return await super()._run(args, expect_json=expect_json)
+
+    a = _BadListAdapter()
+    with pytest.raises(ka.KanbanCLIError, match="malformed JSON"):
+        await a.poll("multica:nope")
 
 
 @pytest.mark.asyncio
