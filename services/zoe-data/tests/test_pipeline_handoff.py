@@ -59,6 +59,33 @@ def test_implement_evidence_recovers_live_run_metadata_and_ticket_pr_url():
     )
 
 
+def test_task_body_does_not_create_tool_evidence_without_logs_or_skills():
+    detail = {
+        "latest_summary": "Fixed the requested implementation.",
+        "task": {
+            "body": """Multica issue: ZOE-5354
+PR_URL=https://github.com/jason-easyazz/zoe-ai-assistant/pull/213
+```zoe-ticket
+{"pr_url":"https://github.com/jason-easyazz/zoe-ai-assistant/pull/213"}
+```"""
+        },
+        "runs": [
+            {
+                "metadata": {
+                    "tests_run": 1,
+                    "tests_passed": 1,
+                },
+            }
+        ],
+    }
+
+    items = evidence_from_handoff("implement", detail, skills=())
+
+    assert not any(item.kind == "tool" for item in items)
+    assert any(item.kind == "test" and item.passed is True for item in items)
+    assert any(item.kind == "pr" for item in items)
+
+
 def test_run_metadata_test_evidence_requires_all_tests_to_pass():
     detail = {
         "runs": [

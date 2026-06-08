@@ -46,15 +46,16 @@ _STABLE_BLOCKER_RE = re.compile(
 )
 
 
+def _task_body(detail: dict[str, Any]) -> str:
+    task = detail.get("task") if isinstance(detail.get("task"), dict) else {}
+    return str(task.get("body") or "")
+
+
 def _haystacks(detail: dict[str, Any]) -> list[str]:
     parts: list[str] = []
     summary = detail.get("latest_summary")
     if summary:
         parts.append(summary if isinstance(summary, str) else json.dumps(summary))
-    task = detail.get("task") if isinstance(detail.get("task"), dict) else {}
-    task_body = task.get("body") or ""
-    if task_body:
-        parts.append(str(task_body))
     for comment in detail.get("comments") or []:
         body = comment.get("body") or comment.get("text") or ""
         if body:
@@ -295,8 +296,7 @@ def _test_from_run_metadata(detail: dict[str, Any], *, phase: PipelinePhase) -> 
 
 
 def _pr_url_from_ticket_block(detail: dict[str, Any]) -> str:
-    task = detail.get("task") if isinstance(detail.get("task"), dict) else {}
-    body = str(task.get("body") or "") if isinstance(task, dict) else ""
+    body = _task_body(detail)
     if not body:
         return ""
     try:
@@ -480,6 +480,9 @@ def evidence_from_handoff(
     text_fields: dict[str, str] = {}
     for chunk in _haystacks(detail):
         text_fields.update(_parse_kv_fields(chunk))
+    task_body = _task_body(detail)
+    if task_body:
+        text_fields.update(_parse_kv_fields(task_body))
     fields = dict(text_fields)
     fields.update(_structured_handoff_fields(detail))
 
@@ -559,6 +562,8 @@ def evidence_from_handoff(
             if review_item:
                 items.append(review_item)
 
+    ticket_pr_url = _pr_url_from_ticket_block(detail)
+
     if phase == "closeout":
         summary_raw = fields.get("SUMMARY") or fields.get("CLOSEOUT") or ""
         audit_only = (fields.get("AUDIT_ONLY") or "").strip().lower() in {"1", "true", "yes"}
@@ -568,7 +573,7 @@ def evidence_from_handoff(
             summary_raw
             and "audit" in summary_raw.lower()
             and not (fields.get("PR_URL") or "").strip()
-            and not _pr_url_from_ticket_block(detail)
+            and not ticket_pr_url
         )
         if audit_only or inferred_audit:
             items.append(
@@ -591,7 +596,7 @@ def evidence_from_handoff(
             metadata["follow_up"] = follow_up
         items.append(EvidenceItem(kind="log", summary=retro_raw[:500], passed=True, metadata=metadata))
 
-    pr_url = fields.get("PR_URL") or _pr_url_from_ticket_block(detail)
+    pr_url = fields.get("PR_URL") or ticket_pr_url
     if pr_url and phase in {"implement", "verify", "closeout"}:
         items.append(EvidenceItem(kind="pr", summary=pr_url[:500], artifact=pr_url, passed=True))
 
