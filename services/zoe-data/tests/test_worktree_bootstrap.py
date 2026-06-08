@@ -87,6 +87,92 @@ def test_ensure_worktree_rejects_invalid_task_id():
         wb.ensure_worktree("../escape")
 
 
+def test_extract_pr_number():
+    assert wb._extract_pr_number("https://github.com/o/r/pull/213") == "213"
+    assert wb._extract_pr_number("https://github.com/o/r/pull/213/files") == "213"
+    with pytest.raises(ValueError, match="cannot extract"):
+        wb._extract_pr_number("https://github.com/o/r/issues/213")
+
+
+def test_prepare_existing_pr_revision_worktree_resets_to_pr_head(git_repo, tmp_path):
+    remote = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+    subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=git_repo, check=True)
+    subprocess.run(["git", "push", "-u", "origin", "main"], cwd=git_repo, check=True, capture_output=True)
+
+    (git_repo / "PR_ONLY.md").write_text("pr head\n", encoding="utf-8")
+    subprocess.run(["git", "add", "PR_ONLY.md"], cwd=git_repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "pr head"], cwd=git_repo, check=True, capture_output=True)
+    expected_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=git_repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    subprocess.run(
+        ["git", "push", "origin", "HEAD:refs/pull/213/head"],
+        cwd=git_repo,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(["git", "reset", "--hard", "HEAD~1"], cwd=git_repo, check=True, capture_output=True)
+
+    wt = wb.prepare_existing_pr_revision_worktree(
+        "t_pr_revision",
+        "https://github.com/o/r/pull/213",
+    )
+
+    assert (wt / "PR_ONLY.md").read_text(encoding="utf-8") == "pr head\n"
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=wt,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert head == expected_head
+    task_ref = subprocess.run(
+        ["git", "rev-parse", "refs/wt-pr/t_pr_revision"],
+        cwd=wt,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert task_ref.returncode != 0
+
+    (git_repo / "PR_ONLY.md").write_text("force-pushed pr head\n", encoding="utf-8")
+    subprocess.run(["git", "add", "PR_ONLY.md"], cwd=git_repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "--amend", "-m", "force-pushed pr head"], cwd=git_repo, check=True, capture_output=True)
+    force_pushed_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=git_repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    subprocess.run(
+        ["git", "push", "--force", "origin", "HEAD:refs/pull/213/head"],
+        cwd=git_repo,
+        check=True,
+        capture_output=True,
+    )
+
+    wt = wb.prepare_existing_pr_revision_worktree(
+        "t_pr_revision",
+        "https://github.com/o/r/pull/213",
+    )
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=wt,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert head == force_pushed_head
+    assert (wt / "PR_ONLY.md").read_text(encoding="utf-8") == "force-pushed pr head\n"
+
+
 def test_ensure_worktree_raises_when_repo_not_git(tmp_path, monkeypatch):
     monkeypatch.setenv("ZOE_REPO_ROOT", str(tmp_path / "not-git"))
     monkeypatch.setenv("ZOE_WORKTREE_ROOT", str(tmp_path / "worktrees"))

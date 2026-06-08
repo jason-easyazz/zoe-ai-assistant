@@ -120,6 +120,12 @@ def _ticket_metadata(issue: dict | None = None) -> dict[str, Any]:
     return meta
 
 
+def _existing_pr_url(issue: dict | None = None) -> str:
+    issue = issue or {}
+    raw = issue.get("pr_url") or _ticket_metadata(issue).get("pr_url") or ""
+    return str(raw).strip()
+
+
 def _engineering_mode(issue: dict | None = None) -> str:
     """Resolve the engineering execution mode for a journaled phase run.
 
@@ -273,11 +279,24 @@ def _code_audit_implement_hint(issue: dict | None = None) -> str:
     )
 
 
+def _is_bounded_goal_phase(phase: str, issue: dict | None = None) -> bool:
+    """Return True when this phase should run in bounded goal mode with one retry."""
+    return phase == "implement" and _is_code_audit_actionable(_ticket_metadata(issue))
+
+
 def _goal_mode_args(phase: str, issue: dict | None = None) -> list[str]:
     """Return bounded Hermes goal-mode args for phases that benefit from one continuation."""
-    if phase == "implement" and _is_code_audit_actionable(_ticket_metadata(issue)):
+    if _is_bounded_goal_phase(phase, issue):
         return ["--goal", "--goal-max-turns", "2"]
     return []
+
+
+def _max_retries_for_phase(phase: str, issue: dict | None = None) -> str:
+    """Return the Hermes consecutive-failure limit for this task."""
+    if _is_bounded_goal_phase(phase, issue):
+        # Goal mode gives these tickets one bounded continuation in the same worktree.
+        return "2"
+    return "1"
 
 
 def _audit_no_pr_issue(issue: dict | None = None) -> bool:
@@ -495,6 +514,28 @@ class KanbanAdapter:
                 "- Do NOT create additional Hermes/Kanban tasks, scaffold subtasks, or sibling work items."
                 " If scope needs another task, use the NEEDS_SPLIT/SPLIT_PACKET block below and stop.\n"
                 "- Validate: `python3 tools/audit/validate_structure.py` and focused tests for touched modules.\n"
+                f"- EXISTING PR REVISION FAST PATH: if the ticket block already contains `pr_url`/PR_URL,"
+                " this is a revision task. Do not rediscover the original fix and do not create a new PR."
+                " This revision path takes precedence over all file inspection: after `kanban_show`,"
+                " do not read, grep, or edit files until the existing PR checkout below succeeds."
+                " Zoe dispatch pre-checks this task worktree to the existing PR head before the worker"
+                " starts. Run `gh pr view <PR_URL> --json url,number,headRefName,headRefOid,"
+                f"headRepositoryOwner,mergeStateStatus,statusCheckRollup` and `{_greptile_mcp_bin()}"
+                " pr-comments --unaddressed-only jason-easyazz/zoe-ai-assistant <number>`."
+                " That Greptile command may exit nonzero when it prints unresolved comments; read stdout"
+                " as the action list instead of treating the nonzero exit alone as failure. Run"
+                " `git rev-parse HEAD` and compare it to the gh `headRefOid`; if it does not match,"
+                " immediately call `kanban_block` with BLOCKER=PR_REVISION_CHECKOUT_FAILED."
+                " Do not run `gh pr checkout`, `git checkout`, `git fetch`, or `git reset` yourself"
+                " in this phase; if the pre-checked worktree is wrong, block instead of repairing it."
+                " Address only the unresolved review/Greptile/CI action list, run focused tests plus validators, commit,"
+                " `git push origin HEAD:<headRefName>` (use headRefName from the gh pr view output above),"
+                " and report the SAME PR_URL. Run Python tests with"
+                " `PYTHONPATH=services/zoe-data python3 -m pytest ...`. For tests involving module-level"
+                " env-derived constants, patch the module variable with monkeypatch/setattr after import;"
+                " do not set os.environ after importing the module and expect the already-loaded constant"
+                " to change. If the action list is ambiguous, call `kanban_block` with"
+                " BLOCKER=PR_REVISION_BLOCKED.\n"
                 "- You already run on an isolated git worktree branch. Commit verified changes, then publish"
                 " the branch and open ONE small PR (do not merge) with EXACTLY these commands:\n"
                 "    git push -u origin HEAD\n"
@@ -519,6 +560,8 @@ class KanbanAdapter:
                 " `kanban_complete(summary=..., metadata={...})` OR `kanban_block(reason=...)`."
                 " Exiting without either is a protocol violation and the dispatcher will retry forever.\n"
                 "- Success: `kanban_complete` after push+PR with metadata including PR_URL, TESTS, SUMMARY.\n"
+                "  Security-sensitive changes still complete implement after the PR is opened; PR review/Greptile is the review gate.\n"
+                "  Do not call `kanban_block` merely because a human/security reviewer should inspect the PR.\n"
                 "- Failure/stuck: `kanban_block` with a clear reason (prefix BLOCKER= when applicable).\n\n"
                 "Summary text should still include:\n"
                 "PR_URL=<url or blank>\nBLOCKER=<reason or blank>\nTESTS=<checks run>\nSUMMARY=<short>\n"
@@ -533,6 +576,10 @@ class KanbanAdapter:
                 " `kanban_show`, compare the implementer handoff to the Multica acceptance criteria,"
                 " then call `kanban_complete` in this turn with TESTS=not applicable/audit evidence,"
                 " VALIDATORS=not applicable/audit-only, PR_URL= blank, and a short pass/fail summary.\n"
+                "- PR_URL FAST PATH: if `kanban_show` or the ticket block includes PR_URL, do not"
+                " hunt branches or commits. Use `gh pr view <url> --json url,headRefName,headRefOid,"
+                "mergeStateStatus,statusCheckRollup` and inspect the PR diff/checks directly, then"
+                " run the validators below and complete/block from that evidence.\n"
                 "- Start with `kanban_show` to read the implementer handoff and PR_URL.\n"
                 "- Do not redesign or refactor. Run the declared tests and the minimum extra checks needed"
                 " for the touched surface.\n"
@@ -543,7 +590,12 @@ class KanbanAdapter:
                 " PR_URL, and a pass/fail summary. Include exact commands and outcomes.\n"
                 "- If tests fail, evidence is missing, the PR is absent for a code task, or the task needs"
                 " product clarification, call `kanban_block` with BLOCKER= and the failing output.\n"
-                "- If you cannot reach a pass/block decision within 8 tool/model steps, call"
+                "- If Greptile/CI has unresolved comments or failures, call `kanban_block` with"
+                " BLOCKER=PR_REVIEW_REQUIRED, PR_URL, and a concise action list; do not spend this"
+                " phase rewriting the PR.\n"
+                "- If you cannot reach a pass/block decision within 14 tool/model steps, call"
+                # Keep in sync with _TOOL_DEFAULTS["verify"] - terminal grace
+                # in kanban_phase_budget.py.
                 " `kanban_block` with BLOCKER=VERIFY_BUDGET and the missing evidence.\n"
                 "- TERMINAL PROTOCOL: end with `kanban_complete` or `kanban_block` (no silent exit)."
             )
@@ -764,14 +816,19 @@ class KanbanAdapter:
         entry = next((plan_entry for plan_entry in plan if plan_entry[0] == phase), None)
         current_row = existing_phases.get(phase) or {}
         current_status = (current_row.get("status") or "").lower()
-        if state is not None and state.status == "todo" and current_status == "blocked":
+        if (
+            state is not None
+            and state.status == "todo"
+            and (current_status == "blocked" or current_status in _TERMINAL_KANBAN_STATUSES)
+        ):
             task_id = current_row.get("id")
             if task_id:
                 try:
                     await self._run(["archive", str(task_id)])
                 except KanbanCLIError as exc:
                     logger.warning(
-                        "kanban_adapter: archive of stale blocked task %s failed for %s: %s",
+                        "kanban_adapter: archive of stale %s task %s failed for %s: %s",
+                        current_status,
                         task_id,
                         external_ref,
                         exc,
@@ -779,7 +836,7 @@ class KanbanAdapter:
                     return {
                         "ok": False,
                         "external_ref": external_ref,
-                        "reason": "stale blocked phase archive failed",
+                        "reason": "stale phase archive failed",
                         "phase": phase,
                         "chain": {},
                         "created": [],
@@ -874,9 +931,11 @@ class KanbanAdapter:
             "--max-runtime",
             _max_runtime(mode),
             # Hermes trips the circuit breaker on the Nth failure; 1 means one
-            # total attempt and zero automatic retries.
+            # total attempt and zero automatic retries. Code-audit goal tasks get
+            # one same-worktree continuation so a first turn that made a patch can
+            # still commit/push instead of starting over.
             "--max-retries",
-            "1",
+            _max_retries_for_phase(phase, issue),
             *_goal_mode_args(phase, issue),
             "--created-by",
             "zoe-bridge",
@@ -896,9 +955,48 @@ class KanbanAdapter:
         if not (result or {}).get("deduplicated"):
             created.append(phase)
         if phase in {"implement", "verify"}:
-            from worktree_bootstrap import prepare_kanban_worktree
+            from worktree_bootstrap import prepare_existing_pr_revision_worktree, prepare_kanban_worktree
 
-            await asyncio.to_thread(prepare_kanban_worktree, str(task_id))
+            pr_url = _existing_pr_url(issue)
+            worktree_failure_reason = "kanban worktree preparation failed"
+            worktree_blocker = "BLOCKER=WORKTREE_PREPARATION_FAILED"
+            try:
+                if phase == "implement" and pr_url:
+                    worktree_failure_reason = "existing PR worktree preparation failed"
+                    worktree_blocker = "BLOCKER=PR_REVISION_CHECKOUT_FAILED"
+                    await asyncio.to_thread(
+                        prepare_existing_pr_revision_worktree,
+                        str(task_id),
+                        pr_url,
+                    )
+                else:
+                    await asyncio.to_thread(prepare_kanban_worktree, str(task_id))
+            except Exception as exc:  # noqa: BLE001
+                reason = f"{worktree_blocker}: {exc}"
+                logger.warning(
+                    "kanban_adapter: worktree preparation failed for %s (%s): %s",
+                    task_id,
+                    phase,
+                    exc,
+                )
+                try:
+                    await self._run(["block", str(task_id), reason[:1000]])
+                except KanbanCLIError as block_exc:
+                    logger.warning(
+                        "kanban_adapter: failed to block %s after worktree preparation failure: %s",
+                        task_id,
+                        block_exc,
+                    )
+                return {
+                    "ok": False,
+                    "external_ref": external_ref,
+                    "reason": worktree_failure_reason,
+                    "phase": phase,
+                    "chain": {phase: task_id},
+                    "created": created,
+                    "mode": mode,
+                    "ready_phase_only": True,
+                }
         if state is not None and state.status == "todo":
             try:
                 running = transition(state, "start")
@@ -977,7 +1075,7 @@ class KanbanAdapter:
                     else:
                         current_row = phases.get(str(existing_state.phase or "")) or {}
                         current_status = (current_row.get("status") or "").lower()
-                        if current_status == "blocked":
+                        if current_status == "blocked" or current_status in _TERMINAL_KANBAN_STATUSES:
                             stale_executor_phase = str(existing_state.phase or "")
                             stale_executor_status = current_status
                             phases = {
@@ -985,7 +1083,11 @@ class KanbanAdapter:
                                 for phase, row in phases.items()
                                 if phase != stale_executor_phase
                             }
-                    if stale_executor_phase and (stale_executor_status == "blocked" or not phases):
+                    if stale_executor_phase and (
+                        stale_executor_status == "blocked"
+                        or stale_executor_status in _TERMINAL_KANBAN_STATUSES
+                        or not phases
+                    ):
                         pipeline = {
                             **pipeline_summary(existing_state),
                             "stale_executor_phase": stale_executor_phase,

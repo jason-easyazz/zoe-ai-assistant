@@ -38,12 +38,48 @@ _LOG_TOOL_MARKERS = (
     "validate_structure",
     "validate_critical_files",
 )
-_STABLE_BLOCKER_RE = re.compile(
-    r"\b(?:WORKTREE_NOT_READY|GATE_BLOCKED|PROTOCOL_VIOLATION|MERGE_BLOCKED|"
-    r"VERIFICATION_FAILED|HTTP_402|PAYMENT_REQUIRED|CREDITS_EXHAUSTED|"
-    r"TURN_BUDGET|ITERATION_BUDGET|CONTEXT_LIMIT|TOKEN_LIMIT|SCOPE_SPLIT_REQUIRED|NEEDS_SPLIT)\b",
-    re.I,
+_STABLE_BLOCKER_TOKENS = (
+    "WORKTREE_NOT_READY",
+    "GATE_BLOCKED",
+    "PROTOCOL_VIOLATION",
+    "MERGE_BLOCKED",
+    "VERIFICATION_FAILED",
+    "HTTP_402",
+    "PAYMENT_REQUIRED",
+    "CREDITS_EXHAUSTED",
+    "TURN_BUDGET",
+    "ITERATION_BUDGET",
+    "CONTEXT_LIMIT",
+    "TOKEN_LIMIT",
+    "SCOPE_SPLIT_REQUIRED",
+    "NEEDS_SPLIT",
 )
+_SURFACED_BLOCKER_TOKENS = (
+    "VERIFY_BUDGET",
+    "REVIEW_BUDGET",
+    "CLOSEOUT_BUDGET",
+    "IMPLEMENT_BUDGET",
+    "PR_REVIEW_REQUIRED",
+    "PR_REVISION_BLOCKED",
+    "PR_REVISION_CHECKOUT_FAILED",
+    "WORKTREE_PREPARATION_FAILED",
+    "WORKTREE_NOT_READY",
+    "PROTOCOL_VIOLATION",
+    "TURN_BUDGET",
+    "ITERATION_BUDGET",
+    "CONTEXT_LIMIT",
+    "TOKEN_LIMIT",
+    "HTTP_402",
+    "PAYMENT_REQUIRED",
+    "CREDITS_EXHAUSTED",
+)
+_STABLE_BLOCKER_RE = re.compile(rf"\b(?:{'|'.join(_STABLE_BLOCKER_TOKENS)})\b", re.I)
+_SURFACED_BLOCKER_RE = re.compile(rf"\b(?:{'|'.join(_SURFACED_BLOCKER_TOKENS)})\b", re.I)
+
+
+def _task_body(detail: dict[str, Any]) -> str:
+    task = detail.get("task") if isinstance(detail.get("task"), dict) else {}
+    return str(task.get("body") or "")
 
 
 def _haystacks(detail: dict[str, Any]) -> list[str]:
@@ -84,7 +120,7 @@ def _parse_kv_fields(text: str) -> dict[str, str]:
     out: dict[str, str] = {}
     for match in _KV_RE.finditer(text or ""):
         key, value = match.group(1), match.group(2).strip()
-        if value:
+        if value or key == "BLOCKER":
             out[key] = value
     return out
 
@@ -250,6 +286,59 @@ def _tool_from_log_markers(detail: dict[str, Any]) -> EvidenceItem | None:
                 metadata={"source": "log_markers"},
             )
     return None
+
+
+def _test_from_run_metadata(detail: dict[str, Any], *, phase: PipelinePhase) -> EvidenceItem | None:
+    if phase not in {"implement", "verify"}:
+        return None
+    latest: tuple[Any, Any] | None = None
+    for run in detail.get("runs") or []:
+        if not isinstance(run, dict):
+            continue
+        metadata = run.get("metadata") or {}
+        if not isinstance(metadata, dict):
+            continue
+        tests_run = metadata.get("tests_run")
+        tests_passed = metadata.get("tests_passed")
+        if tests_run in (None, "", 0, "0"):
+            continue
+        latest = (tests_run, tests_passed)
+    if latest is not None:
+        tests_run, tests_passed = latest
+        passed = False
+        if tests_passed is True:
+            passed = True
+        elif tests_passed is False:
+            passed = False
+        else:
+            try:
+                passed = int(tests_passed) >= int(tests_run)
+            except (TypeError, ValueError):
+                passed = str(tests_passed or "").strip().lower() in {"true", "yes", "pass", "passed"}
+        summary = f"kanban run metadata: tests_run={tests_run}, tests_passed={tests_passed}"
+        return EvidenceItem(
+            kind="test",
+            summary=summary[:500],
+            content_hash=content_hash(summary),
+            passed=passed,
+            metadata={"source": "kanban_run_metadata", "phase": phase},
+        )
+    return None
+
+
+def _pr_url_from_ticket_block(detail: dict[str, Any]) -> str:
+    body = _task_body(detail)
+    if not body:
+        return ""
+    try:
+        from multica_ticket_contract import parse_ticket_block
+
+        metadata = parse_ticket_block(body)
+    except Exception:  # noqa: BLE001
+        metadata = {}
+    if isinstance(metadata, dict):
+        return str(metadata.get("pr_url") or "").strip()
+    return ""
 
 
 def _review_metadata_candidates(detail: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
@@ -422,6 +511,9 @@ def evidence_from_handoff(
     text_fields: dict[str, str] = {}
     for chunk in _haystacks(detail):
         text_fields.update(_parse_kv_fields(chunk))
+    task_fields = _parse_kv_fields(_task_body(detail))
+    if task_fields.get("PR_URL") and not text_fields.get("PR_URL"):
+        text_fields["PR_URL"] = task_fields["PR_URL"]
     fields = dict(text_fields)
     fields.update(_structured_handoff_fields(detail))
 
@@ -471,6 +563,10 @@ def evidence_from_handoff(
                 metadata={"source": "handoff"},
             )
         )
+    elif phase in {"implement", "verify"}:
+        metadata_test = _test_from_run_metadata(detail, phase=phase)
+        if metadata_test:
+            items.append(metadata_test)
 
     validators_raw = fields.get("VALIDATORS") or ""
     if validators_raw and phase in {"implement", "verify"}:
@@ -497,13 +593,22 @@ def evidence_from_handoff(
             if review_item:
                 items.append(review_item)
 
+    ticket_pr_url = (
+        _pr_url_from_ticket_block(detail)
+        if phase in {"implement", "verify", "closeout"}
+        else ""
+    )
+
     if phase == "closeout":
         summary_raw = fields.get("SUMMARY") or fields.get("CLOSEOUT") or ""
         audit_only = (fields.get("AUDIT_ONLY") or "").strip().lower() in {"1", "true", "yes"}
         # Some audit/no-code closeout workers omit AUDIT_ONLY but still report an
         # audit-only summary and no PR. Treat only that explicit audit wording as inferred audit.
         inferred_audit = bool(
-            summary_raw and "audit" in summary_raw.lower() and not (fields.get("PR_URL") or "").strip()
+            summary_raw
+            and "audit" in summary_raw.lower()
+            and not (fields.get("PR_URL") or "").strip()
+            and not ticket_pr_url
         )
         if audit_only or inferred_audit:
             items.append(
@@ -526,7 +631,7 @@ def evidence_from_handoff(
             metadata["follow_up"] = follow_up
         items.append(EvidenceItem(kind="log", summary=retro_raw[:500], passed=True, metadata=metadata))
 
-    pr_url = fields.get("PR_URL") or ""
+    pr_url = fields.get("PR_URL") or ticket_pr_url
     if pr_url and phase in {"implement", "verify", "closeout"}:
         items.append(EvidenceItem(kind="pr", summary=pr_url[:500], artifact=pr_url, passed=True))
 
@@ -564,7 +669,20 @@ def block_reason_from_handoff(detail: dict[str, Any], *, row_block_reason: str |
 def infer_outcome(phase: PipelinePhase, row_status: str, detail: dict[str, Any]) -> str | None:
     """Map a terminal Kanban row to a pipeline transition outcome when inferrable."""
     status = (row_status or "").lower()
+    fields: dict[str, str] = {}
+    for chunk in _haystacks(detail):
+        fields.update(_parse_kv_fields(chunk))
+    explicit_blocker = (fields.get("BLOCKER") or "").strip()
+    blocker = explicit_blocker
+    if status == "blocked" and not blocker:
+        for chunk in _haystacks(detail):
+            blocker = _stable_block_reason_from_text(chunk)
+            if blocker:
+                break
+
     if status == "blocked":
+        if _SURFACED_BLOCKER_RE.search(blocker):
+            return "block"
         if phase == "verify":
             return "verification_failed"
         if phase == "review":
@@ -575,11 +693,9 @@ def infer_outcome(phase: PipelinePhase, row_status: str, detail: dict[str, Any])
     if status not in {"done", "archived"}:
         return None
 
-    fields: dict[str, str] = {}
-    for chunk in _haystacks(detail):
-        fields.update(_parse_kv_fields(chunk))
-    blocker = fields.get("BLOCKER") or ""
-    if blocker:
+    if explicit_blocker:
+        if _SURFACED_BLOCKER_RE.search(explicit_blocker):
+            return "block"
         if phase == "verify":
             return "verification_failed"
         if phase == "review":

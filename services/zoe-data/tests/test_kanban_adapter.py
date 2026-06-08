@@ -15,6 +15,10 @@ def _mock_ensure_worktree(monkeypatch):
         "worktree_bootstrap.prepare_kanban_worktree",
         lambda task_id, **kwargs: Path(f"/tmp/worktrees/{task_id}"),
     )
+    monkeypatch.setattr(
+        "worktree_bootstrap.prepare_existing_pr_revision_worktree",
+        lambda task_id, pr_url, **kwargs: Path(f"/tmp/worktrees/{task_id}"),
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -93,6 +97,87 @@ async def test_dispatch_refuses_to_create_without_pipeline_journal(monkeypatch):
     assert result["ok"] is False
     assert result["reason"] == "pipeline bootstrap failed"
     assert [c for c in a.calls if c[0] == "create"] == []
+
+
+@pytest.mark.asyncio
+async def test_dispatch_prepares_existing_pr_revision_worktree(monkeypatch):
+    monkeypatch.setenv("ZOE_KANBAN_SKIP_SCOUT", "1")
+    calls = []
+
+    def fake_prepare(task_id, pr_url, **kwargs):
+        calls.append((task_id, pr_url, kwargs))
+        return Path(f"/tmp/worktrees/{task_id}")
+
+    monkeypatch.setattr("worktree_bootstrap.prepare_existing_pr_revision_worktree", fake_prepare)
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {
+            "id": "uuid-pr-revision",
+            "identifier": "ZOE-5354",
+            "title": "Metrics auth revision",
+            "description": """```zoe-ticket
+{"pr_url":"https://github.com/jason-easyazz/zoe-ai-assistant/pull/213"}
+```""",
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["phase"] == "implement"
+    assert calls == [
+        ("t_implement", "https://github.com/jason-easyazz/zoe-ai-assistant/pull/213", {})
+    ]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_blocks_existing_pr_revision_when_precheckout_fails(monkeypatch):
+    monkeypatch.setenv("ZOE_KANBAN_SKIP_SCOUT", "1")
+
+    def fail_prepare(*args, **kwargs):
+        raise RuntimeError("fetch failed")
+
+    monkeypatch.setattr("worktree_bootstrap.prepare_existing_pr_revision_worktree", fail_prepare)
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {
+            "id": "uuid-pr-revision-fail",
+            "identifier": "ZOE-5354",
+            "title": "Metrics auth revision",
+            "description": """```zoe-ticket
+{"pr_url":"https://github.com/jason-easyazz/zoe-ai-assistant/pull/213"}
+```""",
+        }
+    )
+
+    assert result["ok"] is False
+    assert result["reason"] == "existing PR worktree preparation failed"
+    block_calls = [c for c in a.calls if c[0] == "block"]
+    assert len(block_calls) == 1
+    assert "BLOCKER=PR_REVISION_CHECKOUT_FAILED" in block_calls[0][2]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_blocks_regular_worktree_failures_with_generic_reason(monkeypatch):
+    monkeypatch.setenv("ZOE_KANBAN_SKIP_SCOUT", "1")
+
+    def fail_prepare(*args, **kwargs):
+        raise RuntimeError("worktree add failed")
+
+    monkeypatch.setattr("worktree_bootstrap.prepare_kanban_worktree", fail_prepare)
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {
+            "id": "uuid-regular-worktree-fail",
+            "identifier": "ZOE-WT",
+            "title": "Regular implement task",
+        }
+    )
+
+    assert result["ok"] is False
+    assert result["reason"] == "kanban worktree preparation failed"
+    block_calls = [c for c in a.calls if c[0] == "block"]
+    assert len(block_calls) == 1
+    assert "BLOCKER=WORKTREE_PREPARATION_FAILED" in block_calls[0][2]
+    assert "PR_REVISION_CHECKOUT_FAILED" not in block_calls[0][2]
 
 
 
@@ -245,7 +330,7 @@ async def test_dispatch_resumed_todo_reports_archive_failure_without_create():
     assert [c for c in a.calls if c[0] == "archive"] == [["archive", "t_implement"]]
     assert [c for c in a.calls if c[0] == "create"] == []
     assert result["ok"] is False
-    assert result["reason"] == "stale blocked phase archive failed"
+    assert result["reason"] == "stale phase archive failed"
     assert result["phase"] == "implement"
 
 
@@ -454,6 +539,7 @@ async def test_dispatch_uses_bounded_goal_mode_for_actionable_code_audit_impleme
     assert len(creates) == 1
     assert "--goal" in creates[0]
     assert creates[0][creates[0].index("--goal-max-turns") + 1] == "2"
+    assert creates[0][creates[0].index("--max-retries") + 1] == "2"
 
 
 @pytest.mark.asyncio
@@ -477,6 +563,7 @@ async def test_dispatch_omits_goal_mode_for_non_code_audit_implement():
     assert len(creates) == 1
     assert "--goal" not in creates[0]
     assert "--goal-max-turns" not in creates[0]
+    assert creates[0][creates[0].index("--max-retries") + 1] == "1"
 
 
 @pytest.mark.asyncio
@@ -552,6 +639,48 @@ async def test_dispatch_keeps_scout_for_non_bug_code_audit_ticket():
         }
     )
     assert set(result["chain"]) == {"scout"}
+
+
+@pytest.mark.asyncio
+async def test_dispatch_archives_stale_terminal_revision_phase_row():
+    from pipeline_evidence import PipelineState
+    from pipeline_store import load_latest_state, save_state
+
+    save_state(
+        PipelineState(
+            task_ref="multica:uuid-revision-terminal",
+            phase="implement",
+            status="todo",
+            evidence_profile="code",
+        ),
+        event="verification_failed",
+    )
+    rows = [
+        _row("implement", "done", chain_version="v4", issue_id="uuid-revision-terminal"),
+        _row("verify", "blocked", chain_version="v4", issue_id="uuid-revision-terminal"),
+    ]
+    a = _FakeAdapter(list_rows=rows)
+
+    result = await a.dispatch(
+        {
+            "id": "uuid-revision-terminal",
+            "identifier": "ZOE-5354",
+            "title": "Fix metrics auth",
+            "metadata": {
+                "zoe_kind": "bug",
+                "source": "code_audit_p0_security",
+                "acceptance_criteria": ["Require internal token"],
+            },
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["phase"] == "implement"
+    assert result["created"] == ["implement"]
+    assert ["archive", "t_implement"] in a.calls
+    latest = load_latest_state("multica:uuid-revision-terminal")
+    assert latest.phase == "implement"
+    assert latest.status == "running"
 
 
 @pytest.mark.asyncio
@@ -1023,6 +1152,20 @@ async def test_verify_body_requires_evidence_gate():
 
 
 @pytest.mark.asyncio
+async def test_verify_body_uses_pr_url_fast_path_before_generic_work():
+    body = ka.KanbanAdapter()._build_body(
+        "verify",
+        {"id": "uuid-1", "identifier": "ZOE-9", "title": "Fix thing", "description": ""},
+        "ZOE-9",
+    )
+    assert "PR_URL FAST PATH" in body
+    assert "do not hunt branches or commits" in body
+    assert "gh pr view <url>" in body
+    assert "PR_REVIEW_REQUIRED" in body
+    assert body.index("PR_URL FAST PATH") < body.index("Start with `kanban_show`")
+
+
+@pytest.mark.asyncio
 async def test_review_body_requires_verify_evidence():
     body = ka.KanbanAdapter()._build_body(
         "review",
@@ -1207,6 +1350,48 @@ async def test_poll_v4_done_phase_with_ready_next_phase_is_partial():
     assert out["status"] == "partial"
     assert out["pipeline"]["phase"] == "implement"
     assert out["pipeline"]["status"] == "todo"
+
+
+@pytest.mark.asyncio
+async def test_poll_ignores_stale_terminal_row_for_revision_phase():
+    from pipeline_evidence import PipelineState
+    from pipeline_store import save_state
+
+    save_state(
+        PipelineState(
+            task_ref="multica:uuid-revision-poll",
+            phase="implement",
+            status="todo",
+            evidence_profile="code",
+        ),
+        event="verification_failed",
+    )
+    rows = [
+        _row("implement", "done", chain_version="v4", issue_id="uuid-revision-poll"),
+        _row("verify", "blocked", chain_version="v4", issue_id="uuid-revision-poll"),
+    ]
+    a = _FakeAdapter(list_rows=rows)
+
+    out = await a.poll(
+        "multica:uuid-revision-poll",
+        issue={
+            "id": "uuid-revision-poll",
+            "identifier": "ZOE-5354",
+            "title": "Fix metrics auth",
+            "metadata": {
+                "zoe_kind": "bug",
+                "source": "code_audit_p0_security",
+                "acceptance_criteria": ["Require internal token"],
+            },
+        },
+    )
+
+    assert out["status"] == "partial"
+    assert out["pipeline"]["phase"] == "implement"
+    assert out["pipeline"]["status"] == "todo"
+    assert out["pipeline"]["stale_executor_phase"] == "implement"
+    assert out["pipeline"]["stale_executor_status"] == "done"
+    assert out["blocker"] is None
 
 
 @pytest.mark.asyncio
@@ -1636,6 +1821,110 @@ def test_phase_budget_reason_enforces_tool_and_runtime_limits(tmp_path, monkeypa
     assert "runtime budget exceeded" in reason
 
 
+def test_verify_phase_budget_allows_pr_validation_headroom(tmp_path, monkeypatch):
+    log_path = tmp_path / "task.log"
+    monkeypatch.setattr(kb, "_log_path", lambda _task_id: log_path)
+    monkeypatch.delenv("ZOE_KANBAN_VERIFY_TOOL_BUDGET", raising=False)
+
+    log_path.write_text("\n".join(["  ┊ tool call"] * 17), encoding="utf-8")
+    reason = kb.phase_budget_reason(
+        "t_verify",
+        "verify",
+        {"task": {"started_at": 100}},
+        now=110,
+    )
+
+    assert reason is None
+
+    log_path.write_text("\n".join(["  ┊ tool call"] * 19), encoding="utf-8")
+    reason = kb.phase_budget_reason(
+        "t_verify",
+        "verify",
+        {"task": {"started_at": 100}},
+        now=110,
+    )
+
+    assert reason is not None
+    assert "VERIFY_BUDGET" in reason
+    assert "guidance_limit=16" in reason
+    assert "hard_limit=18" in reason
+
+
+def test_existing_pr_revision_implement_budget_has_scoped_headroom(tmp_path, monkeypatch):
+    log_path = tmp_path / "task.log"
+    monkeypatch.setattr(kb, "_log_path", lambda _task_id: log_path)
+    monkeypatch.delenv("ZOE_KANBAN_IMPLEMENT_TOOL_BUDGET", raising=False)
+    monkeypatch.delenv("ZOE_KANBAN_IMPLEMENT_REVISION_TOOL_BUDGET", raising=False)
+
+    log_path.write_text("\n".join(["  ┊ tool call"] * 27), encoding="utf-8")
+    normal = kb.phase_budget_reason(
+        "t_implement",
+        "implement",
+        {"task": {"started_at": 100, "body": "plain implement task"}},
+        now=110,
+    )
+    revision = kb.phase_budget_reason(
+        "t_revision",
+        "implement",
+        {"task": {"started_at": 100, "body": "EXISTING PR REVISION FAST PATH"}},
+        now=110,
+    )
+
+    assert normal is not None
+    assert "guidance_limit=24" in normal
+    assert revision is None
+
+    log_path.write_text("\n".join(["  ┊ tool call"] * 33), encoding="utf-8")
+    revision = kb.phase_budget_reason(
+        "t_revision",
+        "implement",
+        {"task": {"started_at": 100, "body": "EXISTING PR REVISION FAST PATH"}},
+        now=110,
+    )
+
+    assert revision is not None
+    assert "IMPLEMENT_BUDGET" in revision
+    assert "guidance_limit=30" in revision
+    assert "hard_limit=32" in revision
+
+    log_path.write_text("\n".join(["  ┊ tool call"] * 27), encoding="utf-8")
+    top_level_only = kb.phase_budget_reason(
+        "t_top_level",
+        "implement",
+        {"task": {"started_at": 100}, "body": "EXISTING PR REVISION FAST PATH"},
+        now=110,
+    )
+    assert top_level_only is not None
+    assert "guidance_limit=24" in top_level_only
+
+
+def test_existing_pr_revision_budget_inherits_generic_override(tmp_path, monkeypatch):
+    log_path = tmp_path / "task.log"
+    monkeypatch.setattr(kb, "_log_path", lambda _task_id: log_path)
+    monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_TOOL_BUDGET", "28")
+    monkeypatch.delenv("ZOE_KANBAN_IMPLEMENT_REVISION_TOOL_BUDGET", raising=False)
+
+    log_path.write_text("\n".join(["  ┊ tool call"] * 31), encoding="utf-8")
+    inherited = kb.phase_budget_reason(
+        "t_revision",
+        "implement",
+        {"task": {"started_at": 100, "body": "EXISTING PR REVISION FAST PATH"}},
+        now=110,
+    )
+    assert inherited is not None
+    assert "guidance_limit=28" in inherited
+    assert "hard_limit=30" in inherited
+
+    monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_REVISION_TOOL_BUDGET", "34")
+    specific = kb.phase_budget_reason(
+        "t_revision",
+        "implement",
+        {"task": {"started_at": 100, "body": "EXISTING PR REVISION FAST PATH"}},
+        now=110,
+    )
+    assert specific is None
+
+
 def test_phase_budget_accepts_iso_timestamp_and_ascii_step_logs(tmp_path, monkeypatch):
     log_path = tmp_path / "task.log"
     log_path.write_text("| shell command  0.2s\n", encoding="utf-8")
@@ -1956,6 +2245,65 @@ def test_implement_body_omits_code_audit_fast_path_for_non_code_audit():
     )
 
     assert "CODE-AUDIT FAST PATH" not in body
+
+
+def test_implement_body_always_completes_after_pr_creation_even_for_security_review():
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {"id": "uuid-generic", "identifier": "ZOE-GEN", "title": "Generic feature", "description": "Add a small endpoint"},
+        "ZOE-GEN",
+    )
+
+    assert "Security-sensitive changes still complete implement after the PR is opened" in body
+    assert "Do not call `kanban_block` merely because a human/security reviewer should inspect the PR" in body
+    assert "CODE-AUDIT FAST PATH" not in body
+
+
+def test_implement_body_documents_existing_pr_revision_fast_path_before_new_pr_creation(monkeypatch):
+    monkeypatch.setenv("GREPTILE_MCP_BIN", "/opt/zoe/greptile-mcp")
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {
+            "id": "uuid-pr-revision",
+            "identifier": "ZOE-5354",
+            "title": "GET /metrics endpoint is unauthenticated",
+            "description": """```zoe-ticket
+{"pr_url":"https://github.com/jason-easyazz/zoe-ai-assistant/pull/213","last_evidence":"Revision required from verify"}
+```""",
+            "metadata": {
+                "zoe_kind": "bug",
+                "source": "code_audit_p0_security",
+                "acceptance_criteria": ["Require admin or internal token on /metrics"],
+            },
+        },
+        "ZOE-5354",
+    )
+
+    assert "EXISTING PR REVISION FAST PATH" in body
+    assert "Do not rediscover the original fix and do not create a new PR" in body
+    assert "do not read, grep, or edit files until the existing PR checkout below succeeds" in body
+    assert "/opt/zoe/greptile-mcp pr-comments --unaddressed-only" in body
+    assert "may exit nonzero when it prints unresolved comments" in body
+    assert "Zoe dispatch pre-checks this task worktree to the existing PR head" in body
+    assert "headRefOid" in body
+    assert "git rev-parse HEAD" in body
+    assert "Do not run `gh pr checkout`, `git checkout`, `git fetch`, or `git reset` yourself" in body
+    assert "git push origin HEAD:<headRefName>" in body
+    assert "report the SAME PR_URL" in body
+    assert "PYTHONPATH=services/zoe-data python3 -m pytest" in body
+    assert "patch the module variable with monkeypatch/setattr after import" in body
+    assert "BLOCKER=PR_REVISION_CHECKOUT_FAILED" in body
+    assert "BLOCKER=PR_REVISION_BLOCKED" in body
+    assert body.index("BLOCKER=PR_REVISION_CHECKOUT_FAILED") < body.index("BLOCKER=PR_REVISION_BLOCKED")
+    assert body.index("EXISTING PR REVISION FAST PATH") < body.index("open ONE small PR")
+
+    generic_body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {"id": "uuid-generic", "identifier": "ZOE-GEN", "title": "Generic feature"},
+        "ZOE-GEN",
+    )
+    assert "EXISTING PR REVISION FAST PATH" in generic_body
+    assert "if the ticket block already contains `pr_url`/PR_URL" in generic_body
 
 
 def test_implement_body_puts_bounded_fast_paths_before_graphify():

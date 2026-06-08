@@ -358,6 +358,59 @@ async def test_sync_pipeline_advances_on_complete_handoff(isolated_store):
 
 
 @pytest.mark.asyncio
+async def test_sync_pipeline_advances_with_live_run_metadata_recovery(isolated_store):
+    await store.bootstrap_state("multica:sync-live-metadata")
+
+    async def fetch_detail(_task_id: str):
+        return {
+            "latest_summary": (
+                "Fixed timing-attack vulnerability in auth.py token comparison — "
+                "replaced vulnerable == with hmac.compare_digest."
+            ),
+            "task": {
+                "body": """Multica issue: ZOE-5354
+```zoe-ticket
+{"pr_url":"https://github.com/jason-easyazz/zoe-ai-assistant/pull/213"}
+```"""
+            },
+            "runs": [
+                {
+                    "summary": "Fixed timing-attack vulnerability in auth.py token comparison.",
+                    "metadata": {
+                        "changed_files": ["services/zoe-data/auth.py"],
+                        "tests_run": 1,
+                        "tests_passed": 1,
+                    },
+                }
+            ],
+            "comments": [],
+        }
+
+    phases = {"implement": {"id": "t_live", "status": "archived"}}
+    state = await store.sync_pipeline_from_chain(
+        "multica:sync-live-metadata",
+        phases,
+        fetch_detail,
+    )
+
+    assert state.phase == "verify"
+    assert state.status == "todo"
+    assert "zoe-engineering" in store._PHASE_SKILLS["implement"]
+    assert any(
+        item.kind == "tool"
+        and item.passed is True
+        and item.metadata.get("source") == "skills"
+        for item in state.evidence
+    )
+    assert any(item.kind == "test" and item.passed is True for item in state.evidence)
+    assert any(
+        item.kind == "pr"
+        and item.artifact == "https://github.com/jason-easyazz/zoe-ai-assistant/pull/213"
+        for item in state.evidence
+    )
+
+
+@pytest.mark.asyncio
 async def test_sync_pipeline_retries_a_concurrent_transition_write(
     isolated_store, monkeypatch
 ):
@@ -752,6 +805,26 @@ async def test_sync_pipeline_blocked_records_reason_in_history(isolated_store):
 
     last = json.loads(isolated_store.read_text(encoding="utf-8").strip().splitlines()[-1])
     assert last["meta"]["block_reason"] == "dirty tree"
+
+
+@pytest.mark.asyncio
+async def test_sync_pipeline_verify_budget_blocks_without_revision(isolated_store):
+    state = PipelineState(task_ref="multica:verify-budget", phase="verify", status="running")
+    store.save_state(state, event="effect_requested")
+
+    async def fetch_detail(_task_id: str):
+        return {
+            "latest_summary": "BLOCKER=VERIFY_BUDGET: code-enforced tool budget exceeded",
+            "comments": [],
+        }
+
+    phases = {"verify": {"id": "t_verify", "status": "blocked"}}
+    state = await store.sync_pipeline_from_chain("multica:verify-budget", phases, fetch_detail)
+
+    assert state.phase == "verify"
+    assert state.status == "blocked"
+    assert state.history[-1].outcome == "block"
+    assert "VERIFY_BUDGET" in (state.history[-1].reason or "")
 
 
 @pytest.mark.asyncio
