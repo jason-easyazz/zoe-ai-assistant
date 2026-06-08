@@ -34,6 +34,10 @@ _RUNTIME_DEFAULTS = {
 }
 _STEP_LINE_RE = re.compile(r"^\s*(?:┊|\|)\s+\S")
 _FALLBACK_STEP_RE = re.compile(r"^\s*\S.*\s+\d+(?:\.\d+)?s(?:\s+\[.*\])?\s*$")
+_ITERATION_BUDGET_RE = re.compile(
+    r"Iteration budget reached\s*\((?P<used>\d+)\s*/\s*(?P<limit>\d+)\)",
+    re.IGNORECASE,
+)
 _ZERO_STEP_WARNED: set[str] = set()
 
 
@@ -64,6 +68,17 @@ def _log_path(task_id: str) -> Path:
     return hermes_home / "kanban" / "logs" / f"{task_id}.log"
 
 
+def task_log_tail(task_id: str, *, max_lines: int = 80) -> str:
+    """Return the latest Hermes Kanban task log lines for evidence recovery."""
+    try:
+        lines = _log_path(task_id).read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return ""
+    if max_lines <= 0:
+        return "\n".join(lines)
+    return "\n".join(lines[-max_lines:])
+
+
 def tool_step_count(task_id: str, *, since: float | None = None) -> int:
     path = _log_path(task_id)
     try:
@@ -92,6 +107,31 @@ def tool_step_count(task_id: str, *, since: float | None = None) -> int:
             task_id,
         )
     return count
+
+
+def phase_budget_reason_from_log(task_id: str, phase: str) -> str | None:
+    """Recover Hermes' own iteration-budget stop from a task log.
+
+    Hermes can exit with rc=0 after printing "Iteration budget reached" before it
+    calls kanban_block. That used to look like a generic protocol violation and
+    hid the useful cost-control signal from the pipeline. Treat the log line as
+    explicit blocker evidence so Zoe can stop/recover without redispatch loops.
+    """
+    tail = task_log_tail(task_id, max_lines=120)
+    if not tail:
+        return None
+    lines = tail.splitlines()
+    query_starts = [index for index, line in enumerate(lines) if line.startswith("Query:")]
+    if query_starts:
+        tail = "\n".join(lines[query_starts[-1]:])
+    matches = list(_ITERATION_BUDGET_RE.finditer(tail))
+    if not matches:
+        return None
+    match = matches[-1]
+    return (
+        f"BLOCKER=ITERATION_BUDGET: Hermes iteration budget reached during {phase} "
+        f"(steps={match.group('used')}, limit={match.group('limit')})"
+    )
 
 
 def _is_expected_worker(pid: int) -> bool:
@@ -185,6 +225,9 @@ def phase_budget_reason(
             f"BLOCKER={phase.upper()}_BUDGET: code-enforced tool budget exceeded "
             f"(steps={tool_steps}, guidance_limit={tool_limit}, hard_limit={hard_limit})"
         )
+    log_reason = phase_budget_reason_from_log(task_id, phase)
+    if log_reason:
+        return log_reason
 
     if started_ts is None:
         return None
