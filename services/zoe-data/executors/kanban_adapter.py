@@ -365,6 +365,10 @@ class KanbanAdapter:
             return common + (
                 "You are scout (zoe-planner, read-only). Gather context before any code changes.\n"
                 "- Start with `kanban_show` and read the Multica issue acceptance criteria.\n"
+                "- CHILD/FOLLOW-UP FAST PATH: if the issue is already a narrow child/follow-up with"
+                " concrete acceptance criteria and an existing prerequisite artifact/PR named in the"
+                " ticket block, do not inspect branch history or broad worktrees. Decide ready/blocked"
+                " from the ticket plus at most the named artifact files, then hand off.\n"
                 "- Keep this phase bounded: run at most one focused Graphify/doc lookup and no broad repo crawl.\n"
                 "- For smoke, audit-only, or harness-check tickets, do not over-investigate; summarize the"
                 " observed contract and complete the scout handoff.\n"
@@ -405,6 +409,8 @@ class KanbanAdapter:
                 " reuse service-layer helpers.\n"
                 "- If the task needs more than one PR or a large refactor, call `kanban_block` and"
                 " ask for a split — do not absorb unbounded work in one implement run.\n"
+                "- Do NOT create additional Hermes/Kanban tasks, scaffold subtasks, or sibling work items."
+                " If scope needs another task, use the NEEDS_SPLIT/SPLIT_PACKET block below and stop.\n"
                 "- Validate: `python3 tools/audit/validate_structure.py` and focused tests for touched modules.\n"
                 "- You already run on an isolated git worktree branch. Commit verified changes, then publish"
                 " the branch and open ONE small PR (do not merge) with EXACTLY these commands:\n"
@@ -494,6 +500,10 @@ class KanbanAdapter:
         if phase == "retro":
             return common + _retro_cost_hint() + (
                 "You are retro (zoe-planner). Capture learnings after closeout — no silent prod changes.\n"
+                "- POST-CLOSEOUT FAST PATH: if closeout already records PR_URL, MERGE_SHA, and"
+                " GREPTILE/greptile_status=5/5 or already_merged, do not inspect worktrees,"
+                " branch history, or GitHub."
+                " Use `kanban_show`, summarize one learning, and `kanban_complete`.\n"
                 "- AUDIT/NO-PR FAST PATH: if this was an audit-only/no-code run, keep retro to one"
                 " short handoff and do not load broad skills or inspect unrelated repo state.\n"
                 "- Read closeout/implement handoffs and any Greptile or validator notes.\n"

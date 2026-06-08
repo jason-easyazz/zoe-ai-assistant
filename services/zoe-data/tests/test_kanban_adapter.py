@@ -1247,9 +1247,45 @@ def test_implement_body_puts_bounded_fast_paths_before_graphify():
     assert "SMALL EXPLICIT CODE FAST PATH" in body
     assert "Start editing within 6 tool/model steps" in body
     assert "BLOCKER=IMPLEMENT_BUDGET" in body
+    assert "Do NOT create additional Hermes/Kanban tasks" in body
+    assert "scaffold subtasks" in body
     assert "broad or ambiguous code-changing tickets only" in body
     assert body.index("AUDIT/SMOKE FAST PATH") < body.index("Graphify map")
     assert body.index("SMALL EXPLICIT CODE FAST PATH") < body.index("Graphify map")
+
+
+def test_scout_body_has_child_followup_fast_path():
+    body = ka.KanbanAdapter()._build_body(
+        "scout",
+        {
+            "id": "uuid-1",
+            "identifier": "ZOE-9",
+            "title": "child fixture follow-up",
+            "description": "zoe_kind: child\nacceptance criteria: focused fixture tests",
+        },
+        "ZOE-9",
+    )
+
+    assert "CHILD/FOLLOW-UP FAST PATH" in body
+    assert "do not inspect branch history or broad worktrees" in body
+    assert "at most the named artifact files" in body
+    assert body.index("CHILD/FOLLOW-UP FAST PATH") < body.index("Keep this phase bounded")
+
+
+def test_retro_body_has_post_closeout_fast_path():
+    body = ka.KanbanAdapter()._build_body(
+        "retro",
+        {"id": "uuid-1", "identifier": "ZOE-9", "title": "Retro", "description": ""},
+        "ZOE-9",
+    )
+
+    assert "POST-CLOSEOUT FAST PATH" in body
+    assert "PR_URL, MERGE_SHA" in body
+    assert "GREPTILE/greptile_status=5/5 or already_merged" in body
+    assert "GREPTILE=5/5/already_merged" not in body
+    assert "do not inspect worktrees, branch history, or GitHub" in body
+    assert "Use `kanban_show`, summarize one learning, and `kanban_complete`" in body
+    assert body.index("POST-CLOSEOUT FAST PATH") < body.index("AUDIT/NO-PR FAST PATH")
 
 
 def test_audit_no_pr_phases_do_not_preload_broad_skills():
