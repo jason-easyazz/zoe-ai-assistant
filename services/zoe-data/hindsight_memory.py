@@ -2,8 +2,8 @@
 
 The adapter is disabled by default, never performs blind auto-retain, and is
 hardened for Zoe's offline-only memory rule. If enabled, the sidecar URL must be
-local/private and any visible Hindsight LLM provider config must use a local
-provider or a local OpenAI-compatible base URL.
+local/private and any visible Hindsight LLM or embedding provider config must
+use a local provider or a local OpenAI-compatible base URL.
 """
 
 from __future__ import annotations
@@ -58,6 +58,23 @@ _LOCAL_LLM_PROVIDERS = {
     "ollama",
 }
 
+_CLOUD_EMBEDDINGS_PROVIDERS = {
+    "cohere",
+    "gemini",
+    "google",
+    "litellm",
+    "litellm-sdk",
+    "openai",
+    "openrouter",
+    "vertexai",
+    "zeroentropy",
+}
+
+_LOCAL_EMBEDDINGS_PROVIDERS = {
+    "local",
+    "onnx",
+}
+
 
 @dataclass(frozen=True)
 class HindsightConfig:
@@ -71,6 +88,9 @@ class HindsightConfig:
     offline_only: bool = True
     llm_provider: str | None = None
     llm_base_url: str | None = None
+    embeddings_provider: str = "local"
+    embeddings_model: str = "BAAI/bge-small-en-v1.5"
+    embeddings_base_url: str | None = None
 
     def __post_init__(self) -> None:
         self.validate_offline_policy()
@@ -89,6 +109,18 @@ class HindsightConfig:
             offline_only=_env_bool(values.get("HINDSIGHT_OFFLINE_ONLY"), default=True),
             llm_provider=(values.get("HINDSIGHT_API_LLM_PROVIDER") or values.get("HINDSIGHT_LLM_PROVIDER") or None),
             llm_base_url=(values.get("HINDSIGHT_API_LLM_BASE_URL") or values.get("HINDSIGHT_LLM_BASE_URL") or None),
+            embeddings_provider=(values.get("HINDSIGHT_API_EMBEDDINGS_PROVIDER") or "local"),
+            embeddings_model=(
+                values.get("HINDSIGHT_API_EMBEDDINGS_LOCAL_MODEL")
+                or values.get("HINDSIGHT_API_EMBEDDINGS_ONNX_MODEL_PATH")
+                or values.get("HINDSIGHT_API_EMBEDDINGS_ONNX_MODEL_ID")
+                or values.get("HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL")
+                or "BAAI/bge-small-en-v1.5"
+            ),
+            embeddings_base_url=_embeddings_base_url_from_env(
+                values,
+                values.get("HINDSIGHT_API_EMBEDDINGS_PROVIDER") or "local",
+            ),
         )
 
     def bank_id(self, user_id: str, scope: str) -> str:
@@ -100,6 +132,10 @@ class HindsightConfig:
         if not _is_local_or_private_url(self.base_url):
             raise HindsightOfflineConfigError("HINDSIGHT_BASE_URL must be localhost or private network when offline_only is enabled")
 
+        self._validate_llm_offline_policy()
+        self._validate_embeddings_offline_policy()
+
+    def _validate_llm_offline_policy(self) -> None:
         provider = (self.llm_provider or "").strip().lower()
         if not provider:
             return
@@ -117,11 +153,57 @@ class HindsightConfig:
             f"Hindsight LLM provider {provider!r} is unrecognized for Zoe offline memory; set a localhost/private HINDSIGHT_API_LLM_BASE_URL or use llamacpp, ollama, or lmstudio"
         )
 
+    def _validate_embeddings_offline_policy(self) -> None:
+        embeddings_provider = (self.embeddings_provider or "").strip().lower()
+        if not embeddings_provider:
+            raise HindsightOfflineConfigError("Hindsight embeddings provider must be set for Zoe offline memory")
+        if embeddings_provider in {"tei"}:
+            if self.embeddings_base_url and _is_local_or_private_url(self.embeddings_base_url):
+                return
+            raise HindsightOfflineConfigError("Hindsight TEI embeddings require a localhost/private HINDSIGHT_API_EMBEDDINGS_TEI_URL")
+        if embeddings_provider in _LOCAL_EMBEDDINGS_PROVIDERS:
+            return
+        if embeddings_provider == "openai" and self.embeddings_base_url and _is_local_or_private_url(self.embeddings_base_url):
+            return
+        if embeddings_provider in _CLOUD_EMBEDDINGS_PROVIDERS:
+            raise HindsightOfflineConfigError(
+                f"Hindsight embeddings provider {embeddings_provider!r} is not allowed for Zoe offline memory; use local, onnx, tei with a local URL, or a local OpenAI-compatible base URL"
+            )
+        if self.embeddings_base_url and _is_local_or_private_url(self.embeddings_base_url):
+            return
+        raise HindsightOfflineConfigError(
+            f"Hindsight embeddings provider {embeddings_provider!r} is unrecognized for Zoe offline memory; set a localhost/private embeddings base URL or use local/onnx/tei"
+        )
+
 
 def _env_bool(value: str | None, *, default: bool) -> bool:
     if value is None or str(value).strip() == "":
         return default
-    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"Unrecognized boolean env var value: {value!r}")
+
+
+def _embeddings_base_url_from_env(values: Mapping[str, str], provider: str) -> str | None:
+    normalized = str(provider or "").strip().lower()
+    if normalized == "tei":
+        return values.get("HINDSIGHT_API_EMBEDDINGS_TEI_URL") or None
+    if normalized == "openai":
+        return values.get("HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL") or None
+    if normalized == "litellm":
+        return values.get("HINDSIGHT_API_EMBEDDINGS_LITELLM_API_BASE") or None
+    if normalized == "litellm-sdk":
+        return values.get("HINDSIGHT_API_EMBEDDINGS_LITELLM_SDK_API_BASE") or None
+    return (
+        values.get("HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL")
+        or values.get("HINDSIGHT_API_EMBEDDINGS_TEI_URL")
+        or values.get("HINDSIGHT_API_EMBEDDINGS_LITELLM_API_BASE")
+        or values.get("HINDSIGHT_API_EMBEDDINGS_LITELLM_SDK_API_BASE")
+        or None
+    )
 
 
 def _slug(value: str) -> str:
@@ -205,6 +287,9 @@ class HindsightMemoryClient:
             "offline_only": self.config.offline_only,
             "llm_provider": self.config.llm_provider,
             "llm_base_url": self.config.llm_base_url,
+            "embeddings_provider": self.config.embeddings_provider,
+            "embeddings_model": self.config.embeddings_model,
+            "embeddings_base_url": self.config.embeddings_base_url,
         }
 
     async def health(self) -> dict[str, Any]:

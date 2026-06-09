@@ -42,16 +42,24 @@ _CLOUD_PROVIDER_PATTERN = (
     r"(?:anthropic|gemini|groq|openrouter|bedrock|vertexai|ollama-cloud)[\"']?"
 )
 
+_CLOUD_EMBEDDINGS_PROVIDER_PATTERN = (
+    r"HINDSIGHT_API_EMBEDDINGS_PROVIDER\s*[:=]\s*[\"']?"
+    r"(?:cohere|gemini|google|litellm|openai|openrouter|vertexai|zeroentropy)[\"']?"
+)
+
 DENIED_MEMORY_PATTERNS = (
     re.compile(r"HINDSIGHT_OFFLINE_ONLY\s*[:=]\s*(?:false|0|no|off)", re.I),
     re.compile(r"HINDSIGHT_AUTO_RETAIN\s*[:=]\s*(?:true|1|yes|on)", re.I),
     re.compile(_CLOUD_PROVIDER_PATTERN, re.I),
+    re.compile(_CLOUD_EMBEDDINGS_PROVIDER_PATTERN, re.I),
     re.compile(r"(?:OPENAI|ANTHROPIC|GEMINI|GROQ|OPENROUTER)_API_KEY", re.I),
 )
 
 ALLOWED_CLOUD_KEY_CONTEXT = (
     "provider == \"openai\" and self.llm_base_url",
+    "embeddings_provider == \"openai\" and self.embeddings_base_url",
     "provider {provider!r} is not allowed",
+    "embeddings_provider {embeddings_provider!r} is not allowed",
 )
 
 
@@ -72,6 +80,8 @@ def _assert_hindsight_policy() -> list[str]:
         issues.append("Hindsight auto_retain must default to false")
     if default.base_url != "http://127.0.0.1:8888":
         issues.append("Hindsight default base_url must stay localhost")
+    if default.embeddings_provider != "local":
+        issues.append("Hindsight embeddings_provider must default to local")
 
     rejected_cases = [
         {
@@ -88,6 +98,18 @@ def _assert_hindsight_policy() -> list[str]:
             "HINDSIGHT_ENABLED": "true",
             "HINDSIGHT_BASE_URL": "https://memory.example.com",
             "HINDSIGHT_API_LLM_PROVIDER": "llamacpp",
+        },
+        {
+            "HINDSIGHT_ENABLED": "true",
+            "HINDSIGHT_BASE_URL": "http://127.0.0.1:8888",
+            "HINDSIGHT_API_LLM_PROVIDER": "llamacpp",
+            "HINDSIGHT_API_EMBEDDINGS_PROVIDER": "openai",
+        },
+        {
+            "HINDSIGHT_ENABLED": "true",
+            "HINDSIGHT_BASE_URL": "http://127.0.0.1:8888",
+            "HINDSIGHT_API_LLM_PROVIDER": "llamacpp",
+            "HINDSIGHT_API_EMBEDDINGS_PROVIDER": "tei",
         },
     ]
     for env in rejected_cases:
@@ -108,6 +130,26 @@ def _assert_hindsight_policy() -> list[str]:
             "HINDSIGHT_BASE_URL": "http://127.0.0.1:8888",
             "HINDSIGHT_API_LLM_PROVIDER": "openai",
             "HINDSIGHT_API_LLM_BASE_URL": "http://127.0.0.1:11434/v1",
+        },
+        {
+            "HINDSIGHT_ENABLED": "true",
+            "HINDSIGHT_BASE_URL": "http://127.0.0.1:8888",
+            "HINDSIGHT_API_LLM_PROVIDER": "llamacpp",
+            "HINDSIGHT_API_EMBEDDINGS_PROVIDER": "onnx",
+        },
+        {
+            "HINDSIGHT_ENABLED": "true",
+            "HINDSIGHT_BASE_URL": "http://127.0.0.1:8888",
+            "HINDSIGHT_API_LLM_PROVIDER": "llamacpp",
+            "HINDSIGHT_API_EMBEDDINGS_PROVIDER": "tei",
+            "HINDSIGHT_API_EMBEDDINGS_TEI_URL": "http://127.0.0.1:8080",
+        },
+        {
+            "HINDSIGHT_ENABLED": "true",
+            "HINDSIGHT_BASE_URL": "http://127.0.0.1:8888",
+            "HINDSIGHT_API_LLM_PROVIDER": "llamacpp",
+            "HINDSIGHT_API_EMBEDDINGS_PROVIDER": "openai",
+            "HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL": "http://127.0.0.1:11434/v1",
         },
     ]
     for env in accepted_cases:
@@ -155,10 +197,10 @@ def main() -> int:
             print(f"{RED}x{RESET} {issue}")
         return _fail(f"offline memory validation found {len(issues)} issue(s)")
 
-    print(f"{GREEN}ok{RESET} Hindsight defaults are disabled, offline-only, localhost, and no auto-retain")
+    print(f"{GREEN}ok{RESET} Hindsight defaults are disabled, offline-only, localhost, local embeddings, and no auto-retain")
     print(
-        f"{GREEN}ok{RESET} Public/cloud memory model providers are rejected "
-        "unless OpenAI-compatible points to local/private base URL"
+        f"{GREEN}ok{RESET} Public/cloud memory LLM and embedding providers are rejected "
+        "unless OpenAI-compatible/TEI points to local/private base URL"
     )
     print(f"{GREEN}ok{RESET} Active memory files contain no committed cloud-memory defaults or API-key dependencies")
     return 0

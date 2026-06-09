@@ -33,6 +33,8 @@ def test_config_defaults_are_safe_and_offline_only():
     assert config.auto_retain is False
     assert config.async_retain is True
     assert config.offline_only is True
+    assert config.embeddings_provider == "local"
+    assert config.embeddings_model == "BAAI/bge-small-en-v1.5"
     assert config.bank_id("Jason B", "project") == "zoe-project-jason-b"
 
 
@@ -45,6 +47,9 @@ def test_config_reads_local_env_without_enabling_auto_retain_by_accident():
             "HINDSIGHT_TIMEOUT_SECONDS": "2.5",
             "HINDSIGHT_API_LLM_PROVIDER": "openai",
             "HINDSIGHT_API_LLM_BASE_URL": "http://127.0.0.1:11434/v1",
+            "HINDSIGHT_API_EMBEDDINGS_PROVIDER": "openai",
+            "HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL": "http://127.0.0.1:11434/v1",
+            "HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL": "local-embedding",
         }
     )
 
@@ -55,6 +60,9 @@ def test_config_reads_local_env_without_enabling_auto_retain_by_accident():
     assert config.auto_retain is False
     assert config.llm_provider == "openai"
     assert config.llm_base_url == "http://127.0.0.1:11434/v1"
+    assert config.embeddings_provider == "openai"
+    assert config.embeddings_base_url == "http://127.0.0.1:11434/v1"
+    assert config.embeddings_model == "local-embedding"
 
 
 def test_config_rejects_cloud_provider_when_enabled_offline_only():
@@ -88,6 +96,103 @@ def test_config_rejects_unknown_provider_without_local_base_url():
                 "HINDSIGHT_API_LLM_PROVIDER": "together",
             }
         )
+
+
+def test_config_rejects_cloud_embeddings_provider_when_enabled_offline_only():
+    with pytest.raises(HindsightOfflineConfigError, match="embeddings provider"):
+        HindsightConfig.from_env(
+            {
+                "HINDSIGHT_ENABLED": "true",
+                "HINDSIGHT_BASE_URL": "http://127.0.0.1:8888",
+                "HINDSIGHT_API_LLM_PROVIDER": "llamacpp",
+                "HINDSIGHT_API_EMBEDDINGS_PROVIDER": "openai",
+            }
+        )
+
+
+def test_config_rejects_tei_embeddings_without_local_url():
+    with pytest.raises(HindsightOfflineConfigError, match="TEI embeddings"):
+        HindsightConfig.from_env(
+            {
+                "HINDSIGHT_ENABLED": "true",
+                "HINDSIGHT_BASE_URL": "http://127.0.0.1:8888",
+                "HINDSIGHT_API_LLM_PROVIDER": "llamacpp",
+                "HINDSIGHT_API_EMBEDDINGS_PROVIDER": "tei",
+            }
+        )
+
+
+def test_config_allows_tei_embeddings_with_local_url():
+    config = HindsightConfig.from_env(
+        {
+            "HINDSIGHT_ENABLED": "true",
+            "HINDSIGHT_BASE_URL": "http://127.0.0.1:8888",
+            "HINDSIGHT_API_LLM_PROVIDER": "llamacpp",
+            "HINDSIGHT_API_EMBEDDINGS_PROVIDER": "tei",
+            "HINDSIGHT_API_EMBEDDINGS_TEI_URL": "http://127.0.0.1:8080",
+        }
+    )
+
+    assert config.embeddings_provider == "tei"
+    assert config.embeddings_base_url == "http://127.0.0.1:8080"
+
+
+def test_config_rejects_tei_embeddings_when_only_openai_base_url_is_present():
+    with pytest.raises(HindsightOfflineConfigError, match="TEI embeddings"):
+        HindsightConfig.from_env(
+            {
+                "HINDSIGHT_ENABLED": "true",
+                "HINDSIGHT_BASE_URL": "http://127.0.0.1:8888",
+                "HINDSIGHT_API_LLM_PROVIDER": "llamacpp",
+                "HINDSIGHT_API_EMBEDDINGS_PROVIDER": "tei",
+                "HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL": "http://127.0.0.1:11434/v1",
+            }
+        )
+
+
+def test_config_rejects_tei_embeddings_with_cloud_tei_url_even_when_openai_base_url_is_local():
+    with pytest.raises(HindsightOfflineConfigError, match="TEI embeddings"):
+        HindsightConfig.from_env(
+            {
+                "HINDSIGHT_ENABLED": "true",
+                "HINDSIGHT_BASE_URL": "http://127.0.0.1:8888",
+                "HINDSIGHT_API_LLM_PROVIDER": "llamacpp",
+                "HINDSIGHT_API_EMBEDDINGS_PROVIDER": "tei",
+                "HINDSIGHT_API_EMBEDDINGS_TEI_URL": "https://tei.example.com",
+                "HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL": "http://127.0.0.1:11434/v1",
+            }
+        )
+
+
+def test_config_rejects_unknown_embeddings_provider_without_local_base_url():
+    with pytest.raises(HindsightOfflineConfigError, match="embeddings provider"):
+        HindsightConfig.from_env(
+            {
+                "HINDSIGHT_ENABLED": "true",
+                "HINDSIGHT_BASE_URL": "http://127.0.0.1:8888",
+                "HINDSIGHT_API_LLM_PROVIDER": "llamacpp",
+                "HINDSIGHT_API_EMBEDDINGS_PROVIDER": "mystery",
+            }
+        )
+
+
+def test_config_allows_unknown_embeddings_provider_with_local_base_url():
+    config = HindsightConfig.from_env(
+        {
+            "HINDSIGHT_ENABLED": "true",
+            "HINDSIGHT_BASE_URL": "http://127.0.0.1:8888",
+            "HINDSIGHT_API_LLM_PROVIDER": "llamacpp",
+            "HINDSIGHT_API_EMBEDDINGS_PROVIDER": "custom",
+            "HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL": "http://127.0.0.1:11434/v1",
+        }
+    )
+
+    assert config.embeddings_provider == "custom"
+
+
+def test_config_rejects_malformed_boolean_env():
+    with pytest.raises(ValueError, match="Unrecognized boolean"):
+        HindsightConfig.from_env({"HINDSIGHT_ENABLED": "enabled"})
 
 
 def test_config_allows_unknown_provider_with_local_base_url():
@@ -124,6 +229,23 @@ def test_event_to_hindsight_item_keeps_evidence_and_scope_tags():
     assert "scope:project" in item["tags"]
     assert "evidence:pytest-test_hindsight_memory" in item["tags"]
     assert "evidence_refs" in item["context"]
+
+
+def test_enabled_status_includes_embedding_config():
+    client = HindsightMemoryClient(
+        HindsightConfig(
+            enabled=True,
+            embeddings_provider="tei",
+            embeddings_base_url="http://127.0.0.1:8080",
+            embeddings_model="local-embedding",
+        )
+    )
+
+    status = client.enabled_status()
+
+    assert status["embeddings_provider"] == "tei"
+    assert status["embeddings_base_url"] == "http://127.0.0.1:8080"
+    assert status["embeddings_model"] == "local-embedding"
 
 
 @pytest.mark.asyncio
