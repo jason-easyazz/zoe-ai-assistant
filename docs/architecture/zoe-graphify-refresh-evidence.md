@@ -51,3 +51,27 @@ Evidence:
 - `graphify-out/GRAPH_REPORT.md` records built-from commit `0ee19f03`;
 - estimated Graphify extraction cost was `$0.1934`;
 - refresh ran in a clean worktree because canonical `/home/zoe/assistant` had unrelated dirty files.
+
+## Refresh 2026-06-09 Offline Embedding Guard Pass
+
+Source commit: `3e9d1f2f3b561e1dc49421a8f437049859831edc`
+
+Commands:
+
+```bash
+WORKTREE_ROOT=/home/zoe/.worktrees/zoe-graphify-post-267-refresh
+OPENAI_API_KEY=$(grep "^OPENAI_API_KEY=" /home/zoe/assistant/.env | cut -d= -f2-) \
+  ZOE_ASSISTANT_ROOT="$WORKTREE_ROOT" \
+  scripts/maintenance/refresh_graphify.sh --force
+/home/zoe/.local/share/uv/tools/graphifyy/bin/graphify query "How does Zoe enforce offline-only memory for Hindsight embeddings?" --budget 800
+```
+
+Evidence:
+
+- extract scanned 547 code files and 256 docs;
+- `graphify-out/graph.json` wrote 7,688 nodes, 13,183 edges, and 593 communities;
+- cluster-only regenerated 589 communities;
+- `graphify-out/GRAPH_REPORT.md` records built-from commit `3e9d1f2f`;
+- estimated Graphify extraction cost was `$0.1962`;
+- query smoke test returned traversal results for `HindsightConfig`, `_validate_embeddings_offline_policy()`, and `_embeddings_base_url_from_env()`;
+- refresh ran in a clean worktree after PR #267 merged the Hindsight offline embedding guard.

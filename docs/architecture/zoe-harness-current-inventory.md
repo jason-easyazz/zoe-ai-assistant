@@ -8,12 +8,12 @@ areas before any broad main-engine cleanup begins.
 
 Source basis:
 
-- Branch/head inspected: `origin/main` at `0ee19f0333bd4e25d9dd3d2556aebd114a98cda5`.
+- Branch/head inspected: `origin/main` at `3e9d1f2f3b561e1dc49421a8f437049859831edc`.
 - API composition point: `services/zoe-data/main.py`.
 - Main agent/tool surface: `services/zoe-data/zoe_agent.py`.
 - Memory facade: `services/zoe-data/memory_service.py`.
 - Harness status ledger: `docs/strategy/zoe-evolution-harness-status.md`.
-- Graphify report status: `graphify-out/GRAPH_REPORT.md` has been regenerated from `origin/main` at `0ee19f03`.
+- Graphify report status: `graphify-out/GRAPH_REPORT.md` has been regenerated from `origin/main` at `3e9d1f2`.
 
 ## Active Production Surfaces
 
@@ -31,7 +31,7 @@ Source basis:
 | Greptile/Greploop | `services/zoe-data/greptile_client.py`, `services/zoe-data/greploop_guard.py` | PR review state and bounded repair loop support. | Active. |
 | Hermes/OpenClaw escalation | `services/zoe-data/zoe_agent.py`, `services/zoe-data/routers/openclaw.py`, `services/zoe-data/openclaw_ws.py` | Escalation and execution surfaces. | Active; Hermes preferred by operating guide. |
 | MCP server | `services/zoe-data/mcp_server.py` | Tool bridge including memory, Graphify, and operational tools. | Active; high surface area. |
-| Graphify outputs | `graphify-out/` | Code/system graph intelligence. | Refreshed from `origin/main` at `0ee19f03`; rerun after substantial code or architecture changes. |
+| Graphify outputs | `graphify-out/` | Code/system graph intelligence. | Refreshed from `origin/main` at `3e9d1f2`; rerun after substantial code or architecture changes. |
 | Retired core | `services/zoe-core/` | Historical/reference code. | Retired; do not extend for new Zoe features. |
 
 ## Mounted Zoe Data Routers
@@ -155,8 +155,8 @@ Important routing notes:
 ## Graphify Status
 
 `graphify-out/GRAPH_REPORT.md` and `graphify-out/graph.json` were regenerated
-from `origin/main` at `0ee19f03` on 2026-06-09. The refreshed graph reports
-7,646 nodes, 13,144 edges, and 543 communities after `cluster-only --no-viz`.
+from `origin/main` at `3e9d1f2` on 2026-06-09. The refreshed graph reports
+7,688 nodes, 13,183 edges, and 589 communities after `cluster-only --no-viz`.
 
 Graphify remains a generated architecture aid, not the only source of truth.
 The embedded report commit is the pre-merge code base used for extraction; this
