@@ -5,9 +5,16 @@ ROOT="${ZOE_ASSISTANT_ROOT:-/home/zoe/assistant}"
 GRAPHIFY_BIN="${GRAPHIFY_BIN:-/home/zoe/.local/share/uv/tools/graphifyy/bin/graphify}"
 MODE="${1:-}"
 LOCK_FILE="${TMPDIR:-/tmp}/zoe-graphify-refresh.lock"
+ERROR_MARKER="graphify-out/.last_refresh_error"
 
 log() {
   printf '[graphify-refresh] %s\n' "$*"
+}
+
+fail() {
+  log "$*"
+  printf '%s %s\n' "$(date -Is)" "$*" >"$ROOT/$ERROR_MARKER" 2>/dev/null || true
+  exit 1
 }
 
 cd "$ROOT"
@@ -19,24 +26,23 @@ if ! flock -n 9; then
 fi
 
 if [[ ! -x "$GRAPHIFY_BIN" ]]; then
-  log "graphify executable not found: $GRAPHIFY_BIN"
-  exit 1
+  fail "graphify executable not found: $GRAPHIFY_BIN"
 fi
 
 if [[ ! -f graphify-out/GRAPH_REPORT.md ]]; then
-  log "missing graphify-out/GRAPH_REPORT.md"
-  exit 1
+  fail "missing graphify-out/GRAPH_REPORT.md"
 fi
 
-if [[ "${GRAPHIFY_ALLOW_DIRTY:-0}" != "1" ]]; then
-  dirty_source="$(git status --porcelain --untracked-files=no -- . ':(exclude)graphify-out' || true)"
-  if [[ -n "$dirty_source" ]]; then
-    log "source tree has tracked changes outside graphify-out; commit or stash before refreshing"
-    exit 2
-  fi
+# Refresh from a clean snapshot of the latest committed state so the live
+# working tree can stay dirty / on a feature branch without blocking the
+# nightly refresh (the old dirty-tree guard failed almost every night).
+REF="origin/main"
+if ! git fetch --quiet origin main; then
+  REF="HEAD"
+  log "git fetch failed; falling back to local HEAD"
 fi
+current_head="$(git rev-parse --short=8 "$REF")"
 
-current_head="$(git rev-parse --short=8 HEAD)"
 built_head="$(python3 - <<'PY'
 from pathlib import Path
 import re
@@ -67,6 +73,7 @@ fi
 
 if [[ "$should_refresh" != "1" ]]; then
   log "graph is current for $current_head; no refresh needed"
+  rm -f "$ERROR_MARKER"
   exit 0
 fi
 
@@ -87,12 +94,35 @@ PY
 fi
 
 if [[ -z "${OPENAI_API_KEY:-}" ]]; then
-  log "OPENAI_API_KEY is required; set it in the environment or .env"
-  exit 1
+  fail "OPENAI_API_KEY is required; set it in the environment or .env"
 fi
 export OPENAI_API_KEY
 
+SNAPSHOT_PARENT="$(mktemp -d "${TMPDIR:-/tmp}/zoe-graphify-snapshot.XXXXXX")"
+SNAPSHOT_DIR="$SNAPSHOT_PARENT/src"
+
+cleanup() {
+  git worktree remove --force "$SNAPSHOT_DIR" >/dev/null 2>&1 || true
+  rm -rf "$SNAPSHOT_PARENT"
+  git worktree prune >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+log "creating snapshot worktree at $SNAPSHOT_DIR from $REF ($current_head)"
+git worktree add --detach "$SNAPSHOT_DIR" "$REF" >/dev/null
+
+# Reuse the LLM extraction cache so unchanged files are not re-billed.
+if [[ -d graphify-out/cache ]]; then
+  cp -a graphify-out/cache "$SNAPSHOT_DIR/graphify-out/"
+fi
+
 log "refreshing graphify graph for $current_head"
-"$GRAPHIFY_BIN" extract . --backend openai
-"$GRAPHIFY_BIN" cluster-only . --no-viz
-log "graphify refresh complete"
+if ! (cd "$SNAPSHOT_DIR" && "$GRAPHIFY_BIN" extract . --backend openai && "$GRAPHIFY_BIN" cluster-only . --no-viz); then
+  fail "graphify extract/cluster failed for $current_head"
+fi
+
+log "syncing refreshed graph back to $ROOT/graphify-out"
+rsync -a "$SNAPSHOT_DIR/graphify-out/" "$ROOT/graphify-out/"
+
+rm -f "$ERROR_MARKER"
+log "graphify refresh complete for $current_head"
