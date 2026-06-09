@@ -154,10 +154,11 @@ def test_capability_trust_review_rejects_unapproved_candidate():
     )
 
     assert result.allowed_to_apply is False
-    assert "review_rejected:hindsight_reflective_memory" in result.blockers
-    assert "not_approved:hindsight_reflective_memory" in result.blockers
+    assert result.blockers == ()
     assert result.profiles == ()
     assert result.decisions[0].approved is False
+    assert "review_rejected:hindsight_reflective_memory" in result.decisions[0].reason
+    assert "not_approved:hindsight_reflective_memory" in result.decisions[0].reason
 
 
 def test_capability_trust_review_keeps_candidate_blockers_isolated():
@@ -189,7 +190,7 @@ def test_capability_trust_review_keeps_candidate_blockers_isolated():
     assert result.profiles == ()
 
 
-def test_capability_trust_review_clears_profiles_when_any_candidate_blocks():
+def test_capability_trust_review_applies_approved_profiles_when_other_candidates_are_rejected():
     approved = _candidate(
         capability_id="hindsight_reflective_memory",
         current_trust_level="experimental",
@@ -210,11 +211,42 @@ def test_capability_trust_review_clears_profiles_when_any_candidate_blocks():
         profiles=DEFAULT_CAPABILITY_PROFILES,
     )
 
+    assert result.allowed_to_apply is True
+    assert result.applied_capability_ids == ("hindsight_reflective_memory",)
+    assert result.decisions[0].approved is True
+    assert result.decisions[1].approved is False
+    assert result.blockers == ()
+    by_id = {profile.capability_id: profile for profile in result.profiles}
+    assert by_id["hindsight_reflective_memory"].trust_level == "assisted"
+    assert by_id["openclaw_fallback"].trust_level == "assisted"
+    assert "review_rejected:openclaw_fallback" in result.decisions[1].reason
+
+
+def test_capability_trust_review_clears_profiles_when_any_candidate_is_invalid():
+    approved = _candidate(
+        capability_id="hindsight_reflective_memory",
+        current_trust_level="experimental",
+        proposed_trust_level="assisted",
+    )
+    invalid = _candidate(
+        capability_id="openclaw_fallback",
+        current_trust_level="unknown",
+        proposed_trust_level="trusted",
+    )
+
+    result = review_capability_trust_update_plan(
+        _plan(approved, invalid),
+        reviewer_id="multica:reviewer",
+        approval_refs=("approval:multica:ZOE-322",),
+        approved_capability_ids=("hindsight_reflective_memory", "openclaw_fallback"),
+        profiles=DEFAULT_CAPABILITY_PROFILES,
+    )
+
     assert result.allowed_to_apply is False
     assert result.applied_capability_ids == ()
     assert result.decisions[0].approved is True
     assert result.decisions[1].approved is False
-    assert "review_rejected:openclaw_fallback" in result.blockers
+    assert "stale_current_trust_level:openclaw_fallback" in result.blockers
     assert result.profiles == ()
 
 

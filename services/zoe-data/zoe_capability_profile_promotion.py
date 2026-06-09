@@ -13,6 +13,7 @@ from types import MappingProxyType
 from typing import Any, Mapping, Sequence
 
 from zoe_capability_profile import CapabilityProfile, capability_profile_index
+from zoe_capability_utils import merge_string_refs
 from zoe_capability_trust_review import CapabilityTrustReviewResult
 
 
@@ -150,7 +151,6 @@ def build_capability_profile_promotion_plan(
         if not decision.approved:
             continue
         profile = profile_index[decision.candidate.capability_id]
-        profile.validate()
         records.append(
             CapabilityProfilePromotionRecord(
                 capability_id=decision.candidate.capability_id,
@@ -159,11 +159,11 @@ def build_capability_profile_promotion_plan(
                 target_path=target_path,
                 decision_id=decision.decision_id,
                 proposal_id=decision.candidate.proposal_id,
-                approval_refs=_merge(decision.approval_refs),
-                evidence_refs=_merge(decision.evidence_refs, decision.candidate.evidence_refs),
-                pr_refs=_merge(pr_refs),
-                rollback_refs=_merge(rollback_refs),
-                verification_refs=_merge(verification_refs),
+                approval_refs=merge_string_refs(decision.approval_refs),
+                evidence_refs=merge_string_refs(decision.evidence_refs, decision.candidate.evidence_refs),
+                pr_refs=merge_string_refs(pr_refs),
+                rollback_refs=merge_string_refs(rollback_refs),
+                verification_refs=merge_string_refs(verification_refs),
                 profile_snapshot=profile.to_dict(),
                 metadata={
                     "source": CAPABILITY_PROFILE_PROMOTION_SOURCE,
@@ -241,13 +241,6 @@ def _metadata(metadata: Mapping[str, Any] | None) -> Mapping[str, Any]:
         "source": CAPABILITY_PROFILE_PROMOTION_SOURCE,
         "extra": dict(metadata or {}),
     }
-
-
-def _merge(*groups: Sequence[str]) -> tuple[str, ...]:
-    values: list[str] = []
-    for group in groups:
-        values.extend(str(value) for value in group if value is not None and str(value))
-    return tuple(dict.fromkeys(values))
 
 
 __all__ = [

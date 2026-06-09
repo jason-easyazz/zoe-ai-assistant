@@ -83,6 +83,40 @@ def test_profile_promotion_manifest_is_deterministic_json():
     assert payload["records"][0]["profile_snapshot"]["trust_level"] == "assisted"
 
 
+def test_profile_promotion_plan_only_manifests_approved_decisions():
+    approved = _candidate()
+    rejected = _candidate(
+        capability_id="openclaw_fallback",
+        proposal_id="proposal_openclaw_trust",
+        proposal_candidate_id="openclaw_fallback",
+        current_trust_level="assisted",
+        proposed_trust_level="trusted",
+        source_event_id="event_openclaw_trust",
+        source_admission_id="admit_openclaw_trust",
+    )
+    review = review_capability_trust_update_plan(
+        CapabilityTrustUpdatePlan(candidates=(approved, rejected)),
+        reviewer_id="multica:reviewer",
+        approval_refs=("approval:multica:ZOE-326",),
+        approved_capability_ids=("hindsight_reflective_memory",),
+        rejected_capability_ids=("openclaw_fallback",),
+        profiles=DEFAULT_CAPABILITY_PROFILES,
+    )
+
+    plan = build_capability_profile_promotion_plan(
+        review,
+        pr_refs=("pr:326",),
+        rollback_refs=("rollback:revert-pr-326",),
+        verification_refs=("pytest:test_zoe_capability_profile_promotion",),
+    )
+
+    assert plan.allowed_to_write_patch is True
+    assert plan.promoted_capability_ids == ("hindsight_reflective_memory",)
+    assert len(plan.records) == 1
+    assert plan.records[0].capability_id == "hindsight_reflective_memory"
+    assert "openclaw_fallback" not in plan.promoted_capability_ids
+
+
 def test_profile_promotion_plan_blocks_missing_pr_rollback_or_verification_refs():
     plan = build_capability_profile_promotion_plan(
         _review_result(),
