@@ -3028,6 +3028,8 @@ def test_implement_body_includes_harness_repo_map_for_blocker_followup_source():
         "services/zoe-data/tests/test_main_multica_poll.py::"
         "test_record_blocked_multica_chain_creates_iteration_budget_followup"
     ) in body
+    assert "do not create `.venv`, run `pip install`" in body
+    assert "BLOCKER=TEST_ENVIRONMENT" in body
 
 
 @pytest.mark.parametrize(
@@ -3072,6 +3074,7 @@ def test_implement_body_includes_harness_blocker_followup_focused_tests(
 
     assert "engineering_blocker_followup tickets" in body
     assert expected_test in body
+    assert "Use the existing repo/runtime environment only" in body
 
 
 def test_implement_body_includes_harness_repo_map_for_harness_title():

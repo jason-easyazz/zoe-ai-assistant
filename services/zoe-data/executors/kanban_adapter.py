@@ -334,6 +334,11 @@ def _harness_implement_hint(issue: dict | None = None) -> str:
             "  For engineering_blocker_followup tickets, inspect only"
             " services/zoe-data/main.py and services/zoe-data/tests/test_main_multica_poll.py"
             f" first. Run focused test: `PYTHONPATH=services/zoe-data python3 -m pytest -q {focused_test}`."
+            " Use the existing repo/runtime environment only: do not create `.venv`, run `pip install`,"
+            " or install missing Python packages from inside a worker. If that exact command reports"
+            " a missing dependency/import that is not fixed by `PYTHONPATH=services/zoe-data`, call"
+            " `kanban_block` with BLOCKER=TEST_ENVIRONMENT and the first import error instead of"
+            " spending turns on environment repair."
             " If that behavior is already covered and passing, make a small prompt/locator fix"
             " instead of reworking blocker creation.\n"
         )
