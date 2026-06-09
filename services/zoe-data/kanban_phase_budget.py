@@ -58,7 +58,7 @@ _FOCUSED_HARNESS_TEST_RE = re.compile(
     re.IGNORECASE,
 )
 _CODE_AUDIT_BODY_RE = re.compile(
-    r"CODE-AUDIT FAST PATH|code_audit",
+    r"CODE-AUDIT FAST PATH|\bcode_audit\b",
     re.IGNORECASE,
 )
 _POST_PATCH_VALIDATION_RE = re.compile(
@@ -282,7 +282,6 @@ def implement_code_audit_post_patch_drift_reason_from_log(
             continue
         if _PATCH_STEP_RE.search(line):
             patch_seen = True
-            post_patch_explore_steps = 0
             continue
         if not patch_seen:
             continue
