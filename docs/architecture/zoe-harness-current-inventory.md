@@ -13,7 +13,7 @@ Source basis:
 - Main agent/tool surface: `services/zoe-data/zoe_agent.py`.
 - Memory facade: `services/zoe-data/memory_service.py`.
 - Harness status ledger: `docs/strategy/zoe-evolution-harness-status.md`.
-- Graphify report status: `graphify-out/GRAPH_REPORT.md` exists but was built from `b262ce99`, so it is stale for this head.
+- Graphify report status: `graphify-out/GRAPH_REPORT.md` has been regenerated from `origin/main` at `ad52f61d`.
 
 ## Active Production Surfaces
 
@@ -31,7 +31,7 @@ Source basis:
 | Greptile/Greploop | `services/zoe-data/greptile_client.py`, `services/zoe-data/greploop_guard.py` | PR review state and bounded repair loop support. | Active. |
 | Hermes/OpenClaw escalation | `services/zoe-data/zoe_agent.py`, `services/zoe-data/routers/openclaw.py`, `services/zoe-data/openclaw_ws.py` | Escalation and execution surfaces. | Active; Hermes preferred by operating guide. |
 | MCP server | `services/zoe-data/mcp_server.py` | Tool bridge including memory, Graphify, and operational tools. | Active; high surface area. |
-| Graphify outputs | `graphify-out/` | Code/system graph intelligence. | Present but stale for current `main`. |
+| Graphify outputs | `graphify-out/` | Code/system graph intelligence. | Refreshed from `origin/main` at `ad52f61d`; rerun after substantial code or architecture changes. |
 | Retired core | `services/zoe-core/` | Historical/reference code. | Retired; do not extend for new Zoe features. |
 
 ## Mounted Zoe Data Routers
@@ -154,16 +154,17 @@ Important routing notes:
 
 ## Graphify Status
 
-The current `graphify-out/GRAPH_REPORT.md` is stale for this branch:
+`graphify-out/GRAPH_REPORT.md` and `graphify-out/graph.json` were regenerated
+from `origin/main` at `ad52f61d` on 2026-06-09. The refreshed graph reports
+7,340 nodes, 12,522 edges, and 539 communities after `cluster-only --no-viz`.
 
-- Report date: 2026-05-28.
-- Built from commit: `b262ce99`.
-- Inspected branch/head: `03a01526800597b9ac6bf6ed70951b3c3d5dba79`.
-
-This inventory is therefore source-verified from mounted routers, agent tool
-catalog, memory files, and pipeline files. The next Graphify PR should refresh
-or regenerate the graph report from current `main`, then reconcile any
-architecture differences against this inventory.
+Graphify remains a generated architecture aid, not the only source of truth.
+The embedded report commit is the pre-merge code base used for extraction; this
+PR changes only generated Graphify outputs and harness docs, so a post-merge
+HEAD mismatch by itself does not indicate code graph staleness. This inventory
+is source-verified from mounted routers, agent tool catalog, memory files, and
+pipeline files. After substantial code or architecture changes, rerun Graphify
+and reconcile the generated report against this inventory before broad cleanup.
 
 ## Cleanup Readiness
 
