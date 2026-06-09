@@ -34,6 +34,7 @@ Important non-complete truth:
 - MemPalace now has a repeatable local baseline harness and first measured Zoe-host run; Hindsight now has a fixed measured runner and Zoe-host availability baseline, but no live sidecar bake-off yet because no Hindsight process/container is running.
 - Graphiti/FalkorDB/Neo4j have not yet been measured for Zoe relational memory, but Zoe-specific Graphiti fixtures now define the first relationship eval set.
 - The plan now names Zoe's missing north-star layer: capability profiles, trust/autonomy classes, candidate scouting, outcome evals, and hardware-aware promotion.
+- Zoe now has an executable capability profile contract and initial self-model for key chat, memory, graph, governance, escalation, Pi, and device-control surfaces.
 - The deterministic memory router is not yet wired into production chat behind a feature flag.
 - Retain-candidate admission is not yet fully governed through Multica approval.
 - The full self-evolution loop is not yet implemented end to end.
@@ -56,6 +57,7 @@ Important non-complete truth:
 | Tool/capability inventory | Complete foundation | `docs/architecture/zoe-tool-capability-inventory.md` maps agent, MCP, Multica, Hermes, OpenClaw, and governance surfaces. | Keep updated when tool catalogs or execution lanes change. |
 | Memory read/write inventory | Complete foundation | `docs/architecture/zoe-memory-read-write-inventory.md` maps MemoryService operations, durable writes, prompt reads, MCP paths, Hindsight candidates, and metadata gaps. | Keep updated when memory write/read paths change. |
 | Zoe north-star layer | Complete foundation | `docs/strategy/zoe-evolution-harness-plan.md` and `docs/adr/ADR-zoe-north-star-layer.md` define capability profiles, trust/autonomy classes, discovery scoring, outcome evals, and hardware budgets. | Build capability profile inventory and candidate-scoring records. |
+| Capability profiles | Complete foundation | `services/zoe-data/zoe_capability_profile.py`, `services/zoe-data/tests/test_zoe_capability_profile.py`, and `docs/architecture/zoe-capability-profiles.md` define the first executable Zoe capability self-model. | Wire profiles into candidate scoring, self-evolution proposals, and cleanup gates. |
 | Observation/evaluation traces | Not started | Memory metrics exist for MemPalace but not full retrieval helpfulness/contradiction traces. | Add a trace schema for recall, retain candidate, admission, contradiction, and fallback events. |
 | Multica evidence gates | Partial | Implement completion now requires PR evidence for code/default profiles. | Add memory admission gates and explicit self-evolution proposal gates. |
 | Self-evolution loop | Partial | Multica, pipeline evidence, Greploop, Greptile, Hermes, and worktree bootstrap pieces exist. | Implement structured Notice -> Explain -> Search -> Evaluate -> Propose records before any automatic execution. |
@@ -186,8 +188,9 @@ Keep each pull request small enough for Greptile and Zoe verification.
     - Implement Notice -> Explain -> Search -> Evaluate -> Propose records.
     - Keep execution approval-gated.
 10. Zoe capability profile inventory.
-    - Add profiles for active chat, voice, memory, Graphify, Multica, Hermes, OpenClaw, MCP, Pi, and local service capabilities.
-    - Include trust level, approval class, tests, budget, dependencies, rollback, and known failures.
+    - Status: complete foundation for key active and candidate surfaces.
+    - Expand profiles for voice, MCP, calendars, reminders, lists, search, maps/charts, proactive scheduling, and setup flows.
+    - Use trust level, approval class, tests, budget, dependencies, rollback, and known failures as proposal/cleanup gates.
 11. Candidate discovery scoring.
     - Add records/templates that compare Pi, MCP, GitHub, local skills, APIs, and existing Zoe capabilities.
     - Include activity, stars, license, offline viability, security, hardware footprint, test quality, and overlap.
