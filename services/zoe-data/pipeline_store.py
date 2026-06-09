@@ -611,7 +611,10 @@ async def _sync_pipeline_from_chain_once(
             elif validator_hash_mismatch:
                 block_reason = "GATE_BLOCKED: validator hash mismatch"
             else:
-                block_reason = "GATE_BLOCKED: phase completion evidence invalid"
+                raise AssertionError(
+                    "can_complete_phase returned False with no diagnosable gate reason "
+                    f"(phase={state.phase!r}, evidence={[item.kind for item in state.evidence]!r})"
+                )
             state, _should_abort = record_block_fingerprint(
                 state,
                 block_fingerprint(phase, block_reason),  # type: ignore[arg-type]

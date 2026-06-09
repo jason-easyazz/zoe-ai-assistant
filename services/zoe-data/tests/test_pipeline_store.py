@@ -436,6 +436,29 @@ async def test_sync_pipeline_blocks_code_implement_without_pr(isolated_store):
 
 
 @pytest.mark.asyncio
+async def test_sync_pipeline_blocks_default_implement_without_pr(isolated_store):
+    await store.bootstrap_state("multica:no-pr-default")
+
+    async def fetch_detail(_task_id: str):
+        return {
+            "latest_summary": "TOOLS_USED=graphify\nSUMMARY=investigated only",
+            "comments": [],
+        }
+
+    state = await store.sync_pipeline_from_chain(
+        "multica:no-pr-default",
+        {"implement": {"id": "t_impl", "status": "done"}},
+        fetch_detail,
+    )
+
+    assert state.evidence_profile == "default"
+    assert state.phase == "implement"
+    assert state.status == "blocked"
+    assert state.history[-1].reason == "GATE_BLOCKED: missing required evidence pr"
+    assert store.pipeline_summary(state)["missing_evidence"] == ["pr"]
+
+
+@pytest.mark.asyncio
 async def test_sync_pipeline_reports_validator_hash_mismatch_gate(isolated_store):
     state = PipelineState(
         task_ref="multica:verify-hash-mismatch",
