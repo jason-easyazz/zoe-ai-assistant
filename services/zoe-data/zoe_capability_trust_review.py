@@ -95,18 +95,18 @@ def review_capability_trust_update_plan(
     """Review and apply approved trust candidates to an in-memory profile set."""
 
     base_profiles = tuple(profiles)
-    blockers = list(plan.blockers)
+    global_blockers = list(plan.blockers)
     if not reviewer_id:
-        blockers.append("missing_reviewer_id")
+        global_blockers.append("missing_reviewer_id")
     if not approval_refs:
-        blockers.append("missing_approval_refs")
+        global_blockers.append("missing_approval_refs")
     if not plan.candidates:
-        blockers.append("no_candidates")
+        global_blockers.append("no_candidates")
     if not reviewer_id:
         return CapabilityTrustReviewResult(
             decisions=(),
             profiles=base_profiles,
-            blockers=tuple(dict.fromkeys(blockers)),
+            blockers=tuple(dict.fromkeys(global_blockers)),
         )
 
     profile_index = capability_profile_index(base_profiles)
@@ -114,18 +114,19 @@ def review_capability_trust_update_plan(
     rejected_ids = {str(capability_id) for capability_id in rejected_capability_ids if str(capability_id)}
     profile_updates: dict[str, CapabilityProfile] = {}
     decisions: list[CapabilityTrustReviewDecision] = []
+    result_blockers: list[str] = list(global_blockers)
+    candidate_global_blockers = tuple(blocker for blocker in global_blockers if blocker != "no_candidates")
 
     for candidate in plan.candidates:
-        decision_blockers = tuple(blocker for blocker in blockers if blocker != "no_candidates")
+        decision_blockers = candidate_global_blockers
         decision_blockers += _candidate_review_blockers(
             candidate,
             profile_index,
             approved_ids,
             rejected_ids,
-            has_approval_refs=bool(approval_refs),
         )
         if decision_blockers:
-            blockers.extend(decision_blockers)
+            result_blockers.extend(decision_blockers)
             decisions.append(
                 _decision(
                     candidate,
@@ -138,7 +139,22 @@ def review_capability_trust_update_plan(
             )
             continue
 
-        updated_profile = _promoted_profile(profile_index[candidate.capability_id], candidate, approval_refs, metadata)
+        try:
+            updated_profile = _promoted_profile(profile_index[candidate.capability_id], candidate, approval_refs, metadata)
+        except ValueError as exc:
+            blocker = f"invalid_promoted_profile:{candidate.capability_id}"
+            result_blockers.append(blocker)
+            decisions.append(
+                _decision(
+                    candidate,
+                    reviewer_id=reviewer_id,
+                    approved=False,
+                    reason=f"{blocker}: {exc}",
+                    approval_refs=(),
+                    metadata=metadata,
+                )
+            )
+            continue
         profile_updates[candidate.capability_id] = updated_profile
         decisions.append(
             _decision(
@@ -155,7 +171,7 @@ def review_capability_trust_update_plan(
     return CapabilityTrustReviewResult(
         decisions=tuple(decisions),
         profiles=updated_profiles,
-        blockers=tuple(dict.fromkeys(blockers)),
+        blockers=tuple(dict.fromkeys(result_blockers)),
     )
 
 
@@ -164,12 +180,8 @@ def _candidate_review_blockers(
     profile_index: Mapping[str, CapabilityProfile],
     approved_ids: set[str],
     rejected_ids: set[str],
-    *,
-    has_approval_refs: bool,
 ) -> tuple[str, ...]:
     blockers: list[str] = []
-    if not has_approval_refs:
-        blockers.append("missing_approval_refs")
     profile = profile_index.get(candidate.capability_id)
     if profile is None:
         blockers.append(f"unknown_capability_profile:{candidate.capability_id}")
@@ -190,7 +202,7 @@ def _promoted_profile(
     approval_refs: Sequence[str],
     metadata: Mapping[str, Any] | None,
 ) -> CapabilityProfile:
-    return replace(
+    promoted = replace(
         profile,
         trust_level=candidate.proposed_trust_level,
         evidence_refs=_merge(profile.evidence_refs, candidate.evidence_refs, approval_refs),
@@ -206,6 +218,8 @@ def _promoted_profile(
             },
         },
     )
+    promoted.validate()
+    return promoted
 
 
 def _decision(

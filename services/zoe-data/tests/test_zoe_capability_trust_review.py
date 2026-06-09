@@ -2,7 +2,7 @@ from dataclasses import replace
 
 import pytest
 
-from zoe_capability_profile import DEFAULT_CAPABILITY_PROFILES
+from zoe_capability_profile import DEFAULT_CAPABILITY_PROFILES, CapabilityProfile
 from zoe_capability_trust_review import (
     CAPABILITY_TRUST_REVIEW_SOURCE,
     CapabilityTrustReviewDecision,
@@ -86,6 +86,7 @@ def test_capability_trust_review_fails_closed_without_approval_refs():
     assert result.allowed_to_apply is False
     assert "missing_approval_refs" in result.blockers
     assert result.decisions[0].approved is False
+    assert result.decisions[0].reason.count("missing_approval_refs") == 1
 
 
 def test_capability_trust_review_fails_closed_when_plan_has_blockers():
@@ -152,6 +153,64 @@ def test_capability_trust_review_rejects_unapproved_candidate():
     assert "review_rejected:hindsight_reflective_memory" in result.blockers
     assert "not_approved:hindsight_reflective_memory" in result.blockers
     assert result.decisions[0].approved is False
+
+
+def test_capability_trust_review_keeps_candidate_blockers_isolated():
+    first = _candidate(
+        capability_id="hindsight_reflective_memory",
+        current_trust_level="experimental",
+        proposed_trust_level="assisted",
+    )
+    second = _candidate(
+        capability_id="openclaw_fallback",
+        current_trust_level="assisted",
+        proposed_trust_level="trusted",
+    )
+
+    result = review_capability_trust_update_plan(
+        _plan(first, second),
+        reviewer_id="multica:reviewer",
+        approval_refs=("approval:multica:ZOE-320",),
+        approved_capability_ids=(),
+        profiles=DEFAULT_CAPABILITY_PROFILES,
+    )
+
+    first_reason = result.decisions[0].reason
+    second_reason = result.decisions[1].reason
+    assert result.allowed_to_apply is False
+    assert "not_approved:hindsight_reflective_memory" in first_reason
+    assert "not_approved:openclaw_fallback" in second_reason
+    assert "hindsight_reflective_memory" not in second_reason
+
+
+def test_capability_trust_review_rejects_invalid_promoted_profile():
+    profile = CapabilityProfile(
+        capability_id="scratch_memory_candidate",
+        name="Scratch memory candidate",
+        owner_surface="memory",
+        task_types=("memory_recall",),
+        trust_level="experimental",
+        offline_mode="required",
+        evidence_refs=("docs:test",),
+    )
+    candidate = _candidate(
+        capability_id="scratch_memory_candidate",
+        current_trust_level="experimental",
+        proposed_trust_level="trusted",
+    )
+
+    result = review_capability_trust_update_plan(
+        _plan(candidate),
+        reviewer_id="multica:reviewer",
+        approval_refs=("approval:multica:ZOE-320",),
+        approved_capability_ids=("scratch_memory_candidate",),
+        profiles=(profile,),
+    )
+
+    assert result.allowed_to_apply is False
+    assert "invalid_promoted_profile:scratch_memory_candidate" in result.blockers
+    assert result.decisions[0].approved is False
+    assert result.profiles[0].trust_level == "experimental"
 
 
 def test_capability_trust_review_decision_metadata_is_read_only_and_serializable():
