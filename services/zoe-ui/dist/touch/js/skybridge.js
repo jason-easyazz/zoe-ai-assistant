@@ -28,7 +28,7 @@
         if (typeof TouchMenu !== 'undefined') TouchMenu.init({ page: 'skybridge' });
         const initialQuery = new URLSearchParams(location.search).get('q');
         if (initialQuery) {
-            setTimeout(() => submitCommand(initialQuery), 120);
+            setTimeout(() => projectCommand(initialQuery), 120);
         }
     }
 
@@ -126,10 +126,16 @@
     function submitCommand(text) {
         const query = String(text || '').trim();
         if (!query) return;
+        projectCommand(query);
+        if (voice) voice.sendText(query);
+    }
+
+    function projectCommand(text) {
+        const query = String(text || '').trim();
+        if (!query) return;
         currentUtterance = 'Heard: ' + query;
         els.copy.textContent = currentUtterance;
         projectCards(query);
-        if (voice) voice.sendText(query);
     }
 
     function projectCards(query) {
