@@ -94,7 +94,7 @@ def _ticket_metadata(issue_or_record: Mapping[str, Any]) -> dict[str, Any]:
     metadata = dict(raw_metadata) if isinstance(raw_metadata, Mapping) else {}
     parsed = parse_ticket_block(str(issue_or_record.get("description") or ""))
     if parsed:
-        metadata.update(parsed)
+        metadata.update({key: value for key, value in parsed.items() if value is not None})
     return metadata
 
 
@@ -178,7 +178,7 @@ def _metadata_sequence(value: Any) -> tuple[str, ...]:
     if isinstance(value, str):
         return (value,) if value else ()
     if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray, str)):
-        return tuple(str(item) for item in value if str(item))
+        return tuple(str(item) for item in value if item is not None and str(item))
     return (str(value),)
 
 

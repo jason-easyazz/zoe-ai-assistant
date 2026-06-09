@@ -101,6 +101,58 @@ def test_blocked_multica_record_blocks_even_when_approval_flag_is_present():
     assert "multica:ZOE-124" in decision.evidence_refs
 
 
+def test_blocked_multica_record_without_approval_flag_fails_closed():
+    issue = _issue(
+        {
+            "memory_admission_review_id": "ZOE-124B",
+            "blocked_reason": "Reviewer rejected the candidate.",
+        }
+    )
+
+    decision = evaluate_multica_memory_admission(issue, _event())
+
+    assert decision.status == MemoryAdmissionStatus.BLOCKED.value
+    assert decision.allowed_to_write_durable is False
+    assert decision.blockers == (
+        "approval_required",
+        "successful_admission_or_verification_trace_required",
+        "failed_or_blocked_trace_present",
+    )
+    assert "approval:multica:ZOE-124B" not in decision.evidence_refs
+    assert "multica:ZOE-124B" in decision.evidence_refs
+
+
+def test_description_nulls_do_not_clear_raw_metadata_blocker():
+    issue = _issue(
+        {"memory_admission_approved": True, "memory_admission_review_id": "ZOE-124C"},
+    )
+    issue["metadata"] = {"blocked_reason": "Raw review metadata blocked promotion."}
+
+    decision = evaluate_multica_memory_admission(issue, _event())
+
+    assert decision.status == MemoryAdmissionStatus.BLOCKED.value
+    assert "failed_or_blocked_trace_present" in decision.blockers
+    assert "multica:ZOE-124C" in decision.evidence_refs
+
+
+def test_none_items_are_ignored_in_metadata_reference_sequences():
+    issue = _issue(
+        {
+            "memory_admission_approved": True,
+            "memory_admission_review_id": "ZOE-124D",
+            "memory_admission_evidence_refs": [None, "review:human-approved"],
+            "memory_admission_approval_refs": [None, "approval:operator:jason"],
+        }
+    )
+
+    request = build_multica_memory_admission_request(issue, _event())
+    decision = evaluate_multica_memory_admission(issue, _event())
+
+    assert request.approval_refs == ("approval:multica:ZOE-124D", "approval:operator:jason")
+    assert request.observation_traces[0].evidence_refs == ("multica:ZOE-124D", "review:human-approved")
+    assert "None" not in decision.evidence_refs
+
+
 def test_graphiti_target_from_multica_metadata_still_requires_relationship():
     issue = _issue(
         {
