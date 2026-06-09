@@ -179,6 +179,19 @@ async def _probe_local_embedding_service(
 
     try:
         health = await _service_health(config.embeddings_provider, config.embeddings_base_url)
+    except httpx.HTTPStatusError as exc:
+        return HindsightEmbeddingProbeResult(
+            ok=False,
+            acceptable=False,
+            status="service_unhealthy",
+            provider=config.embeddings_provider,
+            model=config.embeddings_model,
+            base_url=config.embeddings_base_url,
+            checked_paths=(),
+            health={"status_code": exc.response.status_code},
+            latency_ms=_elapsed_ms(started),
+            reason=str(exc),
+        )
     except (httpx.HTTPError, OSError) as exc:
         return HindsightEmbeddingProbeResult(
             ok=False,
@@ -295,7 +308,12 @@ def _elapsed_ms(started: float) -> float:
 
 
 def probe_hindsight_embeddings_sync(*, env: Mapping[str, str] | None = None) -> dict[str, Any]:
-    return asyncio.run(probe_hindsight_embeddings(env=env)).to_dict()
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(probe_hindsight_embeddings(env=env)).to_dict()
+
+    raise RuntimeError("probe_hindsight_embeddings_sync cannot be called from a running event loop")
 
 
 __all__ = [

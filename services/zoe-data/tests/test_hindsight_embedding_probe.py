@@ -157,6 +157,53 @@ async def test_embedding_probe_reports_local_service_offline(monkeypatch):
     assert "connection refused" in (result.reason or "")
 
 
+@pytest.mark.asyncio
+async def test_embedding_probe_reports_local_service_unhealthy_status(monkeypatch):
+    async def fake_health(provider, base_url):
+        return {"status": "loading"}
+
+    monkeypatch.setattr("hindsight_embedding_probe._service_health", fake_health)
+
+    result = await probe_hindsight_embeddings(
+        env={
+            "HINDSIGHT_ENABLED": "true",
+            "HINDSIGHT_BASE_URL": "http://127.0.0.1:8888",
+            "HINDSIGHT_API_LLM_PROVIDER": "llamacpp",
+            "HINDSIGHT_API_EMBEDDINGS_PROVIDER": "tei",
+            "HINDSIGHT_API_EMBEDDINGS_TEI_URL": "http://127.0.0.1:8080",
+        }
+    )
+
+    assert result.ok is False
+    assert result.acceptable is False
+    assert result.status == "service_unhealthy"
+
+
+@pytest.mark.asyncio
+async def test_embedding_probe_reports_http_error_as_service_unhealthy(monkeypatch):
+    async def fake_health(provider, base_url):
+        request = httpx.Request("GET", "http://127.0.0.1:8080/health")
+        response = httpx.Response(500, request=request)
+        raise httpx.HTTPStatusError("server error", request=request, response=response)
+
+    monkeypatch.setattr("hindsight_embedding_probe._service_health", fake_health)
+
+    result = await probe_hindsight_embeddings(
+        env={
+            "HINDSIGHT_ENABLED": "true",
+            "HINDSIGHT_BASE_URL": "http://127.0.0.1:8888",
+            "HINDSIGHT_API_LLM_PROVIDER": "llamacpp",
+            "HINDSIGHT_API_EMBEDDINGS_PROVIDER": "tei",
+            "HINDSIGHT_API_EMBEDDINGS_TEI_URL": "http://127.0.0.1:8080",
+        }
+    )
+
+    assert result.ok is False
+    assert result.acceptable is False
+    assert result.status == "service_unhealthy"
+    assert result.health == {"status_code": 500}
+
+
 def test_embedding_probe_health_url_for_openai_compatible_base():
     assert _health_url("openai", "http://127.0.0.1:11434/v1") == "http://127.0.0.1:11434/v1/models"
     assert _health_url("openai", "http://127.0.0.1:11434") == "http://127.0.0.1:11434/v1/models"
@@ -168,3 +215,9 @@ def test_embedding_probe_sync_wrapper_returns_dict():
 
     assert payload["status"] == "disabled"
     assert payload["acceptable"] is True
+
+
+@pytest.mark.asyncio
+async def test_embedding_probe_sync_wrapper_rejects_running_event_loop():
+    with pytest.raises(RuntimeError, match="cannot be called from a running event loop"):
+        probe_hindsight_embeddings_sync(env={})
