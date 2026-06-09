@@ -2786,6 +2786,28 @@ def test_scout_body_has_intent_gap_fast_path():
     assert body.index("INTENT GAP FAST PATH") < body.index("Keep this phase bounded")
 
 
+def test_implement_body_includes_unconditional_scout_handoff_fast_path():
+    # This is a static prompt-contract assertion. The agent decides whether
+    # SCOUT_SUMMARY is present at runtime after `kanban_show`.
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {
+            "id": "uuid-1",
+            "identifier": "ZOE-5451",
+            "title": "Intent gap: 'Tell me a joke.'",
+            "description": "",
+        },
+        "ZOE-5451",
+    )
+
+    assert "SCOUT HANDOFF FAST PATH" in body
+    assert "treat that as the accepted context" in body
+    assert "Do not re-scout, re-map, or repeatedly read the same file" in body
+    assert "intent-gap tickets" in body
+    assert "start editing within 4 tool/model steps" in body
+    assert body.index("SCOUT HANDOFF FAST PATH") < body.index("SMALL EXPLICIT CODE FAST PATH")
+
+
 def test_retro_body_has_post_closeout_fast_path():
     body = ka.KanbanAdapter()._build_body(
         "retro",
