@@ -2577,6 +2577,46 @@ def test_implement_body_puts_bounded_fast_paths_before_graphify():
     assert body.index("SMALL EXPLICIT CODE FAST PATH") < body.index("Graphify map")
 
 
+def test_implement_body_includes_harness_repo_map_for_harness_tickets():
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {
+            "id": "uuid-5435",
+            "identifier": "ZOE-5435",
+            "title": "retro-fallback-when-worktree-missing",
+            "description": """Fix the missing worktree retro fallback.
+
+```zoe-ticket
+{"schema":1,"zoe_kind":"harness_fix","source":"retro_followup","acceptance_criteria":["small harness fix"],"evidence_expectations":["focused tests"]}
+```""",
+        },
+        "ZOE-5435",
+    )
+
+    assert "HARNESS FAST PATH" in body
+    assert "services/zoe-data/executors/kanban_adapter.py" in body
+    assert "services/zoe-data/worktree_bootstrap.py" in body
+    assert "For worktree-missing/retro fallback tickets" in body
+    assert "Start editing within 6 tool/model steps" in body
+    assert body.index("HARNESS FAST PATH") < body.index("Graphify map")
+
+
+def test_implement_body_omits_harness_repo_map_for_generic_tickets():
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {
+            "id": "uuid-generic",
+            "identifier": "ZOE-GEN",
+            "title": "Generic feature",
+            "description": "Add a small user setting.",
+        },
+        "ZOE-GEN",
+    )
+
+    assert "HARNESS FAST PATH" not in body
+    assert "For worktree-missing/retro fallback tickets" not in body
+
+
 def test_scout_body_has_child_followup_fast_path():
     body = ka.KanbanAdapter()._build_body(
         "scout",
