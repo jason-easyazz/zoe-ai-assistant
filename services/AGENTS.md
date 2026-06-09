@@ -1,0 +1,38 @@
+# services/ — Zoe runtime services
+
+## Purpose
+
+Production runtime services for the Zoe assistant: the web/chat API, static UI, auth, protocol bridges, and realtime media.
+
+## Ownership
+
+- `zoe-data/` — THE production web + chat API (host uvicorn, port 8000). Single source of truth for chat, intents, memory, MCP tools, and background jobs.
+- `zoe-ui/` — static frontend served by nginx (`dist/` is the docroot) plus `nginx.conf`.
+- `zoe-auth/` — authentication service.
+- `homeassistant-mcp-bridge/`, `n8n-mcp-bridge/` — MCP protocol bridges to external systems.
+- `livekit/` — realtime audio/video infrastructure config.
+- `zoe-core/` does not exist here anymore: it is RETIRED legacy reference code. Never extend it for new features.
+
+## Local Contracts
+
+- Exactly ONE production chat router: `zoe-data/routers/chat.py`. Never create `chat_v2.py`, `chat_new.py`, or parallel routers.
+- No hardcoded NLU if/else in the production chat router; natural-language routing belongs in `intent_router.py`, Zoe Agent, Hermes, or OpenClaw.
+- Code must work on BOTH Jetson Orin NX (GPU) and Raspberry Pi 5 (CPU); gate hardware-specific paths on `HARDWARE_PLATFORM`.
+- Memory writes always carry scope (`personal` / `shared` / `ambient`); credentials are per user and per scope, never in global env vars.
+- No `home` / `family` / `household` concepts in kernel code (router, memory schema, auth, tool signatures) — they belong in skills and scopes.
+- `zoe-data` runs as a systemd USER service: `systemctl --user restart zoe-data.service` (never `sudo systemctl`).
+
+## Work Guidance
+
+- Prefer harness improvements (routing, prompts, memory boundaries, tool contracts) before model upgrades; ablate changes module by module.
+- Keep domain policy in routes/actions/intents; move reusable mechanics into service-layer helpers.
+
+## Verification
+
+- `curl http://localhost:8000/health` and `/api/system/status` after service changes.
+- Focused pytest under `zoe-data/tests/`; full FastAPI-lifespan tests run only on the self-hosted Jetson runner, not GitHub-hosted runners.
+- `python3 tools/audit/validate_critical_files.py` before commit.
+
+## Child DOX Index
+
+No child AGENTS.md files yet.
