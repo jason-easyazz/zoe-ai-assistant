@@ -39,6 +39,7 @@ def test_memory_router_runtime_enabled_is_observe_only(monkeypatch):
     assert decision["route"]["primary"] == MemoryBackend.HINDSIGHT.value
     assert decision["can_inject_prompt"] is False
     assert decision["can_write_memory"] is False
+    assert "trace" not in decision
 
 
 def test_runtime_route_can_include_observation_trace(monkeypatch):
@@ -60,6 +61,17 @@ def test_runtime_route_can_include_observation_trace(monkeypatch):
     assert "query" not in trace["metadata"]
     assert decision["can_inject_prompt"] is False
     assert decision["can_write_memory"] is False
+
+
+def test_runtime_route_personal_trace_requires_user_id(monkeypatch):
+    monkeypatch.setenv(FEATURE_FLAG, "true")
+
+    with pytest.raises(ValueError, match="user_id is required"):
+        route_memory_for_runtime(
+            "What fix worked for this recurring failure?",
+            include_trace=True,
+            scope="personal",
+        )
 
 
 def test_disabled_runtime_trace_is_skipped_and_does_not_route(monkeypatch):

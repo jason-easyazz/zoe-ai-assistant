@@ -51,26 +51,16 @@ def route_memory_for_runtime(
             "can_write_memory": False,
             "reason": "runtime flag disabled",
         }
-        if include_trace:
-            decision["trace"] = build_memory_route_trace(
-                query,
-                purpose=purpose,
-                decision=decision,
-                trace_id=trace_id,
-                scope=scope,
-                user_id=user_id,
-                latency_ms=_elapsed_ms(start),
-            ).to_dict()
-        return decision
-    route = route_memory_query(query, purpose=purpose)
-    decision = {
-        "enabled": True,
-        "mode": "observe_only",
-        "route": route.to_dict(),
-        "can_inject_prompt": False,
-        "can_write_memory": False,
-        "reason": "runtime flag enabled for observation only",
-    }
+    else:
+        route = route_memory_query(query, purpose=purpose)
+        decision = {
+            "enabled": True,
+            "mode": "observe_only",
+            "route": route.to_dict(),
+            "can_inject_prompt": False,
+            "can_write_memory": False,
+            "reason": "runtime flag enabled for observation only",
+        }
     if include_trace:
         decision["trace"] = build_memory_route_trace(
             query,
@@ -82,6 +72,10 @@ def route_memory_for_runtime(
             latency_ms=_elapsed_ms(start),
         ).to_dict()
     return decision
+
+
+def _elapsed_ms(start: float) -> float:
+    return round((time.perf_counter() - start) * 1000, 3)
 
 
 def build_memory_route_trace(
@@ -174,7 +168,3 @@ __all__ = [
     "memory_router_runtime_status",
     "route_memory_for_runtime",
 ]
-
-
-def _elapsed_ms(start: float) -> float:
-    return round((time.perf_counter() - start) * 1000, 3)
