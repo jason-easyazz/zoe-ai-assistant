@@ -2767,6 +2767,25 @@ def test_scout_body_has_broad_parent_split_fast_path():
     assert body.index("BROAD PARENT SPLIT FAST PATH") < body.index("Keep this phase bounded")
 
 
+def test_scout_body_has_intent_gap_fast_path():
+    body = ka.KanbanAdapter()._build_body(
+        "scout",
+        {
+            "id": "uuid-1",
+            "identifier": "ZOE-5451",
+            "title": "Intent gap: 'Tell me a joke.'",
+            "description": "Intent router missed similar messages in the last 7 days.",
+        },
+        "ZOE-5451",
+    )
+
+    assert "INTENT GAP FAST PATH" in body
+    assert "do not map the repo" in body
+    assert "at most one focused lookup of the routing/intent file" in body
+    assert "IMPLEMENTATION_REQUIRED=true unless the exact behavior is already handled" in body
+    assert body.index("INTENT GAP FAST PATH") < body.index("Keep this phase bounded")
+
+
 def test_retro_body_has_post_closeout_fast_path():
     body = ka.KanbanAdapter()._build_body(
         "retro",
