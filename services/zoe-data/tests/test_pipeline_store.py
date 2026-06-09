@@ -358,6 +358,29 @@ async def test_sync_pipeline_advances_on_complete_handoff(isolated_store):
 
 
 @pytest.mark.asyncio
+async def test_sync_pipeline_blocks_code_implement_without_pr(isolated_store):
+    await store.bootstrap_state("multica:no-pr-code", issue={"metadata": {"evidence_profile": "code"}})
+
+    async def fetch_detail(_task_id: str):
+        return {
+            "latest_summary": "TOOLS_USED=graphify\nTESTS=validate_structure.py passed\nSUMMARY=investigated only",
+            "comments": [],
+        }
+
+    phases = {"implement": {"id": "t_impl", "status": "done"}}
+    state = await store.sync_pipeline_from_chain("multica:no-pr-code", phases, fetch_detail)
+
+    assert state.phase == "implement"
+    assert state.status == "blocked"
+    assert state.history[-1].reason == "GATE_BLOCKED: missing required evidence pr"
+    assert store.pipeline_summary(state)["missing_evidence"] == ["pr"]
+    last = json.loads(isolated_store.read_text(encoding="utf-8").strip().splitlines()[-1])
+    assert last["event"] == "gate_blocked"
+    assert last["meta"]["row_phase"] == "implement"
+    assert last["meta"]["missing"] == ["pr"]
+
+
+@pytest.mark.asyncio
 async def test_sync_pipeline_advances_with_live_run_metadata_recovery(isolated_store):
     await store.bootstrap_state("multica:sync-live-metadata")
 

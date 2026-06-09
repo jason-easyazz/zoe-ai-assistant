@@ -40,7 +40,7 @@ PHASE_ORDER: tuple[PipelinePhase, ...] = (
 
 _REQUIRED_EVIDENCE: dict[PipelinePhase, set[EvidenceKind]] = {
     "scout": {"tool"},
-    "implement": {"tool"},
+    "implement": {"tool", "pr"},
     "verify": {"test", "validator"},
     "review": {"human"},
     "closeout": {"greptile"},

@@ -249,6 +249,7 @@ def skip_blocked_implementation(
             raise ValueError(
                 f"pipeline lacks passed scout/tool evidence required for a no-code skip: {task_ref}"
             )
+        state = state.model_copy(update={"evidence_profile": "audit"})
         skipped = transition(state, "skip_implementation", reason=reason)
         skipped = skipped.model_copy(
             update={
@@ -604,6 +605,12 @@ async def _sync_pipeline_from_chain_once(
             }
             if state.phase == "verify" and not verify_validator_hash_matches(state):
                 extra["validator_hash_mismatch"] = True
+            block_reason = "GATE_BLOCKED: missing required evidence " + ",".join(extra["missing"])
+            state, _should_abort = record_block_fingerprint(
+                state,
+                block_fingerprint(phase, block_reason),  # type: ignore[arg-type]
+            )
+            state = transition(state, "block", reason=block_reason)
             state = await _run_io(
                 partial(
                     save_state,
