@@ -160,7 +160,7 @@ def implement_edit_safety_reason_from_log(task_id: str, phase: str) -> str | Non
     grepping. Treat the latest task log as an enforceable event stream: after a
     Python patch, the next tool step must be a narrow syntax/test check.
     """
-    if phase != "implement":
+    if phase not in {"implement", "implement_revision"}:
         return None
     session = _latest_log_session(task_id, max_lines=0)
     if not session:
@@ -168,10 +168,12 @@ def implement_edit_safety_reason_from_log(task_id: str, phase: str) -> str | Non
 
     pending_python_patch = False
     for line in session.splitlines():
+        if not _STEP_LINE_RE.match(line):
+            continue
         if _PYTHON_PATCH_RE.search(line):
             pending_python_patch = True
             continue
-        if not pending_python_patch or not _STEP_LINE_RE.match(line):
+        if not pending_python_patch:
             continue
         if _PYTHON_CHECK_RE.search(line):
             pending_python_patch = False

@@ -1889,6 +1889,37 @@ def test_implement_edit_safety_allows_immediate_python_check(tmp_path, monkeypat
     assert kb.implement_edit_safety_reason_from_log("t_impl", "implement") is None
 
 
+def test_implement_edit_safety_ignores_non_step_patch_text(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "Planning note: patch services/zoe-data/intent_router.py after locating the helper.\n"
+        "  ┊ 📖 read      /work/services/zoe-data/intent_router.py  0.1s\n",
+        encoding="utf-8",
+    )
+
+    assert kb.implement_edit_safety_reason_from_log("t_impl", "implement") is None
+
+
+def test_implement_edit_safety_covers_revision_phase(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_revision.log").write_text(
+        "Query: work kanban task t_revision\n"
+        "  ┊ 🔧 patch     /work/services/zoe-data/intent_router.py  5.9s\n"
+        "  ┊ 🔎 grep      def execute_intent  0.1s\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.implement_edit_safety_reason_from_log("t_revision", "implement_revision")
+
+    assert reason is not None
+    assert "IMPLEMENT_EDIT_SAFETY" in reason
+
+
 def test_phase_budget_reason_ignores_stale_iteration_budget_log_session(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     log_dir = tmp_path / "kanban" / "logs"
