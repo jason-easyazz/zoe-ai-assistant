@@ -29,7 +29,7 @@ Current merged foundation:
 
 Important non-complete truth:
 
-- Graphify has been refreshed from `origin/main` at `3e9d1f2`; rerun it after subsequent code or architecture changes.
+- Graphify has been refreshed from Pi harness merge source commit `a3fe849c` and merged in PR #273; PR #273 changed only generated Graphify artifacts, so the map is current for source surfaces until the next code or architecture change.
 - Tool/capability and memory read/write inventories now exist as cleanup gates; keep them updated as runtime paths change.
 - MemPalace now has a repeatable local baseline harness and first measured Zoe-host run; Hindsight now has a fixed measured runner, read-only sidecar probe, and Zoe-host availability baseline, but no live sidecar bake-off yet because no sidecar is running and the available image cannot be safely started until Zoe has a local/cached embedding model or local embeddings service configured.
 - Graphiti/FalkorDB/Neo4j have not yet been measured for Zoe relational memory, but Zoe-specific Graphiti fixtures and a read-only backend probe now define the first relationship eval set and availability preflight.
@@ -58,7 +58,7 @@ Important non-complete truth:
 | MemPalace baseline | Complete foundation | `services/zoe-data/mempalace_baseline.py`, `scripts/maintenance/mempalace_baseline.py`, and `docs/architecture/zoe-mempalace-baseline.md` record a repeatable local benchmark; first run scored 1.0 avg with p95 200.90 ms and cleaned up 4 synthetic rows. | Expand with relational/supersession cases before comparing Graphiti-style backends. |
 | Hindsight bake-off | Partial | Offline sidecar client, retain-candidate helpers, synthetic fixtures, measured runner, read-only sidecar probe, availability doc, and tests exist; current Zoe-host check found no running Hindsight sidecar and no cached default embedding model. | Start a local/offline sidecar only after a local embedding model/service is present, run retain/recall with synthetic events, and record p50/p95 latency, failures, evidence quality, and CPU/RAM use. |
 | Graphiti bake-off | Partial | ADR plus `services/zoe-data/graphiti_bakeoff.py`, `services/zoe-data/graphiti_sidecar_probe.py`, `services/zoe-data/tests/test_graphiti_bakeoff.py`, `services/zoe-data/tests/test_graphiti_sidecar_probe.py`, and `docs/architecture/zoe-graphiti-fixtures.md` define the first relationship fixture set and read-only backend availability probe. | Start a local/offline FalkorDB sidecar, run the fixtures, then test Neo4j if feasible, and record latency, evidence quality, supersession behavior, and CPU/RAM use. |
-| Graphify current map | Complete foundation | `graphify-out/GRAPH_REPORT.md` and `graphify-out/graph.json` were regenerated from `origin/main` at `3e9d1f2`; `docs/architecture/zoe-harness-current-inventory.md` records the source-backed inventory. | Rerun Graphify after substantial code or architecture changes. |
+| Graphify current map | Complete foundation | `graphify-out/GRAPH_REPORT.md` and `graphify-out/graph.json` were regenerated from Pi harness merge source commit `a3fe849c` and merged in PR #273; PR #273 changed only generated Graphify artifacts, and `docs/architecture/zoe-harness-current-inventory.md` records the source-backed inventory. | Rerun Graphify after substantial code or architecture changes. |
 | Tool/capability inventory | Complete foundation | `docs/architecture/zoe-tool-capability-inventory.md` maps agent, MCP, Multica, Hermes, OpenClaw, and governance surfaces. | Keep updated when tool catalogs or execution lanes change. |
 | Memory read/write inventory | Complete foundation | `docs/architecture/zoe-memory-read-write-inventory.md` maps MemoryService operations, durable writes, prompt reads, MCP paths, Hindsight candidates, and metadata gaps. | Keep updated when memory write/read paths change. |
 | Zoe north-star layer | Complete foundation | `docs/strategy/zoe-evolution-harness-plan.md` and `docs/adr/ADR-zoe-north-star-layer.md` define capability profiles, trust/autonomy classes, discovery scoring, outcome evals, and hardware budgets. | Build capability profile inventory and candidate-scoring records. |
@@ -167,7 +167,7 @@ Keep each pull request small enough for Greptile and Zoe verification.
    - Verify structure.
    - Use Greptile as the first review loop.
 2. Fresh Graphify and architecture inventory.
-   - Status: complete foundation as of `3e9d1f2`.
+   - Status: complete foundation as of Pi harness merge source commit `a3fe849c`, merged as generated artifacts in PR #273.
    - Keep Graphify refreshed after substantial code or architecture changes.
    - Reconcile future generated reports against `docs/architecture/zoe-harness-current-inventory.md`.
 3. Tool and memory inventory.
