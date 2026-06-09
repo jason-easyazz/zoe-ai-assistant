@@ -44,6 +44,10 @@ _PYTHON_CHECK_RE = re.compile(
     re.IGNORECASE,
 )
 _PATCH_STEP_RE = re.compile(r"^\s*(?:┊|\|)\s+\S+\s+patch\b", re.IGNORECASE)
+_PATCH_AMBIGUITY_RE = re.compile(
+    r"^\s*(?:┊|\|)\s+\S+\s+patch\b.*\[Found\s+\d+\s+matches\b",
+    re.IGNORECASE,
+)
 _PATCH_REVIEW_DIFF_RE = re.compile(r"^\s*(?:┊|\|)\s+review\s+diff\b", re.IGNORECASE)
 _TERMINAL_STEP_RE = re.compile(r"^\s*(?:┊|\|)\s+\S+\s+kanban_(?:complete|block)\b", re.IGNORECASE)
 _EXPLORE_STEP_RE = re.compile(r"^\s*(?:┊|\|)\s+\S+\s+(?:read|grep|find)\b", re.IGNORECASE)
@@ -377,6 +381,37 @@ def implement_code_audit_post_validation_ship_reason_from_log(
     return None
 
 
+def implement_patch_ambiguity_reason_from_log(
+    task_id: str,
+    phase: str,
+    *,
+    session: str | None = None,
+) -> str | None:
+    """Block implement workers that repeat ambiguous patch anchors."""
+    if phase not in {"implement", "implement_revision"}:
+        return None
+    if session is None:
+        session = _latest_log_session(task_id, max_lines=0)
+    if not session:
+        return None
+
+    ambiguous_patches = 0
+    for line in session.splitlines():
+        if not _STEP_LINE_RE.match(line):
+            continue
+        if _PATCH_AMBIGUITY_RE.search(line):
+            ambiguous_patches += 1
+            if ambiguous_patches >= 2:
+                return (
+                    "BLOCKER=PATCH_AMBIGUITY_DRIFT: repeated patch attempts used "
+                    "non-unique anchors; use a unique surrounding block or call kanban_block"
+                )
+            continue
+        if _PATCH_STEP_RE.search(line):
+            ambiguous_patches = 0
+    return None
+
+
 def implement_pre_edit_drift_reason_from_log(
     task_id: str,
     phase: str,
@@ -632,6 +667,13 @@ def phase_budget_reason(
     )
     if worktree_reason:
         return worktree_reason
+    patch_ambiguity_reason = implement_patch_ambiguity_reason_from_log(
+        task_id,
+        phase,
+        session=session,
+    )
+    if patch_ambiguity_reason:
+        return patch_ambiguity_reason
     edit_safety_reason = implement_edit_safety_reason_from_log(task_id, phase, session=session)
     if edit_safety_reason:
         return edit_safety_reason

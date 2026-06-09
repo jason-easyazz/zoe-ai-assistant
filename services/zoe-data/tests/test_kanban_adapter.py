@@ -2385,6 +2385,53 @@ def test_phase_budget_reason_passes_harness_followup_body_to_pre_edit_guard(
     assert "engineering blocker follow-up kept exploring after focused test" in reason
 
 
+def test_phase_budget_blocks_repeated_ambiguous_patch_attempts(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 🔧 patch     services/zoe-ui/nginx.conf  0.0s [Found 2 matches for old_string. Provide more ...]\n"
+        "  ┊ 💻 $         sed -n '315,340p' services/zoe-ui/nginx.conf  0.1s\n"
+        "  ┊ 🔧 patch     services/zoe-ui/nginx.conf  0.0s [Found 2 matches for old_string. Provide more ...]\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.phase_budget_reason(
+        "t_impl",
+        "implement",
+        {"task": {"started_at": 100}, "runs": [{"started_at": 100}]},
+        now=120,
+    )
+
+    assert reason is not None
+    assert "PATCH_AMBIGUITY_DRIFT" in reason
+
+
+def test_phase_budget_allows_ambiguous_patch_followed_by_successful_patch(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 🔧 patch     services/zoe-ui/nginx.conf  0.0s [Found 2 matches for old_string. Provide more ...]\n"
+        "  ┊ 💻 $         sed -n '315,340p' services/zoe-ui/nginx.conf  0.1s\n"
+        "  ┊ 🔧 patch     services/zoe-ui/nginx.conf  0.2s\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.phase_budget_reason(
+        "t_impl",
+        "implement",
+        {"task": {"started_at": 100}, "runs": [{"started_at": 100}]},
+        now=120,
+    )
+
+    assert reason is None
+
+
 def test_phase_budget_blocks_code_audit_post_patch_drift(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     monkeypatch.setenv("ZOE_KANBAN_CODE_AUDIT_POST_PATCH_EXPLORE_BUDGET", "2")
@@ -3640,6 +3687,7 @@ def test_implement_body_adds_code_audit_fast_path_for_actionable_bug():
     assert "do not run `git add` by itself" in body
     assert "code-audit ship instruction overrides the generic separate push/PR" in body
     assert "unless a phase fast path above explicitly requires a chained ship command" in body
+    assert "on a second ambiguous patch, call `kanban_block`" in body
     assert "git push -u origin HEAD" in body
     assert body.index("CODE-AUDIT FAST PATH") < body.index("AUDIT/SMOKE FAST PATH")
     assert body.index("CODE-AUDIT FAST PATH") < body.index("Graphify map")
