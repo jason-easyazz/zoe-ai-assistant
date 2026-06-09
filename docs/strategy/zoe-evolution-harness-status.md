@@ -38,8 +38,9 @@ Important non-complete truth:
 - Zoe now has candidate scoring for comparing Pi, MCP, GitHub, skill, API, local-service, and existing-Zoe options before adoption.
 - Zoe now has a self-evolution proposal contract that attaches signals, candidate scores, affected capabilities, approval gates, verification, rollback, and evidence before any execution.
 - Zoe now has an observation/evaluation trace schema for recall, retain candidates, admission, contradiction, fallback, proposals, verification, outcome evals, and hardware budget evidence.
+- Zoe now has an inert memory admission contract that keeps retain candidates pending until evidence, successful admission/verification traces, and approval refs allow durable/trusted memory writes.
 - The deterministic memory router is not yet wired into production chat behind a feature flag.
-- Retain-candidate admission is not yet fully governed through Multica approval.
+- Retain-candidate admission has a tested contract, but existing runtime writers are not yet wired to enforce it through Multica approval.
 - The full self-evolution loop is not yet implemented end to end; proposal records are now defined, but existing live proposal writers still need to emit them and Multica still needs to enforce admission.
 - Zoe main engine cleanup should not begin until the inventory, graph, and memory/evolution contracts have protective tests around the active surfaces.
 
@@ -63,7 +64,8 @@ Important non-complete truth:
 | Capability profiles | Complete foundation | `services/zoe-data/zoe_capability_profile.py`, `services/zoe-data/tests/test_zoe_capability_profile.py`, and `docs/architecture/zoe-capability-profiles.md` define the first executable Zoe capability self-model. | Wire profiles into candidate scoring, self-evolution proposals, and cleanup gates. |
 | Candidate scoring | Complete foundation | `services/zoe-data/zoe_candidate_scoring.py`, `services/zoe-data/tests/test_zoe_candidate_scoring.py`, and `docs/architecture/zoe-candidate-scoring.md` define candidate scoring and adoption gates. | Attach candidate scores to self-evolution proposal records before installs or replacements. |
 | Observation/evaluation traces | Complete foundation | `services/zoe-data/zoe_observation_trace.py`, `services/zoe-data/tests/test_zoe_observation_trace.py`, and `docs/architecture/zoe-observation-trace-schema.md` define trace records for recall, retain candidate, admission, contradiction, fallback, proposal, verification, outcome eval, and hardware-budget events. | Wire traces around memory router decisions, retain candidates, sidecar bake-offs, Multica admission, and capability promotion/retirement. |
-| Multica evidence gates | Partial | Implement completion now requires PR evidence for code/default profiles. | Add memory admission gates and explicit self-evolution proposal gates. |
+| Memory admission governance | Complete foundation | `services/zoe-data/zoe_memory_admission.py`, `services/zoe-data/tests/test_zoe_memory_admission.py`, and `docs/architecture/zoe-memory-admission-gates.md` define evidence, trace, approval, graph, and self-evolution proposal gates before durable memory writes. | Wire retain candidate workers and future graph/Hindsight writers through this decision before any backend write. |
+| Multica evidence gates | Partial | Implement completion now requires PR evidence for code/default profiles, and memory admission has a tested decision contract. | Connect the memory admission contract to Multica/review records and add explicit self-evolution execution gates. |
 | Self-evolution proposal records | Complete foundation | `services/zoe-data/zoe_evolution_proposal.py`, `services/zoe-data/tests/test_zoe_evolution_proposal.py`, and `docs/architecture/zoe-evolution-proposal-contract.md` define structured Notice -> Explain -> Search -> Evaluate -> Propose records. | Adapt existing live proposal writers to emit this payload and require it before installs/replacements. |
 | Self-evolution loop | Partial | Multica, pipeline evidence, Greploop, Greptile, Hermes, worktree bootstrap, candidate scoring, and proposal contract pieces exist. | Wire live proposal writers, Multica admission, execution approval, verification, retained outcomes, and retirement evidence. |
 | Main engine cleanup | Deferred | `zoe_agent.py` remains large and active. | Start only after inventories and chat/memory/tool dispatch tests are strong enough to prevent regressions. |
@@ -187,8 +189,9 @@ Keep each pull request small enough for Greptile and Zoe verification.
    - Wire deterministic routing into chat/agent recall in fallback-safe mode.
    - Add latency timeout and compact cited memory packets.
 8. Memory admission governance.
-   - Route retain candidates through Multica/review.
-   - Add evidence and scope gates for relational and self-evolution memory.
+   - Status: complete foundation.
+   - `zoe_memory_admission.py` now gates durable memory writes on approval refs, successful admission/verification traces, graph edge requirements, user/scope matching, and proposal context for self-evolution memories.
+   - Next: route retain candidate workers through the decision before any Hindsight, MemPalace, or Graphiti durable write.
 9. Self-evolution proposal records.
     - Implement Notice -> Explain -> Search -> Evaluate -> Propose records.
     - Keep execution approval-gated.
