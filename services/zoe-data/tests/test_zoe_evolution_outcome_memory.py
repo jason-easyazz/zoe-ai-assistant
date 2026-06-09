@@ -114,6 +114,55 @@ def test_verified_proposal_outcome_builds_pending_fix_memory_event():
     ) in relationships
 
 
+def test_latest_trace_content_uses_created_at_not_input_order_and_conservative_confidence():
+    older = _verification_trace(
+        trace_id="trace_older",
+        summary="Older verification passed.",
+        confidence=0.95,
+        created_at="2026-06-09T10:00:00+00:00",
+    )
+    newer = _verification_trace(
+        trace_id="trace_newer",
+        trace_type=ObservationTraceType.OUTCOME_EVAL.value,
+        outcome=ObservationOutcome.SUCCESS.value,
+        summary="Newer outcome eval confirmed the result.",
+        evidence_refs=("eval:newer-outcome",),
+        confidence=0.4,
+        created_at="2026-06-09T11:00:00+00:00",
+    )
+
+    event = build_evolution_outcome_memory_event(_proposal(), (newer, older))
+
+    assert "Newer outcome eval confirmed the result." in event.content
+    assert event.confidence == 0.4
+
+
+def test_all_proposal_evidence_refs_get_relationship_edges():
+    signals = tuple(
+        _signal().__class__(
+            signal_id=f"signal_{index}",
+            signal_type=EvolutionSignalType.USER_REQUEST.value,
+            summary=f"Signal {index}",
+            source="chat",
+            evidence_refs=(f"chat:evidence:{index}:a", f"chat:evidence:{index}:b"),
+            user_id="jason",
+            scope="project",
+        )
+        for index in range(4)
+    )
+    proposal = _proposal(signals=signals)
+
+    event = build_evolution_outcome_memory_event(proposal, (_verification_trace(),))
+
+    evidenced_edges = [
+        relationship
+        for relationship in event.relationships
+        if relationship.relationship_type == RelationshipType.EVIDENCED_BY.value
+    ]
+    assert len(evidenced_edges) == len(proposal.evidence_refs)
+    assert {relationship.target for relationship in evidenced_edges} == set(proposal.evidence_refs)
+
+
 def test_failed_proposal_outcome_builds_failure_memory_event():
     trace = _verification_trace(
         trace_id="trace_failed_memory_gate",
@@ -186,6 +235,22 @@ def test_failed_proposal_requires_failed_or_blocked_trace():
             _proposal(status=ProposalStatus.FAILED.value),
             (_verification_trace(outcome=ObservationOutcome.SUCCESS.value),),
         )
+
+
+def test_retired_proposal_requires_success_or_partial_retirement_evidence():
+    with pytest.raises(EvolutionOutcomeMemoryError, match="retirement verification"):
+        build_evolution_outcome_memory_event(
+            _proposal(status=ProposalStatus.RETIRED.value),
+            (_verification_trace(outcome=ObservationOutcome.FAILED.value),),
+        )
+
+
+def test_missing_trace_confidence_defaults_to_neutral_memory_confidence():
+    trace = _verification_trace(confidence=None)
+
+    event = build_evolution_outcome_memory_event(_proposal(), (trace,))
+
+    assert event.confidence == 0.5
 
 
 def test_outcome_memory_requires_user_scope():

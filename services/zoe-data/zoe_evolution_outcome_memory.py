@@ -144,7 +144,7 @@ def _event_type_for_status(status: str) -> str:
 
 
 def _content_for_outcome(proposal: EvolutionProposal, traces: Sequence[ObservationTrace]) -> str:
-    latest = traces[-1]
+    latest = max(traces, key=lambda trace: trace.created_at)
     return (
         f"Zoe evolution proposal {proposal.proposal_id} ended as {proposal.status}: "
         f"{proposal.title}. Latest evidence: {latest.summary}"
@@ -165,7 +165,7 @@ def _relationships_for_outcome(proposal: EvolutionProposal) -> tuple[MemoryRelat
             source=proposal.proposal_id,
             target=ref,
         )
-        for ref in proposal.evidence_refs[:6]
+        for ref in proposal.evidence_refs
     ]
     relationships.extend(
         MemoryRelationship(
@@ -188,8 +188,8 @@ def _evidence_refs(proposal: EvolutionProposal, traces: Sequence[ObservationTrac
 def _confidence_for_traces(traces: Sequence[ObservationTrace]) -> float:
     confidences = [trace.confidence for trace in traces if trace.confidence is not None]
     if not confidences:
-        return 0.75
-    return min(1.0, max(0.0, sum(confidences) / len(confidences)))
+        return 0.5
+    return min(confidences)
 
 
 __all__ = [
