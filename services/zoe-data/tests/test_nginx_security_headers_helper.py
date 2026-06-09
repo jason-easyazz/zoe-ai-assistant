@@ -308,7 +308,7 @@ def test_ensure_headers_is_idempotent_and_replaces_managed_blocks():
     server_name _;
 
     # BEGIN ZOE MANAGED SECURITY HEADERS
-    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Frame-Options "DENY" always;
     # END ZOE MANAGED SECURITY HEADERS
 
     location / {
@@ -321,7 +321,8 @@ def test_ensure_headers_is_idempotent_and_replaces_managed_blocks():
     twice = helper.ensure_headers(once)
 
     assert once == twice
-    assert "SAMEORIGIN" not in once
+    assert '"DENY"' not in once
+    assert '"SAMEORIGIN"' in once
     assert once.count(helper.BEGIN_MARKER) == 1
     assert "Strict-Transport-Security" not in once
     assert helper.missing_headers(once) == []
@@ -387,10 +388,10 @@ def test_missing_headers_requires_server_level_headers_when_location_has_headers
     location ~* \\.(js|css)$ {
         # BEGIN ZOE MANAGED SECURITY HEADERS
         add_header Content-Security-Policy "default-src 'self'" always;
-        add_header X-Frame-Options "DENY" always;
+        add_header X-Frame-Options "SAMEORIGIN" always;
         add_header X-Content-Type-Options "nosniff" always;
         add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-        add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+        add_header Permissions-Policy "camera=(), microphone=(self), geolocation=()" always;
         # END ZOE MANAGED SECURITY HEADERS
         add_header Cache-Control "no-cache";
     }
