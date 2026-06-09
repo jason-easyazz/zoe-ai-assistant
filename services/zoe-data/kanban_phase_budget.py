@@ -48,6 +48,11 @@ _PATCH_REVIEW_DIFF_RE = re.compile(r"^\s*(?:┊|\|)\s+review\s+diff\b", re.IGNOR
 _TERMINAL_STEP_RE = re.compile(r"^\s*(?:┊|\|)\s+\S+\s+kanban_(?:complete|block)\b", re.IGNORECASE)
 _EXPLORE_STEP_RE = re.compile(r"^\s*(?:┊|\|)\s+\S+\s+(?:read|grep|find)\b", re.IGNORECASE)
 _READ_STEP_RE = re.compile(r"^\s*(?:┊|\|)\s+\S+\s+read\s+(?P<path>\S+)", re.IGNORECASE)
+_SHELL_CD_STEP_RE = re.compile(
+    r"^\s*(?:┊|\|)\s+\S+\s+\$\s+cd\s+(?P<cwd>'[^']+'|\"[^\"]+\"|\S+)\s+&&\s+(?P<command>.+)$",
+    re.IGNORECASE,
+)
+_STEP_TIMING_SUFFIX_RE = re.compile(r"\s+\d+(?:\.\d+)?s(?:\s+\[.*?\])?\s*$")
 _FOCUSED_HARNESS_TEST_RE = re.compile(
     r"\bpython3\s+-m\s+pytest\b.*services/zoe-data/tests/\S+\.py::\S+",
     re.IGNORECASE,
@@ -308,6 +313,48 @@ def implement_pre_edit_drift_reason_from_log(
     return None
 
 
+def worktree_path_violation_reason_from_log(
+    task_id: str,
+    phase: str,
+    *,
+    session: str | None = None,
+    task: dict[str, Any] | None = None,
+) -> str | None:
+    """Block workers that leave their pinned isolated worktree.
+
+    The task row is the source of truth for where Hermes should run. A worker
+    that shells back into the dirty live checkout can commit unrelated files and
+    open a polluted PR, so this guard fails closed as soon as the log shows a
+    different `cd ... &&` working directory.
+    """
+    if phase not in {"implement", "implement_revision", "verify"}:
+        return None
+    task = task or {}
+    if str(task.get("workspace_kind") or "").lower() != "worktree":
+        return None
+    expected = str(task.get("workspace_path") or "").rstrip("/")
+    if not expected:
+        return None
+    if session is None:
+        session = _latest_log_session(task_id, max_lines=0)
+    if not session:
+        return None
+
+    for line in session.splitlines():
+        match = _SHELL_CD_STEP_RE.match(line)
+        if not match:
+            continue
+        cwd = match.group("cwd").strip("'\"").rstrip("/")
+        if cwd != expected and not cwd.startswith(expected + "/"):
+            command = _STEP_TIMING_SUFFIX_RE.sub("", match.group("command").strip())
+            return (
+                "BLOCKER=WORKTREE_PATH_VIOLATION: worker used "
+                f"{cwd} instead of pinned task worktree {expected} "
+                f"before command `{command[:160]}`"
+            )
+    return None
+
+
 def review_wrapup_tool_grace(task_id: str, phase: str) -> int:
     """Grant review terminal headroom only after a verdict marker is written."""
     if phase != "review":
@@ -421,11 +468,23 @@ def phase_budget_reason(
             f"BLOCKER={phase.upper()}_BUDGET: code-enforced tool budget exceeded "
             f"(steps={tool_steps}, guidance_limit={tool_limit}, hard_limit={hard_limit})"
         )
-    session = _latest_log_session(task_id, max_lines=0) if phase in {"implement", "implement_revision"} else None
+    session = (
+        _latest_log_session(task_id, max_lines=0)
+        if phase in {"implement", "implement_revision", "verify"}
+        else None
+    )
+    task = detail.get("task") if isinstance(detail.get("task"), dict) else {}
+    worktree_reason = worktree_path_violation_reason_from_log(
+        task_id,
+        phase,
+        session=session,
+        task=task,
+    )
+    if worktree_reason:
+        return worktree_reason
     edit_safety_reason = implement_edit_safety_reason_from_log(task_id, phase, session=session)
     if edit_safety_reason:
         return edit_safety_reason
-    task = detail.get("task") if isinstance(detail.get("task"), dict) else {}
     pre_edit_drift_reason = implement_pre_edit_drift_reason_from_log(
         task_id,
         phase,
