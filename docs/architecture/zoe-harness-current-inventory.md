@@ -159,10 +159,12 @@ from `origin/main` at `ad52f61d` on 2026-06-09. The refreshed graph reports
 7,340 nodes, 12,522 edges, and 539 communities after `cluster-only --no-viz`.
 
 Graphify remains a generated architecture aid, not the only source of truth.
-This inventory is source-verified from mounted routers, agent tool catalog,
-memory files, and pipeline files. After substantial code or architecture
-changes, rerun Graphify and reconcile the generated report against this
-inventory before broad cleanup.
+The embedded report commit is the pre-merge code base used for extraction; this
+PR changes only generated Graphify outputs and harness docs, so a post-merge
+HEAD mismatch by itself does not indicate code graph staleness. This inventory
+is source-verified from mounted routers, agent tool catalog, memory files, and
+pipeline files. After substantial code or architecture changes, rerun Graphify
+and reconcile the generated report against this inventory before broad cleanup.
 
 ## Cleanup Readiness
 
