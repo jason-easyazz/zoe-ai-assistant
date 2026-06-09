@@ -91,6 +91,17 @@ def _board() -> str:
     return os.environ.get("ZOE_KANBAN_BOARD", "default")
 
 
+def _workspace_for_phase(phase: str) -> str:
+    """Choose the Hermes workspace for a phase.
+
+    Retro is read-only orchestration/learning work. Running it from the main
+    repo avoids phantom task worktrees after closeout has already merged.
+    """
+    if phase == "retro":
+        return f"dir:{zoe_repo_root()}"
+    return "worktree"
+
+
 def _greptile_mcp_bin() -> str:
     """Locate the operator-local greptile MCP CLI; honour GREPTILE_MCP_BIN override.
 
@@ -494,13 +505,14 @@ class KanbanAdapter:
         issue_id = str(issue.get("id") or "").strip()
         escalation = _model_escalation_active(issue, mode)
         escalation_marker = "zoe-model-escalation: true\n" if escalation else ""
+        workspace_label = "main repo checkout" if phase == "retro" else "git worktree"
         common = (
             f"Multica issue: {identifier} (id {issue_id})\n"
             f"zoe-ref: multica:{issue_id}:{phase}\n"
             f"zoe-chain: v4\n"
             f"{escalation_marker}"
             f"{mode_note}"
-            f"Repo: {zoe_repo_root()}  |  Base branch: main  |  Workspace: git worktree\n\n"
+            f"Repo: {zoe_repo_root()}  |  Base branch: main  |  Workspace: {workspace_label}\n\n"
             f"Title: {title}\n\n{description}\n\n"
         )
         if phase == "scout":
@@ -976,7 +988,7 @@ class KanbanAdapter:
             "--assignee",
             assignee,
             "--workspace",
-            "worktree",
+            _workspace_for_phase(phase),
             "--idempotency-key",
             f"{external_ref}:{phase}",
             "--max-runtime",
