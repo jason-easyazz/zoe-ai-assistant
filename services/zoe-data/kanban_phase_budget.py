@@ -38,6 +38,11 @@ _ITERATION_BUDGET_RE = re.compile(
     r"Iteration budget reached\s*\((?P<used>\d+)\s*/\s*(?P<limit>\d+)\)",
     re.IGNORECASE,
 )
+_PYTHON_PATCH_RE = re.compile(r"\bpatch\b.*\.py\b")
+_PYTHON_CHECK_RE = re.compile(
+    r"\b(py_compile|pytest|mypy|ruff|validate_structure|validate_critical_files)\b",
+    re.IGNORECASE,
+)
 _MARK_REVIEWED_VERDICT_RE = re.compile(
     r"\bmark-reviewed\b(?=.*--critical-count)(?=.*--summary)",
     re.IGNORECASE,
@@ -145,6 +150,37 @@ def phase_budget_reason_from_log(task_id: str, phase: str) -> str | None:
         f"BLOCKER=ITERATION_BUDGET: Hermes iteration budget reached during {phase} "
         f"(steps={match.group('used')}, limit={match.group('limit')})"
     )
+
+
+def implement_edit_safety_reason_from_log(task_id: str, phase: str) -> str | None:
+    """Block implement runs that patch Python then keep exploring before syntax checks.
+
+    Prompt instructions are not enough for cost control: a worker can apply a
+    malformed Python patch and spend the rest of its iteration budget reading and
+    grepping. Treat the latest task log as an enforceable event stream: after a
+    Python patch, the next tool step must be a narrow syntax/test check.
+    """
+    if phase != "implement":
+        return None
+    session = _latest_log_session(task_id, max_lines=0)
+    if not session:
+        return None
+
+    pending_python_patch = False
+    for line in session.splitlines():
+        if _PYTHON_PATCH_RE.search(line):
+            pending_python_patch = True
+            continue
+        if not pending_python_patch or not _STEP_LINE_RE.match(line):
+            continue
+        if _PYTHON_CHECK_RE.search(line):
+            pending_python_patch = False
+            continue
+        return (
+            "BLOCKER=IMPLEMENT_EDIT_SAFETY: Python patch was followed by more "
+            "exploration before py_compile/focused tests"
+        )
+    return None
 
 
 def review_wrapup_tool_grace(task_id: str, phase: str) -> int:
@@ -260,6 +296,9 @@ def phase_budget_reason(
             f"BLOCKER={phase.upper()}_BUDGET: code-enforced tool budget exceeded "
             f"(steps={tool_steps}, guidance_limit={tool_limit}, hard_limit={hard_limit})"
         )
+    edit_safety_reason = implement_edit_safety_reason_from_log(task_id, phase)
+    if edit_safety_reason:
+        return edit_safety_reason
     log_reason = phase_budget_reason_from_log(task_id, phase)
     if log_reason:
         return log_reason
