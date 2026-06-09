@@ -5,7 +5,9 @@ trusted durable memory. Reflection, extraction, and sidecar recall may propose
 memory, but they cannot silently promote it into truth.
 
 The executable contract lives in
-`services/zoe-data/zoe_memory_admission.py`.
+`services/zoe-data/zoe_memory_admission.py`. Multica/review records can be
+converted into the same inert decision shape by
+`services/zoe-data/zoe_multica_memory_admission.py`.
 
 ## Rules
 
@@ -19,16 +21,29 @@ The executable contract lives in
 
 ## Current Scope
 
-This is a schema and decision contract only. It does not write to
-MemoryService, Hindsight, Graphiti, or Multica. Runtime wiring should happen in
-a later small PR after this contract is reviewed and tested.
+This is a schema, decision contract, and Multica metadata bridge only. It does
+not write to MemoryService, Hindsight, Graphiti, or Multica. Runtime writer
+wiring should happen in a later small PR after this contract is reviewed and
+tested.
 
 ## Intended Flow
 
 1. Memory extraction or Hindsight reflection creates a pending candidate.
 2. Zoe records observation traces for recall, retain, admission, or
    verification.
-3. Multica or a reviewer supplies approval evidence.
+3. Multica or a reviewer supplies explicit `memory_admission_approved: true`
+   approval evidence in Zoe ticket metadata, or a `blocked_reason` if the
+   candidate must not be promoted.
 4. `evaluate_memory_admission()` returns whether Zoe may keep the candidate
    pending or write durable/trusted memory.
 5. The runtime writer uses the decision as a gate before touching any backend.
+
+## Multica Bridge Rules
+
+- Missing approval metadata remains pending review.
+- Only explicit `memory_admission_approved: true` creates a Multica approval
+  ref and successful admission trace.
+- `blocked_reason` creates a blocked admission trace and prevents durable
+  promotion even if an approval flag is present.
+- Ticket metadata may request target backends, but Graphiti-style targets still
+  require a relationship or supersession edge.
