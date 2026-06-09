@@ -43,6 +43,10 @@ _PYTHON_CHECK_RE = re.compile(
     r"^\s*(?:┊|\|)\s+\S+\s+\$\s+.*\b(py_compile|pytest|mypy|ruff|validate_structure|validate_critical_files)\b",
     re.IGNORECASE,
 )
+_PATCH_STEP_RE = re.compile(r"^\s*(?:┊|\|)\s+\S+\s+patch\b", re.IGNORECASE)
+_TERMINAL_STEP_RE = re.compile(r"^\s*(?:┊|\|)\s+\S+\s+kanban_(?:complete|block)\b", re.IGNORECASE)
+_EXPLORE_STEP_RE = re.compile(r"^\s*(?:┊|\|)\s+\S+\s+(?:read|grep|find)\b", re.IGNORECASE)
+_READ_STEP_RE = re.compile(r"^\s*(?:┊|\|)\s+\S+\s+read\s+(?P<path>\S+)", re.IGNORECASE)
 _MARK_REVIEWED_VERDICT_RE = re.compile(
     r"\bmark-reviewed\b(?=.*--critical-count)(?=.*--summary)",
     re.IGNORECASE,
@@ -152,7 +156,7 @@ def phase_budget_reason_from_log(task_id: str, phase: str) -> str | None:
     )
 
 
-def implement_edit_safety_reason_from_log(task_id: str, phase: str) -> str | None:
+def implement_edit_safety_reason_from_log(task_id: str, phase: str, *, session: str | None = None) -> str | None:
     """Block implement runs that patch Python then keep exploring before syntax checks.
 
     Prompt instructions are not enough for cost control: a worker can apply a
@@ -162,7 +166,8 @@ def implement_edit_safety_reason_from_log(task_id: str, phase: str) -> str | Non
     """
     if phase not in {"implement", "implement_revision"}:
         return None
-    session = _latest_log_session(task_id, max_lines=0)
+    if session is None:
+        session = _latest_log_session(task_id, max_lines=0)
     if not session:
         return None
 
@@ -182,6 +187,69 @@ def implement_edit_safety_reason_from_log(task_id: str, phase: str) -> str | Non
             "BLOCKER=IMPLEMENT_EDIT_SAFETY: Python patch was followed by more "
             "exploration before py_compile/focused tests"
         )
+    return None
+
+
+def _pre_edit_explore_budget() -> int:
+    try:
+        return max(1, int(os.environ.get("ZOE_KANBAN_IMPLEMENT_PRE_EDIT_EXPLORE_BUDGET", "12")))
+    except ValueError:
+        return 12
+
+
+def _pre_edit_repeat_read_budget() -> int:
+    try:
+        return max(1, int(os.environ.get("ZOE_KANBAN_IMPLEMENT_PRE_EDIT_REPEAT_READ_BUDGET", "6")))
+    except ValueError:
+        return 6
+
+
+def _read_path_key(raw_path: str) -> str:
+    return re.sub(r":\d+(?:-\d+)?$", "", raw_path)
+
+
+def implement_pre_edit_drift_reason_from_log(task_id: str, phase: str, *, session: str | None = None) -> str | None:
+    """Block implement runs that keep exploring before making any edit.
+
+    Real production failures showed workers ignoring a narrow scout handoff and
+    repeatedly reading/grepping the same files until Hermes' full iteration
+    budget was gone. This guard cuts that loop off earlier. Once a patch or a
+    terminal Kanban call appears, this pre-edit guard stands down and the normal
+    edit-safety / evidence gates take over.
+    """
+    if phase not in {"implement", "implement_revision"}:
+        return None
+    if session is None:
+        session = _latest_log_session(task_id, max_lines=0)
+    if not session:
+        return None
+
+    step_lines = [line for line in session.splitlines() if _STEP_LINE_RE.match(line)]
+    if any(_PATCH_STEP_RE.search(line) or _TERMINAL_STEP_RE.search(line) for line in step_lines):
+        return None
+
+    explore_budget = _pre_edit_explore_budget()
+    repeat_read_budget = _pre_edit_repeat_read_budget()
+    explore_steps = 0
+    read_counts: dict[str, int] = {}
+    for line in step_lines:
+        if not _EXPLORE_STEP_RE.search(line):
+            continue
+        explore_steps += 1
+        read_match = _READ_STEP_RE.search(line)
+        if explore_steps > explore_budget:
+            return (
+                "BLOCKER=IMPLEMENT_HANDOFF_DRIFT: pre-edit exploration exceeded "
+                f"budget without patch (steps={explore_steps}, limit={explore_budget})"
+            )
+        if read_match:
+            path = _read_path_key(read_match.group("path"))
+            read_counts[path] = read_counts.get(path, 0) + 1
+            if read_counts[path] > repeat_read_budget:
+                return (
+                    "BLOCKER=IMPLEMENT_HANDOFF_DRIFT: repeated pre-edit reads "
+                    f"without patch (file={path}, reads={read_counts[path]})"
+                )
     return None
 
 
@@ -298,9 +366,13 @@ def phase_budget_reason(
             f"BLOCKER={phase.upper()}_BUDGET: code-enforced tool budget exceeded "
             f"(steps={tool_steps}, guidance_limit={tool_limit}, hard_limit={hard_limit})"
         )
-    edit_safety_reason = implement_edit_safety_reason_from_log(task_id, phase)
+    session = _latest_log_session(task_id, max_lines=0) if phase in {"implement", "implement_revision"} else None
+    edit_safety_reason = implement_edit_safety_reason_from_log(task_id, phase, session=session)
     if edit_safety_reason:
         return edit_safety_reason
+    pre_edit_drift_reason = implement_pre_edit_drift_reason_from_log(task_id, phase, session=session)
+    if pre_edit_drift_reason:
+        return pre_edit_drift_reason
     log_reason = phase_budget_reason_from_log(task_id, phase)
     if log_reason:
         return log_reason

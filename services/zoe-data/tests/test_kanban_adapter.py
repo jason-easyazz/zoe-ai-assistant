@@ -1951,6 +1951,199 @@ def test_implement_edit_safety_covers_revision_phase(tmp_path, monkeypatch):
     assert "IMPLEMENT_EDIT_SAFETY" in reason
 
 
+def test_implement_pre_edit_drift_blocks_repeated_reads_without_patch(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_PRE_EDIT_REPEAT_READ_BUDGET", "6")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    repeated_reads = "\n".join(
+        "  ┊ 📖 read      /work/services/zoe-data/intent_router.py  0.1s"
+        for _ in range(7)
+    )
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ ⚡ kanban_sh   0.0s\n"
+        "  ┊ 💻 $         cd /work && git status  0.1s\n"
+        f"{repeated_reads}\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.implement_pre_edit_drift_reason_from_log("t_impl", "implement")
+
+    assert reason is not None
+    assert "IMPLEMENT_HANDOFF_DRIFT" in reason
+    assert "repeated pre-edit reads" in reason
+
+
+def test_implement_pre_edit_drift_normalizes_read_range_suffixes(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_PRE_EDIT_REPEAT_READ_BUDGET", "3")
+    monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_PRE_EDIT_EXPLORE_BUDGET", "20")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    ranged_reads = "\n".join(
+        f"  ┊ 📖 read      /work/services/zoe-data/intent_router.py:{index}-{index + 20}  0.1s"
+        for index in [1, 40, 80, 120]
+    )
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        f"{ranged_reads}\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.implement_pre_edit_drift_reason_from_log("t_impl", "implement")
+
+    assert reason is not None
+    assert "repeated pre-edit reads" in reason
+    assert "file=/work/services/zoe-data/intent_router.py" in reason
+
+
+def test_implement_pre_edit_drift_blocks_exploration_without_patch(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_PRE_EDIT_EXPLORE_BUDGET", "12")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    explore = "\n".join(
+        f"  ┊ 🔎 grep      symbol_{index}  0.1s"
+        for index in range(13)
+    )
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ ⚡ kanban_sh   0.0s\n"
+        f"{explore}\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.implement_pre_edit_drift_reason_from_log("t_impl", "implement")
+
+    assert reason is not None
+    assert "pre-edit exploration exceeded budget" in reason
+
+
+def test_implement_pre_edit_drift_prioritizes_explore_budget_when_both_trip(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_PRE_EDIT_REPEAT_READ_BUDGET", "3")
+    monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_PRE_EDIT_EXPLORE_BUDGET", "3")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    repeated_reads = "\n".join(
+        "  ┊ 📖 read      /work/services/zoe-data/intent_router.py  0.1s"
+        for _ in range(4)
+    )
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        f"{repeated_reads}\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.implement_pre_edit_drift_reason_from_log("t_impl", "implement")
+
+    assert reason is not None
+    assert "pre-edit exploration exceeded budget" in reason
+
+
+def test_implement_pre_edit_drift_stands_down_after_patch(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 📖 read      /work/services/zoe-data/intent_router.py  0.1s\n"
+        "  ┊ 📖 read      /work/services/zoe-data/intent_router.py  0.1s\n"
+        "  ┊ 🔧 patch     /work/services/zoe-data/intent_router.py  5.9s\n"
+        "  ┊ 📖 read      /work/services/zoe-data/intent_router.py  0.1s\n",
+        encoding="utf-8",
+    )
+
+    assert kb.implement_pre_edit_drift_reason_from_log("t_impl", "implement") is None
+
+
+def test_implement_pre_edit_drift_stands_down_after_terminal_call(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_PRE_EDIT_EXPLORE_BUDGET", "12")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    explore = "\n".join(
+        f"  ┊ 🔎 grep      symbol_{index}  0.1s"
+        for index in range(13)
+    )
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        f"{explore}\n"
+        "  ┊ ✅ kanban_block  0.1s\n",
+        encoding="utf-8",
+    )
+
+    assert kb.implement_pre_edit_drift_reason_from_log("t_impl", "implement") is None
+
+
+def test_implement_pre_edit_drift_covers_revision_phase(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_PRE_EDIT_EXPLORE_BUDGET", "12")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    explore = "\n".join(
+        f"  ┊ 🔎 grep      stale_comment_{index}  0.1s"
+        for index in range(13)
+    )
+    (log_dir / "t_revision.log").write_text(
+        "Query: work kanban task t_revision\n"
+        f"{explore}\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.implement_pre_edit_drift_reason_from_log("t_revision", "implement_revision")
+
+    assert reason is not None
+    assert "IMPLEMENT_HANDOFF_DRIFT" in reason
+
+
+def test_phase_budget_reason_blocks_pre_edit_handoff_drift(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_PRE_EDIT_EXPLORE_BUDGET", "12")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    explore = "\n".join(
+        f"  ┊ 🔎 grep      symbol_{index}  0.1s"
+        for index in range(13)
+    )
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        f"{explore}\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.phase_budget_reason(
+        "t_impl",
+        "implement",
+        {"task": {"started_at": 100}, "runs": [{"started_at": 100}]},
+        now=120,
+    )
+
+    assert reason is not None
+    assert "IMPLEMENT_HANDOFF_DRIFT" in reason
+
+
+def test_phase_budget_reason_reuses_implement_log_session(monkeypatch):
+    monkeypatch.setattr(kb, "tool_step_count", lambda *args, **kwargs: 1)
+    monkeypatch.setattr(kb, "_started_timestamp", lambda detail: None)
+    calls = []
+
+    def fake_latest(task_id, *, max_lines=120):
+        calls.append(max_lines)
+        if max_lines == 0:
+            return (
+                "Query: work kanban task t_impl\n"
+                "  ┊ 📖 read      /work/services/zoe-data/intent_router.py  0.1s\n"
+            )
+        return ""
+
+    monkeypatch.setattr(kb, "_latest_log_session", fake_latest)
+
+    assert kb.phase_budget_reason("t_impl", "implement", {"task": {}, "runs": []}) is None
+    assert calls.count(0) == 1
+
+
 def test_phase_budget_reason_ignores_stale_iteration_budget_log_session(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     log_dir = tmp_path / "kanban" / "logs"
@@ -2918,6 +3111,44 @@ def test_implement_body_includes_unconditional_scout_handoff_fast_path():
     assert "intent-gap tickets" in body
     assert "start editing within 4 tool/model steps" in body
     assert body.index("SCOUT HANDOFF FAST PATH") < body.index("SMALL EXPLICIT CODE FAST PATH")
+
+
+def test_implement_body_includes_intent_gap_fast_path():
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {
+            "id": "uuid-intent",
+            "identifier": "ZOE-5451",
+            "title": "Intent gap: 'Tell me a joke.'",
+            "description": "SCOUT_SUMMARY says services/zoe-data/intent_router.py needs a narrow route.",
+        },
+        "ZOE-5451",
+    )
+
+    assert "INTENT-GAP IMPLEMENT FAST PATH" in body
+    assert "services/zoe-data/intent_router.py" in body
+    assert "nearest intent_router tests" in body
+    assert "Start editing within 4 tool/model steps after `kanban_show`" in body
+    assert body.index("INTENT-GAP IMPLEMENT FAST PATH") < body.index("AUDIT/SMOKE FAST PATH")
+
+
+def test_implement_revision_body_includes_intent_gap_fast_path():
+    body = ka.KanbanAdapter()._build_body(
+        "implement_revision",
+        {
+            "id": "uuid-intent",
+            "identifier": "ZOE-5451",
+            "title": "Intent-gap revision: 'Tell me a joke.'",
+            "description": "Existing PR still needs a focused intent_router.py revision.",
+        },
+        "ZOE-5451",
+    )
+
+    assert "INTENT-GAP IMPLEMENT FAST PATH" in body
+    assert "services/zoe-data/intent_router.py" in body
+    assert "EXISTING PR REVISION FAST PATH" in body
+    assert "After the existing-PR checkout checks succeed" in body
+    assert "Start editing within 4 tool/model steps after `kanban_show`" not in body
 
 
 def test_retro_body_has_post_closeout_fast_path():
