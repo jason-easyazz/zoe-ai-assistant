@@ -162,6 +162,7 @@ async def run_evolution_notice() -> dict:
                 description=description,
                 evidence=evidence,
                 proposal_type=prop_type,
+                contract_snapshot=target_patterns,
             )
             if multica_id:
                 await db.execute(
@@ -221,6 +222,7 @@ async def run_evolution_notice() -> dict:
                 description=description,
                 evidence=evidence_data,
                 proposal_type="agent_health",
+                contract_snapshot=target_patterns,
             )
             if multica_id:
                 await db.execute(
@@ -297,6 +299,7 @@ async def record_frustration_signal(
             description=description,
             evidence=evidence,
             proposal_type="user_frustration",
+            contract_snapshot=target_patterns,
         )
         if multica_id:
             await db.execute(
@@ -363,6 +366,7 @@ async def record_user_issue(message: str, user_id: str) -> None:
             evidence=evidence,
             proposal_type="user_issue_report",
             label_name="user-feedback",
+            contract_snapshot=target_patterns,
         )
         if multica_id:
             await db.execute(

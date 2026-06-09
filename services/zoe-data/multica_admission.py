@@ -60,6 +60,29 @@ def ticket_is_dispatch_approved(
     source = str(metadata.get("source") or "").lower()
     if "smoke" in source or "e2e" in source:
         return False
+    if source.startswith("evolution_proposal:") and not _has_matching_evolution_contract(metadata, source):
+        return False
+    return True
+
+
+def _has_matching_evolution_contract(metadata: dict[str, Any], source: str) -> bool:
+    proposal_id = source.split(":", 1)[1].strip()
+    if not proposal_id:
+        return False
+    if metadata.get("evolution_contract_schema") != "zoe_evolution_proposal":
+        return False
+    if str(metadata.get("evolution_contract_proposal_id") or "") != proposal_id:
+        return False
+    if str(metadata.get("evolution_proposal_id") or "") != proposal_id:
+        return False
+    if metadata.get("evolution_contract_allowed_to_prepare") is not True:
+        return False
+    if not metadata.get("evolution_contract_status"):
+        return False
+    if not metadata.get("evolution_contract_autonomy_class"):
+        return False
+    if not metadata.get("evolution_contract_risk"):
+        return False
     return True
 
 
@@ -91,7 +114,11 @@ def select_next_approved_issue(
         if str(issue.get("assignee_id") or "") != str(hermes_agent_id):
             continue
         metadata = parse_ticket_block(issue.get("description") or "")
-        if metadata.get("dispatch_approved") is True:
+        if ticket_is_dispatch_approved(
+            issue,
+            hermes_agent_id=hermes_agent_id,
+            metadata=metadata,
+        ):
             blocked_approved.append(
                 str(issue.get("identifier") or issue.get("id") or "unknown")
             )

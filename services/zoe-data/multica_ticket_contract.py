@@ -88,10 +88,12 @@ def describe_ticket(
     evidence_expectations: list[str] | None = None,
     source: str | None = None,
     parent_issue_id: str | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> str:
     """Build a Multica description with preserved prose plus Zoe metadata."""
     metadata = normalize_ticket_metadata(
-        {
+        metadata,
+        **{
             "zoe_kind": zoe_kind,
             "evidence_profile": evidence_profile,
             "engineering_mode": engineering_mode,

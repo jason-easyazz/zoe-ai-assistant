@@ -3024,6 +3024,7 @@ async def _execute_tool(db, name: str, args: dict):
                 description=description,
                 evidence=evidence,
                 proposal_type=proposal_type,
+                contract_snapshot=contract_snapshot,
             )
             if multica_id:
                 await db.execute(
