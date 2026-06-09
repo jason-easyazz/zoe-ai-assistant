@@ -54,6 +54,30 @@ def test_execution_requires_local_model_when_offline_only():
         ).validate()
 
 
+def test_execution_cannot_disable_offline_requirement():
+    with pytest.raises(PiRuntimeConfigError, match="OFFLINE_ONLY"):
+        PiRuntimeConfig.from_env(
+            {
+                "ZOE_PI_ENABLED": "true",
+                "ZOE_PI_ALLOW_EXECUTION": "true",
+                "ZOE_PI_OFFLINE_ONLY": "false",
+                "ZOE_PI_LOCAL_MODEL_CONFIGURED": "true",
+            }
+        ).validate()
+
+
+def test_execution_cannot_disable_local_model_requirement():
+    with pytest.raises(PiRuntimeConfigError, match="LOCAL_MODEL_REQUIRED"):
+        PiRuntimeConfig.from_env(
+            {
+                "ZOE_PI_ENABLED": "true",
+                "ZOE_PI_ALLOW_EXECUTION": "true",
+                "ZOE_PI_LOCAL_MODEL_REQUIRED": "false",
+                "ZOE_PI_LOCAL_MODEL_CONFIGURED": "true",
+            }
+        ).validate()
+
+
 def test_execution_can_be_configured_with_explicit_local_model_flag(tmp_path, monkeypatch):
     bindir = tmp_path / "bin"
     bindir.mkdir()
@@ -76,7 +100,7 @@ def test_execution_can_be_configured_with_explicit_local_model_flag(tmp_path, mo
     assert result.tools["pi"] == str(bindir / "pi")
 
 
-def test_runtime_detects_agent_files(tmp_path):
+def test_disabled_runtime_does_not_surface_agent_files(tmp_path):
     agent_dir = tmp_path / ".pi" / "agents"
     agent_dir.mkdir(parents=True)
     (agent_dir / "explorer.md").write_text(
@@ -86,6 +110,21 @@ def test_runtime_detects_agent_files(tmp_path):
 
     result = probe_pi_runtime(env={"ZOE_PI_CWD": str(tmp_path)})
 
+    assert result.status == "disabled"
+    assert result.agent_files == ()
+
+
+def test_enabled_runtime_detects_agent_files(tmp_path):
+    agent_dir = tmp_path / ".pi" / "agents"
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "explorer.md").write_text(
+        "---\nname: explorer\ndescription: Fast codebase exploration\nmodel: local/gemma\n---\nPrompt body\n",
+        encoding="utf-8",
+    )
+
+    result = probe_pi_runtime(env={"ZOE_PI_ENABLED": "true", "ZOE_PI_CWD": str(tmp_path), "PATH": ""})
+
+    assert result.status == "missing_node"
     assert result.agent_files == (
         {
             "path": str(agent_dir / "explorer.md"),
@@ -109,6 +148,7 @@ def test_timeout_must_be_positive():
     result = probe_pi_runtime(env={"ZOE_PI_TIMEOUT_SECONDS": "0"})
 
     assert result.status == "misconfigured"
+    assert result.config["timeout_seconds"] == 0.0
     assert "positive" in (result.reason or "")
 
 

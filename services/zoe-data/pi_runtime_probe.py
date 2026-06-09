@@ -51,10 +51,13 @@ class PiRuntimeConfig:
             raise PiRuntimeConfigError("ZOE_PI_TIMEOUT_SECONDS must be positive")
         if self.allow_execution and not self.enabled:
             raise PiRuntimeConfigError("ZOE_PI_ALLOW_EXECUTION requires ZOE_PI_ENABLED")
-        if self.enabled and self.allow_execution and self.offline_only and self.local_model_required and not self.local_model_configured:
-            raise PiRuntimeConfigError(
-                "Pi execution requires ZOE_PI_LOCAL_MODEL_CONFIGURED=true when Zoe Pi runtime is offline-only"
-            )
+        if self.enabled and self.allow_execution:
+            if not self.offline_only:
+                raise PiRuntimeConfigError("Pi execution requires ZOE_PI_OFFLINE_ONLY=true")
+            if not self.local_model_required:
+                raise PiRuntimeConfigError("Pi execution requires ZOE_PI_LOCAL_MODEL_REQUIRED=true")
+            if not self.local_model_configured:
+                raise PiRuntimeConfigError("Pi execution requires ZOE_PI_LOCAL_MODEL_CONFIGURED=true")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -109,7 +112,6 @@ def probe_pi_runtime(env: Mapping[str, str] | None = None) -> PiRuntimeProbeResu
         )
 
     tools = _tool_snapshot(config.command, env)
-    agent_files = tuple(_discover_agent_files(config))
 
     if not config.enabled:
         return PiRuntimeProbeResult(
@@ -118,9 +120,11 @@ def probe_pi_runtime(env: Mapping[str, str] | None = None) -> PiRuntimeProbeResu
             status="disabled",
             config=config.to_dict(),
             tools=tools,
-            agent_files=agent_files,
+            agent_files=(),
             reason="ZOE_PI_ENABLED is false",
         )
+
+    agent_files = tuple(_discover_agent_files(config))
 
     if not tools.get("node"):
         return PiRuntimeProbeResult(
@@ -196,7 +200,7 @@ def _config_snapshot(env: Mapping[str, str] | None = None) -> dict[str, Any]:
         "command": (values.get("ZOE_PI_COMMAND") or "pi").strip() or "pi",
         "cwd": (values.get("ZOE_PI_CWD") or "/home/zoe/assistant").strip() or "/home/zoe/assistant",
         "agent_dir": values.get("ZOE_PI_AGENT_DIR") or None,
-        "timeout_seconds": values.get("ZOE_PI_TIMEOUT_SECONDS") or 2.0,
+        "timeout_seconds": _float_snapshot(values.get("ZOE_PI_TIMEOUT_SECONDS"), default=2.0),
     }
 
 
@@ -209,6 +213,15 @@ def _bool_snapshot(value: str | None, *, default: bool) -> bool | str:
     if normalized in {"0", "false", "no", "off"}:
         return False
     return str(value)
+
+
+def _float_snapshot(value: str | None, *, default: float) -> float | str:
+    if value is None or str(value).strip() == "":
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return str(value)
 
 
 def _tool_snapshot(pi_command: str, env: Mapping[str, str] | None = None) -> dict[str, str | None]:
