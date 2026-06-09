@@ -8,8 +8,10 @@ or admitted by Multica/evidence gates before any sidecar retain call occurs.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import Any, Mapping
 
+from hindsight_memory import HindsightConfig, event_to_hindsight_item
 from zoe_evolution_proposal import EvolutionProposal
 from zoe_memory_admission import MemoryAdmissionDecision, MemoryAdmissionRequest, evaluate_memory_admission
 from zoe_memory_contract import MemoryEvent, memory_event_from_mapping
@@ -18,6 +20,28 @@ from zoe_observation_trace import ObservationTrace
 
 
 HINDSIGHT_RETAIN_SOURCE = "hindsight_retain_candidate"
+
+
+class HindsightRetainAdmissionError(ValueError):
+    """Raised when a Hindsight retain plan lacks an approved admission decision."""
+
+
+@dataclass(frozen=True)
+class HindsightAdmittedRetainPlan:
+    admission_id: str
+    event_id: str
+    bank_id: str
+    payload: Mapping[str, Any]
+    evidence_refs: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "admission_id": self.admission_id,
+            "event_id": self.event_id,
+            "bank_id": self.bank_id,
+            "payload": dict(self.payload),
+            "evidence_refs": list(self.evidence_refs),
+        }
 
 
 def build_hindsight_retain_candidate(event_or_payload: MemoryEvent | Mapping[str, Any]) -> dict[str, Any]:
@@ -135,6 +159,50 @@ def evaluate_hindsight_retain_candidate_admission(
     return evaluate_memory_admission(request)
 
 
+def build_admitted_hindsight_retain_plan(
+    request: MemoryAdmissionRequest,
+    decision: MemoryAdmissionDecision,
+    *,
+    config: HindsightConfig | None = None,
+) -> HindsightAdmittedRetainPlan:
+    """Build the exact Hindsight retain payload only after admission approves it.
+
+    This does not call Hindsight. It gives future runtime writers a small,
+    testable object that cannot be produced unless the existing memory
+    admission decision explicitly permits a durable Hindsight write.
+    """
+
+    request.validate()
+    _validate_hindsight_retain_decision(request, decision)
+    hindsight_config = config or HindsightConfig()
+    return HindsightAdmittedRetainPlan(
+        admission_id=request.admission_id,
+        event_id=request.candidate.event_id,
+        bank_id=hindsight_config.bank_id(request.candidate.user_id, request.candidate.scope),
+        payload={
+            "async": hindsight_config.async_retain,
+            "items": [event_to_hindsight_item(request.candidate)],
+        },
+        evidence_refs=decision.evidence_refs,
+    )
+
+
+def _validate_hindsight_retain_decision(
+    request: MemoryAdmissionRequest,
+    decision: MemoryAdmissionDecision,
+) -> None:
+    if decision.admission_id != request.admission_id:
+        raise HindsightRetainAdmissionError(
+            f"{request.admission_id}: decision admission_id {decision.admission_id!r} does not match request"
+        )
+    if MemoryBackend.HINDSIGHT.value not in request.target_backends:
+        raise HindsightRetainAdmissionError(f"{request.admission_id}: request does not target Hindsight")
+    if not decision.allowed_to_write_durable:
+        raise HindsightRetainAdmissionError(f"{request.admission_id}: admission decision does not allow durable write")
+    if MemoryBackend.HINDSIGHT.value not in decision.allowed_backends:
+        raise HindsightRetainAdmissionError(f"{request.admission_id}: admission decision does not allow Hindsight")
+
+
 async def create_hindsight_retain_candidate(
     event_or_payload: MemoryEvent | Mapping[str, Any],
     *,
@@ -167,7 +235,10 @@ async def create_hindsight_retain_candidate(
 
 
 __all__ = [
+    "HindsightAdmittedRetainPlan",
     "HINDSIGHT_RETAIN_SOURCE",
+    "HindsightRetainAdmissionError",
+    "build_admitted_hindsight_retain_plan",
     "build_hindsight_retain_admission_request",
     "build_hindsight_retain_candidate",
     "create_hindsight_retain_candidate",
