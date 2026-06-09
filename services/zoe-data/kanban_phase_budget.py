@@ -44,6 +44,7 @@ _PYTHON_CHECK_RE = re.compile(
     re.IGNORECASE,
 )
 _PATCH_STEP_RE = re.compile(r"^\s*(?:┊|\|)\s+\S+\s+patch\b", re.IGNORECASE)
+_PATCH_REVIEW_DIFF_RE = re.compile(r"^\s*(?:┊|\|)\s+review\s+diff\b", re.IGNORECASE)
 _TERMINAL_STEP_RE = re.compile(r"^\s*(?:┊|\|)\s+\S+\s+kanban_(?:complete|block)\b", re.IGNORECASE)
 _EXPLORE_STEP_RE = re.compile(r"^\s*(?:┊|\|)\s+\S+\s+(?:read|grep|find)\b", re.IGNORECASE)
 _READ_STEP_RE = re.compile(r"^\s*(?:┊|\|)\s+\S+\s+read\s+(?P<path>\S+)", re.IGNORECASE)
@@ -179,6 +180,8 @@ def implement_edit_safety_reason_from_log(task_id: str, phase: str, *, session: 
             pending_python_patch = True
             continue
         if not pending_python_patch:
+            continue
+        if _PATCH_REVIEW_DIFF_RE.search(line):
             continue
         if _PYTHON_CHECK_RE.search(line):
             pending_python_patch = False

@@ -1889,6 +1889,46 @@ def test_implement_edit_safety_allows_immediate_python_check(tmp_path, monkeypat
     assert kb.implement_edit_safety_reason_from_log("t_impl", "implement") is None
 
 
+def test_implement_edit_safety_ignores_patch_review_diff_before_check(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 🔧 patch     /work/services/zoe-data/intent_router.py  5.9s\n"
+        "  ┊ review diff\n"
+        "a//work/services/zoe-data/intent_router.py → b//work/services/zoe-data/intent_router.py\n"
+        "@@ -410,7 +410,8 @@\n"
+        "-    r\"can you explain|set up (?:a )?new automation|what is happening in)\",\n"
+        "+    r\"can you explain|set up (?:a )?new automation|what is happening in|\"\n"
+        "+    r\"tell me (?:a|another) joke)\",\n"
+        "  ┊ 💻 $         python3 -m py_compile services/zoe-data/intent_router.py  0.2s\n",
+        encoding="utf-8",
+    )
+
+    assert kb.implement_edit_safety_reason_from_log("t_impl", "implement") is None
+
+
+def test_implement_edit_safety_blocks_explore_after_patch_review_diff(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 🔧 patch     /work/services/zoe-data/intent_router.py  5.9s\n"
+        "  ┊ review diff\n"
+        "a//work/services/zoe-data/intent_router.py → b//work/services/zoe-data/intent_router.py\n"
+        "@@ -410,7 +410,8 @@\n"
+        "  ┊ 📖 read      /work/services/zoe-data/intent_router.py  0.1s\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.implement_edit_safety_reason_from_log("t_impl", "implement")
+
+    assert reason is not None
+    assert "IMPLEMENT_EDIT_SAFETY" in reason
+
+
 def test_implement_edit_safety_ignores_non_step_patch_text(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     log_dir = tmp_path / "kanban" / "logs"
