@@ -129,6 +129,56 @@ def test_resume_pipeline_retries_after_conflict(isolated_store, monkeypatch):
     assert resumed.status == "todo"
 
 
+def test_complete_pipeline_after_external_merge_journals_done(isolated_store):
+    state = PipelineState(task_ref="multica:merged", phase="implement", status="blocked")
+    state = with_evidence(
+        state,
+        EvidenceItem(
+            kind="greptile",
+            summary="5/5",
+            passed=True,
+            metadata={"source": "pr_maintenance", "phase": "closeout", "merge_sha": "deadbeef"},
+        ),
+        EvidenceItem(
+            kind="log",
+            summary="PR maintenance recorded merged PR",
+            passed=True,
+            metadata={"source": "pr_maintenance", "phase": "retro", "merge_sha": "deadbeef"},
+        ),
+    )
+    store.save_state(state, event="blocked")
+
+    completed = store.complete_pipeline_after_external_merge(
+        "multica:merged",
+        pr_url="https://github.com/o/r/pull/9",
+        merge_sha="deadbeef",
+        greptile_status="5/5",
+    )
+
+    assert completed is not None
+    assert completed.phase == "retro"
+    assert completed.status == "done"
+    assert completed.block_classification is None
+    assert completed.split_packet is None
+    assert completed.history[-1].from_phase == "implement"
+    assert completed.history[-1].to_phase == "retro"
+    assert any(item.kind == "pr" and item.artifact == "https://github.com/o/r/pull/9" for item in completed.evidence)
+    assert any(item.kind == "greptile" and item.metadata.get("merge_sha") == "deadbeef" for item in completed.evidence)
+    assert any(item.kind == "log" and item.metadata.get("phase") == "retro" for item in completed.evidence)
+    assert sum(
+        1
+        for item in completed.evidence
+        if item.kind == "greptile" and item.metadata.get("source") == "pr_maintenance"
+    ) == 1
+    assert sum(
+        1
+        for item in completed.evidence
+        if item.kind == "log" and item.metadata.get("source") == "pr_maintenance"
+    ) == 1
+    last = json.loads(isolated_store.read_text(encoding="utf-8").strip().splitlines()[-1])
+    assert last["event"] == "external_merge_completed"
+
+
 def test_concurrent_evidence_merge_deduplicates_created_at_only(isolated_store):
     initial = store.save_state(
         PipelineState(task_ref="multica:evidence-dedup"),
@@ -337,6 +387,61 @@ def test_skip_blocked_implementation_requires_tool_evidence(isolated_store):
 
 
 @pytest.mark.asyncio
+async def test_skip_blocked_code_implementation_allows_validator_only_verify(isolated_store):
+    from pipeline_evidence import TransitionRecord
+
+    state = PipelineState(
+        task_ref="multica:code-gate-no-code-skip",
+        phase="implement",
+        status="blocked",
+        evidence_profile="code",
+        history=[
+            TransitionRecord(
+                from_phase="implement",
+                to_phase="implement",
+                outcome="block",
+                reason="GATE_BLOCKED: missing required evidence pr",
+            )
+        ],
+        evidence=[
+            EvidenceItem(
+                kind="tool",
+                summary="scout proved acceptance is already satisfied by merged work",
+                passed=True,
+            )
+        ],
+    )
+    store.save_state(state, event="gate_blocked", extra={"missing": ["pr"]})
+
+    skipped = store.skip_blocked_implementation(
+        "multica:code-gate-no-code-skip",
+        reason="operator confirmed no code change is needed",
+    )
+
+    assert skipped.phase == "verify"
+    assert skipped.status == "todo"
+    assert skipped.evidence_profile == "audit"
+
+    async def fetch_detail(_task_id: str):
+        return {
+            "latest_summary": "VALIDATORS=validate_structure.py passed",
+            "comments": [],
+        }
+
+    verified = await store.sync_pipeline_from_chain(
+        "multica:code-gate-no-code-skip",
+        {"verify": {"id": "t_verify", "status": "done"}},
+        fetch_detail,
+    )
+
+    assert verified.phase == "review"
+    assert verified.status == "todo"
+    assert verified.evidence_profile == "audit"
+    assert verified.history[-1].outcome == "complete"
+    assert verified.history[-1].reason != "GATE_BLOCKED: missing required evidence test"
+
+
+@pytest.mark.asyncio
 async def test_sync_pipeline_advances_on_complete_handoff(isolated_store):
     await store.bootstrap_state("multica:sync")
 
@@ -355,6 +460,152 @@ async def test_sync_pipeline_advances_on_complete_handoff(isolated_store):
     assert len(lines) >= 2
     last = json.loads(lines[-1])
     assert last["event"] in {"transition", "gate_blocked"}
+
+
+@pytest.mark.asyncio
+async def test_sync_pipeline_blocks_code_implement_without_pr(isolated_store):
+    await store.bootstrap_state("multica:no-pr-code", issue={"metadata": {"evidence_profile": "code"}})
+
+    async def fetch_detail(_task_id: str):
+        return {
+            "latest_summary": "TOOLS_USED=graphify\nTESTS=validate_structure.py passed\nSUMMARY=investigated only",
+            "comments": [],
+        }
+
+    phases = {"implement": {"id": "t_impl", "status": "done"}}
+    state = await store.sync_pipeline_from_chain("multica:no-pr-code", phases, fetch_detail)
+
+    assert state.phase == "implement"
+    assert state.status == "blocked"
+    assert state.history[-1].reason == "GATE_BLOCKED: missing required evidence pr"
+    assert store.pipeline_summary(state)["missing_evidence"] == ["pr"]
+    last = json.loads(isolated_store.read_text(encoding="utf-8").strip().splitlines()[-1])
+    assert last["event"] == "gate_blocked"
+    assert last["meta"]["row_phase"] == "implement"
+    assert last["meta"]["missing"] == ["pr"]
+
+
+@pytest.mark.asyncio
+async def test_sync_pipeline_blocks_default_implement_without_pr(isolated_store):
+    await store.bootstrap_state("multica:no-pr-default")
+
+    async def fetch_detail(_task_id: str):
+        return {
+            "latest_summary": "TOOLS_USED=graphify\nSUMMARY=investigated only",
+            "comments": [],
+        }
+
+    state = await store.sync_pipeline_from_chain(
+        "multica:no-pr-default",
+        {"implement": {"id": "t_impl", "status": "done"}},
+        fetch_detail,
+    )
+
+    assert state.evidence_profile == "default"
+    assert state.phase == "implement"
+    assert state.status == "blocked"
+    assert state.history[-1].reason == "GATE_BLOCKED: missing required evidence pr"
+    assert store.pipeline_summary(state)["missing_evidence"] == ["pr"]
+
+
+@pytest.mark.asyncio
+async def test_sync_pipeline_reports_validator_hash_mismatch_gate(isolated_store):
+    state = PipelineState(
+        task_ref="multica:verify-hash-mismatch",
+        phase="verify",
+        status="todo",
+        evidence=[
+            EvidenceItem(kind="test", summary="pytest passed", passed=True),
+            EvidenceItem(
+                kind="validator",
+                summary="implement validator",
+                passed=True,
+                content_hash="a" * 64,
+                metadata={"phase": "implement", "source": "handoff"},
+            ),
+            EvidenceItem(
+                kind="validator",
+                summary="verify validator",
+                passed=True,
+                content_hash="b" * 64,
+                metadata={"phase": "verify", "source": "handoff"},
+            ),
+        ],
+    )
+    store.save_state(state, event="verify_ready")
+
+    async def fetch_detail(_task_id: str):
+        return {
+            "latest_summary": "TESTS=pytest passed\nVALIDATORS=validate_structure.py passed",
+            "comments": [],
+        }
+
+    state = await store.sync_pipeline_from_chain(
+        "multica:verify-hash-mismatch",
+        {"verify": {"id": "t_verify", "status": "done"}},
+        fetch_detail,
+    )
+
+    assert state.phase == "verify"
+    assert state.status == "blocked"
+    assert state.history[-1].reason == "GATE_BLOCKED: validator hash mismatch"
+    last = json.loads(isolated_store.read_text(encoding="utf-8").strip().splitlines()[-1])
+    assert last["event"] == "gate_blocked"
+    assert last["meta"]["missing"] == []
+    assert last["meta"]["validator_hash_mismatch"] is True
+
+
+@pytest.mark.asyncio
+async def test_sync_pipeline_advances_with_live_run_metadata_recovery(isolated_store):
+    await store.bootstrap_state("multica:sync-live-metadata")
+
+    async def fetch_detail(_task_id: str):
+        return {
+            "latest_summary": (
+                "Fixed timing-attack vulnerability in auth.py token comparison — "
+                "replaced vulnerable == with hmac.compare_digest."
+            ),
+            "task": {
+                "body": """Multica issue: ZOE-5354
+```zoe-ticket
+{"pr_url":"https://github.com/jason-easyazz/zoe-ai-assistant/pull/213"}
+```"""
+            },
+            "runs": [
+                {
+                    "summary": "Fixed timing-attack vulnerability in auth.py token comparison.",
+                    "metadata": {
+                        "changed_files": ["services/zoe-data/auth.py"],
+                        "tests_run": 1,
+                        "tests_passed": 1,
+                    },
+                }
+            ],
+            "comments": [],
+        }
+
+    phases = {"implement": {"id": "t_live", "status": "archived"}}
+    state = await store.sync_pipeline_from_chain(
+        "multica:sync-live-metadata",
+        phases,
+        fetch_detail,
+    )
+
+    assert state.phase == "verify"
+    assert state.status == "todo"
+    assert "zoe-engineering" in store._PHASE_SKILLS["implement"]
+    assert any(
+        item.kind == "tool"
+        and item.passed is True
+        and item.metadata.get("source") == "skills"
+        for item in state.evidence
+    )
+    assert any(item.kind == "test" and item.passed is True for item in state.evidence)
+    assert any(
+        item.kind == "pr"
+        and item.artifact == "https://github.com/jason-easyazz/zoe-ai-assistant/pull/213"
+        for item in state.evidence
+    )
 
 
 @pytest.mark.asyncio
@@ -661,6 +912,35 @@ async def test_sync_pipeline_fingerprint_abort_creates_split_packet_for_protocol
 
 
 @pytest.mark.asyncio
+async def test_sync_pipeline_explicit_scout_split_packet_blocks_terminal(isolated_store):
+    await store.bootstrap_state("multica:scout-split", start_phase="scout")
+
+    async def fetch_detail(_task_id: str):
+        return {
+            "latest_summary": (
+                "BLOCKER=SCOPE_SPLIT_REQUIRED: parent has too many surfaces\n"
+                'NEEDS_SPLIT=1\nSPLIT_PACKET={"child_issue_template":{"title":"ZOE-5288: card_service base"}}'
+            ),
+            "comments": [],
+        }
+
+    phases = {
+        "scout": {
+            "id": "t1",
+            "status": "blocked",
+            "block_reason": "SCOPE_SPLIT_REQUIRED: parent has too many surfaces",
+        }
+    }
+    state = await store.sync_pipeline_from_chain("multica:scout-split", phases, fetch_detail)
+
+    assert state.status == "blocked"
+    assert state.block_classification == "scope_split_required"
+    assert state.split_packet["blocked_phase"] == "scout"
+    assert state.split_packet["child_issue_template"]["title"] == "ZOE-5288: card_service base"
+    assert "ignored_scope_split_request" not in isolated_store.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
 async def test_sync_pipeline_explicit_split_packet_blocks_terminal(isolated_store):
     await store.bootstrap_state("multica:explicit")
 
@@ -719,9 +999,30 @@ async def test_sync_pipeline_blocked_records_reason_in_history(isolated_store):
     state = await store.sync_pipeline_from_chain("multica:block-reason", phases, fetch_detail)
     assert state.status == "blocked"
     assert state.history[-1].reason == "dirty tree"
+    assert store.pipeline_summary(state)["block_reason"] == "dirty tree"
 
     last = json.loads(isolated_store.read_text(encoding="utf-8").strip().splitlines()[-1])
     assert last["meta"]["block_reason"] == "dirty tree"
+
+
+@pytest.mark.asyncio
+async def test_sync_pipeline_verify_budget_blocks_without_revision(isolated_store):
+    state = PipelineState(task_ref="multica:verify-budget", phase="verify", status="running")
+    store.save_state(state, event="effect_requested")
+
+    async def fetch_detail(_task_id: str):
+        return {
+            "latest_summary": "BLOCKER=VERIFY_BUDGET: code-enforced tool budget exceeded",
+            "comments": [],
+        }
+
+    phases = {"verify": {"id": "t_verify", "status": "blocked"}}
+    state = await store.sync_pipeline_from_chain("multica:verify-budget", phases, fetch_detail)
+
+    assert state.phase == "verify"
+    assert state.status == "blocked"
+    assert state.history[-1].outcome == "block"
+    assert "VERIFY_BUDGET" in (state.history[-1].reason or "")
 
 
 @pytest.mark.asyncio

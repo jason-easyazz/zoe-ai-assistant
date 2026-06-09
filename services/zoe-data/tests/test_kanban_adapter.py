@@ -15,6 +15,10 @@ def _mock_ensure_worktree(monkeypatch):
         "worktree_bootstrap.prepare_kanban_worktree",
         lambda task_id, **kwargs: Path(f"/tmp/worktrees/{task_id}"),
     )
+    monkeypatch.setattr(
+        "worktree_bootstrap.prepare_existing_pr_revision_worktree",
+        lambda task_id, pr_url, **kwargs: Path(f"/tmp/worktrees/{task_id}"),
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -93,6 +97,114 @@ async def test_dispatch_refuses_to_create_without_pipeline_journal(monkeypatch):
     assert result["ok"] is False
     assert result["reason"] == "pipeline bootstrap failed"
     assert [c for c in a.calls if c[0] == "create"] == []
+
+
+@pytest.mark.asyncio
+async def test_dispatch_prepares_existing_pr_revision_worktree(monkeypatch):
+    monkeypatch.setenv("ZOE_KANBAN_SKIP_SCOUT", "1")
+    calls = []
+
+    def fake_prepare(task_id, pr_url, **kwargs):
+        calls.append((task_id, pr_url, kwargs))
+        return Path(f"/tmp/worktrees/{task_id}")
+
+    monkeypatch.setattr("worktree_bootstrap.prepare_existing_pr_revision_worktree", fake_prepare)
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {
+            "id": "uuid-pr-revision",
+            "identifier": "ZOE-5354",
+            "title": "Metrics auth revision",
+            "description": """```zoe-ticket
+{"pr_url":"https://github.com/jason-easyazz/zoe-ai-assistant/pull/213"}
+```""",
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["phase"] == "implement"
+    assert calls == [
+        ("t_implement", "https://github.com/jason-easyazz/zoe-ai-assistant/pull/213", {})
+    ]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_blocks_existing_pr_revision_when_precheckout_fails(monkeypatch):
+    monkeypatch.setenv("ZOE_KANBAN_SKIP_SCOUT", "1")
+
+    def fail_prepare(*args, **kwargs):
+        raise RuntimeError("fetch failed")
+
+    monkeypatch.setattr("worktree_bootstrap.prepare_existing_pr_revision_worktree", fail_prepare)
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {
+            "id": "uuid-pr-revision-fail",
+            "identifier": "ZOE-5354",
+            "title": "Metrics auth revision",
+            "description": """```zoe-ticket
+{"pr_url":"https://github.com/jason-easyazz/zoe-ai-assistant/pull/213"}
+```""",
+        }
+    )
+
+    assert result["ok"] is False
+    assert result["reason"] == "existing PR worktree preparation failed"
+    block_calls = [c for c in a.calls if c[0] == "block"]
+    assert len(block_calls) == 1
+    assert "BLOCKER=PR_REVISION_CHECKOUT_FAILED" in block_calls[0][2]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_blocks_regular_worktree_failures_with_generic_reason(monkeypatch):
+    monkeypatch.setenv("ZOE_KANBAN_SKIP_SCOUT", "1")
+
+    def fail_prepare(*args, **kwargs):
+        raise RuntimeError("worktree add failed")
+
+    monkeypatch.setattr("worktree_bootstrap.prepare_kanban_worktree", fail_prepare)
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {
+            "id": "uuid-regular-worktree-fail",
+            "identifier": "ZOE-WT",
+            "title": "Regular implement task",
+        }
+    )
+
+    assert result["ok"] is False
+    assert result["reason"] == "kanban worktree preparation failed"
+    block_calls = [c for c in a.calls if c[0] == "block"]
+    assert len(block_calls) == 1
+    assert "BLOCKER=WORKTREE_PREPARATION_FAILED" in block_calls[0][2]
+    assert "PR_REVISION_CHECKOUT_FAILED" not in block_calls[0][2]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_retro_uses_main_repo_workspace():
+    from pipeline_evidence import PipelineState
+    from pipeline_store import save_state
+
+    state = PipelineState(
+        task_ref="multica:uuid-retro-workspace",
+        phase="retro",
+        status="todo",
+        attempts={"implement": 1, "verify": 1, "review": 1, "closeout": 1},
+    )
+    save_state(state, event="operator_resumed")
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {
+            "id": "uuid-retro-workspace",
+            "identifier": "ZOE-RETRO",
+            "title": "Retro fallback",
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["phase"] == "retro"
+    create = [c for c in a.calls if c[0] == "create"][0]
+    assert create[create.index("--workspace") + 1] == f"dir:{ka.zoe_repo_root()}"
 
 
 
@@ -175,6 +287,79 @@ async def test_dispatch_does_not_parent_recovered_phase_to_terminal_like_prior_r
     assert result["phase"] == "verify"
     assert len(creates) == 1
     assert "--parent" not in creates[0]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_resumed_todo_archives_blocked_current_phase_before_retry():
+    from pipeline_evidence import PipelineState
+    from pipeline_store import save_state
+
+    state = PipelineState(
+        task_ref="multica:uuid-retry-current",
+        phase="implement",
+        status="todo",
+        attempts={"implement": 1},
+    )
+    save_state(state, event="operator_resumed")
+    rows = [_row("implement", "blocked", chain_version="v4", issue_id="uuid-retry-current")]
+    a = _FakeAdapter(list_rows=rows)
+    result = await a.dispatch(
+        {
+            "id": "uuid-retry-current",
+            "identifier": "ZOE-RETRY",
+            "title": "Harness: retry current phase",
+            "metadata": {"zoe_kind": "harness_fix", "acceptance_criteria": ["retry"]},
+        }
+    )
+
+    archives = [c for c in a.calls if c[0] == "archive"]
+    creates = [c for c in a.calls if c[0] == "create"]
+    assert archives == [["archive", "t_implement"]]
+    assert len(creates) == 1
+    assert creates[0][creates[0].index("--idempotency-key") + 1] == "multica:uuid-retry-current:implement"
+    assert result["ok"] is True
+    assert result["phase"] == "implement"
+    assert result["created"] == ["implement"]
+    assert result["chain"] == {"implement": "t_implement"}
+
+
+
+@pytest.mark.asyncio
+async def test_dispatch_resumed_todo_reports_archive_failure_without_create():
+    from pipeline_evidence import PipelineState
+    from pipeline_store import save_state
+
+    class ArchiveFailAdapter(_FakeAdapter):
+        async def _run(self, args, *, expect_json=False):
+            if args[0] == "archive":
+                self.calls.append(args)
+                raise ka.KanbanCLIError("archive failed")
+            return await super()._run(args, expect_json=expect_json)
+
+    state = PipelineState(
+        task_ref="multica:uuid-archive-fail",
+        phase="implement",
+        status="todo",
+        attempts={"implement": 1},
+    )
+    save_state(state, event="operator_resumed")
+    rows = [_row("implement", "blocked", chain_version="v4", issue_id="uuid-archive-fail")]
+    a = ArchiveFailAdapter(list_rows=rows)
+    result = await a.dispatch(
+        {
+            "id": "uuid-archive-fail",
+            "identifier": "ZOE-ARCHIVE",
+            "title": "Harness: retry current phase",
+            "metadata": {"zoe_kind": "harness_fix", "acceptance_criteria": ["retry"]},
+        }
+    )
+
+    assert [c for c in a.calls if c[0] == "archive"] == [["archive", "t_implement"]]
+    assert [c for c in a.calls if c[0] == "create"] == []
+    assert result["ok"] is False
+    assert result["reason"] == "stale phase archive failed"
+    assert result["phase"] == "implement"
+
 
 
 @pytest.mark.asyncio
@@ -276,6 +461,485 @@ async def test_dispatch_skip_scout_when_env_set(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_dispatch_skips_scout_for_scope_split_child():
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {
+            "id": "uuid-child",
+            "identifier": "ZOE-5438",
+            "title": "card_service foundation",
+            "metadata": {
+                "zoe_kind": "child",
+                "source": "scope_split",
+                "acceptance_criteria": ["card_service.py foundation"],
+            },
+        }
+    )
+    assert "scout" not in result["chain"]
+    assert set(result["chain"]) == {"implement"}
+
+
+@pytest.mark.asyncio
+async def test_dispatch_skips_scout_for_scope_split_child_ticket_block():
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {
+            "id": "uuid-child-block",
+            "identifier": "ZOE-5439",
+            "title": "calendar child",
+            "description": '```zoe-ticket\n{"zoe_kind":"child","source":"scope_split","acceptance_criteria":["calendar builder"]}\n```',
+        }
+    )
+    assert "scout" not in result["chain"]
+    assert set(result["chain"]) == {"implement"}
+
+
+@pytest.mark.asyncio
+async def test_dispatch_skips_scout_for_harness_fix_with_acceptance_criteria():
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {
+            "id": "uuid-harness-fix",
+            "identifier": "ZOE-5446",
+            "title": "Harness follow-up for implement budget blocks",
+            "description": (
+                "```zoe-ticket\n"
+                '{"zoe_kind":"harness_fix","acceptance_criteria":["idempotent follow-up ticket"]}'
+                "\n```"
+            ),
+        }
+    )
+    assert "scout" not in result["chain"]
+    assert set(result["chain"]) == {"implement"}
+
+
+@pytest.mark.asyncio
+async def test_dispatch_skips_scout_for_harness_fix_metadata_with_acceptance_criteria():
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {
+            "id": "uuid-harness-fix-meta",
+            "identifier": "ZOE-5447",
+            "title": "Harness follow-up for scout budget blocks",
+            "metadata": {
+                "zoe_kind": "harness_fix",
+                "acceptance_criteria": ["budget blockers create one follow-up ticket"],
+            },
+        }
+    )
+    assert "scout" not in result["chain"]
+    assert set(result["chain"]) == {"implement"}
+
+
+@pytest.mark.asyncio
+async def test_dispatch_keeps_scout_for_harness_fix_without_acceptance_criteria():
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {
+            "id": "uuid-harness-fix-no-criteria",
+            "identifier": "ZOE-5448",
+            "title": "Harness follow-up without a concrete contract",
+            "metadata": {"zoe_kind": "harness_fix"},
+        }
+    )
+    assert set(result["chain"]) == {"scout"}
+
+
+@pytest.mark.asyncio
+async def test_dispatch_uses_bounded_goal_mode_for_actionable_code_audit_implement():
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {
+            "id": "uuid-code-audit-goal",
+            "identifier": "ZOE-5354",
+            "title": "GET /metrics endpoint is unauthenticated",
+            "metadata": {
+                "zoe_kind": "bug",
+                "source": "code_audit_p0_security",
+                "acceptance_criteria": ["Require admin or internal token on /metrics"],
+            },
+        }
+    )
+
+    creates = [c for c in a.calls if c[0] == "create"]
+    assert result["phase"] == "implement"
+    assert len(creates) == 1
+    assert "--goal" in creates[0]
+    assert creates[0][creates[0].index("--goal-max-turns") + 1] == "2"
+    assert creates[0][creates[0].index("--max-retries") + 1] == "2"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_omits_goal_mode_for_non_code_audit_implement():
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {
+            "id": "uuid-harness-goal",
+            "identifier": "ZOE-5449",
+            "title": "Harness: follow up ITERATION_BUDGET",
+            "metadata": {
+                "zoe_kind": "harness_fix",
+                "source": "engineering_blocker_followup",
+                "acceptance_criteria": ["Focused tests cover blocker path"],
+            },
+        }
+    )
+
+    creates = [c for c in a.calls if c[0] == "create"]
+    assert result["phase"] == "implement"
+    assert len(creates) == 1
+    assert "--goal" not in creates[0]
+    assert "--goal-max-turns" not in creates[0]
+    assert creates[0][creates[0].index("--max-retries") + 1] == "1"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_skips_scout_for_code_audit_ticket_with_acceptance_criteria():
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {
+            "id": "uuid-code-audit",
+            "identifier": "ZOE-5354",
+            "title": "GET /metrics endpoint is unauthenticated",
+            "metadata": {
+                "zoe_kind": "bug",
+                "source": "code_audit_p0_security",
+                "acceptance_criteria": ["Require admin or internal token on /metrics"],
+            },
+        }
+    )
+    assert "scout" not in result["chain"]
+    assert set(result["chain"]) == {"implement"}
+
+
+@pytest.mark.asyncio
+async def test_dispatch_skips_scout_for_code_audit_ticket_block():
+    from multica_ticket_contract import parse_ticket_block
+
+    description = (
+        "```zoe-ticket\n"
+        '{"zoe_kind":"bug","source":"code_audit_p0_security",'
+        '"acceptance_criteria":["Add security headers"]}'
+        "\n```"
+    )
+    assert parse_ticket_block(description)["source"] == "code_audit_p0_security"
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {
+            "id": "uuid-code-audit-block",
+            "identifier": "ZOE-5355",
+            "title": "nginx.conf missing HTTP security headers",
+            "description": description,
+        }
+    )
+    assert "scout" not in result["chain"]
+    assert set(result["chain"]) == {"implement"}
+
+
+@pytest.mark.asyncio
+async def test_dispatch_keeps_scout_for_code_audit_without_acceptance_criteria():
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {
+            "id": "uuid-code-audit-no-criteria",
+            "identifier": "ZOE-5356",
+            "title": "CORS misconfiguration",
+            "metadata": {"zoe_kind": "bug", "source": "code_audit_p0_security"},
+        }
+    )
+    assert set(result["chain"]) == {"scout"}
+
+
+@pytest.mark.asyncio
+async def test_dispatch_keeps_scout_for_non_bug_code_audit_ticket():
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {
+            "id": "uuid-code-audit-feature",
+            "identifier": "ZOE-5366",
+            "title": "Automated issue prioritization workflow",
+            "metadata": {
+                "zoe_kind": "feature",
+                "source": "code_audit_meta",
+                "acceptance_criteria": ["Design the prioritization workflow"],
+            },
+        }
+    )
+    assert set(result["chain"]) == {"scout"}
+
+
+@pytest.mark.asyncio
+async def test_dispatch_archives_stale_terminal_revision_phase_row():
+    from pipeline_evidence import PipelineState
+    from pipeline_store import load_latest_state, save_state
+
+    save_state(
+        PipelineState(
+            task_ref="multica:uuid-revision-terminal",
+            phase="implement",
+            status="todo",
+            evidence_profile="code",
+        ),
+        event="verification_failed",
+    )
+    rows = [
+        _row("implement", "done", chain_version="v4", issue_id="uuid-revision-terminal"),
+        _row("verify", "blocked", chain_version="v4", issue_id="uuid-revision-terminal"),
+    ]
+    a = _FakeAdapter(list_rows=rows)
+
+    result = await a.dispatch(
+        {
+            "id": "uuid-revision-terminal",
+            "identifier": "ZOE-5354",
+            "title": "Fix metrics auth",
+            "metadata": {
+                "zoe_kind": "bug",
+                "source": "code_audit_p0_security",
+                "acceptance_criteria": ["Require internal token"],
+            },
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["phase"] == "implement"
+    assert result["created"] == ["implement"]
+    assert ["archive", "t_implement"] in a.calls
+    latest = load_latest_state("multica:uuid-revision-terminal")
+    assert latest.phase == "implement"
+    assert latest.status == "running"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_adjusts_stale_scout_journal_for_scope_split_child():
+    from pipeline_evidence import PipelineState
+    from pipeline_store import load_latest_state, save_state
+
+    save_state(
+        PipelineState(
+            task_ref="multica:uuid-child-stale-scout",
+            phase="scout",
+            status="todo",
+            evidence_profile="code",
+        ),
+        event="bootstrap",
+    )
+    rows = [
+        _row(
+            "scout",
+            "archived",
+            chain_version="v4",
+            issue_id="uuid-child-stale-scout",
+        )
+    ]
+    a = _FakeAdapter(list_rows=rows)
+
+    result = await a.dispatch(
+        {
+            "id": "uuid-child-stale-scout",
+            "identifier": "ZOE-5439",
+            "title": "calendar child",
+            "description": """```zoe-ticket
+{"zoe_kind":"child","source":"scope_split","acceptance_criteria":["calendar builder"]}
+```""",
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["phase"] == "implement"
+    assert set(result["chain"]) == {"implement"}
+    latest = load_latest_state("multica:uuid-child-stale-scout")
+    assert latest.phase == "implement"
+    assert latest.status == "running"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_adjusts_running_scout_journal_when_scout_row_is_archived():
+    from pipeline_evidence import PipelineState
+    from pipeline_store import load_latest_state, save_state
+
+    save_state(
+        PipelineState(
+            task_ref="multica:uuid-child-running-archived-scout",
+            phase="scout",
+            status="running",
+            evidence_profile="code",
+            attempts={"scout": 1},
+        ),
+        event="effect_requested",
+    )
+    rows = [
+        _row(
+            "scout",
+            "archived",
+            chain_version="v4",
+            issue_id="uuid-child-running-archived-scout",
+        )
+    ]
+    a = _FakeAdapter(list_rows=rows)
+
+    result = await a.dispatch(
+        {
+            "id": "uuid-child-running-archived-scout",
+            "identifier": "ZOE-5439",
+            "title": "calendar child",
+            "description": """```zoe-ticket
+{"zoe_kind":"child","source":"scope_split","acceptance_criteria":["calendar builder"]}
+```""",
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["phase"] == "implement"
+    assert set(result["chain"]) == {"implement"}
+    latest = load_latest_state("multica:uuid-child-running-archived-scout")
+    assert latest.phase == "implement"
+    assert latest.status == "running"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_adjusts_running_scout_journal_when_scout_row_is_done():
+    from pipeline_evidence import PipelineState
+    from pipeline_store import load_latest_state, save_state
+
+    save_state(
+        PipelineState(
+            task_ref="multica:uuid-child-running-done-scout",
+            phase="scout",
+            status="running",
+            evidence_profile="code",
+            attempts={"scout": 1},
+        ),
+        event="effect_requested",
+    )
+    rows = [
+        _row(
+            "scout",
+            "done",
+            chain_version="v4",
+            issue_id="uuid-child-running-done-scout",
+        )
+    ]
+    a = _FakeAdapter(list_rows=rows)
+
+    result = await a.dispatch(
+        {
+            "id": "uuid-child-running-done-scout",
+            "identifier": "ZOE-5439",
+            "title": "calendar child",
+            "description": """```zoe-ticket
+{"zoe_kind":"child","source":"scope_split","acceptance_criteria":["calendar builder"]}
+```""",
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["phase"] == "implement"
+    assert set(result["chain"]) == {"implement"}
+    latest = load_latest_state("multica:uuid-child-running-done-scout")
+    assert latest.phase == "implement"
+    assert latest.status == "running"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_does_not_adjust_running_scout_journal_with_active_row():
+    from pipeline_evidence import PipelineState
+    from pipeline_store import load_latest_state, save_state
+
+    save_state(
+        PipelineState(
+            task_ref="multica:uuid-child-running-active-scout",
+            phase="scout",
+            status="running",
+            evidence_profile="code",
+            attempts={"scout": 1},
+        ),
+        event="effect_requested",
+    )
+    rows = [
+        _row(
+            "scout",
+            "running",
+            chain_version="v4",
+            issue_id="uuid-child-running-active-scout",
+        )
+    ]
+    a = _FakeAdapter(list_rows=rows)
+
+    result = await a.dispatch(
+        {
+            "id": "uuid-child-running-active-scout",
+            "identifier": "ZOE-5439",
+            "title": "calendar child",
+            "description": """```zoe-ticket
+{"zoe_kind":"child","source":"scope_split","acceptance_criteria":["calendar builder"]}
+```""",
+        }
+    )
+
+    assert result["ok"] is False
+    assert result["reason"] == "phase scout is not in this issue plan"
+    assert [call for call in a.calls if call[0] == "create"] == []
+    latest = load_latest_state("multica:uuid-child-running-active-scout")
+    assert latest.phase == "scout"
+    assert latest.status == "running"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_adjusts_running_scout_journal_when_scout_row_is_missing():
+    from pipeline_evidence import PipelineState
+    from pipeline_store import load_latest_state, save_state
+
+    save_state(
+        PipelineState(
+            task_ref="multica:uuid-child-running-missing-scout",
+            phase="scout",
+            status="running",
+            evidence_profile="code",
+            attempts={"scout": 1},
+        ),
+        event="effect_requested",
+    )
+    a = _FakeAdapter(list_rows=[])
+
+    result = await a.dispatch(
+        {
+            "id": "uuid-child-running-missing-scout",
+            "identifier": "ZOE-5439",
+            "title": "calendar child",
+            "description": """```zoe-ticket
+{"zoe_kind":"child","source":"scope_split","acceptance_criteria":["calendar builder"]}
+```""",
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["phase"] == "implement"
+    assert set(result["chain"]) == {"implement"}
+    latest = load_latest_state("multica:uuid-child-running-missing-scout")
+    assert latest.phase == "implement"
+    assert latest.status == "running"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_keeps_scout_for_under_specified_scope_split_child():
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {
+            "id": "uuid-child-empty",
+            "identifier": "ZOE-EMPTY",
+            "title": "under-specified child",
+            "metadata": {
+                "zoe_kind": "child",
+                "source": "scope_split",
+                "acceptance_criteria": [],
+            },
+        }
+    )
+    assert set(result["chain"]) == {"scout"}
+
+
+@pytest.mark.asyncio
 async def test_dispatch_quality_escalation_mode(monkeypatch):
     monkeypatch.setenv("ZOE_KANBAN_ESCALATION_MAX_RUNTIME", "75m")
     a = _FakeAdapter()
@@ -325,6 +989,20 @@ async def test_dispatch_model_escalation_from_metadata():
     )
     assert "zoe-model-escalation: true" in review_body
     assert "anthropic/claude-sonnet-4.6" in review_body
+
+
+@pytest.mark.asyncio
+async def test_model_escalation_from_ticket_block():
+    issue = {
+        "id": "uuid-block-esc",
+        "identifier": "ZOE-ESC",
+        "title": "Escalate from block",
+        "description": "```zoe-ticket\n{\"model_escalation\":true,\"confirm_paid_auto\":true}\n```",
+    }
+    review_body = ka.KanbanAdapter()._build_body("review", issue, "ZOE-ESC")
+    assert "zoe-model-escalation: true" in review_body
+    assert "anthropic/claude-sonnet-4.6" in review_body
+    assert "openrouter/auto is allowed" in review_body
 
 
 @pytest.mark.asyncio
@@ -501,6 +1179,20 @@ async def test_verify_body_requires_evidence_gate():
 
 
 @pytest.mark.asyncio
+async def test_verify_body_uses_pr_url_fast_path_before_generic_work():
+    body = ka.KanbanAdapter()._build_body(
+        "verify",
+        {"id": "uuid-1", "identifier": "ZOE-9", "title": "Fix thing", "description": ""},
+        "ZOE-9",
+    )
+    assert "PR_URL FAST PATH" in body
+    assert "do not hunt branches or commits" in body
+    assert "gh pr view <url>" in body
+    assert "PR_REVIEW_REQUIRED" in body
+    assert body.index("PR_URL FAST PATH") < body.index("Start with `kanban_show`")
+
+
+@pytest.mark.asyncio
 async def test_review_body_requires_verify_evidence():
     body = ka.KanbanAdapter()._build_body(
         "review",
@@ -546,6 +1238,20 @@ async def test_poll_not_found():
     out = await a.poll("multica:uuid-1")
     assert out["found"] is False
     assert out["status"] == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_poll_fails_closed_on_malformed_kanban_list():
+    class _BadListAdapter(_FakeAdapter):
+        async def _run(self, args, *, expect_json=False):
+            self.calls.append(args)
+            if args[0] == "list":
+                return None
+            return await super()._run(args, expect_json=expect_json)
+
+    a = _BadListAdapter()
+    with pytest.raises(ka.KanbanCLIError, match="malformed JSON"):
+        await a.poll("multica:nope")
 
 
 @pytest.mark.asyncio
@@ -674,6 +1380,76 @@ async def test_poll_v4_done_phase_with_ready_next_phase_is_partial():
 
 
 @pytest.mark.asyncio
+async def test_poll_v4_blocks_code_implement_done_without_pr():
+    rows = [_row("implement", "done", chain_version="v4", issue_id="uuid-no-pr")]
+    show = {
+        "t_implement": {
+            "latest_summary": "TOOLS_USED=graphify\nTESTS=validate_structure.py passed\nSUMMARY=investigated only",
+            "comments": [],
+        }
+    }
+    a = _FakeAdapter(list_rows=rows, show_map=show)
+    out = await a.poll(
+        "multica:uuid-no-pr",
+        issue={
+            "id": "uuid-no-pr",
+            "identifier": "ZOE-NO-PR",
+            "title": "Harness fix must produce a PR",
+            "metadata": {"evidence_profile": "code"},
+        },
+    )
+
+    assert out["found"] is True
+    assert out["status"] == "blocked"
+    assert out["pipeline"]["phase"] == "implement"
+    assert out["pipeline"]["status"] == "blocked"
+    assert out["pipeline"]["missing_evidence"] == ["pr"]
+    assert out["blocker"] == "GATE_BLOCKED: missing required evidence pr"
+
+
+@pytest.mark.asyncio
+async def test_poll_ignores_stale_terminal_row_for_revision_phase():
+    from pipeline_evidence import PipelineState
+    from pipeline_store import save_state
+
+    save_state(
+        PipelineState(
+            task_ref="multica:uuid-revision-poll",
+            phase="implement",
+            status="todo",
+            evidence_profile="code",
+        ),
+        event="verification_failed",
+    )
+    rows = [
+        _row("implement", "done", chain_version="v4", issue_id="uuid-revision-poll"),
+        _row("verify", "blocked", chain_version="v4", issue_id="uuid-revision-poll"),
+    ]
+    a = _FakeAdapter(list_rows=rows)
+
+    out = await a.poll(
+        "multica:uuid-revision-poll",
+        issue={
+            "id": "uuid-revision-poll",
+            "identifier": "ZOE-5354",
+            "title": "Fix metrics auth",
+            "metadata": {
+                "zoe_kind": "bug",
+                "source": "code_audit_p0_security",
+                "acceptance_criteria": ["Require internal token"],
+            },
+        },
+    )
+
+    assert out["status"] == "partial"
+    assert out["pipeline"]["phase"] == "implement"
+    assert out["pipeline"]["status"] == "todo"
+    assert out["pipeline"]["stale_executor_phase"] == "implement"
+    assert out["pipeline"]["stale_executor_status"] == "done"
+    assert out["blocker"] is None
+
+
+@pytest.mark.asyncio
 async def test_poll_v4_pipeline_sync_failure_blocks_redispatch(monkeypatch):
     async def fail_sync(*args, **kwargs):
         raise RuntimeError("pipeline store unavailable")
@@ -758,6 +1534,72 @@ async def test_poll_v4_running_pipeline_clears_stale_recovered_blocker():
 
 
 @pytest.mark.asyncio
+async def test_poll_v4_resumed_todo_ignores_stale_blocked_current_phase():
+    from pipeline_evidence import PipelineState
+    from pipeline_store import save_state
+
+    state = PipelineState(
+        task_ref="multica:uuid-resume-current",
+        phase="implement",
+        status="todo",
+        attempts={"implement": 1},
+    )
+    save_state(state, event="operator_resumed")
+    rows = [_row("implement", "blocked", chain_version="v4", issue_id="uuid-resume-current")]
+    issue = {
+        "id": "uuid-resume-current",
+        "identifier": "ZOE-RESUME",
+        "title": "Harness: retry current phase",
+        "metadata": {"zoe_kind": "harness_fix", "acceptance_criteria": ["retry"]},
+    }
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:uuid-resume-current", issue=issue)
+
+    assert out["status"] == "partial"
+    assert out["blocker"] is None
+    assert out["phases"] == {}
+    assert out["pipeline"]["phase"] == "implement"
+    assert out["pipeline"]["status"] == "todo"
+    assert out["pipeline"]["stale_executor_phase"] == "implement"
+    assert out["pipeline"]["stale_executor_status"] == "blocked"
+
+
+
+@pytest.mark.asyncio
+async def test_poll_v4_resumed_todo_ignores_stale_blocked_current_phase_with_prior_done():
+    from pipeline_evidence import PipelineState
+    from pipeline_store import save_state
+
+    state = PipelineState(
+        task_ref="multica:uuid-resume-after-scout",
+        phase="implement",
+        status="todo",
+        attempts={"scout": 1, "implement": 1},
+    )
+    save_state(state, event="operator_resumed")
+    rows = [
+        _row("scout", "done", chain_version="v4", issue_id="uuid-resume-after-scout"),
+        _row("implement", "blocked", chain_version="v4", issue_id="uuid-resume-after-scout"),
+    ]
+    issue = {
+        "id": "uuid-resume-after-scout",
+        "identifier": "ZOE-RESUME",
+        "title": "Code ticket after scout",
+    }
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:uuid-resume-after-scout", issue=issue)
+
+    assert out["status"] == "partial"
+    assert out["blocker"] is None
+    assert out["phases"] == {"scout": "done"}
+    assert out["pipeline"]["phase"] == "implement"
+    assert out["pipeline"]["status"] == "todo"
+    assert out["pipeline"]["stale_executor_phase"] == "implement"
+    assert out["pipeline"]["stale_executor_status"] == "blocked"
+
+
+
+@pytest.mark.asyncio
 async def test_poll_v4_partial_clears_stale_prior_phase_blocker():
     from pipeline_evidence import EvidenceItem, PipelineState
     from pipeline_store import save_state
@@ -795,6 +1637,39 @@ async def test_poll_v4_partial_clears_stale_prior_phase_blocker():
     assert out["blocker"] is None
     assert out["pipeline"]["phase"] == "verify"
     assert out["pipeline"]["status"] == "todo"
+
+
+@pytest.mark.asyncio
+async def test_poll_v4_resumed_skip_scout_ignores_stale_scout_blocker():
+    from pipeline_evidence import PipelineState
+    from pipeline_store import save_state
+
+    state = PipelineState(
+        task_ref="multica:uuid-9",
+        phase="scout",
+        status="todo",
+        evidence_profile="code",
+        attempts={"scout": 1},
+    )
+    save_state(state, event="operator_resumed")
+    rows = [_row("scout", "blocked", chain_version="v4", block_reason="SCOUT_BUDGET")]
+    issue = {
+        "id": "uuid-9",
+        "identifier": "ZOE-5446",
+        "title": "Harness follow-up",
+        "metadata": {
+            "zoe_kind": "harness_fix",
+            "acceptance_criteria": ["budget blockers create one follow-up ticket"],
+        },
+    }
+    a = _FakeAdapter(list_rows=rows)
+    out = await a.poll("multica:uuid-9", issue=issue)
+
+    assert out["status"] == "partial"
+    assert out["blocker"] is None
+    assert out["pipeline"]["phase"] == "scout"
+    assert out["pipeline"]["status"] == "todo"
+    assert out["pipeline"]["stale_executor_phase"] == "scout"
 
 
 @pytest.mark.asyncio
@@ -880,6 +1755,36 @@ async def test_poll_v4_does_not_promote_kanban_blocked_to_partial():
 
 
 @pytest.mark.asyncio
+async def test_poll_v4_prefers_journal_block_reason_over_kanban_row():
+    rows = [
+        _row(
+            "implement",
+            "blocked",
+            chain_version="v4",
+            block_reason="pipeline blocked at implement",
+        )
+    ]
+    show = {
+        "t_implement": {
+            "latest_summary": (
+                "BLOCKER=IMPLEMENT_BUDGET: code-enforced tool budget exceeded "
+                "(steps=17, guidance_limit=14, hard_limit=16)"
+            ),
+            "comments": [],
+        }
+    }
+    a = _FakeAdapter(list_rows=rows, show_map=show)
+    out = await a.poll("multica:uuid-9")
+
+    assert out["status"] == "blocked"
+    assert out["blocker"] == (
+        "IMPLEMENT_BUDGET: code-enforced tool budget exceeded "
+        "(steps=17, guidance_limit=14, hard_limit=16)"
+    )
+    assert out["pipeline"]["block_reason"] == out["blocker"]
+
+
+@pytest.mark.asyncio
 async def test_poll_current_partial_chain_with_verify_is_redispatchable():
     rows = [
         _row("implement", "done"),
@@ -931,6 +1836,635 @@ def test_protocol_violation_count():
     assert ka._protocol_violation_count(detail) == 2
 
 
+def test_phase_budget_reason_recovers_hermes_iteration_budget_log(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 📖 read      services/zoe-data/main.py  0.1s\n"
+        "⚠ Iteration budget reached (22/22) — response may be incomplete\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.phase_budget_reason_from_log("t_impl", "implement")
+
+    assert reason == (
+        "BLOCKER=ITERATION_BUDGET: Hermes iteration budget reached during implement "
+        "(steps=22, limit=22)"
+    )
+
+
+def test_implement_edit_safety_blocks_python_patch_without_immediate_check(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 🔧 patch     /work/services/zoe-data/intent_router.py  5.9s\n"
+        "  ┊ 📖 read      /work/services/zoe-data/intent_router.py  0.1s\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.implement_edit_safety_reason_from_log("t_impl", "implement")
+
+    assert reason == (
+        "BLOCKER=IMPLEMENT_EDIT_SAFETY: Python patch was followed by more "
+        "exploration before py_compile/focused tests"
+    )
+
+
+def test_implement_edit_safety_allows_immediate_python_check(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 🔧 patch     /work/services/zoe-data/intent_router.py  5.9s\n"
+        "  ┊ 💻 $         python3 -m py_compile services/zoe-data/intent_router.py  0.2s\n"
+        "  ┊ 📖 read      /work/services/zoe-data/intent_router.py  0.1s\n",
+        encoding="utf-8",
+    )
+
+    assert kb.implement_edit_safety_reason_from_log("t_impl", "implement") is None
+
+
+def test_implement_edit_safety_ignores_patch_review_diff_before_check(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 🔧 patch     /work/services/zoe-data/intent_router.py  5.9s\n"
+        "  ┊ review diff\n"
+        "a//work/services/zoe-data/intent_router.py → b//work/services/zoe-data/intent_router.py\n"
+        "@@ -410,7 +410,8 @@\n"
+        "-    r\"can you explain|set up (?:a )?new automation|what is happening in)\",\n"
+        "+    r\"can you explain|set up (?:a )?new automation|what is happening in|\"\n"
+        "+    r\"tell me (?:a|another) joke)\",\n"
+        "  ┊ 💻 $         python3 -m py_compile services/zoe-data/intent_router.py  0.2s\n",
+        encoding="utf-8",
+    )
+
+    assert kb.implement_edit_safety_reason_from_log("t_impl", "implement") is None
+
+
+def test_implement_edit_safety_blocks_explore_after_patch_review_diff(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 🔧 patch     /work/services/zoe-data/intent_router.py  5.9s\n"
+        "  ┊ review diff\n"
+        "a//work/services/zoe-data/intent_router.py → b//work/services/zoe-data/intent_router.py\n"
+        "@@ -410,7 +410,8 @@\n"
+        "  ┊ 📖 read      /work/services/zoe-data/intent_router.py  0.1s\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.implement_edit_safety_reason_from_log("t_impl", "implement")
+
+    assert reason is not None
+    assert "IMPLEMENT_EDIT_SAFETY" in reason
+
+
+def test_implement_edit_safety_ignores_non_step_patch_text(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "Planning note: patch services/zoe-data/intent_router.py after locating the helper.\n"
+        "  ┊ 📖 read      /work/services/zoe-data/intent_router.py  0.1s\n",
+        encoding="utf-8",
+    )
+
+    assert kb.implement_edit_safety_reason_from_log("t_impl", "implement") is None
+
+
+def test_implement_edit_safety_ignores_patch_word_in_step_arguments(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 🔎 grep      patch utils.py  0.1s\n"
+        "  ┊ 📖 read      /work/services/zoe-data/intent_router.py  0.1s\n",
+        encoding="utf-8",
+    )
+
+    assert kb.implement_edit_safety_reason_from_log("t_impl", "implement") is None
+
+
+def test_implement_edit_safety_does_not_clear_on_check_word_in_step_arguments(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 🔧 patch     /work/services/zoe-data/intent_router.py  5.9s\n"
+        "  ┊ 🔎 grep      validate_structure /work/services/zoe-data/main.py  0.1s\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.implement_edit_safety_reason_from_log("t_impl", "implement")
+
+    assert reason is not None
+    assert "IMPLEMENT_EDIT_SAFETY" in reason
+
+
+def test_implement_edit_safety_covers_revision_phase(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_revision.log").write_text(
+        "Query: work kanban task t_revision\n"
+        "  ┊ 🔧 patch     /work/services/zoe-data/intent_router.py  5.9s\n"
+        "  ┊ 🔎 grep      def execute_intent  0.1s\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.implement_edit_safety_reason_from_log("t_revision", "implement_revision")
+
+    assert reason is not None
+    assert "IMPLEMENT_EDIT_SAFETY" in reason
+
+
+def test_implement_pre_edit_drift_blocks_repeated_reads_without_patch(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_PRE_EDIT_REPEAT_READ_BUDGET", "6")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    repeated_reads = "\n".join(
+        "  ┊ 📖 read      /work/services/zoe-data/intent_router.py  0.1s"
+        for _ in range(7)
+    )
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ ⚡ kanban_sh   0.0s\n"
+        "  ┊ 💻 $         cd /work && git status  0.1s\n"
+        f"{repeated_reads}\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.implement_pre_edit_drift_reason_from_log("t_impl", "implement")
+
+    assert reason is not None
+    assert "IMPLEMENT_HANDOFF_DRIFT" in reason
+    assert "repeated pre-edit reads" in reason
+
+
+def test_implement_pre_edit_drift_normalizes_read_range_suffixes(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_PRE_EDIT_REPEAT_READ_BUDGET", "3")
+    monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_PRE_EDIT_EXPLORE_BUDGET", "20")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    ranged_reads = "\n".join(
+        f"  ┊ 📖 read      /work/services/zoe-data/intent_router.py:{index}-{index + 20}  0.1s"
+        for index in [1, 40, 80, 120]
+    )
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        f"{ranged_reads}\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.implement_pre_edit_drift_reason_from_log("t_impl", "implement")
+
+    assert reason is not None
+    assert "repeated pre-edit reads" in reason
+    assert "file=/work/services/zoe-data/intent_router.py" in reason
+
+
+def test_implement_pre_edit_drift_blocks_exploration_without_patch(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_PRE_EDIT_EXPLORE_BUDGET", "12")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    explore = "\n".join(
+        f"  ┊ 🔎 grep      symbol_{index}  0.1s"
+        for index in range(13)
+    )
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ ⚡ kanban_sh   0.0s\n"
+        f"{explore}\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.implement_pre_edit_drift_reason_from_log("t_impl", "implement")
+
+    assert reason is not None
+    assert "pre-edit exploration exceeded budget" in reason
+
+
+def test_implement_pre_edit_drift_blocks_harness_followup_after_focused_test(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_PRE_EDIT_EXPLORE_BUDGET", "12")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 📖 read      /work/services/zoe-data/main.py  0.1s\n"
+        "  ┊ 💻 $         cd /work && PYTHONPATH=services/zoe-data python3 -m pytest -v "
+        "services/zoe-data/tests/test_main_multica_poll.py::"
+        "test_record_blocked_multica_chain_creates_iteration_budget_followup -x  3.3s\n"
+        "  ┊ 📖 read      /work/services/zoe-data/executors/kanban_adapter.py  0.1s\n"
+        "  ┊ 🔎 grep      ITERATION_BUDGET  0.1s\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.implement_pre_edit_drift_reason_from_log(
+        "t_impl",
+        "implement",
+        task_body='{"source":"engineering_blocker_followup"}',
+    )
+
+    assert reason is not None
+    assert "engineering blocker follow-up kept exploring after focused test" in reason
+
+
+def test_implement_pre_edit_drift_allows_harness_followup_adapter_read_after_focused_test(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 💻 $         cd /work && PYTHONPATH=services/zoe-data python3 -m pytest -q "
+        "services/zoe-data/tests/test_main_multica_poll.py::"
+        "test_record_blocked_multica_chain_creates_iteration_budget_followup  3.3s\n"
+        "  ┊ 📖 read      /work/services/zoe-data/executors/kanban_adapter.py  0.1s\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.implement_pre_edit_drift_reason_from_log(
+        "t_impl",
+        "implement",
+        task_body='{"source":"engineering_blocker_followup"}',
+    )
+
+    assert reason is None
+
+
+def test_implement_pre_edit_drift_does_not_charge_allowed_adapter_read_to_budget(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_PRE_EDIT_EXPLORE_BUDGET", "12")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    pre_focus_explore = "\n".join(
+        f"  ┊ 🔎 grep      symbol_{index}  0.1s"
+        for index in range(12)
+    )
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        f"{pre_focus_explore}\n"
+        "  ┊ 💻 $         cd /work && PYTHONPATH=services/zoe-data python3 -m pytest -q "
+        "services/zoe-data/tests/test_main_multica_poll.py::"
+        "test_record_blocked_multica_chain_creates_iteration_budget_followup  3.3s\n"
+        "  ┊ 📖 read      /work/services/zoe-data/executors/kanban_adapter.py  0.1s\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.implement_pre_edit_drift_reason_from_log(
+        "t_impl",
+        "implement",
+        task_body='{"source":"engineering_blocker_followup"}',
+    )
+
+    assert reason is None
+
+
+def test_implement_pre_edit_drift_covers_harness_followup_focused_tests_in_other_files(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 💻 $         cd /work && PYTHONPATH=services/zoe-data python3 -m pytest -q "
+        "services/zoe-data/tests/test_kanban_adapter.py::"
+        "test_implement_body_includes_harness_blocker_followup_focused_tests  0.9s\n"
+        "  ┊ 🔎 grep      _ensure_blocker_followup_ticket  0.1s\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.implement_pre_edit_drift_reason_from_log(
+        "t_impl",
+        "implement",
+        task_body='{"source":"engineering_blocker_followup"}',
+    )
+
+    assert reason is not None
+    assert "engineering blocker follow-up kept exploring after focused test" in reason
+
+
+def test_implement_pre_edit_drift_ignores_plain_followup_prompt_without_metadata(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_PRE_EDIT_EXPLORE_BUDGET", "12")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 💻 $         cd /work && PYTHONPATH=services/zoe-data python3 -m pytest -q "
+        "services/zoe-data/tests/test_kanban_adapter.py::"
+        "test_implement_body_includes_harness_blocker_followup_focused_tests  0.9s\n"
+        "  ┊ 🔎 grep      _ensure_blocker_followup_ticket  0.1s\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.implement_pre_edit_drift_reason_from_log(
+        "t_impl",
+        "implement",
+        task_body="For engineering_blocker_followup tickets, inspect only the named files.",
+    )
+
+    assert reason is None
+
+
+def test_implement_pre_edit_drift_stands_down_for_harness_followup_patch_without_focused_test(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_PRE_EDIT_EXPLORE_BUDGET", "12")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    pre_patch_explore = "\n".join(
+        f"  ┊ 🔎 grep      symbol_{index}  0.1s"
+        for index in range(13)
+    )
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        f"{pre_patch_explore}\n"
+        "  ┊ 🔧 patch     /work/services/zoe-data/executors/kanban_adapter.py  5.9s\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.implement_pre_edit_drift_reason_from_log(
+        "t_impl",
+        "implement",
+        task_body='{"source":"engineering_blocker_followup"}',
+    )
+
+    assert reason is None
+
+
+def test_implement_pre_edit_drift_stands_down_for_patch_before_focused_test(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_PRE_EDIT_EXPLORE_BUDGET", "12")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    pre_patch_explore = "\n".join(
+        f"  ┊ 🔎 grep      symbol_{index}  0.1s"
+        for index in range(13)
+    )
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        f"{pre_patch_explore}\n"
+        "  ┊ 🔧 patch     /work/services/zoe-data/executors/kanban_adapter.py  5.9s\n"
+        "  ┊ 💻 $         cd /work && PYTHONPATH=services/zoe-data python3 -m pytest -q "
+        "services/zoe-data/tests/test_main_multica_poll.py::"
+        "test_record_blocked_multica_chain_creates_iteration_budget_followup  3.3s\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.implement_pre_edit_drift_reason_from_log(
+        "t_impl",
+        "implement",
+        task_body='{"source":"engineering_blocker_followup"}',
+    )
+
+    assert reason is None
+
+
+def test_implement_pre_edit_drift_prioritizes_explore_budget_when_both_trip(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_PRE_EDIT_REPEAT_READ_BUDGET", "3")
+    monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_PRE_EDIT_EXPLORE_BUDGET", "3")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    repeated_reads = "\n".join(
+        "  ┊ 📖 read      /work/services/zoe-data/intent_router.py  0.1s"
+        for _ in range(4)
+    )
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        f"{repeated_reads}\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.implement_pre_edit_drift_reason_from_log("t_impl", "implement")
+
+    assert reason is not None
+    assert "pre-edit exploration exceeded budget" in reason
+
+
+def test_implement_pre_edit_drift_stands_down_after_patch(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 📖 read      /work/services/zoe-data/intent_router.py  0.1s\n"
+        "  ┊ 📖 read      /work/services/zoe-data/intent_router.py  0.1s\n"
+        "  ┊ 🔧 patch     /work/services/zoe-data/intent_router.py  5.9s\n"
+        "  ┊ 📖 read      /work/services/zoe-data/intent_router.py  0.1s\n",
+        encoding="utf-8",
+    )
+
+    assert kb.implement_pre_edit_drift_reason_from_log("t_impl", "implement") is None
+
+
+def test_implement_pre_edit_drift_stands_down_after_terminal_call(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_PRE_EDIT_EXPLORE_BUDGET", "12")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    explore = "\n".join(
+        f"  ┊ 🔎 grep      symbol_{index}  0.1s"
+        for index in range(13)
+    )
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        f"{explore}\n"
+        "  ┊ ✅ kanban_block  0.1s\n",
+        encoding="utf-8",
+    )
+
+    assert kb.implement_pre_edit_drift_reason_from_log("t_impl", "implement") is None
+
+
+def test_implement_pre_edit_drift_covers_revision_phase(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_PRE_EDIT_EXPLORE_BUDGET", "12")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    explore = "\n".join(
+        f"  ┊ 🔎 grep      stale_comment_{index}  0.1s"
+        for index in range(13)
+    )
+    (log_dir / "t_revision.log").write_text(
+        "Query: work kanban task t_revision\n"
+        f"{explore}\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.implement_pre_edit_drift_reason_from_log("t_revision", "implement_revision")
+
+    assert reason is not None
+    assert "IMPLEMENT_HANDOFF_DRIFT" in reason
+
+
+def test_phase_budget_reason_blocks_pre_edit_handoff_drift(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_PRE_EDIT_EXPLORE_BUDGET", "12")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    explore = "\n".join(
+        f"  ┊ 🔎 grep      symbol_{index}  0.1s"
+        for index in range(13)
+    )
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        f"{explore}\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.phase_budget_reason(
+        "t_impl",
+        "implement",
+        {"task": {"started_at": 100}, "runs": [{"started_at": 100}]},
+        now=120,
+    )
+
+    assert reason is not None
+    assert "IMPLEMENT_HANDOFF_DRIFT" in reason
+
+
+def test_phase_budget_reason_passes_harness_followup_body_to_pre_edit_guard(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_PRE_EDIT_EXPLORE_BUDGET", "12")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 💻 $         cd /work && PYTHONPATH=services/zoe-data python3 -m pytest -q "
+        "services/zoe-data/tests/test_main_multica_poll.py::"
+        "test_record_blocked_multica_chain_creates_iteration_budget_followup  3.3s\n"
+        "  ┊ 📖 read      /work/services/zoe-data/executors/kanban_adapter.py  0.1s\n"
+        "  ┊ 🔎 grep      ITERATION_BUDGET  0.1s\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.phase_budget_reason(
+        "t_impl",
+        "implement",
+        {
+            "task": {
+                "started_at": 100,
+                "body": '{"source":"engineering_blocker_followup"}',
+            },
+            "runs": [{"started_at": 100}],
+        },
+        now=120,
+    )
+
+    assert reason is not None
+    assert "engineering blocker follow-up kept exploring after focused test" in reason
+
+
+def test_phase_budget_reason_reuses_implement_log_session(monkeypatch):
+    monkeypatch.setattr(kb, "tool_step_count", lambda *args, **kwargs: 1)
+    monkeypatch.setattr(kb, "_started_timestamp", lambda detail: None)
+    calls = []
+
+    def fake_latest(task_id, *, max_lines=120):
+        calls.append(max_lines)
+        if max_lines == 0:
+            return (
+                "Query: work kanban task t_impl\n"
+                "  ┊ 📖 read      /work/services/zoe-data/intent_router.py  0.1s\n"
+            )
+        return ""
+
+    monkeypatch.setattr(kb, "_latest_log_session", fake_latest)
+
+    assert kb.phase_budget_reason("t_impl", "implement", {"task": {}, "runs": []}) is None
+    assert calls.count(0) == 1
+
+
+def test_phase_budget_reason_ignores_stale_iteration_budget_log_session(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "⚠ Iteration budget reached (22/22) — response may be incomplete\n"
+        "Query: work kanban task t_impl\n"
+        "  ┊ ✅ kanban_block  0.1s\n",
+        encoding="utf-8",
+    )
+
+    assert kb.phase_budget_reason_from_log("t_impl", "implement") is None
+
+
+@pytest.mark.asyncio
+async def test_poll_v4_blocked_protocol_violation_recovers_iteration_budget_from_log(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_implement.log").write_text(
+        "Query: work kanban task t_implement\n"
+        "  ┊ 🔎 grep      ITERATION_BUDGET  0.1s\n"
+        "⚠ Iteration budget reached (22/22) — response may be incomplete\n",
+        encoding="utf-8",
+    )
+    rows = [_row("implement", "blocked", chain_version="v4")]
+    show = {
+        "t_implement": {
+            "latest_summary": "",
+            "comments": [],
+            "events": [{"kind": "protocol_violation", "payload": {"exit_code": 0}}],
+            "runs": [
+                {
+                    "status": "crashed",
+                    "outcome": "crashed",
+                    "error": "worker exited cleanly without calling kanban_complete",
+                }
+            ],
+        }
+    }
+    a = _FakeAdapter(list_rows=rows, show_map=show)
+
+    out = await a.poll("multica:uuid-9")
+
+    assert out["status"] == "blocked"
+    assert out["blocker"] == (
+        "ITERATION_BUDGET: Hermes iteration budget reached during implement "
+        "(steps=22, limit=22)"
+    )
+    assert out["pipeline"]["status"] == "blocked"
+    assert out["pipeline"]["block_reason"] == (
+        "ITERATION_BUDGET: Hermes iteration budget reached during implement "
+        "(steps=22, limit=22)"
+    )
+
+
 def test_phase_budget_reason_enforces_tool_and_runtime_limits(tmp_path, monkeypatch):
     log_path = tmp_path / "task.log"
     log_path.write_text("\n".join(["  ┊ tool call"] * 9), encoding="utf-8")
@@ -969,6 +2503,279 @@ def test_phase_budget_reason_enforces_tool_and_runtime_limits(tmp_path, monkeypa
     )
     assert reason is not None
     assert "runtime budget exceeded" in reason
+
+
+def test_review_budget_gets_wrapup_grace_after_mark_reviewed_verdict(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    lines = ["Query: work kanban task t_review"]
+    lines.extend(f"  ┊ tool call {idx}  0.1s" for idx in range(13))
+    lines.append(
+        "  ┊ 💻 $ PYTHONPATH=services/zoe-data python3 "
+        "services/zoe-data/pipeline_evidence_commands.py mark-reviewed "
+        "multica:issue --critical-count 0 --summary approved  0.1s"
+    )
+    (log_dir / "t_review.log").write_text("\n".join(lines), encoding="utf-8")
+
+    reason = kb.phase_budget_reason(
+        "t_review",
+        "review",
+        {"task": {"started_at": 100}},
+        now=110,
+    )
+
+    assert kb.tool_step_count("t_review") == 14
+    assert kb.review_wrapup_tool_grace("t_review", "review") == 3
+    assert reason is None
+
+
+def test_review_budget_finds_verdict_in_verbose_session(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    lines = ["Query: work kanban task t_review"]
+    lines.extend(f"  ┊ pre-verdict tool call {idx}  0.1s" for idx in range(8))
+    lines.append(
+        "  ┊ 💻 $ python3 services/zoe-data/pipeline_evidence_commands.py "
+        "mark-reviewed multica:issue --critical-count 0 --summary approved  0.1s"
+    )
+    lines.extend(f"verbose review output line {idx}" for idx in range(220))
+    lines.extend(f"  ┊ post-verdict tool call {idx}  0.1s" for idx in range(5))
+    (log_dir / "t_review.log").write_text("\n".join(lines), encoding="utf-8")
+
+    reason = kb.phase_budget_reason(
+        "t_review",
+        "review",
+        {"task": {"started_at": 100}},
+        now=110,
+    )
+
+    assert kb.tool_step_count("t_review") == 14
+    assert kb.review_wrapup_tool_grace("t_review", "review") == 3
+    assert reason is None
+
+
+def test_review_budget_wrapup_grace_env_override(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_REVIEW_WRAPUP_TOOL_GRACE", "5")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    lines = ["Query: work kanban task t_review"]
+    lines.append(
+        "  ┊ 💻 $ python3 services/zoe-data/pipeline_evidence_commands.py "
+        "mark-reviewed multica:issue --critical-count 0 --summary approved  0.1s"
+    )
+    (log_dir / "t_review.log").write_text("\n".join(lines), encoding="utf-8")
+
+    assert kb.review_wrapup_tool_grace("t_review", "review") == 5
+
+
+def test_review_budget_wrapup_grace_zero_override(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_REVIEW_WRAPUP_TOOL_GRACE", "0")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    lines = ["Query: work kanban task t_review"]
+    lines.append(
+        "  ┊ 💻 $ python3 services/zoe-data/pipeline_evidence_commands.py "
+        "mark-reviewed multica:issue --critical-count 0 --summary approved  0.1s"
+    )
+    (log_dir / "t_review.log").write_text("\n".join(lines), encoding="utf-8")
+
+    assert kb.review_wrapup_tool_grace("t_review", "review") == 0
+
+
+def test_review_budget_wrapup_grace_bad_override_falls_back(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_REVIEW_WRAPUP_TOOL_GRACE", "soon")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    lines = ["Query: work kanban task t_review"]
+    lines.append(
+        "  ┊ 💻 $ python3 services/zoe-data/pipeline_evidence_commands.py "
+        "mark-reviewed multica:issue --critical-count 0 --summary approved  0.1s"
+    )
+    (log_dir / "t_review.log").write_text("\n".join(lines), encoding="utf-8")
+
+    assert kb.review_wrapup_tool_grace("t_review", "review") == 3
+
+
+def test_review_budget_without_verdict_still_blocks_at_normal_limit(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_review.log").write_text(
+        "Query: work kanban task t_review\n"
+        + "\n".join(f"  ┊ tool call {idx}  0.1s" for idx in range(13)),
+        encoding="utf-8",
+    )
+
+    reason = kb.phase_budget_reason(
+        "t_review",
+        "review",
+        {"task": {"started_at": 100}},
+        now=110,
+    )
+
+    assert reason is not None
+    assert "BLOCKER=REVIEW_BUDGET" in reason
+    assert "hard_limit=12" in reason
+
+
+def test_review_budget_does_not_treat_mark_reviewed_help_as_verdict(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    lines = ["Query: work kanban task t_review"]
+    lines.extend(f"  ┊ tool call {idx}  0.1s" for idx in range(13))
+    lines.append(
+        "  ┊ 💻 $ python3 services/zoe-data/pipeline_evidence_commands.py "
+        "mark-reviewed --help  0.1s"
+    )
+    (log_dir / "t_review.log").write_text("\n".join(lines), encoding="utf-8")
+
+    reason = kb.phase_budget_reason(
+        "t_review",
+        "review",
+        {"task": {"started_at": 100}},
+        now=110,
+    )
+
+    assert kb.review_wrapup_tool_grace("t_review", "review") == 0
+    assert reason is not None
+    assert "BLOCKER=REVIEW_BUDGET" in reason
+
+
+def test_review_budget_does_not_treat_help_output_as_verdict(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    lines = ["Query: work kanban task t_review"]
+    lines.extend(f"  ┊ tool call {idx}  0.1s" for idx in range(13))
+    lines.append(
+        "  ┊ 💻 $ python3 services/zoe-data/pipeline_evidence_commands.py "
+        "mark-reviewed --help  0.1s"
+    )
+    lines.append(
+        "usage: mark-reviewed multica:issue --critical-count 0 --summary approved"
+    )
+    (log_dir / "t_review.log").write_text("\n".join(lines), encoding="utf-8")
+
+    reason = kb.phase_budget_reason(
+        "t_review",
+        "review",
+        {"task": {"started_at": 100}},
+        now=110,
+    )
+
+    assert kb.review_wrapup_tool_grace("t_review", "review") == 0
+    assert reason is not None
+    assert "BLOCKER=REVIEW_BUDGET" in reason
+
+
+def test_verify_phase_budget_allows_pr_validation_headroom(tmp_path, monkeypatch):
+    log_path = tmp_path / "task.log"
+    monkeypatch.setattr(kb, "_log_path", lambda _task_id: log_path)
+    monkeypatch.delenv("ZOE_KANBAN_VERIFY_TOOL_BUDGET", raising=False)
+
+    log_path.write_text("\n".join(["  ┊ tool call"] * 17), encoding="utf-8")
+    reason = kb.phase_budget_reason(
+        "t_verify",
+        "verify",
+        {"task": {"started_at": 100}},
+        now=110,
+    )
+
+    assert reason is None
+
+    log_path.write_text("\n".join(["  ┊ tool call"] * 19), encoding="utf-8")
+    reason = kb.phase_budget_reason(
+        "t_verify",
+        "verify",
+        {"task": {"started_at": 100}},
+        now=110,
+    )
+
+    assert reason is not None
+    assert "VERIFY_BUDGET" in reason
+    assert "guidance_limit=16" in reason
+    assert "hard_limit=18" in reason
+
+
+def test_existing_pr_revision_implement_budget_has_scoped_headroom(tmp_path, monkeypatch):
+    log_path = tmp_path / "task.log"
+    monkeypatch.setattr(kb, "_log_path", lambda _task_id: log_path)
+    monkeypatch.delenv("ZOE_KANBAN_IMPLEMENT_TOOL_BUDGET", raising=False)
+    monkeypatch.delenv("ZOE_KANBAN_IMPLEMENT_REVISION_TOOL_BUDGET", raising=False)
+
+    log_path.write_text("\n".join(["  ┊ tool call"] * 27), encoding="utf-8")
+    normal = kb.phase_budget_reason(
+        "t_implement",
+        "implement",
+        {"task": {"started_at": 100, "body": "plain implement task"}},
+        now=110,
+    )
+    revision = kb.phase_budget_reason(
+        "t_revision",
+        "implement",
+        {"task": {"started_at": 100, "body": "EXISTING PR REVISION FAST PATH"}},
+        now=110,
+    )
+
+    assert normal is not None
+    assert "guidance_limit=24" in normal
+    assert revision is None
+
+    log_path.write_text("\n".join(["  ┊ tool call"] * 33), encoding="utf-8")
+    revision = kb.phase_budget_reason(
+        "t_revision",
+        "implement",
+        {"task": {"started_at": 100, "body": "EXISTING PR REVISION FAST PATH"}},
+        now=110,
+    )
+
+    assert revision is not None
+    assert "IMPLEMENT_BUDGET" in revision
+    assert "guidance_limit=30" in revision
+    assert "hard_limit=32" in revision
+
+    log_path.write_text("\n".join(["  ┊ tool call"] * 27), encoding="utf-8")
+    top_level_only = kb.phase_budget_reason(
+        "t_top_level",
+        "implement",
+        {"task": {"started_at": 100}, "body": "EXISTING PR REVISION FAST PATH"},
+        now=110,
+    )
+    assert top_level_only is not None
+    assert "guidance_limit=24" in top_level_only
+
+
+def test_existing_pr_revision_budget_inherits_generic_override(tmp_path, monkeypatch):
+    log_path = tmp_path / "task.log"
+    monkeypatch.setattr(kb, "_log_path", lambda _task_id: log_path)
+    monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_TOOL_BUDGET", "28")
+    monkeypatch.delenv("ZOE_KANBAN_IMPLEMENT_REVISION_TOOL_BUDGET", raising=False)
+
+    log_path.write_text("\n".join(["  ┊ tool call"] * 31), encoding="utf-8")
+    inherited = kb.phase_budget_reason(
+        "t_revision",
+        "implement",
+        {"task": {"started_at": 100, "body": "EXISTING PR REVISION FAST PATH"}},
+        now=110,
+    )
+    assert inherited is not None
+    assert "guidance_limit=28" in inherited
+    assert "hard_limit=30" in inherited
+
+    monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_REVISION_TOOL_BUDGET", "34")
+    specific = kb.phase_budget_reason(
+        "t_revision",
+        "implement",
+        {"task": {"started_at": 100, "body": "EXISTING PR REVISION FAST PATH"}},
+        now=110,
+    )
+    assert specific is None
 
 
 def test_phase_budget_accepts_iso_timestamp_and_ascii_step_logs(tmp_path, monkeypatch):
@@ -1231,6 +3038,127 @@ def test_closeout_body_defers_multica_done_until_retro():
     assert "MULTICA=<Zoe updates after retro; report blocker if any>" in body
 
 
+def test_implement_body_adds_code_audit_fast_path_for_actionable_bug():
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {
+            "id": "uuid-code-audit",
+            "identifier": "ZOE-5354",
+            "title": "GET /metrics endpoint is unauthenticated",
+            "metadata": {
+                "zoe_kind": "bug",
+                "source": "code_audit_p0_security",
+                "acceptance_criteria": ["Require admin or internal token on /metrics"],
+            },
+        },
+        "ZOE-5354",
+    )
+
+    assert "CODE-AUDIT FAST PATH" in body
+    assert "Do not re-audit the whole repo" in body
+    assert "Apply the smallest patch" in body
+    assert "Spend no more than 3 tool calls hunting for tests" in body
+    assert "git push -u origin HEAD" in body
+    assert body.index("CODE-AUDIT FAST PATH") < body.index("AUDIT/SMOKE FAST PATH")
+    assert body.index("CODE-AUDIT FAST PATH") < body.index("Graphify map")
+
+
+def test_implement_body_omits_code_audit_fast_path_without_acceptance_criteria():
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {
+            "id": "uuid-code-audit-open",
+            "identifier": "ZOE-OPEN",
+            "title": "Investigate unauthenticated endpoint",
+            "metadata": {
+                "zoe_kind": "bug",
+                "source": "code_audit_p0_security",
+            },
+        },
+        "ZOE-OPEN",
+    )
+
+    assert "CODE-AUDIT FAST PATH" not in body
+
+
+def test_implement_body_omits_code_audit_fast_path_for_non_code_audit():
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {
+            "id": "uuid-harness",
+            "identifier": "ZOE-5449",
+            "title": "Harness: follow up ITERATION_BUDGET",
+            "metadata": {
+                "zoe_kind": "harness_fix",
+                "source": "engineering_blocker_followup",
+                "acceptance_criteria": ["Focused tests cover blocker path"],
+            },
+        },
+        "ZOE-5449",
+    )
+
+    assert "CODE-AUDIT FAST PATH" not in body
+
+
+def test_implement_body_always_completes_after_pr_creation_even_for_security_review():
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {"id": "uuid-generic", "identifier": "ZOE-GEN", "title": "Generic feature", "description": "Add a small endpoint"},
+        "ZOE-GEN",
+    )
+
+    assert "Security-sensitive changes still complete implement after the PR is opened" in body
+    assert "Do not call `kanban_block` merely because a human/security reviewer should inspect the PR" in body
+    assert "CODE-AUDIT FAST PATH" not in body
+
+
+def test_implement_body_documents_existing_pr_revision_fast_path_before_new_pr_creation(monkeypatch):
+    monkeypatch.setenv("GREPTILE_MCP_BIN", "/opt/zoe/greptile-mcp")
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {
+            "id": "uuid-pr-revision",
+            "identifier": "ZOE-5354",
+            "title": "GET /metrics endpoint is unauthenticated",
+            "description": """```zoe-ticket
+{"pr_url":"https://github.com/jason-easyazz/zoe-ai-assistant/pull/213","last_evidence":"Revision required from verify"}
+```""",
+            "metadata": {
+                "zoe_kind": "bug",
+                "source": "code_audit_p0_security",
+                "acceptance_criteria": ["Require admin or internal token on /metrics"],
+            },
+        },
+        "ZOE-5354",
+    )
+
+    assert "EXISTING PR REVISION FAST PATH" in body
+    assert "Do not rediscover the original fix and do not create a new PR" in body
+    assert "do not read, grep, or edit files until the existing PR checkout below succeeds" in body
+    assert "/opt/zoe/greptile-mcp pr-comments --unaddressed-only" in body
+    assert "may exit nonzero when it prints unresolved comments" in body
+    assert "Zoe dispatch pre-checks this task worktree to the existing PR head" in body
+    assert "headRefOid" in body
+    assert "git rev-parse HEAD" in body
+    assert "Do not run `gh pr checkout`, `git checkout`, `git fetch`, or `git reset` yourself" in body
+    assert "git push origin HEAD:<headRefName>" in body
+    assert "report the SAME PR_URL" in body
+    assert "PYTHONPATH=services/zoe-data python3 -m pytest" in body
+    assert "patch the module variable with monkeypatch/setattr after import" in body
+    assert "BLOCKER=PR_REVISION_CHECKOUT_FAILED" in body
+    assert "BLOCKER=PR_REVISION_BLOCKED" in body
+    assert body.index("BLOCKER=PR_REVISION_CHECKOUT_FAILED") < body.index("BLOCKER=PR_REVISION_BLOCKED")
+    assert body.index("EXISTING PR REVISION FAST PATH") < body.index("open ONE small PR")
+
+    generic_body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {"id": "uuid-generic", "identifier": "ZOE-GEN", "title": "Generic feature"},
+        "ZOE-GEN",
+    )
+    assert "EXISTING PR REVISION FAST PATH" in generic_body
+    assert "if the ticket block already contains `pr_url`/PR_URL" in generic_body
+
+
 def test_implement_body_puts_bounded_fast_paths_before_graphify():
     body = ka.KanbanAdapter()._build_body(
         "implement",
@@ -1254,6 +3182,179 @@ def test_implement_body_puts_bounded_fast_paths_before_graphify():
     assert body.index("SMALL EXPLICIT CODE FAST PATH") < body.index("Graphify map")
 
 
+def test_implement_body_has_edit_safety_loop():
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {"id": "uuid-1", "identifier": "ZOE-9", "title": "Small code change", "description": ""},
+        "ZOE-9",
+    )
+
+    assert "EDIT SAFETY LOOP" in body
+    assert "after every patch, immediately run the narrowest syntax check" in body
+    assert "python3 -m py_compile <file>" in body
+    assert "before any second patch or more exploration" in body
+    assert "BLOCKER=IMPLEMENT_EDIT_SAFETY" in body
+    assert "Never leave a malformed partial edit and keep exploring" in body
+    assert body.index("EDIT SAFETY LOOP") < body.index("If the task needs more than one PR")
+
+
+def test_implement_body_includes_harness_repo_map_for_harness_tickets():
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {
+            "id": "uuid-5435",
+            "identifier": "ZOE-5435",
+            "title": "retro-fallback-when-worktree-missing",
+            "description": """Fix the missing worktree retro fallback.
+
+```zoe-ticket
+{"schema":1,"zoe_kind":"harness_fix","source":"retro_followup","acceptance_criteria":["small harness fix"],"evidence_expectations":["focused tests"]}
+```""",
+        },
+        "ZOE-5435",
+    )
+
+    assert "HARNESS FAST PATH" in body
+    assert "services/zoe-data/executors/kanban_adapter.py" in body
+    assert "services/zoe-data/worktree_bootstrap.py" in body
+    assert "For worktree-missing/retro fallback tickets" in body
+    assert "Start editing within 6 tool/model steps" in body
+    assert body.index("HARNESS FAST PATH") < body.index("Graphify map")
+
+
+def test_implement_body_includes_harness_repo_map_for_blocker_followup_source():
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {
+            "id": "uuid-5454",
+            "identifier": "ZOE-5454",
+            "title": "Follow up iteration budget",
+            "description": """Fix the blocked harness run.
+
+```zoe-ticket
+{"schema":1,"zoe_kind":"operator_task","source":"engineering_blocker_followup","source_blocker":"ITERATION_BUDGET","acceptance_criteria":["small harness fix"],"evidence_expectations":["focused tests"]}
+```""",
+        },
+        "ZOE-5454",
+    )
+
+    assert "HARNESS FAST PATH" in body
+    assert "services/zoe-data/executors/kanban_adapter.py" in body
+    assert "services/zoe-data/worktree_bootstrap.py" in body
+    assert "engineering_blocker_followup tickets" in body
+    assert "services/zoe-data/main.py" in body
+    assert "services/zoe-data/tests/test_main_multica_poll.py" in body
+    assert (
+        "PYTHONPATH=services/zoe-data python3 -m pytest -q "
+        "services/zoe-data/tests/test_main_multica_poll.py::"
+        "test_record_blocked_multica_chain_creates_iteration_budget_followup"
+    ) in body
+    assert "do not create `.venv`, run `pip install`" in body
+    assert "BLOCKER=TEST_ENVIRONMENT" in body
+    assert "If the focused test passes before any edit, do not inspect more blocker code" in body
+    assert "edit services/zoe-data/executors/kanban_adapter.py within 2 more tool/model steps" in body
+    assert "BLOCKER=ALREADY_COVERED" in body
+
+
+@pytest.mark.parametrize(
+    ("source_blocker", "expected_test"),
+    [
+        (
+            "IMPLEMENT_BUDGET",
+            "test_record_blocked_multica_chain_creates_budget_followup_once",
+        ),
+        (
+            "IMPLEMENT_HANDOFF_DRIFT",
+            "test_record_blocked_multica_chain_creates_budget_followup_once",
+        ),
+        (
+            "PROTOCOL_VIOLATION",
+            "test_record_blocked_multica_chain_creates_protocol_followup",
+        ),
+        (
+            "",
+            "services/zoe-data/tests/test_main_multica_poll.py`",
+        ),
+    ],
+)
+def test_implement_body_includes_harness_blocker_followup_focused_tests(
+    source_blocker, expected_test
+):
+    source_blocker_json = f',"source_blocker":"{source_blocker}"' if source_blocker else ""
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {
+            "id": "uuid-5454",
+            "identifier": "ZOE-5454",
+            "title": "Follow up harness blocker",
+            "description": f"""Fix the blocked harness run.
+
+```zoe-ticket
+{{"schema":1,"zoe_kind":"operator_task","source":"engineering_blocker_followup"{source_blocker_json},"acceptance_criteria":["small harness fix"],"evidence_expectations":["focused tests"]}}
+```""",
+        },
+        "ZOE-5454",
+    )
+
+    assert "engineering_blocker_followup tickets" in body
+    assert expected_test in body
+    assert "Use the existing repo/runtime environment only" in body
+    assert "If the focused test passes before any edit, do not inspect more blocker code" in body
+    assert "edit services/zoe-data/executors/kanban_adapter.py within 2 more tool/model steps" in body
+    assert "BLOCKER=ALREADY_COVERED" in body
+
+
+def test_implement_body_includes_harness_repo_map_for_harness_title():
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {
+            "id": "uuid-title",
+            "identifier": "ZOE-TITLE",
+            "title": "Harness: fix worktree path",
+            "description": """Small operator task.
+
+```zoe-ticket
+{"schema":1,"zoe_kind":"operator_task","source":"manual","acceptance_criteria":["small fix"],"evidence_expectations":["focused tests"]}
+```""",
+        },
+        "ZOE-TITLE",
+    )
+
+    assert "HARNESS FAST PATH" in body
+    assert "services/zoe-data/executors/kanban_adapter.py" in body
+
+
+def test_implement_body_omits_harness_repo_map_for_unrelated_harness_word():
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {
+            "id": "uuid-test-harness",
+            "identifier": "ZOE-TEST",
+            "title": "Fix CI test harness timeout",
+            "description": "Update a product test fixture timeout.",
+        },
+        "ZOE-TEST",
+    )
+
+    assert "HARNESS FAST PATH" not in body
+
+
+def test_implement_body_omits_harness_repo_map_for_generic_tickets():
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {
+            "id": "uuid-generic",
+            "identifier": "ZOE-GEN",
+            "title": "Generic feature",
+            "description": "Add a small user setting.",
+        },
+        "ZOE-GEN",
+    )
+
+    assert "HARNESS FAST PATH" not in body
+    assert "For worktree-missing/retro fallback tickets" not in body
+
+
 def test_scout_body_has_child_followup_fast_path():
     body = ka.KanbanAdapter()._build_body(
         "scout",
@@ -1272,6 +3373,141 @@ def test_scout_body_has_child_followup_fast_path():
     assert body.index("CHILD/FOLLOW-UP FAST PATH") < body.index("Keep this phase bounded")
 
 
+def test_scout_body_has_broad_parent_split_fast_path():
+    # This is a static prompt-contract assertion, not conditional broad-ticket detection.
+    body = ka.KanbanAdapter()._build_body(
+        "scout",
+        {
+            "id": "uuid-1",
+            "identifier": "ZOE-5288",
+            "title": "card-upgrade: backend service, registry, and domain builders",
+            "description": "Wire chat.py, intent_router.py, zoe_agent.py, ui_orchestrator.py, and mcp_server.py",
+        },
+        "ZOE-5288",
+    )
+
+    assert "BROAD PARENT SPLIT FAST PATH" in body
+    assert "BLOCKER=SCOPE_SPLIT_REQUIRED" in body
+    assert "NEEDS_SPLIT=1" in body
+    assert "SPLIT_PACKET={" in body
+    assert "child_issue_template" in body
+    assert body.index("BROAD PARENT SPLIT FAST PATH") < body.index("Keep this phase bounded")
+
+
+def test_scout_body_has_intent_gap_fast_path():
+    body = ka.KanbanAdapter()._build_body(
+        "scout",
+        {
+            "id": "uuid-1",
+            "identifier": "ZOE-5451",
+            "title": "Intent gap: 'Tell me a joke.'",
+            "description": "Intent router missed similar messages in the last 7 days.",
+        },
+        "ZOE-5451",
+    )
+
+    assert "INTENT GAP FAST PATH" in body
+    assert "ticket evidence plus at most one" in body
+    assert "at most one focused lookup of the routing/intent file" in body
+    assert "IMPLEMENTATION_REQUIRED=true unless the exact behavior is already handled" in body
+    assert body.index("INTENT GAP FAST PATH") < body.index("Keep this phase bounded")
+
+
+def test_implement_body_includes_unconditional_scout_handoff_fast_path():
+    # This is a static prompt-contract assertion. The agent decides whether
+    # SCOUT_SUMMARY is present at runtime after `kanban_show`.
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {
+            "id": "uuid-1",
+            "identifier": "ZOE-5451",
+            "title": "Intent gap: 'Tell me a joke.'",
+            "description": "",
+        },
+        "ZOE-5451",
+    )
+
+    assert "SCOUT HANDOFF FAST PATH" in body
+    assert "treat that as the accepted context" in body
+    assert "Do not re-scout, re-map, or repeatedly read the same file" in body
+    assert "intent-gap tickets" in body
+    assert "start editing within 4 tool/model steps" in body
+    assert body.index("SCOUT HANDOFF FAST PATH") < body.index("SMALL EXPLICIT CODE FAST PATH")
+
+
+def test_implement_body_includes_intent_gap_fast_path():
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {
+            "id": "uuid-intent",
+            "identifier": "ZOE-5451",
+            "title": "Intent gap: 'Tell me a joke.'",
+            "description": "SCOUT_SUMMARY says services/zoe-data/intent_router.py needs a narrow route.",
+        },
+        "ZOE-5451",
+    )
+
+    assert "INTENT-GAP IMPLEMENT FAST PATH" in body
+    assert "services/zoe-data/intent_router.py" in body
+    assert "nearest intent_router tests" in body
+    assert "`_AGENT_CHAT_RE`" in body
+    assert "Open-domain Q&A / creative" in body
+    assert "do not grep `_CALCULATE_`, `_execute_`" in body
+    assert "`Tell me a joke.`, `Tell me a joke`, and `Tell me another joke.`" in body
+    assert "python3 scripts/maintenance/zoe_apply_intent_gap_contract.py joke" in body
+    assert "python3 -m py_compile services/zoe-data/intent_router.py" in body
+    assert "services/zoe-data/tests/test_intent_open_domain.py" in body
+    assert "Intent(\"extend_capability\", {\"raw\": <original text>})" in body
+    assert "Do not add a joke bank or a brittle per-joke executor" in body
+    assert "Start editing within 4 tool/model steps after `kanban_show`" in body
+    assert body.index("INTENT-GAP IMPLEMENT FAST PATH") < body.index("AUDIT/SMOKE FAST PATH")
+
+
+def test_implement_body_does_not_add_joke_contract_for_other_intent_gaps():
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {
+            "id": "uuid-intent-weather",
+            "identifier": "ZOE-5450",
+            "title": "Intent gap: 'Can you tell me about me?'",
+            "description": "This is no joke; the routing is broken for profile questions.",
+        },
+        "ZOE-5450",
+    )
+
+    assert "INTENT-GAP IMPLEMENT FAST PATH" in body
+    assert "Concrete edit contract for this joke gap" not in body
+    assert "`Tell me a joke.`, `Tell me a joke`, and `Tell me another joke.`" not in body
+
+
+def test_implement_revision_body_includes_intent_gap_fast_path():
+    body = ka.KanbanAdapter()._build_body(
+        "implement_revision",
+        {
+            "id": "uuid-intent",
+            "identifier": "ZOE-5451",
+            "title": "Intent-gap revision: 'Tell me a joke.'",
+            "description": "Existing PR still needs a focused intent_router.py revision.",
+        },
+        "ZOE-5451",
+    )
+
+    assert "INTENT-GAP IMPLEMENT FAST PATH" in body
+    assert "services/zoe-data/intent_router.py" in body
+    assert "`_AGENT_CHAT_RE`" in body
+    assert "Open-domain Q&A / creative" in body
+    assert "do not grep `_CALCULATE_`, `_execute_`" in body
+    assert "`Tell me a joke.`, `Tell me a joke`, and `Tell me another joke.`" in body
+    assert "python3 scripts/maintenance/zoe_apply_intent_gap_contract.py joke" in body
+    assert "python3 -m py_compile services/zoe-data/intent_router.py" in body
+    assert "services/zoe-data/tests/test_intent_open_domain.py" in body
+    assert "Intent(\"extend_capability\", {\"raw\": <original text>})" in body
+    assert "Do not add a joke bank or a brittle per-joke executor" in body
+    assert "EXISTING PR REVISION FAST PATH" in body
+    assert "After the existing-PR checkout checks succeed" in body
+    assert "Start editing within 4 tool/model steps after `kanban_show`" not in body
+
+
 def test_retro_body_has_post_closeout_fast_path():
     body = ka.KanbanAdapter()._build_body(
         "retro",
@@ -1279,6 +3515,7 @@ def test_retro_body_has_post_closeout_fast_path():
         "ZOE-9",
     )
 
+    assert "Workspace: main repo checkout" in body
     assert "POST-CLOSEOUT FAST PATH" in body
     assert "PR_URL, MERGE_SHA" in body
     assert "GREPTILE/greptile_status=5/5 or already_merged" in body

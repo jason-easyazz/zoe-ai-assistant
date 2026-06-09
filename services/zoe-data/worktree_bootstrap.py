@@ -14,6 +14,7 @@ from hermes_http import zoe_repo_root
 logger = logging.getLogger(__name__)
 
 _TASK_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+_GITHUB_PR_RE = re.compile(r"/pull/(\d+)(?:\D|$)")
 
 
 def _run_git(args: list[str], *, cwd: str, timeout: int) -> subprocess.CompletedProcess[str]:
@@ -208,4 +209,62 @@ def prepare_kanban_worktree(task_id: str, *, base_branch: str = "main") -> Path:
             task_id,
             exc,
         )
+    return wt_path
+
+
+def _extract_pr_number(pr_url: str) -> str:
+    match = _GITHUB_PR_RE.search((pr_url or "").strip())
+    if not match:
+        raise ValueError(f"cannot extract GitHub PR number from {pr_url!r}")
+    return match.group(1)
+
+
+def prepare_existing_pr_revision_worktree(task_id: str, pr_url: str, *, base_branch: str = "main") -> Path:
+    """Create/pin a task worktree and reset it to the existing PR head.
+
+    Revision tasks must not rely on the worker prompt to check out the PR. Zoe
+    prepares the workspace before the Hermes worker is allowed to inspect files;
+    if the fetch/reset fails, dispatch can block the Kanban task without burning
+    a paid agent run on the wrong branch.
+    """
+    wt_path = prepare_kanban_worktree(task_id, base_branch=base_branch)
+    pr_number = _extract_pr_number(pr_url)
+    pr_ref = f"refs/wt-pr/{task_id}"
+
+    fetch = _run_git(
+        ["git", "fetch", "origin", f"+pull/{pr_number}/head:{pr_ref}"],
+        cwd=str(wt_path),
+        timeout=120,
+    )
+    if fetch.returncode != 0:
+        raise RuntimeError(
+            f"git fetch origin +pull/{pr_number}/head:{pr_ref} failed for {task_id}:"
+            f" {(fetch.stderr or fetch.stdout or '').strip() or 'unknown error'}"
+        )
+
+    reset = _run_git(
+        ["git", "reset", "--hard", pr_ref],
+        cwd=str(wt_path),
+        timeout=60,
+    )
+    if reset.returncode != 0:
+        raise RuntimeError(
+            f"git reset --hard {pr_ref} failed for {task_id}:"
+            f" {(reset.stderr or reset.stdout or '').strip() or 'unknown error'}"
+        )
+
+    cleanup = _run_git(["git", "update-ref", "-d", pr_ref], cwd=str(wt_path), timeout=30)
+    if cleanup.returncode != 0:
+        logger.warning(
+            "worktree_bootstrap: could not delete temporary PR ref %s for %s: %s",
+            pr_ref,
+            task_id,
+            (cleanup.stderr or cleanup.stdout or "").strip() or "unknown error",
+        )
+
+    logger.info(
+        "worktree_bootstrap: prepared existing PR revision workspace %s -> PR #%s",
+        task_id,
+        pr_number,
+    )
     return wt_path

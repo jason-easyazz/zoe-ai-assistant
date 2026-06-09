@@ -15,6 +15,7 @@ from pipeline_evidence import (
     EvidenceItem,
     PipelinePhase,
     PipelineState,
+    TransitionRecord,
     block_fingerprint,
     build_scope_split_packet,
     can_complete_phase,
@@ -249,6 +250,7 @@ def skip_blocked_implementation(
             raise ValueError(
                 f"pipeline lacks passed scout/tool evidence required for a no-code skip: {task_ref}"
             )
+        state = state.model_copy(update={"evidence_profile": "audit"})
         skipped = transition(state, "skip_implementation", reason=reason)
         skipped = skipped.model_copy(
             update={
@@ -263,6 +265,109 @@ def skip_blocked_implementation(
                 skipped,
                 event="operator_skipped_implementation",
                 extra={"reason": reason, "from_phase": "implement", "to_phase": "verify"},
+            )
+        except PipelineStateConflict:
+            if attempt:
+                raise
+    raise AssertionError("unreachable")
+
+
+def complete_pipeline_after_external_merge(
+    task_ref: str,
+    *,
+    pr_url: str | None = None,
+    merge_sha: str | None = None,
+    greptile_status: str | None = None,
+    reason: str = "external PR merge recorded",
+) -> PipelineState | None:
+    """Journal a completed run when PR maintenance recovers a worker publish gap."""
+    for attempt in range(2):
+        state = load_latest_state(task_ref)
+        if state is None:
+            return None
+        if state.status == "done":
+            return state
+        evidence = list(state.evidence)
+        if pr_url and not any(item.kind == "pr" and item.artifact == pr_url for item in evidence):
+            evidence.append(
+                EvidenceItem(
+                    kind="pr",
+                    summary=pr_url[:500],
+                    artifact=pr_url,
+                    passed=True,
+                    metadata={"source": "pr_maintenance", "phase": "implement"},
+                )
+            )
+        if not any(
+            item.kind == "greptile"
+            and item.metadata.get("source") == "pr_maintenance"
+            and item.metadata.get("phase") == "closeout"
+            and item.metadata.get("merge_sha") == merge_sha
+            for item in evidence
+        ):
+            evidence.append(
+                EvidenceItem(
+                    kind="greptile",
+                    summary=(greptile_status or "MERGED")[:500],
+                    artifact=pr_url,
+                    passed=True,
+                    metadata={
+                        "source": "pr_maintenance",
+                        "phase": "closeout",
+                        "merge_sha": merge_sha,
+                    },
+                )
+            )
+        if not any(
+            item.kind == "log"
+            and item.metadata.get("source") == "pr_maintenance"
+            and item.metadata.get("phase") == "retro"
+            and item.metadata.get("merge_sha") == merge_sha
+            for item in evidence
+        ):
+            evidence.append(
+                EvidenceItem(
+                    kind="log",
+                    summary=reason[:500],
+                    artifact=pr_url,
+                    passed=True,
+                    metadata={
+                        "source": "pr_maintenance",
+                        "phase": "retro",
+                        "merge_sha": merge_sha,
+                    },
+                )
+            )
+        completed = state.model_copy(
+            update={
+                "phase": "retro",
+                "status": "done",
+                "evidence": evidence,
+                "last_block_fingerprint": None,
+                "repeated_block_count": 0,
+                "block_classification": None,
+                "split_packet": None,
+                "history": [
+                    *state.history,
+                    TransitionRecord(
+                        from_phase=state.phase,
+                        to_phase="retro",
+                        outcome="complete",
+                        reason=reason,
+                    ),
+                ],
+            }
+        )
+        try:
+            return save_state(
+                completed,
+                event="external_merge_completed",
+                extra={
+                    "reason": reason,
+                    "pr_url": pr_url,
+                    "merge_sha": merge_sha,
+                    "greptile_status": greptile_status,
+                },
             )
         except PipelineStateConflict:
             if attempt:
@@ -359,6 +464,12 @@ def pipeline_summary(state: PipelineState | None) -> dict[str, Any]:
     if not state:
         return {"tracked": False}
     missing = sorted(missing_required_evidence(state))
+    block_reason = None
+    if state.status == "blocked":
+        for record in reversed(state.history):
+            if record.outcome in {"block", "verification_failed", "request_changes", "merge_blocked"}:
+                block_reason = record.reason
+                break
     fingerprint_abort = state.status == "blocked" and (
         state.repeated_block_count >= 2
         or any(
@@ -381,6 +492,7 @@ def pipeline_summary(state: PipelineState | None) -> dict[str, Any]:
         "attempts": dict(state.attempts),
         "terminal_block": terminal_block,
         "fingerprint_abort": fingerprint_abort,
+        "block_reason": block_reason,
         "block_classification": state.block_classification,
         "needs_split": state.status == "blocked" and state.block_classification == "scope_split_required",
         "split_packet": state.split_packet,
@@ -595,8 +707,25 @@ async def _sync_pipeline_from_chain_once(
                 "row_phase": phase,
                 "missing": sorted(missing_required_evidence(state)),
             }
-            if state.phase == "verify" and not verify_validator_hash_matches(state):
+            validator_hash_mismatch = state.phase == "verify" and not verify_validator_hash_matches(state)
+            if validator_hash_mismatch:
                 extra["validator_hash_mismatch"] = True
+            if extra["missing"]:
+                block_reason = "GATE_BLOCKED: missing required evidence " + ",".join(extra["missing"])
+            elif validator_hash_mismatch:
+                block_reason = "GATE_BLOCKED: validator hash mismatch"
+            else:
+                raise AssertionError(
+                    "can_complete_phase returned False with no diagnosable gate reason "
+                    f"(phase={state.phase!r}, evidence={[item.kind for item in state.evidence]!r})"
+                )
+            state, _should_abort = record_block_fingerprint(
+                state,
+                block_fingerprint(phase, block_reason),  # type: ignore[arg-type]
+            )
+            # A gate block is already terminal for this phase until operator action
+            # changes the state, so repeated-fingerprint escalation would be noise.
+            state = transition(state, "block", reason=block_reason)
             state = await _run_io(
                 partial(
                     save_state,

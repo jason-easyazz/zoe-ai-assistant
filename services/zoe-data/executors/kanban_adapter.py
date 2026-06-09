@@ -28,7 +28,12 @@ from pathlib import Path
 from typing import Any
 
 from hermes_http import hermes_bin, zoe_repo_root
-from kanban_phase_budget import phase_budget_reason, terminate_running_workers
+from kanban_phase_budget import (
+    phase_budget_reason,
+    phase_budget_reason_from_log,
+    task_log_tail,
+    terminate_running_workers,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +70,10 @@ _PROTOCOL_VIOLATION_LIMIT = max(
 # task body at dispatch. Anchored to the start of a line so it never collides with
 # prose elsewhere in the body.
 _REF_MARKER_RE = re.compile(r"^zoe-ref:\s*(\S+)", re.MULTILINE)
+_JOKE_INTENT_GAP_TITLE_RE = re.compile(
+    r"\bintent[- ]gap\b.*['\"]?(?:tell\s+me\s+(?:another\s+)?joke|joke)['\"]?",
+    re.IGNORECASE,
+)
 
 
 def _row_ref_key(row: dict) -> str:
@@ -86,6 +95,17 @@ def _board() -> str:
     return os.environ.get("ZOE_KANBAN_BOARD", "default")
 
 
+def _workspace_for_phase(phase: str) -> str:
+    """Choose the Hermes workspace for a phase.
+
+    Retro is read-only orchestration/learning work. Running it from the main
+    repo avoids phantom task worktrees after closeout has already merged.
+    """
+    if phase == "retro":
+        return f"dir:{zoe_repo_root()}"
+    return "worktree"
+
+
 def _greptile_mcp_bin() -> str:
     """Locate the operator-local greptile MCP CLI; honour GREPTILE_MCP_BIN override.
 
@@ -100,6 +120,32 @@ def _greptile_mcp_bin() -> str:
     return os.path.expanduser("~/bin/greptile-mcp.py")
 
 
+def _ticket_metadata(issue: dict | None = None) -> dict[str, Any]:
+    issue = issue or {}
+    cached = issue.get("_zoe_ticket_metadata_cache")
+    if isinstance(cached, dict):
+        return dict(cached)
+
+    meta = dict(issue.get("metadata") or {})
+    if issue.get("description"):
+        try:
+            from multica_ticket_contract import parse_ticket_block
+
+            parsed = parse_ticket_block(issue.get("description") or "")
+            if isinstance(parsed, dict):
+                meta = {**parsed, **meta}
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("_ticket_metadata: parse_ticket_block failed: %s", exc)
+    issue["_zoe_ticket_metadata_cache"] = dict(meta)
+    return meta
+
+
+def _existing_pr_url(issue: dict | None = None) -> str:
+    issue = issue or {}
+    raw = issue.get("pr_url") or _ticket_metadata(issue).get("pr_url") or ""
+    return str(raw).strip()
+
+
 def _engineering_mode(issue: dict | None = None) -> str:
     """Resolve the engineering execution mode for a journaled phase run.
 
@@ -110,7 +156,7 @@ def _engineering_mode(issue: dict | None = None) -> str:
     issue = issue or {}
     raw = (
         issue.get("engineering_mode")
-        or (issue.get("metadata") or {}).get("engineering_mode")
+        or _ticket_metadata(issue).get("engineering_mode")
         or os.environ.get("ZOE_ENGINEERING_MODE")
         or "interactive"
     )
@@ -125,7 +171,7 @@ def _engineering_mode(issue: dict | None = None) -> str:
 def _model_escalation_active(issue: dict | None, mode: str) -> bool:
     """True when review/verify/closeout may use stronger models after cheap paths fail."""
     issue = issue or {}
-    meta = issue.get("metadata") or {}
+    meta = _ticket_metadata(issue)
     if str(meta.get("model_escalation") or issue.get("model_escalation") or "").strip().lower() in {
         "1",
         "true",
@@ -138,7 +184,7 @@ def _model_escalation_active(issue: dict | None, mode: str) -> bool:
 def _escalation_model_hint(issue: dict | None) -> str:
     """Paid-model escalation guard — never suggest openrouter/auto without explicit opt-in."""
     issue = issue or {}
-    meta = issue.get("metadata") or {}
+    meta = _ticket_metadata(issue)
     paid_auto_ok = str(meta.get("confirm_paid_auto") or issue.get("confirm_paid_auto") or "").strip().lower() in {
         "1",
         "true",
@@ -190,16 +236,38 @@ _AUDIT_NO_PR_RE = re.compile(
 )
 
 
+def _is_code_audit_actionable(meta: dict[str, Any]) -> bool:
+    """Return True for code-audit bug tickets that already have acceptance criteria."""
+    return (
+        str(meta.get("zoe_kind") or "").strip().lower() == "bug"
+        and str(meta.get("source") or "").strip().lower().startswith("code_audit_")
+        and bool(meta.get("acceptance_criteria"))
+    )
+
+
 def _skip_scout(issue: dict | None = None) -> bool:
     issue = issue or {}
     if str(os.environ.get("ZOE_KANBAN_SKIP_SCOUT", "")).strip().lower() in {"1", "true", "yes"}:
         return True
-    meta = issue.get("metadata") or {}
+    meta = _ticket_metadata(issue)
     if str(meta.get("skip_scout") or issue.get("skip_scout") or "").strip().lower() in {
         "1",
         "true",
         "yes",
     }:
+        return True
+    if (
+        str(meta.get("zoe_kind") or "").strip().lower() == "child"
+        and str(meta.get("source") or "").strip().lower() == "scope_split"
+        and bool(meta.get("acceptance_criteria"))
+    ):
+        return True
+    if (
+        str(meta.get("zoe_kind") or "").strip().lower() == "harness_fix"
+        and bool(meta.get("acceptance_criteria"))
+    ):
+        return True
+    if _is_code_audit_actionable(meta):
         return True
     haystack = " ".join(
         [
@@ -211,9 +279,164 @@ def _skip_scout(issue: dict | None = None) -> bool:
     return bool(_SKIP_SCOUT_TAG_RE.search(haystack))
 
 
+def _code_audit_implement_hint(issue: dict | None = None) -> str:
+    """Return extra bounded instructions for actionable code-audit tickets."""
+    meta = _ticket_metadata(issue)
+    if not _is_code_audit_actionable(meta):
+        return ""
+    return (
+        "- CODE-AUDIT FAST PATH: this is an actionable code-audit bug with acceptance criteria. "
+        "Do not re-audit the whole repo, compare every possible helper, or search broadly for patterns. "
+        "After `kanban_show`, inspect only the named vulnerable file/endpoint plus at most one nearest "
+        "focused test file. Apply the smallest patch that satisfies the acceptance criteria before the "
+        "8th model/tool step. If the ticket lists acceptable alternatives, choose the least invasive "
+        "in-process guard unless the acceptance criteria requires a different one. Spend no more than "
+        "3 tool calls hunting for tests; if no focused test is obvious, run `python3 tools/audit/validate_structure.py`, "
+        "commit the patch, run `git push -u origin HEAD`, open the PR, and report TESTS=validate_structure.py only. "
+        "If a product/security "
+        "decision is still missing after the named file is inspected, call `kanban_block` with "
+        "BLOCKER=IMPLEMENT_BUDGET and the missing decision.\n"
+    )
+
+
+def _harness_implement_hint(issue: dict | None = None) -> str:
+    """Return a small repo map for harness/self-improvement tickets."""
+    issue = issue or {}
+    meta = _ticket_metadata(issue)
+    title = str(issue.get("title") or "").lower()
+    source = str(meta.get("source") or "").lower()
+    kind = str(meta.get("zoe_kind") or "").lower()
+    harness_sources = {"retro_followup", "engineering_blocker_followup"}
+    harness_title = title.startswith(("harness:", "zoe harness", "hermes harness"))
+    if kind != "harness_fix" and not harness_title and source not in harness_sources:
+        return ""
+    blocker = str(meta.get("source_blocker") or "").upper()
+    blocker_followup_hint = ""
+    if source == "engineering_blocker_followup":
+        if blocker == "ITERATION_BUDGET":
+            focused_test = (
+                "services/zoe-data/tests/test_main_multica_poll.py::"
+                "test_record_blocked_multica_chain_creates_iteration_budget_followup"
+            )
+        elif blocker in {"IMPLEMENT_BUDGET", "IMPLEMENT_HANDOFF_DRIFT"}:
+            focused_test = (
+                "services/zoe-data/tests/test_main_multica_poll.py::"
+                "test_record_blocked_multica_chain_creates_budget_followup_once"
+            )
+        elif blocker == "PROTOCOL_VIOLATION":
+            focused_test = (
+                "services/zoe-data/tests/test_main_multica_poll.py::"
+                "test_record_blocked_multica_chain_creates_protocol_followup"
+            )
+        else:
+            focused_test = "services/zoe-data/tests/test_main_multica_poll.py"
+        blocker_followup_hint = (
+            "  For engineering_blocker_followup tickets, inspect only"
+            " services/zoe-data/main.py and services/zoe-data/tests/test_main_multica_poll.py"
+            f" first. Run focused test: `PYTHONPATH=services/zoe-data python3 -m pytest -q {focused_test}`."
+            " Use the existing repo/runtime environment only: do not create `.venv`, run `pip install`,"
+            " or install missing Python packages from inside a worker. If that exact command reports"
+            " a missing dependency/import that is not fixed by `PYTHONPATH=services/zoe-data`, call"
+            " `kanban_block` with BLOCKER=TEST_ENVIRONMENT and the first import error instead of"
+            " spending turns on environment repair."
+            " If the focused test passes before any edit, do not inspect more blocker code:"
+            " edit services/zoe-data/executors/kanban_adapter.py within 2 more tool/model"
+            " steps with the smallest prompt/locator guard, or call `kanban_block` with"
+            " BLOCKER=ALREADY_COVERED and the passing test output. Do not rework blocker"
+            " creation after a passing focused test.\n"
+        )
+    return (
+        "- HARNESS FAST PATH: this is a Zoe/Hermes harness ticket. Do not spend budget"
+        " searching ~/.local, Hermes internals, or broad worktree inventories unless a named file"
+        " explicitly requires it. Start from this repo map:\n"
+        "  * phase prompt/dispatch/task creation: services/zoe-data/executors/kanban_adapter.py\n"
+        "  * task worktree creation and workspace_path pinning: services/zoe-data/worktree_bootstrap.py\n"
+        "  * phase handoff/evidence parsing: services/zoe-data/pipeline_handoff.py\n"
+        "  * journal/cache state: services/zoe-data/pipeline_store.py\n"
+        "  * Multica ticket metadata/progress: services/zoe-data/multica_ticket_contract.py and multica_client.py\n"
+        "  * poll/admission/blocked follow-ups: services/zoe-data/main.py, multica_admission.py,"
+        " multica_poll_dispatch.py\n"
+        f"{blocker_followup_hint}"
+        "  For worktree-missing/retro fallback tickets, inspect kanban_adapter.py and"
+        " worktree_bootstrap.py first; decide whether the fix belongs before Hermes starts,"
+        " not inside the external Hermes worker. Start editing within 6 tool/model steps or"
+        " call `kanban_block` with BLOCKER=IMPLEMENT_BUDGET and the missing locator.\n"
+    )
+
+
+def _intent_gap_implement_hint(issue: dict | None = None, *, phase: str = "implement") -> str:
+    issue = issue or {}
+    title = str(issue.get("title") or "")
+    haystack = " ".join(
+        [
+            str(issue.get("identifier") or ""),
+            title,
+            str(issue.get("description") or ""),
+        ]
+    ).lower()
+    if "intent gap" not in haystack and "intent-gap" not in haystack:
+        return ""
+    edit_deadline = (
+        " Start editing within 4 tool/model steps after `kanban_show`.\n"
+        if phase == "implement"
+        else " After the existing-PR checkout checks succeed, start the focused revision edit within 4 tool/model steps.\n"
+    )
+    joke_contract = ""
+    if _JOKE_INTENT_GAP_TITLE_RE.search(title):
+        joke_contract = (
+            " Concrete edit contract for this joke gap: update `_AGENT_CHAT_RE` so"
+            " `Tell me a joke.`, `Tell me a joke`, and `Tell me another joke.` route"
+            " to `extend_capability` through the existing open-domain/creative branch."
+            " Preferred deterministic path: from the repo root, run"
+            " `python3 scripts/maintenance/zoe_apply_intent_gap_contract.py joke`, then"
+            " immediately run `python3 -m py_compile services/zoe-data/intent_router.py`"
+            " and `PYTHONPATH=services/zoe-data python3 -m pytest -q"
+            " services/zoe-data/tests/test_intent_open_domain.py`."
+            " Add or extend the focused detect_intent test coverage for those examples;"
+            " the expected result is `Intent(\"extend_capability\", {\"raw\": <original text>})`."
+            " Do not add a joke bank or a brittle per-joke executor in this ticket; the"
+            " acceptance goal is routing the creative request to the agent path.\n"
+        )
+    return (
+        "- INTENT-GAP IMPLEMENT FAST PATH: this ticket is already scoped by scout as"
+        " a routing/intent gap. Do not re-scout the repo. Start from"
+        " services/zoe-data/intent_router.py and the nearest intent_router tests;"
+        " inspect each at most once, then patch the intent route and focused tests."
+        " For creative/open-domain gaps like jokes, use these exact anchors:"
+        " `_AGENT_CHAT_RE` and the `Open-domain Q&A / creative` branch in"
+        " `detect_intent`. Your first search should be one of those anchors;"
+        " do not grep `_CALCULATE_`, `_execute_`, or unrelated domain sections"
+        " for creative intent gaps."
+        f"{joke_contract}"
+        " If those files are not the right location, call `kanban_block` with"
+        " BLOCKER=IMPLEMENT_BUDGET and the missing locator instead of exploring."
+        f"{edit_deadline}"
+    )
+
+
+def _is_bounded_goal_phase(phase: str, issue: dict | None = None) -> bool:
+    """Return True when this phase should run in bounded goal mode with one retry."""
+    return phase == "implement" and _is_code_audit_actionable(_ticket_metadata(issue))
+
+
+def _goal_mode_args(phase: str, issue: dict | None = None) -> list[str]:
+    """Return bounded Hermes goal-mode args for phases that benefit from one continuation."""
+    if _is_bounded_goal_phase(phase, issue):
+        return ["--goal", "--goal-max-turns", "2"]
+    return []
+
+
+def _max_retries_for_phase(phase: str, issue: dict | None = None) -> str:
+    """Return the Hermes consecutive-failure limit for this task."""
+    if _is_bounded_goal_phase(phase, issue):
+        # Goal mode gives these tickets one bounded continuation in the same worktree.
+        return "2"
+    return "1"
+
+
 def _audit_no_pr_issue(issue: dict | None = None) -> bool:
     issue = issue or {}
-    meta = issue.get("metadata") or {}
+    meta = _ticket_metadata(issue)
     if str(meta.get("evidence_profile") or "").strip().lower() == "audit":
         return True
     haystack = " ".join(
@@ -247,6 +470,21 @@ def _protocol_violation_count(detail: dict[str, Any]) -> int:
     return sum(
         1 for event in events if isinstance(event, dict) and event.get("kind") == "protocol_violation"
     )
+
+
+def _with_recovered_log_budget(task_id: str, phase: str, detail: dict[str, Any]) -> dict[str, Any]:
+    """Attach Hermes log evidence when a silent exit was really a budget stop."""
+    reason = phase_budget_reason_from_log(task_id, phase)
+    if not reason:
+        return detail
+    enriched = dict(detail)
+    latest = str(enriched.get("latest_summary") or "").strip()
+    enriched["latest_summary"] = f"{latest}\n{reason}".strip() if latest else reason
+    if not (enriched.get("logs") or enriched.get("log") or enriched.get("log_tail")):
+        tail = task_log_tail(task_id)
+        if tail:
+            enriched["log_tail"] = tail
+    return enriched
 
 
 def _expected_phases(phases: dict[str, dict]) -> set[str]:
@@ -309,7 +547,12 @@ class KanbanAdapter:
 
     async def _phases_for_ref(self, external_ref: str) -> dict[str, dict]:
         tasks = await self._run(["list", "--json"], expect_json=True)
-        rows = tasks if isinstance(tasks, list) else (tasks or {}).get("tasks", [])
+        if isinstance(tasks, list):
+            rows = tasks
+        elif isinstance(tasks, dict) and isinstance(tasks.get("tasks"), list):
+            rows = tasks["tasks"]
+        else:
+            raise KanbanCLIError(f"kanban list returned malformed JSON: {tasks!r}")
         prefix = f"{external_ref}:"
         phases: dict[str, dict] = {}
         for row in rows:
@@ -352,13 +595,15 @@ class KanbanAdapter:
         issue_id = str(issue.get("id") or "").strip()
         escalation = _model_escalation_active(issue, mode)
         escalation_marker = "zoe-model-escalation: true\n" if escalation else ""
+        workspace = _workspace_for_phase(phase)
+        workspace_label = "main repo checkout" if workspace.startswith("dir:") else "git worktree"
         common = (
             f"Multica issue: {identifier} (id {issue_id})\n"
             f"zoe-ref: multica:{issue_id}:{phase}\n"
             f"zoe-chain: v4\n"
             f"{escalation_marker}"
             f"{mode_note}"
-            f"Repo: {zoe_repo_root()}  |  Base branch: main  |  Workspace: git worktree\n\n"
+            f"Repo: {zoe_repo_root()}  |  Base branch: main  |  Workspace: {workspace_label}\n\n"
             f"Title: {title}\n\n{description}\n\n"
         )
         if phase == "scout":
@@ -369,6 +614,18 @@ class KanbanAdapter:
                 " concrete acceptance criteria and an existing prerequisite artifact/PR named in the"
                 " ticket block, do not inspect branch history or broad worktrees. Decide ready/blocked"
                 " from the ticket plus at most the named artifact files, then hand off.\n"
+                "- BROAD PARENT SPLIT FAST PATH: if the ticket asks for multiple deliverables, many files,"
+                " or several domain builders/surfaces in one PR, do not map the repo first. Call"
+                " `kanban_block` immediately with:\n"
+                "BLOCKER=SCOPE_SPLIT_REQUIRED: <why this parent is too broad>\n"
+                "NEEDS_SPLIT=1\n"
+                "SPLIT_PACKET={\"child_issue_template\":{\"title\":\"<parent>: <small deliverable>\","
+                "\"description\":\"Scope + acceptance criteria + evidence\"},\"reason\":\"<why split is required>\"}\n"
+                "- INTENT GAP FAST PATH: if the ticket is an intent-gap/evolution proposal such as"
+                " \"Tell me a joke\", do not map the repo. Use the ticket evidence plus at most one"
+                " focused lookup of the routing/intent file named by the issue or obvious from the"
+                " title, then hand off. Include IMPLEMENTATION_REQUIRED=true unless the exact"
+                " behavior is already handled by merged code.\n"
                 "- Keep this phase bounded: run at most one focused Graphify/doc lookup and no broad repo crawl.\n"
                 "- For smoke, audit-only, or harness-check tickets, do not over-investigate; summarize the"
                 " observed contract and complete the scout handoff.\n"
@@ -385,18 +642,31 @@ class KanbanAdapter:
                 " BLOCKER=SCOUT_BUDGET and the missing information instead of exploring further.\n"
                 "- TERMINAL PROTOCOL: end with `kanban_complete` or `kanban_block` (no silent exit)."
             )
-        if phase == "implement":
+        if phase in {"implement", "implement_revision"}:
             overnight_hint = _overnight_implement_cost_hint() if mode == "overnight" else ""
+            code_audit_hint = _code_audit_implement_hint(issue)
+            harness_hint = _harness_implement_hint(issue)
+            intent_gap_hint = _intent_gap_implement_hint(issue, phase=phase)
             # Implement body intentionally omits full prior-phase logs; workers should
             # call kanban_show and read SCOUT_SUMMARY= from scout metadata when present.
             return common + overnight_hint + (
                 "You are the implementer (zoe-coder).\n"
+                f"{code_audit_hint}"
+                f"{harness_hint}"
+                f"{intent_gap_hint}"
                 "- AUDIT/SMOKE FAST PATH: only if the title/body explicitly says audit-only, smoke test,"
                 " no code change, or uses trace/map with an audit/no-code qualifier, do not run Graphify"
                 " or repo exploration first. Complete in one bounded handoff with"
                 " TOOLS_USED=audit-read, PR_URL= blank, AUDIT_ONLY=1, TESTS=not applicable/audit-only,"
                 " and SUMMARY= findings. Do not open a PR.\n"
                 "- Start with `kanban_show` to confirm this task id.\n"
+                "- SCOUT HANDOFF FAST PATH: when `kanban_show` includes SCOUT_SUMMARY with an exact"
+                " file/function and a narrow implementation plan, treat that as the accepted context."
+                " Do not re-scout, re-map, or repeatedly read the same file. For intent-gap tickets,"
+                " inspect the named routing/intent file at most once, then edit, add the focused test,"
+                " and open the PR. If you cannot start editing within 4 tool/model steps after"
+                " `kanban_show`, call `kanban_block` with BLOCKER=IMPLEMENT_BUDGET and the missing"
+                " decision instead of continuing exploration.\n"
                 "- SMALL EXPLICIT CODE FAST PATH: when the ticket names the exact file, helper,"
                 " function, or focused test to change, inspect only those named files plus the"
                 " nearest existing test. Do not run a broad Graphify query, repo crawl, or unrelated"
@@ -407,11 +677,39 @@ class KanbanAdapter:
                 "- Use opensrc for any third-party library source before guessing APIs.\n"
                 "- Make the smallest reviewable change; do NOT rewrite existing functions into bloat;"
                 " reuse service-layer helpers.\n"
+                "- EDIT SAFETY LOOP: after every patch, immediately run the narrowest syntax check"
+                " for touched Python files, usually `python3 -m py_compile <file>`, before any"
+                " second patch or more exploration. If syntax fails, revert or fix that exact patch"
+                " once; if the insertion point or indentation is still unclear, call `kanban_block`"
+                " with BLOCKER=IMPLEMENT_EDIT_SAFETY instead of continuing. Never leave a malformed"
+                " partial edit and keep exploring.\n"
                 "- If the task needs more than one PR or a large refactor, call `kanban_block` and"
                 " ask for a split — do not absorb unbounded work in one implement run.\n"
                 "- Do NOT create additional Hermes/Kanban tasks, scaffold subtasks, or sibling work items."
                 " If scope needs another task, use the NEEDS_SPLIT/SPLIT_PACKET block below and stop.\n"
                 "- Validate: `python3 tools/audit/validate_structure.py` and focused tests for touched modules.\n"
+                f"- EXISTING PR REVISION FAST PATH: if the ticket block already contains `pr_url`/PR_URL,"
+                " this is a revision task. Do not rediscover the original fix and do not create a new PR."
+                " This revision path takes precedence over all file inspection: after `kanban_show`,"
+                " do not read, grep, or edit files until the existing PR checkout below succeeds."
+                " Zoe dispatch pre-checks this task worktree to the existing PR head before the worker"
+                " starts. Run `gh pr view <PR_URL> --json url,number,headRefName,headRefOid,"
+                f"headRepositoryOwner,mergeStateStatus,statusCheckRollup` and `{_greptile_mcp_bin()}"
+                " pr-comments --unaddressed-only jason-easyazz/zoe-ai-assistant <number>`."
+                " That Greptile command may exit nonzero when it prints unresolved comments; read stdout"
+                " as the action list instead of treating the nonzero exit alone as failure. Run"
+                " `git rev-parse HEAD` and compare it to the gh `headRefOid`; if it does not match,"
+                " immediately call `kanban_block` with BLOCKER=PR_REVISION_CHECKOUT_FAILED."
+                " Do not run `gh pr checkout`, `git checkout`, `git fetch`, or `git reset` yourself"
+                " in this phase; if the pre-checked worktree is wrong, block instead of repairing it."
+                " Address only the unresolved review/Greptile/CI action list, run focused tests plus validators, commit,"
+                " `git push origin HEAD:<headRefName>` (use headRefName from the gh pr view output above),"
+                " and report the SAME PR_URL. Run Python tests with"
+                " `PYTHONPATH=services/zoe-data python3 -m pytest ...`. For tests involving module-level"
+                " env-derived constants, patch the module variable with monkeypatch/setattr after import;"
+                " do not set os.environ after importing the module and expect the already-loaded constant"
+                " to change. If the action list is ambiguous, call `kanban_block` with"
+                " BLOCKER=PR_REVISION_BLOCKED.\n"
                 "- You already run on an isolated git worktree branch. Commit verified changes, then publish"
                 " the branch and open ONE small PR (do not merge) with EXACTLY these commands:\n"
                 "    git push -u origin HEAD\n"
@@ -436,6 +734,8 @@ class KanbanAdapter:
                 " `kanban_complete(summary=..., metadata={...})` OR `kanban_block(reason=...)`."
                 " Exiting without either is a protocol violation and the dispatcher will retry forever.\n"
                 "- Success: `kanban_complete` after push+PR with metadata including PR_URL, TESTS, SUMMARY.\n"
+                "  Security-sensitive changes still complete implement after the PR is opened; PR review/Greptile is the review gate.\n"
+                "  Do not call `kanban_block` merely because a human/security reviewer should inspect the PR.\n"
                 "- Failure/stuck: `kanban_block` with a clear reason (prefix BLOCKER= when applicable).\n\n"
                 "Summary text should still include:\n"
                 "PR_URL=<url or blank>\nBLOCKER=<reason or blank>\nTESTS=<checks run>\nSUMMARY=<short>\n"
@@ -450,6 +750,10 @@ class KanbanAdapter:
                 " `kanban_show`, compare the implementer handoff to the Multica acceptance criteria,"
                 " then call `kanban_complete` in this turn with TESTS=not applicable/audit evidence,"
                 " VALIDATORS=not applicable/audit-only, PR_URL= blank, and a short pass/fail summary.\n"
+                "- PR_URL FAST PATH: if `kanban_show` or the ticket block includes PR_URL, do not"
+                " hunt branches or commits. Use `gh pr view <url> --json url,headRefName,headRefOid,"
+                "mergeStateStatus,statusCheckRollup` and inspect the PR diff/checks directly, then"
+                " run the validators below and complete/block from that evidence.\n"
                 "- Start with `kanban_show` to read the implementer handoff and PR_URL.\n"
                 "- Do not redesign or refactor. Run the declared tests and the minimum extra checks needed"
                 " for the touched surface.\n"
@@ -460,7 +764,12 @@ class KanbanAdapter:
                 " PR_URL, and a pass/fail summary. Include exact commands and outcomes.\n"
                 "- If tests fail, evidence is missing, the PR is absent for a code task, or the task needs"
                 " product clarification, call `kanban_block` with BLOCKER= and the failing output.\n"
-                "- If you cannot reach a pass/block decision within 8 tool/model steps, call"
+                "- If Greptile/CI has unresolved comments or failures, call `kanban_block` with"
+                " BLOCKER=PR_REVIEW_REQUIRED, PR_URL, and a concise action list; do not spend this"
+                " phase rewriting the PR.\n"
+                "- If you cannot reach a pass/block decision within 14 tool/model steps, call"
+                # Keep in sync with _TOOL_DEFAULTS["verify"] - terminal grace
+                # in kanban_phase_budget.py.
                 " `kanban_block` with BLOCKER=VERIFY_BUDGET and the missing evidence.\n"
                 "- TERMINAL PROTOCOL: end with `kanban_complete` or `kanban_block` (no silent exit)."
             )
@@ -675,7 +984,83 @@ class KanbanAdapter:
             }
 
         phase = state.phase if state is not None else ("implement" if _skip_scout(issue) else "scout")
-        entry = _phase_plan_entry(phase, issue)
+        existing_phases = await self._phases_for_ref(external_ref)
+        plan = _chain_for_issue(issue)
+        phase_order = [p for p, _, _ in plan]
+        entry = next((plan_entry for plan_entry in plan if plan_entry[0] == phase), None)
+        current_row = existing_phases.get(phase) or {}
+        current_status = (current_row.get("status") or "").lower()
+        if (
+            state is not None
+            and state.status == "todo"
+            and (current_status == "blocked" or current_status in _TERMINAL_KANBAN_STATUSES)
+        ):
+            task_id = current_row.get("id")
+            if task_id:
+                try:
+                    await self._run(["archive", str(task_id)])
+                except KanbanCLIError as exc:
+                    logger.warning(
+                        "kanban_adapter: archive of stale %s task %s failed for %s: %s",
+                        current_status,
+                        task_id,
+                        external_ref,
+                        exc,
+                    )
+                    return {
+                        "ok": False,
+                        "external_ref": external_ref,
+                        "reason": "stale phase archive failed",
+                        "phase": phase,
+                        "chain": {},
+                        "created": [],
+                        "mode": mode,
+                    }
+            existing_phases.pop(phase, None)
+            current_row = {}
+            current_status = ""
+        can_adjust_stale_phase = bool(
+            state is not None
+            and phase_order
+            and (
+                state.status == "todo"
+                or (
+                    state.status == "running"
+                    and (not current_row or current_status in _TERMINAL_KANBAN_STATUSES)
+                )
+            )
+        )
+        # Only adjust phases with no active effect. A stale running journal is
+        # reset only when its Kanban row is absent/terminal; active rows stay
+        # blocked for operator review.
+        if entry is None and can_adjust_stale_phase:
+            previous_phase = phase
+            previous_status = state.status
+            phase = phase_order[0]
+            entry = next((plan_entry for plan_entry in plan if plan_entry[0] == phase), None)
+            try:
+                state = state.model_copy(update={"phase": phase, "status": "todo"})
+                state = await asyncio.to_thread(
+                    save_state,
+                    state,
+                    event="plan_adjusted",
+                    extra={
+                        "from_phase": previous_phase,
+                        "from_status": previous_status,
+                        "to_phase": phase,
+                        "to_status": "todo",
+                        "kanban_row_absent": not bool(current_row),
+                        "terminal_kanban_status": current_status or None,
+                        "reason": "current issue plan no longer includes inactive journal phase",
+                    },
+                )
+            except Exception as exc:
+                logger.warning(
+                    "kanban_adapter: plan_adjusted save skipped for %s: %s; "
+                    "phase adjustment will still be applied via effect_requested",
+                    external_ref,
+                    exc,
+                )
         if entry is None:
             return {
                 "ok": False,
@@ -687,7 +1072,6 @@ class KanbanAdapter:
                 "mode": mode,
             }
 
-        existing_phases = await self._phases_for_ref(external_ref)
         existing_row = existing_phases.get(phase)
         if existing_row and existing_row.get("id"):
             return {
@@ -700,7 +1084,6 @@ class KanbanAdapter:
                 "ready_phase_only": True,
             }
 
-        phase_order = [p for p, _, _ in _chain_for_issue(issue)]
         parent: str | None = None
         if phase in phase_order:
             idx = phase_order.index(phase)
@@ -716,15 +1099,18 @@ class KanbanAdapter:
             "--assignee",
             assignee,
             "--workspace",
-            "worktree",
+            _workspace_for_phase(phase),
             "--idempotency-key",
             f"{external_ref}:{phase}",
             "--max-runtime",
             _max_runtime(mode),
             # Hermes trips the circuit breaker on the Nth failure; 1 means one
-            # total attempt and zero automatic retries.
+            # total attempt and zero automatic retries. Code-audit goal tasks get
+            # one same-worktree continuation so a first turn that made a patch can
+            # still commit/push instead of starting over.
             "--max-retries",
-            "1",
+            _max_retries_for_phase(phase, issue),
+            *_goal_mode_args(phase, issue),
             "--created-by",
             "zoe-bridge",
             "--body",
@@ -743,9 +1129,48 @@ class KanbanAdapter:
         if not (result or {}).get("deduplicated"):
             created.append(phase)
         if phase in {"implement", "verify"}:
-            from worktree_bootstrap import prepare_kanban_worktree
+            from worktree_bootstrap import prepare_existing_pr_revision_worktree, prepare_kanban_worktree
 
-            await asyncio.to_thread(prepare_kanban_worktree, str(task_id))
+            pr_url = _existing_pr_url(issue)
+            worktree_failure_reason = "kanban worktree preparation failed"
+            worktree_blocker = "BLOCKER=WORKTREE_PREPARATION_FAILED"
+            try:
+                if phase == "implement" and pr_url:
+                    worktree_failure_reason = "existing PR worktree preparation failed"
+                    worktree_blocker = "BLOCKER=PR_REVISION_CHECKOUT_FAILED"
+                    await asyncio.to_thread(
+                        prepare_existing_pr_revision_worktree,
+                        str(task_id),
+                        pr_url,
+                    )
+                else:
+                    await asyncio.to_thread(prepare_kanban_worktree, str(task_id))
+            except Exception as exc:  # noqa: BLE001
+                reason = f"{worktree_blocker}: {exc}"
+                logger.warning(
+                    "kanban_adapter: worktree preparation failed for %s (%s): %s",
+                    task_id,
+                    phase,
+                    exc,
+                )
+                try:
+                    await self._run(["block", str(task_id), reason[:1000]])
+                except KanbanCLIError as block_exc:
+                    logger.warning(
+                        "kanban_adapter: failed to block %s after worktree preparation failure: %s",
+                        task_id,
+                        block_exc,
+                    )
+                return {
+                    "ok": False,
+                    "external_ref": external_ref,
+                    "reason": worktree_failure_reason,
+                    "phase": phase,
+                    "chain": {phase: task_id},
+                    "created": created,
+                    "mode": mode,
+                    "ready_phase_only": True,
+                }
         if state is not None and state.status == "todo":
             try:
                 running = transition(state, "start")
@@ -785,7 +1210,7 @@ class KanbanAdapter:
             return f"Retro {identifier}"[:140]
         return f"Closeout {identifier}"[:140]
 
-    async def poll(self, external_ref: str) -> dict:
+    async def poll(self, external_ref: str, *, issue: dict | None = None) -> dict:
         """Report aggregate state of a chain by idempotency-key prefix.
 
         Returns {found, status, phases:{phase:status}, pr_url, blocker}.
@@ -805,6 +1230,55 @@ class KanbanAdapter:
         if not phases:
             return {"found": False, "status": "not_found", "phases": {}, "pr_url": None, "blocker": None}
 
+        if issue:
+            try:
+                from pipeline_store import load_latest_state, pipeline_summary
+
+                existing_state = await asyncio.to_thread(load_latest_state, external_ref)
+                expected_phase_names = {entry[0] for entry in _chain_for_issue(issue)}
+                if existing_state is not None and existing_state.status == "todo":
+                    stale_executor_phase = None
+                    stale_executor_status = None
+                    if existing_state.phase not in expected_phase_names:
+                        stale_executor_phase = existing_state.phase
+                        phases = {
+                            phase: row
+                            for phase, row in phases.items()
+                            if phase in expected_phase_names
+                        }
+                    else:
+                        current_row = phases.get(str(existing_state.phase or "")) or {}
+                        current_status = (current_row.get("status") or "").lower()
+                        if current_status == "blocked" or current_status in _TERMINAL_KANBAN_STATUSES:
+                            stale_executor_phase = str(existing_state.phase or "")
+                            stale_executor_status = current_status
+                            phases = {
+                                phase: row
+                                for phase, row in phases.items()
+                                if phase != stale_executor_phase
+                            }
+                    if stale_executor_phase and (
+                        stale_executor_status == "blocked"
+                        or stale_executor_status in _TERMINAL_KANBAN_STATUSES
+                        or not phases
+                    ):
+                        pipeline = {
+                            **pipeline_summary(existing_state),
+                            "stale_executor_phase": stale_executor_phase,
+                        }
+                        if stale_executor_status:
+                            pipeline["stale_executor_status"] = stale_executor_status
+                        return {
+                            "found": True,
+                            "status": "partial",
+                            "phases": {phase: (row.get("status") or "") for phase, row in phases.items()},
+                            "pr_url": None,
+                            "blocker": None,
+                            "pipeline": pipeline,
+                        }
+            except Exception as exc:
+                logger.debug("kanban_adapter: stale phase filter skipped for %s: %s", external_ref, exc)
+
         detail_cache: dict[str, dict[str, Any]] = {}
         for phase, row in list(phases.items()):
             task_id = row.get("id")
@@ -818,6 +1292,7 @@ class KanbanAdapter:
             except KanbanCLIError as exc:
                 logger.debug("kanban_adapter: show failed for %s: %s", task_id, exc)
                 continue
+            detail = _with_recovered_log_budget(task_id, phase, detail)
             detail_cache[task_id] = detail
             if await self._maybe_auto_block_phase_budget(task_id, phase, row, detail):
                 phases[phase] = row
@@ -860,6 +1335,12 @@ class KanbanAdapter:
                 if cached is not None:
                     return cached
                 detail = await self._run(["show", task_id, "--json"], expect_json=True)
+                phase = next(
+                    (phase for phase, row in phases.items() if row.get("id") == task_id),
+                    "",
+                )
+                if phase:
+                    detail = _with_recovered_log_budget(task_id, phase, detail)
                 detail_cache[task_id] = detail
                 return detail
 
@@ -878,11 +1359,15 @@ class KanbanAdapter:
             elif is_v4:
                 if pipeline_info.get("terminal_block"):
                     agg = "blocked"
-                    blocker = f"pipeline terminal block at {current_phase}"
+                    blocker = pipeline_info.get("block_reason") or f"pipeline terminal block at {current_phase}"
                 elif current_status == "blocked":
                     agg = "blocked"
                     current_row = phases.get(str(current_phase or ""), {})
-                    blocker = current_row.get("block_reason") or f"pipeline blocked at {current_phase}"
+                    blocker = (
+                        pipeline_info.get("block_reason")
+                        or current_row.get("block_reason")
+                        or f"pipeline blocked at {current_phase}"
+                    )
                 elif current_status == "todo":
                     agg = "partial" if current_phase not in phases else "running"
                     blocker = None

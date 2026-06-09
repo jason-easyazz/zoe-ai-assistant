@@ -410,7 +410,8 @@ _GREETING_RE = re.compile(
 _AGENT_CHAT_RE = re.compile(
     r"^(?:tell me about|what(?:'s| is) the (?:capital|weather)|"
     r"search the web|write me (?:an? )?(?:email|haiku|poem)|"
-    r"can you explain|set up (?:a )?new automation|what is happening in)",
+    r"can you explain|set up (?:a )?new automation|what is happening in|"
+    r"tell me (?:a|another) joke|make me laugh|(?:do you |have you )?(?:got|have) any jokes|know any (?:good )?jokes)",
     re.IGNORECASE,
 )
 
@@ -1657,7 +1658,7 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
             lines = ["**Active Hermes engineering issues:**"]
             for status, issue in active[:5]:
                 ident = issue.get("identifier") or issue.get("id")
-                chain = await poll_ref(f"multica:{issue.get('id')}")
+                chain = await poll_ref(f"multica:{issue.get('id')}", issue=issue)
                 phase = chain.get("status") if chain.get("found") else status
                 pr = f" | PR: {chain.get('pr_url')}" if chain.get("pr_url") else ""
                 lines.append(f"- `{ident}` — {phase} — {(issue.get('title') or '')[:80]}{pr}")

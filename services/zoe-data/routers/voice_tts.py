@@ -419,22 +419,6 @@ async def _synthesize_kokoro(text: str, voice: str = "af_sky") -> Optional[bytes
         return None
 
 
-def _should_supersede_voice_weather_action(row, nav_key: str, card_key: str) -> bool:
-    if row["idempotency_key"] in {nav_key, card_key}:
-        return False
-    try:
-        payload = json.loads(row["payload"] or "{}")
-    except Exception:
-        payload = {}
-    return (
-        row["action_type"] == "panel_navigate"
-        and payload.get("url") == "/touch/weather.html"
-    ) or (
-        row["action_type"] == "show_card"
-        and payload.get("type") == "weather"
-    )
-
-
 def _split_sentences(text: str) -> list[str]:
     """Split text into spoken sentences for streaming TTS.
 
@@ -489,6 +473,12 @@ async def _broadcast_weather_ui(
         },
     }
     try:
+        from push import broadcaster
+        await broadcaster.broadcast("all", "ui_action", {"action": nav_action})
+        await broadcaster.broadcast("all", "ui_action", {"action": card_action})
+    except Exception as exc:
+        logger.debug("voice weather ui broadcast failed (non-fatal): %s", exc)
+    try:
         from database import get_db as _get_db
         from ui_orchestrator import enqueue_ui_action as _enqueue_ui_action
         async for _db in _get_db():
@@ -503,59 +493,24 @@ async def _broadcast_weather_ui(
                     _panel_user_id = str(_row["user_id"])
             except Exception:
                 pass
-            nav_key = f"voice_weather_nav_{panel_id}_{delivery_key}"
-            card_key = f"voice_weather_card_{panel_id}_{delivery_key}"
-            async with _db.transaction():
-                await _enqueue_ui_action(
-                    _db,
-                    user_id=_panel_user_id,
-                    panel_id=panel_id,
-                    action_type="panel_navigate",
-                    payload=nav_action["payload"],
-                    requested_by="voice",
-                    idempotency_key=nav_key,
-                    commit=False,
-                    broadcast=False,
-                )
-                await _enqueue_ui_action(
-                    _db,
-                    user_id=_panel_user_id,
-                    panel_id=panel_id,
-                    action_type="show_card",
-                    payload=card_action["payload"],
-                    requested_by="voice",
-                    idempotency_key=card_key,
-                    commit=False,
-                    broadcast=False,
-                )
-                _cur = await _db.execute(
-                    """SELECT id, action_type, payload, idempotency_key
-                       FROM ui_actions
-                       WHERE panel_id = ?
-                         AND requested_by = 'voice'
-                         AND status IN ('queued', 'running')""",
-                    (panel_id,),
-                )
-                _rows = await _cur.fetchall()
-                _superseded_at = datetime.now(timezone.utc).isoformat()
-                for _row in _rows:
-                    if not _should_supersede_voice_weather_action(_row, nav_key, card_key):
-                        continue
-                    await _db.execute(
-                        """UPDATE ui_actions
-                           SET status = 'skipped',
-                               error_code = 'superseded',
-                               error_message = 'Superseded by newer voice weather request',
-                               updated_at = ?
-                           WHERE id = ?""",
-                        (_superseded_at, _row["id"]),
-                    )
-            try:
-                from push import broadcaster
-                await broadcaster.broadcast("all", "ui_action", {"action": nav_action})
-                await broadcaster.broadcast("all", "ui_action", {"action": card_action})
-            except Exception as exc:
-                logger.debug("voice weather ui broadcast failed (non-fatal): %s", exc)
+            await _enqueue_ui_action(
+                _db,
+                user_id=_panel_user_id,
+                panel_id=panel_id,
+                action_type="panel_navigate",
+                payload=nav_action["payload"],
+                requested_by="voice",
+                idempotency_key=f"voice_weather_nav_{panel_id}_{delivery_key}",
+            )
+            await _enqueue_ui_action(
+                _db,
+                user_id=_panel_user_id,
+                panel_id=panel_id,
+                action_type="show_card",
+                payload=card_action["payload"],
+                requested_by="voice",
+                idempotency_key=f"voice_weather_card_{panel_id}_{delivery_key}",
+            )
             break
     except Exception as exc:
         logger.debug("voice weather ui enqueue failed (non-fatal): %s", exc)

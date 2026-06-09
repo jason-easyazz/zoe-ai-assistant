@@ -40,7 +40,7 @@ PHASE_ORDER: tuple[PipelinePhase, ...] = (
 
 _REQUIRED_EVIDENCE: dict[PipelinePhase, set[EvidenceKind]] = {
     "scout": {"tool"},
-    "implement": {"tool"},
+    "implement": {"tool", "pr"},
     "verify": {"test", "validator"},
     "review": {"human"},
     "closeout": {"greptile"},
@@ -48,6 +48,7 @@ _REQUIRED_EVIDENCE: dict[PipelinePhase, set[EvidenceKind]] = {
 }
 
 _EVIDENCE_PROFILES: dict[EvidenceProfile, dict[PipelinePhase, set[EvidenceKind]]] = {
+    # Default is the normal code-producing path, so implement completion needs PR evidence.
     "default": _REQUIRED_EVIDENCE,
     "code": _REQUIRED_EVIDENCE,
     "audit": {
@@ -161,11 +162,11 @@ def scope_split_required(
     repeated: bool = False,
     explicit: bool = False,
 ) -> bool:
-    """Classify broad implement failures that should become split/escalation packets."""
+    """Classify broad failures that should become split/escalation packets."""
+    if explicit:
+        return phase in {"scout", "implement"}
     if phase != "implement":
         return False
-    if explicit:
-        return True
     return repeated and bool(_SCOPE_SPLIT_REASON_RE.search(reason or ""))
 
 
