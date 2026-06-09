@@ -36,6 +36,7 @@ This slice is still non-persistent:
 
 - no database migration;
 - memory-router runtime calls can return optional trace packets;
+- trace batches can pass through the governed non-persistent collector;
 - no automatic durable trace writes;
 - no hot-path recall changes;
 - no automatic proposal creation.
