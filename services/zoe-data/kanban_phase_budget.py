@@ -44,10 +44,12 @@ _PYTHON_CHECK_RE = re.compile(
     re.IGNORECASE,
 )
 _PATCH_STEP_RE = re.compile(r"^\s*(?:┊|\|)\s+\S+\s+patch\b", re.IGNORECASE)
+# Hermes patch tool emits "[Found N matches ...]" when an old_string anchor is not unique.
 _PATCH_AMBIGUITY_RE = re.compile(
     r"^\s*(?:┊|\|)\s+\S+\s+patch\b.*\[Found\s+\d+\s+matches\b",
     re.IGNORECASE,
 )
+_PATCH_PATH_RE = re.compile(r"^\s*(?:┊|\|)\s+\S+\s+patch\s+(?P<path>\S+)", re.IGNORECASE)
 _PATCH_REVIEW_DIFF_RE = re.compile(r"^\s*(?:┊|\|)\s+review\s+diff\b", re.IGNORECASE)
 _TERMINAL_STEP_RE = re.compile(r"^\s*(?:┊|\|)\s+\S+\s+kanban_(?:complete|block)\b", re.IGNORECASE)
 _EXPLORE_STEP_RE = re.compile(r"^\s*(?:┊|\|)\s+\S+\s+(?:read|grep|find)\b", re.IGNORECASE)
@@ -395,20 +397,22 @@ def implement_patch_ambiguity_reason_from_log(
     if not session:
         return None
 
-    ambiguous_patches = 0
+    ambiguous_patches_by_path: dict[str, int] = {}
     for line in session.splitlines():
         if not _STEP_LINE_RE.match(line):
             continue
+        patch_match = _PATCH_PATH_RE.search(line)
+        patch_path = patch_match.group("path") if patch_match else "<unknown>"
         if _PATCH_AMBIGUITY_RE.search(line):
-            ambiguous_patches += 1
-            if ambiguous_patches >= 2:
+            ambiguous_patches_by_path[patch_path] = ambiguous_patches_by_path.get(patch_path, 0) + 1
+            if ambiguous_patches_by_path[patch_path] >= 2:
                 return (
                     "BLOCKER=PATCH_AMBIGUITY_DRIFT: repeated patch attempts used "
                     "non-unique anchors; use a unique surrounding block or call kanban_block"
                 )
             continue
         if _PATCH_STEP_RE.search(line):
-            ambiguous_patches = 0
+            ambiguous_patches_by_path.pop(patch_path, None)
     return None
 
 

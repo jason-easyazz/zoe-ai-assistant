@@ -2432,6 +2432,29 @@ def test_phase_budget_allows_ambiguous_patch_followed_by_successful_patch(
     assert reason is None
 
 
+def test_phase_budget_keeps_patch_ambiguity_count_per_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 🔧 patch     services/zoe-ui/nginx.conf  0.0s [Found 2 matches for old_string. Provide more ...]\n"
+        "  ┊ 🔧 patch     services/zoe-data/main.py  0.2s\n"
+        "  ┊ 🔧 patch     services/zoe-ui/nginx.conf  0.0s [Found 2 matches for old_string. Provide more ...]\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.phase_budget_reason(
+        "t_impl",
+        "implement",
+        {"task": {"started_at": 100}, "runs": [{"started_at": 100}]},
+        now=120,
+    )
+
+    assert reason is not None
+    assert "PATCH_AMBIGUITY_DRIFT" in reason
+
+
 def test_phase_budget_blocks_code_audit_post_patch_drift(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     monkeypatch.setenv("ZOE_KANBAN_CODE_AUDIT_POST_PATCH_EXPLORE_BUDGET", "2")
