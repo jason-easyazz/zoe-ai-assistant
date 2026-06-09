@@ -3,6 +3,22 @@ import pytest
 from memory_service import MemoryService, MemoryServiceError
 
 
+class _FakeCollection:
+    def __init__(self, *, get_result=None, query_result=None):
+        self.get_result = get_result or {}
+        self.query_result = query_result or {}
+        self.seen_get_where = None
+        self.seen_query_where = None
+
+    def get(self, **kwargs):
+        self.seen_get_where = kwargs.get("where")
+        return self.get_result
+
+    def query(self, **kwargs):
+        self.seen_query_where = kwargs.get("where")
+        return self.query_result
+
+
 def test_build_metadata_preserves_candidate_source_excerpt_and_structured_metadata():
     metadata = MemoryService._build_metadata(
         user_id="jason",
@@ -183,3 +199,62 @@ def test_build_metadata_defaults_keep_review_edit_call_compatible():
 
     assert metadata["source"] == "review_ui"
     assert "source_excerpt" not in metadata
+
+
+def test_metadata_prompt_read_blocks_cross_user_disputed_and_superseded_rows():
+    collection = _FakeCollection(
+        get_result={
+            "ids": ["own", "shared", "other", "disputed", "old"],
+            "documents": [
+                "Jason active fact",
+                "Shared family fact",
+                "Other private fact",
+                "Disputed fact",
+                "Old superseded fact",
+            ],
+            "metadatas": [
+                {"user_id": "jason", "visibility": "personal", "status": "approved", "added_at": "2026-01-01T00:00:00Z"},
+                {"user_id": "alex", "visibility": "family", "status": "approved", "added_at": "2026-01-02T00:00:00Z"},
+                {"user_id": "alex", "visibility": "personal", "status": "approved", "added_at": "2026-01-03T00:00:00Z"},
+                {"user_id": "jason", "visibility": "personal", "status": "disputed", "added_at": "2026-01-04T00:00:00Z"},
+                {"user_id": "jason", "visibility": "personal", "status": "superseded", "superseded_by_id": "new", "added_at": "2026-01-05T00:00:00Z"},
+            ],
+        }
+    )
+    service = MemoryService(data_dir="/tmp/zoe-test-memory-safety")
+    service._collection = lambda: collection
+
+    rows = service._metadata_read("jason", limit=10)
+
+    assert [row.id for row in rows] == ["shared", "own"]
+    assert {"visibility": "family"} in collection.seen_get_where["$or"]
+
+
+def test_semantic_search_blocks_cross_user_disputed_and_superseded_rows():
+    collection = _FakeCollection(
+        query_result={
+            "ids": [["own", "shared", "other", "disputed", "old"]],
+            "documents": [[
+                "Jason active fact",
+                "Shared family fact",
+                "Other private fact",
+                "Disputed fact",
+                "Old superseded fact",
+            ]],
+            "metadatas": [[
+                {"user_id": "jason", "visibility": "personal", "status": "approved", "confidence": 0.9, "added_at": "2026-01-01T00:00:00Z"},
+                {"user_id": "alex", "visibility": "family", "status": "approved", "confidence": 0.9, "added_at": "2026-01-02T00:00:00Z"},
+                {"user_id": "alex", "visibility": "personal", "status": "approved", "confidence": 0.9, "added_at": "2026-01-03T00:00:00Z"},
+                {"user_id": "jason", "visibility": "personal", "status": "disputed", "confidence": 0.9, "added_at": "2026-01-04T00:00:00Z"},
+                {"user_id": "jason", "visibility": "personal", "status": "superseded", "superseded_by_id": "new", "confidence": 0.9, "added_at": "2026-01-05T00:00:00Z"},
+            ]],
+            "distances": [[0.1, 0.2, 0.3, 0.4, 0.5]],
+        }
+    )
+    service = MemoryService(data_dir="/tmp/zoe-test-memory-safety")
+    service._collection = lambda: collection
+
+    rows = service._semantic_search("fact", "jason", limit=10)
+
+    assert [row.id for row in rows] == ["own", "shared"]
+    assert {"visibility": "family"} in collection.seen_query_where["$or"]

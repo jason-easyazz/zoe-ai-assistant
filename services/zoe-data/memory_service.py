@@ -38,7 +38,7 @@ import re
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Mapping, Optional
 
 try:
     from memory_metrics import (
@@ -74,6 +74,24 @@ def _metadata_value(value: Any) -> str | int | float | bool:
     if isinstance(value, (str, int, float, bool)):
         return value
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+_BLOCKED_READ_STATUSES = {"archived", "rejected", "superseded", "pending", "disputed"}
+
+
+def _memory_visible_to_user(metadata: Mapping[str, Any], user_id: str) -> bool:
+    """Return True only for the caller's personal rows or shared family rows."""
+
+    visibility = str(metadata.get("visibility") or "").strip().lower()
+    if visibility == "family":
+        return True
+    owner = str(metadata.get("user_id") or metadata.get("wing") or "").strip()
+    return bool(owner and owner == user_id)
+
+
+def _memory_status_visible(metadata: Mapping[str, Any]) -> bool:
+    status = str(metadata.get("status", "approved") or "approved").strip().lower()
+    return status not in _BLOCKED_READ_STATUSES
 
 
 def _scope_visibility(scope: Any | None) -> str:
@@ -718,7 +736,7 @@ class MemoryService:
     def _metadata_read(self, user_id: str, limit: int) -> list[MemoryRef]:
         col = self._collection()
         result = col.get(
-            where={"$or": [{"user_id": user_id}, {"wing": user_id}]},
+            where={"$or": [{"user_id": user_id}, {"wing": user_id}, {"visibility": "family"}]},
             include=["documents", "metadatas"],
         )
         docs = result.get("documents") or []
@@ -733,8 +751,9 @@ class MemoryService:
             expires = meta.get("expires_at")
             if expires and expires <= now_iso:
                 continue
-            st = meta.get("status", "approved")
-            if st in {"archived", "rejected", "superseded", "pending"}:
+            if not _memory_visible_to_user(meta, user_id):
+                continue
+            if not _memory_status_visible(meta):
                 continue
             filtered.append(MemoryRef(id=rid, text=doc or "", metadata=dict(meta)))
 
@@ -769,7 +788,7 @@ class MemoryService:
         result = col.query(
             query_texts=[query],
             n_results=max(limit * 3, limit),
-            where={"$or": [{"user_id": user_id}, {"wing": user_id}]},
+            where={"$or": [{"user_id": user_id}, {"wing": user_id}, {"visibility": "family"}]},
             include=["documents", "metadatas", "distances"],
         )
         ids = (result.get("ids") or [[]])[0]
@@ -784,8 +803,9 @@ class MemoryService:
             expires = md.get("expires_at")
             if expires and expires <= now_iso:
                 continue
-            st = md.get("status", "approved")
-            if st in {"archived", "rejected", "superseded", "pending"}:
+            if not _memory_visible_to_user(md, user_id):
+                continue
+            if not _memory_status_visible(md):
                 continue
             hits.append(
                 MemoryRef(
