@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 
 
-JOKE_PATTERN = r"tell me (?:a|another) joke|make me laugh|got any jokes"
+JOKE_PATTERN = r"tell me (?:a|another) joke|make me laugh|(?:do you |have you )?(?:got|have) any jokes|know any (?:good )?jokes"
 JOKE_TEST = '''"""Open-domain creative intent routing."""
 
 import pytest
