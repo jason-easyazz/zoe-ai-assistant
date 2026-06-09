@@ -682,7 +682,7 @@
         .sky-actions button,
         .sky-command button {
             border-radius: 12px;
-            font-weight: 720;
+            font-weight: 700;
         }
 
         .sky-actions button.primary,
@@ -1196,7 +1196,7 @@
         .sky-actions button,
         .sky-command button {
             border-radius: 14px;
-            font-weight: 720;
+            font-weight: 700;
         }
 
         .sky-actions button.primary,
@@ -1376,7 +1376,7 @@
                 width: calc(100vw - 28px) !important;
                 max-width: calc(100vw - 28px) !important;
                 top: 228px !important;
-                bottom: 96px !important;
+                bottom: max(96px, calc(74px + env(safe-area-inset-bottom, 22px))) !important;
                 transform: none !important;
                 overflow: hidden;
             }
