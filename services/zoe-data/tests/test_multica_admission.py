@@ -30,6 +30,27 @@ def _issue(identifier: str, title: str, *, status: str = "backlog", **metadata):
     }
 
 
+def _approved_evolution_issue(identifier: str, proposal_id: str, **metadata):
+    contract_metadata = {
+        "evolution_proposal_id": proposal_id,
+        "evolution_contract_schema": "zoe_evolution_proposal",
+        "evolution_contract_version": 1,
+        "evolution_contract_proposal_id": proposal_id,
+        "evolution_contract_autonomy_class": "suggest",
+        "evolution_contract_risk": "medium",
+        "evolution_contract_status": "pending_approval",
+        "evolution_contract_allowed_to_prepare": True,
+    }
+    contract_metadata.update(metadata)
+    return _issue(
+        identifier,
+        "Evolution proposal",
+        dispatch_approved=True,
+        source=f"evolution_proposal:{proposal_id}",
+        **contract_metadata,
+    )
+
+
 def test_unapproved_or_unstructured_backlog_is_not_admitted():
     unapproved = _issue("ZOE-1", "Small fix")
     legacy = {
@@ -193,3 +214,49 @@ def test_smoke_sources_and_parent_tickets_are_never_auto_admitted():
         [smoke, parent],
         hermes_agent_id=HERMES,
     )[0] is None
+
+
+def test_evolution_proposal_ticket_requires_matching_contract_marker():
+    missing_contract = _issue(
+        "ZOE-1",
+        "Evolution without contract",
+        dispatch_approved=True,
+        source="evolution_proposal:proposal-1",
+    )
+    mismatched_contract = _approved_evolution_issue(
+        "ZOE-2",
+        "proposal-1",
+        evolution_contract_proposal_id="proposal-2",
+    )
+    approved = _approved_evolution_issue("ZOE-3", "proposal-3")
+
+    assert not ticket_is_dispatch_approved(missing_contract, hermes_agent_id=HERMES)
+    assert not ticket_is_dispatch_approved(mismatched_contract, hermes_agent_id=HERMES)
+    selected, held = select_next_approved_issue(
+        [missing_contract, mismatched_contract, approved],
+        [missing_contract, mismatched_contract, approved],
+        hermes_agent_id=HERMES,
+    )
+
+    assert selected == approved
+    assert held == []
+
+
+def test_blocked_evolution_ticket_without_contract_does_not_halt_lane():
+    blocked_without_contract = _issue(
+        "ZOE-1",
+        "Blocked broken evolution proposal",
+        status="blocked",
+        dispatch_approved=True,
+        source="evolution_proposal:proposal-1",
+    )
+    approved = _approved_evolution_issue("ZOE-2", "proposal-2")
+
+    selected, held = select_next_approved_issue(
+        [approved],
+        [blocked_without_contract, approved],
+        hermes_agent_id=HERMES,
+    )
+
+    assert selected == approved
+    assert held == []

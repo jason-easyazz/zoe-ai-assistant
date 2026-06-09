@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any
+from typing import Any, Mapping
 
 import httpx
 
@@ -442,6 +442,7 @@ async def sync_evolution_proposal_to_multica(
     evidence: str,
     proposal_type: str,
     label_name: str = "evolution-proposal",
+    contract_snapshot: str | Mapping[str, Any] | None = None,
 ) -> str | None:
     """Create a Multica issue for a new evolution proposal.
 
@@ -462,6 +463,22 @@ async def sync_evolution_proposal_to_multica(
         full_desc = f"{description}\n\n**Evidence:** {evidence}"
     try:
         from multica_ticket_contract import describe_ticket
+        from zoe_evolution_proposal_adapter import load_proposal_contract_snapshot
+
+        contract = load_proposal_contract_snapshot(contract_snapshot)
+        proposal = contract.get("proposal", {}) if contract else {}
+        gate = proposal.get("approval_gate", {}) if isinstance(proposal, dict) else {}
+        contract_metadata = {
+            "evolution_proposal_id": proposal_id,
+            "evolution_contract_schema": contract.get("schema") if contract else None,
+            "evolution_contract_version": contract.get("version") if contract else None,
+            "evolution_contract_proposal_id": proposal.get("proposal_id") if isinstance(proposal, dict) else None,
+            "evolution_contract_autonomy_class": proposal.get("autonomy_class") if isinstance(proposal, dict) else None,
+            "evolution_contract_risk": proposal.get("risk") if isinstance(proposal, dict) else None,
+            "evolution_contract_status": proposal.get("status") if isinstance(proposal, dict) else None,
+            "evolution_contract_allowed_to_prepare": gate.get("allowed_to_prepare") if isinstance(gate, dict) else None,
+            "evolution_contract_approval_required": proposal.get("approval_required") if isinstance(proposal, dict) else None,
+        }
 
         full_desc = describe_ticket(
             full_desc,
@@ -471,9 +488,14 @@ async def sync_evolution_proposal_to_multica(
             acceptance_criteria=["Proposal is triaged into a narrow, reviewable change before dispatch."],
             evidence_expectations=["Journal evidence", "Tests or validators", "Greptile 5/5 before merge"],
             source=f"evolution_proposal:{proposal_id}",
+            metadata=contract_metadata,
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning(
+            "sync_evolution_proposal_to_multica: failed to build contract metadata for %s: %s",
+            proposal_id,
+            exc,
+        )
 
     payload: dict[str, Any] = {
         "title": title,

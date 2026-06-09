@@ -44,6 +44,9 @@ The foundation contract is now wired into Zoe's live proposal writers:
   `legacy_target_patterns` from contract metadata;
 - `multica_issue_id` remains authoritative in the legacy column; the stored
   contract snapshot is not rewritten just to mirror that live sync field;
+- Multica tickets created from evolution proposals carry compact contract
+  markers in their `zoe-ticket` metadata, and admission refuses approved
+  evolution-proposal tickets when those markers are absent or mismatched;
 - proposal creation remains review-only and never grants execution;
 - `approval_gate.allowed_to_execute` remains false.
 
@@ -53,6 +56,6 @@ This still avoids:
 - no automatic memory promotion;
 - no chat hot-path change.
 
-The next slices should require this contract payload before installs or
-replacements, then add Multica admission rules for memory and capability
-promotion.
+The next slices should extend these admission rules to memory and capability
+promotion, then require explicit approval evidence before installs or
+replacements can execute.

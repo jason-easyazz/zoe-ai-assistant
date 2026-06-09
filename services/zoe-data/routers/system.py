@@ -1704,6 +1704,7 @@ async def evolution_proposal_action(
                         description=proposal["description"],
                         evidence=proposal.get("evidence", ""),
                         proposal_type=proposal.get("type", "intent_pattern"),
+                        contract_snapshot=proposal.get("target_patterns"),
                     )
                     if new_id:
                         multica_issue_id = new_id
