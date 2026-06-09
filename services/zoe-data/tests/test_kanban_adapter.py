@@ -1356,6 +1356,21 @@ def test_pushed_branch_recovery_scans_latest_log_session_only(tmp_path, monkeypa
     assert ka.KanbanAdapter()._pushed_branch_without_pr_handoff("t_impl") is False
 
 
+def test_pushed_branch_recovery_ignores_pr_create_in_reasoning_text(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "I will run `gh pr create` after this push.\n"
+        "  ┊ 💻 $         git push -u origin HEAD  2.1s\n"
+        "⚡ Interrupted during API call.\n",
+        encoding="utf-8",
+    )
+
+    assert ka.KanbanAdapter()._pushed_branch_without_pr_handoff("t_impl") is True
+
+
 @pytest.mark.asyncio
 async def test_poll_partial_chain_is_redispatchable():
     # closeout phase never got created (e.g. CLI error mid-chain): must report

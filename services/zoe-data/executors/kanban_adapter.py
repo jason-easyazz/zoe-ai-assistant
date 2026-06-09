@@ -77,6 +77,7 @@ _JOKE_INTENT_GAP_TITLE_RE = re.compile(
     re.IGNORECASE,
 )
 _GITHUB_PR_URL_RE = re.compile(r"https://github\.com/[^/\s]+/[^/\s]+/pull/\d+")
+_SHELL_TOOL_LINE_RE = re.compile(r"(?:^|\s)(?:💻\s+)?\$\s+(?P<command>.+)$")
 
 
 def _row_ref_key(row: dict) -> str:
@@ -604,6 +605,8 @@ class KanbanAdapter:
         except asyncio.TimeoutError as exc:
             with contextlib.suppress(ProcessLookupError):
                 proc.kill()
+            with contextlib.suppress(Exception):
+                await proc.communicate()
             raise KanbanCLIError(f"`{' '.join(args)}` timed out after {timeout:.0f}s") from exc
         stdout = (out or b"").decode("utf-8", errors="replace").strip()
         stderr = (err or b"").decode("utf-8", errors="replace").strip()
@@ -1010,14 +1013,17 @@ class KanbanAdapter:
     def _pushed_branch_without_pr_handoff(self, task_id: str) -> bool:
         """True when a worker pushed HEAD then got interrupted before PR handoff."""
         log = latest_log_session(task_id, max_lines=120)
-        if "git push -u origin HEAD" not in log:
-            return False
-        if "gh pr create" in log or "PR_URL=" in log:
-            return False
+        shell_commands: list[str] = []
         for line in log.splitlines():
-            if "git push -u origin HEAD" not in line:
+            match = _SHELL_TOOL_LINE_RE.search(line)
+            if match:
+                shell_commands.append(match.group("command"))
+        if any("gh pr create" in command for command in shell_commands) or "PR_URL=" in log:
+            return False
+        for command in shell_commands:
+            if "git push -u origin HEAD" not in command:
                 continue
-            if re.search(r"\[exit\s+[1-9]\d*\]", line, re.IGNORECASE):
+            if re.search(r"\[exit\s+[1-9]\d*\]", command, re.IGNORECASE):
                 return False
             return True
         return False
