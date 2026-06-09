@@ -2632,6 +2632,22 @@ def test_implement_body_puts_bounded_fast_paths_before_graphify():
     assert body.index("SMALL EXPLICIT CODE FAST PATH") < body.index("Graphify map")
 
 
+def test_implement_body_has_edit_safety_loop():
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {"id": "uuid-1", "identifier": "ZOE-9", "title": "Small code change", "description": ""},
+        "ZOE-9",
+    )
+
+    assert "EDIT SAFETY LOOP" in body
+    assert "after every patch, immediately run the narrowest syntax check" in body
+    assert "python3 -m py_compile <file>" in body
+    assert "before any second patch or more exploration" in body
+    assert "BLOCKER=IMPLEMENT_EDIT_SAFETY" in body
+    assert "Never leave a malformed partial edit and keep exploring" in body
+    assert body.index("EDIT SAFETY LOOP") < body.index("If the task needs more than one PR")
+
+
 def test_implement_body_includes_harness_repo_map_for_harness_tickets():
     body = ka.KanbanAdapter()._build_body(
         "implement",
