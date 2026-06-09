@@ -155,6 +155,8 @@ def review_wrapup_tool_grace(task_id: str, phase: str) -> int:
     if not session:
         return 0
     for line in session.splitlines():
+        if not _STEP_LINE_RE.match(line):
+            continue
         lowered = line.lower()
         if "mark-reviewed" not in lowered or "--help" in lowered:
             continue

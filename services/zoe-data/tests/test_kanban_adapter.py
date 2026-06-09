@@ -2042,6 +2042,33 @@ def test_review_budget_does_not_treat_mark_reviewed_help_as_verdict(tmp_path, mo
     assert "BLOCKER=REVIEW_BUDGET" in reason
 
 
+def test_review_budget_does_not_treat_help_output_as_verdict(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    lines = ["Query: work kanban task t_review"]
+    lines.extend(f"  ┊ tool call {idx}  0.1s" for idx in range(13))
+    lines.append(
+        "  ┊ 💻 $ python3 services/zoe-data/pipeline_evidence_commands.py "
+        "mark-reviewed --help  0.1s"
+    )
+    lines.append(
+        "usage: mark-reviewed multica:issue --critical-count 0 --summary approved"
+    )
+    (log_dir / "t_review.log").write_text("\n".join(lines), encoding="utf-8")
+
+    reason = kb.phase_budget_reason(
+        "t_review",
+        "review",
+        {"task": {"started_at": 100}},
+        now=110,
+    )
+
+    assert kb.review_wrapup_tool_grace("t_review", "review") == 0
+    assert reason is not None
+    assert "BLOCKER=REVIEW_BUDGET" in reason
+
+
 def test_verify_phase_budget_allows_pr_validation_headroom(tmp_path, monkeypatch):
     log_path = tmp_path / "task.log"
     monkeypatch.setattr(kb, "_log_path", lambda _task_id: log_path)
