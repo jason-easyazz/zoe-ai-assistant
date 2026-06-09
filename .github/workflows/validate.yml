@@ -50,6 +50,9 @@ jobs:
       - name: Validate critical files
         run: python3 tools/audit/validate_critical_files.py
 
+      - name: Validate offline memory policy
+        run: python3 tools/audit/validate_offline_memory.py
+
       - name: Run Alembic migrations on CI PostgreSQL
         run: |
           cd services/zoe-data
