@@ -30,8 +30,7 @@ Current merged foundation:
 Important non-complete truth:
 
 - Graphify has been refreshed from `origin/main` at `ad52f61d`; rerun it after subsequent code or architecture changes.
-- Zoe does not yet have a complete active-vs-retired tool inventory.
-- Zoe does not yet have a complete memory read/write inventory.
+- Tool/capability and memory read/write inventories now exist as cleanup gates; keep them updated as runtime paths change.
 - Hindsight has not yet been run as a measured live sidecar bake-off.
 - Graphiti/FalkorDB/Neo4j have not yet been measured for Zoe relational memory.
 - The deterministic memory router is not yet wired into production chat behind a feature flag.
@@ -53,8 +52,8 @@ Important non-complete truth:
 | Hindsight bake-off | Partial | Offline sidecar client, retain-candidate helpers, synthetic fixtures, and tests exist. | Run a measured sidecar bake-off with local models only and record p50/p95 latency, failures, and evidence quality. |
 | Graphiti bake-off | Not started | ADR exists only. | Build Graphiti evaluation fixtures, then test FalkorDB first and Neo4j second if feasible. |
 | Graphify current map | Complete foundation | `graphify-out/GRAPH_REPORT.md` and `graphify-out/graph.json` were regenerated from `origin/main` at `ad52f61d`; `docs/architecture/zoe-harness-current-inventory.md` records the source-backed inventory. | Rerun Graphify after substantial code or architecture changes. |
-| Tool/capability inventory | Not started | Current plan names surfaces but does not provide a full inventory. | Generate a tool/capability map with owner, runtime surface, evidence requirements, and retirement status. |
-| Memory read/write inventory | Not started | Existing code uses `MemoryService`, MemPalace, digest, MCP, chat, notes, people, and journal paths, but no single inventory exists. | Produce an inventory of every durable memory read/write and whether it has user, scope, evidence, and review state. |
+| Tool/capability inventory | Complete foundation | `docs/architecture/zoe-tool-capability-inventory.md` maps agent, MCP, Multica, Hermes, OpenClaw, and governance surfaces. | Keep updated when tool catalogs or execution lanes change. |
+| Memory read/write inventory | Complete foundation | `docs/architecture/zoe-memory-read-write-inventory.md` maps MemoryService operations, durable writes, prompt reads, MCP paths, Hindsight candidates, and metadata gaps. | Keep updated when memory write/read paths change. |
 | Observation/evaluation traces | Not started | Memory metrics exist for MemPalace but not full retrieval helpfulness/contradiction traces. | Add a trace schema for recall, retain candidate, admission, contradiction, and fallback events. |
 | Multica evidence gates | Partial | Implement completion now requires PR evidence for code/default profiles. | Add memory admission gates and explicit self-evolution proposal gates. |
 | Self-evolution loop | Partial | Multica, pipeline evidence, Greploop, Greptile, Hermes, and worktree bootstrap pieces exist. | Implement structured Notice -> Explain -> Search -> Evaluate -> Propose records before any automatic execution. |
@@ -138,9 +137,9 @@ Keep each pull request small enough for Greptile and Zoe verification.
    - Keep Graphify refreshed after substantial code or architecture changes.
    - Reconcile future generated reports against `docs/architecture/zoe-harness-current-inventory.md`.
 3. Tool and memory inventory.
-   - Add `docs/architecture/zoe-tool-capability-inventory.md`.
-   - Add `docs/architecture/zoe-memory-read-write-inventory.md`.
-   - Include active, retired, owner, scope, evidence, and risk columns.
+   - Status: complete foundation.
+   - Keep `docs/architecture/zoe-tool-capability-inventory.md` and `docs/architecture/zoe-memory-read-write-inventory.md` updated as runtime paths change.
+   - Use the inventories as cleanup and self-evolution admission gates.
 4. MemPalace baseline evaluation.
    - Add repeatable local benchmark fixtures.
    - Measure current p50/p95 and memory footprint.
