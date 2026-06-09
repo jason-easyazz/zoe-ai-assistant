@@ -129,6 +129,56 @@ def test_resume_pipeline_retries_after_conflict(isolated_store, monkeypatch):
     assert resumed.status == "todo"
 
 
+def test_complete_pipeline_after_external_merge_journals_done(isolated_store):
+    state = PipelineState(task_ref="multica:merged", phase="implement", status="blocked")
+    state = with_evidence(
+        state,
+        EvidenceItem(
+            kind="greptile",
+            summary="5/5",
+            passed=True,
+            metadata={"source": "pr_maintenance", "phase": "closeout", "merge_sha": "deadbeef"},
+        ),
+        EvidenceItem(
+            kind="log",
+            summary="PR maintenance recorded merged PR",
+            passed=True,
+            metadata={"source": "pr_maintenance", "phase": "retro", "merge_sha": "deadbeef"},
+        ),
+    )
+    store.save_state(state, event="blocked")
+
+    completed = store.complete_pipeline_after_external_merge(
+        "multica:merged",
+        pr_url="https://github.com/o/r/pull/9",
+        merge_sha="deadbeef",
+        greptile_status="5/5",
+    )
+
+    assert completed is not None
+    assert completed.phase == "retro"
+    assert completed.status == "done"
+    assert completed.block_classification is None
+    assert completed.split_packet is None
+    assert completed.history[-1].from_phase == "implement"
+    assert completed.history[-1].to_phase == "retro"
+    assert any(item.kind == "pr" and item.artifact == "https://github.com/o/r/pull/9" for item in completed.evidence)
+    assert any(item.kind == "greptile" and item.metadata.get("merge_sha") == "deadbeef" for item in completed.evidence)
+    assert any(item.kind == "log" and item.metadata.get("phase") == "retro" for item in completed.evidence)
+    assert sum(
+        1
+        for item in completed.evidence
+        if item.kind == "greptile" and item.metadata.get("source") == "pr_maintenance"
+    ) == 1
+    assert sum(
+        1
+        for item in completed.evidence
+        if item.kind == "log" and item.metadata.get("source") == "pr_maintenance"
+    ) == 1
+    last = json.loads(isolated_store.read_text(encoding="utf-8").strip().splitlines()[-1])
+    assert last["event"] == "external_merge_completed"
+
+
 def test_concurrent_evidence_merge_deduplicates_created_at_only(isolated_store):
     initial = store.save_state(
         PipelineState(task_ref="multica:evidence-dedup"),
