@@ -4,6 +4,7 @@ from zoe_evolution_proposal_adapter import (
     build_mcp_evolution_proposal_contract,
     dump_mcp_evolution_proposal_contract,
     load_proposal_contract_snapshot,
+    normalize_mcp_evolution_proposal_type,
 )
 
 
@@ -59,6 +60,11 @@ def test_unknown_legacy_type_falls_back_to_intent_pattern():
 
     assert proposal["metadata"]["legacy_proposal_type"] == "intent_pattern"
     assert proposal["signals"][0]["signal_type"] == "repeated_failure"
+
+
+def test_normalize_mcp_evolution_proposal_type_matches_contract_fallback():
+    assert normalize_mcp_evolution_proposal_type("code_improvement") == "code_improvement"
+    assert normalize_mcp_evolution_proposal_type("surprise") == "intent_pattern"
 
 
 def test_dump_and_load_contract_snapshot_round_trip():

@@ -151,6 +151,8 @@ async def test_create_evolution_proposal_keeps_contract_when_multica_unconfigure
     assert "target_patterns" in insert_sql
     contract = json.loads(insert_args[4])
     assert contract["schema"] == "zoe_evolution_proposal"
+    assert insert_args[5] == "code_improvement"
+    assert contract["proposal"]["metadata"]["legacy_proposal_type"] == "code_improvement"
     assert contract["proposal"]["multica_issue_id"] is None
     assert contract["proposal"]["signals"][0]["signal_type"] == "tool_gap"
 

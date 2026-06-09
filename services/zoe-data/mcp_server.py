@@ -2992,14 +2992,17 @@ async def _execute_tool(db, name: str, args: dict):
     elif name == "create_evolution_proposal":
         try:
             from multica_client import sync_evolution_proposal_to_multica  # type: ignore[import]
-            from zoe_evolution_proposal_adapter import dump_mcp_evolution_proposal_contract  # type: ignore[import]
+            from zoe_evolution_proposal_adapter import (  # type: ignore[import]
+                dump_mcp_evolution_proposal_contract,
+                normalize_mcp_evolution_proposal_type,
+            )
             import time as _time
             title = (args.get("title") or "").strip()
             description = (args.get("description") or "").strip()
             if not title or not description:
                 return {"error": "title and description required"}
             evidence = (args.get("evidence") or "").strip()
-            proposal_type = args.get("proposal_type", "intent_pattern")
+            proposal_type = normalize_mcp_evolution_proposal_type(args.get("proposal_type", "intent_pattern"))
             prop_id = str(uuid.uuid4()).replace("-", "")
             contract_snapshot = dump_mcp_evolution_proposal_contract(
                 proposal_id=prop_id,

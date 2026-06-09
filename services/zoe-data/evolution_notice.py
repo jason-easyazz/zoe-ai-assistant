@@ -334,6 +334,20 @@ async def record_user_issue(message: str, user_id: str) -> None:
 _MEASURE_WINDOW_S = 48 * 3600  # 48-hour monitoring window post-deployment
 
 
+def _load_target_patterns(raw: str | None) -> list[str]:
+    """Load legacy target pattern arrays without crashing on contract envelopes."""
+
+    if not raw:
+        return []
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+    if not isinstance(payload, list):
+        return []
+    return [str(item) for item in payload if item is not None]
+
+
 async def run_measure_phase() -> dict:
     """MEASURE: close monitoring window for deployed proposals.
 
@@ -361,7 +375,7 @@ async def run_measure_phase() -> dict:
 
         for row in rows:
             proposal_id = row["id"]
-            target_patterns: list[str] = json.loads(row["target_patterns"] or "[]")
+            target_patterns = _load_target_patterns(row["target_patterns"])
 
             # Heuristic: count intent misses for the target patterns in the 48h
             # BEFORE deploy vs the 48h AFTER deploy. If miss count dropped by

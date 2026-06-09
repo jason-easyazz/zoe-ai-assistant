@@ -55,7 +55,7 @@ def build_mcp_evolution_proposal_contract(
     legacy proposal row as evidence for later Multica/review gates.
     """
 
-    normalized_type = _normalize_proposal_type(proposal_type)
+    normalized_type = normalize_mcp_evolution_proposal_type(proposal_type)
     source_ref = f"mcp:create_evolution_proposal:{proposal_id}"
     evidence_refs = _evidence_refs(source_ref, evidence)
     signal = EvolutionSignal(
@@ -153,7 +153,9 @@ def load_proposal_contract_snapshot(raw: str | bytes | Mapping[str, Any] | None)
     return payload
 
 
-def _normalize_proposal_type(proposal_type: str | None) -> str:
+def normalize_mcp_evolution_proposal_type(proposal_type: str | None) -> str:
+    """Normalize legacy MCP proposal types before DB and contract storage."""
+
     normalized = (proposal_type or "intent_pattern").strip().lower()
     if normalized not in _SIGNAL_BY_LEGACY_TYPE:
         return "intent_pattern"
@@ -172,4 +174,5 @@ __all__ = [
     "build_mcp_evolution_proposal_contract",
     "dump_mcp_evolution_proposal_contract",
     "load_proposal_contract_snapshot",
+    "normalize_mcp_evolution_proposal_type",
 ]
