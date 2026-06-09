@@ -2780,7 +2780,7 @@ def test_scout_body_has_intent_gap_fast_path():
     )
 
     assert "INTENT GAP FAST PATH" in body
-    assert "do not map the repo" in body
+    assert "ticket evidence plus at most one" in body
     assert "at most one focused lookup of the routing/intent file" in body
     assert "IMPLEMENTATION_REQUIRED=true unless the exact behavior is already handled" in body
     assert body.index("INTENT GAP FAST PATH") < body.index("Keep this phase bounded")
