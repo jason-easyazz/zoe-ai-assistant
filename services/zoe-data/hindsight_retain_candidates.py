@@ -91,7 +91,7 @@ def build_hindsight_retain_admission_request(
 
     event = event_or_payload if isinstance(event_or_payload, MemoryEvent) else memory_event_from_mapping(event_or_payload)
     event.validate()
-    return MemoryAdmissionRequest(
+    request = MemoryAdmissionRequest(
         admission_id=admission_id or f"admit_hindsight_retain_{event.event_id}",
         candidate=event,
         requested_by=requested_by,
@@ -105,6 +105,8 @@ def build_hindsight_retain_admission_request(
             "extra": dict(metadata or {}),
         },
     )
+    request.validate()
+    return request
 
 
 def evaluate_hindsight_retain_candidate_admission(

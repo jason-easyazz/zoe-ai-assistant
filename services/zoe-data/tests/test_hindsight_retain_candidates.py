@@ -7,7 +7,7 @@ from hindsight_retain_candidates import (
     create_hindsight_retain_candidate,
     evaluate_hindsight_retain_candidate_admission,
 )
-from zoe_memory_admission import MemoryAdmissionStatus
+from zoe_memory_admission import MemoryAdmissionError, MemoryAdmissionStatus
 from zoe_memory_contract import (
     MemoryEvent,
     MemoryEventType,
@@ -94,6 +94,7 @@ def test_build_hindsight_retain_admission_request_defaults_to_hindsight_target()
     assert request.candidate.event_id == "mem_evt_candidate"
     assert request.metadata["source"] == HINDSIGHT_RETAIN_SOURCE
     assert request.metadata["candidate_event_id"] == "mem_evt_candidate"
+    assert request.metadata["extra"] == {}
 
 
 def test_build_hindsight_retain_admission_request_keeps_caller_metadata_nested():
@@ -105,6 +106,22 @@ def test_build_hindsight_retain_admission_request_keeps_caller_metadata_nested()
     assert request.metadata["source"] == HINDSIGHT_RETAIN_SOURCE
     assert request.metadata["candidate_event_id"] == "mem_evt_candidate"
     assert request.metadata["extra"] == {"source": "caller_override", "note": "operator review"}
+
+
+def test_build_hindsight_retain_admission_request_rejects_invalid_backend():
+    with pytest.raises(MemoryAdmissionError, match="not admitted write targets"):
+        build_hindsight_retain_admission_request(
+            _event(),
+            target_backends=("cloud_memory",),
+        )
+
+
+def test_build_hindsight_retain_admission_request_rejects_mismatched_trace_user():
+    with pytest.raises(MemoryAdmissionError, match="user_id must match"):
+        build_hindsight_retain_admission_request(
+            _plain_event(),
+            observation_traces=(_admission_trace(scope=MemoryScope.PERSONAL.value, user_id="someone_else"),),
+        )
 
 
 def test_hindsight_retain_candidate_admission_stays_pending_without_approval_or_trace():
