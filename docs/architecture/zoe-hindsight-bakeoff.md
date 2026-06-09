@@ -11,13 +11,34 @@ This document records the current bake-off runner and the first Zoe-host availab
 Files:
 
 - `services/zoe-data/hindsight_bakeoff.py`
+- `services/zoe-data/hindsight_embedding_probe.py`
 - `services/zoe-data/hindsight_sidecar_probe.py`
 - `scripts/maintenance/hindsight_bakeoff.py`
+- `scripts/maintenance/hindsight_embedding_probe.py`
 - `scripts/maintenance/hindsight_sidecar_probe.py`
 - `services/zoe-data/tests/test_hindsight_bakeoff.py`
+- `services/zoe-data/tests/test_hindsight_embedding_probe.py`
 - `services/zoe-data/tests/test_hindsight_sidecar_probe.py`
 
 The runner uses the synthetic Zoe memory events from `hindsight_bakeoff.py`, can optionally retain them into a configured Hindsight sidecar, then measures recall scores and p50/p95 latency across the evaluation queries.
+
+The embedding probe is read-only and should pass before a live sidecar bake-off:
+
+```bash
+PYTHONPATH=services/zoe-data python3 scripts/maintenance/hindsight_embedding_probe.py --json
+```
+
+Embedding probe statuses:
+
+- `disabled`: `HINDSIGHT_ENABLED` is false; no health call, embedding request, retain, recall, or writes.
+- `misconfigured`: offline-only policy rejected the visible embedding config.
+- `missing_local_model`: local embeddings are configured, but no model path or Hugging Face cache entry exists.
+- `local_model_available`: local embeddings have an existing model path or cache entry.
+- `missing_onnx_model`: ONNX embeddings are configured, but the local model path does not exist.
+- `onnx_model_available`: ONNX embeddings have an existing model path.
+- `service_offline`: TEI or local OpenAI-compatible embeddings are configured, but the local/private service health check failed.
+- `service_unhealthy`: the local/private embeddings service responded without ok/healthy status.
+- `service_healthy`: the local/private embeddings service reported ok/healthy.
 
 The sidecar probe is read-only and should be run before the bake-off:
 
@@ -63,8 +84,10 @@ Environment:
 - Process/container status: no Hindsight process or container was running.
 - Runner mode: default disabled config, no retain, no writes.
 - Probe status: disabled with `HINDSIGHT_ENABLED=false`; no health call, retain, recall, or writes.
+- Embedding preflight: with `HINDSIGHT_ENABLED=true`, `HINDSIGHT_API_LLM_PROVIDER=llamacpp`, and the default local embedding model, `scripts/maintenance/hindsight_embedding_probe.py --json` reported `missing_local_model`.
+- Checked embedding paths: `/home/zoe/.cache/huggingface/hub/models--BAAI--bge-small-en-v1.5` and `/home/zoe/.cache/huggingface/hub/models--BAAI--bge-small-en-v1.5/snapshots`.
 - Local image check: `ghcr.io/vectorize-io/hindsight:latest` exists on the Zoe host.
-- Offline start blocker: the image defaults its LLM provider to OpenAI unless Zoe overrides it, and the default local embedding model (`BAAI/bge-small-en-v1.5`) is not currently present in the host Hugging Face cache.
+- Offline start blocker: the image defaults its LLM provider to OpenAI unless Zoe overrides it, and the default local embedding model (`BAAI/bge-small-en-v1.5`) is not currently present in the host Hugging Face cache. Confirm the current state with `scripts/maintenance/hindsight_embedding_probe.py --json` before starting a sidecar.
 
 Measured disabled-run result:
 
