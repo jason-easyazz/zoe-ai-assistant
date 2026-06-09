@@ -1900,6 +1900,77 @@ def test_phase_budget_reason_enforces_tool_and_runtime_limits(tmp_path, monkeypa
     assert "runtime budget exceeded" in reason
 
 
+def test_review_budget_gets_wrapup_grace_after_mark_reviewed_verdict(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    lines = ["Query: work kanban task t_review"]
+    lines.extend(f"  ┊ tool call {idx}  0.1s" for idx in range(13))
+    lines.append(
+        "  ┊ 💻 $ PYTHONPATH=services/zoe-data python3 "
+        "services/zoe-data/pipeline_evidence_commands.py mark-reviewed "
+        "multica:issue --critical-count 0 --summary approved  0.1s"
+    )
+    (log_dir / "t_review.log").write_text("\n".join(lines), encoding="utf-8")
+
+    reason = kb.phase_budget_reason(
+        "t_review",
+        "review",
+        {"task": {"started_at": 100}},
+        now=110,
+    )
+
+    assert kb.tool_step_count("t_review") == 14
+    assert kb.review_wrapup_tool_grace("t_review", "review") == 3
+    assert reason is None
+
+
+def test_review_budget_without_verdict_still_blocks_at_normal_limit(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_review.log").write_text(
+        "Query: work kanban task t_review\n"
+        + "\n".join(f"  ┊ tool call {idx}  0.1s" for idx in range(13)),
+        encoding="utf-8",
+    )
+
+    reason = kb.phase_budget_reason(
+        "t_review",
+        "review",
+        {"task": {"started_at": 100}},
+        now=110,
+    )
+
+    assert reason is not None
+    assert "BLOCKER=REVIEW_BUDGET" in reason
+    assert "hard_limit=12" in reason
+
+
+def test_review_budget_does_not_treat_mark_reviewed_help_as_verdict(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    lines = ["Query: work kanban task t_review"]
+    lines.extend(f"  ┊ tool call {idx}  0.1s" for idx in range(13))
+    lines.append(
+        "  ┊ 💻 $ python3 services/zoe-data/pipeline_evidence_commands.py "
+        "mark-reviewed --help  0.1s"
+    )
+    (log_dir / "t_review.log").write_text("\n".join(lines), encoding="utf-8")
+
+    reason = kb.phase_budget_reason(
+        "t_review",
+        "review",
+        {"task": {"started_at": 100}},
+        now=110,
+    )
+
+    assert kb.review_wrapup_tool_grace("t_review", "review") == 0
+    assert reason is not None
+    assert "BLOCKER=REVIEW_BUDGET" in reason
+
+
 def test_verify_phase_budget_allows_pr_validation_headroom(tmp_path, monkeypatch):
     log_path = tmp_path / "task.log"
     monkeypatch.setattr(kb, "_log_path", lambda _task_id: log_path)

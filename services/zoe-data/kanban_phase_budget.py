@@ -38,6 +38,10 @@ _ITERATION_BUDGET_RE = re.compile(
     r"Iteration budget reached\s*\((?P<used>\d+)\s*/\s*(?P<limit>\d+)\)",
     re.IGNORECASE,
 )
+_MARK_REVIEWED_VERDICT_RE = re.compile(
+    r"\bmark-reviewed\b(?=.*--critical-count)(?=.*--summary)",
+    re.IGNORECASE,
+)
 _ZERO_STEP_WARNED: set[str] = set()
 
 
@@ -79,6 +83,17 @@ def task_log_tail(task_id: str, *, max_lines: int = 80) -> str:
     return "\n".join(lines[-max_lines:])
 
 
+def _latest_log_session(task_id: str, *, max_lines: int = 120) -> str:
+    tail = task_log_tail(task_id, max_lines=max_lines)
+    if not tail:
+        return ""
+    lines = tail.splitlines()
+    query_starts = [index for index, line in enumerate(lines) if line.startswith("Query:")]
+    if query_starts:
+        lines = lines[query_starts[-1]:]
+    return "\n".join(lines)
+
+
 def tool_step_count(task_id: str, *, since: float | None = None) -> int:
     path = _log_path(task_id)
     try:
@@ -117,13 +132,9 @@ def phase_budget_reason_from_log(task_id: str, phase: str) -> str | None:
     hid the useful cost-control signal from the pipeline. Treat the log line as
     explicit blocker evidence so Zoe can stop/recover without redispatch loops.
     """
-    tail = task_log_tail(task_id, max_lines=120)
+    tail = _latest_log_session(task_id, max_lines=120)
     if not tail:
         return None
-    lines = tail.splitlines()
-    query_starts = [index for index, line in enumerate(lines) if line.startswith("Query:")]
-    if query_starts:
-        tail = "\n".join(lines[query_starts[-1]:])
     matches = list(_ITERATION_BUDGET_RE.finditer(tail))
     if not matches:
         return None
@@ -132,6 +143,25 @@ def phase_budget_reason_from_log(task_id: str, phase: str) -> str | None:
         f"BLOCKER=ITERATION_BUDGET: Hermes iteration budget reached during {phase} "
         f"(steps={match.group('used')}, limit={match.group('limit')})"
     )
+
+
+def review_wrapup_tool_grace(task_id: str, phase: str) -> int:
+    """Grant review terminal headroom only after a verdict marker is written."""
+    if phase != "review":
+        return 0
+    session = _latest_log_session(task_id, max_lines=160)
+    if not session:
+        return 0
+    for line in session.splitlines():
+        lowered = line.lower()
+        if "mark-reviewed" not in lowered or "--help" in lowered:
+            continue
+        if _MARK_REVIEWED_VERDICT_RE.search(line):
+            try:
+                return max(0, int(os.environ.get("ZOE_KANBAN_REVIEW_WRAPUP_TOOL_GRACE", "3")))
+            except ValueError:
+                return 3
+    return 0
 
 
 def _is_expected_worker(pid: int) -> bool:
@@ -219,7 +249,8 @@ def phase_budget_reason(
         )
     except ValueError:
         terminal_grace = _TERMINAL_GRACE_DEFAULT
-    hard_limit = tool_limit + terminal_grace
+    wrapup_grace = review_wrapup_tool_grace(task_id, phase)
+    hard_limit = tool_limit + terminal_grace + wrapup_grace
     if tool_steps > hard_limit:
         return (
             f"BLOCKER={phase.upper()}_BUDGET: code-enforced tool budget exceeded "
