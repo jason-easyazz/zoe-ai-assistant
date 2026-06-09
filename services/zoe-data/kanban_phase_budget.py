@@ -40,7 +40,7 @@ _ITERATION_BUDGET_RE = re.compile(
 )
 _PYTHON_PATCH_RE = re.compile(r"^\s*(?:┊|\|)\s+\S+\s+patch\s+.*\.py\b")
 _PYTHON_CHECK_RE = re.compile(
-    r"\b(py_compile|pytest|mypy|ruff|validate_structure|validate_critical_files)\b",
+    r"^\s*(?:┊|\|)\s+\S+\s+\$\s+.*\b(py_compile|pytest|mypy|ruff|validate_structure|validate_critical_files)\b",
     re.IGNORECASE,
 )
 _MARK_REVIEWED_VERDICT_RE = re.compile(

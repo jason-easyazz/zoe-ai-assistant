@@ -1917,6 +1917,23 @@ def test_implement_edit_safety_ignores_patch_word_in_step_arguments(tmp_path, mo
     assert kb.implement_edit_safety_reason_from_log("t_impl", "implement") is None
 
 
+def test_implement_edit_safety_does_not_clear_on_check_word_in_step_arguments(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 🔧 patch     /work/services/zoe-data/intent_router.py  5.9s\n"
+        "  ┊ 🔎 grep      validate_structure /work/services/zoe-data/main.py  0.1s\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.implement_edit_safety_reason_from_log("t_impl", "implement")
+
+    assert reason is not None
+    assert "IMPLEMENT_EDIT_SAFETY" in reason
+
+
 def test_implement_edit_safety_covers_revision_phase(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     log_dir = tmp_path / "kanban" / "logs"
