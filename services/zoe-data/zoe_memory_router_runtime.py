@@ -83,7 +83,7 @@ def route_memory_for_runtime(
         )
         collection = collect_memory_route_trace(trace)
         decision["trace"] = trace.to_dict()
-        decision["trace_collection"] = collection.to_dict()
+        decision["trace_collection"] = _trace_collection_summary(collection)
     return decision
 
 
@@ -140,6 +140,12 @@ def collect_memory_route_trace(trace: ObservationTrace) -> ObservationTraceColle
         reasons = "; ".join(rejection["reason"] for rejection in result.rejected)
         raise ValueError(reasons)
     return result
+
+
+def _trace_collection_summary(collection: ObservationTraceCollectionResult) -> dict[str, Any]:
+    payload = collection.to_dict()
+    payload.pop("traces", None)
+    return payload
 
 
 def memory_router_runtime_status(

@@ -64,6 +64,7 @@ def test_runtime_route_can_include_observation_trace(monkeypatch):
     assert decision["trace_collection"]["accepted_count"] == 1
     assert decision["trace_collection"]["persisted"] is False
     assert decision["trace_collection"]["summary"]["types"] == {ObservationTraceType.MEMORY_ROUTE.value: 1}
+    assert "traces" not in decision["trace_collection"]
     assert decision["can_inject_prompt"] is False
     assert decision["can_write_memory"] is False
 
@@ -135,6 +136,33 @@ def test_collect_memory_route_trace_rejects_non_memory_route_trace():
     )
 
     with pytest.raises(ValueError, match="trace_type 'recall' is not allowed"):
+        collect_memory_route_trace(bad_trace)
+
+
+def test_collect_memory_route_trace_rejects_non_memory_surface():
+    trace = build_memory_route_trace(
+        "What fix worked for this recurring failure?",
+        purpose="chat",
+        decision={
+            "enabled": False,
+            "mode": "disabled",
+            "route": None,
+            "can_inject_prompt": False,
+            "can_write_memory": False,
+            "reason": "runtime flag disabled",
+        },
+    )
+    bad_trace = ObservationTrace(
+        trace_id=trace.trace_id,
+        trace_type=trace.trace_type,
+        surface="chat",
+        scope=trace.scope,
+        outcome=trace.outcome,
+        summary=trace.summary,
+        evidence_refs=trace.evidence_refs,
+    )
+
+    with pytest.raises(ValueError, match="surface 'chat' is not allowed"):
         collect_memory_route_trace(bad_trace)
 
 
