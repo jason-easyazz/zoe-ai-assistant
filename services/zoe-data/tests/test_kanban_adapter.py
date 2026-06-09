@@ -2385,6 +2385,104 @@ def test_phase_budget_reason_passes_harness_followup_body_to_pre_edit_guard(
     assert "engineering blocker follow-up kept exploring after focused test" in reason
 
 
+def test_phase_budget_blocks_code_audit_post_patch_drift(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_CODE_AUDIT_POST_PATCH_EXPLORE_BUDGET", "2")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 🔧 patch     /home/zoe/.worktrees/t_impl/services/zoe-ui/nginx.conf  0.1s\n"
+        "  ┊ 📖 read      /home/zoe/.worktrees/t_impl/docker-compose.modules.yml  0.1s\n"
+        "  ┊ 🔎 grep      validate_structure  0.1s\n"
+        "  ┊ 🔎 find      .github  0.1s\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.phase_budget_reason(
+        "t_impl",
+        "implement",
+        {
+            "task": {
+                "started_at": 100,
+                "body": "CODE-AUDIT FAST PATH\nsource=code_audit_p0_security",
+                "workspace_kind": "worktree",
+                "workspace_path": "/home/zoe/.worktrees/t_impl",
+            },
+            "runs": [{"started_at": 100}],
+        },
+        now=120,
+    )
+
+    assert reason is not None
+    assert "CODE_AUDIT_POST_PATCH_DRIFT" in reason
+    assert "post_patch_explore_steps=3" in reason
+
+
+def test_phase_budget_allows_code_audit_validation_after_patch(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 🔧 patch     /home/zoe/.worktrees/t_impl/services/zoe-ui/nginx.conf  0.1s\n"
+        "  ┊ 📖 read      /home/zoe/.worktrees/t_impl/services/zoe-ui/nginx.conf  0.1s\n"
+        "  ┊ 💻 $         cd /home/zoe/.worktrees/t_impl && python3 tools/audit/validate_structure.py  1.1s\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.phase_budget_reason(
+        "t_impl",
+        "implement",
+        {
+            "task": {
+                "started_at": 100,
+                "body": "CODE-AUDIT FAST PATH\nsource=code_audit_p0_security",
+                "workspace_kind": "worktree",
+                "workspace_path": "/home/zoe/.worktrees/t_impl",
+            },
+            "runs": [{"started_at": 100}],
+        },
+        now=120,
+    )
+
+    assert reason is None
+
+
+def test_phase_budget_does_not_apply_code_audit_post_patch_guard_to_generic_tasks(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_CODE_AUDIT_POST_PATCH_EXPLORE_BUDGET", "2")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 🔧 patch     /home/zoe/.worktrees/t_impl/services/zoe-ui/nginx.conf  0.1s\n"
+        "  ┊ 📖 read      /home/zoe/.worktrees/t_impl/services/zoe-ui/nginx.conf  0.1s\n"
+        "  ┊ 🔎 grep      nearby_symbol  0.1s\n"
+        "  ┊ 🔎 find      services/zoe-data/tests  0.1s\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.phase_budget_reason(
+        "t_impl",
+        "implement",
+        {
+            "task": {
+                "started_at": 100,
+                "body": "ordinary implement task",
+                "workspace_kind": "worktree",
+                "workspace_path": "/home/zoe/.worktrees/t_impl",
+            },
+            "runs": [{"started_at": 100}],
+        },
+        now=120,
+    )
+
+    assert reason is None
+
+
 def test_phase_budget_reason_reuses_implement_log_session(monkeypatch):
     monkeypatch.setattr(kb, "tool_step_count", lambda *args, **kwargs: 1)
     monkeypatch.setattr(kb, "_started_timestamp", lambda detail: None)
@@ -3210,7 +3308,8 @@ def test_implement_body_adds_code_audit_fast_path_for_actionable_bug():
     assert "CODE-AUDIT FAST PATH" in body
     assert "Do not re-audit the whole repo" in body
     assert "Apply the smallest patch" in body
-    assert "Spend no more than 3 tool calls hunting for tests" in body
+    assert "After the first patch, spend at most 2 more tool calls locating validation" in body
+    assert "do not inspect docker-compose, .github" in body
     assert "git push -u origin HEAD" in body
     assert body.index("CODE-AUDIT FAST PATH") < body.index("AUDIT/SMOKE FAST PATH")
     assert body.index("CODE-AUDIT FAST PATH") < body.index("Graphify map")

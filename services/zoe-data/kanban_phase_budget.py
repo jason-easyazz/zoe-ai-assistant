@@ -57,6 +57,18 @@ _FOCUSED_HARNESS_TEST_RE = re.compile(
     r"\bpython3\s+-m\s+pytest\b.*services/zoe-data/tests/\S+\.py::\S+",
     re.IGNORECASE,
 )
+_CODE_AUDIT_BODY_RE = re.compile(
+    r"CODE-AUDIT FAST PATH|code_audit",
+    re.IGNORECASE,
+)
+_POST_PATCH_VALIDATION_RE = re.compile(
+    r"\b(py_compile|pytest|mypy|ruff|validate_structure|validate_critical_files|nginx\s+-t|curl\s+-I)\b",
+    re.IGNORECASE,
+)
+_POST_PATCH_SHIP_RE = re.compile(
+    r"\b(git\s+commit|git\s+push|gh\s+pr\s+create)\b",
+    re.IGNORECASE,
+)
 _ENGINEERING_BLOCKER_FOLLOWUP_SOURCE_RE = re.compile(
     r'"source"\s*:\s*"engineering_blocker_followup"'
 )
@@ -225,6 +237,74 @@ def _read_path_key(raw_path: str) -> str:
 
 def _is_engineering_blocker_followup_body(body: str) -> bool:
     return bool(_ENGINEERING_BLOCKER_FOLLOWUP_SOURCE_RE.search(body))
+
+
+def _is_code_audit_body(body: str) -> bool:
+    return bool(_CODE_AUDIT_BODY_RE.search(body))
+
+
+def _post_patch_explore_budget() -> int:
+    try:
+        return max(1, int(os.environ.get("ZOE_KANBAN_CODE_AUDIT_POST_PATCH_EXPLORE_BUDGET", "2")))
+    except ValueError:
+        return 2
+
+
+def implement_code_audit_post_patch_drift_reason_from_log(
+    task_id: str,
+    phase: str,
+    *,
+    session: str | None = None,
+    task_body: str = "",
+) -> str | None:
+    """Block code-audit workers that keep exploring after applying a patch.
+
+    Code-audit tickets should be cheap: inspect the named surface, patch it, run
+    the nearest validation or structural smoke check, then hand off a PR. A
+    production run showed the worker correctly patched a config file but spent
+    the rest of its iteration budget reading CI and shell scripts. This guard
+    turns that pattern into an explicit blocker before another full-budget loop.
+    """
+    if phase not in {"implement", "implement_revision"}:
+        return None
+    if not _is_code_audit_body(task_body):
+        return None
+    if session is None:
+        session = _latest_log_session(task_id, max_lines=0)
+    if not session:
+        return None
+
+    patch_seen = False
+    post_patch_explore_steps = 0
+    explore_budget = _post_patch_explore_budget()
+    for line in session.splitlines():
+        if not _STEP_LINE_RE.match(line):
+            continue
+        if _PATCH_STEP_RE.search(line):
+            patch_seen = True
+            post_patch_explore_steps = 0
+            continue
+        if not patch_seen:
+            continue
+        shell_step = "$" in line
+        if _TERMINAL_STEP_RE.search(line) or (
+            shell_step
+            and (
+                _POST_PATCH_VALIDATION_RE.search(line)
+                or _POST_PATCH_SHIP_RE.search(line)
+            )
+        ):
+            return None
+        if not _EXPLORE_STEP_RE.search(line):
+            continue
+        post_patch_explore_steps += 1
+        if post_patch_explore_steps > explore_budget:
+            return (
+                "BLOCKER=CODE_AUDIT_POST_PATCH_DRIFT: code-audit worker kept "
+                "exploring after patch instead of validation, commit, PR, or terminal handoff "
+                f"(post_patch_explore_steps={post_patch_explore_steps}, limit={explore_budget})"
+            )
+    return None
 
 
 def implement_pre_edit_drift_reason_from_log(
@@ -485,6 +565,14 @@ def phase_budget_reason(
     edit_safety_reason = implement_edit_safety_reason_from_log(task_id, phase, session=session)
     if edit_safety_reason:
         return edit_safety_reason
+    code_audit_post_patch_reason = implement_code_audit_post_patch_drift_reason_from_log(
+        task_id,
+        phase,
+        session=session,
+        task_body=str(task.get("body") or ""),
+    )
+    if code_audit_post_patch_reason:
+        return code_audit_post_patch_reason
     pre_edit_drift_reason = implement_pre_edit_drift_reason_from_log(
         task_id,
         phase,
