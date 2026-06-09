@@ -322,6 +322,7 @@ def test_ensure_headers_is_idempotent_and_replaces_managed_blocks():
 
     assert once == twice
     assert '"DENY"' not in once
+    assert '"SAMEORIGIN"' in once
     assert once.count(helper.BEGIN_MARKER) == 1
     assert "Strict-Transport-Security" not in once
     assert helper.missing_headers(once) == []
