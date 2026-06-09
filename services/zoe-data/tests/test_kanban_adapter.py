@@ -180,6 +180,33 @@ async def test_dispatch_blocks_regular_worktree_failures_with_generic_reason(mon
     assert "PR_REVISION_CHECKOUT_FAILED" not in block_calls[0][2]
 
 
+@pytest.mark.asyncio
+async def test_dispatch_retro_uses_main_repo_workspace():
+    from pipeline_evidence import PipelineState
+    from pipeline_store import save_state
+
+    state = PipelineState(
+        task_ref="multica:uuid-retro-workspace",
+        phase="retro",
+        status="todo",
+        attempts={"implement": 1, "verify": 1, "review": 1, "closeout": 1},
+    )
+    save_state(state, event="operator_resumed")
+    a = _FakeAdapter()
+    result = await a.dispatch(
+        {
+            "id": "uuid-retro-workspace",
+            "identifier": "ZOE-RETRO",
+            "title": "Retro fallback",
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["phase"] == "retro"
+    create = [c for c in a.calls if c[0] == "create"][0]
+    assert create[create.index("--workspace") + 1] == f"dir:{ka.zoe_repo_root()}"
+
+
 
 
 @pytest.mark.asyncio
@@ -2719,6 +2746,7 @@ def test_retro_body_has_post_closeout_fast_path():
         "ZOE-9",
     )
 
+    assert "Workspace: main repo checkout" in body
     assert "POST-CLOSEOUT FAST PATH" in body
     assert "PR_URL, MERGE_SHA" in body
     assert "GREPTILE/greptile_status=5/5 or already_merged" in body
