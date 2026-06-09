@@ -324,6 +324,33 @@ def _harness_implement_hint(issue: dict | None = None) -> str:
     )
 
 
+def _intent_gap_implement_hint(issue: dict | None = None, *, phase: str = "implement") -> str:
+    issue = issue or {}
+    haystack = " ".join(
+        [
+            str(issue.get("identifier") or ""),
+            str(issue.get("title") or ""),
+            str(issue.get("description") or ""),
+        ]
+    ).lower()
+    if "intent gap" not in haystack and "intent-gap" not in haystack:
+        return ""
+    edit_deadline = (
+        " Start editing within 4 tool/model steps after `kanban_show`.\n"
+        if phase == "implement"
+        else " After the existing-PR checkout checks succeed, start the focused revision edit within 4 tool/model steps.\n"
+    )
+    return (
+        "- INTENT-GAP IMPLEMENT FAST PATH: this ticket is already scoped by scout as"
+        " a routing/intent gap. Do not re-scout the repo. Start from"
+        " services/zoe-data/intent_router.py and the nearest intent_router tests;"
+        " inspect each at most once, then patch the intent route and focused tests."
+        " If those files are not the right location, call `kanban_block` with"
+        " BLOCKER=IMPLEMENT_BUDGET and the missing locator instead of exploring."
+        f"{edit_deadline}"
+    )
+
+
 def _is_bounded_goal_phase(phase: str, issue: dict | None = None) -> bool:
     """Return True when this phase should run in bounded goal mode with one retry."""
     return phase == "implement" and _is_code_audit_actionable(_ticket_metadata(issue))
@@ -552,16 +579,18 @@ class KanbanAdapter:
                 " BLOCKER=SCOUT_BUDGET and the missing information instead of exploring further.\n"
                 "- TERMINAL PROTOCOL: end with `kanban_complete` or `kanban_block` (no silent exit)."
             )
-        if phase == "implement":
+        if phase in {"implement", "implement_revision"}:
             overnight_hint = _overnight_implement_cost_hint() if mode == "overnight" else ""
             code_audit_hint = _code_audit_implement_hint(issue)
             harness_hint = _harness_implement_hint(issue)
+            intent_gap_hint = _intent_gap_implement_hint(issue, phase=phase)
             # Implement body intentionally omits full prior-phase logs; workers should
             # call kanban_show and read SCOUT_SUMMARY= from scout metadata when present.
             return common + overnight_hint + (
                 "You are the implementer (zoe-coder).\n"
                 f"{code_audit_hint}"
                 f"{harness_hint}"
+                f"{intent_gap_hint}"
                 "- AUDIT/SMOKE FAST PATH: only if the title/body explicitly says audit-only, smoke test,"
                 " no code change, or uses trace/map with an audit/no-code qualifier, do not run Graphify"
                 " or repo exploration first. Complete in one bounded handoff with"
