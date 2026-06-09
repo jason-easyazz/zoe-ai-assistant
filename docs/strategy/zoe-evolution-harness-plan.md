@@ -274,7 +274,7 @@ Stages:
 2. Explain: convert the signal into a structured problem statement with evidence.
 3. Search: look for existing tools, Pi packages, MCP servers, GitHub projects, skills, APIs.
 4. Evaluate: score candidates by fit, activity, stars, license, local viability, runtime cost, security, tests.
-5. Propose: create an evolution proposal with scope, risk, expected benefit, tests, rollback.
+5. Propose: create an evolution proposal with scope, scored candidate, affected capabilities, risk, expected benefit, tests, rollback, and approval requirements.
 6. Approve: require user/admin approval for privileged changes.
 7. Execute: use Pi/Hermes/OpenClaw/Multica lanes depending on task type.
 8. Verify: run tests, health checks, screenshots if UI, metrics if runtime.
