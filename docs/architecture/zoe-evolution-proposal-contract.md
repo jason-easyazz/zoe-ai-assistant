@@ -24,6 +24,12 @@ This is the bridge between the harness plan and Multica:
 
 `approval_gate.allowed_to_execute` is intentionally always false. A valid proposal can be prepared and handed to Multica or review, but privileged execution must happen through the governed runtime path.
 
+`services/zoe-data/zoe_evolution_execution_gate.py` defines the next
+side-effect-free gate: execution is allowed only when the proposal is an
+`execute` or `promote` proposal and every required approval class has a matching
+evidence ref, such as PR evidence, user/admin approval, security review,
+install/runtime approval, or memory-admission approval.
+
 ## Why This Matters
 
 This gives Zoe a durable, testable shape for self-improvement before the runtime loop becomes more autonomous. It prevents a user request, reflection, or failed tool run from becoming an unchecked install, trusted memory, or code change.
@@ -47,6 +53,9 @@ The foundation contract is now wired into Zoe's live proposal writers:
 - Multica tickets created from evolution proposals carry compact contract
   markers in their `zoe-ticket` metadata, and admission refuses approved
   evolution-proposal tickets when those markers are absent or mismatched;
+- the execution approval gate can evaluate required approval evidence for
+  install/runtime changes, privileged execution, memory admission, and
+  promotion before any future runtime path executes them;
 - proposal creation remains review-only and never grants execution;
 - `approval_gate.allowed_to_execute` remains false.
 
