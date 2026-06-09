@@ -8,11 +8,12 @@ from zoe_memory_router import MemoryBackend
 from zoe_memory_router_runtime import (
     FEATURE_FLAG,
     build_memory_route_trace,
+    collect_memory_route_trace,
     memory_router_runtime_enabled,
     memory_router_runtime_status,
     route_memory_for_runtime,
 )
-from zoe_observation_trace import ObservationOutcome, ObservationTraceType
+from zoe_observation_trace import ObservationOutcome, ObservationTrace, ObservationTraceType
 
 
 def test_memory_router_runtime_is_disabled_by_default(monkeypatch):
@@ -59,6 +60,10 @@ def test_runtime_route_can_include_observation_trace(monkeypatch):
     assert trace["metadata"]["primary"] == MemoryBackend.HINDSIGHT.value
     assert trace["metadata"]["query_length"] == len("What fix worked for this recurring failure?")
     assert "query" not in trace["metadata"]
+    assert decision["trace_collection"]["ok"] is True
+    assert decision["trace_collection"]["accepted_count"] == 1
+    assert decision["trace_collection"]["persisted"] is False
+    assert decision["trace_collection"]["summary"]["types"] == {ObservationTraceType.MEMORY_ROUTE.value: 1}
     assert decision["can_inject_prompt"] is False
     assert decision["can_write_memory"] is False
 
@@ -87,6 +92,8 @@ def test_disabled_runtime_trace_is_skipped_and_does_not_route(monkeypatch):
     assert decision["trace"]["outcome"] == ObservationOutcome.SKIPPED.value
     assert decision["trace"]["metadata"]["primary"] is None
     assert decision["trace"]["metadata"]["enabled"] is False
+    assert decision["trace_collection"]["ok"] is True
+    assert decision["trace_collection"]["persisted"] is False
 
 
 def test_build_memory_route_trace_requires_user_for_personal_scope(monkeypatch):
@@ -102,6 +109,33 @@ def test_build_memory_route_trace_requires_user_for_personal_scope(monkeypatch):
 
     with pytest.raises(ValueError, match="user_id is required"):
         trace.validate()
+
+
+def test_collect_memory_route_trace_rejects_non_memory_route_trace():
+    trace = build_memory_route_trace(
+        "What fix worked for this recurring failure?",
+        purpose="chat",
+        decision={
+            "enabled": False,
+            "mode": "disabled",
+            "route": None,
+            "can_inject_prompt": False,
+            "can_write_memory": False,
+            "reason": "runtime flag disabled",
+        },
+    )
+    bad_trace = ObservationTrace(
+        trace_id=trace.trace_id,
+        trace_type=ObservationTraceType.RECALL.value,
+        surface=trace.surface,
+        scope=trace.scope,
+        outcome=trace.outcome,
+        summary=trace.summary,
+        evidence_refs=trace.evidence_refs,
+    )
+
+    with pytest.raises(ValueError, match="trace_type 'recall' is not allowed"):
+        collect_memory_route_trace(bad_trace)
 
 
 def test_status_can_include_sample_route_decisions(monkeypatch):
@@ -127,6 +161,8 @@ def test_status_can_include_sample_route_traces(monkeypatch):
     decision = status["sample_routes"][0]["decision"]
     assert decision["trace"]["trace_id"] == "trace_memory_route_sample_relational"
     assert decision["trace"]["metadata"]["primary"] == MemoryBackend.GRAPHITI.value
+    assert decision["trace_collection"]["ok"] is True
+    assert decision["trace_collection"]["persisted"] is False
     assert "query" not in decision["trace"]["metadata"]
 
 

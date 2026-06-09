@@ -14,7 +14,8 @@ The helper lives in `services/zoe-data/zoe_memory_router_runtime.py`.
 - Runtime status shows sample route decisions only when the runtime flag is enabled
   or a test/operator call explicitly requests samples.
 - Runtime calls can include optional observation trace packets for route
-  decisions. These packets are returned to the caller only; they are not
+  decisions. These packets pass through the governed non-persistent collector
+  and are returned to the caller with a collection summary; they are not
   persisted and do not contain raw query text.
 - This slice does not call MemPalace, Hindsight, Graphiti, Graphify, or Multica.
 
@@ -29,7 +30,8 @@ by default.
 
 ## Next Runtime Step
 
-The next PR may persist or forward observation traces through a governed
-collector, still without injecting memory packets into prompts or writing
-durable memory. Prompt-time recall should remain a later feature flag after
-latency and safety evidence exist.
+The next PR may add a durable trace store proposal or prompt-time recall in
+fallback-safe mode, still without writing durable memory unless the memory
+admission contract and Multica approval gates are satisfied. Prompt-time recall
+should remain behind a later feature flag after latency and safety evidence
+exist.
