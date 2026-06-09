@@ -48,6 +48,13 @@ _PATCH_REVIEW_DIFF_RE = re.compile(r"^\s*(?:┊|\|)\s+review\s+diff\b", re.IGNOR
 _TERMINAL_STEP_RE = re.compile(r"^\s*(?:┊|\|)\s+\S+\s+kanban_(?:complete|block)\b", re.IGNORECASE)
 _EXPLORE_STEP_RE = re.compile(r"^\s*(?:┊|\|)\s+\S+\s+(?:read|grep|find)\b", re.IGNORECASE)
 _READ_STEP_RE = re.compile(r"^\s*(?:┊|\|)\s+\S+\s+read\s+(?P<path>\S+)", re.IGNORECASE)
+_FOCUSED_HARNESS_TEST_RE = re.compile(
+    r"\bpython3\s+-m\s+pytest\b.*services/zoe-data/tests/\S+\.py::\S+",
+    re.IGNORECASE,
+)
+_ENGINEERING_BLOCKER_FOLLOWUP_SOURCE_RE = re.compile(
+    r'"source"\s*:\s*"engineering_blocker_followup"'
+)
 _MARK_REVIEWED_VERDICT_RE = re.compile(
     r"\bmark-reviewed\b(?=.*--critical-count)(?=.*--summary)",
     re.IGNORECASE,
@@ -211,7 +218,17 @@ def _read_path_key(raw_path: str) -> str:
     return re.sub(r":\d+(?:-\d+)?$", "", raw_path)
 
 
-def implement_pre_edit_drift_reason_from_log(task_id: str, phase: str, *, session: str | None = None) -> str | None:
+def _is_engineering_blocker_followup_body(body: str) -> bool:
+    return bool(_ENGINEERING_BLOCKER_FOLLOWUP_SOURCE_RE.search(body))
+
+
+def implement_pre_edit_drift_reason_from_log(
+    task_id: str,
+    phase: str,
+    *,
+    session: str | None = None,
+    task_body: str = "",
+) -> str | None:
     """Block implement runs that keep exploring before making any edit.
 
     Real production failures showed workers ignoring a narrow scout handoff and
@@ -228,18 +245,53 @@ def implement_pre_edit_drift_reason_from_log(task_id: str, phase: str, *, sessio
         return None
 
     step_lines = [line for line in session.splitlines() if _STEP_LINE_RE.match(line)]
-    if any(_PATCH_STEP_RE.search(line) or _TERMINAL_STEP_RE.search(line) for line in step_lines):
+    harness_followup = _is_engineering_blocker_followup_body(task_body)
+    focused_indexes = [
+        index
+        for index, line in enumerate(step_lines)
+        if harness_followup and _FOCUSED_HARNESS_TEST_RE.search(line)
+    ]
+    terminal_indexes = [
+        index
+        for index, line in enumerate(step_lines)
+        if _PATCH_STEP_RE.search(line) or _TERMINAL_STEP_RE.search(line)
+    ]
+    focused_harness_test_present = bool(focused_indexes)
+    if terminal_indexes and (
+        not focused_harness_test_present or terminal_indexes[0] < focused_indexes[0]
+    ):
         return None
 
     explore_budget = _pre_edit_explore_budget()
     repeat_read_budget = _pre_edit_repeat_read_budget()
     explore_steps = 0
+    focused_harness_test_seen = False
+    post_focus_adapter_read_allowed = True
     read_counts: dict[str, int] = {}
     for line in step_lines:
+        if _PATCH_STEP_RE.search(line) or _TERMINAL_STEP_RE.search(line):
+            return None
+        if harness_followup and _FOCUSED_HARNESS_TEST_RE.search(line):
+            focused_harness_test_seen = True
+            continue
         if not _EXPLORE_STEP_RE.search(line):
             continue
         explore_steps += 1
         read_match = _READ_STEP_RE.search(line)
+        if focused_harness_test_seen:
+            path = _read_path_key(read_match.group("path")) if read_match else ""
+            if (
+                post_focus_adapter_read_allowed
+                and path.endswith("services/zoe-data/executors/kanban_adapter.py")
+            ):
+                post_focus_adapter_read_allowed = False
+                continue
+            else:
+                return (
+                    "BLOCKER=IMPLEMENT_HANDOFF_DRIFT: engineering blocker follow-up kept "
+                    "exploring after focused test instead of editing kanban_adapter.py "
+                    "or blocking ALREADY_COVERED"
+                )
         if explore_steps > explore_budget:
             return (
                 "BLOCKER=IMPLEMENT_HANDOFF_DRIFT: pre-edit exploration exceeded "
@@ -373,7 +425,13 @@ def phase_budget_reason(
     edit_safety_reason = implement_edit_safety_reason_from_log(task_id, phase, session=session)
     if edit_safety_reason:
         return edit_safety_reason
-    pre_edit_drift_reason = implement_pre_edit_drift_reason_from_log(task_id, phase, session=session)
+    task = detail.get("task") if isinstance(detail.get("task"), dict) else {}
+    pre_edit_drift_reason = implement_pre_edit_drift_reason_from_log(
+        task_id,
+        phase,
+        session=session,
+        task_body=str(task.get("body") or ""),
+    )
     if pre_edit_drift_reason:
         return pre_edit_drift_reason
     log_reason = phase_budget_reason_from_log(task_id, phase)

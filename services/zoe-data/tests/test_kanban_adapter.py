@@ -2060,6 +2060,193 @@ def test_implement_pre_edit_drift_blocks_exploration_without_patch(tmp_path, mon
     assert "pre-edit exploration exceeded budget" in reason
 
 
+def test_implement_pre_edit_drift_blocks_harness_followup_after_focused_test(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_PRE_EDIT_EXPLORE_BUDGET", "12")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 📖 read      /work/services/zoe-data/main.py  0.1s\n"
+        "  ┊ 💻 $         cd /work && PYTHONPATH=services/zoe-data python3 -m pytest -v "
+        "services/zoe-data/tests/test_main_multica_poll.py::"
+        "test_record_blocked_multica_chain_creates_iteration_budget_followup -x  3.3s\n"
+        "  ┊ 📖 read      /work/services/zoe-data/executors/kanban_adapter.py  0.1s\n"
+        "  ┊ 🔎 grep      ITERATION_BUDGET  0.1s\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.implement_pre_edit_drift_reason_from_log(
+        "t_impl",
+        "implement",
+        task_body='{"source":"engineering_blocker_followup"}',
+    )
+
+    assert reason is not None
+    assert "engineering blocker follow-up kept exploring after focused test" in reason
+
+
+def test_implement_pre_edit_drift_allows_harness_followup_adapter_read_after_focused_test(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 💻 $         cd /work && PYTHONPATH=services/zoe-data python3 -m pytest -q "
+        "services/zoe-data/tests/test_main_multica_poll.py::"
+        "test_record_blocked_multica_chain_creates_iteration_budget_followup  3.3s\n"
+        "  ┊ 📖 read      /work/services/zoe-data/executors/kanban_adapter.py  0.1s\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.implement_pre_edit_drift_reason_from_log(
+        "t_impl",
+        "implement",
+        task_body='{"source":"engineering_blocker_followup"}',
+    )
+
+    assert reason is None
+
+
+def test_implement_pre_edit_drift_does_not_charge_allowed_adapter_read_to_budget(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_PRE_EDIT_EXPLORE_BUDGET", "12")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    pre_focus_explore = "\n".join(
+        f"  ┊ 🔎 grep      symbol_{index}  0.1s"
+        for index in range(12)
+    )
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        f"{pre_focus_explore}\n"
+        "  ┊ 💻 $         cd /work && PYTHONPATH=services/zoe-data python3 -m pytest -q "
+        "services/zoe-data/tests/test_main_multica_poll.py::"
+        "test_record_blocked_multica_chain_creates_iteration_budget_followup  3.3s\n"
+        "  ┊ 📖 read      /work/services/zoe-data/executors/kanban_adapter.py  0.1s\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.implement_pre_edit_drift_reason_from_log(
+        "t_impl",
+        "implement",
+        task_body='{"source":"engineering_blocker_followup"}',
+    )
+
+    assert reason is None
+
+
+def test_implement_pre_edit_drift_covers_harness_followup_focused_tests_in_other_files(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 💻 $         cd /work && PYTHONPATH=services/zoe-data python3 -m pytest -q "
+        "services/zoe-data/tests/test_kanban_adapter.py::"
+        "test_implement_body_includes_harness_blocker_followup_focused_tests  0.9s\n"
+        "  ┊ 🔎 grep      _ensure_blocker_followup_ticket  0.1s\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.implement_pre_edit_drift_reason_from_log(
+        "t_impl",
+        "implement",
+        task_body='{"source":"engineering_blocker_followup"}',
+    )
+
+    assert reason is not None
+    assert "engineering blocker follow-up kept exploring after focused test" in reason
+
+
+def test_implement_pre_edit_drift_ignores_plain_followup_prompt_without_metadata(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_PRE_EDIT_EXPLORE_BUDGET", "12")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 💻 $         cd /work && PYTHONPATH=services/zoe-data python3 -m pytest -q "
+        "services/zoe-data/tests/test_kanban_adapter.py::"
+        "test_implement_body_includes_harness_blocker_followup_focused_tests  0.9s\n"
+        "  ┊ 🔎 grep      _ensure_blocker_followup_ticket  0.1s\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.implement_pre_edit_drift_reason_from_log(
+        "t_impl",
+        "implement",
+        task_body="For engineering_blocker_followup tickets, inspect only the named files.",
+    )
+
+    assert reason is None
+
+
+def test_implement_pre_edit_drift_stands_down_for_harness_followup_patch_without_focused_test(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_PRE_EDIT_EXPLORE_BUDGET", "12")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    pre_patch_explore = "\n".join(
+        f"  ┊ 🔎 grep      symbol_{index}  0.1s"
+        for index in range(13)
+    )
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        f"{pre_patch_explore}\n"
+        "  ┊ 🔧 patch     /work/services/zoe-data/executors/kanban_adapter.py  5.9s\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.implement_pre_edit_drift_reason_from_log(
+        "t_impl",
+        "implement",
+        task_body='{"source":"engineering_blocker_followup"}',
+    )
+
+    assert reason is None
+
+
+def test_implement_pre_edit_drift_stands_down_for_patch_before_focused_test(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_PRE_EDIT_EXPLORE_BUDGET", "12")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    pre_patch_explore = "\n".join(
+        f"  ┊ 🔎 grep      symbol_{index}  0.1s"
+        for index in range(13)
+    )
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        f"{pre_patch_explore}\n"
+        "  ┊ 🔧 patch     /work/services/zoe-data/executors/kanban_adapter.py  5.9s\n"
+        "  ┊ 💻 $         cd /work && PYTHONPATH=services/zoe-data python3 -m pytest -q "
+        "services/zoe-data/tests/test_main_multica_poll.py::"
+        "test_record_blocked_multica_chain_creates_iteration_budget_followup  3.3s\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.implement_pre_edit_drift_reason_from_log(
+        "t_impl",
+        "implement",
+        task_body='{"source":"engineering_blocker_followup"}',
+    )
+
+    assert reason is None
+
+
 def test_implement_pre_edit_drift_prioritizes_explore_budget_when_both_trip(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_PRE_EDIT_REPEAT_READ_BUDGET", "3")
@@ -2162,6 +2349,40 @@ def test_phase_budget_reason_blocks_pre_edit_handoff_drift(tmp_path, monkeypatch
 
     assert reason is not None
     assert "IMPLEMENT_HANDOFF_DRIFT" in reason
+
+
+def test_phase_budget_reason_passes_harness_followup_body_to_pre_edit_guard(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_PRE_EDIT_EXPLORE_BUDGET", "12")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 💻 $         cd /work && PYTHONPATH=services/zoe-data python3 -m pytest -q "
+        "services/zoe-data/tests/test_main_multica_poll.py::"
+        "test_record_blocked_multica_chain_creates_iteration_budget_followup  3.3s\n"
+        "  ┊ 📖 read      /work/services/zoe-data/executors/kanban_adapter.py  0.1s\n"
+        "  ┊ 🔎 grep      ITERATION_BUDGET  0.1s\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.phase_budget_reason(
+        "t_impl",
+        "implement",
+        {
+            "task": {
+                "started_at": 100,
+                "body": '{"source":"engineering_blocker_followup"}',
+            },
+            "runs": [{"started_at": 100}],
+        },
+        now=120,
+    )
+
+    assert reason is not None
+    assert "engineering blocker follow-up kept exploring after focused test" in reason
 
 
 def test_phase_budget_reason_reuses_implement_log_session(monkeypatch):
