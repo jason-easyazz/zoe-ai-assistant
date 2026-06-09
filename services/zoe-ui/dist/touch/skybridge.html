@@ -1439,10 +1439,6 @@
                 grid-template-columns: minmax(0, 1fr) !important;
             }
 
-            .sky-card.list-card .sky-field:nth-child(n+3) {
-                display: none;
-            }
-
             .sky-badge {
                 display: none;
             }
@@ -1641,6 +1637,13 @@
             .sky-card-grid {
                 gap: 9px !important;
                 margin-top: 14px !important;
+            }
+
+            .sky-card.list-card .sky-card-grid {
+                max-height: 236px;
+                overflow-y: auto;
+                padding-right: 2px;
+                scrollbar-width: thin;
             }
 
             .sky-field {
