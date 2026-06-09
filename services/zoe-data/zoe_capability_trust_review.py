@@ -12,6 +12,7 @@ from types import MappingProxyType
 from typing import Any, Mapping, Sequence
 
 from zoe_capability_profile import CapabilityProfile, capability_profile_index
+from zoe_capability_utils import merge_string_refs
 from zoe_capability_trust_update import CapabilityTrustUpdateCandidate, CapabilityTrustUpdatePlan
 
 
@@ -132,7 +133,8 @@ def review_capability_trust_update_plan(
             rejected_ids,
         )
         if decision_blockers:
-            result_blockers.extend(decision_blockers)
+            if _blocks_review_application(decision_blockers):
+                result_blockers.extend(decision_blockers)
             decisions.append(
                 _decision(
                     candidate,
@@ -174,9 +176,10 @@ def review_capability_trust_update_plan(
         )
 
     deduped_blockers = tuple(dict.fromkeys(result_blockers))
+    has_approved_decision = any(decision.approved for decision in decisions)
     updated_profiles = (
         ()
-        if deduped_blockers
+        if deduped_blockers or not has_approved_decision
         else tuple(profile_updates.get(profile.capability_id, profile) for profile in base_profiles)
     )
     return CapabilityTrustReviewResult(
@@ -207,6 +210,13 @@ def _candidate_review_blockers(
     return tuple(blockers)
 
 
+def _blocks_review_application(blockers: Sequence[str]) -> bool:
+    """Return true when blockers indicate an invalid review, not a deliberate rejection."""
+
+    non_applyable_prefixes = ("review_rejected:", "not_approved:")
+    return any(not blocker.startswith(non_applyable_prefixes) for blocker in blockers)
+
+
 def _promoted_profile(
     profile: CapabilityProfile,
     candidate: CapabilityTrustUpdateCandidate,
@@ -216,7 +226,7 @@ def _promoted_profile(
     promoted = replace(
         profile,
         trust_level=candidate.proposed_trust_level,
-        evidence_refs=_merge(profile.evidence_refs, candidate.evidence_refs, approval_refs),
+        evidence_refs=merge_string_refs(profile.evidence_refs, candidate.evidence_refs, approval_refs),
         metadata={
             **dict(profile.metadata),
             "trust_review": {
@@ -248,20 +258,13 @@ def _decision(
         reviewer_id=reviewer_id,
         approved=approved,
         reason=reason,
-        approval_refs=_merge(approval_refs),
-        evidence_refs=_merge(candidate.evidence_refs, approval_refs),
+        approval_refs=merge_string_refs(approval_refs),
+        evidence_refs=merge_string_refs(candidate.evidence_refs, approval_refs),
         metadata={
             "source": CAPABILITY_TRUST_REVIEW_SOURCE,
             "extra": dict(metadata or {}),
         },
     )
-
-
-def _merge(*groups: Sequence[str]) -> tuple[str, ...]:
-    values: list[str] = []
-    for group in groups:
-        values.extend(str(value) for value in group if value is not None and str(value))
-    return tuple(dict.fromkeys(values))
 
 
 __all__ = [

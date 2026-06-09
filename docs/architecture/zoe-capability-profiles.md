@@ -11,9 +11,11 @@ This is the foundation for governed self-evolution. Zoe should look up existing 
 Files:
 
 - `services/zoe-data/zoe_capability_profile.py`
+- `services/zoe-data/zoe_capability_profile_promotion.py`
 - `services/zoe-data/zoe_capability_trust_update.py`
 - `services/zoe-data/zoe_capability_trust_review.py`
 - `services/zoe-data/tests/test_zoe_capability_profile.py`
+- `services/zoe-data/tests/test_zoe_capability_profile_promotion.py`
 - `services/zoe-data/tests/test_zoe_capability_trust_update.py`
 - `services/zoe-data/tests/test_zoe_capability_trust_review.py`
 
@@ -55,6 +57,11 @@ matching current trust level, and evidence are present. It returns updated
 profile objects for a later writer; it does not write profile files or mutate
 production runtime state.
 
+Capability profile promotion plans are explicit writer gates, not writes.
+`zoe_capability_profile_promotion.py` can render a deterministic promotion
+manifest only from a clean trust review with PR refs, rollback refs, and
+verification refs. Blocked plans carry no records and cannot be rendered.
+
 ## Next Use
 
 The next self-evolution slices should use these profiles to:
@@ -64,6 +71,6 @@ The next self-evolution slices should use these profiles to:
 - run `scripts/maintenance/pi_runtime_probe.py --json` before any Pi install or delegated execution proposal;
 - block privileged execution when profile approval rules are unmet;
 - add outcome eval traces against profile IDs;
-- connect reviewed trust promotions to an explicit profile writer with PR and
-  rollback evidence;
+- connect promotion manifests to an explicit profile-file patch writer with PR
+  and rollback evidence;
 - require non-use, replacement, or failure evidence before retirement.
