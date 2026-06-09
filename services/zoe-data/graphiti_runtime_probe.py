@@ -113,15 +113,16 @@ async def probe_graphiti_runtime(
         runtime_config = GraphitiRuntimeConfig.from_env(env)
         backend_config = GraphitiProbeConfig.from_env(env)
     except (GraphitiRuntimeConfigError, GraphitiProbeConfigError, ValueError) as exc:
+        backend_snapshot = GraphitiProbeConfig.snapshot_from_env(env)
         return GraphitiRuntimeProbeResult(
             ok=False,
             acceptable=False,
             status="misconfigured",
             config={
                 "runtime": GraphitiRuntimeConfig.snapshot_from_env(env),
-                "backend": GraphitiProbeConfig.snapshot_from_env(env),
+                "backend": backend_snapshot,
             },
-            packages=_package_snapshot("falkordb"),
+            packages=_package_snapshot(str(backend_snapshot.get("backend") or "falkordb")),
             backend={},
             llm={},
             latency_ms=_elapsed_ms(started),

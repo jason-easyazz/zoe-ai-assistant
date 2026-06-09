@@ -1,4 +1,5 @@
 import pytest
+import httpx
 
 from graphiti_runtime_probe import (
     GraphitiRuntimeConfig,
@@ -116,6 +117,40 @@ async def test_runtime_probe_reports_missing_llm_model(monkeypatch):
 
     assert result.status == "llm_model_missing"
     assert result.acceptable is False
+
+
+@pytest.mark.asyncio
+async def test_runtime_probe_reports_llm_unavailable(monkeypatch):
+    monkeypatch.setattr(
+        "graphiti_runtime_probe._package_snapshot",
+        lambda backend: {
+            "graphiti_core": {"available": True, "version": "0.29.2"},
+            "falkordb": {"available": True, "version": "1.6.1"},
+        },
+    )
+
+    class Backend:
+        ok = True
+        status = "healthy"
+        reason = None
+
+        def to_dict(self):
+            return {"ok": True, "status": "healthy"}
+
+    async def fake_sidecar(*args, **kwargs):
+        return Backend()
+
+    async def fail_llm(config):
+        raise httpx.ConnectError("local llama-server unavailable")
+
+    monkeypatch.setattr("graphiti_runtime_probe.probe_graphiti_sidecar", fake_sidecar)
+    monkeypatch.setattr("graphiti_runtime_probe._probe_openai_compatible_llm", fail_llm)
+
+    result = await probe_graphiti_runtime(env={"GRAPHITI_ENABLED": "true"}, include_process_scan=False)
+
+    assert result.status == "llm_unavailable"
+    assert result.acceptable is False
+    assert "local llama-server unavailable" in (result.reason or "")
 
 
 @pytest.mark.asyncio
