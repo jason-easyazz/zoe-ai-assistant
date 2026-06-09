@@ -3128,6 +3128,9 @@ def test_implement_body_includes_intent_gap_fast_path():
     assert "INTENT-GAP IMPLEMENT FAST PATH" in body
     assert "services/zoe-data/intent_router.py" in body
     assert "nearest intent_router tests" in body
+    assert "`_AGENT_CHAT_RE`" in body
+    assert "Open-domain Q&A / creative" in body
+    assert "do not grep `_CALCULATE_`, `_execute_`" in body
     assert "Start editing within 4 tool/model steps after `kanban_show`" in body
     assert body.index("INTENT-GAP IMPLEMENT FAST PATH") < body.index("AUDIT/SMOKE FAST PATH")
 
@@ -3146,6 +3149,9 @@ def test_implement_revision_body_includes_intent_gap_fast_path():
 
     assert "INTENT-GAP IMPLEMENT FAST PATH" in body
     assert "services/zoe-data/intent_router.py" in body
+    assert "`_AGENT_CHAT_RE`" in body
+    assert "Open-domain Q&A / creative" in body
+    assert "do not grep `_CALCULATE_`, `_execute_`" in body
     assert "EXISTING PR REVISION FAST PATH" in body
     assert "After the existing-PR checkout checks succeed" in body
     assert "Start editing within 4 tool/model steps after `kanban_show`" not in body
