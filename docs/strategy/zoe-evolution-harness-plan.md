@@ -366,7 +366,7 @@ These evals should feed the same memory/evolution loop as test results. A failed
 7. Add memory router behind a feature flag.
 8. Add retain-candidate admission through Multica/evidence gates.
 9. Add Zoe capability profiles and discovery/evaluation records.
-10. Add outcome eval traces for task completion, correction handling, continuity, trust, and hardware fit.
+10. Add Zoe observation traces for recall, retain candidates, admission, contradiction, fallback, proposal, verification, outcome evals, and hardware fit.
 11. Clean Zoe main engine only after tests protect chat, memory gating, tool dispatch, capability profiles, and proposal records.
 
 ## Test Strategy
