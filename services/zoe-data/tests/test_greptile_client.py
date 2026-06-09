@@ -33,4 +33,5 @@ def test_normalize_pr_comment_maps_common_fields():
 
 def test_review_is_running_detects_pending_states():
     assert greptile_client.review_is_running({"reviewCompleteness": "in_progress"}) is True
+    assert greptile_client.review_is_running({"codeReviews": [{"status": "REVIEWING_FILES"}]}) is True
     assert greptile_client.review_is_running({"reviewCompleteness": "reviewed"}) is False
