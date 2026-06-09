@@ -17,6 +17,7 @@ from zoe_evolution_proposal import EvolutionSignal, EvolutionSignalType
 
 
 class ObservationTraceType(str, Enum):
+    MEMORY_ROUTE = "memory_route"
     RECALL = "recall"
     RETAIN_CANDIDATE = "retain_candidate"
     ADMISSION = "admission"
