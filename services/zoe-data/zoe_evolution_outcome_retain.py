@@ -42,11 +42,12 @@ async def retain_admitted_evolution_outcome_in_hindsight(
 ) -> EvolutionOutcomeRetainResult:
     """Retain an already-evaluated evolution outcome when admission approves it."""
 
+    resolved_config = config or (client.config if client else None)
     try:
         plan = build_admitted_hindsight_retain_plan(
             admission.request,
             admission.decision,
-            config=config or (client.config if client else None),
+            config=resolved_config,
         )
     except HindsightRetainAdmissionError as exc:
         return EvolutionOutcomeRetainResult(
@@ -56,7 +57,7 @@ async def retain_admitted_evolution_outcome_in_hindsight(
             reason=str(exc),
         )
 
-    execution = await execute_admitted_hindsight_retain_plan(plan, client=client, config=config)
+    execution = await execute_admitted_hindsight_retain_plan(plan, client=client, config=resolved_config)
     return EvolutionOutcomeRetainResult(
         admission=admission,
         execution=execution,

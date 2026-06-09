@@ -122,6 +122,20 @@ async def test_approved_evolution_outcome_does_not_write_when_hindsight_disabled
 
 
 @pytest.mark.asyncio
+async def test_wrapper_returns_non_write_result_for_pending_admission():
+    result = await evaluate_and_retain_evolution_outcome_in_hindsight(
+        _proposal(),
+        (_verification_trace(),),
+        config=HindsightConfig(enabled=True),
+    )
+
+    assert result.admission.decision.status == MemoryAdmissionStatus.PENDING_REVIEW.value
+    assert result.execution is None
+    assert result.retained is False
+    assert "does not allow durable write" in result.reason
+
+
+@pytest.mark.asyncio
 async def test_approved_evolution_outcome_retains_exact_hindsight_payload():
     seen = {}
 
