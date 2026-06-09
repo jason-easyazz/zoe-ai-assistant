@@ -12,14 +12,14 @@ import argparse
 import asyncio
 import json
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "services" / "zoe-data"
-if str(DATA) not in sys.path:
-    sys.path.insert(0, str(DATA))
+sys.path.insert(0, str(DATA))
 
-from hindsight_bakeoff import EVAL_QUERIES, SYNTHETIC_EVENTS, score_recall_response  # noqa: E402
+from hindsight_bakeoff import EVAL_QUERIES, SYNTHETIC_EVENTS, score_recall_response, summarize_bakeoff_scores  # noqa: E402
 from hindsight_memory import HindsightConfig, HindsightMemoryClient  # noqa: E402
 
 
@@ -33,7 +33,7 @@ async def main() -> int:
     args = parser.parse_args()
 
     client = HindsightMemoryClient(HindsightConfig.from_env())
-    output: dict[str, object] = {"status": client.enabled_status(), "retained": [], "operations": [], "scores": []}
+    output: dict[str, object] = {"status": client.enabled_status(), "retained": [], "operations": [], "scores": [], "summary": {}}
 
     if args.retain_synthetic:
         retained = []
@@ -49,6 +49,7 @@ async def main() -> int:
 
     scores = []
     for query in EVAL_QUERIES:
+        started = time.perf_counter()
         response = await client.recall(
             user_id=query.user_id,
             scope=query.scope,
@@ -56,15 +57,23 @@ async def main() -> int:
             budget=query.budget,
             max_tokens=1024,
         )
-        scores.append(score_recall_response(response, query))
+        latency_ms = (time.perf_counter() - started) * 1000
+        score = score_recall_response(response, query)
+        score["latency_ms"] = latency_ms
+        score["bank_id"] = response.get("bank_id")
+        score["enabled"] = response.get("enabled", client.config.enabled)
+        score["reason"] = response.get("reason")
+        scores.append(score)
     output["scores"] = scores
+    output["summary"] = summarize_bakeoff_scores(scores)
 
     if args.json:
         print(json.dumps(output, indent=2, sort_keys=True))
     else:
         print(json.dumps(output["status"], indent=2, sort_keys=True))
+        print(json.dumps(output["summary"], indent=2, sort_keys=True))
         for item in scores:
-            print(f"{item['name']}: score={item['score']:.2f} missing={item['missing']}")
+            print(f"{item['name']}: score={item['score']:.2f} latency_ms={item['latency_ms']:.2f} missing={item['missing']}")
     return 0
 
 
