@@ -7,7 +7,9 @@ memory, but they cannot silently promote it into truth.
 The executable contract lives in
 `services/zoe-data/zoe_memory_admission.py`. Multica/review records can be
 converted into the same inert decision shape by
-`services/zoe-data/zoe_multica_memory_admission.py`.
+`services/zoe-data/zoe_multica_memory_admission.py`. Terminal evolution
+outcome memory candidates can be evaluated by
+`services/zoe-data/zoe_evolution_outcome_admission.py`.
 
 ## Rules
 
@@ -21,10 +23,10 @@ converted into the same inert decision shape by
 
 ## Current Scope
 
-This is a schema, decision contract, and Multica metadata bridge only. It does
-not write to MemoryService, Hindsight, Graphiti, or Multica. Runtime writer
-wiring should happen in a later small PR after this contract is reviewed and
-tested.
+This is a schema, decision contract, Multica metadata bridge, and outcome
+memory admission bridge only. It does not write to MemoryService, Hindsight,
+Graphiti, MemPalace, or Multica. Runtime writer wiring should happen in a
+later small PR after this contract is reviewed and tested.
 
 ## Intended Flow
 
@@ -37,6 +39,11 @@ tested.
 4. `evaluate_memory_admission()` returns whether Zoe may keep the candidate
    pending or write durable/trusted memory.
 5. The runtime writer uses the decision as a gate before touching any backend.
+
+Outcome memory candidates follow the same rule: Zoe may build a pending event
+from a terminal proposal outcome, but durable promotion still requires
+`memory_admission` proposal context, approval refs, and successful
+admission/verification evidence.
 
 ## Multica Bridge Rules
 

@@ -41,6 +41,9 @@ Important non-complete truth:
 - Zoe now has an inert evolution outcome memory builder that converts
   verified, failed, or retired proposal outcomes plus trace evidence into
   pending self-evolution memory candidates.
+- Zoe now has an inert evolution outcome admission bridge that evaluates those
+  pending candidates through memory admission before any durable backend writer
+  can promote them.
 - Zoe now has an inert memory admission contract that keeps retain candidates pending until evidence, successful admission/verification traces, and approval refs allow durable/trusted memory writes.
 - Zoe now has a read-only Pi runtime probe and policy contract; actual Pi execution is still blocked until Node/npm/Pi and local/offline model configuration are present and approved.
 - The deterministic memory router now has a disabled-by-default runtime status gate, optional non-persistent observation trace packets, and a governed non-persistent trace collector; it is not yet used for prompt injection or backend recall in production chat.
@@ -73,11 +76,11 @@ Important non-complete truth:
 | Capability profiles | Complete foundation | `services/zoe-data/zoe_capability_profile.py`, `services/zoe-data/tests/test_zoe_capability_profile.py`, and `docs/architecture/zoe-capability-profiles.md` define the first executable Zoe capability self-model. | Wire profiles into candidate scoring, self-evolution proposals, and cleanup gates. |
 | Candidate scoring | Complete foundation | `services/zoe-data/zoe_candidate_scoring.py`, `services/zoe-data/tests/test_zoe_candidate_scoring.py`, and `docs/architecture/zoe-candidate-scoring.md` define candidate scoring and adoption gates. | Attach candidate scores to self-evolution proposal records before installs or replacements. |
 | Pi runtime harness | Partial | `services/zoe-data/pi_runtime_probe.py`, `scripts/maintenance/pi_runtime_probe.py`, and `docs/architecture/zoe-pi-runtime-harness.md` detect Pi readiness without installing or executing Pi. Current Zoe host lacks Node/npm/Pi. | Create an approved install/runtime proposal with local model evidence before delegated Pi execution. |
-| Observation/evaluation traces | Complete foundation | `services/zoe-data/zoe_observation_trace.py`, `services/zoe-data/zoe_observation_trace_collector.py`, `services/zoe-data/zoe_evolution_outcome_memory.py`, tests, `docs/architecture/zoe-observation-trace-schema.md`, and `docs/architecture/zoe-observation-trace-collector.md` define trace records, non-persistent collection gates, and pending outcome-memory candidates for memory route decisions, recall, retain candidate, admission, contradiction, fallback, proposal, verification, outcome eval, and hardware-budget events. | Wire runtime callers through the collector, then route outcome memory candidates through memory admission before any durable promotion. |
-| Memory admission governance | Complete foundation | `services/zoe-data/zoe_memory_admission.py`, `services/zoe-data/hindsight_retain_candidates.py`, `services/zoe-data/zoe_multica_memory_admission.py`, tests, and `docs/architecture/zoe-memory-admission-gates.md` define evidence, trace, approval, graph, Multica review metadata, and self-evolution proposal gates before durable memory writes; Hindsight retain candidates and Multica review records can now build/evaluate admission requests before promotion. | Route future Hindsight, MemPalace, Graphiti, and outcome-memory durable writers through admission before any backend write. |
+| Observation/evaluation traces | Complete foundation | `services/zoe-data/zoe_observation_trace.py`, `services/zoe-data/zoe_observation_trace_collector.py`, `services/zoe-data/zoe_evolution_outcome_memory.py`, tests, `docs/architecture/zoe-observation-trace-schema.md`, and `docs/architecture/zoe-observation-trace-collector.md` define trace records, non-persistent collection gates, and pending outcome-memory candidates for memory route decisions, recall, retain candidate, admission, contradiction, fallback, proposal, verification, outcome eval, and hardware-budget events. | Wire runtime callers through the collector, then pass outcome memory admission decisions into durable writer gates. |
+| Memory admission governance | Complete foundation | `services/zoe-data/zoe_memory_admission.py`, `services/zoe-data/hindsight_retain_candidates.py`, `services/zoe-data/zoe_multica_memory_admission.py`, `services/zoe-data/zoe_evolution_outcome_admission.py`, tests, and `docs/architecture/zoe-memory-admission-gates.md` define evidence, trace, approval, graph, Multica review metadata, outcome memory admission, and self-evolution proposal gates before durable memory writes; Hindsight retain candidates, Multica review records, and terminal evolution outcomes can now build/evaluate admission requests before promotion. | Route future Hindsight, MemPalace, Graphiti, and outcome-memory durable writers through admission decisions before any backend write. |
 | Multica evidence gates | Partial | Implement completion now requires PR evidence for code/default profiles, memory admission has a tested decision contract, Multica admission requires matching Zoe proposal contract markers before dispatching evolution-proposal tickets, execute/promote proposal tickets must pass the execution approval gate before dispatch, and Multica memory review metadata can be evaluated as an inert admission decision. | Capture verified outcomes back into memory/capability trust, then wire runtime durable writers through memory admission decisions. |
 | Self-evolution proposal records | Runtime writers wired | `services/zoe-data/zoe_evolution_proposal.py`, `services/zoe-data/zoe_evolution_proposal_adapter.py`, tests, and `docs/architecture/zoe-evolution-proposal-contract.md` define structured Notice -> Explain -> Search -> Evaluate -> Propose records. MCP proposal creation, nightly NOTICE proposals, user-frustration proposals, and explicit user issue reports now store validated contract snapshots while preserving the legacy row shape and MEASURE target patterns; Multica tickets receive compact contract markers for admission. | Require approval evidence before installs/replacements and connect verified outcomes back to memory/capability trust. |
-| Self-evolution loop | Partial | Multica, pipeline evidence, Greploop, Greptile, Hermes, worktree bootstrap, candidate scoring, proposal contract, contract-aware Multica admission, live execution approval gating for execute/promote proposal tickets, and inert outcome-memory candidate construction exist. | Route verified/failed/retired outcome candidates through memory admission, then update capability trust only after approved durable promotion. |
+| Self-evolution loop | Partial | Multica, pipeline evidence, Greploop, Greptile, Hermes, worktree bootstrap, candidate scoring, proposal contract, contract-aware Multica admission, live execution approval gating for execute/promote proposal tickets, inert outcome-memory candidate construction, and outcome admission decisions exist. | Update capability trust only after approved durable promotion and verified runtime writer evidence. |
 | Main engine cleanup | Deferred | `zoe_agent.py` remains large and active. | Start only after inventories and chat/memory/tool dispatch tests are strong enough to prevent regressions. |
 
 ## Missing Work By Capability
@@ -202,11 +205,13 @@ Keep each pull request small enough for Greptile and Zoe verification.
    - `zoe_memory_router_runtime.py` and `/api/system/memory-router/status` expose disabled-by-default route decisions without prompt injection or writes.
    - Next: wire prompt-time recall in fallback-safe mode with latency timeout and compact cited memory packets.
 8. Memory admission governance.
-   - Status: complete foundation with Multica review bridge.
+   - Status: complete foundation with Multica review and outcome memory bridges.
    - `zoe_memory_admission.py` now gates durable memory writes on approval refs, successful admission/verification traces, graph edge requirements, user/scope matching, and proposal context for self-evolution memories.
    - Hindsight retain candidates can now build and evaluate admission requests before any durable promotion.
    - Multica memory review metadata can now be converted into the same inert decision: missing approval stays pending, explicit approval creates approval evidence, and blocked reviews fail closed.
-   - Next: route future Hindsight, MemPalace, and Graphiti durable writers through the decision before backend writes.
+   - Terminal proposal outcomes can now be converted into pending memory
+     candidates and evaluated through admission before any durable promotion.
+   - Next: route future Hindsight, MemPalace, Graphiti, and outcome-memory durable writers through admission decisions before backend writes.
 9. Self-evolution proposal records.
     - Status: foundation complete and live proposal writers now emit validated contract snapshots into `target_patterns`; Multica admission requires matching contract markers before dispatching evolution-proposal tickets.
     - Next: require approval evidence before installs/replacements and connect verified outcomes back to memory/capability trust.
@@ -228,6 +233,8 @@ Keep each pull request small enough for Greptile and Zoe verification.
     - Convert recurring failures into Notice records.
     - Convert terminal proposal outcomes into pending self-evolution memory
       candidates, not durable trusted facts.
+    - Evaluate terminal outcome candidates through memory admission before any
+      backend writer can promote them.
 14. Main engine cleanup.
     - Split only protected, well-understood areas in `zoe_agent.py`.
     - Remove duplicate or retired memory paths only after inventory and tests.

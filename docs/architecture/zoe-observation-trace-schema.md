@@ -6,7 +6,9 @@ Zoe needs proof that memory and self-evolution are helping before those systems 
 
 This is an executable trace contract, not a persistence layer. Terminal
 self-evolution proposal traces can be converted into pending memory event
-candidates by `services/zoe-data/zoe_evolution_outcome_memory.py`.
+candidates by `services/zoe-data/zoe_evolution_outcome_memory.py`, then
+evaluated through memory admission by
+`services/zoe-data/zoe_evolution_outcome_admission.py`.
 
 ## Trace Types
 
@@ -34,6 +36,8 @@ candidates by `services/zoe-data/zoe_evolution_outcome_memory.py`.
 - Verified, failed, or retired proposal outcomes can become pending
   self-evolution memory candidates only after matching verification or outcome
   evidence exists.
+- Outcome memory candidates must pass memory admission before any durable
+  backend promotion is allowed.
 
 ## Current Scope
 
