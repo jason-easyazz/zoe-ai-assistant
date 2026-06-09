@@ -234,6 +234,8 @@
     function showError(message) {
         const text = message || 'Something needs attention.';
         setStatus(text);
+        const transportNotice = /voice disconnected|transport unavailable|livekit unavailable/i.test(text);
+        if (transportNotice && (document.body.classList.contains('sky-empty') || currentUtterance)) return;
         if (!document.body.classList.contains('sky-empty')) {
             const previous = currentUtterance;
             els.copy.textContent = 'Notice: ' + text;
