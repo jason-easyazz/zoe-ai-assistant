@@ -1024,7 +1024,7 @@ class KanbanAdapter:
             if "git push -u origin HEAD" not in command:
                 continue
             if re.search(r"\[exit\s+[1-9]\d*\]", command, re.IGNORECASE):
-                return False
+                continue
             return True
         return False
 
@@ -1120,6 +1120,15 @@ class KanbanAdapter:
                     )
                 ).strip()
             except KanbanCLIError:
+                pr_url = ""
+            if pr_url and not _GITHUB_PR_URL_RE.search(pr_url):
+                logger.warning(
+                    "kanban_adapter: gh pr view returned no PR URL for recovered task %s: %s",
+                    task_id,
+                    pr_url,
+                )
+                pr_url = ""
+            if not pr_url:
                 try:
                     upstream = (
                         await self._run_worktree_command(

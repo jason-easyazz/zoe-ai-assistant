@@ -1451,6 +1451,78 @@ def test_pushed_branch_recovery_allows_successful_pr_create_without_complete(tmp
     assert ka.KanbanAdapter()._pushed_branch_without_pr_handoff("t_impl") is True
 
 
+def test_pushed_branch_recovery_scans_past_failed_push_retry(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 💻 $         git push -u origin HEAD  2.1s [exit 1]\n"
+        "  ┊ 💻 $         git push -u origin HEAD  2.4s\n"
+        "⚡ Interrupted during API call.\n",
+        encoding="utf-8",
+    )
+
+    assert ka.KanbanAdapter()._pushed_branch_without_pr_handoff("t_impl") is True
+
+
+@pytest.mark.asyncio
+async def test_poll_creates_pr_when_pr_view_returns_no_url(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_implement.log").write_text(
+        "Query: work kanban task t_implement\n"
+        "  ┊ 💻 $         git push -u origin HEAD  2.1s\n"
+        "⚡ Interrupted during API call.\n",
+        encoding="utf-8",
+    )
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    rows = [
+        _row(
+            "implement",
+            "blocked",
+            chain_version="v4",
+            workspace_path=str(worktree),
+            block_reason="worker interrupted after push",
+        )
+    ]
+
+    class _RecoverAdapter(_FakeAdapter):
+        def __init__(self):
+            super().__init__(
+                list_rows=rows,
+                show_map={
+                    "t_implement": {
+                        "task": {"workspace_path": str(worktree)},
+                        "latest_summary": "",
+                        "comments": [],
+                    }
+                },
+            )
+            self.worktree_commands = []
+
+        async def _run_worktree_command(self, args, *, cwd, timeout=45.0):
+            self.worktree_commands.append(args)
+            if args[:3] == ["git", "branch", "--show-current"]:
+                return "wt/t_implement"
+            if args[:3] == ["git", "rev-parse", "--abbrev-ref"]:
+                return "origin/main"
+            if args[:3] == ["gh", "pr", "view"]:
+                return "null"
+            if args[:3] == ["gh", "pr", "create"]:
+                return "https://github.com/jason-easyazz/zoe-ai-assistant/pull/997"
+            raise AssertionError(args)
+
+    a = _RecoverAdapter()
+    out = await a.poll("multica:uuid-9")
+
+    assert out["phases"]["implement"] == "done"
+    assert out["pr_url"] == "https://github.com/jason-easyazz/zoe-ai-assistant/pull/997"
+    assert any(cmd[:3] == ["gh", "pr", "create"] for cmd in a.worktree_commands)
+
+
 @pytest.mark.asyncio
 async def test_poll_partial_chain_is_redispatchable():
     # closeout phase never got created (e.g. CLI error mid-chain): must report
