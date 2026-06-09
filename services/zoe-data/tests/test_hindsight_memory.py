@@ -291,6 +291,51 @@ async def test_retain_posts_to_hindsight_memories_endpoint():
 
 
 @pytest.mark.asyncio
+async def test_retain_payload_posts_pre_admitted_payload_without_auto_retain():
+    seen = {}
+    payload = {"async": False, "items": (event_to_hindsight_item(_event()),)}
+
+    async def handler(request):
+        seen["path"] = request.url.path
+        seen["payload"] = json.loads(request.read().decode())
+        return httpx.Response(200, json={"operation_id": "op_123"})
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        client = HindsightMemoryClient(HindsightConfig(enabled=True, auto_retain=False), client=http_client)
+        result = await client.retain_payload(
+            bank_id="zoe-project-jason-b",
+            payload=payload,
+            event_id="mem_evt_test",
+        )
+
+    assert seen["path"] == "/v1/default/banks/zoe-project-jason-b/memories"
+    assert seen["payload"]["async"] is False
+    assert seen["payload"]["items"][0]["document_id"] == "mem_evt_test"
+    assert result["retained"] is True
+    assert result["event_id"] == "mem_evt_test"
+
+
+@pytest.mark.asyncio
+async def test_retain_payload_refuses_when_disabled():
+    client = HindsightMemoryClient(HindsightConfig(enabled=False))
+
+    result = await client.retain_payload(
+        bank_id="zoe-project-jason-b",
+        payload={"async": True, "items": []},
+        event_id="mem_evt_test",
+    )
+
+    assert result == {
+        "enabled": False,
+        "retained": False,
+        "reason": "disabled",
+        "bank_id": "zoe-project-jason-b",
+        "event_id": "mem_evt_test",
+    }
+
+
+@pytest.mark.asyncio
 async def test_operation_status_gets_hindsight_operation_endpoint():
     seen = {}
 
