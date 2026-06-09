@@ -11,7 +11,9 @@ This is the foundation for governed self-evolution. Zoe should look up existing 
 Files:
 
 - `services/zoe-data/zoe_capability_profile.py`
+- `services/zoe-data/zoe_capability_trust_update.py`
 - `services/zoe-data/tests/test_zoe_capability_profile.py`
+- `services/zoe-data/tests/test_zoe_capability_trust_update.py`
 
 Initial covered profiles:
 
@@ -38,6 +40,12 @@ Privileged profiles must also include explicit approval requirements.
 
 Experimental profiles can exist before full proof, but they must not be promoted to trusted without measurements and review.
 
+Capability trust updates are review candidates, not automatic profile writes.
+`zoe_capability_trust_update.py` can propose trust updates only after a
+verified self-evolution outcome was admitted and retained through Hindsight.
+Pending, blocked, failed, or unretained outcomes produce blockers instead of
+profile mutations.
+
 ## Next Use
 
 The next self-evolution slices should use these profiles to:
@@ -47,4 +55,5 @@ The next self-evolution slices should use these profiles to:
 - run `scripts/maintenance/pi_runtime_probe.py --json` before any Pi install or delegated execution proposal;
 - block privileged execution when profile approval rules are unmet;
 - add outcome eval traces against profile IDs;
+- review retained outcome trust-update candidates before profile promotion;
 - require non-use, replacement, or failure evidence before retirement.
