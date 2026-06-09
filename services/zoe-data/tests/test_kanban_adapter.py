@@ -3716,6 +3716,106 @@ def test_implement_body_adds_code_audit_fast_path_for_actionable_bug():
     assert body.index("CODE-AUDIT FAST PATH") < body.index("Graphify map")
 
 
+def test_implement_body_points_nginx_security_headers_to_helper():
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {
+            "id": "uuid-code-audit-nginx",
+            "identifier": "ZOE-5355",
+            "title": "nginx.conf missing all HTTP security headers",
+            "metadata": {
+                "zoe_kind": "bug",
+                "source": "code_audit_p0_security",
+                "acceptance_criteria": [
+                    "Add CSP, X-Frame-Options, HSTS, nosniff, Referrer-Policy, and Permissions-Policy"
+                ],
+            },
+        },
+        "ZOE-5355",
+    )
+
+    assert "do not hand-patch repeated `server {}` blocks" in body
+    assert "tools/audit/ensure_nginx_security_headers.py" in body
+    assert "--check" in body
+    assert body.index("ensure_nginx_security_headers.py") < body.index("After `kanban_show`")
+
+
+def test_implement_body_points_nginx_named_headers_to_helper():
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {
+            "id": "uuid-code-audit-nginx-csp",
+            "identifier": "ZOE-5356",
+            "title": "nginx.conf: add X-Frame-Options, CSP, and HSTS",
+            "metadata": {
+                "zoe_kind": "bug",
+                "source": "code_audit_p0_security",
+                "acceptance_criteria": ["Add Content-Security-Policy and Strict-Transport-Security"],
+            },
+        },
+        "ZOE-5356",
+    )
+
+    assert "tools/audit/ensure_nginx_security_headers.py" in body
+
+
+def test_implement_body_points_nginx_header_terms_to_helper_without_p0_source():
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {
+            "id": "uuid-code-audit-nginx-header-term",
+            "identifier": "ZOE-5357",
+            "title": "nginx.conf: add Content-Security-Policy",
+            "metadata": {
+                "zoe_kind": "bug",
+                "source": "code_audit_scan",
+                "acceptance_criteria": ["Add Content-Security-Policy"],
+            },
+        },
+        "ZOE-5357",
+    )
+
+    assert "tools/audit/ensure_nginx_security_headers.py" in body
+
+
+def test_implement_body_points_nginx_security_ticket_without_conf_suffix_to_helper():
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {
+            "id": "uuid-code-audit-nginx-term",
+            "identifier": "ZOE-5358",
+            "title": "nginx: missing HSTS and CSP",
+            "metadata": {
+                "zoe_kind": "bug",
+                "source": "code_audit_scan",
+                "acceptance_criteria": ["Add HSTS and CSP"],
+            },
+        },
+        "ZOE-5358",
+    )
+
+    assert "tools/audit/ensure_nginx_security_headers.py" in body
+
+
+def test_implement_body_omits_nginx_header_helper_for_non_header_ticket():
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {
+            "id": "uuid-code-audit-nginx-cipher",
+            "identifier": "ZOE-5359",
+            "title": "nginx: tighten TLS cipher selection",
+            "metadata": {
+                "zoe_kind": "bug",
+                "source": "code_audit_p0_security",
+                "acceptance_criteria": ["Disable weak TLS ciphers"],
+            },
+        },
+        "ZOE-5359",
+    )
+
+    assert "tools/audit/ensure_nginx_security_headers.py" not in body
+
+
 def test_implement_body_omits_code_audit_fast_path_without_acceptance_criteria():
     body = ka.KanbanAdapter()._build_body(
         "implement",
