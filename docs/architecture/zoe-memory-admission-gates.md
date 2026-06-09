@@ -12,7 +12,9 @@ outcome memory candidates can be evaluated by
 `services/zoe-data/zoe_evolution_outcome_admission.py`. Hindsight retain
 payloads can be planned by `services/zoe-data/hindsight_retain_candidates.py`
 and executed by `services/zoe-data/hindsight_retain_executor.py` only after
-admission allows the Hindsight backend.
+admission allows the Hindsight backend. Verified evolution outcomes can pass
+through `services/zoe-data/zoe_evolution_outcome_retain.py` to that same
+admitted Hindsight executor.
 
 ## Rules
 
@@ -27,11 +29,12 @@ admission allows the Hindsight backend.
 ## Current Scope
 
 This is a schema, decision contract, Multica metadata bridge, outcome memory
-admission bridge, and Hindsight admitted-executor bridge. Hindsight can execute
-an admitted retain plan, but production chat still does not auto-write to
-MemoryService, Hindsight, Graphiti, MemPalace, or Multica. Additional runtime
-writers should be wired in later small PRs after each backend path is reviewed
-and tested.
+admission bridge, Hindsight admitted-executor bridge, and admitted Hindsight
+outcome-retain bridge. Hindsight can execute admitted retain plans, including
+approved evolution outcome memories, but production chat still does not
+auto-write to MemoryService, Hindsight, Graphiti, MemPalace, or Multica.
+Additional runtime writers should be wired in later small PRs after each
+backend path is reviewed and tested.
 
 ## Intended Flow
 
@@ -48,7 +51,9 @@ and tested.
 Outcome memory candidates follow the same rule: Zoe may build a pending event
 from a terminal proposal outcome, but durable promotion still requires
 `memory_admission` proposal context, approval refs, and successful
-admission/verification evidence.
+admission/verification evidence. Hindsight outcome retain execution reuses the
+same admitted retain-plan gate and returns a structured non-write result when
+admission is pending or blocked.
 
 Hindsight retain plans follow the same rule: Zoe may create pending retain
 candidates for review, but the sidecar retain payload cannot be built or
