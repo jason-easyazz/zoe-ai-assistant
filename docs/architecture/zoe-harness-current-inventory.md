@@ -24,7 +24,7 @@ Source basis:
 | Zoe agent | `services/zoe-data/zoe_agent.py` | Gemma-backed agent loop, prompt/tool catalog, MemPalace wrappers, web/research tools, escalation tools. | Active; large and cleanup-sensitive. |
 | UI | `services/zoe-ui/` | Browser/touch/user interface. | Active. |
 | Auth | `services/zoe-auth/` and `services/zoe-data/auth.py` | Authentication and API user context. | Active; critical. |
-| Voice | `services/zoe-data/routers/voice_tts.py`, `services/zoe-data/routers/voice_livekit.py` | Voice/TTS/live voice routing. | Active. |
+| Voice | `services/zoe-data/routers/voice_tts.py`, `services/zoe-data/routers/voice_livekit.py`, `services/zoe-data/main.py` `/ws/voice/` | Voice/TTS/live voice routing plus the direct real-time voice WebSocket. | Active. |
 | Memory API | `services/zoe-data/routers/memories.py` | Memory list, review, search, export, opt-out, and forget endpoints. | Active. |
 | People/notes/journal | `services/zoe-data/routers/people.py`, `services/zoe-data/routers/notes.py`, `services/zoe-data/routers/journal.py` | Domain routers that can write derived memories through `MemoryService`. | Active. |
 | Multica | `services/zoe-data/multica_*.py`, `services/zoe-data/pipeline_*.py` | Governed execution, phase lanes, evidence gates, and proposal workflow. | Active. |
@@ -70,7 +70,9 @@ Source basis:
 - `voice_livekit_router` when the import succeeds
 
 Cleanup implication: broad router reshaping should wait until endpoint smoke tests
-cover chat, memory, voice, system, auth, and Multica-facing routes.
+cover chat, memory, voice, system, auth, and Multica-facing routes. `main.py`
+also owns direct WebSocket surfaces such as `/ws/voice/`, so cleanup cannot
+assume every live endpoint is represented by a mounted router.
 
 ## Agent Tool Catalog
 
