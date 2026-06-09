@@ -113,3 +113,23 @@ async def test_execute_admitted_hindsight_retain_plan_reports_sidecar_rejection(
     assert result.retained is False
     assert result.reason == "sidecar_rejected"
     assert result.sidecar_result["error"] == "duplicate document_id"
+
+
+@pytest.mark.asyncio
+async def test_execute_admitted_hindsight_retain_plan_returns_structured_sidecar_error():
+    async def handler(request):
+        return httpx.Response(500, json={"error": "sidecar unavailable"})
+
+    transport = httpx.MockTransport(handler)
+    config = HindsightConfig(enabled=True)
+    plan = _plan(config=config)
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        client = HindsightMemoryClient(config, client=http_client)
+        result = await execute_admitted_hindsight_retain_plan(plan, client=client)
+
+    assert result.attempted is True
+    assert result.retained is False
+    assert result.reason == "sidecar_error"
+    assert result.sidecar_result["bank_id"] == "zoe-personal-jason"
+    assert result.sidecar_result["event_id"] == "mem_evt_admitted_retain"
+    assert "Hindsight request failed" in result.sidecar_result["error"]

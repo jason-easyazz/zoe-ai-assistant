@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from hindsight_memory import HindsightConfig, HindsightMemoryClient
+from hindsight_memory import HindsightConfig, HindsightMemoryClient, HindsightMemoryError
 from hindsight_retain_candidates import HindsightAdmittedRetainPlan
 
 
@@ -51,11 +51,21 @@ async def execute_admitted_hindsight_retain_plan(
     """
 
     hindsight_client = client or HindsightMemoryClient(config)
-    result = await hindsight_client.retain_payload(
-        bank_id=plan.bank_id,
-        payload=plan.payload,
-        event_id=plan.event_id,
-    )
+    try:
+        result = await hindsight_client.retain_payload(
+            bank_id=plan.bank_id,
+            payload=plan.payload,
+            event_id=plan.event_id,
+        )
+    except HindsightMemoryError as exc:
+        result = {
+            "enabled": hindsight_client.config.enabled,
+            "retained": False,
+            "reason": "sidecar_error",
+            "error": str(exc),
+            "bank_id": plan.bank_id,
+            "event_id": plan.event_id,
+        }
     retained = bool(result.get("retained"))
     reason = _execution_reason(result, retained)
     return HindsightRetainExecutionResult(
