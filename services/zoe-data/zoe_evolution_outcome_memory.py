@@ -53,6 +53,10 @@ def build_evolution_outcome_memory_event(
 
     for trace in traces:
         trace.validate()
+        if trace.subject_id is not None and trace.subject_id != proposal.proposal_id:
+            raise EvolutionOutcomeMemoryError(
+                f"{proposal.proposal_id}: trace {trace.trace_id} subject_id does not match proposal_id"
+            )
 
     resolved_user_id = user_id or _proposal_user_id(proposal)
     if not resolved_user_id:

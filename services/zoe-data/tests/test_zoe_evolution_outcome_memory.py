@@ -216,6 +216,14 @@ def test_non_terminal_proposal_cannot_create_outcome_memory():
         )
 
 
+def test_trace_subject_id_must_match_proposal_when_present():
+    with pytest.raises(EvolutionOutcomeMemoryError, match="subject_id does not match"):
+        build_evolution_outcome_memory_event(
+            _proposal(),
+            (_verification_trace(subject_id="other_proposal"),),
+        )
+
+
 def test_verified_proposal_requires_successful_verification_trace():
     with pytest.raises(EvolutionOutcomeMemoryError, match="successful verification trace"):
         build_evolution_outcome_memory_event(
