@@ -113,34 +113,37 @@ def build_capability_trust_update_plan(
     source_event_id = outcome_retain.admission.candidate.event_id
     retained_backend = outcome_retain.execution.bank_id or "hindsight"
     evidence_refs = _evidence_refs(outcome_retain)
-    candidates = tuple(
-        CapabilityTrustUpdateCandidate(
-            capability_id=capability_id,
-            proposal_id=proposal.proposal_id,
-            proposal_candidate_id=proposal.candidate.candidate_id,
-            current_trust_level=profile_index[capability_id].trust_level if capability_id in profile_index else "unknown",
-            proposed_trust_level=_proposed_trust_level(
-                profile_index[capability_id].trust_level if capability_id in profile_index else "unknown"
-            ),
-            reason=(
-                f"Verified proposal {proposal.proposal_id} was admitted and retained "
-                f"for capability {capability_id}."
-            ),
-            evidence_refs=evidence_refs,
-            source_event_id=source_event_id,
-            source_admission_id=outcome_retain.admission.request.admission_id,
-            retained_backend=retained_backend,
-            metadata={
-                "source": TRUST_UPDATE_SOURCE,
-                "proposal_status": proposal.status,
-                "outcome_reason": outcome_retain.reason,
-                "execution_attempted": outcome_retain.execution.attempted,
-                "retained": outcome_retain.retained,
-            },
+    candidates: list[CapabilityTrustUpdateCandidate] = []
+    for capability_id in proposal.affected_capabilities:
+        current_trust_level = profile_index[capability_id].trust_level if capability_id in profile_index else "unknown"
+        proposed_trust_level = _proposed_trust_level(current_trust_level)
+        if proposed_trust_level == current_trust_level:
+            continue
+        candidates.append(
+            CapabilityTrustUpdateCandidate(
+                capability_id=capability_id,
+                proposal_id=proposal.proposal_id,
+                proposal_candidate_id=proposal.candidate.candidate_id,
+                current_trust_level=current_trust_level,
+                proposed_trust_level=proposed_trust_level,
+                reason=(
+                    f"Verified proposal {proposal.proposal_id} was admitted and retained "
+                    f"for capability {capability_id}."
+                ),
+                evidence_refs=evidence_refs,
+                source_event_id=source_event_id,
+                source_admission_id=outcome_retain.admission.request.admission_id,
+                retained_backend=retained_backend,
+                metadata={
+                    "source": TRUST_UPDATE_SOURCE,
+                    "proposal_status": proposal.status,
+                    "outcome_reason": outcome_retain.reason,
+                    "execution_attempted": outcome_retain.execution.attempted,
+                    "retained": outcome_retain.retained,
+                },
+            )
         )
-        for capability_id in proposal.affected_capabilities
-    )
-    return CapabilityTrustUpdatePlan(candidates=candidates)
+    return CapabilityTrustUpdatePlan(candidates=tuple(candidates))
 
 
 def _trust_update_blockers(outcome_retain: EvolutionOutcomeRetainResult) -> tuple[str, ...]:

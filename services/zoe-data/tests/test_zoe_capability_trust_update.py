@@ -180,7 +180,7 @@ async def test_capability_trust_update_metadata_is_read_only_and_serializable():
 
 
 @pytest.mark.asyncio
-async def test_capability_trust_update_does_not_demote_privileged_capability():
+async def test_capability_trust_update_skips_privileged_noop_candidate():
     proposal = build_evolution_proposal(
         proposal_id="proposal_privileged_trust",
         title="Keep Multica privilege intact",
@@ -201,9 +201,34 @@ async def test_capability_trust_update_does_not_demote_privileged_capability():
 
     plan = build_capability_trust_update_plan(outcome)
 
-    assert plan.allowed_to_propose is True
-    assert plan.candidates[0].current_trust_level == "privileged"
-    assert plan.candidates[0].proposed_trust_level == "privileged"
+    assert plan.allowed_to_propose is False
+    assert plan.candidates == ()
+
+
+@pytest.mark.asyncio
+async def test_capability_trust_update_skips_trusted_noop_candidate():
+    proposal = build_evolution_proposal(
+        proposal_id="proposal_trusted_noop",
+        title="Avoid trusted trust no-op",
+        problem_statement="Already trusted capabilities should not create no-op trust candidates.",
+        signals=(_signal(),),
+        candidate=_candidate(),
+        affected_capabilities=("chat_router",),
+        autonomy_class=TrustAutonomyClass.PROMOTE.value,
+        risk=ProposalRisk.MEDIUM.value,
+        expected_benefit="Reviewers only see meaningful trust promotions.",
+        verification_plan=("pytest:test_zoe_capability_trust_update",),
+        rollback_plan="Do not change chat router trust.",
+        approval_required=("pr_evidence", "memory_admission"),
+        status=ProposalStatus.VERIFIED.value,
+    )
+    trace = _trace(subject_id="proposal_trusted_noop")
+    outcome, _seen = await _retained_outcome(proposal=proposal, trace=trace)
+
+    plan = build_capability_trust_update_plan(outcome)
+
+    assert plan.allowed_to_propose is False
+    assert plan.candidates == ()
 
 
 def test_capability_trust_update_candidate_validates_trust_levels():
