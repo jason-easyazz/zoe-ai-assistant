@@ -9,7 +9,9 @@ The executable contract lives in
 converted into the same inert decision shape by
 `services/zoe-data/zoe_multica_memory_admission.py`. Terminal evolution
 outcome memory candidates can be evaluated by
-`services/zoe-data/zoe_evolution_outcome_admission.py`.
+`services/zoe-data/zoe_evolution_outcome_admission.py`. Hindsight retain
+payloads can be planned by `services/zoe-data/hindsight_retain_candidates.py`
+only after admission allows the Hindsight backend.
 
 ## Rules
 
@@ -24,9 +26,10 @@ outcome memory candidates can be evaluated by
 ## Current Scope
 
 This is a schema, decision contract, Multica metadata bridge, and outcome
-memory admission bridge only. It does not write to MemoryService, Hindsight,
-Graphiti, MemPalace, or Multica. Runtime writer wiring should happen in a
-later small PR after this contract is reviewed and tested.
+memory admission bridge only. Hindsight can build an admitted retain plan, but
+this contract still does not write to MemoryService, Hindsight, Graphiti,
+MemPalace, or Multica. Runtime writer wiring should happen in a later small PR
+after this contract is reviewed and tested.
 
 ## Intended Flow
 
@@ -44,6 +47,10 @@ Outcome memory candidates follow the same rule: Zoe may build a pending event
 from a terminal proposal outcome, but durable promotion still requires
 `memory_admission` proposal context, approval refs, and successful
 admission/verification evidence.
+
+Hindsight retain plans follow the same rule: Zoe may create pending retain
+candidates for review, but the sidecar retain payload cannot be built unless a
+matching admission decision allows durable writes to the Hindsight backend.
 
 ## Multica Bridge Rules
 

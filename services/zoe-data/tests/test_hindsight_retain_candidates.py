@@ -2,12 +2,15 @@ import pytest
 
 from hindsight_retain_candidates import (
     HINDSIGHT_RETAIN_SOURCE,
+    HindsightRetainAdmissionError,
+    build_admitted_hindsight_retain_plan,
     build_hindsight_retain_admission_request,
     build_hindsight_retain_candidate,
     create_hindsight_retain_candidate,
     evaluate_hindsight_retain_candidate_admission,
 )
-from zoe_memory_admission import MemoryAdmissionError, MemoryAdmissionStatus
+from hindsight_memory import HindsightConfig
+from zoe_memory_admission import MemoryAdmissionDecision, MemoryAdmissionError, MemoryAdmissionStatus
 from zoe_memory_contract import (
     MemoryEvent,
     MemoryEventType,
@@ -148,6 +151,122 @@ def test_hindsight_retain_candidate_admission_can_approve_hindsight_with_evidenc
     assert "chat:offline-memory" in decision.evidence_refs
     assert "multica:retain-review" in decision.evidence_refs
     assert "approval:multica:retain-review" in decision.evidence_refs
+
+
+def test_admitted_hindsight_retain_plan_requires_approved_hindsight_decision():
+    request = build_hindsight_retain_admission_request(
+        _plain_event(),
+        observation_traces=(_admission_trace(scope=MemoryScope.PERSONAL.value),),
+        approval_refs=("approval:multica:retain-review",),
+    )
+    decision = evaluate_hindsight_retain_candidate_admission(
+        _plain_event(),
+        observation_traces=(_admission_trace(scope=MemoryScope.PERSONAL.value),),
+        approval_refs=("approval:multica:retain-review",),
+    )
+
+    plan = build_admitted_hindsight_retain_plan(
+        request,
+        decision,
+        config=HindsightConfig(bank_prefix="zoe-test", async_retain=False),
+    )
+
+    payload = plan.to_dict()
+    assert payload["admission_id"] == "admit_hindsight_retain_mem_evt_hindsight_pref"
+    assert payload["event_id"] == "mem_evt_hindsight_pref"
+    assert payload["bank_id"] == "zoe-test-personal-jason"
+    assert payload["payload"]["async"] is False
+    assert payload["payload"]["items"][0]["document_id"] == "mem_evt_hindsight_pref"
+    assert payload["payload"]["items"][0]["content"] == "Jason prefers Zoe memory to stay offline-only."
+    assert "approval:multica:retain-review" in payload["evidence_refs"]
+
+
+def test_admitted_hindsight_retain_plan_payload_is_immutable():
+    request = build_hindsight_retain_admission_request(
+        _plain_event(),
+        observation_traces=(_admission_trace(scope=MemoryScope.PERSONAL.value),),
+        approval_refs=("approval:multica:retain-review",),
+    )
+    decision = evaluate_hindsight_retain_candidate_admission(
+        _plain_event(),
+        observation_traces=(_admission_trace(scope=MemoryScope.PERSONAL.value),),
+        approval_refs=("approval:multica:retain-review",),
+    )
+
+    plan = build_admitted_hindsight_retain_plan(request, decision)
+
+    with pytest.raises(TypeError):
+        plan.payload["items"] = ()
+    assert isinstance(plan.to_dict()["payload"]["items"], list)
+
+
+def test_admitted_hindsight_retain_plan_defaults_to_env_config(monkeypatch):
+    monkeypatch.setenv("HINDSIGHT_ENABLED", "false")
+    monkeypatch.setenv("HINDSIGHT_BANK_PREFIX", "zoe-env")
+    monkeypatch.setenv("HINDSIGHT_ASYNC_RETAIN", "false")
+    request = build_hindsight_retain_admission_request(
+        _plain_event(),
+        observation_traces=(_admission_trace(scope=MemoryScope.PERSONAL.value),),
+        approval_refs=("approval:multica:retain-review",),
+    )
+    decision = evaluate_hindsight_retain_candidate_admission(
+        _plain_event(),
+        observation_traces=(_admission_trace(scope=MemoryScope.PERSONAL.value),),
+        approval_refs=("approval:multica:retain-review",),
+    )
+
+    plan = build_admitted_hindsight_retain_plan(request, decision)
+
+    assert plan.bank_id == "zoe-env-personal-jason"
+    assert plan.payload["async"] is False
+
+
+def test_admitted_hindsight_retain_plan_rejects_pending_decision():
+    request = build_hindsight_retain_admission_request(_plain_event())
+    decision = evaluate_hindsight_retain_candidate_admission(_plain_event())
+
+    with pytest.raises(HindsightRetainAdmissionError, match="does not allow durable write"):
+        build_admitted_hindsight_retain_plan(request, decision)
+
+
+def test_admitted_hindsight_retain_plan_rejects_wrong_backend():
+    event = _event()
+    request = build_hindsight_retain_admission_request(
+        event,
+        target_backends=(MemoryBackend.GRAPHITI.value,),
+        observation_traces=(_admission_trace(),),
+        approval_refs=("approval:multica:retain-review",),
+    )
+    decision = evaluate_hindsight_retain_candidate_admission(
+        event,
+        target_backends=(MemoryBackend.GRAPHITI.value,),
+        observation_traces=(_admission_trace(),),
+        approval_refs=("approval:multica:retain-review",),
+    )
+
+    with pytest.raises(HindsightRetainAdmissionError, match="does not target Hindsight"):
+        build_admitted_hindsight_retain_plan(request, decision)
+
+
+def test_admitted_hindsight_retain_plan_rejects_mismatched_decision():
+    request = build_hindsight_retain_admission_request(
+        _plain_event(),
+        observation_traces=(_admission_trace(scope=MemoryScope.PERSONAL.value),),
+        approval_refs=("approval:multica:retain-review",),
+    )
+    decision = MemoryAdmissionDecision(
+        admission_id="admit_other",
+        status=MemoryAdmissionStatus.APPROVED.value,
+        allowed_to_keep_pending=True,
+        allowed_to_write_durable=True,
+        allowed_backends=(MemoryBackend.HINDSIGHT.value,),
+        blockers=(),
+        required_approvals=("memory_admission",),
+        evidence_refs=("approval:multica:retain-review",),
+    )
+
+    with pytest.raises(HindsightRetainAdmissionError, match="does not match request"):
+        build_admitted_hindsight_retain_plan(request, decision)
 
 
 def test_hindsight_retain_candidate_admission_blocks_graphiti_without_relationships():
