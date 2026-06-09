@@ -1,4 +1,5 @@
 import pytest
+from pathlib import Path
 
 from zoe_capability_profile import DEFAULT_CAPABILITY_PROFILES
 from zoe_capability_profile_patch_writer import (
@@ -14,8 +15,7 @@ from zoe_capability_trust_update import CapabilityTrustUpdateCandidate, Capabili
 
 
 def _source_text():
-    with open("services/zoe-data/zoe_capability_profile.py", encoding="utf-8") as handle:
-        return handle.read()
+    return (Path(__file__).parent.parent / "zoe_capability_profile.py").read_text(encoding="utf-8")
 
 
 def _candidate(**overrides):

@@ -117,6 +117,12 @@ def build_capability_profile_patch_plan(
         old_line = lines[line_index]
         old_value = f'"{promotion.from_trust_level}"'
         new_value = f'"{promotion.to_trust_level}"'
+        actual_value = old_line[location.trust_value_col : location.trust_value_end_col]
+        if actual_value != old_value:
+            raise ValueError(
+                f"{promotion.capability_id}: column-offset mismatch; "
+                f"expected {old_value!r} at col {location.trust_value_col} but found {actual_value!r}"
+            )
         lines[line_index] = old_line[: location.trust_value_col] + new_value + old_line[location.trust_value_end_col :]
         records.append(
             CapabilityProfilePatchRecord(
@@ -220,7 +226,9 @@ def _profile_locations(source_text: str) -> dict[str, _ProfileLocation]:
             trust_level=trust_level,
             trust_value_line=trust_node.lineno,
             trust_value_col=trust_node.col_offset,
-            trust_value_end_col=trust_node.end_col_offset or trust_node.col_offset,
+            trust_value_end_col=trust_node.end_col_offset
+            if trust_node.end_col_offset is not None
+            else trust_node.col_offset,
         )
     return locations
 
