@@ -4,7 +4,7 @@
 
 Hindsight remains an offline-only candidate for Zoe reflective memory: lessons, recurring failures, fixes, and experience summaries. It is not a replacement for MemPalace and it is not in the chat hot path.
 
-This document records the current bake-off runner and the first Zoe-host availability check.
+This document records the current bake-off runner, Zoe-host availability checks, and the first live offline retain/recall result.
 
 ## Harness
 
@@ -87,7 +87,7 @@ Environment:
 - Embedding preflight: with `HINDSIGHT_ENABLED=true`, `HINDSIGHT_API_LLM_PROVIDER=llamacpp`, and the default local embedding model, `scripts/maintenance/hindsight_embedding_probe.py --json` reported `missing_local_model`.
 - Checked embedding paths: `/home/zoe/.cache/huggingface/hub/models--BAAI--bge-small-en-v1.5` and `/home/zoe/.cache/huggingface/hub/models--BAAI--bge-small-en-v1.5/snapshots`.
 - Local image check: `ghcr.io/vectorize-io/hindsight:latest` exists on the Zoe host.
-- Offline start blocker: the image defaults its LLM provider to OpenAI unless Zoe overrides it, and the default local embedding model (`BAAI/bge-small-en-v1.5`) is not currently present in the host Hugging Face cache. Confirm the current state with `scripts/maintenance/hindsight_embedding_probe.py --json` before starting a sidecar.
+- Offline start blocker at baseline: the image defaults its LLM provider to OpenAI unless Zoe overrides it, and the default local embedding model (`BAAI/bge-small-en-v1.5`) was not present in the host Hugging Face cache.
 
 Measured disabled-run result:
 
@@ -100,7 +100,106 @@ Measured disabled-run result:
 | p95 latency | 0.0066 ms |
 | Sidecar writes | 0 |
 
-This is not a Hindsight acceptance result. It is an availability baseline and a fixed runner. The Hindsight bake-off remains incomplete until a local/offline sidecar is started and measured with synthetic retain/recall. A live run should not start until Zoe has either a cached local embedding model, an ONNX embedding model, a local TEI endpoint, or a local OpenAI-compatible embeddings endpoint.
+This disabled run is not a Hindsight acceptance result. It is an availability baseline and a fixed runner.
+
+## Live Offline Bake-Off
+
+Date: 2026-06-09
+
+The default embedding blocker was cleared by caching `BAAI/bge-small-en-v1.5` on the Zoe host. The read-only embedding probe then reported:
+
+| Probe field | Value |
+| --- | --- |
+| Status | `local_model_available` |
+| Acceptable | `true` |
+| Provider | `local` |
+| Model | `BAAI/bge-small-en-v1.5` |
+| Checked paths | `/home/zoe/.cache/huggingface/hub/models--BAAI--bge-small-en-v1.5`, `/home/zoe/.cache/huggingface/hub/models--BAAI--bge-small-en-v1.5/snapshots` |
+
+The live sidecar was started as an isolated bake-off container, then removed after measurement:
+
+```bash
+docker run -d --name zoe-hindsight-bakeoff --network host \
+  -v /home/zoe/.cache/huggingface:/root/.cache/huggingface \
+  -e HINDSIGHT_API_DATABASE_URL=pg0 \
+  -e HINDSIGHT_API_LLM_PROVIDER=openai \
+  -e HINDSIGHT_API_LLM_API_KEY=local \
+  -e HINDSIGHT_API_LLM_BASE_URL=http://127.0.0.1:11434/v1 \
+  -e HINDSIGHT_API_LLM_MODEL=gemma-4-E2B-it-Q4_K_M.gguf \
+  -e HINDSIGHT_API_EMBEDDINGS_PROVIDER=local \
+  -e HINDSIGHT_API_EMBEDDINGS_LOCAL_MODEL=BAAI/bge-small-en-v1.5 \
+  -e HINDSIGHT_API_EMBEDDINGS_LOCAL_FORCE_CPU=true \
+  -e HINDSIGHT_API_LLM_MAX_CONCURRENT=1 \
+  -e HINDSIGHT_API_RETAIN_LLM_MAX_CONCURRENT=1 \
+  -e HINDSIGHT_API_REFLECT_LLM_MAX_CONCURRENT=1 \
+  -e HINDSIGHT_API_CONSOLIDATION_LLM_MAX_CONCURRENT=1 \
+  ghcr.io/vectorize-io/hindsight:latest
+```
+
+Sidecar probe result:
+
+| Field | Value |
+| --- | --- |
+| Status | `healthy` |
+| Health | `{"status":"healthy","database":"connected"}` |
+| Database | embedded PostgreSQL via `pg0` |
+| LLM | Zoe local Gemma through `http://127.0.0.1:11434/v1` |
+| Embeddings | local `BAAI/bge-small-en-v1.5` |
+| Auto-retain | `false` |
+
+Synthetic retain/recall command:
+
+```bash
+HINDSIGHT_ENABLED=true \
+HINDSIGHT_BASE_URL=http://127.0.0.1:8888 \
+HINDSIGHT_API_LLM_PROVIDER=openai \
+HINDSIGHT_API_LLM_BASE_URL=http://127.0.0.1:11434/v1 \
+HINDSIGHT_API_EMBEDDINGS_PROVIDER=local \
+PYTHONPATH=services/zoe-data \
+python3 scripts/maintenance/hindsight_bakeoff.py --retain-synthetic --retain-timeout-seconds 240 --json
+```
+
+Measured live retain/recall result:
+
+| Metric | Value |
+| --- | --- |
+| Synthetic events retained | 4 |
+| Retain parent operations completed | 4/4 |
+| Retain extraction errors | 0 |
+| Recall cases | 4 |
+| Average score | 1.0 |
+| Minimum score | 1.0 |
+| p50 recall latency | 564.71 ms |
+| p95 recall latency | 649.00 ms |
+| Recall scores | 4/4 exact expected-term matches |
+
+Warm recall-only pass:
+
+| Metric | Value |
+| --- | --- |
+| Recall cases | 4 |
+| Average score | 1.0 |
+| Minimum score | 1.0 |
+| p50 recall latency | 567.67 ms |
+| p95 recall latency | 643.25 ms |
+
+Resource observations:
+
+| Observation | Value |
+| --- | --- |
+| Startup worker RSS | about 752 MB |
+| Active retain sample | about 970 MiB container memory, about 2% CPU at sample time |
+| Idle after bake-off | about 981.5 MiB container memory, about 0.46% CPU at sample time |
+| Recall engine timings | internal warm recall completions were about 0.316-0.574 s before client overhead |
+
+Residual findings:
+
+- Offline viability is proven for the synthetic Hindsight path: no cloud LLM or cloud embedding provider was required.
+- Accuracy is strong on the current synthetic fixture: 4/4 recall cases scored 1.0.
+- Hindsight does not yet clear the strict hot-path latency gate because p95 recall stayed above the 600 ms target on both live and warm runs.
+- Hindsight should therefore remain a sidecar/async or cached recall candidate until latency is improved or the routing budget is explicitly relaxed.
+- The bake-off used an isolated embedded PostgreSQL instance inside the Hindsight container; it did not write Zoe production memory tables.
+- Hindsight emitted maintenance warnings for some embedded database helper functions during startup, but the health check, retain operations, consolidation, and recall completed.
 
 ## Acceptance Use
 
