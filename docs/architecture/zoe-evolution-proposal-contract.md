@@ -32,11 +32,22 @@ It also attaches candidate scoring to proposals, so Zoe can compare existing Pi/
 
 ## Current Scope
 
-This slice is contract-only:
+The foundation contract is now wired into the MCP `create_evolution_proposal`
+writer:
 
-- no production table migration;
+- the legacy `evolution_proposals` row shape remains unchanged for current UI,
+  Multica, and review routes;
+- a validated `zoe_evolution_proposal` contract snapshot is stored as JSON in
+  the existing `target_patterns` field;
+- proposal creation remains review-only and never grants execution;
+- `approval_gate.allowed_to_execute` remains false.
+
+This still avoids:
+
 - no automatic execution;
 - no automatic memory promotion;
 - no chat hot-path change.
 
-The next slices should adapt existing `evolution_proposals` writes to include this contract payload, then add Multica admission rules for memory and capability promotion.
+The next slices should adapt remaining `evolution_proposals` writers to include
+this contract payload, then add Multica admission rules for memory and capability
+promotion.

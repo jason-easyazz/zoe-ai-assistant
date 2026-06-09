@@ -2992,6 +2992,7 @@ async def _execute_tool(db, name: str, args: dict):
     elif name == "create_evolution_proposal":
         try:
             from multica_client import sync_evolution_proposal_to_multica  # type: ignore[import]
+            from zoe_evolution_proposal_adapter import dump_mcp_evolution_proposal_contract  # type: ignore[import]
             import time as _time
             title = (args.get("title") or "").strip()
             description = (args.get("description") or "").strip()
@@ -3000,11 +3001,19 @@ async def _execute_tool(db, name: str, args: dict):
             evidence = (args.get("evidence") or "").strip()
             proposal_type = args.get("proposal_type", "intent_pattern")
             prop_id = str(uuid.uuid4()).replace("-", "")
+            contract_snapshot = dump_mcp_evolution_proposal_contract(
+                proposal_id=prop_id,
+                title=title,
+                description=description,
+                evidence=evidence,
+                proposal_type=proposal_type,
+                user_id=args.get("_user_id") or args.get("user_id"),
+            )
             await db.execute(
                 """INSERT INTO evolution_proposals
-                   (id, title, description, evidence, type, status, proposed_at)
-                   VALUES ($1,$2,$3,$4,$5,'pending',$6)""",
-                prop_id, title, description, evidence, proposal_type, _time.time(),
+                   (id, title, description, evidence, target_patterns, type, status, proposed_at)
+                   VALUES ($1,$2,$3,$4,$5,$6,'pending',$7)""",
+                prop_id, title, description, evidence, contract_snapshot, proposal_type, _time.time(),
             )
             multica_id = await sync_evolution_proposal_to_multica(
                 proposal_id=prop_id,
@@ -3014,11 +3023,25 @@ async def _execute_tool(db, name: str, args: dict):
                 proposal_type=proposal_type,
             )
             if multica_id:
-                await db.execute(
-                    "UPDATE evolution_proposals SET multica_issue_id=$1 WHERE id=$2",
-                    multica_id, prop_id,
+                contract_snapshot = dump_mcp_evolution_proposal_contract(
+                    proposal_id=prop_id,
+                    title=title,
+                    description=description,
+                    evidence=evidence,
+                    proposal_type=proposal_type,
+                    user_id=args.get("_user_id") or args.get("user_id"),
+                    multica_issue_id=multica_id,
                 )
-            return {"ok": True, "proposal_id": prop_id, "multica_issue_id": multica_id}
+                await db.execute(
+                    "UPDATE evolution_proposals SET multica_issue_id=$1, target_patterns=$2 WHERE id=$3",
+                    multica_id, contract_snapshot, prop_id,
+                )
+            return {
+                "ok": True,
+                "proposal_id": prop_id,
+                "multica_issue_id": multica_id,
+                "contract_schema": "zoe_evolution_proposal",
+            }
         except Exception as exc:
             return {"error": f"create_evolution_proposal failed: {exc}"}
 

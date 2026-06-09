@@ -4,6 +4,7 @@ import asyncio
 import sys
 import os
 import json
+import types
 
 import pytest
 
@@ -67,6 +68,57 @@ def test_all_panel_tools_have_descriptions():
     assert len(panel_tools) >= 6, f"Expected at least 6 panel tools, got {len(panel_tools)}"
     for t in panel_tools:
         assert t.get("description"), f"Tool {t['name']} is missing a description"
+
+
+class _RecordingDb:
+    def __init__(self):
+        self.calls = []
+
+    async def execute(self, sql, *args):
+        self.calls.append((sql, args))
+        return _Cursor(None)
+
+
+@pytest.mark.asyncio
+async def test_create_evolution_proposal_stores_contract_snapshot(monkeypatch):
+    async def fake_sync_evolution_proposal_to_multica(**_kwargs):
+        return "multica-issue-123"
+
+    monkeypatch.setitem(
+        sys.modules,
+        "multica_client",
+        types.SimpleNamespace(sync_evolution_proposal_to_multica=fake_sync_evolution_proposal_to_multica),
+    )
+    db = _RecordingDb()
+
+    result = await mcp_server._execute_tool(
+        db=db,
+        name="create_evolution_proposal",
+        args={
+            "_user_id": "jason",
+            "title": "Improve recurring task recall",
+            "description": "Zoe missed a recurring task twice and should create a reviewed improvement proposal.",
+            "evidence": "chat:recurring-task-miss",
+            "proposal_type": "intent_pattern",
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["multica_issue_id"] == "multica-issue-123"
+    assert result["contract_schema"] == "zoe_evolution_proposal"
+    assert len(db.calls) == 2
+    insert_sql, insert_args = db.calls[0]
+    update_sql, update_args = db.calls[1]
+    assert "target_patterns" in insert_sql
+    assert "target_patterns" in update_sql
+
+    insert_contract = json.loads(insert_args[4])
+    update_contract = json.loads(update_args[1])
+    assert insert_contract["schema"] == "zoe_evolution_proposal"
+    assert insert_contract["proposal"]["status"] == "pending_approval"
+    assert insert_contract["proposal"]["signals"][0]["signal_type"] == "repeated_failure"
+    assert insert_contract["proposal"]["approval_gate"]["allowed_to_execute"] is False
+    assert update_contract["proposal"]["multica_issue_id"] == "multica-issue-123"
 
 
 class _Cursor:
