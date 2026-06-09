@@ -1435,6 +1435,22 @@ def test_pushed_branch_recovery_allows_failed_pr_create_attempt(tmp_path, monkey
     assert ka.KanbanAdapter()._pushed_branch_without_pr_handoff("t_impl") is True
 
 
+def test_pushed_branch_recovery_allows_successful_pr_create_without_complete(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 💻 $         git push -u origin HEAD  2.1s\n"
+        "  ┊ 💻 $         gh pr create --base main --title x --body y  1.1s\n"
+        "https://github.com/jason-easyazz/zoe-ai-assistant/pull/998\n"
+        "⚡ Interrupted during API call.\n",
+        encoding="utf-8",
+    )
+
+    assert ka.KanbanAdapter()._pushed_branch_without_pr_handoff("t_impl") is True
+
+
 @pytest.mark.asyncio
 async def test_poll_partial_chain_is_redispatchable():
     # closeout phase never got created (e.g. CLI error mid-chain): must report

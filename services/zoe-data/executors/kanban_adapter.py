@@ -1021,9 +1021,6 @@ class KanbanAdapter:
         if "PR_URL=" in log:
             return False
         for command in shell_commands:
-            if "gh pr create" in command and not re.search(r"\[exit\s+[1-9]\d*\]", command, re.IGNORECASE):
-                return False
-        for command in shell_commands:
             if "git push -u origin HEAD" not in command:
                 continue
             if re.search(r"\[exit\s+[1-9]\d*\]", command, re.IGNORECASE):
