@@ -39,13 +39,52 @@ def test_adoption_gate_allows_strong_compatible_candidate():
     assert gate["blockers"] == []
 
 
-def test_adoption_gate_blocks_unknown_offline_candidate():
+def test_adoption_gate_blocks_pi_until_runtime_prerequisites_are_measured():
     candidate = EXAMPLE_CANDIDATES[2]
 
     gate = adoption_gate(candidate)
 
     assert gate["allowed"] is False
-    assert "offline:unknown" in gate["blockers"]
+    assert gate["blockers"] == ["offline:partial", "score_below_threshold"]
+    assert candidate.offline_viability == "partial"
+    assert candidate.stars == 59100
+
+
+def test_adoption_gate_blocks_partial_offline_without_ready_evidence():
+    candidate = CandidateEvaluation(
+        candidate_id="partial_no_evidence",
+        name="Partial offline candidate",
+        source="github",
+        task="test",
+        score=CandidateScore(fit=5, activity=5, license=5, offline=5, security=5, footprint=5, tests=5, maintainability=5, overlap=5),
+        evidence_refs=("test:evidence",),
+        license_risk="compatible",
+        offline_viability="partial",
+    )
+
+    gate = adoption_gate(candidate)
+
+    assert gate["allowed"] is False
+    assert gate["blockers"] == ["offline:partial"]
+
+
+def test_adoption_gate_allows_partial_offline_with_ready_evidence():
+    candidate = CandidateEvaluation(
+        candidate_id="partial_ready",
+        name="Partial offline ready candidate",
+        source="github",
+        task="test",
+        score=CandidateScore(fit=5, activity=5, license=5, offline=5, security=5, footprint=5, tests=5, maintainability=5, overlap=5),
+        evidence_refs=("test:evidence",),
+        license_risk="compatible",
+        offline_viability="partial",
+        metadata={"offline_ready": True},
+    )
+
+    gate = adoption_gate(candidate)
+
+    assert gate["allowed"] is True
+    assert gate["blockers"] == []
 
 
 def test_adoption_gate_blocks_incompatible_license():

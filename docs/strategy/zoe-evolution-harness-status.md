@@ -39,6 +39,7 @@ Important non-complete truth:
 - Zoe now has a self-evolution proposal contract that attaches signals, candidate scores, affected capabilities, approval gates, verification, rollback, and evidence before any execution.
 - Zoe now has an observation/evaluation trace schema for recall, retain candidates, admission, contradiction, fallback, proposals, verification, outcome evals, and hardware budget evidence.
 - Zoe now has an inert memory admission contract that keeps retain candidates pending until evidence, successful admission/verification traces, and approval refs allow durable/trusted memory writes.
+- Zoe now has a read-only Pi runtime probe and policy contract; actual Pi execution is still blocked until Node/npm/Pi and local/offline model configuration are present and approved.
 - The deterministic memory router now has a disabled-by-default runtime status gate; it is not yet used for prompt injection or backend recall in production chat.
 - Retain-candidate admission has a tested contract, but existing runtime writers are not yet wired to enforce it through Multica approval.
 - The full self-evolution loop is not yet implemented end to end; proposal records are now defined, but existing live proposal writers still need to emit them and Multica still needs to enforce admission.
@@ -63,6 +64,7 @@ Important non-complete truth:
 | Zoe north-star layer | Complete foundation | `docs/strategy/zoe-evolution-harness-plan.md` and `docs/adr/ADR-zoe-north-star-layer.md` define capability profiles, trust/autonomy classes, discovery scoring, outcome evals, and hardware budgets. | Build capability profile inventory and candidate-scoring records. |
 | Capability profiles | Complete foundation | `services/zoe-data/zoe_capability_profile.py`, `services/zoe-data/tests/test_zoe_capability_profile.py`, and `docs/architecture/zoe-capability-profiles.md` define the first executable Zoe capability self-model. | Wire profiles into candidate scoring, self-evolution proposals, and cleanup gates. |
 | Candidate scoring | Complete foundation | `services/zoe-data/zoe_candidate_scoring.py`, `services/zoe-data/tests/test_zoe_candidate_scoring.py`, and `docs/architecture/zoe-candidate-scoring.md` define candidate scoring and adoption gates. | Attach candidate scores to self-evolution proposal records before installs or replacements. |
+| Pi runtime harness | Partial | `services/zoe-data/pi_runtime_probe.py`, `scripts/maintenance/pi_runtime_probe.py`, and `docs/architecture/zoe-pi-runtime-harness.md` detect Pi readiness without installing or executing Pi. Current Zoe host lacks Node/npm/Pi. | Create an approved install/runtime proposal with local model evidence before delegated Pi execution. |
 | Observation/evaluation traces | Complete foundation | `services/zoe-data/zoe_observation_trace.py`, `services/zoe-data/tests/test_zoe_observation_trace.py`, and `docs/architecture/zoe-observation-trace-schema.md` define trace records for recall, retain candidate, admission, contradiction, fallback, proposal, verification, outcome eval, and hardware-budget events. | Wire traces around memory router decisions, retain candidates, sidecar bake-offs, Multica admission, and capability promotion/retirement. |
 | Memory admission governance | Complete foundation | `services/zoe-data/zoe_memory_admission.py`, `services/zoe-data/tests/test_zoe_memory_admission.py`, and `docs/architecture/zoe-memory-admission-gates.md` define evidence, trace, approval, graph, and self-evolution proposal gates before durable memory writes. | Wire retain candidate workers and future graph/Hindsight writers through this decision before any backend write. |
 | Multica evidence gates | Partial | Implement completion now requires PR evidence for code/default profiles, and memory admission has a tested decision contract. | Connect the memory admission contract to Multica/review records and add explicit self-evolution execution gates. |
@@ -204,10 +206,14 @@ Keep each pull request small enough for Greptile and Zoe verification.
     - Status: complete foundation.
     - Candidate records now compare Pi, MCP, GitHub, local skills, APIs, local services, and existing Zoe capabilities.
     - Next: attach scores to self-evolution proposals and require them before installs/replacements.
-12. Outcome eval trace schema.
+12. Pi runtime harness.
+    - Status: read-only probe and policy contract complete.
+    - Next: approved install/runtime proposal for Node/npm/Pi plus local/offline model config.
+    - Keep Pi execution disabled until the probe reports available runtime and Multica approves use.
+13. Outcome eval trace schema.
     - Track task completion, correction handling, continuity, friction, latency, trust, cleanup quality, and hardware fit.
     - Convert recurring failures into Notice records.
-13. Main engine cleanup.
+14. Main engine cleanup.
     - Split only protected, well-understood areas in `zoe_agent.py`.
     - Remove duplicate or retired memory paths only after inventory and tests.
 
