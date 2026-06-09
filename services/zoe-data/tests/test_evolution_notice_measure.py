@@ -5,7 +5,7 @@ import types
 import pytest
 
 import evolution_notice
-from zoe_evolution_proposal_adapter import dump_mcp_evolution_proposal_contract
+from zoe_evolution_proposal_adapter import dump_legacy_evolution_proposal_contract, dump_mcp_evolution_proposal_contract
 
 
 class _Db:
@@ -32,6 +32,33 @@ class _Db:
 
     async def execute(self, sql, *args):
         self.execute_calls.append((sql, args))
+
+
+class _WriterDb:
+    def __init__(self):
+        self.fetch_calls = []
+        self.execute_calls = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def fetch(self, sql, *args):
+        self.fetch_calls.append((sql, args))
+        return []
+
+    async def execute(self, sql, *args):
+        self.execute_calls.append((sql, args))
+
+
+class _NoticeDb(_WriterDb):
+    async def fetch(self, sql, *args):
+        self.fetch_calls.append((sql, args))
+        if "FROM llm_call_log" in sql:
+            return [{"agent_tier": "gemma4", "total": 20, "errors": 3}]
+        return []
 
 
 @pytest.mark.asyncio
@@ -85,3 +112,118 @@ def test_load_target_patterns_accepts_only_legacy_arrays():
     assert evolution_notice._load_target_patterns('{"schema":"zoe_evolution_proposal"}') == []
     assert evolution_notice._load_target_patterns("not-json") == []
     assert evolution_notice._load_target_patterns(None) == []
+
+
+def test_load_target_patterns_extracts_contract_metadata():
+    raw = dump_legacy_evolution_proposal_contract(
+        proposal_id="prop_patterns",
+        title="Intent gap",
+        description="Contract envelopes should preserve measurement patterns.",
+        evidence="trace:patterns",
+        proposal_type="intent_pattern",
+        legacy_writer="evolution_notice:intent_miss_cluster",
+        target_patterns=("turn lights on", "switch lights on"),
+    )
+
+    assert evolution_notice._load_target_patterns(raw) == ["turn lights on", "switch lights on"]
+
+
+@pytest.mark.asyncio
+async def test_record_frustration_signal_stores_contract_snapshot(monkeypatch):
+    db = _WriterDb()
+
+    monkeypatch.setitem(sys.modules, "db_pool", types.SimpleNamespace(get_db_ctx=lambda: db))
+
+    async def fake_sync_evolution_proposal_to_multica(**_kwargs):
+        return None
+
+    monkeypatch.setitem(
+        sys.modules,
+        "multica_client",
+        types.SimpleNamespace(sync_evolution_proposal_to_multica=fake_sync_evolution_proposal_to_multica),
+    )
+
+    await evolution_notice.record_frustration_signal(
+        user_id="jason",
+        normalized_message="why can't you remember the bins",
+        session_id="sess-1",
+        repeat_count=3,
+    )
+
+    assert len(db.execute_calls) == 1
+    insert_sql, insert_args = db.execute_calls[0]
+    assert "target_patterns" in insert_sql
+    contract = json.loads(insert_args[4])
+    assert contract["schema"] == "zoe_evolution_proposal"
+    assert contract["legacy_writer"] == "evolution_notice:user_frustration"
+    assert contract["proposal"]["metadata"]["legacy_target_patterns"] == ["why can't you remember the bins"]
+    assert contract["proposal"]["signals"][0]["scope"] == "personal"
+
+
+@pytest.mark.asyncio
+async def test_record_user_issue_stores_contract_snapshot(monkeypatch):
+    db = _WriterDb()
+
+    monkeypatch.setitem(sys.modules, "db_pool", types.SimpleNamespace(get_db_ctx=lambda: db))
+
+    async def fake_sync_evolution_proposal_to_multica(**_kwargs):
+        return None
+
+    monkeypatch.setitem(
+        sys.modules,
+        "multica_client",
+        types.SimpleNamespace(sync_evolution_proposal_to_multica=fake_sync_evolution_proposal_to_multica),
+    )
+
+    await evolution_notice.record_user_issue("weather failed again", "jason")
+
+    assert len(db.execute_calls) == 1
+    insert_sql, insert_args = db.execute_calls[0]
+    assert "target_patterns" in insert_sql
+    contract = json.loads(insert_args[4])
+    assert insert_args[1] == "User report: 'weather failed again'"
+    assert contract["schema"] == "zoe_evolution_proposal"
+    assert contract["legacy_writer"] == "evolution_notice:user_issue_report"
+    assert contract["proposal"]["metadata"]["legacy_proposal_type"] == "user_issue_report"
+    assert contract["proposal"]["metadata"]["legacy_target_patterns"] == ["weather failed again"]
+
+
+@pytest.mark.asyncio
+async def test_run_evolution_notice_stores_contract_snapshots(monkeypatch):
+    db = _NoticeDb()
+
+    monkeypatch.setattr(
+        evolution_notice,
+        "_load_recent_misses",
+        lambda: ["turn on kitchen lights", "turn on kitchen lights", "turn on kitchen lights"],
+    )
+    monkeypatch.setitem(sys.modules, "db_pool", types.SimpleNamespace(get_db_ctx=lambda: db))
+
+    async def fake_sync_evolution_proposal_to_multica(**_kwargs):
+        return None
+
+    monkeypatch.setitem(
+        sys.modules,
+        "multica_client",
+        types.SimpleNamespace(sync_evolution_proposal_to_multica=fake_sync_evolution_proposal_to_multica),
+    )
+
+    result = await evolution_notice.run_evolution_notice()
+
+    assert result == {"created": 2, "skipped_dedup": 0, "clusters": 1}
+    assert len(db.execute_calls) == 2
+    intent_sql, intent_args = db.execute_calls[0]
+    health_sql, health_args = db.execute_calls[1]
+    assert "target_patterns" in intent_sql
+    assert "target_patterns" in health_sql
+
+    intent_contract = json.loads(intent_args[5])
+    health_contract = json.loads(health_args[4])
+    assert intent_contract["legacy_writer"] == "evolution_notice:intent_miss_cluster"
+    assert intent_contract["proposal"]["metadata"]["legacy_target_patterns"] == [
+        "turn on kitchen lights",
+        "turn on kitchen lights",
+        "turn on kitchen lights",
+    ]
+    assert health_contract["legacy_writer"] == "evolution_notice:agent_health"
+    assert health_contract["proposal"]["metadata"]["legacy_proposal_type"] == "agent_health"

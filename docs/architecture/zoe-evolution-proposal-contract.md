@@ -32,13 +32,16 @@ It also attaches candidate scoring to proposals, so Zoe can compare existing Pi/
 
 ## Current Scope
 
-The foundation contract is now wired into the MCP `create_evolution_proposal`
-writer:
+The foundation contract is now wired into Zoe's live proposal writers:
 
 - the legacy `evolution_proposals` row shape remains unchanged for current UI,
   Multica, and review routes;
 - a validated `zoe_evolution_proposal` contract snapshot is stored as JSON in
   the existing `target_patterns` field;
+- nightly NOTICE proposals, MCP-created proposals, user-frustration proposals,
+  and explicit user issue reports all emit the snapshot;
+- MEASURE still supports legacy target-pattern behavior by reading
+  `legacy_target_patterns` from contract metadata;
 - `multica_issue_id` remains authoritative in the legacy column; the stored
   contract snapshot is not rewritten just to mirror that live sync field;
 - proposal creation remains review-only and never grants execution;
@@ -50,6 +53,6 @@ This still avoids:
 - no automatic memory promotion;
 - no chat hot-path change.
 
-The next slices should adapt remaining `evolution_proposals` writers to include
-this contract payload, then add Multica admission rules for memory and capability
+The next slices should require this contract payload before installs or
+replacements, then add Multica admission rules for memory and capability
 promotion.

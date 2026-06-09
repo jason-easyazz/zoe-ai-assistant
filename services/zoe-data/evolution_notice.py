@@ -92,6 +92,7 @@ async def run_evolution_notice() -> dict:
     """Run the NOTICE phase — returns summary dict."""
     from db_pool import get_db_ctx
     from multica_client import sync_evolution_proposal_to_multica
+    from zoe_evolution_proposal_adapter import dump_legacy_evolution_proposal_contract
 
     created = 0
     skipped = 0
@@ -121,7 +122,16 @@ async def run_evolution_notice() -> dict:
                 "miss_count": len(members),
                 "examples": members[:5],
             })
-            target_patterns = json.dumps(members[:20])
+            target_members = members[:20]
+            target_patterns = dump_legacy_evolution_proposal_contract(
+                proposal_id=prop_id,
+                title=title,
+                description=description,
+                evidence=evidence,
+                proposal_type=prop_type,
+                legacy_writer="evolution_notice:intent_miss_cluster",
+                target_patterns=target_members,
+            )
             await db.execute(
                 """INSERT INTO evolution_proposals
                    (id, type, title, description, evidence, target_patterns, status, proposed_at)
@@ -183,14 +193,23 @@ async def run_evolution_notice() -> dict:
             prop_id = uuid.uuid4().hex
             description = f"{tier} had {errors}/{total} ({int(100*errors/total)}%) slow/error calls in 24h."
             evidence_data = json.dumps({"agent_tier": tier, "total": total, "errors": errors})
+            target_patterns = dump_legacy_evolution_proposal_contract(
+                proposal_id=prop_id,
+                title=title,
+                description=description,
+                evidence=evidence_data,
+                proposal_type="agent_health",
+                legacy_writer="evolution_notice:agent_health",
+            )
             await db.execute(
                 """INSERT INTO evolution_proposals
-                   (id, type, title, description, evidence, status, proposed_at)
-                   VALUES ($1,'agent_health',$2,$3,$4,'pending',$5)""",
+                   (id, type, title, description, evidence, target_patterns, status, proposed_at)
+                   VALUES ($1,'agent_health',$2,$3,$4,$5,'pending',$6)""",
                 prop_id,
                 title,
                 description,
                 evidence_data,
+                target_patterns,
                 time.time(),
             )
             created += 1
@@ -221,6 +240,7 @@ async def record_frustration_signal(
     """Write a user frustration proposal (called from chat.py inline)."""
     from db_pool import get_db_ctx
     from multica_client import sync_evolution_proposal_to_multica
+    from zoe_evolution_proposal_adapter import dump_legacy_evolution_proposal_contract
 
     title = f"User frustration: '{normalized_message[:60]}'"
     async with get_db_ctx() as db:
@@ -244,6 +264,16 @@ async def record_frustration_signal(
             "repeat_count": repeat_count,
             "message": normalized_message,
         })
+        target_patterns = dump_legacy_evolution_proposal_contract(
+            proposal_id=prop_id,
+            title=title,
+            description=description,
+            evidence=evidence,
+            proposal_type="user_frustration",
+            legacy_writer="evolution_notice:user_frustration",
+            user_id=user_id,
+            target_patterns=(normalized_message,),
+        )
         await db.execute(
             """INSERT INTO evolution_proposals
                (id, type, title, description, evidence, target_patterns, status, proposed_at)
@@ -252,7 +282,7 @@ async def record_frustration_signal(
             title,
             description,
             evidence,
-            json.dumps([normalized_message]),
+            target_patterns,
             time.time(),
         )
         logger.info(
@@ -284,6 +314,7 @@ async def record_user_issue(message: str, user_id: str) -> None:
     """
     from db_pool import get_db_ctx
     from multica_client import sync_evolution_proposal_to_multica
+    from zoe_evolution_proposal_adapter import dump_legacy_evolution_proposal_contract
 
     title = f"User report: '{message[:60]}'"
     async with get_db_ctx() as db:
@@ -299,6 +330,16 @@ async def record_user_issue(message: str, user_id: str) -> None:
         prop_id = uuid.uuid4().hex
         description = f"User {user_id} explicitly reported a problem: {message}"
         evidence = json.dumps({"user_id": user_id, "message": message})
+        target_patterns = dump_legacy_evolution_proposal_contract(
+            proposal_id=prop_id,
+            title=title,
+            description=description,
+            evidence=evidence,
+            proposal_type="user_issue_report",
+            legacy_writer="evolution_notice:user_issue_report",
+            user_id=user_id,
+            target_patterns=(message,),
+        )
         await db.execute(
             """INSERT INTO evolution_proposals
                (id, type, title, description, evidence, target_patterns, status, proposed_at)
@@ -307,7 +348,7 @@ async def record_user_issue(message: str, user_id: str) -> None:
             title,
             description,
             evidence,
-            json.dumps([message]),
+            target_patterns,
             time.time(),
         )
         logger.info(
@@ -335,7 +376,7 @@ _MEASURE_WINDOW_S = 48 * 3600  # 48-hour monitoring window post-deployment
 
 
 def _load_target_patterns(raw: str | None) -> list[str]:
-    """Load legacy target pattern arrays without crashing on contract envelopes."""
+    """Load target patterns from legacy arrays or proposal contract envelopes."""
 
     if not raw:
         return []
@@ -343,9 +384,15 @@ def _load_target_patterns(raw: str | None) -> list[str]:
         payload = json.loads(raw)
     except (TypeError, ValueError, json.JSONDecodeError):
         return []
-    if not isinstance(payload, list):
-        return []
-    return [str(item) for item in payload if item is not None]
+    if isinstance(payload, list):
+        return [str(item) for item in payload if item is not None]
+    if isinstance(payload, dict) and payload.get("schema") == "zoe_evolution_proposal":
+        proposal = payload.get("proposal")
+        metadata = proposal.get("metadata") if isinstance(proposal, dict) else None
+        target_patterns = metadata.get("legacy_target_patterns") if isinstance(metadata, dict) else None
+        if isinstance(target_patterns, list):
+            return [str(item) for item in target_patterns if item is not None]
+    return []
 
 
 async def run_measure_phase() -> dict:
