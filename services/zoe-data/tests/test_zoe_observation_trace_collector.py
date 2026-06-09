@@ -36,6 +36,14 @@ def test_collect_observation_traces_accepts_valid_non_persistent_batch():
     assert payload["summary"]["types"] == {"memory_route": 2}
 
 
+def test_collect_observation_traces_rejects_empty_batch():
+    result = collect_observation_traces(())
+
+    assert result.ok is False
+    assert result.accepted == ()
+    assert result.rejected == ({"trace_id": "*batch*", "reason": "batch is empty"},)
+
+
 def test_collector_policy_rejects_persistence_until_enabled_elsewhere():
     with pytest.raises(ValueError, match="persistence is not enabled"):
         ObservationTraceCollectorPolicy(allow_persistence=True).validate()
@@ -96,6 +104,32 @@ def test_collect_observation_traces_discards_entire_batch_on_rejection():
     assert result.ok is False
     assert result.accepted == ()
     assert result.to_dict()["accepted_count"] == 0
+    assert result.rejected[0]["trace_id"] == "trace_bad"
+
+
+def test_collect_observation_traces_reports_batch_rejections_from_original_input():
+    result = collect_observation_traces(
+        (
+            ObservationTrace(
+                trace_id="trace_bad_user_1",
+                trace_type="unknown",
+                surface="memory",
+                scope="personal",
+                user_id="user_1",
+                outcome=ObservationOutcome.SUCCESS.value,
+                summary="Invalid trace type.",
+                evidence_refs=(),
+            ),
+            _trace("trace_user_2", scope="personal", user_id="user_2"),
+        )
+    )
+
+    assert result.ok is False
+    assert result.accepted == ()
+    assert [rejection["reason"] for rejection in result.rejected] == [
+        "trace_bad_user_1: unknown trace_type 'unknown'",
+        "batch contains multiple user_id values",
+    ]
 
 
 def test_collect_observation_traces_rejects_disallowed_surface():

@@ -81,6 +81,15 @@ def collect_observation_traces(
     accepted: list[ObservationTrace] = []
     rejected: list[dict[str, str]] = []
 
+    if not traces:
+        rejected.append({"trace_id": "*batch*", "reason": "batch is empty"})
+        return ObservationTraceCollectionResult(
+            accepted=(),
+            rejected=tuple(rejected),
+            persisted=False,
+            policy=active_policy,
+        )
+
     if len(traces) > active_policy.max_batch_size:
         rejected.append(
             {
@@ -104,7 +113,7 @@ def collect_observation_traces(
             continue
         accepted.append(trace)
 
-    rejected.extend(_batch_rejections(accepted, active_policy))
+    rejected.extend(_batch_rejections(traces, active_policy))
     if rejected:
         return ObservationTraceCollectionResult(
             accepted=(),
