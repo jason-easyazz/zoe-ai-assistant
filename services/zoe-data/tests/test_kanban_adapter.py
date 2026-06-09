@@ -2601,6 +2601,27 @@ def test_implement_body_includes_harness_repo_map_for_harness_tickets():
     assert body.index("HARNESS FAST PATH") < body.index("Graphify map")
 
 
+def test_implement_body_includes_harness_repo_map_for_blocker_followup_source():
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {
+            "id": "uuid-5454",
+            "identifier": "ZOE-5454",
+            "title": "Follow up iteration budget",
+            "description": """Fix the blocked harness run.
+
+```zoe-ticket
+{"schema":1,"zoe_kind":"operator_task","source":"engineering_blocker_followup","acceptance_criteria":["small harness fix"],"evidence_expectations":["focused tests"]}
+```""",
+        },
+        "ZOE-5454",
+    )
+
+    assert "HARNESS FAST PATH" in body
+    assert "services/zoe-data/executors/kanban_adapter.py" in body
+    assert "services/zoe-data/worktree_bootstrap.py" in body
+
+
 def test_implement_body_omits_harness_repo_map_for_generic_tickets():
     body = ka.KanbanAdapter()._build_body(
         "implement",
