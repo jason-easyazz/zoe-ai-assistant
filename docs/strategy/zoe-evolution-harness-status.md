@@ -31,7 +31,7 @@ Important non-complete truth:
 
 - Graphify has been refreshed from `origin/main` at `0ee19f03`; rerun it after subsequent code or architecture changes.
 - Tool/capability and memory read/write inventories now exist as cleanup gates; keep them updated as runtime paths change.
-- MemPalace now has a repeatable local baseline harness and first measured Zoe-host run; Hindsight now has a fixed measured runner, read-only sidecar probe, and Zoe-host availability baseline, but no live sidecar bake-off yet because no Hindsight process/container is running.
+- MemPalace now has a repeatable local baseline harness and first measured Zoe-host run; Hindsight now has a fixed measured runner, read-only sidecar probe, and Zoe-host availability baseline, but no live sidecar bake-off yet because no sidecar is running and the available image cannot be safely started until Zoe has a local/cached embedding model or local embeddings service configured.
 - Graphiti/FalkorDB/Neo4j have not yet been measured for Zoe relational memory, but Zoe-specific Graphiti fixtures and a read-only backend probe now define the first relationship eval set and availability preflight.
 - The plan now names Zoe's missing north-star layer: capability profiles, trust/autonomy classes, candidate scouting, outcome evals, and hardware-aware promotion.
 - Zoe now has an executable capability profile contract and initial self-model for key chat, memory, graph, governance, escalation, Pi, and device-control surfaces.
@@ -50,12 +50,12 @@ Important non-complete truth:
 | --- | --- | --- | --- |
 | Strategy and ADRs | Complete | `docs/strategy/zoe-evolution-harness-plan.md`, `docs/adr/ADR-zoe-memory-layer.md`, `docs/adr/ADR-hindsight-bakeoff.md`, `docs/adr/ADR-graphiti-bakeoff.md` | Keep updated only when decisions change. |
 | Zoe naming discipline | Complete for new harness docs/code | Strategy and ADRs use Zoe system names and keep external inspirations out of concrete identifiers. | Sweep future PRs for accidental non-Zoe module names. |
-| Offline-only memory rule | Partial | `HindsightConfig` rejects public/cloud memory model configuration by default. | Add a repository-wide memory/provider audit that flags cloud memory paths and exposed secrets. |
+| Offline-only memory rule | Partial | `HindsightConfig` rejects public/cloud memory LLM and embedding configuration by default. | Add runtime preflight evidence for a local embedding model/service before live Hindsight bake-off runs. |
 | Memory contract | Complete foundation | `services/zoe-data/zoe_memory_contract.py` and `services/zoe-data/tests/test_zoe_memory_contract.py`. | Extend only when a measured backend requires a new field or relationship. |
 | Memory layer map | Complete foundation | `services/zoe-data/zoe_memory_layers.py` and `services/zoe-data/tests/test_zoe_memory_layers.py`. | Link layer decisions to runtime config and status endpoints. |
 | Memory router | Partial | `services/zoe-data/zoe_memory_router.py`, `services/zoe-data/zoe_memory_router_runtime.py`, `services/zoe-data/tests/test_zoe_memory_router.py`, `services/zoe-data/tests/test_zoe_memory_router_runtime.py`, and `/api/system/memory-router/status` expose disabled-by-default observe-only route decisions. | Add observation traces around route decisions, then wire prompt-time recall behind a second explicit feature flag with latency guards. |
 | MemPalace baseline | Complete foundation | `services/zoe-data/mempalace_baseline.py`, `scripts/maintenance/mempalace_baseline.py`, and `docs/architecture/zoe-mempalace-baseline.md` record a repeatable local benchmark; first run scored 1.0 avg with p95 200.90 ms and cleaned up 4 synthetic rows. | Expand with relational/supersession cases before comparing Graphiti-style backends. |
-| Hindsight bake-off | Partial | Offline sidecar client, retain-candidate helpers, synthetic fixtures, measured runner, read-only sidecar probe, availability doc, and tests exist; current Zoe-host check found no running Hindsight sidecar. | Start a local/offline sidecar, run retain/recall with synthetic events, and record p50/p95 latency, failures, evidence quality, and CPU/RAM use. |
+| Hindsight bake-off | Partial | Offline sidecar client, retain-candidate helpers, synthetic fixtures, measured runner, read-only sidecar probe, availability doc, and tests exist; current Zoe-host check found no running Hindsight sidecar and no cached default embedding model. | Start a local/offline sidecar only after a local embedding model/service is present, run retain/recall with synthetic events, and record p50/p95 latency, failures, evidence quality, and CPU/RAM use. |
 | Graphiti bake-off | Partial | ADR plus `services/zoe-data/graphiti_bakeoff.py`, `services/zoe-data/graphiti_sidecar_probe.py`, `services/zoe-data/tests/test_graphiti_bakeoff.py`, `services/zoe-data/tests/test_graphiti_sidecar_probe.py`, and `docs/architecture/zoe-graphiti-fixtures.md` define the first relationship fixture set and read-only backend availability probe. | Start a local/offline FalkorDB sidecar, run the fixtures, then test Neo4j if feasible, and record latency, evidence quality, supersession behavior, and CPU/RAM use. |
 | Graphify current map | Complete foundation | `graphify-out/GRAPH_REPORT.md` and `graphify-out/graph.json` were regenerated from `origin/main` at `0ee19f03`; `docs/architecture/zoe-harness-current-inventory.md` records the source-backed inventory. | Rerun Graphify after substantial code or architecture changes. |
 | Tool/capability inventory | Complete foundation | `docs/architecture/zoe-tool-capability-inventory.md` maps agent, MCP, Multica, Hermes, OpenClaw, and governance surfaces. | Keep updated when tool catalogs or execution lanes change. |
@@ -178,7 +178,7 @@ Keep each pull request small enough for Greptile and Zoe verification.
    - Expand with memory footprint, relational, and supersession cases before backend replacement decisions.
 5. Hindsight sidecar bake-off.
    - Status: runner, read-only sidecar probe, and availability baseline complete.
-   - Next: start local/offline-only Hindsight and run synthetic retain/recall.
+   - Next: add or configure a local embedding model/service, then start local/offline-only Hindsight and run synthetic retain/recall.
    - Produce measured p50/p95, evidence quality, CPU/RAM, and gaps.
    - Keep it out of production chat until feature-flagged and measured.
 6. Graphiti relational bake-off.

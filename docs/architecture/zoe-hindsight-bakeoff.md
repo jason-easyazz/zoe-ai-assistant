@@ -49,7 +49,7 @@ To write synthetic events, the operator must explicitly enable Hindsight and opt
 HINDSIGHT_ENABLED=true PYTHONPATH=services/zoe-data python3 scripts/maintenance/hindsight_bakeoff.py --retain-synthetic --json
 ```
 
-Zoe memory remains offline-only. `HindsightConfig` rejects public/cloud model providers unless an OpenAI-compatible provider points to a localhost/private base URL.
+Zoe memory remains offline-only. `HindsightConfig` rejects public/cloud LLM and embedding providers unless an OpenAI-compatible or TEI endpoint points to a localhost/private base URL.
 
 ## Current Zoe-Host Check
 
@@ -63,6 +63,8 @@ Environment:
 - Process/container status: no Hindsight process or container was running.
 - Runner mode: default disabled config, no retain, no writes.
 - Probe status: disabled with `HINDSIGHT_ENABLED=false`; no health call, retain, recall, or writes.
+- Local image check: `ghcr.io/vectorize-io/hindsight:latest` exists on the Zoe host.
+- Offline start blocker: the image defaults its LLM provider to OpenAI unless Zoe overrides it, and the default local embedding model (`BAAI/bge-small-en-v1.5`) is not currently present in the host Hugging Face cache.
 
 Measured disabled-run result:
 
@@ -75,7 +77,7 @@ Measured disabled-run result:
 | p95 latency | 0.0066 ms |
 | Sidecar writes | 0 |
 
-This is not a Hindsight acceptance result. It is an availability baseline and a fixed runner. The Hindsight bake-off remains incomplete until a local/offline sidecar is started and measured with synthetic retain/recall.
+This is not a Hindsight acceptance result. It is an availability baseline and a fixed runner. The Hindsight bake-off remains incomplete until a local/offline sidecar is started and measured with synthetic retain/recall. A live run should not start until Zoe has either a cached local embedding model, an ONNX embedding model, a local TEI endpoint, or a local OpenAI-compatible embeddings endpoint.
 
 ## Acceptance Use
 

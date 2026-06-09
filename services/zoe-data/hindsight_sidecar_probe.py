@@ -117,6 +117,7 @@ def _elapsed_ms(started: float) -> float:
 
 def _config_snapshot(env: Mapping[str, str] | None = None) -> dict[str, Any]:
     values = env or os.environ
+    embeddings_provider = values.get("HINDSIGHT_API_EMBEDDINGS_PROVIDER") or "local"
     return {
         "enabled": _env_bool_snapshot(values.get("HINDSIGHT_ENABLED"), default=False),
         "base_url": (values.get("HINDSIGHT_BASE_URL") or "http://127.0.0.1:8888").rstrip("/"),
@@ -126,13 +127,46 @@ def _config_snapshot(env: Mapping[str, str] | None = None) -> dict[str, Any]:
         "offline_only": _env_bool_snapshot(values.get("HINDSIGHT_OFFLINE_ONLY"), default=True),
         "llm_provider": values.get("HINDSIGHT_API_LLM_PROVIDER") or values.get("HINDSIGHT_LLM_PROVIDER") or None,
         "llm_base_url": values.get("HINDSIGHT_API_LLM_BASE_URL") or values.get("HINDSIGHT_LLM_BASE_URL") or None,
+        "embeddings_provider": embeddings_provider,
+        "embeddings_model": (
+            values.get("HINDSIGHT_API_EMBEDDINGS_LOCAL_MODEL")
+            or values.get("HINDSIGHT_API_EMBEDDINGS_ONNX_MODEL_PATH")
+            or values.get("HINDSIGHT_API_EMBEDDINGS_ONNX_MODEL_ID")
+            or values.get("HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL")
+            or "BAAI/bge-small-en-v1.5"
+        ),
+        "embeddings_base_url": _embeddings_base_url_snapshot(values, embeddings_provider),
     }
 
 
-def _env_bool_snapshot(value: str | None, *, default: bool) -> bool:
+def _env_bool_snapshot(value: str | None, *, default: bool) -> bool | str:
     if value is None or str(value).strip() == "":
         return default
-    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return str(value)
+
+
+def _embeddings_base_url_snapshot(values: Mapping[str, str], provider: str) -> str | None:
+    normalized = str(provider or "").strip().lower()
+    if normalized == "tei":
+        return values.get("HINDSIGHT_API_EMBEDDINGS_TEI_URL") or None
+    if normalized == "openai":
+        return values.get("HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL") or None
+    if normalized == "litellm":
+        return values.get("HINDSIGHT_API_EMBEDDINGS_LITELLM_API_BASE") or None
+    if normalized == "litellm-sdk":
+        return values.get("HINDSIGHT_API_EMBEDDINGS_LITELLM_SDK_API_BASE") or None
+    return (
+        values.get("HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL")
+        or values.get("HINDSIGHT_API_EMBEDDINGS_TEI_URL")
+        or values.get("HINDSIGHT_API_EMBEDDINGS_LITELLM_API_BASE")
+        or values.get("HINDSIGHT_API_EMBEDDINGS_LITELLM_SDK_API_BASE")
+        or None
+    )
 
 
 def _slug_snapshot(value: str) -> str:

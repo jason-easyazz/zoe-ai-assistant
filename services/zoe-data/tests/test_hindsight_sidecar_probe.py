@@ -31,7 +31,64 @@ async def test_probe_rejects_cloud_model_config():
     assert result.config["enabled"] is True
     assert result.config["base_url"] == "http://127.0.0.1:8888"
     assert result.config["llm_provider"] == "openai"
+    assert result.config["embeddings_provider"] == "local"
     assert "not allowed" in (result.reason or "")
+
+
+@pytest.mark.asyncio
+async def test_probe_rejects_cloud_embedding_config():
+    result = await probe_hindsight_sidecar(
+        env={
+            "HINDSIGHT_ENABLED": "true",
+            "HINDSIGHT_BASE_URL": "http://127.0.0.1:8888",
+            "HINDSIGHT_API_LLM_PROVIDER": "llamacpp",
+            "HINDSIGHT_API_EMBEDDINGS_PROVIDER": "openai",
+        },
+        include_process_scan=False,
+    )
+
+    assert result.status == "misconfigured"
+    assert result.acceptable is False
+    assert result.config["embeddings_provider"] == "openai"
+    assert "embeddings provider" in (result.reason or "")
+
+
+@pytest.mark.asyncio
+async def test_probe_snapshot_keeps_tei_url_from_openai_base_url():
+    result = await probe_hindsight_sidecar(
+        env={
+            "HINDSIGHT_ENABLED": "true",
+            "HINDSIGHT_BASE_URL": "http://127.0.0.1:8888",
+            "HINDSIGHT_API_LLM_PROVIDER": "llamacpp",
+            "HINDSIGHT_API_EMBEDDINGS_PROVIDER": "tei",
+            "HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL": "http://127.0.0.1:11434/v1",
+        },
+        include_process_scan=False,
+    )
+
+    assert result.status == "misconfigured"
+    assert result.config["embeddings_provider"] == "tei"
+    assert result.config["embeddings_base_url"] is None
+    assert "TEI embeddings" in (result.reason or "")
+
+
+@pytest.mark.asyncio
+async def test_probe_snapshot_prefers_tei_url_for_tei_provider():
+    result = await probe_hindsight_sidecar(
+        env={
+            "HINDSIGHT_ENABLED": "true",
+            "HINDSIGHT_BASE_URL": "http://127.0.0.1:8888",
+            "HINDSIGHT_API_LLM_PROVIDER": "llamacpp",
+            "HINDSIGHT_API_EMBEDDINGS_PROVIDER": "tei",
+            "HINDSIGHT_API_EMBEDDINGS_TEI_URL": "https://tei.example.com",
+            "HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL": "http://127.0.0.1:11434/v1",
+        },
+        include_process_scan=False,
+    )
+
+    assert result.status == "misconfigured"
+    assert result.config["embeddings_base_url"] == "https://tei.example.com"
+    assert "TEI embeddings" in (result.reason or "")
 
 
 @pytest.mark.asyncio
@@ -69,6 +126,19 @@ async def test_probe_reports_malformed_env_as_misconfigured():
     assert result.config["base_url"] == "http://127.0.0.1:8888"
     assert result.config["bank_prefix"] == "zoe"
     assert "could not convert string to float" in (result.reason or "")
+
+
+@pytest.mark.asyncio
+async def test_probe_reports_invalid_boolean_env_as_misconfigured():
+    result = await probe_hindsight_sidecar(
+        env={"HINDSIGHT_ENABLED": "enabled"},
+        include_process_scan=False,
+    )
+
+    assert result.status == "misconfigured"
+    assert result.acceptable is False
+    assert result.config["enabled"] == "enabled"
+    assert "Unrecognized boolean" in (result.reason or "")
 
 
 @pytest.mark.asyncio
