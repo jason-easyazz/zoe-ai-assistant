@@ -3172,6 +3172,9 @@ def test_implement_body_includes_intent_gap_fast_path():
     assert "Open-domain Q&A / creative" in body
     assert "do not grep `_CALCULATE_`, `_execute_`" in body
     assert "`Tell me a joke.`, `Tell me a joke`, and `Tell me another joke.`" in body
+    assert "python3 scripts/maintenance/zoe_apply_intent_gap_contract.py joke" in body
+    assert "python3 -m py_compile services/zoe-data/intent_router.py" in body
+    assert "services/zoe-data/tests/test_intent_open_domain.py" in body
     assert "Intent(\"extend_capability\", {\"raw\": <original text>})" in body
     assert "Do not add a joke bank or a brittle per-joke executor" in body
     assert "Start editing within 4 tool/model steps after `kanban_show`" in body
@@ -3213,6 +3216,9 @@ def test_implement_revision_body_includes_intent_gap_fast_path():
     assert "Open-domain Q&A / creative" in body
     assert "do not grep `_CALCULATE_`, `_execute_`" in body
     assert "`Tell me a joke.`, `Tell me a joke`, and `Tell me another joke.`" in body
+    assert "python3 scripts/maintenance/zoe_apply_intent_gap_contract.py joke" in body
+    assert "python3 -m py_compile services/zoe-data/intent_router.py" in body
+    assert "services/zoe-data/tests/test_intent_open_domain.py" in body
     assert "Intent(\"extend_capability\", {\"raw\": <original text>})" in body
     assert "Do not add a joke bank or a brittle per-joke executor" in body
     assert "EXISTING PR REVISION FAST PATH" in body
