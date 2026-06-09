@@ -292,7 +292,8 @@ def _harness_implement_hint(issue: dict | None = None) -> str:
     source = str(meta.get("source") or "").lower()
     kind = str(meta.get("zoe_kind") or "").lower()
     harness_sources = {"retro_followup", "engineering_blocker_followup"}
-    if kind != "harness_fix" and "harness" not in title and source not in harness_sources:
+    harness_title = title.startswith(("harness:", "zoe harness", "hermes harness"))
+    if kind != "harness_fix" and not harness_title and source not in harness_sources:
         return ""
     return (
         "- HARNESS FAST PATH: this is a Zoe/Hermes harness ticket. Do not spend budget"

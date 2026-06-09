@@ -2628,7 +2628,7 @@ def test_implement_body_includes_harness_repo_map_for_harness_title():
         {
             "id": "uuid-title",
             "identifier": "ZOE-TITLE",
-            "title": "Fix harness worktree path",
+            "title": "Harness: fix worktree path",
             "description": """Small operator task.
 
 ```zoe-ticket
@@ -2640,6 +2640,21 @@ def test_implement_body_includes_harness_repo_map_for_harness_title():
 
     assert "HARNESS FAST PATH" in body
     assert "services/zoe-data/executors/kanban_adapter.py" in body
+
+
+def test_implement_body_omits_harness_repo_map_for_unrelated_harness_word():
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {
+            "id": "uuid-test-harness",
+            "identifier": "ZOE-TEST",
+            "title": "Fix CI test harness timeout",
+            "description": "Update a product test fixture timeout.",
+        },
+        "ZOE-TEST",
+    )
+
+    assert "HARNESS FAST PATH" not in body
 
 
 def test_implement_body_omits_harness_repo_map_for_generic_tickets():
