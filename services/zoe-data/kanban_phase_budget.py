@@ -77,7 +77,7 @@ _POST_PATCH_SHIP_RE = re.compile(
 )
 _GIT_ADD_RE = re.compile(r"^git\s+add\b", re.IGNORECASE)
 _CHAINED_SHIP_RE = re.compile(
-    r"^git\s+add\b(?=.*&&\s*git\s+commit\b)(?=.*&&\s*git\s+push\b)(?=.*&&\s*gh\s+pr\s+create\b)",
+    r"^git\s+add\b.*&&\s*git\s+commit\b.*&&\s*git\s+push\b.*&&\s*gh\s+pr\s+create\b",
     re.IGNORECASE,
 )
 _STEP_EXIT_RE = re.compile(r"\[exit\s+(?P<code>\d+)\]", re.IGNORECASE)
