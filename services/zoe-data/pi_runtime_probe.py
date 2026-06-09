@@ -33,7 +33,7 @@ class PiRuntimeConfig:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "PiRuntimeConfig":
-        values = env or os.environ
+        values = env if env is not None else os.environ
         return cls(
             enabled=_env_bool(values.get("ZOE_PI_ENABLED"), default=False),
             allow_execution=_env_bool(values.get("ZOE_PI_ALLOW_EXECUTION"), default=False),
@@ -190,7 +190,7 @@ def _env_bool(value: str | None, *, default: bool) -> bool:
 
 
 def _config_snapshot(env: Mapping[str, str] | None = None) -> dict[str, Any]:
-    values = env or os.environ
+    values = env if env is not None else os.environ
     return {
         "enabled": _bool_snapshot(values.get("ZOE_PI_ENABLED"), default=False),
         "allow_execution": _bool_snapshot(values.get("ZOE_PI_ALLOW_EXECUTION"), default=False),
@@ -225,7 +225,8 @@ def _float_snapshot(value: str | None, *, default: float) -> float | str:
 
 
 def _tool_snapshot(pi_command: str, env: Mapping[str, str] | None = None) -> dict[str, str | None]:
-    path = (env or os.environ).get("PATH")
+    values = env if env is not None else os.environ
+    path = values.get("PATH")
     return {
         "node": shutil.which("node", path=path),
         "npm": shutil.which("npm", path=path),

@@ -17,6 +17,23 @@ def test_pi_runtime_defaults_are_disabled_and_offline_only():
     assert config.command == "pi"
 
 
+def test_empty_env_does_not_fall_through_to_process_environment(monkeypatch):
+    monkeypatch.setenv("ZOE_PI_ENABLED", "true")
+    monkeypatch.setenv("ZOE_PI_COMMAND", "process-pi")
+    monkeypatch.setenv("PATH", "")
+
+    isolated_config = PiRuntimeConfig.from_env({})
+    isolated_probe = probe_pi_runtime(env={})
+    process_config = PiRuntimeConfig.from_env()
+
+    assert isolated_config.enabled is False
+    assert isolated_config.command == "pi"
+    assert isolated_probe.status == "disabled"
+    assert isolated_probe.tools["pi"] is None
+    assert process_config.enabled is True
+    assert process_config.command == "process-pi"
+
+
 def test_disabled_probe_is_acceptable_even_when_tools_are_missing(monkeypatch):
     monkeypatch.setenv("PATH", "")
 
