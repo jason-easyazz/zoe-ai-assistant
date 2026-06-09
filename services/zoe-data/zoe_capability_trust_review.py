@@ -64,6 +64,10 @@ class CapabilityTrustReviewResult:
     profiles: tuple[CapabilityProfile, ...]
     blockers: tuple[str, ...] = ()
 
+    def __post_init__(self) -> None:
+        if self.blockers and self.profiles:
+            raise ValueError("blocked trust review results cannot carry applyable profiles")
+
     @property
     def allowed_to_apply(self) -> bool:
         return any(decision.approved for decision in self.decisions) and not self.blockers
@@ -107,7 +111,7 @@ def review_capability_trust_update_plan(
     if not reviewer_id:
         return CapabilityTrustReviewResult(
             decisions=(),
-            profiles=base_profiles,
+            profiles=(),
             blockers=tuple(dict.fromkeys(global_blockers)),
         )
 
@@ -171,7 +175,7 @@ def review_capability_trust_update_plan(
 
     deduped_blockers = tuple(dict.fromkeys(result_blockers))
     updated_profiles = (
-        base_profiles
+        ()
         if deduped_blockers
         else tuple(profile_updates.get(profile.capability_id, profile) for profile in base_profiles)
     )

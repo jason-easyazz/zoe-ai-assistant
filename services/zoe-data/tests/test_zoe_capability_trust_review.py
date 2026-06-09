@@ -6,6 +6,7 @@ from zoe_capability_profile import DEFAULT_CAPABILITY_PROFILES, CapabilityProfil
 from zoe_capability_trust_review import (
     CAPABILITY_TRUST_REVIEW_SOURCE,
     CapabilityTrustReviewDecision,
+    CapabilityTrustReviewResult,
     review_capability_trust_update_plan,
 )
 from zoe_capability_trust_update import CapabilityTrustUpdateCandidate, CapabilityTrustUpdatePlan
@@ -98,11 +99,10 @@ def test_capability_trust_review_fails_closed_when_plan_has_blockers():
         profiles=DEFAULT_CAPABILITY_PROFILES,
     )
 
-    by_id = {profile.capability_id: profile for profile in result.profiles}
     assert result.allowed_to_apply is False
     assert "outcome_not_retained" in result.blockers
     assert result.decisions[0].approved is False
-    assert by_id["hindsight_reflective_memory"].trust_level == "experimental"
+    assert result.profiles == ()
 
 
 def test_capability_trust_review_fails_closed_without_reviewer_id():
@@ -116,6 +116,7 @@ def test_capability_trust_review_fails_closed_without_reviewer_id():
 
     assert result.allowed_to_apply is False
     assert result.decisions == ()
+    assert result.profiles == ()
     assert "missing_reviewer_id" in result.blockers
 
 
@@ -204,13 +205,12 @@ def test_capability_trust_review_returns_base_profiles_when_any_candidate_blocks
         profiles=DEFAULT_CAPABILITY_PROFILES,
     )
 
-    by_id = {profile.capability_id: profile for profile in result.profiles}
     assert result.allowed_to_apply is False
     assert result.applied_capability_ids == ()
     assert result.decisions[0].approved is True
     assert result.decisions[1].approved is False
     assert "review_rejected:openclaw_fallback" in result.blockers
-    assert by_id["hindsight_reflective_memory"].trust_level == "experimental"
+    assert result.profiles == ()
 
 
 def test_capability_trust_review_rejects_invalid_promoted_profile():
@@ -240,7 +240,7 @@ def test_capability_trust_review_rejects_invalid_promoted_profile():
     assert result.allowed_to_apply is False
     assert "invalid_promoted_profile:scratch_memory_candidate" in result.blockers
     assert result.decisions[0].approved is False
-    assert result.profiles[0].trust_level == "experimental"
+    assert result.profiles == ()
 
 
 def test_capability_trust_review_decision_metadata_is_read_only_and_serializable():
@@ -270,4 +270,13 @@ def test_capability_trust_review_decision_requires_approval_refs_when_approved()
             reason="invalid approved decision",
             approval_refs=(),
             evidence_refs=("pytest:test_zoe_capability_trust_review",),
+        )
+
+
+def test_capability_trust_review_result_rejects_blocked_applyable_profiles():
+    with pytest.raises(ValueError, match="blocked trust review results"):
+        CapabilityTrustReviewResult(
+            decisions=(),
+            profiles=DEFAULT_CAPABILITY_PROFILES,
+            blockers=("manual_blocker",),
         )
