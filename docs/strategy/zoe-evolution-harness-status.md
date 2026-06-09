@@ -36,9 +36,10 @@ Important non-complete truth:
 - The plan now names Zoe's missing north-star layer: capability profiles, trust/autonomy classes, candidate scouting, outcome evals, and hardware-aware promotion.
 - Zoe now has an executable capability profile contract and initial self-model for key chat, memory, graph, governance, escalation, Pi, and device-control surfaces.
 - Zoe now has candidate scoring for comparing Pi, MCP, GitHub, skill, API, local-service, and existing-Zoe options before adoption.
+- Zoe now has a self-evolution proposal contract that attaches signals, candidate scores, affected capabilities, approval gates, verification, rollback, and evidence before any execution.
 - The deterministic memory router is not yet wired into production chat behind a feature flag.
 - Retain-candidate admission is not yet fully governed through Multica approval.
-- The full self-evolution loop is not yet implemented end to end.
+- The full self-evolution loop is not yet implemented end to end; proposal records are now defined, but existing live proposal writers still need to emit them and Multica still needs to enforce admission.
 - Zoe main engine cleanup should not begin until the inventory, graph, and memory/evolution contracts have protective tests around the active surfaces.
 
 ## Phase Ledger
@@ -62,7 +63,8 @@ Important non-complete truth:
 | Candidate scoring | Complete foundation | `services/zoe-data/zoe_candidate_scoring.py`, `services/zoe-data/tests/test_zoe_candidate_scoring.py`, and `docs/architecture/zoe-candidate-scoring.md` define candidate scoring and adoption gates. | Attach candidate scores to self-evolution proposal records before installs or replacements. |
 | Observation/evaluation traces | Not started | Memory metrics exist for MemPalace but not full retrieval helpfulness/contradiction traces. | Add a trace schema for recall, retain candidate, admission, contradiction, and fallback events. |
 | Multica evidence gates | Partial | Implement completion now requires PR evidence for code/default profiles. | Add memory admission gates and explicit self-evolution proposal gates. |
-| Self-evolution loop | Partial | Multica, pipeline evidence, Greploop, Greptile, Hermes, and worktree bootstrap pieces exist. | Implement structured Notice -> Explain -> Search -> Evaluate -> Propose records before any automatic execution. |
+| Self-evolution proposal records | Complete foundation | `services/zoe-data/zoe_evolution_proposal.py`, `services/zoe-data/tests/test_zoe_evolution_proposal.py`, and `docs/architecture/zoe-evolution-proposal-contract.md` define structured Notice -> Explain -> Search -> Evaluate -> Propose records. | Adapt existing live proposal writers to emit this payload and require it before installs/replacements. |
+| Self-evolution loop | Partial | Multica, pipeline evidence, Greploop, Greptile, Hermes, worktree bootstrap, candidate scoring, and proposal contract pieces exist. | Wire live proposal writers, Multica admission, execution approval, verification, retained outcomes, and retirement evidence. |
 | Main engine cleanup | Deferred | `zoe_agent.py` remains large and active. | Start only after inventories and chat/memory/tool dispatch tests are strong enough to prevent regressions. |
 
 ## Missing Work By Capability
