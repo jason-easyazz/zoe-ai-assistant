@@ -33,6 +33,7 @@ Important non-complete truth:
 - Tool/capability and memory read/write inventories now exist as cleanup gates; keep them updated as runtime paths change.
 - MemPalace now has a repeatable local baseline harness and first measured Zoe-host run; Hindsight has not yet been run as a measured live sidecar bake-off.
 - Graphiti/FalkorDB/Neo4j have not yet been measured for Zoe relational memory.
+- The plan now names Zoe's missing north-star layer: capability profiles, trust/autonomy classes, candidate scouting, outcome evals, and hardware-aware promotion.
 - The deterministic memory router is not yet wired into production chat behind a feature flag.
 - Retain-candidate admission is not yet fully governed through Multica approval.
 - The full self-evolution loop is not yet implemented end to end.
@@ -54,6 +55,7 @@ Important non-complete truth:
 | Graphify current map | Complete foundation | `graphify-out/GRAPH_REPORT.md` and `graphify-out/graph.json` were regenerated from `origin/main` at `ad52f61d`; `docs/architecture/zoe-harness-current-inventory.md` records the source-backed inventory. | Rerun Graphify after substantial code or architecture changes. |
 | Tool/capability inventory | Complete foundation | `docs/architecture/zoe-tool-capability-inventory.md` maps agent, MCP, Multica, Hermes, OpenClaw, and governance surfaces. | Keep updated when tool catalogs or execution lanes change. |
 | Memory read/write inventory | Complete foundation | `docs/architecture/zoe-memory-read-write-inventory.md` maps MemoryService operations, durable writes, prompt reads, MCP paths, Hindsight candidates, and metadata gaps. | Keep updated when memory write/read paths change. |
+| Zoe north-star layer | Complete foundation | `docs/strategy/zoe-evolution-harness-plan.md` and `docs/adr/ADR-zoe-north-star-layer.md` define capability profiles, trust/autonomy classes, discovery scoring, outcome evals, and hardware budgets. | Build capability profile inventory and candidate-scoring records. |
 | Observation/evaluation traces | Not started | Memory metrics exist for MemPalace but not full retrieval helpfulness/contradiction traces. | Add a trace schema for recall, retain candidate, admission, contradiction, and fallback events. |
 | Multica evidence gates | Partial | Implement completion now requires PR evidence for code/default profiles. | Add memory admission gates and explicit self-evolution proposal gates. |
 | Self-evolution loop | Partial | Multica, pipeline evidence, Greploop, Greptile, Hermes, and worktree bootstrap pieces exist. | Implement structured Notice -> Explain -> Search -> Evaluate -> Propose records before any automatic execution. |
@@ -124,6 +126,27 @@ Acceptance evidence:
 - Failed execution produces a pending memory candidate, not a trusted fact.
 - Successful execution updates capability trust only after verification.
 
+### Zoe Product Intelligence
+
+The missing plan layer is not another database. It is a product and agency model that keeps Zoe pointed at the right kind of intelligence: local-first continuity, useful initiative, safe capability growth, and measured improvement.
+
+Required slices:
+
+- define capability profiles for current Zoe tools, routes, skills, sidecars, and execution lanes;
+- classify each capability by trust level, approval requirement, offline viability, model/device dependency, tests, rollback, and hardware budget;
+- create candidate-scoring records for Pi, MCP, GitHub, local skills, APIs, and existing Zoe tools before adopting or replacing anything;
+- add trust/autonomy classes so Zoe can observe, recall, suggest, prepare, execute, and promote under different gates;
+- add outcome eval traces for task completion, correction handling, continuity, friction, latency, trust, cleanup quality, and hardware fit;
+- treat user-visible coherence and relationship continuity as first-class success metrics alongside latency and test pass rate.
+
+Acceptance evidence:
+
+- every trusted capability has a profile with tests, owner surface, budget, and rollback;
+- candidate adoption decisions record activity, stars, license, offline viability, security, footprint, and fit;
+- privileged execution cannot occur merely because a capability exists;
+- outcome evals can create Notice records when Zoe repeatedly fails or regresses;
+- cleanup proposals include non-use, replacement, failure-rate, or maintenance-cost evidence.
+
 ## Recommended PR Order
 
 Keep each pull request small enough for Greptile and Zoe verification.
@@ -159,9 +182,18 @@ Keep each pull request small enough for Greptile and Zoe verification.
    - Route retain candidates through Multica/review.
    - Add evidence and scope gates for relational and self-evolution memory.
 9. Self-evolution proposal records.
-   - Implement Notice -> Explain -> Search -> Evaluate -> Propose records.
-   - Keep execution approval-gated.
-10. Main engine cleanup.
+    - Implement Notice -> Explain -> Search -> Evaluate -> Propose records.
+    - Keep execution approval-gated.
+10. Zoe capability profile inventory.
+    - Add profiles for active chat, voice, memory, Graphify, Multica, Hermes, OpenClaw, MCP, Pi, and local service capabilities.
+    - Include trust level, approval class, tests, budget, dependencies, rollback, and known failures.
+11. Candidate discovery scoring.
+    - Add records/templates that compare Pi, MCP, GitHub, local skills, APIs, and existing Zoe capabilities.
+    - Include activity, stars, license, offline viability, security, hardware footprint, test quality, and overlap.
+12. Outcome eval trace schema.
+    - Track task completion, correction handling, continuity, friction, latency, trust, cleanup quality, and hardware fit.
+    - Convert recurring failures into Notice records.
+13. Main engine cleanup.
     - Split only protected, well-understood areas in `zoe_agent.py`.
     - Remove duplicate or retired memory paths only after inventory and tests.
 
@@ -173,6 +205,7 @@ Do not start major Zoe main engine cleanup if any of these are true:
 - Active-vs-retired surfaces are not labeled.
 - Memory writes cannot be traced to user, scope, evidence, and review state.
 - Chat, memory gating, tool dispatch, and Multica evidence tests are missing.
+- Capability profiles and outcome evals are missing for the surface being cleaned or replaced.
 - A proposed change would bypass PR review, Greptile, or protected-branch policy.
 - A memory backend requires cloud models for Zoe memory.
 
@@ -188,4 +221,6 @@ The Zoe evolution harness is done only when:
 - no durable memory write is unscoped;
 - no trusted relational/self-evolution memory lacks evidence;
 - every code-producing self-evolution change has proposal, approval when privileged, PR evidence, verification, and retained outcome;
+- every trusted Zoe capability has a profile, budget, tests, approval class, known failure list, and rollback path;
+- outcome evals can show Zoe is improving task completion, continuity, correction handling, trust, latency, and hardware fit;
 - stale tools and memory paths can be retired through measured, reviewable cleanup rather than intuition.
