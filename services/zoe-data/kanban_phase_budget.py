@@ -76,6 +76,7 @@ _POST_PATCH_SHIP_RE = re.compile(
     re.IGNORECASE,
 )
 _GIT_ADD_RE = re.compile(r"^git\s+add\b", re.IGNORECASE)
+# Zoe needs a PR handoff, not only a pushed branch; require all four steps in order.
 _CHAINED_SHIP_RE = re.compile(
     r"^git\s+add\b.*&&\s*git\s+commit\b.*&&\s*git\s+push\b.*&&\s*gh\s+pr\s+create\b",
     re.IGNORECASE,
@@ -313,14 +314,15 @@ def implement_code_audit_post_patch_drift_reason_from_log(
         if not patch_seen:
             continue
         shell_command = _shell_command_from_step(line)
-        if _TERMINAL_STEP_RE.search(line) or (
-            shell_command
-            and (
-                _POST_PATCH_VALIDATION_RE.search(shell_command)
-                or _POST_PATCH_SHIP_RE.search(shell_command)
-            )
-        ):
+        if _TERMINAL_STEP_RE.search(line):
             return None
+        if shell_command and (
+            _POST_PATCH_VALIDATION_RE.search(shell_command)
+            or _POST_PATCH_SHIP_RE.search(shell_command)
+        ):
+            if not _step_failed(line):
+                return None
+            continue
         if not _EXPLORE_STEP_RE.search(line):
             continue
         post_patch_explore_steps += 1
@@ -360,7 +362,9 @@ def implement_code_audit_post_validation_ship_reason_from_log(
         if not shell_command:
             continue
         if _POST_PATCH_SHIP_RE.search(shell_command) or _CHAINED_SHIP_RE.search(shell_command):
-            return None
+            if not _step_failed(line):
+                return None
+            continue
         if _POST_PATCH_VALIDATION_RE.search(shell_command):
             if not _step_failed(line):
                 validation_seen = True
