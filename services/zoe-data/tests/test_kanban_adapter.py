@@ -1903,6 +1903,20 @@ def test_implement_edit_safety_ignores_non_step_patch_text(tmp_path, monkeypatch
     assert kb.implement_edit_safety_reason_from_log("t_impl", "implement") is None
 
 
+def test_implement_edit_safety_ignores_patch_word_in_step_arguments(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 🔎 grep      patch utils.py  0.1s\n"
+        "  ┊ 📖 read      /work/services/zoe-data/intent_router.py  0.1s\n",
+        encoding="utf-8",
+    )
+
+    assert kb.implement_edit_safety_reason_from_log("t_impl", "implement") is None
+
+
 def test_implement_edit_safety_covers_revision_phase(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     log_dir = tmp_path / "kanban" / "logs"
