@@ -71,6 +71,7 @@ def test_capability_trust_review_blocks_unknown_profile_until_profile_contract_e
 
     assert result.allowed_to_apply is False
     assert result.applied_capability_ids == ()
+    assert result.profiles == ()
     assert "unknown_capability_profile:self_evolution_loop" in result.blockers
     assert result.decisions[0].approved is False
 
@@ -86,6 +87,7 @@ def test_capability_trust_review_fails_closed_without_approval_refs():
 
     assert result.allowed_to_apply is False
     assert "missing_approval_refs" in result.blockers
+    assert result.profiles == ()
     assert result.decisions[0].approved is False
     assert result.decisions[0].reason.count("missing_approval_refs") == 1
 
@@ -138,6 +140,7 @@ def test_capability_trust_review_blocks_stale_current_profile_level():
 
     assert result.allowed_to_apply is False
     assert "stale_current_trust_level:hindsight_reflective_memory" in result.blockers
+    assert result.profiles == ()
 
 
 def test_capability_trust_review_rejects_unapproved_candidate():
@@ -153,6 +156,7 @@ def test_capability_trust_review_rejects_unapproved_candidate():
     assert result.allowed_to_apply is False
     assert "review_rejected:hindsight_reflective_memory" in result.blockers
     assert "not_approved:hindsight_reflective_memory" in result.blockers
+    assert result.profiles == ()
     assert result.decisions[0].approved is False
 
 
@@ -182,9 +186,10 @@ def test_capability_trust_review_keeps_candidate_blockers_isolated():
     assert "not_approved:hindsight_reflective_memory" in first_reason
     assert "not_approved:openclaw_fallback" in second_reason
     assert "hindsight_reflective_memory" not in second_reason
+    assert result.profiles == ()
 
 
-def test_capability_trust_review_returns_base_profiles_when_any_candidate_blocks():
+def test_capability_trust_review_clears_profiles_when_any_candidate_blocks():
     approved = _candidate(
         capability_id="hindsight_reflective_memory",
         current_trust_level="experimental",
