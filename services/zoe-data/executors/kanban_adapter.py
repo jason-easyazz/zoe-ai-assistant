@@ -505,7 +505,8 @@ class KanbanAdapter:
         issue_id = str(issue.get("id") or "").strip()
         escalation = _model_escalation_active(issue, mode)
         escalation_marker = "zoe-model-escalation: true\n" if escalation else ""
-        workspace_label = "main repo checkout" if phase == "retro" else "git worktree"
+        workspace = _workspace_for_phase(phase)
+        workspace_label = "main repo checkout" if workspace.startswith("dir:") else "git worktree"
         common = (
             f"Multica issue: {identifier} (id {issue_id})\n"
             f"zoe-ref: multica:{issue_id}:{phase}\n"
