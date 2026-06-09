@@ -75,6 +75,13 @@ _POST_PATCH_SHIP_RE = re.compile(
     r"^(?:git\s+(?:commit|push)\b|gh\s+pr\s+create\b)",
     re.IGNORECASE,
 )
+_GIT_ADD_RE = re.compile(r"^git\s+add\b", re.IGNORECASE)
+# Zoe needs a PR handoff, not only a pushed branch; require all four steps in order.
+_CHAINED_SHIP_RE = re.compile(
+    r"^git\s+add\b.*&&\s*git\s+commit\b.*&&\s*git\s+push\b.*&&\s*gh\s+pr\s+create\b",
+    re.IGNORECASE,
+)
+_STEP_EXIT_RE = re.compile(r"\[exit\s+(?P<code>\d+)\]", re.IGNORECASE)
 _ENGINEERING_BLOCKER_FOLLOWUP_SOURCE_RE = re.compile(
     r'"source"\s*:\s*"engineering_blocker_followup"'
 )
@@ -266,6 +273,11 @@ def _shell_command_from_step(line: str) -> str | None:
     return _STEP_TIMING_SUFFIX_RE.sub("", command)
 
 
+def _step_failed(line: str) -> bool:
+    match = _STEP_EXIT_RE.search(line)
+    return bool(match and int(match.group("code")) != 0)
+
+
 def implement_code_audit_post_patch_drift_reason_from_log(
     task_id: str,
     phase: str,
@@ -302,14 +314,15 @@ def implement_code_audit_post_patch_drift_reason_from_log(
         if not patch_seen:
             continue
         shell_command = _shell_command_from_step(line)
-        if _TERMINAL_STEP_RE.search(line) or (
-            shell_command
-            and (
-                _POST_PATCH_VALIDATION_RE.search(shell_command)
-                or _POST_PATCH_SHIP_RE.search(shell_command)
-            )
-        ):
+        if _TERMINAL_STEP_RE.search(line):
             return None
+        if shell_command and (
+            _POST_PATCH_VALIDATION_RE.search(shell_command)
+            or _POST_PATCH_SHIP_RE.search(shell_command)
+        ):
+            if not _step_failed(line):
+                return None
+            continue
         if not _EXPLORE_STEP_RE.search(line):
             continue
         post_patch_explore_steps += 1
@@ -318,6 +331,48 @@ def implement_code_audit_post_patch_drift_reason_from_log(
                 "BLOCKER=CODE_AUDIT_POST_PATCH_DRIFT: code-audit worker kept "
                 "exploring after patch instead of validation, commit, PR, or terminal handoff "
                 f"(post_patch_explore_steps={post_patch_explore_steps}, limit={explore_budget})"
+            )
+    return None
+
+
+def implement_code_audit_post_validation_ship_reason_from_log(
+    task_id: str,
+    phase: str,
+    *,
+    session: str | None = None,
+    task_body: str = "",
+) -> str | None:
+    """Block code-audit workers that stage changes without shipping after validation."""
+    if phase not in {"implement", "implement_revision"}:
+        return None
+    if not _is_code_audit_body(task_body):
+        return None
+    if session is None:
+        session = _latest_log_session(task_id, max_lines=0)
+    if not session:
+        return None
+
+    validation_seen = False
+    for line in session.splitlines():
+        if not _STEP_LINE_RE.match(line):
+            continue
+        shell_command = _shell_command_from_step(line)
+        if _TERMINAL_STEP_RE.search(line):
+            return None
+        if not shell_command:
+            continue
+        if _POST_PATCH_SHIP_RE.search(shell_command) or _CHAINED_SHIP_RE.search(shell_command):
+            if not _step_failed(line):
+                return None
+            continue
+        if _POST_PATCH_VALIDATION_RE.search(shell_command):
+            if not _step_failed(line):
+                validation_seen = True
+            continue
+        if validation_seen and _GIT_ADD_RE.search(shell_command):
+            return (
+                "BLOCKER=CODE_AUDIT_STAGED_WITHOUT_SHIP: code-audit worker ran "
+                "`git add` after validation without chaining commit, push, and PR creation"
             )
     return None
 
@@ -588,6 +643,14 @@ def phase_budget_reason(
     )
     if code_audit_post_patch_reason:
         return code_audit_post_patch_reason
+    code_audit_post_validation_reason = implement_code_audit_post_validation_ship_reason_from_log(
+        task_id,
+        phase,
+        session=session,
+        task_body=str(task.get("body") or ""),
+    )
+    if code_audit_post_validation_reason:
+        return code_audit_post_validation_reason
     pre_edit_drift_reason = implement_pre_edit_drift_reason_from_log(
         task_id,
         phase,

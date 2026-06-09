@@ -2479,6 +2479,170 @@ def test_phase_budget_allows_code_audit_ship_command_after_patch(tmp_path, monke
     assert reason is None
 
 
+def test_phase_budget_blocks_code_audit_git_add_after_validation_without_ship(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 🔧 patch     /home/zoe/.worktrees/t_impl/services/zoe-ui/nginx.conf  0.1s\n"
+        "  ┊ 💻 $         cd /home/zoe/.worktrees/t_impl && python3 tools/audit/validate_structure.py  0.2s\n"
+        "  ┊ 💻 $         cd /home/zoe/.worktrees/t_impl && git add services/zoe-ui/nginx.conf  0.1s\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.phase_budget_reason(
+        "t_impl",
+        "implement",
+        {
+            "task": {
+                "started_at": 100,
+                "body": "CODE-AUDIT FAST PATH\nsource=code_audit_p0_security",
+                "workspace_kind": "worktree",
+                "workspace_path": "/home/zoe/.worktrees/t_impl",
+            },
+            "runs": [{"started_at": 100}],
+        },
+        now=120,
+    )
+
+    assert reason is not None
+    assert "CODE_AUDIT_STAGED_WITHOUT_SHIP" in reason
+
+
+def test_phase_budget_allows_git_add_after_failed_code_audit_validation(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 🔧 patch     /home/zoe/.worktrees/t_impl/services/zoe-ui/nginx.conf  0.1s\n"
+        "  ┊ 💻 $         cd /home/zoe/.worktrees/t_impl && python3 tools/audit/validate_structure.py  0.2s [EXIT 1]\n"
+        "  ┊ 💻 $         cd /home/zoe/.worktrees/t_impl && git add services/zoe-ui/nginx.conf  0.1s\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.phase_budget_reason(
+        "t_impl",
+        "implement",
+        {
+            "task": {
+                "started_at": 100,
+                "body": "CODE-AUDIT FAST PATH\nsource=code_audit_p0_security",
+                "workspace_kind": "worktree",
+                "workspace_path": "/home/zoe/.worktrees/t_impl",
+            },
+            "runs": [{"started_at": 100}],
+        },
+        now=120,
+    )
+
+    assert reason is None
+
+
+def test_phase_budget_blocks_git_add_after_failed_ship_then_validation(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 🔧 patch     /home/zoe/.worktrees/t_impl/services/zoe-ui/nginx.conf  0.1s\n"
+        "  ┊ 💻 $         cd /home/zoe/.worktrees/t_impl && git push -u origin HEAD  0.2s [exit 1]\n"
+        "  ┊ 💻 $         cd /home/zoe/.worktrees/t_impl && python3 tools/audit/validate_structure.py  0.2s\n"
+        "  ┊ 💻 $         cd /home/zoe/.worktrees/t_impl && git add services/zoe-ui/nginx.conf  0.1s\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.phase_budget_reason(
+        "t_impl",
+        "implement",
+        {
+            "task": {
+                "started_at": 100,
+                "body": "CODE-AUDIT FAST PATH\nsource=code_audit_p0_security",
+                "workspace_kind": "worktree",
+                "workspace_path": "/home/zoe/.worktrees/t_impl",
+            },
+            "runs": [{"started_at": 100}],
+        },
+        now=120,
+    )
+
+    assert reason is not None
+    assert "CODE_AUDIT_STAGED_WITHOUT_SHIP" in reason
+
+
+def test_phase_budget_allows_code_audit_chained_ship_after_validation(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 🔧 patch     /home/zoe/.worktrees/t_impl/services/zoe-ui/nginx.conf  0.1s\n"
+        "  ┊ 💻 $         cd /home/zoe/.worktrees/t_impl && python3 tools/audit/validate_structure.py  0.2s\n"
+        "  ┊ 💻 $         cd /home/zoe/.worktrees/t_impl && git add services/zoe-ui/nginx.conf && git commit -m security-headers && git push -u origin HEAD && gh pr create --fill  2.1s\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.phase_budget_reason(
+        "t_impl",
+        "implement",
+        {
+            "task": {
+                "started_at": 100,
+                "body": "CODE-AUDIT FAST PATH\nsource=code_audit_p0_security",
+                "workspace_kind": "worktree",
+                "workspace_path": "/home/zoe/.worktrees/t_impl",
+            },
+            "runs": [{"started_at": 100}],
+        },
+        now=120,
+    )
+
+    assert reason is None
+
+
+def test_phase_budget_blocks_wrong_order_code_audit_ship_chain_after_validation(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 🔧 patch     /home/zoe/.worktrees/t_impl/services/zoe-ui/nginx.conf  0.1s\n"
+        "  ┊ 💻 $         cd /home/zoe/.worktrees/t_impl && python3 tools/audit/validate_structure.py  0.2s\n"
+        "  ┊ 💻 $         cd /home/zoe/.worktrees/t_impl && git add services/zoe-ui/nginx.conf && gh pr create --fill && git push -u origin HEAD && git commit -m security-headers  2.1s\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.phase_budget_reason(
+        "t_impl",
+        "implement",
+        {
+            "task": {
+                "started_at": 100,
+                "body": "CODE-AUDIT FAST PATH\nsource=code_audit_p0_security",
+                "workspace_kind": "worktree",
+                "workspace_path": "/home/zoe/.worktrees/t_impl",
+            },
+            "runs": [{"started_at": 100}],
+        },
+        now=120,
+    )
+
+    assert reason is not None
+    assert "CODE_AUDIT_STAGED_WITHOUT_SHIP" in reason
+
+
 def test_phase_budget_does_not_treat_shell_grep_as_validation_after_patch(
     tmp_path, monkeypatch
 ):
@@ -3473,6 +3637,7 @@ def test_implement_body_adds_code_audit_fast_path_for_actionable_bug():
     assert "Apply the smallest patch" in body
     assert "After the first patch, spend at most 2 more tool calls locating validation" in body
     assert "do not inspect docker-compose, .github" in body
+    assert "do not run `git add` by itself" in body
     assert "git push -u origin HEAD" in body
     assert body.index("CODE-AUDIT FAST PATH") < body.index("AUDIT/SMOKE FAST PATH")
     assert body.index("CODE-AUDIT FAST PATH") < body.index("Graphify map")
