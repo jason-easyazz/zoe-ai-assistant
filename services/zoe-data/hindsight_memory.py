@@ -270,6 +270,24 @@ def _compact_context(context: Mapping[str, Any]) -> str:
     return "; ".join(parts)
 
 
+def _retain_result_succeeded(result: Mapping[str, Any]) -> bool:
+    if result.get("success") is False:
+        return False
+    return bool(
+        result.get("success") is True
+        or result.get("operation_id")
+        or _positive_count(result.get("items_count"))
+        or _positive_count(result.get("unit_ids_count"))
+    )
+
+
+def _positive_count(value: Any) -> bool:
+    try:
+        return int(value or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 class HindsightMemoryClient:
     """Small async client for Hindsight's HTTP API."""
 
@@ -314,9 +332,35 @@ class HindsightMemoryClient:
 
         bank_id = self.config.bank_id(event.user_id, event.scope)
         payload = {"async": self.config.async_retain, "items": [event_to_hindsight_item(event)]}
-        result = await self._request("POST", f"/v1/default/banks/{bank_id}/memories", json=payload)
-        result.setdefault("event_id", event.event_id)
+        return await self.retain_payload(bank_id=bank_id, payload=payload, event_id=event.event_id)
+
+    async def retain_payload(
+        self,
+        *,
+        bank_id: str,
+        payload: Mapping[str, Any],
+        event_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Submit a pre-admitted retain payload to Hindsight.
+
+        This method deliberately does not consult ``auto_retain``. It is for
+        exact payloads that have already passed Zoe's admission gate.
+        """
+
+        if not self.config.enabled:
+            result = {"enabled": False, "retained": False, "reason": "disabled", "bank_id": bank_id}
+            if event_id:
+                result["event_id"] = event_id
+            return result
+
+        retain_payload = dict(payload)
+        if isinstance(retain_payload.get("items"), tuple):
+            retain_payload["items"] = list(retain_payload["items"])
+        result = await self._request("POST", f"/v1/default/banks/{bank_id}/memories", json=retain_payload)
+        if event_id:
+            result.setdefault("event_id", event_id)
         result.setdefault("bank_id", bank_id)
+        result.setdefault("retained", _retain_result_succeeded(result))
         return result
 
     async def operation_status(self, *, bank_id: str, operation_id: str) -> dict[str, Any]:
