@@ -14,9 +14,19 @@ from typing import Any, Sequence
 
 from zoe_memory_router import route_memory_query
 from zoe_observation_trace import ObservationOutcome, ObservationTrace, ObservationTraceType
+from zoe_observation_trace_collector import (
+    ObservationTraceCollectionResult,
+    ObservationTraceCollectorPolicy,
+    collect_observation_traces,
+)
 
 
 FEATURE_FLAG = "ZOE_MEMORY_ROUTER_RUNTIME_ENABLED"
+MEMORY_ROUTE_TRACE_COLLECTOR_POLICY = ObservationTraceCollectorPolicy(
+    max_batch_size=1,
+    allowed_surfaces=("memory",),
+    allowed_trace_types=(ObservationTraceType.MEMORY_ROUTE.value,),
+)
 DEFAULT_SAMPLE_QUERIES = (
     ("default_chat", "What do I usually like for breakfast?"),
     ("experience", "What fix worked for the recurring service failure?"),
@@ -62,7 +72,7 @@ def route_memory_for_runtime(
             "reason": "runtime flag enabled for observation only",
         }
     if include_trace:
-        decision["trace"] = build_memory_route_trace(
+        trace = build_memory_route_trace(
             query,
             purpose=purpose,
             decision=decision,
@@ -70,7 +80,10 @@ def route_memory_for_runtime(
             scope=scope,
             user_id=user_id,
             latency_ms=_elapsed_ms(start),
-        ).to_dict()
+        )
+        collection = collect_memory_route_trace(trace)
+        decision["trace"] = trace.to_dict()
+        decision["trace_collection"] = _trace_collection_summary(collection)
     return decision
 
 
@@ -121,6 +134,20 @@ def build_memory_route_trace(
     )
 
 
+def collect_memory_route_trace(trace: ObservationTrace) -> ObservationTraceCollectionResult:
+    result = collect_observation_traces((trace,), policy=MEMORY_ROUTE_TRACE_COLLECTOR_POLICY)
+    if not result.ok:
+        reasons = "; ".join(rejection["reason"] for rejection in result.rejected)
+        raise ValueError(reasons)
+    return result
+
+
+def _trace_collection_summary(collection: ObservationTraceCollectionResult) -> dict[str, Any]:
+    payload = collection.to_dict()
+    payload.pop("traces", None)
+    return payload
+
+
 def memory_router_runtime_status(
     *,
     env: dict[str, str] | None = None,
@@ -163,7 +190,9 @@ def memory_router_runtime_status(
 __all__ = [
     "DEFAULT_SAMPLE_QUERIES",
     "FEATURE_FLAG",
+    "MEMORY_ROUTE_TRACE_COLLECTOR_POLICY",
     "build_memory_route_trace",
+    "collect_memory_route_trace",
     "memory_router_runtime_enabled",
     "memory_router_runtime_status",
     "route_memory_for_runtime",
