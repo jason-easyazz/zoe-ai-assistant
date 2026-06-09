@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping
+from statistics import median
+from typing import Any, Iterable, Mapping, Sequence
 
 from zoe_memory_contract import (
     MemoryEvent,
@@ -125,6 +126,33 @@ def score_recall_text(text: str, expected_terms: Iterable[str]) -> dict[str, Any
     }
 
 
+def percentile(values: Sequence[float], percentile_value: float) -> float:
+    if not 0.0 <= percentile_value <= 1.0:
+        raise ValueError("percentile_value must be between 0.0 and 1.0")
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return ordered[0]
+    rank = (len(ordered) - 1) * percentile_value
+    lower = int(rank)
+    upper = min(lower + 1, len(ordered) - 1)
+    weight = rank - lower
+    return ordered[lower] * (1 - weight) + ordered[upper] * weight
+
+
+def summarize_bakeoff_scores(scores: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    score_values = [float(item.get("score") or 0.0) for item in scores]
+    latencies = [float(item.get("latency_ms") or 0.0) for item in scores if "latency_ms" in item]
+    return {
+        "case_count": len(scores),
+        "avg_score": sum(score_values) / len(score_values) if score_values else 0.0,
+        "min_score": min(score_values) if score_values else 0.0,
+        "p50_latency_ms": median(latencies) if latencies else 0.0,
+        "p95_latency_ms": percentile(latencies, 0.95),
+    }
+
+
 def recall_response_text(response: Mapping[str, Any]) -> str:
     results = response.get("results") or []
     texts = []
@@ -148,8 +176,10 @@ __all__ = [
     "EVAL_QUERIES",
     "SYNTHETIC_EVENTS",
     "HindsightEvalQuery",
+    "percentile",
     "recall_response_text",
     "score_recall_response",
     "score_recall_text",
+    "summarize_bakeoff_scores",
     "synthetic_retain_payloads",
 ]
