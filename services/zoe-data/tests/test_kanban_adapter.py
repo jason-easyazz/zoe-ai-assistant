@@ -3030,6 +3030,9 @@ def test_implement_body_includes_harness_repo_map_for_blocker_followup_source():
     ) in body
     assert "do not create `.venv`, run `pip install`" in body
     assert "BLOCKER=TEST_ENVIRONMENT" in body
+    assert "If the focused test passes before any edit, do not inspect more blocker code" in body
+    assert "edit services/zoe-data/executors/kanban_adapter.py within 2 more tool/model steps" in body
+    assert "BLOCKER=ALREADY_COVERED" in body
 
 
 @pytest.mark.parametrize(
@@ -3075,6 +3078,9 @@ def test_implement_body_includes_harness_blocker_followup_focused_tests(
     assert "engineering_blocker_followup tickets" in body
     assert expected_test in body
     assert "Use the existing repo/runtime environment only" in body
+    assert "If the focused test passes before any edit, do not inspect more blocker code" in body
+    assert "edit services/zoe-data/executors/kanban_adapter.py within 2 more tool/model steps" in body
+    assert "BLOCKER=ALREADY_COVERED" in body
 
 
 def test_implement_body_includes_harness_repo_map_for_harness_title():
