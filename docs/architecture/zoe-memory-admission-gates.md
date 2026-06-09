@@ -24,6 +24,13 @@ admitted Hindsight executor.
 - Failed or blocked traces prevent promotion.
 - Graphiti-style targets require a relationship or supersession edge.
 - Self-evolution memories require approved proposal context.
+- Scope-bearing Zoe memory events must keep first-class `scope` metadata at the
+  MemoryService writer boundary. Legacy `visibility` is derived from scope:
+  `shared` maps to `family`; `personal`, `ambient`, `system`, and `project`
+  map to `personal` while preserving the explicit scope value.
+- Hindsight retain candidates must persist `event_id`, `evidence_refs`,
+  `relationships`, `supersedes`, and `retention_policy` as first-class
+  metadata, not only candidate-prefixed fields or tags.
 - Trace `user_id` values must match the memory candidate user.
 
 ## Current Scope

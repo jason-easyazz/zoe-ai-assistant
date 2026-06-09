@@ -234,6 +234,7 @@ async def create_hindsight_retain_candidate(
         entity_type=payload["entity_type"],
         entity_id=payload["entity_id"],
         source_excerpt=payload["source_excerpt"],
+        scope=payload["metadata"]["scope"],
         metadata=payload["metadata"],
     )
 

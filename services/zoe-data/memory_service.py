@@ -61,11 +61,37 @@ _MEMPALACE_DATA = os.environ.get(
 
 _AUDIT_COLLECTION = os.environ.get("ZOE_MEMORY_AUDIT_COLLECTION", "mempalace_audit")
 
+_MEMORY_SCOPE_TO_VISIBILITY = {
+    "personal": "personal",
+    "shared": "family",
+    "ambient": "personal",
+    "system": "personal",
+    "project": "personal",
+}
+
 
 def _metadata_value(value: Any) -> str | int | float | bool:
     if isinstance(value, (str, int, float, bool)):
         return value
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _scope_visibility(scope: Any | None) -> str:
+    if scope is None:
+        return "personal"
+    scope_value = str(scope)
+    if not scope_value.strip():
+        raise MemoryServiceError("memory scope cannot be blank")
+    if scope_value not in _MEMORY_SCOPE_TO_VISIBILITY:
+        raise MemoryServiceError(f"unsupported memory scope: {scope_value}")
+    return _MEMORY_SCOPE_TO_VISIBILITY[scope_value]
+
+
+def _promote_event_metadata(md: dict[str, Any], extra: dict[str, Any]) -> None:
+    for key in ("event_id", "evidence_refs", "relationships", "supersedes", "retention_policy"):
+        value = extra.get(key)
+        if value is not None:
+            md[key] = _metadata_value(value)
 
 
 @dataclass(frozen=True)
@@ -171,6 +197,7 @@ class MemoryService:
         entity_id: Optional[str] = None,
         expires_at: Optional[str] = None,
         source_excerpt: Optional[str] = None,
+        scope: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
         opt_out: bool = False,
     ) -> Optional[MemoryRef]:
@@ -220,6 +247,7 @@ class MemoryService:
                 entity_id=entity_id,
                 expires_at=expires_at,
                 source_excerpt=source_excerpt,
+                scope=scope,
                 extra_metadata=metadata,
                 idem_key=idem_key,
             )
@@ -602,14 +630,19 @@ class MemoryService:
         entity_id: Optional[str],
         expires_at: Optional[str],
         source_excerpt: Optional[str] = None,
+        scope: Optional[str] = None,
         extra_metadata: Optional[dict[str, Any]] = None,
         idem_key: str = "",
     ) -> dict[str, Any]:
         now = datetime.datetime.utcnow().isoformat() + "Z"
+        extra = dict(extra_metadata or {})
+        event_scope = scope if scope is not None else extra.get("scope")
+        visibility = _scope_visibility(event_scope)
         md: dict[str, Any] = {
             "user_id": user_id,
             "wing": user_id,
             "room": "conversations",
+            "visibility": visibility,
             "memory_type": memory_type,
             "confidence": float(confidence),
             "source": source,
@@ -641,7 +674,10 @@ class MemoryService:
             md["expires_at"] = expires_at
         if source_excerpt:
             md["source_excerpt"] = source_excerpt
-        for key, value in (extra_metadata or {}).items():
+        if event_scope:
+            md["scope"] = str(event_scope)
+        _promote_event_metadata(md, extra)
+        for key, value in extra.items():
             target_key = f"candidate_{key}"
             if target_key in md or value is None:
                 continue

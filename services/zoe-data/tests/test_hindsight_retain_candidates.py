@@ -312,6 +312,7 @@ async def test_create_hindsight_retain_candidate_uses_memory_service_pending_ing
     assert seen["status"] == "pending"
     assert seen["memory_type"] == "failure"
     assert seen["user_turn_id"] == "mem_evt_candidate"
+    assert seen["scope"] == "project"
     assert seen["source_excerpt"].startswith("The weather card failed")
     assert seen["metadata"]["relationships"][0]["relationship_type"] == "FAILED_ON"
     assert seen["metadata"]["evidence_refs"] == ["trace:weather:001"]
