@@ -1090,7 +1090,7 @@
 
         body.sky-empty .sky-command {
             opacity: 0;
-            pointer-events: none;
+            pointer-events: auto;
             transform: translateX(-50%) translateY(18px);
         }
 
@@ -1504,9 +1504,18 @@
         }
 
         body:not(.sky-empty) .sky-command {
-            opacity: 0;
-            pointer-events: none;
+            opacity: 0.08;
+            pointer-events: auto;
             transform: translateX(-50%) translateY(18px);
+        }
+
+        body.sky-empty .sky-command:focus-within,
+        body.sky-empty .sky-command:hover,
+        body:not(.sky-empty) .sky-command:focus-within,
+        body:not(.sky-empty) .sky-command:hover {
+            opacity: 1;
+            pointer-events: auto;
+            transform: translateX(-50%) translateY(0);
         }
 
         body:not(.sky-empty) .sky-card {
@@ -1678,8 +1687,15 @@
             }
 
             body:not(.sky-empty) .sky-command {
-                opacity: 0 !important;
-                pointer-events: none !important;
+                opacity: 0.08 !important;
+                pointer-events: auto !important;
+            }
+
+            body:not(.sky-empty) .sky-command:focus-within,
+            body:not(.sky-empty) .sky-command:hover {
+                opacity: 1 !important;
+                pointer-events: auto !important;
+                transform: translateX(-50%) translateY(0) !important;
             }
         }
     </style>

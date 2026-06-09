@@ -46,7 +46,9 @@ def test_skybridge_uses_login_orb_to_voice_pill_layout():
     assert "body:not(.sky-empty) .sky-listening-copy" in html
     assert "body.sky-empty .sky-command" in html
     assert "pointer-events: none" in html
-    assert "body.sky-empty .sky-command:hover" not in html
+    assert "body.sky-empty .sky-command:focus-within" in html
+    assert "body.sky-empty .sky-command:hover" in html
+    assert "body:not(.sky-empty) .sky-command:hover" in html
 
 
 def test_skybridge_exposes_voice_transport_without_dashboard_header():
