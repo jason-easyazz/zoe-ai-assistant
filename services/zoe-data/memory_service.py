@@ -31,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import hashlib
+import json
 import logging
 import os
 import re
@@ -59,6 +60,12 @@ _MEMPALACE_DATA = os.environ.get(
 )
 
 _AUDIT_COLLECTION = os.environ.get("ZOE_MEMORY_AUDIT_COLLECTION", "mempalace_audit")
+
+
+def _metadata_value(value: Any) -> str | int | float | bool:
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
 @dataclass(frozen=True)
@@ -163,6 +170,8 @@ class MemoryService:
         entity_type: Optional[str] = None,
         entity_id: Optional[str] = None,
         expires_at: Optional[str] = None,
+        source_excerpt: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
         opt_out: bool = False,
     ) -> Optional[MemoryRef]:
         """Store a fact. Returns None when silently dropped."""
@@ -210,6 +219,8 @@ class MemoryService:
                 entity_type=entity_type,
                 entity_id=entity_id,
                 expires_at=expires_at,
+                source_excerpt=source_excerpt,
+                extra_metadata=metadata,
                 idem_key=idem_key,
             )
 
@@ -590,7 +601,9 @@ class MemoryService:
         entity_type: Optional[str],
         entity_id: Optional[str],
         expires_at: Optional[str],
-        idem_key: str,
+        source_excerpt: Optional[str] = None,
+        extra_metadata: Optional[dict[str, Any]] = None,
+        idem_key: str = "",
     ) -> dict[str, Any]:
         now = datetime.datetime.utcnow().isoformat() + "Z"
         md: dict[str, Any] = {
@@ -626,6 +639,13 @@ class MemoryService:
             md["entity_id"] = entity_id
         if expires_at:
             md["expires_at"] = expires_at
+        if source_excerpt:
+            md["source_excerpt"] = source_excerpt
+        for key, value in (extra_metadata or {}).items():
+            target_key = f"candidate_{key}"
+            if target_key in md or value is None:
+                continue
+            md[target_key] = _metadata_value(value)
         return md
 
     def _bump(self, status: str, source: str) -> None:
