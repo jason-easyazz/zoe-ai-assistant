@@ -145,7 +145,7 @@ def load_proposal_contract_snapshot(raw: str | bytes | Mapping[str, Any] | None)
             payload = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else str(raw))
         except (TypeError, ValueError, json.JSONDecodeError):
             return None
-    if payload.get("schema") != "zoe_evolution_proposal":
+    if not isinstance(payload, Mapping) or payload.get("schema") != "zoe_evolution_proposal":
         return None
     proposal = payload.get("proposal")
     if not isinstance(proposal, Mapping):

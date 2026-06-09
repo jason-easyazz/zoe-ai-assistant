@@ -88,3 +88,4 @@ def test_loader_rejects_legacy_non_contract_payloads():
     assert load_proposal_contract_snapshot(None) is None
     assert load_proposal_contract_snapshot("not json") is None
     assert load_proposal_contract_snapshot('{"legacy": true}') is None
+    assert load_proposal_contract_snapshot('["pattern1", "pattern2"]') is None
