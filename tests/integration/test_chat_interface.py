@@ -1,73 +1,59 @@
 #!/usr/bin/env python3
-"""
-Test script to verify chat interface and prompt structure
-"""
-import requests
+"""Production smoke tests for Zoe's live chat interface."""
+
 import json
-import time
+
+import requests
+
 
 BASE_URL = "http://localhost:8000"
+UI_BASE_URL = "http://localhost"
 TEST_USER = "chat_test_user"
 
-def test_chat_interface():
-    print("=" * 60)
-    print("TESTING CHAT INTERFACE")
-    print("=" * 60)
-    
-    # Test 1: Store a fact
-    print("\n1. Storing fact: 'My name is Alice'")
-    response1 = requests.post(
-        f"{BASE_URL}/api/chat",
-        json={"message": "My name is Alice", "user_id": TEST_USER},
-        timeout=10
+
+def _chat_events(message: str) -> list[dict]:
+    response = requests.post(
+        f"{BASE_URL}/api/chat/",
+        params={"stream": "true"},
+        json={"message": message, "user_id": TEST_USER},
+        timeout=15,
     )
-    print(f"   Status: {response1.status_code}")
-    if response1.status_code == 200:
-        data1 = response1.json()
-        print(f"   Response time: {data1.get('response_time', 0):.2f}s")
-        print(f"   Response preview: {data1.get('response', '')[:100]}...")
-    
-    time.sleep(2)
-    
-    # Test 2: Retrieve the fact
-    print("\n2. Retrieving fact: 'What is my name?'")
-    response2 = requests.post(
-        f"{BASE_URL}/api/chat",
-        json={"message": "What is my name?", "user_id": TEST_USER},
-        timeout=10
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+
+    events = []
+    for line in response.text.splitlines():
+        if not line.startswith("data: "):
+            continue
+        events.append(json.loads(line.removeprefix("data: ")))
+    assert events, f"No SSE events received; raw response: {response.text[:500]}"
+    return events
+
+
+def test_chat_interface_emits_ag_ui_stream():
+    events = _chat_events("Say exactly: Zoe chat integration ok")
+
+    event_types = [event["type"] for event in events]
+    assert event_types[0] == "RUN_STARTED"
+    assert "TEXT_MESSAGE_START" in event_types
+    assert "TEXT_MESSAGE_END" in event_types
+    assert event_types[-1] == "RUN_FINISHED"
+
+    assistant_text = "".join(
+        event.get("delta", "")
+        for event in events
+        if event["type"] == "TEXT_MESSAGE_CHUNK"
     )
-    print(f"   Status: {response2.status_code}")
-    if response2.status_code == 200:
-        data2 = response2.json()
-        resp_text = data2.get('response', '')
-        print(f"   Response time: {data2.get('response_time', 0):.2f}s")
-        print(f"   Full response: {resp_text}")
-        
-        # Check if name was found
-        if 'Alice' in resp_text:
-            print("   ✅ SUCCESS: Name was found in response!")
-        else:
-            print("   ❌ FAIL: Name was NOT found in response")
-            print(f"   Routing: {data2.get('routing', 'unknown')}")
-            print(f"   Memories used: {data2.get('memories_used', 0)}")
-    
-    # Test 3: Check chat.html accessibility
-    print("\n3. Testing chat.html accessibility")
-    try:
-        ui_response = requests.get("http://localhost/chat.html", timeout=5)
-        if ui_response.status_code == 200:
-            print(f"   ✅ SUCCESS: chat.html is accessible (Status: {ui_response.status_code})")
-            if "Zoe - AI Chat" in ui_response.text:
-                print("   ✅ Page title found")
-        else:
-            print(f"   ❌ FAIL: chat.html returned status {ui_response.status_code}")
-    except Exception as e:
-        print(f"   ❌ ERROR: Could not access chat.html: {e}")
-    
-    print("\n" + "=" * 60)
+    assert "Zoe chat integration ok" in assistant_text
+
+
+def test_chat_html_is_accessible():
+    response = requests.get(f"{UI_BASE_URL}/chat.html", timeout=5)
+
+    assert response.status_code == 200
+    assert "Zoe - AI Chat" in response.text
+
 
 if __name__ == "__main__":
-    test_chat_interface()
-
-
-
+    for event in _chat_events("Say exactly: Zoe chat integration ok"):
+        print(event)
