@@ -211,6 +211,11 @@ Rules:
 - Auto-retain is gated.
 - Reflection may propose memories, but cannot silently create trusted truth.
 
+The executable admission gate lives in
+`services/zoe-data/zoe_memory_admission.py`. It keeps candidates pending until
+approval refs, successful admission/verification traces, scope/user checks, and
+proposal context for self-evolution memories allow durable writes.
+
 ## Memory Router
 
 The deterministic router lives in `services/zoe-data/zoe_memory_router.py`.
@@ -365,6 +370,8 @@ These evals should feed the same memory/evolution loop as test results. A failed
 6. Run Graphiti/FalkorDB and Graphiti/Neo4j bake-off.
 7. Add memory router behind a feature flag.
 8. Add retain-candidate admission through Multica/evidence gates.
+   - Status: foundation complete in `zoe_memory_admission.py`; runtime writers
+     still need to call it before durable backend writes.
 9. Add Zoe capability profiles and discovery/evaluation records.
 10. Add Zoe observation traces for recall, retain candidates, admission, contradiction, fallback, proposal, verification, outcome evals, and hardware fit.
 11. Clean Zoe main engine only after tests protect chat, memory gating, tool dispatch, capability profiles, and proposal records.
