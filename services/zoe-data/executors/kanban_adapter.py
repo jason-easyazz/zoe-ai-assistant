@@ -284,9 +284,39 @@ def _code_audit_implement_hint(issue: dict | None = None) -> str:
     meta = _ticket_metadata(issue)
     if not _is_code_audit_actionable(meta):
         return ""
+    issue = issue or {}
+    haystack = " ".join(
+        [
+            str(issue.get("title") or ""),
+            str(issue.get("description") or ""),
+            json.dumps(meta),
+        ]
+    ).lower()
+    nginx_security_header_hint = ""
+    nginx_header_terms = (
+        "security header",
+        "security-header",
+        "content-security-policy",
+        "x-frame-options",
+        "strict-transport-security",
+        "hsts",
+        "x-content-type-options",
+        "referrer-policy",
+        "permissions-policy",
+    )
+    nginx_context = "nginx" in haystack
+    if nginx_context and any(term in haystack for term in nginx_header_terms):
+        nginx_security_header_hint = (
+            "For nginx.conf security-header tickets, do not hand-patch repeated `server {}` "
+            "blocks. Run `python3 tools/audit/ensure_nginx_security_headers.py`, then "
+            "`python3 tools/audit/ensure_nginx_security_headers.py --check`, "
+            "then `python3 tools/audit/validate_structure.py`, "
+            "then use the chained ship command. "
+        )
     return (
         "- CODE-AUDIT FAST PATH: this is an actionable code-audit bug with acceptance criteria. "
         "Do not re-audit the whole repo, compare every possible helper, or search broadly for patterns. "
+        f"{nginx_security_header_hint}"
         "After `kanban_show`, inspect only the named vulnerable file/endpoint plus at most one nearest "
         "focused test file. Apply the smallest patch that satisfies the acceptance criteria before the "
         "8th model/tool step. If the ticket lists acceptable alternatives, choose the least invasive "
