@@ -310,6 +310,33 @@ def _harness_implement_hint(issue: dict | None = None) -> str:
     harness_title = title.startswith(("harness:", "zoe harness", "hermes harness"))
     if kind != "harness_fix" and not harness_title and source not in harness_sources:
         return ""
+    blocker = str(meta.get("source_blocker") or "").upper()
+    blocker_followup_hint = ""
+    if source == "engineering_blocker_followup":
+        if blocker == "ITERATION_BUDGET":
+            focused_test = (
+                "services/zoe-data/tests/test_main_multica_poll.py::"
+                "test_record_blocked_multica_chain_creates_iteration_budget_followup"
+            )
+        elif blocker in {"IMPLEMENT_BUDGET", "IMPLEMENT_HANDOFF_DRIFT"}:
+            focused_test = (
+                "services/zoe-data/tests/test_main_multica_poll.py::"
+                "test_record_blocked_multica_chain_creates_budget_followup_once"
+            )
+        elif blocker == "PROTOCOL_VIOLATION":
+            focused_test = (
+                "services/zoe-data/tests/test_main_multica_poll.py::"
+                "test_record_blocked_multica_chain_creates_protocol_followup"
+            )
+        else:
+            focused_test = "services/zoe-data/tests/test_main_multica_poll.py"
+        blocker_followup_hint = (
+            "  For engineering_blocker_followup tickets, inspect only"
+            " services/zoe-data/main.py and services/zoe-data/tests/test_main_multica_poll.py"
+            f" first. Run focused test: `PYTHONPATH=services/zoe-data python3 -m pytest -q {focused_test}`."
+            " If that behavior is already covered and passing, make a small prompt/locator fix"
+            " instead of reworking blocker creation.\n"
+        )
     return (
         "- HARNESS FAST PATH: this is a Zoe/Hermes harness ticket. Do not spend budget"
         " searching ~/.local, Hermes internals, or broad worktree inventories unless a named file"
@@ -321,6 +348,7 @@ def _harness_implement_hint(issue: dict | None = None) -> str:
         "  * Multica ticket metadata/progress: services/zoe-data/multica_ticket_contract.py and multica_client.py\n"
         "  * poll/admission/blocked follow-ups: services/zoe-data/main.py, multica_admission.py,"
         " multica_poll_dispatch.py\n"
+        f"{blocker_followup_hint}"
         "  For worktree-missing/retro fallback tickets, inspect kanban_adapter.py and"
         " worktree_bootstrap.py first; decide whether the fix belongs before Hermes starts,"
         " not inside the external Hermes worker. Start editing within 6 tool/model steps or"

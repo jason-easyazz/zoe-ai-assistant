@@ -3011,7 +3011,7 @@ def test_implement_body_includes_harness_repo_map_for_blocker_followup_source():
             "description": """Fix the blocked harness run.
 
 ```zoe-ticket
-{"schema":1,"zoe_kind":"operator_task","source":"engineering_blocker_followup","acceptance_criteria":["small harness fix"],"evidence_expectations":["focused tests"]}
+{"schema":1,"zoe_kind":"operator_task","source":"engineering_blocker_followup","source_blocker":"ITERATION_BUDGET","acceptance_criteria":["small harness fix"],"evidence_expectations":["focused tests"]}
 ```""",
         },
         "ZOE-5454",
@@ -3020,6 +3020,58 @@ def test_implement_body_includes_harness_repo_map_for_blocker_followup_source():
     assert "HARNESS FAST PATH" in body
     assert "services/zoe-data/executors/kanban_adapter.py" in body
     assert "services/zoe-data/worktree_bootstrap.py" in body
+    assert "engineering_blocker_followup tickets" in body
+    assert "services/zoe-data/main.py" in body
+    assert "services/zoe-data/tests/test_main_multica_poll.py" in body
+    assert (
+        "PYTHONPATH=services/zoe-data python3 -m pytest -q "
+        "services/zoe-data/tests/test_main_multica_poll.py::"
+        "test_record_blocked_multica_chain_creates_iteration_budget_followup"
+    ) in body
+
+
+@pytest.mark.parametrize(
+    ("source_blocker", "expected_test"),
+    [
+        (
+            "IMPLEMENT_BUDGET",
+            "test_record_blocked_multica_chain_creates_budget_followup_once",
+        ),
+        (
+            "IMPLEMENT_HANDOFF_DRIFT",
+            "test_record_blocked_multica_chain_creates_budget_followup_once",
+        ),
+        (
+            "PROTOCOL_VIOLATION",
+            "test_record_blocked_multica_chain_creates_protocol_followup",
+        ),
+        (
+            "",
+            "services/zoe-data/tests/test_main_multica_poll.py`",
+        ),
+    ],
+)
+def test_implement_body_includes_harness_blocker_followup_focused_tests(
+    source_blocker, expected_test
+):
+    source_blocker_json = f',"source_blocker":"{source_blocker}"' if source_blocker else ""
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {
+            "id": "uuid-5454",
+            "identifier": "ZOE-5454",
+            "title": "Follow up harness blocker",
+            "description": f"""Fix the blocked harness run.
+
+```zoe-ticket
+{{"schema":1,"zoe_kind":"operator_task","source":"engineering_blocker_followup"{source_blocker_json},"acceptance_criteria":["small harness fix"],"evidence_expectations":["focused tests"]}}
+```""",
+        },
+        "ZOE-5454",
+    )
+
+    assert "engineering_blocker_followup tickets" in body
+    assert expected_test in body
 
 
 def test_implement_body_includes_harness_repo_map_for_harness_title():
