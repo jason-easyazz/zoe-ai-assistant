@@ -337,6 +337,61 @@ def test_skip_blocked_implementation_requires_tool_evidence(isolated_store):
 
 
 @pytest.mark.asyncio
+async def test_skip_blocked_code_implementation_allows_validator_only_verify(isolated_store):
+    from pipeline_evidence import TransitionRecord
+
+    state = PipelineState(
+        task_ref="multica:code-gate-no-code-skip",
+        phase="implement",
+        status="blocked",
+        evidence_profile="code",
+        history=[
+            TransitionRecord(
+                from_phase="implement",
+                to_phase="implement",
+                outcome="block",
+                reason="GATE_BLOCKED: missing required evidence pr",
+            )
+        ],
+        evidence=[
+            EvidenceItem(
+                kind="tool",
+                summary="scout proved acceptance is already satisfied by merged work",
+                passed=True,
+            )
+        ],
+    )
+    store.save_state(state, event="gate_blocked", extra={"missing": ["pr"]})
+
+    skipped = store.skip_blocked_implementation(
+        "multica:code-gate-no-code-skip",
+        reason="operator confirmed no code change is needed",
+    )
+
+    assert skipped.phase == "verify"
+    assert skipped.status == "todo"
+    assert skipped.evidence_profile == "audit"
+
+    async def fetch_detail(_task_id: str):
+        return {
+            "latest_summary": "VALIDATORS=validate_structure.py passed",
+            "comments": [],
+        }
+
+    verified = await store.sync_pipeline_from_chain(
+        "multica:code-gate-no-code-skip",
+        {"verify": {"id": "t_verify", "status": "done"}},
+        fetch_detail,
+    )
+
+    assert verified.phase == "review"
+    assert verified.status == "todo"
+    assert verified.evidence_profile == "audit"
+    assert verified.history[-1].outcome == "complete"
+    assert verified.history[-1].reason != "GATE_BLOCKED: missing required evidence test"
+
+
+@pytest.mark.asyncio
 async def test_sync_pipeline_advances_on_complete_handoff(isolated_store):
     await store.bootstrap_state("multica:sync")
 

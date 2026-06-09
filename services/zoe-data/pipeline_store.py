@@ -610,6 +610,8 @@ async def _sync_pipeline_from_chain_once(
                 state,
                 block_fingerprint(phase, block_reason),  # type: ignore[arg-type]
             )
+            # A gate block is already terminal for this phase until operator action
+            # changes the state, so repeated-fingerprint escalation would be noise.
             state = transition(state, "block", reason=block_reason)
             state = await _run_io(
                 partial(
