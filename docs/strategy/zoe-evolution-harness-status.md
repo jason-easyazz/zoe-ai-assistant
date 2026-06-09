@@ -31,7 +31,7 @@ Important non-complete truth:
 
 - Graphify has been refreshed from `origin/main` at `ad52f61d`; rerun it after subsequent code or architecture changes.
 - Tool/capability and memory read/write inventories now exist as cleanup gates; keep them updated as runtime paths change.
-- MemPalace now has a repeatable local baseline harness and first measured Zoe-host run; Hindsight now has a fixed measured runner and Zoe-host availability baseline, but no live sidecar bake-off yet because no Hindsight process/container is running.
+- MemPalace now has a repeatable local baseline harness and first measured Zoe-host run; Hindsight now has a fixed measured runner, read-only sidecar probe, and Zoe-host availability baseline, but no live sidecar bake-off yet because no Hindsight process/container is running.
 - Graphiti/FalkorDB/Neo4j have not yet been measured for Zoe relational memory, but Zoe-specific Graphiti fixtures now define the first relationship eval set.
 - The plan now names Zoe's missing north-star layer: capability profiles, trust/autonomy classes, candidate scouting, outcome evals, and hardware-aware promotion.
 - Zoe now has an executable capability profile contract and initial self-model for key chat, memory, graph, governance, escalation, Pi, and device-control surfaces.
@@ -55,7 +55,7 @@ Important non-complete truth:
 | Memory layer map | Complete foundation | `services/zoe-data/zoe_memory_layers.py` and `services/zoe-data/tests/test_zoe_memory_layers.py`. | Link layer decisions to runtime config and status endpoints. |
 | Memory router | Partial | `services/zoe-data/zoe_memory_router.py`, `services/zoe-data/zoe_memory_router_runtime.py`, `services/zoe-data/tests/test_zoe_memory_router.py`, `services/zoe-data/tests/test_zoe_memory_router_runtime.py`, and `/api/system/memory-router/status` expose disabled-by-default observe-only route decisions. | Add observation traces around route decisions, then wire prompt-time recall behind a second explicit feature flag with latency guards. |
 | MemPalace baseline | Complete foundation | `services/zoe-data/mempalace_baseline.py`, `scripts/maintenance/mempalace_baseline.py`, and `docs/architecture/zoe-mempalace-baseline.md` record a repeatable local benchmark; first run scored 1.0 avg with p95 200.90 ms and cleaned up 4 synthetic rows. | Expand with relational/supersession cases before comparing Graphiti-style backends. |
-| Hindsight bake-off | Partial | Offline sidecar client, retain-candidate helpers, synthetic fixtures, measured runner, availability doc, and tests exist; current Zoe-host check found no running Hindsight sidecar. | Start a local/offline sidecar, run retain/recall with synthetic events, and record p50/p95 latency, failures, evidence quality, and CPU/RAM use. |
+| Hindsight bake-off | Partial | Offline sidecar client, retain-candidate helpers, synthetic fixtures, measured runner, read-only sidecar probe, availability doc, and tests exist; current Zoe-host check found no running Hindsight sidecar. | Start a local/offline sidecar, run retain/recall with synthetic events, and record p50/p95 latency, failures, evidence quality, and CPU/RAM use. |
 | Graphiti bake-off | Partial | ADR plus `services/zoe-data/graphiti_bakeoff.py`, `services/zoe-data/tests/test_graphiti_bakeoff.py`, and `docs/architecture/zoe-graphiti-fixtures.md` define the first relationship fixture set. | Run the fixtures against FalkorDB first, then Neo4j if feasible, and record latency, evidence quality, supersession behavior, and CPU/RAM use. |
 | Graphify current map | Complete foundation | `graphify-out/GRAPH_REPORT.md` and `graphify-out/graph.json` were regenerated from `origin/main` at `ad52f61d`; `docs/architecture/zoe-harness-current-inventory.md` records the source-backed inventory. | Rerun Graphify after substantial code or architecture changes. |
 | Tool/capability inventory | Complete foundation | `docs/architecture/zoe-tool-capability-inventory.md` maps agent, MCP, Multica, Hermes, OpenClaw, and governance surfaces. | Keep updated when tool catalogs or execution lanes change. |
@@ -177,7 +177,7 @@ Keep each pull request small enough for Greptile and Zoe verification.
    - Repeatable benchmark and first Zoe-host p50/p95 run are documented in `docs/architecture/zoe-mempalace-baseline.md`.
    - Expand with memory footprint, relational, and supersession cases before backend replacement decisions.
 5. Hindsight sidecar bake-off.
-   - Status: runner and availability baseline complete.
+   - Status: runner, read-only sidecar probe, and availability baseline complete.
    - Next: start local/offline-only Hindsight and run synthetic retain/recall.
    - Produce measured p50/p95, evidence quality, CPU/RAM, and gaps.
    - Keep it out of production chat until feature-flagged and measured.

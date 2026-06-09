@@ -11,10 +11,31 @@ This document records the current bake-off runner and the first Zoe-host availab
 Files:
 
 - `services/zoe-data/hindsight_bakeoff.py`
+- `services/zoe-data/hindsight_sidecar_probe.py`
 - `scripts/maintenance/hindsight_bakeoff.py`
+- `scripts/maintenance/hindsight_sidecar_probe.py`
 - `services/zoe-data/tests/test_hindsight_bakeoff.py`
+- `services/zoe-data/tests/test_hindsight_sidecar_probe.py`
 
 The runner uses the synthetic Zoe memory events from `hindsight_bakeoff.py`, can optionally retain them into a configured Hindsight sidecar, then measures recall scores and p50/p95 latency across the evaluation queries.
+
+The sidecar probe is read-only and should be run before the bake-off:
+
+```bash
+PYTHONPATH=services/zoe-data python3 scripts/maintenance/hindsight_sidecar_probe.py --json
+```
+
+Probe statuses:
+
+- `disabled`: `HINDSIGHT_ENABLED` is false; no health call, retain, recall, or writes.
+- `misconfigured`: offline-only policy rejected the visible config.
+- `offline`: enabled config is valid, but the sidecar health call failed.
+- `unhealthy`: enabled config is valid and the sidecar responded, but not with an ok/healthy health body.
+- `healthy`: enabled config is valid and the sidecar health response reports ok/healthy.
+
+Probe payloads separate `ok` from `acceptable`. `ok` means the sidecar is actively healthy.
+`acceptable` means the operational state is allowed for the current rollout, so `disabled` is acceptable
+while bake-off runtime wiring remains off by default.
 
 Command:
 
@@ -41,6 +62,7 @@ Environment:
 - Sidecar status: not running; `curl --max-time 2 http://127.0.0.1:8888/health` returned connection refused.
 - Process/container status: no Hindsight process or container was running.
 - Runner mode: default disabled config, no retain, no writes.
+- Probe status: disabled with `HINDSIGHT_ENABLED=false`; no health call, retain, recall, or writes.
 
 Measured disabled-run result:
 
