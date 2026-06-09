@@ -30,6 +30,31 @@ def test_recall_trace_allows_lightweight_no_evidence_path():
     assert payload["latency_ms"] == 82.5
 
 
+def test_memory_route_trace_allows_safe_metadata_without_evidence():
+    trace = ObservationTrace(
+        trace_id="trace_memory_route_1",
+        trace_type=ObservationTraceType.MEMORY_ROUTE.value,
+        surface="memory",
+        scope="system",
+        outcome=ObservationOutcome.SUCCESS.value,
+        summary="Memory router selected an observe-only route.",
+        evidence_refs=(),
+        latency_ms=1.25,
+        metadata={
+            "purpose": "chat",
+            "query_length": 42,
+            "primary": "hindsight",
+            "can_inject_prompt": False,
+            "can_write_memory": False,
+        },
+    )
+
+    payload = trace.to_dict()
+
+    assert payload["trace_type"] == "memory_route"
+    assert payload["metadata"]["primary"] == "hindsight"
+
+
 def test_retain_candidate_trace_requires_evidence():
     trace = ObservationTrace(
         trace_id="trace_retain_missing_evidence",

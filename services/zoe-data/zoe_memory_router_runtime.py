@@ -9,9 +9,11 @@ writer.
 from __future__ import annotations
 
 import os
+import time
 from typing import Any, Sequence
 
 from zoe_memory_router import route_memory_query
+from zoe_observation_trace import ObservationOutcome, ObservationTrace, ObservationTraceType
 
 
 FEATURE_FLAG = "ZOE_MEMORY_ROUTER_RUNTIME_ENABLED"
@@ -33,10 +35,15 @@ def route_memory_for_runtime(
     *,
     purpose: str = "chat",
     env: dict[str, str] | None = None,
+    include_trace: bool = False,
+    trace_id: str | None = None,
+    scope: str = "system",
+    user_id: str | None = None,
 ) -> dict[str, Any]:
+    start = time.perf_counter()
     enabled = memory_router_runtime_enabled(env)
     if not enabled:
-        return {
+        decision = {
             "enabled": False,
             "mode": "disabled",
             "route": None,
@@ -44,8 +51,19 @@ def route_memory_for_runtime(
             "can_write_memory": False,
             "reason": "runtime flag disabled",
         }
+        if include_trace:
+            decision["trace"] = build_memory_route_trace(
+                query,
+                purpose=purpose,
+                decision=decision,
+                trace_id=trace_id,
+                scope=scope,
+                user_id=user_id,
+                latency_ms=_elapsed_ms(start),
+            ).to_dict()
+        return decision
     route = route_memory_query(query, purpose=purpose)
-    return {
+    decision = {
         "enabled": True,
         "mode": "observe_only",
         "route": route.to_dict(),
@@ -53,12 +71,67 @@ def route_memory_for_runtime(
         "can_write_memory": False,
         "reason": "runtime flag enabled for observation only",
     }
+    if include_trace:
+        decision["trace"] = build_memory_route_trace(
+            query,
+            purpose=purpose,
+            decision=decision,
+            trace_id=trace_id,
+            scope=scope,
+            user_id=user_id,
+            latency_ms=_elapsed_ms(start),
+        ).to_dict()
+    return decision
+
+
+def build_memory_route_trace(
+    query: str,
+    *,
+    purpose: str,
+    decision: dict[str, Any],
+    trace_id: str | None = None,
+    scope: str = "system",
+    user_id: str | None = None,
+    latency_ms: float | None = None,
+) -> ObservationTrace:
+    route = decision.get("route") or {}
+    primary = route.get("primary")
+    secondary = list(route.get("secondary") or ())
+    enabled = bool(decision.get("enabled"))
+    outcome = ObservationOutcome.SUCCESS.value if enabled and primary else ObservationOutcome.SKIPPED.value
+    summary = "Memory router selected an observe-only route." if primary else "Memory router skipped routing."
+    return ObservationTrace(
+        trace_id=trace_id or f"trace_memory_route_{purpose}_{'enabled' if enabled else 'disabled'}",
+        trace_type=ObservationTraceType.MEMORY_ROUTE.value,
+        surface="memory",
+        scope=scope,
+        user_id=user_id,
+        outcome=outcome,
+        summary=summary,
+        evidence_refs=(),
+        latency_ms=latency_ms,
+        confidence=1.0,
+        metadata={
+            "purpose": purpose,
+            "query_length": len(query),
+            "enabled": enabled,
+            "mode": decision.get("mode"),
+            "primary": primary,
+            "secondary": secondary,
+            "latency_budget_ms": route.get("latency_budget_ms"),
+            "can_inject_prompt": bool(decision.get("can_inject_prompt")),
+            "can_write_memory": bool(decision.get("can_write_memory")),
+            "reason": decision.get("reason"),
+            "route_reason": route.get("reason"),
+        },
+    )
 
 
 def memory_router_runtime_status(
     *,
     env: dict[str, str] | None = None,
     include_samples: bool | None = None,
+    include_traces: bool = False,
     samples: Sequence[tuple[str, str]] = DEFAULT_SAMPLE_QUERIES,
 ) -> dict[str, Any]:
     enabled = memory_router_runtime_enabled(env)
@@ -71,7 +144,12 @@ def memory_router_runtime_status(
                 {
                     "id": sample_id,
                     "query": query,
-                    "decision": route_memory_for_runtime(query, env=env),
+                    "decision": route_memory_for_runtime(
+                        query,
+                        env=env,
+                        include_trace=include_traces,
+                        trace_id=f"trace_memory_route_sample_{sample_id}",
+                    ),
                 }
             )
     return {
@@ -91,7 +169,12 @@ def memory_router_runtime_status(
 __all__ = [
     "DEFAULT_SAMPLE_QUERIES",
     "FEATURE_FLAG",
+    "build_memory_route_trace",
     "memory_router_runtime_enabled",
     "memory_router_runtime_status",
     "route_memory_for_runtime",
 ]
+
+
+def _elapsed_ms(start: float) -> float:
+    return round((time.perf_counter() - start) * 1000, 3)
