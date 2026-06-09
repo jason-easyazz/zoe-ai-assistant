@@ -165,6 +165,14 @@ async def get_system_status(
     }
 
 
+@router.get("/memory-router/status")
+async def get_memory_router_status(user: dict = Depends(require_admin)):
+    """Read-only status for Zoe's disabled-by-default memory router runtime."""
+    from zoe_memory_router_runtime import memory_router_runtime_status
+
+    return memory_router_runtime_status()
+
+
 def _load_skills_and_cron():
     skills = []
     skills_dir = os.path.expanduser("~/.openclaw/workspace/skills")
