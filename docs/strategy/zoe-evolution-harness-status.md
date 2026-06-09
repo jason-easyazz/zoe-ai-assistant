@@ -39,7 +39,7 @@ Important non-complete truth:
 - Zoe now has a self-evolution proposal contract that attaches signals, candidate scores, affected capabilities, approval gates, verification, rollback, and evidence before any execution.
 - Zoe now has an observation/evaluation trace schema for recall, retain candidates, admission, contradiction, fallback, proposals, verification, outcome evals, and hardware budget evidence.
 - Zoe now has an inert memory admission contract that keeps retain candidates pending until evidence, successful admission/verification traces, and approval refs allow durable/trusted memory writes.
-- The deterministic memory router is not yet wired into production chat behind a feature flag.
+- The deterministic memory router now has a disabled-by-default runtime status gate; it is not yet used for prompt injection or backend recall in production chat.
 - Retain-candidate admission has a tested contract, but existing runtime writers are not yet wired to enforce it through Multica approval.
 - The full self-evolution loop is not yet implemented end to end; proposal records are now defined, but existing live proposal writers still need to emit them and Multica still needs to enforce admission.
 - Zoe main engine cleanup should not begin until the inventory, graph, and memory/evolution contracts have protective tests around the active surfaces.
@@ -53,7 +53,7 @@ Important non-complete truth:
 | Offline-only memory rule | Partial | `HindsightConfig` rejects public/cloud memory model configuration by default. | Add a repository-wide memory/provider audit that flags cloud memory paths and exposed secrets. |
 | Memory contract | Complete foundation | `services/zoe-data/zoe_memory_contract.py` and `services/zoe-data/tests/test_zoe_memory_contract.py`. | Extend only when a measured backend requires a new field or relationship. |
 | Memory layer map | Complete foundation | `services/zoe-data/zoe_memory_layers.py` and `services/zoe-data/tests/test_zoe_memory_layers.py`. | Link layer decisions to runtime config and status endpoints. |
-| Memory router | Partial | `services/zoe-data/zoe_memory_router.py` and `services/zoe-data/tests/test_zoe_memory_router.py`. | Wire into chat/agent recall behind a disabled-by-default feature flag with latency guards. |
+| Memory router | Partial | `services/zoe-data/zoe_memory_router.py`, `services/zoe-data/zoe_memory_router_runtime.py`, `services/zoe-data/tests/test_zoe_memory_router.py`, `services/zoe-data/tests/test_zoe_memory_router_runtime.py`, and `/api/system/memory-router/status` expose disabled-by-default observe-only route decisions. | Add observation traces around route decisions, then wire prompt-time recall behind a second explicit feature flag with latency guards. |
 | MemPalace baseline | Complete foundation | `services/zoe-data/mempalace_baseline.py`, `scripts/maintenance/mempalace_baseline.py`, and `docs/architecture/zoe-mempalace-baseline.md` record a repeatable local benchmark; first run scored 1.0 avg with p95 200.90 ms and cleaned up 4 synthetic rows. | Expand with relational/supersession cases before comparing Graphiti-style backends. |
 | Hindsight bake-off | Partial | Offline sidecar client, retain-candidate helpers, synthetic fixtures, measured runner, availability doc, and tests exist; current Zoe-host check found no running Hindsight sidecar. | Start a local/offline sidecar, run retain/recall with synthetic events, and record p50/p95 latency, failures, evidence quality, and CPU/RAM use. |
 | Graphiti bake-off | Partial | ADR plus `services/zoe-data/graphiti_bakeoff.py`, `services/zoe-data/tests/test_graphiti_bakeoff.py`, and `docs/architecture/zoe-graphiti-fixtures.md` define the first relationship fixture set. | Run the fixtures against FalkorDB first, then Neo4j if feasible, and record latency, evidence quality, supersession behavior, and CPU/RAM use. |
@@ -186,8 +186,9 @@ Keep each pull request small enough for Greptile and Zoe verification.
    - Next: test FalkorDB, then Neo4j if feasible.
    - Decide sidecar/remote/hot-path eligibility from evidence.
 7. Runtime memory router feature flag.
-   - Wire deterministic routing into chat/agent recall in fallback-safe mode.
-   - Add latency timeout and compact cited memory packets.
+   - Status: observe-only runtime status foundation complete.
+   - `zoe_memory_router_runtime.py` and `/api/system/memory-router/status` expose disabled-by-default route decisions without prompt injection or writes.
+   - Next: add observation traces around route decisions, then wire prompt-time recall in fallback-safe mode with latency timeout and compact cited memory packets.
 8. Memory admission governance.
    - Status: complete foundation.
    - `zoe_memory_admission.py` now gates durable memory writes on approval refs, successful admission/verification traces, graph edge requirements, user/scope matching, and proposal context for self-evolution memories.

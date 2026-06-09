@@ -219,6 +219,8 @@ proposal context for self-evolution memories allow durable writes.
 ## Memory Router
 
 The deterministic router lives in `services/zoe-data/zoe_memory_router.py`.
+Runtime inspection lives in `services/zoe-data/zoe_memory_router_runtime.py`
+and is disabled by default through `ZOE_MEMORY_ROUTER_RUNTIME_ENABLED`.
 
 Routing defaults:
 
@@ -227,6 +229,14 @@ Routing defaults:
 - Relationship/causal/supersession queries: Graphiti-style graph as async/deferred relational enrichment until measured.
 - Code/system questions: Graphify.
 - Self-evolution proposals: Multica first, with Hindsight + Graphiti + Graphify evidence.
+
+Runtime rules:
+
+- Default runtime mode is disabled.
+- Enabled runtime mode is observe-only until a later PR wires traces.
+- Prompt injection remains off.
+- Durable memory writes remain off.
+- `/api/system/memory-router/status` may expose sample route decisions for admin inspection.
 
 Prompt-time policy:
 
