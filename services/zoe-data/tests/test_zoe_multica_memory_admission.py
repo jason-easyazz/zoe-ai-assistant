@@ -216,3 +216,18 @@ def test_explicit_target_backends_override_multica_metadata():
 
     assert decision.status == MemoryAdmissionStatus.APPROVED.value
     assert decision.allowed_backends == (MemoryBackend.MEMPALACE.value,)
+
+
+def test_none_items_are_ignored_in_metadata_target_backends():
+    issue = _issue(
+        {
+            "memory_admission_approved": True,
+            "memory_admission_review_id": "ZOE-128",
+            "memory_admission_target_backends": [None, MemoryBackend.MEMPALACE.value],
+        }
+    )
+
+    decision = evaluate_multica_memory_admission(issue, _event())
+
+    assert decision.status == MemoryAdmissionStatus.APPROVED.value
+    assert decision.allowed_backends == (MemoryBackend.MEMPALACE.value,)

@@ -114,7 +114,7 @@ def _target_backends(metadata: Mapping[str, Any], explicit: Sequence[str] | None
     if isinstance(raw, str):
         return (raw,)
     if isinstance(raw, Sequence) and not isinstance(raw, (bytes, bytearray, str)):
-        return tuple(str(item) for item in raw)
+        return tuple(str(item) for item in raw if item is not None and str(item))
     return DEFAULT_MULTICA_MEMORY_TARGET_BACKENDS
 
 
