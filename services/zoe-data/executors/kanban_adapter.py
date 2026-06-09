@@ -339,8 +339,11 @@ def _harness_implement_hint(issue: dict | None = None) -> str:
             " a missing dependency/import that is not fixed by `PYTHONPATH=services/zoe-data`, call"
             " `kanban_block` with BLOCKER=TEST_ENVIRONMENT and the first import error instead of"
             " spending turns on environment repair."
-            " If that behavior is already covered and passing, make a small prompt/locator fix"
-            " instead of reworking blocker creation.\n"
+            " If the focused test passes before any edit, do not inspect more blocker code:"
+            " edit services/zoe-data/executors/kanban_adapter.py within 2 more tool/model"
+            " steps with the smallest prompt/locator guard, or call `kanban_block` with"
+            " BLOCKER=ALREADY_COVERED and the passing test output. Do not rework blocker"
+            " creation after a passing focused test.\n"
         )
     return (
         "- HARNESS FAST PATH: this is a Zoe/Hermes harness ticket. Do not spend budget"
