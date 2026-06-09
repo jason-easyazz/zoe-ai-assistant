@@ -260,3 +260,84 @@ def test_blocked_evolution_ticket_without_contract_does_not_halt_lane():
 
     assert selected == approved
     assert held == []
+
+
+def test_execute_evolution_ticket_requires_execution_approval_refs():
+    execute_without_refs = _approved_evolution_issue(
+        "ZOE-1",
+        "proposal-1",
+        evolution_contract_autonomy_class="execute",
+        evolution_contract_approval_required=["install_or_runtime_change", "pr_evidence"],
+    )
+    approved = _approved_evolution_issue("ZOE-2", "proposal-2")
+
+    assert not ticket_is_dispatch_approved(execute_without_refs, hermes_agent_id=HERMES)
+    selected, held = select_next_approved_issue(
+        [execute_without_refs, approved],
+        [execute_without_refs, approved],
+        hermes_agent_id=HERMES,
+    )
+
+    assert selected == approved
+    assert held == []
+
+
+def test_execute_evolution_ticket_with_required_approval_refs_can_dispatch():
+    execute_with_refs = _approved_evolution_issue(
+        "ZOE-1",
+        "proposal-1",
+        evolution_contract_autonomy_class="execute",
+        evolution_contract_approval_required=["install_or_runtime_change", "pr_evidence"],
+        evolution_execution_approval_refs=[
+            "approval:install_or_runtime_change:jason:2026-06-10",
+            "pr:https://github.com/jason-easyazz/zoe-ai-assistant/pull/303",
+        ],
+    )
+
+    assert ticket_is_dispatch_approved(execute_with_refs, hermes_agent_id=HERMES)
+
+
+def test_blocked_execute_ticket_without_approval_refs_does_not_halt_lane():
+    blocked_without_refs = _approved_evolution_issue(
+        "ZOE-1",
+        "proposal-1",
+        status="blocked",
+        evolution_contract_autonomy_class="execute",
+        evolution_contract_approval_required=["install_or_runtime_change", "pr_evidence"],
+    )
+    approved = _approved_evolution_issue("ZOE-2", "proposal-2")
+
+    selected, held = select_next_approved_issue(
+        [approved],
+        [blocked_without_refs, approved],
+        hermes_agent_id=HERMES,
+    )
+
+    assert selected == approved
+    assert held == []
+
+
+def test_promote_evolution_ticket_requires_execution_approval_refs():
+    promote_without_refs = _approved_evolution_issue(
+        "ZOE-1",
+        "proposal-1",
+        evolution_contract_autonomy_class="promote",
+        evolution_contract_approval_required=["memory_admission", "pr_evidence"],
+    )
+
+    assert not ticket_is_dispatch_approved(promote_without_refs, hermes_agent_id=HERMES)
+
+
+def test_promote_evolution_ticket_with_required_approval_refs_can_dispatch():
+    promote_with_refs = _approved_evolution_issue(
+        "ZOE-1",
+        "proposal-1",
+        evolution_contract_autonomy_class="promote",
+        evolution_contract_approval_required=["memory_admission", "pr_evidence"],
+        evolution_execution_approval_refs=[
+            "approval:memory_admission:trace-123",
+            "github_pr:https://github.com/jason-easyazz/zoe-ai-assistant/pull/303",
+        ],
+    )
+
+    assert ticket_is_dispatch_approved(promote_with_refs, hermes_agent_id=HERMES)

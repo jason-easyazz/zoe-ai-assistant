@@ -56,6 +56,8 @@ The foundation contract is now wired into Zoe's live proposal writers:
 - the execution approval gate can evaluate required approval evidence for
   install/runtime changes, privileged execution, memory admission, and
   promotion before any future runtime path executes them;
+- Multica admission invokes that execution approval gate for `execute` and
+  `promote` evolution-proposal tickets before dispatch;
 - proposal creation remains review-only and never grants execution;
 - `approval_gate.allowed_to_execute` remains false.
 
