@@ -696,6 +696,15 @@ async def run_guard_once(
         status = await get_pr_status(repo=DEFAULT_REPO, pr_number=pr_number, default_branch=DEFAULT_BASE_BRANCH)
         comments = await list_pr_comments(repo=DEFAULT_REPO, pr_number=pr_number, default_branch=DEFAULT_BASE_BRANCH)
         findings = comments.get("findings") or []
+        if status.get("reviewIsRunning"):
+            state["greptile"] = {
+                "status": status.get("reviewCompleteness") or "review_running",
+                "confidence": status.get("confidenceScore"),
+                "unaddressed_count": len(findings),
+            }
+            state["terminal_state"] = "WAITING_GREPTILE"
+            _write_json(pr_number, "status.json", state)
+            return {"ok": True, "state": "WAITING_GREPTILE", "greptile": status}
         progress_key = f"{status.get('headSha')}:{status.get('confidenceScore')}:{len(findings)}"
         blocked = _update_circuit_breakers(pr_number, state, progress_key)
         if blocked:
@@ -709,10 +718,6 @@ async def run_guard_once(
             "unaddressed_count": len(findings),
         }
         _write_json(pr_number, "status.json", state)
-        if status.get("reviewIsRunning"):
-            state["terminal_state"] = "WAITING_GREPTILE"
-            _write_json(pr_number, "status.json", state)
-            return {"ok": True, "state": "WAITING_GREPTILE", "greptile": status}
         if (status.get("confidenceScore") or 0) >= int(task.get("target_confidence") or 5) and not findings:
             state["terminal_state"] = "READY_TO_MERGE"
             _write_json(pr_number, "status.json", state)
