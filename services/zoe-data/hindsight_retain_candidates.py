@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Mapping
 
 from hindsight_memory import HindsightConfig, event_to_hindsight_item
@@ -35,11 +36,14 @@ class HindsightAdmittedRetainPlan:
     evidence_refs: tuple[str, ...]
 
     def to_dict(self) -> dict[str, Any]:
+        payload = dict(self.payload)
+        if isinstance(payload.get("items"), tuple):
+            payload["items"] = list(payload["items"])
         return {
             "admission_id": self.admission_id,
             "event_id": self.event_id,
             "bank_id": self.bank_id,
-            "payload": dict(self.payload),
+            "payload": payload,
             "evidence_refs": list(self.evidence_refs),
         }
 
@@ -179,10 +183,10 @@ def build_admitted_hindsight_retain_plan(
         admission_id=request.admission_id,
         event_id=request.candidate.event_id,
         bank_id=hindsight_config.bank_id(request.candidate.user_id, request.candidate.scope),
-        payload={
+        payload=MappingProxyType({
             "async": hindsight_config.async_retain,
-            "items": [event_to_hindsight_item(request.candidate)],
-        },
+            "items": (event_to_hindsight_item(request.candidate),),
+        }),
         evidence_refs=decision.evidence_refs,
     )
 

@@ -181,6 +181,25 @@ def test_admitted_hindsight_retain_plan_requires_approved_hindsight_decision():
     assert "approval:multica:retain-review" in payload["evidence_refs"]
 
 
+def test_admitted_hindsight_retain_plan_payload_is_immutable():
+    request = build_hindsight_retain_admission_request(
+        _plain_event(),
+        observation_traces=(_admission_trace(scope=MemoryScope.PERSONAL.value),),
+        approval_refs=("approval:multica:retain-review",),
+    )
+    decision = evaluate_hindsight_retain_candidate_admission(
+        _plain_event(),
+        observation_traces=(_admission_trace(scope=MemoryScope.PERSONAL.value),),
+        approval_refs=("approval:multica:retain-review",),
+    )
+
+    plan = build_admitted_hindsight_retain_plan(request, decision)
+
+    with pytest.raises(TypeError):
+        plan.payload["items"] = ()
+    assert isinstance(plan.to_dict()["payload"]["items"], list)
+
+
 def test_admitted_hindsight_retain_plan_defaults_to_env_config(monkeypatch):
     monkeypatch.setenv("HINDSIGHT_ENABLED", "false")
     monkeypatch.setenv("HINDSIGHT_BANK_PREFIX", "zoe-env")
