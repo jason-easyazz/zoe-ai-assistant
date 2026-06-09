@@ -7,6 +7,7 @@ from collections import defaultdict
 from typing import Any
 
 from multica_ticket_contract import parse_ticket_block
+from zoe_evolution_execution_gate import evaluate_execution_gate
 
 _CARD_UPGRADE_RE = re.compile(r"(?i)^(card-upgrade)\s*:\s*phase\s*(\d+)")
 _SKYBRIDGE_RE = re.compile(r"(?i)^skybridge\s+p(\d+)")
@@ -83,7 +84,29 @@ def _has_matching_evolution_contract(metadata: dict[str, Any], source: str) -> b
         return False
     if not metadata.get("evolution_contract_risk"):
         return False
+    autonomy_class = str(metadata.get("evolution_contract_autonomy_class") or "")
+    if autonomy_class in {"execute", "promote"}:
+        decision = evaluate_execution_gate(
+            {
+                "proposal_id": proposal_id,
+                "autonomy_class": autonomy_class,
+                "approval_required": _metadata_sequence(metadata.get("evolution_contract_approval_required")),
+            },
+            approval_refs=_metadata_sequence(metadata.get("evolution_execution_approval_refs")),
+        )
+        if not decision.allowed_to_execute:
+            return False
     return True
+
+
+def _metadata_sequence(value: Any) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return (value,) if value.strip() else ()
+    if isinstance(value, (list, tuple)):
+        return tuple(str(item) for item in value if str(item).strip())
+    return (str(value),)
 
 
 def _predecessors_done(
