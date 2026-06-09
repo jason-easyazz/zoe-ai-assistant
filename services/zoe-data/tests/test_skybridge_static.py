@@ -46,6 +46,7 @@ def test_skybridge_uses_login_orb_to_voice_pill_layout():
     assert "body:not(.sky-empty) .sky-listening-copy" in html
     assert "body.sky-empty .sky-command" in html
     assert "pointer-events: none" in html
+    assert "body.sky-empty .sky-command:hover" not in html
 
 
 def test_skybridge_exposes_voice_transport_without_dashboard_header():
@@ -112,6 +113,8 @@ def test_skybridge_voice_normalizes_both_transports():
     assert "participant_identity" in voice
     assert "/api/voice/livekit-cancel" in voice
     assert "stopPlayback()" in voice
+    assert "timeoutId = setTimeout" in voice
+    assert "clearTimeout(timeoutId)" in voice
 
 
 def test_livekit_voice_router_accepts_text_commands():
@@ -127,6 +130,8 @@ def test_skybridge_renderer_keeps_button_actions_functional():
 
     assert "Object.assign({}, props, { actions: cardActions })" in renderer
     assert "Object.assign({ status: risk }, props, { actions: settingActions })" in renderer
+    assert "function safeClassTokens" in renderer
+    assert "/^[a-z0-9-]+$/i.test(token)" in renderer
 
 
 def test_skybridge_uses_backend_status_contract():
@@ -141,6 +146,7 @@ def test_skybridge_uses_backend_status_contract():
     assert "currentUtterance" in app
     assert "Heard: " in app
     assert "voice.cancel()" in app
+    assert "Notice: " in app
 
 
 def test_skybridge_is_registered_in_touch_menu():

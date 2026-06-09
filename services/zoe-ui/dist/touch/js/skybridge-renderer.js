@@ -21,10 +21,18 @@
         return '<button type="button" class="' + kind.trim() + '" data-sky-action="' + escapeHtml(action.type || 'query') + '" data-query="' + query + '" data-route="' + route + '">' + label + '</button>';
     }
 
+    function safeClassTokens(value) {
+        return String(value || '')
+            .split(/\s+/)
+            .filter(token => /^[a-z0-9-]+$/i.test(token))
+            .join(' ');
+    }
+
     function cardFrame(props, body, options) {
         const wide = options && options.wide ? ' wide' : '';
         const compact = options && options.compact ? ' compact' : '';
-        const tone = options && options.tone ? ' ' + options.tone : '';
+        const safeTone = options && options.tone ? safeClassTokens(options.tone) : '';
+        const tone = safeTone ? ' ' + safeTone : '';
         const actions = Array.isArray(props.actions) && props.actions.length
             ? '<div class="sky-actions">' + props.actions.map(buttonHtml).join('') + '</div>'
             : '';

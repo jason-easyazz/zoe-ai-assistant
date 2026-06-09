@@ -226,9 +226,20 @@
     }
 
     function showError(message) {
-        setStatus(message || 'Something needs attention');
-        if (!document.body.classList.contains('sky-empty') && !currentUtterance) {
-            els.copy.textContent = message || 'Something needs attention.';
+        const text = message || 'Something needs attention.';
+        setStatus(text);
+        if (!document.body.classList.contains('sky-empty')) {
+            const previous = currentUtterance;
+            els.copy.textContent = 'Notice: ' + text;
+            if (previous) {
+                setTimeout(() => {
+                    if (!document.body.classList.contains('sky-empty') && currentUtterance === previous) {
+                        els.copy.textContent = previous;
+                    }
+                }, 4500);
+            }
+        } else {
+            els.copy.textContent = text;
         }
     }
 

@@ -149,15 +149,20 @@
                         this.emit({ type: 'error', message: 'LiveKit disconnected' });
                     }
                 });
-                await Promise.race([
-                    room.connect(data.url, data.token),
-                    new Promise((_, reject) => {
-                        setTimeout(() => {
-                            try { room.disconnect(); } catch (_) {}
-                            reject(new Error('LiveKit timeout'));
-                        }, 7000);
-                    })
-                ]);
+                let timeoutId = null;
+                try {
+                    await Promise.race([
+                        room.connect(data.url, data.token),
+                        new Promise((_, reject) => {
+                            timeoutId = setTimeout(() => {
+                                try { room.disconnect(); } catch (_) {}
+                                reject(new Error('LiveKit timeout'));
+                            }, 7000);
+                        })
+                    ]);
+                } finally {
+                    if (timeoutId) clearTimeout(timeoutId);
+                }
                 this.room = room;
                 this.emit({ type: 'ready', mode: 'livekit' });
             } catch (err) {
