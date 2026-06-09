@@ -284,6 +284,35 @@ def _code_audit_implement_hint(issue: dict | None = None) -> str:
     )
 
 
+def _harness_implement_hint(issue: dict | None = None) -> str:
+    """Return a small repo map for harness/self-improvement tickets."""
+    issue = issue or {}
+    meta = _ticket_metadata(issue)
+    title = str(issue.get("title") or "").lower()
+    source = str(meta.get("source") or "").lower()
+    kind = str(meta.get("zoe_kind") or "").lower()
+    harness_sources = {"retro_followup", "engineering_blocker_followup"}
+    harness_title = title.startswith(("harness:", "zoe harness", "hermes harness"))
+    if kind != "harness_fix" and not harness_title and source not in harness_sources:
+        return ""
+    return (
+        "- HARNESS FAST PATH: this is a Zoe/Hermes harness ticket. Do not spend budget"
+        " searching ~/.local, Hermes internals, or broad worktree inventories unless a named file"
+        " explicitly requires it. Start from this repo map:\n"
+        "  * phase prompt/dispatch/task creation: services/zoe-data/executors/kanban_adapter.py\n"
+        "  * task worktree creation and workspace_path pinning: services/zoe-data/worktree_bootstrap.py\n"
+        "  * phase handoff/evidence parsing: services/zoe-data/pipeline_handoff.py\n"
+        "  * journal/cache state: services/zoe-data/pipeline_store.py\n"
+        "  * Multica ticket metadata/progress: services/zoe-data/multica_ticket_contract.py and multica_client.py\n"
+        "  * poll/admission/blocked follow-ups: services/zoe-data/main.py, multica_admission.py,"
+        " multica_poll_dispatch.py\n"
+        "  For worktree-missing/retro fallback tickets, inspect kanban_adapter.py and"
+        " worktree_bootstrap.py first; decide whether the fix belongs before Hermes starts,"
+        " not inside the external Hermes worker. Start editing within 6 tool/model steps or"
+        " call `kanban_block` with BLOCKER=IMPLEMENT_BUDGET and the missing locator.\n"
+    )
+
+
 def _is_bounded_goal_phase(phase: str, issue: dict | None = None) -> bool:
     """Return True when this phase should run in bounded goal mode with one retry."""
     return phase == "implement" and _is_code_audit_actionable(_ticket_metadata(issue))
@@ -508,11 +537,13 @@ class KanbanAdapter:
         if phase == "implement":
             overnight_hint = _overnight_implement_cost_hint() if mode == "overnight" else ""
             code_audit_hint = _code_audit_implement_hint(issue)
+            harness_hint = _harness_implement_hint(issue)
             # Implement body intentionally omits full prior-phase logs; workers should
             # call kanban_show and read SCOUT_SUMMARY= from scout metadata when present.
             return common + overnight_hint + (
                 "You are the implementer (zoe-coder).\n"
                 f"{code_audit_hint}"
+                f"{harness_hint}"
                 "- AUDIT/SMOKE FAST PATH: only if the title/body explicitly says audit-only, smoke test,"
                 " no code change, or uses trace/map with an audit/no-code qualifier, do not run Graphify"
                 " or repo exploration first. Complete in one bounded handoff with"
