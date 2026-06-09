@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 
 
-JOKE_PATTERN = r"tell me (?:a|another) joke|make me laugh|got any jokes"
+JOKE_PATTERN = r"tell me (?:a|another) joke|make me laugh|(?:do you |have you )?(?:got|have) any jokes|know any (?:good )?jokes"
 JOKE_TEST = '''"""Open-domain creative intent routing."""
 
 import pytest
@@ -16,7 +16,7 @@ import pytest
 from intent_router import detect_intent
 
 
-@pytest.mark.parametrize("text", ["Tell me a joke.", "Tell me a joke", "Tell me another joke."])
+@pytest.mark.parametrize("text", ["Tell me a joke.", "Tell me a joke", "Tell me another joke.", "make me laugh", "do you have any jokes?", "have you got any jokes?", "know any good jokes?"])
 def test_joke_requests_route_to_open_domain_agent(text: str):
     intent = detect_intent(text)
 

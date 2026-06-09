@@ -35,7 +35,7 @@ def test_apply_joke_contract_patches_router_and_adds_test(tmp_path):
     router = router_path.read_text(encoding="utf-8")
     generated_test = tmp_path / "services/zoe-data/tests/test_intent_open_domain.py"
     assert result["idempotent"] is False
-    assert "tell me (?:a|another) joke|make me laugh|got any jokes" in router
+    assert "tell me (?:a|another) joke|make me laugh|(?:do you |have you )?(?:got|have) any jokes|know any (?:good )?jokes" in router
     assert generated_test.exists()
     assert "test_joke_requests_route_to_open_domain_agent" in generated_test.read_text(encoding="utf-8")
 
@@ -76,3 +76,18 @@ def test_apply_joke_contract_fails_cleanly_when_router_missing(tmp_path):
         assert "intent_router.py not found" in str(exc)
     else:
         raise AssertionError("expected SystemExit for missing intent_router.py")
+
+
+def test_apply_joke_contract_is_idempotent_with_current_router_pattern(tmp_path):
+    helper = _load_helper()
+    router_path = tmp_path / "services/zoe-data/intent_router.py"
+    router_path.parent.mkdir(parents=True)
+    router_path.write_text(
+        '    r"tell me (?:a|another) joke|make me laugh|(?:do you |have you )?(?:got|have) any jokes|know any (?:good )?jokes)",\n',
+        encoding="utf-8",
+    )
+
+    result = helper.apply_joke_contract(tmp_path)
+
+    assert result["changed"] == ["services/zoe-data/tests/test_intent_open_domain.py"]
+    assert "tell me (?:a|another) joke|make me laugh|(?:do you |have you )?(?:got|have) any jokes|know any (?:good )?jokes" in router_path.read_text(encoding="utf-8")

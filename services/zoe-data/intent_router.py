@@ -410,7 +410,8 @@ _GREETING_RE = re.compile(
 _AGENT_CHAT_RE = re.compile(
     r"^(?:tell me about|what(?:'s| is) the (?:capital|weather)|"
     r"search the web|write me (?:an? )?(?:email|haiku|poem)|"
-    r"can you explain|set up (?:a )?new automation|what is happening in)",
+    r"can you explain|set up (?:a )?new automation|what is happening in|"
+    r"tell me (?:a|another) joke|make me laugh|(?:do you |have you )?(?:got|have) any jokes|know any (?:good )?jokes)",
     re.IGNORECASE,
 )
 
