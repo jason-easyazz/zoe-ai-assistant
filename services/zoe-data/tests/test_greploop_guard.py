@@ -276,6 +276,35 @@ async def test_run_guard_once_active_review_does_not_trip_no_progress(tmp_path, 
 
 
 @pytest.mark.asyncio
+async def test_run_guard_once_blocks_permanently_active_review(tmp_path, monkeypatch):
+    async def fake_status(**_kwargs):
+        return {
+            "confidenceScore": None,
+            "reviewIsRunning": True,
+            "headSha": "abc",
+            "reviewCompleteness": "No Greptile review comments",
+            "codeReviews": [{"status": "REVIEWING_FILES"}],
+        }
+
+    async def fake_comments(**_kwargs):
+        return {"findings": []}
+
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr("greptile_client.get_pr_status", fake_status)
+    monkeypatch.setattr("greptile_client.list_pr_comments", fake_comments)
+
+    out = {}
+    for _ in range(greploop_guard.MAX_ITERATIONS + 1):
+        out = await greploop_guard.run_guard_once(66)
+
+    assert out["ok"] is False
+    assert out["state"] == "BLOCKED_GREPTILE_STUCK"
+    state = greploop_guard.read_guard_state(66)
+    assert state["terminal_state"] == "BLOCKED_GREPTILE_STUCK"
+    assert state["no_progress_count"] == 0
+
+
+@pytest.mark.asyncio
 async def test_merge_pr_when_ready_merges_when_assessment_passes(tmp_path, monkeypatch):
     async def fake_assess(_pr_number, **_kwargs):
         return {"ready": True, "blockers": [], "greptile": {}, "gh": {"ok": True}}

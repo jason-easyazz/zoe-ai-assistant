@@ -436,6 +436,53 @@ async def test_sync_pipeline_blocks_code_implement_without_pr(isolated_store):
 
 
 @pytest.mark.asyncio
+async def test_sync_pipeline_reports_validator_hash_mismatch_gate(isolated_store):
+    state = PipelineState(
+        task_ref="multica:verify-hash-mismatch",
+        phase="verify",
+        status="todo",
+        evidence=[
+            EvidenceItem(kind="test", summary="pytest passed", passed=True),
+            EvidenceItem(
+                kind="validator",
+                summary="implement validator",
+                passed=True,
+                content_hash="a" * 64,
+                metadata={"phase": "implement", "source": "handoff"},
+            ),
+            EvidenceItem(
+                kind="validator",
+                summary="verify validator",
+                passed=True,
+                content_hash="b" * 64,
+                metadata={"phase": "verify", "source": "handoff"},
+            ),
+        ],
+    )
+    store.save_state(state, event="verify_ready")
+
+    async def fetch_detail(_task_id: str):
+        return {
+            "latest_summary": "TESTS=pytest passed\nVALIDATORS=validate_structure.py passed",
+            "comments": [],
+        }
+
+    state = await store.sync_pipeline_from_chain(
+        "multica:verify-hash-mismatch",
+        {"verify": {"id": "t_verify", "status": "done"}},
+        fetch_detail,
+    )
+
+    assert state.phase == "verify"
+    assert state.status == "blocked"
+    assert state.history[-1].reason == "GATE_BLOCKED: validator hash mismatch"
+    last = json.loads(isolated_store.read_text(encoding="utf-8").strip().splitlines()[-1])
+    assert last["event"] == "gate_blocked"
+    assert last["meta"]["missing"] == []
+    assert last["meta"]["validator_hash_mismatch"] is True
+
+
+@pytest.mark.asyncio
 async def test_sync_pipeline_advances_with_live_run_metadata_recovery(isolated_store):
     await store.bootstrap_state("multica:sync-live-metadata")
 

@@ -603,9 +603,15 @@ async def _sync_pipeline_from_chain_once(
                 "row_phase": phase,
                 "missing": sorted(missing_required_evidence(state)),
             }
-            if state.phase == "verify" and not verify_validator_hash_matches(state):
+            validator_hash_mismatch = state.phase == "verify" and not verify_validator_hash_matches(state)
+            if validator_hash_mismatch:
                 extra["validator_hash_mismatch"] = True
-            block_reason = "GATE_BLOCKED: missing required evidence " + ",".join(extra["missing"])
+            if extra["missing"]:
+                block_reason = "GATE_BLOCKED: missing required evidence " + ",".join(extra["missing"])
+            elif validator_hash_mismatch:
+                block_reason = "GATE_BLOCKED: validator hash mismatch"
+            else:
+                block_reason = "GATE_BLOCKED: phase completion evidence invalid"
             state, _should_abort = record_block_fingerprint(
                 state,
                 block_fingerprint(phase, block_reason),  # type: ignore[arg-type]
