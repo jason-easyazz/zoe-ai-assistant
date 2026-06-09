@@ -39,13 +39,15 @@ def test_adoption_gate_allows_strong_compatible_candidate():
     assert gate["blockers"] == []
 
 
-def test_adoption_gate_blocks_unknown_offline_candidate():
+def test_adoption_gate_blocks_pi_until_runtime_prerequisites_are_measured():
     candidate = EXAMPLE_CANDIDATES[2]
 
     gate = adoption_gate(candidate)
 
     assert gate["allowed"] is False
-    assert "offline:unknown" in gate["blockers"]
+    assert gate["blockers"] == ["score_below_threshold"]
+    assert candidate.offline_viability == "partial"
+    assert candidate.stars == 59100
 
 
 def test_adoption_gate_blocks_incompatible_license():

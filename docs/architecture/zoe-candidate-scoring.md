@@ -29,7 +29,10 @@ The first example records compare:
 
 - keeping MemPalace as Zoe's measured offline baseline;
 - trying Graphiti with FalkorDB as a sidecar;
-- reviewing Pi runtime/package reuse before any install.
+- reviewing Pi runtime/package reuse before any install. The current Pi candidate
+  records strong project activity and compatible licensing, but remains below
+  Zoe's adoption threshold until the Zoe host has Node/npm/Pi plus local/offline
+  model evidence.
 
 ## Adoption Gate
 
@@ -40,6 +43,10 @@ The gate blocks candidates when:
 - normalized score is below threshold.
 
 This makes the default future behavior conservative: Zoe can scout and propose broadly, but adoption still requires evidence, compatible licensing, offline/local viability, and a good enough score.
+
+Pi-specific note: `offline_viability=partial` is allowed by the generic gate,
+but the candidate can still fail on total score, security, footprint, and test
+evidence until `pi_runtime_probe.py` reports a usable local runtime.
 
 ## Next Use
 

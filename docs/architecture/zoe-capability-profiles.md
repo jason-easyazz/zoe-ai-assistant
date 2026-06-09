@@ -23,7 +23,7 @@ Initial covered profiles:
 - Multica governance;
 - Hermes escalation;
 - OpenClaw fallback;
-- Pi external runtime candidate;
+- Pi external runtime candidate with read-only runtime probe;
 - Home Assistant control.
 
 ## Trust Rules
@@ -44,6 +44,7 @@ The next self-evolution slices should use these profiles to:
 
 - generate a current capability inventory view;
 - score candidate Pi/MCP/GitHub/skill/API adoption;
+- run `scripts/maintenance/pi_runtime_probe.py --json` before any Pi install or delegated execution proposal;
 - block privileged execution when profile approval rules are unmet;
 - add outcome eval traces against profile IDs;
 - require non-use, replacement, or failure evidence before retirement.
