@@ -3,6 +3,7 @@ import pytest
 
 from hindsight_embedding_probe import (
     _health_url,
+    _service_health,
     probe_hindsight_embeddings,
     probe_hindsight_embeddings_sync,
 )
@@ -221,6 +222,39 @@ async def test_embedding_probe_reports_http_error_as_service_unhealthy(monkeypat
     assert result.acceptable is False
     assert result.status == "service_unhealthy"
     assert result.health == {"status_code": 500}
+
+
+@pytest.mark.asyncio
+async def test_service_health_reports_malformed_json_as_unhealthy(monkeypatch):
+    class FakeResponse:
+        headers = {"content-type": "application/json"}
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            raise ValueError("bad json")
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def get(self, url):
+            assert url == "http://127.0.0.1:8080/health"
+            return FakeResponse()
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+
+    health = await _service_health("tei", "http://127.0.0.1:8080")
+
+    assert health == {"status": "invalid_json", "status_code": 200}
 
 
 def test_embedding_probe_health_url_for_openai_compatible_base():

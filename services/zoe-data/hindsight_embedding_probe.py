@@ -227,7 +227,10 @@ async def _service_health(provider: str, base_url: str) -> dict[str, Any]:
         response = await client.get(url)
         response.raise_for_status()
         if response.headers.get("content-type", "").startswith("application/json"):
-            payload = response.json()
+            try:
+                payload = response.json()
+            except ValueError:
+                return {"status": "invalid_json", "status_code": response.status_code}
             return payload if isinstance(payload, dict) else {"ok": True, "payload": payload}
         return {"ok": True, "status_code": response.status_code}
 
