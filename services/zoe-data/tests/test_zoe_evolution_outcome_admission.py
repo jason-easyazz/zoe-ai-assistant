@@ -1,6 +1,7 @@
 import pytest
 
 from zoe_candidate_scoring import CandidateEvaluation, CandidateScore
+from zoe_evolution_outcome_memory import EvolutionOutcomeMemoryError
 from zoe_evolution_outcome_admission import (
     DEFAULT_EVOLUTION_OUTCOME_TARGET_BACKENDS,
     build_evolution_outcome_admission_request,
@@ -166,6 +167,37 @@ def test_failed_outcome_remains_pending_only_and_never_trusted_durable_memory():
     assert result.decision.allowed_to_write_durable is False
     assert "failed_or_blocked_trace_present" in result.decision.blockers
     assert "proposal_must_be_approved_or_verified" in result.decision.blockers
+
+
+def test_retired_outcome_remains_blocked_until_retirement_memory_policy_exists():
+    retired_trace = _verification_trace(
+        trace_id="trace_retired_memory_gate",
+        outcome=ObservationOutcome.PARTIAL.value,
+        summary="Retirement evidence showed the old path was superseded.",
+        evidence_refs=("eval:retirement-review",),
+        confidence=0.7,
+    )
+
+    result = evaluate_evolution_outcome_admission(
+        _proposal(status=ProposalStatus.RETIRED.value),
+        (retired_trace,),
+        approval_refs=("approval:multica:ZOE-315",),
+    )
+
+    assert result.candidate.event_type == MemoryEventType.CAPABILITY.value
+    assert result.decision.status == MemoryAdmissionStatus.BLOCKED.value
+    assert result.decision.allowed_to_keep_pending is True
+    assert result.decision.allowed_to_write_durable is False
+    assert "proposal_must_be_approved_or_verified" in result.decision.blockers
+
+
+def test_retired_outcome_requires_matching_retirement_trace_before_admission_request():
+    with pytest.raises(EvolutionOutcomeMemoryError, match="retirement verification"):
+        build_evolution_outcome_admission_request(
+            _proposal(status=ProposalStatus.RETIRED.value),
+            (_verification_trace(outcome=ObservationOutcome.FAILED.value),),
+            approval_refs=("approval:multica:ZOE-316",),
+        )
 
 
 def test_result_serializes_candidate_request_and_decision():
