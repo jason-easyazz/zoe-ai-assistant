@@ -88,7 +88,7 @@ Active production surfaces:
 Important current caveats:
 
 - `services/zoe-core` is retired reference code and must not be extended.
-- The existing Graphify report is stale after newer harness PRs: it was last refreshed from `ad52f61d`, not current `origin/main`.
+- Graphify was refreshed after the harness probe PRs from `origin/main` at `0ee19f03`.
 - The worktree already had unrelated dirty files before this plan was implemented; this pass avoids modifying those files.
 - Live relational memory should remain Postgres-centered; do not introduce production SQLite memory paths.
 
