@@ -70,6 +70,10 @@ _PROTOCOL_VIOLATION_LIMIT = max(
 # task body at dispatch. Anchored to the start of a line so it never collides with
 # prose elsewhere in the body.
 _REF_MARKER_RE = re.compile(r"^zoe-ref:\s*(\S+)", re.MULTILINE)
+_JOKE_INTENT_GAP_TITLE_RE = re.compile(
+    r"\bintent[- ]gap\b.*['\"]?(?:tell\s+me\s+(?:another\s+)?joke|joke)['\"]?",
+    re.IGNORECASE,
+)
 
 
 def _row_ref_key(row: dict) -> str:
@@ -326,10 +330,11 @@ def _harness_implement_hint(issue: dict | None = None) -> str:
 
 def _intent_gap_implement_hint(issue: dict | None = None, *, phase: str = "implement") -> str:
     issue = issue or {}
+    title = str(issue.get("title") or "")
     haystack = " ".join(
         [
             str(issue.get("identifier") or ""),
-            str(issue.get("title") or ""),
+            title,
             str(issue.get("description") or ""),
         ]
     ).lower()
@@ -340,6 +345,17 @@ def _intent_gap_implement_hint(issue: dict | None = None, *, phase: str = "imple
         if phase == "implement"
         else " After the existing-PR checkout checks succeed, start the focused revision edit within 4 tool/model steps.\n"
     )
+    joke_contract = ""
+    if _JOKE_INTENT_GAP_TITLE_RE.search(title):
+        joke_contract = (
+            " Concrete edit contract for this joke gap: update `_AGENT_CHAT_RE` so"
+            " `Tell me a joke.`, `Tell me a joke`, and `Tell me another joke.` route"
+            " to `extend_capability` through the existing open-domain/creative branch."
+            " Add or extend the focused detect_intent test coverage for those examples;"
+            " the expected result is `Intent(\"extend_capability\", {\"raw\": <original text>})`."
+            " Do not add a joke bank or a brittle per-joke executor in this ticket; the"
+            " acceptance goal is routing the creative request to the agent path.\n"
+        )
     return (
         "- INTENT-GAP IMPLEMENT FAST PATH: this ticket is already scoped by scout as"
         " a routing/intent gap. Do not re-scout the repo. Start from"
@@ -350,6 +366,7 @@ def _intent_gap_implement_hint(issue: dict | None = None, *, phase: str = "imple
         " `detect_intent`. Your first search should be one of those anchors;"
         " do not grep `_CALCULATE_`, `_execute_`, or unrelated domain sections"
         " for creative intent gaps."
+        f"{joke_contract}"
         " If those files are not the right location, call `kanban_block` with"
         " BLOCKER=IMPLEMENT_BUDGET and the missing locator instead of exploring."
         f"{edit_deadline}"
