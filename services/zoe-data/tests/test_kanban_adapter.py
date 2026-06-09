@@ -3131,8 +3131,28 @@ def test_implement_body_includes_intent_gap_fast_path():
     assert "`_AGENT_CHAT_RE`" in body
     assert "Open-domain Q&A / creative" in body
     assert "do not grep `_CALCULATE_`, `_execute_`" in body
+    assert "`Tell me a joke.`, `Tell me a joke`, and `Tell me another joke.`" in body
+    assert "Intent(\"extend_capability\", {\"raw\": <original text>})" in body
+    assert "Do not add a joke bank or a brittle per-joke executor" in body
     assert "Start editing within 4 tool/model steps after `kanban_show`" in body
     assert body.index("INTENT-GAP IMPLEMENT FAST PATH") < body.index("AUDIT/SMOKE FAST PATH")
+
+
+def test_implement_body_does_not_add_joke_contract_for_other_intent_gaps():
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {
+            "id": "uuid-intent-weather",
+            "identifier": "ZOE-5450",
+            "title": "Intent gap: 'Can you tell me about me?'",
+            "description": "This is no joke; the routing is broken for profile questions.",
+        },
+        "ZOE-5450",
+    )
+
+    assert "INTENT-GAP IMPLEMENT FAST PATH" in body
+    assert "Concrete edit contract for this joke gap" not in body
+    assert "`Tell me a joke.`, `Tell me a joke`, and `Tell me another joke.`" not in body
 
 
 def test_implement_revision_body_includes_intent_gap_fast_path():
@@ -3152,6 +3172,9 @@ def test_implement_revision_body_includes_intent_gap_fast_path():
     assert "`_AGENT_CHAT_RE`" in body
     assert "Open-domain Q&A / creative" in body
     assert "do not grep `_CALCULATE_`, `_execute_`" in body
+    assert "`Tell me a joke.`, `Tell me a joke`, and `Tell me another joke.`" in body
+    assert "Intent(\"extend_capability\", {\"raw\": <original text>})" in body
+    assert "Do not add a joke bank or a brittle per-joke executor" in body
     assert "EXISTING PR REVISION FAST PATH" in body
     assert "After the existing-PR checkout checks succeed" in body
     assert "Start editing within 4 tool/model steps after `kanban_show`" not in body
