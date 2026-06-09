@@ -1,7 +1,9 @@
 import json
 
 from zoe_evolution_proposal_adapter import (
+    build_legacy_evolution_proposal_contract,
     build_mcp_evolution_proposal_contract,
+    dump_legacy_evolution_proposal_contract,
     dump_mcp_evolution_proposal_contract,
     load_proposal_contract_snapshot,
     normalize_mcp_evolution_proposal_type,
@@ -82,6 +84,46 @@ def test_dump_and_load_contract_snapshot_round_trip():
     assert payload is not None
     assert json.loads(raw)["proposal"]["multica_issue_id"] == "issue-123"
     assert payload["proposal"]["signals"][0]["signal_type"] == "tool_gap"
+
+
+def test_legacy_contract_snapshot_preserves_target_patterns_and_writer():
+    payload = build_legacy_evolution_proposal_contract(
+        proposal_id="prop_notice",
+        title="Intent gap",
+        description="Zoe missed related intent messages.",
+        evidence="trace:intent-gap",
+        proposal_type="intent_pattern",
+        legacy_writer="evolution_notice:intent_miss_cluster",
+        target_patterns=("one", "two"),
+    )
+
+    proposal = payload["proposal"]
+
+    assert payload["legacy_writer"] == "evolution_notice:intent_miss_cluster"
+    assert proposal["metadata"]["legacy_target_patterns"] == ["one", "two"]
+    assert proposal["signals"][0]["metadata"]["legacy_target_patterns"] == ["one", "two"]
+    assert proposal["candidate"]["metadata"]["legacy_target_patterns"] == ["one", "two"]
+
+
+def test_legacy_contract_snapshot_supports_user_issue_report():
+    raw = dump_legacy_evolution_proposal_contract(
+        proposal_id="prop_user_issue",
+        title="User report",
+        description="User explicitly reported a problem.",
+        evidence="trace:user-report",
+        proposal_type="user_issue_report",
+        legacy_writer="evolution_notice:user_issue_report",
+        user_id="jason",
+        target_patterns=("reported problem",),
+    )
+
+    payload = load_proposal_contract_snapshot(raw)
+
+    assert payload is not None
+    proposal = payload["proposal"]
+    assert proposal["metadata"]["legacy_proposal_type"] == "user_issue_report"
+    assert proposal["signals"][0]["signal_type"] == "user_request"
+    assert proposal["signals"][0]["scope"] == "personal"
 
 
 def test_loader_rejects_legacy_non_contract_payloads():

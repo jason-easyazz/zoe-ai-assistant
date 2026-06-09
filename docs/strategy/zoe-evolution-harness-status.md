@@ -42,7 +42,7 @@ Important non-complete truth:
 - Zoe now has a read-only Pi runtime probe and policy contract; actual Pi execution is still blocked until Node/npm/Pi and local/offline model configuration are present and approved.
 - The deterministic memory router now has a disabled-by-default runtime status gate, optional non-persistent observation trace packets, and a governed non-persistent trace collector; it is not yet used for prompt injection or backend recall in production chat.
 - Retain-candidate admission has a tested contract, but existing runtime writers are not yet wired to enforce it through Multica approval.
-- The full self-evolution loop is not yet implemented end to end; the MCP `create_evolution_proposal` writer now stores a validated Zoe proposal contract snapshot in the legacy `target_patterns` field, but other live proposal writers still need to emit it and Multica still needs to enforce admission.
+- The full self-evolution loop is not yet implemented end to end; live proposal writers now store validated Zoe proposal contract snapshots in the legacy `target_patterns` field, but Multica still needs to enforce admission and execution gates.
 - Zoe main engine cleanup should not begin until the inventory, graph, and memory/evolution contracts have protective tests around the active surfaces.
 
 ## Phase Ledger
@@ -68,7 +68,7 @@ Important non-complete truth:
 | Observation/evaluation traces | Complete foundation | `services/zoe-data/zoe_observation_trace.py`, `services/zoe-data/zoe_observation_trace_collector.py`, tests, `docs/architecture/zoe-observation-trace-schema.md`, and `docs/architecture/zoe-observation-trace-collector.md` define trace records and non-persistent collection gates for memory route decisions, recall, retain candidate, admission, contradiction, fallback, proposal, verification, outcome eval, and hardware-budget events. | Wire runtime callers through the collector, then add governed collection around retain candidates, sidecar bake-offs, Multica admission, and capability promotion/retirement. |
 | Memory admission governance | Complete foundation | `services/zoe-data/zoe_memory_admission.py`, `services/zoe-data/hindsight_retain_candidates.py`, tests, and `docs/architecture/zoe-memory-admission-gates.md` define evidence, trace, approval, graph, and self-evolution proposal gates before durable memory writes; Hindsight retain candidates can now build/evaluate admission requests before promotion. | Wire future graph/Hindsight durable writers through this decision before any backend write. |
 | Multica evidence gates | Partial | Implement completion now requires PR evidence for code/default profiles, and memory admission has a tested decision contract. | Connect the memory admission contract to Multica/review records and add explicit self-evolution execution gates. |
-| Self-evolution proposal records | Partial runtime wiring | `services/zoe-data/zoe_evolution_proposal.py`, `services/zoe-data/zoe_evolution_proposal_adapter.py`, tests, and `docs/architecture/zoe-evolution-proposal-contract.md` define structured Notice -> Explain -> Search -> Evaluate -> Propose records. The MCP `create_evolution_proposal` writer now stores a validated contract snapshot while preserving the legacy row shape. | Adapt remaining live proposal writers to emit this payload and require it before installs/replacements. |
+| Self-evolution proposal records | Runtime writers wired | `services/zoe-data/zoe_evolution_proposal.py`, `services/zoe-data/zoe_evolution_proposal_adapter.py`, tests, and `docs/architecture/zoe-evolution-proposal-contract.md` define structured Notice -> Explain -> Search -> Evaluate -> Propose records. MCP proposal creation, nightly NOTICE proposals, user-frustration proposals, and explicit user issue reports now store validated contract snapshots while preserving the legacy row shape and MEASURE target patterns. | Require the contract before installs/replacements and connect it to Multica admission/execution gates. |
 | Self-evolution loop | Partial | Multica, pipeline evidence, Greploop, Greptile, Hermes, worktree bootstrap, candidate scoring, and proposal contract pieces exist. | Wire live proposal writers, Multica admission, execution approval, verification, retained outcomes, and retirement evidence. |
 | Main engine cleanup | Deferred | `zoe_agent.py` remains large and active. | Start only after inventories and chat/memory/tool dispatch tests are strong enough to prevent regressions. |
 
@@ -199,8 +199,8 @@ Keep each pull request small enough for Greptile and Zoe verification.
    - Hindsight retain candidates can now build and evaluate admission requests before any durable promotion.
    - Next: route future Hindsight, MemPalace, and Graphiti durable writers through the decision before backend writes.
 9. Self-evolution proposal records.
-    - Status: foundation complete and MCP `create_evolution_proposal` runtime writer now emits a validated contract snapshot into `target_patterns`.
-    - Next: adapt remaining live proposal writers and require the contract before installs/replacements.
+    - Status: foundation complete and live proposal writers now emit validated contract snapshots into `target_patterns`.
+    - Next: require the contract before installs/replacements and connect it to Multica execution gates.
     - Keep execution approval-gated.
 10. Zoe capability profile inventory.
     - Status: complete foundation for key active and candidate surfaces.
