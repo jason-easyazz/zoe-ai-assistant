@@ -11,10 +11,12 @@ This is the foundation for governed self-evolution. Zoe should look up existing 
 Files:
 
 - `services/zoe-data/zoe_capability_profile.py`
+- `services/zoe-data/zoe_capability_profile_patch_writer.py`
 - `services/zoe-data/zoe_capability_profile_promotion.py`
 - `services/zoe-data/zoe_capability_trust_update.py`
 - `services/zoe-data/zoe_capability_trust_review.py`
 - `services/zoe-data/tests/test_zoe_capability_profile.py`
+- `services/zoe-data/tests/test_zoe_capability_profile_patch_writer.py`
 - `services/zoe-data/tests/test_zoe_capability_profile_promotion.py`
 - `services/zoe-data/tests/test_zoe_capability_trust_update.py`
 - `services/zoe-data/tests/test_zoe_capability_trust_review.py`
@@ -61,6 +63,12 @@ Capability profile promotion plans are explicit writer gates, not writes.
 `zoe_capability_profile_promotion.py` can render a deterministic promotion
 manifest only from a clean trust review with PR refs, rollback refs, and
 verification refs. Blocked plans carry no records and cannot be rendered.
+
+Capability profile patch plans are explicit source patch gates, not direct
+file mutations. `zoe_capability_profile_patch_writer.py` consumes an applyable
+promotion manifest plus current source text and renders a deterministic unified
+diff only when the source profile exists and its current trust level still
+matches the reviewed promotion.
 
 ## Next Use
 
