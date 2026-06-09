@@ -174,7 +174,7 @@ def build_admitted_hindsight_retain_plan(
 
     request.validate()
     _validate_hindsight_retain_decision(request, decision)
-    hindsight_config = config or HindsightConfig()
+    hindsight_config = config or HindsightConfig.from_env()
     return HindsightAdmittedRetainPlan(
         admission_id=request.admission_id,
         event_id=request.candidate.event_id,
