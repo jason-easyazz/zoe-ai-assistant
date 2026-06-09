@@ -2703,6 +2703,159 @@ def test_verify_phase_budget_allows_pr_validation_headroom(tmp_path, monkeypatch
     assert "hard_limit=18" in reason
 
 
+def test_phase_budget_blocks_worker_that_leaves_pinned_worktree(tmp_path, monkeypatch):
+    log_path = tmp_path / "task.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                "Query: work kanban task t_impl",
+                "  ┊ 💻 $ cd /home/zoe/assistant && git status  0.1s",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(kb, "_log_path", lambda _task_id: log_path)
+
+    reason = kb.phase_budget_reason(
+        "t_impl",
+        "implement",
+        {
+            "task": {
+                "started_at": 100,
+                "workspace_kind": "worktree",
+                "workspace_path": "/home/zoe/.worktrees/t_impl",
+            }
+        },
+        now=110,
+    )
+
+    assert reason is not None
+    assert "BLOCKER=WORKTREE_PATH_VIOLATION" in reason
+    assert "/home/zoe/assistant" in reason
+    assert "/home/zoe/.worktrees/t_impl" in reason
+    assert "`git status`" in reason
+
+
+def test_phase_budget_blocks_verify_worker_that_leaves_pinned_worktree(tmp_path, monkeypatch):
+    log_path = tmp_path / "task.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                "Query: work kanban task t_verify",
+                "  ┊ 💻 $ cd /home/zoe/assistant && python3 tools/audit/validate_structure.py  0.1s [retry=2]",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(kb, "_log_path", lambda _task_id: log_path)
+
+    reason = kb.phase_budget_reason(
+        "t_verify",
+        "verify",
+        {
+            "task": {
+                "started_at": 100,
+                "workspace_kind": "worktree",
+                "workspace_path": "/home/zoe/.worktrees/t_verify",
+            }
+        },
+        now=110,
+    )
+
+    assert reason is not None
+    assert "BLOCKER=WORKTREE_PATH_VIOLATION" in reason
+    assert "/home/zoe/assistant" in reason
+    assert "/home/zoe/.worktrees/t_verify" in reason
+    assert "`python3 tools/audit/validate_structure.py`" in reason
+
+
+def test_phase_budget_allows_commands_inside_pinned_worktree(tmp_path, monkeypatch):
+    log_path = tmp_path / "task.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                "Query: work kanban task t_impl",
+                "  ┊ 💻 $ cd /home/zoe/.worktrees/t_impl && git status  0.1s",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(kb, "_log_path", lambda _task_id: log_path)
+
+    reason = kb.phase_budget_reason(
+        "t_impl",
+        "implement",
+        {
+            "task": {
+                "started_at": 100,
+                "workspace_kind": "worktree",
+                "workspace_path": "/home/zoe/.worktrees/t_impl",
+            }
+        },
+        now=110,
+    )
+
+    assert reason is None
+
+
+def test_phase_budget_allows_commands_in_pinned_worktree_subdirectory(tmp_path, monkeypatch):
+    log_path = tmp_path / "task.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                "Query: work kanban task t_impl",
+                "  ┊ 💻 $ cd /home/zoe/.worktrees/t_impl/services/zoe-data && python3 -m pytest tests/test_kanban_adapter.py  0.1s",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(kb, "_log_path", lambda _task_id: log_path)
+
+    reason = kb.phase_budget_reason(
+        "t_impl",
+        "implement",
+        {
+            "task": {
+                "started_at": 100,
+                "workspace_kind": "worktree",
+                "workspace_path": "/home/zoe/.worktrees/t_impl",
+            }
+        },
+        now=110,
+    )
+
+    assert reason is None
+
+
+def test_phase_budget_parses_quoted_worktree_paths(tmp_path, monkeypatch):
+    log_path = tmp_path / "task.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                "Query: work kanban task t_impl",
+                "  ┊ 💻 $ cd '/home/zoe/.worktrees/t_impl spaced/services/zoe-data' && git status  0.1s",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(kb, "_log_path", lambda _task_id: log_path)
+
+    reason = kb.phase_budget_reason(
+        "t_impl",
+        "implement",
+        {
+            "task": {
+                "started_at": 100,
+                "workspace_kind": "worktree",
+                "workspace_path": "/home/zoe/.worktrees/t_impl spaced",
+            }
+        },
+        now=110,
+    )
+
+    assert reason is None
+
+
 def test_existing_pr_revision_implement_budget_has_scoped_headroom(tmp_path, monkeypatch):
     log_path = tmp_path / "task.log"
     monkeypatch.setattr(kb, "_log_path", lambda _task_id: log_path)
@@ -3110,6 +3263,20 @@ def test_implement_body_always_completes_after_pr_creation_even_for_security_rev
     assert "Security-sensitive changes still complete implement after the PR is opened" in body
     assert "Do not call `kanban_block` merely because a human/security reviewer should inspect the PR" in body
     assert "CODE-AUDIT FAST PATH" not in body
+
+
+def test_implement_body_requires_pinned_worktree_before_git_or_pr_commands():
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {"id": "uuid-generic", "identifier": "ZOE-GEN", "title": "Generic feature"},
+        "ZOE-GEN",
+    )
+
+    assert "pwd && git branch --show-current" in body
+    assert "workspace_path" in body
+    assert "BLOCKER=WORKTREE_PATH_VIOLATION" in body
+    assert "do not `cd` into" in body
+    assert body.index("BLOCKER=WORKTREE_PATH_VIOLATION") < body.index("git push -u origin HEAD")
 
 
 def test_implement_body_documents_existing_pr_revision_fast_path_before_new_pr_creation(monkeypatch):
