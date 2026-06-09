@@ -110,15 +110,49 @@ async def test_create_evolution_proposal_stores_contract_snapshot(monkeypatch):
     insert_sql, insert_args = db.calls[0]
     update_sql, update_args = db.calls[1]
     assert "target_patterns" in insert_sql
-    assert "target_patterns" in update_sql
+    assert "target_patterns" not in update_sql
 
     insert_contract = json.loads(insert_args[4])
-    update_contract = json.loads(update_args[1])
     assert insert_contract["schema"] == "zoe_evolution_proposal"
     assert insert_contract["proposal"]["status"] == "pending_approval"
+    assert insert_contract["proposal"]["multica_issue_id"] is None
     assert insert_contract["proposal"]["signals"][0]["signal_type"] == "repeated_failure"
     assert insert_contract["proposal"]["approval_gate"]["allowed_to_execute"] is False
-    assert update_contract["proposal"]["multica_issue_id"] == "multica-issue-123"
+    assert update_args == ("multica-issue-123", result["proposal_id"])
+
+
+@pytest.mark.asyncio
+async def test_create_evolution_proposal_keeps_contract_when_multica_unconfigured(monkeypatch):
+    async def fake_sync_evolution_proposal_to_multica(**_kwargs):
+        return None
+
+    monkeypatch.setitem(
+        sys.modules,
+        "multica_client",
+        types.SimpleNamespace(sync_evolution_proposal_to_multica=fake_sync_evolution_proposal_to_multica),
+    )
+    db = _RecordingDb()
+
+    result = await mcp_server._execute_tool(
+        db=db,
+        name="create_evolution_proposal",
+        args={
+            "title": "Review missing proposal path",
+            "description": "Zoe should keep a contract snapshot even when Multica is unavailable.",
+            "proposal_type": "code_improvement",
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["multica_issue_id"] is None
+    assert result["contract_schema"] == "zoe_evolution_proposal"
+    assert len(db.calls) == 1
+    insert_sql, insert_args = db.calls[0]
+    assert "target_patterns" in insert_sql
+    contract = json.loads(insert_args[4])
+    assert contract["schema"] == "zoe_evolution_proposal"
+    assert contract["proposal"]["multica_issue_id"] is None
+    assert contract["proposal"]["signals"][0]["signal_type"] == "tool_gap"
 
 
 class _Cursor:

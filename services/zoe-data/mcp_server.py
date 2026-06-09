@@ -3023,18 +3023,9 @@ async def _execute_tool(db, name: str, args: dict):
                 proposal_type=proposal_type,
             )
             if multica_id:
-                contract_snapshot = dump_mcp_evolution_proposal_contract(
-                    proposal_id=prop_id,
-                    title=title,
-                    description=description,
-                    evidence=evidence,
-                    proposal_type=proposal_type,
-                    user_id=args.get("_user_id") or args.get("user_id"),
-                    multica_issue_id=multica_id,
-                )
                 await db.execute(
-                    "UPDATE evolution_proposals SET multica_issue_id=$1, target_patterns=$2 WHERE id=$3",
-                    multica_id, contract_snapshot, prop_id,
+                    "UPDATE evolution_proposals SET multica_issue_id=$1 WHERE id=$2",
+                    multica_id, prop_id,
                 )
             return {
                 "ok": True,

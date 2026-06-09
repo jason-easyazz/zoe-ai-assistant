@@ -39,6 +39,8 @@ writer:
   Multica, and review routes;
 - a validated `zoe_evolution_proposal` contract snapshot is stored as JSON in
   the existing `target_patterns` field;
+- `multica_issue_id` remains authoritative in the legacy column; the stored
+  contract snapshot is not rewritten just to mirror that live sync field;
 - proposal creation remains review-only and never grants execution;
 - `approval_gate.allowed_to_execute` remains false.
 
