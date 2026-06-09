@@ -1380,6 +1380,34 @@ async def test_poll_v4_done_phase_with_ready_next_phase_is_partial():
 
 
 @pytest.mark.asyncio
+async def test_poll_v4_blocks_code_implement_done_without_pr():
+    rows = [_row("implement", "done", chain_version="v4", issue_id="uuid-no-pr")]
+    show = {
+        "t_implement": {
+            "latest_summary": "TOOLS_USED=graphify\nTESTS=validate_structure.py passed\nSUMMARY=investigated only",
+            "comments": [],
+        }
+    }
+    a = _FakeAdapter(list_rows=rows, show_map=show)
+    out = await a.poll(
+        "multica:uuid-no-pr",
+        issue={
+            "id": "uuid-no-pr",
+            "identifier": "ZOE-NO-PR",
+            "title": "Harness fix must produce a PR",
+            "metadata": {"evidence_profile": "code"},
+        },
+    )
+
+    assert out["found"] is True
+    assert out["status"] == "blocked"
+    assert out["pipeline"]["phase"] == "implement"
+    assert out["pipeline"]["status"] == "blocked"
+    assert out["pipeline"]["missing_evidence"] == ["pr"]
+    assert out["blocker"] == "GATE_BLOCKED: missing required evidence pr"
+
+
+@pytest.mark.asyncio
 async def test_poll_ignores_stale_terminal_row_for_revision_phase():
     from pipeline_evidence import PipelineState
     from pipeline_store import save_state

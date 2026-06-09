@@ -40,7 +40,7 @@ PHASE_ORDER: tuple[PipelinePhase, ...] = (
 
 _REQUIRED_EVIDENCE: dict[PipelinePhase, set[EvidenceKind]] = {
     "scout": {"tool"},
-    "implement": {"tool"},
+    "implement": {"tool", "pr"},
     "verify": {"test", "validator"},
     "review": {"human"},
     "closeout": {"greptile"},
@@ -48,6 +48,7 @@ _REQUIRED_EVIDENCE: dict[PipelinePhase, set[EvidenceKind]] = {
 }
 
 _EVIDENCE_PROFILES: dict[EvidenceProfile, dict[PipelinePhase, set[EvidenceKind]]] = {
+    # Default is the normal code-producing path, so implement completion needs PR evidence.
     "default": _REQUIRED_EVIDENCE,
     "code": _REQUIRED_EVIDENCE,
     "audit": {

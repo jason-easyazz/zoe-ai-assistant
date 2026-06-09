@@ -249,6 +249,7 @@ def skip_blocked_implementation(
             raise ValueError(
                 f"pipeline lacks passed scout/tool evidence required for a no-code skip: {task_ref}"
             )
+        state = state.model_copy(update={"evidence_profile": "audit"})
         skipped = transition(state, "skip_implementation", reason=reason)
         skipped = skipped.model_copy(
             update={
@@ -602,8 +603,25 @@ async def _sync_pipeline_from_chain_once(
                 "row_phase": phase,
                 "missing": sorted(missing_required_evidence(state)),
             }
-            if state.phase == "verify" and not verify_validator_hash_matches(state):
+            validator_hash_mismatch = state.phase == "verify" and not verify_validator_hash_matches(state)
+            if validator_hash_mismatch:
                 extra["validator_hash_mismatch"] = True
+            if extra["missing"]:
+                block_reason = "GATE_BLOCKED: missing required evidence " + ",".join(extra["missing"])
+            elif validator_hash_mismatch:
+                block_reason = "GATE_BLOCKED: validator hash mismatch"
+            else:
+                raise AssertionError(
+                    "can_complete_phase returned False with no diagnosable gate reason "
+                    f"(phase={state.phase!r}, evidence={[item.kind for item in state.evidence]!r})"
+                )
+            state, _should_abort = record_block_fingerprint(
+                state,
+                block_fingerprint(phase, block_reason),  # type: ignore[arg-type]
+            )
+            # A gate block is already terminal for this phase until operator action
+            # changes the state, so repeated-fingerprint escalation would be noise.
+            state = transition(state, "block", reason=block_reason)
             state = await _run_io(
                 partial(
                     save_state,

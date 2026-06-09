@@ -337,6 +337,61 @@ def test_skip_blocked_implementation_requires_tool_evidence(isolated_store):
 
 
 @pytest.mark.asyncio
+async def test_skip_blocked_code_implementation_allows_validator_only_verify(isolated_store):
+    from pipeline_evidence import TransitionRecord
+
+    state = PipelineState(
+        task_ref="multica:code-gate-no-code-skip",
+        phase="implement",
+        status="blocked",
+        evidence_profile="code",
+        history=[
+            TransitionRecord(
+                from_phase="implement",
+                to_phase="implement",
+                outcome="block",
+                reason="GATE_BLOCKED: missing required evidence pr",
+            )
+        ],
+        evidence=[
+            EvidenceItem(
+                kind="tool",
+                summary="scout proved acceptance is already satisfied by merged work",
+                passed=True,
+            )
+        ],
+    )
+    store.save_state(state, event="gate_blocked", extra={"missing": ["pr"]})
+
+    skipped = store.skip_blocked_implementation(
+        "multica:code-gate-no-code-skip",
+        reason="operator confirmed no code change is needed",
+    )
+
+    assert skipped.phase == "verify"
+    assert skipped.status == "todo"
+    assert skipped.evidence_profile == "audit"
+
+    async def fetch_detail(_task_id: str):
+        return {
+            "latest_summary": "VALIDATORS=validate_structure.py passed",
+            "comments": [],
+        }
+
+    verified = await store.sync_pipeline_from_chain(
+        "multica:code-gate-no-code-skip",
+        {"verify": {"id": "t_verify", "status": "done"}},
+        fetch_detail,
+    )
+
+    assert verified.phase == "review"
+    assert verified.status == "todo"
+    assert verified.evidence_profile == "audit"
+    assert verified.history[-1].outcome == "complete"
+    assert verified.history[-1].reason != "GATE_BLOCKED: missing required evidence test"
+
+
+@pytest.mark.asyncio
 async def test_sync_pipeline_advances_on_complete_handoff(isolated_store):
     await store.bootstrap_state("multica:sync")
 
@@ -355,6 +410,99 @@ async def test_sync_pipeline_advances_on_complete_handoff(isolated_store):
     assert len(lines) >= 2
     last = json.loads(lines[-1])
     assert last["event"] in {"transition", "gate_blocked"}
+
+
+@pytest.mark.asyncio
+async def test_sync_pipeline_blocks_code_implement_without_pr(isolated_store):
+    await store.bootstrap_state("multica:no-pr-code", issue={"metadata": {"evidence_profile": "code"}})
+
+    async def fetch_detail(_task_id: str):
+        return {
+            "latest_summary": "TOOLS_USED=graphify\nTESTS=validate_structure.py passed\nSUMMARY=investigated only",
+            "comments": [],
+        }
+
+    phases = {"implement": {"id": "t_impl", "status": "done"}}
+    state = await store.sync_pipeline_from_chain("multica:no-pr-code", phases, fetch_detail)
+
+    assert state.phase == "implement"
+    assert state.status == "blocked"
+    assert state.history[-1].reason == "GATE_BLOCKED: missing required evidence pr"
+    assert store.pipeline_summary(state)["missing_evidence"] == ["pr"]
+    last = json.loads(isolated_store.read_text(encoding="utf-8").strip().splitlines()[-1])
+    assert last["event"] == "gate_blocked"
+    assert last["meta"]["row_phase"] == "implement"
+    assert last["meta"]["missing"] == ["pr"]
+
+
+@pytest.mark.asyncio
+async def test_sync_pipeline_blocks_default_implement_without_pr(isolated_store):
+    await store.bootstrap_state("multica:no-pr-default")
+
+    async def fetch_detail(_task_id: str):
+        return {
+            "latest_summary": "TOOLS_USED=graphify\nSUMMARY=investigated only",
+            "comments": [],
+        }
+
+    state = await store.sync_pipeline_from_chain(
+        "multica:no-pr-default",
+        {"implement": {"id": "t_impl", "status": "done"}},
+        fetch_detail,
+    )
+
+    assert state.evidence_profile == "default"
+    assert state.phase == "implement"
+    assert state.status == "blocked"
+    assert state.history[-1].reason == "GATE_BLOCKED: missing required evidence pr"
+    assert store.pipeline_summary(state)["missing_evidence"] == ["pr"]
+
+
+@pytest.mark.asyncio
+async def test_sync_pipeline_reports_validator_hash_mismatch_gate(isolated_store):
+    state = PipelineState(
+        task_ref="multica:verify-hash-mismatch",
+        phase="verify",
+        status="todo",
+        evidence=[
+            EvidenceItem(kind="test", summary="pytest passed", passed=True),
+            EvidenceItem(
+                kind="validator",
+                summary="implement validator",
+                passed=True,
+                content_hash="a" * 64,
+                metadata={"phase": "implement", "source": "handoff"},
+            ),
+            EvidenceItem(
+                kind="validator",
+                summary="verify validator",
+                passed=True,
+                content_hash="b" * 64,
+                metadata={"phase": "verify", "source": "handoff"},
+            ),
+        ],
+    )
+    store.save_state(state, event="verify_ready")
+
+    async def fetch_detail(_task_id: str):
+        return {
+            "latest_summary": "TESTS=pytest passed\nVALIDATORS=validate_structure.py passed",
+            "comments": [],
+        }
+
+    state = await store.sync_pipeline_from_chain(
+        "multica:verify-hash-mismatch",
+        {"verify": {"id": "t_verify", "status": "done"}},
+        fetch_detail,
+    )
+
+    assert state.phase == "verify"
+    assert state.status == "blocked"
+    assert state.history[-1].reason == "GATE_BLOCKED: validator hash mismatch"
+    last = json.loads(isolated_store.read_text(encoding="utf-8").strip().splitlines()[-1])
+    assert last["event"] == "gate_blocked"
+    assert last["meta"]["missing"] == []
+    assert last["meta"]["validator_hash_mismatch"] is True
 
 
 @pytest.mark.asyncio
