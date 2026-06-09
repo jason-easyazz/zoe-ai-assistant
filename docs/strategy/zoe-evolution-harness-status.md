@@ -31,7 +31,7 @@ Important non-complete truth:
 
 - Graphify has been refreshed from Pi harness merge source commit `a3fe849c` and merged in PR #273; PR #273 changed only generated Graphify artifacts, so the map is current for source surfaces until the next code or architecture change.
 - Tool/capability and memory read/write inventories now exist as cleanup gates; keep them updated as runtime paths change.
-- MemPalace now has a repeatable local baseline harness and first measured Zoe-host run; Hindsight now has a fixed measured runner, read-only sidecar probe, and Zoe-host availability baseline, but no live sidecar bake-off yet because no sidecar is running and the available image cannot be safely started until Zoe has a local/cached embedding model or local embeddings service configured.
+- MemPalace now has a repeatable local baseline harness and first measured Zoe-host run; Hindsight now has a fixed measured runner, read-only probes, Zoe-host availability baseline, and first live offline retain/recall bake-off: 4/4 synthetic events retained and recalled at score 1.0 using local Gemma and cached BGE embeddings, but p95 recall stayed above the 600 ms hot-path target at 649.00 ms live and 643.25 ms warm.
 - Graphiti/FalkorDB/Neo4j have not yet been measured for Zoe relational memory, but Zoe-specific Graphiti fixtures and a read-only backend probe now define the first relationship eval set and availability preflight.
 - The plan now names Zoe's missing north-star layer: capability profiles, trust/autonomy classes, candidate scouting, outcome evals, and hardware-aware promotion.
 - Zoe now has an executable capability profile contract and initial self-model for key chat, memory, graph, governance, escalation, Pi, and device-control surfaces.
@@ -179,9 +179,10 @@ Keep each pull request small enough for Greptile and Zoe verification.
    - Repeatable benchmark and first Zoe-host p50/p95 run are documented in `docs/architecture/zoe-mempalace-baseline.md`.
    - Expand with memory footprint, relational, and supersession cases before backend replacement decisions.
 5. Hindsight sidecar bake-off.
-   - Status: runner, read-only sidecar probe, and availability baseline complete.
-   - Next: add or configure a local embedding model/service, then start local/offline-only Hindsight and run synthetic retain/recall.
-   - Produce measured p50/p95, evidence quality, CPU/RAM, and gaps.
+   - Status: runner, read-only probes, availability baseline, and first live offline retain/recall bake-off complete.
+   - Result: 4/4 synthetic events retained and recalled at score 1.0 using local Gemma and cached BGE embeddings.
+   - Gap: live p95 649.00 ms and warm p95 643.25 ms are above the 600 ms hot-path target; container memory was about 1 GiB.
+   - Next: test lower budgets, caching, or async routing and record whether p95 can clear 600 ms.
    - Keep it out of production chat until feature-flagged and measured.
 6. Graphiti relational bake-off.
    - Status: fixture foundation and read-only backend probe complete.
