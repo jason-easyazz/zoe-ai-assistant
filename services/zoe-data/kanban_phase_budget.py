@@ -62,11 +62,17 @@ _CODE_AUDIT_BODY_RE = re.compile(
     re.IGNORECASE,
 )
 _POST_PATCH_VALIDATION_RE = re.compile(
-    r"\b(py_compile|pytest|mypy|ruff|validate_structure|validate_critical_files|nginx\s+-t|curl\s+-I)\b",
+    r"^(?:"
+    r"(?:\w+=\S+\s+)*python3?\s+-m\s+(?:py_compile|pytest|mypy|ruff)\b|"
+    r"(?:\w+=\S+\s+)*python3?\s+tools/audit/(?:validate_structure|validate_critical_files)\.py\b|"
+    r"(?:\w+=\S+\s+)*tools/audit/(?:validate_structure|validate_critical_files)\.py\b|"
+    r"nginx\s+-t\b|"
+    r"curl\s+-I\b"
+    r")",
     re.IGNORECASE,
 )
 _POST_PATCH_SHIP_RE = re.compile(
-    r"\b(git\s+commit|git\s+push|gh\s+pr\s+create)\b",
+    r"^(?:git\s+(?:commit|push)\b|gh\s+pr\s+create\b)",
     re.IGNORECASE,
 )
 _ENGINEERING_BLOCKER_FOLLOWUP_SOURCE_RE = re.compile(
@@ -250,6 +256,16 @@ def _post_patch_explore_budget() -> int:
         return 2
 
 
+def _shell_command_from_step(line: str) -> str | None:
+    if "$" not in line:
+        return None
+    cd_match = _SHELL_CD_STEP_RE.match(line)
+    if cd_match:
+        return _STEP_TIMING_SUFFIX_RE.sub("", cd_match.group("command").strip())
+    command = line.split("$", 1)[1].strip()
+    return _STEP_TIMING_SUFFIX_RE.sub("", command)
+
+
 def implement_code_audit_post_patch_drift_reason_from_log(
     task_id: str,
     phase: str,
@@ -285,12 +301,12 @@ def implement_code_audit_post_patch_drift_reason_from_log(
             continue
         if not patch_seen:
             continue
-        shell_step = "$" in line
+        shell_command = _shell_command_from_step(line)
         if _TERMINAL_STEP_RE.search(line) or (
-            shell_step
+            shell_command
             and (
-                _POST_PATCH_VALIDATION_RE.search(line)
-                or _POST_PATCH_SHIP_RE.search(line)
+                _POST_PATCH_VALIDATION_RE.search(shell_command)
+                or _POST_PATCH_SHIP_RE.search(shell_command)
             )
         ):
             return None

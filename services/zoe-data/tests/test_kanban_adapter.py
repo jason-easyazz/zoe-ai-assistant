@@ -2479,6 +2479,42 @@ def test_phase_budget_allows_code_audit_ship_command_after_patch(tmp_path, monke
     assert reason is None
 
 
+def test_phase_budget_does_not_treat_shell_grep_as_validation_after_patch(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_CODE_AUDIT_POST_PATCH_EXPLORE_BUDGET", "2")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 🔧 patch     /home/zoe/.worktrees/t_impl/services/zoe-ui/nginx.conf  0.1s\n"
+        "  ┊ 📖 read      /home/zoe/.worktrees/t_impl/services/zoe-ui/nginx.conf  0.1s\n"
+        "  ┊ 💻 $         cd /home/zoe/.worktrees/t_impl && grep validate_structure .  0.1s\n"
+        "  ┊ 🔎 find      .github  0.1s\n"
+        "  ┊ 🔎 grep      docker-compose  0.1s\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.phase_budget_reason(
+        "t_impl",
+        "implement",
+        {
+            "task": {
+                "started_at": 100,
+                "body": "CODE-AUDIT FAST PATH\nsource=code_audit_p0_security",
+                "workspace_kind": "worktree",
+                "workspace_path": "/home/zoe/.worktrees/t_impl",
+            },
+            "runs": [{"started_at": 100}],
+        },
+        now=120,
+    )
+
+    assert reason is not None
+    assert "CODE_AUDIT_POST_PATCH_DRIFT" in reason
+
+
 def test_phase_budget_allows_code_audit_terminal_handoff_after_patch(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     log_dir = tmp_path / "kanban" / "logs"
