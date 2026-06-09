@@ -11,6 +11,11 @@ Concrete modules, docs, metrics, and runtime concepts should use Zoe names.
 External inspirations remain product vision and research inputs, not Zoe system
 identifiers.
 
+Implementation rule: close one contract loop end-to-end before starting the
+next. A schema, card contract, memory contract, evidence contract, or handoff
+contract is not considered complete until at least one intended consumer path is
+tested, or the missing last mile is explicitly recorded as blocked.
+
 ## Status Snapshot
 
 Date: 2026-06-09
