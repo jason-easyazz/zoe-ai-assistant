@@ -64,6 +64,29 @@ def test_build_metadata_maps_shared_scope_to_family_visibility():
     assert metadata["visibility"] == "family"
 
 
+def test_build_metadata_promotes_metadata_scope_when_explicit_scope_missing():
+    metadata = MemoryService._build_metadata(
+        user_id="jason",
+        source="hindsight_retain_candidate",
+        session_id=None,
+        user_turn_id="mem_evt_metadata_scope",
+        memory_type="fact",
+        confidence=0.8,
+        status="pending",
+        tags=[],
+        entity_type=None,
+        entity_id=None,
+        expires_at=None,
+        scope=None,
+        extra_metadata={"scope": "project", "event_id": "mem_evt_metadata_scope"},
+    )
+
+    assert metadata["scope"] == "project"
+    assert metadata["visibility"] == "personal"
+    assert metadata["candidate_scope"] == "project"
+    assert metadata["event_id"] == "mem_evt_metadata_scope"
+
+
 def test_build_metadata_rejects_unknown_scope():
     with pytest.raises(MemoryServiceError, match="unsupported memory scope"):
         MemoryService._build_metadata(

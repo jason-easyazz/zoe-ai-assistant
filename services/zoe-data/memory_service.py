@@ -201,7 +201,11 @@ class MemoryService:
         metadata: Optional[dict[str, Any]] = None,
         opt_out: bool = False,
     ) -> Optional[MemoryRef]:
-        """Store a fact. Returns None when silently dropped."""
+        """Store a fact. Returns None when silently dropped.
+
+        When ``scope`` is None, ``metadata["scope"]`` is treated as the
+        authoritative memory scope and is validated before any durable write.
+        """
         self._require(user_id, "user_id is required")
         if not text or not text.strip():
             raise MemoryServiceError("empty text")
@@ -634,6 +638,11 @@ class MemoryService:
         extra_metadata: Optional[dict[str, Any]] = None,
         idem_key: str = "",
     ) -> dict[str, Any]:
+        """Build durable metadata for a memory row.
+
+        When ``scope`` is None, ``extra_metadata["scope"]`` is promoted to the
+        first-class Zoe memory scope and drives legacy visibility mapping.
+        """
         now = datetime.datetime.utcnow().isoformat() + "Z"
         extra = dict(extra_metadata or {})
         event_scope = scope if scope is not None else extra.get("scope")
