@@ -1339,6 +1339,55 @@ async def test_poll_recovers_pr_after_push_then_api_interruption(tmp_path, monke
     assert create_cmd[create_cmd.index("--base") + 1] == "release"
 
 
+@pytest.mark.asyncio
+async def test_poll_completes_recovered_pr_url_already_in_comments(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_implement.log").write_text(
+        "Query: work kanban task t_implement\n"
+        "  ┊ 💻 $         git push -u origin HEAD  2.1s\n"
+        "⚡ Interrupted during API call.\n",
+        encoding="utf-8",
+    )
+    rows = [
+        _row(
+            "implement",
+            "blocked",
+            chain_version="v4",
+            block_reason="worker interrupted after push",
+        )
+    ]
+
+    class _RecoverAdapter(_FakeAdapter):
+        def __init__(self):
+            super().__init__(
+                list_rows=rows,
+                show_map={
+                    "t_implement": {
+                        "latest_summary": "",
+                        "comments": [
+                            {
+                                "body": "manual recovery PR: https://github.com/jason-easyazz/zoe-ai-assistant/pull/998"
+                            }
+                        ],
+                    }
+                },
+            )
+
+        async def _run_worktree_command(self, args, *, cwd, timeout=45.0):
+            raise AssertionError(f"early PR URL recovery should not inspect worktree: {args}")
+
+    a = _RecoverAdapter()
+    out = await a.poll("multica:uuid-9")
+
+    assert out["phases"]["implement"] == "done"
+    assert out["pr_url"] == "https://github.com/jason-easyazz/zoe-ai-assistant/pull/998"
+    assert out["status"] != "blocked"
+    complete = next(call for call in a.calls if call[0] == "complete")
+    assert "PR_URL=https://github.com/jason-easyazz/zoe-ai-assistant/pull/998" in "\n".join(complete)
+
+
 def test_pushed_branch_recovery_scans_latest_log_session_only(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     log_dir = tmp_path / "kanban" / "logs"
@@ -1364,6 +1413,21 @@ def test_pushed_branch_recovery_ignores_pr_create_in_reasoning_text(tmp_path, mo
         "Query: work kanban task t_impl\n"
         "I will run `gh pr create` after this push.\n"
         "  ┊ 💻 $         git push -u origin HEAD  2.1s\n"
+        "⚡ Interrupted during API call.\n",
+        encoding="utf-8",
+    )
+
+    assert ka.KanbanAdapter()._pushed_branch_without_pr_handoff("t_impl") is True
+
+
+def test_pushed_branch_recovery_allows_failed_pr_create_attempt(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 💻 $         git push -u origin HEAD  2.1s\n"
+        "  ┊ 💻 $         gh pr create --base main --title x --body y  1.1s [exit 1]\n"
         "⚡ Interrupted during API call.\n",
         encoding="utf-8",
     )

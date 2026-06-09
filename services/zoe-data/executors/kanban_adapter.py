@@ -1018,8 +1018,11 @@ class KanbanAdapter:
             match = _SHELL_TOOL_LINE_RE.search(line)
             if match:
                 shell_commands.append(match.group("command"))
-        if any("gh pr create" in command for command in shell_commands) or "PR_URL=" in log:
+        if "PR_URL=" in log:
             return False
+        for command in shell_commands:
+            if "gh pr create" in command and not re.search(r"\[exit\s+[1-9]\d*\]", command, re.IGNORECASE):
+                return False
         for command in shell_commands:
             if "git push -u origin HEAD" not in command:
                 continue
@@ -1027,6 +1030,43 @@ class KanbanAdapter:
                 return False
             return True
         return False
+
+    async def _complete_recovered_pr_handoff(
+        self,
+        task_id: str,
+        row: dict[str, Any],
+        pr_url: str,
+        *,
+        branch: str | None = None,
+    ) -> str:
+        summary = (
+            f"PR_URL={pr_url}\n"
+            "BLOCKER=\n"
+            "TESTS=recovered after pushed branch; downstream verify/review must validate\n"
+            "SUMMARY=Recovered PR handoff after worker interruption following git push"
+        )
+        metadata = {
+            "pr_url": pr_url,
+            "recovery": "pushed_branch_without_pr_handoff",
+        }
+        if branch:
+            metadata["branch"] = branch
+        await self._run(
+            [
+                "complete",
+                "--result",
+                summary,
+                "--summary",
+                summary,
+                "--metadata",
+                json.dumps(metadata, sort_keys=True),
+                task_id,
+            ]
+        )
+        row["status"] = "done"
+        row["result"] = summary
+        row["block_reason"] = None
+        return pr_url
 
     async def _maybe_recover_pushed_pr(
         self,
@@ -1051,7 +1091,7 @@ class KanbanAdapter:
         ):
             match = _GITHUB_PR_URL_RE.search(haystack)
             if match:
-                return match.group(0)
+                return await self._complete_recovered_pr_handoff(task_id, row, match.group(0))
 
         try:
             from worktree_bootstrap import worktree_path
@@ -1115,36 +1155,7 @@ class KanbanAdapter:
             if not match:
                 return None
             pr_url = match.group(0)
-            summary = (
-                f"PR_URL={pr_url}\n"
-                "BLOCKER=\n"
-                "TESTS=recovered after pushed branch; downstream verify/review must validate\n"
-                "SUMMARY=Recovered PR handoff after worker interruption following git push"
-            )
-            metadata = json.dumps(
-                {
-                    "pr_url": pr_url,
-                    "recovery": "pushed_branch_without_pr_handoff",
-                    "branch": branch,
-                },
-                sort_keys=True,
-            )
-            await self._run(
-                [
-                    "complete",
-                    "--result",
-                    summary,
-                    "--summary",
-                    summary,
-                    "--metadata",
-                    metadata,
-                    task_id,
-                ]
-            )
-            row["status"] = "done"
-            row["result"] = summary
-            row["block_reason"] = None
-            return pr_url
+            return await self._complete_recovered_pr_handoff(task_id, row, pr_url, branch=branch)
         except Exception as exc:  # noqa: BLE001 - recovery must not break normal poll.
             logger.warning("kanban_adapter: pushed PR recovery failed for %s: %s", task_id, exc)
             return None
