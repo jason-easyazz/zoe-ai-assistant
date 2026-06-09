@@ -11,12 +11,13 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Mapping, Sequence
 
-from zoe_capability_profile import CapabilityProfile, capability_profile_index
+from zoe_capability_profile import CapabilityProfile, TRUST_LEVELS, capability_profile_index
 from zoe_evolution_outcome_retain import EvolutionOutcomeRetainResult
 from zoe_evolution_proposal import ProposalStatus
 
 
 TRUST_UPDATE_SOURCE = "evolution_outcome_retain"
+TRUST_PROMOTION_ORDER = ("experimental", "assisted", "trusted", "privileged")
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,15 @@ class CapabilityTrustUpdateCandidate:
             raise ValueError(f"{self.capability_id}: proposal_id is required")
         if not self.evidence_refs:
             raise ValueError(f"{self.capability_id}: evidence_refs are required")
+        if self.current_trust_level not in TRUST_LEVELS and self.current_trust_level != "unknown":
+            raise ValueError(f"{self.capability_id}: unknown current_trust_level {self.current_trust_level!r}")
+        if self.proposed_trust_level not in TRUST_LEVELS:
+            raise ValueError(f"{self.capability_id}: unknown proposed_trust_level {self.proposed_trust_level!r}")
+        if _trust_rank(self.proposed_trust_level) < _trust_rank(self.current_trust_level):
+            raise ValueError(
+                f"{self.capability_id}: proposed_trust_level {self.proposed_trust_level!r} "
+                f"would demote current_trust_level {self.current_trust_level!r}"
+            )
         if not self.source_event_id:
             raise ValueError(f"{self.capability_id}: source_event_id is required")
         if not self.source_admission_id:
@@ -101,7 +111,7 @@ def build_capability_trust_update_plan(
 
     profile_index = capability_profile_index(profiles) if profiles is not None else capability_profile_index()
     source_event_id = outcome_retain.admission.candidate.event_id
-    retained_backend = str(outcome_retain.execution.sidecar_result.get("bank_id") or "hindsight")
+    retained_backend = outcome_retain.execution.bank_id or "hindsight"
     evidence_refs = _evidence_refs(outcome_retain)
     candidates = tuple(
         CapabilityTrustUpdateCandidate(
@@ -109,7 +119,9 @@ def build_capability_trust_update_plan(
             proposal_id=proposal.proposal_id,
             proposal_candidate_id=proposal.candidate.candidate_id,
             current_trust_level=profile_index[capability_id].trust_level if capability_id in profile_index else "unknown",
-            proposed_trust_level="trusted",
+            proposed_trust_level=_proposed_trust_level(
+                profile_index[capability_id].trust_level if capability_id in profile_index else "unknown"
+            ),
             reason=(
                 f"Verified proposal {proposal.proposal_id} was admitted and retained "
                 f"for capability {capability_id}."
@@ -147,6 +159,31 @@ def _trust_update_blockers(outcome_retain: EvolutionOutcomeRetainResult) -> tupl
     return tuple(dict.fromkeys(blockers))
 
 
+def _proposed_trust_level(current_trust_level: str) -> str:
+    if current_trust_level == "unknown":
+        return "experimental"
+    if current_trust_level == "retired":
+        return "retired"
+    if current_trust_level == "privileged":
+        return "privileged"
+    try:
+        current_index = TRUST_PROMOTION_ORDER.index(current_trust_level)
+    except ValueError:
+        return "experimental"
+    return TRUST_PROMOTION_ORDER[min(current_index + 1, TRUST_PROMOTION_ORDER.index("trusted"))]
+
+
+def _trust_rank(trust_level: str) -> int:
+    if trust_level == "unknown":
+        return -1
+    if trust_level == "retired":
+        return len(TRUST_PROMOTION_ORDER)
+    try:
+        return TRUST_PROMOTION_ORDER.index(trust_level)
+    except ValueError:
+        return -1
+
+
 def _evidence_refs(outcome_retain: EvolutionOutcomeRetainResult) -> tuple[str, ...]:
     refs: list[str] = []
     refs.extend(outcome_retain.admission.decision.evidence_refs)
@@ -160,6 +197,7 @@ def _evidence_refs(outcome_retain: EvolutionOutcomeRetainResult) -> tuple[str, .
 __all__ = [
     "CapabilityTrustUpdateCandidate",
     "CapabilityTrustUpdatePlan",
+    "TRUST_PROMOTION_ORDER",
     "TRUST_UPDATE_SOURCE",
     "build_capability_trust_update_plan",
 ]

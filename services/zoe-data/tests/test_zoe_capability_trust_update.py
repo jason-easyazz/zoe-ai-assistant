@@ -5,7 +5,7 @@ import pytest
 
 from hindsight_memory import HindsightConfig, HindsightMemoryClient
 from zoe_candidate_scoring import CandidateEvaluation, CandidateScore
-from zoe_capability_trust_update import build_capability_trust_update_plan
+from zoe_capability_trust_update import CapabilityTrustUpdateCandidate, build_capability_trust_update_plan
 from zoe_evolution_outcome_retain import evaluate_and_retain_evolution_outcome_in_hindsight
 from zoe_evolution_proposal import (
     EvolutionSignal,
@@ -120,8 +120,9 @@ async def test_capability_trust_update_candidates_require_retained_verified_outc
     assert len(plan.candidates) == 2
     by_id = {candidate.capability_id: candidate for candidate in plan.candidates}
     assert by_id["hindsight_reflective_memory"].current_trust_level == "experimental"
-    assert by_id["hindsight_reflective_memory"].proposed_trust_level == "trusted"
+    assert by_id["hindsight_reflective_memory"].proposed_trust_level == "assisted"
     assert by_id["self_evolution_loop"].current_trust_level == "unknown"
+    assert by_id["self_evolution_loop"].proposed_trust_level == "experimental"
     assert "approval:multica:ZOE-318" in by_id["hindsight_reflective_memory"].evidence_refs
     assert by_id["hindsight_reflective_memory"].source_event_id == seen["payload"]["items"][0]["document_id"]
     assert by_id["hindsight_reflective_memory"].retained_backend == "zoe-test-project-jason"
@@ -176,3 +177,62 @@ async def test_capability_trust_update_metadata_is_read_only_and_serializable():
     payload = plan.to_dict()
     assert payload["allowed_to_propose"] is True
     assert payload["candidates"][0]["metadata"]["source"] == "evolution_outcome_retain"
+
+
+@pytest.mark.asyncio
+async def test_capability_trust_update_does_not_demote_privileged_capability():
+    proposal = build_evolution_proposal(
+        proposal_id="proposal_privileged_trust",
+        title="Keep Multica privilege intact",
+        problem_statement="Privileged capabilities should never receive demotion candidates.",
+        signals=(_signal(),),
+        candidate=_candidate(),
+        affected_capabilities=("multica_governance",),
+        autonomy_class=TrustAutonomyClass.PROMOTE.value,
+        risk=ProposalRisk.MEDIUM.value,
+        expected_benefit="Zoe can review privileged evidence without lowering the trust class.",
+        verification_plan=("pytest:test_zoe_capability_trust_update",),
+        rollback_plan="Do not change Multica trust.",
+        approval_required=("pr_evidence", "memory_admission"),
+        status=ProposalStatus.VERIFIED.value,
+    )
+    trace = _trace(subject_id="proposal_privileged_trust")
+    outcome, _seen = await _retained_outcome(proposal=proposal, trace=trace)
+
+    plan = build_capability_trust_update_plan(outcome)
+
+    assert plan.allowed_to_propose is True
+    assert plan.candidates[0].current_trust_level == "privileged"
+    assert plan.candidates[0].proposed_trust_level == "privileged"
+
+
+def test_capability_trust_update_candidate_validates_trust_levels():
+    with pytest.raises(ValueError, match="unknown proposed_trust_level"):
+        CapabilityTrustUpdateCandidate(
+            capability_id="hindsight_reflective_memory",
+            proposal_id="proposal_hindsight_trust",
+            proposal_candidate_id="hindsight_reflective_memory",
+            current_trust_level="experimental",
+            proposed_trust_level="magic",
+            reason="invalid trust level",
+            evidence_refs=("pytest:test_zoe_capability_trust_update",),
+            source_event_id="event_invalid_trust",
+            source_admission_id="admit_invalid_trust",
+            retained_backend="zoe-test-project-jason",
+            metadata={},
+        )
+
+    with pytest.raises(ValueError, match="would demote"):
+        CapabilityTrustUpdateCandidate(
+            capability_id="multica_governance",
+            proposal_id="proposal_hindsight_trust",
+            proposal_candidate_id="hindsight_reflective_memory",
+            current_trust_level="privileged",
+            proposed_trust_level="trusted",
+            reason="demotion should fail",
+            evidence_refs=("pytest:test_zoe_capability_trust_update",),
+            source_event_id="event_demote",
+            source_admission_id="admit_demote",
+            retained_backend="zoe-test-project-jason",
+            metadata={},
+        )
