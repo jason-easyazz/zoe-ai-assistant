@@ -28,7 +28,7 @@ SECURITY_HEADERS: tuple[tuple[str, str], ...] = (
         # compatibility. Keep this explicit so future security audits can tighten it.
         "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
         "style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; "
-        "font-src 'self'; connect-src 'self'; frame-ancestors 'self';",
+        "font-src 'self'; connect-src 'self' ws: wss:; frame-ancestors 'self';",
     ),
     ("X-Frame-Options", "SAMEORIGIN"),
     ("X-Content-Type-Options", "nosniff"),
