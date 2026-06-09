@@ -79,6 +79,25 @@ async def test_embedding_probe_accepts_cached_huggingface_model(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_embedding_probe_accepts_huggingface_hub_cache_override(tmp_path):
+    cached = tmp_path / "hf-hub" / "models--BAAI--bge-small-en-v1.5" / "snapshots"
+    cached.mkdir(parents=True)
+
+    result = await probe_hindsight_embeddings(
+        env={
+            "HINDSIGHT_ENABLED": "true",
+            "HINDSIGHT_BASE_URL": "http://127.0.0.1:8888",
+            "HINDSIGHT_API_LLM_PROVIDER": "llamacpp",
+            "HF_HUB_CACHE": str(tmp_path / "hf-hub"),
+        }
+    )
+
+    assert result.ok is True
+    assert result.status == "local_model_available"
+    assert str(cached) in result.checked_paths
+
+
+@pytest.mark.asyncio
 async def test_embedding_probe_reports_missing_onnx_path(tmp_path):
     missing = tmp_path / "missing.onnx"
     result = await probe_hindsight_embeddings(

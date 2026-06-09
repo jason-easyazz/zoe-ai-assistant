@@ -262,7 +262,7 @@ def _candidate_local_model_paths(model: str, *, env: Mapping[str, str] | None = 
 
 def _huggingface_cache_roots(values: Mapping[str, str]) -> tuple[Path, ...]:
     roots: list[Path] = []
-    for key in ("SENTENCE_TRANSFORMERS_HOME", "TRANSFORMERS_CACHE"):
+    for key in ("SENTENCE_TRANSFORMERS_HOME", "TRANSFORMERS_CACHE", "HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE"):
         if values.get(key):
             roots.append(Path(str(values[key])).expanduser())
     if values.get("HF_HOME"):
