@@ -10,7 +10,11 @@ from __future__ import annotations
 import json
 from typing import Any, Mapping
 
+from zoe_evolution_proposal import EvolutionProposal
+from zoe_memory_admission import MemoryAdmissionDecision, MemoryAdmissionRequest, evaluate_memory_admission
 from zoe_memory_contract import MemoryEvent, memory_event_from_mapping
+from zoe_memory_router import MemoryBackend
+from zoe_observation_trace import ObservationTrace
 
 
 HINDSIGHT_RETAIN_SOURCE = "hindsight_retain_candidate"
@@ -72,6 +76,65 @@ def _candidate_text(event: MemoryEvent, context: Mapping[str, Any]) -> str:
     return f"{event.content}\n\n[zoe_hindsight_retain_candidate] {structured}"
 
 
+def build_hindsight_retain_admission_request(
+    event_or_payload: MemoryEvent | Mapping[str, Any],
+    *,
+    admission_id: str | None = None,
+    requested_by: str = HINDSIGHT_RETAIN_SOURCE,
+    target_backends: tuple[str, ...] = (MemoryBackend.HINDSIGHT.value,),
+    observation_traces: tuple[ObservationTrace, ...] = (),
+    approval_refs: tuple[str, ...] = (),
+    proposal: EvolutionProposal | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> MemoryAdmissionRequest:
+    """Build the admission request that must approve durable retain promotion."""
+
+    event = event_or_payload if isinstance(event_or_payload, MemoryEvent) else memory_event_from_mapping(event_or_payload)
+    event.validate()
+    request = MemoryAdmissionRequest(
+        admission_id=admission_id or f"admit_hindsight_retain_{event.event_id}",
+        candidate=event,
+        requested_by=requested_by,
+        target_backends=target_backends,
+        observation_traces=observation_traces,
+        approval_refs=approval_refs,
+        proposal=proposal,
+        metadata={
+            "source": HINDSIGHT_RETAIN_SOURCE,
+            "candidate_event_id": event.event_id,
+            "extra": dict(metadata or {}),
+        },
+    )
+    request.validate()
+    return request
+
+
+def evaluate_hindsight_retain_candidate_admission(
+    event_or_payload: MemoryEvent | Mapping[str, Any],
+    *,
+    admission_id: str | None = None,
+    requested_by: str = HINDSIGHT_RETAIN_SOURCE,
+    target_backends: tuple[str, ...] = (MemoryBackend.HINDSIGHT.value,),
+    observation_traces: tuple[ObservationTrace, ...] = (),
+    approval_refs: tuple[str, ...] = (),
+    proposal: EvolutionProposal | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> MemoryAdmissionDecision:
+    """Evaluate admission without writing to Hindsight or any durable backend."""
+
+    request = build_hindsight_retain_admission_request(
+        event_or_payload,
+        admission_id=admission_id,
+        requested_by=requested_by,
+        target_backends=target_backends,
+        observation_traces=observation_traces,
+        approval_refs=approval_refs,
+        proposal=proposal,
+        metadata=metadata,
+    )
+    return evaluate_memory_admission(request)
+
+
 async def create_hindsight_retain_candidate(
     event_or_payload: MemoryEvent | Mapping[str, Any],
     *,
@@ -105,6 +168,8 @@ async def create_hindsight_retain_candidate(
 
 __all__ = [
     "HINDSIGHT_RETAIN_SOURCE",
+    "build_hindsight_retain_admission_request",
     "build_hindsight_retain_candidate",
     "create_hindsight_retain_candidate",
+    "evaluate_hindsight_retain_candidate_admission",
 ]
