@@ -130,6 +130,8 @@ def adoption_gate(candidate: CandidateEvaluation, *, minimum_score: float = 0.72
         blockers.append(f"license:{candidate.license_risk}")
     if candidate.offline_viability in {"unavailable", "unknown"}:
         blockers.append(f"offline:{candidate.offline_viability}")
+    if candidate.offline_viability == "partial" and not (candidate.metadata or {}).get("offline_ready"):
+        blockers.append("offline:partial")
     if candidate.score.normalized() < minimum_score:
         blockers.append("score_below_threshold")
     return {
