@@ -46,9 +46,9 @@ Important non-complete truth:
 | Strategy and ADRs | Complete | `docs/strategy/zoe-evolution-harness-plan.md`, `docs/adr/ADR-zoe-memory-layer.md`, `docs/adr/ADR-hindsight-bakeoff.md`, `docs/adr/ADR-graphiti-bakeoff.md` | Keep updated only when decisions change. |
 | Zoe naming discipline | Complete for new harness docs/code | Strategy and ADRs use Zoe system names and keep external inspirations out of concrete identifiers. | Sweep future PRs for accidental non-Zoe module names. |
 | Offline-only memory rule | Partial | `HindsightConfig` rejects public/cloud memory model configuration by default. | Add a repository-wide memory/provider audit that flags cloud memory paths and exposed secrets. |
-| Memory contract | Complete foundation | `services/zoe-data/zoe_memory_contract.py` and `test_zoe_memory_contract.py`. | Extend only when a measured backend requires a new field or relationship. |
-| Memory layer map | Complete foundation | `services/zoe-data/zoe_memory_layers.py` and `test_zoe_memory_layers.py`. | Link layer decisions to runtime config and status endpoints. |
-| Memory router | Partial | `services/zoe-data/zoe_memory_router.py` and `test_zoe_memory_router.py`. | Wire into chat/agent recall behind a disabled-by-default feature flag with latency guards. |
+| Memory contract | Complete foundation | `services/zoe-data/zoe_memory_contract.py` and `services/zoe-data/tests/test_zoe_memory_contract.py`. | Extend only when a measured backend requires a new field or relationship. |
+| Memory layer map | Complete foundation | `services/zoe-data/zoe_memory_layers.py` and `services/zoe-data/tests/test_zoe_memory_layers.py`. | Link layer decisions to runtime config and status endpoints. |
+| Memory router | Partial | `services/zoe-data/zoe_memory_router.py` and `services/zoe-data/tests/test_zoe_memory_router.py`. | Wire into chat/agent recall behind a disabled-by-default feature flag with latency guards. |
 | MemPalace baseline | Partial | `MemoryService` remains the live memory facade; MemPalace integration tests exist. | Add a current MemPalace read/write inventory and latency baseline. |
 | Hindsight bake-off | Partial | Offline sidecar client, retain-candidate helpers, synthetic fixtures, and tests exist. | Run a measured sidecar bake-off with local models only and record p50/p95 latency, failures, and evidence quality. |
 | Graphiti bake-off | Not started | ADR exists only. | Build Graphiti evaluation fixtures, then test FalkorDB first and Neo4j second if feasible. |
