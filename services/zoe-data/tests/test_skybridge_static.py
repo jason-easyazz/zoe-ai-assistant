@@ -32,6 +32,32 @@ def test_skybridge_page_loads_required_modules_in_order():
     assert "window.confirm = function() { return true; }" not in html
 
 
+def test_skybridge_uses_login_orb_to_voice_pill_layout():
+    html = read(UI / "skybridge.html")
+
+    assert "Login-screen composition reset" in html
+    assert "<h1>Zoe</h1>" in html
+    assert "Skybridge is listening." in html
+    assert "#skyOrb" in html
+    assert "display: none !important" in html
+    assert ".sky-orb-panel::before" in html
+    assert "sky-login-breathe" in html
+    assert "body:not(.sky-empty) .sky-orb-panel::after" in html
+    assert "body:not(.sky-empty) .sky-listening-copy" in html
+    assert "body.sky-empty .sky-command" in html
+    assert "pointer-events: none" in html
+
+
+def test_skybridge_exposes_voice_transport_without_dashboard_header():
+    html = read(UI / "skybridge.html")
+
+    assert "sky-transport-toggle" in html
+    assert "data-mode=\"local\"" in html
+    assert "data-mode=\"livekit\"" in html
+    assert ".sky-stage-header" in html
+    assert "display: none" in html
+
+
 def test_skybridge_capability_registry_covers_core_touch_pages():
     registry = read(UI / "js" / "skybridge-capabilities.js")
 
@@ -80,6 +106,12 @@ def test_skybridge_voice_normalizes_both_transports():
     assert "this.ws.send(ab)" in voice
     assert "this.mode === 'livekit'" in voice
     assert "publishData(payload, { reliable: true })" in voice
+    assert "RoomEvent.TrackSubscribed" in voice
+    assert "RoomEvent.TrackUnsubscribed" in voice
+    assert "Track.Kind.Audio" in voice
+    assert "participant_identity" in voice
+    assert "/api/voice/livekit-cancel" in voice
+    assert "stopPlayback()" in voice
 
 
 def test_livekit_voice_router_accepts_text_commands():
@@ -104,6 +136,11 @@ def test_skybridge_uses_backend_status_contract():
     assert "Skybridge runtime ready" in app
     assert "route && route.startsWith('/')" in app
     assert "Unsupported card route" in app
+    assert "skybridge_voice_mode" in app
+    assert "localStorage.setItem('skybridge_voice_mode', mode)" in app
+    assert "currentUtterance" in app
+    assert "Heard: " in app
+    assert "voice.cancel()" in app
 
 
 def test_skybridge_is_registered_in_touch_menu():

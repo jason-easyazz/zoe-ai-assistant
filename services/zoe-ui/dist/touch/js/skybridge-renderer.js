@@ -24,11 +24,12 @@
     function cardFrame(props, body, options) {
         const wide = options && options.wide ? ' wide' : '';
         const compact = options && options.compact ? ' compact' : '';
+        const tone = options && options.tone ? ' ' + options.tone : '';
         const actions = Array.isArray(props.actions) && props.actions.length
             ? '<div class="sky-actions">' + props.actions.map(buttonHtml).join('') + '</div>'
             : '';
         return [
-            '<article class="sky-card' + wide + compact + '" data-card-id="' + escapeHtml(props.id || '') + '">',
+            '<article class="sky-card' + wide + compact + tone + '" data-card-id="' + escapeHtml(props.id || '') + '">',
             '<div class="sky-card-header">',
             '<div>',
             props.kicker ? '<p class="sky-card-kicker">' + escapeHtml(props.kicker) + '</p>' : '',
@@ -43,20 +44,19 @@
     }
 
     function renderStatus(props) {
-        return cardFrame(props, '<div class="sky-card-body">' + escapeHtml(props.body || props.message || '') + '</div>', { wide: !!props.wide });
+        return cardFrame(props, '<div class="sky-card-body">' + escapeHtml(props.body || props.message || '') + '</div>', { wide: !!props.wide, tone: props.tone || '' });
     }
 
     function renderPage(props) {
         const fields = [
-            ['Route', props.route || ''],
-            ['Kind', props.kind || 'page'],
-            ['Actions', (props.actions || []).join(', ')]
+            ['What opens', props.title || 'Page'],
+            ['Best for', props.summary || 'Zoe context']
         ].map(pair => '<div class="sky-field"><span>' + escapeHtml(pair[0]) + '</span><strong>' + escapeHtml(pair[1]) + '</strong></div>').join('');
         var cardActions = [
             { label: 'Open page', route: props.route, type: 'open' },
             { label: 'Show related settings', query: props.title + ' settings' }
         ];
-        return cardFrame(Object.assign({}, props, { actions: cardActions }), '<div class="sky-card-body">' + escapeHtml(props.summary || '') + '</div><div class="sky-card-grid">' + fields + '</div>', { wide: true });
+        return cardFrame(Object.assign({}, props, { actions: cardActions }), '<div class="sky-card-body">' + escapeHtml(props.summary || '') + '</div><div class="sky-card-grid">' + fields + '</div>', { wide: false, tone: 'page-card' });
     }
 
     function renderSetting(props) {
@@ -64,33 +64,32 @@
         const changeLabel = risk === 'critical' ? 'Prepare change' : 'Change setting';
         const fields = [
             ['Risk', risk],
-            ['Domain', props.domain || 'settings'],
-            ['Section', props.id || '']
+            ['Control area', props.domain || 'settings']
         ].map(pair => '<div class="sky-field"><span>' + escapeHtml(pair[0]) + '</span><strong>' + escapeHtml(pair[1]) + '</strong></div>').join('');
         var settingActions = [
             { label: 'Open settings', route: props.route, type: 'open' },
             { label: changeLabel, query: 'change ' + props.title, kind: risk === 'critical' ? 'warn' : 'normal' }
         ];
-        return cardFrame(Object.assign({ status: risk }, props, { actions: settingActions }), '<div class="sky-card-body">' + escapeHtml(props.summary || '') + '</div><div class="sky-card-grid">' + fields + '</div>', { wide: true });
+        return cardFrame(Object.assign({ status: risk }, props, { actions: settingActions }), '<div class="sky-card-body">' + escapeHtml(props.summary || '') + '</div><div class="sky-card-grid">' + fields + '</div>', { wide: false, tone: 'setting-card' });
     }
 
     function renderPageGrid(props) {
-        const items = (props.items || []).map(item => {
+        const items = (props.items || []).slice(0, 4).map(item => {
             return '<div class="sky-field"><span>' + escapeHtml(item.title) + '</span><strong>' + escapeHtml(item.summary) + '</strong></div>';
         }).join('');
-        return cardFrame(props, '<div class="sky-card-grid">' + items + '</div>', { wide: true });
+        return cardFrame(props, '<div class="sky-card-grid">' + items + '</div>', { wide: true, tone: 'map-card' });
     }
 
     function renderSettingsOverview(props) {
-        const items = (props.items || []).map(item => {
+        const items = (props.items || []).slice(0, 4).map(item => {
             return '<div class="sky-field"><span>' + escapeHtml(item.title) + ' · ' + escapeHtml(item.risk) + '</span><strong>' + escapeHtml(item.summary) + '</strong></div>';
         }).join('');
-        return cardFrame(props, '<div class="sky-card-grid">' + items + '</div>', { wide: true });
+        return cardFrame(props, '<div class="sky-card-grid">' + items + '</div>', { wide: true, tone: 'map-card' });
     }
 
     function renderList(props) {
-        const rows = (props.items || []).map(item => '<div class="sky-field"><strong>' + escapeHtml(typeof item === 'string' ? item : item.title || item.text || JSON.stringify(item)) + '</strong></div>').join('');
-        return cardFrame(props, '<div class="sky-card-grid">' + rows + '</div>', { wide: true });
+        const rows = (props.items || []).slice(0, 3).map(item => '<div class="sky-field"><strong>' + escapeHtml(typeof item === 'string' ? item : item.title || item.text || JSON.stringify(item)) + '</strong></div>').join('');
+        return cardFrame(props, '<div class="sky-card-grid">' + rows + '</div>', { wide: false, tone: 'list-card' });
     }
 
     function normalizeCard(card) {
