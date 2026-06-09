@@ -70,6 +70,8 @@ class CapabilityTrustReviewResult:
 
     @property
     def applied_capability_ids(self) -> tuple[str, ...]:
+        if self.blockers:
+            return ()
         return tuple(decision.candidate.capability_id for decision in self.decisions if decision.approved)
 
     def to_dict(self) -> dict[str, Any]:
@@ -167,11 +169,16 @@ def review_capability_trust_update_plan(
             )
         )
 
-    updated_profiles = tuple(profile_updates.get(profile.capability_id, profile) for profile in base_profiles)
+    deduped_blockers = tuple(dict.fromkeys(result_blockers))
+    updated_profiles = (
+        base_profiles
+        if deduped_blockers
+        else tuple(profile_updates.get(profile.capability_id, profile) for profile in base_profiles)
+    )
     return CapabilityTrustReviewResult(
         decisions=tuple(decisions),
         profiles=updated_profiles,
-        blockers=tuple(dict.fromkeys(result_blockers)),
+        blockers=deduped_blockers,
     )
 
 

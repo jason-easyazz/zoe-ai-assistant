@@ -183,6 +183,36 @@ def test_capability_trust_review_keeps_candidate_blockers_isolated():
     assert "hindsight_reflective_memory" not in second_reason
 
 
+def test_capability_trust_review_returns_base_profiles_when_any_candidate_blocks():
+    approved = _candidate(
+        capability_id="hindsight_reflective_memory",
+        current_trust_level="experimental",
+        proposed_trust_level="assisted",
+    )
+    rejected = _candidate(
+        capability_id="openclaw_fallback",
+        current_trust_level="assisted",
+        proposed_trust_level="trusted",
+    )
+
+    result = review_capability_trust_update_plan(
+        _plan(approved, rejected),
+        reviewer_id="multica:reviewer",
+        approval_refs=("approval:multica:ZOE-322",),
+        approved_capability_ids=("hindsight_reflective_memory",),
+        rejected_capability_ids=("openclaw_fallback",),
+        profiles=DEFAULT_CAPABILITY_PROFILES,
+    )
+
+    by_id = {profile.capability_id: profile for profile in result.profiles}
+    assert result.allowed_to_apply is False
+    assert result.applied_capability_ids == ()
+    assert result.decisions[0].approved is True
+    assert result.decisions[1].approved is False
+    assert "review_rejected:openclaw_fallback" in result.blockers
+    assert by_id["hindsight_reflective_memory"].trust_level == "experimental"
+
+
 def test_capability_trust_review_rejects_invalid_promoted_profile():
     profile = CapabilityProfile(
         capability_id="scratch_memory_candidate",
