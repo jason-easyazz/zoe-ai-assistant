@@ -84,13 +84,15 @@ def task_log_tail(task_id: str, *, max_lines: int = 80) -> str:
 
 
 def _latest_log_session(task_id: str, *, max_lines: int = 120) -> str:
-    tail = task_log_tail(task_id, max_lines=max_lines)
-    if not tail:
+    try:
+        lines = _log_path(task_id).read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
         return ""
-    lines = tail.splitlines()
     query_starts = [index for index, line in enumerate(lines) if line.startswith("Query:")]
     if query_starts:
         lines = lines[query_starts[-1]:]
+    if max_lines > 0:
+        lines = lines[-max_lines:]
     return "\n".join(lines)
 
 
@@ -149,7 +151,7 @@ def review_wrapup_tool_grace(task_id: str, phase: str) -> int:
     """Grant review terminal headroom only after a verdict marker is written."""
     if phase != "review":
         return 0
-    session = _latest_log_session(task_id, max_lines=160)
+    session = _latest_log_session(task_id, max_lines=0)
     if not session:
         return 0
     for line in session.splitlines():

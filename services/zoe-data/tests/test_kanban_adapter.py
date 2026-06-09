@@ -1925,6 +1925,77 @@ def test_review_budget_gets_wrapup_grace_after_mark_reviewed_verdict(tmp_path, m
     assert reason is None
 
 
+def test_review_budget_finds_verdict_in_verbose_session(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    lines = ["Query: work kanban task t_review"]
+    lines.extend(f"  ┊ pre-verdict tool call {idx}  0.1s" for idx in range(8))
+    lines.append(
+        "  ┊ 💻 $ python3 services/zoe-data/pipeline_evidence_commands.py "
+        "mark-reviewed multica:issue --critical-count 0 --summary approved  0.1s"
+    )
+    lines.extend(f"verbose review output line {idx}" for idx in range(220))
+    lines.extend(f"  ┊ post-verdict tool call {idx}  0.1s" for idx in range(5))
+    (log_dir / "t_review.log").write_text("\n".join(lines), encoding="utf-8")
+
+    reason = kb.phase_budget_reason(
+        "t_review",
+        "review",
+        {"task": {"started_at": 100}},
+        now=110,
+    )
+
+    assert kb.tool_step_count("t_review") == 14
+    assert kb.review_wrapup_tool_grace("t_review", "review") == 3
+    assert reason is None
+
+
+def test_review_budget_wrapup_grace_env_override(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_REVIEW_WRAPUP_TOOL_GRACE", "5")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    lines = ["Query: work kanban task t_review"]
+    lines.append(
+        "  ┊ 💻 $ python3 services/zoe-data/pipeline_evidence_commands.py "
+        "mark-reviewed multica:issue --critical-count 0 --summary approved  0.1s"
+    )
+    (log_dir / "t_review.log").write_text("\n".join(lines), encoding="utf-8")
+
+    assert kb.review_wrapup_tool_grace("t_review", "review") == 5
+
+
+def test_review_budget_wrapup_grace_zero_override(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_REVIEW_WRAPUP_TOOL_GRACE", "0")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    lines = ["Query: work kanban task t_review"]
+    lines.append(
+        "  ┊ 💻 $ python3 services/zoe-data/pipeline_evidence_commands.py "
+        "mark-reviewed multica:issue --critical-count 0 --summary approved  0.1s"
+    )
+    (log_dir / "t_review.log").write_text("\n".join(lines), encoding="utf-8")
+
+    assert kb.review_wrapup_tool_grace("t_review", "review") == 0
+
+
+def test_review_budget_wrapup_grace_bad_override_falls_back(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_REVIEW_WRAPUP_TOOL_GRACE", "soon")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    lines = ["Query: work kanban task t_review"]
+    lines.append(
+        "  ┊ 💻 $ python3 services/zoe-data/pipeline_evidence_commands.py "
+        "mark-reviewed multica:issue --critical-count 0 --summary approved  0.1s"
+    )
+    (log_dir / "t_review.log").write_text("\n".join(lines), encoding="utf-8")
+
+    assert kb.review_wrapup_tool_grace("t_review", "review") == 3
+
+
 def test_review_budget_without_verdict_still_blocks_at_normal_limit(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     log_dir = tmp_path / "kanban" / "logs"
