@@ -3638,6 +3638,8 @@ def test_implement_body_adds_code_audit_fast_path_for_actionable_bug():
     assert "After the first patch, spend at most 2 more tool calls locating validation" in body
     assert "do not inspect docker-compose, .github" in body
     assert "do not run `git add` by itself" in body
+    assert "code-audit ship instruction overrides the generic separate push/PR" in body
+    assert "unless a phase fast path above explicitly requires a chained ship command" in body
     assert "git push -u origin HEAD" in body
     assert body.index("CODE-AUDIT FAST PATH") < body.index("AUDIT/SMOKE FAST PATH")
     assert body.index("CODE-AUDIT FAST PATH") < body.index("Graphify map")
