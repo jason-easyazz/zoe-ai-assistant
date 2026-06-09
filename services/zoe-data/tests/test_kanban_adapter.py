@@ -2786,14 +2786,16 @@ def test_scout_body_has_intent_gap_fast_path():
     assert body.index("INTENT GAP FAST PATH") < body.index("Keep this phase bounded")
 
 
-def test_implement_body_trusts_scout_handoff_for_intent_gap():
+def test_implement_body_includes_unconditional_scout_handoff_fast_path():
+    # This is a static prompt-contract assertion. The agent decides whether
+    # SCOUT_SUMMARY is present at runtime after `kanban_show`.
     body = ka.KanbanAdapter()._build_body(
         "implement",
         {
             "id": "uuid-1",
             "identifier": "ZOE-5451",
             "title": "Intent gap: 'Tell me a joke.'",
-            "description": "SCOUT_SUMMARY=services/zoe-data/intent_router.py needs a joke intent.",
+            "description": "",
         },
         "ZOE-5451",
     )
