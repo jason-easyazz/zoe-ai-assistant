@@ -243,7 +243,10 @@ async def test_run_evolution_notice_stores_contract_snapshots(monkeypatch):
     )
     monkeypatch.setitem(sys.modules, "db_pool", types.SimpleNamespace(get_db_ctx=lambda: db))
 
-    async def fake_sync_evolution_proposal_to_multica(**_kwargs):
+    sync_calls = []
+
+    async def fake_sync_evolution_proposal_to_multica(**kwargs):
+        sync_calls.append(kwargs)
         return None
 
     monkeypatch.setitem(
@@ -262,12 +265,27 @@ async def test_run_evolution_notice_stores_contract_snapshots(monkeypatch):
     assert "target_patterns" in health_sql
 
     intent_contract = json.loads(intent_args[5])
+    health_evidence = json.loads(health_args[3])
     health_contract = json.loads(health_args[4])
+    assert len(sync_calls) == 2
     assert intent_contract["legacy_writer"] == "evolution_notice:intent_miss_cluster"
     assert intent_contract["proposal"]["metadata"]["legacy_target_patterns"] == [
         "turn on kitchen lights",
         "turn on kitchen lights",
         "turn on kitchen lights",
     ]
-    assert health_contract["legacy_writer"] == "evolution_notice:agent_health"
-    assert health_contract["proposal"]["metadata"]["legacy_proposal_type"] == "agent_health"
+    assert health_evidence["source"] == "runtime_evolution_intake"
+    assert health_evidence["signal"]["source"] == "evolution_notice:agent_health"
+    assert health_evidence["signal"]["scope"] == "system"
+    assert health_evidence["signal"]["metadata"] == {"agent_tier": "gemma4", "total": 20, "errors": 3}
+    assert health_evidence["candidate_ids"] == ["existing_zoe_agent_health_triage"]
+    assert health_contract["legacy_writer"] == "runtime_evolution_intake"
+    health_proposal = health_contract["proposal"]
+    assert health_proposal["metadata"]["legacy_proposal_type"] == "agent_health"
+    assert health_proposal["metadata"]["legacy_writer"] == "evolution_notice:agent_health"
+    assert health_proposal["metadata"]["selected_candidate_id"] == "existing_zoe_agent_health_triage"
+    assert health_proposal["metadata"]["candidate_search"][0]["candidate_id"] == "existing_zoe_agent_health_triage"
+    assert health_proposal["approval_gate"]["allowed_to_execute"] is False
+    assert sync_calls[1]["proposal_id"] == health_args[0]
+    assert sync_calls[1]["proposal_type"] == "agent_health"
+    assert sync_calls[1]["contract_snapshot"] == health_args[4]
