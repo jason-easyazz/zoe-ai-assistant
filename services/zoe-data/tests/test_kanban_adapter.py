@@ -5368,6 +5368,8 @@ def test_implement_body_includes_bare_say_exactly_intent_gap_contract():
     )
 
     assert "INTENT-GAP IMPLEMENT FAST PATH" in body
+    assert body.startswith("CRITICAL FIRST ACTION FOR THIS INTENT-GAP TICKET:")
+    assert body.index("CRITICAL FIRST ACTION") < body.index("services/zoe-data/evolution_notice.py")
     assert "Concrete edit contract for this exact-repeat gap" in body
     assert "your NEXT tool call must be the terminal command" in body
     assert "cd <workspace_path> && python3 ./scripts/maintenance/zoe_apply_intent_gap_contract.py say_exactly --repo-root ." in body
@@ -5391,6 +5393,7 @@ def test_implement_body_includes_say_exactly_intent_gap_contract():
     )
 
     assert "INTENT-GAP IMPLEMENT FAST PATH" in body
+    assert body.startswith("CRITICAL FIRST ACTION FOR THIS INTENT-GAP TICKET:")
     assert "Concrete edit contract for this exact-repeat gap" in body
     assert "Say exactly: Zoe chat integration ok" in body
     assert "cd <workspace_path> && python3 ./scripts/maintenance/zoe_apply_intent_gap_contract.py say_exactly --repo-root ." in body

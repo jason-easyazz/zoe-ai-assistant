@@ -573,6 +573,28 @@ def _intent_gap_implement_hint(issue: dict | None = None, *, phase: str = "imple
     )
 
 
+def _intent_gap_first_action_preamble(issue: dict | None = None) -> str:
+    """Put the deterministic helper command before issue evidence paths."""
+    issue = issue or {}
+    title = str(issue.get("title") or "")
+    description = str(issue.get("description") or "")
+    haystack = f"{title} {description}".lower()
+    if not (
+        _SAY_EXACTLY_INTENT_GAP_TITLE_RE.search(title)
+        or "say exactly: zoe chat integration ok" in haystack
+        or ("intent gap" in title.lower() and "say exactly" in title.lower())
+    ):
+        return ""
+    return (
+        "CRITICAL FIRST ACTION FOR THIS INTENT-GAP TICKET:\n"
+        "1. Call `kanban_show`.\n"
+        "2. As the very next tool call, run exactly:\n"
+        "`cd <workspace_path> && /home/zoe/bin/zoe_apply_intent_gap_contract say_exactly --repo-root . "
+        "--run-focused-checks --kanban-task <task_id_from_kanban_show>`\n"
+        "Do not read issue evidence files, grep, inspect code, or open the live checkout before this helper.\n\n"
+    )
+
+
 def _is_bounded_goal_phase(phase: str, issue: dict | None = None) -> bool:
     """Return True when this phase should run in bounded goal mode with one retry."""
     return phase == "implement" and _is_code_audit_actionable(_ticket_metadata(issue))
@@ -833,9 +855,12 @@ class KanbanAdapter:
             code_audit_hint = _code_audit_implement_hint(issue)
             harness_hint = _harness_implement_hint(issue)
             intent_gap_hint = _intent_gap_implement_hint(issue, phase=phase)
+            intent_gap_first_action = (
+                _intent_gap_first_action_preamble(issue) if phase == "implement" else ""
+            )
             # Implement body intentionally omits full prior-phase logs; workers should
             # call kanban_show and read SCOUT_SUMMARY= from scout metadata when present.
-            return common + overnight_hint + (
+            return intent_gap_first_action + common + overnight_hint + (
                 "You are the implementer (zoe-coder).\n"
                 f"{code_audit_hint}"
                 f"{harness_hint}"
