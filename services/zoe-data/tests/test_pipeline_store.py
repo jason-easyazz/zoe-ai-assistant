@@ -463,6 +463,41 @@ async def test_sync_pipeline_advances_on_complete_handoff(isolated_store):
 
 
 @pytest.mark.asyncio
+async def test_sync_pipeline_skips_already_covered_implement_block(isolated_store):
+    await store.bootstrap_state(
+        "multica:already-covered",
+        issue={"metadata": {"evidence_profile": "code"}},
+    )
+    phases = {
+        "implement": {
+            "id": "t_impl",
+            "status": "blocked",
+            "block_reason": "ALREADY_COVERED: focused harness test passed before edit",
+        }
+    }
+
+    async def fetch_detail(_task_id: str):
+        return {
+            "latest_summary": "BLOCKER=ALREADY_COVERED: focused harness test passed before edit",
+            "comments": [],
+        }
+
+    state = await store.sync_pipeline_from_chain("multica:already-covered", phases, fetch_detail)
+
+    assert state.phase == "verify"
+    assert state.status == "todo"
+    assert state.evidence_profile == "audit"
+    assert state.last_block_fingerprint is None
+    assert state.repeated_block_count == 0
+    assert state.history[-1].outcome == "skip_implementation"
+    events = [
+        json.loads(line)["event"]
+        for line in isolated_store.read_text(encoding="utf-8").strip().splitlines()
+    ]
+    assert "already_covered_implementation_skipped" in events
+
+
+@pytest.mark.asyncio
 async def test_sync_pipeline_blocks_code_implement_without_pr(isolated_store):
     await store.bootstrap_state("multica:no-pr-code", issue={"metadata": {"evidence_profile": "code"}})
 

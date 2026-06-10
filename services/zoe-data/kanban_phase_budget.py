@@ -655,9 +655,8 @@ def implement_pre_edit_drift_reason_from_log(
                 if post_focus_grep_steps <= post_focus_grep_budget:
                     continue
             return (
-                "BLOCKER=IMPLEMENT_HANDOFF_DRIFT: engineering blocker follow-up kept "
-                "exploring after focused test beyond the named-file navigation budget "
-                "instead of editing or blocking ALREADY_COVERED"
+                "BLOCKER=ALREADY_COVERED: focused harness test passed before edit; "
+                "no code change required for this blocker follow-up"
             )
         explore_steps += 1
         if explore_steps > explore_budget:

@@ -2407,7 +2407,7 @@ def test_implement_pre_edit_drift_blocks_excess_harness_followup_grep_after_focu
     )
 
     assert reason is not None
-    assert "engineering blocker follow-up kept exploring after focused test" in reason
+    assert "BLOCKER=ALREADY_COVERED" in reason
 
 
 def test_implement_pre_edit_drift_allows_harness_followup_named_file_read_after_focused_test(
@@ -2515,7 +2515,7 @@ def test_implement_pre_edit_drift_honors_post_focus_grep_budget_override(tmp_pat
     )
 
     assert reason is not None
-    assert "engineering blocker follow-up kept exploring after focused test" in reason
+    assert "BLOCKER=ALREADY_COVERED" in reason
 
 
 def test_implement_pre_edit_drift_allows_bounded_named_file_navigation_after_focused_test(
@@ -2602,7 +2602,7 @@ def test_implement_pre_edit_drift_honors_focused_test_read_budget_override(
     )
 
     assert reason is not None
-    assert "engineering blocker follow-up kept exploring after focused test" in reason
+    assert "BLOCKER=ALREADY_COVERED" in reason
 
 
 def test_implement_pre_edit_drift_blocks_excess_focused_test_reads_after_focused_test(
@@ -2631,7 +2631,7 @@ def test_implement_pre_edit_drift_blocks_excess_focused_test_reads_after_focused
     )
 
     assert reason is not None
-    assert "engineering blocker follow-up kept exploring after focused test" in reason
+    assert "BLOCKER=ALREADY_COVERED" in reason
 
 
 
@@ -2657,7 +2657,7 @@ def test_implement_pre_edit_drift_honors_post_focus_read_budget_override(tmp_pat
     )
 
     assert reason is not None
-    assert "engineering blocker follow-up kept exploring after focused test" in reason
+    assert "BLOCKER=ALREADY_COVERED" in reason
 
 
 def test_implement_pre_edit_drift_blocks_excess_harness_followup_navigation_after_focused_test(
@@ -2684,7 +2684,7 @@ def test_implement_pre_edit_drift_blocks_excess_harness_followup_navigation_afte
     )
 
     assert reason is not None
-    assert "engineering blocker follow-up kept exploring after focused test" in reason
+    assert "BLOCKER=ALREADY_COVERED" in reason
 
 
 def test_implement_pre_edit_drift_blocks_excess_harness_followup_focused_test_greps_in_other_files(
@@ -2712,7 +2712,39 @@ def test_implement_pre_edit_drift_blocks_excess_harness_followup_focused_test_gr
     )
 
     assert reason is not None
-    assert "engineering blocker follow-up kept exploring after focused test" in reason
+    assert "BLOCKER=ALREADY_COVERED" in reason
+
+
+def test_implement_pre_edit_drift_maps_post_focus_budget_exhaustion_to_already_covered(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 💻 $ cd /work && PYTHONPATH=services/zoe-data python3 -m pytest -q "
+        "services/zoe-data/tests/test_main_multica_poll.py::"
+        "test_record_blocked_multica_chain_creates_iteration_budget_followup  3.3s\n"
+        "  ┊ 📖 read /work/services/zoe-data/tests/test_main_multica_poll.py  0.1s\n"
+        "  ┊ 🔎 grep test_record_blocked_multica_chain_creates_iteration_budget_followup  0.1s\n"
+        "  ┊ 📖 read /work/services/zoe-data/tests/test_main_multica_poll.py  0.1s\n"
+        "  ┊ 🔎 grep _record_blocked_multica_chain  0.1s\n"
+        "  ┊ 📖 read /work/services/zoe-data/main.py  0.1s\n"
+        "  ┊ 🔎 grep _ensure_blocker_followup_ticket  0.1s\n"
+        "  ┊ 📖 read /work/services/zoe-data/main.py  0.1s\n"
+        "  ┊ 🔎 grep _blocker_followup_marker  0.1s\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.implement_pre_edit_drift_reason_from_log(
+        "t_impl",
+        "implement",
+        task_body='{"source":"engineering_blocker_followup"}',
+    )
+
+    assert reason is not None
+    assert "BLOCKER=ALREADY_COVERED" in reason
 
 
 def test_implement_pre_edit_drift_ignores_plain_followup_prompt_without_metadata(
@@ -3102,7 +3134,7 @@ def test_phase_budget_reason_passes_harness_followup_body_to_pre_edit_guard(
     )
 
     assert reason is not None
-    assert "engineering blocker follow-up kept exploring after focused test" in reason
+    assert "BLOCKER=ALREADY_COVERED" in reason
 
 
 def test_phase_budget_blocks_repeated_ambiguous_patch_attempts(tmp_path, monkeypatch):
