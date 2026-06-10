@@ -77,7 +77,11 @@
             submitCommand(els.input.value);
             els.input.value = '';
         });
-        els.input.addEventListener('focus', () => openCommandFallback('Type anything Zoe should show.'));
+        els.input.addEventListener('focus', () => {
+            if (!commandFallbackOpen) {
+                openCommandFallback('Type anything Zoe should show.');
+            }
+        });
         els.input.addEventListener('input', () => {
             commandFallbackOpen = true;
             document.body.classList.add('sky-command-open');
@@ -151,7 +155,7 @@
                 headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
                 body: JSON.stringify({ message: query })
             });
-            if (resp.status === 503) {
+            if (resp.status === 401 || resp.status === 503) {
                 try { localStorage.removeItem('zoe_session'); } catch (_) {}
                 resp = await fetch('/api/skybridge/resolve', {
                     method: 'POST',
@@ -247,6 +251,7 @@
         document.body.classList.add('sky-empty');
         commandFallbackOpen = false;
         document.body.classList.remove('sky-command-open');
+        syncVoiceFallbackState();
         currentUtterance = '';
         setContext('Listening', 'The surface will build itself when Zoe understands what you need.');
         clearCards();
@@ -361,7 +366,7 @@
     function openCommandFallback(message) {
         commandFallbackOpen = true;
         document.body.classList.add('sky-command-open');
-        document.body.classList.add('sky-voice-fallback');
+        document.body.classList.toggle('sky-voice-fallback', !canUseMicrophone());
         if (message) els.input.placeholder = message;
         updateVoiceHint('Type to Zoe', message || 'Voice is unavailable here. The same resolver will render cards from typed requests.', 'Type');
         requestAnimationFrame(() => els.input.focus({ preventScroll: true }));

@@ -47,7 +47,7 @@
             ? '<div class="sky-actions">' + props.actions.map(buttonHtml).join('') + '</div>'
             : '';
         return [
-            '<article class="sky-card' + wide + compact + tone + '" data-card-id="' + escapeHtml(props.id || '') + '">',
+            '<article class="sky-card sky-premium-card' + wide + compact + tone + '" data-card-id="' + escapeHtml(props.id || '') + '">',
             '<div class="sky-widget-top">',
             '<div class="sky-widget-title">',
             props.kicker ? '<p>' + escapeHtml(props.kicker) + '</p>' : '',
@@ -124,11 +124,42 @@
         return '☀️';
     }
 
+    function formatForecastLabel(value) {
+        const raw = String(value || '');
+        if (/^\d{4}-\d{2}-\d{2}/.test(raw)) {
+            const date = new Date(raw + 'T12:00:00');
+            if (!Number.isNaN(date.getTime())) {
+                return date.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+            }
+        }
+        return raw;
+    }
+
     function formatWind(value) {
+        // Zoe weather APIs expose wind_speed in metres per second; Skybridge displays km/h.
         if (value == null || value === '') return '--';
         const number = Number(value);
         if (!Number.isFinite(number)) return String(value);
         return Math.round(number * 3.6) + ' km/h';
+    }
+
+    function forecastTempBand(item) {
+        const low = Number(item.low != null ? item.low : item.temp);
+        const high = Number(item.high != null ? item.high : item.temp);
+        const min = Number.isFinite(low) ? low : high;
+        const max = Number.isFinite(high) ? high : low;
+        if (!Number.isFinite(min) || !Number.isFinite(max)) {
+            return { left: 28, width: 36 };
+        }
+        const rangeMin = -5;
+        const rangeMax = 45;
+        const clamp = value => Math.max(0, Math.min(100, ((value - rangeMin) / (rangeMax - rangeMin)) * 100));
+        const left = Math.min(clamp(min), clamp(max));
+        const right = Math.max(clamp(min), clamp(max));
+        return {
+            left: Math.round(left),
+            width: Math.max(12, Math.round(right - left))
+        };
     }
 
     function renderWeather(props) {
@@ -137,15 +168,23 @@
         const daily = Array.isArray(forecast.daily) ? forecast.daily : [];
         const hourly = Array.isArray(forecast.hourly) ? forecast.hourly : [];
         const location = props.location || {};
-        const place = [location.city || current.city || props.city || 'Geraldton', location.country || current.country || props.country || 'AU'].filter(Boolean).join(', ');
+        const place = [location.city || current.city || props.city, location.country || current.country || props.country].filter(Boolean).join(', ') || 'Current location';
         const description = current.description || current.condition || props.description || 'Current conditions';
         const points = daily.length ? daily.slice(0, 5) : hourly.slice(0, 5);
         const forecastTiles = points.map(item => {
-            const label = item.day || item.time || '';
-            const temp = item.high != null || item.low != null
-                ? formatTemp(item.high) + ' / ' + formatTemp(item.low)
-                : formatTemp(item.temp);
-            return '<div class="sky-weather-forecast-tile"><span>' + escapeHtml(label) + '</span><strong>' + escapeHtml(temp) + '</strong><em>' + escapeHtml(item.description || item.condition || '') + '</em></div>';
+            const label = formatForecastLabel(item.day || item.time || '');
+            const high = item.high != null ? formatTemp(item.high) : formatTemp(item.temp);
+            const low = item.low != null ? formatTemp(item.low) : '';
+            const band = forecastTempBand(item);
+            const condition = item.description || item.condition || '';
+            return [
+                '<div class="sky-weather-forecast-tile">',
+                '<div class="sky-weather-tile-top"><span>' + escapeHtml(label) + '</span><b aria-hidden="true">' + escapeHtml(weatherEmoji(item)) + '</b></div>',
+                '<div class="sky-weather-tile-temp"><strong>' + escapeHtml(high) + '</strong>' + (low ? '<small>' + escapeHtml(low) + '</small>' : '') + '</div>',
+                '<div class="sky-weather-temp-band" aria-hidden="true"><i style="left: ' + band.left + '%; width: ' + band.width + '%;"></i></div>',
+                '<em>' + escapeHtml(condition) + '</em>',
+                '</div>'
+            ].join('');
         }).join('');
         const meta = [
             ['🌡', 'Feels ' + formatTemp(current.feels_like)],
