@@ -27,7 +27,11 @@ def test_skybridge_status_endpoint_returns_runtime_contract():
     assert data["surface"] == "skybridge"
     assert data["status"] == "ready"
     assert data["entrypoint"] == "/touch/skybridge.html"
-    assert data["card_contract"] == "ag-ui-compatible"
+    assert data["card_contract"]["status"] == "wired_for_calendar_weather"
+    assert data["card_contract"]["supported_major"] == 1
+    assert data["card_contract"]["data_domains"] == ["calendar", "weather"]
+    assert data["card_contract"]["voice_ws_domains"] == ["calendar", "weather"]
     assert data["transports"]["local_ws"] is True
     assert "livekit" in data["transports"]
     assert data["capabilities"]["settings"] == 22
+    assert data["capabilities"]["dynamic_cards"] == "calendar_weather_data_cards"
