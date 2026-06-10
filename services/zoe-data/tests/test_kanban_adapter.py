@@ -1388,6 +1388,58 @@ async def test_poll_completes_recovered_pr_url_already_in_comments(tmp_path, mon
     assert "PR_URL=https://github.com/jason-easyazz/zoe-ai-assistant/pull/998" in "\n".join(complete)
 
 
+@pytest.mark.asyncio
+async def test_poll_does_not_crash_when_existing_url_recovery_complete_fails(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_implement.log").write_text(
+        "Query: work kanban task t_implement\n"
+        "  ┊ 💻 $         git push -u origin HEAD  2.1s\n"
+        "⚡ Interrupted during API call.\n",
+        encoding="utf-8",
+    )
+    rows = [
+        _row(
+            "implement",
+            "blocked",
+            chain_version="v4",
+            block_reason="worker interrupted after push",
+        )
+    ]
+
+    class _FailCompleteAdapter(_FakeAdapter):
+        def __init__(self):
+            super().__init__(
+                list_rows=rows,
+                show_map={
+                    "t_implement": {
+                        "latest_summary": "",
+                        "comments": [
+                            {
+                                "body": "manual recovery PR: https://github.com/jason-easyazz/zoe-ai-assistant/pull/998"
+                            }
+                        ],
+                    }
+                },
+            )
+
+        async def _run(self, args, *, expect_json=False):
+            if args[0] == "complete":
+                raise ka.KanbanCLIError("transient kanban complete failure")
+            return await super()._run(args, expect_json=expect_json)
+
+        async def _run_worktree_command(self, args, *, cwd, timeout=45.0):
+            raise AssertionError(f"existing PR URL recovery should not inspect worktree: {args}")
+
+    a = _FailCompleteAdapter()
+    out = await a.poll("multica:uuid-9")
+
+    assert out["found"] is True
+    assert out["status"] == "blocked"
+    assert out["phases"]["implement"] == "blocked"
+
+
 def test_pushed_branch_recovery_scans_latest_log_session_only(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     log_dir = tmp_path / "kanban" / "logs"

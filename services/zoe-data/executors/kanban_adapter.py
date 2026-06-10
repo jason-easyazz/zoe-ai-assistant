@@ -1088,7 +1088,15 @@ class KanbanAdapter:
         ):
             match = _GITHUB_PR_URL_RE.search(haystack)
             if match:
-                return await self._complete_recovered_pr_handoff(task_id, row, match.group(0))
+                try:
+                    return await self._complete_recovered_pr_handoff(task_id, row, match.group(0))
+                except Exception as exc:  # noqa: BLE001 - recovery must not break normal poll.
+                    logger.warning(
+                        "kanban_adapter: pushed PR recovery from existing URL failed for %s: %s",
+                        task_id,
+                        exc,
+                    )
+                    return None
 
         try:
             from worktree_bootstrap import worktree_path
