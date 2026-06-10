@@ -4987,7 +4987,7 @@ def test_implement_body_uses_narrow_contract_for_blocker_followup_source():
     assert "services/zoe-data/tests/test_main_multica_poll.py" in body
     assert "Do not read the broad harness map" in body
     assert (
-        "python3 scripts/maintenance/run_harness_followup_test.py ITERATION_BUDGET"
+        "python3 scripts/maintenance/r ITERATION_BUDGET"
     ) in body
     assert "That helper runs `services/zoe-data/tests/test_main_multica_poll.py::test_record_blocked_multica_chain_creates_iteration_budget_followup`" in body
     assert "do not copy the long pytest node id yourself" in body
@@ -5043,7 +5043,7 @@ def test_implement_body_includes_harness_blocker_followup_focused_tests(
 
     assert "HARNESS FOLLOW-UP FAST PATH" in body
     assert expected_test in body
-    assert f"python3 scripts/maintenance/run_harness_followup_test.py {source_blocker or 'UNKNOWN'}" in body
+    assert f"python3 scripts/maintenance/r {source_blocker or 'UNKNOWN'}" in body
     assert "Use the existing repo/runtime environment only" in body
     assert "If the focused test passes before any edit, do not inspect more blocker code" in body
     assert "use at most three symbol greps total, up to four reads of the focused test file, and two reads per other named file" in body

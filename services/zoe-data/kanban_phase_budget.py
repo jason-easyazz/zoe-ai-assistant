@@ -38,6 +38,10 @@ _ITERATION_BUDGET_RE = re.compile(
     r"Iteration budget reached\s*\((?P<used>\d+)\s*/\s*(?P<limit>\d+)\)",
     re.IGNORECASE,
 )
+_TEXT_BLOCKER_RE = re.compile(
+    r"(?:<channel\|>)?\s*BLOCKER\s*(?:=|:)\s*(?P<reason>[^\n\r]+)",
+    re.IGNORECASE,
+)
 _PYTHON_PATCH_RE = re.compile(r"^\s*(?:┊|\|)\s+\S+\s+patch\s+.*\.py\b")
 _PYTHON_CHECK_RE = re.compile(
     r"^\s*(?:┊|\|)\s+\S+\s+\$\s+.*\b(py_compile|pytest|mypy|ruff|validate_structure|validate_critical_files)\b",

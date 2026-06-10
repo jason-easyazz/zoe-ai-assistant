@@ -34,6 +34,7 @@ from kanban_phase_budget import (
     phase_budget_reason,
     phase_budget_reason_from_log,
     task_log_tail,
+    textual_blocker_reason_from_log,
     terminate_running_workers,
 )
 
@@ -383,7 +384,7 @@ def _harness_implement_hint(issue: dict | None = None) -> str:
             " Start only from these files:\n"
             "  * blocker follow-up logic: services/zoe-data/main.py\n"
             "  * focused tests: services/zoe-data/tests/test_main_multica_poll.py\n"
-            f" Run focused test first with this exact short command: `python3 scripts/maintenance/run_harness_followup_test.py {helper_blocker}`."
+            f" Run focused test first with this exact short command: `python3 scripts/maintenance/r {helper_blocker}`."
             f" That helper runs `{focused_test}`; do not copy the long pytest node id yourself."
             " Do not read the broad harness map, kanban_adapter.py, pipeline_store.py, or Hermes internals"
             " unless that focused test failure names them."
@@ -547,19 +548,26 @@ def _protocol_violation_count(detail: dict[str, Any]) -> int:
 
 
 def _with_recovered_log_budget(task_id: str, phase: str, detail: dict[str, Any]) -> dict[str, Any]:
-    """Attach Hermes log evidence when a silent exit was really a budget stop."""
-    reason = phase_budget_reason_from_log(task_id, phase)
-    if not reason:
+    """Attach Hermes log evidence when a silent exit still contains a blocker."""
+    reasons = [
+        reason
+        for reason in (
+            phase_budget_reason_from_log(task_id, phase),
+            textual_blocker_reason_from_log(task_id),
+        )
+        if reason
+    ]
+    if not reasons:
         return detail
     enriched = dict(detail)
     latest = str(enriched.get("latest_summary") or "").strip()
-    enriched["latest_summary"] = f"{latest}\n{reason}".strip() if latest else reason
+    recovered = "\n".join(dict.fromkeys(reasons))
+    enriched["latest_summary"] = f"{latest}\n{recovered}".strip() if latest else recovered
     if not (enriched.get("logs") or enriched.get("log") or enriched.get("log_tail")):
         tail = task_log_tail(task_id)
         if tail:
             enriched["log_tail"] = tail
     return enriched
-
 
 def _expected_phases(phases: dict[str, dict]) -> set[str]:
     present = set(phases)
