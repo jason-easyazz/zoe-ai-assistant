@@ -18,7 +18,7 @@ tested, or the missing last mile is explicitly recorded as blocked.
 
 ## Status Snapshot
 
-Date: 2026-06-09
+Date: 2026-06-10
 
 Current merged foundation:
 
@@ -34,9 +34,11 @@ Current merged foundation:
 
 Important non-complete truth:
 
-- Graphify has been refreshed through current main source commit `e734c0da`
-  after the Hindsight bake-off latency-gate merge; the map is current for
-  source surfaces until the next code or architecture change.
+- Graphify was last successfully refreshed through source commit `e734c0da`.
+  A refresh attempt after `260321b` scanned 590 code files and 257 docs but
+  all 7 OpenAI semantic chunks failed with `insufficient_quota`; the partial
+  graph output was discarded and the committed map must be treated as stale
+  for changes after `e734c0da`.
 - Tool/capability and memory read/write inventories now exist as cleanup gates; keep them updated as runtime paths change.
 - MemPalace now has a repeatable local baseline harness and first measured Zoe-host run; Hindsight now has a fixed measured runner, read-only probes, Zoe-host availability baseline, and first live offline retain/recall bake-off: 4/4 synthetic events retained and recalled at score 1.0 using local Gemma and cached BGE embeddings, but p95 recall stayed above the 600 ms hot-path target at 649.00 ms live and 643.25 ms warm.
 - Graphiti/FalkorDB/Neo4j have not yet been accepted for Zoe relational memory. Zoe-specific Graphiti fixtures, a read-only backend probe, and a read-only runtime readiness probe now define the first relationship eval set and availability preflight. A temporary FalkorDB sidecar was reachable, but Zoe's normal Python runtime lacks Graphiti backend packages and the current local Gemma endpoint failed Graphiti structured extraction in a smoke test.
@@ -51,6 +53,10 @@ Important non-complete truth:
   pure patch writer. Clean trust reviews plus PR, rollback, and verification
   refs are required before Zoe can render applyable profile promotion records
   or deterministic source diffs.
+- Zoe now has an inert Multica handoff packet builder for governed capability
+  profile promotions: it round-trips ticket metadata, carries manifest and
+  patch hashes, refuses blocked payloads, and has tests for every named
+  blocker before any future ticket writer can consume it.
 - Zoe now has candidate scoring for comparing Pi, MCP, GitHub, skill, API, local-service, and existing-Zoe options before adoption.
 - Zoe now has a self-evolution proposal contract that attaches signals, candidate scores, affected capabilities, approval gates, verification, rollback, and evidence before any execution.
 - Zoe now has an observation/evaluation trace schema for recall, retain candidates, admission, contradiction, fallback, proposals, verification, outcome evals, and hardware budget evidence.
@@ -92,18 +98,18 @@ Important non-complete truth:
 | MemPalace baseline | Complete foundation | `services/zoe-data/mempalace_baseline.py`, `scripts/maintenance/mempalace_baseline.py`, and `docs/architecture/zoe-mempalace-baseline.md` record a repeatable local benchmark; first run scored 1.0 avg with p95 200.90 ms and cleaned up 4 synthetic rows. | Expand with relational/supersession cases before comparing Graphiti-style backends. |
 | Hindsight bake-off | Partial with first live evidence | Offline sidecar client, retain-candidate helpers, synthetic fixtures, measured runner, read-only probes, availability doc, admission bridge, admitted retain-plan gate, admitted retain executor, and tests exist. First live offline sidecar retained 4/4 synthetic events with 0 extraction errors and recalled 4/4 cases at score 1.0 using local Gemma plus cached local BGE embeddings. Live p95 recall was 649.00 ms and warm p95 was 643.25 ms, above the 600 ms hot-path target; container memory was about 1 GiB. | Treat Hindsight as validated for offline experience recall but not yet accepted for hot-path prompt recall; next test lower budgets/caching/async routing and record whether p95 can clear 600 ms. |
 | Graphiti bake-off | Partial with blocker evidence | ADR plus `services/zoe-data/graphiti_bakeoff.py`, `services/zoe-data/graphiti_sidecar_probe.py`, `services/zoe-data/graphiti_runtime_probe.py`, tests, and `docs/architecture/zoe-graphiti-fixtures.md` define the first relationship fixture set, backend availability preflight, and runtime readiness gate. FalkorDB was reachable in a temporary local sidecar, but Zoe's normal Python runtime lacks Graphiti backend packages and the current local Gemma endpoint failed Graphiti structured extraction in a smoke test. | Create an approved optional-dependency/runtime proposal, then solve the local structured-output extraction path before any accepted fixture ingest/query measurements. |
-| Graphify current map | Complete foundation | `graphify-out/GRAPH_REPORT.md` and `graphify-out/graph.json` were regenerated through current main source commit `e734c0da` after the Hindsight bake-off latency-gate merge; `docs/architecture/zoe-harness-current-inventory.md` records the source-backed inventory. | Rerun Graphify after substantial code or architecture changes. |
+| Graphify current map | Stale after quota-blocked refresh | `graphify-out/GRAPH_REPORT.md` and `graphify-out/graph.json` were last successfully regenerated through source commit `e734c0da`. A post-`260321b` refresh attempt scanned 590 code files and 257 docs but all 7 OpenAI semantic chunks failed with `insufficient_quota`; the partial output was discarded. | Restore OpenAI quota or approved local/offline Graphify backend, then rerun Graphify before major cleanup. |
 | Tool/capability inventory | Complete foundation | `docs/architecture/zoe-tool-capability-inventory.md` maps agent, MCP, Multica, Hermes, OpenClaw, and governance surfaces. | Keep updated when tool catalogs or execution lanes change. |
 | Memory read/write inventory | Complete foundation | `docs/architecture/zoe-memory-read-write-inventory.md` maps MemoryService operations, durable writes, prompt reads, MCP paths, Hindsight candidates, and metadata gaps. | Keep updated when memory write/read paths change. |
 | Zoe north-star layer | Complete foundation | `docs/strategy/zoe-evolution-harness-plan.md` and `docs/adr/ADR-zoe-north-star-layer.md` define capability profiles, trust/autonomy classes, discovery scoring, outcome evals, and hardware budgets. | Build capability profile inventory and candidate-scoring records. |
-| Capability profiles | Complete foundation | `services/zoe-data/zoe_capability_profile.py`, `services/zoe-data/zoe_capability_profile_patch_writer.py`, `services/zoe-data/zoe_capability_profile_promotion.py`, `services/zoe-data/zoe_capability_trust_update.py`, `services/zoe-data/zoe_capability_trust_review.py`, tests, and `docs/architecture/zoe-capability-profiles.md` define the first executable Zoe capability self-model, retained-outcome trust-update candidates, governed in-memory trust reviews, promotion manifests with PR/rollback/verification evidence, and pure source diff rendering. | Add Multica handoff for promotion manifests and patch plans, then keep every actual profile edit landing through PR review. |
+| Capability profiles | Complete foundation | `services/zoe-data/zoe_capability_profile.py`, `services/zoe-data/zoe_capability_profile_patch_writer.py`, `services/zoe-data/zoe_capability_profile_promotion.py`, `services/zoe-data/zoe_capability_profile_multica_handoff.py`, `services/zoe-data/zoe_capability_trust_update.py`, `services/zoe-data/zoe_capability_trust_review.py`, tests, and `docs/architecture/zoe-capability-profiles.md` define the first executable Zoe capability self-model, retained-outcome trust-update candidates, governed in-memory trust reviews, promotion manifests with PR/rollback/verification evidence, pure source diff rendering, and inert Multica handoff payloads. | Keep every actual profile edit landing through PR review; next attach profile handoffs to runtime proposal callers without creating tickets directly. |
 | Candidate scoring | Complete foundation | `services/zoe-data/zoe_candidate_scoring.py`, `services/zoe-data/tests/test_zoe_candidate_scoring.py`, and `docs/architecture/zoe-candidate-scoring.md` define candidate scoring and adoption gates. | Attach candidate scores to self-evolution proposal records before installs or replacements. |
 | Pi runtime harness | Partial | `services/zoe-data/pi_runtime_probe.py`, `scripts/maintenance/pi_runtime_probe.py`, and `docs/architecture/zoe-pi-runtime-harness.md` detect Pi readiness without installing or executing Pi. Current Zoe host lacks Node/npm/Pi. | Create an approved install/runtime proposal with local model evidence before delegated Pi execution. |
 | Observation/evaluation traces | Complete foundation | `services/zoe-data/zoe_observation_trace.py`, `services/zoe-data/zoe_observation_trace_collector.py`, `services/zoe-data/zoe_evolution_outcome_memory.py`, tests, `docs/architecture/zoe-observation-trace-schema.md`, and `docs/architecture/zoe-observation-trace-collector.md` define trace records, non-persistent collection gates, and pending outcome-memory candidates for memory route decisions, recall, retain candidate, admission, contradiction, fallback, proposal, verification, outcome eval, and hardware-budget events. | Wire runtime callers through the collector, then pass outcome memory admission decisions into durable writer gates. |
 | Memory admission governance | Complete foundation | `services/zoe-data/zoe_memory_admission.py`, `services/zoe-data/hindsight_retain_candidates.py`, `services/zoe-data/hindsight_retain_executor.py`, `services/zoe-data/zoe_multica_memory_admission.py`, `services/zoe-data/zoe_evolution_outcome_admission.py`, `services/zoe-data/zoe_evolution_outcome_retain.py`, tests, and `docs/architecture/zoe-memory-admission-gates.md` define evidence, trace, approval, graph, Multica review metadata, outcome memory admission, Hindsight admitted retain planning/execution, admitted outcome retain execution, and self-evolution proposal gates before durable memory writes; Hindsight retain candidates, Multica review records, and terminal evolution outcomes can now build/evaluate admission requests before promotion, Hindsight candidate metadata reaches MemoryService writer metadata with first-class scope/evidence/relationship fields, and `admit_hindsight_retain_candidate(event_id)` gives future runtime code an inert no-write pending-review entrypoint instead of direct sidecar retain calls. | Route future MemPalace, Graphiti, and non-Hindsight outcome-memory durable writers through admission decisions before any backend write. |
-| Multica evidence gates | Partial | Implement completion now requires PR evidence for code/default profiles, memory admission has a tested decision contract, Multica admission requires matching Zoe proposal contract markers before dispatching evolution-proposal tickets, execute/promote proposal tickets must pass the execution approval gate before dispatch, Multica memory review metadata can be evaluated as an inert admission decision, retained capability-trust candidates can be reviewed in memory with explicit approval refs, and profile promotion manifests/patch plans require PR/rollback/verification refs. | Add Multica handoff for promotion manifests and patch plans. |
+| Multica evidence gates | Partial | Implement completion now requires PR evidence for code/default profiles, memory admission has a tested decision contract, Multica admission requires matching Zoe proposal contract markers before dispatching evolution-proposal tickets, execute/promote proposal tickets must pass the execution approval gate before dispatch, Multica memory review metadata can be evaluated as an inert admission decision, retained capability-trust candidates can be reviewed in memory with explicit approval refs, profile promotion manifests/patch plans require PR/rollback/verification refs, and governed profile promotions can render inert Multica handoff packets. | Wire runtime proposal callers to build handoff packets without creating tickets directly. |
 | Self-evolution proposal records | Runtime writers wired | `services/zoe-data/zoe_evolution_proposal.py`, `services/zoe-data/zoe_evolution_proposal_adapter.py`, tests, and `docs/architecture/zoe-evolution-proposal-contract.md` define structured Notice -> Explain -> Search -> Evaluate -> Propose records. MCP proposal creation, nightly NOTICE proposals, user-frustration proposals, and explicit user issue reports now store validated contract snapshots while preserving the legacy row shape and MEASURE target patterns; Multica tickets receive compact contract markers for admission. | Require approval evidence before installs/replacements and connect verified outcomes back to memory/capability trust. |
-| Self-evolution loop | Partial | Multica, pipeline evidence, Greploop, Greptile, Hermes, worktree bootstrap, candidate scoring, proposal contract, contract-aware Multica admission, live execution approval gating for execute/promote proposal tickets, inert outcome-memory candidate construction, outcome admission decisions, admitted Hindsight outcome retain, retained-outcome capability trust candidates, governed in-memory trust reviews, promotion manifests, and profile patch plans exist. | Add Multica handoff for profile patch plans plus Notice/Search/Evaluate runtime callers. |
+| Self-evolution loop | Partial | Multica, pipeline evidence, Greploop, Greptile, Hermes, worktree bootstrap, candidate scoring, proposal contract, contract-aware Multica admission, live execution approval gating for execute/promote proposal tickets, inert outcome-memory candidate construction, outcome admission decisions, admitted Hindsight outcome retain, retained-outcome capability trust candidates, governed in-memory trust reviews, promotion manifests, profile patch plans, and inert profile Multica handoffs exist. | Add Notice/Search/Evaluate runtime callers that consume existing contracts and evidence without bypassing approval gates. |
 | Main engine cleanup | Deferred | `zoe_agent.py` remains large and active. | Start only after inventories and chat/memory/tool dispatch tests are strong enough to prevent regressions. |
 
 ## Missing Work By Capability
@@ -201,8 +207,9 @@ Keep each pull request small enough for Greptile and Zoe verification.
    - Verify structure.
    - Use Greptile as the first review loop.
 2. Fresh Graphify and architecture inventory.
-   - Status: complete foundation as of Pi harness merge source commit `a3fe849c`, merged as generated artifacts in PR #273.
-   - Keep Graphify refreshed after substantial code or architecture changes.
+   - Status: stale after source commit `e734c0da`; later refresh attempts are blocked by OpenAI `insufficient_quota`.
+   - Latest blocked attempt after `260321b` scanned 590 code files and 257 docs; all 7 semantic chunks failed, and the partial graph output was discarded.
+   - Restore quota or approve a local/offline Graphify backend before treating Graphify as current for major cleanup.
    - Reconcile future generated reports against `docs/architecture/zoe-harness-current-inventory.md`.
 3. Tool and memory inventory.
    - Status: complete foundation.
@@ -243,9 +250,9 @@ Keep each pull request small enough for Greptile and Zoe verification.
     - Next: require approval evidence before installs/replacements and connect verified outcomes back to memory/capability trust.
     - Keep execution approval-gated.
 10. Zoe capability profile inventory.
-    - Status: complete foundation for key active and candidate surfaces.
+    - Status: complete foundation for key active and candidate surfaces, with governed promotion manifests, pure patch plans, and inert Multica handoff packets.
     - Expand profiles for voice, MCP, calendars, reminders, lists, search, maps/charts, proactive scheduling, and setup flows.
-    - Use trust level, approval class, tests, budget, dependencies, rollback, and known failures as proposal/cleanup gates.
+    - Use trust level, approval class, tests, budget, dependencies, rollback, known failures, and handoff evidence as proposal/cleanup gates.
 11. Candidate discovery scoring.
     - Status: complete foundation.
     - Candidate records now compare Pi, MCP, GitHub, local skills, APIs, local services, and existing Zoe capabilities.
