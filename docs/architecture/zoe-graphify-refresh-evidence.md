@@ -78,7 +78,7 @@ Evidence:
 
 ## Refresh 2026-06-10 Hindsight Latency Hardening Pass
 
-Source commit: `0146caad86aa4d1c4c64d5f6895df6cbc7038033`
+Trigger commit: `0146caad86aa4d1c4c64d5f6895df6cbc7038033`
 
 Commands:
 
@@ -93,10 +93,7 @@ git diff --check
 
 Evidence:
 
-- extract scanned 587 code files and 257 docs;
-- `graphify-out/graph.json` wrote 8,174 nodes, 14,575 edges, and 534 communities;
-- cluster-only regenerated 533 communities;
-- `graphify-out/GRAPH_REPORT.md` records built-from commit `0146caad`;
-- estimated Graphify extraction cost was `$0.1846`;
+- Graphify was refreshed in PR #351 after PR #349 merged;
+- `graphify-out/GRAPH_REPORT.md` and `graphify-out/graph.json` contain the generated graph metrics for the final refresh;
 - structure, critical-file, offline-memory, and diff whitespace validators passed;
 - refresh ran after PR #349 hardened Hindsight recall latency summaries so missing enabled latency remains unmeasured instead of becoming `0ms`.
