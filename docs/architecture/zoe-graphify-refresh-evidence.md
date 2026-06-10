@@ -190,3 +190,26 @@ Evidence:
 - `docs/reports/` is ignored so generated utility reports do not become accidental committed output;
 - `graphify-out/GRAPH_REPORT.md` and `graphify-out/graph.json` contain the generated graph metrics for the final refresh;
 - structure, critical-file, offline-memory, and diff whitespace validators passed.
+
+## Refresh 2026-06-10 Memory Router Context Terms Pass
+
+Trigger commit: `ae49ed8a36a85ba7bda677e5fb3b85d121dafb21` (PR #362)
+
+Commands:
+
+```bash
+OPENAI_API_KEY=$(grep "^OPENAI_API_KEY=" /home/zoe/assistant/.env | cut -d= -f2-) /home/zoe/.local/share/uv/tools/graphifyy/bin/graphify extract . --backend openai
+/home/zoe/.local/share/uv/tools/graphifyy/bin/graphify cluster-only . --no-viz
+python3 tools/audit/validate_structure.py
+python3 tools/audit/validate_critical_files.py
+python3 tools/audit/validate_offline_memory.py
+git diff --check
+```
+
+Evidence:
+
+- Graphify was refreshed after PR #362 hardened Zoe memory router code-context terms so casual service language stays on the fast MemPalace path;
+- focused verification for PR #362 covered `test_zoe_memory_router.py`, Python compilation of `zoe_memory_router.py`, and the standard Zoe validators;
+- the PR kept router matching deterministic while adding regression coverage for casual service false positives and explicit architecture service queries;
+- `graphify-out/GRAPH_REPORT.md` and `graphify-out/graph.json` contain the generated graph metrics for the final refresh;
+- structure, critical-file, offline-memory, and diff whitespace validators passed.
