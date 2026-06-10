@@ -13,11 +13,13 @@ Files:
 - `services/zoe-data/zoe_capability_profile.py`
 - `services/zoe-data/zoe_capability_profile_patch_writer.py`
 - `services/zoe-data/zoe_capability_profile_promotion.py`
+- `services/zoe-data/zoe_capability_profile_promotion_handoff.py`
 - `services/zoe-data/zoe_capability_trust_update.py`
 - `services/zoe-data/zoe_capability_trust_review.py`
 - `services/zoe-data/tests/test_zoe_capability_profile.py`
 - `services/zoe-data/tests/test_zoe_capability_profile_patch_writer.py`
 - `services/zoe-data/tests/test_zoe_capability_profile_promotion.py`
+- `services/zoe-data/tests/test_zoe_capability_profile_promotion_handoff.py`
 - `services/zoe-data/tests/test_zoe_capability_trust_update.py`
 - `services/zoe-data/tests/test_zoe_capability_trust_review.py`
 
@@ -70,6 +72,12 @@ promotion manifest plus current source text and renders a deterministic unified
 diff only when the source profile exists and its current trust level still
 matches the reviewed promotion.
 
+Capability profile promotion handoff plans close the pure runtime handoff loop.
+`zoe_capability_profile_promotion_handoff.py` consumes a reviewed trust result,
+PR/rollback/verification refs, and current source text, then builds the
+promotion manifest, patch plan, and inert Multica handoff packet together. It
+does not create tickets, write files, or mutate profiles.
+
 ## Next Use
 
 The next self-evolution slices should use these profiles to:
@@ -81,4 +89,6 @@ The next self-evolution slices should use these profiles to:
 - add outcome eval traces against profile IDs;
 - connect promotion manifests to an explicit profile-file patch writer with PR
   and rollback evidence;
+- hand reviewed promotion results to Multica through inert handoff plans before
+  any future ticket writer creates work;
 - require non-use, replacement, or failure evidence before retirement.
