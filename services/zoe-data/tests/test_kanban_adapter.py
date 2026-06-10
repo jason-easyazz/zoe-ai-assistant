@@ -4429,6 +4429,23 @@ def test_implement_body_requires_pinned_worktree_before_git_or_pr_commands():
     assert body.index("BLOCKER=WORKTREE_PATH_VIOLATION") < body.index("git push -u origin HEAD")
 
 
+def test_verify_body_requires_exact_workspace_path_for_repo_commands():
+    body = ka.KanbanAdapter()._build_body(
+        "verify",
+        {"id": "uuid-generic", "identifier": "ZOE-GEN", "title": "Generic feature"},
+        "ZOE-GEN",
+    )
+
+    assert "exact task `workspace_path`" in body
+    assert "pwd && git branch --show-current" in body
+    assert "BLOCKER=WORKTREE_PATH_VIOLATION" in body
+    assert "cd <workspace_path> && PYTHONPATH=services/zoe-data python3 -m pytest" in body
+    assert "do not use relative `cd services/zoe-data`" in body
+    assert body.index("BLOCKER=WORKTREE_PATH_VIOLATION") < body.index(
+        "python3 tools/audit/validate_structure.py"
+    )
+
+
 def test_implement_body_documents_existing_pr_revision_fast_path_before_new_pr_creation(monkeypatch):
     monkeypatch.setenv("GREPTILE_MCP_BIN", "/opt/zoe/greptile-mcp")
     body = ka.KanbanAdapter()._build_body(
