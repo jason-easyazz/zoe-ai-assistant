@@ -15,6 +15,7 @@ python3 scripts/maintenance/graphify_local_probe.py --mode smoke --timeout-sec 6
 python3 scripts/maintenance/graphify_local_probe.py --mode repo --timeout-sec 1800 --status-json /tmp/zoe-graphify-local-repo-status.json
 python3 scripts/maintenance/graphify_local_probe.py --mode scope --include-path services/zoe-data --timeout-sec 600 --status-json /tmp/zoe-graphify-local-scope-status.json
 python3 scripts/maintenance/graphify_local_model_matrix.py --mode scope --include-path services/zoe-data --model gemma-4-E2B-it-Q4_K_M.gguf --model gemma-4-e4b-it-Q4_K_M.gguf --model gemma-4-12B-it-Q4_K_M.gguf --timeout-sec 600 --allow-partial --status-json /tmp/zoe-graphify-local-model-matrix.json
+python3 scripts/maintenance/graphify_local_shard_matrix.py --model gemma-4-e4b-it-Q4_K_M.gguf --timeout-sec 600 --allow-partial --status-json /tmp/zoe-graphify-local-shard-matrix.json
 ```
 
 The probe uses Graphify's `ollama` backend against Zoe's localhost llama.cpp
@@ -25,7 +26,7 @@ copy, or detached git snapshot. It never syncs generated `graphify-out` artifact
 back into the repo. The model matrix wrapper runs the same fail-closed probe
 across local model candidates and records compact accepted/rejected, latency,
 RSS, model-file, invalid-JSON, truncation, and context-split evidence so Zoe can
-compare Gemma 4 E2B, E4B, and 12B before changing the sync-capable refresh lane.
+compare Gemma 4 E2B, E4B, and 12B before changing the sync-capable refresh lane. The shard matrix wrapper then runs the selected local model across named bounded repo slices, records blocked shards, accepted-shard latency, and max observed RSS across all shards, and keeps every shard observe-only until a later merge/sync strategy is proven. Default shards avoid `.zoe` operator state and docs-only directories; those require explicit `--shard` opt-in after separate safety/behavior evidence.
 Scoped mode is observe-only evidence for subsystem-sized local model runs; the
 sync-capable refresh wrapper still requires full repo mode with clustering.
 
@@ -79,6 +80,10 @@ Current evidence:
   `graphify_timed_out`, `graphify_exit_nonzero`, 26 invalid JSON chunks, 6
   truncated chunks, and 58 context split warnings. The refresh wrapper did not
   sync `graphify-out`, so the committed stale graph remains untouched.
+- Shard matrix smoke run for `scripts/maintenance` accepted with E4B in 148.736 s
+  over 45 code files and 1 doc, producing 306 nodes and 685 edges with no invalid
+  JSON, truncation, or context splits. This proves the sharded lane can capture
+  bounded local Graphify evidence after the full-repo rejection.
 
 ## Refresh 2026-06-09 Foundation Pass
 
