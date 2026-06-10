@@ -120,3 +120,28 @@ Evidence:
 - `graphify-out/GRAPH_REPORT.md` and `graphify-out/graph.json` contain the generated graph metrics for the final refresh;
 - structure, critical-file, offline-memory, and diff whitespace validators passed;
 - refresh ran after the pipeline duplicate-phase regression fix, trunk/worktree prune policy, and prune-script hardening landed on main.
+
+## Refresh 2026-06-10 Shopping Card Contract Pass
+
+Trigger commits:
+
+- `096288e12cbd4598de26a79e7b9bfb1ec1d6e6fc` (PR #201)
+- `15f17b0bf3b8d462033ece301aa644654bcb5611` (PR #357)
+
+Commands:
+
+```bash
+OPENAI_API_KEY=$(grep "^OPENAI_API_KEY=" /home/zoe/assistant/.env | cut -d= -f2-) /home/zoe/.local/share/uv/tools/graphifyy/bin/graphify extract . --backend openai
+/home/zoe/.local/share/uv/tools/graphifyy/bin/graphify cluster-only . --no-viz
+python3 tools/audit/validate_structure.py
+python3 tools/audit/validate_critical_files.py
+python3 tools/audit/validate_offline_memory.py
+git diff --check
+```
+
+Evidence:
+
+- Graphify was refreshed after PR #201 added shopping/list card builders and PR #357 normalized shopping card item payloads;
+- the source change closed the shopping/list card contract loop through `card_service.py`, `routers/chat.py`, action-form payloads, and focused tests;
+- `graphify-out/GRAPH_REPORT.md` and `graphify-out/graph.json` contain the generated graph metrics for the final refresh;
+- structure, critical-file, offline-memory, and diff whitespace validators passed.
