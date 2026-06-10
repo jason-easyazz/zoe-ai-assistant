@@ -360,10 +360,10 @@ def _harness_implement_hint(issue: dict | None = None) -> str:
                 "services/zoe-data/tests/test_main_multica_poll.py::"
                 "test_record_blocked_multica_chain_creates_iteration_budget_followup"
             )
-        elif blocker in {"IMPLEMENT_BUDGET", "IMPLEMENT_HANDOFF_DRIFT"}:
+        elif blocker in {"IMPLEMENT_BUDGET", "IMPLEMENT_HANDOFF_DRIFT", "ITERATION_BUDGET"}:
             focused_test = (
                 "services/zoe-data/tests/test_main_multica_poll.py::"
-                "test_record_blocked_multica_chain_creates_budget_followup_once"
+                "test_record_blocked_multica_chain_creates_iteration_budget_followup"
             )
         elif blocker == "PROTOCOL_VIOLATION":
             focused_test = (
