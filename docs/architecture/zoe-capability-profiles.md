@@ -17,6 +17,7 @@ Files:
 - `services/zoe-data/zoe_capability_outcome_profile_handoff.py`
 - `services/zoe-data/zoe_capability_profile_ticket_gate.py`
 - `services/zoe-data/zoe_capability_profile_ticket_writer.py`
+- `services/zoe-data/zoe_capability_profile_pr_edit_gate.py`
 - `services/zoe-data/zoe_capability_trust_update.py`
 - `services/zoe-data/zoe_capability_trust_review.py`
 - `services/zoe-data/tests/test_zoe_capability_profile.py`
@@ -26,6 +27,7 @@ Files:
 - `services/zoe-data/tests/test_zoe_capability_outcome_profile_handoff.py`
 - `services/zoe-data/tests/test_zoe_capability_profile_ticket_gate.py`
 - `services/zoe-data/tests/test_zoe_capability_profile_ticket_writer.py`
+- `services/zoe-data/tests/test_zoe_capability_profile_pr_edit_gate.py`
 - `services/zoe-data/tests/test_zoe_capability_trust_update.py`
 - `services/zoe-data/tests/test_zoe_capability_trust_review.py`
 
@@ -105,6 +107,12 @@ backlog ticket containing the gate metadata, promotion manifest, and profile
 patch only after explicit operator approval. It still does not apply profile
 edits; those remain PR-backed.
 
+Capability profile PR edit gates connect created profile tickets to reviewable
+profile edits without mutating files. `zoe_capability_profile_pr_edit_gate.py`
+accepts only ticket-writer metadata, matching current source and patch hashes,
+and explicit PR, rollback, verification, and Greptile refs before rendering the
+patch text for a profile-edit PR. Blocked plans carry no patch text.
+
 ## Next Use
 
 The next self-evolution slices should use these profiles to:
@@ -115,6 +123,6 @@ The next self-evolution slices should use these profiles to:
 - block privileged execution when profile approval rules are unmet;
 - add outcome eval traces against profile IDs;
 - keep retained-outcome profile promotions routed through the composed
-  outcome-to-handoff plan, ticket gate, and profile ticket writer before any
-  profile edit PR is created;
+  outcome-to-handoff plan, ticket gate, profile ticket writer, and PR edit gate
+  before any profile edit PR is prepared;
 - require non-use, replacement, or failure evidence before retirement.
