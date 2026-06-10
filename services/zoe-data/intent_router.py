@@ -412,7 +412,7 @@ _AGENT_CHAT_RE = re.compile(
     r"search the web|write me (?:an? )?(?:email|haiku|poem)|"
     r"can you explain|set up (?:a )?new automation|what is happening in|"
     r"tell me (?:a|another) joke|make me laugh|(?:do you |have you )?(?:got|have) any jokes|know any (?:good )?jokes|"
-    r"say exactly[: ]+(?:.+))",
+    r"say exactly[: ]+.+)",
     re.IGNORECASE,
 )
 
