@@ -376,22 +376,25 @@ def _harness_implement_hint(issue: dict | None = None) -> str:
             )
         else:
             focused_test = "services/zoe-data/tests/test_main_multica_poll.py"
-        blocker_followup_hint = (
-            "  For engineering_blocker_followup tickets, inspect only"
-            " services/zoe-data/main.py and services/zoe-data/tests/test_main_multica_poll.py"
-            f" first. Run focused test: `PYTHONPATH=services/zoe-data python3 -m pytest -q {focused_test}`."
+        return (
+            "- HARNESS FOLLOW-UP FAST PATH: this is an engineering_blocker_followup ticket."
+            " All paths below are relative to the task `workspace_path`; do not use the live checkout.\n"
+            " Start only from these files:\n"
+            "  * blocker follow-up logic: services/zoe-data/main.py\n"
+            "  * focused tests: services/zoe-data/tests/test_main_multica_poll.py\n"
+            f" Run focused test first: `PYTHONPATH=services/zoe-data python3 -m pytest -q {focused_test}`."
+            " Do not read the broad harness map, kanban_adapter.py, pipeline_store.py, or Hermes internals"
+            " unless that focused test failure names them."
             " Use the existing repo/runtime environment only: do not create `.venv`, run `pip install`,"
             " or install missing Python packages from inside a worker. If that exact command reports"
             " a missing dependency/import that is not fixed by `PYTHONPATH=services/zoe-data`, call"
             " `kanban_block` with BLOCKER=TEST_ENVIRONMENT and the first import error instead of"
             " spending turns on environment repair."
             " If the focused test passes before any edit, do not inspect more blocker code:"
-            " use at most three symbol greps total, up to four reads of the focused test file, and two reads per other named file, then edit the"
-            " named harness file already in scope (usually services/zoe-data/main.py,"
-            " services/zoe-data/tests/test_main_multica_poll.py, or"
-            " services/zoe-data/executors/kanban_adapter.py) with the smallest guard, or call `kanban_block` with"
-            " BLOCKER=ALREADY_COVERED and the passing test output. Do not rework blocker"
-            " creation after a passing focused test.\n"
+            " use at most three symbol greps total, up to four reads of the focused test file, and two reads per other named file,"
+            " then edit services/zoe-data/main.py or services/zoe-data/tests/test_main_multica_poll.py"
+            " with the smallest guard, or call `kanban_block` with BLOCKER=ALREADY_COVERED and the passing test output."
+            " Do not rework blocker creation after a passing focused test.\n"
         )
     return (
         "- HARNESS FAST PATH: this is a Zoe/Hermes harness ticket. Do not spend budget"

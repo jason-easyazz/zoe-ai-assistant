@@ -4960,7 +4960,7 @@ def test_implement_body_includes_harness_repo_map_for_harness_tickets():
     assert body.index("HARNESS FAST PATH") < body.index("Graphify map")
 
 
-def test_implement_body_includes_harness_repo_map_for_blocker_followup_source():
+def test_implement_body_uses_narrow_contract_for_blocker_followup_source():
     body = ka.KanbanAdapter()._build_body(
         "implement",
         {
@@ -4976,17 +4976,16 @@ def test_implement_body_includes_harness_repo_map_for_blocker_followup_source():
         "ZOE-5454",
     )
 
-    assert "HARNESS FAST PATH" in body
-    assert "All paths in this repo map are relative to the task `workspace_path`" in body
+    assert "HARNESS FOLLOW-UP FAST PATH" in body
+    assert "All paths below are relative to the task `workspace_path`" in body
     assert "do not use the live checkout" in body
-    assert "Live checkout path intentionally omitted" in body
-    assert "Working root for this phase: exact task workspace_path from kanban_show" in body
     assert "/home/zoe/assistant" not in body
-    assert "services/zoe-data/executors/kanban_adapter.py" in body
-    assert "services/zoe-data/worktree_bootstrap.py" in body
-    assert "engineering_blocker_followup tickets" in body
+    assert "Start only from these files" in body
+    assert "services/zoe-data/executors/kanban_adapter.py" not in body
+    assert "services/zoe-data/worktree_bootstrap.py" not in body
     assert "services/zoe-data/main.py" in body
     assert "services/zoe-data/tests/test_main_multica_poll.py" in body
+    assert "Do not read the broad harness map" in body
     assert (
         "PYTHONPATH=services/zoe-data python3 -m pytest -q "
         "services/zoe-data/tests/test_main_multica_poll.py::"
@@ -4996,9 +4995,9 @@ def test_implement_body_includes_harness_repo_map_for_blocker_followup_source():
     assert "BLOCKER=TEST_ENVIRONMENT" in body
     assert "If the focused test passes before any edit, do not inspect more blocker code" in body
     assert "use at most three symbol greps total, up to four reads of the focused test file, and two reads per other named file" in body
-    assert "edit the named harness file already in scope" in body
+    assert "then edit services/zoe-data/main.py or services/zoe-data/tests/test_main_multica_poll.py" in body
     assert "services/zoe-data/main.py" in body
-    assert "services/zoe-data/executors/kanban_adapter.py" in body
+    assert "services/zoe-data/executors/kanban_adapter.py" not in body
     assert "BLOCKER=ALREADY_COVERED" in body
 
 
@@ -5042,14 +5041,14 @@ def test_implement_body_includes_harness_blocker_followup_focused_tests(
         "ZOE-5454",
     )
 
-    assert "engineering_blocker_followup tickets" in body
+    assert "HARNESS FOLLOW-UP FAST PATH" in body
     assert expected_test in body
     assert "Use the existing repo/runtime environment only" in body
     assert "If the focused test passes before any edit, do not inspect more blocker code" in body
     assert "use at most three symbol greps total, up to four reads of the focused test file, and two reads per other named file" in body
-    assert "edit the named harness file already in scope" in body
+    assert "then edit services/zoe-data/main.py or services/zoe-data/tests/test_main_multica_poll.py" in body
     assert "services/zoe-data/main.py" in body
-    assert "services/zoe-data/executors/kanban_adapter.py" in body
+    assert "services/zoe-data/executors/kanban_adapter.py" not in body
     assert "BLOCKER=ALREADY_COVERED" in body
 
 
