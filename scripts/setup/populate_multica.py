@@ -233,6 +233,7 @@ _LABELS = [
     ("user-feedback", "#EA580C"),
     ("harness-fix", "#7C3AED"),
     ("operator-task", "#334155"),
+    ("autoresearch", "#14B8A6"),
 ]
 
 
@@ -282,6 +283,8 @@ _PROJECTS = [
      "Evolution proposals, capability extension, self-improvement skill, NOTICE/PROPOSE/EXECUTE/MEASURE loop"),
     ("Infrastructure & Platform", "in_progress",
      "Auth, nginx, PostgreSQL, Docker services, OIDC provider, security"),
+    ("Autoresearch Lab", "planned",
+     "Karpathy-style fixed-budget asset optimization runs: one locked program, one editable asset, one objective score"),
     ("Agent Orchestration", "in_progress",
      "OpenClaw, Hermes, Agent Zero, A2A federation, task routing, board status"),
     ("Voice & Presence", "in_progress",
@@ -400,6 +403,7 @@ _SKILL_DEFS = [
     ("skills/shopping-list/SKILL.md", "Shopping List"),
     ("skills/smart-home/SKILL.md", "Smart Home"),
     ("skills/openclaw/zoe-capability-extender/SKILL.md", "Zoe Capability Extender"),
+    ("skills/autoresearch-engineer/SKILL.md", "Auto Research Engineer"),
     ("skills/openclaw/zoe-page-builder/SKILL.md", "Zoe Page Builder"),
     ("skills/openclaw/zoe-widget-builder/SKILL.md", "Zoe Widget Builder"),
 ]
@@ -512,6 +516,28 @@ _AGENT_DEFS = [
         ),
         "model": "Llama-3.2-3B-Instruct-Q4_K_M",
         "runtime_provider": "zoe",
+    },
+    {
+        "name": "Auto Research Engineer",
+        "description": (
+            "Karpathy-style autonomous optimizer for approved assets. It turns one business "
+            "question into one objective metric, changes only the declared asset, scores via "
+            "the locked evaluator, keeps improvements, reverts losses, and logs each round."
+        ),
+        "instructions": (
+            "You are Zoe's Auto Research Engineer. Before any run, perform the fit check: "
+            "the target must have one objective numeric score, feedback in minutes or hours, "
+            "and approved write access to exactly the asset files. Create or verify the three-file "
+            "setup: a human-owned instructions/program file, one or more agent-editable asset files, "
+            "and a locked scoring file. During a run, follow the Karpathy autoresearch loop: establish "
+            "baseline, make one hypothesis and one asset change, run the scorer, keep only better "
+            "results, revert worse or crashed changes, and append every round to an untracked results "
+            "log. Never edit the instructions/program file, scoring file, evaluators, dependencies, "
+            "or undeclared assets. Zoe/Hermes approval gates and branch/PR processes still apply."
+        ),
+        "model": "gpt-5.4",
+        "fallback_model": "main",
+        "runtime_provider": "hermes",
     },
     {
         "name": "Self-Improvement Agent",
@@ -632,9 +658,10 @@ _SKILL_ASSIGNMENTS: dict[str, list[str]] = {
     "Zoe Core": ["Calendar Events", "Personal Facts", "Shopping List", "Smart Home",
                  "Proactive Agent", "Self-Improvement"],
     "OpenClaw": ["Zoe Capability Extender", "Zoe Page Builder", "Zoe Widget Builder"],
-    "Hermes": [],
+    "Hermes": ["Auto Research Engineer"],
     "Agent Zero": ["Agent Zero Research"],
     "Self-Improvement Agent": ["Self-Improvement", "Zoe Capability Extender"],
+    "Auto Research Engineer": ["Auto Research Engineer"],
 }
 
 
@@ -710,7 +737,20 @@ def step_h_create_squads(agent_ids: dict[str, str]) -> dict[str, str]:
                 "Handle deep research, competitive analysis, and strategic planning tasks. "
                 "Agent Zero leads investigation. Zoe Core frames questions from user intent."
             ),
-            "members": ["Zoe Core"],
+            "members": ["Zoe Core", "Auto Research Engineer"],
+        },
+        {
+            "name": "Autoresearch Lab",
+            "leader": "Auto Research Engineer",
+            "description": (
+                "Bounded asset optimization squad for approved Karpathy-style autoresearch runs."
+            ),
+            "instructions": (
+                "Run only after a fit check passes and the human has approved the exact asset and "
+                "scoring file. Keep the evaluator locked, change only declared assets, record every "
+                "round, and preserve Zoe's branch, evidence, and rollback rules."
+            ),
+            "members": ["Hermes", "Self-Improvement Agent"],
         },
     ]
 
