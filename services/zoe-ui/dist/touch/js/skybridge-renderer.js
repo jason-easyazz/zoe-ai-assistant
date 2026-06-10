@@ -101,29 +101,71 @@
         return Number.isFinite(number) ? Math.round(number) + '°' : String(value);
     }
 
+    function weatherClass(props, current) {
+        const text = String((current && (current.icon || current.description || current.condition)) || props.condition || '').toLowerCase();
+        if (/thunder|storm/.test(text)) return 'weather-stormy';
+        if (/rain|drizzle|shower/.test(text)) return 'weather-rainy';
+        if (/snow|sleet|ice/.test(text)) return 'weather-snowy';
+        if (/fog|mist|haze|smoke/.test(text)) return 'weather-foggy';
+        if (/cloud|overcast/.test(text)) return /part|02/.test(text) ? 'weather-partly-cloudy' : 'weather-cloudy';
+        if (/night|\dn$/.test(text)) return 'weather-clear-night';
+        return 'weather-sunny';
+    }
+
+    function weatherEmoji(current) {
+        const text = String((current && (current.icon_emoji || current.icon || current.description || current.condition)) || '').toLowerCase();
+        if (current && current.icon_emoji) return current.icon_emoji;
+        if (/thunder|storm/.test(text)) return '⛈️';
+        if (/rain|drizzle|shower/.test(text)) return '🌧️';
+        if (/snow|sleet|ice/.test(text)) return '❄️';
+        if (/fog|mist|haze|smoke/.test(text)) return '🌫️';
+        if (/cloud|overcast/.test(text)) return '☁️';
+        if (/night|\dn$/.test(text)) return '🌙';
+        return '☀️';
+    }
+
+    function formatWind(value) {
+        if (value == null || value === '') return '--';
+        const number = Number(value);
+        if (!Number.isFinite(number)) return String(value);
+        return Math.round(number * 3.6) + ' km/h';
+    }
+
     function renderWeather(props) {
         const current = props.current || {};
         const forecast = props.forecast || {};
         const daily = Array.isArray(forecast.daily) ? forecast.daily : [];
         const hourly = Array.isArray(forecast.hourly) ? forecast.hourly : [];
         const location = props.location || {};
-        const metric = props.source === 'weather_forecast'
-            ? '<div class="sky-widget-metric"><strong>' + escapeHtml(daily.length || hourly.length) + '</strong><span>forecast points</span></div>'
-            : '<div class="sky-widget-metric"><strong>' + escapeHtml(formatTemp(current.temp)) + '</strong><span>' + escapeHtml(current.description || 'Current conditions') + '</span></div>';
-        const facts = [
-            ['Feels like', formatTemp(current.feels_like)],
-            ['Humidity', current.humidity == null ? '--' : current.humidity + '%'],
-            ['Wind', current.wind_speed == null ? '--' : current.wind_speed + ' m/s'],
-            ['Location', [location.city || current.city, location.country || current.country].filter(Boolean).join(', ')]
-        ].map(pair => '<div class="sky-field"><span>' + escapeHtml(pair[0]) + '</span><strong>' + escapeHtml(pair[1]) + '</strong></div>').join('');
-        const tiles = daily.slice(0, 5).map(day => {
-            return '<div class="sky-forecast-tile"><span>' + escapeHtml(day.day || '') + '</span><strong>' + escapeHtml(formatTemp(day.high)) + ' / ' + escapeHtml(formatTemp(day.low)) + '</strong><em>' + escapeHtml(day.description || '') + '</em></div>';
-        }).join('') || hourly.slice(0, 5).map(hour => {
-            return '<div class="sky-forecast-tile"><span>' + escapeHtml(hour.time || '') + '</span><strong>' + escapeHtml(formatTemp(hour.temp)) + '</strong><em>' + escapeHtml(hour.description || '') + '</em></div>';
+        const place = [location.city || current.city || props.city || 'Geraldton', location.country || current.country || props.country || 'AU'].filter(Boolean).join(', ');
+        const description = current.description || current.condition || props.description || 'Current conditions';
+        const points = daily.length ? daily.slice(0, 5) : hourly.slice(0, 5);
+        const forecastTiles = points.map(item => {
+            const label = item.day || item.time || '';
+            const temp = item.high != null || item.low != null
+                ? formatTemp(item.high) + ' / ' + formatTemp(item.low)
+                : formatTemp(item.temp);
+            return '<div class="sky-weather-forecast-tile"><span>' + escapeHtml(label) + '</span><strong>' + escapeHtml(temp) + '</strong><em>' + escapeHtml(item.description || item.condition || '') + '</em></div>';
         }).join('');
-        const body = metric + '<div class="sky-widget-strip">' + facts + '</div>' + (tiles ? '<div class="sky-forecast-row">' + tiles + '</div>' : '');
-        return cardFrame(Object.assign({ status: 'Weather', icon: 'W' }, props), body, { wide: true, tone: 'weather-card' });
+        const meta = [
+            ['🌡', 'Feels ' + formatTemp(current.feels_like)],
+            ['💧', current.humidity == null ? 'Humidity --' : current.humidity + '% humidity'],
+            ['💨', formatWind(current.wind_speed)]
+        ].map(pair => '<div class="sky-weather-pill"><span>' + escapeHtml(pair[0]) + '</span>' + escapeHtml(pair[1]) + '</div>').join('');
+        const body = [
+            '<div class="sky-weather-scene">',
+            '<div class="sky-weather-main">',
+            '<div class="sky-weather-location">📍 ' + escapeHtml(place) + '</div>',
+            '<div class="sky-weather-hero"><div class="sky-weather-temp">' + escapeHtml(formatTemp(current.temp)) + '</div><div class="sky-weather-icon" aria-hidden="true">' + escapeHtml(weatherEmoji(current)) + '</div></div>',
+            '<div class="sky-weather-condition">' + escapeHtml(description) + '</div>',
+            '<div class="sky-weather-meta">' + meta + '</div>',
+            '</div>',
+            '<div class="sky-weather-forecast"><h4>' + escapeHtml(props.source === 'weather_forecast' ? 'Forecast' : 'Next up') + '</h4><div class="sky-weather-forecast-grid">' + forecastTiles + '</div></div>',
+            '</div>'
+        ].join('');
+        return cardFrame(Object.assign({ status: 'Weather', icon: 'W' }, props), body, { wide: true, tone: 'weather-card ' + weatherClass(props, current) });
     }
+
 
     function renderPage(props) {
         const fields = [

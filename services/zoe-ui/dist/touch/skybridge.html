@@ -2281,7 +2281,7 @@
 
         .sky-stage {
             position: fixed !important;
-            inset: clamp(28px, 5vh, 56px) 0 132px !important;
+            inset: clamp(28px, 5vh, 56px) 0 168px !important;
             width: min(1120px, calc(100vw - 48px)) !important;
             margin: 0 auto !important;
             transform: none !important;
@@ -2300,7 +2300,7 @@
         .sky-card-stack {
             height: 100% !important;
             max-height: none !important;
-            padding: 0 0 18px !important;
+            padding: 0 0 30px !important;
             display: grid !important;
             grid-template-columns: repeat(12, minmax(0, 1fr)) !important;
             gap: 16px !important;
@@ -2357,9 +2357,271 @@
             50% { filter: brightness(1.16); }
         }
 
+
+        /* Weather data cards borrow the animated language of the touch weather page. */
+        .sky-card.weather-card {
+            min-height: 360px !important;
+            padding: 0 !important;
+            border-color: rgba(255,255,255,0.2) !important;
+            background: linear-gradient(160deg, #1e5a87 0%, #2c82bd 48%, #3f6a8b 100%) !important;
+            box-shadow:
+                0 34px 110px rgba(0,0,0,0.42),
+                inset 0 1px 0 rgba(255,255,255,0.22) !important;
+            backdrop-filter: none !important;
+            -webkit-backdrop-filter: none !important;
+        }
+
+
+        .sky-card.weather-card > .sky-widget-top,
+        .sky-card.weather-card > .sky-badge {
+            display: none !important;
+        }
+
+        .sky-card.weather-card.weather-sunny {
+            background: linear-gradient(160deg, #ff8c00 0%, #ffb347 35%, #87ceeb 70%, #1a6ea8 100%) !important;
+        }
+
+        .sky-card.weather-card.weather-clear-night {
+            background: linear-gradient(160deg, #0a0a2e 0%, #141452 42%, #1a1a6e 100%) !important;
+        }
+
+        .sky-card.weather-card.weather-cloudy {
+            background: linear-gradient(160deg, #485563 0%, #29323c 60%, #2c3e50 100%) !important;
+        }
+
+        .sky-card.weather-card.weather-rainy {
+            background: linear-gradient(160deg, #1c3144 0%, #2c4a6e 44%, #374a5a 100%) !important;
+        }
+
+        .sky-card.weather-card.weather-stormy {
+            background: linear-gradient(160deg, #070714 0%, #1a1a2e 42%, #16213e 100%) !important;
+        }
+
+        .sky-card.weather-card.weather-foggy {
+            background: linear-gradient(160deg, #b8c6db 0%, #f5f7fa 52%, #c3cfe2 100%) !important;
+            color: #1c2430;
+        }
+
+        .sky-card.weather-card.weather-snowy {
+            background: linear-gradient(160deg, #2c3e6a 0%, #4a6fa5 42%, #8ba7d4 100%) !important;
+        }
+
+        .sky-card.weather-card::before,
+        .sky-card.weather-card::after {
+            content: "";
+            position: absolute;
+            pointer-events: none;
+        }
+
+        .sky-card.weather-card::before {
+            top: -70px;
+            right: -54px;
+            width: 190px;
+            height: 190px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(255,247,161,0.98) 0%, rgba(255,215,0,0.72) 36%, rgba(255,140,0,0.18) 68%, transparent 72%);
+            box-shadow: 0 0 70px 28px rgba(255,200,0,0.24);
+            animation: sky-weather-pulse 4.5s ease-in-out infinite;
+        }
+
+        .sky-card.weather-card.weather-cloudy::before,
+        .sky-card.weather-card.weather-rainy::before,
+        .sky-card.weather-card.weather-stormy::before,
+        .sky-card.weather-card.weather-foggy::before,
+        .sky-card.weather-card.weather-snowy::before {
+            background: radial-gradient(circle at 42% 42%, rgba(255,255,255,0.54), rgba(255,255,255,0.18) 48%, transparent 70%);
+            box-shadow: -56px 22px 0 rgba(255,255,255,0.14), 38px 36px 0 rgba(255,255,255,0.12);
+            animation: sky-weather-drift 7s ease-in-out infinite;
+        }
+
+        .sky-card.weather-card.weather-clear-night::before {
+            background: radial-gradient(circle at 42% 38%, #f5f0c8 0%, #f5f0c8 38%, transparent 40%);
+            box-shadow: -26px -8px 0 -2px rgba(10,10,46,0.92), 0 0 60px 18px rgba(157,133,255,0.18);
+        }
+
+        .sky-card.weather-card::after {
+            inset: 0;
+            background:
+                linear-gradient(180deg, rgba(255,255,255,0.16), transparent 28%, rgba(0,0,0,0.18)),
+                radial-gradient(circle at 8% 8%, rgba(255,255,255,0.2), transparent 28%);
+            opacity: 0.9;
+        }
+
+        .sky-weather-scene {
+            position: relative;
+            z-index: 1;
+            display: grid;
+            grid-template-columns: minmax(0, 0.95fr) minmax(300px, 0.8fr);
+            gap: 18px;
+            min-height: 360px;
+            padding: 26px;
+            color: #fff;
+            text-shadow: 0 2px 12px rgba(0,0,0,0.34);
+        }
+
+        .sky-weather-main {
+            display: grid;
+            align-content: center;
+            gap: 12px;
+            min-width: 0;
+        }
+
+        .sky-weather-location {
+            justify-self: start;
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            max-width: 100%;
+            padding: 8px 16px;
+            border-radius: 999px;
+            border: 1px solid rgba(255,255,255,0.28);
+            background: rgba(8,20,40,0.42);
+            color: rgba(255,255,255,0.92);
+            font-size: 14px;
+            font-weight: 800;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .sky-weather-hero {
+            display: flex;
+            align-items: flex-end;
+            gap: 18px;
+        }
+
+        .sky-weather-temp {
+            font-size: clamp(82px, 11vw, 132px);
+            font-weight: 260;
+            line-height: 0.88;
+            letter-spacing: 0 !important;
+        }
+
+        .sky-weather-icon {
+            font-size: clamp(48px, 7vw, 76px);
+            line-height: 1;
+            filter: drop-shadow(0 7px 16px rgba(0,0,0,0.36));
+            animation: sky-weather-float 4.8s ease-in-out infinite;
+        }
+
+        .sky-weather-condition {
+            font-size: clamp(22px, 2.6vw, 32px);
+            font-weight: 650;
+            text-transform: capitalize;
+        }
+
+        .sky-weather-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 9px;
+            margin-top: 8px;
+        }
+
+        .sky-weather-pill,
+        .sky-weather-forecast-tile {
+            border: 1px solid rgba(255,255,255,0.22);
+            background: rgba(8,20,40,0.38);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.1);
+        }
+
+        .sky-weather-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 14px;
+            border-radius: 14px;
+            font-size: 14px;
+            font-weight: 800;
+            white-space: nowrap;
+        }
+
+        .sky-weather-forecast {
+            align-self: stretch;
+            display: grid;
+            grid-template-rows: auto 1fr;
+            gap: 12px;
+            min-width: 0;
+        }
+
+        .sky-weather-forecast h4 {
+            margin: 0;
+            font-size: 14px;
+            color: rgba(255,255,255,0.74);
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+
+        .sky-weather-forecast-grid {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: 10px;
+            align-items: stretch;
+        }
+
+        .sky-weather-forecast-tile {
+            display: grid;
+            gap: 7px;
+            min-height: 132px;
+            padding: 14px;
+            border-radius: 18px;
+        }
+
+        .sky-weather-forecast-tile span {
+            color: rgba(255,255,255,0.72);
+            font-size: 12px;
+            font-weight: 850;
+            text-transform: uppercase;
+        }
+
+        .sky-weather-forecast-tile strong {
+            font-size: 20px;
+            color: #fff;
+        }
+
+        .sky-weather-forecast-tile em {
+            color: rgba(255,255,255,0.66);
+            font-size: 13px;
+            font-style: normal;
+            line-height: 1.28;
+        }
+
+        .weather-foggy .sky-weather-scene,
+        .weather-foggy .sky-weather-location,
+        .weather-foggy .sky-weather-pill,
+        .weather-foggy .sky-weather-forecast h4,
+        .weather-foggy .sky-weather-forecast-tile,
+        .weather-foggy .sky-weather-forecast-tile span,
+        .weather-foggy .sky-weather-forecast-tile strong,
+        .weather-foggy .sky-weather-forecast-tile em {
+            color: #1d2733;
+            text-shadow: none;
+        }
+
+        .weather-foggy .sky-weather-location,
+        .weather-foggy .sky-weather-pill,
+        .weather-foggy .sky-weather-forecast-tile {
+            background: rgba(255,255,255,0.32);
+            border-color: rgba(0,0,0,0.12);
+        }
+
+        @keyframes sky-weather-pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.07); }
+        }
+
+        @keyframes sky-weather-drift {
+            0%, 100% { transform: translateX(0); }
+            50% { transform: translateX(-14px); }
+        }
+
+        @keyframes sky-weather-float {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-8px); }
+        }
+
         @media (max-width: 780px) {
             .sky-stage {
-                inset: 22px 12px 116px !important;
+                inset: 18px 12px 132px !important;
                 width: auto !important;
             }
 
@@ -2587,7 +2849,7 @@
 
         .sky-stage {
             position: fixed !important;
-            inset: clamp(28px, 5vh, 56px) 0 132px !important;
+            inset: clamp(28px, 5vh, 56px) 0 168px !important;
             width: min(1120px, calc(100vw - 48px)) !important;
             margin: 0 auto !important;
             transform: none !important;
@@ -2606,7 +2868,7 @@
         .sky-card-stack {
             height: 100% !important;
             max-height: none !important;
-            padding: 0 0 18px !important;
+            padding: 0 0 30px !important;
             display: grid !important;
             grid-template-columns: repeat(12, minmax(0, 1fr)) !important;
             gap: 16px !important;
@@ -2647,13 +2909,29 @@
 
         @media (max-width: 780px) {
             .sky-stage {
-                inset: 22px 12px 116px !important;
+                inset: 22px 12px 142px !important;
                 width: auto !important;
             }
 
             .sky-card-stack {
                 grid-template-columns: 1fr !important;
                 gap: 12px !important;
+                padding-bottom: 22px !important;
+            }
+
+            .sky-weather-scene {
+                grid-template-columns: 1fr;
+                min-height: 0;
+                padding: 22px;
+                gap: 18px;
+            }
+
+            .sky-weather-forecast-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .sky-weather-temp {
+                font-size: clamp(68px, 22vw, 104px);
             }
 
             .sky-card,
@@ -2696,6 +2974,258 @@
                 height: 74px !important;
                 line-height: 74px !important;
                 font-size: 15px !important;
+            }
+        }
+
+        /* Typed fallback: only appears when voice cannot start or the user focuses it. */
+        body.sky-command-open .sky-command,
+        body.sky-voice-fallback.sky-empty .sky-command {
+            display: grid !important;
+            position: fixed !important;
+            left: 50% !important;
+            bottom: max(24px, env(safe-area-inset-bottom, 18px)) !important;
+            width: min(760px, calc(100vw - 40px)) !important;
+            transform: translateX(-50%) !important;
+            grid-template-columns: minmax(0, 1fr) auto auto !important;
+            gap: 10px !important;
+            padding: 10px !important;
+            border: 1px solid rgba(255,255,255,0.14) !important;
+            border-radius: 999px !important;
+            background: rgba(9, 13, 27, 0.78) !important;
+            box-shadow: 0 24px 90px rgba(0,0,0,0.42), inset 0 1px 0 rgba(255,255,255,0.1) !important;
+            backdrop-filter: blur(28px) !important;
+            -webkit-backdrop-filter: blur(28px) !important;
+            z-index: 20 !important;
+            opacity: 1 !important;
+            pointer-events: auto !important;
+        }
+
+        body.sky-command-open:not(.sky-empty) .sky-stage {
+            inset: clamp(28px, 5vh, 56px) 0 198px !important;
+        }
+
+        body.sky-command-open .sky-orb-panel::after,
+        body.sky-command-open .sky-listening-copy {
+            opacity: 0 !important;
+            pointer-events: none !important;
+        }
+
+        .sky-command #skyHomeBtn {
+            display: none !important;
+        }
+
+        .sky-command input {
+            display: block !important;
+            min-height: 54px !important;
+            border: 0 !important;
+            border-radius: 999px !important;
+            background: rgba(255,255,255,0.08) !important;
+            color: #fff !important;
+            padding: 0 18px !important;
+        }
+
+        .sky-command button {
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            min-height: 54px !important;
+            border-radius: 999px !important;
+            white-space: nowrap !important;
+        }
+
+        @media (max-width: 780px) {
+            body.sky-command-open .sky-command,
+            body.sky-voice-fallback.sky-empty .sky-command {
+                width: calc(100vw - 24px) !important;
+                grid-template-columns: auto minmax(0, 1fr) auto !important;
+                bottom: max(18px, env(safe-area-inset-bottom, 14px)) !important;
+                border-radius: 24px !important;
+            }
+
+            body.sky-command-open:not(.sky-empty) .sky-stage {
+                inset: 18px 12px 150px !important;
+            }
+
+            .sky-command #skyMicBtn {
+                display: none !important;
+            }
+        }
+
+    </style>
+
+    <style id="skybridge-runtime-overrides">
+        /* Final runtime lock: later minimal layers must not blur rendered data cards. */
+        .sky-stage,
+        .sky-orb-panel,
+        .sky-card,
+        .sky-card.weather-card {
+            backdrop-filter: none !important;
+            -webkit-backdrop-filter: none !important;
+        }
+
+        .sky-card.weather-card {
+            min-height: 360px !important;
+            padding: 0 !important;
+            background: linear-gradient(160deg, #1e5a87 0%, #2c82bd 48%, #3f6a8b 100%) !important;
+        }
+
+        .sky-card.weather-card.weather-sunny {
+            background: linear-gradient(160deg, #ff8c00 0%, #ffb347 35%, #87ceeb 70%, #1a6ea8 100%) !important;
+        }
+
+        .sky-card.weather-card.weather-cloudy,
+        .sky-card.weather-card.weather-partly-cloudy {
+            background: linear-gradient(160deg, #1e5a87 0%, #2c82bd 50%, #3f6a8b 100%) !important;
+        }
+
+        .sky-card.weather-card.weather-rainy {
+            background: linear-gradient(160deg, #1c3144 0%, #2c4a6e 44%, #374a5a 100%) !important;
+        }
+
+        .sky-card.weather-card.weather-stormy,
+        .sky-card.weather-card.weather-clear-night {
+            background: linear-gradient(160deg, #070714 0%, #1a1a2e 42%, #16213e 100%) !important;
+        }
+
+        body:not(.sky-empty) .sky-card-stack {
+            align-content: start !important;
+            padding-bottom: 34px !important;
+        }
+
+        body:not(.sky-empty) .sky-stage {
+            inset: clamp(28px, 5vh, 56px) 0 176px !important;
+        }
+
+        body.sky-command-open:not(.sky-empty) .sky-stage {
+            inset: clamp(28px, 5vh, 56px) 0 210px !important;
+        }
+
+        @media (max-width: 780px) {
+            body:not(.sky-empty) .sky-stage {
+                inset: 18px 12px 142px !important;
+            }
+
+            body.sky-command-open:not(.sky-empty) .sky-stage {
+                inset: 18px 12px 158px !important;
+            }
+        }
+    </style>
+
+    <style id="skybridge-premium-pill-overrides">
+        /* Premium command pill: functional fallback without looking like a form bolted on. */
+        body.sky-command-open .sky-command,
+        body.sky-voice-fallback.sky-empty .sky-command {
+            display: grid !important;
+            position: fixed !important;
+            left: 50% !important;
+            bottom: max(26px, env(safe-area-inset-bottom, 20px)) !important;
+            width: min(780px, calc(100vw - 48px)) !important;
+            min-height: 82px !important;
+            transform: translateX(-50%) !important;
+            grid-template-columns: auto minmax(0, 1fr) auto !important;
+            gap: 12px !important;
+            align-items: center !important;
+            padding: 10px 12px 10px 22px !important;
+            border: 1px solid rgba(255,255,255,0.18) !important;
+            border-radius: 999px !important;
+            background:
+                radial-gradient(circle at 7% 28%, rgba(255,255,255,0.18), transparent 28%),
+                linear-gradient(145deg, rgba(255,255,255,0.18), rgba(255,255,255,0.065)),
+                rgba(9, 13, 27, 0.72) !important;
+            box-shadow:
+                0 30px 100px rgba(0,0,0,0.44),
+                0 0 70px rgba(90,224,224,0.12),
+                inset 0 1px 0 rgba(255,255,255,0.14) !important;
+            backdrop-filter: blur(30px) saturate(1.18) !important;
+            -webkit-backdrop-filter: blur(30px) saturate(1.18) !important;
+            z-index: 20 !important;
+            opacity: 1 !important;
+            pointer-events: auto !important;
+        }
+
+        body.sky-command-open .sky-command::before,
+        body.sky-voice-fallback.sky-empty .sky-command::before {
+            content: "";
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            background:
+                radial-gradient(circle at 34% 24%, rgba(255,255,255,0.4), transparent 24%),
+                linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            box-shadow: 0 0 34px rgba(123,97,255,0.38), 0 0 58px rgba(90,224,224,0.18);
+            animation: sky-pill-orb-pulse 2.4s ease-in-out infinite;
+        }
+
+        body.sky-command-open .sky-command input,
+        body.sky-voice-fallback.sky-empty .sky-command input {
+            min-width: 0 !important;
+            min-height: 58px !important;
+            border: 0 !important;
+            border-radius: 999px !important;
+            background: transparent !important;
+            color: rgba(255,255,255,0.94) !important;
+            padding: 0 4px !important;
+            font-size: clamp(16px, 1.25vw, 19px) !important;
+            font-weight: 520 !important;
+            outline: none !important;
+        }
+
+        body.sky-command-open .sky-command input::placeholder,
+        body.sky-voice-fallback.sky-empty .sky-command input::placeholder {
+            color: rgba(255,255,255,0.46) !important;
+        }
+
+        body.sky-command-open .sky-command .primary,
+        body.sky-voice-fallback.sky-empty .sky-command .primary {
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            min-width: 92px !important;
+            min-height: 58px !important;
+            padding: 0 22px !important;
+            border: 0 !important;
+            border-radius: 999px !important;
+            background: linear-gradient(135deg, #7B61FF, #5AE0E0) !important;
+            color: #081016 !important;
+            font-size: 15px !important;
+            font-weight: 850 !important;
+            box-shadow: 0 12px 34px rgba(90,224,224,0.22) !important;
+        }
+
+        body.sky-command-open .sky-command #skyMicBtn,
+        body.sky-command-open .sky-command #skyHomeBtn,
+        body.sky-voice-fallback.sky-empty .sky-command #skyMicBtn,
+        body.sky-voice-fallback.sky-empty .sky-command #skyHomeBtn {
+            display: none !important;
+        }
+
+        body.sky-command-open .sky-orb-panel::after,
+        body.sky-command-open .sky-listening-copy {
+            opacity: 0 !important;
+            pointer-events: none !important;
+        }
+
+        @media (max-width: 780px) {
+            body.sky-command-open .sky-command,
+            body.sky-voice-fallback.sky-empty .sky-command {
+                width: calc(100vw - 24px) !important;
+                min-height: 76px !important;
+                bottom: max(18px, env(safe-area-inset-bottom, 14px)) !important;
+                padding: 9px 10px 9px 18px !important;
+                gap: 8px !important;
+            }
+
+            body.sky-command-open .sky-command::before,
+            body.sky-voice-fallback.sky-empty .sky-command::before {
+                width: 44px;
+                height: 44px;
+            }
+
+            body.sky-command-open .sky-command .primary,
+            body.sky-voice-fallback.sky-empty .sky-command .primary {
+                min-width: 74px !important;
+                min-height: 52px !important;
+                padding: 0 16px !important;
             }
         }
     </style>
@@ -2764,9 +3294,9 @@
     <script src="/touch/js/gestures.js"></script>
     <script src="/touch/js/touch-menu.js"></script>
     <script src="/js/touch-ui-executor.js"></script>
-    <script src="/touch/js/skybridge-capabilities.js?v=skybridge-minimal-1"></script>
-    <script src="/touch/js/skybridge-renderer.js?v=skybridge-minimal-1"></script>
-    <script src="/touch/js/skybridge-voice.js?v=skybridge-minimal-1"></script>
-    <script src="/touch/js/skybridge.js?v=skybridge-minimal-1"></script>
+    <script src="/touch/js/skybridge-capabilities.js?v=skybridge-weather-pill-2"></script>
+    <script src="/touch/js/skybridge-renderer.js?v=skybridge-weather-pill-2"></script>
+    <script src="/touch/js/skybridge-voice.js?v=skybridge-weather-pill-2"></script>
+    <script src="/touch/js/skybridge.js?v=skybridge-weather-pill-2"></script>
 </body>
 </html>

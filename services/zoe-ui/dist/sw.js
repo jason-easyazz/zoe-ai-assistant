@@ -8,24 +8,24 @@
 importScripts('https://storage.googleapis.com/workbox-cdn/releases/7.0.0/workbox-sw.js');
 
 // Zoe UI Version 4.17.3 - public modules (with or without trailing path segment)
-const SW_VERSION = '4.63.10'; // agent activity sidebar: escape/slice fixes, task detail fetch
+const SW_VERSION = '4.63.12'; // skybridge: auth and voice surface cache bypass
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
 if (workbox) {
     console.log(`🚀 Zoe Service Worker ${SW_VERSION} - Workbox loaded`);
-    
+
     // Configure Workbox
     workbox.setConfig({
         debug: false
     });
-    
+
     // Set cache name prefix
     workbox.core.setCacheNameDetails({
         prefix: 'zoe',
         suffix: SW_VERSION
     });
-    
+
     // Skip waiting and claim clients immediately on update
     workbox.core.skipWaiting();
     workbox.core.clientsClaim();
@@ -43,7 +43,7 @@ if (workbox) {
             return;
         }
     });
-    
+
     // ===== PRECACHING =====
     // Precache critical assets during service worker installation
     workbox.precaching.precacheAndRoute([
@@ -59,9 +59,9 @@ if (workbox) {
         { url: '/js/sw-registration.js', revision: SW_VERSION },
         { url: '/css/dark-mode-shared.css', revision: SW_VERSION }
     ]);
-    
+
     // ===== CACHING STRATEGIES =====
-    
+
     // Self-hosted module HTML (/modules/qd/, /modules/jag-board/): never cache as documents
     // (avoids storing index.html under a module URL if origin misroutes).
     workbox.routing.registerRoute(
@@ -79,7 +79,13 @@ if (workbox) {
         },
         new workbox.strategies.NetworkOnly()
     );
-    
+
+    // Skybridge is a live voice/data surface. Never serve stale HTML, auth, or runtime JS.
+    workbox.routing.registerRoute(
+        ({ url }) => url.pathname === '/touch/skybridge.html' || url.pathname === '/js/auth.js' || url.pathname.startsWith('/touch/js/skybridge'),
+        new workbox.strategies.NetworkOnly()
+    );
+
     // 1. HTML Pages - Network First (fresh content, fallback to cache)
     workbox.routing.registerRoute(
         ({ request }) => request.destination === 'document',
@@ -96,13 +102,13 @@ if (workbox) {
             ]
         })
     );
-    
+
     // 2. JavaScript - Network First for widgets and widget-system, Cache First for other JS
     workbox.routing.registerRoute(
         ({ request }) => {
             // Check if it's a widget file, widget-system.js, or widget-base.js - always network first
             return request.destination === 'script' && (
-                request.url.includes('/widgets/') || 
+                request.url.includes('/widgets/') ||
                 request.url.includes('widget-system.js') ||
                 request.url.includes('widget-base.js')
             );
@@ -121,7 +127,7 @@ if (workbox) {
             ]
         })
     );
-    
+
     // Other JavaScript - Network First (ensures auth/executor fixes deploy instantly)
     workbox.routing.registerRoute(
         ({ request }) => request.destination === 'script',
@@ -139,7 +145,7 @@ if (workbox) {
             ]
         })
     );
-    
+
     // 3. CSS - Network First for widget CSS, Cache First for others
     workbox.routing.registerRoute(
         ({ request }) => {
@@ -159,7 +165,7 @@ if (workbox) {
             ]
         })
     );
-    
+
     // Other CSS - Network First (ensures style fixes deploy instantly)
     workbox.routing.registerRoute(
         ({ request }) => request.destination === 'style',
@@ -177,7 +183,7 @@ if (workbox) {
             ]
         })
     );
-    
+
     // 4. Images - Cache First with expiration
     workbox.routing.registerRoute(
         ({ request }) => request.destination === 'image',
@@ -194,7 +200,7 @@ if (workbox) {
             ]
         })
     );
-    
+
     // 5. Auth + Chat + notifications + health + WebSocket - Network Only (never cache)
     workbox.routing.registerRoute(
         ({ url }) => {
@@ -233,7 +239,7 @@ if (workbox) {
             ]
         })
     );
-    
+
     // 7. Fonts - Cache First (rarely change)
     workbox.routing.registerRoute(
         ({ request }) => request.destination === 'font',
@@ -250,17 +256,17 @@ if (workbox) {
             ]
         })
     );
-    
+
     // ===== OFFLINE FALLBACK =====
     workbox.routing.setCatchHandler(async ({ event }) => {
         // Return cached response or offline page for navigation requests
         if (event.request.destination === 'document') {
             return caches.match('/offline.html') || Response.error();
         }
-        
+
         return Response.error();
     });
-    
+
 } else {
     console.error('❌ Workbox failed to load');
 }
@@ -269,7 +275,7 @@ if (workbox) {
 // Handle push events for notifications
 self.addEventListener('push', (event) => {
     console.log('📬 Push notification received');
-    
+
     let data = {};
     try {
         data = event.data ? event.data.json() : {};
@@ -280,7 +286,7 @@ self.addEventListener('push', (event) => {
             body: event.data ? event.data.text() : 'You have a new notification'
         };
     }
-    
+
     const title = data.title || 'Zoe';
     // Keep options minimal and iOS-safe: no undefined values, no unsupported fields
     const options = {
@@ -293,7 +299,7 @@ self.addEventListener('push', (event) => {
             timestamp: Date.now()
         },
     };
-    
+
     event.waitUntil(
         self.registration.showNotification(title, options)
     );
@@ -339,7 +345,7 @@ self.addEventListener('notificationclose', (event) => {
 // Handle background sync for queued actions
 self.addEventListener('sync', (event) => {
     console.log('🔄 Background sync triggered:', event.tag);
-    
+
     if (event.tag === 'sync-queued-actions') {
         event.waitUntil(syncQueuedActions());
     }
@@ -356,11 +362,11 @@ async function syncQueuedActions() {
 // Handle messages from clients
 self.addEventListener('message', (event) => {
     console.log('💬 Message received:', event.data);
-    
+
     if (event.data && event.data.type === 'SKIP_WAITING') {
         self.skipWaiting();
     }
-    
+
     if (event.data && event.data.type === 'CACHE_URLS') {
         event.waitUntil(
             caches.open(CACHE_NAME).then((cache) => {
@@ -368,7 +374,7 @@ self.addEventListener('message', (event) => {
             })
         );
     }
-    
+
     if (event.data && event.data.type === 'CLEAR_CACHE') {
         // Delete all zoe-* caches and take control
         event.waitUntil((async () => {
@@ -381,7 +387,7 @@ self.addEventListener('message', (event) => {
             clientList.forEach(client => client.postMessage({ type: 'CACHE_CLEARED', version: SW_VERSION }));
         })());
     }
-    
+
     if (event.data && event.data.type === 'GET_VERSION') {
         event.ports[0].postMessage({ version: SW_VERSION });
     }
