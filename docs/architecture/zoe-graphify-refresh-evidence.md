@@ -73,6 +73,12 @@ Current evidence:
   `services/zoe-data` with 290 code files and 10 docs, no invalid JSON,
   truncation, or context splits; E4B was the fastest accepted model at 47.087 s,
   with 5,089 nodes, 11,144 edges, and max child RSS about 86 MB.
+- Full-repo local refresh with E4B after `3dd3218` rejected cleanly after the
+  1800 second timeout. AST extraction completed over 617 code files and 257
+  docs, and temporary `graph.json` output existed, but the run was blocked by
+  `graphify_timed_out`, `graphify_exit_nonzero`, 26 invalid JSON chunks, 6
+  truncated chunks, and 58 context split warnings. The refresh wrapper did not
+  sync `graphify-out`, so the committed stale graph remains untouched.
 
 ## Refresh 2026-06-09 Foundation Pass
 
