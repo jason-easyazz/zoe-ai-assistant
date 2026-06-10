@@ -153,6 +153,37 @@ def summarize_bakeoff_scores(scores: Sequence[Mapping[str, Any]]) -> dict[str, A
     }
 
 
+def summarize_recall_latency(
+    scores: Sequence[Mapping[str, Any]],
+    *,
+    budget_ms: float = 600.0,
+) -> dict[str, Any]:
+    """Build the machine-readable recall latency acceptance block."""
+
+    if budget_ms <= 0:
+        raise ValueError("budget_ms must be positive")
+    latencies = [
+        float(item.get("latency_ms") or 0.0)
+        for item in scores
+        if bool(item.get("enabled")) and "latency_ms" in item
+    ]
+    enabled_case_count = len(latencies)
+    p50_latency_ms = median(latencies) if latencies else 0.0
+    p95_latency_ms = percentile(latencies, 0.95)
+    measured = bool(latencies) and enabled_case_count > 0
+    p95_within_budget = measured and p95_latency_ms <= budget_ms
+    return {
+        "measured": measured,
+        "case_count": len(scores),
+        "enabled_case_count": enabled_case_count,
+        "budget_ms": budget_ms,
+        "p50_latency_ms": p50_latency_ms,
+        "p95_latency_ms": p95_latency_ms,
+        "p95_within_budget": p95_within_budget,
+        "hot_path_status": "eligible" if p95_within_budget else ("async_or_cached_only" if measured else "not_measured"),
+    }
+
+
 def recall_response_text(response: Mapping[str, Any]) -> str:
     results = response.get("results") or []
     texts = []
@@ -181,5 +212,6 @@ __all__ = [
     "score_recall_response",
     "score_recall_text",
     "summarize_bakeoff_scores",
+    "summarize_recall_latency",
     "synthetic_retain_payloads",
 ]
