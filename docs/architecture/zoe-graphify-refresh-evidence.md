@@ -14,6 +14,7 @@ Zoe now has an observe-only local Graphify probe:
 python3 scripts/maintenance/graphify_local_probe.py --mode smoke --timeout-sec 60 --status-json /tmp/zoe-graphify-local-smoke-status.json
 python3 scripts/maintenance/graphify_local_probe.py --mode repo --timeout-sec 1800 --status-json /tmp/zoe-graphify-local-repo-status.json
 python3 scripts/maintenance/graphify_local_probe.py --mode scope --include-path services/zoe-data --timeout-sec 600 --status-json /tmp/zoe-graphify-local-scope-status.json
+python3 scripts/maintenance/graphify_local_model_matrix.py --mode scope --include-path services/zoe-data --model gemma-4-E2B-it-Q4_K_M.gguf --model gemma-4-e4b-it-Q4_K_M.gguf --model gemma-4-12B-it-Q4_K_M.gguf --timeout-sec 600 --allow-partial --status-json /tmp/zoe-graphify-local-model-matrix.json
 ```
 
 The probe uses Graphify's `ollama` backend against Zoe's localhost llama.cpp
@@ -21,7 +22,10 @@ OpenAI-compatible endpoint, removes cloud API keys from the subprocess
 environment, records local model-file evidence, captures extract/cluster duration
 and child-process max RSS evidence, and runs in a temporary fixture, scoped path
 copy, or detached git snapshot. It never syncs generated `graphify-out` artifacts
-back into the repo.
+back into the repo. The model matrix wrapper runs the same fail-closed probe
+across local model candidates and records compact accepted/rejected, latency,
+RSS, model-file, invalid-JSON, truncation, and context-split evidence so Zoe can
+compare Gemma 4 E2B, E4B, and 12B before changing the sync-capable refresh lane.
 Scoped mode is observe-only evidence for subsystem-sized local model runs; the
 sync-capable refresh wrapper still requires full repo mode with clustering.
 
@@ -62,6 +66,13 @@ Current evidence:
 - Local probe status now includes compact command evidence for extract/cluster
   duration and child max RSS, plus local model-file evidence so Gemma 4 E2B, E4B,
   and 12B runs can be compared without enabling a cloud backend.
+- Local model matrix smoke mode accepted Gemma 4 E2B, E4B, and 12B against the
+  one-file fixture with no invalid JSON, truncation, or context splits; E4B was
+  the fastest accepted model at 146 ms.
+- Local model matrix scoped mode accepted Gemma 4 E2B, E4B, and 12B for
+  `services/zoe-data` with 290 code files and 10 docs, no invalid JSON,
+  truncation, or context splits; E4B was the fastest accepted model at 47.087 s,
+  with 5,089 nodes, 11,144 edges, and max child RSS about 86 MB.
 
 ## Refresh 2026-06-09 Foundation Pass
 
