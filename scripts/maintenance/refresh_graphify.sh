@@ -19,6 +19,14 @@ fail() {
 
 cd "$ROOT"
 
+# Safety net: any unguarded command failure under set -e still leaves a
+# detectable trace instead of dying silently before fail() is reached.
+on_unexpected_error() {
+  log "unexpected failure at line $1"
+  printf '%s unexpected failure at line %s\n' "$(date -Is)" "$1" >"$ROOT/$ERROR_MARKER" 2>/dev/null || true
+}
+trap 'on_unexpected_error $LINENO' ERR
+
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
   log "another refresh is already running; exiting"
@@ -108,7 +116,9 @@ cleanup() {
 trap cleanup EXIT
 
 log "creating snapshot worktree at $SNAPSHOT_DIR from $REF ($current_head)"
-git worktree add --detach "$SNAPSHOT_DIR" "$REF" >/dev/null
+if ! git worktree add --detach "$SNAPSHOT_DIR" "$REF" >/dev/null; then
+  fail "git worktree add failed for $REF at $SNAPSHOT_DIR"
+fi
 
 # Reuse the LLM extraction cache so unchanged files are not re-billed.
 if [[ -d graphify-out/cache ]]; then
