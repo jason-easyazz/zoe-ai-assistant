@@ -136,6 +136,11 @@ def task_log_tail(task_id: str, *, max_lines: int = 80) -> str:
     return "\n".join(lines[-max_lines:])
 
 
+def latest_log_session(task_id: str, *, max_lines: int = 120) -> str:
+    """Return only the latest Hermes session from a task log."""
+    return _latest_log_session(task_id, max_lines=max_lines)
+
+
 def _latest_log_session(task_id: str, *, max_lines: int = 120) -> str:
     try:
         lines = _log_path(task_id).read_text(encoding="utf-8", errors="replace").splitlines()
