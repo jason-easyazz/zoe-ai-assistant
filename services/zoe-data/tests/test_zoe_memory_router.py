@@ -58,3 +58,38 @@ def test_router_uses_word_boundaries_for_slow_backend_terms():
 
     for query in examples:
         assert route_memory_query(query).primary == MemoryBackend.MEMPALACE
+
+
+def test_casual_service_language_stays_on_fast_chat_path():
+    examples = [
+        "I like the breakfast service at that cafe",
+        "The breakfast service runs from 7am",
+        "The hotel service was great",
+        "My cleaning service handles the laundry",
+        "The cleaning services are expensive",
+        "What service can you recommend for laundry?",
+        "Which service is best for house cleaning?",
+        "Which services are nearby?",
+        "Remind me to compliment the service team",
+    ]
+
+    for query in examples:
+        assert route_memory_query(query).primary == MemoryBackend.MEMPALACE
+
+
+def test_code_service_context_still_routes_to_graphify():
+    examples = [
+        "Which service owns chat routing?",
+        "Which services depend on memory?",
+        "What service handles memory writes?",
+        "What services own reminders?",
+        "Show the backend service dependency map",
+        "Which Zoe service handles auth?",
+        "What data service feeds the chat router?",
+        "Show service module boundaries",
+        "Find the service router for voice",
+        "Which service owns the calendar sync?",
+    ]
+
+    for query in examples:
+        assert route_memory_query(query).primary == MemoryBackend.GRAPHIFY
