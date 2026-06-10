@@ -1,3 +1,4 @@
+import argparse
 import importlib.util
 import sys
 from pathlib import Path
@@ -5,8 +6,10 @@ from pathlib import Path
 from hindsight_bakeoff import (
     EVAL_QUERIES,
     SYNTHETIC_EVENTS,
+    eval_queries_for_user,
     percentile,
     score_recall_response,
+    synthetic_events_for_user,
     summarize_bakeoff_scores,
     summarize_recall_latency,
     synthetic_retain_payloads,
@@ -20,6 +23,34 @@ def test_synthetic_events_validate_and_include_required_cases():
     assert {item["event_type"] for item in payloads} >= {"failure", "fix", "preference", "approval"}
     assert all(item["user_id"] for item in payloads)
     assert all(item["evidence_refs"] for item in payloads)
+
+
+def test_synthetic_events_can_be_parameterized_for_multi_user_runs():
+    events = synthetic_events_for_user("casey")
+    payloads = synthetic_retain_payloads("casey")
+
+    assert {event.user_id for event in events} == {"casey"}
+    assert {item["user_id"] for item in payloads} == {"casey"}
+    assert tuple(event.event_id for event in events) == tuple(event.event_id for event in SYNTHETIC_EVENTS)
+    assert {event.user_id for event in SYNTHETIC_EVENTS} == {"jason"}
+
+
+def test_eval_queries_can_be_parameterized_for_multi_user_runs():
+    queries = eval_queries_for_user("casey")
+
+    assert {query.user_id for query in queries} == {"casey"}
+    assert tuple(query.name for query in queries) == tuple(query.name for query in EVAL_QUERIES)
+    assert {query.user_id for query in EVAL_QUERIES} == {"jason"}
+
+
+def test_bakeoff_user_override_rejects_blank_user_id():
+    for helper in (synthetic_events_for_user, eval_queries_for_user, synthetic_retain_payloads):
+        try:
+            helper("  ")
+        except ValueError as exc:
+            assert "user_id must not be blank" in str(exc)
+        else:
+            raise AssertionError(f"{helper.__name__} accepted a blank user_id")
 
 
 def test_eval_queries_cover_plan_questions():
@@ -183,6 +214,14 @@ def test_maintenance_runner_imports_real_bakeoff_module():
     finally:
         sys.path[:] = original_sys_path
 
-    assert len(runner.EVAL_QUERIES) == len(EVAL_QUERIES)
+    assert len(runner.eval_queries_for_user()) == len(EVAL_QUERIES)
+    assert {event.user_id for event in runner.synthetic_events_for_user("casey")} == {"casey"}
+    assert runner._user_id_arg(" casey ") == "casey"
+    try:
+        runner._user_id_arg("  ")
+    except argparse.ArgumentTypeError as exc:
+        assert "user_id must not be blank" in str(exc)
+    else:
+        raise AssertionError("_user_id_arg accepted a blank user_id")
     assert runner.summarize_bakeoff_scores([{"score": 1, "latency_ms": 1}])["case_count"] == 1
     assert runner.summarize_recall_latency([{"latency_ms": 1, "enabled": True}], budget_ms=600)["p95_within_budget"] is True
