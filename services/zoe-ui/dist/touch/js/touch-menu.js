@@ -15,7 +15,6 @@ const TouchMenu = (() => {
 
     const PRIMARY = [
         { id: 'dashboard', path: '/touch/dashboard.html',  label: 'Home'     },
-        { id: 'skybridge', path: '/touch/skybridge.html',  label: 'Skybridge' },
         { id: 'calendar',  path: '/touch/calendar.html',   label: 'Calendar' },
         { id: 'lists',     path: '/touch/lists.html',      label: 'Lists'    },
         { id: 'chat',      path: '/touch/chat.html',       label: 'Chat'     },
@@ -24,7 +23,6 @@ const TouchMenu = (() => {
     const ALL_PAGES = [
         { id: 'dashboard',  path: '/touch/dashboard.html',  icon: '🏠', label: 'Home'       },
         { id: 'skybridge',  path: '/touch/skybridge.html',  icon: '◇',  label: 'Skybridge'  },
-        { id: 'skybridge-calendar', path: '/touch/skybridge.html', href: '/touch/skybridge.html?q=show%20my%20calendar', icon: '◇', label: 'Skybridge Calendar' },
         { id: 'calendar',   path: '/touch/calendar.html',   icon: '📅', label: 'Calendar'   },
         { id: 'lists',      path: '/touch/lists.html',      icon: '☰',  label: 'Lists'      },
         { id: 'notes',      path: '/touch/notes.html',      icon: '📝', label: 'Notes'      },
@@ -357,7 +355,7 @@ html.dark-mode .ztm-ctx-item { color: rgba(255,255,255,0.88); border-bottom-colo
         morePages.forEach(p => {
             const item = document.createElement('a');
             item.className = 'ztm-pg-item' + (p.id === pageId ? ' active' : '');
-            item.href = p.href || p.path;
+            item.href = p.path;
             item.innerHTML = `<span class="ztm-pg-icon">${p.icon}</span><span class="ztm-pg-label">${p.label}</span>`;
             grid.appendChild(item);
         });
