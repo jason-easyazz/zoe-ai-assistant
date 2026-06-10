@@ -34,6 +34,11 @@ Current evidence:
   files and 257 docs, then was stopped after repeated context splitting and
   three invalid JSON chunks. That run was not accepted and no partial graph was
   committed.
+- Repo-mode probe after `5c9ef0f` scanned 603 code files and 257 docs, completed
+  AST extraction, and rejected the run after a 300 second timeout, 11 context
+  split warnings, three invalid JSON chunks, and one truncated chunk. Temporary
+  graph output existed inside the probe snapshot but was not accepted or
+  committed.
 
 ## Refresh 2026-06-09 Foundation Pass
 
