@@ -136,6 +136,10 @@ def _db_update_one(sql: str) -> tuple[bool, str]:
 def _db_name_id_map(table: str, names: list[str]) -> dict[str, str]:
     if not names:
         return {}
+    allowed_tables = {"agent", "squad"}
+    if table not in allowed_tables:
+        print(f"  ⚠ Refusing to inspect unsupported table {table!r}")
+        return {}
     names_sql = ", ".join(_sql_literal(name) for name in names)
     sql = (
         "select name, id from "

@@ -10,9 +10,9 @@ Environment=PATH=/home/zoe/.local/bin:/home/zoe/.nvm/versions/node/v22.22.0/bin:
 Environment=MULTICA_SERVER_URL=http://localhost:8080
 Environment=MULTICA_DAEMON_MAX_CONCURRENT_TASKS=1
 Environment=MULTICA_DAEMON_AUTO_UPDATE=false
-Environment=MULTICA_AGENT_RUNTIME_NAME=Zoe Host Multica Daemon
-Environment=MULTICA_DAEMON_DEVICE_NAME=Zoe Host
-ExecStart=/home/zoe/.local/bin/multica daemon start --foreground --max-concurrent-tasks 1 --runtime-name Zoe Host Multica Daemon --device-name Zoe Host --no-auto-update
+Environment="MULTICA_AGENT_RUNTIME_NAME=Zoe Host Multica Daemon"
+Environment="MULTICA_DAEMON_DEVICE_NAME=Zoe Host"
+ExecStart=/home/zoe/.local/bin/multica daemon start --foreground --max-concurrent-tasks 1 --runtime-name "Zoe Host Multica Daemon" --device-name "Zoe Host" --no-auto-update
 Restart=on-failure
 RestartSec=10
 
