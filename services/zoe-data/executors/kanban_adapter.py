@@ -77,7 +77,7 @@ _JOKE_INTENT_GAP_TITLE_RE = re.compile(
     re.IGNORECASE,
 )
 _SAY_EXACTLY_INTENT_GAP_TITLE_RE = re.compile(
-    r"\bintent[- ]gap\b.*\bsay\s+exactly[: ]+zoe\s+chat\s+integration\s+ok\b",
+    r"\bintent[- ]gap\b.*\bsay\s+exactly(?:[: ]+zoe\s+chat\s+integration\s+ok)?\b",
     re.IGNORECASE,
 )
 _GITHUB_PR_URL_RE = re.compile(r"https://github\.com/[^/\s]+/[^/\s]+/pull/\d+")
@@ -513,16 +513,29 @@ def _intent_gap_implement_hint(issue: dict | None = None, *, phase: str = "imple
         else " After the existing-PR checkout checks succeed, start the focused revision edit within 4 tool/model steps.\n"
     )
     say_exactly_contract = ""
-    if _SAY_EXACTLY_INTENT_GAP_TITLE_RE.search(title):
+    if (
+        _SAY_EXACTLY_INTENT_GAP_TITLE_RE.search(title)
+        or "say exactly: zoe chat integration ok" in haystack
+        or ("intent gap" in title.lower() and "say exactly" in title.lower())
+    ):
         say_exactly_contract = (
             " Concrete edit contract for this exact-repeat gap: update `_AGENT_CHAT_RE` so"
             " `Say exactly: Zoe chat integration ok` routes to `extend_capability` through"
             " the existing open-domain branch. Preferred deterministic path: after `kanban_show`,"
-            " run this from the task `workspace_path`, never from `/home/zoe/assistant`:"
-            " `python3 scripts/maintenance/zoe_apply_intent_gap_contract.py say_exactly`,"
-            " then immediately run `python3 -m py_compile services/zoe-data/intent_router.py`"
+            " your NEXT tool call must be the terminal command"
+            " `cd <workspace_path> && /home/zoe/bin/zoe_apply_intent_gap_contract say_exactly --repo-root ."
+            " --run-focused-checks --kanban-task <task_id_from_kanban_show>`"
+            " using the exact task `workspace_path`. Do not narrate, wait, plan, or heartbeat first."
+            " If you cannot run that exact helper as the next tool call, call `kanban_block`"
+            " with BLOCKER=INTENT_GAP_HELPER_UNAVAILABLE. Never run this from the live"
+            " checkout. The helper runs `python3 -m py_compile services/zoe-data/intent_router.py`"
             " and `PYTHONPATH=services/zoe-data python3 -m pytest -q"
-            " services/zoe-data/tests/test_intent_open_domain.py`. Do not add a bespoke"
+            " services/zoe-data/tests/test_intent_open_domain.py` for you."
+            " The helper is the edit/context authority for this fast path; do not read"
+            " `services/zoe-data/intent_router.py` after it runs. If the helper reports"
+            " `terminal_action: kanban_block:ALREADY_COVERED`, stop immediately; the task"
+            " already has its terminal Kanban action. Do not inspect more files, call"
+            " `kanban_complete`, or open a PR. Do not add a bespoke"
             " say/echo executor in this ticket; the acceptance goal is routing the request"
             " to the agent path while preserving the raw phrase.\n"
         )
@@ -533,7 +546,7 @@ def _intent_gap_implement_hint(issue: dict | None = None, *, phase: str = "imple
             " `Tell me a joke.`, `Tell me a joke`, and `Tell me another joke.` route"
             " to `extend_capability` through the existing open-domain/creative branch."
             " Preferred deterministic path: from the repo root, run"
-            " `python3 scripts/maintenance/zoe_apply_intent_gap_contract.py joke`, then"
+            " `/home/zoe/bin/zoe_apply_intent_gap_contract joke --repo-root .`, then"
             " immediately run `python3 -m py_compile services/zoe-data/intent_router.py`"
             " and `PYTHONPATH=services/zoe-data python3 -m pytest -q"
             " services/zoe-data/tests/test_intent_open_domain.py`."
@@ -1317,7 +1330,7 @@ class KanbanAdapter:
                 start_phase="implement" if _skip_scout(issue) else "scout",
                 issue=issue,
             )
-        except (ImportError, OSError, RuntimeError, TypeError, ValueError) as exc:
+        except Exception as exc:
             logger.warning("kanban_adapter: pipeline bootstrap failed for %s: %s", external_ref, exc)
             return {
                 "ok": False,
@@ -1660,7 +1673,7 @@ class KanbanAdapter:
                             "blocker": None,
                             "pipeline": pipeline,
                         }
-            except (ImportError, OSError, RuntimeError, TypeError, ValueError) as exc:
+            except Exception as exc:
                 logger.debug("kanban_adapter: stale phase filter skipped for %s: %s", external_ref, exc)
 
         detail_cache: dict[str, dict[str, Any]] = {}

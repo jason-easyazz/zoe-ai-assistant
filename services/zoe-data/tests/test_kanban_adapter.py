@@ -5325,7 +5325,7 @@ def test_implement_body_includes_intent_gap_fast_path():
     assert "Open-domain Q&A / creative" in body
     assert "do not grep `_CALCULATE_`, `_execute_`" in body
     assert "`Tell me a joke.`, `Tell me a joke`, and `Tell me another joke.`" in body
-    assert "python3 scripts/maintenance/zoe_apply_intent_gap_contract.py joke" in body
+    assert "/home/zoe/bin/zoe_apply_intent_gap_contract joke --repo-root ." in body
     assert "python3 -m py_compile services/zoe-data/intent_router.py" in body
     assert "services/zoe-data/tests/test_intent_open_domain.py" in body
     assert "Intent(\"extend_capability\", {\"raw\": <original text>})" in body
@@ -5351,6 +5351,33 @@ def test_implement_body_does_not_add_joke_contract_for_other_intent_gaps():
     assert "`Tell me a joke.`, `Tell me a joke`, and `Tell me another joke.`" not in body
 
 
+def test_implement_body_includes_bare_say_exactly_intent_gap_contract():
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {
+            "id": "uuid-intent-exact-bare",
+            "identifier": "ZOE-5682",
+            "title": "Intent gap: say exactly",
+            "description": (
+                "Representative: say exactly. Acceptance: Say exactly: "
+                "Zoe chat integration ok routes to open-domain. Evidence points at "
+                "services/zoe-data/evolution_notice.py:run_evolution_notice."
+            ),
+        },
+        "ZOE-5682",
+    )
+
+    assert "INTENT-GAP IMPLEMENT FAST PATH" in body
+    assert "Concrete edit contract for this exact-repeat gap" in body
+    assert "your NEXT tool call must be the terminal command" in body
+    assert "cd <workspace_path> && /home/zoe/bin/zoe_apply_intent_gap_contract say_exactly --repo-root ." in body
+    assert "--run-focused-checks --kanban-task <task_id_from_kanban_show>" in body
+    assert "BLOCKER=INTENT_GAP_HELPER_UNAVAILABLE" in body
+    assert body.index("your NEXT tool call must be the terminal command") < body.index(
+        "AUDIT/SMOKE FAST PATH"
+    )
+
+
 def test_implement_body_includes_say_exactly_intent_gap_contract():
     body = ka.KanbanAdapter()._build_body(
         "implement",
@@ -5366,8 +5393,10 @@ def test_implement_body_includes_say_exactly_intent_gap_contract():
     assert "INTENT-GAP IMPLEMENT FAST PATH" in body
     assert "Concrete edit contract for this exact-repeat gap" in body
     assert "Say exactly: Zoe chat integration ok" in body
-    assert "python3 scripts/maintenance/zoe_apply_intent_gap_contract.py say_exactly" in body
-    assert "run this from the task `workspace_path`, never from `/home/zoe/assistant`" in body
+    assert "cd <workspace_path> && /home/zoe/bin/zoe_apply_intent_gap_contract say_exactly --repo-root ." in body
+    assert "--run-focused-checks --kanban-task <task_id_from_kanban_show>" in body
+    assert "terminal_action: kanban_block:ALREADY_COVERED" in body
+    assert "Never run this from the live" in body
     assert "to the agent path while preserving the raw phrase" in body
     assert "Do not add a bespoke" in body
 
@@ -5386,7 +5415,7 @@ def test_implement_body_does_not_add_say_exactly_contract_for_description_aside(
 
     assert "INTENT-GAP IMPLEMENT FAST PATH" in body
     assert "Concrete edit contract for this exact-repeat gap" not in body
-    assert "zoe_apply_intent_gap_contract.py say_exactly" not in body
+    assert "zoe_apply_intent_gap_contract say_exactly" not in body
 
 
 def test_implement_revision_body_includes_intent_gap_fast_path():
@@ -5407,7 +5436,7 @@ def test_implement_revision_body_includes_intent_gap_fast_path():
     assert "Open-domain Q&A / creative" in body
     assert "do not grep `_CALCULATE_`, `_execute_`" in body
     assert "`Tell me a joke.`, `Tell me a joke`, and `Tell me another joke.`" in body
-    assert "python3 scripts/maintenance/zoe_apply_intent_gap_contract.py joke" in body
+    assert "/home/zoe/bin/zoe_apply_intent_gap_contract joke --repo-root ." in body
     assert "python3 -m py_compile services/zoe-data/intent_router.py" in body
     assert "services/zoe-data/tests/test_intent_open_domain.py" in body
     assert "Intent(\"extend_capability\", {\"raw\": <original text>})" in body
