@@ -124,6 +124,50 @@ def _db_exec(sql: str) -> tuple[bool, str]:
         return False, str(e)
 
 
+def _db_update_one(sql: str) -> tuple[bool, str]:
+    ok, msg = _db_exec(sql)
+    if not ok:
+        return False, msg
+    if "UPDATE 1" not in msg:
+        return False, (msg.strip() or "update did not report row count")
+    return True, msg
+
+
+def _db_name_id_map(table: str, names: list[str]) -> dict[str, str]:
+    if not names:
+        return {}
+    names_sql = ", ".join(_sql_literal(name) for name in names)
+    sql = (
+        "select name, id from "
+        f"{table} where workspace_id={_sql_literal(WORKSPACE_ID)} "
+        f"and name in ({names_sql}) "
+        "order by name, archived_at nulls first, updated_at desc;"
+    )
+    cmd = [
+        "docker", "exec", _DB_CONTAINER,
+        "psql", "-U", _DB_USER, "-d", _DB_NAME,
+        "-t", "-A", "-F", "\t", "-c", sql,
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+    except Exception as exc:
+        print(f"  ⚠ Failed to inspect existing {table} rows: {exc}")
+        return {}
+    if result.returncode != 0:
+        print(f"  ⚠ Failed to inspect existing {table} rows: {(result.stderr or result.stdout)[:100]}")
+        return {}
+    found: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        if "\t" not in line:
+            continue
+        name, row_id = line.split("\t", 1)
+        name = name.strip()
+        row_id = row_id.strip()
+        if name and row_id and name not in found:
+            found[name] = row_id
+    return found
+
+
 # ── Step A — Update workspace context ─────────────────────────────────────────
 
 def step_a_update_workspace():
@@ -468,7 +512,9 @@ def step_f_create_agents(runtime_id: str) -> dict[str, str]:
     print("\n[F] Creating agents...")
     existing_raw = _get("/api/agents") or []
     existing: list[dict] = existing_raw if isinstance(existing_raw, list) else existing_raw.get("agents", [])
-    existing_names = {a["name"]: a["id"] for a in existing}
+    managed_names = [str(defn["name"]) for defn in _AGENT_DEFS]
+    existing_names = _db_name_id_map("agent", managed_names)
+    existing_names.update({a["name"]: a["id"] for a in existing if a.get("name") in managed_names})
 
     agent_ids: dict[str, str] = dict(existing_names)
     for defn in _AGENT_DEFS:
@@ -480,10 +526,11 @@ def step_f_create_agents(runtime_id: str) -> dict[str, str]:
                 f"description={_sql_literal(defn['description'])}, "
                 f"instructions={_sql_literal(defn['instructions'])}, "
                 f"model={_sql_literal(defn['model'])}, "
-                "runtime_mode='local', visibility='workspace', updated_at=now() "
+                "runtime_mode='local', visibility='workspace', "
+                "archived_at=NULL, archived_by=NULL, updated_at=now() "
                 f"where id={_sql_literal(agent_id)};"
             )
-            ok, msg = _db_exec(sql)
+            ok, msg = _db_update_one(sql)
             if ok:
                 print(f"  ↻ Agent '{name}' exists ({agent_id}) — refreshed managed fields")
             else:
@@ -565,9 +612,6 @@ def step_h_create_squads(agent_ids: dict[str, str]) -> dict[str, str]:
     print("\n[H] Creating squads...")
     existing_raw = _get("/api/squads") or []
     existing: list[dict] = existing_raw if isinstance(existing_raw, list) else existing_raw.get("squads", [])
-    existing_names = {s["name"]: s["id"] for s in existing}
-
-    squad_ids: dict[str, str] = dict(existing_names)
 
     squads_to_create = [
         {
@@ -599,6 +643,12 @@ def step_h_create_squads(agent_ids: dict[str, str]) -> dict[str, str]:
         },
     ]
 
+    managed_squad_names = [str(sq["name"]) for sq in squads_to_create]
+    existing_names = _db_name_id_map("squad", managed_squad_names)
+    existing_names.update({s["name"]: s["id"] for s in existing if s.get("name") in managed_squad_names})
+
+    squad_ids: dict[str, str] = dict(existing_names)
+
     for sq in squads_to_create:
         name = sq["name"]
         leader_id = agent_ids.get(sq["leader"])
@@ -612,10 +662,11 @@ def step_h_create_squads(agent_ids: dict[str, str]) -> dict[str, str]:
                 "update squad set "
                 f"description={_sql_literal(sq['description'])}, "
                 f"instructions={_sql_literal(sq['instructions'])}, "
-                f"leader_id={_sql_literal(leader_id)}, updated_at=now() "
+                f"leader_id={_sql_literal(leader_id)}, "
+                "archived_at=NULL, archived_by=NULL, updated_at=now() "
                 f"where id={_sql_literal(squad_id)};"
             )
-            ok, msg = _db_exec(sql)
+            ok, msg = _db_update_one(sql)
             if ok:
                 print(f"  ↻ Squad '{name}' exists ({squad_id}) — refreshed leader/context")
             else:
