@@ -91,6 +91,12 @@ def _patch(path: str, payload: dict) -> dict | None:
     return None
 
 
+def _sql_literal(value: Any) -> str:
+    if value is None:
+        return "NULL"
+    return "'" + str(value).replace("'", "''") + "'"
+
+
 def _post_with_workspace(path: str, payload: dict) -> dict | None:
     """POST with workspace_id as query param (used for sub-resource endpoints)."""
     params = {"workspace_id": WORKSPACE_ID}
@@ -422,6 +428,7 @@ _AGENT_DEFS = [
             "evidence, and surface blockers. Zoe driver owns phase advancement; do not create "
             "unmanaged Kanban chains or bypass dispatch gates."
         ),
+        # Multica daemon selector for the Hermes CLI profile, not a public OpenAI model id.
         "model": "gpt-5.4",
     },
     {
@@ -467,7 +474,20 @@ def step_f_create_agents(runtime_id: str) -> dict[str, str]:
     for defn in _AGENT_DEFS:
         name = defn["name"]
         if name in existing_names:
-            print(f"  ↩ Agent '{name}' exists ({existing_names[name]}) — skipping")
+            agent_id = existing_names[name]
+            sql = (
+                "update agent set "
+                f"description={_sql_literal(defn['description'])}, "
+                f"instructions={_sql_literal(defn['instructions'])}, "
+                f"model={_sql_literal(defn['model'])}, "
+                "runtime_mode='local', visibility='workspace', updated_at=now() "
+                f"where id={_sql_literal(agent_id)};"
+            )
+            ok, msg = _db_exec(sql)
+            if ok:
+                print(f"  ↻ Agent '{name}' exists ({agent_id}) — refreshed managed fields")
+            else:
+                print(f"  ⚠ Agent '{name}' exists ({agent_id}) — refresh failed: {msg[:100]}")
             continue
         result = _post("/api/agents", {
             "name": name,
@@ -588,7 +608,18 @@ def step_h_create_squads(agent_ids: dict[str, str]) -> dict[str, str]:
 
         if name in existing_names:
             squad_id = existing_names[name]
-            print(f"  ↩ Squad '{name}' exists ({squad_id})")
+            sql = (
+                "update squad set "
+                f"description={_sql_literal(sq['description'])}, "
+                f"instructions={_sql_literal(sq['instructions'])}, "
+                f"leader_id={_sql_literal(leader_id)}, updated_at=now() "
+                f"where id={_sql_literal(squad_id)};"
+            )
+            ok, msg = _db_exec(sql)
+            if ok:
+                print(f"  ↻ Squad '{name}' exists ({squad_id}) — refreshed leader/context")
+            else:
+                print(f"  ⚠ Squad '{name}' exists ({squad_id}) — refresh failed: {msg[:100]}")
         else:
             result = _post("/api/squads", {
                 "name": name,
