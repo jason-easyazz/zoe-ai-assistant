@@ -40,6 +40,13 @@ def test_list_add_payload_preserves_compat_list_default():
     assert payload["card"]["content"]["values"] == {"item": "eggs", "list_name": "List"}
 
 
+def test_list_add_payload_forwards_items_slot_to_editor_card():
+    payload = _intent_card_data(Intent("list_add", {"items": [" milk "]}))
+
+    assert payload["data"] == {"list_name": "List", "item": "milk"}
+    assert payload["card"]["content"]["values"] == {"item": "milk", "list_name": "List"}
+
+
 def test_normalized_list_items_fallback_matches_service_shape(monkeypatch):
     real_import = __import__
 

@@ -106,7 +106,9 @@ def _intent_card_data(intent) -> dict:
         }
         if card_service is not None:
             try:
-                payload["card"] = card_service.build_shopping_item_editor_card({**slots, "list_name": list_name})
+                payload["card"] = card_service.build_shopping_item_editor_card(
+                    {**slots, "list_name": list_name, "item": item}
+                )
             except Exception as exc:
                 logger.debug("list_add card contract build failed: %s", exc)
         return payload
