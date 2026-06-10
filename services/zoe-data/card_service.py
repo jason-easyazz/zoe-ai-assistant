@@ -100,7 +100,9 @@ def build_calendar_event_editor_content(slots: dict[str, Any] | None = None) -> 
     }
 
 
-def _list_items(slots: dict[str, Any]) -> list[str]:
+def list_items(slots: dict[str, Any] | None = None) -> list[str]:
+    """Normalize list-intent item slots for compat payloads and cards."""
+    slots = slots or {}
     raw_items = slots.get("items")
     if isinstance(raw_items, list):
         items = raw_items
@@ -116,7 +118,7 @@ def build_shopping_list_content(slots: dict[str, Any] | None = None) -> dict[str
     """Build canonical content for a shopping/list view card."""
     slots = slots or {}
     list_name = _text(slots.get("list_name") or slots.get("list_type"), "Shopping")
-    items = _list_items(slots)
+    items = list_items(slots)
     return {
         "title": f"{list_name} List",
         "list_name": list_name,
@@ -131,7 +133,8 @@ def build_shopping_item_editor_content(slots: dict[str, Any] | None = None) -> d
     """Build canonical content for a shopping/list item editor card."""
     slots = slots or {}
     list_name = _text(slots.get("list_name") or slots.get("list_type"), "Shopping")
-    item = _text(slots.get("item") or slots.get("text"))
+    normalized_items = list_items(slots)
+    item = normalized_items[0] if normalized_items else ""
     return {
         "form_id": "shopping_item_editor",
         "title": "Add List Item",
