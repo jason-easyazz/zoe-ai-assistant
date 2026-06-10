@@ -117,10 +117,14 @@ async def _record_running_multica_chain_progress(
         pass
 
     progress_kwargs = {
-        "phase": phase,
-        "evidence": "Engineering PR opened; validation/review in progress" if pr_url else "Engineering run in progress",
-        "pr_url": pr_url,
-        "clear_blocker": True,
+        key: value
+        for key, value in {
+            "phase": phase,
+            "evidence": "Engineering PR opened; validation/review in progress" if pr_url else "Engineering run in progress",
+            "pr_url": pr_url,
+            "clear_blocker": True,
+        }.items()
+        if value is not None
     }
     if target_status:
         progress_kwargs["status"] = target_status

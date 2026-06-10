@@ -112,7 +112,7 @@ async def test_record_running_multica_chain_progress_records_phase_without_statu
 
     assert changed is True
     assert client.calls[0][1]["phase"] == "implement"
-    assert client.calls[0][1]["pr_url"] is None
+    assert "pr_url" not in client.calls[0][1]
     assert "status" not in client.calls[0][1]
 
 
