@@ -97,3 +97,26 @@ Evidence:
 - `graphify-out/GRAPH_REPORT.md` and `graphify-out/graph.json` contain the generated graph metrics for the final refresh;
 - structure, critical-file, offline-memory, and diff whitespace validators passed;
 - refresh ran after PR #349 hardened Hindsight recall latency summaries so missing enabled latency remains unmeasured instead of becoming `0ms`.
+
+## Refresh 2026-06-10 Pipeline And Worktree Policy Pass
+
+Trigger commit: `e93a8e3605b28e2a7c5b8745ae68ee0d335a752d`
+
+Commands:
+
+```bash
+OPENAI_API_KEY=$(grep "^OPENAI_API_KEY=" /home/zoe/assistant/.env | cut -d= -f2-) /home/zoe/.local/share/uv/tools/graphifyy/bin/graphify extract . --backend openai
+/home/zoe/.local/share/uv/tools/graphifyy/bin/graphify cluster-only . --no-viz
+python3 tools/audit/validate_structure.py
+python3 tools/audit/validate_critical_files.py
+python3 tools/audit/validate_offline_memory.py
+git diff --check
+```
+
+Evidence:
+
+- Graphify was refreshed after PR #346, PR #352, and PR #353 merged;
+- the full refresh recovered from one transient OpenAI rate-limit retry and completed successfully;
+- `graphify-out/GRAPH_REPORT.md` and `graphify-out/graph.json` contain the generated graph metrics for the final refresh;
+- structure, critical-file, offline-memory, and diff whitespace validators passed;
+- refresh ran after the pipeline duplicate-phase regression fix, trunk/worktree prune policy, and prune-script hardening landed on main.
