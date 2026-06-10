@@ -100,7 +100,7 @@ Evidence:
 
 ## Refresh 2026-06-10 Pipeline And Worktree Policy Pass
 
-Trigger commit: `e92f1c53e44437303f2f2c86242033745b70307f`
+Trigger commit: `e93a8e3605b28e2a7c5b8745ae68ee0d335a752d`
 
 Commands:
 
@@ -115,8 +115,8 @@ git diff --check
 
 Evidence:
 
-- Graphify was refreshed after PR #346 and PR #352 merged;
+- Graphify was refreshed after PR #346, PR #352, and PR #353 merged;
 - the full refresh recovered from one transient OpenAI rate-limit retry and completed successfully;
 - `graphify-out/GRAPH_REPORT.md` and `graphify-out/graph.json` contain the generated graph metrics for the final refresh;
 - structure, critical-file, offline-memory, and diff whitespace validators passed;
-- refresh ran after the pipeline duplicate-phase regression fix and the trunk/worktree prune policy landed on main.
+- refresh ran after the pipeline duplicate-phase regression fix, trunk/worktree prune policy, and prune-script hardening landed on main.
