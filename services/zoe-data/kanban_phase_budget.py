@@ -238,11 +238,18 @@ def implement_edit_safety_reason_from_log(task_id: str, phase: str, *, session: 
         return None
 
     pending_python_patch = False
+    patched_python_paths: set[str] = set()
+    post_patch_read_counts: dict[str, int] = {}
+    allowed_post_patch_reads = _post_patch_file_read_budget()
     for line in session.splitlines():
         if not _STEP_LINE_RE.match(line):
             continue
-        if _PYTHON_PATCH_RE.search(line):
+        patch_match = _PATCH_PATH_RE.search(line) if _PYTHON_PATCH_RE.search(line) else None
+        if patch_match:
             pending_python_patch = True
+            path_key = _read_path_key(patch_match.group("path"))
+            patched_python_paths.add(path_key)
+            post_patch_read_counts.pop(path_key, None)
             continue
         if not pending_python_patch:
             continue
@@ -250,7 +257,22 @@ def implement_edit_safety_reason_from_log(task_id: str, phase: str, *, session: 
             continue
         if _PYTHON_CHECK_RE.search(line):
             pending_python_patch = False
+            patched_python_paths.clear()
+            post_patch_read_counts.clear()
             continue
+        read_match = _READ_STEP_RE.search(line)
+        if read_match:
+            path = _read_path_key(read_match.group("path"))
+            matched_patch = next(
+                (patched for patched in patched_python_paths if path.endswith(patched)),
+                "",
+            )
+            if matched_patch:
+                post_patch_read_counts[matched_patch] = (
+                    post_patch_read_counts.get(matched_patch, 0) + 1
+                )
+                if post_patch_read_counts[matched_patch] <= allowed_post_patch_reads:
+                    continue
         return (
             "BLOCKER=IMPLEMENT_EDIT_SAFETY: Python patch was followed by more "
             "exploration before py_compile/focused tests"
@@ -270,6 +292,13 @@ def _pre_edit_repeat_read_budget() -> int:
         return max(1, int(os.environ.get("ZOE_KANBAN_IMPLEMENT_PRE_EDIT_REPEAT_READ_BUDGET", "6")))
     except ValueError:
         return 6
+
+
+def _post_patch_file_read_budget() -> int:
+    try:
+        return max(0, int(os.environ.get("ZOE_KANBAN_IMPLEMENT_POST_PATCH_FILE_READ_BUDGET", "2")))
+    except ValueError:
+        return 2
 
 
 def _post_focus_read_budget() -> int:
