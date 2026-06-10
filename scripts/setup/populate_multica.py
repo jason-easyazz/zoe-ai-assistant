@@ -518,7 +518,10 @@ def step_f_create_agents(runtime_id: str) -> dict[str, str]:
     existing: list[dict] = existing_raw if isinstance(existing_raw, list) else existing_raw.get("agents", [])
     managed_names = [str(defn["name"]) for defn in _AGENT_DEFS]
     existing_names = _db_name_id_map("agent", managed_names)
-    existing_names.update({a["name"]: a["id"] for a in existing if a.get("name") in managed_names})
+    for agent in existing:
+        name = agent.get("name")
+        if name in managed_names and name not in existing_names:
+            existing_names[name] = agent["id"]
 
     agent_ids: dict[str, str] = dict(existing_names)
     for defn in _AGENT_DEFS:
@@ -649,7 +652,10 @@ def step_h_create_squads(agent_ids: dict[str, str]) -> dict[str, str]:
 
     managed_squad_names = [str(sq["name"]) for sq in squads_to_create]
     existing_names = _db_name_id_map("squad", managed_squad_names)
-    existing_names.update({s["name"]: s["id"] for s in existing if s.get("name") in managed_squad_names})
+    for squad in existing:
+        name = squad.get("name")
+        if name in managed_squad_names and name not in existing_names:
+            existing_names[name] = squad["id"]
 
     squad_ids: dict[str, str] = dict(existing_names)
 
