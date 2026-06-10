@@ -178,7 +178,7 @@ def _ticket_metadata(issue: dict | None = None) -> dict[str, Any]:
             parsed = parse_ticket_block(issue.get("description") or "")
             if isinstance(parsed, dict):
                 meta = {**parsed, **meta}
-        except Exception as exc:  # noqa: BLE001
+        except (ImportError, TypeError, ValueError) as exc:
             logger.debug("_ticket_metadata: parse_ticket_block failed: %s", exc)
     issue["_zoe_ticket_metadata_cache"] = dict(meta)
     return meta
