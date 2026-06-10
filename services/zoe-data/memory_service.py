@@ -85,8 +85,10 @@ def _memory_visible_to_user(metadata: Mapping[str, Any], user_id: str) -> bool:
     visibility = str(metadata.get("visibility") or "").strip().lower()
     if visibility == "family":
         return True
-    owner = str(metadata.get("user_id") or metadata.get("wing") or "").strip()
-    return bool(owner and owner == user_id)
+    caller = str(user_id or "").strip().lower()
+    uid = str(metadata.get("user_id") or "").strip().lower()
+    wing = str(metadata.get("wing") or "").strip().lower()
+    return bool(caller and ((uid and uid == caller) or (wing and wing == caller)))
 
 
 def _memory_status_visible(metadata: Mapping[str, Any]) -> bool:
