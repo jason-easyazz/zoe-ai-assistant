@@ -167,3 +167,26 @@ Evidence:
 - focused verification for PR #356 covered `test_kanban_adapter.py`, `test_main_multica_poll.py`, and Python compilation of touched files;
 - `graphify-out/GRAPH_REPORT.md` and `graphify-out/graph.json` contain the generated graph metrics for the final refresh;
 - structure, critical-file, offline-memory, and diff whitespace validators passed.
+
+## Refresh 2026-06-10 Zoe Identity Utility Naming Pass
+
+Trigger commit: `c766e2b11ff0a0260db86bbe62c06ce5abdf7927` (PR #360)
+
+Commands:
+
+```bash
+OPENAI_API_KEY=$(grep "^OPENAI_API_KEY=" /home/zoe/assistant/.env | cut -d= -f2-) /home/zoe/.local/share/uv/tools/graphifyy/bin/graphify extract . --backend openai
+/home/zoe/.local/share/uv/tools/graphifyy/bin/graphify cluster-only . --no-viz
+python3 tools/audit/validate_structure.py
+python3 tools/audit/validate_critical_files.py
+python3 tools/audit/validate_offline_memory.py
+git diff --check
+```
+
+Evidence:
+
+- Graphify was refreshed after PR #360 renamed utility intelligence checks from concrete Samantha naming to Zoe identity and continuity naming;
+- focused verification for PR #360 covered Python compilation of the touched utility scripts, `git grep -n -i "samantha" -- scripts/utilities`, and the standard Zoe validators;
+- `docs/reports/` is ignored so generated utility reports do not become accidental committed output;
+- `graphify-out/GRAPH_REPORT.md` and `graphify-out/graph.json` contain the generated graph metrics for the final refresh;
+- structure, critical-file, offline-memory, and diff whitespace validators passed.
