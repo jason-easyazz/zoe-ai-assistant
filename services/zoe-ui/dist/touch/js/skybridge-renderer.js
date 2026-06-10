@@ -110,16 +110,8 @@
     }
 
     function calendarAccentLabel(value) {
-        const token = String(value || 'general').toLowerCase();
-        if (token === 'work') return 'Work';
-        if (token === 'personal') return 'Personal';
-        if (token === 'bucket') return 'Bucket';
-        if (token === 'shopping') return 'Shopping';
-        if (token === 'health') return 'Health';
-        if (token === 'routine') return 'Routine';
-        if (token === 'social') return 'Social';
-        if (token === 'family') return 'Family';
-        return 'General';
+        const category = calendarCategoryClass(value);
+        return category.charAt(0).toUpperCase() + category.slice(1);
     }
 
     function renderCalendar(props) {
