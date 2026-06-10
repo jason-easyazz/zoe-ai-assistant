@@ -7,7 +7,7 @@ Operational scripting for Zoe hosts: setup, maintenance, deployment, migrations,
 ## Ownership
 
 - `setup/` — host/platform provisioning, including `setup/jetson/` systemd unit templates (e.g. `zoe-graphify-refresh.service` / `.timer`).
-- `maintenance/` — recurring operational jobs: `refresh_graphify.sh` (nightly knowledge-graph refresh), `greploop_guard.py` (Greptile fix-packet loop), triage generators.
+- `maintenance/` — recurring operational jobs: `refresh_graphify.sh` (nightly knowledge-graph refresh), `prune_worktrees.sh` (stale worktree cleanup), `greploop_guard.py` (Greptile fix-packet loop), triage generators.
 - `deploy/`, `migrations/`, `testing/`, `train/`, `utilities/`, `preview/` — task-specific script groups.
 
 ## Local Contracts
@@ -16,6 +16,7 @@ Operational scripting for Zoe hosts: setup, maintenance, deployment, migrations,
 - Installed systemd user units live in `~/.config/systemd/user/`; the copies here are templates. Keep both in sync when changing a unit.
 - Scripts run by timers/CI have no login session: prefix user-service systemctl calls with `XDG_RUNTIME_DIR=/run/user/$(id -u)`.
 - `refresh_graphify.sh` extracts from a clean git worktree snapshot of `origin/main`; it must never require a clean live working tree and must never use `graphify update` (inflates the graph).
+- `prune_worktrees.sh` is dry-run by default; never pass `--execute` without operator review of the candidate list. Skips dirty, locked, live-checkout, unmerged, and recently-active worktrees.
 
 ## Work Guidance
 
