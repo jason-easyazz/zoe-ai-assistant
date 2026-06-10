@@ -112,8 +112,27 @@ def test_summarize_recall_latency_marks_disabled_runs_not_measured():
     assert latency["measured"] is False
     assert latency["case_count"] == 2
     assert latency["enabled_case_count"] == 0
+    assert latency["p50_latency_ms"] is None
+    assert latency["p95_latency_ms"] is None
     assert latency["p95_within_budget"] is False
     assert latency["hot_path_status"] == "not_measured"
+
+
+def test_summarize_recall_latency_ignores_missing_enabled_latency():
+    latency = summarize_recall_latency(
+        [
+            {"latency_ms": None, "enabled": True},
+            {"latency_ms": 800.0, "enabled": True},
+        ],
+        budget_ms=600.0,
+    )
+
+    assert latency["measured"] is True
+    assert latency["case_count"] == 2
+    assert latency["enabled_case_count"] == 1
+    assert latency["p95_latency_ms"] == 800.0
+    assert latency["p95_within_budget"] is False
+    assert latency["hot_path_status"] == "async_or_cached_only"
 
 
 def test_summarize_recall_latency_ignores_disabled_latencies_in_mixed_run():
