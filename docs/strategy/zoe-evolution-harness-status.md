@@ -48,6 +48,12 @@ Important non-complete truth:
   11 context split warnings, three invalid JSON chunks, and one truncated chunk;
   temporary graph output existed but was not accepted or committed. The local
   backend is promising but not yet accepted for full Graphify refreshes.
+- The default shard matrix after `911c1f6` accepted `data-core` and `operators`
+  with local Gemma E4B and zero invalid JSON, truncation, or context splits, but
+  rejected `ui` because `services/zoe-ui` yielded 0 code files, 3 docs, 0 graph
+  nodes, and 1 invalid JSON chunk. Zoe should continue using local/offline
+  shard-based Graphify evidence, but the default UI shard must be corrected or
+  removed before the default matrix is treated as all-green.
 - Zoe now has a local/offline Graphify probe that runs Graphify through the
   Ollama/OpenAI-compatible localhost llama.cpp path in a temporary fixture or
   snapshot, strips cloud API keys from the probe environment, parses context,

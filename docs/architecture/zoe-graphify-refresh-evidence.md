@@ -84,6 +84,18 @@ Current evidence:
   over 45 code files and 1 doc, producing 306 nodes and 685 edges with no invalid
   JSON, truncation, or context splits. This proves the sharded lane can capture
   bounded local Graphify evidence after the full-repo rejection.
+- Default shard matrix against `origin/main` at `911c1f6` accepted two of three
+  shards with `--allow-partial`: `data-core` accepted in 103.591 s over 289 code
+  files and 10 docs, producing 5,087 nodes and 11,145 edges; `operators`
+  accepted in 64.320 s over 176 code files and 9 docs, producing 1,640 nodes and
+  3,088 edges. Both accepted shards had zero invalid JSON chunks, truncation, or
+  context splits.
+- The same default shard matrix rejected `ui` in 85.404 s because the
+  `services/zoe-ui` shard found 0 code files, 3 docs, 0 graph nodes, and 1
+  invalid JSON chunk. This does not disprove local Gemma for Graphify; it shows
+  the UI shard definition is not yet a reliable accepted source slice. The next
+  default-shard PR should either point `ui` at indexable source assets or remove
+  it from the default matrix until a focused UI probe is accepted.
 
 ## Refresh 2026-06-09 Foundation Pass
 
