@@ -157,12 +157,24 @@ class MULClient:
         if direct.get("id"):
             return direct
         wanted_lower = wanted.lower()
-        for issue in await self.list_issues(limit=1000):
-            if wanted_lower in {
-                str(issue.get("id") or "").lower(),
-                str(issue.get("identifier") or "").lower(),
-            }:
-                return issue
+        seen: set[str] = set()
+        search_sets = [await self.list_issues(limit=1000)]
+        for status in ("backlog", "todo", "in_progress", "blocked", "in_review", "done", "canceled", "cancelled"):
+            search_sets.append(await self.list_issues(status=status, limit=1000))
+        for issues in search_sets:
+            for issue in issues or []:
+                if not isinstance(issue, dict):
+                    continue
+                issue_id = str(issue.get("id") or "")
+                if issue_id and issue_id in seen:
+                    continue
+                if issue_id:
+                    seen.add(issue_id)
+                if wanted_lower in {
+                    issue_id.lower(),
+                    str(issue.get("identifier") or "").lower(),
+                }:
+                    return issue
         return {}
 
     async def list_issues(
