@@ -703,7 +703,27 @@ def block_reason_from_handoff(detail: dict[str, Any], *, row_block_reason: str |
         stable = _stable_block_reason_from_text(chunk)
         if stable:
             return stable
-    return (row_block_reason or "").strip()
+    row_reason = (row_block_reason or "").strip()
+    if row_reason.lower() not in {"", "block", "blocked"}:
+        return row_reason
+    if not row_reason:
+        return ""
+    for run in detail.get("runs") or []:
+        if not isinstance(run, dict):
+            continue
+        summary = str(run.get("summary") or "").strip()
+        if summary:
+            return summary[:500]
+    for comment in detail.get("comments") or []:
+        if not isinstance(comment, dict):
+            continue
+        body = str(comment.get("body") or comment.get("text") or "").strip()
+        if body:
+            return body[:500]
+    summary = str(detail.get("latest_summary") or "").strip()
+    if summary:
+        return summary[:500]
+    return row_reason
 
 
 def infer_outcome(phase: PipelinePhase, row_status: str, detail: dict[str, Any]) -> str | None:

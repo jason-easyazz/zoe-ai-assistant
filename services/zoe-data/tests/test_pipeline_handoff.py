@@ -580,6 +580,25 @@ def test_block_reason_from_handoff_prefers_blocker_field():
     assert block_reason_from_handoff(detail) == "WORKTREE_NOT_READY"
 
 
+def test_block_reason_from_handoff_replaces_generic_row_block_with_run_summary():
+    from pipeline_handoff import block_reason_from_handoff
+
+    detail = {
+        "latest_summary": "",
+        "comments": [],
+        "runs": [
+            {
+                "status": "blocked",
+                "summary": "The focused test failed because the command used the wrong path.",
+            }
+        ],
+    }
+
+    assert block_reason_from_handoff(detail, row_block_reason="block") == (
+        "The focused test failed because the command used the wrong path."
+    )
+
+
 def test_infer_outcome_blocked_verify_loops():
     assert (
         infer_outcome(
