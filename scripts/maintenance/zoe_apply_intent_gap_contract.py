@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 
@@ -45,7 +46,22 @@ def _repo_root(raw: str | None) -> Path:
     return Path(raw or ".").resolve()
 
 
-def apply_joke_contract(root: Path) -> dict[str, object]:
+def _live_repo_root() -> Path:
+    return Path(os.environ.get("ZOE_LIVE_REPO_ROOT", "/home/zoe/assistant")).resolve()
+
+
+def _guard_not_live_root(root: Path, *, allow_live_root: bool = False) -> None:
+    live_root = _live_repo_root()
+    if allow_live_root or root.resolve() != live_root:
+        return
+    raise SystemExit(
+        f"Refusing to mutate live checkout at {live_root}; run from the task worktree "
+        "or pass --allow-live-root for an intentional operator repair"
+    )
+
+
+def apply_joke_contract(root: Path, *, allow_live_root: bool = False) -> dict[str, object]:
+    _guard_not_live_root(root, allow_live_root=allow_live_root)
     router_path = root / "services/zoe-data/intent_router.py"
     test_path = root / "services/zoe-data/tests/test_intent_open_domain.py"
     if not router_path.exists():
@@ -83,7 +99,8 @@ def apply_joke_contract(root: Path) -> dict[str, object]:
     return {"contract": "joke-open-domain", "changed": changed, "idempotent": not changed}
 
 
-def apply_say_exactly_contract(root: Path) -> dict[str, object]:
+def apply_say_exactly_contract(root: Path, *, allow_live_root: bool = False) -> dict[str, object]:
+    _guard_not_live_root(root, allow_live_root=allow_live_root)
     router_path = root / "services/zoe-data/intent_router.py"
     test_path = root / "services/zoe-data/tests/test_intent_open_domain.py"
     if not router_path.exists():
@@ -126,13 +143,18 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("contract", choices=["joke", "say_exactly"], help="Intent-gap contract to apply")
     parser.add_argument("--repo-root", default=None, help="Repo root; defaults to current directory")
+    parser.add_argument(
+        "--allow-live-root",
+        action="store_true",
+        help="Allow intentional operator mutation of the live /home/zoe/assistant checkout",
+    )
     args = parser.parse_args()
 
     root = _repo_root(args.repo_root)
     if args.contract == "joke":
-        result = apply_joke_contract(root)
+        result = apply_joke_contract(root, allow_live_root=args.allow_live_root)
     elif args.contract == "say_exactly":
-        result = apply_say_exactly_contract(root)
+        result = apply_say_exactly_contract(root, allow_live_root=args.allow_live_root)
     else:  # pragma: no cover - argparse choices keep this unreachable.
         raise SystemExit(f"Unsupported contract: {args.contract}")
     print(json.dumps(result, sort_keys=True))

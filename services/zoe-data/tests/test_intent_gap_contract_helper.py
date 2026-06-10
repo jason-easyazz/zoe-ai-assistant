@@ -166,3 +166,157 @@ def test_apply_say_exactly_contract_fails_cleanly_when_router_missing(tmp_path):
         assert "intent_router.py not found" in str(exc)
     else:
         raise AssertionError("expected SystemExit for missing intent_router.py")
+
+
+def test_cli_guard_refuses_live_repo_root(tmp_path, monkeypatch):
+    helper = _load_helper()
+    monkeypatch.setenv("ZOE_LIVE_REPO_ROOT", str(tmp_path))
+
+    try:
+        helper._guard_not_live_root(tmp_path)
+    except SystemExit as exc:
+        assert "Refusing to mutate live checkout" in str(exc)
+        assert "task worktree" in str(exc)
+    else:
+        raise AssertionError("expected SystemExit for live repo root")
+
+
+def test_cli_guard_allows_explicit_live_repo_override(tmp_path, monkeypatch):
+    helper = _load_helper()
+    monkeypatch.setenv("ZOE_LIVE_REPO_ROOT", str(tmp_path))
+
+    helper._guard_not_live_root(tmp_path, allow_live_root=True)
+
+
+def test_cli_guard_resolves_relative_live_repo_root(tmp_path, monkeypatch):
+    helper = _load_helper()
+    monkeypatch.setenv("ZOE_LIVE_REPO_ROOT", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+
+    try:
+        helper._guard_not_live_root(Path("."))
+    except SystemExit as exc:
+        assert "Refusing to mutate live checkout" in str(exc)
+    else:
+        raise AssertionError("expected SystemExit for relative live repo root")
+
+
+def test_apply_say_exactly_contract_refuses_live_repo_root(tmp_path, monkeypatch):
+    helper = _load_helper()
+    router_path = tmp_path / "services/zoe-data/intent_router.py"
+    router_path.parent.mkdir(parents=True)
+    router_path.write_text(
+        '    r"can you explain|set up (?:a )?new automation|what is happening in)",\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ZOE_LIVE_REPO_ROOT", str(tmp_path))
+
+    try:
+        helper.apply_say_exactly_contract(tmp_path)
+    except SystemExit as exc:
+        assert "Refusing to mutate live checkout" in str(exc)
+    else:
+        raise AssertionError("expected SystemExit for direct live-root apply")
+
+
+def test_apply_say_exactly_contract_allows_explicit_live_repo_override(tmp_path, monkeypatch):
+    helper = _load_helper()
+    router_path = tmp_path / "services/zoe-data/intent_router.py"
+    router_path.parent.mkdir(parents=True)
+    router_path.write_text(
+        '    r"can you explain|set up (?:a )?new automation|what is happening in)",\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ZOE_LIVE_REPO_ROOT", str(tmp_path))
+
+    result = helper.apply_say_exactly_contract(tmp_path, allow_live_root=True)
+
+    assert result["idempotent"] is False
+    assert "say exactly[: ]+(?:.+)" in router_path.read_text(encoding="utf-8")
+
+
+def test_apply_joke_contract_refuses_live_repo_root(tmp_path, monkeypatch):
+    helper = _load_helper()
+    router_path = tmp_path / "services/zoe-data/intent_router.py"
+    router_path.parent.mkdir(parents=True)
+    router_path.write_text(
+        '    r"can you explain|set up (?:a )?new automation|what is happening in)",\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ZOE_LIVE_REPO_ROOT", str(tmp_path))
+
+    try:
+        helper.apply_joke_contract(tmp_path)
+    except SystemExit as exc:
+        assert "Refusing to mutate live checkout" in str(exc)
+    else:
+        raise AssertionError("expected SystemExit for direct live-root joke apply")
+
+
+def test_apply_joke_contract_allows_explicit_live_repo_override(tmp_path, monkeypatch):
+    helper = _load_helper()
+    router_path = tmp_path / "services/zoe-data/intent_router.py"
+    router_path.parent.mkdir(parents=True)
+    router_path.write_text(
+        '    r"can you explain|set up (?:a )?new automation|what is happening in)",\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ZOE_LIVE_REPO_ROOT", str(tmp_path))
+
+    result = helper.apply_joke_contract(tmp_path, allow_live_root=True)
+
+    assert result["idempotent"] is False
+    assert "tell me (?:a|another) joke" in router_path.read_text(encoding="utf-8")
+
+
+def test_main_threads_live_root_override(tmp_path, monkeypatch, capsys):
+    helper = _load_helper()
+    router_path = tmp_path / "services/zoe-data/intent_router.py"
+    router_path.parent.mkdir(parents=True)
+    router_path.write_text(
+        '    r"can you explain|set up (?:a )?new automation|what is happening in)",\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ZOE_LIVE_REPO_ROOT", str(tmp_path))
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "zoe_apply_intent_gap_contract.py",
+            "say_exactly",
+            "--repo-root",
+            str(tmp_path),
+            "--allow-live-root",
+        ],
+    )
+
+    assert helper.main() == 0
+
+    assert "say-exactly-open-domain" in capsys.readouterr().out
+    assert "say exactly[: ]+(?:.+)" in router_path.read_text(encoding="utf-8")
+
+
+def test_main_refuses_live_repo_root_without_override(tmp_path, monkeypatch):
+    helper = _load_helper()
+    router_path = tmp_path / "services/zoe-data/intent_router.py"
+    router_path.parent.mkdir(parents=True)
+    router_path.write_text(
+        '    r"can you explain|set up (?:a )?new automation|what is happening in)",\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ZOE_LIVE_REPO_ROOT", str(tmp_path))
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "zoe_apply_intent_gap_contract.py",
+            "say_exactly",
+            "--repo-root",
+            str(tmp_path),
+        ],
+    )
+
+    try:
+        helper.main()
+    except SystemExit as exc:
+        assert "Refusing to mutate live checkout" in str(exc)
+    else:
+        raise AssertionError("expected SystemExit for live-root CLI without override")
