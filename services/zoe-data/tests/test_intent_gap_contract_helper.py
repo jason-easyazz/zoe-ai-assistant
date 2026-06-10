@@ -134,6 +134,28 @@ def test_apply_say_exactly_contract_can_patch_base_router_pattern(tmp_path):
     assert "say exactly[: ]+(?:.+)" in router_path.read_text(encoding="utf-8")
 
 
+def test_apply_say_exactly_contract_is_idempotent_with_current_router_pattern(tmp_path):
+    helper = _load_helper()
+    router_path = tmp_path / "services/zoe-data/intent_router.py"
+    test_path = tmp_path / "services/zoe-data/tests/test_intent_open_domain.py"
+    router_path.parent.mkdir(parents=True)
+    test_path.parent.mkdir(parents=True)
+    router_path.write_text(
+        '    r"tell me (?:a|another) joke|make me laugh|(?:do you |have you )?(?:got|have) any jokes|know any (?:good )?jokes|"\n'
+        '    r"say exactly[: ]+.+)",\n',
+        encoding="utf-8",
+    )
+    test_path.write_text(
+        "def test_say_exactly_routes_to_open_domain_agent():\n"
+        "    assert True\n",
+        encoding="utf-8",
+    )
+
+    result = helper.apply_say_exactly_contract(tmp_path)
+
+    assert result == {"contract": "say-exactly-open-domain", "changed": [], "idempotent": True}
+
+
 def test_apply_say_exactly_contract_appends_to_existing_open_domain_test(tmp_path):
     helper = _load_helper()
     router_path = tmp_path / "services/zoe-data/intent_router.py"

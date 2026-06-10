@@ -11,6 +11,7 @@ from pathlib import Path
 
 JOKE_PATTERN = r"tell me (?:a|another) joke|make me laugh|(?:do you |have you )?(?:got|have) any jokes|know any (?:good )?jokes"
 SAY_EXACTLY_PATTERN = r"say exactly[: ]+(?:.+)"
+SAY_EXACTLY_TOKEN = r"say exactly[: ]+"
 JOKE_TEST = '''"""Open-domain creative intent routing."""
 
 import pytest
@@ -110,7 +111,7 @@ def apply_say_exactly_contract(root: Path, *, allow_live_root: bool = False) -> 
     router = router_path.read_text(encoding="utf-8")
     changed: list[str] = []
 
-    if SAY_EXACTLY_PATTERN not in router:
+    if SAY_EXACTLY_TOKEN not in router:
         needle = f'    r"{JOKE_PATTERN})",\n'
         replacement = f'    r"{JOKE_PATTERN}|"\n    r"{SAY_EXACTLY_PATTERN})",\n'
         if needle not in router:
