@@ -123,7 +123,9 @@ fi
 log "syncing refreshed graph back to $ROOT/graphify-out"
 # --delete keeps the live copy authoritative; the cache survives because it
 # was seeded into the snapshot and extended there before syncing back.
-rsync -a --delete "$SNAPSHOT_DIR/graphify-out/" "$ROOT/graphify-out/"
+if ! rsync -a --delete "$SNAPSHOT_DIR/graphify-out/" "$ROOT/graphify-out/"; then
+  fail "rsync of refreshed graph back to $ROOT/graphify-out failed; live copy may be partial"
+fi
 
 rm -f "$ERROR_MARKER"
 log "graphify refresh complete for $current_head"
