@@ -196,14 +196,19 @@ def test_worker_profile_contexts_reject_zoe_self_blocks(tmp_path, monkeypatch):
 def test_worker_dispatch_contract_requires_lean_dropin(tmp_path, monkeypatch):
     module = _module()
     dropin = tmp_path / "kanban-worker-lean.conf"
+    system_prompt = tmp_path / "system_prompt.py"
     monkeypatch.setattr(module, "_HERMES_KANBAN_WORKER_DROPIN", dropin)
+    monkeypatch.setattr(module, "_HERMES_SYSTEM_PROMPT_FILE", system_prompt)
 
     assert module._worker_dispatch_contract()["ok"] is False
     dropin.write_text(
-        "[Service]\n"
-        "Environment=HERMES_KANBAN_WORKER_IGNORE_RULES=true\n"
-        "Environment=HERMES_KANBAN_WORKER_TOOLSETS=terminal,file,kanban,skills\n"
+        """[Service]
+Environment=HERMES_KANBAN_WORKER_IGNORE_RULES=true
+Environment=HERMES_KANBAN_WORKER_TOOLSETS=terminal,file,kanban,skills
+Environment=HERMES_KANBAN_LEAN_SYSTEM=true
+"""
     )
+    system_prompt.write_text("HERMES_KANBAN_LEAN_SYSTEM HERMES_KANBAN_TASK")
     assert module._worker_dispatch_contract()["ok"] is True
 
 
