@@ -251,6 +251,11 @@ def resume_pipeline(
     raise AssertionError("unreachable")
 
 
+
+def _already_covered_block(phase: str, block_reason: str | None) -> bool:
+    return phase == "implement" and "ALREADY_COVERED" in str(block_reason or "").upper()
+
+
 def skip_blocked_implementation(
     task_ref: str,
     *,
@@ -685,6 +690,35 @@ async def _sync_pipeline_from_chain_once(
                 detail, row_block_reason=row.get("block_reason")
             ) or outcome
             split_requested, handoff_split_packet = split_request_from_handoff(detail)
+            if _already_covered_block(phase, block_reason):  # type: ignore[arg-type]
+                state = state.model_copy(update={"evidence_profile": "audit"})
+                state = with_evidence(
+                    state,
+                    EvidenceItem(
+                        kind="tool",
+                        summary="focused harness test passed before edit; implementation already covered",
+                        passed=True,
+                        metadata={"source": "already_covered", "phase": "implement"},
+                    ),
+                )
+                state = transition(state, "skip_implementation", reason=str(block_reason))
+                state = state.model_copy(
+                    update={
+                        "last_block_fingerprint": None,
+                        "repeated_block_count": 0,
+                        "block_classification": None,
+                        "split_packet": None,
+                    }
+                )
+                state = await _run_io(
+                    partial(
+                        save_state,
+                        state,
+                        event="already_covered_implementation_skipped",
+                        extra={"row_phase": phase, "reason": block_reason},
+                    )
+                )
+                continue
             fingerprint = block_fingerprint(phase, str(block_reason))  # type: ignore[arg-type]
             if state.status == "blocked" and fingerprint == state.last_block_fingerprint:
                 return state
