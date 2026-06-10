@@ -219,7 +219,7 @@ def test_worker_tool_envelope_rejects_large_or_mcp_toolset(monkeypatch, tmp_path
     class Completed:
         returncode = 0
         stderr = ""
-        stdout = '{"toolsets":["terminal","kanban"],"tool_count":2,"tools":["kanban_show","mcp_zoe_tools_memory_search"]}\n'
+        stdout = '{"toolsets":["terminal","kanban"],"tool_count":2,"max_tokens":1024,"tools":["kanban_show","mcp_zoe_tools_memory_search"]}\n'
 
     monkeypatch.setattr(module.subprocess, "run", lambda *_args, **_kwargs: Completed())
 
@@ -227,6 +227,7 @@ def test_worker_tool_envelope_rejects_large_or_mcp_toolset(monkeypatch, tmp_path
 
     assert result["zoe-coder"]["ok"] is False
     assert result["zoe-coder"]["disallowed_tools"] == ["mcp_zoe_tools_memory_search"]
+    assert result["zoe-coder"]["max_tokens_ok"] is True
 
 
 def test_worker_tool_envelope_accepts_lean_kanban_tools(monkeypatch, tmp_path):
@@ -240,8 +241,11 @@ def test_worker_tool_envelope_accepts_lean_kanban_tools(monkeypatch, tmp_path):
     class Completed:
         returncode = 0
         stderr = ""
-        stdout = '{"toolsets":["terminal","kanban"],"tool_count":3,"tools":["terminal","kanban_show","kanban_complete"]}\n'
+        stdout = '{"toolsets":["terminal","kanban"],"tool_count":3,"max_tokens":1024,"tools":["terminal","kanban_show","kanban_complete"]}\n'
 
     monkeypatch.setattr(module.subprocess, "run", lambda *_args, **_kwargs: Completed())
 
-    assert module._worker_tool_envelope()["zoe-coder"]["ok"] is True
+    result = module._worker_tool_envelope()["zoe-coder"]
+
+    assert result["ok"] is True
+    assert result["max_tokens"] == 1024

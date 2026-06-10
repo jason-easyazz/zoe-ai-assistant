@@ -34,6 +34,7 @@ _HERMES_WORKER_SOULS = (
 )
 _HERMES_WORKER_CONFIGS = tuple(path.parent / "config.yaml" for path in _HERMES_WORKER_SOULS)
 _HERMES_WORKER_TOOLSETS = ["terminal", "file", "kanban", "skills", "no_mcp"]
+_HERMES_WORKER_MAX_TOKENS = 1024
 _HERMES_WORKER_DISABLED_TOOLSETS = [
     "browser",
     "browser-cdp",
@@ -295,6 +296,8 @@ def _write_hermes_worker_profile_configs() -> dict[str, str]:
             memory_config = config.setdefault("memory", {})
             memory_config["memory_enabled"] = False
             memory_config["user_profile_enabled"] = False
+            model_config = config.setdefault("model", {})
+            model_config["max_tokens"] = _HERMES_WORKER_MAX_TOKENS
             for server in (config.get("mcp_servers") or {}).values():
                 if isinstance(server, dict):
                     server["enabled"] = False

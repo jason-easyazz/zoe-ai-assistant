@@ -129,4 +129,5 @@ memory:
     assert updated["mcp_servers"]["zoe-tools"]["enabled"] is False
     assert updated["memory"]["memory_enabled"] is False
     assert updated["memory"]["user_profile_enabled"] is False
+    assert updated["model"]["max_tokens"] == 1024
     assert "memory" in updated["agent"]["disabled_toolsets"]
