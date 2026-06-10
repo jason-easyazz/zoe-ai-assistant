@@ -16,6 +16,7 @@ Files:
 - `services/zoe-data/zoe_capability_profile_promotion_handoff.py`
 - `services/zoe-data/zoe_capability_outcome_profile_handoff.py`
 - `services/zoe-data/zoe_capability_profile_ticket_gate.py`
+- `services/zoe-data/zoe_capability_profile_ticket_writer.py`
 - `services/zoe-data/zoe_capability_trust_update.py`
 - `services/zoe-data/zoe_capability_trust_review.py`
 - `services/zoe-data/tests/test_zoe_capability_profile.py`
@@ -24,6 +25,7 @@ Files:
 - `services/zoe-data/tests/test_zoe_capability_profile_promotion_handoff.py`
 - `services/zoe-data/tests/test_zoe_capability_outcome_profile_handoff.py`
 - `services/zoe-data/tests/test_zoe_capability_profile_ticket_gate.py`
+- `services/zoe-data/tests/test_zoe_capability_profile_ticket_writer.py`
 - `services/zoe-data/tests/test_zoe_capability_trust_update.py`
 - `services/zoe-data/tests/test_zoe_capability_trust_review.py`
 
@@ -96,6 +98,13 @@ profile handoff plus explicit operator approval refs, verifies the promotion
 manifest and patch hashes against ticket metadata, and returns a ticket payload
 without submitting it.
 
+Capability profile ticket writers are the only approved Multica creation path
+for profile handoffs. `zoe_capability_profile_ticket_writer.py` evaluates the
+gate internally, refuses blocked handoffs without calling Multica, and creates a
+backlog ticket containing the gate metadata, promotion manifest, and profile
+patch only after explicit operator approval. It still does not apply profile
+edits; those remain PR-backed.
+
 ## Next Use
 
 The next self-evolution slices should use these profiles to:
@@ -106,5 +115,6 @@ The next self-evolution slices should use these profiles to:
 - block privileged execution when profile approval rules are unmet;
 - add outcome eval traces against profile IDs;
 - keep retained-outcome profile promotions routed through the composed
-  outcome-to-handoff plan and ticket gate before any future writer creates work;
+  outcome-to-handoff plan, ticket gate, and profile ticket writer before any
+  profile edit PR is created;
 - require non-use, replacement, or failure evidence before retirement.
