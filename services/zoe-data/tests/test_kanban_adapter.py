@@ -2177,6 +2177,61 @@ def test_phase_budget_reason_recovers_hermes_iteration_budget_log(tmp_path, monk
     )
 
 
+def test_textual_blocker_reason_recovers_plain_text_blocker_log(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "I will block and request clarification.\n"
+        "<channel|>BLOCKER=context: I need the exact harness file to change.\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.textual_blocker_reason_from_log("t_impl")
+
+    assert reason == "BLOCKER=CONTEXT_MISSING: I need the exact harness file to change."
+
+
+def test_textual_blocker_reason_recovers_wrapped_blocker_log(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "     <channel|>BLOCKER=context: I have reviewed the\n"
+        "     named adapter file, but need the concrete harness location.\n"
+        " ────────────────────────────────────────────────────────────────────────────── \n"
+        "Resume this session with:\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.textual_blocker_reason_from_log("t_impl")
+
+    assert reason == (
+        "BLOCKER=CONTEXT_MISSING: I have reviewed the named adapter file, "
+        "but need the concrete harness location."
+    )
+
+
+def test_with_recovered_log_budget_adds_textual_blocker(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "BLOCKER=IMPLEMENT_CONTEXT: named file was not enough to edit safely\n",
+        encoding="utf-8",
+    )
+
+    detail = ka._with_recovered_log_budget("t_impl", "implement", {"latest_summary": ""})
+
+    assert detail["latest_summary"] == (
+        "BLOCKER=IMPLEMENT_CONTEXT: named file was not enough to edit safely"
+    )
+    assert "BLOCKER=IMPLEMENT_CONTEXT" in detail["log_tail"]
+
+
 def test_implement_edit_safety_allows_bounded_patched_file_read_before_check(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     log_dir = tmp_path / "kanban" / "logs"
