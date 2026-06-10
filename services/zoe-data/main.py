@@ -124,6 +124,7 @@ async def _record_running_multica_chain_progress(
     }
     if target_status:
         progress_kwargs["status"] = target_status
+
     await client.record_progress(issue_id, **progress_kwargs)
     return True
 
@@ -828,8 +829,9 @@ async def lifespan(app: FastAPI):
                                         {
                                             "multica_issue_id": str(issue_id),
                                             "title": title,
-                                            "phase": (chain.get("pipeline") if isinstance(chain.get("pipeline"), dict) else {}).get("phase"),
+                                            "phase": (chain.get("pipeline") or {}).get("phase"),
                                             "pr_url": chain.get("pr_url"),
+                                            "status": "in_review" if chain.get("pr_url") else None,
                                         },
                                     )
                                 except Exception as _push_exc:

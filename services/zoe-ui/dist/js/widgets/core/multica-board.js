@@ -32,7 +32,8 @@ class MulticaBoardWidget extends WidgetModule {
         super.init(element);
         this.loadBoard();
 
-        // Refresh on multica_task_done push event
+        // Refresh on Multica push events
+        document.addEventListener('zoe:multica_task_progress', () => this.loadBoard());
         document.addEventListener('zoe:multica_task_done', () => this.loadBoard());
     }
 

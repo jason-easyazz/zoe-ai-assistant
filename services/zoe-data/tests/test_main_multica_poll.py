@@ -93,6 +93,28 @@ def test_poll_loop_keeps_blocked_broadcast_out_of_running_branch():
 
 
 @pytest.mark.asyncio
+async def test_record_running_multica_chain_progress_records_phase_without_status_none():
+    from main import _record_running_multica_chain_progress
+
+    client = RecordingClient()
+
+    changed = await _record_running_multica_chain_progress(
+        client,
+        "issue-running",
+        {
+            "status": "running",
+            "pipeline": {"phase": "implement"},
+        },
+        issue={"id": "issue-running", "status": "in_progress", "description": ""},
+    )
+
+    assert changed is True
+    assert client.calls[0][1]["phase"] == "implement"
+    assert client.calls[0][1]["pr_url"] is None
+    assert "status" not in client.calls[0][1]
+
+
+@pytest.mark.asyncio
 async def test_record_running_multica_chain_progress_records_pr_url_and_review_status():
     from main import _record_running_multica_chain_progress
 
@@ -115,27 +137,6 @@ async def test_record_running_multica_chain_progress_records_pr_url_and_review_s
     assert client.calls[0][1]["phase"] == "verify"
     assert client.calls[0][1]["pr_url"] == "https://github.com/jason-easyazz/zoe-ai-assistant/pull/999"
     assert client.calls[0][1]["status"] == "in_review"
-    assert client.calls[0][1]["clear_blocker"] is True
-
-
-@pytest.mark.asyncio
-async def test_record_running_multica_chain_progress_omits_status_without_pr_url():
-    from main import _record_running_multica_chain_progress
-
-    client = RecordingClient()
-    client.issues["issue-running"] = {"id": "issue-running", "status": "in_review", "description": ""}
-
-    changed = await _record_running_multica_chain_progress(
-        client,
-        "issue-running",
-        {"status": "running", "pipeline": {"phase": "implement"}},
-        issue=client.issues["issue-running"],
-    )
-
-    assert changed is True
-    assert client.calls[0][1]["phase"] == "implement"
-    assert client.calls[0][1]["pr_url"] is None
-    assert "status" not in client.calls[0][1]
     assert client.calls[0][1]["clear_blocker"] is True
 
 
