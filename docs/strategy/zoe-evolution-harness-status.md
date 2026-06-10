@@ -53,7 +53,13 @@ Important non-complete truth:
   rejected `ui` because `services/zoe-ui` yielded 0 code files, 3 docs, 0 graph
   nodes, and 1 invalid JSON chunk. Zoe should continue using local/offline
   shard-based Graphify evidence, but the default UI shard must be corrected or
-  removed before the default matrix is treated as all-green.
+  removed before the default matrix is treated as all-green. The default shard
+  set now excludes `ui`; operators can still run it explicitly while the UI
+  indexing path is investigated.
+- The corrected default shard matrix accepted 2/2 local Gemma E4B shards without
+  `--allow-partial`: `data-core` in 43.770 s and `operators` in 49.967 s, with
+  no blocked shards, invalid JSON, truncation, or context splits. The default
+  shard lane is now accepted for bounded observe-only local Graphify evidence.
 - Zoe now has a local/offline Graphify probe that runs Graphify through the
   Ollama/OpenAI-compatible localhost llama.cpp path in a temporary fixture or
   snapshot, strips cloud API keys from the probe environment, parses context,

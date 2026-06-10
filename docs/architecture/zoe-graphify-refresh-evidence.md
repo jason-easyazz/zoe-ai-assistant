@@ -29,6 +29,10 @@ RSS, model-file, invalid-JSON, truncation, and context-split evidence so Zoe can
 compare Gemma 4 E2B, E4B, and 12B before changing the sync-capable refresh lane. The shard matrix wrapper then runs the selected local model across named bounded repo slices, records blocked shards, accepted-shard latency, and max observed RSS across all shards, and keeps every shard observe-only until a later merge/sync strategy is proven. Default shards avoid `.zoe` operator state and docs-only directories; those require explicit `--shard` opt-in after separate safety/behavior evidence.
 Scoped mode is observe-only evidence for subsystem-sized local model runs; the
 sync-capable refresh wrapper still requires full repo mode with clustering.
+After the first default matrix run, the default shard set was narrowed to the
+accepted local slices only: `data-core` and `operators`. The UI tree remains an
+explicit `--shard ui=services/zoe-ui` probe until Graphify can index Zoe's HTML,
+CSS, and JavaScript assets without producing empty or malformed graph output.
 
 `graphify_local_refresh.py` is the sync-capable local wrapper. It runs the repo
 probe with clustering and `keep_workdir`, then syncs `graphify-out` back to the
@@ -96,6 +100,13 @@ Current evidence:
   the UI shard definition is not yet a reliable accepted source slice. The next
   default-shard PR should either point `ui` at indexable source assets or remove
   it from the default matrix until a focused UI probe is accepted.
+- Corrected default shard matrix after removing `ui` accepted 2/2 default shards
+  without `--allow-partial`: `data-core` accepted in 43.770 s over 289 code
+  files and 10 docs, producing 5,087 nodes and 11,145 edges; `operators`
+  accepted in 49.967 s over 176 code files and 9 docs, producing 1,638 nodes and
+  3,075 edges. The run had no blocked shards, no invalid JSON chunks, no
+  truncation, no context splits, median accepted duration 46.869 s, and max
+  observed child RSS about 86 MB.
 
 ## Refresh 2026-06-09 Foundation Pass
 
