@@ -30,16 +30,21 @@ def test_managed_agents_keep_provider_specific_runtime_contract():
     agent_defs = _assigned_literal("_AGENT_DEFS")
     providers = {agent["name"]: agent.get("runtime_provider") for agent in agent_defs}
     fallback_models = {agent["name"]: agent.get("fallback_model") for agent in agent_defs}
+    models = {agent["name"]: agent.get("model") for agent in agent_defs}
 
     assert providers["Zoe Core"] == "zoe"
-    assert providers["OpenClaw"] == "hermes"
-    assert fallback_models["OpenClaw"] == "main"
+    assert providers["OpenClaw"] == "openclaw"
+    assert models["OpenClaw"] == "main"
+    assert fallback_models["OpenClaw"] is None
     assert providers["Hermes"] == "hermes"
     assert fallback_models["Hermes"] == "main"
     assert providers["Agent Zero"] == "zoe"
     assert providers["Self-Improvement Agent"] == "zoe"
 
     source = _source()
+    assert "github.com/jason-easyazz/zoe-ai-assistant" in source
+    assert "Multica source of truth" in source
+    assert "one " in source and "approved ticket at a time" in source
     assert "def _runtime_ids_by_provider" in source
     assert "target_runtime_id = runtime_ids.get" in source
     assert 'target_model = str(defn.get("fallback_model") or target_model)' in source
@@ -78,8 +83,8 @@ def test_runtime_fallback_and_trigger_refresh_are_observable():
     source = _source()
 
     assert "Provider '{runtime_provider}' not online" in source
-    assert "and provider in ('hermes')" in source
-    assert "openclaw', 'cursor" not in source
+    assert "and provider in ('hermes', 'openclaw')" in source
+    assert "cursor" not in source[source.index("and provider in ("):source.index("order by provider")]
     assert "delete from autopilot_trigger" in source
     assert "kind='schedule'" in source
     assert 'desired_cron = apdef["cron"]' in source

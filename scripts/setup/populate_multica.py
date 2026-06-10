@@ -180,13 +180,17 @@ def step_a_update_workspace():
     payload = {
         "context": (
             "Zoe is a self-hosted AI assistant running on a Jetson Orin NX 16GB. "
-            "She is conversational, proactive, and self-improving. This workspace tracks "
-            "everything: her capabilities, her agents, her scheduled behaviours, and her "
-            "evolution. Every intent gap she cannot answer becomes a backlog issue. "
-            "Every improvement she deploys is measured here. This is how Zoe grows."
+            "She is conversational, proactive, and self-improving. This workspace is the "
+            "Multica source of truth for Zoe work: simple-English issue capture, backlog, "
+            "ticket metadata, blockers, evidence, PR links, and scheduled improvements. "
+            "The codebase is https://github.com/jason-easyazz/zoe-ai-assistant. "
+            "Hermes owns engineering execution through Zoe's deterministic harness, one "
+            "approved ticket at a time. OpenClaw is available for browser/tool-heavy "
+            "execution when explicitly assigned. Every intent gap she cannot answer becomes "
+            "a backlog issue, and every improvement she deploys is measured here."
         ),
         "description": (
-            "Operational mirror of the Zoe AI system — agents, skills, evolution, and capability growth"
+            "Operational mirror of Zoe: Multica tickets, agents, skills, evidence, and evolution"
         ),
     }
     result = _patch(f"/api/workspaces/{WORKSPACE_ID}", payload)
@@ -219,6 +223,16 @@ _LABELS = [
     ("feature", "#059669"),
     ("infrastructure", "#374151"),
     ("self-improvement", "#6D28D9"),
+    # Zoe engineering harness labels
+    ("needs-split", "#B45309"),
+    ("blocked-external", "#991B1B"),
+    ("in-review", "#2563EB"),
+    ("greptile", "#0F766E"),
+    ("ci-failed", "#DC2626"),
+    ("audit-only", "#64748B"),
+    ("user-feedback", "#EA580C"),
+    ("harness-fix", "#7C3AED"),
+    ("operator-task", "#334155"),
 ]
 
 
@@ -453,19 +467,18 @@ _AGENT_DEFS = [
     {
         "name": "OpenClaw",
         "description": (
-            "Agentic execution runtime. Handles browser automation, code execution, and skill "
-            "building. In Multica issue capture, route simple-English ticket creation through "
-            "the Hermes runtime until OpenClaw's Codex-backed harness has non-rate-limited capacity."
+            "Agentic execution runtime. Handles browser automation, code execution, skill "
+            "building, and simple-English Multica issue execution when explicitly assigned."
         ),
         "instructions": (
-            "You are OpenClaw, Zoe's native agentic execution runtime. For Multica simple-English "
-            "issue capture, use the Hermes runtime path so ticket creation remains reliable and cost-controlled; "
-            "run browser/tool tasks only when explicitly assigned, and report blockers clearly. "
-            "Do not decide Zoe engineering phase advancement; Zoe/Hermes harness owns that workflow."
+            "You are OpenClaw, Zoe's native agentic execution runtime. Use the issue context, "
+            "available Multica CLI, staged skills, and Zoe MCP tools to complete explicitly "
+            "assigned Multica tickets. Keep work scoped, use comments/status updates for "
+            "evidence or blockers, and do not decide Zoe engineering phase advancement; "
+            "Zoe/Hermes harness owns that workflow."
         ),
-        "model": "gpt-5.4",
-        "fallback_model": "main",
-        "runtime_provider": "hermes",
+        "model": "main",
+        "runtime_provider": "openclaw",
     },
     {
         "name": "Hermes",
@@ -526,7 +539,7 @@ def _runtime_ids_by_provider(default_runtime_id: str) -> dict[str, str]:
         "select provider, id from agent_runtime "
         f"where workspace_id={_sql_literal(WORKSPACE_ID)} "
         "and status='online' "
-        "and provider in ('hermes') "
+        "and provider in ('hermes', 'openclaw') "
         "order by provider, daemon_id is null, updated_at desc;"
     )
     cmd = [
