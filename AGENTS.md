@@ -64,6 +64,16 @@ The `agentic-engineering-workflow` and `grep-loop-review-workflow` names are kep
 
 OpenClaw remains installed and available as a future/manual fallback. Do not route ordinary coding, planning, review, board work, browser work, or background work to OpenClaw by default. Zoe's Multica-first engineering driver owns workflow state and phase advancement; Hermes executes the one ready phase unless the user explicitly asks to use OpenClaw.
 
+## Branching policy
+
+Trunk-based development. `main` is the only permanent branch; there is no `develop`, `staging`, or other long-lived integration branch.
+
+- One branch per issue / Multica task, created from fresh `origin/main`.
+- Naming: `codex/<slug>` for agent-driven work, `feature/<slug>` for features, `fix/<slug>` for bug fixes, `verify/<slug>` for throwaway validation branches.
+- Develop in a worktree under `~/.worktrees/<slug>`; never switch the live checkout at `/home/zoe/assistant` onto a development branch for new work.
+- Branches die at merge: remote branches auto-delete (`delete_branch_on_merge`); remove the local worktree and branch promptly, or rely on `scripts/maintenance/prune_worktrees.sh`.
+- Branch protection requires green `validate`, GitGuardian, and Greptile Review checks and an up-to-date branch; when `main` moves quickly, use `gh pr update-branch` and the Greploop guard merge loop rather than any bypass.
+
 # DOX framework
 
 - DOX is highly performant AGENTS.md hierarchy installed here

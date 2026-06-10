@@ -7,7 +7,7 @@ Operational scripting for Zoe hosts: setup, maintenance, deployment, migrations,
 ## Ownership
 
 - `setup/` — host/platform provisioning, including `setup/jetson/` systemd unit templates (e.g. `zoe-graphify-refresh.service` / `.timer`).
-- `maintenance/` — recurring operational jobs: `refresh_graphify.sh` (nightly knowledge-graph refresh), `greploop_guard.py` (Greptile fix-packet loop), triage generators.
+- `maintenance/` — recurring operational jobs: `refresh_graphify.sh` (nightly knowledge-graph refresh), `greploop_guard.py` (Greptile fix-packet loop), `prune_worktrees.sh` (stale worktree cleanup, dry-run by default), triage generators.
 - `deploy/`, `migrations/`, `testing/`, `train/`, `utilities/`, `preview/` — task-specific script groups.
 
 ## Local Contracts

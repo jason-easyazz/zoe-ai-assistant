@@ -19,6 +19,8 @@ For Hermes-backed engineering work, prefer the local Hermes skills `zoe-engineer
 
 Use the small-PR loop for reviewable work: split large changes, push a focused PR, let Greptile review independently, then use Zoe's Greploop guard when an engineering task id exists. Otherwise use **Greptile MCP first** (`get_merge_request`, `list_merge_request_comments`, `trigger_code_review`) or the operator-local CLI `~/bin/greptile-mcp.py` (install path varies by host; see Cursor `/grep-loop`) before falling back to `gh` scraping. For heavier repair loops, delegate to Hermes `github-greptile-loop`. Read the PR diff before fixing comments and stop to split if the PR is too large for reliable review.
 
+Branching is trunk-based: `main` is the only permanent branch (no `develop`/`staging`). One branch per issue from fresh `origin/main`, named `codex/<slug>`, `feature/<slug>`, `fix/<slug>`, or `verify/<slug>`, developed in a worktree under `~/.worktrees/<slug>`. Remove worktrees and branches after merge, or run `scripts/maintenance/prune_worktrees.sh` (dry-run first).
+
 `main` is protected. Do not push directly, bypass branch protection, or use administrator merges unless the operator explicitly asks for that emergency path. If GitHub blocks a green PR because repo auto-merge is disabled or another policy requires human action, report the blocker and keep the PR ready rather than forcing it.
 
 Verify from a user perspective before commit: focused tests, `validate_structure.py`, `validate_critical_files.py`, live `/health` and `/api/system/status`, and any relevant systemd timers or MCP tools.
