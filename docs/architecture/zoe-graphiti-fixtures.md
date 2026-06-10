@@ -13,11 +13,14 @@ Files:
 - `services/zoe-data/graphiti_bakeoff.py`
 - `services/zoe-data/graphiti_sidecar_probe.py`
 - `services/zoe-data/graphiti_runtime_probe.py`
+- `services/zoe-data/graphiti_local_model_probe.py`
 - `scripts/maintenance/graphiti_sidecar_probe.py`
 - `scripts/maintenance/graphiti_runtime_probe.py`
+- `scripts/maintenance/graphiti_local_model_probe.py`
 - `services/zoe-data/tests/test_graphiti_bakeoff.py`
 - `services/zoe-data/tests/test_graphiti_sidecar_probe.py`
 - `services/zoe-data/tests/test_graphiti_runtime_probe.py`
+- `services/zoe-data/tests/test_graphiti_local_model_probe.py`
 
 The fixtures define synthetic Zoe episodes and expected relationship questions before any FalkorDB or Neo4j service is started. Later runners should ingest the same episodes into Graphiti, query each evaluation question, and score returned answers with the same helper functions.
 
@@ -52,10 +55,29 @@ Runtime probe statuses:
 - `backend_offline`: required Python packages are available, but the selected graph backend is not reachable.
 - `llm_unavailable`: the configured local OpenAI-compatible model endpoint did not answer `/v1/models`.
 - `llm_model_missing`: the endpoint answered, but did not advertise the configured local Gemma model.
-- `ready_for_ingest_trial`: packages, backend TCP reachability, and local model advertisement are present.
+- `ready_for_ingest_trial`: packages, backend TCP reachability, and local model advertisement are present. Structured-output readiness is measured by the separate local model contract probe.
 
 `ready_for_ingest_trial` is not Graphiti acceptance. It only means Zoe is ready for the next
 offline fixture ingest/query run.
+
+The local structured-output probe is a separate explicit gate. It only calls the
+configured local model when `--run` is supplied:
+
+```bash
+PYTHONPATH=services/zoe-data python3 scripts/maintenance/graphiti_local_model_probe.py
+PYTHONPATH=services/zoe-data python3 scripts/maintenance/graphiti_local_model_probe.py --run
+```
+
+Local model probe statuses:
+
+- `disabled`: no model call was made; explicit `--run` or `GRAPHITI_LOCAL_MODEL_PROBE_RUN=true` is required.
+- `misconfigured`: offline-only policy or visible env parsing failed.
+- `llm_unavailable`: the local OpenAI-compatible chat endpoint did not complete the request.
+- `invalid_json`: the local model answered but did not return a parseable JSON object.
+- `contract_mismatch`: JSON parsed, but required entities, relationships, or evidence refs were missing.
+- `structured_output_ready`: the local model returned the expected entity, relationship, and evidence shape.
+
+This probe answers whether the local Gemma path can satisfy Graphiti's structured-output contract. It does not install packages, start a sidecar, write graph data, or prove retrieval quality.
 
 Covered relationship topics:
 
@@ -116,11 +138,14 @@ Environment:
 - Zoe host Python runtime package availability: `graphiti_core=false`, `falkordb=false`,
   `neo4j=false`, and `redis=false`.
 - Temporary package target outside the repo with `graphiti-core==0.29.2` and `falkordb==1.6.1`
-  showed that Graphiti can connect to FalkorDB with a custom local embedder, but the current local
-  Gemma endpoint did not satisfy Graphiti structured extraction. The smoke test failed with a
-  Pydantic `ExtractedEntities` invalid JSON validation error after retries.
+  showed that Graphiti can connect to FalkorDB with a custom local embedder, but the Graphiti
+  library extraction smoke test failed with a Pydantic `ExtractedEntities` invalid JSON validation
+  error after retries.
+- Explicit local Gemma structured-output probe: `structured_output_ready`, `ok=true`,
+  `acceptable=true`, about 6099.84 ms latency, with parseable entities, `FAILED_ON`, `FIXED_BY`,
+  `MEASURED_BY`, and evidence refs from the configured localhost OpenAI-compatible endpoint.
 
 This is not a Graphiti acceptance result. It is an availability baseline and a read-only preflight. The
-Graphiti bake-off remains incomplete until Zoe has approved optional local dependencies and a reliable
-offline structured-output path for extraction, then the FalkorDB fixtures are ingested and measured.
+Graphiti bake-off remains incomplete until Zoe has approved optional local dependencies and Graphiti's
+own extractor path works reliably with the local model, then the FalkorDB fixtures are ingested and measured.
 Neo4j should still be tested only if feasible after FalkorDB produces useful evidence.
