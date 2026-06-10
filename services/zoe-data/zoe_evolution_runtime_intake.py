@@ -53,7 +53,7 @@ class RuntimeEvolutionProposalIntake:
     status: str = "pending"
     multica_payload: Mapping[str, Any] | None = None
 
-    def to_legacy_row(self) -> dict[str, Any]:
+    def __post_init__(self) -> None:
         if not self.proposal_id:
             raise ValueError("proposal_id is required")
         if not self.proposal_type:
@@ -66,6 +66,8 @@ class RuntimeEvolutionProposalIntake:
             raise ValueError(f"{self.proposal_id}: evidence is required")
         if not self.target_patterns:
             raise ValueError(f"{self.proposal_id}: target_patterns contract snapshot is required")
+
+    def to_legacy_row(self) -> dict[str, Any]:
         return {
             "id": self.proposal_id,
             "type": self.proposal_type,
@@ -113,17 +115,18 @@ def build_runtime_evolution_proposal_intake(
         explicit=approval_required,
     )
     evidence_payload = _evidence_payload(signal=signal, candidates=ranked_candidates, metadata=metadata)
-    proposal_metadata = {
-        "created_by": RUNTIME_INTAKE_SOURCE,
-        "legacy_table": "evolution_proposals",
-        "legacy_status": "pending",
-        "legacy_proposal_type": proposal_type,
-        "legacy_target_patterns": [str(item) for item in legacy_target_patterns if item is not None],
-        "candidate_search": [candidate.to_dict() for candidate in ranked_candidates],
-        "selected_candidate_id": ranked_candidates[0].candidate_id,
-    }
-    if metadata:
-        proposal_metadata.update(dict(metadata))
+    proposal_metadata = dict(metadata or {})
+    proposal_metadata.update(
+        {
+            "created_by": RUNTIME_INTAKE_SOURCE,
+            "legacy_table": "evolution_proposals",
+            "legacy_status": "pending",
+            "legacy_proposal_type": proposal_type,
+            "legacy_target_patterns": [str(item) for item in legacy_target_patterns if item is not None],
+            "candidate_search": [candidate.to_dict() for candidate in ranked_candidates],
+            "selected_candidate_id": ranked_candidates[0].candidate_id,
+        }
+    )
     proposal = build_evolution_proposal(
         proposal_id=proposal_id,
         title=title,

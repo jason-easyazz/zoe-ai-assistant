@@ -5,7 +5,7 @@ import pytest
 from zoe_candidate_scoring import CandidateEvaluation, CandidateScore
 from zoe_evolution_proposal import EvolutionSignal, EvolutionSignalType, ProposalRisk, TrustAutonomyClass
 from zoe_evolution_proposal_adapter import load_proposal_contract_snapshot
-from zoe_evolution_runtime_intake import build_runtime_evolution_proposal_intake
+from zoe_evolution_runtime_intake import RuntimeEvolutionProposalIntake, build_runtime_evolution_proposal_intake
 
 
 def _signal(**overrides):
@@ -91,6 +91,47 @@ def test_runtime_intake_builds_review_only_legacy_row_with_candidate_search_evid
     assert evidence["signal"]["evidence_refs"] == ["trace:runtime-notice-calendar-gap"]
     assert "github:mcp-calendar" in evidence["candidate_evidence_refs"]
     assert intake.multica_payload["contract_snapshot"] == row["target_patterns"]
+
+
+def test_runtime_intake_structured_metadata_overrides_caller_collisions():
+    intake = build_runtime_evolution_proposal_intake(
+        proposal_id="prop_runtime_metadata_collision",
+        proposal_type="code_improvement",
+        title="Review metadata collision",
+        problem_statement="Caller metadata must not overwrite structured reviewer evidence.",
+        signal=_signal(),
+        candidates=(_candidate(),),
+        affected_capabilities=("calendar_sync",),
+        expected_benefit="Keep proposal evidence trustworthy.",
+        verification_plan=("pytest:metadata-collision",),
+        rollback_plan="Reject the proposal; no runtime change has been made.",
+        metadata={
+            "created_by": "caller",
+            "candidate_search": [],
+            "selected_candidate_id": "wrong",
+            "caller_note": "preserved",
+        },
+    )
+    payload = load_proposal_contract_snapshot(intake.target_patterns)
+
+    assert payload is not None
+    metadata = payload["proposal"]["metadata"]
+    assert metadata["created_by"] == "runtime_evolution_intake"
+    assert metadata["selected_candidate_id"] == "mcp_calendar_local"
+    assert metadata["candidate_search"][0]["candidate_id"] == "mcp_calendar_local"
+    assert metadata["caller_note"] == "preserved"
+
+
+def test_runtime_intake_validates_direct_construction_at_init():
+    with pytest.raises(ValueError, match="proposal_id is required"):
+        RuntimeEvolutionProposalIntake(
+            proposal_id="",
+            proposal_type="code_improvement",
+            title="Bad direct construction",
+            description="Invalid instances should not exist until to_legacy_row.",
+            evidence="{}",
+            target_patterns="{}",
+        )
 
 
 def test_runtime_intake_preserves_candidate_blockers_without_granting_prepare():
