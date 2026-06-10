@@ -448,21 +448,24 @@ _AGENT_DEFS = [
             "skill. Always be concise, helpful, and personal. Your wake word is 'Hey Zoe'."
         ),
         "model": "Llama-3.2-3B-Instruct-Q4_K_M",
+        "runtime_provider": "zoe",
     },
     {
         "name": "OpenClaw",
         "description": (
-            "Agentic execution runtime. Handles browser automation, code execution, skill "
-            "building, and simple-English Multica quick-create tasks through the native "
-            "Multica daemon."
+            "Agentic execution runtime. Handles browser automation, code execution, and skill "
+            "building. In Multica issue capture, route simple-English ticket creation through "
+            "the Hermes runtime until OpenClaw's Codex-backed harness has non-rate-limited capacity."
         ),
         "instructions": (
-            "You are OpenClaw, Zoe's native agentic execution runtime. Use local tools to "
-            "create well-formed Multica issues from simple-English quick-create requests, "
-            "run browser/tool tasks when explicitly assigned, and report blockers clearly. "
+            "You are OpenClaw, Zoe's native agentic execution runtime. For Multica simple-English "
+            "issue capture, use the Hermes runtime path so ticket creation remains reliable and cost-controlled; "
+            "run browser/tool tasks only when explicitly assigned, and report blockers clearly. "
             "Do not decide Zoe engineering phase advancement; Zoe/Hermes harness owns that workflow."
         ),
-        "model": "main",
+        "model": "gpt-5.4",
+        "fallback_model": "main",
+        "runtime_provider": "hermes",
     },
     {
         "name": "Hermes",
@@ -479,6 +482,8 @@ _AGENT_DEFS = [
         ),
         # Multica daemon selector for the Hermes CLI profile, not a public OpenAI model id.
         "model": "gpt-5.4",
+        "fallback_model": "main",
+        "runtime_provider": "hermes",
     },
     {
         "name": "Agent Zero",
@@ -493,6 +498,7 @@ _AGENT_DEFS = [
             "Be thorough and cite your sources."
         ),
         "model": "Llama-3.2-3B-Instruct-Q4_K_M",
+        "runtime_provider": "zoe",
     },
     {
         "name": "Self-Improvement Agent",
@@ -508,13 +514,47 @@ _AGENT_DEFS = [
             "test it, commit it, and report back."
         ),
         "model": "Llama-3.2-3B-Instruct-Q4_K_M",
+        "runtime_provider": "zoe",
     },
 ]
+
+
+def _runtime_ids_by_provider(default_runtime_id: str) -> dict[str, str]:
+    """Return provider -> online runtime id, falling back to the Zoe host runtime."""
+    runtime_ids = {"zoe": default_runtime_id}
+    sql = (
+        "select provider, id from agent_runtime "
+        f"where workspace_id={_sql_literal(WORKSPACE_ID)} "
+        "and status='online' "
+        "and provider in ('hermes') "
+        "order by provider, daemon_id is null, updated_at desc;"
+    )
+    cmd = [
+        "docker", "exec", _DB_CONTAINER,
+        "psql", "-U", _DB_USER, "-d", _DB_NAME,
+        "-t", "-A", "-F", "\t", "-c", sql,
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+    except Exception as exc:
+        print(f"  ⚠ Runtime provider lookup failed: {exc}")
+        return runtime_ids
+    if result.returncode != 0:
+        print(f"  ⚠ Runtime provider lookup failed: {(result.stderr or result.stdout)[:100]}")
+        return runtime_ids
+    for line in result.stdout.splitlines():
+        if "\t" not in line:
+            continue
+        provider, row_id = [part.strip() for part in line.split("\t", 1)]
+        if provider and row_id and provider not in runtime_ids:
+            runtime_ids[provider] = row_id
+    return runtime_ids
 
 
 def step_f_create_agents(runtime_id: str) -> dict[str, str]:
     """Returns name → agent_id mapping."""
     print("\n[F] Creating agents...")
+    runtime_ids = _runtime_ids_by_provider(runtime_id)
     existing_raw = _get("/api/agents") or []
     existing: list[dict] = existing_raw if isinstance(existing_raw, list) else existing_raw.get("agents", [])
     managed_names = [str(defn["name"]) for defn in _AGENT_DEFS]
@@ -527,14 +567,23 @@ def step_f_create_agents(runtime_id: str) -> dict[str, str]:
     agent_ids: dict[str, str] = dict(existing_names)
     for defn in _AGENT_DEFS:
         name = defn["name"]
+        runtime_provider = str(defn.get("runtime_provider") or "zoe")
+        target_runtime_id = runtime_ids.get(runtime_provider, runtime_id)
+        target_model = defn["model"]
+        if runtime_provider != "zoe" and runtime_provider not in runtime_ids:
+            target_model = str(defn.get("fallback_model") or target_model)
+            print(
+                f"  ⚠ Provider '{runtime_provider}' not online — using Zoe runtime for '{name}' "
+                f"with fallback model '{target_model}'"
+            )
         if name in existing_names:
             agent_id = existing_names[name]
             sql = (
                 "update agent set "
                 f"description={_sql_literal(defn['description'])}, "
                 f"instructions={_sql_literal(defn['instructions'])}, "
-                f"model={_sql_literal(defn['model'])}, "
-                f"runtime_id={_sql_literal(runtime_id)}, "
+                f"model={_sql_literal(target_model)}, "
+                f"runtime_id={_sql_literal(target_runtime_id)}, "
                 "runtime_mode='local', visibility='workspace', "
                 "archived_at=NULL, archived_by=NULL, updated_at=now() "
                 f"where id={_sql_literal(agent_id)};"
@@ -549,8 +598,8 @@ def step_f_create_agents(runtime_id: str) -> dict[str, str]:
             "name": name,
             "description": defn["description"],
             "instructions": defn["instructions"],
-            "model": defn["model"],
-            "runtime_id": runtime_id,
+            "model": target_model,
+            "runtime_id": target_runtime_id,
             "runtime_mode": "local",
             "visibility": "workspace",
         })
@@ -723,16 +772,18 @@ _AUTOPILOTS = [
     {
         "title": "Morning Checkin",
         "agent": "Zoe Core",
-        "execution_mode": "create_issue",
+        "status": "paused",
+        "execution_mode": "run_only",
         "cron": "30 7 * * *",
-        "issue_title_template": "Morning Brief — {date}",
+        "issue_title_template": "",
     },
     {
         "title": "Evening Wind Down",
         "agent": "Zoe Core",
+        "status": "paused",
         "execution_mode": "run_only",
         "cron": "0 21 * * *",
-        "issue_title_template": "Evening Check-In — {date}",
+        "issue_title_template": "",
     },
     {
         "title": "Evolution Nightly Notice",
@@ -751,14 +802,15 @@ _AUTOPILOTS = [
     {
         "title": "Reminder Scan",
         "agent": "Zoe Core",
+        "status": "paused",
         "execution_mode": "run_only",
         "cron": "*/5 * * * *",
         "issue_title_template": "Reminder Scan",
     },
     {
         "title": "Platform Health Check",
-        "agent": "Zoe Core",
-        "execution_mode": "run_only",
+        "agent": "Hermes",
+        "execution_mode": "create_issue",
         "cron": "0 6 * * *",
         "issue_title_template": "Platform Health — {date}",
     },
@@ -780,10 +832,29 @@ def step_i_create_autopilots(agent_ids: dict[str, str]):
 
         if title in existing_titles:
             ap_id = existing_titles[title]
-            print(f"  ↩ Autopilot '{title}' exists ({ap_id})")
+            status_sql = (
+                f"status={_sql_literal(apdef['status'])}, "
+                if "status" in apdef else ""
+            )
+            sql = (
+                "update autopilot set "
+                f"assignee_id={_sql_literal(agent_id)}, "
+                f"{status_sql}"
+                f"execution_mode={_sql_literal(apdef['execution_mode'])}, "
+                f"issue_title_template={_sql_literal(apdef.get('issue_title_template', ''))}, "
+                "updated_at=now() "
+                f"where id={_sql_literal(ap_id)};"
+            )
+            ok, msg = _db_update_one(sql)
+            if ok:
+                print(f"  ↻ Autopilot '{title}' exists ({ap_id}) — refreshed settings")
+            else:
+                print(f"  ⚠ Autopilot '{title}' refresh failed: {msg[:100]}")
+                continue
         else:
             payload = {
                 "title": title,
+                "status": apdef.get("status", "active"),
                 "execution_mode": apdef["execution_mode"],
                 "issue_title_template": apdef.get("issue_title_template", ""),
                 "assignee_id": agent_id,
@@ -798,24 +869,44 @@ def step_i_create_autopilots(agent_ids: dict[str, str]):
             _counts["autopilots"] += 1
             print(f"  ✓ Created autopilot '{title}' ({ap_id})")
 
-        # Ensure cron trigger exists
+        # Ensure cron trigger matches the managed schedule.
         ap_detail = _get(f"/api/autopilots/{ap_id}")
         existing_triggers = ap_detail.get("triggers", []) if ap_detail else []
-        has_schedule_trigger = any(t.get("kind") == "schedule" for t in existing_triggers)
-        if has_schedule_trigger:
-            print(f"    ↩ Trigger already set: {apdef['cron']}")
+        schedule_triggers = [t for t in existing_triggers if t.get("kind") == "schedule"]
+        desired_cron = apdef["cron"]
+        desired_timezone = "Australia/Perth"
+        has_matching_schedule = any(
+            t.get("cron_expression") == desired_cron
+            and t.get("timezone") == desired_timezone
+            for t in schedule_triggers
+        )
+        if has_matching_schedule:
+            print(f"    ↩ Trigger already set: {desired_cron}")
             continue
-
+        replacing_schedule = bool(schedule_triggers)
         trig = _post(
             f"/api/autopilots/{ap_id}/triggers",
             {
                 "kind": "schedule",
-                "cron_expression": apdef["cron"],
-                "timezone": "Australia/Perth",
+                "cron_expression": desired_cron,
+                "timezone": desired_timezone,
             },
         )
         if trig and "id" in trig:
-            print(f"    ✓ Trigger set: {apdef['cron']}")
+            if replacing_schedule:
+                delete_sql = (
+                    "delete from autopilot_trigger "
+                    f"where autopilot_id={_sql_literal(ap_id)} "
+                    "and kind='schedule' "
+                    f"and id <> {_sql_literal(trig['id'])};"
+                )
+                ok, msg = _db_exec(delete_sql)
+                if ok:
+                    print(f"    ↻ Replaced schedule trigger with: {desired_cron}")
+                else:
+                    print(f"    ⚠ New trigger created but old trigger cleanup failed for '{title}': {msg[:100]}")
+            else:
+                print(f"    ✓ Trigger set: {desired_cron}")
         else:
             print(f"    ⚠ Trigger creation returned: {trig}")
 

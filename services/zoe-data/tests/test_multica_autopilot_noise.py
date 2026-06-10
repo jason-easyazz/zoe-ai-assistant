@@ -10,6 +10,117 @@ import pytest
 import multica_autopilot_sync as mas
 
 
+@pytest.mark.asyncio
+async def test_sync_autopilots_prefers_execution_mode(monkeypatch):
+    captured_jobs: list[dict] = []
+
+    class FakeCronTrigger:
+        @classmethod
+        def from_crontab(cls, expr, timezone=None):
+            return {"expr": expr, "timezone": timezone}
+
+    class FakeScheduler:
+        def remove_job(self, job_id):
+            raise LookupError(job_id)
+
+        def add_job(self, func, *, trigger, id, replace_existing, kwargs):
+            captured_jobs.append(
+                {
+                    "func": func,
+                    "trigger": trigger,
+                    "id": id,
+                    "replace_existing": replace_existing,
+                    "kwargs": kwargs,
+                }
+            )
+
+    monkeypatch.setattr(mas, "_is_configured", lambda: True)
+    monkeypatch.setattr(
+        mas,
+        "get_multica_autopilots",
+        AsyncMock(
+            return_value=[
+                {
+                    "id": "ap-run-only",
+                    "title": "Morning Checkin",
+                    "execution_mode": "run_only",
+                    "mode": "create_issue",
+                    "assignee_id": "agent-1",
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        mas,
+        "get_autopilot_triggers",
+        AsyncMock(return_value=[{"cron_expression": "30 7 * * *"}]),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "apscheduler.triggers.cron",
+        types.SimpleNamespace(CronTrigger=FakeCronTrigger),
+    )
+
+    registered = await mas.sync_autopilots_from_multica(FakeScheduler())
+
+    assert registered == 1
+    assert captured_jobs == [
+        {
+            "func": mas._fire_autopilot_job,
+            "trigger": {"expr": "30 7 * * *", "timezone": mas._TZ},
+            "id": "multica_autopilot_ap-run-only",
+            "replace_existing": True,
+            "kwargs": {
+                "autopilot_id": "ap-run-only",
+                "autopilot_title": "Morning Checkin",
+                "mode": "run_only",
+                "assignee_agent_id": "agent-1",
+            },
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_sync_autopilots_logs_missing_mode_default(monkeypatch, caplog):
+    captured_jobs: list[dict] = []
+
+    class FakeCronTrigger:
+        @classmethod
+        def from_crontab(cls, expr, timezone=None):
+            return {"expr": expr, "timezone": timezone}
+
+    class FakeScheduler:
+        def remove_job(self, job_id):
+            raise LookupError(job_id)
+
+        def add_job(self, func, *, trigger, id, replace_existing, kwargs):
+            captured_jobs.append(kwargs)
+
+    monkeypatch.setattr(mas, "_is_configured", lambda: True)
+    monkeypatch.setattr(
+        mas,
+        "get_multica_autopilots",
+        AsyncMock(return_value=[{"id": "ap-missing-mode", "title": "Legacy"}]),
+    )
+    monkeypatch.setattr(
+        mas,
+        "get_autopilot_triggers",
+        AsyncMock(return_value=[{"cron_expression": "0 8 * * *"}]),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "apscheduler.triggers.cron",
+        types.SimpleNamespace(CronTrigger=FakeCronTrigger),
+    )
+
+    with caplog.at_level("DEBUG", logger=mas.logger.name):
+        registered = await mas.sync_autopilots_from_multica(FakeScheduler())
+
+    assert registered == 1
+    assert captured_jobs[0]["mode"] == "create_issue"
+    assert "has no execution_mode/mode" in caplog.text
+
+
 def test_should_create_tracker_issue_default_off_for_mapped_task():
     fn = lambda: None  # noqa: E731
     with patch.object(mas, "_CREATE_ISSUES", False):
