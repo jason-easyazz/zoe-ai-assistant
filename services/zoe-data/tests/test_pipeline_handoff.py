@@ -937,6 +937,41 @@ PR_URL=""", "comments": []}
     assert not any(item.kind == "greptile" for item in items)
 
 
+def test_handoff_ignores_placeholder_pr_url_from_summary():
+    detail = {
+        "latest_summary": "TOOLS_USED=zoe-engineering\nPR_URL=<url or blank>\nTESTS=pytest passed",
+        "comments": [],
+    }
+
+    items = evidence_from_handoff("implement", detail)
+
+    assert not any(item.kind == "pr" for item in items)
+
+
+def test_handoff_ignores_placeholder_pr_url_from_task_body():
+    detail = {
+        "latest_summary": "TOOLS_USED=zoe-engineering\nTESTS=pytest passed",
+        "task": {"body": "Summary text should include:\nPR_URL=<url or blank>\n"},
+        "comments": [],
+    }
+
+    items = evidence_from_handoff("implement", detail)
+
+    assert not any(item.kind == "pr" for item in items)
+
+
+def test_handoff_accepts_actual_github_pr_url():
+    detail = {
+        "latest_summary": "TOOLS_USED=zoe-engineering\nPR_URL=https://github.com/o/r/pull/123\nTESTS=pytest passed",
+        "comments": [],
+    }
+
+    items = evidence_from_handoff("implement", detail)
+
+    pr = next(item for item in items if item.kind == "pr")
+    assert pr.artifact == "https://github.com/o/r/pull/123"
+
+
 def test_closeout_audit_only_handoff_accepts_indented_log_lines():
     detail = {"log_tail": """
      PR_URL=

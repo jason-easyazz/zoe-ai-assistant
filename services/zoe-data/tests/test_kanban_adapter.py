@@ -4892,6 +4892,9 @@ def test_implement_body_includes_harness_repo_map_for_harness_tickets():
     )
 
     assert "HARNESS FAST PATH" in body
+    assert "All paths in this repo map are relative to the task `workspace_path`" in body
+    assert "do not read them from `/home/zoe/assistant`" in body
+    assert "Working root for this phase: task workspace_path from kanban_show" in body
     assert "services/zoe-data/executors/kanban_adapter.py" in body
     assert "services/zoe-data/worktree_bootstrap.py" in body
     assert "For worktree-missing/retro fallback tickets" in body
@@ -4916,6 +4919,10 @@ def test_implement_body_includes_harness_repo_map_for_blocker_followup_source():
     )
 
     assert "HARNESS FAST PATH" in body
+    assert "All paths in this repo map are relative to the task `workspace_path`" in body
+    assert "do not read them from `/home/zoe/assistant`" in body
+    assert "Live repo: /home/zoe/assistant" in body
+    assert "Working root for this phase: task workspace_path from kanban_show" in body
     assert "services/zoe-data/executors/kanban_adapter.py" in body
     assert "services/zoe-data/worktree_bootstrap.py" in body
     assert "engineering_blocker_followup tickets" in body

@@ -75,6 +75,21 @@ _SURFACED_BLOCKER_TOKENS = (
 )
 _STABLE_BLOCKER_RE = re.compile(rf"\b(?:{'|'.join(_STABLE_BLOCKER_TOKENS)})\b", re.I)
 _SURFACED_BLOCKER_RE = re.compile(rf"\b(?:{'|'.join(_SURFACED_BLOCKER_TOKENS)})\b", re.I)
+_GITHUB_PR_URL_RE = re.compile(r"^https://github\.com/[^/\s]+/[^/\s]+/pull/\d+/?$")
+_BLANK_PR_URL_MARKERS = {
+    "",
+    "blank",
+    "<blank>",
+    "none",
+    "null",
+    "n/a",
+    "na",
+    "<url>",
+    "url",
+    "<url or blank>",
+    "url or blank",
+    "<actual github pr url>",
+}
 
 
 def _task_body(detail: dict[str, Any]) -> str:
@@ -123,6 +138,14 @@ def _parse_kv_fields(text: str) -> dict[str, str]:
         if value or key == "BLOCKER":
             out[key] = value
     return out
+
+
+def _normalized_pr_url(value: Any) -> str:
+    raw = str(value or "").strip().strip("\"'")
+    lowered = raw.lower()
+    if lowered in _BLANK_PR_URL_MARKERS:
+        return ""
+    return raw if _GITHUB_PR_URL_RE.match(raw) else ""
 
 
 def _reported_evidence_passed(raw: str, *, unavailable_markers: tuple[str, ...]) -> bool:
@@ -337,7 +360,7 @@ def _pr_url_from_ticket_block(detail: dict[str, Any]) -> str:
     except Exception:  # noqa: BLE001
         metadata = {}
     if isinstance(metadata, dict):
-        return str(metadata.get("pr_url") or "").strip()
+        return _normalized_pr_url(metadata.get("pr_url"))
     return ""
 
 
@@ -512,8 +535,9 @@ def evidence_from_handoff(
     for chunk in _haystacks(detail):
         text_fields.update(_parse_kv_fields(chunk))
     task_fields = _parse_kv_fields(_task_body(detail))
-    if task_fields.get("PR_URL") and not text_fields.get("PR_URL"):
-        text_fields["PR_URL"] = task_fields["PR_URL"]
+    task_pr_url = _normalized_pr_url(task_fields.get("PR_URL"))
+    if task_pr_url and not _normalized_pr_url(text_fields.get("PR_URL")):
+        text_fields["PR_URL"] = task_pr_url
     fields = dict(text_fields)
     fields.update(_structured_handoff_fields(detail))
 
@@ -607,7 +631,7 @@ def evidence_from_handoff(
         inferred_audit = bool(
             summary_raw
             and "audit" in summary_raw.lower()
-            and not (fields.get("PR_URL") or "").strip()
+            and not _normalized_pr_url(fields.get("PR_URL"))
             and not ticket_pr_url
         )
         if audit_only or inferred_audit:
@@ -631,7 +655,7 @@ def evidence_from_handoff(
             metadata["follow_up"] = follow_up
         items.append(EvidenceItem(kind="log", summary=retro_raw[:500], passed=True, metadata=metadata))
 
-    pr_url = fields.get("PR_URL") or ticket_pr_url
+    pr_url = _normalized_pr_url(fields.get("PR_URL")) or ticket_pr_url
     if pr_url and phase in {"implement", "verify", "closeout"}:
         items.append(EvidenceItem(kind="pr", summary=pr_url[:500], artifact=pr_url, passed=True))
 

@@ -396,7 +396,9 @@ def _harness_implement_hint(issue: dict | None = None) -> str:
     return (
         "- HARNESS FAST PATH: this is a Zoe/Hermes harness ticket. Do not spend budget"
         " searching ~/.local, Hermes internals, or broad worktree inventories unless a named file"
-        " explicitly requires it. Start from this repo map:\n"
+        " explicitly requires it. All paths in this repo map are relative to the task"
+        " `workspace_path`; do not read them from `/home/zoe/assistant`.\n"
+        " Start from this repo map:\n"
         "  * phase prompt/dispatch/task creation: services/zoe-data/executors/kanban_adapter.py\n"
         "  * task worktree creation and workspace_path pinning: services/zoe-data/worktree_bootstrap.py\n"
         "  * phase handoff/evidence parsing: services/zoe-data/pipeline_handoff.py\n"
@@ -690,14 +692,16 @@ class KanbanAdapter:
         escalation = _model_escalation_active(issue, mode)
         escalation_marker = "zoe-model-escalation: true\n" if escalation else ""
         workspace = _workspace_for_phase(phase)
-        workspace_label = "main repo checkout" if workspace.startswith("dir:") else "git worktree"
+        workspace_label = "main repo checkout" if workspace.startswith("dir:") else "isolated git worktree"
+        work_root_label = zoe_repo_root() if workspace.startswith("dir:") else "task workspace_path from kanban_show"
         common = (
             f"Multica issue: {identifier} (id {issue_id})\n"
             f"zoe-ref: multica:{issue_id}:{phase}\n"
             f"zoe-chain: v4\n"
             f"{escalation_marker}"
             f"{mode_note}"
-            f"Repo: {zoe_repo_root()}  |  Base branch: main  |  Workspace: {workspace_label}\n\n"
+            f"Live repo: {zoe_repo_root()}  |  Base branch: main  |  Workspace: {workspace_label}\n"
+            f"Working root for this phase: {work_root_label}\n\n"
             f"Title: {title}\n\n{description}\n\n"
         )
         if phase == "scout":
@@ -751,7 +755,7 @@ class KanbanAdapter:
                 "- AUDIT/SMOKE FAST PATH: only if the title/body explicitly says audit-only, smoke test,"
                 " no code change, or uses trace/map with an audit/no-code qualifier, do not run Graphify"
                 " or repo exploration first. Complete in one bounded handoff with"
-                " TOOLS_USED=audit-read, PR_URL= blank, AUDIT_ONLY=1, TESTS=not applicable/audit-only,"
+                " TOOLS_USED=audit-read, PR_URL=, AUDIT_ONLY=1, TESTS=not applicable/audit-only,"
                 " and SUMMARY= findings. Do not open a PR.\n"
                 "- Start with `kanban_show` to confirm this task id.\n"
                 "- SCOUT HANDOFF FAST PATH: when `kanban_show` includes SCOUT_SUMMARY with an exact"
@@ -841,7 +845,8 @@ class KanbanAdapter:
                 "  Do not call `kanban_block` merely because a human/security reviewer should inspect the PR.\n"
                 "- Failure/stuck: `kanban_block` with a clear reason (prefix BLOCKER= when applicable).\n\n"
                 "Summary text should still include:\n"
-                "PR_URL=<url or blank>\nBLOCKER=<reason or blank>\nTESTS=<checks run>\nSUMMARY=<short>\n"
+                "PR_URL=<actual GitHub PR URL, or empty only for audit-only/no-code>\n"
+                "BLOCKER=<reason or empty>\nTESTS=<checks run>\nSUMMARY=<short>\n"
                 "Changed files + branch/worktree details for the reviewer."
             )
         if phase == "verify":
@@ -852,7 +857,7 @@ class KanbanAdapter:
                 " and no PR_URL, do not load broad skills, hunt for a PR, or explore the repo. Run"
                 " `kanban_show`, compare the implementer handoff to the Multica acceptance criteria,"
                 " then call `kanban_complete` in this turn with TESTS=not applicable/audit evidence,"
-                " VALIDATORS=not applicable/audit-only, PR_URL= blank, and a short pass/fail summary.\n"
+                " VALIDATORS=not applicable/audit-only, PR_URL=, and a short pass/fail summary.\n"
                 "- PR_URL FAST PATH: if `kanban_show` or the ticket block includes PR_URL, do not"
                 " hunt branches or commits. Use `gh pr view <url> --json url,headRefName,headRefOid,"
                 "mergeStateStatus,statusCheckRollup` and inspect the PR diff/checks directly, then"
