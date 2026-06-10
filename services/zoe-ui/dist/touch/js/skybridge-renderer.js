@@ -43,19 +43,23 @@
         const compact = options && options.compact ? ' compact' : '';
         const safeTone = options && options.tone ? safeClassTokens(options.tone) : '';
         const tone = safeTone ? ' ' + safeTone : '';
+        const showHeader = !(options && options.hideHeader);
+        const showStatus = !(options && options.hideStatus);
         const actions = Array.isArray(props.actions) && props.actions.length
             ? '<div class="sky-actions">' + props.actions.map(buttonHtml).join('') + '</div>'
             : '';
         return [
             '<article class="sky-card sky-premium-card' + wide + compact + tone + '" data-card-id="' + escapeHtml(props.id || '') + '">',
+            showHeader ? [
             '<div class="sky-widget-top">',
             '<div class="sky-widget-title">',
             props.kicker ? '<p>' + escapeHtml(props.kicker) + '</p>' : '',
             '<h3 class="sky-card-title">' + escapeHtml(props.title || 'Zoe') + '</h3>',
             '</div>',
             '<div class="sky-widget-glyph" aria-hidden="true">' + glyphFor(props) + '</div>',
-            '</div>',
-            props.status ? '<span class="sky-badge">' + escapeHtml(props.status) + '</span>' : '',
+            '</div>'
+            ].join('') : '',
+            showStatus && props.status ? '<span class="sky-badge">' + escapeHtml(props.status) + '</span>' : '',
             body,
             actions,
             '</article>'
@@ -109,11 +113,6 @@
         return known.indexOf(token) >= 0 ? token : 'general';
     }
 
-    function calendarAccentLabel(value) {
-        const category = calendarCategoryClass(value);
-        return category.charAt(0).toUpperCase() + category.slice(1);
-    }
-
     function renderCalendar(props) {
         const events = Array.isArray(props.events) ? props.events : [];
         const visibleEvents = events.slice().sort((a, b) => calendarEventSortKey(a) - calendarEventSortKey(b)).slice(0, 8);
@@ -126,7 +125,6 @@
                 '<div class="sky-event-row sky-calendar-event ' + escapeHtml(category) + '">',
                 '<div class="sky-calendar-time"><span>' + escapeHtml(formatEventTime(item)) + '</span>' + (index === 0 ? '<b>Next</b>' : '') + '</div>',
                 '<div class="sky-calendar-event-main"><strong>' + escapeHtml(title) + '</strong>' + (detail ? '<em>' + escapeHtml(detail) + '</em>' : '') + '</div>',
-                '<div class="sky-calendar-category">' + escapeHtml(calendarAccentLabel(item.category)) + '</div>',
                 '</div>'
             ].join('');
         }).join('');
@@ -146,7 +144,7 @@
             '<div class="sky-calendar-agenda"><div class="sky-calendar-rail" aria-hidden="true"></div><div class="sky-data-list">' + (rows || empty) + '</div></div>',
             '</div>'
         ].join('');
-        return cardFrame(Object.assign({ status: 'Calendar', icon: 'C' }, props), body, { wide: true, tone: 'calendar-card' });
+        return cardFrame(Object.assign({ status: 'Calendar', icon: 'C' }, props), body, { wide: true, tone: 'calendar-card', hideHeader: true, hideStatus: true });
     }
 
     function formatTemp(value) {
