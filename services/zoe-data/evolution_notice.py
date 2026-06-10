@@ -92,7 +92,10 @@ async def run_evolution_notice() -> dict:
     """Run the NOTICE phase — returns summary dict."""
     from db_pool import get_db_ctx
     from multica_client import sync_evolution_proposal_to_multica
+    from zoe_candidate_scoring import CandidateEvaluation, CandidateScore
+    from zoe_evolution_proposal import EvolutionSignal, EvolutionSignalType
     from zoe_evolution_proposal_adapter import dump_legacy_evolution_proposal_contract
+    from zoe_evolution_runtime_intake import build_runtime_evolution_proposal_intake
 
     created = 0
     skipped = 0
@@ -193,41 +196,80 @@ async def run_evolution_notice() -> dict:
                 continue
             prop_id = uuid.uuid4().hex
             description = f"{tier} had {errors}/{total} ({int(100*errors/total)}%) slow/error calls in 24h."
-            evidence_data = json.dumps({"agent_tier": tier, "total": total, "errors": errors})
-            target_patterns = dump_legacy_evolution_proposal_contract(
-                proposal_id=prop_id,
-                title=title,
-                description=description,
-                evidence=evidence_data,
-                proposal_type="agent_health",
-                legacy_writer="evolution_notice:agent_health",
+            evidence_ref = f"llm_call_log:agent_health:{tier}:{prop_id}"
+            signal = EvolutionSignal(
+                signal_id=f"signal_{prop_id}",
+                signal_type=EvolutionSignalType.OUTCOME_EVAL_FAILURE.value,
+                summary=description,
+                source="evolution_notice:agent_health",
+                evidence_refs=(evidence_ref,),
+                scope="system",
+                metadata={"agent_tier": tier, "total": total, "errors": errors},
             )
+            candidate = CandidateEvaluation(
+                candidate_id="existing_zoe_agent_health_triage",
+                name="Existing Zoe agent health triage",
+                source="existing_zoe",
+                task="review agent health spike",
+                score=CandidateScore(
+                    fit=4,
+                    activity=4,
+                    license=5,
+                    offline=5,
+                    security=4,
+                    footprint=5,
+                    tests=3,
+                    maintainability=4,
+                    overlap=5,
+                ),
+                evidence_refs=(
+                    evidence_ref,
+                    "services/zoe-data/evolution_notice.py:run_evolution_notice",
+                    "llm_call_log:agent_tier_latency",
+                ),
+                license_risk="compatible",
+                offline_viability="required",
+                runtime_notes="Creates a review-only agent-health evolution proposal and Multica ticket; no execution is granted.",
+                overlaps_existing=("evolution_proposals", "multica_governance", "llm_call_log"),
+                recommendation="needs_review",
+                metadata={"legacy_proposal_type": "agent_health"},
+            )
+            intake = build_runtime_evolution_proposal_intake(
+                proposal_id=prop_id,
+                proposal_type="agent_health",
+                title=title,
+                problem_statement=description,
+                signal=signal,
+                candidates=(candidate,),
+                affected_capabilities=("agent_runtime", "multica_governance", "observation_trace"),
+                expected_benefit="Create a reviewable Zoe health proposal from measured LLM error evidence before implementation work.",
+                verification_plan=(
+                    "human_or_multica_review_required_before_approval",
+                    "implementation_pr_must_attach_tests_and_evidence_before_completion",
+                ),
+                rollback_plan="Reject or defer the proposal; no runtime change has been made by proposal creation.",
+                metadata={"legacy_writer": "evolution_notice:agent_health"},
+            )
+            row_payload = intake.to_legacy_row()
             await db.execute(
                 """INSERT INTO evolution_proposals
                    (id, type, title, description, evidence, target_patterns, status, proposed_at)
                    VALUES ($1,'agent_health',$2,$3,$4,$5,'pending',$6)""",
-                prop_id,
-                title,
-                description,
-                evidence_data,
-                target_patterns,
+                row_payload["id"],
+                row_payload["title"],
+                row_payload["description"],
+                row_payload["evidence"],
+                row_payload["target_patterns"],
                 time.time(),
             )
             created += 1
 
-            # Sync to Multica board
-            multica_id = await sync_evolution_proposal_to_multica(
-                proposal_id=prop_id,
-                title=title,
-                description=description,
-                evidence=evidence_data,
-                proposal_type="agent_health",
-                contract_snapshot=target_patterns,
-            )
+            multica_payload = dict(intake.multica_payload)
+            multica_id = await sync_evolution_proposal_to_multica(**multica_payload)
             if multica_id:
                 await db.execute(
                     "UPDATE evolution_proposals SET multica_issue_id=$1 WHERE id=$2",
-                    multica_id, prop_id,
+                    multica_id, row_payload["id"],
                 )
 
     return {"created": created, "skipped_dedup": skipped, "clusters": len(clusters)}
@@ -339,8 +381,6 @@ async def record_frustration_signal(
             user_id, normalized_message[:60], repeat_count,
         )
 
-        if not intake.multica_payload:
-            return
         multica_payload = dict(intake.multica_payload)
         multica_id = await sync_evolution_proposal_to_multica(**multica_payload)
         if multica_id:
@@ -449,8 +489,6 @@ async def record_user_issue(message: str, user_id: str) -> None:
             user_id, message[:60],
         )
 
-        if not intake.multica_payload:
-            return
         multica_payload = dict(intake.multica_payload)
         multica_payload["label_name"] = "user-feedback"
         multica_id = await sync_evolution_proposal_to_multica(**multica_payload)
