@@ -36,6 +36,23 @@ def test_progress_and_children_patch_metadata_only():
     assert meta["child_issue_ids"] == ["child-1"]
 
 
+def test_progress_records_completion_reason_without_touching_prose():
+    description = describe_ticket("Human closure notes", zoe_kind="harness_fix")
+
+    updated = update_ticket_progress(
+        description,
+        phase="done",
+        evidence="merged and deployed",
+        completion_reason="PR merged after Greptile 5/5",
+    )
+
+    assert updated.startswith("Human closure notes")
+    meta = parse_ticket_block(updated)
+    assert meta["phase"] == "done"
+    assert meta["last_evidence"] == "merged and deployed"
+    assert meta["completion_reason"] == "PR merged after Greptile 5/5"
+
+
 def test_block_only_description_does_not_gain_leading_blank_lines():
     description = describe_ticket("", zoe_kind="bug")
     updated = write_ticket_block(description, {"schema": 1, "zoe_kind": "child"})
