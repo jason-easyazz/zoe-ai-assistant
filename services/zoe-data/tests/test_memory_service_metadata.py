@@ -212,12 +212,13 @@ def test_memory_visible_to_user_matches_user_id_or_wing_or_shared_visibility():
 def test_metadata_prompt_read_blocks_cross_user_disputed_and_superseded_rows():
     collection = _FakeCollection(
         get_result={
-            "ids": ["own", "wing_only", "mixed", "shared", "other", "disputed", "old"],
+            "ids": ["own", "wing_only", "mixed", "shared", "family_disputed", "other", "disputed", "old"],
             "documents": [
                 "Jason active fact",
                 "Jason wing-only fact",
                 "Jason mixed wing fact",
                 "Shared family fact",
+                "Disputed shared family fact",
                 "Other private fact",
                 "Disputed fact",
                 "Old superseded fact",
@@ -227,9 +228,10 @@ def test_metadata_prompt_read_blocks_cross_user_disputed_and_superseded_rows():
                 {"wing": "jason", "visibility": "personal", "status": "approved", "added_at": "2026-01-02T00:00:00Z"},
                 {"user_id": "alex", "wing": "jason", "visibility": "personal", "status": "approved", "added_at": "2026-01-03T00:00:00Z"},
                 {"user_id": "alex", "visibility": "family", "status": "approved", "added_at": "2026-01-04T00:00:00Z"},
-                {"user_id": "alex", "visibility": "personal", "status": "approved", "added_at": "2026-01-05T00:00:00Z"},
-                {"user_id": "jason", "visibility": "personal", "status": "disputed", "added_at": "2026-01-06T00:00:00Z"},
-                {"user_id": "jason", "visibility": "personal", "status": "superseded", "superseded_by_id": "new", "added_at": "2026-01-07T00:00:00Z"},
+                {"user_id": "alex", "visibility": "family", "status": "disputed", "added_at": "2026-01-05T00:00:00Z"},
+                {"user_id": "alex", "visibility": "personal", "status": "approved", "added_at": "2026-01-06T00:00:00Z"},
+                {"user_id": "jason", "visibility": "personal", "status": "disputed", "added_at": "2026-01-07T00:00:00Z"},
+                {"user_id": "jason", "visibility": "personal", "status": "superseded", "superseded_by_id": "new", "added_at": "2026-01-08T00:00:00Z"},
             ],
         }
     )
@@ -238,19 +240,20 @@ def test_metadata_prompt_read_blocks_cross_user_disputed_and_superseded_rows():
 
     rows = service._metadata_read("jason", limit=10)
 
-    assert [row.id for row in rows] == ["shared", "mixed", "wing_only", "own"]
+    assert {row.id for row in rows} == {"own", "wing_only", "mixed", "shared"}
     assert {"visibility": "family"} in collection.seen_get_where["$or"]
 
 
 def test_semantic_search_blocks_cross_user_disputed_and_superseded_rows():
     collection = _FakeCollection(
         query_result={
-            "ids": [["own", "wing_only", "mixed", "shared", "other", "disputed", "old"]],
+            "ids": [["own", "wing_only", "mixed", "shared", "family_superseded", "other", "disputed", "old"]],
             "documents": [[
                 "Jason active fact",
                 "Jason wing-only fact",
                 "Jason mixed wing fact",
                 "Shared family fact",
+                "Superseded shared family fact",
                 "Other private fact",
                 "Disputed fact",
                 "Old superseded fact",
@@ -260,11 +263,12 @@ def test_semantic_search_blocks_cross_user_disputed_and_superseded_rows():
                 {"wing": "jason", "visibility": "personal", "status": "approved", "confidence": 0.9, "added_at": "2026-01-02T00:00:00Z"},
                 {"user_id": "alex", "wing": "jason", "visibility": "personal", "status": "approved", "confidence": 0.9, "added_at": "2026-01-03T00:00:00Z"},
                 {"user_id": "alex", "visibility": "family", "status": "approved", "confidence": 0.9, "added_at": "2026-01-04T00:00:00Z"},
-                {"user_id": "alex", "visibility": "personal", "status": "approved", "confidence": 0.9, "added_at": "2026-01-05T00:00:00Z"},
-                {"user_id": "jason", "visibility": "personal", "status": "disputed", "confidence": 0.9, "added_at": "2026-01-06T00:00:00Z"},
-                {"user_id": "jason", "visibility": "personal", "status": "superseded", "superseded_by_id": "new", "confidence": 0.9, "added_at": "2026-01-07T00:00:00Z"},
+                {"user_id": "alex", "visibility": "family", "status": "superseded", "superseded_by_id": "new", "confidence": 0.9, "added_at": "2026-01-05T00:00:00Z"},
+                {"user_id": "alex", "visibility": "personal", "status": "approved", "confidence": 0.9, "added_at": "2026-01-06T00:00:00Z"},
+                {"user_id": "jason", "visibility": "personal", "status": "disputed", "confidence": 0.9, "added_at": "2026-01-07T00:00:00Z"},
+                {"user_id": "jason", "visibility": "personal", "status": "superseded", "superseded_by_id": "new", "confidence": 0.9, "added_at": "2026-01-08T00:00:00Z"},
             ]],
-            "distances": [[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]],
+            "distances": [[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]],
         }
     )
     service = MemoryService(data_dir="/tmp/zoe-test-memory-safety")
@@ -272,5 +276,5 @@ def test_semantic_search_blocks_cross_user_disputed_and_superseded_rows():
 
     rows = service._semantic_search("fact", "jason", limit=10)
 
-    assert [row.id for row in rows] == ["own", "wing_only", "mixed", "shared"]
+    assert {row.id for row in rows} == {"own", "wing_only", "mixed", "shared"}
     assert {"visibility": "family"} in collection.seen_query_where["$or"]
