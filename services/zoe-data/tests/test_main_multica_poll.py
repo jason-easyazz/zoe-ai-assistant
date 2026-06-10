@@ -12,6 +12,8 @@ class RecordingClient:
         self.created = []
         self.labels = []
         self.notes = []
+        self.default_list_statuses: set[str] | None = None
+        self.list_calls = []
 
     async def record_progress(self, *args, **kwargs):
         self.calls.append((args, kwargs))
@@ -21,9 +23,12 @@ class RecordingClient:
         return self.issues.get(issue_id, {})
 
     async def list_issues(self, status=None, *, limit=None):
+        self.list_calls.append({"status": status, "limit": limit})
         issues = list(self.issues.values()) + list(self.created)
         if status is not None:
             issues = [issue for issue in issues if issue.get("status") == status]
+        elif self.default_list_statuses is not None:
+            issues = [issue for issue in issues if issue.get("status") in self.default_list_statuses]
         return issues[:limit] if limit is not None else issues
 
     async def create_issue(self, **kwargs):
@@ -355,6 +360,7 @@ async def test_record_blocked_multica_chain_creates_budget_followup_once():
     from multica_ticket_contract import parse_ticket_block
 
     client = RecordingClient()
+    client.default_list_statuses = {"backlog", "todo", "in_progress", "blocked", "in_review"}
     client.issues["issue-budget"] = {
         "id": "issue-budget",
         "identifier": "ZOE-1",
@@ -471,11 +477,54 @@ async def test_record_blocked_multica_chain_reuses_existing_in_progress_budget_f
 
 
 @pytest.mark.asyncio
-async def test_record_blocked_multica_chain_reopens_after_done_budget_followup():
+async def test_record_blocked_multica_chain_returns_after_first_matching_followup_bucket():
     from main import _record_blocked_multica_chain
     from multica_ticket_contract import describe_ticket, parse_ticket_block, write_ticket_block
 
     client = RecordingClient()
+    client.issues["issue-budget"] = {
+        "id": "issue-budget",
+        "identifier": "ZOE-1",
+        "description": "Parent prose",
+        "assignee_id": "hermes",
+    }
+    existing_description = describe_ticket(
+        "Existing backlog follow-up",
+        zoe_kind="harness_fix",
+        source="engineering_blocker_followup",
+        parent_issue_id="issue-budget",
+    )
+    existing_metadata = parse_ticket_block(existing_description)
+    existing_metadata["source_blocker"] = "IMPLEMENT_BUDGET"
+    client.issues["existing-child"] = {
+        "id": "existing-child",
+        "identifier": "ZOE-C1",
+        "status": "backlog",
+        "description": write_ticket_block(existing_description, existing_metadata),
+    }
+
+    await _record_blocked_multica_chain(
+        client,
+        "issue-budget",
+        {
+            "pipeline": {
+                "phase": "implement",
+                "block_reason": "IMPLEMENT_BUDGET: code-enforced tool budget exceeded",
+            }
+        },
+    )
+
+    assert client.created == []
+    assert client.list_calls == [{"status": "backlog", "limit": 1000}]
+
+
+@pytest.mark.asyncio
+async def test_record_blocked_multica_chain_reuses_done_budget_followup():
+    from main import _record_blocked_multica_chain
+    from multica_ticket_contract import describe_ticket, parse_ticket_block, write_ticket_block
+
+    client = RecordingClient()
+    client.default_list_statuses = {"backlog", "todo", "in_progress", "blocked", "in_review"}
     client.issues["issue-budget"] = {
         "id": "issue-budget",
         "identifier": "ZOE-1",
@@ -508,9 +557,9 @@ async def test_record_blocked_multica_chain_reopens_after_done_budget_followup()
         },
     )
 
-    assert len(client.created) == 1
-    metadata = parse_ticket_block(client.created[0]["description"])
-    assert metadata["source_blocker"] == "IMPLEMENT_BUDGET"
+    assert client.created == []
+    assert client.labels == []
+    assert client.notes == []
 
 
 @pytest.mark.asyncio

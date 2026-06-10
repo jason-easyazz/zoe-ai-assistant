@@ -201,15 +201,33 @@ async def _ensure_blocker_followup_ticket(client, issue_id: str, chain: dict, bl
             )
             return {}
         parent_ident = parent.get("identifier") or issue_id
-        for status in ("backlog", "todo", "in_progress", "blocked", "in_review"):
+        # Dedup across the whole ticket system, not just active columns. A done/no-op
+        # follow-up for the same parent and blocker is still the canonical audit trail;
+        # creating another ticket hides the recurring harness failure in backlog noise.
+        seen_candidates: set[str] = set()
+
+        def matching_followup(candidate: dict) -> dict | None:
+            candidate_id = str(candidate.get("id") or "")
+            if candidate_id and candidate_id in seen_candidates:
+                return None
+            if candidate_id:
+                seen_candidates.add(candidate_id)
+            metadata = parse_ticket_block(candidate.get("description") or "")
+            if (
+                metadata.get("source") == "engineering_blocker_followup"
+                and str(metadata.get("parent_issue_id") or "") == str(issue_id)
+                and metadata.get("source_blocker") == marker
+            ):
+                return candidate
+            return None
+
+        for status in ("backlog", "todo", "in_progress", "blocked", "in_review", "done", "canceled"):
             for candidate in await client.list_issues(status=status, limit=1000) or []:
-                metadata = parse_ticket_block(candidate.get("description") or "")
-                if (
-                    metadata.get("source") == "engineering_blocker_followup"
-                    and str(metadata.get("parent_issue_id") or "") == str(issue_id)
-                    and metadata.get("source_blocker") == marker
-                ):
-                    return candidate
+                if match := matching_followup(candidate):
+                    return match
+        for candidate in await client.list_issues(limit=5000) or []:
+            if match := matching_followup(candidate):
+                return match
 
         description = describe_ticket(
             (
