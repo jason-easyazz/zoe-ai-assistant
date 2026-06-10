@@ -21,4 +21,6 @@ Use the small-PR loop for reviewable work: split large changes, push a focused P
 
 `main` is protected. Do not push directly, bypass branch protection, or use administrator merges unless the operator explicitly asks for that emergency path. If GitHub blocks a green PR because repo auto-merge is disabled or another policy requires human action, report the blocker and keep the PR ready rather than forcing it.
 
+Branching is trunk-based: one short-lived branch per issue off `origin/main`, no permanent `develop`. Use `~/.worktrees/<slug>` for agent work; do not repoint the live checkout to feature branches. After merge, remove the worktree; prune stale ones with `scripts/maintenance/prune_worktrees.sh` (dry-run first).
+
 Verify from a user perspective before commit: focused tests, `validate_structure.py`, `validate_critical_files.py`, live `/health` and `/api/system/status`, and any relevant systemd timers or MCP tools.
