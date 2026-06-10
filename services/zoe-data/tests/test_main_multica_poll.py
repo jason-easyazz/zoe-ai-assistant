@@ -76,6 +76,59 @@ def test_tracked_multica_engineering_issues_includes_review_and_deduplicates():
 
 
 @pytest.mark.asyncio
+async def test_record_running_multica_chain_progress_records_pr_url_and_review_status():
+    from main import _record_running_multica_chain_progress
+
+    client = RecordingClient()
+    client.issues["issue-running"] = {"id": "issue-running", "status": "in_progress", "description": ""}
+
+    changed = await _record_running_multica_chain_progress(
+        client,
+        "issue-running",
+        {
+            "status": "running",
+            "pr_url": "https://github.com/jason-easyazz/zoe-ai-assistant/pull/999",
+            "pipeline": {"phase": "verify"},
+        },
+        issue=client.issues["issue-running"],
+    )
+
+    assert changed is True
+    assert client.calls[0][0] == ("issue-running",)
+    assert client.calls[0][1]["phase"] == "verify"
+    assert client.calls[0][1]["pr_url"] == "https://github.com/jason-easyazz/zoe-ai-assistant/pull/999"
+    assert client.calls[0][1]["status"] == "in_review"
+    assert client.calls[0][1]["clear_blocker"] is True
+
+
+@pytest.mark.asyncio
+async def test_record_running_multica_chain_progress_skips_unchanged_metadata():
+    from main import _record_running_multica_chain_progress
+    from multica_ticket_contract import describe_ticket
+
+    description = describe_ticket(
+        "Already synced",
+        metadata={"phase": "verify", "pr_url": "https://github.com/jason-easyazz/zoe-ai-assistant/pull/999"},
+    )
+    client = RecordingClient()
+    issue = {"id": "issue-running", "status": "in_review", "description": description}
+
+    changed = await _record_running_multica_chain_progress(
+        client,
+        "issue-running",
+        {
+            "status": "running",
+            "pr_url": "https://github.com/jason-easyazz/zoe-ai-assistant/pull/999",
+            "pipeline": {"phase": "verify"},
+        },
+        issue=issue,
+    )
+
+    assert changed is False
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
 async def test_record_completed_multica_chain_records_explicit_retro_completion_metadata():
     from main import _record_completed_multica_chain
 
