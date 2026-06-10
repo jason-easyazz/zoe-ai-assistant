@@ -16,13 +16,19 @@ def _module() -> ast.Module:
 
 def _assigned_literal(name: str):
     for node in _module().body:
+        value = None
         if isinstance(node, ast.Assign):
             for target in node.targets:
                 if isinstance(target, ast.Name) and target.id == name:
-                    try:
-                        return ast.literal_eval(node.value)
-                    except (ValueError, SyntaxError) as exc:
-                        raise AssertionError(f"{name} must remain a literal contract") from exc
+                    value = node.value
+                    break
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == name:
+            value = node.value
+        if value is not None:
+            try:
+                return ast.literal_eval(value)
+            except (ValueError, SyntaxError) as exc:
+                raise AssertionError(f"{name} must remain a literal contract") from exc
     raise AssertionError(f"{name} assignment not found")
 
 
@@ -37,6 +43,7 @@ def test_managed_agents_keep_provider_specific_runtime_contract():
     assert providers["Hermes"] == "hermes"
     assert fallback_models["Hermes"] == "main"
     assert providers["Agent Zero"] == "zoe"
+    assert providers["Auto Research Engineer"] == "hermes"
     assert providers["Self-Improvement Agent"] == "zoe"
 
     source = _source()
@@ -47,6 +54,30 @@ def test_managed_agents_keep_provider_specific_runtime_contract():
     assert "runtime_id={_sql_literal(target_runtime_id)}" in source
     assert '"model": target_model' in source
     assert '"runtime_id": target_runtime_id' in source
+
+
+def test_autoresearch_skill_agent_and_scope_are_managed():
+    skill_defs = _assigned_literal("_SKILL_DEFS")
+    skill_names = {name for _, name in skill_defs}
+    skill_paths = {name: path for path, name in skill_defs}
+    agents = {agent["name"]: agent for agent in _assigned_literal("_AGENT_DEFS")}
+    assignments = _assigned_literal("_SKILL_ASSIGNMENTS")
+    projects = {title: description for title, _, description in _assigned_literal("_PROJECTS")}
+    labels = {name for name, _ in _assigned_literal("_LABELS")}
+
+    assert "autoresearch" in labels
+    assert "Autoresearch Lab" in projects
+    assert "fixed-budget asset optimization" in projects["Autoresearch Lab"]
+    assert "Auto Research Engineer" in skill_names
+    assert skill_paths["Auto Research Engineer"] == "skills/autoresearch-engineer/SKILL.md"
+
+    agent = agents["Auto Research Engineer"]
+    assert agent["runtime_provider"] == "hermes"
+    assert agent["fallback_model"] == "main"
+    assert "locked scoring file" in agent["instructions"]
+    assert "Never edit the instructions/program file" in agent["instructions"]
+    assert assignments["Auto Research Engineer"] == ["Auto Research Engineer"]
+    assert "Auto Research Engineer" in assignments["Hermes"]
 
 
 def test_managed_autopilots_keep_execution_modes_and_templates():
