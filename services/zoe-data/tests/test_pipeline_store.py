@@ -609,6 +609,137 @@ async def test_sync_pipeline_advances_with_live_run_metadata_recovery(isolated_s
 
 
 @pytest.mark.asyncio
+async def test_sync_pipeline_ignores_stale_duplicate_implement_block_after_verify_success(
+    isolated_store,
+):
+    state = await store.bootstrap_state(
+        "multica:duplicate-implement-block",
+        issue={"metadata": {"evidence_profile": "code"}},
+    )
+    state = with_evidence(
+        state,
+        EvidenceItem(
+            kind="tool",
+            summary="implementation used repo context",
+            passed=True,
+            metadata={"phase": "implement", "source": "handoff"},
+        ),
+        EvidenceItem(
+            kind="pr",
+            summary="https://github.com/jason-easyazz/zoe-ai-assistant/pull/342",
+            artifact="https://github.com/jason-easyazz/zoe-ai-assistant/pull/342",
+            passed=True,
+            metadata={"phase": "implement", "source": "handoff"},
+        ),
+    )
+    store.save_state(state, event="implement_evidence_recorded")
+
+    phases = {
+        "implement": {
+            "id": "t_duplicate",
+            "status": "blocked",
+            "block_reason": "DUPLICATE_REDISPATCH PR_URL=https://github.com/jason-easyazz/zoe-ai-assistant/pull/342",
+        },
+        "verify": {"id": "t_verify", "status": "done"},
+    }
+
+    async def fetch_detail(task_id: str):
+        if task_id == "t_verify":
+            return {
+                "latest_summary": (
+                    "TESTS=pytest passed\n"
+                    "VALIDATORS=validate_structure.py passed\n"
+                    "SUMMARY=verify passed"
+                ),
+                "comments": [],
+            }
+        return {"latest_summary": "BLOCKER=DUPLICATE_REDISPATCH", "comments": []}
+
+    synced = await store.sync_pipeline_from_chain(
+        "multica:duplicate-implement-block",
+        phases,
+        fetch_detail,
+    )
+
+    assert synced.phase == "review"
+    assert synced.status == "todo"
+    assert synced.attempts.get("implement") is None
+    assert synced.last_block_fingerprint is None
+    assert synced.repeated_block_count == 0
+    assert synced.block_classification is None
+    assert synced.history[-1].from_phase == "verify"
+    assert synced.history[-1].outcome == "complete"
+    assert store.pipeline_summary(synced)["block_reason"] is None
+    events = [
+        json.loads(line)["event"]
+        for line in isolated_store.read_text(encoding="utf-8").strip().splitlines()
+    ]
+    assert "phase_catch_up" in events
+
+
+@pytest.mark.asyncio
+async def test_sync_pipeline_keeps_legitimate_implement_block_with_later_orphan_success(
+    isolated_store,
+):
+    state = await store.bootstrap_state(
+        "multica:legitimate-block-with-orphan-verify",
+        issue={"metadata": {"evidence_profile": "code"}},
+    )
+    state = with_evidence(
+        state,
+        EvidenceItem(
+            kind="tool",
+            summary="implementation used repo context",
+            passed=True,
+            metadata={"phase": "implement", "source": "handoff"},
+        ),
+        EvidenceItem(
+            kind="pr",
+            summary="https://github.com/jason-easyazz/zoe-ai-assistant/pull/999",
+            artifact="https://github.com/jason-easyazz/zoe-ai-assistant/pull/999",
+            passed=True,
+            metadata={"phase": "implement", "source": "handoff"},
+        ),
+    )
+    store.save_state(state, event="implement_evidence_recorded")
+    phases = {
+        "implement": {
+            "id": "t_blocked",
+            "status": "blocked",
+            "block_reason": "GATE_BLOCKED: missing required evidence pr",
+        },
+        "verify": {"id": "t_orphan_verify", "status": "done"},
+    }
+
+    async def fetch_detail(task_id: str):
+        if task_id == "t_blocked":
+            return {
+                "latest_summary": (
+                    "BLOCKER=GATE_BLOCKED: missing required evidence pr\n"
+                    "SUMMARY=implementation did not produce a PR"
+                ),
+                "comments": [],
+            }
+        return {"latest_summary": "TESTS=pytest passed", "comments": []}
+
+    synced = await store.sync_pipeline_from_chain(
+        "multica:legitimate-block-with-orphan-verify",
+        phases,
+        fetch_detail,
+    )
+
+    assert synced.phase == "implement"
+    assert synced.status == "blocked"
+    assert synced.history[-1].outcome == "block"
+    assert synced.history[-1].reason == "GATE_BLOCKED: missing required evidence pr"
+    events = [
+        json.loads(line)["event"]
+        for line in isolated_store.read_text(encoding="utf-8").strip().splitlines()
+    ]
+    assert "phase_catch_up" not in events
+
+
+@pytest.mark.asyncio
 async def test_sync_pipeline_retries_a_concurrent_transition_write(
     isolated_store, monkeypatch
 ):
