@@ -414,6 +414,28 @@ async def test_recall_posts_trace_enabled_request():
     assert result["results"][0]["text"] == "voice queue guard fixed weather"
 
 
+@pytest.mark.asyncio
+async def test_recall_uses_user_and_scope_isolated_bank_ids():
+    seen_paths = []
+
+    async def handler(request):
+        seen_paths.append(request.url.path)
+        return httpx.Response(200, json={"results": []})
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        client = HindsightMemoryClient(HindsightConfig(enabled=True, bank_prefix="zoe-test"), client=http_client)
+        await client.recall(user_id="Jason", scope="personal", query="What failed?")
+        await client.recall(user_id="Alex", scope="personal", query="What failed?")
+        await client.recall(user_id="Jason", scope="shared", query="What failed?")
+
+    assert seen_paths == [
+        "/v1/default/banks/zoe-test-personal-jason/memories/recall",
+        "/v1/default/banks/zoe-test-personal-alex/memories/recall",
+        "/v1/default/banks/zoe-test-shared-jason/memories/recall",
+    ]
+
+
 def test_event_to_hindsight_item_serializes_structured_context_as_json():
     item = event_to_hindsight_item(_event())
 

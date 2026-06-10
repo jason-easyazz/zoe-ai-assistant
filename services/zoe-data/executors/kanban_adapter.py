@@ -20,6 +20,7 @@ Worker profiles + pinned skills encode Zoe's agentic-engineering loop:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -29,6 +30,7 @@ from typing import Any
 
 from hermes_http import hermes_bin, zoe_repo_root
 from kanban_phase_budget import (
+    latest_log_session,
     phase_budget_reason,
     phase_budget_reason_from_log,
     task_log_tail,
@@ -74,6 +76,8 @@ _JOKE_INTENT_GAP_TITLE_RE = re.compile(
     r"\bintent[- ]gap\b.*['\"]?(?:tell\s+me\s+(?:another\s+)?joke|joke)['\"]?",
     re.IGNORECASE,
 )
+_GITHUB_PR_URL_RE = re.compile(r"https://github\.com/[^/\s]+/[^/\s]+/pull/\d+")
+_SHELL_TOOL_LINE_RE = re.compile(r"(?:^|\s)(?:💻\s+)?\$\s+(?P<command>.+)$")
 
 
 def _row_ref_key(row: dict) -> str:
@@ -583,6 +587,33 @@ class KanbanAdapter:
         except json.JSONDecodeError as exc:
             raise KanbanCLIError(f"non-JSON output from kanban {args[0]}: {exc}: {stdout[:200]}")
 
+    async def _run_worktree_command(
+        self,
+        args: list[str],
+        *,
+        cwd: Path,
+        timeout: float = 45.0,
+    ) -> str:
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=str(cwd),
+        )
+        try:
+            out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except asyncio.TimeoutError as exc:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            with contextlib.suppress(Exception):
+                await proc.communicate()
+            raise KanbanCLIError(f"`{' '.join(args)}` timed out after {timeout:.0f}s") from exc
+        stdout = (out or b"").decode("utf-8", errors="replace").strip()
+        stderr = (err or b"").decode("utf-8", errors="replace").strip()
+        if proc.returncode != 0:
+            raise KanbanCLIError(f"`{' '.join(args)}` exited {proc.returncode}: {stderr or stdout}")
+        return stdout
+
     async def _phases_for_ref(self, external_ref: str) -> dict[str, dict]:
         tasks = await self._run(["list", "--json"], expect_json=True)
         if isinstance(tasks, list):
@@ -979,6 +1010,172 @@ class KanbanAdapter:
         logger.warning("kanban_adapter: stopped %s (%s): %s", task_id, phase, reason)
         return True
 
+    def _pushed_branch_without_pr_handoff(self, task_id: str) -> bool:
+        """True when a worker pushed HEAD then got interrupted before PR handoff."""
+        log = latest_log_session(task_id, max_lines=120)
+        shell_commands: list[str] = []
+        for line in log.splitlines():
+            match = _SHELL_TOOL_LINE_RE.search(line)
+            if match:
+                shell_commands.append(match.group("command"))
+        if "PR_URL=" in log:
+            return False
+        for command in shell_commands:
+            if "git push -u origin HEAD" not in command:
+                continue
+            if "gh pr create" in command:
+                return True
+            if re.search(r"\[exit\s+[1-9]\d*\]", command, re.IGNORECASE):
+                continue
+            return True
+        return False
+
+    async def _complete_recovered_pr_handoff(
+        self,
+        task_id: str,
+        row: dict[str, Any],
+        pr_url: str,
+        *,
+        branch: str | None = None,
+    ) -> str:
+        summary = (
+            f"PR_URL={pr_url}\n"
+            "BLOCKER=\n"
+            "TESTS=recovered after pushed branch; downstream verify/review must validate\n"
+            "SUMMARY=Recovered PR handoff after worker interruption following git push"
+        )
+        metadata = {
+            "pr_url": pr_url,
+            "recovery": "pushed_branch_without_pr_handoff",
+        }
+        if branch:
+            metadata["branch"] = branch
+        await self._run(
+            [
+                "complete",
+                "--result",
+                summary,
+                "--summary",
+                summary,
+                "--metadata",
+                json.dumps(metadata, sort_keys=True),
+                task_id,
+            ]
+        )
+        row["status"] = "done"
+        row["result"] = summary
+        row["block_reason"] = None
+        return pr_url
+
+    async def _maybe_recover_pushed_pr(
+        self,
+        task_id: str,
+        phase: str,
+        row: dict[str, Any],
+        *,
+        issue: dict | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> str | None:
+        """Create/record a PR after the worker pushed but lost the terminal handoff."""
+        if phase != "implement" or (row.get("status") or "").lower() != "blocked":
+            return None
+        if not self._pushed_branch_without_pr_handoff(task_id):
+            return None
+
+        detail = detail or {}
+        for haystack in (
+            json.dumps(detail.get("latest_summary") or ""),
+            json.dumps(detail.get("comments") or []),
+            str(row.get("result") or ""),
+        ):
+            match = _GITHUB_PR_URL_RE.search(haystack)
+            if match:
+                try:
+                    return await self._complete_recovered_pr_handoff(task_id, row, match.group(0))
+                except Exception as exc:  # noqa: BLE001 - recovery must not break normal poll.
+                    logger.warning(
+                        "kanban_adapter: pushed PR recovery from existing URL failed for %s: %s",
+                        task_id,
+                        exc,
+                    )
+                    return None
+
+        try:
+            from worktree_bootstrap import worktree_path
+
+            task = detail.get("task") if isinstance(detail.get("task"), dict) else {}
+            wt_path = Path(
+                row.get("workspace_path")
+                or task.get("workspace_path")
+                or worktree_path(task_id)
+            ).expanduser()
+            if not wt_path.exists():
+                return None
+            branch = (
+                await self._run_worktree_command(
+                    ["git", "branch", "--show-current"],
+                    cwd=wt_path,
+                    timeout=10,
+                )
+            ).strip()
+            if not branch:
+                return None
+
+            try:
+                pr_url = (
+                    await self._run_worktree_command(
+                        ["gh", "pr", "view", "--json", "url", "--jq", ".url"],
+                        cwd=wt_path,
+                        timeout=20,
+                    )
+                ).strip()
+            except KanbanCLIError:
+                pr_url = ""
+            if pr_url and not _GITHUB_PR_URL_RE.search(pr_url):
+                logger.warning(
+                    "kanban_adapter: gh pr view returned no PR URL for recovered task %s: %s",
+                    task_id,
+                    pr_url,
+                )
+                pr_url = ""
+            if not pr_url:
+                try:
+                    upstream = (
+                        await self._run_worktree_command(
+                            ["git", "rev-parse", "--abbrev-ref", "HEAD@{upstream}"],
+                            cwd=wt_path,
+                            timeout=10,
+                        )
+                    ).strip()
+                    base_branch = upstream.split("/", 1)[-1].strip() or "main"
+                except KanbanCLIError:
+                    base_branch = "main"
+                identifier = (issue or {}).get("identifier") or row.get("title") or task_id
+                title = str(row.get("title") or (issue or {}).get("title") or identifier)
+                if not title.startswith(str(identifier)):
+                    title = f"{identifier}: {title}"
+                body = (
+                    "Recovered by Zoe after Hermes pushed the branch but was interrupted "
+                    "before `gh pr create`/`kanban_complete`.\n\n"
+                    f"Kanban task: `{task_id}`\n"
+                    f"Branch: `{branch}`"
+                )
+                pr_url = (
+                    await self._run_worktree_command(
+                        ["gh", "pr", "create", "--base", base_branch, "--title", title[:240], "--body", body],
+                        cwd=wt_path,
+                        timeout=45,
+                    )
+                ).strip()
+            match = _GITHUB_PR_URL_RE.search(pr_url)
+            if not match:
+                return None
+            pr_url = match.group(0)
+            return await self._complete_recovered_pr_handoff(task_id, row, pr_url, branch=branch)
+        except Exception as exc:  # noqa: BLE001 - recovery must not break normal poll.
+            logger.warning("kanban_adapter: pushed PR recovery failed for %s: %s", task_id, exc)
+            return None
+
     async def dispatch(self, issue: dict) -> dict:
         """Create the single current ready phase for a Multica engineering run.
 
@@ -1343,6 +1540,36 @@ class KanbanAdapter:
                 phases[phase] = row
                 continue
             if await self._maybe_auto_block_protocol_violation(task_id, phase, row, detail):
+                phases[phase] = row
+
+        for phase, row in list(phases.items()):
+            if phase != "implement" or (row.get("status") or "").lower() != "blocked":
+                continue
+            task_id = row.get("id")
+            if not task_id:
+                continue
+            detail = detail_cache.get(task_id)
+            if detail is None:
+                try:
+                    detail = await self._run(["show", task_id, "--json"], expect_json=True)
+                    detail = _with_recovered_log_budget(task_id, phase, detail)
+                except KanbanCLIError:
+                    detail = {}
+                detail_cache[task_id] = detail
+            pr_url = await self._maybe_recover_pushed_pr(
+                task_id,
+                phase,
+                row,
+                issue=issue,
+                detail=detail,
+            )
+            if pr_url:
+                detail["latest_summary"] = (
+                    f"PR_URL={pr_url}\n"
+                    "BLOCKER=\n"
+                    "TESTS=recovered after pushed branch; downstream verify/review must validate\n"
+                    "SUMMARY=Recovered PR handoff after worker interruption following git push"
+                )
                 phases[phase] = row
 
         statuses = {p: (r.get("status") or "") for p, r in phases.items()}

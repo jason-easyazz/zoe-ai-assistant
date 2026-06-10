@@ -24,6 +24,13 @@ admitted Hindsight executor.
 - Failed or blocked traces prevent promotion.
 - Graphiti-style targets require a relationship or supersession edge.
 - Self-evolution memories require approved proposal context.
+- Scope-bearing Zoe memory events must keep first-class `scope` metadata at the
+  MemoryService writer boundary. Legacy `visibility` is derived from scope:
+  `shared` maps to `family`; `personal`, `ambient`, `system`, and `project`
+  map to `personal` while preserving the explicit scope value.
+- Hindsight retain candidates must persist `event_id`, `evidence_refs`,
+  `relationships`, `supersedes`, and `retention_policy` as first-class
+  metadata, not only candidate-prefixed fields or tags.
 - Trace `user_id` values must match the memory candidate user.
 
 ## Current Scope
@@ -35,6 +42,12 @@ approved evolution outcome memories, but production chat still does not
 auto-write to MemoryService, Hindsight, Graphiti, MemPalace, or Multica.
 Additional runtime writers should be wired in later small PRs after each
 backend path is reviewed and tested.
+
+`admit_hindsight_retain_candidate(event_id)` is the current runtime-facing
+admission interface for pending Hindsight retain candidates. It is intentionally
+inert until the admission worker is wired: it returns pending review,
+`allowed_to_write_durable: false`, and no side effects. Future chat/runtime code
+should call this interface rather than calling retain sidecars directly.
 
 ## Intended Flow
 
@@ -58,7 +71,10 @@ admission is pending or blocked.
 Hindsight retain plans follow the same rule: Zoe may create pending retain
 candidates for review, but the sidecar retain payload cannot be built or
 executed unless a matching admission decision allows durable writes to the
-Hindsight backend.
+Hindsight backend. The current `admit_hindsight_retain_candidate(event_id)`
+entrypoint is a no-op pending stub; a later worker must load the pending
+candidate, build the full admission request, evaluate evidence, and produce an
+admitted retain plan before any durable Hindsight write.
 
 ## Multica Bridge Rules
 
