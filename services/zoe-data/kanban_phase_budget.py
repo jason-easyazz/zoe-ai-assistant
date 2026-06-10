@@ -552,7 +552,12 @@ def implement_pre_edit_drift_reason_from_log(
     repeat_read_budget = _pre_edit_repeat_read_budget()
     explore_steps = 0
     focused_harness_test_seen = False
-    post_focus_adapter_read_allowed = True
+    post_focus_allowed_reads = {
+        "services/zoe-data/main.py",
+        "services/zoe-data/tests/test_main_multica_poll.py",
+        "services/zoe-data/executors/kanban_adapter.py",
+    }
+    post_focus_reads_seen: set[str] = set()
     read_counts: dict[str, int] = {}
     for line in step_lines:
         if _PATCH_STEP_RE.search(line) or _TERMINAL_STEP_RE.search(line):
@@ -566,18 +571,18 @@ def implement_pre_edit_drift_reason_from_log(
         read_match = _READ_STEP_RE.search(line)
         if focused_harness_test_seen:
             path = _read_path_key(read_match.group("path")) if read_match else ""
-            if (
-                post_focus_adapter_read_allowed
-                and path.endswith("services/zoe-data/executors/kanban_adapter.py")
-            ):
-                post_focus_adapter_read_allowed = False
+            matched_allowed_path = next(
+                (allowed for allowed in post_focus_allowed_reads if path.endswith(allowed)),
+                "",
+            )
+            if matched_allowed_path and matched_allowed_path not in post_focus_reads_seen:
+                post_focus_reads_seen.add(matched_allowed_path)
                 continue
-            else:
-                return (
-                    "BLOCKER=IMPLEMENT_HANDOFF_DRIFT: engineering blocker follow-up kept "
-                    "exploring after focused test instead of editing kanban_adapter.py "
-                    "or blocking ALREADY_COVERED"
-                )
+            return (
+                "BLOCKER=IMPLEMENT_HANDOFF_DRIFT: engineering blocker follow-up kept "
+                "exploring after focused test instead of editing the named harness file "
+                "or blocking ALREADY_COVERED"
+            )
         if explore_steps > explore_budget:
             return (
                 "BLOCKER=IMPLEMENT_HANDOFF_DRIFT: pre-edit exploration exceeded "
