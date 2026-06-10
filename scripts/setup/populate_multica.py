@@ -120,8 +120,8 @@ def _db_exec(sql: str) -> tuple[bool, str]:
         if result.returncode == 0:
             return True, result.stdout
         return False, result.stderr
-    except Exception as e:
-        return False, str(e)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, str(exc)
 
 
 def _db_update_one(sql: str) -> tuple[bool, str]:
@@ -155,7 +155,7 @@ def _db_name_id_map(table: str, names: list[str]) -> dict[str, str]:
     ]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-    except Exception as exc:
+    except (OSError, subprocess.SubprocessError) as exc:
         print(f"  ⚠ Failed to inspect existing {table} rows: {exc}")
         return {}
     if result.returncode != 0:
@@ -562,7 +562,7 @@ def _runtime_ids_by_provider(default_runtime_id: str) -> dict[str, str]:
     ]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-    except Exception as exc:
+    except (OSError, subprocess.SubprocessError) as exc:
         print(f"  ⚠ Runtime provider lookup failed: {exc}")
         return runtime_ids
     if result.returncode != 0:
@@ -1185,8 +1185,8 @@ def _db_exec_zoe(sql: str) -> tuple[bool, str]:
         if result.returncode == 0:
             return True, result.stdout.strip()
         return False, result.stderr
-    except Exception as e:
-        return False, str(e)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, str(exc)
 
 
 def _parse_psql_output(output: str) -> list[dict]:
