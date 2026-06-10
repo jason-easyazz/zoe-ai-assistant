@@ -338,7 +338,6 @@
                     ? true
                     : !!cap.matrix.pages[pageId];
                 if (!allowed && pageId === 'skybridge') {
-                    console.log('✅ Skybridge touch surface allowed without capability matrix entry');
                     return;
                 }
                 if (!allowed) {
