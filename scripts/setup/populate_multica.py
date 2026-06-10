@@ -565,7 +565,12 @@ def step_f_create_agents(runtime_id: str) -> dict[str, str]:
     agent_ids: dict[str, str] = dict(existing_names)
     for defn in _AGENT_DEFS:
         name = defn["name"]
-        target_runtime_id = runtime_ids.get(str(defn.get("runtime_provider") or "zoe"), runtime_id)
+        runtime_provider = str(defn.get("runtime_provider") or "zoe")
+        target_runtime_id = runtime_ids.get(runtime_provider, runtime_id)
+        if runtime_provider != "zoe" and runtime_provider not in runtime_ids:
+            print(
+                f"  ⚠ Provider '{runtime_provider}' not online — using Zoe runtime for '{name}'"
+            )
         if name in existing_names:
             agent_id = existing_names[name]
             sql = (
@@ -849,20 +854,37 @@ def step_i_create_autopilots(agent_ids: dict[str, str]):
             _counts["autopilots"] += 1
             print(f"  ✓ Created autopilot '{title}' ({ap_id})")
 
-        # Ensure cron trigger exists
+        # Ensure cron trigger matches the managed schedule.
         ap_detail = _get(f"/api/autopilots/{ap_id}")
         existing_triggers = ap_detail.get("triggers", []) if ap_detail else []
-        has_schedule_trigger = any(t.get("kind") == "schedule" for t in existing_triggers)
-        if has_schedule_trigger:
-            print(f"    ↩ Trigger already set: {apdef['cron']}")
+        schedule_triggers = [t for t in existing_triggers if t.get("kind") == "schedule"]
+        desired_cron = apdef["cron"]
+        desired_timezone = "Australia/Perth"
+        has_matching_schedule = any(
+            t.get("cron_expression") == desired_cron
+            and (t.get("timezone") or desired_timezone) == desired_timezone
+            for t in schedule_triggers
+        )
+        if has_matching_schedule:
+            print(f"    ↩ Trigger already set: {desired_cron}")
             continue
-
+        if schedule_triggers:
+            delete_sql = (
+                "delete from autopilot_trigger "
+                f"where autopilot_id={_sql_literal(ap_id)} and kind='schedule';"
+            )
+            ok, msg = _db_exec(delete_sql)
+            if ok:
+                print(f"    ↻ Replacing schedule trigger with: {desired_cron}")
+            else:
+                print(f"    ⚠ Could not replace trigger for '{title}': {msg[:100]}")
+                continue
         trig = _post(
             f"/api/autopilots/{ap_id}/triggers",
             {
                 "kind": "schedule",
-                "cron_expression": apdef["cron"],
-                "timezone": "Australia/Perth",
+                "cron_expression": desired_cron,
+                "timezone": desired_timezone,
             },
         )
         if trig and "id" in trig:
