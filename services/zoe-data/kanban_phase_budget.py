@@ -64,6 +64,10 @@ _FOCUSED_HARNESS_TEST_RE = re.compile(
     r"\bpython3\s+-m\s+pytest\b.*services/zoe-data/tests/\S+\.py::\S+",
     re.IGNORECASE,
 )
+_FOCUSED_HARNESS_TEST_PATH_RE = re.compile(
+    r"(?P<path>services/zoe-data/tests/\S+\.py)::\S+",
+    re.IGNORECASE,
+)
 _CODE_AUDIT_BODY_RE = re.compile(
     r"CODE-AUDIT FAST PATH|\bcode_audit\b",
     re.IGNORECASE,
@@ -107,6 +111,7 @@ _MARK_REVIEWED_VERDICT_RE = re.compile(
 )
 _ZERO_STEP_WARNED: set[str] = set()
 _POST_FOCUS_READ_BUDGET_DEFAULT = 2
+_POST_FOCUS_FOCUSED_TEST_READ_BUDGET_DEFAULT = 4
 _POST_FOCUS_GREP_BUDGET_DEFAULT = 2
 
 
@@ -280,6 +285,26 @@ def _post_focus_read_budget() -> int:
         )
     except ValueError:
         return _POST_FOCUS_READ_BUDGET_DEFAULT
+
+
+def _post_focus_focused_test_read_budget() -> int:
+    try:
+        return max(
+            1,
+            int(
+                os.environ.get(
+                    "ZOE_KANBAN_IMPLEMENT_POST_FOCUS_FOCUSED_TEST_READ_BUDGET",
+                    str(_POST_FOCUS_FOCUSED_TEST_READ_BUDGET_DEFAULT),
+                )
+            ),
+        )
+    except ValueError:
+        return _POST_FOCUS_FOCUSED_TEST_READ_BUDGET_DEFAULT
+
+
+def _focused_harness_test_path(line: str) -> str:
+    match = _FOCUSED_HARNESS_TEST_PATH_RE.search(line)
+    return match.group("path") if match else ""
 
 
 def _post_focus_grep_budget() -> int:
@@ -585,14 +610,17 @@ def implement_pre_edit_drift_reason_from_log(
     repeat_read_budget = _pre_edit_repeat_read_budget()
     explore_steps = 0
     focused_harness_test_seen = False
+    focused_harness_test_path = ""
     post_focus_allowed_reads = {
         "services/zoe-data/main.py",
         "services/zoe-data/tests/test_main_multica_poll.py",
         "services/zoe-data/executors/kanban_adapter.py",
     }
+    post_focus_allowed_read_paths = set(post_focus_allowed_reads)
     post_focus_read_counts: dict[str, int] = {}
     post_focus_grep_steps = 0
     post_focus_read_budget = _post_focus_read_budget()
+    post_focus_focused_test_read_budget = _post_focus_focused_test_read_budget()
     post_focus_grep_budget = _post_focus_grep_budget()
     read_counts: dict[str, int] = {}
     for line in step_lines:
@@ -600,6 +628,9 @@ def implement_pre_edit_drift_reason_from_log(
             return None
         if harness_followup and _FOCUSED_HARNESS_TEST_RE.search(line):
             focused_harness_test_seen = True
+            focused_harness_test_path = _focused_harness_test_path(line)
+            if focused_harness_test_path:
+                post_focus_allowed_read_paths.add(focused_harness_test_path)
             continue
         if not _EXPLORE_STEP_RE.search(line):
             continue
@@ -607,14 +638,17 @@ def implement_pre_edit_drift_reason_from_log(
         if focused_harness_test_seen:
             path = _read_path_key(read_match.group("path")) if read_match else ""
             matched_allowed_path = next(
-                (allowed for allowed in post_focus_allowed_reads if path.endswith(allowed)),
+                (allowed for allowed in post_focus_allowed_read_paths if path.endswith(allowed)),
                 "",
             )
             if matched_allowed_path:
                 post_focus_read_counts[matched_allowed_path] = (
                     post_focus_read_counts.get(matched_allowed_path, 0) + 1
                 )
-                if post_focus_read_counts[matched_allowed_path] <= post_focus_read_budget:
+                read_budget = post_focus_read_budget
+                if focused_harness_test_path and matched_allowed_path == focused_harness_test_path:
+                    read_budget = post_focus_focused_test_read_budget
+                if post_focus_read_counts[matched_allowed_path] <= read_budget:
                     continue
             elif _GREP_STEP_RE.search(line):
                 post_focus_grep_steps += 1
