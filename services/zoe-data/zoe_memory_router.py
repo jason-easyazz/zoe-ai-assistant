@@ -75,7 +75,6 @@ EXPERIENCE_TERMS = {
 
 CODE_TERMS = {
     "code",
-    "service",
     "dependency",
     "router",
     "module",
@@ -83,6 +82,19 @@ CODE_TERMS = {
     "graphify",
     "repo",
     "commit",
+}
+
+CODE_CONTEXT_PHRASES = {
+    "backend service",
+    "data service",
+    "zoe service",
+    "service owns",
+    "which service owns",
+    "which service handles",
+    "which services depend",
+    "which services own",
+    "what service handles",
+    "what services own",
 }
 
 EVOLUTION_TERMS = {
@@ -104,6 +116,12 @@ def _contains_any(text: str, terms: set[str]) -> bool:
         if re.search(pattern, text):
             return True
     return False
+
+
+def _contains_code_context(text: str) -> bool:
+    if _contains_any(text, CODE_TERMS):
+        return True
+    return _contains_any(text, CODE_CONTEXT_PHRASES)
 
 
 def route_memory_query(query: str, *, purpose: str = "chat") -> MemoryRoute:
@@ -167,7 +185,7 @@ def route_memory_query(query: str, *, purpose: str = "chat") -> MemoryRoute:
             reason="experience or outcome memory query",
         )
 
-    if _contains_any(text, CODE_TERMS):
+    if _contains_code_context(text):
         return MemoryRoute(
             primary=MemoryBackend.GRAPHIFY,
             secondary=(MemoryBackend.MEMPALACE,),
