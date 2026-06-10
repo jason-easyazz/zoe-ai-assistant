@@ -1317,7 +1317,7 @@ class KanbanAdapter:
                 start_phase="implement" if _skip_scout(issue) else "scout",
                 issue=issue,
             )
-        except Exception as exc:
+        except (ImportError, OSError, RuntimeError, TypeError, ValueError) as exc:
             logger.warning("kanban_adapter: pipeline bootstrap failed for %s: %s", external_ref, exc)
             return {
                 "ok": False,
@@ -1660,7 +1660,7 @@ class KanbanAdapter:
                             "blocker": None,
                             "pipeline": pipeline,
                         }
-            except Exception as exc:
+            except (ImportError, OSError, RuntimeError, TypeError, ValueError) as exc:
                 logger.debug("kanban_adapter: stale phase filter skipped for %s: %s", external_ref, exc)
 
         detail_cache: dict[str, dict[str, Any]] = {}
