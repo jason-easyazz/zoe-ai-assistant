@@ -240,10 +240,12 @@ def test_skybridge_weather_renderer_uses_widget_forecast_structure():
     assert "new Date(raw + 'T12:00:00')" not in forecast_label_helper
     assert "const dailyRows = daily.slice(0, 5).map" in renderer
     assert "const hourlyTiles = hourly.slice(0, 8).map" in renderer
-    assert "const fallbackTiles = !dailyRows && hourly.slice(0, 5).map" in renderer
+    assert "const fallbackTiles = !dailyRows && !hourlyTiles && hourly.slice(0, 5).map" in renderer
+    assert "const dayList = dailyRows || fallbackTiles;" in renderer
     assert "current && current.description" in renderer
     assert "rain|drizzle|shower|09|10" in renderer
     assert "cloud|overcast|03|04" in renderer
+    assert "replace(',', '')" in renderer
     assert "sky-weather-forecast-head" in renderer
     assert "sky-weather-forecast-grid" not in renderer
     assert "sky-weather-forecast-tile" not in renderer

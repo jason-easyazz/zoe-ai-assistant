@@ -203,8 +203,18 @@
     }
 
     function formatForecastShort(value) {
-        const label = formatForecastLabel(value);
-        return label.replace(/^([A-Za-z]{3})\s+(\d+)\s+([A-Za-z]{3})$/, '$1 $2');
+        const raw = String(value || '');
+        const datePart = raw.slice(0, 10);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(datePart)) {
+            const date = new Date(datePart + 'T12:00:00');
+            if (!Number.isNaN(date.getTime())) {
+                return date.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' }).replace(',', '');
+            }
+        }
+        const label = formatForecastLabel(value).replace(',', '');
+        return label
+            .replace(/^([A-Za-z]{3})\s+([A-Za-z]{3})\s+(\d+)$/, '$1 $3')
+            .replace(/^([A-Za-z]{3})\s+(\d+)\s+([A-Za-z]{3})$/, '$1 $2');
     }
 
     function formatHourLabel(value) {
@@ -277,7 +287,7 @@
                 '</div>'
             ].join('');
         }).join('');
-        const fallbackTiles = !dailyRows && hourly.slice(0, 5).map(item => {
+        const fallbackTiles = !dailyRows && !hourlyTiles && hourly.slice(0, 5).map(item => {
             const band = forecastTempBand(item);
             return [
                 '<div class="sky-weather-day-row">',
@@ -287,6 +297,7 @@
                 '</div>'
             ].join('');
         }).join('');
+        const dayList = dailyRows || fallbackTiles;
         const meta = [
             ['🌡', 'Feels ' + formatTemp(current.feels_like)],
             ['💧', current.humidity == null ? 'Humidity --' : current.humidity + '% humidity'],
@@ -303,7 +314,7 @@
             '<div class="sky-weather-forecast">',
             '<div class="sky-weather-forecast-head"><h4>' + escapeHtml(props.source === 'weather_forecast' ? 'Forecast' : 'Next up') + '</h4><span>' + escapeHtml(daily.length ? daily.length + ' days' : hourly.length + ' hours') + '</span></div>',
             hourlyTiles ? '<div class="sky-weather-hour-strip">' + hourlyTiles + '</div>' : '',
-            '<div class="sky-weather-day-list">' + (dailyRows || fallbackTiles || '<div class="sky-empty-data">No forecast data available yet.</div>') + '</div>',
+            dayList ? '<div class="sky-weather-day-list">' + dayList + '</div>' : (!hourlyTiles ? '<div class="sky-weather-day-list"><div class="sky-empty-data">No forecast data available yet.</div></div>' : ''),
             '</div>',
             '</div>'
         ].join('');
