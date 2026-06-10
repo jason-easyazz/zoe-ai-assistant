@@ -134,6 +134,37 @@ def eval_queries_for_user(user_id: str | None = None) -> tuple[HindsightEvalQuer
     return tuple(replace(query, user_id=normalized) for query in EVAL_QUERIES)
 
 
+def _normalize_budget(value: str) -> str:
+    normalized = value.strip().lower()
+    if not normalized:
+        raise ValueError("budget must not be blank")
+    return normalized
+
+
+def normalize_recall_budgets(values: Sequence[str] | None) -> tuple[str, ...]:
+    if not values:
+        return ()
+    budgets: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        for part in value.split(","):
+            budget = _normalize_budget(part)
+            if budget not in seen:
+                budgets.append(budget)
+                seen.add(budget)
+    return tuple(budgets)
+
+
+def eval_queries_for_budgets(
+    queries: Sequence[HindsightEvalQuery],
+    budgets: Sequence[str] | None,
+) -> tuple[HindsightEvalQuery, ...]:
+    normalized_budgets = normalize_recall_budgets(budgets)
+    if not normalized_budgets:
+        return tuple(queries)
+    return tuple(replace(query, budget=budget) for budget in normalized_budgets for query in queries)
+
+
 def synthetic_retain_payloads(user_id: str | None = None) -> list[dict[str, Any]]:
     return [event.to_dict() for event in synthetic_events_for_user(user_id)]
 
@@ -207,6 +238,21 @@ def summarize_recall_latency(
     }
 
 
+def summarize_recall_latency_by_budget(
+    scores: Sequence[Mapping[str, Any]],
+    *,
+    budget_ms: float = 600.0,
+) -> dict[str, dict[str, Any]]:
+    grouped: dict[str, list[Mapping[str, Any]]] = {}
+    for item in scores:
+        recall_budget = str(item.get("budget") or "unknown")
+        grouped.setdefault(recall_budget, []).append(item)
+    return {
+        recall_budget: summarize_recall_latency(items, budget_ms=budget_ms)
+        for recall_budget, items in sorted(grouped.items())
+    }
+
+
 def recall_response_text(response: Mapping[str, Any]) -> str:
     results = response.get("results") or []
     texts = []
@@ -230,13 +276,16 @@ __all__ = [
     "EVAL_QUERIES",
     "SYNTHETIC_EVENTS",
     "HindsightEvalQuery",
+    "eval_queries_for_budgets",
     "eval_queries_for_user",
     "percentile",
+    "normalize_recall_budgets",
     "recall_response_text",
     "score_recall_response",
     "score_recall_text",
     "summarize_bakeoff_scores",
     "summarize_recall_latency",
+    "summarize_recall_latency_by_budget",
     "synthetic_events_for_user",
     "synthetic_retain_payloads",
 ]
