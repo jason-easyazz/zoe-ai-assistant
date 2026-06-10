@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import re
+import signal
 import shutil
 import subprocess
 import sys
@@ -147,23 +148,44 @@ def classify_probe_result(
     }
 
 
+def _text_output(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
 def run_command(command: Sequence[str], *, cwd: Path, env: dict[str, str], timeout_sec: int) -> tuple[int, bool, str]:
+    process = subprocess.Popen(
+        list(command),
+        cwd=cwd,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
     try:
-        completed = subprocess.run(
-            list(command),
-            cwd=cwd,
-            env=env,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=timeout_sec,
-            check=False,
-        )
-        return completed.returncode, False, completed.stdout
+        stdout, _ = process.communicate(timeout=timeout_sec)
+        return process.returncode or 0, False, stdout or ""
     except subprocess.TimeoutExpired as exc:
-        output = exc.stdout or ""
-        if isinstance(output, bytes):
-            output = output.decode("utf-8", errors="replace")
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except OSError:
+            pass
+        try:
+            stdout, _ = process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except OSError:
+                pass
+            try:
+                stdout, _ = process.communicate(timeout=10)
+            except subprocess.TimeoutExpired:
+                stdout = b""
+        output = "".join(_text_output(part) for part in (exc.stdout, stdout))
         return 124, True, output
 
 

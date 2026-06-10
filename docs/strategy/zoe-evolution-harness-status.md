@@ -57,7 +57,8 @@ Important non-complete truth:
   the probe, requires repo mode plus clustering, and syncs `graphify-out` back to
   the repo only when the probe is accepted and required graph/report files exist.
   Rejected local runs write the generated refresh marker and leave the committed
-  graph untouched.
+  graph untouched. Probe timeouts now terminate the whole Graphify process group
+  so worker children do not survive failed local refresh attempts.
 - Tool/capability and memory read/write inventories now exist as cleanup gates; keep them updated as runtime paths change.
 - MemPalace now has a repeatable local baseline harness and first measured Zoe-host run; Hindsight now has a fixed measured runner, read-only probes, Zoe-host availability baseline, and first live offline retain/recall bake-off: 4/4 synthetic events retained and recalled at score 1.0 using local Gemma and cached BGE embeddings, but p95 recall stayed above the 600 ms hot-path target at 649.00 ms live and 643.25 ms warm.
 - Graphiti/FalkorDB/Neo4j have not yet been accepted for Zoe relational memory. Zoe-specific Graphiti fixtures, a read-only backend probe, and a read-only runtime readiness probe now define the first relationship eval set and availability preflight. A temporary FalkorDB sidecar was reachable, but Zoe's normal Python runtime lacks Graphiti backend packages and the current local Gemma endpoint failed Graphiti structured extraction in a smoke test.
