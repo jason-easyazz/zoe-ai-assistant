@@ -177,6 +177,134 @@ def test_run_command_timeout_handles_killpg_oserror(monkeypatch, tmp_path):
 
 
 
+
+def test_local_model_fit_evidence_finds_local_model_file(tmp_path):
+    module = _load_module()
+    model_dir = tmp_path / "models" / "gemma4-e2b"
+    model_dir.mkdir(parents=True)
+    model_file = model_dir / "gemma-4-E2B-it-Q4_K_M.gguf"
+    model_file.write_bytes(b"local model")
+
+    evidence = module.local_model_fit_evidence(
+        "gemma-4-E2B-it-Q4_K_M.gguf",
+        "http://127.0.0.1:11434/v1",
+        roots=(tmp_path / "models",),
+    )
+
+    assert evidence["base_url_localhost"] is True
+    assert evidence["model_file"] == str(model_file)
+    assert evidence["model_file_exists"] is True
+    assert evidence["model_file_bytes"] == len(b"local model")
+    assert evidence["offline_cloud_keys_scrubbed"] is True
+
+
+def test_run_command_with_evidence_captures_duration_without_log_dump(tmp_path):
+    module = _load_module()
+
+    result = module.run_command_with_evidence(
+        [sys.executable, "-c", "print('hello graphify')"],
+        cwd=tmp_path,
+        env=os.environ.copy(),
+        timeout_sec=5,
+    )
+
+    assert result.exit_code == 0
+    assert result.timed_out is False
+    assert result.output.strip() == "hello graphify"
+    assert result.duration_ms >= 0
+    assert result.child_max_rss_kb is None or result.child_max_rss_kb >= 0
+
+
+def test_run_probe_status_includes_command_and_model_fit_evidence(tmp_path):
+    module = _load_module()
+    fake_graphify = tmp_path / "graphify"
+    fake_graphify.write_text(
+        "#!/usr/bin/env python3\n"
+        "from pathlib import Path\n"
+        "out = Path('graphify-out')\n"
+        "out.mkdir(exist_ok=True)\n"
+        "(out / 'graph.json').write_text('{}', encoding='utf-8')\n"
+        "print('[graphify extract] found 1 code, 0 docs')\n"
+        "print('[graphify extract] wrote graphify-out/graph.json - 2 nodes, 1 edges')\n",
+        encoding="utf-8",
+    )
+    fake_graphify.chmod(0o755)
+
+    status = module.run_probe(
+        module.GraphifyLocalProbeConfig(
+            graphify_bin=fake_graphify,
+            base_url="http://127.0.0.1:11434/v1",
+            model="missing-test-model.gguf",
+            mode="smoke",
+            timeout_sec=5,
+        )
+    )
+
+    assert status["accepted"] is True
+    assert status["command_evidence"]["extract"]["exit_code"] == 0
+    assert "output" not in status["command_evidence"]["extract"]
+    assert status["command_evidence"]["extract"]["duration_ms"] >= 0
+    assert status["model_fit"]["base_url_localhost"] is True
+    assert status["model_fit"]["model_file_exists"] is False
+    assert status["metrics"]["nodes"] == 2
+    assert status["metrics"]["edges"] == 1
+
+
+def test_default_model_roots_honors_env_override(monkeypatch, tmp_path):
+    monkeypatch.setenv("ZOE_MODEL_ROOT", str(tmp_path / "custom-models"))
+
+    module = _load_module()
+
+    assert module.DEFAULT_MODEL_ROOTS == (tmp_path / "custom-models",)
+
+
+def test_child_max_rss_reports_kilobytes_on_darwin(monkeypatch):
+    module = _load_module()
+
+    class Usage:
+        ru_maxrss = 2048 * 1024
+
+    monkeypatch.setattr(module.sys, "platform", "darwin")
+    monkeypatch.setattr(module.resource, "getrusage", lambda _target: Usage())
+
+    assert module._child_max_rss_kb() == 2048
+
+
+def test_run_probe_error_status_keeps_command_evidence_schema(tmp_path, monkeypatch):
+    module = _load_module()
+    fake_graphify = tmp_path / "graphify"
+    fake_graphify.write_text(
+        "#!/usr/bin/env python3\n"
+        "from pathlib import Path\n"
+        "out = Path('graphify-out')\n"
+        "out.mkdir(exist_ok=True)\n"
+        "(out / 'graph.json').write_text('{}', encoding='utf-8')\n"
+        "print('[graphify extract] found 1 code, 0 docs')\n",
+        encoding="utf-8",
+    )
+    fake_graphify.chmod(0o755)
+
+    def boom(**_kwargs):
+        raise RuntimeError("classification failed")
+
+    monkeypatch.setattr(module, "classify_probe_result", boom)
+
+    status = module.run_probe(
+        module.GraphifyLocalProbeConfig(
+            graphify_bin=fake_graphify,
+            base_url="http://127.0.0.1:11434/v1",
+            model="missing-test-model.gguf",
+            mode="smoke",
+            timeout_sec=5,
+        )
+    )
+
+    assert status["accepted"] is False
+    assert status["blockers"] == ["probe_error"]
+    assert status["command_evidence"]["extract"]["exit_code"] == 0
+    assert "output" not in status["command_evidence"]["extract"]
+    assert "classification failed" in status["error"]
+
 def test_validate_scope_path_rejects_unsafe_values():
     module = _load_module()
 
