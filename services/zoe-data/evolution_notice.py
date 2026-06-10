@@ -94,7 +94,7 @@ async def run_evolution_notice() -> dict:
     from multica_client import sync_evolution_proposal_to_multica
     from zoe_candidate_scoring import CandidateEvaluation, CandidateScore
     from zoe_evolution_proposal import EvolutionSignal, EvolutionSignalType
-    from zoe_evolution_proposal_adapter import dump_legacy_evolution_proposal_contract
+    from zoe_evolution_proposal_adapter import build_existing_zoe_proposal_candidate
     from zoe_evolution_runtime_intake import build_runtime_evolution_proposal_intake
 
     created = 0
@@ -126,25 +126,60 @@ async def run_evolution_notice() -> dict:
                 "examples": members[:5],
             })
             target_members = members[:20]
-            target_patterns = dump_legacy_evolution_proposal_contract(
-                proposal_id=prop_id,
-                title=title,
-                description=description,
-                evidence=evidence,
+            evidence_ref = f"intent_miss_cluster:{prop_id}"
+            signal = EvolutionSignal(
+                signal_id=f"signal_{prop_id}",
+                signal_type=EvolutionSignalType.REPEATED_FAILURE.value,
+                summary=description,
+                source="evolution_notice:intent_miss_cluster",
+                evidence_refs=(evidence_ref,),
+                scope="system",
+                metadata={
+                    "miss_count": len(members),
+                    "examples": members[:5],
+                    "representative": rep,
+                },
+            )
+            candidate = build_existing_zoe_proposal_candidate(
                 proposal_type=prop_type,
+                title=title,
+                evidence_refs=(
+                    evidence_ref,
+                    "services/zoe-data/evolution_notice.py:run_evolution_notice",
+                    "training/data/intent-misses.jsonl",
+                ),
                 legacy_writer="evolution_notice:intent_miss_cluster",
+                runtime_notes="Creates a review-only intent-gap proposal from clustered misses; no execution is granted.",
                 target_patterns=target_members,
             )
+            intake = build_runtime_evolution_proposal_intake(
+                proposal_id=prop_id,
+                proposal_type=prop_type,
+                title=title,
+                problem_statement=description,
+                signal=signal,
+                candidates=(candidate,),
+                affected_capabilities=("intent_router", "chat_router", "observation_trace"),
+                expected_benefit="Create a reviewable Zoe intent-gap proposal from clustered miss evidence before implementation work.",
+                verification_plan=(
+                    "human_or_multica_review_required_before_approval",
+                    "implementation_pr_must_attach_tests_and_evidence_before_completion",
+                ),
+                rollback_plan="Reject or defer the proposal; no runtime change has been made by proposal creation.",
+                legacy_target_patterns=target_members,
+                metadata={"legacy_writer": "evolution_notice:intent_miss_cluster"},
+            )
+            row = intake.to_legacy_row()
             await db.execute(
                 """INSERT INTO evolution_proposals
                    (id, type, title, description, evidence, target_patterns, status, proposed_at)
                    VALUES ($1,$2,$3,$4,$5,$6,'pending',$7)""",
-                prop_id,
-                prop_type,
-                title,
-                description,
-                evidence,
-                target_patterns,
+                row["id"],
+                row["type"],
+                row["title"],
+                row["description"],
+                row["evidence"],
+                row["target_patterns"],
                 time.time(),
             )
             created += 1
@@ -160,12 +195,7 @@ async def run_evolution_notice() -> dict:
 
             # Sync to Multica board
             multica_id = await sync_evolution_proposal_to_multica(
-                proposal_id=prop_id,
-                title=title,
-                description=description,
-                evidence=evidence,
-                proposal_type=prop_type,
-                contract_snapshot=target_patterns,
+                **dict(intake.multica_payload),
             )
             if multica_id:
                 await db.execute(
