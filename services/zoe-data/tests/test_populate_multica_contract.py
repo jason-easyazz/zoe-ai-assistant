@@ -29,17 +29,23 @@ def _assigned_literal(name: str):
 def test_managed_agents_keep_provider_specific_runtime_contract():
     agent_defs = _assigned_literal("_AGENT_DEFS")
     providers = {agent["name"]: agent.get("runtime_provider") for agent in agent_defs}
+    fallback_models = {agent["name"]: agent.get("fallback_model") for agent in agent_defs}
 
     assert providers["Zoe Core"] == "zoe"
     assert providers["OpenClaw"] == "hermes"
+    assert fallback_models["OpenClaw"] == "main"
     assert providers["Hermes"] == "hermes"
+    assert fallback_models["Hermes"] == "main"
     assert providers["Agent Zero"] == "zoe"
     assert providers["Self-Improvement Agent"] == "zoe"
 
     source = _source()
     assert "def _runtime_ids_by_provider" in source
     assert "target_runtime_id = runtime_ids.get" in source
+    assert 'target_model = str(defn.get("fallback_model") or target_model)' in source
+    assert "model={_sql_literal(target_model)}" in source
     assert "runtime_id={_sql_literal(target_runtime_id)}" in source
+    assert '"model": target_model' in source
     assert '"runtime_id": target_runtime_id' in source
 
 

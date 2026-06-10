@@ -464,6 +464,7 @@ _AGENT_DEFS = [
             "Do not decide Zoe engineering phase advancement; Zoe/Hermes harness owns that workflow."
         ),
         "model": "gpt-5.4",
+        "fallback_model": "main",
         "runtime_provider": "hermes",
     },
     {
@@ -481,6 +482,7 @@ _AGENT_DEFS = [
         ),
         # Multica daemon selector for the Hermes CLI profile, not a public OpenAI model id.
         "model": "gpt-5.4",
+        "fallback_model": "main",
         "runtime_provider": "hermes",
     },
     {
@@ -567,9 +569,12 @@ def step_f_create_agents(runtime_id: str) -> dict[str, str]:
         name = defn["name"]
         runtime_provider = str(defn.get("runtime_provider") or "zoe")
         target_runtime_id = runtime_ids.get(runtime_provider, runtime_id)
+        target_model = defn["model"]
         if runtime_provider != "zoe" and runtime_provider not in runtime_ids:
+            target_model = str(defn.get("fallback_model") or target_model)
             print(
-                f"  ⚠ Provider '{runtime_provider}' not online — using Zoe runtime for '{name}'"
+                f"  ⚠ Provider '{runtime_provider}' not online — using Zoe runtime for '{name}' "
+                f"with fallback model '{target_model}'"
             )
         if name in existing_names:
             agent_id = existing_names[name]
@@ -577,7 +582,7 @@ def step_f_create_agents(runtime_id: str) -> dict[str, str]:
                 "update agent set "
                 f"description={_sql_literal(defn['description'])}, "
                 f"instructions={_sql_literal(defn['instructions'])}, "
-                f"model={_sql_literal(defn['model'])}, "
+                f"model={_sql_literal(target_model)}, "
                 f"runtime_id={_sql_literal(target_runtime_id)}, "
                 "runtime_mode='local', visibility='workspace', "
                 "archived_at=NULL, archived_by=NULL, updated_at=now() "
@@ -593,7 +598,7 @@ def step_f_create_agents(runtime_id: str) -> dict[str, str]:
             "name": name,
             "description": defn["description"],
             "instructions": defn["instructions"],
-            "model": defn["model"],
+            "model": target_model,
             "runtime_id": target_runtime_id,
             "runtime_mode": "local",
             "visibility": "workspace",
