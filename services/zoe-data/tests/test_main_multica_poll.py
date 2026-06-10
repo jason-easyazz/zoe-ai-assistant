@@ -13,6 +13,7 @@ class RecordingClient:
         self.labels = []
         self.notes = []
         self.default_list_statuses: set[str] | None = None
+        self.list_calls = []
 
     async def record_progress(self, *args, **kwargs):
         self.calls.append((args, kwargs))
@@ -22,6 +23,7 @@ class RecordingClient:
         return self.issues.get(issue_id, {})
 
     async def list_issues(self, status=None, *, limit=None):
+        self.list_calls.append({"status": status, "limit": limit})
         issues = list(self.issues.values()) + list(self.created)
         if status is not None:
             issues = [issue for issue in issues if issue.get("status") == status]
@@ -471,10 +473,49 @@ async def test_record_blocked_multica_chain_reuses_existing_in_progress_budget_f
 
     assert client.created == []
     assert client.labels == []
-    assert client.notes[-1] == (
-        "issue-budget",
-        "Harness follow-up already exists for IMPLEMENT_BUDGET: ZOE-C1",
+    assert client.notes == []
+
+
+@pytest.mark.asyncio
+async def test_record_blocked_multica_chain_returns_after_first_matching_followup_bucket():
+    from main import _record_blocked_multica_chain
+    from multica_ticket_contract import describe_ticket, parse_ticket_block, write_ticket_block
+
+    client = RecordingClient()
+    client.issues["issue-budget"] = {
+        "id": "issue-budget",
+        "identifier": "ZOE-1",
+        "description": "Parent prose",
+        "assignee_id": "hermes",
+    }
+    existing_description = describe_ticket(
+        "Existing backlog follow-up",
+        zoe_kind="harness_fix",
+        source="engineering_blocker_followup",
+        parent_issue_id="issue-budget",
     )
+    existing_metadata = parse_ticket_block(existing_description)
+    existing_metadata["source_blocker"] = "IMPLEMENT_BUDGET"
+    client.issues["existing-child"] = {
+        "id": "existing-child",
+        "identifier": "ZOE-C1",
+        "status": "backlog",
+        "description": write_ticket_block(existing_description, existing_metadata),
+    }
+
+    await _record_blocked_multica_chain(
+        client,
+        "issue-budget",
+        {
+            "pipeline": {
+                "phase": "implement",
+                "block_reason": "IMPLEMENT_BUDGET: code-enforced tool budget exceeded",
+            }
+        },
+    )
+
+    assert client.created == []
+    assert client.list_calls == [{"status": "backlog", "limit": 1000}]
 
 
 @pytest.mark.asyncio
@@ -518,10 +559,7 @@ async def test_record_blocked_multica_chain_reuses_done_budget_followup():
 
     assert client.created == []
     assert client.labels == []
-    assert client.notes[-1] == (
-        "issue-budget",
-        "Harness follow-up already exists for IMPLEMENT_BUDGET: ZOE-C-DONE",
-    )
+    assert client.notes == []
 
 
 @pytest.mark.asyncio
@@ -586,7 +624,4 @@ async def test_record_blocked_multica_chain_reuses_existing_protocol_followup():
 
     assert client.created == []
     assert client.labels == []
-    assert client.notes[-1] == (
-        "issue-protocol",
-        "Harness follow-up already exists for PROTOCOL_VIOLATION: ZOE-C2",
-    )
+    assert client.notes == []
