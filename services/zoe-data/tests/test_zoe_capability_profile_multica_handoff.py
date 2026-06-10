@@ -138,6 +138,32 @@ def test_profile_multica_handoff_blocks_mismatched_patch_capabilities():
     assert "capability_id_mismatch" in handoff.blockers
 
 
+def test_profile_multica_handoff_blocks_mismatched_target_path():
+    promotion = _promotion_plan()
+    patch = _patch_plan(promotion)
+    mismatched_patch = type(patch)(
+        target_path="services/zoe-data/other_capability_profile.py",
+        source_sha256=patch.source_sha256,
+        patch=patch.patch,
+        records=patch.records,
+        metadata=patch.metadata,
+    )
+
+    handoff = build_capability_profile_multica_handoff(promotion, mismatched_patch)
+
+    assert handoff.allowed_to_create_ticket is False
+    assert "target_path_mismatch" in handoff.blockers
+
+
+def test_profile_multica_handoff_blocks_missing_title():
+    handoff = build_capability_profile_multica_handoff(_promotion_plan(), _patch_plan(), title="   ")
+
+    assert handoff.allowed_to_create_ticket is False
+    assert "missing_title" in handoff.blockers
+    assert handoff.description == ""
+    assert handoff.ticket_metadata == {}
+
+
 def test_blocked_profile_multica_handoff_cannot_carry_payloads():
     with pytest.raises(ValueError, match="blocked capability profile handoffs"):
         CapabilityProfileMulticaHandoff(
@@ -146,5 +172,15 @@ def test_blocked_profile_multica_handoff_cannot_carry_payloads():
             ticket_metadata={},
             promotion_manifest="manifest",
             patch_text="patch",
+            blockers=("manual_blocker",),
+        )
+
+    with pytest.raises(ValueError, match="blocked capability profile handoffs"):
+        CapabilityProfileMulticaHandoff(
+            title="blocked",
+            description="",
+            ticket_metadata={"stale": "metadata"},
+            promotion_manifest="",
+            patch_text="",
             blockers=("manual_blocker",),
         )

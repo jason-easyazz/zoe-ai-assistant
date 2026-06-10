@@ -8,6 +8,7 @@ or apply patches.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -40,7 +41,9 @@ class CapabilityProfileMulticaHandoff:
     def __post_init__(self) -> None:
         object.__setattr__(self, "ticket_metadata", MappingProxyType(dict(self.ticket_metadata)))
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
-        if self.blockers and (self.description or self.promotion_manifest or self.patch_text):
+        if self.blockers and (
+            self.description or self.ticket_metadata or self.promotion_manifest or self.patch_text
+        ):
             raise ValueError("blocked capability profile handoffs cannot carry ticket payloads")
 
     @property
@@ -190,8 +193,6 @@ def _metadata(metadata: Mapping[str, Any] | None) -> Mapping[str, Any]:
 
 
 def _sha256(text: str) -> str:
-    import hashlib
-
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
