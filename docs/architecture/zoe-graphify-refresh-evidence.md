@@ -13,12 +13,15 @@ Zoe now has an observe-only local Graphify probe:
 ```bash
 python3 scripts/maintenance/graphify_local_probe.py --mode smoke --timeout-sec 60 --status-json /tmp/zoe-graphify-local-smoke-status.json
 python3 scripts/maintenance/graphify_local_probe.py --mode repo --timeout-sec 1800 --status-json /tmp/zoe-graphify-local-repo-status.json
+python3 scripts/maintenance/graphify_local_probe.py --mode scope --include-path services/zoe-data --timeout-sec 600 --status-json /tmp/zoe-graphify-local-scope-status.json
 ```
 
 The probe uses Graphify's `ollama` backend against Zoe's localhost llama.cpp
 OpenAI-compatible endpoint, removes cloud API keys from the subprocess
-environment, and runs in a temporary fixture or detached git snapshot. It never
-syncs generated `graphify-out` artifacts back into the repo.
+environment, and runs in a temporary fixture, scoped path copy, or detached git
+snapshot. It never syncs generated `graphify-out` artifacts back into the repo.
+Scoped mode is observe-only evidence for subsystem-sized local model runs; the
+sync-capable refresh wrapper still requires full repo mode with clustering.
 
 `graphify_local_refresh.py` is the sync-capable local wrapper. It runs the repo
 probe with clustering and `keep_workdir`, then syncs `graphify-out` back to the

@@ -174,3 +174,53 @@ def test_run_command_timeout_handles_killpg_oserror(monkeypatch, tmp_path):
     assert timed_out is True
     assert output == "partial"
     assert fake.calls == 3
+
+
+
+def test_validate_scope_path_rejects_unsafe_values():
+    module = _load_module()
+
+    assert module.validate_scope_path("services/zoe-data") == Path("services/zoe-data")
+
+    for value in ("", "/home/zoe/assistant", "../secrets", "services/../.env", "."):
+        try:
+            module.validate_scope_path(value)
+        except ValueError as exc:
+            assert "invalid scoped Graphify path" in str(exc)
+        else:
+            raise AssertionError(f"unsafe scope path accepted: {value}")
+
+
+def test_prepare_scope_workdir_copies_only_requested_paths(tmp_path):
+    module = _load_module()
+    root = tmp_path / "repo"
+    source_dir = root / "services" / "zoe-data"
+    source_dir.mkdir(parents=True)
+    (source_dir / "memory_contract.py").write_text("def retain():\\n    return True\\n", encoding="utf-8")
+    ignored = source_dir / "__pycache__"
+    ignored.mkdir()
+    (ignored / "memory_contract.pyc").write_text("cache", encoding="utf-8")
+    (root / "outside.py").write_text("outside", encoding="utf-8")
+    parent = tmp_path / "probe"
+    config = module.GraphifyLocalProbeConfig(root=root, mode="scope", include_paths=("services/zoe-data",))
+
+    workdir = module.prepare_scope_workdir(config, parent)
+
+    assert (workdir / "services" / "zoe-data" / "memory_contract.py").exists()
+    assert not (workdir / "services" / "zoe-data" / "__pycache__").exists()
+    assert not (workdir / "outside.py").exists()
+    assert (workdir / ".git").exists()
+
+
+def test_prepare_scope_workdir_requires_include_paths(tmp_path):
+    module = _load_module()
+    root = tmp_path / "repo"
+    root.mkdir()
+    config = module.GraphifyLocalProbeConfig(root=root, mode="scope")
+
+    try:
+        module.prepare_scope_workdir(config, tmp_path / "probe")
+    except ValueError as exc:
+        assert "requires at least one --include-path" in str(exc)
+    else:
+        raise AssertionError("scope mode without include paths was accepted")

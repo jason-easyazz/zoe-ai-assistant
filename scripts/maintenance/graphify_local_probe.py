@@ -57,6 +57,7 @@ class GraphifyLocalProbeConfig:
     timeout_sec: int = 180
     cluster: bool = False
     keep_workdir: bool = False
+    include_paths: tuple[str, ...] = ()
 
 
 def utc_now() -> str:
@@ -205,6 +206,44 @@ def prepare_smoke_workdir(parent: Path) -> Path:
     return workdir
 
 
+SCOPE_COPY_IGNORE = shutil.ignore_patterns(
+    ".git",
+    "__pycache__",
+    ".pytest_cache",
+    "node_modules",
+    "graphify-out",
+    ".venv",
+    "venv",
+)
+
+
+def validate_scope_path(value: str) -> Path:
+    path = Path(value)
+    if not value or value == "." or path.is_absolute() or any(part in ("", ".", "..") for part in path.parts):
+        raise ValueError(f"invalid scoped Graphify path: {value!r}")
+    return path
+
+
+def prepare_scope_workdir(config: GraphifyLocalProbeConfig, parent: Path) -> Path:
+    if not config.include_paths:
+        raise ValueError("scope mode requires at least one --include-path")
+    workdir = parent / "graphify-local-scope"
+    workdir.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=workdir, check=True)
+    for raw_path in config.include_paths:
+        rel_path = validate_scope_path(raw_path)
+        source = config.root / rel_path
+        if not source.exists():
+            raise FileNotFoundError(f"scoped Graphify path not found: {raw_path}")
+        destination = workdir / rel_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if source.is_dir():
+            shutil.copytree(source, destination, dirs_exist_ok=True, ignore=SCOPE_COPY_IGNORE)
+        else:
+            shutil.copy2(source, destination)
+    return workdir
+
+
 def prepare_repo_workdir(config: GraphifyLocalProbeConfig, parent: Path) -> Path:
     workdir = parent / "graphify-local-repo"
     subprocess.run(["git", "fetch", "--quiet", "origin", "main"], cwd=config.root, check=True)
@@ -229,6 +268,8 @@ def run_probe(config: GraphifyLocalProbeConfig) -> dict[str, object]:
             workdir = prepare_smoke_workdir(temp_parent)
         elif config.mode == "repo":
             workdir = prepare_repo_workdir(config, temp_parent)
+        elif config.mode == "scope":
+            workdir = prepare_scope_workdir(config, temp_parent)
         else:
             raise ValueError(f"unsupported probe mode: {config.mode}")
 
@@ -273,6 +314,7 @@ def run_probe(config: GraphifyLocalProbeConfig) -> dict[str, object]:
             "ref": config.ref,
             "model": config.model,
             "base_url": config.base_url,
+            "include_paths": list(config.include_paths),
             "exit_code": exit_code,
             "timed_out": timed_out,
             "workdir": str(workdir) if config.keep_workdir and workdir else None,
@@ -288,6 +330,7 @@ def run_probe(config: GraphifyLocalProbeConfig) -> dict[str, object]:
             "ref": config.ref,
             "model": config.model,
             "base_url": config.base_url,
+            "include_paths": list(config.include_paths),
             "accepted": False,
             "blockers": ["probe_error"],
             "warnings": [],
@@ -310,10 +353,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--ref", default="origin/main")
-    parser.add_argument("--mode", choices=("smoke", "repo"), default="smoke")
+    parser.add_argument("--mode", choices=("smoke", "repo", "scope"), default="smoke")
     parser.add_argument("--timeout-sec", type=int, default=180)
     parser.add_argument("--cluster", action="store_true")
     parser.add_argument("--keep-workdir", action="store_true")
+    parser.add_argument("--include-path", action="append", default=[], help="Relative path to copy for scope mode. May be repeated.")
     parser.add_argument("--status-json", type=Path)
     return parser.parse_args(argv)
 
@@ -330,6 +374,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         timeout_sec=args.timeout_sec,
         cluster=args.cluster,
         keep_workdir=args.keep_workdir,
+        include_paths=tuple(args.include_path),
     )
     status = run_probe(config)
     text = json.dumps(status, indent=2, sort_keys=True)
