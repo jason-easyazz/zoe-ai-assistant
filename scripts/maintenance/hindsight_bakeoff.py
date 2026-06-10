@@ -20,10 +20,12 @@ DATA = ROOT / "services" / "zoe-data"
 sys.path.insert(0, str(DATA))
 
 from hindsight_bakeoff import (  # noqa: E402
+    eval_queries_for_budgets,
     eval_queries_for_user,
     score_recall_response,
     summarize_bakeoff_scores,
     summarize_recall_latency,
+    summarize_recall_latency_by_budget,
     synthetic_events_for_user,
 )
 from hindsight_memory import HindsightConfig, HindsightMemoryClient  # noqa: E402
@@ -43,13 +45,20 @@ async def main() -> int:
     parser.add_argument("--retain-timeout-seconds", type=float, default=180.0, help="max seconds to wait for each async retain operation")
     parser.add_argument("--retain-poll-seconds", type=float, default=1.0, help="seconds between async retain status polls")
     parser.add_argument("--recall-latency-budget-ms", type=float, default=600.0, help="p95 recall latency budget for hot-path eligibility")
+    parser.add_argument(
+        "--recall-budget",
+        dest="recall_budgets",
+        action="append",
+        help="recall budget to measure; repeat or comma-separate values such as low,mid",
+    )
     parser.add_argument("--user-id", type=_user_id_arg, help="override the synthetic bake-off user_id for multi-user runs")
     parser.add_argument("--json", action="store_true", help="emit JSON")
     args = parser.parse_args()
 
     client = HindsightMemoryClient(HindsightConfig.from_env())
     synthetic_events = synthetic_events_for_user(args.user_id)
-    eval_queries = eval_queries_for_user(args.user_id)
+    base_eval_queries = eval_queries_for_user(args.user_id)
+    eval_queries = eval_queries_for_budgets(base_eval_queries, args.recall_budgets)
     effective_user_id = eval_queries[0].user_id
     output: dict[str, object] = {
         "status": client.enabled_status(),
@@ -84,6 +93,7 @@ async def main() -> int:
         )
         latency_ms = (time.perf_counter() - started) * 1000
         score = score_recall_response(response, query)
+        score["budget"] = query.budget
         score["latency_ms"] = latency_ms
         score["bank_id"] = response.get("bank_id")
         score["enabled"] = response.get("enabled", client.config.enabled)
@@ -94,6 +104,11 @@ async def main() -> int:
     output["scores"] = scores
     output["summary"] = summarize_bakeoff_scores(scores)
     output["latency"] = summarize_recall_latency(scores, budget_ms=args.recall_latency_budget_ms)
+    if args.recall_budgets:
+        output["latency_by_recall_budget"] = summarize_recall_latency_by_budget(
+            scores,
+            budget_ms=args.recall_latency_budget_ms,
+        )
 
     if args.json:
         print(json.dumps(output, indent=2, sort_keys=True))
@@ -101,6 +116,8 @@ async def main() -> int:
         print(json.dumps(output["status"], indent=2, sort_keys=True))
         print(json.dumps(output["summary"], indent=2, sort_keys=True))
         print(json.dumps(output["latency"], indent=2, sort_keys=True))
+        if "latency_by_recall_budget" in output:
+            print(json.dumps(output["latency_by_recall_budget"], indent=2, sort_keys=True))
         for item in scores:
             print(f"{item['name']}: score={item['score']:.2f} latency_ms={item['latency_ms']:.2f} missing={item['missing']}")
     return 0

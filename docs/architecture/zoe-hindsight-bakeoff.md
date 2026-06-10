@@ -64,6 +64,12 @@ Command:
 PYTHONPATH=services/zoe-data python3 scripts/maintenance/hindsight_bakeoff.py --json
 ```
 
+To compare recall budgets in one run, repeat or comma-separate `--recall-budget` values. When this flag is present, the output includes both aggregate `latency` and `latency_by_recall_budget` blocks.
+
+```bash
+PYTHONPATH=services/zoe-data python3 scripts/maintenance/hindsight_bakeoff.py --recall-budget low,mid --json
+```
+
 To write synthetic events, the operator must explicitly enable Hindsight and opt into writes:
 
 ```bash
@@ -183,6 +189,44 @@ Warm recall-only pass:
 | p50 recall latency | 567.67 ms |
 | p95 recall latency | 643.25 ms |
 
+## Live Budget Matrix Pass
+
+Date: 2026-06-11
+
+The live sidecar was started as a fresh isolated `zoe-hindsight-budget-bakeoff` container using the same local Gemma and cached local BGE configuration. The runner retained the four synthetic events, waited for all four parent operations to complete, then measured both low and mid recall budgets in one pass:
+
+```bash
+HINDSIGHT_ENABLED=true \
+HINDSIGHT_BASE_URL=http://127.0.0.1:8888 \
+HINDSIGHT_API_LLM_PROVIDER=openai \
+HINDSIGHT_API_LLM_BASE_URL=http://127.0.0.1:11434/v1 \
+HINDSIGHT_API_EMBEDDINGS_PROVIDER=local \
+PYTHONPATH=services/zoe-data \
+python3 scripts/maintenance/hindsight_bakeoff.py --retain-synthetic --retain-timeout-seconds 240 --recall-budget low,mid --json
+```
+
+Aggregate result:
+
+| Metric | Value |
+| --- | --- |
+| Synthetic events retained | 4 |
+| Retain parent operations completed | 4/4 |
+| Recall cases | 8 |
+| Average score | 1.0 |
+| Minimum score | 1.0 |
+| p50 recall latency | 513.95 ms |
+| p95 recall latency | 657.52 ms |
+| Hot-path status | `async_or_cached_only` |
+
+Budget breakdown:
+
+| Recall Budget | Cases | Average Score | p50 Latency | p95 Latency | Hot-Path Status |
+| --- | --- | --- | --- | --- | --- |
+| `low` | 4 | 1.0 | 553.22 ms | 647.14 ms | `async_or_cached_only` |
+| `mid` | 4 | 1.0 | 510.21 ms | 637.34 ms | `async_or_cached_only` |
+
+Resource observation at cleanup: the isolated sidecar sampled about 936.9 MiB memory and about 4.59% CPU, then it was removed.
+
 Resource observations:
 
 | Observation | Value |
@@ -196,8 +240,8 @@ Residual findings:
 
 - Offline viability is proven for the synthetic Hindsight path: no cloud LLM or cloud embedding provider was required.
 - Accuracy is strong on the current synthetic fixture: 4/4 recall cases scored 1.0.
-- Hindsight does not yet clear the strict hot-path latency gate because p95 recall stayed above the 600 ms target on both live and warm runs.
-- Hindsight should therefore remain a sidecar/async or cached recall candidate until latency is improved or the routing budget is explicitly relaxed.
+- Hindsight does not yet clear the strict hot-path latency gate because p95 recall stayed above the 600 ms target on live, warm, low-budget, and mid-budget runs.
+- Hindsight should therefore remain a sidecar/async or cached recall candidate until latency is improved, cached prompt packets are measured, or the routing budget is explicitly relaxed.
 - The bake-off used an isolated embedded PostgreSQL instance inside the Hindsight container; it did not write Zoe production memory tables.
 - Hindsight emitted maintenance warnings for some embedded database helper functions during startup, but the health check, retain operations, consolidation, and recall completed.
 
