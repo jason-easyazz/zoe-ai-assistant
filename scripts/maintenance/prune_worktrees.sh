@@ -65,7 +65,6 @@ while IFS= read -r line; do
       wt_path="${line#worktree }"
       wt_branch=""
       wt_locked=0
-      wt_dirty=0
       ;;
     branch\ refs/heads/*)
       wt_branch="${line#branch refs/heads/}"
@@ -136,7 +135,10 @@ for entry in "${candidates[@]}"; do
   IFS='|' read -r wt_path wt_branch wt_kind <<<"$entry"
   if [[ "$EXECUTE" == 1 ]]; then
     log "removing $wt_path ($wt_kind${wt_branch:+, branch $wt_branch})"
-    git worktree remove "$wt_path"
+    if ! git worktree remove "$wt_path"; then
+      log "warning: could not remove $wt_path; skipping"
+      continue
+    fi
     if [[ -n "$wt_branch" ]] && git show-ref --verify --quiet "refs/heads/$wt_branch"; then
       git branch -d "$wt_branch" 2>/dev/null || log "warning: could not delete local branch $wt_branch"
     fi
