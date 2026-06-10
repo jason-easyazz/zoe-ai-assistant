@@ -231,6 +231,22 @@ async def test_record_completed_multica_chain_records_non_retro_pipeline_phase()
 
 
 @pytest.mark.asyncio
+async def test_record_completed_multica_chain_omits_absent_pr_url():
+    from main import _record_completed_multica_chain
+
+    client = RecordingClient()
+
+    await _record_completed_multica_chain(
+        client,
+        "issue-no-pr",
+        {"status": "done", "pipeline": {"phase": "closeout"}},
+    )
+
+    assert "pr_url" not in client.calls[0][1]
+    assert client.calls[0][1]["status"] == "done"
+
+
+@pytest.mark.asyncio
 async def test_record_completed_multica_chain_creates_retro_followup_ticket():
     from main import _record_completed_multica_chain
     from multica_ticket_contract import parse_ticket_block
