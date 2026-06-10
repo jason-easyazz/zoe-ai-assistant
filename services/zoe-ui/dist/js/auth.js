@@ -425,7 +425,8 @@
                     if (u) pathname = new URL(u, window.location.origin).pathname;
                 } catch (_e) {}
                 const skipClear = /\/api\/auth\/(login|register|password|refresh|guest)/i.test(pathname);
-                const allowSessionClear = /\/api\/auth\/(profile|me|session|logout)/i.test(pathname);
+                const allowSessionClear = /\/api\/auth\/(profile|me|session|logout)/i.test(pathname) ||
+                    pathname === '/api/skybridge/resolve';
                 const sidBefore = getSession();
                 if (sidBefore && allowSessionClear && !skipClear && !options.__zoe401Retried) {
                     console.warn('⚠️ 401 — clearing stale session and retrying once without X-Session-ID:', url);

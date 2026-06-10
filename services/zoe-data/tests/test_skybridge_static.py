@@ -164,6 +164,7 @@ def test_skybridge_uses_backend_status_contract():
     assert "/api/skybridge/resolve" in app
     assert "resolveCommand(query)" in app
     assert "isDataQuery(query)" in app
+    assert "resp.status === 401 || resp.status === 503" in app
     assert "if (voice) voice.sendText(query)" in app
     assert "event.role === 'user') projectCards" not in app
     assert "projectCommand(query);\n        if (voice) voice.sendText(query);" not in app
@@ -188,11 +189,26 @@ def test_skybridge_renderer_supports_real_data_cards():
 
     assert "renderCalendar(props)" in renderer
     assert "renderWeather(props)" in renderer
+    assert "sky-premium-card" in renderer
+    assert "formatForecastLabel" in renderer
+    assert "forecastTempBand(item)" in renderer
+    assert "sky-weather-tile-temp" in renderer
+    assert "sky-weather-temp-band" in renderer
+    assert "Current location" in renderer
+    assert "Geraldton" not in renderer
+    assert "metres per second" in renderer
     assert "props.source === 'calendar_show'" in renderer
     assert "props.source === 'weather_current'" in renderer
     assert "props.source === 'weather_forecast'" in renderer
     assert "sky-event-row" in html
-    assert "sky-forecast-tile" in html
+    assert "sky-weather-forecast-tile" in html
+    assert "sky-weather-scene" in html
+    assert "weather-sunny" in html
+    assert "skybridge-runtime-overrides" in html
+    assert "skybridge-premium-card-system" in html
+    assert "skybridge-forecast-widget-overrides" in html
+    assert "skybridge-premium-cards-3" in html
+    assert "backdrop-filter: none !important" in html
     assert "No events " in renderer
 
 
@@ -203,3 +219,31 @@ def test_skybridge_is_registered_in_touch_menu():
     assert "/touch/skybridge.html" in menu
     assert "'skybridge.html'" in menu
     assert "'dashboard', 'skybridge', 'calendar'" not in menu
+
+
+
+def test_service_worker_does_not_cache_skybridge_runtime():
+    sw = read(ROOT / "zoe-ui" / "dist" / "sw.js")
+
+    assert "Skybridge is a live voice/data surface" in sw
+    assert "4.63.12" in sw
+    assert "url.pathname === '/touch/skybridge.html'" in sw
+    assert "url.pathname === '/js/auth.js'" in sw
+    assert "url.pathname.startsWith('/touch/js/skybridge')" in sw
+    assert "new workbox.strategies.NetworkOnly()" in sw
+
+
+
+def test_skybridge_has_typed_fallback_for_insecure_voice_contexts():
+    html = read(UI / "skybridge.html")
+    app = read(UI / "js" / "skybridge.js")
+
+    assert "sky-command-open" in html
+    assert "skybridge-premium-pill-overrides" in html
+    assert "sky-voice-fallback.sky-empty .sky-command" in html
+    assert "canUseMicrophone()" in app
+    assert "openCommandFallback(" in app
+    assert "if (!commandFallbackOpen)" in app
+    assert "syncVoiceFallbackState();" in app
+    assert "Microphone needs HTTPS here" in app
+    assert "resp.status === 401 || resp.status === 503" in app

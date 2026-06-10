@@ -11,6 +11,7 @@
     let cardSequence = 0;
     let currentUtterance = '';
     let voiceStartedByUser = false;
+    let commandFallbackOpen = false;
 
     const colors = {
         ambient: ['#5fc6ff', '#66d19e'],
@@ -26,6 +27,7 @@
         renderHome();
         loadBackendStatus();
         setMode(mode);
+        syncVoiceFallbackState();
         if (typeof TouchMenu !== 'undefined') TouchMenu.init({ page: 'skybridge' });
         const initialQuery = new URLSearchParams(location.search).get('q');
         if (initialQuery) {
@@ -74,6 +76,15 @@
             event.preventDefault();
             submitCommand(els.input.value);
             els.input.value = '';
+        });
+        els.input.addEventListener('focus', () => {
+            if (!commandFallbackOpen) {
+                openCommandFallback('Type anything Zoe should show.');
+            }
+        });
+        els.input.addEventListener('input', () => {
+            commandFallbackOpen = true;
+            document.body.classList.add('sky-command-open');
         });
         els.mic.addEventListener('click', toggleVoiceCapture);
         els.orbButton.addEventListener('click', toggleVoiceCapture);
@@ -238,6 +249,9 @@
     function renderHome(options) {
         const showCards = options && options.showCards;
         document.body.classList.add('sky-empty');
+        commandFallbackOpen = false;
+        document.body.classList.remove('sky-command-open');
+        syncVoiceFallbackState();
         currentUtterance = '';
         setContext('Listening', 'The surface will build itself when Zoe understands what you need.');
         clearCards();
@@ -340,6 +354,24 @@
         updateVoiceControl(state);
     }
 
+    function canUseMicrophone() {
+        return !!(window.isSecureContext || location.hostname === 'localhost' || location.hostname === '127.0.0.1') &&
+            !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+    }
+
+    function syncVoiceFallbackState() {
+        document.body.classList.toggle('sky-voice-fallback', !canUseMicrophone());
+    }
+
+    function openCommandFallback(message) {
+        commandFallbackOpen = true;
+        document.body.classList.add('sky-command-open');
+        document.body.classList.toggle('sky-voice-fallback', !canUseMicrophone());
+        if (message) els.input.placeholder = message;
+        updateVoiceHint('Type to Zoe', message || 'Voice is unavailable here. The same resolver will render cards from typed requests.', 'Type');
+        requestAnimationFrame(() => els.input.focus({ preventScroll: true }));
+    }
+
     function getMicGuidance() {
         if (!window.isSecureContext && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
             return 'Open Skybridge over HTTPS on the touch screen so the browser can allow microphone access.';
@@ -377,11 +409,11 @@
 
     function toggleVoiceCapture() {
         if (!voice) {
-            showError('Voice transport is still connecting.');
+            openCommandFallback('Voice is still connecting. Type here or tap again in a moment.');
             return;
         }
-        if (!window.isSecureContext && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
-            showError('Microphone requires HTTPS. Open the touch screen using the HTTPS Zoe URL.');
+        if (!canUseMicrophone()) {
+            openCommandFallback('Microphone needs HTTPS here. Type a request and Zoe will still render cards.');
             return;
         }
         if (voice.isRecording) {
