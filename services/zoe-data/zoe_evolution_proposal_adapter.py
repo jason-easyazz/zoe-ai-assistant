@@ -40,6 +40,58 @@ _AFFECTED_CAPABILITIES_BY_TYPE = {
 }
 
 
+def legacy_signal_type_for_proposal_type(proposal_type: str | None) -> str:
+    """Return the contract signal type for a legacy proposal type."""
+
+    return _SIGNAL_BY_LEGACY_TYPE[normalize_legacy_evolution_proposal_type(proposal_type)]
+
+
+def build_existing_zoe_proposal_candidate(
+    *,
+    proposal_type: str | None,
+    title: str,
+    evidence_refs: Sequence[str],
+    legacy_writer: str,
+    runtime_notes: str | None = None,
+    target_patterns: Sequence[str] = (),
+) -> CandidateEvaluation:
+    """Build the standard review-only existing-Zoe candidate for proposal writers."""
+
+    normalized_type = normalize_legacy_evolution_proposal_type(proposal_type)
+    legacy_target_patterns = tuple(str(item) for item in target_patterns if item is not None)
+    metadata: dict[str, Any] = {
+        "legacy_proposal_type": normalized_type,
+        "legacy_writer": legacy_writer,
+    }
+    if legacy_target_patterns:
+        metadata["legacy_target_patterns"] = list(legacy_target_patterns)
+    return CandidateEvaluation(
+        candidate_id=f"existing_zoe_{normalized_type}",
+        name="Existing Zoe proposal path",
+        source="existing_zoe",
+        task=title,
+        score=CandidateScore(
+            fit=4,
+            activity=4,
+            license=5,
+            offline=5,
+            security=4,
+            footprint=5,
+            tests=3,
+            maintainability=4,
+            overlap=5,
+        ),
+        evidence_refs=tuple(evidence_refs),
+        license_risk="compatible",
+        offline_viability="required",
+        runtime_notes=runtime_notes
+        or f"Legacy proposal writer {legacy_writer} creates review-only proposals; no execution is granted by this contract.",
+        overlaps_existing=("evolution_proposals", "multica_governance"),
+        recommendation="needs_review",
+        metadata=metadata,
+    )
+
+
 def build_legacy_evolution_proposal_contract(
     *,
     proposal_id: str,
@@ -65,7 +117,7 @@ def build_legacy_evolution_proposal_contract(
     legacy_target_patterns = tuple(str(item) for item in target_patterns if item is not None)
     signal = EvolutionSignal(
         signal_id=f"signal_{proposal_id}",
-        signal_type=_SIGNAL_BY_LEGACY_TYPE[normalized_type],
+        signal_type=legacy_signal_type_for_proposal_type(normalized_type),
         summary=description,
         source=legacy_writer,
         evidence_refs=evidence_refs,
@@ -77,33 +129,12 @@ def build_legacy_evolution_proposal_contract(
             "legacy_target_patterns": list(legacy_target_patterns),
         },
     )
-    candidate = CandidateEvaluation(
-        candidate_id=f"existing_zoe_{normalized_type}",
-        name="Existing Zoe proposal path",
-        source="existing_zoe",
-        task=title,
-        score=CandidateScore(
-            fit=4,
-            activity=4,
-            license=5,
-            offline=5,
-            security=4,
-            footprint=5,
-            tests=3,
-            maintainability=4,
-            overlap=5,
-        ),
+    candidate = build_existing_zoe_proposal_candidate(
+        proposal_type=normalized_type,
+        title=title,
         evidence_refs=evidence_refs,
-        license_risk="compatible",
-        offline_viability="required",
-        runtime_notes=f"Legacy proposal writer {legacy_writer} creates review-only proposals; no execution is granted by this contract.",
-        overlaps_existing=("evolution_proposals", "multica_governance"),
-        recommendation="needs_review",
-        metadata={
-            "legacy_proposal_type": normalized_type,
-            "legacy_writer": legacy_writer,
-            "legacy_target_patterns": list(legacy_target_patterns),
-        },
+        legacy_writer=legacy_writer,
+        target_patterns=legacy_target_patterns,
     )
     proposal = build_evolution_proposal(
         proposal_id=proposal_id,
@@ -243,10 +274,12 @@ def _evidence_refs(source_ref: str, evidence: str) -> tuple[str, ...]:
 
 __all__ = [
     "CONTRACT_ENVELOPE_VERSION",
+    "build_existing_zoe_proposal_candidate",
     "build_legacy_evolution_proposal_contract",
     "build_mcp_evolution_proposal_contract",
     "dump_legacy_evolution_proposal_contract",
     "dump_mcp_evolution_proposal_contract",
+    "legacy_signal_type_for_proposal_type",
     "load_proposal_contract_snapshot",
     "normalize_legacy_evolution_proposal_type",
     "normalize_mcp_evolution_proposal_type",

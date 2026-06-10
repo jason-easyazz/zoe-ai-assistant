@@ -80,8 +80,11 @@ class _RecordingDb:
 
 
 @pytest.mark.asyncio
-async def test_create_evolution_proposal_stores_contract_snapshot(monkeypatch):
-    async def fake_sync_evolution_proposal_to_multica(**_kwargs):
+async def test_create_evolution_proposal_stores_runtime_intake_contract_snapshot(monkeypatch):
+    sync_calls = []
+
+    async def fake_sync_evolution_proposal_to_multica(**kwargs):
+        sync_calls.append(kwargs)
         return "multica-issue-123"
 
     monkeypatch.setitem(
@@ -107,22 +110,38 @@ async def test_create_evolution_proposal_stores_contract_snapshot(monkeypatch):
     assert result["multica_issue_id"] == "multica-issue-123"
     assert result["contract_schema"] == "zoe_evolution_proposal"
     assert len(db.calls) == 2
+    assert len(sync_calls) == 1
     insert_sql, insert_args = db.calls[0]
     update_sql, update_args = db.calls[1]
     assert "target_patterns" in insert_sql
     assert "target_patterns" not in update_sql
 
+    insert_evidence = json.loads(insert_args[3])
     insert_contract = json.loads(insert_args[4])
+    assert insert_evidence["source"] == "runtime_evolution_intake"
+    assert insert_evidence["signal"]["source"] == "mcp:create_evolution_proposal"
+    assert insert_evidence["signal"]["scope"] == "personal"
+    assert insert_evidence["signal"]["user_id"] == "jason"
+    assert insert_evidence["candidate_ids"] == ["existing_zoe_intent_pattern"]
     assert insert_contract["schema"] == "zoe_evolution_proposal"
-    assert insert_contract["proposal"]["status"] == "pending_approval"
-    assert insert_contract["proposal"]["multica_issue_id"] is None
-    assert insert_contract["proposal"]["signals"][0]["signal_type"] == "repeated_failure"
-    assert insert_contract["proposal"]["approval_gate"]["allowed_to_execute"] is False
+    assert insert_contract["legacy_writer"] == "runtime_evolution_intake"
+    proposal = insert_contract["proposal"]
+    assert proposal["status"] == "pending_approval"
+    assert proposal["multica_issue_id"] is None
+    assert proposal["signals"][0]["signal_type"] == "repeated_failure"
+    assert proposal["metadata"]["legacy_writer"] == "mcp:create_evolution_proposal"
+    assert proposal["metadata"]["legacy_proposal_type"] == "intent_pattern"
+    assert proposal["metadata"]["selected_candidate_id"] == "existing_zoe_intent_pattern"
+    assert proposal["metadata"]["candidate_search"][0]["candidate_id"] == "existing_zoe_intent_pattern"
+    assert proposal["approval_gate"]["allowed_to_execute"] is False
+    assert sync_calls[0]["proposal_id"] == insert_args[0]
+    assert sync_calls[0]["proposal_type"] == "intent_pattern"
+    assert sync_calls[0]["contract_snapshot"] == insert_args[4]
     assert update_args == ("multica-issue-123", result["proposal_id"])
 
 
 @pytest.mark.asyncio
-async def test_create_evolution_proposal_keeps_contract_when_multica_unconfigured(monkeypatch):
+async def test_create_evolution_proposal_keeps_system_scope_without_explicit_user(monkeypatch):
     async def fake_sync_evolution_proposal_to_multica(**_kwargs):
         return None
 
@@ -150,9 +169,16 @@ async def test_create_evolution_proposal_keeps_contract_when_multica_unconfigure
     insert_sql, insert_args = db.calls[0]
     assert "target_patterns" in insert_sql
     contract = json.loads(insert_args[4])
+    evidence = json.loads(insert_args[3])
+    assert evidence["source"] == "runtime_evolution_intake"
+    assert evidence["signal"]["source"] == "mcp:create_evolution_proposal"
+    assert evidence["signal"]["scope"] == "system"
+    assert evidence["signal"]["user_id"] is None
     assert contract["schema"] == "zoe_evolution_proposal"
+    assert contract["legacy_writer"] == "runtime_evolution_intake"
     assert insert_args[5] == "code_improvement"
     assert contract["proposal"]["metadata"]["legacy_proposal_type"] == "code_improvement"
+    assert contract["proposal"]["metadata"]["selected_candidate_id"] == "existing_zoe_code_improvement"
     assert contract["proposal"]["multica_issue_id"] is None
     assert contract["proposal"]["signals"][0]["signal_type"] == "tool_gap"
 
