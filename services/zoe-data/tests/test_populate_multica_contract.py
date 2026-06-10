@@ -71,6 +71,8 @@ def test_runtime_fallback_and_trigger_refresh_are_observable():
     assert "delete from autopilot_trigger" in source
     assert "kind='schedule'" in source
     assert 'desired_cron = apdef["cron"]' in source
+    assert 't.get("timezone") == desired_timezone' in source
+    assert '(t.get("timezone") or desired_timezone)' not in source
     assert "Replaced schedule trigger with" in source
     assert source.index("trig = _post") < source.index("delete from autopilot_trigger")
     assert "id <> {_sql_literal(trig['id'])}" in source

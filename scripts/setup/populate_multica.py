@@ -867,7 +867,7 @@ def step_i_create_autopilots(agent_ids: dict[str, str]):
         desired_timezone = "Australia/Perth"
         has_matching_schedule = any(
             t.get("cron_expression") == desired_cron
-            and (t.get("timezone") or desired_timezone) == desired_timezone
+            and t.get("timezone") == desired_timezone
             for t in schedule_triggers
         )
         if has_matching_schedule:
