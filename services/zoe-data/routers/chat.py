@@ -90,13 +90,54 @@ def _intent_card_data(intent) -> dict:
             logger.debug("calendar_show card contract build failed: %s", exc)
         return payload
     if name == "list_add":
-        return {
+        try:
+            from card_service import card_service
+        except Exception:
+            card_service = None
+        list_name = slots.get("list_name") or "Shopping"
+        item = slots.get("item") or slots.get("text") or ""
+        payload = {
             "type": "list",
             "data": {
-                "list_name": slots.get("list_name") or "List",
-                "item": slots.get("item") or slots.get("text") or "",
+                "list_name": list_name,
+                "item": item,
             },
         }
+        if card_service is not None:
+            try:
+                payload["card"] = card_service.build_shopping_item_editor_card(slots)
+            except Exception as exc:
+                logger.debug("list_add card contract build failed: %s", exc)
+        return payload
+    if name == "list_show":
+        try:
+            from card_service import card_service, list_items
+
+            items = list_items(slots)
+        except Exception:
+            card_service = None
+            raw_items = slots.get("items")
+            if isinstance(raw_items, list):
+                items = raw_items
+            elif raw_items:
+                items = [raw_items]
+            elif slots.get("item") or slots.get("text"):
+                items = [slots.get("item") or slots.get("text")]
+            else:
+                items = []
+        payload = {
+            "type": "list",
+            "data": {
+                "list_name": slots.get("list_name") or "Shopping",
+                "items": items,
+            },
+        }
+        if card_service is not None:
+            try:
+                payload["card"] = card_service.build_shopping_list_card(slots)
+            except Exception as exc:
+                logger.debug("list_show card contract build failed: %s", exc)
+        return payload
     if name == "timer_create":
         return {
             "type": "timer",
@@ -3315,4 +3356,3 @@ async def get_pending_tasks(user: dict = Depends(get_current_user)):
     user_name = user.get("username") or user.get("display_name") or ""
     tasks = await _get(user_id)
     return {"tasks": tasks, "user_name": user_name}
-

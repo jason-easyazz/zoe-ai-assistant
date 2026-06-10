@@ -2,7 +2,7 @@
 
 import pytest
 from unittest.mock import Mock
-from card_service import CardService, card_service
+from card_service import CardService, card_service, list_items
 from card_contract import CardContractError, CardType
 
 
@@ -137,6 +137,10 @@ def test_global_card_service_instance():
         card_service._domain_builders.clear()
         card_service.register_domain_builder("calendar_timeline", card_service.build_calendar_timeline_card)
         card_service.register_domain_builder("calendar_event_editor", card_service.build_calendar_event_editor_card)
+        card_service.register_domain_builder("weather_current", card_service.build_weather_current_card)
+        card_service.register_domain_builder("weather_forecast", card_service.build_weather_forecast_card)
+        card_service.register_domain_builder("shopping_list", card_service.build_shopping_list_card)
+        card_service.register_domain_builder("shopping_item_editor", card_service.build_shopping_item_editor_card)
 
 
 def test_card_service_build_calendar_timeline_card():
@@ -170,3 +174,40 @@ def test_global_card_service_registers_calendar_builders():
     assert callable(editor)
     assert timeline({"qualifier": "today"})["content"]["view"] == "timeline"
     assert editor({"title": "Dentist"})["content"]["form_id"] == "calendar_event_editor"
+
+
+def test_list_items_normalizes_slots():
+    assert list_items({"items": [" milk ", 123, ""]}) == ["milk", "123"]
+    assert list_items({"item": " bread "}) == ["bread"]
+    assert list_items({"text": " eggs "}) == ["eggs"]
+
+
+def test_card_service_build_shopping_list_card():
+    service = CardService()
+    card = service.build_shopping_list_card({"list_name": "Groceries", "items": [" milk ", "eggs"]})
+
+    assert card["card_type"] == CardType.LIST.value
+    assert card["producer"] == "zoe-lists"
+    assert card["content"]["list_id"] == "groceries"
+    assert card["content"]["title"] == "Groceries List"
+    assert card["content"]["items"] == ["milk", "eggs"]
+
+
+def test_card_service_build_shopping_item_editor_card():
+    service = CardService()
+    card = service.build_shopping_item_editor_card({"list_name": "Groceries", "item": "milk"})
+
+    assert card["card_type"] == CardType.ACTION_FORM.value
+    assert card["producer"] == "zoe-lists"
+    assert card["content"]["form_id"] == "shopping_item_editor"
+    assert card["content"]["values"] == {"item": "milk", "list_name": "Groceries"}
+
+
+def test_global_card_service_registers_shopping_builders():
+    list_builder = card_service.get_domain_builder("shopping_list")
+    editor = card_service.get_domain_builder("shopping_item_editor")
+
+    assert callable(list_builder)
+    assert callable(editor)
+    assert list_builder({"list_name": "Groceries"})["content"]["list_name"] == "Groceries"
+    assert editor({"item": "milk"})["content"]["form_id"] == "shopping_item_editor"

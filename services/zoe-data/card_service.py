@@ -100,6 +100,56 @@ def build_calendar_event_editor_content(slots: dict[str, Any] | None = None) -> 
     }
 
 
+def list_items(slots: dict[str, Any] | None = None) -> list[str]:
+    """Normalize list-intent item slots for compat payloads and cards."""
+    slots = slots or {}
+    raw_items = slots.get("items")
+    if isinstance(raw_items, list):
+        candidates = raw_items
+    elif raw_items:
+        candidates = [raw_items]
+    elif slots.get("item") or slots.get("text"):
+        candidates = [slots.get("item") or slots.get("text")]
+    else:
+        candidates = []
+    return [item for item in (_text(value) for value in candidates) if item]
+
+
+def build_shopping_list_content(slots: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Build canonical content for a shopping/list display card."""
+    slots = slots or {}
+    list_name = _text(slots.get("list_name"), "Shopping")
+    items = list_items(slots)
+    return {
+        "list_id": _text(slots.get("list_id"), list_name.lower().replace(" ", "-")),
+        "title": f"{list_name} List",
+        "summary": f"{len(items)} item{'s' if len(items) != 1 else ''}",
+        "source": "list_show",
+        "list_name": list_name,
+        "items": items,
+    }
+
+
+def build_shopping_item_editor_content(slots: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Build canonical content for a shopping/list item editor card."""
+    slots = slots or {}
+    list_name = _text(slots.get("list_name"), "Shopping")
+    item = _text(slots.get("item") or slots.get("text"))
+    return {
+        "form_id": "shopping_item_editor",
+        "title": f"Add to {list_name}",
+        "fields": [
+            {"name": "item", "label": "Item", "type": "text", "value": item},
+            {"name": "list_name", "label": "List", "type": "text", "value": list_name},
+        ],
+        "values": {
+            "item": item,
+            "list_name": list_name,
+        },
+        "source": "list_add",
+    }
+
+
 class CardService:
     """Service layer for Zoe card operations."""
 
@@ -220,6 +270,20 @@ class CardService:
             producer="zoe-calendar",
         )
 
+    def build_shopping_list_card(self, slots: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self.build_card(
+            CardType.LIST.value,
+            build_shopping_list_content(slots),
+            producer="zoe-lists",
+        )
+
+    def build_shopping_item_editor_card(self, slots: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self.build_card(
+            CardType.ACTION_FORM.value,
+            build_shopping_item_editor_content(slots),
+            producer="zoe-lists",
+        )
+
 
 
 # Global singleton instance
@@ -228,3 +292,5 @@ card_service.register_domain_builder("calendar_timeline", card_service.build_cal
 card_service.register_domain_builder("calendar_event_editor", card_service.build_calendar_event_editor_card)
 card_service.register_domain_builder("weather_current", card_service.build_weather_current_card)
 card_service.register_domain_builder("weather_forecast", card_service.build_weather_forecast_card)
+card_service.register_domain_builder("shopping_list", card_service.build_shopping_list_card)
+card_service.register_domain_builder("shopping_item_editor", card_service.build_shopping_item_editor_card)
