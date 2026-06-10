@@ -3712,6 +3712,68 @@ def test_phase_budget_blocks_verify_worker_that_leaves_pinned_worktree(tmp_path,
     assert "`python3 tools/audit/validate_structure.py`" in reason
 
 
+def test_phase_budget_blocks_absolute_reads_outside_pinned_worktree(tmp_path, monkeypatch):
+    log_path = tmp_path / "task.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                "Query: work kanban task t_impl",
+                "  ┊ 📖 read      /home/zoe/assistant/services/zoe-data/intent_router.py  0.1s",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(kb, "_log_path", lambda _task_id: log_path)
+
+    reason = kb.phase_budget_reason(
+        "t_impl",
+        "implement",
+        {
+            "task": {
+                "started_at": 100,
+                "workspace_kind": "worktree",
+                "workspace_path": "/home/zoe/.worktrees/t_impl",
+                "body": "INTENT-GAP IMPLEMENT FAST PATH",
+            }
+        },
+        now=110,
+    )
+
+    assert reason is not None
+    assert "BLOCKER=WORKTREE_PATH_VIOLATION" in reason
+    assert "/home/zoe/assistant/services/zoe-data/intent_router.py" in reason
+    assert "/home/zoe/.worktrees/t_impl" in reason
+
+
+def test_phase_budget_allows_absolute_reads_inside_pinned_worktree(tmp_path, monkeypatch):
+    log_path = tmp_path / "task.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                "Query: work kanban task t_impl",
+                "  ┊ 📖 read      /home/zoe/.worktrees/t_impl/services/zoe-data/intent_router.py  0.1s",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(kb, "_log_path", lambda _task_id: log_path)
+
+    reason = kb.phase_budget_reason(
+        "t_impl",
+        "implement",
+        {
+            "task": {
+                "started_at": 100,
+                "workspace_kind": "worktree",
+                "workspace_path": "/home/zoe/.worktrees/t_impl",
+            }
+        },
+        now=110,
+    )
+
+    assert reason is None
+
+
 def test_phase_budget_allows_commands_inside_pinned_worktree(tmp_path, monkeypatch):
     log_path = tmp_path / "task.log"
     log_path.write_text(
@@ -4711,6 +4773,7 @@ def test_implement_body_includes_say_exactly_intent_gap_contract():
     assert "Concrete edit contract for this exact-repeat gap" in body
     assert "Say exactly: Zoe chat integration ok" in body
     assert "python3 scripts/maintenance/zoe_apply_intent_gap_contract.py say_exactly" in body
+    assert "run this from the task `workspace_path`, never from `/home/zoe/assistant`" in body
     assert "to the agent path while preserving the raw phrase" in body
     assert "Do not add a bespoke" in body
 
