@@ -2,10 +2,16 @@ import json
 
 import pytest
 
+import zoe_evolution_runtime_intake as runtime_intake
+
 from zoe_candidate_scoring import CandidateEvaluation, CandidateScore
 from zoe_evolution_proposal import EvolutionSignal, EvolutionSignalType, ProposalRisk, TrustAutonomyClass
 from zoe_evolution_proposal_adapter import load_proposal_contract_snapshot
-from zoe_evolution_runtime_intake import RuntimeEvolutionProposalIntake, build_runtime_evolution_proposal_intake
+from zoe_evolution_runtime_intake import (
+    RuntimeEvolutionProposalIntake,
+    build_pi_runtime_install_proposal_intake,
+    build_runtime_evolution_proposal_intake,
+)
 
 
 def _signal(**overrides):
@@ -234,3 +240,82 @@ def test_runtime_intake_rejects_empty_candidate_search():
             verification_plan=("pytest",),
             rollback_plan="No-op.",
         )
+
+
+def _pi_probe(**overrides):
+    base_config = {
+        "enabled": False,
+        "allow_execution": False,
+        "offline_only": True,
+        "local_model_required": True,
+        "local_model_configured": False,
+        "command": "pi",
+        "cwd": "/home/zoe/assistant",
+        "agent_dir": None,
+        "timeout_seconds": 2.0,
+    }
+    config_override = overrides.pop("config", None)
+    defaults = {
+        "ok": False,
+        "acceptable": True,
+        "status": "disabled",
+        "reason": "ZOE_PI_ENABLED is false",
+        "config": {**base_config, **(config_override or {})},
+        "tools": {"node": None, "npm": None, "pi": None},
+        "agent_files": [],
+    }
+    defaults.update(overrides)
+    return defaults
+
+
+def test_pi_runtime_install_proposal_is_inert_and_blocked_until_prerequisites_pass():
+    intake = build_pi_runtime_install_proposal_intake(
+        proposal_id="prop_pi_runtime_install_test",
+        user_id="jason",
+        probe_result=_pi_probe(),
+    )
+
+    row = intake.to_legacy_row()
+    payload = load_proposal_contract_snapshot(row["target_patterns"])
+    evidence = json.loads(row["evidence"])
+
+    assert row["status"] == "pending"
+    assert payload is not None
+    proposal = payload["proposal"]
+    assert proposal["candidate"]["candidate_id"] == "pi_runtime_reuse"
+    assert proposal["autonomy_class"] == "prepare"
+    assert proposal["risk"] == "privileged"
+    assert proposal["approval_gate"]["allowed_to_prepare"] is False
+    assert proposal["approval_gate"]["allowed_to_execute"] is False
+    assert proposal["approval_gate"]["blockers"] == ["offline:partial", "score_below_threshold"]
+    assert proposal["approval_required"] == [
+        "user_or_admin_for_privileged_execution",
+        "security_review",
+        "install_or_runtime_change",
+        "license_review",
+        "pr_evidence",
+    ]
+    assert proposal["metadata"]["pi_runtime_probe"]["tools"] == {"node": None, "npm": None, "pi": None}
+    assert proposal["metadata"]["pi_candidate_gate"]["allowed"] is False
+    assert evidence["signal"]["metadata"]["probe_status"] == "disabled"
+    assert intake.multica_payload["contract_snapshot"] == row["target_patterns"]
+
+
+def test_pi_runtime_install_proposal_does_not_mark_partial_offline_ready_without_local_model():
+    base = _pi_probe()
+    probe = _pi_probe(ok=True, status="available", config={**base["config"], "local_model_configured": False})
+
+    intake = build_pi_runtime_install_proposal_intake(probe_result=probe)
+    payload = load_proposal_contract_snapshot(intake.target_patterns)
+
+    assert payload is not None
+    candidate = payload["proposal"]["candidate"]
+    assert candidate["metadata"]["offline_ready"] is False
+    assert "offline:partial" in payload["proposal"]["approval_gate"]["blockers"]
+
+
+def test_pi_runtime_install_proposal_reports_missing_pi_candidate(monkeypatch):
+    monkeypatch.setattr(runtime_intake, "EXAMPLE_CANDIDATES", ())
+
+    with pytest.raises(ValueError, match="pi_runtime_reuse"):
+        runtime_intake.build_pi_runtime_install_proposal_intake(probe_result=_pi_probe())

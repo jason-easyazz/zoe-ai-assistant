@@ -13,9 +13,10 @@ import json
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
-from zoe_candidate_scoring import CandidateEvaluation, rank_candidates
+from zoe_candidate_scoring import EXAMPLE_CANDIDATES, CandidateEvaluation, adoption_gate, rank_candidates
 from zoe_evolution_proposal import (
     EvolutionSignal,
+    EvolutionSignalType,
     ProposalRisk,
     ProposalStatus,
     TrustAutonomyClass,
@@ -133,6 +134,77 @@ def build_mcp_runtime_evolution_proposal_intake(
         rollback_plan="Reject or defer the proposal; no runtime change has been made by proposal creation.",
         metadata={"legacy_writer": "mcp:create_evolution_proposal"},
     )
+
+
+def build_pi_runtime_install_proposal_intake(
+    *,
+    proposal_id: str = "prop_pi_runtime_install",
+    user_id: str | None = None,
+    probe_result: Mapping[str, Any] | None = None,
+) -> RuntimeEvolutionProposalIntake:
+    """Build an inert proposal for adopting Pi as an external Zoe runtime.
+
+    This does not install Node, npm, Pi, packages, agents, or models. It packages
+    the current read-only Pi probe plus Zoe's Pi candidate score into the normal
+    proposal contract so Multica/humans can review prerequisites before any
+    privileged environment change.
+    """
+
+    probe = dict(probe_result or {})
+    pi_candidate = _pi_candidate_with_probe(probe)
+    gate = adoption_gate(pi_candidate)
+    status = str(probe.get("status") or "unknown")
+    reason = str(probe.get("reason") or "no probe reason supplied")
+    tools = probe.get("tools") if isinstance(probe.get("tools"), Mapping) else {}
+    signal = EvolutionSignal(
+        signal_id=f"signal_{proposal_id}",
+        signal_type=EvolutionSignalType.TOOL_GAP.value,
+        summary="Pi external runtime is requested but Zoe must prove local/offline prerequisites before use.",
+        source="pi_runtime_probe",
+        evidence_refs=("docs/architecture/zoe-pi-runtime-harness.md", "probe:pi_runtime_probe"),
+        user_id=user_id,
+        scope="system" if not user_id else "project",
+        metadata={
+            "probe_status": status,
+            "probe_reason": reason,
+            "node": tools.get("node"),
+            "npm": tools.get("npm"),
+            "pi": tools.get("pi"),
+            "acceptable": probe.get("acceptable"),
+            "ok": probe.get("ok"),
+        },
+    )
+    return build_runtime_evolution_proposal_intake(
+        proposal_id=proposal_id,
+        proposal_type="code_improvement",
+        title="Review Pi external runtime adoption",
+        problem_statement=(
+            "Zoe should use Pi as an external runtime where it provides proven package, CLI, SDK, "
+            "or project-agent leverage, but the current runtime must be installed and configured for "
+            "local/offline model use before any execution is allowed."
+        ),
+        signal=signal,
+        candidates=(pi_candidate,),
+        affected_capabilities=("pi_external_runtime", "multica_governance", "local_model_runtime"),
+        expected_benefit=(
+            "Reuse Pi's external agent/runtime ecosystem instead of rebuilding comparable harness features inside Zoe."
+        ),
+        verification_plan=(
+            "python3 scripts/maintenance/pi_runtime_probe.py --json",
+            "local_model_configuration_evidence_required",
+            "candidate_scoring_and_license_review_required",
+            "implementation_pr_must_attach_tests_and_rollback_evidence",
+        ),
+        rollback_plan=(
+            "Do not install or enable Pi; remove any proposed runtime packages/config and leave ZOE_PI_ENABLED=false."
+        ),
+        autonomy_class=TrustAutonomyClass.PREPARE.value,
+        risk=ProposalRisk.PRIVILEGED.value,
+        approval_required=("install_or_runtime_change", "license_review", "pr_evidence"),
+        legacy_target_patterns=("pi external runtime", "local offline model runtime", "multica approval"),
+        metadata={"pi_runtime_probe": probe, "pi_candidate_gate": gate},
+    )
+
 
 def build_runtime_evolution_proposal_intake(
     *,
@@ -258,9 +330,44 @@ def _evidence_payload(
     }
 
 
+def _pi_candidate_with_probe(probe_result: Mapping[str, Any]) -> CandidateEvaluation:
+    base = next(
+        (candidate for candidate in EXAMPLE_CANDIDATES if candidate.candidate_id == "pi_runtime_reuse"),
+        None,
+    )
+    if base is None:
+        raise ValueError("EXAMPLE_CANDIDATES does not contain 'pi_runtime_reuse'; update zoe_candidate_scoring.py")
+    metadata = dict(base.metadata or {})
+    config = probe_result.get("config") if isinstance(probe_result.get("config"), Mapping) else {}
+    metadata.update(
+        {
+            "pi_runtime_probe": dict(probe_result),
+            "offline_ready": bool(probe_result.get("ok")) and bool(config.get("local_model_configured")),
+        }
+    )
+    return CandidateEvaluation(
+        candidate_id=base.candidate_id,
+        name=base.name,
+        source=base.source,
+        task=base.task,
+        score=base.score,
+        evidence_refs=tuple(dict.fromkeys((*base.evidence_refs, "probe:pi_runtime_probe"))),
+        license_risk=base.license_risk,
+        offline_viability=base.offline_viability,
+        stars=base.stars,
+        last_activity=base.last_activity,
+        runtime_notes=base.runtime_notes,
+        security_notes=base.security_notes,
+        overlaps_existing=base.overlaps_existing,
+        recommendation=base.recommendation,
+        metadata=metadata,
+    )
+
+
 __all__ = [
     "RUNTIME_INTAKE_SOURCE",
     "RuntimeEvolutionProposalIntake",
     "build_mcp_runtime_evolution_proposal_intake",
+    "build_pi_runtime_install_proposal_intake",
     "build_runtime_evolution_proposal_intake",
 ]
