@@ -287,17 +287,7 @@
                 '</div>'
             ].join('');
         }).join('');
-        const fallbackTiles = !dailyRows && !hourlyTiles && hourly.slice(0, 5).map(item => {
-            const band = forecastTempBand(item);
-            return [
-                '<div class="sky-weather-day-row">',
-                '<div class="sky-weather-day-label"><span>' + escapeHtml(formatHourLabel(item.time || '')) + '</span><b aria-hidden="true">' + escapeHtml(weatherEmoji(item)) + '</b></div>',
-                '<div class="sky-weather-day-main"><strong>' + escapeHtml(item.description || item.condition || description) + '</strong><div class="sky-weather-temp-band" aria-hidden="true"><i style="left: ' + band.left + '%; width: ' + band.width + '%;"></i></div></div>',
-                '<div class="sky-weather-day-temp"><strong>' + escapeHtml(formatTemp(item.temp)) + '</strong></div>',
-                '</div>'
-            ].join('');
-        }).join('');
-        const dayList = dailyRows || fallbackTiles;
+        const dayList = dailyRows;
         const meta = [
             ['🌡', 'Feels ' + formatTemp(current.feels_like)],
             ['💧', current.humidity == null ? 'Humidity --' : current.humidity + '% humidity'],

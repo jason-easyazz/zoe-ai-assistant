@@ -199,6 +199,8 @@ def test_skybridge_renderer_supports_real_data_cards():
     assert "formatForecastLabel" in renderer
     assert "forecastTempBand(item)" in renderer
     assert "formatHourLabel" in renderer
+    assert "const dayList = dailyRows;" in renderer
+    assert "fallbackTiles" not in renderer
     assert "sky-weather-hour-strip" in renderer
     assert "sky-weather-hour-tile" in renderer
     assert "sky-weather-day-list" in renderer
@@ -240,8 +242,8 @@ def test_skybridge_weather_renderer_uses_widget_forecast_structure():
     assert "new Date(raw + 'T12:00:00')" not in forecast_label_helper
     assert "const dailyRows = daily.slice(0, 5).map" in renderer
     assert "const hourlyTiles = hourly.slice(0, 8).map" in renderer
-    assert "const fallbackTiles = !dailyRows && !hourlyTiles && hourly.slice(0, 5).map" in renderer
-    assert "const dayList = dailyRows || fallbackTiles;" in renderer
+    assert "fallbackTiles" not in renderer
+    assert "const dayList = dailyRows;" in renderer
     assert "current && current.description" in renderer
     assert "rain|drizzle|shower|09|10" in renderer
     assert "cloud|overcast|03|04" in renderer
