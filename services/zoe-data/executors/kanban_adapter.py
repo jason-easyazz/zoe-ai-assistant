@@ -1023,6 +1023,8 @@ class KanbanAdapter:
         for command in shell_commands:
             if "git push -u origin HEAD" not in command:
                 continue
+            if "gh pr create" in command:
+                return True
             if re.search(r"\[exit\s+[1-9]\d*\]", command, re.IGNORECASE):
                 continue
             return True

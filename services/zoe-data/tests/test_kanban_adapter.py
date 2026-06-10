@@ -1518,6 +1518,20 @@ def test_pushed_branch_recovery_scans_past_failed_push_retry(tmp_path, monkeypat
     assert ka.KanbanAdapter()._pushed_branch_without_pr_handoff("t_impl") is True
 
 
+def test_pushed_branch_recovery_allows_compound_push_then_failed_pr_create(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 💻 $         git push -u origin HEAD && gh pr create --base main --title x --body y  3.1s [exit 1]\n"
+        "⚡ Interrupted during API call.\n",
+        encoding="utf-8",
+    )
+
+    assert ka.KanbanAdapter()._pushed_branch_without_pr_handoff("t_impl") is True
+
+
 @pytest.mark.asyncio
 async def test_poll_creates_pr_when_pr_view_returns_no_url(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
