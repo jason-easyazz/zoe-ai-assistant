@@ -130,6 +130,7 @@ def test_summarize_recall_latency_ignores_missing_enabled_latency():
     assert latency["measured"] is True
     assert latency["case_count"] == 2
     assert latency["enabled_case_count"] == 1
+    assert latency["p50_latency_ms"] == 800.0
     assert latency["p95_latency_ms"] == 800.0
     assert latency["p95_within_budget"] is False
     assert latency["hot_path_status"] == "async_or_cached_only"
