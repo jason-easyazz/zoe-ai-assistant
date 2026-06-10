@@ -86,6 +86,10 @@ _POST_PATCH_SHIP_RE = re.compile(
     r"^(?:git\s+(?:commit|push)\b|gh\s+pr\s+create\b)",
     re.IGNORECASE,
 )
+_INTENT_GAP_HELPER_EDIT_RE = re.compile(
+    r"\bpython3?\s+(?:\./)?scripts/maintenance/zoe_apply_intent_gap_contract\.py\b",
+    re.IGNORECASE,
+)
 _GIT_ADD_RE = re.compile(r"^git\s+add\b", re.IGNORECASE)
 # Zoe needs a PR handoff, not only a pushed branch; require all four steps in order.
 _CHAINED_SHIP_RE = re.compile(
@@ -477,6 +481,8 @@ def implement_intent_gap_pre_edit_reason_from_log(
         if _PATCH_STEP_RE.search(line) or _TERMINAL_STEP_RE.search(line):
             return None
         shell_command = _shell_command_from_step(line)
+        if shell_command and _INTENT_GAP_HELPER_EDIT_RE.search(shell_command):
+            return None
         if shell_command and _BROAD_FIND_GREP_RE.search(shell_command):
             return (
                 "BLOCKER=IMPLEMENT_BUDGET: intent-gap worker ran broad repo "

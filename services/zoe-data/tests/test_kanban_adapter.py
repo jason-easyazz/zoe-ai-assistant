@@ -2710,6 +2710,46 @@ def test_phase_budget_blocks_intent_gap_pre_edit_churn_from_live_shape(tmp_path,
 
 
 
+
+
+def test_phase_budget_allows_intent_gap_reads_after_helper_edit(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_INTENT_GAP_REPEAT_READ_BUDGET", "2")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_intent.log").write_text(
+        """Query: work kanban task t_intent
+  ┊ ⚡ kanban_sh   0.0s
+  ┊ 💻 $         pwd && git branch --show-current  0.1s
+  ┊ 💻 $         python3 ./scripts/maintenance/zoe_apply_intent_gap_contract.py say_exactly  0.2s
+  ┊ 💻 $         python3 -m py_compile services/zoe-data/intent_router.py  0.2s
+  ┊ 💻 $         PYTHONPATH=services/zoe-data python3 -m pytest -q services/zoe-data/tests/test_intent_open_domain.py  0.7s
+  ┊ 💻 $         git diff HEAD --no-ext-diff -- services/zoe-data/intent_router.py services/zoe-data/tests/test_intent_open_domain.py  0.1s
+  ┊ 📖 read      /work/services/zoe-data/intent_router.py  0.1s
+  ┊ 📖 read      /work/services/zoe-data/intent_router.py  0.1s
+  ┊ 📖 read      /work/services/zoe-data/intent_router.py  0.1s
+  ┊ 📖 read      /work/services/zoe-data/tests/test_intent_open_domain.py  0.1s
+  ┊ 🔎 grep      _AGENT_CHAT_RE  0.1s
+""",
+        encoding="utf-8",
+    )
+
+    reason = kb.phase_budget_reason(
+        "t_intent",
+        "implement",
+        {
+            "task": {
+                "started_at": 100,
+                "body": '{"source":"intent_gap:operator_single_lane_test"}',
+            },
+            "runs": [{"started_at": 100}],
+        },
+        now=120,
+    )
+
+    assert reason is None
+
+
 def test_phase_budget_blocks_intent_gap_explore_budget_before_patch(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     monkeypatch.setenv("ZOE_KANBAN_INTENT_GAP_PRE_EDIT_EXPLORE_BUDGET", "3")
