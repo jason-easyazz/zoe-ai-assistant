@@ -873,17 +873,7 @@ def step_i_create_autopilots(agent_ids: dict[str, str]):
         if has_matching_schedule:
             print(f"    ↩ Trigger already set: {desired_cron}")
             continue
-        if schedule_triggers:
-            delete_sql = (
-                "delete from autopilot_trigger "
-                f"where autopilot_id={_sql_literal(ap_id)} and kind='schedule';"
-            )
-            ok, msg = _db_exec(delete_sql)
-            if ok:
-                print(f"    ↻ Replacing schedule trigger with: {desired_cron}")
-            else:
-                print(f"    ⚠ Could not replace trigger for '{title}': {msg[:100]}")
-                continue
+        replacing_schedule = bool(schedule_triggers)
         trig = _post(
             f"/api/autopilots/{ap_id}/triggers",
             {
@@ -893,7 +883,20 @@ def step_i_create_autopilots(agent_ids: dict[str, str]):
             },
         )
         if trig and "id" in trig:
-            print(f"    ✓ Trigger set: {apdef['cron']}")
+            if replacing_schedule:
+                delete_sql = (
+                    "delete from autopilot_trigger "
+                    f"where autopilot_id={_sql_literal(ap_id)} "
+                    "and kind='schedule' "
+                    f"and id <> {_sql_literal(trig['id'])};"
+                )
+                ok, msg = _db_exec(delete_sql)
+                if ok:
+                    print(f"    ↻ Replaced schedule trigger with: {desired_cron}")
+                else:
+                    print(f"    ⚠ New trigger created but old trigger cleanup failed for '{title}': {msg[:100]}")
+            else:
+                print(f"    ✓ Trigger set: {desired_cron}")
         else:
             print(f"    ⚠ Trigger creation returned: {trig}")
 
