@@ -48,6 +48,9 @@ Current evidence:
 - Local refresh wrapper short-timeout dry run rejected current main with
   `graphify_timed_out` and `graphify_exit_nonzero`, produced status JSON with a
   scrubbed workdir, and did not sync graph artifacts.
+- Timeout cleanup now runs Graphify in its own process group and terminates the
+  group on timeout; focused tests cover child-process cleanup, bytes output from
+  timeout exceptions, dry-run marker preservation, and rsync timeout reporting.
 
 ## Refresh 2026-06-09 Foundation Pass
 
