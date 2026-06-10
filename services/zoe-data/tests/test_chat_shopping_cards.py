@@ -34,7 +34,7 @@ def test_list_add_payload_keeps_compat_shape_and_adds_editor_contract():
 
 
 def test_list_add_payload_preserves_compat_list_default():
-    payload = _intent_card_data(Intent("list_add", {"text": "eggs"}))
+    payload = _intent_card_data(Intent("list_add", {"text": " eggs "}))
 
     assert payload["data"] == {"list_name": "List", "item": "eggs"}
     assert payload["card"]["content"]["values"] == {"item": "eggs", "list_name": "List"}

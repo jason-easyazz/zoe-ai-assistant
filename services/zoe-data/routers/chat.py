@@ -95,7 +95,8 @@ def _intent_card_data(intent) -> dict:
         except Exception:
             card_service = None
         list_name = slots.get("list_name") or "List"
-        item = slots.get("item") or slots.get("text") or ""
+        items = _normalized_list_items(slots)
+        item = items[0] if items else ""
         payload = {
             "type": "list",
             "data": {
