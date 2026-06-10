@@ -129,12 +129,14 @@ def test_load_target_patterns_extracts_contract_metadata():
 
 
 @pytest.mark.asyncio
-async def test_record_frustration_signal_stores_contract_snapshot(monkeypatch):
+async def test_record_frustration_signal_stores_runtime_intake_contract_snapshot(monkeypatch):
     db = _WriterDb()
+    sync_calls = []
 
     monkeypatch.setitem(sys.modules, "db_pool", types.SimpleNamespace(get_db_ctx=lambda: db))
 
-    async def fake_sync_evolution_proposal_to_multica(**_kwargs):
+    async def fake_sync_evolution_proposal_to_multica(**kwargs):
+        sync_calls.append(kwargs)
         return None
 
     monkeypatch.setitem(
@@ -151,13 +153,35 @@ async def test_record_frustration_signal_stores_contract_snapshot(monkeypatch):
     )
 
     assert len(db.execute_calls) == 1
+    assert len(sync_calls) == 1
     insert_sql, insert_args = db.execute_calls[0]
     assert "target_patterns" in insert_sql
+    evidence = json.loads(insert_args[3])
     contract = json.loads(insert_args[4])
+    assert insert_args[1] == "User frustration: 'why can't you remember the bins'"
+    assert evidence["source"] == "runtime_evolution_intake"
+    assert evidence["signal"]["source"] == "evolution_notice:user_frustration"
+    assert evidence["signal"]["scope"] == "personal"
+    assert evidence["signal"]["user_id"] == "jason"
+    assert evidence["signal"]["metadata"]["session_id"] == "sess-1"
+    assert evidence["signal"]["metadata"]["repeat_count"] == 3
+    assert evidence["candidate_ids"] == ["existing_zoe_frustration_triage"]
     assert contract["schema"] == "zoe_evolution_proposal"
-    assert contract["legacy_writer"] == "evolution_notice:user_frustration"
-    assert contract["proposal"]["metadata"]["legacy_target_patterns"] == ["why can't you remember the bins"]
-    assert contract["proposal"]["signals"][0]["scope"] == "personal"
+    assert contract["legacy_writer"] == "runtime_evolution_intake"
+    proposal = contract["proposal"]
+    assert proposal["metadata"]["legacy_proposal_type"] == "user_frustration"
+    assert proposal["metadata"]["legacy_writer"] == "evolution_notice:user_frustration"
+    assert proposal["metadata"]["legacy_target_patterns"] == ["why can't you remember the bins"]
+    assert "user_id" not in proposal["metadata"]
+    assert "session_id" not in proposal["metadata"]
+    assert "repeat_count" not in proposal["metadata"]
+    assert "message_excerpt" not in proposal["metadata"]
+    assert proposal["metadata"]["selected_candidate_id"] == "existing_zoe_frustration_triage"
+    assert proposal["metadata"]["candidate_search"][0]["candidate_id"] == "existing_zoe_frustration_triage"
+    assert proposal["approval_gate"]["allowed_to_execute"] is False
+    assert sync_calls[0]["proposal_id"] == insert_args[0]
+    assert sync_calls[0]["proposal_type"] == "user_frustration"
+    assert sync_calls[0]["contract_snapshot"] == insert_args[4]
 
 
 @pytest.mark.asyncio
@@ -197,6 +221,8 @@ async def test_record_user_issue_stores_runtime_intake_contract_snapshot(monkeyp
     assert proposal["metadata"]["legacy_proposal_type"] == "user_issue_report"
     assert proposal["metadata"]["legacy_writer"] == "evolution_notice:user_issue_report"
     assert proposal["metadata"]["legacy_target_patterns"] == ["weather failed again"]
+    assert "user_id" not in proposal["metadata"]
+    assert "message_excerpt" not in proposal["metadata"]
     assert proposal["metadata"]["selected_candidate_id"] == "existing_zoe_user_issue_triage"
     assert proposal["metadata"]["candidate_search"][0]["candidate_id"] == "existing_zoe_user_issue_triage"
     assert proposal["approval_gate"]["allowed_to_execute"] is False
