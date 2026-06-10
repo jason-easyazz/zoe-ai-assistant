@@ -571,7 +571,7 @@ async def sync_autopilots_from_multica(scheduler) -> int:
     for ap in autopilots:
         ap_id: str = str(ap.get("id", "")).strip()
         ap_title: str = (ap.get("title") or ap.get("name") or "").strip()
-        ap_mode: str = ap.get("mode") or "create_issue"
+        ap_mode: str = ap.get("execution_mode") or ap.get("mode") or "create_issue"
         ap_assignee: str | None = ap.get("assignee_agent_id") or ap.get("assignee_id")
 
         if not ap_id or not ap_title:

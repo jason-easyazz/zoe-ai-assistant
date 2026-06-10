@@ -448,21 +448,23 @@ _AGENT_DEFS = [
             "skill. Always be concise, helpful, and personal. Your wake word is 'Hey Zoe'."
         ),
         "model": "Llama-3.2-3B-Instruct-Q4_K_M",
+        "runtime_provider": "zoe",
     },
     {
         "name": "OpenClaw",
         "description": (
-            "Agentic execution runtime. Handles browser automation, code execution, skill "
-            "building, and simple-English Multica quick-create tasks through the native "
-            "Multica daemon."
+            "Agentic execution runtime. Handles browser automation, code execution, and skill "
+            "building. In Multica issue capture, route simple-English ticket creation through "
+            "the Hermes runtime until OpenClaw's Codex-backed harness has non-rate-limited capacity."
         ),
         "instructions": (
-            "You are OpenClaw, Zoe's native agentic execution runtime. Use local tools to "
-            "create well-formed Multica issues from simple-English quick-create requests, "
-            "run browser/tool tasks when explicitly assigned, and report blockers clearly. "
+            "You are OpenClaw, Zoe's native agentic execution runtime. For Multica simple-English "
+            "issue capture, use the Hermes runtime path so ticket creation remains reliable and cost-controlled; "
+            "run browser/tool tasks only when explicitly assigned, and report blockers clearly. "
             "Do not decide Zoe engineering phase advancement; Zoe/Hermes harness owns that workflow."
         ),
-        "model": "main",
+        "model": "gpt-5.4",
+        "runtime_provider": "hermes",
     },
     {
         "name": "Hermes",
@@ -479,6 +481,7 @@ _AGENT_DEFS = [
         ),
         # Multica daemon selector for the Hermes CLI profile, not a public OpenAI model id.
         "model": "gpt-5.4",
+        "runtime_provider": "hermes",
     },
     {
         "name": "Agent Zero",
@@ -493,6 +496,7 @@ _AGENT_DEFS = [
             "Be thorough and cite your sources."
         ),
         "model": "Llama-3.2-3B-Instruct-Q4_K_M",
+        "runtime_provider": "zoe",
     },
     {
         "name": "Self-Improvement Agent",
@@ -508,13 +512,47 @@ _AGENT_DEFS = [
             "test it, commit it, and report back."
         ),
         "model": "Llama-3.2-3B-Instruct-Q4_K_M",
+        "runtime_provider": "zoe",
     },
 ]
+
+
+def _runtime_ids_by_provider(default_runtime_id: str) -> dict[str, str]:
+    """Return provider -> online runtime id, falling back to the Zoe host runtime."""
+    runtime_ids = {"zoe": default_runtime_id}
+    sql = (
+        "select provider, id from agent_runtime "
+        f"where workspace_id={_sql_literal(WORKSPACE_ID)} "
+        "and status='online' "
+        "and provider in ('hermes', 'openclaw', 'cursor') "
+        "order by provider, daemon_id is null, updated_at desc;"
+    )
+    cmd = [
+        "docker", "exec", _DB_CONTAINER,
+        "psql", "-U", _DB_USER, "-d", _DB_NAME,
+        "-t", "-A", "-F", "\t", "-c", sql,
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+    except Exception as exc:
+        print(f"  ⚠ Runtime provider lookup failed: {exc}")
+        return runtime_ids
+    if result.returncode != 0:
+        print(f"  ⚠ Runtime provider lookup failed: {(result.stderr or result.stdout)[:100]}")
+        return runtime_ids
+    for line in result.stdout.splitlines():
+        if "\t" not in line:
+            continue
+        provider, row_id = [part.strip() for part in line.split("\t", 1)]
+        if provider and row_id and provider not in runtime_ids:
+            runtime_ids[provider] = row_id
+    return runtime_ids
 
 
 def step_f_create_agents(runtime_id: str) -> dict[str, str]:
     """Returns name → agent_id mapping."""
     print("\n[F] Creating agents...")
+    runtime_ids = _runtime_ids_by_provider(runtime_id)
     existing_raw = _get("/api/agents") or []
     existing: list[dict] = existing_raw if isinstance(existing_raw, list) else existing_raw.get("agents", [])
     managed_names = [str(defn["name"]) for defn in _AGENT_DEFS]
@@ -527,6 +565,7 @@ def step_f_create_agents(runtime_id: str) -> dict[str, str]:
     agent_ids: dict[str, str] = dict(existing_names)
     for defn in _AGENT_DEFS:
         name = defn["name"]
+        target_runtime_id = runtime_ids.get(str(defn.get("runtime_provider") or "zoe"), runtime_id)
         if name in existing_names:
             agent_id = existing_names[name]
             sql = (
@@ -534,7 +573,7 @@ def step_f_create_agents(runtime_id: str) -> dict[str, str]:
                 f"description={_sql_literal(defn['description'])}, "
                 f"instructions={_sql_literal(defn['instructions'])}, "
                 f"model={_sql_literal(defn['model'])}, "
-                f"runtime_id={_sql_literal(runtime_id)}, "
+                f"runtime_id={_sql_literal(target_runtime_id)}, "
                 "runtime_mode='local', visibility='workspace', "
                 "archived_at=NULL, archived_by=NULL, updated_at=now() "
                 f"where id={_sql_literal(agent_id)};"
@@ -550,7 +589,7 @@ def step_f_create_agents(runtime_id: str) -> dict[str, str]:
             "description": defn["description"],
             "instructions": defn["instructions"],
             "model": defn["model"],
-            "runtime_id": runtime_id,
+            "runtime_id": target_runtime_id,
             "runtime_mode": "local",
             "visibility": "workspace",
         })
@@ -723,9 +762,9 @@ _AUTOPILOTS = [
     {
         "title": "Morning Checkin",
         "agent": "Zoe Core",
-        "execution_mode": "create_issue",
+        "execution_mode": "run_only",
         "cron": "30 7 * * *",
-        "issue_title_template": "Morning Brief — {date}",
+        "issue_title_template": "",
     },
     {
         "title": "Evening Wind Down",
@@ -757,8 +796,8 @@ _AUTOPILOTS = [
     },
     {
         "title": "Platform Health Check",
-        "agent": "Zoe Core",
-        "execution_mode": "run_only",
+        "agent": "Hermes",
+        "execution_mode": "create_issue",
         "cron": "0 6 * * *",
         "issue_title_template": "Platform Health — {date}",
     },
@@ -780,7 +819,20 @@ def step_i_create_autopilots(agent_ids: dict[str, str]):
 
         if title in existing_titles:
             ap_id = existing_titles[title]
-            print(f"  ↩ Autopilot '{title}' exists ({ap_id})")
+            sql = (
+                "update autopilot set "
+                f"assignee_id={_sql_literal(agent_id)}, "
+                "status=" + _sql_literal("active") + ", "
+                f"execution_mode={_sql_literal(apdef['execution_mode'])}, "
+                f"issue_title_template={_sql_literal(apdef.get('issue_title_template', ''))}, "
+                "updated_at=now() "
+                f"where id={_sql_literal(ap_id)};"
+            )
+            ok, msg = _db_update_one(sql)
+            if ok:
+                print(f"  ↻ Autopilot '{title}' exists ({ap_id}) — refreshed settings")
+            else:
+                print(f"  ⚠ Autopilot '{title}' refresh failed: {msg[:100]}")
         else:
             payload = {
                 "title": title,
