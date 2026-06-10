@@ -13,7 +13,9 @@ import argparse
 import json
 import os
 import re
+import resource
 import signal
+import time
 import shutil
 import subprocess
 import sys
@@ -43,7 +45,17 @@ def default_graphify_bin() -> Path:
 DEFAULT_GRAPHIFY_BIN = default_graphify_bin()
 DEFAULT_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1")
 DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "gemma-4-E2B-it-Q4_K_M.gguf")
+DEFAULT_MODEL_ROOTS = (Path("/home/zoe/models"),)
 STATUS_SCHEMA_VERSION = 1
+
+
+@dataclass(frozen=True)
+class CommandEvidence:
+    exit_code: int
+    timed_out: bool
+    output: str
+    duration_ms: int
+    child_max_rss_kb: int | None
 
 
 @dataclass(frozen=True)
@@ -157,7 +169,16 @@ def _text_output(value: str | bytes | None) -> str:
     return value
 
 
-def run_command(command: Sequence[str], *, cwd: Path, env: dict[str, str], timeout_sec: int) -> tuple[int, bool, str]:
+def _child_max_rss_kb() -> int | None:
+    try:
+        value = int(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss)
+    except Exception:  # noqa: BLE001 - best-effort operator evidence.
+        return None
+    return value if value >= 0 else None
+
+
+def run_command_with_evidence(command: Sequence[str], *, cwd: Path, env: dict[str, str], timeout_sec: int) -> CommandEvidence:
+    started = time.monotonic()
     process = subprocess.Popen(
         list(command),
         cwd=cwd,
@@ -169,7 +190,13 @@ def run_command(command: Sequence[str], *, cwd: Path, env: dict[str, str], timeo
     )
     try:
         stdout, _ = process.communicate(timeout=timeout_sec)
-        return process.returncode or 0, False, stdout or ""
+        return CommandEvidence(
+            exit_code=process.returncode or 0,
+            timed_out=False,
+            output=stdout or "",
+            duration_ms=int((time.monotonic() - started) * 1000),
+            child_max_rss_kb=_child_max_rss_kb(),
+        )
     except subprocess.TimeoutExpired as exc:
         try:
             os.killpg(process.pid, signal.SIGTERM)
@@ -187,7 +214,37 @@ def run_command(command: Sequence[str], *, cwd: Path, env: dict[str, str], timeo
             except subprocess.TimeoutExpired:
                 stdout = b""
         output = "".join(_text_output(part) for part in (exc.stdout, stdout))
-        return 124, True, output
+        return CommandEvidence(
+            exit_code=124,
+            timed_out=True,
+            output=output,
+            duration_ms=int((time.monotonic() - started) * 1000),
+            child_max_rss_kb=_child_max_rss_kb(),
+        )
+
+
+def run_command(command: Sequence[str], *, cwd: Path, env: dict[str, str], timeout_sec: int) -> tuple[int, bool, str]:
+    result = run_command_with_evidence(command, cwd=cwd, env=env, timeout_sec=timeout_sec)
+    return result.exit_code, result.timed_out, result.output
+
+
+def local_model_fit_evidence(model: str, base_url: str, *, roots: Sequence[Path] = DEFAULT_MODEL_ROOTS) -> dict[str, object]:
+    candidates: list[Path] = []
+    model_path = Path(model)
+    if model_path.is_absolute():
+        candidates.append(model_path)
+    else:
+        for root in roots:
+            candidates.extend(root.glob(f"**/{model}"))
+    existing = next((candidate for candidate in candidates if candidate.exists()), None)
+    return {
+        "base_url_localhost": base_url.startswith("http://127.0.0.1") or base_url.startswith("http://localhost"),
+        "model": model,
+        "model_file": str(existing) if existing else None,
+        "model_file_exists": bool(existing),
+        "model_file_bytes": existing.stat().st_size if existing else None,
+        "offline_cloud_keys_scrubbed": True,
+    }
 
 
 def prepare_smoke_workdir(parent: Path) -> Path:
@@ -276,23 +333,30 @@ def run_probe(config: GraphifyLocalProbeConfig) -> dict[str, object]:
         command = [str(config.graphify_bin), "extract", ".", "--backend", "ollama", "--model", config.model]
         if not config.cluster:
             command.append("--no-cluster")
-        exit_code, timed_out, log_text = run_command(
+        extract_result = run_command_with_evidence(
             command,
             cwd=workdir,
             env=graphify_env(config),
             timeout_sec=config.timeout_sec,
         )
+        exit_code = extract_result.exit_code
+        timed_out = extract_result.timed_out
+        log_text = extract_result.output
+        command_evidence = {"extract": asdict(extract_result)}
+        command_evidence["extract"].pop("output", None)
         if config.cluster and exit_code == 0 and not timed_out:
-            cluster_code, cluster_timed_out, cluster_log = run_command(
+            cluster_result = run_command_with_evidence(
                 [str(config.graphify_bin), "cluster-only", ".", "--no-viz"],
                 cwd=workdir,
                 env=graphify_env(config),
                 timeout_sec=config.timeout_sec,
             )
-            log_text = f"{log_text}\n{cluster_log}"
-            if cluster_code != 0 or cluster_timed_out:
-                exit_code = cluster_code
-                timed_out = timed_out or cluster_timed_out
+            log_text = f"{log_text}\n{cluster_result.output}"
+            command_evidence["cluster"] = asdict(cluster_result)
+            command_evidence["cluster"].pop("output", None)
+            if cluster_result.exit_code != 0 or cluster_result.timed_out:
+                exit_code = cluster_result.exit_code
+                timed_out = timed_out or cluster_result.timed_out
 
         graph_json = workdir / "graphify-out" / "graph.json"
         graph_report = workdir / "graphify-out" / "GRAPH_REPORT.md"
@@ -315,6 +379,8 @@ def run_probe(config: GraphifyLocalProbeConfig) -> dict[str, object]:
             "model": config.model,
             "base_url": config.base_url,
             "include_paths": list(config.include_paths),
+            "model_fit": local_model_fit_evidence(config.model, config.base_url),
+            "command_evidence": command_evidence,
             "exit_code": exit_code,
             "timed_out": timed_out,
             "workdir": str(workdir) if config.keep_workdir and workdir else None,
@@ -331,6 +397,7 @@ def run_probe(config: GraphifyLocalProbeConfig) -> dict[str, object]:
             "model": config.model,
             "base_url": config.base_url,
             "include_paths": list(config.include_paths),
+            "model_fit": local_model_fit_evidence(config.model, config.base_url),
             "accepted": False,
             "blockers": ["probe_error"],
             "warnings": [],

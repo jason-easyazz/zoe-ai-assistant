@@ -18,8 +18,10 @@ python3 scripts/maintenance/graphify_local_probe.py --mode scope --include-path 
 
 The probe uses Graphify's `ollama` backend against Zoe's localhost llama.cpp
 OpenAI-compatible endpoint, removes cloud API keys from the subprocess
-environment, and runs in a temporary fixture, scoped path copy, or detached git
-snapshot. It never syncs generated `graphify-out` artifacts back into the repo.
+environment, records local model-file evidence, captures extract/cluster duration
+and child-process max RSS evidence, and runs in a temporary fixture, scoped path
+copy, or detached git snapshot. It never syncs generated `graphify-out` artifacts
+back into the repo.
 Scoped mode is observe-only evidence for subsystem-sized local model runs; the
 sync-capable refresh wrapper still requires full repo mode with clustering.
 
@@ -33,7 +35,10 @@ Acceptance is fail-closed. The status JSON is rejected when Graphify times out,
 exits nonzero, omits `graphify-out/graph.json`, writes an empty graph, emits
 invalid JSON chunks, emits truncated chunks, or surfaces cloud quota errors.
 Context splits are recorded as warnings because they may recover, but they remain
-important evidence for tuning local chunk budgets.
+important evidence for tuning local chunk budgets. Command evidence intentionally
+omits raw logs from the compact JSON packet; operators should use metrics,
+blockers, duration, RSS, and model-fit fields first, then inspect full terminal
+logs only when a run needs repair.
 
 Current evidence:
 
@@ -54,6 +59,9 @@ Current evidence:
 - Timeout cleanup now runs Graphify in its own process group and terminates the
   group on timeout; focused tests cover child-process cleanup, bytes output from
   timeout exceptions, dry-run marker preservation, and rsync timeout reporting.
+- Local probe status now includes compact command evidence for extract/cluster
+  duration and child max RSS, plus local model-file evidence so Gemma 4 E2B, E4B,
+  and 12B runs can be compared without enabling a cloud backend.
 
 ## Refresh 2026-06-09 Foundation Pass
 
