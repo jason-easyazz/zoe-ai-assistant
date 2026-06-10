@@ -829,7 +829,7 @@ async def lifespan(app: FastAPI):
                                         {
                                             "multica_issue_id": str(issue_id),
                                             "title": title,
-                                            "phase": (chain.get("pipeline") or {}).get("phase"),
+                                            "phase": (chain.get("pipeline") if isinstance(chain.get("pipeline"), dict) else {}).get("phase"),
                                             "pr_url": chain.get("pr_url"),
                                             "status": "in_review" if chain.get("pr_url") else None,
                                         },
