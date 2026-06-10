@@ -154,7 +154,6 @@ def build_capability_profile_edit_outcome_plan(
             "extra": dict(metadata or {}),
         },
     )
-    request.validate()
     return CapabilityProfileEditOutcomePlan(
         memory_candidate=candidate,
         admission_request=request,
@@ -229,7 +228,8 @@ def _manifest_trust_blockers(pr_edit_plan: CapabilityProfilePREditPlan, manifest
             continue
         from_trust = str(record.get("from_trust_level") or "")
         to_trust = str(record.get("to_trust_level") or "")
-        if from_trust and to_trust and from_trust == to_trust:
+        resolved_to_trust = to_trust or "applied"
+        if from_trust and from_trust == resolved_to_trust:
             blockers.append(f"unchanged_trust_level:{capability_id}")
     return tuple(blockers)
 

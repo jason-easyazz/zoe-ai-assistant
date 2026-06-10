@@ -226,6 +226,25 @@ async def test_profile_edit_outcome_blocks_unchanged_trust_manifest_without_rais
     assert plan.trust_records == ()
     assert plan.memory_candidate is None
 
+
+@pytest.mark.asyncio
+async def test_profile_edit_outcome_blocks_from_trust_matching_default_to_trust_without_raising():
+    handoff, pr_edit_plan = await _allowed_pr_edit_plan()
+    manifest = handoff.promotion_manifest.replace('"from_trust_level": "experimental"', '"from_trust_level": "applied"')
+    manifest = manifest.replace('"to_trust_level": "assisted",\n', '')
+
+    plan = build_capability_profile_edit_outcome_plan(
+        pr_edit_plan,
+        verification_traces=(_verification_trace(),),
+        user_id="zoe_system",
+        promotion_manifest=manifest,
+    )
+
+    assert plan.allowed_to_admit_memory is False
+    assert "unchanged_trust_level:hindsight_reflective_memory" in plan.blockers
+    assert plan.trust_records == ()
+    assert plan.memory_candidate is None
+
 @pytest.mark.asyncio
 async def test_profile_edit_outcome_rejects_invalid_manifest_before_memory_candidate():
     _handoff, pr_edit_plan = await _allowed_pr_edit_plan()
