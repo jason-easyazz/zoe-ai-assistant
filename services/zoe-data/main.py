@@ -1213,10 +1213,10 @@ async def _resolve_ws_user(session_id: str) -> str:
     """Resolve a browser session_id to a user_id via zoe-auth HTTP.
 
     Calls the same /api/auth/user endpoint that get_current_user uses in auth.py.
-    Falls back to 'family-admin' on any auth failure or timeout.
+    Falls back to 'voice-guest' on any auth failure or timeout.
     """
     if not session_id:
-        return "family-admin"
+        return "voice-guest"
     try:
         import httpx
         auth_url = os.getenv("ZOE_AUTH_URL", "http://localhost:8002").rstrip("/")
@@ -1228,10 +1228,21 @@ async def _resolve_ws_user(session_id: str) -> str:
         if r.status_code == 200:
             data = r.json()
             uid = data.get("user_id") or data.get("id") or ""
-            return uid or "family-admin"
+            return uid or "voice-guest"
     except Exception:
         pass
-    return "family-admin"
+    return "voice-guest"
+
+
+async def _resolve_voice_cards(message_text: str, user_id: str) -> dict:
+    """Resolve voice text to real Skybridge data cards when a supported domain exists."""
+    try:
+        from skybridge_service import resolve_skybridge_request
+
+        return await resolve_skybridge_request(message_text, user_id)
+    except Exception as exc:
+        logger.warning("Voice WS Skybridge resolve failed: %s", exc)
+        return {"handled": False, "cards": [], "spoken_summary": ""}
 
 
 @app.websocket("/ws/voice/")
@@ -1315,6 +1326,9 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
             _ws_cancelled[0] = False
 
             await websocket.send_json({"type": "state", "state": "thinking"})
+            skybridge_result = await _resolve_voice_cards(message_text, user_id)
+            for card_contract in skybridge_result.get("cards") or []:
+                await websocket.send_json({"type": "card", "card": card_contract})
 
             # ── Streaming LLM + per-sentence TTS ────────────────────────────────
             # Track LLM output and TTS output separately so fallback only re-runs
