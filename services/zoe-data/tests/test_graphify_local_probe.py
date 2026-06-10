@@ -249,6 +249,62 @@ def test_run_probe_status_includes_command_and_model_fit_evidence(tmp_path):
     assert status["metrics"]["nodes"] == 2
     assert status["metrics"]["edges"] == 1
 
+
+def test_default_model_roots_honors_env_override(monkeypatch, tmp_path):
+    monkeypatch.setenv("ZOE_MODEL_ROOT", str(tmp_path / "custom-models"))
+
+    module = _load_module()
+
+    assert module.DEFAULT_MODEL_ROOTS == (tmp_path / "custom-models",)
+
+
+def test_child_max_rss_reports_kilobytes_on_darwin(monkeypatch):
+    module = _load_module()
+
+    class Usage:
+        ru_maxrss = 2048 * 1024
+
+    monkeypatch.setattr(module.sys, "platform", "darwin")
+    monkeypatch.setattr(module.resource, "getrusage", lambda _target: Usage())
+
+    assert module._child_max_rss_kb() == 2048
+
+
+def test_run_probe_error_status_keeps_command_evidence_schema(tmp_path, monkeypatch):
+    module = _load_module()
+    fake_graphify = tmp_path / "graphify"
+    fake_graphify.write_text(
+        "#!/usr/bin/env python3\n"
+        "from pathlib import Path\n"
+        "out = Path('graphify-out')\n"
+        "out.mkdir(exist_ok=True)\n"
+        "(out / 'graph.json').write_text('{}', encoding='utf-8')\n"
+        "print('[graphify extract] found 1 code, 0 docs')\n",
+        encoding="utf-8",
+    )
+    fake_graphify.chmod(0o755)
+
+    def boom(**_kwargs):
+        raise RuntimeError("classification failed")
+
+    monkeypatch.setattr(module, "classify_probe_result", boom)
+
+    status = module.run_probe(
+        module.GraphifyLocalProbeConfig(
+            graphify_bin=fake_graphify,
+            base_url="http://127.0.0.1:11434/v1",
+            model="missing-test-model.gguf",
+            mode="smoke",
+            timeout_sec=5,
+        )
+    )
+
+    assert status["accepted"] is False
+    assert status["blockers"] == ["probe_error"]
+    assert status["command_evidence"]["extract"]["exit_code"] == 0
+    assert "output" not in status["command_evidence"]["extract"]
+    assert "classification failed" in status["error"]
+
 def test_validate_scope_path_rejects_unsafe_values():
     module = _load_module()
 

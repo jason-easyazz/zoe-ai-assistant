@@ -45,7 +45,7 @@ def default_graphify_bin() -> Path:
 DEFAULT_GRAPHIFY_BIN = default_graphify_bin()
 DEFAULT_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1")
 DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "gemma-4-E2B-it-Q4_K_M.gguf")
-DEFAULT_MODEL_ROOTS = (Path("/home/zoe/models"),)
+DEFAULT_MODEL_ROOTS = (Path(os.environ.get("ZOE_MODEL_ROOT", "/home/zoe/models")),)
 STATUS_SCHEMA_VERSION = 1
 
 
@@ -174,6 +174,8 @@ def _child_max_rss_kb() -> int | None:
         value = int(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss)
     except Exception:  # noqa: BLE001 - best-effort operator evidence.
         return None
+    if sys.platform == "darwin":
+        value = value // 1024
     return value if value >= 0 else None
 
 
@@ -320,6 +322,7 @@ def run_probe(config: GraphifyLocalProbeConfig) -> dict[str, object]:
     log_text = ""
     exit_code = 1
     timed_out = False
+    command_evidence: dict[str, object] = {}
     try:
         if config.mode == "smoke":
             workdir = prepare_smoke_workdir(temp_parent)
@@ -398,6 +401,7 @@ def run_probe(config: GraphifyLocalProbeConfig) -> dict[str, object]:
             "base_url": config.base_url,
             "include_paths": list(config.include_paths),
             "model_fit": local_model_fit_evidence(config.model, config.base_url),
+            "command_evidence": command_evidence,
             "accepted": False,
             "blockers": ["probe_error"],
             "warnings": [],
