@@ -121,7 +121,9 @@ if ! (cd "$SNAPSHOT_DIR" && "$GRAPHIFY_BIN" extract . --backend openai && "$GRAP
 fi
 
 log "syncing refreshed graph back to $ROOT/graphify-out"
-rsync -a "$SNAPSHOT_DIR/graphify-out/" "$ROOT/graphify-out/"
+# --delete keeps the live copy authoritative; the cache survives because it
+# was seeded into the snapshot and extended there before syncing back.
+rsync -a --delete "$SNAPSHOT_DIR/graphify-out/" "$ROOT/graphify-out/"
 
 rm -f "$ERROR_MARKER"
 log "graphify refresh complete for $current_head"
