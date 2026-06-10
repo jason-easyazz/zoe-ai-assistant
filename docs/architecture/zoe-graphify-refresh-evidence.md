@@ -20,6 +20,12 @@ OpenAI-compatible endpoint, removes cloud API keys from the subprocess
 environment, and runs in a temporary fixture or detached git snapshot. It never
 syncs generated `graphify-out` artifacts back into the repo.
 
+`graphify_local_refresh.py` is the sync-capable local wrapper. It runs the repo
+probe with clustering and `keep_workdir`, then syncs `graphify-out` back to the
+repo only when the status is accepted, blockers are empty, `graph.json` is
+non-empty, and `GRAPH_REPORT.md` exists. Rejected runs write
+`graphify-out/.last_refresh_error` and leave committed graph artifacts untouched.
+
 Acceptance is fail-closed. The status JSON is rejected when Graphify times out,
 exits nonzero, omits `graphify-out/graph.json`, writes an empty graph, emits
 invalid JSON chunks, emits truncated chunks, or surfaces cloud quota errors.
@@ -39,6 +45,9 @@ Current evidence:
   split warnings, three invalid JSON chunks, and one truncated chunk. Temporary
   graph output existed inside the probe snapshot but was not accepted or
   committed.
+- Local refresh wrapper short-timeout dry run rejected current main with
+  `graphify_timed_out` and `graphify_exit_nonzero`, produced status JSON with a
+  scrubbed workdir, and did not sync graph artifacts.
 
 ## Refresh 2026-06-09 Foundation Pass
 
