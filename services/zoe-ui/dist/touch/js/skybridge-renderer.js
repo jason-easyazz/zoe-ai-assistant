@@ -110,16 +110,8 @@
     }
 
     function calendarAccentLabel(value) {
-        const token = String(value || 'general').toLowerCase();
-        if (token === 'work') return 'Work';
-        if (token === 'personal') return 'Personal';
-        if (token === 'bucket') return 'Bucket';
-        if (token === 'shopping') return 'Shopping';
-        if (token === 'health') return 'Health';
-        if (token === 'routine') return 'Routine';
-        if (token === 'social') return 'Social';
-        if (token === 'family') return 'Family';
-        return 'General';
+        const category = calendarCategoryClass(value);
+        return category.charAt(0).toUpperCase() + category.slice(1);
     }
 
     function renderCalendar(props) {
@@ -129,7 +121,7 @@
         const rows = visibleEvents.map((item, index) => {
             const title = item.title || item.name || 'Calendar event';
             const category = calendarCategoryClass(item.category);
-            const detail = [item.location, calendarAccentLabel(item.category)].filter(Boolean).join(' · ');
+            const detail = [item.location].filter(Boolean).join(' · ');
             return [
                 '<div class="sky-event-row sky-calendar-event ' + escapeHtml(category) + '">',
                 '<div class="sky-calendar-time"><span>' + escapeHtml(formatEventTime(item)) + '</span>' + (index === 0 ? '<b>Next</b>' : '') + '</div>',

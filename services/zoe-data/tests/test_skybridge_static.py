@@ -233,6 +233,8 @@ def test_skybridge_calendar_renderer_handles_datetime_dates_and_ordering():
     assert "events.slice().sort((a, b) => calendarEventSortKey(a) - calendarEventSortKey(b)).slice(0, 8)" in renderer
     assert "props.date || props.start_date || (visibleEvents[0] && visibleEvents[0].start_date)" in renderer
     assert "props.date || props.start_date || (events[0] && events[0].start_date)" not in renderer
+    assert "const detail = [item.location].filter(Boolean).join(' · ');" in renderer
+    assert "const detail = [item.location, calendarAccentLabel(item.category)]" not in renderer
     assert "return known.indexOf(token) >= 0 ? token : 'general';" in renderer
 
 
