@@ -129,6 +129,32 @@ async def test_workflow_cli_outputs_allowed_plan(tmp_path, capsys):
 
 
 @pytest.mark.asyncio
+async def test_workflow_cli_render_patch_outputs_allowed_patch(tmp_path, capsys):
+    runner = _load_runner()
+    handoff, files = await _write_fixture_files(tmp_path)
+
+    rc = runner.main(
+        [
+            "--ticket-id", "ZOE-427",
+            "--ticket-description-file", str(files["ticket"]),
+            "--current-source-file", str(files["source"]),
+            "--patch-file", str(files["patch"]),
+            "--promotion-manifest-file", str(files["manifest"]),
+            "--pr-ref", "https://github.com/jason-easyazz/zoe-ai-assistant/pull/427",
+            "--rollback-ref", "rollback:revert-pr-427",
+            "--verification-ref", "pytest:test_capability_profile_pr_edit_workflow",
+            "--greptile-ref", "greptile:pass:427",
+            "--render-patch",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert captured.out == handoff.patch_text
+    assert captured.err == ""
+
+
+@pytest.mark.asyncio
 async def test_workflow_cli_blocks_without_greptile_ref(tmp_path, capsys):
     runner = _load_runner()
     _handoff, files = await _write_fixture_files(tmp_path)
@@ -177,3 +203,23 @@ async def test_workflow_cli_render_patch_fails_closed_when_blocked(tmp_path, cap
     assert captured.out == ""
     assert "missing_greptile_refs" in captured.err
     assert "cannot render capability profile PR edit patch" in captured.err
+
+
+def test_workflow_cli_bad_file_path_fails_cleanly(tmp_path, capsys):
+    runner = _load_runner()
+    missing = tmp_path / "missing.md"
+
+    with pytest.raises(SystemExit, match="could not read ticket description file"):
+        runner.main(
+            [
+                "--ticket-id", "ZOE-427",
+                "--ticket-description-file", str(missing),
+                "--current-source-file", str(missing),
+                "--patch-file", str(missing),
+                "--promotion-manifest-file", str(missing),
+            ]
+        )
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""

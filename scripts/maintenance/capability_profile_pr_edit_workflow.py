@@ -26,8 +26,11 @@ from zoe_capability_profile_pr_edit_gate import (  # noqa: E402
 )
 
 
-def _read_text(path: str) -> str:
-    return Path(path).read_text(encoding="utf-8")
+def _read_text(path: str, *, label: str) -> str:
+    try:
+        return Path(path).read_text(encoding="utf-8")
+    except OSError as exc:
+        raise SystemExit(f"could not read {label} file {path!r}: {exc}") from exc
 
 
 def _non_empty_refs(values: list[str] | None) -> tuple[str, ...]:
@@ -72,10 +75,10 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     plan = build_capability_profile_pr_edit_plan_from_ticket(
         ticket_id=args.ticket_id,
-        ticket_description=_read_text(args.ticket_description_file),
-        current_source_text=_read_text(args.current_source_file),
-        patch_text=_read_text(args.patch_file),
-        promotion_manifest=_read_text(args.promotion_manifest_file),
+        ticket_description=_read_text(args.ticket_description_file, label="ticket description"),
+        current_source_text=_read_text(args.current_source_file, label="current source"),
+        patch_text=_read_text(args.patch_file, label="patch"),
+        promotion_manifest=_read_text(args.promotion_manifest_file, label="promotion manifest"),
         pr_refs=_non_empty_refs(args.pr_ref),
         rollback_refs=_non_empty_refs(args.rollback_ref),
         verification_refs=_non_empty_refs(args.verification_ref),
