@@ -34,6 +34,44 @@ def build_calendar_timeline_content(slots: dict[str, Any] | None = None) -> dict
     }
 
 
+def build_weather_current_content(slots: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Build canonical content for current weather data."""
+    slots = slots or {}
+    current = slots.get("current") or {}
+    forecast = slots.get("forecast") or {}
+    location = slots.get("location") or {}
+    city = _text(location.get("city") or current.get("city"), "Weather")
+    country = _text(location.get("country") or current.get("country"))
+    return {
+        "title": f"Weather in {city}",
+        "summary": _text(current.get("description"), "Current conditions"),
+        "source": "weather_current",
+        "view": "current",
+        "location": {"city": city, "country": country},
+        "current": {k: v for k, v in current.items() if not str(k).startswith("_")},
+        "forecast": forecast,
+    }
+
+
+def build_weather_forecast_content(slots: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Build canonical content for weather forecast data."""
+    slots = slots or {}
+    current = slots.get("current") or {}
+    forecast = slots.get("forecast") or {}
+    location = slots.get("location") or {}
+    city = _text(location.get("city") or current.get("city"), "Weather")
+    country = _text(location.get("country") or current.get("country"))
+    return {
+        "title": f"Forecast for {city}",
+        "summary": "Upcoming weather",
+        "source": "weather_forecast",
+        "view": "forecast",
+        "location": {"city": city, "country": country},
+        "current": {k: v for k, v in current.items() if not str(k).startswith("_")},
+        "forecast": forecast,
+    }
+
+
 def build_calendar_event_editor_content(slots: dict[str, Any] | None = None) -> dict[str, Any]:
     """Build canonical content for a calendar event editor card."""
     slots = slots or {}
@@ -161,6 +199,20 @@ class CardService:
             producer="zoe-calendar",
         )
 
+    def build_weather_current_card(self, slots: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self.build_card(
+            CardType.GENERIC.value,
+            build_weather_current_content(slots),
+            producer="zoe-weather",
+        )
+
+    def build_weather_forecast_card(self, slots: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self.build_card(
+            CardType.GENERIC.value,
+            build_weather_forecast_content(slots),
+            producer="zoe-weather",
+        )
+
     def build_calendar_event_editor_card(self, slots: dict[str, Any] | None = None) -> dict[str, Any]:
         return self.build_card(
             CardType.ACTION_FORM.value,
@@ -174,3 +226,5 @@ class CardService:
 card_service = CardService()
 card_service.register_domain_builder("calendar_timeline", card_service.build_calendar_timeline_card)
 card_service.register_domain_builder("calendar_event_editor", card_service.build_calendar_event_editor_card)
+card_service.register_domain_builder("weather_current", card_service.build_weather_current_card)
+card_service.register_domain_builder("weather_forecast", card_service.build_weather_forecast_card)

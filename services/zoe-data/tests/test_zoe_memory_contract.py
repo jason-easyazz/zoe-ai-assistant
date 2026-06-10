@@ -59,11 +59,24 @@ def test_valid_event_serializes_contract_fields():
     assert payload["evidence_refs"] == ["pytest:services/zoe-data/tests/test_voice_transcribe.py"]
 
 
-def test_mapping_rejects_unscoped_write():
+def test_mapping_rejects_missing_user_id():
     with pytest.raises(MemoryContractError, match="user_id"):
         memory_event_from_mapping(
             {
                 "scope": "personal",
+                "source": "chat",
+                "event_type": "preference",
+                "content": "prefers concise answers",
+                "evidence_refs": [],
+            }
+        )
+
+
+def test_mapping_rejects_missing_scope():
+    with pytest.raises(MemoryContractError, match="unsupported scope"):
+        memory_event_from_mapping(
+            {
+                "user_id": "jason",
                 "source": "chat",
                 "event_type": "preference",
                 "content": "prefers concise answers",

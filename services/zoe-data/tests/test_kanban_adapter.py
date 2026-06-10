@@ -64,6 +64,8 @@ class _FakeAdapter(ka.KanbanAdapter):
             return self._show_map.get(args[1], {"comments": [], "latest_summary": ""})
         if verb == "block":
             return ""
+        if verb == "complete":
+            return ""
         return ""
 
 
@@ -1266,6 +1268,325 @@ async def test_poll_blocked_detected():
     assert out["found"] is True
     assert out["status"] == "blocked"
     assert "dirty tree" in out["blocker"]
+
+
+@pytest.mark.asyncio
+async def test_poll_recovers_pr_after_push_then_api_interruption(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_implement.log").write_text(
+        "Query: work kanban task t_implement\n"
+        "  ┊ 💻 $         git add services/zoe-ui/nginx.conf && git commit -m security && git push -u origin HEAD  2.1s\n"
+        "⚡ Interrupted during API call.\n",
+        encoding="utf-8",
+    )
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    rows = [
+        _row(
+            "implement",
+            "blocked",
+            chain_version="v4",
+            workspace_path=str(worktree),
+            block_reason="worker interrupted after push",
+        )
+    ]
+
+    class _RecoverAdapter(_FakeAdapter):
+        def __init__(self):
+            super().__init__(
+                list_rows=rows,
+                show_map={
+                    "t_implement": {
+                        "task": {"workspace_path": str(worktree)},
+                        "latest_summary": "",
+                        "comments": [],
+                    }
+                },
+            )
+            self.worktree_commands = []
+
+        async def _run_worktree_command(self, args, *, cwd, timeout=45.0):
+            self.worktree_commands.append(args)
+            if args[:3] == ["git", "branch", "--show-current"]:
+                return "wt/t_implement"
+            if args[:3] == ["git", "rev-parse", "--abbrev-ref"]:
+                return "origin/release"
+            if args[:3] == ["gh", "pr", "view"]:
+                raise ka.KanbanCLIError("no pull request found")
+            if args[:3] == ["gh", "pr", "create"]:
+                return "https://github.com/jason-easyazz/zoe-ai-assistant/pull/999"
+            raise AssertionError(args)
+
+    a = _RecoverAdapter()
+    out = await a.poll(
+        "multica:uuid-9",
+        issue={
+            "id": "uuid-9",
+            "identifier": "ZOE-999",
+            "title": "Recover pushed branch",
+            "metadata": {"evidence_profile": "code"},
+        },
+    )
+
+    assert out["phases"]["implement"] == "done"
+    assert out["pr_url"] == "https://github.com/jason-easyazz/zoe-ai-assistant/pull/999"
+    assert out["status"] != "blocked"
+    complete = next(call for call in a.calls if call[0] == "complete")
+    assert "PR_URL=https://github.com/jason-easyazz/zoe-ai-assistant/pull/999" in "\n".join(complete)
+    create_cmd = next(cmd for cmd in a.worktree_commands if cmd[:3] == ["gh", "pr", "create"])
+    assert create_cmd[create_cmd.index("--base") + 1] == "release"
+
+
+@pytest.mark.asyncio
+async def test_poll_completes_recovered_pr_url_already_in_comments(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_implement.log").write_text(
+        "Query: work kanban task t_implement\n"
+        "  ┊ 💻 $         git push -u origin HEAD  2.1s\n"
+        "⚡ Interrupted during API call.\n",
+        encoding="utf-8",
+    )
+    rows = [
+        _row(
+            "implement",
+            "blocked",
+            chain_version="v4",
+            block_reason="worker interrupted after push",
+        )
+    ]
+
+    class _RecoverAdapter(_FakeAdapter):
+        def __init__(self):
+            super().__init__(
+                list_rows=rows,
+                show_map={
+                    "t_implement": {
+                        "latest_summary": "",
+                        "comments": [
+                            {
+                                "body": "manual recovery PR: https://github.com/jason-easyazz/zoe-ai-assistant/pull/998"
+                            }
+                        ],
+                    }
+                },
+            )
+
+        async def _run_worktree_command(self, args, *, cwd, timeout=45.0):
+            raise AssertionError(f"early PR URL recovery should not inspect worktree: {args}")
+
+    a = _RecoverAdapter()
+    out = await a.poll("multica:uuid-9")
+
+    assert out["phases"]["implement"] == "done"
+    assert out["pr_url"] == "https://github.com/jason-easyazz/zoe-ai-assistant/pull/998"
+    assert out["status"] != "blocked"
+    complete = next(call for call in a.calls if call[0] == "complete")
+    assert "PR_URL=https://github.com/jason-easyazz/zoe-ai-assistant/pull/998" in "\n".join(complete)
+
+
+@pytest.mark.asyncio
+async def test_poll_does_not_crash_when_existing_url_recovery_complete_fails(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_implement.log").write_text(
+        "Query: work kanban task t_implement\n"
+        "  ┊ 💻 $         git push -u origin HEAD  2.1s\n"
+        "⚡ Interrupted during API call.\n",
+        encoding="utf-8",
+    )
+    rows = [
+        _row(
+            "implement",
+            "blocked",
+            chain_version="v4",
+            block_reason="worker interrupted after push",
+        )
+    ]
+
+    class _FailCompleteAdapter(_FakeAdapter):
+        def __init__(self):
+            super().__init__(
+                list_rows=rows,
+                show_map={
+                    "t_implement": {
+                        "latest_summary": "",
+                        "comments": [
+                            {
+                                "body": "manual recovery PR: https://github.com/jason-easyazz/zoe-ai-assistant/pull/998"
+                            }
+                        ],
+                    }
+                },
+            )
+
+        async def _run(self, args, *, expect_json=False):
+            if args[0] == "complete":
+                raise ka.KanbanCLIError("transient kanban complete failure")
+            return await super()._run(args, expect_json=expect_json)
+
+        async def _run_worktree_command(self, args, *, cwd, timeout=45.0):
+            raise AssertionError(f"existing PR URL recovery should not inspect worktree: {args}")
+
+    a = _FailCompleteAdapter()
+    out = await a.poll("multica:uuid-9")
+
+    assert out["found"] is True
+    assert out["status"] == "blocked"
+    assert out["phases"]["implement"] == "blocked"
+
+
+def test_pushed_branch_recovery_scans_latest_log_session_only(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 💻 $         git push -u origin HEAD  2.1s\n"
+        "⚡ Interrupted during API call.\n"
+        "Query: work kanban task t_impl\n"
+        "  ┊ 💻 $         python3 -m pytest services/zoe-data/tests/test_x.py  0.4s [exit 1]\n"
+        "  ┊ kanban_block BLOCKER=TEST_FAILURE\n",
+        encoding="utf-8",
+    )
+
+    assert ka.KanbanAdapter()._pushed_branch_without_pr_handoff("t_impl") is False
+
+
+def test_pushed_branch_recovery_ignores_pr_create_in_reasoning_text(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "I will run `gh pr create` after this push.\n"
+        "  ┊ 💻 $         git push -u origin HEAD  2.1s\n"
+        "⚡ Interrupted during API call.\n",
+        encoding="utf-8",
+    )
+
+    assert ka.KanbanAdapter()._pushed_branch_without_pr_handoff("t_impl") is True
+
+
+def test_pushed_branch_recovery_allows_failed_pr_create_attempt(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 💻 $         git push -u origin HEAD  2.1s\n"
+        "  ┊ 💻 $         gh pr create --base main --title x --body y  1.1s [exit 1]\n"
+        "⚡ Interrupted during API call.\n",
+        encoding="utf-8",
+    )
+
+    assert ka.KanbanAdapter()._pushed_branch_without_pr_handoff("t_impl") is True
+
+
+def test_pushed_branch_recovery_allows_successful_pr_create_without_complete(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 💻 $         git push -u origin HEAD  2.1s\n"
+        "  ┊ 💻 $         gh pr create --base main --title x --body y  1.1s\n"
+        "https://github.com/jason-easyazz/zoe-ai-assistant/pull/998\n"
+        "⚡ Interrupted during API call.\n",
+        encoding="utf-8",
+    )
+
+    assert ka.KanbanAdapter()._pushed_branch_without_pr_handoff("t_impl") is True
+
+
+def test_pushed_branch_recovery_scans_past_failed_push_retry(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 💻 $         git push -u origin HEAD  2.1s [exit 1]\n"
+        "  ┊ 💻 $         git push -u origin HEAD  2.4s\n"
+        "⚡ Interrupted during API call.\n",
+        encoding="utf-8",
+    )
+
+    assert ka.KanbanAdapter()._pushed_branch_without_pr_handoff("t_impl") is True
+
+
+def test_pushed_branch_recovery_allows_compound_push_then_failed_pr_create(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 💻 $         git push -u origin HEAD && gh pr create --base main --title x --body y  3.1s [exit 1]\n"
+        "⚡ Interrupted during API call.\n",
+        encoding="utf-8",
+    )
+
+    assert ka.KanbanAdapter()._pushed_branch_without_pr_handoff("t_impl") is True
+
+
+@pytest.mark.asyncio
+async def test_poll_creates_pr_when_pr_view_returns_no_url(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_implement.log").write_text(
+        "Query: work kanban task t_implement\n"
+        "  ┊ 💻 $         git push -u origin HEAD  2.1s\n"
+        "⚡ Interrupted during API call.\n",
+        encoding="utf-8",
+    )
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    rows = [
+        _row(
+            "implement",
+            "blocked",
+            chain_version="v4",
+            workspace_path=str(worktree),
+            block_reason="worker interrupted after push",
+        )
+    ]
+
+    class _RecoverAdapter(_FakeAdapter):
+        def __init__(self):
+            super().__init__(
+                list_rows=rows,
+                show_map={
+                    "t_implement": {
+                        "task": {"workspace_path": str(worktree)},
+                        "latest_summary": "",
+                        "comments": [],
+                    }
+                },
+            )
+            self.worktree_commands = []
+
+        async def _run_worktree_command(self, args, *, cwd, timeout=45.0):
+            self.worktree_commands.append(args)
+            if args[:3] == ["git", "branch", "--show-current"]:
+                return "wt/t_implement"
+            if args[:3] == ["git", "rev-parse", "--abbrev-ref"]:
+                return "origin/main"
+            if args[:3] == ["gh", "pr", "view"]:
+                return "null"
+            if args[:3] == ["gh", "pr", "create"]:
+                return "https://github.com/jason-easyazz/zoe-ai-assistant/pull/997"
+            raise AssertionError(args)
+
+    a = _RecoverAdapter()
+    out = await a.poll("multica:uuid-9")
+
+    assert out["phases"]["implement"] == "done"
+    assert out["pr_url"] == "https://github.com/jason-easyazz/zoe-ai-assistant/pull/997"
+    assert any(cmd[:3] == ["gh", "pr", "create"] for cmd in a.worktree_commands)
 
 
 @pytest.mark.asyncio
