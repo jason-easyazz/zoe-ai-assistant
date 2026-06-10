@@ -38,3 +38,10 @@ def test_list_show_payload_singular_item_matches_contract():
 
     assert payload["data"]["items"] == ["milk"]
     assert payload["card"]["content"]["items"] == ["milk"]
+
+
+def test_list_show_payload_list_type_matches_contract():
+    payload = _intent_card_data(Intent("list_show", {"list_type": "Hardware", "items": ["screws"]}))
+
+    assert payload["data"]["list_name"] == "Hardware"
+    assert payload["card"]["content"]["list_name"] == "Hardware"

@@ -117,7 +117,7 @@ def _intent_card_data(intent) -> dict:
         payload = {
             "type": "list",
             "data": {
-                "list_name": slots.get("list_name") or "Shopping",
+                "list_name": slots.get("list_name") or slots.get("list_type") or "Shopping",
                 "items": items,
             },
         }
@@ -190,7 +190,7 @@ def _intent_action_form_payload(intent, panel_id: str | None = None) -> dict | N
             "panel_type": "shopping_list",
             "title": f"{slots.get('list_name', 'Shopping')} List",
             "data": {
-                "list_name": slots.get("list_name") or "Shopping",
+                "list_name": slots.get("list_name") or slots.get("list_type") or "Shopping",
                 "items": items,
                 "item": slots.get("item") or "",
             },
