@@ -29,7 +29,7 @@ class OptimizationResult:
 
 class SystemOptimizer:
     """Comprehensive system optimization for maximum potential"""
-    
+
     def __init__(self):
         self.services = {
             "zoe-core": "http://localhost:8000",
@@ -39,7 +39,7 @@ class SystemOptimizer:
             "homeassistant-bridge": "http://localhost:8007",
             "n8n-bridge": "http://localhost:8009"
         }
-        
+
         self.optimization_tests = [
             {
                 "name": "LLM Performance",
@@ -78,12 +78,12 @@ class SystemOptimizer:
                 ]
             }
         ]
-    
+
     async def test_llm_performance(self) -> List[OptimizationResult]:
         """Test LLM performance optimization"""
         logger.info("🧠 Testing LLM Performance Optimization...")
         results = []
-        
+
         # Test different models with optimized parameters
         models_to_test = [
             {"name": "gemma3:1b", "params": {"temperature": 0.5, "top_p": 0.8, "num_predict": 64}},
@@ -91,7 +91,7 @@ class SystemOptimizer:
             {"name": "qwen2.5:1.5b", "params": {"temperature": 0.7, "top_p": 0.8, "num_predict": 96}},
             {"name": "mistral:7b", "params": {"temperature": 0.8, "top_p": 0.9, "num_predict": 256}}
         ]
-        
+
         for model in models_to_test:
             start_time = time.time()
             try:
@@ -100,15 +100,15 @@ class SystemOptimizer:
                         "http://localhost:11434/api/generate",
                         json={
                             "model": model["name"],
-                            "prompt": "You are Zoe, an AI assistant with Samantha-level intelligence. Respond with warmth and intelligence.",
+                            "prompt": "You are Zoe, an AI assistant with Zoe continuity intelligence. Respond with warmth and intelligence.",
                             "stream": False,
                             "options": model["params"]
                         }
                     )
-                    
+
                     response_time = time.time() - start_time
                     success = response.status_code == 200
-                    
+
                     # Calculate optimization score based on response time and quality
                     if success:
                         data = response.json()
@@ -118,7 +118,7 @@ class SystemOptimizer:
                         optimization_score = int((quality_score + speed_score) / 2)
                     else:
                         optimization_score = 0
-                    
+
                     results.append(OptimizationResult(
                         component="LLM",
                         test_name=f"{model['name']}_performance",
@@ -126,7 +126,7 @@ class SystemOptimizer:
                         success=success,
                         optimization_score=optimization_score
                     ))
-                    
+
             except Exception as e:
                 results.append(OptimizationResult(
                     component="LLM",
@@ -136,14 +136,14 @@ class SystemOptimizer:
                     optimization_score=0,
                     error_message=str(e)
                 ))
-        
+
         return results
-    
+
     async def test_memory_system(self) -> List[OptimizationResult]:
         """Test memory system optimization"""
         logger.info("🧠 Testing Memory System Optimization...")
         results = []
-        
+
         memory_tests = [
             {
                 "name": "semantic_search",
@@ -161,7 +161,7 @@ class SystemOptimizer:
                 "expected_features": ["proactive_memory", "context_awareness"]
             }
         ]
-        
+
         for test in memory_tests:
             start_time = time.time()
             try:
@@ -180,17 +180,17 @@ class SystemOptimizer:
                             "include_relationships": True
                         }
                     )
-                    
+
                     response_time = time.time() - start_time
                     success = response.status_code == 200
-                    
+
                     if success:
                         data = response.json()
                         experts = data.get("experts", [])
                         optimization_score = min(10, len(experts) * 2)  # Score based on expert engagement
                     else:
                         optimization_score = 0
-                    
+
                     results.append(OptimizationResult(
                         component="Memory",
                         test_name=test["name"],
@@ -198,7 +198,7 @@ class SystemOptimizer:
                         success=success,
                         optimization_score=optimization_score
                     ))
-                    
+
             except Exception as e:
                 results.append(OptimizationResult(
                     component="Memory",
@@ -208,14 +208,14 @@ class SystemOptimizer:
                     optimization_score=0,
                     error_message=str(e)
                 ))
-        
+
         return results
-    
+
     async def test_mcp_integration(self) -> List[OptimizationResult]:
         """Test MCP integration optimization"""
         logger.info("🔧 Testing MCP Integration Optimization...")
         results = []
-        
+
         mcp_tests = [
             {
                 "name": "tool_discovery",
@@ -249,7 +249,7 @@ class SystemOptimizer:
                 }
             }
         ]
-        
+
         for test in mcp_tests:
             start_time = time.time()
             try:
@@ -261,16 +261,16 @@ class SystemOptimizer:
                         )
                     else:
                         response = await client.get(f"{self.services['mcp-server']}{test['endpoint']}")
-                    
+
                     response_time = time.time() - start_time
                     success = response.status_code == 200
-                    
+
                     if success:
                         data = response.json()
                         optimization_score = 8 if "success" in str(data) else 6
                     else:
                         optimization_score = 0
-                    
+
                     results.append(OptimizationResult(
                         component="MCP",
                         test_name=test["name"],
@@ -278,7 +278,7 @@ class SystemOptimizer:
                         success=success,
                         optimization_score=optimization_score
                     ))
-                    
+
             except Exception as e:
                 results.append(OptimizationResult(
                     component="MCP",
@@ -288,14 +288,14 @@ class SystemOptimizer:
                     optimization_score=0,
                     error_message=str(e)
                 ))
-        
+
         return results
-    
+
     async def test_routellm_intelligence(self) -> List[OptimizationResult]:
         """Test RouteLLM intelligence optimization"""
         logger.info("🔄 Testing RouteLLM Intelligence Optimization...")
         results = []
-        
+
         routing_tests = [
             {
                 "name": "quick_query_routing",
@@ -331,7 +331,7 @@ class SystemOptimizer:
                 )
                 for test in routing_tests
             ]
-        
+
         for test in routing_tests:
             start_time = time.time()
             try:
@@ -342,24 +342,24 @@ class SystemOptimizer:
                         json={
                             "model": "gemma3-ultra-fast",  # Test with specific model
                             "messages": [
-                                {"role": "system", "content": "You are Zoe, an AI assistant with Samantha-level intelligence."},
+                                {"role": "system", "content": "You are Zoe, an AI assistant with Zoe continuity intelligence."},
                                 {"role": "user", "content": test["query"]}
                             ],
                             "temperature": 0.7,
                             "max_tokens": 256
                         }
                     )
-                    
+
                     response_time = time.time() - start_time
                     success = response.status_code == 200
-                    
+
                     if success:
                         data = response.json()
                         response_text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
                         optimization_score = min(10, len(response_text) / 20)  # Score based on response quality
                     else:
                         optimization_score = 0
-                    
+
                     results.append(OptimizationResult(
                         component="RouteLLM",
                         test_name=test["name"],
@@ -367,7 +367,7 @@ class SystemOptimizer:
                         success=success,
                         optimization_score=optimization_score
                     ))
-                    
+
             except Exception as e:
                 results.append(OptimizationResult(
                     component="RouteLLM",
@@ -377,31 +377,31 @@ class SystemOptimizer:
                     optimization_score=0,
                     error_message=str(e)
                 ))
-        
+
         return results
-    
+
     async def run_comprehensive_optimization(self) -> Dict[str, Any]:
         """Run comprehensive system optimization"""
         logger.info("🚀 Starting Comprehensive System Optimization...")
-        
+
         all_results = []
-        
+
         # Test LLM Performance
         llm_results = await self.test_llm_performance()
         all_results.extend(llm_results)
-        
+
         # Test Memory System
         memory_results = await self.test_memory_system()
         all_results.extend(memory_results)
-        
+
         # Test MCP Integration
         mcp_results = await self.test_mcp_integration()
         all_results.extend(mcp_results)
-        
+
         # Test RouteLLM Intelligence
         routing_results = await self.test_routellm_intelligence()
         all_results.extend(routing_results)
-        
+
         # Calculate optimization scores
         component_scores = {}
         for component in ["LLM", "Memory", "MCP", "RouteLLM"]:
@@ -410,38 +410,38 @@ class SystemOptimizer:
                 avg_score = statistics.mean([r.optimization_score for r in component_results])
                 success_rate = sum([r.success for r in component_results]) / len(component_results)
                 avg_response_time = statistics.mean([r.response_time for r in component_results])
-                
+
                 component_scores[component] = {
                     "optimization_score": avg_score,
                     "success_rate": success_rate,
                     "avg_response_time": avg_response_time,
                     "total_tests": len(component_results)
                 }
-        
+
         return {
             "component_scores": component_scores,
             "all_results": all_results,
             "overall_score": statistics.mean([r.optimization_score for r in all_results if r.success])
         }
-    
+
     def generate_optimization_report(self, results: Dict[str, Any]) -> str:
         """Generate comprehensive optimization report"""
         report = []
         report.append("# 🔧 Comprehensive System Optimization Report")
         report.append(f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}")
         report.append("")
-        
+
         # Overall score
         report.append("## 🏆 Overall Optimization Score")
         report.append(f"**Overall Score**: {results['overall_score']:.1f}/10")
         report.append("")
-        
+
         # Component scores
         report.append("## 📊 Component Optimization Scores")
-        
+
         component_scores = results["component_scores"]
         sorted_components = sorted(component_scores.items(), key=lambda x: x[1]["optimization_score"], reverse=True)
-        
+
         for component, data in sorted_components:
             emoji = "🥇" if component == sorted_components[0][0] else "🥈" if component == sorted_components[1][0] else "🥉" if component == sorted_components[2][0] else "📊"
             report.append(f"{emoji} **{component}**: {data['optimization_score']:.1f}/10")
@@ -449,10 +449,10 @@ class SystemOptimizer:
             report.append(f"   - Avg Response Time: {data['avg_response_time']:.2f}s")
             report.append(f"   - Total Tests: {data['total_tests']}")
             report.append("")
-        
+
         # Detailed results
         report.append("## 📋 Detailed Test Results")
-        
+
         for component in ["LLM", "Memory", "MCP", "RouteLLM"]:
             component_results = [r for r in results["all_results"] if r.component == component]
             if component_results:
@@ -462,13 +462,13 @@ class SystemOptimizer:
                     report.append(f"- {status} {result.test_name}: {result.optimization_score}/10 ({result.response_time:.2f}s)")
                     if not result.success and result.error_message:
                         report.append(f"  Error: {result.error_message}")
-        
+
         # Optimization recommendations
         report.append("\n## 🎯 Optimization Recommendations")
-        
+
         # Identify areas for improvement
         low_scoring_components = [comp for comp, data in component_scores.items() if data["optimization_score"] < 7]
-        
+
         if low_scoring_components:
             report.append("### 🔧 Components Needing Optimization")
             for component in low_scoring_components:
@@ -486,14 +486,14 @@ class SystemOptimizer:
                 elif component == "RouteLLM":
                     report.append("  - Optimize model routing logic")
                     report.append("  - Improve query classification accuracy")
-        
+
         # High-performing components
         high_scoring_components = [comp for comp, data in component_scores.items() if data["optimization_score"] >= 8]
         if high_scoring_components:
             report.append("\n### 🌟 High-Performing Components")
             for component in high_scoring_components:
                 report.append(f"- **{component}**: Excellent performance ({component_scores[component]['optimization_score']:.1f}/10)")
-        
+
         # Next steps
         report.append("\n## 🚀 Next Steps for Maximum Potential")
         report.append("1. **Download Missing Models**: Complete the optimal model setup")
@@ -501,13 +501,13 @@ class SystemOptimizer:
         report.append("3. **Enhance Memory**: Improve semantic search and context awareness")
         report.append("4. **Optimize Routing**: Fine-tune model selection logic")
         report.append("5. **Integration Testing**: Test all components working together")
-        
+
         return "\n".join(report)
 
 async def main():
     """Main optimization function"""
     optimizer = SystemOptimizer()
-    
+
     # Check if all services are running
     logger.info("🔍 Checking service availability...")
     for service, url in optimizer.services.items():
@@ -520,16 +520,16 @@ async def main():
                     logger.warning(f"⚠️ {service}: Unhealthy ({response.status_code})")
         except Exception as e:
             logger.error(f"❌ {service}: Unavailable ({e})")
-    
+
     # Run the optimization
     results = await optimizer.run_comprehensive_optimization()
-    
+
     # Generate and save report
     report = optimizer.generate_optimization_report(results)
-    
+
     with open(str(PROJECT_ROOT / "SYSTEM_OPTIMIZATION_REPORT.md"), "w") as f:
         f.write(report)
-    
+
     print("\n" + "="*80)
     print("🎉 COMPREHENSIVE SYSTEM OPTIMIZATION COMPLETE!")
     print("="*80)

@@ -176,6 +176,9 @@ mcp_test_env/
 logs/
 *.log
 
+# Generated utility reports
+docs/reports/
+
 # Archive files (tar, zip, etc.) - these bloat the repository
 *.tar.gz
 *.tar

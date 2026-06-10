@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Comprehensive Integrated System Test
-Tests all optimized tools working together for Samantha-level intelligence
+Tests all optimized tools working together for Zoe continuity intelligence
 """
 
 import asyncio
@@ -18,12 +18,12 @@ logger = logging.getLogger(__name__)
 
 class ComprehensiveIntegratedTester:
     """Test all optimized tools working together"""
-    
+
     def __init__(self):
         self.base_url = "http://localhost:8000"
         self.test_scenarios = [
             {
-                "name": "Samantha Warmth Test",
+                "name": "Zoe Warmth Test",
                 "message": "I'm feeling a bit overwhelmed with work today. Can you help me feel better?",
                 "expected_qualities": ["warmth", "empathy", "support"],
                 "query_type": "conversation"
@@ -53,13 +53,13 @@ class ComprehensiveIntegratedTester:
                 "query_type": "coding"
             }
         ]
-    
+
     async def test_chat_with_quality_monitoring(self, scenario: Dict) -> Dict:
         """Test chat with quality monitoring"""
         logger.info(f"🧪 Testing: {scenario['name']}")
-        
+
         start_time = time.time()
-        
+
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
                 response = await client.post(
@@ -70,9 +70,9 @@ class ComprehensiveIntegratedTester:
                         "context": {"query_type": scenario["query_type"]}
                     }
                 )
-                
+
                 response_time = time.time() - start_time
-                
+
                 if response.status_code == 200:
                     data = response.json()
                     return {
@@ -91,7 +91,7 @@ class ComprehensiveIntegratedTester:
                         "response_time": response_time,
                         "error": f"HTTP {response.status_code}"
                     }
-                    
+
         except Exception as e:
             return {
                 "success": False,
@@ -99,19 +99,19 @@ class ComprehensiveIntegratedTester:
                 "response_time": time.time() - start_time,
                 "error": str(e)
             }
-    
+
     async def test_quality_metrics(self) -> Dict:
         """Test quality metrics collection"""
         logger.info("📊 Testing quality metrics...")
-        
+
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 # Test performance endpoint
                 perf_response = await client.get(f"{self.base_url}/api/models/performance")
-                
+
                 # Test quality endpoint
                 quality_response = await client.get(f"{self.base_url}/api/models/quality")
-                
+
                 if perf_response.status_code == 200 and quality_response.status_code == 200:
                     return {
                         "success": True,
@@ -123,22 +123,22 @@ class ComprehensiveIntegratedTester:
                         "success": False,
                         "error": f"Performance: {perf_response.status_code}, Quality: {quality_response.status_code}"
                     }
-                    
+
         except Exception as e:
             return {
                 "success": False,
                 "error": str(e)
             }
-    
+
     async def test_mcp_integration(self) -> Dict:
         """Test MCP server integration"""
         logger.info("🔧 Testing MCP integration...")
-        
+
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 # Test MCP server health
                 mcp_response = await client.get("http://localhost:8003/health")
-                
+
                 if mcp_response.status_code == 200:
                     return {
                         "success": True,
@@ -150,22 +150,22 @@ class ComprehensiveIntegratedTester:
                         "success": False,
                         "error": f"MCP server returned {mcp_response.status_code}"
                     }
-                    
+
         except Exception as e:
             return {
                 "success": False,
                 "error": str(e)
             }
-    
+
     async def test_mem_agent_integration(self) -> Dict:
         """Test memory agent integration"""
         logger.info("🧠 Testing memory agent integration...")
-        
+
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 # Test memory agent health
                 mem_response = await client.get("http://localhost:11435/health")
-                
+
                 if mem_response.status_code == 200:
                     return {
                         "success": True,
@@ -177,17 +177,17 @@ class ComprehensiveIntegratedTester:
                         "success": False,
                         "error": f"Memory agent returned {mem_response.status_code}"
                     }
-                    
+
         except Exception as e:
             return {
                 "success": False,
                 "error": str(e)
             }
-    
+
     async def test_litellm_integration(self) -> Dict:
         """Test LiteLLM integration"""
         logger.info("⚡ Testing LiteLLM integration...")
-        
+
         try:
             litellm_api_key = os.environ.get("LITELLM_API_KEY")
             if not litellm_api_key:
@@ -200,7 +200,7 @@ class ComprehensiveIntegratedTester:
                 # Test LiteLLM health with proper authentication
                 headers = {"Authorization": f"Bearer {litellm_api_key}"}
                 litellm_response = await client.get("http://localhost:8001/health", headers=headers)
-                
+
                 if litellm_response.status_code == 200:
                     return {
                         "success": True,
@@ -212,17 +212,17 @@ class ComprehensiveIntegratedTester:
                         "success": False,
                         "error": f"LiteLLM returned {litellm_response.status_code}"
                     }
-                    
+
         except Exception as e:
             return {
                 "success": False,
                 "error": str(e)
             }
-    
+
     async def run_comprehensive_test(self) -> Dict:
         """Run comprehensive test of all integrated systems"""
         logger.info("🚀 Starting Comprehensive Integrated System Test...")
-        
+
         results = {
             "chat_tests": [],
             "quality_metrics": {},
@@ -231,32 +231,32 @@ class ComprehensiveIntegratedTester:
             "litellm_integration": {},
             "summary": {}
         }
-        
+
         # Test chat scenarios
         for scenario in self.test_scenarios:
             result = await self.test_chat_with_quality_monitoring(scenario)
             results["chat_tests"].append(result)
-            
+
             if result["success"]:
                 logger.info(f"  ✅ {scenario['name']}: {result['response_time']:.2f}s")
             else:
                 logger.error(f"  ❌ {scenario['name']}: {result.get('error', 'Unknown error')}")
-            
+
             # Small delay between tests
             await asyncio.sleep(2)
-        
+
         # Test quality metrics
         results["quality_metrics"] = await self.test_quality_metrics()
-        
+
         # Test MCP integration
         results["mcp_integration"] = await self.test_mcp_integration()
-        
+
         # Test memory agent integration
         results["mem_agent_integration"] = await self.test_mem_agent_integration()
-        
+
         # Test LiteLLM integration
         results["litellm_integration"] = await self.test_litellm_integration()
-        
+
         # Calculate summary
         successful_chat_tests = [t for t in results["chat_tests"] if t["success"]]
         results["summary"] = {
@@ -269,16 +269,16 @@ class ComprehensiveIntegratedTester:
             "mem_agent_working": results["mem_agent_integration"]["success"],
             "litellm_working": results["litellm_integration"]["success"]
         }
-        
+
         return results
-    
+
     def generate_test_report(self, results: Dict) -> str:
         """Generate comprehensive test report"""
         report = []
         report.append("# 🧠 Comprehensive Integrated System Test Report")
         report.append(f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}")
         report.append("")
-        
+
         # Summary
         summary = results["summary"]
         report.append("## 📊 System Summary")
@@ -289,7 +289,7 @@ class ComprehensiveIntegratedTester:
         report.append(f"**Memory Agent**: {'✅ Working' if summary['mem_agent_working'] else '❌ Failed'}")
         report.append(f"**LiteLLM**: {'✅ Working' if summary['litellm_working'] else '❌ Failed'}")
         report.append("")
-        
+
         # Chat test results
         report.append("## 💬 Chat Test Results")
         for test in results["chat_tests"]:
@@ -304,10 +304,10 @@ class ComprehensiveIntegratedTester:
             else:
                 report.append(f"**Error**: {test.get('error', 'Unknown error')}")
             report.append("")
-        
+
         # Integration results
         report.append("## 🔧 Integration Results")
-        
+
         # Quality metrics
         if results["quality_metrics"]["success"]:
             quality_data = results["quality_metrics"]["quality_data"]
@@ -320,41 +320,41 @@ class ComprehensiveIntegratedTester:
         else:
             report.append("### Quality Metrics: ❌ Failed")
             report.append("")
-        
+
         # MCP Integration
         if results["mcp_integration"]["success"]:
             report.append("### MCP Integration: ✅ Working")
         else:
             report.append("### MCP Integration: ❌ Failed")
         report.append("")
-        
+
         # Memory Agent
         if results["mem_agent_integration"]["success"]:
             report.append("### Memory Agent: ✅ Working")
         else:
             report.append("### Memory Agent: ❌ Failed")
         report.append("")
-        
+
         # LiteLLM
         if results["litellm_integration"]["success"]:
             report.append("### LiteLLM: ✅ Working")
         else:
             report.append("### LiteLLM: ❌ Failed")
         report.append("")
-        
+
         # Overall assessment
         report.append("## 🎯 Overall Assessment")
-        
+
         working_components = sum([
             summary['quality_metrics_working'],
             summary['mcp_integration_working'],
             summary['mem_agent_working'],
             summary['litellm_working']
         ])
-        
+
         total_components = 4
         system_health = working_components / total_components
-        
+
         if system_health >= 0.8:
             report.append("🟢 **System Status**: EXCELLENT - All major components working")
         elif system_health >= 0.6:
@@ -363,45 +363,45 @@ class ComprehensiveIntegratedTester:
             report.append("🟠 **System Status**: FAIR - Some components need attention")
         else:
             report.append("🔴 **System Status**: POOR - Multiple components failing")
-        
+
         report.append(f"**Component Health**: {working_components}/{total_components} ({system_health:.1%})")
         report.append(f"**Chat Success Rate**: {summary['chat_success_rate']:.1%}")
         report.append("")
-        
+
         # Recommendations
         report.append("## 🚀 Recommendations")
-        
+
         if not summary['quality_metrics_working']:
             report.append("🔧 **Fix Quality Metrics**: The quality monitoring system needs attention.")
-        
+
         if not summary['mcp_integration_working']:
             report.append("🔧 **Fix MCP Integration**: The MCP server needs to be configured and started.")
-        
+
         if not summary['mem_agent_working']:
             report.append("🔧 **Fix Memory Agent**: The memory system needs attention.")
-        
+
         if not summary['litellm_working']:
             report.append("🔧 **Fix LiteLLM**: The model routing system needs attention.")
-        
+
         if summary['chat_success_rate'] < 0.8:
             report.append("⚠️ **Improve Chat Success Rate**: Some chat tests are failing.")
-        
+
         if summary['avg_response_time'] > 30:
             report.append("⚡ **Optimize Response Times**: Consider using faster models or optimizing parameters.")
-        
+
         report.append("")
         report.append("## 🎉 Next Steps")
         report.append("1. Monitor system performance over time")
         report.append("2. Optimize based on quality metrics")
         report.append("3. Expand tool integrations")
-        report.append("4. Implement additional Samantha-level features")
-        
+        report.append("4. Implement additional Zoe continuity features")
+
         return "\n".join(report)
 
 async def main():
     """Main test function"""
     tester = ComprehensiveIntegratedTester()
-    
+
     # Check if the core service is available
     try:
         async with httpx.AsyncClient() as client:
@@ -412,16 +412,16 @@ async def main():
     except Exception as e:
         logger.error(f"❌ Cannot connect to core service: {e}")
         return
-    
+
     # Run the comprehensive test
     results = await tester.run_comprehensive_test()
-    
+
     # Generate and save report
     report = tester.generate_test_report(results)
-    
+
     with open(str(PROJECT_ROOT / "COMPREHENSIVE_INTEGRATED_TEST_REPORT.md"), "w") as f:
         f.write(report)
-    
+
     print("\n" + "="*80)
     print("🎉 COMPREHENSIVE INTEGRATED SYSTEM TEST COMPLETE!")
     print("="*80)
