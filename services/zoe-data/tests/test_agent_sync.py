@@ -32,7 +32,7 @@ def test_zoe_why_block_teaches_mission_and_stays_lean():
     why = _build_zoe_why()
 
     # North Star + the three memory scopes
-    assert "Samantha" in why
+    assert "one continuous identity" in why
     assert "personal" in why and "shared" in why and "ambient" in why
     # trust-envelope + universality + harness-first biases
     assert "proposal path" in why

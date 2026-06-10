@@ -749,7 +749,7 @@ def _build_agent_card() -> dict:
         "url": base_url,
         "description": (
             "Personal AI companion with persistent memory, voice, home automation, "
-            "web capabilities, and a proactive open-loops engine for Samantha-tier continuity."
+            "web capabilities, and a proactive open-loops engine for Zoe-level continuity."
         ),
         "provider": {
             "name": "Zoe",
