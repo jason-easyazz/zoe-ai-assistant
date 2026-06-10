@@ -117,10 +117,14 @@ async def _record_running_multica_chain_progress(
         pass
 
     progress_kwargs = {
-        "phase": phase,
-        "evidence": "Engineering PR opened; validation/review in progress" if pr_url else "Engineering run in progress",
-        "pr_url": pr_url,
-        "clear_blocker": True,
+        key: value
+        for key, value in {
+            "phase": phase,
+            "evidence": "Engineering PR opened; validation/review in progress" if pr_url else "Engineering run in progress",
+            "pr_url": pr_url,
+            "clear_blocker": True,
+        }.items()
+        if value is not None
     }
     if target_status:
         progress_kwargs["status"] = target_status
@@ -133,14 +137,18 @@ async def _record_completed_multica_chain(client, issue_id: str, chain: dict) ->
     """Persist operator-visible completion metadata for a finished Multica chain."""
     pipeline = chain.get("pipeline") or {}
     phase = pipeline.get("phase") or "closeout"
-    await client.record_progress(
-        issue_id,
-        phase=phase,
-        evidence="Engineering run done after retro" if phase == "retro" else "Engineering run done",
-        pr_url=chain.get("pr_url"),
-        clear_blocker=True,
-        status="done",
-    )
+    progress_kwargs = {
+        key: value
+        for key, value in {
+            "phase": phase,
+            "evidence": "Engineering run done after retro" if phase == "retro" else "Engineering run done",
+            "pr_url": chain.get("pr_url"),
+            "clear_blocker": True,
+            "status": "done",
+        }.items()
+        if value is not None
+    }
+    await client.record_progress(issue_id, **progress_kwargs)
     follow_up = pipeline.get("retro_followup") if isinstance(pipeline, dict) else None
     if phase != "retro" or not isinstance(follow_up, dict) or not follow_up.get("title"):
         return

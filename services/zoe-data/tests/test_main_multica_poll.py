@@ -112,7 +112,7 @@ async def test_record_running_multica_chain_progress_records_phase_without_statu
 
     assert changed is True
     assert client.calls[0][1]["phase"] == "implement"
-    assert client.calls[0][1]["pr_url"] is None
+    assert "pr_url" not in client.calls[0][1]
     assert "status" not in client.calls[0][1]
 
 
@@ -207,7 +207,7 @@ async def test_record_completed_multica_chain_preserves_legacy_closeout_completi
 
     await _record_completed_multica_chain(client, "issue-2", {"status": "done"})
 
-    assert client.calls[0][1]["pr_url"] is None
+    assert "pr_url" not in client.calls[0][1]
     assert client.calls[0][1]["phase"] == "closeout"
     assert client.calls[0][1]["evidence"] == "Engineering run done"
     assert client.calls[0][1]["status"] == "done"
@@ -227,6 +227,22 @@ async def test_record_completed_multica_chain_records_non_retro_pipeline_phase()
 
     assert client.calls[0][1]["phase"] == "closeout"
     assert client.calls[0][1]["evidence"] == "Engineering run done"
+    assert client.calls[0][1]["status"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_record_completed_multica_chain_omits_absent_pr_url():
+    from main import _record_completed_multica_chain
+
+    client = RecordingClient()
+
+    await _record_completed_multica_chain(
+        client,
+        "issue-no-pr",
+        {"status": "done", "pipeline": {"phase": "closeout"}},
+    )
+
+    assert "pr_url" not in client.calls[0][1]
     assert client.calls[0][1]["status"] == "done"
 
 
