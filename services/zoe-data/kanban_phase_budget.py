@@ -265,6 +265,20 @@ def _pre_edit_repeat_read_budget() -> int:
         return 6
 
 
+def _post_focus_read_budget() -> int:
+    try:
+        return max(1, int(os.environ.get("ZOE_KANBAN_IMPLEMENT_POST_FOCUS_READ_BUDGET", "2")))
+    except ValueError:
+        return 2
+
+
+def _post_focus_grep_budget() -> int:
+    try:
+        return max(1, int(os.environ.get("ZOE_KANBAN_IMPLEMENT_POST_FOCUS_GREP_BUDGET", "2")))
+    except ValueError:
+        return 2
+
+
 def _read_path_key(raw_path: str) -> str:
     return re.sub(r":\d+(?:-\d+)?$", "", raw_path)
 
@@ -560,8 +574,8 @@ def implement_pre_edit_drift_reason_from_log(
     }
     post_focus_read_counts: dict[str, int] = {}
     post_focus_grep_steps = 0
-    post_focus_read_budget = 2
-    post_focus_grep_budget = 2
+    post_focus_read_budget = _post_focus_read_budget()
+    post_focus_grep_budget = _post_focus_grep_budget()
     read_counts: dict[str, int] = {}
     for line in step_lines:
         if _PATCH_STEP_RE.search(line) or _TERMINAL_STEP_RE.search(line):
@@ -584,7 +598,7 @@ def implement_pre_edit_drift_reason_from_log(
                 )
                 if post_focus_read_counts[matched_allowed_path] <= post_focus_read_budget:
                     continue
-            if _GREP_STEP_RE.search(line):
+            elif _GREP_STEP_RE.search(line):
                 post_focus_grep_steps += 1
                 if post_focus_grep_steps <= post_focus_grep_budget:
                     continue

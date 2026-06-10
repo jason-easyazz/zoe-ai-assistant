@@ -2463,6 +2463,31 @@ def test_implement_pre_edit_drift_does_not_charge_allowed_named_file_read_to_bud
     assert reason is None
 
 
+def test_implement_pre_edit_drift_honors_post_focus_grep_budget_override(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_POST_FOCUS_GREP_BUDGET", "1")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 💻 $         cd /work && PYTHONPATH=services/zoe-data python3 -m pytest -q "
+        "services/zoe-data/tests/test_main_multica_poll.py::"
+        "test_record_blocked_multica_chain_creates_iteration_budget_followup  3.3s\n"
+        "  ┊ 🔎 grep      _record_blocked_multica_chain  0.1s\n"
+        "  ┊ 🔎 grep      _ensure_blocker_followup_ticket  0.1s\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.implement_pre_edit_drift_reason_from_log(
+        "t_impl",
+        "implement",
+        task_body='{"source":"engineering_blocker_followup"}',
+    )
+
+    assert reason is not None
+    assert "engineering blocker follow-up kept exploring after focused test" in reason
+
+
 def test_implement_pre_edit_drift_allows_bounded_named_file_navigation_after_focused_test(
     tmp_path, monkeypatch
 ):
@@ -2489,6 +2514,31 @@ def test_implement_pre_edit_drift_allows_bounded_named_file_navigation_after_foc
     )
 
     assert reason is None
+
+
+def test_implement_pre_edit_drift_honors_post_focus_read_budget_override(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_POST_FOCUS_READ_BUDGET", "1")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 💻 $         cd /work && PYTHONPATH=services/zoe-data python3 -m pytest -q "
+        "services/zoe-data/tests/test_main_multica_poll.py::"
+        "test_record_blocked_multica_chain_creates_iteration_budget_followup  3.3s\n"
+        "  ┊ 📖 read      /work/services/zoe-data/main.py  0.1s\n"
+        "  ┊ 📖 read      /work/services/zoe-data/main.py  0.1s\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.implement_pre_edit_drift_reason_from_log(
+        "t_impl",
+        "implement",
+        task_body='{"source":"engineering_blocker_followup"}',
+    )
+
+    assert reason is not None
+    assert "engineering blocker follow-up kept exploring after focused test" in reason
 
 
 def test_implement_pre_edit_drift_blocks_excess_harness_followup_navigation_after_focused_test(
