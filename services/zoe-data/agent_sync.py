@@ -36,6 +36,7 @@ _HERMES_WORKER_CONFIGS = tuple(path.parent / "config.yaml" for path in _HERMES_W
 _HERMES_WORKER_TOOLSETS = ["terminal", "file", "kanban", "no_mcp"]
 _HERMES_WORKER_MAX_TOKENS = 1024
 _HERMES_WORKER_CONTEXT_LENGTH = 64000
+_HERMES_WORKER_OLLAMA_NUM_CTX = 65536
 _HERMES_WORKER_BASE_URL = "http://127.0.0.1:11434/v1"
 _HERMES_WORKER_FILE_READ_MAX_CHARS = 6000
 _HERMES_WORKER_TOOL_OUTPUT = {"max_bytes": 8000, "max_line_length": 300, "max_lines": 120}
@@ -306,6 +307,7 @@ def _write_hermes_worker_profile_configs() -> dict[str, str]:
             model_config = config.setdefault("model", {})
             model_config["max_tokens"] = _HERMES_WORKER_MAX_TOKENS
             model_config["context_length"] = _HERMES_WORKER_CONTEXT_LENGTH
+            model_config["ollama_num_ctx"] = _HERMES_WORKER_OLLAMA_NUM_CTX
             model_config["base_url"] = _HERMES_WORKER_BASE_URL
             config["file_read_max_chars"] = _HERMES_WORKER_FILE_READ_MAX_CHARS
             config["tool_output"] = dict(_HERMES_WORKER_TOOL_OUTPUT)

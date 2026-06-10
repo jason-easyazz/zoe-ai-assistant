@@ -132,6 +132,7 @@ memory:
     assert updated["memory"]["user_profile_enabled"] is False
     assert updated["model"]["max_tokens"] == 1024
     assert updated["model"]["context_length"] == 64000
+    assert updated["model"]["ollama_num_ctx"] == 65536
     assert updated["model"]["base_url"] == "http://127.0.0.1:11434/v1"
     assert "memory" in updated["agent"]["disabled_toolsets"]
     assert "skills" in updated["agent"]["disabled_toolsets"]
