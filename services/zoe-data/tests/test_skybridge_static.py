@@ -17,6 +17,7 @@ def read(path: Path) -> str:
 def test_skybridge_page_loads_required_modules_in_order():
     html = read(UI / "skybridge.html")
     expected = [
+        "/js/auth.js",
         "/touch/js/skybridge-capabilities.js",
         "/touch/js/skybridge-renderer.js",
         "/touch/js/skybridge-voice.js",
@@ -49,6 +50,10 @@ def test_skybridge_uses_login_orb_to_voice_pill_layout():
     assert "body.sky-empty .sky-command:focus-within" in html
     assert "body.sky-empty .sky-command:hover" in html
     assert "body:not(.sky-empty) .sky-command:hover" in html
+    assert "id=\"skyOrbButton\"" in html
+    assert "id=\"skyVoiceHint\"" in html
+    assert "Touch the orb to speak" in html
+    assert "aria-live=\"polite\"" in html
 
 
 def test_skybridge_exposes_voice_transport_without_dashboard_header():
@@ -130,10 +135,15 @@ def test_livekit_voice_router_accepts_text_commands():
 def test_skybridge_renderer_keeps_button_actions_functional():
     renderer = read(UI / "js" / "skybridge-renderer.js")
 
-    assert "Object.assign({}, props, { actions: cardActions })" in renderer
+    assert "cardActions" in renderer
+    assert "Open page" in renderer
+    assert "Show related settings" in renderer
     assert "Object.assign({ status: risk }, props, { actions: settingActions })" in renderer
     assert "function safeClassTokens" in renderer
     assert "/^[a-z0-9-]+$/i.test(token)" in renderer
+    assert "function rendererAccepts" in renderer
+    assert "function renderActionForm" in renderer
+    assert "unsupported_contract" in renderer
 
 
 def test_skybridge_uses_backend_status_contract():
@@ -149,6 +159,40 @@ def test_skybridge_uses_backend_status_contract():
     assert "Heard: " in app
     assert "voice.cancel()" in app
     assert "Notice: " in app
+    assert "toggleVoiceCapture" in app
+    assert "getHomeCards()" in app
+    assert "/api/skybridge/resolve" in app
+    assert "resolveCommand(query)" in app
+    assert "isDataQuery(query)" in app
+    assert "event.role === 'user') projectCards" not in app
+    assert "projectCommand(query);\n        if (voice) voice.sendText(query);" not in app
+
+
+def test_skybridge_auth_and_voice_bus_contracts_are_wired():
+    auth = (ROOT / "zoe-ui" / "dist" / "js" / "auth.js").read_text(encoding="utf-8")
+    main = read(DATA / "main.py")
+
+    assert "'/touch/skybridge.html': 'skybridge'" in auth
+    assert "pageId === 'skybridge'" in auth
+    assert 'return "voice-guest"' in main
+    assert 'return "family-admin"' not in main[main.index("async def _resolve_ws_user"):main.index("@app.websocket(\"/ws/voice/\")")]
+    assert "async def _resolve_voice_cards" in main
+    assert "resolve_skybridge_request(message_text, user_id)" in main
+    assert '"type": "card", "card": card_contract' in main
+
+
+def test_skybridge_renderer_supports_real_data_cards():
+    renderer = read(UI / "js" / "skybridge-renderer.js")
+    html = read(UI / "skybridge.html")
+
+    assert "renderCalendar(props)" in renderer
+    assert "renderWeather(props)" in renderer
+    assert "props.source === 'calendar_show'" in renderer
+    assert "props.source === 'weather_current'" in renderer
+    assert "props.source === 'weather_forecast'" in renderer
+    assert "sky-event-row" in html
+    assert "sky-forecast-tile" in html
+    assert "No events " in renderer
 
 
 def test_skybridge_is_registered_in_touch_menu():

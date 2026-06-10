@@ -10,6 +10,7 @@
     let animationFrame = null;
     let cardSequence = 0;
     let currentUtterance = '';
+    let voiceStartedByUser = false;
 
     const colors = {
         ambient: ['#5fc6ff', '#66d19e'],
@@ -28,7 +29,7 @@
         if (typeof TouchMenu !== 'undefined') TouchMenu.init({ page: 'skybridge' });
         const initialQuery = new URLSearchParams(location.search).get('q');
         if (initialQuery) {
-            setTimeout(() => projectCommand(initialQuery), 120);
+            setTimeout(() => submitCommand(initialQuery), 120);
         }
     }
 
@@ -55,6 +56,12 @@
         els.input = document.getElementById('skyCommandInput');
         els.mic = document.getElementById('skyMicBtn');
         els.home = document.getElementById('skyHomeBtn');
+        els.orbButton = document.getElementById('skyOrbButton');
+        els.orbButtonText = document.getElementById('skyOrbButtonText');
+        els.voiceHint = document.getElementById('skyVoiceHint');
+        els.voiceTitle = document.getElementById('skyVoiceTitle');
+        els.voiceDetail = document.getElementById('skyVoiceDetail');
+        els.voiceAction = document.getElementById('skyVoiceAction');
         els.canvas = document.getElementById('skyOrb');
         els.ctx = els.canvas.getContext('2d');
     }
@@ -68,17 +75,10 @@
             submitCommand(els.input.value);
             els.input.value = '';
         });
-        els.mic.addEventListener('click', () => {
-            if (!voice) return;
-            if (voice.isRecording) {
-                voice.stopRecording();
-            } else if (voice.speaking || voice.serverBusy) {
-                voice.cancel().catch(err => showError(err.message || 'Cancel failed'));
-            } else {
-                voice.startRecording().catch(err => showError(err.message || 'Microphone unavailable'));
-            }
-        });
-        els.home.addEventListener('click', renderHome);
+        els.mic.addEventListener('click', toggleVoiceCapture);
+        els.orbButton.addEventListener('click', toggleVoiceCapture);
+        els.voiceAction.addEventListener('click', toggleVoiceCapture);
+        els.home.addEventListener('click', () => renderHome({ showCards: true }));
         els.cards.addEventListener('click', event => {
             const btn = event.target.closest('button[data-sky-action]');
             if (!btn) return;
@@ -113,7 +113,6 @@
             setState(event.state || 'ambient');
         } else if (event.type === 'transcript') {
             addTranscript(event.role, event.text);
-            if (event.role === 'user') projectCards(event.text);
         } else if (event.type === 'card') {
             addCard(event.card, true);
         } else if (event.type === 'error') {
@@ -123,19 +122,78 @@
         }
     }
 
-    function submitCommand(text) {
-        const query = String(text || '').trim();
-        if (!query) return;
-        projectCommand(query);
-        if (voice) voice.sendText(query);
-    }
-
-    function projectCommand(text) {
+    async function submitCommand(text) {
         const query = String(text || '').trim();
         if (!query) return;
         currentUtterance = 'Heard: ' + query;
         els.copy.textContent = currentUtterance;
-        projectCards(query);
+        addTranscript('user', query);
+        setState('thinking');
+        const resolved = await resolveCommand(query);
+        if (!resolved) {
+            projectCards(query);
+        }
+        setState('ambient');
+    }
+
+    async function resolveCommand(query) {
+        try {
+            let resp = await fetch('/api/skybridge/resolve', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                body: JSON.stringify({ message: query })
+            });
+            if (resp.status === 401 || resp.status === 503) {
+                try { localStorage.removeItem('zoe_session'); } catch (_) {}
+                resp = await fetch('/api/skybridge/resolve', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                    body: JSON.stringify({ message: query })
+                });
+            }
+            if (!resp.ok) throw new Error('Skybridge resolver unavailable');
+            const data = await resp.json();
+            if (!data || !data.handled) return false;
+            clearCards();
+            const intent = data.intent || {};
+            const cards = Array.isArray(data.cards) ? data.cards : [];
+            setContext(
+                intent.domain === 'calendar' ? 'Calendar' : (intent.domain === 'weather' ? 'Weather' : 'Skybridge'),
+                data.spoken_summary || 'Showing live data.'
+            );
+            currentUtterance = data.spoken_summary || currentUtterance;
+            els.copy.textContent = currentUtterance;
+            cards.forEach((card, index) => addCard(card, false, index * 90));
+            if (!cards.length) {
+                addCard({
+                    component: 'status',
+                    props: {
+                        title: 'No card returned',
+                        body: data.spoken_summary || 'Zoe understood the request but did not return a display card.',
+                        status: 'Resolver'
+                    }
+                }, true);
+            }
+            return true;
+        } catch (err) {
+            if (isDataQuery(query)) {
+                clearCards();
+                addCard({
+                    component: 'status',
+                    props: {
+                        title: 'Live data unavailable',
+                        body: err.message || 'Skybridge could not reach the data resolver.',
+                        status: 'Data'
+                    }
+                }, true);
+                return true;
+            }
+            return false;
+        }
+    }
+
+    function isDataQuery(query) {
+        return /\b(calendar|schedule|events|appointments|agenda|weather|forecast|temperature|rain|windy|wind)\b/i.test(query || '');
     }
 
     function projectCards(query) {
@@ -176,12 +234,20 @@
         }
     }
 
-    function renderHome() {
+    function renderHome(options) {
+        const showCards = options && options.showCards;
         document.body.classList.add('sky-empty');
         currentUtterance = '';
         setContext('Listening', 'The surface will build itself when Zoe understands what you need.');
         clearCards();
         els.copy.textContent = 'Listening. Ask Zoe for anything.';
+        if (showCards && window.SkybridgeCapabilities && typeof window.SkybridgeCapabilities.getHomeCards === 'function') {
+            setContext('Skybridge home', 'Start with voice, then keep the useful cards in reach.');
+            window.SkybridgeCapabilities.getHomeCards().forEach((card, index) => {
+                addCard(card, false, index * 90);
+            });
+        }
+        updateVoiceHint('Touch the orb to speak', getMicGuidance(), 'Start mic');
         requestAnimationFrame(resizeOrb);
     }
 
@@ -234,6 +300,9 @@
     function showError(message) {
         const text = message || 'Something needs attention.';
         setStatus(text);
+        if (/microphone|secure|permission|voice upload|transport unavailable/i.test(text)) {
+            updateVoiceHint('Voice needs attention', text, 'Try again');
+        }
         const transportNotice = /voice disconnected|transport unavailable|livekit unavailable/i.test(text);
         if (transportNotice && (document.body.classList.contains('sky-empty') || currentUtterance)) return;
         if (!document.body.classList.contains('sky-empty')) {
@@ -254,6 +323,9 @@
     function setState(state) {
         orbState = state;
         els.mic.classList.toggle('recording', state === 'listening');
+        document.body.classList.toggle('sky-state-listening', state === 'listening');
+        document.body.classList.toggle('sky-state-thinking', state === 'thinking');
+        document.body.classList.toggle('sky-state-responding', state === 'responding');
         const copy = {
             ambient: 'Say what you need. Skybridge will shape the screen around it.',
             listening: 'Listening...',
@@ -264,6 +336,66 @@
             els.copy.textContent = copy[state] || copy.ambient;
         }
         setStatus(state.charAt(0).toUpperCase() + state.slice(1));
+        updateVoiceControl(state);
+    }
+
+    function getMicGuidance() {
+        if (!window.isSecureContext && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+            return 'Open Skybridge over HTTPS on the touch screen so the browser can allow microphone access.';
+        }
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            return 'This browser is not exposing a microphone API. Check kiosk permissions and use the HTTPS Zoe URL.';
+        }
+        return 'The touch screen will ask for microphone access the first time.';
+    }
+
+    function updateVoiceHint(title, detail, action) {
+        els.voiceTitle.textContent = title;
+        els.voiceDetail.textContent = detail;
+        els.voiceAction.textContent = action;
+        els.orbButtonText.textContent = action === 'Stop' ? 'Stop listening' : 'Tap to talk';
+        els.mic.textContent = action === 'Stop' ? 'Stop' : 'Mic';
+        els.mic.setAttribute('aria-label', title + '. ' + detail);
+        els.mic.setAttribute('aria-pressed', action === 'Stop' ? 'true' : 'false');
+        els.orbButton.setAttribute('aria-label', title + '. ' + detail);
+    }
+
+    function updateVoiceControl(state) {
+        if (state === 'listening') {
+            updateVoiceHint('Listening now', 'Speak naturally. Zoe will build the screen from what she hears.', 'Stop');
+        } else if (state === 'thinking') {
+            updateVoiceHint('Working on it', 'Finding the right data, page, or card surface.', 'Cancel');
+        } else if (state === 'responding') {
+            updateVoiceHint('Zoe is speaking', 'Tap to interrupt or ask the next thing.', 'Cancel');
+        } else if (!voiceStartedByUser) {
+            updateVoiceHint('Touch the orb to speak', getMicGuidance(), 'Start mic');
+        } else {
+            updateVoiceHint('Ready for the next request', 'Tap the orb or mic button to listen again.', 'Start mic');
+        }
+    }
+
+    function toggleVoiceCapture() {
+        if (!voice) {
+            showError('Voice transport is still connecting.');
+            return;
+        }
+        if (!window.isSecureContext && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+            showError('Microphone requires HTTPS. Open the touch screen using the HTTPS Zoe URL.');
+            return;
+        }
+        if (voice.isRecording) {
+            voice.stopRecording();
+            return;
+        }
+        if (voice.speaking || voice.serverBusy) {
+            voice.cancel().catch(err => showError(err.message || 'Cancel failed'));
+            return;
+        }
+        voiceStartedByUser = true;
+        voice.startRecording().catch(err => {
+            voiceStartedByUser = false;
+            showError(err.message || 'Microphone unavailable');
+        });
     }
 
     function resizeOrb() {

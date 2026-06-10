@@ -26,6 +26,7 @@
         '/touch/memories.html': 'memories',
         '/touch/settings.html': 'settings',
         '/touch/updates.html': 'updates',
+        '/touch/skybridge.html': 'skybridge',
     };
     let _capabilityMatrix = null;
 
@@ -336,6 +337,10 @@
                 const allowed = !pageId || !cap || !cap.matrix || !cap.matrix.pages
                     ? true
                     : !!cap.matrix.pages[pageId];
+                if (!allowed && pageId === 'skybridge') {
+                    console.log('✅ Skybridge touch surface allowed without capability matrix entry');
+                    return;
+                }
                 if (!allowed) {
                     try {
                         if (typeof showNotification === 'function') {
