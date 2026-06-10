@@ -190,6 +190,11 @@ def test_skybridge_renderer_supports_real_data_cards():
     assert "renderCalendar(props)" in renderer
     assert "renderWeather(props)" in renderer
     assert "sky-premium-card" in renderer
+    assert "formatCalendarDate" in renderer
+    assert "calendarCategoryClass" in renderer
+    assert "sky-calendar-scene" in renderer
+    assert "sky-calendar-event-main" in renderer
+    assert "sky-calendar-category" in renderer
     assert "formatForecastLabel" in renderer
     assert "forecastTempBand(item)" in renderer
     assert "sky-weather-tile-temp" in renderer
@@ -206,8 +211,9 @@ def test_skybridge_renderer_supports_real_data_cards():
     assert "weather-sunny" in html
     assert "skybridge-runtime-overrides" in html
     assert "skybridge-premium-card-system" in html
+    assert "skybridge-calendar-widget-overrides" in html
     assert "skybridge-forecast-widget-overrides" in html
-    assert "skybridge-premium-cards-3" in html
+    assert "skybridge-premium-cards-4" in html
     assert "backdrop-filter: none !important" in html
     assert "No events " in renderer
 

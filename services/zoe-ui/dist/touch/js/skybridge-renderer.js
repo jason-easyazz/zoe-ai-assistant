@@ -80,17 +80,70 @@
         return start || item.start_date || 'Scheduled';
     }
 
+    function formatCalendarDate(value) {
+        const raw = String(value || '');
+        if (/^\d{4}-\d{2}-\d{2}/.test(raw)) {
+            const date = new Date(raw + 'T12:00:00');
+            if (!Number.isNaN(date.getTime())) {
+                return {
+                    weekday: date.toLocaleDateString(undefined, { weekday: 'long' }),
+                    monthDay: date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+                };
+            }
+        }
+        return { weekday: 'Agenda', monthDay: raw || 'Today' };
+    }
+
+    function calendarCategoryClass(value) {
+        const token = safeClassTokens(String(value || 'general').toLowerCase()) || 'general';
+        const known = ['work', 'personal', 'bucket', 'shopping', 'health', 'routine', 'social', 'family', 'general'];
+        return known.indexOf(token) >= 0 ? token : 'general';
+    }
+
+    function calendarAccentLabel(value) {
+        const token = String(value || 'general').toLowerCase();
+        if (token === 'work') return 'Work';
+        if (token === 'personal') return 'Personal';
+        if (token === 'bucket') return 'Bucket';
+        if (token === 'shopping') return 'Shopping';
+        if (token === 'health') return 'Health';
+        if (token === 'routine') return 'Routine';
+        if (token === 'social') return 'Social';
+        if (token === 'family') return 'Family';
+        return 'General';
+    }
+
     function renderCalendar(props) {
         const events = Array.isArray(props.events) ? props.events : [];
-        const rows = events.slice(0, 8).map(item => {
+        const visibleEvents = events.slice(0, 8);
+        const dateMeta = formatCalendarDate(props.date || props.start_date || (events[0] && events[0].start_date));
+        const rows = visibleEvents.map((item, index) => {
             const title = item.title || item.name || 'Calendar event';
-            const detail = [item.location, item.category].filter(Boolean).join(' · ');
-            return '<div class="sky-event-row"><span>' + escapeHtml(formatEventTime(item)) + '</span><strong>' + escapeHtml(title) + '</strong>' + (detail ? '<em>' + escapeHtml(detail) + '</em>' : '') + '</div>';
+            const category = calendarCategoryClass(item.category);
+            const detail = [item.location, calendarAccentLabel(item.category)].filter(Boolean).join(' · ');
+            return [
+                '<div class="sky-event-row sky-calendar-event ' + escapeHtml(category) + '">',
+                '<div class="sky-calendar-time"><span>' + escapeHtml(formatEventTime(item)) + '</span>' + (index === 0 ? '<b>Next</b>' : '') + '</div>',
+                '<div class="sky-calendar-event-main"><strong>' + escapeHtml(title) + '</strong>' + (detail ? '<em>' + escapeHtml(detail) + '</em>' : '') + '</div>',
+                '<div class="sky-calendar-category">' + escapeHtml(calendarAccentLabel(item.category)) + '</div>',
+                '</div>'
+            ].join('');
         }).join('');
-        const empty = '<div class="sky-empty-data"><strong>No events ' + escapeHtml(props.qualifier || 'today') + '</strong><span>Your calendar is clear for this range.</span></div>';
+        const empty = [
+            '<div class="sky-empty-data sky-calendar-empty">',
+            '<div class="sky-calendar-empty-mark" aria-hidden="true"></div>',
+            '<strong>No events ' + escapeHtml(props.qualifier || 'today') + '</strong>',
+            '<span>Your calendar is clear for this range.</span>',
+            '</div>'
+        ].join('');
         const body = [
+            '<div class="sky-calendar-scene">',
+            '<div class="sky-calendar-summary">',
+            '<div class="sky-calendar-date"><span>' + escapeHtml(dateMeta.weekday) + '</span><strong>' + escapeHtml(dateMeta.monthDay) + '</strong></div>',
             '<div class="sky-widget-metric"><strong>' + escapeHtml(events.length) + '</strong><span>' + escapeHtml(events.length === 1 ? 'event' : 'events') + ' ' + escapeHtml(props.qualifier || '') + '</span></div>',
-            '<div class="sky-data-list">' + (rows || empty) + '</div>'
+            '</div>',
+            '<div class="sky-calendar-agenda"><div class="sky-calendar-rail" aria-hidden="true"></div><div class="sky-data-list">' + (rows || empty) + '</div></div>',
+            '</div>'
         ].join('');
         return cardFrame(Object.assign({ status: 'Calendar', icon: 'C' }, props), body, { wide: true, tone: 'calendar-card' });
     }
