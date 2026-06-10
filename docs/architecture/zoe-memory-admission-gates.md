@@ -14,7 +14,10 @@ payloads can be planned by `services/zoe-data/hindsight_retain_candidates.py`
 and executed by `services/zoe-data/hindsight_retain_executor.py` only after
 admission allows the Hindsight backend. Verified evolution outcomes can pass
 through `services/zoe-data/zoe_evolution_outcome_retain.py` to that same
-admitted Hindsight executor.
+admitted Hindsight executor. Verified capability-profile PR edits can be
+converted into memory admission requests and capability trust evidence by
+`services/zoe-data/zoe_capability_profile_edit_outcome.py` without writing any
+backend.
 
 ## Rules
 
@@ -36,10 +39,11 @@ admitted Hindsight executor.
 ## Current Scope
 
 This is a schema, decision contract, Multica metadata bridge, outcome memory
-admission bridge, Hindsight admitted-executor bridge, and admitted Hindsight
-outcome-retain bridge. Hindsight can execute admitted retain plans, including
-approved evolution outcome memories, but production chat still does not
-auto-write to MemoryService, Hindsight, Graphiti, MemPalace, or Multica.
+admission bridge, Hindsight admitted-executor bridge, admitted Hindsight
+outcome-retain bridge, and profile-edit outcome bridge. Hindsight can execute
+admitted retain plans, including approved evolution outcome memories, but
+production chat still does not auto-write to MemoryService, Hindsight, Graphiti,
+MemPalace, or Multica.
 Additional runtime writers should be wired in later small PRs after each
 backend path is reviewed and tested.
 
@@ -66,7 +70,11 @@ from a terminal proposal outcome, but durable promotion still requires
 `memory_admission` proposal context, approval refs, and successful
 admission/verification evidence. Hindsight outcome retain execution reuses the
 same admitted retain-plan gate and returns a structured non-write result when
-admission is pending or blocked.
+admission is pending or blocked. Verified profile-edit outcomes can also build
+a pending, relationship-bearing memory event plus trust evidence records from
+PR, rollback, verification, Greptile, and promotion-manifest evidence; the
+normal admission decision still decides whether any durable backend may be
+written.
 
 Hindsight retain plans follow the same rule: Zoe may create pending retain
 candidates for review, but the sidecar retain payload cannot be built or
