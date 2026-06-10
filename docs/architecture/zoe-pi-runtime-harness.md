@@ -52,6 +52,23 @@ PYTHONPATH=services/zoe-data python3 scripts/maintenance/pi_runtime_probe.py --j
 The probe is safe to run in production-adjacent environments because it only
 uses filesystem and `PATH` checks. It does not execute `pi`.
 
+
+## Review-Only Runtime Proposal
+
+Pi adoption now has an inert proposal builder:
+
+```bash
+PYTHONPATH=services/zoe-data python3 scripts/maintenance/pi_runtime_proposal.py --legacy-row
+```
+
+The proposal builder runs the read-only probe, attaches Zoe's existing Pi
+candidate score, records local/offline model prerequisites, and emits the legacy
+`evolution_proposals` row shape with a validated Zoe proposal contract in
+`target_patterns`. It does not write the database, install Node/npm/Pi, create
+agents, or enable execution. On the current host the proposal remains blocked by
+`offline:partial` and `score_below_threshold` until runtime and local-model
+evidence are supplied and approved.
+
 ## Adoption Rules
 
 Pi remains experimental until all of these are true:
