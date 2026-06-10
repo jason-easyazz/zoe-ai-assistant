@@ -31,6 +31,7 @@ DEFAULT_TICKET: dict[str, Any] = {
     "greptile_status": None,
     "phase": None,
     "last_evidence": None,
+    "completion_reason": None,
 }
 
 
@@ -118,6 +119,7 @@ def update_ticket_progress(
     merge_sha: str | None = None,
     child_issue_ids: list[str] | None = None,
     dispatch_approved: bool | None = None,
+    completion_reason: str | None = None,
 ) -> str:
     """Patch progress fields inside the Zoe block without touching prose."""
     current = parse_ticket_block(description)
@@ -140,6 +142,8 @@ def update_ticket_progress(
         metadata["child_issue_ids"] = child_issue_ids
     if dispatch_approved is not None:
         metadata["dispatch_approved"] = dispatch_approved
+    if completion_reason is not None:
+        metadata["completion_reason"] = completion_reason
     metadata["updated_at"] = datetime.now(timezone.utc).isoformat()
     return write_ticket_block(description, metadata)
 

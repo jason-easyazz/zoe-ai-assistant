@@ -48,6 +48,30 @@ async def test_record_progress_can_clear_blocker():
     assert metadata["phase"] == "closeout"
 
 
+@pytest.mark.asyncio
+async def test_record_progress_writes_completion_reason():
+    class Client(MULClient):
+        async def get_issue(self, issue_id):
+            return {
+                "id": issue_id,
+                "description": describe_ticket("Done issue"),
+            }
+
+        async def update_issue(self, issue_id, **kwargs):
+            return {"id": issue_id, **kwargs}
+
+    updated = await Client().record_progress(
+        "issue-1",
+        phase="done",
+        status="done",
+        completion_reason="merged after Greptile 5/5",
+    )
+
+    metadata = parse_ticket_block(updated["description"])
+    assert metadata["phase"] == "done"
+    assert metadata["completion_reason"] == "merged after Greptile 5/5"
+
+
 def test_update_ticket_progress_can_clear_dispatch_approval():
     from multica_ticket_contract import parse_ticket_block, update_ticket_progress, write_ticket_block
 
