@@ -73,7 +73,7 @@ while IFS= read -r line; do
     branch\ *)
       wt_branch=""
       ;;
-    locked)
+    locked*)
       wt_locked=1
       ;;
     *)
