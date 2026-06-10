@@ -94,7 +94,7 @@ def _intent_card_data(intent) -> dict:
             from card_service import card_service
         except Exception:
             card_service = None
-        list_name = slots.get("list_name") or "Shopping"
+        list_name = slots.get("list_name") or "List"
         item = slots.get("item") or slots.get("text") or ""
         payload = {
             "type": "list",
@@ -105,26 +105,16 @@ def _intent_card_data(intent) -> dict:
         }
         if card_service is not None:
             try:
-                payload["card"] = card_service.build_shopping_item_editor_card(slots)
+                payload["card"] = card_service.build_shopping_item_editor_card({**slots, "list_name": list_name})
             except Exception as exc:
                 logger.debug("list_add card contract build failed: %s", exc)
         return payload
     if name == "list_show":
+        items = _normalized_list_items(slots)
         try:
-            from card_service import card_service, list_items
-
-            items = list_items(slots)
+            from card_service import card_service
         except Exception:
             card_service = None
-            raw_items = slots.get("items")
-            if isinstance(raw_items, list):
-                items = raw_items
-            elif raw_items:
-                items = [raw_items]
-            elif slots.get("item") or slots.get("text"):
-                items = [slots.get("item") or slots.get("text")]
-            else:
-                items = []
         payload = {
             "type": "list",
             "data": {
@@ -156,6 +146,26 @@ def _intent_card_data(intent) -> dict:
         "type": "answer",
         "data": {"text": ""},
     }
+
+
+def _normalized_list_items(slots: dict) -> list[str]:
+    """Normalize list items for chat compat, card, and action-form payloads."""
+    try:
+        from card_service import list_items
+
+        return list_items(slots)
+    except Exception:
+        raw_items = slots.get("items")
+        if isinstance(raw_items, list):
+            candidates = raw_items
+        elif raw_items:
+            candidates = [raw_items]
+        elif slots.get("item") or slots.get("text"):
+            candidates = [slots.get("item") or slots.get("text")]
+        else:
+            candidates = []
+        normalized = [str(value or "").strip() for value in candidates]
+        return [value for value in normalized if value]
 
 
 def _intent_action_form_payload(intent, panel_id: str | None = None) -> dict | None:
@@ -190,19 +200,15 @@ def _intent_action_form_payload(intent, panel_id: str | None = None) -> dict | N
         }
 
     if name in ("list_add", "list_show"):
-        items: list[str] = []
-        if slots.get("item"):
-            items = [str(slots["item"])]
-        elif slots.get("items"):
-            raw = slots["items"]
-            items = raw if isinstance(raw, list) else [str(raw)]
+        items = _normalized_list_items(slots)
+        item = items[0] if items else ""
         return {
             "panel_type": "shopping_list",
             "title": f"{slots.get('list_name', 'Shopping')} List",
             "data": {
                 "list_name": slots.get("list_name") or "Shopping",
                 "items": items,
-                "item": slots.get("item") or "",
+                "item": item,
             },
             **({"panel_id": panel_id} if panel_id else {}),
         }
