@@ -5246,7 +5246,9 @@ def test_implement_body_includes_bare_say_exactly_intent_gap_contract():
 
     assert "INTENT-GAP IMPLEMENT FAST PATH" in body
     assert "Concrete edit contract for this exact-repeat gap" in body
+    assert "your NEXT tool call must be the terminal command" in body
     assert "python3 scripts/maintenance/zoe_apply_intent_gap_contract.py say_exactly" in body
+    assert "BLOCKER=INTENT_GAP_HELPER_UNAVAILABLE" in body
 
 
 def test_implement_body_includes_say_exactly_intent_gap_contract():
@@ -5265,7 +5267,8 @@ def test_implement_body_includes_say_exactly_intent_gap_contract():
     assert "Concrete edit contract for this exact-repeat gap" in body
     assert "Say exactly: Zoe chat integration ok" in body
     assert "python3 scripts/maintenance/zoe_apply_intent_gap_contract.py say_exactly" in body
-    assert "run this from the task `workspace_path`, never from the live checkout" in body
+    assert "your NEXT tool call must be the terminal command" in body
+    assert "Never run this from the live" in body
     assert "to the agent path while preserving the raw phrase" in body
     assert "Do not add a bespoke" in body
 
