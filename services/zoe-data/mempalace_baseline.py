@@ -57,6 +57,27 @@ BASELINE_CASES: tuple[MemPalaceBaselineCase, ...] = (
         expected_terms=("hermes", "planning", "greptile"),
         memory_type="capability",
     ),
+    MemPalaceBaselineCase(
+        case_id="tool_failure_fixed_by_relation",
+        text="OpenClaw failed on a browser login modal during a capability probe; Hermes fixed the failure by switching the task to the CloakBrowser automation lane.",
+        query="Which tool failed on the login modal and which lane fixed that failure?",
+        expected_terms=("openclaw", "failed", "hermes", "cloakbrowser"),
+        memory_type="experience",
+    ),
+    MemPalaceBaselineCase(
+        case_id="graphify_backend_supersession",
+        text="The old Graphify OpenAI backend assumption is superseded by Zoe's local offline Graphify path using the Gemma 4 E2B model-fit probe as evidence.",
+        query="What superseded the old OpenAI Graphify backend assumption?",
+        expected_terms=("superseded", "local", "offline", "gemma"),
+        memory_type="fact",
+    ),
+    MemPalaceBaselineCase(
+        case_id="recurring_task_governed_by_relation",
+        text="The weekly evolution digest recurs every Friday and is governed by Multica approval before it can promote capability changes.",
+        query="What recurring task is governed by Multica approval before capability promotion?",
+        expected_terms=("weekly", "recurs", "multica", "approval"),
+        memory_type="recurring_task",
+    ),
 )
 
 

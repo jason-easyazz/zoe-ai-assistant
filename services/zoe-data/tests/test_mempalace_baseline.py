@@ -47,8 +47,27 @@ def test_baseline_cases_cover_memory_plan_topics():
         "memory_preference",
         "governance_approval",
         "tool_capability",
+        "tool_failure_fixed_by_relation",
+        "graphify_backend_supersession",
+        "recurring_task_governed_by_relation",
     }
     assert all(case.expected_terms for case in BASELINE_CASES)
+
+
+def test_baseline_cases_include_relational_and_supersession_topics():
+    cases = {case.case_id: case for case in BASELINE_CASES}
+
+    relation_case = cases["tool_failure_fixed_by_relation"]
+    assert {"openclaw", "hermes"}.issubset(set(relation_case.expected_terms))
+    assert "fixed" in relation_case.query.lower()
+
+    supersession_case = cases["graphify_backend_supersession"]
+    assert "superseded" in supersession_case.text.lower()
+    assert "local" in supersession_case.expected_terms
+
+    recurring_case = cases["recurring_task_governed_by_relation"]
+    assert recurring_case.memory_type == "recurring_task"
+    assert "multica" in recurring_case.expected_terms
 
 
 def test_score_recall_text_reports_missing_terms():
