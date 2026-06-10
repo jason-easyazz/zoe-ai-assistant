@@ -128,7 +128,8 @@ def _db_update_one(sql: str) -> tuple[bool, str]:
     ok, msg = _db_exec(sql)
     if not ok:
         return False, msg
-    if "UPDATE 1" not in msg:
+    command_tags = [line.strip() for line in msg.splitlines() if line.strip().startswith("UPDATE ")]
+    if command_tags != ["UPDATE 1"]:
         return False, (msg.strip() or "update did not report row count")
     return True, msg
 
@@ -533,6 +534,7 @@ def step_f_create_agents(runtime_id: str) -> dict[str, str]:
                 f"description={_sql_literal(defn['description'])}, "
                 f"instructions={_sql_literal(defn['instructions'])}, "
                 f"model={_sql_literal(defn['model'])}, "
+                f"runtime_id={_sql_literal(runtime_id)}, "
                 "runtime_mode='local', visibility='workspace', "
                 "archived_at=NULL, archived_by=NULL, updated_at=now() "
                 f"where id={_sql_literal(agent_id)};"

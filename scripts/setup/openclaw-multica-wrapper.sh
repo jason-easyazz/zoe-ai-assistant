@@ -5,7 +5,7 @@
 # so this exact call is handled by printing the active config file. All other
 # OpenClaw invocations delegate to the real binary.
 set -euo pipefail
-REAL_OPENCLAW="${REAL_OPENCLAW:-/home/zoe/.nvm/versions/node/v22.22.0/bin/openclaw}"
+REAL_OPENCLAW="${REAL_OPENCLAW:-/home/zoe/.nvm/versions/node/current/bin/openclaw}"
 if [[ "$#" -eq 3 && "$1" == "config" && "$2" == "get" && "$3" == "--json" ]]; then
   config_path="${OPENCLAW_CONFIG_PATH:-/home/zoe/.openclaw/openclaw.json}"
   if [[ ! -f "$config_path" ]]; then
