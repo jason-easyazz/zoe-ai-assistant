@@ -120,8 +120,8 @@ async def _resolve_calendar(intent: SkybridgeIntent, user_id: str, db: Any) -> d
 
 
 async def _resolve_weather(intent: SkybridgeIntent, user_id: str, db: Any) -> dict[str, Any]:
-    cursor = await db.execute("SELECT * FROM weather_preferences WHERE user_id = ?", [user_id])
-    prefs = _row_to_prefs(await cursor.fetchone())
+    row = await db.fetchrow("SELECT * FROM weather_preferences WHERE user_id = $1", user_id)
+    prefs = _row_to_prefs(row)
     fallback = await _get_system_default_location(db)
     lat, lon, city, country = _resolve_location(prefs, fallback=fallback)
     current = await _get_current(lat, lon, city, country)

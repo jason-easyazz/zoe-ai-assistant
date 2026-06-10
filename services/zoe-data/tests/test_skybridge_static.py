@@ -164,6 +164,7 @@ def test_skybridge_uses_backend_status_contract():
     assert "/api/skybridge/resolve" in app
     assert "resolveCommand(query)" in app
     assert "isDataQuery(query)" in app
+    assert "if (voice) voice.sendText(query)" in app
     assert "event.role === 'user') projectCards" not in app
     assert "projectCommand(query);\n        if (voice) voice.sendText(query);" not in app
 

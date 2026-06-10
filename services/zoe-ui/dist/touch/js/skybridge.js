@@ -132,6 +132,7 @@
         const resolved = await resolveCommand(query);
         if (!resolved) {
             projectCards(query);
+            if (voice) voice.sendText(query);
         }
         setState('ambient');
     }

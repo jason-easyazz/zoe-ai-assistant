@@ -30,8 +30,11 @@ class FakeDb:
     async def fetch(self, *_args):
         return self.events
 
+    async def fetchrow(self, *_args):
+        return self.prefs
+
     async def execute(self, *_args):
-        return Cursor(self.prefs)
+        raise AssertionError("Skybridge service must use asyncpg fetch/fetchrow APIs")
 
 
 class GuardedGuestDb(FakeDb):

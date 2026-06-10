@@ -94,12 +94,7 @@ async def _validate_with_auth_service(session_id: str) -> Optional[dict]:
                 if prof.status_code in (401, 403):
                     return None
                 if prof.status_code == 404:
-                    return {
-                        "user_id": "guest",
-                        "role": "guest",
-                        "username": "guest",
-                        "permissions": [],
-                    }
+                    return None
                 if prof.status_code >= 500:
                     logger.warning("zoe-auth profile %s for session validation", prof.status_code)
                     if _AUTH_FAIL_CLOSED:
