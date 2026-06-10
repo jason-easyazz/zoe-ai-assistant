@@ -3908,16 +3908,11 @@
                 inset 0 1px 0 rgba(255,255,255,0.15) !important;
         }
 
-        body:not(.sky-empty) .calendar-card .sky-widget-top,
-        body:not(.sky-empty) .calendar-card .sky-badge {
-            margin: 24px 28px 0 !important;
-        }
-
         body:not(.sky-empty) .sky-calendar-scene {
             display: grid;
-            grid-template-columns: minmax(220px, 0.36fr) minmax(0, 1fr);
-            gap: 22px;
-            padding: 24px 28px 28px;
+            grid-template-columns: minmax(230px, 0.34fr) minmax(0, 1fr);
+            gap: 24px;
+            padding: 28px;
             position: relative;
             z-index: 2;
         }
@@ -4002,11 +3997,11 @@
         body:not(.sky-empty) .calendar-card .sky-event-row {
             position: relative;
             display: grid !important;
-            grid-template-columns: minmax(104px, 0.24fr) minmax(0, 1fr) auto !important;
-            gap: 14px !important;
+            grid-template-columns: minmax(112px, 0.24fr) minmax(0, 1fr) !important;
+            gap: 16px !important;
             align-items: center;
             min-height: 76px;
-            padding: 14px 16px !important;
+            padding: 15px 18px 15px 20px !important;
             overflow: hidden;
             border-radius: 22px !important;
             background:
@@ -4080,17 +4075,6 @@
             white-space: nowrap;
         }
 
-        body:not(.sky-empty) .sky-calendar-category {
-            align-self: center;
-            padding: 8px 10px;
-            border-radius: 999px;
-            border: 1px solid rgba(255,255,255,0.14);
-            background: rgba(255,255,255,0.075);
-            color: rgba(255,255,255,0.82);
-            font-size: 11px;
-            font-weight: 820;
-        }
-
         body:not(.sky-empty) .sky-calendar-event.work { --sky-cal-accent: #3B82F6; }
         body:not(.sky-empty) .sky-calendar-event.personal { --sky-cal-accent: #A855F7; }
         body:not(.sky-empty) .sky-calendar-event.bucket { --sky-cal-accent: #10B981; }
@@ -4149,9 +4133,6 @@
                 gap: 8px !important;
             }
 
-            body:not(.sky-empty) .sky-calendar-category {
-                justify-self: start;
-            }
         }
     </style>
 </head>
@@ -4219,9 +4200,9 @@
     <script src="/touch/js/gestures.js"></script>
     <script src="/touch/js/touch-menu.js"></script>
     <script src="/js/touch-ui-executor.js"></script>
-    <script src="/touch/js/skybridge-capabilities.js?v=skybridge-premium-cards-5"></script>
-    <script src="/touch/js/skybridge-renderer.js?v=skybridge-premium-cards-5"></script>
-    <script src="/touch/js/skybridge-voice.js?v=skybridge-premium-cards-5"></script>
-    <script src="/touch/js/skybridge.js?v=skybridge-premium-cards-5"></script>
+    <script src="/touch/js/skybridge-capabilities.js?v=skybridge-calendar-menu-6"></script>
+    <script src="/touch/js/skybridge-renderer.js?v=skybridge-calendar-menu-6"></script>
+    <script src="/touch/js/skybridge-voice.js?v=skybridge-calendar-menu-6"></script>
+    <script src="/touch/js/skybridge.js?v=skybridge-calendar-menu-6"></script>
 </body>
 </html>

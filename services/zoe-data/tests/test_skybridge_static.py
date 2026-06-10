@@ -193,9 +193,11 @@ def test_skybridge_renderer_supports_real_data_cards():
     assert "formatCalendarDate" in renderer
     assert "calendarEventSortKey" in renderer
     assert "calendarCategoryClass" in renderer
+    assert "hideHeader: true" in renderer
+    assert "hideStatus: true" in renderer
     assert "sky-calendar-scene" in renderer
     assert "sky-calendar-event-main" in renderer
-    assert "sky-calendar-category" in renderer
+    assert "sky-calendar-category" not in renderer
     assert "formatForecastLabel" in renderer
     assert "forecastTempBand(item)" in renderer
     assert "formatHourLabel" in renderer
@@ -223,7 +225,7 @@ def test_skybridge_renderer_supports_real_data_cards():
     assert "skybridge-calendar-widget-overrides" in html
     assert "skybridge-forecast-widget-overrides" in html
     assert "skybridge-weather-widget-v2" in html
-    assert "skybridge-premium-cards-5" in html
+    assert "skybridge-calendar-menu-6" in html
     assert "backdrop-filter: none !important" in html
     assert "No events " in renderer
 
@@ -272,6 +274,7 @@ def test_skybridge_calendar_renderer_handles_datetime_dates_and_ordering():
     assert "props.date || props.start_date || (events[0] && events[0].start_date)" not in renderer
     assert "const detail = [item.location].filter(Boolean).join(' · ');" in renderer
     assert "const detail = [item.location, calendarAccentLabel(item.category)]" not in renderer
+    assert "calendarAccentLabel" not in renderer
     assert "return known.indexOf(token) >= 0 ? token : 'general';" in renderer
 
 
@@ -280,6 +283,13 @@ def test_skybridge_is_registered_in_touch_menu():
 
     assert "{ id: 'skybridge'" in menu
     assert "/touch/skybridge.html" in menu
+    assert "{ id: 'skybridge-calendar'" in menu
+    assert "path: '/touch/skybridge.html', href: '/touch/skybridge.html?q=show%20my%20calendar'" in menu
+    assert "item.href = p.href || p.path;" in menu
+    assert "verify=touch-menu-calendar" not in menu
+    assert "Skybridge Calendar" in menu
+    assert "'skybridge-calendar-test'" not in menu
+    assert "'dashboard', 'skybridge'," not in menu
     assert "'skybridge.html'" in menu
     assert "'dashboard', 'skybridge', 'calendar'" not in menu
 
