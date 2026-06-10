@@ -145,3 +145,25 @@ Evidence:
 - the source change closed the shopping/list card contract loop through `card_service.py`, `routers/chat.py`, action-form payloads, and focused tests;
 - `graphify-out/GRAPH_REPORT.md` and `graphify-out/graph.json` contain the generated graph metrics for the final refresh;
 - structure, critical-file, offline-memory, and diff whitespace validators passed.
+
+## Refresh 2026-06-10 Intent Gap Budget And Follow-Up Dedup Pass
+
+Trigger commit: `dc72d877f85db6173648633c3189ece700500091` (PR #356)
+
+Commands:
+
+```bash
+OPENAI_API_KEY=$(grep "^OPENAI_API_KEY=" /home/zoe/assistant/.env | cut -d= -f2-) /home/zoe/.local/share/uv/tools/graphifyy/bin/graphify extract . --backend openai
+/home/zoe/.local/share/uv/tools/graphifyy/bin/graphify cluster-only . --no-viz
+python3 tools/audit/validate_structure.py
+python3 tools/audit/validate_critical_files.py
+python3 tools/audit/validate_offline_memory.py
+git diff --check
+```
+
+Evidence:
+
+- Graphify was refreshed after PR #356 added the intent-gap pre-edit budget guard and cross-status blocker follow-up dedup;
+- focused verification for PR #356 covered `test_kanban_adapter.py`, `test_main_multica_poll.py`, and Python compilation of touched files;
+- `graphify-out/GRAPH_REPORT.md` and `graphify-out/graph.json` contain the generated graph metrics for the final refresh;
+- structure, critical-file, offline-memory, and diff whitespace validators passed.
