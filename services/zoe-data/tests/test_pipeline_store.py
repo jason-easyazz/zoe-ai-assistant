@@ -1016,6 +1016,39 @@ async def test_sync_pipeline_does_not_recover_mixed_protocol_and_real_block(isol
     assert "audit_protocol_recovered" not in isolated_store.read_text(encoding="utf-8")
 
 
+
+
+@pytest.mark.asyncio
+async def test_sync_pipeline_terminal_provider_failure_blocks_instead_of_advancing(isolated_store):
+    await store.bootstrap_state(
+        "multica:provider-failure",
+        start_phase="review",
+        issue={"description": "evidence_profile: audit"},
+    )
+
+    async def fetch_detail(_task_id: str):
+        return {
+            "latest_summary": "",
+            "comments": [],
+            "runs": [
+                {
+                    "status": "crashed",
+                    "outcome": "crashed",
+                    "error": "HTTP 402: Prompt tokens limit exceeded: 14799 > 6462",
+                }
+            ],
+        }
+
+    phases = {"review": {"id": "t_review", "status": "done"}}
+    state = await store.sync_pipeline_from_chain("multica:provider-failure", phases, fetch_detail)
+
+    assert state.phase == "review"
+    assert state.status == "blocked"
+    assert state.block_classification is None
+    assert state.last_block_fingerprint
+    assert state.history[-1].reason == "HTTP_402"
+
+
 @pytest.mark.asyncio
 async def test_sync_pipeline_blocked_poll_is_idempotent(isolated_store):
     await store.bootstrap_state("multica:fp")

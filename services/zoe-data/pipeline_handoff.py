@@ -263,6 +263,13 @@ def _stable_block_reason_from_text(text: str) -> str:
     """Extract a stable blocker token for fingerprinting (ignore dynamic log tails)."""
     if not text:
         return ""
+    lowered = text.lower()
+    if "http 402" in lowered or "payment required" in lowered:
+        return "HTTP_402"
+    if "prompt tokens limit exceeded" in lowered or "tokens limit exceeded" in lowered:
+        return "TOKEN_LIMIT"
+    if "credits" in lowered and "exhaust" in lowered:
+        return "CREDITS_EXHAUSTED"
     match = _STABLE_BLOCKER_RE.search(text)
     if match:
         return match.group(0).upper()
@@ -716,6 +723,15 @@ def infer_outcome(phase: PipelinePhase, row_status: str, detail: dict[str, Any])
         return "block"
     if status not in {"done", "archived"}:
         return None
+
+    surfaced_blocker = ""
+    for chunk in _haystacks(detail):
+        surfaced_blocker = _stable_block_reason_from_text(chunk)
+        if surfaced_blocker:
+            break
+
+    if surfaced_blocker and _SURFACED_BLOCKER_RE.search(surfaced_blocker):
+        return "block"
 
     if explicit_blocker:
         if _SURFACED_BLOCKER_RE.search(explicit_blocker):
