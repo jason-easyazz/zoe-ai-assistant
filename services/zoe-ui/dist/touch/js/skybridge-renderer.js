@@ -125,7 +125,7 @@
     function renderCalendar(props) {
         const events = Array.isArray(props.events) ? props.events : [];
         const visibleEvents = events.slice().sort((a, b) => calendarEventSortKey(a) - calendarEventSortKey(b)).slice(0, 8);
-        const dateMeta = formatCalendarDate(props.date || props.start_date || (events[0] && events[0].start_date));
+        const dateMeta = formatCalendarDate(props.date || props.start_date || (visibleEvents[0] && visibleEvents[0].start_date));
         const rows = visibleEvents.map((item, index) => {
             const title = item.title || item.name || 'Calendar event';
             const category = calendarCategoryClass(item.category);
