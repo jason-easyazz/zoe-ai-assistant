@@ -20,13 +20,20 @@ DATA = ROOT / "services" / "zoe-data"
 sys.path.insert(0, str(DATA))
 
 from hindsight_bakeoff import (  # noqa: E402
-    EVAL_QUERIES,
-    SYNTHETIC_EVENTS,
+    eval_queries_for_user,
     score_recall_response,
     summarize_bakeoff_scores,
     summarize_recall_latency,
+    synthetic_events_for_user,
 )
 from hindsight_memory import HindsightConfig, HindsightMemoryClient  # noqa: E402
+
+
+def _user_id_arg(value: str) -> str:
+    normalized = value.strip()
+    if not normalized:
+        raise argparse.ArgumentTypeError("user_id must not be blank")
+    return normalized
 
 
 async def main() -> int:
@@ -36,15 +43,26 @@ async def main() -> int:
     parser.add_argument("--retain-timeout-seconds", type=float, default=180.0, help="max seconds to wait for each async retain operation")
     parser.add_argument("--retain-poll-seconds", type=float, default=1.0, help="seconds between async retain status polls")
     parser.add_argument("--recall-latency-budget-ms", type=float, default=600.0, help="p95 recall latency budget for hot-path eligibility")
+    parser.add_argument("--user-id", type=_user_id_arg, help="override the synthetic bake-off user_id for multi-user runs")
     parser.add_argument("--json", action="store_true", help="emit JSON")
     args = parser.parse_args()
 
     client = HindsightMemoryClient(HindsightConfig.from_env())
-    output: dict[str, object] = {"status": client.enabled_status(), "retained": [], "operations": [], "scores": [], "summary": {}}
+    synthetic_events = synthetic_events_for_user(args.user_id)
+    eval_queries = eval_queries_for_user(args.user_id)
+    effective_user_id = eval_queries[0].user_id
+    output: dict[str, object] = {
+        "status": client.enabled_status(),
+        "user_id": effective_user_id,
+        "retained": [],
+        "operations": [],
+        "scores": [],
+        "summary": {},
+    }
 
     if args.retain_synthetic:
         retained = []
-        for event in SYNTHETIC_EVENTS:
+        for event in synthetic_events:
             retained.append(await client.retain_event(event, allow_auto=True))
         output["retained"] = retained
         if not args.no_wait_retain:
@@ -55,7 +73,7 @@ async def main() -> int:
             )
 
     scores = []
-    for query in EVAL_QUERIES:
+    for query in eval_queries:
         started = time.perf_counter()
         response = await client.recall(
             user_id=query.user_id,

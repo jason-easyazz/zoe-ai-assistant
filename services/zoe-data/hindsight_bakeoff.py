@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from statistics import median
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -111,8 +111,31 @@ EVAL_QUERIES: tuple[HindsightEvalQuery, ...] = (
 )
 
 
-def synthetic_retain_payloads() -> list[dict[str, Any]]:
-    return [event.to_dict() for event in SYNTHETIC_EVENTS]
+def _normalize_user_id(user_id: str | None) -> str | None:
+    if user_id is None:
+        return None
+    normalized = user_id.strip()
+    if not normalized:
+        raise ValueError("user_id must not be blank")
+    return normalized
+
+
+def synthetic_events_for_user(user_id: str | None = None) -> tuple[MemoryEvent, ...]:
+    normalized = _normalize_user_id(user_id)
+    if normalized is None:
+        return SYNTHETIC_EVENTS
+    return tuple(replace(event, user_id=normalized) for event in SYNTHETIC_EVENTS)
+
+
+def eval_queries_for_user(user_id: str | None = None) -> tuple[HindsightEvalQuery, ...]:
+    normalized = _normalize_user_id(user_id)
+    if normalized is None:
+        return EVAL_QUERIES
+    return tuple(replace(query, user_id=normalized) for query in EVAL_QUERIES)
+
+
+def synthetic_retain_payloads(user_id: str | None = None) -> list[dict[str, Any]]:
+    return [event.to_dict() for event in synthetic_events_for_user(user_id)]
 
 
 def score_recall_text(text: str, expected_terms: Iterable[str]) -> dict[str, Any]:
@@ -207,11 +230,13 @@ __all__ = [
     "EVAL_QUERIES",
     "SYNTHETIC_EVENTS",
     "HindsightEvalQuery",
+    "eval_queries_for_user",
     "percentile",
     "recall_response_text",
     "score_recall_response",
     "score_recall_text",
     "summarize_bakeoff_scores",
     "summarize_recall_latency",
+    "synthetic_events_for_user",
     "synthetic_retain_payloads",
 ]
