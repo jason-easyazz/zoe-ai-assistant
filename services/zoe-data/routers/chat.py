@@ -53,6 +53,26 @@ _ACTION_FORM_INTENTS: frozenset[str] = frozenset({
     "list_show",
 })
 
+
+def _normalized_list_items(slots: dict) -> list[str]:
+    try:
+        from card_service import list_items
+
+        return list_items(slots)
+    except ImportError as exc:
+        logging.getLogger(__name__).debug("list item normalizer import failed: %s", exc)
+        raw_items = slots.get("items")
+        if isinstance(raw_items, list):
+            candidates = raw_items
+        elif raw_items:
+            candidates = [raw_items]
+        elif slots.get("item") or slots.get("text"):
+            candidates = [slots.get("item") or slots.get("text")]
+        else:
+            candidates = []
+        return [item for item in (str(value or "").strip() for value in candidates) if item]
+
+
 def _intent_card_data(intent) -> dict:
     """Build show_card data payload from intent slots for Google Home-style card."""
     slots = intent.slots or {}
@@ -90,41 +110,41 @@ def _intent_card_data(intent) -> dict:
             logger.debug("calendar_show card contract build failed: %s", exc)
         return payload
     if name == "list_add":
+        items = _normalized_list_items(slots)
+        item = items[0] if items else ""
+        list_name = slots.get("list_name") or slots.get("list_type") or "Shopping"
         payload = {
             "type": "list",
             "data": {
-                "list_name": slots.get("list_name") or slots.get("list_type") or "Shopping",
-                "item": slots.get("item") or slots.get("text") or "",
+                "list_name": list_name,
+                "item": item,
             },
         }
         try:
             from card_service import card_service
 
-            payload["card"] = card_service.build_shopping_item_editor_card(slots)
+            payload["card"] = card_service.build_shopping_item_editor_card(
+                {**slots, "list_name": list_name, "item": item}
+            )
         except Exception as exc:
             logger.debug("list_add card contract build failed: %s", exc)
         return payload
     if name == "list_show":
-        raw_items = slots.get("items")
-        if isinstance(raw_items, list):
-            items = raw_items
-        elif raw_items:
-            items = [raw_items]
-        elif slots.get("item") or slots.get("text"):
-            items = [slots.get("item") or slots.get("text")]
-        else:
-            items = []
+        items = _normalized_list_items(slots)
+        list_name = slots.get("list_name") or slots.get("list_type") or "Shopping"
         payload = {
             "type": "list",
             "data": {
-                "list_name": slots.get("list_name") or slots.get("list_type") or "Shopping",
+                "list_name": list_name,
                 "items": items,
             },
         }
         try:
             from card_service import card_service
 
-            payload["card"] = card_service.build_shopping_list_card(slots)
+            payload["card"] = card_service.build_shopping_list_card(
+                {**slots, "list_name": list_name, "items": items}
+            )
         except Exception as exc:
             logger.debug("list_show card contract build failed: %s", exc)
         return payload
@@ -180,19 +200,15 @@ def _intent_action_form_payload(intent, panel_id: str | None = None) -> dict | N
         }
 
     if name in ("list_add", "list_show"):
-        items: list[str] = []
-        if slots.get("item"):
-            items = [str(slots["item"])]
-        elif slots.get("items"):
-            raw = slots["items"]
-            items = raw if isinstance(raw, list) else [str(raw)]
+        items = _normalized_list_items(slots)
+        item = items[0] if items else ""
         return {
             "panel_type": "shopping_list",
             "title": f"{slots.get('list_name') or slots.get('list_type') or 'Shopping'} List",
             "data": {
                 "list_name": slots.get("list_name") or slots.get("list_type") or "Shopping",
                 "items": items,
-                "item": slots.get("item") or "",
+                "item": item,
             },
             **({"panel_id": panel_id} if panel_id else {}),
         }
@@ -3346,4 +3362,3 @@ async def get_pending_tasks(user: dict = Depends(get_current_user)):
     user_name = user.get("username") or user.get("display_name") or ""
     tasks = await _get(user_id)
     return {"tasks": tasks, "user_name": user_name}
-

@@ -2,7 +2,7 @@
 
 import pytest
 from unittest.mock import Mock
-from card_service import CardService, card_service
+from card_service import CardService, card_service, list_items
 from card_contract import CardContractError, CardType
 
 
@@ -137,6 +137,8 @@ def test_global_card_service_instance():
         card_service._domain_builders.clear()
         card_service.register_domain_builder("calendar_timeline", card_service.build_calendar_timeline_card)
         card_service.register_domain_builder("calendar_event_editor", card_service.build_calendar_event_editor_card)
+        card_service.register_domain_builder("weather_current", card_service.build_weather_current_card)
+        card_service.register_domain_builder("weather_forecast", card_service.build_weather_forecast_card)
         card_service.register_domain_builder("shopping_list", card_service.build_shopping_list_card)
         card_service.register_domain_builder("shopping_item_editor", card_service.build_shopping_item_editor_card)
 
@@ -174,6 +176,12 @@ def test_global_card_service_registers_calendar_builders():
     assert editor({"title": "Dentist"})["content"]["form_id"] == "calendar_event_editor"
 
 
+def test_list_items_normalizes_slots():
+    assert list_items({"items": [" milk ", 123, ""]}) == ["milk", "123"]
+    assert list_items({"item": " bread "}) == ["bread"]
+    assert list_items({"text": " eggs "}) == ["eggs"]
+
+
 def test_card_service_build_shopping_list_card():
     service = CardService()
     card = service.build_shopping_list_card({"list_name": "Groceries", "items": ["milk", "bread"]})
@@ -196,6 +204,13 @@ def test_card_service_build_shopping_item_editor_card():
     assert card["content"]["values"]["item"] == "milk"
     assert card["content"]["values"]["list_name"] == "Groceries"
     assert {field["name"] for field in card["content"]["fields"]} >= {"item", "list_name", "quantity"}
+
+
+def test_card_service_build_shopping_item_editor_uses_items_slot():
+    service = CardService()
+    card = service.build_shopping_item_editor_card({"list_name": "Groceries", "items": [" milk "]})
+
+    assert card["content"]["values"]["item"] == "milk"
 
 
 def test_global_card_service_registers_shopping_builders():
