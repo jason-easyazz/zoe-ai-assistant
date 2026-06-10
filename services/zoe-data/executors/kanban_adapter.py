@@ -1410,7 +1410,7 @@ class KanbanAdapter:
                         "reason": "current issue plan no longer includes inactive journal phase",
                     },
                 )
-            except Exception as exc:
+            except (RuntimeError, TypeError, ValueError) as exc:
                 logger.warning(
                     "kanban_adapter: plan_adjusted save skipped for %s: %s; "
                     "phase adjustment will still be applied via effect_requested",
@@ -1537,7 +1537,7 @@ class KanbanAdapter:
                     event="effect_requested",
                     extra={"phase": phase, "task_id": task_id},
                 )
-            except Exception as exc:
+            except (RuntimeError, TypeError, ValueError) as exc:
                 logger.warning("kanban_adapter: effect_requested save skipped for %s: %s", external_ref, exc)
 
         logger.info(
@@ -1794,7 +1794,7 @@ class KanbanAdapter:
             elif pipeline_info.get("terminal_block"):
                 agg = "blocked"
                 blocker = blocker or f"pipeline terminal block at {current_phase}"
-        except Exception as exc:
+        except (RuntimeError, TypeError, ValueError) as exc:
             logger.warning("kanban_adapter: pipeline sync failed for %s: %s", external_ref, exc)
             pipeline_info = {
                 "tracked": False,
