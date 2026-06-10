@@ -107,6 +107,15 @@ Current evidence:
   3,075 edges. The run had no blocked shards, no invalid JSON chunks, no
   truncation, no context splits, median accepted duration 46.869 s, and max
   observed child RSS about 86 MB.
+- Current default shard matrix against `origin/main` at `2032b40` accepted 2/2
+  default shards without `--allow-partial`: `data-core` accepted in 43.524 s
+  over 291 code files and 10 docs, producing 5,181 nodes and 11,355 edges;
+  `operators` accepted in 49.883 s over 181 code files and 9 docs, producing
+  1,652 nodes and 3,121 edges. The run had no blocked shards, no invalid JSON
+  chunks, no truncation, no context splits, median accepted duration 46.704 s,
+  and max observed child RSS 86,408 KB. This keeps the default local shard lane
+  accepted on current main, but it does not make the committed full
+  `graphify-out` map current.
 
 ## Refresh 2026-06-09 Foundation Pass
 
