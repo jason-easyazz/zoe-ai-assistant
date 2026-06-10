@@ -201,15 +201,32 @@ async def _ensure_blocker_followup_ticket(client, issue_id: str, chain: dict, bl
             )
             return {}
         parent_ident = parent.get("identifier") or issue_id
-        for status in ("backlog", "todo", "in_progress", "blocked", "in_review"):
-            for candidate in await client.list_issues(status=status, limit=1000) or []:
-                metadata = parse_ticket_block(candidate.get("description") or "")
-                if (
-                    metadata.get("source") == "engineering_blocker_followup"
-                    and str(metadata.get("parent_issue_id") or "") == str(issue_id)
-                    and metadata.get("source_blocker") == marker
-                ):
-                    return candidate
+        # Dedup across the whole ticket system, not just active columns. A done/no-op
+        # follow-up for the same parent and blocker is still the canonical audit trail;
+        # creating another ticket hides the recurring harness failure in backlog noise.
+        candidates = await client.list_issues(limit=5000) or []
+        if not candidates:
+            for status in ("backlog", "todo", "in_progress", "blocked", "in_review", "done", "canceled"):
+                candidates.extend(await client.list_issues(status=status, limit=1000) or [])
+        seen_candidates: set[str] = set()
+        for candidate in candidates:
+            candidate_id = str(candidate.get("id") or "")
+            if candidate_id and candidate_id in seen_candidates:
+                continue
+            if candidate_id:
+                seen_candidates.add(candidate_id)
+            metadata = parse_ticket_block(candidate.get("description") or "")
+            if (
+                metadata.get("source") == "engineering_blocker_followup"
+                and str(metadata.get("parent_issue_id") or "") == str(issue_id)
+                and metadata.get("source_blocker") == marker
+            ):
+                await client.append_issue_note(
+                    issue_id,
+                    f"Harness follow-up already exists for {marker}: "
+                    f"{candidate.get('identifier') or candidate_id}",
+                )
+                return candidate
 
         description = describe_ticket(
             (

@@ -2672,6 +2672,71 @@ def test_phase_budget_reason_blocks_pre_edit_handoff_drift(tmp_path, monkeypatch
     assert "IMPLEMENT_HANDOFF_DRIFT" in reason
 
 
+
+
+def test_phase_budget_blocks_intent_gap_pre_edit_churn_from_live_shape(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_INTENT_GAP_REPEAT_READ_BUDGET", "2")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_intent.log").write_text(
+        """Query: work kanban task t_intent
+  | kanban_sh   0.0s
+  | $         pwd && git branch --show-current  0.2s
+  ┊ 📖 read      /work/services/zoe-data/intent_router.py  0.1s
+  ┊ 🔎 grep      _AGENT_CHAT_RE  /work/services/zoe-data/intent_router.py  0.1s
+  ┊ 📖 read      /work/services/zoe-data/intent_router.py  0.1s
+  ┊ 🔎 grep      def detect_intent /work/services/zoe-data/intent_router.py  0.1s
+  ┊ 📖 read      /work/services/zoe-data/intent_router.py  0.1s
+""",
+        encoding="utf-8",
+    )
+
+    reason = kb.phase_budget_reason(
+        "t_intent",
+        "implement",
+        {
+            "task": {
+                "started_at": 100,
+                "body": "INTENT-GAP IMPLEMENT FAST PATH",
+            },
+            "runs": [{"started_at": 100}],
+        },
+        now=120,
+    )
+
+    assert reason is not None
+    assert "intent-gap repeated pre-edit reads" in reason
+
+
+def test_phase_budget_blocks_intent_gap_broad_find_before_patch(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_intent.log").write_text(
+        """Query: work kanban task t_intent
+  ┊ 📖 read      /work/services/zoe-data/intent_router.py  0.1s
+  ┊ 💻 $         find /work -name '*.py' -exec grep -l 'say exactly' {} ;  1.4s
+""",
+        encoding="utf-8",
+    )
+
+    reason = kb.phase_budget_reason(
+        "t_intent",
+        "implement",
+        {
+            "task": {
+                "started_at": 100,
+                "body": '{"source":"intent_gap:operator_single_lane_test"}',
+            },
+            "runs": [{"started_at": 100}],
+        },
+        now=120,
+    )
+
+    assert reason is not None
+    assert "intent-gap worker ran broad repo search" in reason
+
 def test_phase_budget_reason_passes_harness_followup_body_to_pre_edit_guard(
     tmp_path, monkeypatch
 ):

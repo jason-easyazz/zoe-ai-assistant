@@ -467,11 +467,14 @@ async def test_record_blocked_multica_chain_reuses_existing_in_progress_budget_f
 
     assert client.created == []
     assert client.labels == []
-    assert client.notes == []
+    assert client.notes[-1] == (
+        "issue-budget",
+        "Harness follow-up already exists for IMPLEMENT_BUDGET: ZOE-C1",
+    )
 
 
 @pytest.mark.asyncio
-async def test_record_blocked_multica_chain_reopens_after_done_budget_followup():
+async def test_record_blocked_multica_chain_reuses_done_budget_followup():
     from main import _record_blocked_multica_chain
     from multica_ticket_contract import describe_ticket, parse_ticket_block, write_ticket_block
 
@@ -508,9 +511,12 @@ async def test_record_blocked_multica_chain_reopens_after_done_budget_followup()
         },
     )
 
-    assert len(client.created) == 1
-    metadata = parse_ticket_block(client.created[0]["description"])
-    assert metadata["source_blocker"] == "IMPLEMENT_BUDGET"
+    assert client.created == []
+    assert client.labels == []
+    assert client.notes[-1] == (
+        "issue-budget",
+        "Harness follow-up already exists for IMPLEMENT_BUDGET: ZOE-C-DONE",
+    )
 
 
 @pytest.mark.asyncio
@@ -575,4 +581,7 @@ async def test_record_blocked_multica_chain_reuses_existing_protocol_followup():
 
     assert client.created == []
     assert client.labels == []
-    assert client.notes == []
+    assert client.notes[-1] == (
+        "issue-protocol",
+        "Harness follow-up already exists for PROTOCOL_VIOLATION: ZOE-C2",
+    )

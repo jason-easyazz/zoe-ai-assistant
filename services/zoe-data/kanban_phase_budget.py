@@ -67,6 +67,11 @@ _CODE_AUDIT_BODY_RE = re.compile(
     r"CODE-AUDIT FAST PATH|\bcode_audit\b",
     re.IGNORECASE,
 )
+_INTENT_GAP_BODY_RE = re.compile(
+    r'INTENT-GAP IMPLEMENT FAST PATH|\bintent_gap\b|"source"\s*:\s*"intent_gap',
+    re.IGNORECASE,
+)
+_BROAD_FIND_GREP_RE = re.compile(r"^find\s+\S+.*\b(?:grep|rg)\b", re.IGNORECASE)
 _POST_PATCH_VALIDATION_RE = re.compile(
     r"^(?:"
     r"(?:\w+=\S+\s+)*python3?\s+-m\s+(?:py_compile|pytest|mypy|ruff)\b|"
@@ -267,6 +272,24 @@ def _is_code_audit_body(body: str) -> bool:
     return bool(_CODE_AUDIT_BODY_RE.search(body))
 
 
+def _is_intent_gap_body(body: str) -> bool:
+    return bool(_INTENT_GAP_BODY_RE.search(body))
+
+
+def _intent_gap_pre_edit_explore_budget() -> int:
+    try:
+        return max(1, int(os.environ.get("ZOE_KANBAN_INTENT_GAP_PRE_EDIT_EXPLORE_BUDGET", "6")))
+    except ValueError:
+        return 6
+
+
+def _intent_gap_repeat_read_budget() -> int:
+    try:
+        return max(1, int(os.environ.get("ZOE_KANBAN_INTENT_GAP_REPEAT_READ_BUDGET", "2")))
+    except ValueError:
+        return 2
+
+
 def _post_patch_explore_budget() -> int:
     try:
         return max(1, int(os.environ.get("ZOE_KANBAN_CODE_AUDIT_POST_PATCH_EXPLORE_BUDGET", "2")))
@@ -418,6 +441,64 @@ def implement_patch_ambiguity_reason_from_log(
             continue
         if _PATCH_STEP_RE.search(line):
             ambiguous_patches_by_path.pop(patch_path, None)
+    return None
+
+
+def implement_intent_gap_pre_edit_reason_from_log(
+    task_id: str,
+    phase: str,
+    *,
+    session: str | None = None,
+    task_body: str = "",
+) -> str | None:
+    """Block intent-gap workers that keep locating instead of editing.
+
+    Intent-gap tickets are already narrow and name the router/test surface in the
+    task body. A live ZOE-5458 run burned its full Hermes iteration budget by
+    rereading intent_router.py and broad find/grep searching without a patch.
+    This turns the fast-path handoff into a runtime contract.
+    """
+    if phase not in {"implement", "implement_revision"}:
+        return None
+    if not _is_intent_gap_body(task_body):
+        return None
+    if session is None:
+        session = _latest_log_session(task_id, max_lines=0)
+    if not session:
+        return None
+
+    explore_budget = _intent_gap_pre_edit_explore_budget()
+    repeat_read_budget = _intent_gap_repeat_read_budget()
+    explore_steps = 0
+    read_counts: dict[str, int] = {}
+    for line in session.splitlines():
+        if not _STEP_LINE_RE.match(line):
+            continue
+        if _PATCH_STEP_RE.search(line) or _TERMINAL_STEP_RE.search(line):
+            return None
+        shell_command = _shell_command_from_step(line)
+        if shell_command and _BROAD_FIND_GREP_RE.search(shell_command):
+            return (
+                "BLOCKER=IMPLEMENT_BUDGET: intent-gap worker ran broad repo "
+                "search before editing the named router/test surface"
+            )
+        if not _EXPLORE_STEP_RE.search(line):
+            continue
+        explore_steps += 1
+        if explore_steps > explore_budget:
+            return (
+                "BLOCKER=IMPLEMENT_BUDGET: intent-gap pre-edit exploration exceeded "
+                f"budget without patch (steps={explore_steps}, limit={explore_budget})"
+            )
+        read_match = _READ_STEP_RE.search(line)
+        if read_match:
+            path = _read_path_key(read_match.group("path"))
+            read_counts[path] = read_counts.get(path, 0) + 1
+            if read_counts[path] > repeat_read_budget:
+                return (
+                    "BLOCKER=IMPLEMENT_BUDGET: intent-gap repeated pre-edit reads "
+                    f"without patch (file={path}, reads={read_counts[path]})"
+                )
     return None
 
 
@@ -702,6 +783,14 @@ def phase_budget_reason(
     )
     if code_audit_post_validation_reason:
         return code_audit_post_validation_reason
+    intent_gap_pre_edit_reason = implement_intent_gap_pre_edit_reason_from_log(
+        task_id,
+        phase,
+        session=session,
+        task_body=str(task.get("body") or ""),
+    )
+    if intent_gap_pre_edit_reason:
+        return intent_gap_pre_edit_reason
     pre_edit_drift_reason = implement_pre_edit_drift_reason_from_log(
         task_id,
         phase,
