@@ -21,7 +21,12 @@ from zoe_evolution_proposal import (
     TrustAutonomyClass,
     build_evolution_proposal,
 )
-from zoe_evolution_proposal_adapter import CONTRACT_ENVELOPE_VERSION
+from zoe_evolution_proposal_adapter import (
+    CONTRACT_ENVELOPE_VERSION,
+    build_existing_zoe_proposal_candidate,
+    legacy_signal_type_for_proposal_type,
+    normalize_mcp_evolution_proposal_type,
+)
 
 RUNTIME_INTAKE_SOURCE = "runtime_evolution_intake"
 _SCHEMA = "zoe_evolution_proposal"
@@ -78,6 +83,56 @@ class RuntimeEvolutionProposalIntake:
             "status": self.status,
         }
 
+
+
+def build_mcp_runtime_evolution_proposal_intake(
+    *,
+    proposal_id: str,
+    title: str,
+    description: str,
+    evidence: str = "",
+    proposal_type: str = "intent_pattern",
+    user_id: str | None = None,
+) -> RuntimeEvolutionProposalIntake:
+    """Build an inert runtime-intake row for the MCP proposal writer."""
+
+    normalized_type = normalize_mcp_evolution_proposal_type(proposal_type)
+    normalized_user_id = str(user_id).strip() if user_id else None
+    source_ref = f"mcp:create_evolution_proposal:{proposal_id}"
+    evidence_refs = _evidence_refs(source_ref, evidence)
+    signal = EvolutionSignal(
+        signal_id=f"signal_{proposal_id}",
+        signal_type=legacy_signal_type_for_proposal_type(normalized_type),
+        summary=description,
+        source="mcp:create_evolution_proposal",
+        evidence_refs=evidence_refs,
+        user_id=normalized_user_id,
+        scope="personal" if normalized_user_id else "system",
+        metadata={"evidence_excerpt": evidence[:500], "mcp_tool": "create_evolution_proposal"},
+    )
+    candidate = build_existing_zoe_proposal_candidate(
+        proposal_type=normalized_type,
+        title=title,
+        evidence_refs=evidence_refs,
+        legacy_writer="mcp:create_evolution_proposal",
+        runtime_notes="MCP creates review-only evolution proposals; no execution is granted by this contract.",
+    )
+    return build_runtime_evolution_proposal_intake(
+        proposal_id=proposal_id,
+        proposal_type=normalized_type,
+        title=title,
+        problem_statement=description,
+        signal=signal,
+        candidates=(candidate,),
+        affected_capabilities=("zoe_codebase", "multica_governance", "verification"),
+        expected_benefit="Create a reviewable Zoe improvement proposal with MCP-supplied evidence before implementation work.",
+        verification_plan=(
+            "human_or_multica_review_required_before_approval",
+            "implementation_pr_must_attach_tests_and_evidence_before_completion",
+        ),
+        rollback_plan="Reject or defer the proposal; no runtime change has been made by proposal creation.",
+        metadata={"legacy_writer": "mcp:create_evolution_proposal"},
+    )
 
 def build_runtime_evolution_proposal_intake(
     *,
@@ -170,6 +225,13 @@ def build_runtime_evolution_proposal_intake(
     )
 
 
+def _evidence_refs(source_ref: str, evidence: str) -> tuple[str, ...]:
+    refs = [source_ref]
+    if evidence.strip():
+        refs.append(f"evidence:{source_ref}")
+    return tuple(refs)
+
+
 def _approval_requirements(*, autonomy_class: str, risk: str, explicit: Sequence[str]) -> tuple[str, ...]:
     approval_required: list[str] = []
     approval_required.extend(_AUTONOMY_APPROVALS.get(autonomy_class, ()))
@@ -199,5 +261,6 @@ def _evidence_payload(
 __all__ = [
     "RUNTIME_INTAKE_SOURCE",
     "RuntimeEvolutionProposalIntake",
+    "build_mcp_runtime_evolution_proposal_intake",
     "build_runtime_evolution_proposal_intake",
 ]
