@@ -116,14 +116,15 @@ async def _record_running_multica_chain_progress(
     except Exception:
         pass
 
-    await client.record_progress(
-        issue_id,
-        phase=phase,
-        evidence="Engineering PR opened; validation/review in progress" if pr_url else "Engineering run in progress",
-        pr_url=pr_url,
-        clear_blocker=True,
-        status=target_status,
-    )
+    progress_kwargs = {
+        "phase": phase,
+        "evidence": "Engineering PR opened; validation/review in progress" if pr_url else "Engineering run in progress",
+        "pr_url": pr_url,
+        "clear_blocker": True,
+    }
+    if target_status:
+        progress_kwargs["status"] = target_status
+    await client.record_progress(issue_id, **progress_kwargs)
     return True
 
 
@@ -820,6 +821,19 @@ async def lifespan(app: FastAPI):
                                     title[:40],
                                     f" PR={chain.get('pr_url')}" if chain.get("pr_url") else "",
                                 )
+                                try:
+                                    await broadcaster.broadcast(
+                                        "all",
+                                        "multica_task_progress",
+                                        {
+                                            "multica_issue_id": str(issue_id),
+                                            "title": title,
+                                            "phase": (chain.get("pipeline") if isinstance(chain.get("pipeline"), dict) else {}).get("phase"),
+                                            "pr_url": chain.get("pr_url"),
+                                        },
+                                    )
+                                except Exception as _push_exc:
+                                    logger.debug("multica_poll: ws progress push failed: %s", _push_exc)
                     except Exception as _inner_exc:
                         logger.debug("multica_poll: inner error for issue %s: %s", issue_id, _inner_exc)
 

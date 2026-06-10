@@ -87,6 +87,7 @@ def test_poll_loop_keeps_blocked_broadcast_out_of_running_branch():
     assert "blocker = await _record_blocked_multica_chain" in blocked_segment
     assert '"multica_task_blocked"' in blocked_segment
     assert "_record_running_multica_chain_progress" in running_segment
+    assert '"multica_task_progress"' in running_segment
     assert '"multica_task_blocked"' not in running_segment
     assert "blocker" not in running_segment
 
@@ -114,6 +115,27 @@ async def test_record_running_multica_chain_progress_records_pr_url_and_review_s
     assert client.calls[0][1]["phase"] == "verify"
     assert client.calls[0][1]["pr_url"] == "https://github.com/jason-easyazz/zoe-ai-assistant/pull/999"
     assert client.calls[0][1]["status"] == "in_review"
+    assert client.calls[0][1]["clear_blocker"] is True
+
+
+@pytest.mark.asyncio
+async def test_record_running_multica_chain_progress_omits_status_without_pr_url():
+    from main import _record_running_multica_chain_progress
+
+    client = RecordingClient()
+    client.issues["issue-running"] = {"id": "issue-running", "status": "in_review", "description": ""}
+
+    changed = await _record_running_multica_chain_progress(
+        client,
+        "issue-running",
+        {"status": "running", "pipeline": {"phase": "implement"}},
+        issue=client.issues["issue-running"],
+    )
+
+    assert changed is True
+    assert client.calls[0][1]["phase"] == "implement"
+    assert client.calls[0][1]["pr_url"] is None
+    assert "status" not in client.calls[0][1]
     assert client.calls[0][1]["clear_blocker"] is True
 
 
