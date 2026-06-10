@@ -54,6 +54,7 @@ _PATCH_REVIEW_DIFF_RE = re.compile(r"^\s*(?:┊|\|)\s+review\s+diff\b", re.IGNOR
 _TERMINAL_STEP_RE = re.compile(r"^\s*(?:┊|\|)\s+\S+\s+kanban_(?:complete|block)\b", re.IGNORECASE)
 _EXPLORE_STEP_RE = re.compile(r"^\s*(?:┊|\|)\s+\S+\s+(?:read|grep|find)\b", re.IGNORECASE)
 _READ_STEP_RE = re.compile(r"^\s*(?:┊|\|)\s+\S+\s+read\s+(?P<path>\S+)", re.IGNORECASE)
+_GREP_STEP_RE = re.compile(r"^\s*(?:┊|\|)\s+\S+\s+(?:grep|find)\b", re.IGNORECASE)
 _SHELL_CD_STEP_RE = re.compile(
     r"^\s*(?:┊|\|)\s+\S+\s+\$\s+cd\s+(?P<cwd>'[^']+'|\"[^\"]+\"|\S+)\s+&&\s+(?P<command>.+)$",
     re.IGNORECASE,
@@ -557,7 +558,10 @@ def implement_pre_edit_drift_reason_from_log(
         "services/zoe-data/tests/test_main_multica_poll.py",
         "services/zoe-data/executors/kanban_adapter.py",
     }
-    post_focus_reads_seen: set[str] = set()
+    post_focus_read_counts: dict[str, int] = {}
+    post_focus_grep_steps = 0
+    post_focus_read_budget = 2
+    post_focus_grep_budget = 2
     read_counts: dict[str, int] = {}
     for line in step_lines:
         if _PATCH_STEP_RE.search(line) or _TERMINAL_STEP_RE.search(line):
@@ -574,13 +578,20 @@ def implement_pre_edit_drift_reason_from_log(
                 (allowed for allowed in post_focus_allowed_reads if path.endswith(allowed)),
                 "",
             )
-            if matched_allowed_path and matched_allowed_path not in post_focus_reads_seen:
-                post_focus_reads_seen.add(matched_allowed_path)
-                continue
+            if matched_allowed_path:
+                post_focus_read_counts[matched_allowed_path] = (
+                    post_focus_read_counts.get(matched_allowed_path, 0) + 1
+                )
+                if post_focus_read_counts[matched_allowed_path] <= post_focus_read_budget:
+                    continue
+            if _GREP_STEP_RE.search(line):
+                post_focus_grep_steps += 1
+                if post_focus_grep_steps <= post_focus_grep_budget:
+                    continue
             return (
                 "BLOCKER=IMPLEMENT_HANDOFF_DRIFT: engineering blocker follow-up kept "
-                "exploring after focused test instead of editing the named harness file "
-                "or blocking ALREADY_COVERED"
+                "exploring after focused test beyond the named-file navigation budget "
+                "instead of editing or blocking ALREADY_COVERED"
             )
         explore_steps += 1
         if explore_steps > explore_budget:
