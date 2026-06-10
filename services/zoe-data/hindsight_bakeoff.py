@@ -163,15 +163,15 @@ def summarize_recall_latency(
     if budget_ms <= 0:
         raise ValueError("budget_ms must be positive")
     latencies = [
-        float(item.get("latency_ms") or 0.0)
+        float(item["latency_ms"])
         for item in scores
-        if bool(item.get("enabled")) and "latency_ms" in item
+        if bool(item.get("enabled")) and item.get("latency_ms") is not None
     ]
     enabled_case_count = len(latencies)
-    p50_latency_ms = median(latencies) if latencies else 0.0
-    p95_latency_ms = percentile(latencies, 0.95)
-    measured = bool(latencies) and enabled_case_count > 0
-    p95_within_budget = measured and p95_latency_ms <= budget_ms
+    measured = enabled_case_count > 0
+    p50_latency_ms = median(latencies) if measured else None
+    p95_latency_ms = percentile(latencies, 0.95) if measured else None
+    p95_within_budget = measured and p95_latency_ms is not None and p95_latency_ms <= budget_ms
     return {
         "measured": measured,
         "case_count": len(scores),
