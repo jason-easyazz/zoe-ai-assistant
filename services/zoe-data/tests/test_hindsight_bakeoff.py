@@ -8,6 +8,7 @@ from hindsight_bakeoff import (
     percentile,
     score_recall_response,
     summarize_bakeoff_scores,
+    summarize_recall_latency,
     synthetic_retain_payloads,
 )
 
@@ -63,6 +64,85 @@ def test_summarize_bakeoff_scores_reports_score_and_latency():
     assert summary["p95_latency_ms"] == 29.0
 
 
+def test_summarize_recall_latency_reports_budget_status():
+    latency = summarize_recall_latency(
+        [
+            {"latency_ms": 20.0, "enabled": True},
+            {"latency_ms": 10.0, "enabled": True},
+            {"latency_ms": 30.0, "enabled": True},
+        ],
+        budget_ms=25.0,
+    )
+
+    assert latency == {
+        "measured": True,
+        "case_count": 3,
+        "enabled_case_count": 3,
+        "budget_ms": 25.0,
+        "p50_latency_ms": 20.0,
+        "p95_latency_ms": 29.0,
+        "p95_within_budget": False,
+        "hot_path_status": "async_or_cached_only",
+    }
+
+
+def test_summarize_recall_latency_reports_hot_path_eligible():
+    latency = summarize_recall_latency(
+        [
+            {"latency_ms": 20.0, "enabled": True},
+            {"latency_ms": 10.0, "enabled": True},
+            {"latency_ms": 30.0, "enabled": True},
+        ],
+        budget_ms=30.0,
+    )
+
+    assert latency["p95_within_budget"] is True
+    assert latency["hot_path_status"] == "eligible"
+
+
+def test_summarize_recall_latency_marks_disabled_runs_not_measured():
+    latency = summarize_recall_latency(
+        [
+            {"latency_ms": 0.01, "enabled": False},
+            {"latency_ms": 0.02, "enabled": False},
+        ],
+        budget_ms=600.0,
+    )
+
+    assert latency["measured"] is False
+    assert latency["case_count"] == 2
+    assert latency["enabled_case_count"] == 0
+    assert latency["p95_within_budget"] is False
+    assert latency["hot_path_status"] == "not_measured"
+
+
+def test_summarize_recall_latency_ignores_disabled_latencies_in_mixed_run():
+    latency = summarize_recall_latency(
+        [
+            {"latency_ms": 0.1, "enabled": False},
+            {"latency_ms": 0.2, "enabled": False},
+            {"latency_ms": 800.0, "enabled": True},
+        ],
+        budget_ms=600.0,
+    )
+
+    assert latency["measured"] is True
+    assert latency["case_count"] == 3
+    assert latency["enabled_case_count"] == 1
+    assert latency["p95_latency_ms"] == 800.0
+    assert latency["p95_within_budget"] is False
+    assert latency["hot_path_status"] == "async_or_cached_only"
+
+
+def test_summarize_recall_latency_requires_positive_budget():
+    try:
+        summarize_recall_latency([{"latency_ms": 1.0}], budget_ms=0.0)
+    except ValueError as exc:
+        assert "budget_ms must be positive" in str(exc)
+    else:
+        raise AssertionError("summarize_recall_latency accepted a non-positive budget")
+
+
 def test_percentile_rejects_out_of_range_values():
     try:
         percentile([1, 2, 3], 95)
@@ -85,3 +165,4 @@ def test_maintenance_runner_imports_real_bakeoff_module():
 
     assert len(runner.EVAL_QUERIES) == len(EVAL_QUERIES)
     assert runner.summarize_bakeoff_scores([{"score": 1, "latency_ms": 1}])["case_count"] == 1
+    assert runner.summarize_recall_latency([{"latency_ms": 1, "enabled": True}], budget_ms=600)["p95_within_budget"] is True

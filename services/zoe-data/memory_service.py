@@ -38,7 +38,7 @@ import re
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Mapping, Optional
 
 try:
     from memory_metrics import (
@@ -61,11 +61,57 @@ _MEMPALACE_DATA = os.environ.get(
 
 _AUDIT_COLLECTION = os.environ.get("ZOE_MEMORY_AUDIT_COLLECTION", "mempalace_audit")
 
+_MEMORY_SCOPE_TO_VISIBILITY = {
+    "personal": "personal",
+    "shared": "family",
+    "ambient": "personal",
+    "system": "personal",
+    "project": "personal",
+}
+
 
 def _metadata_value(value: Any) -> str | int | float | bool:
     if isinstance(value, (str, int, float, bool)):
         return value
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+_BLOCKED_READ_STATUSES = {"archived", "rejected", "superseded", "pending", "disputed"}
+
+
+def _memory_visible_to_user(metadata: Mapping[str, Any], user_id: str) -> bool:
+    """Return True only for the caller's personal rows or shared family rows."""
+
+    visibility = str(metadata.get("visibility") or "").strip().lower()
+    if visibility == "family":
+        return True
+    caller = str(user_id or "").strip().lower()
+    uid = str(metadata.get("user_id") or "").strip().lower()
+    wing = str(metadata.get("wing") or "").strip().lower()
+    return bool(caller and ((uid and uid == caller) or (wing and wing == caller)))
+
+
+def _memory_status_visible(metadata: Mapping[str, Any]) -> bool:
+    status = str(metadata.get("status", "approved") or "approved").strip().lower()
+    return status not in _BLOCKED_READ_STATUSES
+
+
+def _scope_visibility(scope: Any | None) -> str:
+    if scope is None:
+        return "personal"
+    scope_value = str(scope)
+    if not scope_value.strip():
+        raise MemoryServiceError("memory scope cannot be blank")
+    if scope_value not in _MEMORY_SCOPE_TO_VISIBILITY:
+        raise MemoryServiceError(f"unsupported memory scope: {scope_value}")
+    return _MEMORY_SCOPE_TO_VISIBILITY[scope_value]
+
+
+def _promote_event_metadata(md: dict[str, Any], extra: dict[str, Any]) -> None:
+    for key in ("event_id", "evidence_refs", "relationships", "supersedes", "retention_policy"):
+        value = extra.get(key)
+        if value is not None:
+            md[key] = _metadata_value(value)
 
 
 @dataclass(frozen=True)
@@ -171,10 +217,15 @@ class MemoryService:
         entity_id: Optional[str] = None,
         expires_at: Optional[str] = None,
         source_excerpt: Optional[str] = None,
+        scope: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
         opt_out: bool = False,
     ) -> Optional[MemoryRef]:
-        """Store a fact. Returns None when silently dropped."""
+        """Store a fact. Returns None when silently dropped.
+
+        When ``scope`` is None, ``metadata["scope"]`` is treated as the
+        authoritative memory scope and is validated before any durable write.
+        """
         self._require(user_id, "user_id is required")
         if not text or not text.strip():
             raise MemoryServiceError("empty text")
@@ -220,6 +271,7 @@ class MemoryService:
                 entity_id=entity_id,
                 expires_at=expires_at,
                 source_excerpt=source_excerpt,
+                scope=scope,
                 extra_metadata=metadata,
                 idem_key=idem_key,
             )
@@ -602,14 +654,24 @@ class MemoryService:
         entity_id: Optional[str],
         expires_at: Optional[str],
         source_excerpt: Optional[str] = None,
+        scope: Optional[str] = None,
         extra_metadata: Optional[dict[str, Any]] = None,
         idem_key: str = "",
     ) -> dict[str, Any]:
+        """Build durable metadata for a memory row.
+
+        When ``scope`` is None, ``extra_metadata["scope"]`` is promoted to the
+        first-class Zoe memory scope and drives legacy visibility mapping.
+        """
         now = datetime.datetime.utcnow().isoformat() + "Z"
+        extra = dict(extra_metadata or {})
+        event_scope = scope if scope is not None else extra.get("scope")
+        visibility = _scope_visibility(event_scope)
         md: dict[str, Any] = {
             "user_id": user_id,
             "wing": user_id,
             "room": "conversations",
+            "visibility": visibility,
             "memory_type": memory_type,
             "confidence": float(confidence),
             "source": source,
@@ -641,7 +703,10 @@ class MemoryService:
             md["expires_at"] = expires_at
         if source_excerpt:
             md["source_excerpt"] = source_excerpt
-        for key, value in (extra_metadata or {}).items():
+        if event_scope:
+            md["scope"] = str(event_scope)
+        _promote_event_metadata(md, extra)
+        for key, value in extra.items():
             target_key = f"candidate_{key}"
             if target_key in md or value is None:
                 continue
@@ -673,7 +738,7 @@ class MemoryService:
     def _metadata_read(self, user_id: str, limit: int) -> list[MemoryRef]:
         col = self._collection()
         result = col.get(
-            where={"$or": [{"user_id": user_id}, {"wing": user_id}]},
+            where={"$or": [{"user_id": user_id}, {"wing": user_id}, {"visibility": "family"}]},
             include=["documents", "metadatas"],
         )
         docs = result.get("documents") or []
@@ -688,8 +753,9 @@ class MemoryService:
             expires = meta.get("expires_at")
             if expires and expires <= now_iso:
                 continue
-            st = meta.get("status", "approved")
-            if st in {"archived", "rejected", "superseded", "pending"}:
+            if not _memory_visible_to_user(meta, user_id):
+                continue
+            if not _memory_status_visible(meta):
                 continue
             filtered.append(MemoryRef(id=rid, text=doc or "", metadata=dict(meta)))
 
@@ -724,7 +790,7 @@ class MemoryService:
         result = col.query(
             query_texts=[query],
             n_results=max(limit * 3, limit),
-            where={"$or": [{"user_id": user_id}, {"wing": user_id}]},
+            where={"$or": [{"user_id": user_id}, {"wing": user_id}, {"visibility": "family"}]},
             include=["documents", "metadatas", "distances"],
         )
         ids = (result.get("ids") or [[]])[0]
@@ -739,8 +805,9 @@ class MemoryService:
             expires = md.get("expires_at")
             if expires and expires <= now_iso:
                 continue
-            st = md.get("status", "approved")
-            if st in {"archived", "rejected", "superseded", "pending"}:
+            if not _memory_visible_to_user(md, user_id):
+                continue
+            if not _memory_status_visible(md):
                 continue
             hits.append(
                 MemoryRef(

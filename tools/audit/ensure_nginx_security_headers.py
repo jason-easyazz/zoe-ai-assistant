@@ -26,9 +26,11 @@ SECURITY_HEADERS: tuple[tuple[str, str], ...] = (
         "Content-Security-Policy",
         # The legacy Zoe SPA and proxied Multica surface still need inline/eval script
         # compatibility. Keep this explicit so future security audits can tighten it.
+        # Zoe also proxies operator-configurable local voice/LiveKit websocket
+        # endpoints whose hostnames/ports are not stable enough to enumerate here.
         "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
         "style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; "
-        "font-src 'self'; connect-src 'self'; frame-ancestors 'self';",
+        "font-src 'self'; connect-src 'self' ws: wss:; frame-ancestors 'self';",
     ),
     ("X-Frame-Options", "SAMEORIGIN"),
     ("X-Content-Type-Options", "nosniff"),

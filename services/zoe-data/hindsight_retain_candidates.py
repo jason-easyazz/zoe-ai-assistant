@@ -14,7 +14,12 @@ from typing import Any, Mapping
 
 from hindsight_memory import HindsightConfig, event_to_hindsight_item
 from zoe_evolution_proposal import EvolutionProposal
-from zoe_memory_admission import MemoryAdmissionDecision, MemoryAdmissionRequest, evaluate_memory_admission
+from zoe_memory_admission import (
+    MemoryAdmissionDecision,
+    MemoryAdmissionRequest,
+    MemoryAdmissionStatus,
+    evaluate_memory_admission,
+)
 from zoe_memory_contract import MemoryEvent, memory_event_from_mapping
 from zoe_memory_router import MemoryBackend
 from zoe_observation_trace import ObservationTrace
@@ -45,6 +50,28 @@ class HindsightAdmittedRetainPlan:
             "bank_id": self.bank_id,
             "payload": payload,
             "evidence_refs": list(self.evidence_refs),
+        }
+
+
+@dataclass(frozen=True)
+class HindsightRetainCandidateAdmissionResult:
+    event_id: str
+    admission_id: str
+    status: MemoryAdmissionStatus
+    allowed_to_write_durable: bool
+    reason: str
+    evidence_refs: tuple[str, ...] = ()
+    side_effects: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "event_id": self.event_id,
+            "admission_id": self.admission_id,
+            "status": self.status.value,
+            "allowed_to_write_durable": self.allowed_to_write_durable,
+            "reason": self.reason,
+            "evidence_refs": list(self.evidence_refs),
+            "side_effects": list(self.side_effects),
         }
 
 
@@ -163,6 +190,29 @@ def evaluate_hindsight_retain_candidate_admission(
     return evaluate_memory_admission(request)
 
 
+def admit_hindsight_retain_candidate(event_id: str) -> HindsightRetainCandidateAdmissionResult:
+    """Runtime-facing admission stub for pending Hindsight retain candidates.
+
+    Future chat/runtime code should call this interface instead of writing
+    directly to Hindsight. Until the admission worker can load a pending
+    MemoryService candidate and evaluate its evidence, this function is
+    intentionally inert: it returns pending review and records no side effects.
+    """
+
+    if not isinstance(event_id, str):
+        raise TypeError("event_id must be str")
+    event_id_value = event_id.strip()
+    if not event_id_value:
+        raise HindsightRetainAdmissionError("event_id is required")
+    return HindsightRetainCandidateAdmissionResult(
+        event_id=event_id_value,
+        admission_id=f"admit_hindsight_retain_{event_id_value}",
+        status=MemoryAdmissionStatus.PENDING_REVIEW,
+        allowed_to_write_durable=False,
+        reason="admission_worker_not_wired",
+    )
+
+
 def build_admitted_hindsight_retain_plan(
     request: MemoryAdmissionRequest,
     decision: MemoryAdmissionDecision,
@@ -234,14 +284,17 @@ async def create_hindsight_retain_candidate(
         entity_type=payload["entity_type"],
         entity_id=payload["entity_id"],
         source_excerpt=payload["source_excerpt"],
+        scope=payload["metadata"].get("scope"),
         metadata=payload["metadata"],
     )
 
 
 __all__ = [
     "HindsightAdmittedRetainPlan",
+    "HindsightRetainCandidateAdmissionResult",
     "HINDSIGHT_RETAIN_SOURCE",
     "HindsightRetainAdmissionError",
+    "admit_hindsight_retain_candidate",
     "build_admitted_hindsight_retain_plan",
     "build_hindsight_retain_admission_request",
     "build_hindsight_retain_candidate",
