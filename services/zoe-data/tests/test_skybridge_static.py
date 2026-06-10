@@ -191,6 +191,7 @@ def test_skybridge_renderer_supports_real_data_cards():
     assert "renderWeather(props)" in renderer
     assert "sky-premium-card" in renderer
     assert "formatCalendarDate" in renderer
+    assert "calendarEventSortKey" in renderer
     assert "calendarCategoryClass" in renderer
     assert "sky-calendar-scene" in renderer
     assert "sky-calendar-event-main" in renderer
@@ -216,6 +217,21 @@ def test_skybridge_renderer_supports_real_data_cards():
     assert "skybridge-premium-cards-4" in html
     assert "backdrop-filter: none !important" in html
     assert "No events " in renderer
+
+
+def test_skybridge_calendar_renderer_handles_datetime_dates_and_ordering():
+    renderer = read(UI / "js" / "skybridge-renderer.js")
+    calendar_date_helper = renderer[
+        renderer.index("function formatCalendarDate"):
+        renderer.index("function calendarEventSortKey")
+    ]
+
+    assert "const datePart = raw.slice(0, 10);" in calendar_date_helper
+    assert r"/^\d{4}-\d{2}-\d{2}$/.test(datePart)" in calendar_date_helper
+    assert "new Date(datePart + 'T12:00:00')" in calendar_date_helper
+    assert "new Date(raw + 'T12:00:00')" not in calendar_date_helper
+    assert "events.slice().sort((a, b) => calendarEventSortKey(a) - calendarEventSortKey(b)).slice(0, 8)" in renderer
+    assert "return known.indexOf(token) >= 0 ? token : 'general';" in renderer
 
 
 def test_skybridge_is_registered_in_touch_menu():

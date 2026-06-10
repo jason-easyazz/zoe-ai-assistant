@@ -82,8 +82,9 @@
 
     function formatCalendarDate(value) {
         const raw = String(value || '');
-        if (/^\d{4}-\d{2}-\d{2}/.test(raw)) {
-            const date = new Date(raw + 'T12:00:00');
+        const datePart = raw.slice(0, 10);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(datePart)) {
+            const date = new Date(datePart + 'T12:00:00');
             if (!Number.isNaN(date.getTime())) {
                 return {
                     weekday: date.toLocaleDateString(undefined, { weekday: 'long' }),
@@ -92,6 +93,14 @@
             }
         }
         return { weekday: 'Agenda', monthDay: raw || 'Today' };
+    }
+
+    function calendarEventSortKey(item) {
+        const datePart = String(item.start_date || item.date || '').slice(0, 10);
+        const timePart = item.all_day ? '00:00' : String(item.start_time || '00:00').slice(0, 5);
+        const sortable = datePart ? datePart + 'T' + timePart : '9999-12-31T' + timePart;
+        const timestamp = Date.parse(sortable);
+        return Number.isNaN(timestamp) ? Number.MAX_SAFE_INTEGER : timestamp;
     }
 
     function calendarCategoryClass(value) {
@@ -115,7 +124,7 @@
 
     function renderCalendar(props) {
         const events = Array.isArray(props.events) ? props.events : [];
-        const visibleEvents = events.slice(0, 8);
+        const visibleEvents = events.slice().sort((a, b) => calendarEventSortKey(a) - calendarEventSortKey(b)).slice(0, 8);
         const dateMeta = formatCalendarDate(props.date || props.start_date || (events[0] && events[0].start_date));
         const rows = visibleEvents.map((item, index) => {
             const title = item.title || item.name || 'Calendar event';
