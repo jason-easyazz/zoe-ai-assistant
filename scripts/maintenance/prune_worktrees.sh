@@ -20,7 +20,7 @@ Safety guards (all must pass):
   - worktree not locked
   - worktree has no uncommitted changes
   - branch merged into origin/main, or detached HEAD is ancestor of origin/main
-  - no activity for MIN_AGE_DAYS (default 7) by worktree mtime
+  - no activity for MIN_AGE_DAYS (default 7) by latest commit timestamp
 
 Environment:
   ZOE_ASSISTANT_ROOT       repo root (default: /home/zoe/assistant)
@@ -46,6 +46,7 @@ LIVE_ROOT="$(git rev-parse --show-toplevel)"
 
 candidates=()
 skipped=()
+worktree_count=0
 
 is_merged_ref() {
   local ref="$1"
@@ -54,9 +55,12 @@ is_merged_ref() {
 
 worktree_age_seconds() {
   local path="$1"
-  local mtime
-  mtime="$(stat -c %Y "$path" 2>/dev/null || echo 0)"
-  echo $((NOW - mtime))
+  local activity_ts
+  activity_ts="$(git -C "$path" log -1 --format=%ct HEAD 2>/dev/null || echo 0)"
+  if [[ "$activity_ts" == 0 ]]; then
+    activity_ts="$(stat -c %Y "$path" 2>/dev/null || echo 0)"
+  fi
+  echo $((NOW - activity_ts))
 }
 
 while IFS= read -r line; do
@@ -65,6 +69,7 @@ while IFS= read -r line; do
       wt_path="${line#worktree }"
       wt_branch=""
       wt_locked=0
+      worktree_count=$((worktree_count + 1))
       ;;
     branch\ refs/heads/*)
       wt_branch="${line#branch refs/heads/}"
@@ -123,6 +128,11 @@ while IFS= read -r line; do
     wt_locked=0
   fi
 done < <(git worktree list --porcelain; echo)
+
+if [[ "$worktree_count" -eq 0 ]]; then
+  log "error: git worktree list returned no worktrees; refusing to continue"
+  exit 1
+fi
 
 log "candidates: ${#candidates[@]}; skipped: ${#skipped[@]} (min age ${MIN_AGE_DAYS}d)"
 
