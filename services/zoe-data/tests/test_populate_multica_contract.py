@@ -45,6 +45,8 @@ def test_managed_autopilots_keep_execution_modes_and_templates():
 
     assert autopilots["Morning Checkin"]["execution_mode"] == "run_only"
     assert autopilots["Morning Checkin"]["issue_title_template"] == ""
+    assert autopilots["Evening Wind Down"]["execution_mode"] == "run_only"
+    assert autopilots["Evening Wind Down"]["issue_title_template"] == ""
     assert autopilots["Reminder Scan"]["execution_mode"] == "run_only"
     assert autopilots["Platform Health Check"]["agent"] == "Hermes"
     assert autopilots["Platform Health Check"]["execution_mode"] == "create_issue"

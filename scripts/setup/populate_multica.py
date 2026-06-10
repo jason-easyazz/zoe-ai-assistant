@@ -771,7 +771,7 @@ _AUTOPILOTS = [
         "agent": "Zoe Core",
         "execution_mode": "run_only",
         "cron": "0 21 * * *",
-        "issue_title_template": "Evening Check-In — {date}",
+        "issue_title_template": "",
     },
     {
         "title": "Evolution Nightly Notice",
@@ -822,7 +822,6 @@ def step_i_create_autopilots(agent_ids: dict[str, str]):
             sql = (
                 "update autopilot set "
                 f"assignee_id={_sql_literal(agent_id)}, "
-                "status=" + _sql_literal("active") + ", "
                 f"execution_mode={_sql_literal(apdef['execution_mode'])}, "
                 f"issue_title_template={_sql_literal(apdef.get('issue_title_template', ''))}, "
                 "updated_at=now() "
