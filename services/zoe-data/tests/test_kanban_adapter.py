@@ -4437,9 +4437,13 @@ def test_verify_body_requires_exact_workspace_path_for_repo_commands():
     )
 
     assert "exact task `workspace_path`" in body
+    assert "pwd && git branch --show-current" in body
     assert "BLOCKER=WORKTREE_PATH_VIOLATION" in body
     assert "cd <workspace_path> && PYTHONPATH=services/zoe-data python3 -m pytest" in body
     assert "do not use relative `cd services/zoe-data`" in body
+    assert body.index("BLOCKER=WORKTREE_PATH_VIOLATION") < body.index(
+        "python3 tools/audit/validate_structure.py"
+    )
 
 
 def test_implement_body_documents_existing_pr_revision_fast_path_before_new_pr_creation(monkeypatch):
