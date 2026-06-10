@@ -13,6 +13,7 @@ from typing import Any, Awaitable, Callable
 
 from pipeline_evidence import (
     EvidenceItem,
+    PHASE_ORDER,
     PipelinePhase,
     PipelineState,
     TransitionRecord,
@@ -39,10 +40,29 @@ _PHASE_SKILLS: dict[str, tuple[str, ...]] = {
 
 _LOCK = threading.Lock()
 _TERMINAL = {"done", "archived", "blocked"}
+_TERMINAL_SUCCESS = {"done", "archived"}
 
 
 class PipelineStateConflict(RuntimeError):
     """Raised when a caller tries to persist a stale pipeline mutation."""
+
+
+def _phase_after(candidate: PipelinePhase, current: PipelinePhase) -> bool:
+    return PHASE_ORDER.index(candidate) > PHASE_ORDER.index(current)
+
+
+def _has_later_successful_phase(phases: dict[str, dict], phase: PipelinePhase) -> bool:
+    phase_idx = PHASE_ORDER.index(phase)
+    for candidate in PHASE_ORDER[phase_idx + 1 :]:
+        row = phases.get(candidate)
+        if row and (row.get("status") or "").lower() in _TERMINAL_SUCCESS:
+            return True
+    return False
+
+
+def _is_stale_duplicate_block(row: dict) -> bool:
+    reason = str(row.get("block_reason") or row.get("reason") or "").upper()
+    return "DUPLICATE_REDISPATCH" in reason
 
 
 def store_path() -> Path:
@@ -556,12 +576,22 @@ async def _sync_pipeline_from_chain_once(
         if (row.get("status") or "").lower() != "blocked":
             return state
 
-    for phase in ("scout", "implement", "verify", "review", "closeout", "retro"):
+    blocked_catch_up_allowed_from: PipelinePhase | None = None
+    for phase in PHASE_ORDER:
         row = phases.get(phase)
         if not row:
             continue
         row_status = (row.get("status") or "").lower()
         skills = _PHASE_SKILLS.get(phase, ())
+
+        if (
+            row_status == "blocked"
+            and _is_stale_duplicate_block(row)
+            and _has_later_successful_phase(phases, phase)
+        ):
+            if state.status == "blocked" and state.phase == phase:
+                blocked_catch_up_allowed_from = phase
+            continue
 
         if phase == state.phase and row_status not in _TERMINAL and phase == "verify":
             state = await _append_harness_validators(state, "verify")
@@ -573,6 +603,39 @@ async def _sync_pipeline_from_chain_once(
         detail: dict[str, Any] = {}
         if task_id:
             detail = await fetch_detail(task_id)
+
+        while (
+            phase != state.phase
+            and _phase_after(phase, state.phase)
+            and (state.status != "blocked" or state.phase == blocked_catch_up_allowed_from)
+            and can_complete_phase(state)
+        ):
+            previous_phase = state.phase
+            state = transition(
+                state,
+                "complete",
+                reason=f"caught up to terminal {phase} row",
+            )
+            state = state.model_copy(
+                update={
+                    "last_block_fingerprint": None,
+                    "repeated_block_count": 0,
+                    "block_classification": None,
+                    "split_packet": None,
+                }
+            )
+            state = await _run_io(
+                partial(
+                    save_state,
+                    state,
+                    event="phase_catch_up",
+                    extra={
+                        "from_phase": previous_phase,
+                        "to_phase": state.phase,
+                        "row_phase": phase,
+                    },
+                )
+            )
 
         if phase != state.phase:
             continue
