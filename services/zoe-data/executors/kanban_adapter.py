@@ -722,15 +722,16 @@ class KanbanAdapter:
                 "Working root for this phase: exact task workspace_path from kanban_show\n"
                 "Live checkout path intentionally omitted; all file, git, test, and PR commands must use workspace_path.\n"
             )
-        common = (
+        header = (
             f"Multica issue: {identifier} (id {issue_id})\n"
             f"zoe-ref: multica:{issue_id}:{phase}\n"
             f"zoe-chain: v4\n"
             f"{escalation_marker}"
             f"{mode_note}"
             f"{workspace_header}\n"
-            f"Title: {title}\n\n{description}\n\n"
         )
+        issue_context = f"Title: {title}\n\n{description}\n\n"
+        common = header + issue_context
         if phase == "scout":
             return common + (
                 "You are scout (zoe-planner, read-only). Gather context before any code changes.\n"
@@ -774,11 +775,15 @@ class KanbanAdapter:
             intent_gap_hint = _intent_gap_implement_hint(issue, phase=phase)
             # Implement body intentionally omits full prior-phase logs; workers should
             # call kanban_show and read SCOUT_SUMMARY= from scout metadata when present.
-            return common + overnight_hint + (
+            priority_contract = (
                 "You are the implementer (zoe-coder).\n"
                 f"{code_audit_hint}"
-                f"{harness_hint}"
                 f"{intent_gap_hint}"
+                f"{harness_hint}"
+            )
+            return header + overnight_hint + priority_contract + (
+                "\nIssue context follows. Use it only after obeying any mandatory first action above.\n"
+                f"{issue_context}"
                 "- AUDIT/SMOKE FAST PATH: only if the title/body explicitly says audit-only, smoke test,"
                 " no code change, or uses trace/map with an audit/no-code qualifier, do not run Graphify"
                 " or repo exploration first. Complete in one bounded handoff with"

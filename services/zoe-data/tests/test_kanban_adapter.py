@@ -5238,7 +5238,8 @@ def test_implement_body_includes_bare_say_exactly_intent_gap_contract():
             "title": "Intent gap: say exactly",
             "description": (
                 "Representative: say exactly. Acceptance: Say exactly: "
-                "Zoe chat integration ok routes to open-domain."
+                "Zoe chat integration ok routes to open-domain. Evidence points at "
+                "services/zoe-data/evolution_notice.py:run_evolution_notice."
             ),
         },
         "ZOE-5682",
@@ -5249,6 +5250,9 @@ def test_implement_body_includes_bare_say_exactly_intent_gap_contract():
     assert "your NEXT tool call must be the terminal command" in body
     assert "python3 scripts/maintenance/zoe_apply_intent_gap_contract.py say_exactly" in body
     assert "BLOCKER=INTENT_GAP_HELPER_UNAVAILABLE" in body
+    assert body.index("your NEXT tool call must be the terminal command") < body.index(
+        "services/zoe-data/evolution_notice.py"
+    )
 
 
 def test_implement_body_includes_say_exactly_intent_gap_contract():
