@@ -34,7 +34,6 @@ from graphify_local_probe import (  # noqa: E402
 DEFAULT_SHARD_MODEL = "gemma-4-e4b-it-Q4_K_M.gguf"
 DEFAULT_SHARDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("data-core", ("services/zoe-data",)),
-    ("ui", ("services/zoe-ui",)),
     ("operators", ("scripts", "tools")),
 )
 

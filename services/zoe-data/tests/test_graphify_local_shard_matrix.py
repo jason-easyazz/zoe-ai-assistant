@@ -65,7 +65,7 @@ def test_parse_shard_validates_name_and_paths():
 
 
 
-def test_default_shards_exclude_operator_state_and_docs_only_dirs():
+def test_default_shards_include_only_accepted_local_slices():
     module = _load_module()
 
     defaults = module.default_shards()
@@ -74,7 +74,11 @@ def test_default_shards_exclude_operator_state_and_docs_only_dirs():
 
     assert ".zoe" not in flattened
     assert "harness-docs" not in names
-    assert ("scripts", "tools") in [shard.include_paths for shard in defaults]
+    assert "ui" not in names
+    assert "services/zoe-ui" not in flattened
+    assert [shard.name for shard in defaults] == ["data-core", "operators"]
+    assert [shard.include_paths for shard in defaults] == [("services/zoe-data",), ("scripts", "tools")]
+
 
 def test_summarize_shards_reports_blocked_shards_and_accepted_median():
     module = _load_module()
