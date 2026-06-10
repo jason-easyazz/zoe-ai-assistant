@@ -139,6 +139,15 @@ Current evidence:
   this artifact evidence returned `artifact_capture_ready=true`,
   `artifact_report_ready=false`, and `artifact_sync_ready=false` because the run
   was non-clustered and no merged graph/report has been produced.
+- Deterministic artifact merge validation over the same captured shard outputs
+  accepted with no blockers and wrote a merged graph only to `/tmp`: 7,112
+  merged nodes, 14,535 merged edges, 0 hyperedges, 290 explicit external
+  endpoint stubs, 38 duplicate shard-local node records deduplicated with
+  warnings, and 1 cross-shard original-ID collision safely separated by the
+  `{shard}::{original_id}` namespace. The validator recorded
+  `repo_graphify_out_updated=false` and the planner still reported
+  `artifact_sync_ready=false`; the next proof remains merged cluster/report
+  generation and inventory reconciliation before any committed map replacement.
 
 ## Refresh 2026-06-09 Foundation Pass
 
