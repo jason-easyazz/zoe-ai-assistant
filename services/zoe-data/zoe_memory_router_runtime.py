@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 from zoe_memory_router import route_memory_query
 from zoe_observation_trace import ObservationOutcome, ObservationTrace, ObservationTraceType
@@ -22,6 +22,10 @@ from zoe_observation_trace_collector import (
 
 
 FEATURE_FLAG = "ZOE_MEMORY_ROUTER_RUNTIME_ENABLED"
+PROMPT_PACKET_PREVIEW_FLAG = "ZOE_MEMORY_PROMPT_PACKET_PREVIEW_ENABLED"
+ACTIVE_MEMORY_STATUSES = {"active", "approved", "trusted"}
+UNCERTAIN_MEMORY_STATUSES = {"disputed", "uncertain"}
+SUPPRESSED_MEMORY_STATUSES = {"archived"}
 MEMORY_ROUTE_TRACE_COLLECTOR_POLICY = ObservationTraceCollectorPolicy(
     max_batch_size=1,
     allowed_surfaces=("memory",),
@@ -38,6 +42,177 @@ DEFAULT_SAMPLE_QUERIES = (
 def memory_router_runtime_enabled(env: dict[str, str] | None = None) -> bool:
     values = os.environ if env is None else env
     return str(values.get(FEATURE_FLAG, "false")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def memory_prompt_packet_preview_enabled(env: dict[str, str] | None = None) -> bool:
+    values = os.environ if env is None else env
+    return str(values.get(PROMPT_PACKET_PREVIEW_FLAG, "false")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def compile_cached_memory_prompt_packet(
+    query: str,
+    cached_items: Sequence[Mapping[str, Any]],
+    *,
+    purpose: str = "chat",
+    env: dict[str, str] | None = None,
+    user_id: str | None = None,
+    scope: str = "project",
+    max_items: int = 3,
+    max_chars: int = 480,
+) -> dict[str, Any]:
+    """Build a compact cited prompt-packet preview from caller-supplied cache rows.
+
+    This function does not call memory backends and never authorizes chat prompt
+    injection. It is a measurement/preview contract for cached packets only.
+    """
+
+    if max_items <= 0:
+        raise ValueError("max_items must be positive")
+    if max_chars <= 0:
+        raise ValueError("max_chars must be positive")
+
+    enabled = memory_prompt_packet_preview_enabled(env)
+    route = route_memory_query(query, purpose=purpose)
+    base: dict[str, Any] = {
+        "enabled": enabled,
+        "mode": "preview_only" if enabled else "disabled",
+        "feature_flag": PROMPT_PACKET_PREVIEW_FLAG,
+        "route": route.to_dict(),
+        "can_inject_prompt": False,
+        "can_write_memory": False,
+        "source": "caller_supplied_cache",
+    }
+    if not enabled:
+        return {**base, "packet": None, "accepted_count": 0, "candidate_count": len(cached_items), "rejected": []}
+
+    accepted: list[dict[str, Any]] = []
+    rejected: list[dict[str, str]] = []
+    for index, item in enumerate(cached_items):
+        normalized, reason = _normalize_cached_memory_item(item, index=index, user_id=user_id, scope=scope)
+        if reason:
+            rejected.append({"index": str(index), "reason": reason})
+            continue
+        accepted.append(normalized)
+
+    ranked = sorted(accepted, key=_prompt_packet_rank)
+    selected = ranked[:max_items]
+    lines = _packet_lines(selected, max_chars=max_chars)
+    evidence_refs = tuple(dict.fromkeys(ref for item in selected for ref in item["evidence_refs"]))
+    statuses = {item["status"]: sum(1 for selected_item in selected if selected_item["status"] == item["status"]) for item in selected}
+    packet = {
+        "policy": "compact_cited_cached_memory_only",
+        "route_primary": route.primary.value,
+        "scope": scope,
+        "user_id": user_id,
+        "lines": lines,
+        "evidence_refs": list(evidence_refs),
+        "statuses": statuses,
+        "max_items": max_items,
+        "max_chars": max_chars,
+        "instructions": "Use as uncertain context only; explicit user corrections override memory.",
+    }
+    return {
+        **base,
+        "packet": packet,
+        "accepted_count": len(selected),
+        "candidate_count": len(cached_items),
+        "rejected": rejected,
+    }
+
+
+def _normalize_cached_memory_item(
+    item: Mapping[str, Any],
+    *,
+    index: int,
+    user_id: str | None,
+    scope: str,
+) -> tuple[dict[str, Any], str | None]:
+    content = str(item.get("content") or item.get("text") or "").strip()
+    if not content:
+        return {}, "content is required"
+    evidence_refs = tuple(str(ref).strip() for ref in item.get("evidence_refs") or item.get("evidence") or () if str(ref).strip())
+    if not evidence_refs:
+        return {}, "evidence_refs are required"
+    item_scope = str(item.get("scope") or "").strip()
+    if not item_scope:
+        return {}, "scope is required"
+    item_user_id = item.get("user_id")
+    if item_user_id is not None:
+        item_user_id = str(item_user_id).strip() or None
+    if item_scope in {"personal", "shared"} and not item_user_id:
+        return {}, f"user_id is required for {item_scope} memory"
+    if item_scope in {"personal", "shared"} and item_user_id and user_id is None:
+        return {}, "user_id is required to include owned personal/shared memory"
+    if item_user_id and user_id != item_user_id:
+        return {}, "user_id mismatch"
+    if not _scope_allowed(item_scope, requested_scope=scope):
+        return {}, "scope mismatch"
+    status = str(item.get("status") or "active").strip().lower()
+    if status in SUPPRESSED_MEMORY_STATUSES:
+        return {}, f"status {status!r} is suppressed"
+    confidence = _confidence(item.get("confidence"))
+    return {
+        "id": str(item.get("event_id") or item.get("memory_id") or f"cached:{index}"),
+        "content": content,
+        "evidence_refs": evidence_refs,
+        "scope": item_scope,
+        "user_id": item_user_id,
+        "status": status,
+        "confidence": confidence,
+        "source": str(item.get("source") or "cached"),
+    }, None
+
+
+def _scope_allowed(item_scope: str, *, requested_scope: str) -> bool:
+    if item_scope == requested_scope:
+        return True
+    if item_scope == "system":
+        return requested_scope in {"system", "project"}
+    if item_scope == "shared":
+        return requested_scope in {"shared", "personal", "project"}
+    return False
+
+
+def _confidence(value: Any) -> float:
+    try:
+        confidence = float(value)
+    except (TypeError, ValueError):
+        return 0.5
+    return max(0.0, min(1.0, confidence))
+
+
+def _prompt_packet_rank(item: Mapping[str, Any]) -> tuple[int, float, str]:
+    status = str(item["status"])
+    if status in ACTIVE_MEMORY_STATUSES:
+        status_rank = 0
+    elif status in UNCERTAIN_MEMORY_STATUSES:
+        status_rank = 1
+    elif status == "superseded":
+        status_rank = 2
+    else:
+        status_rank = 3
+    return (status_rank, -float(item["confidence"]), str(item["id"]))
+
+
+def _packet_lines(items: Sequence[Mapping[str, Any]], *, max_chars: int) -> list[str]:
+    remaining = max_chars
+    lines: list[str] = []
+    for item in items:
+        prefix = f"[{item['id']}] status={item['status']} confidence={item['confidence']:.2f} evidence={','.join(item['evidence_refs'])}: "
+        room = max(0, remaining - len(prefix))
+        if room <= 0:
+            break
+        content = str(item["content"])
+        if len(content) > room:
+            if room < 3:
+                break
+            content = content[: room - 3].rstrip() + "..."
+        line = prefix + content
+        lines.append(line)
+        remaining -= len(line)
+        if remaining <= 0:
+            break
+    return lines
 
 
 def route_memory_for_runtime(
@@ -182,6 +357,8 @@ def memory_router_runtime_status(
         "default_enabled": False,
         "chat_hot_path_enabled": False,
         "prompt_injection_enabled": False,
+        "prompt_packet_preview_enabled": memory_prompt_packet_preview_enabled(env),
+        "prompt_packet_preview_flag": PROMPT_PACKET_PREVIEW_FLAG,
         "durable_writes_enabled": False,
         "sample_routes": sample_routes,
     }
@@ -190,9 +367,12 @@ def memory_router_runtime_status(
 __all__ = [
     "DEFAULT_SAMPLE_QUERIES",
     "FEATURE_FLAG",
+    "PROMPT_PACKET_PREVIEW_FLAG",
     "MEMORY_ROUTE_TRACE_COLLECTOR_POLICY",
     "build_memory_route_trace",
     "collect_memory_route_trace",
+    "compile_cached_memory_prompt_packet",
+    "memory_prompt_packet_preview_enabled",
     "memory_router_runtime_enabled",
     "memory_router_runtime_status",
     "route_memory_for_runtime",
