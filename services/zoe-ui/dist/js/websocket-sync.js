@@ -403,7 +403,16 @@ window.ZoeWebSockets = {
             }
         });
 
-        // ── Multica board task completion ─────────────────────────────────
+        // ── Multica board task updates ─────────────────────────────────────
+        this.push.on('multica_task_progress', (data) => {
+            const payload = unwrapPayload(data);
+            const title = payload.title || 'Board task';
+            if (payload.status === 'in_review' && payload.pr_url && typeof window._zoeShowNotification === 'function') {
+                window._zoeShowNotification(`Board task in review: ${title}`, 'info');
+            }
+            document.dispatchEvent(new CustomEvent('zoe:multica_task_progress', { detail: payload }));
+        });
+
         this.push.on('multica_task_done', (data) => {
             const payload = unwrapPayload(data);
             const title = payload.title || 'Board task';

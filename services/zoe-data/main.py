@@ -84,6 +84,51 @@ for _handler in logging.getLogger().handlers:
     _handler.addFilter(RequestIdFilter())
 
 
+async def _record_running_multica_chain_progress(
+    client,
+    issue_id: str,
+    chain: dict,
+    *,
+    issue: dict | None = None,
+) -> bool:
+    """Persist operator-visible PR/phase progress for a non-terminal chain."""
+    pipeline = chain.get("pipeline") if isinstance(chain.get("pipeline"), dict) else {}
+    phase = pipeline.get("phase") or None
+    pr_url = chain.get("pr_url") or None
+    if not phase and not pr_url:
+        return False
+
+    target_status = "in_review" if pr_url else None
+    try:
+        from multica_ticket_contract import parse_ticket_block
+
+        current_issue = issue if isinstance(issue, dict) else {}
+        if not current_issue.get("description"):
+            current_issue = await client.get_issue(issue_id)
+        metadata = parse_ticket_block(current_issue.get("description") or "")
+        if (
+            metadata.get("phase") == phase
+            and metadata.get("pr_url") == pr_url
+            and not metadata.get("blocked_reason")
+            and (not target_status or current_issue.get("status") == target_status)
+        ):
+            return False
+    except Exception:
+        pass
+
+    progress_kwargs = {
+        "phase": phase,
+        "evidence": "Engineering PR opened; validation/review in progress" if pr_url else "Engineering run in progress",
+        "pr_url": pr_url,
+        "clear_blocker": True,
+    }
+    if target_status:
+        progress_kwargs["status"] = target_status
+
+    await client.record_progress(issue_id, **progress_kwargs)
+    return True
+
+
 async def _record_completed_multica_chain(client, issue_id: str, chain: dict) -> None:
     """Persist operator-visible completion metadata for a finished Multica chain."""
     pipeline = chain.get("pipeline") or {}
@@ -764,6 +809,33 @@ async def lifespan(app: FastAPI):
                                 )
                             except Exception as _push_exc:
                                 logger.debug("multica_poll: ws block push failed: %s", _push_exc)
+                        elif chain.get("found") and chain.get("status") == "running":
+                            if await _record_running_multica_chain_progress(
+                                client,
+                                str(issue_id),
+                                chain,
+                                issue=issue,
+                            ):
+                                logger.info(
+                                    "multica_poll: synced running issue %s (%s) progress%s",
+                                    issue_id,
+                                    title[:40],
+                                    f" PR={chain.get('pr_url')}" if chain.get("pr_url") else "",
+                                )
+                                try:
+                                    await broadcaster.broadcast(
+                                        "all",
+                                        "multica_task_progress",
+                                        {
+                                            "multica_issue_id": str(issue_id),
+                                            "title": title,
+                                            "phase": (chain.get("pipeline") if isinstance(chain.get("pipeline"), dict) else {}).get("phase"),
+                                            "pr_url": chain.get("pr_url"),
+                                            **({"status": "in_review"} if chain.get("pr_url") else {}),
+                                        },
+                                    )
+                                except Exception as _push_exc:
+                                    logger.debug("multica_poll: ws progress push failed: %s", _push_exc)
                     except Exception as _inner_exc:
                         logger.debug("multica_poll: inner error for issue %s: %s", issue_id, _inner_exc)
 
