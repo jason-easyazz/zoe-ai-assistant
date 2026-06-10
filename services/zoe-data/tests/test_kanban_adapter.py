@@ -2395,7 +2395,8 @@ def test_implement_pre_edit_drift_blocks_excess_harness_followup_grep_after_focu
         "  ┊ 📖 read      /work/services/zoe-data/executors/kanban_adapter.py  0.1s\n"
         "  ┊ 🔎 grep      ITERATION_BUDGET  0.1s\n"
         "  ┊ 🔎 grep      _ensure_blocker_followup_ticket  0.1s\n"
-        "  ┊ 🔎 grep      another_symbol  0.1s\n",
+        "  ┊ 🔎 grep      another_symbol  0.1s\n"
+        "  ┊ 🔎 grep      final_symbol  0.1s\n",
         encoding="utf-8",
     )
 
@@ -2451,6 +2452,35 @@ def test_implement_pre_edit_drift_does_not_charge_allowed_named_file_read_to_bud
         "services/zoe-data/tests/test_main_multica_poll.py::"
         "test_record_blocked_multica_chain_creates_iteration_budget_followup  3.3s\n"
         "  ┊ 📖 read      /work/services/zoe-data/executors/kanban_adapter.py  0.1s\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.implement_pre_edit_drift_reason_from_log(
+        "t_impl",
+        "implement",
+        task_body='{"source":"engineering_blocker_followup"}',
+    )
+
+    assert reason is None
+
+
+def test_implement_pre_edit_drift_allows_three_focused_greps_after_focused_test(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 💻 $ cd /home/zoe/.worktrees/t_impl && PYTHONPATH=services/zoe-data "
+        "python3 -m pytest -q services/zoe-data/tests/test_main_multica_poll.py::"
+        "test_record_blocked_multica_chain_creates_iteration_budget_followup  3.3s\n"
+        "  ┊ 📖 read /home/zoe/.worktrees/t_impl/services/zoe-data/tests/test_main_multica_poll.py  0.1s\n"
+        "  ┊ 🔎 grep test_record_blocked_multica_chain_creates_iteration_budget_followup  0.1s\n"
+        "  ┊ 📖 read /home/zoe/.worktrees/t_impl/services/zoe-data/tests/test_main_multica_poll.py  0.1s\n"
+        "  ┊ 🔎 grep _record_blocked_multica_chain  0.0s\n"
+        "  ┊ 📖 read /home/zoe/.worktrees/t_impl/services/zoe-data/main.py  0.1s\n"
+        "  ┊ 🔎 grep _ensure_blocker_followup_ticket  0.0s\n",
         encoding="utf-8",
     )
 
@@ -2670,7 +2700,8 @@ def test_implement_pre_edit_drift_blocks_excess_harness_followup_focused_test_gr
         "test_implement_body_includes_harness_blocker_followup_focused_tests  0.9s\n"
         "  ┊ 🔎 grep      _ensure_blocker_followup_ticket  0.1s\n"
         "  ┊ 🔎 grep      IMPLEMENT_HANDOFF_DRIFT  0.1s\n"
-        "  ┊ 🔎 grep      ALREADY_COVERED  0.1s\n",
+        "  ┊ 🔎 grep      ALREADY_COVERED  0.1s\n"
+        "  ┊ 🔎 grep      FINAL_SYMBOL  0.1s\n",
         encoding="utf-8",
     )
 
@@ -3052,7 +3083,8 @@ def test_phase_budget_reason_passes_harness_followup_body_to_pre_edit_guard(
         "  ┊ 📖 read      /work/services/zoe-data/executors/kanban_adapter.py  0.1s\n"
         "  ┊ 🔎 grep      ITERATION_BUDGET  0.1s\n"
         "  ┊ 🔎 grep      _ensure_blocker_followup_ticket  0.1s\n"
-        "  ┊ 🔎 grep      another_symbol  0.1s\n",
+        "  ┊ 🔎 grep      another_symbol  0.1s\n"
+        "  ┊ 🔎 grep      final_symbol  0.1s\n",
         encoding="utf-8",
     )
 
@@ -4788,7 +4820,7 @@ def test_implement_body_includes_harness_repo_map_for_blocker_followup_source():
     assert "do not create `.venv`, run `pip install`" in body
     assert "BLOCKER=TEST_ENVIRONMENT" in body
     assert "If the focused test passes before any edit, do not inspect more blocker code" in body
-    assert "use at most two symbol greps total, up to four reads of the focused test file, and two reads per other named file" in body
+    assert "use at most three symbol greps total, up to four reads of the focused test file, and two reads per other named file" in body
     assert "edit the named harness file already in scope" in body
     assert "services/zoe-data/main.py" in body
     assert "services/zoe-data/executors/kanban_adapter.py" in body
@@ -4839,7 +4871,7 @@ def test_implement_body_includes_harness_blocker_followup_focused_tests(
     assert expected_test in body
     assert "Use the existing repo/runtime environment only" in body
     assert "If the focused test passes before any edit, do not inspect more blocker code" in body
-    assert "use at most two symbol greps total, up to four reads of the focused test file, and two reads per other named file" in body
+    assert "use at most three symbol greps total, up to four reads of the focused test file, and two reads per other named file" in body
     assert "edit the named harness file already in scope" in body
     assert "services/zoe-data/main.py" in body
     assert "services/zoe-data/executors/kanban_adapter.py" in body
