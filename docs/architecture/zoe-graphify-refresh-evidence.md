@@ -6,6 +6,35 @@ This note records Graphify refresh evidence after Zoe harness foundation PRs so
 the generated graph outputs have human-readable evidence attached to refresh
 pull requests.
 
+## Local/Offline Probe Lane
+
+Zoe now has an observe-only local Graphify probe:
+
+```bash
+python3 scripts/maintenance/graphify_local_probe.py --mode smoke --timeout-sec 60 --status-json /tmp/zoe-graphify-local-smoke-status.json
+python3 scripts/maintenance/graphify_local_probe.py --mode repo --timeout-sec 1800 --status-json /tmp/zoe-graphify-local-repo-status.json
+```
+
+The probe uses Graphify's `ollama` backend against Zoe's localhost llama.cpp
+OpenAI-compatible endpoint, removes cloud API keys from the subprocess
+environment, and runs in a temporary fixture or detached git snapshot. It never
+syncs generated `graphify-out` artifacts back into the repo.
+
+Acceptance is fail-closed. The status JSON is rejected when Graphify times out,
+exits nonzero, omits `graphify-out/graph.json`, writes an empty graph, emits
+invalid JSON chunks, emits truncated chunks, or surfaces cloud quota errors.
+Context splits are recorded as warnings because they may recover, but they remain
+important evidence for tuning local chunk budgets.
+
+Current evidence:
+
+- Smoke mode against `gemma-4-E2B-it-Q4_K_M.gguf` on `http://127.0.0.1:11434/v1`
+  accepted a one-file fixture with 2 nodes and 1 edge.
+- Full-repo local extraction after `015a529` reached AST extraction for 601 code
+  files and 257 docs, then was stopped after repeated context splitting and
+  three invalid JSON chunks. That run was not accepted and no partial graph was
+  committed.
+
 ## Refresh 2026-06-09 Foundation Pass
 
 Date: 2026-06-09
