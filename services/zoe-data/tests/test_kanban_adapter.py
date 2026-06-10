@@ -2035,7 +2035,7 @@ async def test_poll_v4_todo_existing_phase_clears_stale_prior_blocker():
 
 
 @pytest.mark.asyncio
-async def test_poll_v4_audit_protocol_recovery_reports_partial_for_next_phase():
+async def test_poll_v4_blank_audit_protocol_violation_blocks():
     from pipeline_store import bootstrap_state
 
     await bootstrap_state(
@@ -2060,10 +2060,11 @@ async def test_poll_v4_audit_protocol_recovery_reports_partial_for_next_phase():
     a = _FakeAdapter(list_rows=rows, show_map=show)
     out = await a.poll("multica:uuid-9")
 
-    assert out["status"] == "partial"
-    assert out["blocker"] is None
-    assert out["pipeline"]["phase"] == "verify"
-    assert out["pipeline"]["status"] == "todo"
+    assert out["status"] == "blocked"
+    assert out["blocker"] == "PROTOCOL_VIOLATION"
+    assert out["pipeline"]["phase"] == "implement"
+    assert out["pipeline"]["status"] == "blocked"
+    assert out["pipeline"]["terminal_block"] is True
 
 
 @pytest.mark.asyncio
@@ -2174,6 +2175,61 @@ def test_phase_budget_reason_recovers_hermes_iteration_budget_log(tmp_path, monk
         "BLOCKER=ITERATION_BUDGET: Hermes iteration budget reached during implement "
         "(steps=22, limit=22)"
     )
+
+
+def test_textual_blocker_reason_recovers_plain_text_blocker_log(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "I will block and request clarification.\n"
+        "<channel|>BLOCKER=context: I need the exact harness file to change.\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.textual_blocker_reason_from_log("t_impl")
+
+    assert reason == "BLOCKER=CONTEXT_MISSING: I need the exact harness file to change."
+
+
+def test_textual_blocker_reason_recovers_wrapped_blocker_log(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "     <channel|>BLOCKER=context: I have reviewed the\n"
+        "     named adapter file, but need the concrete harness location.\n"
+        " ────────────────────────────────────────────────────────────────────────────── \n"
+        "Resume this session with:\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.textual_blocker_reason_from_log("t_impl")
+
+    assert reason == (
+        "BLOCKER=CONTEXT_MISSING: I have reviewed the named adapter file, "
+        "but need the concrete harness location."
+    )
+
+
+def test_with_recovered_log_budget_adds_textual_blocker(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "BLOCKER=IMPLEMENT_CONTEXT: named file was not enough to edit safely\n",
+        encoding="utf-8",
+    )
+
+    detail = ka._with_recovered_log_budget("t_impl", "implement", {"latest_summary": ""})
+
+    assert detail["latest_summary"] == (
+        "BLOCKER=IMPLEMENT_CONTEXT: named file was not enough to edit safely"
+    )
+    assert "BLOCKER=IMPLEMENT_CONTEXT" in detail["log_tail"]
 
 
 def test_implement_edit_safety_allows_bounded_patched_file_read_before_check(tmp_path, monkeypatch):
@@ -4892,6 +4948,11 @@ def test_implement_body_includes_harness_repo_map_for_harness_tickets():
     )
 
     assert "HARNESS FAST PATH" in body
+    assert "All paths in this repo map are relative to the task `workspace_path`" in body
+    assert "do not use the live checkout" in body
+    assert "Working root for this phase: exact task workspace_path from kanban_show" in body
+    assert "Live checkout path intentionally omitted" in body
+    assert "/home/zoe/assistant" not in body
     assert "services/zoe-data/executors/kanban_adapter.py" in body
     assert "services/zoe-data/worktree_bootstrap.py" in body
     assert "For worktree-missing/retro fallback tickets" in body
@@ -4899,7 +4960,7 @@ def test_implement_body_includes_harness_repo_map_for_harness_tickets():
     assert body.index("HARNESS FAST PATH") < body.index("Graphify map")
 
 
-def test_implement_body_includes_harness_repo_map_for_blocker_followup_source():
+def test_implement_body_uses_narrow_contract_for_blocker_followup_source():
     body = ka.KanbanAdapter()._build_body(
         "implement",
         {
@@ -4915,24 +4976,28 @@ def test_implement_body_includes_harness_repo_map_for_blocker_followup_source():
         "ZOE-5454",
     )
 
-    assert "HARNESS FAST PATH" in body
-    assert "services/zoe-data/executors/kanban_adapter.py" in body
-    assert "services/zoe-data/worktree_bootstrap.py" in body
-    assert "engineering_blocker_followup tickets" in body
+    assert "HARNESS FOLLOW-UP FAST PATH" in body
+    assert "All paths below are relative to the task `workspace_path`" in body
+    assert "do not use the live checkout" in body
+    assert "/home/zoe/assistant" not in body
+    assert "Start only from these files" in body
+    assert "services/zoe-data/executors/kanban_adapter.py" not in body
+    assert "services/zoe-data/worktree_bootstrap.py" not in body
     assert "services/zoe-data/main.py" in body
     assert "services/zoe-data/tests/test_main_multica_poll.py" in body
+    assert "Do not read the broad harness map" in body
     assert (
-        "PYTHONPATH=services/zoe-data python3 -m pytest -q "
-        "services/zoe-data/tests/test_main_multica_poll.py::"
-        "test_record_blocked_multica_chain_creates_iteration_budget_followup"
+        "python3 scripts/maintenance/r ITERATION_BUDGET"
     ) in body
+    assert "That helper runs `services/zoe-data/tests/test_main_multica_poll.py::test_record_blocked_multica_chain_creates_iteration_budget_followup`" in body
+    assert "do not copy the long pytest node id yourself" in body
     assert "do not create `.venv`, run `pip install`" in body
     assert "BLOCKER=TEST_ENVIRONMENT" in body
     assert "If the focused test passes before any edit, do not inspect more blocker code" in body
     assert "use at most three symbol greps total, up to four reads of the focused test file, and two reads per other named file" in body
-    assert "edit the named harness file already in scope" in body
+    assert "then edit services/zoe-data/main.py or services/zoe-data/tests/test_main_multica_poll.py" in body
     assert "services/zoe-data/main.py" in body
-    assert "services/zoe-data/executors/kanban_adapter.py" in body
+    assert "services/zoe-data/executors/kanban_adapter.py" not in body
     assert "BLOCKER=ALREADY_COVERED" in body
 
 
@@ -4976,14 +5041,15 @@ def test_implement_body_includes_harness_blocker_followup_focused_tests(
         "ZOE-5454",
     )
 
-    assert "engineering_blocker_followup tickets" in body
+    assert "HARNESS FOLLOW-UP FAST PATH" in body
     assert expected_test in body
+    assert f"python3 scripts/maintenance/r {source_blocker or 'UNKNOWN'}" in body
     assert "Use the existing repo/runtime environment only" in body
     assert "If the focused test passes before any edit, do not inspect more blocker code" in body
     assert "use at most three symbol greps total, up to four reads of the focused test file, and two reads per other named file" in body
-    assert "edit the named harness file already in scope" in body
+    assert "then edit services/zoe-data/main.py or services/zoe-data/tests/test_main_multica_poll.py" in body
     assert "services/zoe-data/main.py" in body
-    assert "services/zoe-data/executors/kanban_adapter.py" in body
+    assert "services/zoe-data/executors/kanban_adapter.py" not in body
     assert "BLOCKER=ALREADY_COVERED" in body
 
 
@@ -5137,7 +5203,7 @@ def test_implement_body_includes_intent_gap_fast_path():
     assert "Open-domain Q&A / creative" in body
     assert "do not grep `_CALCULATE_`, `_execute_`" in body
     assert "`Tell me a joke.`, `Tell me a joke`, and `Tell me another joke.`" in body
-    assert "python3 scripts/maintenance/zoe_apply_intent_gap_contract.py joke" in body
+    assert "/home/zoe/bin/zoe_apply_intent_gap_contract joke --repo-root ." in body
     assert "python3 -m py_compile services/zoe-data/intent_router.py" in body
     assert "services/zoe-data/tests/test_intent_open_domain.py" in body
     assert "Intent(\"extend_capability\", {\"raw\": <original text>})" in body
@@ -5163,6 +5229,32 @@ def test_implement_body_does_not_add_joke_contract_for_other_intent_gaps():
     assert "`Tell me a joke.`, `Tell me a joke`, and `Tell me another joke.`" not in body
 
 
+def test_implement_body_includes_bare_say_exactly_intent_gap_contract():
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {
+            "id": "uuid-intent-exact-bare",
+            "identifier": "ZOE-5682",
+            "title": "Intent gap: say exactly",
+            "description": (
+                "Representative: say exactly. Acceptance: Say exactly: "
+                "Zoe chat integration ok routes to open-domain. Evidence points at "
+                "services/zoe-data/evolution_notice.py:run_evolution_notice."
+            ),
+        },
+        "ZOE-5682",
+    )
+
+    assert "INTENT-GAP IMPLEMENT FAST PATH" in body
+    assert "Concrete edit contract for this exact-repeat gap" in body
+    assert "your NEXT tool call must be the terminal command" in body
+    assert "/home/zoe/bin/zoe_apply_intent_gap_contract say_exactly --repo-root ." in body
+    assert "BLOCKER=INTENT_GAP_HELPER_UNAVAILABLE" in body
+    assert body.index("your NEXT tool call must be the terminal command") < body.index(
+        "services/zoe-data/evolution_notice.py"
+    )
+
+
 def test_implement_body_includes_say_exactly_intent_gap_contract():
     body = ka.KanbanAdapter()._build_body(
         "implement",
@@ -5178,8 +5270,9 @@ def test_implement_body_includes_say_exactly_intent_gap_contract():
     assert "INTENT-GAP IMPLEMENT FAST PATH" in body
     assert "Concrete edit contract for this exact-repeat gap" in body
     assert "Say exactly: Zoe chat integration ok" in body
-    assert "python3 scripts/maintenance/zoe_apply_intent_gap_contract.py say_exactly" in body
-    assert "run this from the task `workspace_path`, never from `/home/zoe/assistant`" in body
+    assert "/home/zoe/bin/zoe_apply_intent_gap_contract say_exactly --repo-root ." in body
+    assert "your NEXT tool call must be the terminal command" in body
+    assert "Never run this from the live" in body
     assert "to the agent path while preserving the raw phrase" in body
     assert "Do not add a bespoke" in body
 
@@ -5198,7 +5291,7 @@ def test_implement_body_does_not_add_say_exactly_contract_for_description_aside(
 
     assert "INTENT-GAP IMPLEMENT FAST PATH" in body
     assert "Concrete edit contract for this exact-repeat gap" not in body
-    assert "zoe_apply_intent_gap_contract.py say_exactly" not in body
+    assert "zoe_apply_intent_gap_contract say_exactly" not in body
 
 
 def test_implement_revision_body_includes_intent_gap_fast_path():
@@ -5219,7 +5312,7 @@ def test_implement_revision_body_includes_intent_gap_fast_path():
     assert "Open-domain Q&A / creative" in body
     assert "do not grep `_CALCULATE_`, `_execute_`" in body
     assert "`Tell me a joke.`, `Tell me a joke`, and `Tell me another joke.`" in body
-    assert "python3 scripts/maintenance/zoe_apply_intent_gap_contract.py joke" in body
+    assert "/home/zoe/bin/zoe_apply_intent_gap_contract joke --repo-root ." in body
     assert "python3 -m py_compile services/zoe-data/intent_router.py" in body
     assert "services/zoe-data/tests/test_intent_open_domain.py" in body
     assert "Intent(\"extend_capability\", {\"raw\": <original text>})" in body

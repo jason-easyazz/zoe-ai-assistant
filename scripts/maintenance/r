@@ -1,0 +1,15 @@
+#!/usr/bin/env python3
+"""Short alias for run_harness_followup_test.py.
+
+Hermes local models sometimes truncate long script paths in tool calls. Keep
+this tiny wrapper stable so python3 scripts/maintenance/r still runs the
+safe focused harness follow-up test.
+"""
+
+from __future__ import annotations
+
+import run_harness_followup_test
+
+
+if __name__ == "__main__":
+    raise SystemExit(run_harness_followup_test.main())

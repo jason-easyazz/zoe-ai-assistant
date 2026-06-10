@@ -38,6 +38,10 @@ _ITERATION_BUDGET_RE = re.compile(
     r"Iteration budget reached\s*\((?P<used>\d+)\s*/\s*(?P<limit>\d+)\)",
     re.IGNORECASE,
 )
+_TEXT_BLOCKER_RE = re.compile(
+    r"(?:<channel\|>)?\s*BLOCKER\s*(?:=|:)\s*(?P<reason>[^\n\r]+)",
+    re.IGNORECASE,
+)
 _PYTHON_PATCH_RE = re.compile(r"^\s*(?:┊|\|)\s+\S+\s+patch\s+.*\.py\b")
 _PYTHON_CHECK_RE = re.compile(
     r"^\s*(?:┊|\|)\s+\S+\s+\$\s+.*\b(py_compile|pytest|mypy|ruff|validate_structure|validate_critical_files)\b",
@@ -220,6 +224,47 @@ def phase_budget_reason_from_log(task_id: str, phase: str) -> str | None:
         f"BLOCKER=ITERATION_BUDGET: Hermes iteration budget reached during {phase} "
         f"(steps={match.group('used')}, limit={match.group('limit')})"
     )
+
+
+def textual_blocker_reason_from_log(task_id: str) -> str | None:
+    """Recover a plain-text blocker when Hermes forgot to call kanban_block.
+
+    Local models sometimes end with text such as ``BLOCKER=context: ...`` instead
+    of invoking the Kanban tool. Preserve that operator-visible reason so Zoe
+    does not collapse it into a generic PROTOCOL_VIOLATION.
+    """
+    tail = _latest_log_session(task_id, max_lines=120)
+    if not tail:
+        return None
+    lines = tail.splitlines()
+    match_index: int | None = None
+    match: re.Match[str] | None = None
+    for index, line in enumerate(lines):
+        found = _TEXT_BLOCKER_RE.search(line)
+        if found:
+            match_index = index
+            match = found
+    if match is None or match_index is None:
+        return None
+    parts = [match.group("reason").strip()]
+    for line in lines[match_index + 1 : match_index + 7]:
+        stripped = line.strip()
+        if (
+            not stripped
+            or stripped.startswith(("─", "Resume this session", "hermes --resume", "Session:", "Duration:", "Messages:"))
+            or _STEP_LINE_RE.match(line)
+        ):
+            break
+        parts.append(stripped)
+    raw = " ".join(parts).strip().strip("` ")
+    if not raw:
+        return None
+    lowered = raw.lower()
+    if lowered.startswith("context:"):
+        raw = f"CONTEXT_MISSING:{raw.split(':', 1)[1]}"
+    elif lowered == "context":
+        raw = "CONTEXT_MISSING: worker reported missing implementation context"
+    return raw if raw.upper().startswith("BLOCKER=") else f"BLOCKER={raw}"
 
 
 def implement_edit_safety_reason_from_log(task_id: str, phase: str, *, session: str | None = None) -> str | None:

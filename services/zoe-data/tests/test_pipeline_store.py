@@ -961,7 +961,7 @@ async def test_sync_pipeline_recovers_audit_protocol_only_block(isolated_store):
 
     async def fetch_detail(_task_id: str):
         return {
-            "latest_summary": "",
+            "latest_summary": "AUDIT_ONLY=1\nTOOLS_USED=audit-read\nTESTS=not applicable/audit-only\nSUMMARY=observed no code change needed",
             "comments": [],
             "events": [{"kind": "protocol_violation", "payload": {"exit_code": 0}}],
             "runs": [
@@ -984,6 +984,38 @@ async def test_sync_pipeline_recovers_audit_protocol_only_block(isolated_store):
     )
     assert "audit_protocol_recovered" in isolated_store.read_text(encoding="utf-8")
 
+
+
+@pytest.mark.asyncio
+async def test_sync_pipeline_blocks_blank_audit_protocol_violation(isolated_store):
+    await store.bootstrap_state(
+        "multica:audit-blank-protocol",
+        issue={"description": "evidence_profile: audit"},
+    )
+
+    async def fetch_detail(_task_id: str):
+        return {
+            "latest_summary": "",
+            "comments": [],
+            "events": [{"kind": "protocol_violation", "payload": {"exit_code": 0}}],
+            "runs": [
+                {
+                    "status": "crashed",
+                    "outcome": "crashed",
+                    "error": "worker exited cleanly without calling kanban_complete",
+                }
+            ],
+        }
+
+    phases = {"implement": {"id": "t1", "status": "blocked", "block_reason": "implement blocked"}}
+    state = await store.sync_pipeline_from_chain("multica:audit-blank-protocol", phases, fetch_detail)
+    summary = store.pipeline_summary(state)
+
+    assert state.phase == "implement"
+    assert state.status == "blocked"
+    assert summary["terminal_block"] is True
+    assert summary["block_reason"] == "PROTOCOL_VIOLATION"
+    assert "audit_protocol_recovered" not in isolated_store.read_text(encoding="utf-8")
 
 
 
@@ -1014,6 +1046,39 @@ async def test_sync_pipeline_does_not_recover_mixed_protocol_and_real_block(isol
     assert state.phase == "implement"
     assert state.status == "blocked"
     assert "audit_protocol_recovered" not in isolated_store.read_text(encoding="utf-8")
+
+
+
+
+@pytest.mark.asyncio
+async def test_sync_pipeline_terminal_provider_failure_blocks_instead_of_advancing(isolated_store):
+    await store.bootstrap_state(
+        "multica:provider-failure",
+        start_phase="review",
+        issue={"description": "evidence_profile: audit"},
+    )
+
+    async def fetch_detail(_task_id: str):
+        return {
+            "latest_summary": "",
+            "comments": [],
+            "runs": [
+                {
+                    "status": "crashed",
+                    "outcome": "crashed",
+                    "error": "HTTP 402: Prompt tokens limit exceeded: 14799 > 6462",
+                }
+            ],
+        }
+
+    phases = {"review": {"id": "t_review", "status": "done"}}
+    state = await store.sync_pipeline_from_chain("multica:provider-failure", phases, fetch_detail)
+
+    assert state.phase == "review"
+    assert state.status == "blocked"
+    assert state.block_classification is None
+    assert state.last_block_fingerprint
+    assert state.history[-1].reason == "HTTP_402"
 
 
 @pytest.mark.asyncio

@@ -180,13 +180,17 @@ def step_a_update_workspace():
     payload = {
         "context": (
             "Zoe is a self-hosted AI assistant running on a Jetson Orin NX 16GB. "
-            "She is conversational, proactive, and self-improving. This workspace tracks "
-            "everything: her capabilities, her agents, her scheduled behaviours, and her "
-            "evolution. Every intent gap she cannot answer becomes a backlog issue. "
-            "Every improvement she deploys is measured here. This is how Zoe grows."
+            "She is conversational, proactive, and self-improving. This workspace is the "
+            "Multica source of truth for Zoe work: simple-English issue capture, backlog, "
+            "ticket metadata, blockers, evidence, PR links, and scheduled improvements. "
+            "The codebase is https://github.com/jason-easyazz/zoe-ai-assistant. "
+            "Hermes owns engineering execution through Zoe's deterministic harness, one "
+            "approved ticket at a time. OpenClaw is available for browser/tool-heavy "
+            "execution when explicitly assigned. Every intent gap she cannot answer becomes "
+            "a backlog issue, and every improvement she deploys is measured here."
         ),
         "description": (
-            "Operational mirror of the Zoe AI system — agents, skills, evolution, and capability growth"
+            "Operational mirror of Zoe: Multica tickets, agents, skills, evidence, and evolution"
         ),
     }
     result = _patch(f"/api/workspaces/{WORKSPACE_ID}", payload)
@@ -219,6 +223,17 @@ _LABELS = [
     ("feature", "#059669"),
     ("infrastructure", "#374151"),
     ("self-improvement", "#6D28D9"),
+    # Zoe engineering harness labels
+    ("needs-split", "#B45309"),
+    ("blocked-external", "#991B1B"),
+    ("in-review", "#2563EB"),
+    ("greptile", "#0F766E"),
+    ("ci-failed", "#DC2626"),
+    ("audit-only", "#64748B"),
+    ("user-feedback", "#EA580C"),
+    ("harness-fix", "#7C3AED"),
+    ("operator-task", "#334155"),
+    ("autoresearch", "#14B8A6"),
 ]
 
 
@@ -268,6 +283,8 @@ _PROJECTS = [
      "Evolution proposals, capability extension, self-improvement skill, NOTICE/PROPOSE/EXECUTE/MEASURE loop"),
     ("Infrastructure & Platform", "in_progress",
      "Auth, nginx, PostgreSQL, Docker services, OIDC provider, security"),
+    ("Autoresearch Lab", "planned",
+     "Karpathy-style fixed-budget asset optimization runs: one locked program, one editable asset, one objective score"),
     ("Agent Orchestration", "in_progress",
      "OpenClaw, Hermes, Agent Zero, A2A federation, task routing, board status"),
     ("Voice & Presence", "in_progress",
@@ -386,6 +403,7 @@ _SKILL_DEFS = [
     ("skills/shopping-list/SKILL.md", "Shopping List"),
     ("skills/smart-home/SKILL.md", "Smart Home"),
     ("skills/openclaw/zoe-capability-extender/SKILL.md", "Zoe Capability Extender"),
+    ("skills/autoresearch-engineer/SKILL.md", "Auto Research Engineer"),
     ("skills/openclaw/zoe-page-builder/SKILL.md", "Zoe Page Builder"),
     ("skills/openclaw/zoe-widget-builder/SKILL.md", "Zoe Widget Builder"),
 ]
@@ -453,19 +471,18 @@ _AGENT_DEFS = [
     {
         "name": "OpenClaw",
         "description": (
-            "Agentic execution runtime. Handles browser automation, code execution, and skill "
-            "building. In Multica issue capture, route simple-English ticket creation through "
-            "the Hermes runtime until OpenClaw's Codex-backed harness has non-rate-limited capacity."
+            "Agentic execution runtime. Handles browser automation, code execution, skill "
+            "building, and simple-English Multica issue execution when explicitly assigned."
         ),
         "instructions": (
-            "You are OpenClaw, Zoe's native agentic execution runtime. For Multica simple-English "
-            "issue capture, use the Hermes runtime path so ticket creation remains reliable and cost-controlled; "
-            "run browser/tool tasks only when explicitly assigned, and report blockers clearly. "
-            "Do not decide Zoe engineering phase advancement; Zoe/Hermes harness owns that workflow."
+            "You are OpenClaw, Zoe's native agentic execution runtime. Use the issue context, "
+            "available Multica CLI, staged skills, and Zoe MCP tools to complete explicitly "
+            "assigned Multica tickets. Keep work scoped, use comments/status updates for "
+            "evidence or blockers, and do not decide Zoe engineering phase advancement; "
+            "Zoe/Hermes harness owns that workflow."
         ),
-        "model": "gpt-5.4",
-        "fallback_model": "main",
-        "runtime_provider": "hermes",
+        "model": "main",
+        "runtime_provider": "openclaw",
     },
     {
         "name": "Hermes",
@@ -501,6 +518,28 @@ _AGENT_DEFS = [
         "runtime_provider": "zoe",
     },
     {
+        "name": "Auto Research Engineer",
+        "description": (
+            "Karpathy-style autonomous optimizer for approved assets. It turns one business "
+            "question into one objective metric, changes only the declared asset, scores via "
+            "the locked evaluator, keeps improvements, reverts losses, and logs each round."
+        ),
+        "instructions": (
+            "You are Zoe's Auto Research Engineer. Before any run, perform the fit check: "
+            "the target must have one objective numeric score, feedback in minutes or hours, "
+            "and approved write access to exactly the asset files. Create or verify the three-file "
+            "setup: a human-owned instructions/program file, one or more agent-editable asset files, "
+            "and a locked scoring file. During a run, follow the Karpathy autoresearch loop: establish "
+            "baseline, make one hypothesis and one asset change, run the scorer, keep only better "
+            "results, revert worse or crashed changes, and append every round to an untracked results "
+            "log. Never edit the instructions/program file, scoring file, evaluators, dependencies, "
+            "or undeclared assets. Zoe/Hermes approval gates and branch/PR processes still apply."
+        ),
+        "model": "gpt-5.4",
+        "fallback_model": "main",
+        "runtime_provider": "hermes",
+    },
+    {
         "name": "Self-Improvement Agent",
         "description": (
             "Specialised agent for the evolution loop. Reviews evolution proposals, implements "
@@ -526,7 +565,7 @@ def _runtime_ids_by_provider(default_runtime_id: str) -> dict[str, str]:
         "select provider, id from agent_runtime "
         f"where workspace_id={_sql_literal(WORKSPACE_ID)} "
         "and status='online' "
-        "and provider in ('hermes') "
+        "and provider in ('hermes', 'openclaw') "
         "order by provider, daemon_id is null, updated_at desc;"
     )
     cmd = [
@@ -619,9 +658,10 @@ _SKILL_ASSIGNMENTS: dict[str, list[str]] = {
     "Zoe Core": ["Calendar Events", "Personal Facts", "Shopping List", "Smart Home",
                  "Proactive Agent", "Self-Improvement"],
     "OpenClaw": ["Zoe Capability Extender", "Zoe Page Builder", "Zoe Widget Builder"],
-    "Hermes": [],
+    "Hermes": ["Auto Research Engineer"],
     "Agent Zero": ["Agent Zero Research"],
     "Self-Improvement Agent": ["Self-Improvement", "Zoe Capability Extender"],
+    "Auto Research Engineer": ["Auto Research Engineer"],
 }
 
 
@@ -697,7 +737,20 @@ def step_h_create_squads(agent_ids: dict[str, str]) -> dict[str, str]:
                 "Handle deep research, competitive analysis, and strategic planning tasks. "
                 "Agent Zero leads investigation. Zoe Core frames questions from user intent."
             ),
-            "members": ["Zoe Core"],
+            "members": ["Zoe Core", "Auto Research Engineer"],
+        },
+        {
+            "name": "Autoresearch Lab",
+            "leader": "Auto Research Engineer",
+            "description": (
+                "Bounded asset optimization squad for approved Karpathy-style autoresearch runs."
+            ),
+            "instructions": (
+                "Run only after a fit check passes and the human has approved the exact asset and "
+                "scoring file. Keep the evaluator locked, change only declared assets, record every "
+                "round, and preserve Zoe's branch, evidence, and rollback rules."
+            ),
+            "members": ["Hermes", "Self-Improvement Agent"],
         },
     ]
 

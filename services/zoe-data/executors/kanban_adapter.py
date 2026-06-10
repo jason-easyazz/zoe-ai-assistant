@@ -34,6 +34,7 @@ from kanban_phase_budget import (
     phase_budget_reason,
     phase_budget_reason_from_log,
     task_log_tail,
+    textual_blocker_reason_from_log,
     terminate_running_workers,
 )
 
@@ -376,27 +377,34 @@ def _harness_implement_hint(issue: dict | None = None) -> str:
             )
         else:
             focused_test = "services/zoe-data/tests/test_main_multica_poll.py"
-        blocker_followup_hint = (
-            "  For engineering_blocker_followup tickets, inspect only"
-            " services/zoe-data/main.py and services/zoe-data/tests/test_main_multica_poll.py"
-            f" first. Run focused test: `PYTHONPATH=services/zoe-data python3 -m pytest -q {focused_test}`."
+        helper_blocker = blocker or "UNKNOWN"
+        return (
+            "- HARNESS FOLLOW-UP FAST PATH: this is an engineering_blocker_followup ticket."
+            " All paths below are relative to the task `workspace_path`; do not use the live checkout.\n"
+            " Start only from these files:\n"
+            "  * blocker follow-up logic: services/zoe-data/main.py\n"
+            "  * focused tests: services/zoe-data/tests/test_main_multica_poll.py\n"
+            f" Run focused test first with this exact short command: `python3 scripts/maintenance/r {helper_blocker}`."
+            f" That helper runs `{focused_test}`; do not copy the long pytest node id yourself."
+            " Do not read the broad harness map, kanban_adapter.py, pipeline_store.py, or Hermes internals"
+            " unless that focused test failure names them."
             " Use the existing repo/runtime environment only: do not create `.venv`, run `pip install`,"
             " or install missing Python packages from inside a worker. If that exact command reports"
             " a missing dependency/import that is not fixed by `PYTHONPATH=services/zoe-data`, call"
             " `kanban_block` with BLOCKER=TEST_ENVIRONMENT and the first import error instead of"
             " spending turns on environment repair."
             " If the focused test passes before any edit, do not inspect more blocker code:"
-            " use at most three symbol greps total, up to four reads of the focused test file, and two reads per other named file, then edit the"
-            " named harness file already in scope (usually services/zoe-data/main.py,"
-            " services/zoe-data/tests/test_main_multica_poll.py, or"
-            " services/zoe-data/executors/kanban_adapter.py) with the smallest guard, or call `kanban_block` with"
-            " BLOCKER=ALREADY_COVERED and the passing test output. Do not rework blocker"
-            " creation after a passing focused test.\n"
+            " use at most three symbol greps total, up to four reads of the focused test file, and two reads per other named file,"
+            " then edit services/zoe-data/main.py or services/zoe-data/tests/test_main_multica_poll.py"
+            " with the smallest guard, or call `kanban_block` with BLOCKER=ALREADY_COVERED and the passing test output."
+            " Do not rework blocker creation after a passing focused test.\n"
         )
     return (
         "- HARNESS FAST PATH: this is a Zoe/Hermes harness ticket. Do not spend budget"
         " searching ~/.local, Hermes internals, or broad worktree inventories unless a named file"
-        " explicitly requires it. Start from this repo map:\n"
+        " explicitly requires it. All paths in this repo map are relative to the task"
+        " `workspace_path`; do not use the live checkout.\n"
+        " Start from this repo map:\n"
         "  * phase prompt/dispatch/task creation: services/zoe-data/executors/kanban_adapter.py\n"
         "  * task worktree creation and workspace_path pinning: services/zoe-data/worktree_bootstrap.py\n"
         "  * phase handoff/evidence parsing: services/zoe-data/pipeline_handoff.py\n"
@@ -430,14 +438,22 @@ def _intent_gap_implement_hint(issue: dict | None = None, *, phase: str = "imple
         else " After the existing-PR checkout checks succeed, start the focused revision edit within 4 tool/model steps.\n"
     )
     say_exactly_contract = ""
-    if _SAY_EXACTLY_INTENT_GAP_TITLE_RE.search(title):
+    if (
+        _SAY_EXACTLY_INTENT_GAP_TITLE_RE.search(title)
+        or "say exactly: zoe chat integration ok" in haystack
+        or ("intent gap" in title.lower() and "say exactly" in title.lower())
+    ):
         say_exactly_contract = (
             " Concrete edit contract for this exact-repeat gap: update `_AGENT_CHAT_RE` so"
             " `Say exactly: Zoe chat integration ok` routes to `extend_capability` through"
             " the existing open-domain branch. Preferred deterministic path: after `kanban_show`,"
-            " run this from the task `workspace_path`, never from `/home/zoe/assistant`:"
-            " `python3 scripts/maintenance/zoe_apply_intent_gap_contract.py say_exactly`,"
-            " then immediately run `python3 -m py_compile services/zoe-data/intent_router.py`"
+            " your NEXT tool call must be the terminal command"
+            " `/home/zoe/bin/zoe_apply_intent_gap_contract say_exactly --repo-root .`"
+            " from the task `workspace_path`. Do not narrate, wait, plan, or heartbeat first."
+            " If you cannot run that exact helper as the next tool call, call `kanban_block`"
+            " with BLOCKER=INTENT_GAP_HELPER_UNAVAILABLE. Never run this from the live"
+            " checkout. After the helper, immediately run"
+            " `python3 -m py_compile services/zoe-data/intent_router.py`"
             " and `PYTHONPATH=services/zoe-data python3 -m pytest -q"
             " services/zoe-data/tests/test_intent_open_domain.py`. Do not add a bespoke"
             " say/echo executor in this ticket; the acceptance goal is routing the request"
@@ -450,7 +466,7 @@ def _intent_gap_implement_hint(issue: dict | None = None, *, phase: str = "imple
             " `Tell me a joke.`, `Tell me a joke`, and `Tell me another joke.` route"
             " to `extend_capability` through the existing open-domain/creative branch."
             " Preferred deterministic path: from the repo root, run"
-            " `python3 scripts/maintenance/zoe_apply_intent_gap_contract.py joke`, then"
+            " `/home/zoe/bin/zoe_apply_intent_gap_contract joke --repo-root .`, then"
             " immediately run `python3 -m py_compile services/zoe-data/intent_router.py`"
             " and `PYTHONPATH=services/zoe-data python3 -m pytest -q"
             " services/zoe-data/tests/test_intent_open_domain.py`."
@@ -536,19 +552,26 @@ def _protocol_violation_count(detail: dict[str, Any]) -> int:
 
 
 def _with_recovered_log_budget(task_id: str, phase: str, detail: dict[str, Any]) -> dict[str, Any]:
-    """Attach Hermes log evidence when a silent exit was really a budget stop."""
-    reason = phase_budget_reason_from_log(task_id, phase)
-    if not reason:
+    """Attach Hermes log evidence when a silent exit still contains a blocker."""
+    reasons = [
+        reason
+        for reason in (
+            phase_budget_reason_from_log(task_id, phase),
+            textual_blocker_reason_from_log(task_id),
+        )
+        if reason
+    ]
+    if not reasons:
         return detail
     enriched = dict(detail)
     latest = str(enriched.get("latest_summary") or "").strip()
-    enriched["latest_summary"] = f"{latest}\n{reason}".strip() if latest else reason
+    recovered = "\n".join(dict.fromkeys(reasons))
+    enriched["latest_summary"] = f"{latest}\n{recovered}".strip() if latest else recovered
     if not (enriched.get("logs") or enriched.get("log") or enriched.get("log_tail")):
         tail = task_log_tail(task_id)
         if tail:
             enriched["log_tail"] = tail
     return enriched
-
 
 def _expected_phases(phases: dict[str, dict]) -> set[str]:
     present = set(phases)
@@ -686,16 +709,29 @@ class KanbanAdapter:
         escalation = _model_escalation_active(issue, mode)
         escalation_marker = "zoe-model-escalation: true\n" if escalation else ""
         workspace = _workspace_for_phase(phase)
-        workspace_label = "main repo checkout" if workspace.startswith("dir:") else "git worktree"
-        common = (
+        main_checkout = workspace.startswith("dir:")
+        workspace_label = "main repo checkout" if main_checkout else "isolated git worktree"
+        if main_checkout:
+            workspace_header = (
+                f"Repo: {zoe_repo_root()}  |  Base branch: main  |  Workspace: {workspace_label}\n"
+                f"Working root for this phase: {zoe_repo_root()}\n"
+            )
+        else:
+            workspace_header = (
+                "Repository: Zoe assistant  |  Base branch: main  |  Workspace: isolated git worktree\n"
+                "Working root for this phase: exact task workspace_path from kanban_show\n"
+                "Live checkout path intentionally omitted; all file, git, test, and PR commands must use workspace_path.\n"
+            )
+        header = (
             f"Multica issue: {identifier} (id {issue_id})\n"
             f"zoe-ref: multica:{issue_id}:{phase}\n"
             f"zoe-chain: v4\n"
             f"{escalation_marker}"
             f"{mode_note}"
-            f"Repo: {zoe_repo_root()}  |  Base branch: main  |  Workspace: {workspace_label}\n\n"
-            f"Title: {title}\n\n{description}\n\n"
+            f"{workspace_header}\n"
         )
+        issue_context = f"Title: {title}\n\n{description}\n\n"
+        common = header + issue_context
         if phase == "scout":
             return common + (
                 "You are scout (zoe-planner, read-only). Gather context before any code changes.\n"
@@ -739,15 +775,19 @@ class KanbanAdapter:
             intent_gap_hint = _intent_gap_implement_hint(issue, phase=phase)
             # Implement body intentionally omits full prior-phase logs; workers should
             # call kanban_show and read SCOUT_SUMMARY= from scout metadata when present.
-            return common + overnight_hint + (
+            priority_contract = (
                 "You are the implementer (zoe-coder).\n"
                 f"{code_audit_hint}"
-                f"{harness_hint}"
                 f"{intent_gap_hint}"
+                f"{harness_hint}"
+            )
+            return header + overnight_hint + priority_contract + (
+                "\nIssue context follows. Use it only after obeying any mandatory first action above.\n"
+                f"{issue_context}"
                 "- AUDIT/SMOKE FAST PATH: only if the title/body explicitly says audit-only, smoke test,"
                 " no code change, or uses trace/map with an audit/no-code qualifier, do not run Graphify"
                 " or repo exploration first. Complete in one bounded handoff with"
-                " TOOLS_USED=audit-read, PR_URL= blank, AUDIT_ONLY=1, TESTS=not applicable/audit-only,"
+                " TOOLS_USED=audit-read, PR_URL=, AUDIT_ONLY=1, TESTS=not applicable/audit-only,"
                 " and SUMMARY= findings. Do not open a PR.\n"
                 "- Start with `kanban_show` to confirm this task id.\n"
                 "- SCOUT HANDOFF FAST PATH: when `kanban_show` includes SCOUT_SUMMARY with an exact"
@@ -806,8 +846,8 @@ class KanbanAdapter:
                 " exact task `workspace_path` shown by Kanban. File reads must use paths under that"
                 " workspace_path, never absolute live-checkout paths. If it shows the live repo checkout"
                 " instead of the task worktree, call `kanban_block` with BLOCKER=WORKTREE_PATH_VIOLATION"
-                " immediately; do not read from or `cd` into"
-                f" `{zoe_repo_root()}` for git, test, patch, read, or PR commands.\n"
+                " immediately; do not read from or `cd` into the live checkout for git, test,"
+                " patch, read, or PR commands.\n"
                 "- Commit verified changes from the isolated worktree, then publish"
                 " the branch and open ONE small PR (do not merge) with these commands"
                 " unless a phase fast path above explicitly requires a chained ship command:\n"
@@ -837,7 +877,8 @@ class KanbanAdapter:
                 "  Do not call `kanban_block` merely because a human/security reviewer should inspect the PR.\n"
                 "- Failure/stuck: `kanban_block` with a clear reason (prefix BLOCKER= when applicable).\n\n"
                 "Summary text should still include:\n"
-                "PR_URL=<url or blank>\nBLOCKER=<reason or blank>\nTESTS=<checks run>\nSUMMARY=<short>\n"
+                "PR_URL=<actual GitHub PR URL, or empty only for audit-only/no-code>\n"
+                "BLOCKER=<reason or empty>\nTESTS=<checks run>\nSUMMARY=<short>\n"
                 "Changed files + branch/worktree details for the reviewer."
             )
         if phase == "verify":
@@ -848,7 +889,7 @@ class KanbanAdapter:
                 " and no PR_URL, do not load broad skills, hunt for a PR, or explore the repo. Run"
                 " `kanban_show`, compare the implementer handoff to the Multica acceptance criteria,"
                 " then call `kanban_complete` in this turn with TESTS=not applicable/audit evidence,"
-                " VALIDATORS=not applicable/audit-only, PR_URL= blank, and a short pass/fail summary.\n"
+                " VALIDATORS=not applicable/audit-only, PR_URL=, and a short pass/fail summary.\n"
                 "- PR_URL FAST PATH: if `kanban_show` or the ticket block includes PR_URL, do not"
                 " hunt branches or commits. Use `gh pr view <url> --json url,headRefName,headRefOid,"
                 "mergeStateStatus,statusCheckRollup` and inspect the PR diff/checks directly, then"

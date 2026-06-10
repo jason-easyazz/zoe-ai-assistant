@@ -201,6 +201,21 @@ def _tracked_multica_engineering_issues(*groups: list[dict]) -> list[dict]:
     return tracked
 
 
+def _multica_hermes_lane_issues(issues: list[dict], hermes_agent_id: str) -> list[dict]:
+    """Return issues that occupy Zoe's single Hermes engineering lane."""
+    hermes = str(hermes_agent_id or "")
+    lane: list[dict] = []
+    for issue in issues or []:
+        if str(issue.get("assignee_id") or "") != hermes:
+            continue
+        if str(issue.get("assignee_type") or "agent") not in {"", "agent"}:
+            continue
+        if (issue.get("title") or "").lower().startswith("autopilot:"):
+            continue
+        lane.append(issue)
+    return lane
+
+
 def _blocked_multica_chain_reason(chain: dict) -> str:
     """Return the operator-visible reason for a blocked engineering chain."""
     pipeline = chain.get("pipeline") or {}
@@ -617,12 +632,15 @@ async def lifespan(app: FastAPI):
                             _wh_limit = int(os.environ.get("ZOE_MULTICA_POLL_DISPATCH_LIMIT", "1") or "1")
                         except ValueError:
                             _wh_limit = 1
+                        _lane_todos = _multica_hermes_lane_issues(stale_todos or [], _hermes)
+                        _lane_in_progress = _multica_hermes_lane_issues(in_progress_issues or [], _hermes)
+                        _lane_in_review = _multica_hermes_lane_issues(in_review_issues or [], _hermes)
                         if (
                             _wh_limit > 0
                             and os.environ.get("ZOE_MULTICA_AUTO_ADMIT", "false").lower() == "true"
-                            and not stale_todos
-                            and not in_progress_issues
-                            and not in_review_issues
+                            and not _lane_todos
+                            and not _lane_in_progress
+                            and not _lane_in_review
                         ):
                             from multica_admission import select_next_approved_issue
 
@@ -642,6 +660,7 @@ async def lifespan(app: FastAPI):
                                 )
                                 if _admitted.get("id"):
                                     stale_todos.append(_admitted)
+                                    _lane_todos.append(_admitted)
                                     logger.info(
                                         "multica_poll: admitted %s from backlog into the single ticket lane",
                                         _admitted.get("identifier") or _admitted.get("id"),
@@ -655,11 +674,7 @@ async def lifespan(app: FastAPI):
                             return _chain_cache[_tid]
 
                         _running_chains = 0
-                        for _ip_issue in in_progress_issues:
-                            if str(_ip_issue.get("assignee_id") or "") != _hermes:
-                                continue
-                            if (_ip_issue.get("title") or "").lower().startswith("autopilot:"):
-                                continue
+                        for _ip_issue in _lane_in_progress:
                             _ip_tid = str(_ip_issue.get("id") or "")
                             if _ip_tid and chain_is_running(await _poll_chain(_ip_issue)):
                                 _running_chains += 1
@@ -711,7 +726,7 @@ async def lifespan(app: FastAPI):
                         # A partial chain owns the one active ticket lane but still needs this
                         # dispatch path to create its next ready phase.
                         if _wh_dispatched < _wh_limit:
-                            for _ip_issue in in_progress_issues:
+                            for _ip_issue in _lane_in_progress:
                                 if str(_ip_issue.get("id") or "") in _wh_dispatched_ids:
                                     continue
                                 await _maybe_dispatch_hermes_issue(_ip_issue, from_todo=False)
@@ -719,7 +734,7 @@ async def lifespan(app: FastAPI):
                                     break
                         # Reuse the todo list already fetched above for the stale autopilot pass.
                         if _wh_dispatched < _wh_limit:
-                            for _todo in stale_todos or []:
+                            for _todo in _lane_todos:
                                 await _maybe_dispatch_hermes_issue(_todo, from_todo=True)
                                 if _wh_dispatched >= _wh_limit:
                                     break

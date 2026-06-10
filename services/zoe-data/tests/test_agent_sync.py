@@ -5,7 +5,10 @@ from agent_sync import (
     _build_capabilities_md,
     _build_zoe_self_md,
     _build_zoe_why,
+    _build_hermes_worker_soul,
     _patch_hermes_soul,
+    _write_hermes_worker_souls,
+    _write_hermes_worker_profile_configs,
     _trigger_graphify_rebuild,
 )
 
@@ -79,3 +82,61 @@ def test_graphify_rebuild_opt_in_env_is_recognized(monkeypatch):
 
     assert not result.startswith("skipped (set ZOE_AGENT_SYNC_REBUILD_GRAPH=true")
     assert result == "skipped (graphify not found at /missing/graphify)"
+
+
+def test_hermes_worker_soul_is_lean_and_kanban_scoped():
+    soul = _build_hermes_worker_soul()
+
+    assert "Multica/Kanban" in soul
+    assert "kanban_show" in soul
+    assert "kanban_complete" in soul and "kanban_block" in soul
+    assert "ZOE_SELF_BEGIN" not in soul
+    assert "MCP Tools" not in soul
+    assert "Zoe MCP" in soul and "intentionally unavailable" in soul
+    assert len(soul) < 1800
+
+
+def test_write_hermes_worker_souls_updates_profile_files(tmp_path, monkeypatch):
+    first = tmp_path / "zoe-coder" / "SOUL.md"
+    second = tmp_path / "zoe-planner" / "SOUL.md"
+    monkeypatch.setattr(agent_sync, "_HERMES_WORKER_SOULS", (first, second))
+
+    result = _write_hermes_worker_souls("lean worker soul")
+
+    assert result == {str(first): "updated", str(second): "updated"}
+    assert first.read_text() == "lean worker soul"
+    assert second.read_text() == "lean worker soul"
+
+
+def test_write_hermes_worker_profile_configs_locks_cli_toolsets(tmp_path, monkeypatch):
+    config = tmp_path / "zoe-coder" / "config.yaml"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        """mcp_servers:
+  zoe-tools:
+    enabled: true
+memory:
+  memory_enabled: true
+  user_profile_enabled: true
+"""
+    )
+    monkeypatch.setattr(agent_sync, "_HERMES_WORKER_CONFIGS", (config,))
+
+    result = _write_hermes_worker_profile_configs()
+    updated = agent_sync.yaml.safe_load(config.read_text())
+
+    assert result == {str(config): "updated"}
+    assert updated["platform_toolsets"]["cli"] == ["terminal", "file", "kanban", "no_mcp"]
+    assert updated["mcp_servers"]["zoe-tools"]["enabled"] is False
+    assert updated["memory"]["memory_enabled"] is False
+    assert updated["memory"]["user_profile_enabled"] is False
+    assert updated["model"]["max_tokens"] == 1024
+    assert updated["model"]["context_length"] == 64000
+    assert updated["model"]["ollama_num_ctx"] == 65536
+    assert updated["model"]["base_url"] == "http://127.0.0.1:11434/v1"
+    assert "memory" in updated["agent"]["disabled_toolsets"]
+    assert "skills" in updated["agent"]["disabled_toolsets"]
+    assert updated["toolsets"] == ["terminal", "file", "kanban", "no_mcp"]
+    assert updated["model"]["max_tokens"] == 1024
+    assert updated["file_read_max_chars"] == 6000
+    assert updated["tool_output"] == {"max_bytes": 8000, "max_line_length": 300, "max_lines": 120}

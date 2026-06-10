@@ -75,6 +75,21 @@ _SURFACED_BLOCKER_TOKENS = (
 )
 _STABLE_BLOCKER_RE = re.compile(rf"\b(?:{'|'.join(_STABLE_BLOCKER_TOKENS)})\b", re.I)
 _SURFACED_BLOCKER_RE = re.compile(rf"\b(?:{'|'.join(_SURFACED_BLOCKER_TOKENS)})\b", re.I)
+_GITHUB_PR_URL_RE = re.compile(r"^https://github\.com/[^/\s]+/[^/\s]+/pull/\d+/?$")
+_BLANK_PR_URL_MARKERS = {
+    "",
+    "blank",
+    "<blank>",
+    "none",
+    "null",
+    "n/a",
+    "na",
+    "<url>",
+    "url",
+    "<url or blank>",
+    "url or blank",
+    "<actual github pr url>",
+}
 
 
 def _task_body(detail: dict[str, Any]) -> str:
@@ -97,6 +112,15 @@ def _haystacks(detail: dict[str, Any]) -> list[str]:
     logs = detail.get("logs") or detail.get("log") or detail.get("log_tail")
     if logs:
         parts.append(logs if isinstance(logs, str) else json.dumps(logs))
+    for event in detail.get("events") or []:
+        if not isinstance(event, dict):
+            continue
+        kind = event.get("kind")
+        payload = event.get("payload")
+        if kind:
+            parts.append(str(kind))
+        if payload:
+            parts.append(payload if isinstance(payload, str) else json.dumps(payload))
     for run in detail.get("runs") or []:
         if not isinstance(run, dict):
             continue
@@ -123,6 +147,14 @@ def _parse_kv_fields(text: str) -> dict[str, str]:
         if value or key == "BLOCKER":
             out[key] = value
     return out
+
+
+def _normalized_pr_url(value: Any) -> str:
+    raw = str(value or "").strip().strip("\"'")
+    lowered = raw.lower()
+    if lowered in _BLANK_PR_URL_MARKERS:
+        return ""
+    return raw if _GITHUB_PR_URL_RE.match(raw) else ""
 
 
 def _reported_evidence_passed(raw: str, *, unavailable_markers: tuple[str, ...]) -> bool:
@@ -240,6 +272,13 @@ def _stable_block_reason_from_text(text: str) -> str:
     """Extract a stable blocker token for fingerprinting (ignore dynamic log tails)."""
     if not text:
         return ""
+    lowered = text.lower()
+    if "http 402" in lowered or "payment required" in lowered:
+        return "HTTP_402"
+    if "prompt tokens limit exceeded" in lowered or "tokens limit exceeded" in lowered:
+        return "TOKEN_LIMIT"
+    if "credits" in lowered and "exhaust" in lowered:
+        return "CREDITS_EXHAUSTED"
     match = _STABLE_BLOCKER_RE.search(text)
     if match:
         return match.group(0).upper()
@@ -337,7 +376,7 @@ def _pr_url_from_ticket_block(detail: dict[str, Any]) -> str:
     except Exception:  # noqa: BLE001
         metadata = {}
     if isinstance(metadata, dict):
-        return str(metadata.get("pr_url") or "").strip()
+        return _normalized_pr_url(metadata.get("pr_url"))
     return ""
 
 
@@ -512,8 +551,9 @@ def evidence_from_handoff(
     for chunk in _haystacks(detail):
         text_fields.update(_parse_kv_fields(chunk))
     task_fields = _parse_kv_fields(_task_body(detail))
-    if task_fields.get("PR_URL") and not text_fields.get("PR_URL"):
-        text_fields["PR_URL"] = task_fields["PR_URL"]
+    task_pr_url = _normalized_pr_url(task_fields.get("PR_URL"))
+    if task_pr_url and not _normalized_pr_url(text_fields.get("PR_URL")):
+        text_fields["PR_URL"] = task_pr_url
     fields = dict(text_fields)
     fields.update(_structured_handoff_fields(detail))
 
@@ -607,7 +647,7 @@ def evidence_from_handoff(
         inferred_audit = bool(
             summary_raw
             and "audit" in summary_raw.lower()
-            and not (fields.get("PR_URL") or "").strip()
+            and not _normalized_pr_url(fields.get("PR_URL"))
             and not ticket_pr_url
         )
         if audit_only or inferred_audit:
@@ -631,7 +671,7 @@ def evidence_from_handoff(
             metadata["follow_up"] = follow_up
         items.append(EvidenceItem(kind="log", summary=retro_raw[:500], passed=True, metadata=metadata))
 
-    pr_url = fields.get("PR_URL") or ticket_pr_url
+    pr_url = _normalized_pr_url(fields.get("PR_URL")) or ticket_pr_url
     if pr_url and phase in {"implement", "verify", "closeout"}:
         items.append(EvidenceItem(kind="pr", summary=pr_url[:500], artifact=pr_url, passed=True))
 
@@ -656,14 +696,34 @@ def block_reason_from_handoff(detail: dict[str, Any], *, row_block_reason: str |
     fields: dict[str, str] = {}
     for chunk in _haystacks(detail):
         fields.update(_parse_kv_fields(chunk))
-    reason = (fields.get("BLOCKER") or row_block_reason or "").strip()
-    if reason:
-        return reason
+    explicit = (fields.get("BLOCKER") or "").strip()
+    if explicit:
+        return explicit
     for chunk in _haystacks(detail):
         stable = _stable_block_reason_from_text(chunk)
         if stable:
             return stable
-    return ""
+    row_reason = (row_block_reason or "").strip()
+    if row_reason.lower() not in {"", "block", "blocked"}:
+        return row_reason
+    if not row_reason:
+        return ""
+    for run in detail.get("runs") or []:
+        if not isinstance(run, dict):
+            continue
+        summary = str(run.get("summary") or "").strip()
+        if summary:
+            return summary[:500]
+    for comment in detail.get("comments") or []:
+        if not isinstance(comment, dict):
+            continue
+        body = str(comment.get("body") or comment.get("text") or "").strip()
+        if body:
+            return body[:500]
+    summary = str(detail.get("latest_summary") or "").strip()
+    if summary:
+        return summary[:500]
+    return row_reason
 
 
 def infer_outcome(phase: PipelinePhase, row_status: str, detail: dict[str, Any]) -> str | None:
@@ -692,6 +752,15 @@ def infer_outcome(phase: PipelinePhase, row_status: str, detail: dict[str, Any])
         return "block"
     if status not in {"done", "archived"}:
         return None
+
+    surfaced_blocker = ""
+    for chunk in _haystacks(detail):
+        surfaced_blocker = _stable_block_reason_from_text(chunk)
+        if surfaced_blocker:
+            break
+
+    if surfaced_blocker and _SURFACED_BLOCKER_RE.search(surfaced_blocker):
+        return "block"
 
     if explicit_blocker:
         if _SURFACED_BLOCKER_RE.search(explicit_blocker):

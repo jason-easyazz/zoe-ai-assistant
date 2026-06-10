@@ -194,6 +194,29 @@ async def test_resolve_issue_falls_back_to_visible_identifier():
 
 
 @pytest.mark.asyncio
+async def test_resolve_issue_scans_statuses_for_visible_identifier():
+    calls = []
+
+    class Client(MULClient):
+        def is_configured(self):
+            return True
+
+        async def get_issue(self, issue_id):
+            return {}
+
+        async def list_issues(self, status=None, *, limit=None):
+            calls.append(status)
+            assert limit == 1000
+            if status == "done":
+                return [{"id": "issue-done", "identifier": "ZOE-5743"}]
+            return []
+
+    assert await Client().resolve_issue("zoe-5743") == {"id": "issue-done", "identifier": "ZOE-5743"}
+    assert None in calls
+    assert "done" in calls
+
+
+@pytest.mark.asyncio
 async def test_resolve_issue_returns_empty_when_reference_not_found():
     class Client(MULClient):
         def is_configured(self):

@@ -75,6 +75,19 @@ def test_tracked_multica_engineering_issues_includes_review_and_deduplicates():
     ]
 
 
+def test_multica_hermes_lane_issues_ignores_other_agents_and_autopilots():
+    from main import _multica_hermes_lane_issues
+
+    issues = [
+        {"id": "other", "assignee_id": "openclaw", "assignee_type": "agent", "title": "Other todo"},
+        {"id": "auto", "assignee_id": "hermes", "assignee_type": "agent", "title": "Autopilot: tracker"},
+        {"id": "human", "assignee_id": "hermes", "assignee_type": "user", "title": "Human task"},
+        {"id": "hermes", "assignee_id": "hermes", "assignee_type": "agent", "title": "Real ticket"},
+    ]
+
+    assert _multica_hermes_lane_issues(issues, "hermes") == [issues[-1]]
+
+
 def test_poll_loop_keeps_blocked_broadcast_out_of_running_branch():
     source = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
     blocked_branch = source.index('elif chain.get("found") and chain.get("status") == "blocked"')
