@@ -236,3 +236,29 @@ Evidence:
 - the PR preserved default fixture behavior while allowing explicit user overrides without production chat wiring;
 - `graphify-out/GRAPH_REPORT.md` and `graphify-out/graph.json` contain the generated graph metrics for the final refresh;
 - structure, critical-file, offline-memory, and diff whitespace validators passed.
+
+## Refresh 2026-06-10 Say-Exactly Intent Gap Helper Pass
+
+Trigger commit: `91762d3e12d6994db53dcc16b17b1f2b8ab0d4d5` (PR #366)
+
+Commands:
+
+```bash
+OPENAI_API_KEY=$(grep "^OPENAI_API_KEY=" /home/zoe/assistant/.env | cut -d= -f2-) /home/zoe/.local/share/uv/tools/graphifyy/bin/graphify extract . --backend openai
+/home/zoe/.local/share/uv/tools/graphifyy/bin/graphify cluster-only . --no-viz
+python3 tools/audit/validate_structure.py
+python3 tools/audit/validate_critical_files.py
+python3 tools/audit/validate_offline_memory.py
+git diff --check
+```
+
+Evidence:
+
+- Graphify was refreshed after PR #366 added the deterministic say-exactly intent-gap helper and narrowed the Hermes hint guard to the exact ticket title pattern;
+- extract scanned 588 code files and 257 docs;
+- extract recovered from one transient OpenAI rate-limit message and completed successfully;
+- `graphify-out/graph.json` wrote 8,256 nodes, 14,729 edges, and 528 extract-time communities;
+- cluster-only regenerated 537 communities;
+- `graphify-out/GRAPH_REPORT.md` records built-from commit `91762d3e`;
+- estimated Graphify extraction cost was `$0.1713`;
+- structure, critical-file, offline-memory, and diff whitespace validators passed.
