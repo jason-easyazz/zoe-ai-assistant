@@ -4695,6 +4695,43 @@ def test_implement_body_does_not_add_joke_contract_for_other_intent_gaps():
     assert "`Tell me a joke.`, `Tell me a joke`, and `Tell me another joke.`" not in body
 
 
+def test_implement_body_includes_say_exactly_intent_gap_contract():
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {
+            "id": "uuid-intent-exact",
+            "identifier": "ZOE-5458",
+            "title": "Intent gap: say exactly Zoe chat integration ok",
+            "description": "SCOUT_SUMMARY says Say exactly: Zoe chat integration ok should preserve the raw phrase.",
+        },
+        "ZOE-5458",
+    )
+
+    assert "INTENT-GAP IMPLEMENT FAST PATH" in body
+    assert "Concrete edit contract for this exact-repeat gap" in body
+    assert "Say exactly: Zoe chat integration ok" in body
+    assert "python3 scripts/maintenance/zoe_apply_intent_gap_contract.py say_exactly" in body
+    assert "to the agent path while preserving the raw phrase" in body
+    assert "Do not add a bespoke" in body
+
+
+def test_implement_body_does_not_add_say_exactly_contract_for_description_aside():
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {
+            "id": "uuid-intent-aside",
+            "identifier": "ZOE-5450",
+            "title": "Intent gap: profile routing regression",
+            "description": "The user did not ask Zoe to say exactly this phrase; this is unrelated prose.",
+        },
+        "ZOE-5450",
+    )
+
+    assert "INTENT-GAP IMPLEMENT FAST PATH" in body
+    assert "Concrete edit contract for this exact-repeat gap" not in body
+    assert "zoe_apply_intent_gap_contract.py say_exactly" not in body
+
+
 def test_implement_revision_body_includes_intent_gap_fast_path():
     body = ka.KanbanAdapter()._build_body(
         "implement_revision",
