@@ -112,6 +112,15 @@ def _haystacks(detail: dict[str, Any]) -> list[str]:
     logs = detail.get("logs") or detail.get("log") or detail.get("log_tail")
     if logs:
         parts.append(logs if isinstance(logs, str) else json.dumps(logs))
+    for event in detail.get("events") or []:
+        if not isinstance(event, dict):
+            continue
+        kind = event.get("kind")
+        payload = event.get("payload")
+        if kind:
+            parts.append(str(kind))
+        if payload:
+            parts.append(payload if isinstance(payload, str) else json.dumps(payload))
     for run in detail.get("runs") or []:
         if not isinstance(run, dict):
             continue
@@ -687,14 +696,14 @@ def block_reason_from_handoff(detail: dict[str, Any], *, row_block_reason: str |
     fields: dict[str, str] = {}
     for chunk in _haystacks(detail):
         fields.update(_parse_kv_fields(chunk))
-    reason = (fields.get("BLOCKER") or row_block_reason or "").strip()
-    if reason:
-        return reason
+    explicit = (fields.get("BLOCKER") or "").strip()
+    if explicit:
+        return explicit
     for chunk in _haystacks(detail):
         stable = _stable_block_reason_from_text(chunk)
         if stable:
             return stable
-    return ""
+    return (row_block_reason or "").strip()
 
 
 def infer_outcome(phase: PipelinePhase, row_status: str, detail: dict[str, Any]) -> str | None:

@@ -92,6 +92,7 @@ def test_hermes_worker_soul_is_lean_and_kanban_scoped():
     assert "kanban_complete" in soul and "kanban_block" in soul
     assert "ZOE_SELF_BEGIN" not in soul
     assert "MCP Tools" not in soul
+    assert "Zoe MCP" in soul and "intentionally unavailable" in soul
     assert len(soul) < 1800
 
 
@@ -125,9 +126,14 @@ memory:
     updated = agent_sync.yaml.safe_load(config.read_text())
 
     assert result == {str(config): "updated"}
-    assert updated["platform_toolsets"]["cli"] == ["terminal", "file", "kanban", "skills", "no_mcp"]
+    assert updated["platform_toolsets"]["cli"] == ["terminal", "file", "kanban", "no_mcp"]
     assert updated["mcp_servers"]["zoe-tools"]["enabled"] is False
     assert updated["memory"]["memory_enabled"] is False
     assert updated["memory"]["user_profile_enabled"] is False
     assert updated["model"]["max_tokens"] == 1024
     assert "memory" in updated["agent"]["disabled_toolsets"]
+    assert "skills" in updated["agent"]["disabled_toolsets"]
+    assert updated["toolsets"] == ["terminal", "file", "kanban", "no_mcp"]
+    assert updated["model"]["max_tokens"] == 1024
+    assert updated["file_read_max_chars"] == 6000
+    assert updated["tool_output"] == {"max_bytes": 8000, "max_line_length": 300, "max_lines": 120}

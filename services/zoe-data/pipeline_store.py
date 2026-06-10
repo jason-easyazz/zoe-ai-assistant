@@ -11,6 +11,8 @@ from functools import partial
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+from pipeline_handoff import _haystacks
+
 from pipeline_evidence import (
     EvidenceItem,
     PHASE_ORDER,
@@ -413,8 +415,19 @@ async def _append_harness_validators(state: PipelineState, phase: PipelinePhase)
 
 
 def _protocol_only_block(detail: dict[str, Any]) -> bool:
-    """True when Hermes only failed the terminal protocol for a no-op phase."""
+    """True when Hermes only failed terminal protocol after explicit audit evidence."""
     protocol_seen = False
+    evidence_seen = False
+    for chunk in _haystacks(detail):
+        lowered_chunk = chunk.lower()
+        if (
+            "audit_only=1" in lowered_chunk
+            or "audit-only" in lowered_chunk
+            or "audit only" in lowered_chunk
+            or "tools_used=" in lowered_chunk
+            or "tests=not applicable" in lowered_chunk
+        ):
+            evidence_seen = True
 
     def classify(text: str) -> bool | None:
         lowered = text.strip().lower()
@@ -446,7 +459,7 @@ def _protocol_only_block(detail: dict[str, Any]) -> bool:
             if verdict is False:
                 return False
             protocol_seen = protocol_seen or verdict is True
-    return protocol_seen
+    return protocol_seen and evidence_seen
 
 
 def _append_audit_protocol_recovery_evidence(state: PipelineState, phase: PipelinePhase) -> PipelineState:
@@ -502,9 +515,18 @@ def pipeline_summary(state: PipelineState | None) -> dict[str, Any]:
             for record in state.history
         )
     )
+    terminal_reason_tokens = (
+        "PROTOCOL_VIOLATION",
+        "HTTP_402",
+        "PAYMENT_REQUIRED",
+        "CREDITS_EXHAUSTED",
+        "CONTEXT_LIMIT",
+        "TOKEN_LIMIT",
+    )
     terminal_block = state.status == "blocked" and (
         fingerprint_abort
         or state.block_classification == "scope_split_required"
+        or any(token in str(block_reason or "").upper() for token in terminal_reason_tokens)
     )
     hash_ok = verify_validator_hash_matches(state) if state.phase == "verify" else True
     return {

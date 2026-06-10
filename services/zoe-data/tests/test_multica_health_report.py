@@ -198,17 +198,22 @@ def test_worker_dispatch_contract_requires_lean_dropin(tmp_path, monkeypatch):
     dropin = tmp_path / "kanban-worker-lean.conf"
     system_prompt = tmp_path / "system_prompt.py"
     monkeypatch.setattr(module, "_HERMES_KANBAN_WORKER_DROPIN", dropin)
+    kanban_tools = tmp_path / "kanban_tools.py"
     monkeypatch.setattr(module, "_HERMES_SYSTEM_PROMPT_FILE", system_prompt)
+    monkeypatch.setattr(module, "_HERMES_KANBAN_TOOLS_FILE", kanban_tools)
 
     assert module._worker_dispatch_contract()["ok"] is False
     dropin.write_text(
         """[Service]
 Environment=HERMES_KANBAN_WORKER_IGNORE_RULES=true
-Environment=HERMES_KANBAN_WORKER_TOOLSETS=terminal,file,kanban,skills
+Environment=HERMES_KANBAN_WORKER_TOOLSETS=terminal,file,kanban
 Environment=HERMES_KANBAN_LEAN_SYSTEM=true
+Environment=HERMES_KANBAN_WORKER_AUTO_SKILL=false
+Environment=HERMES_KANBAN_COMPACT_SHOW=true
 """
     )
     system_prompt.write_text("HERMES_KANBAN_LEAN_SYSTEM HERMES_KANBAN_TASK")
+    kanban_tools.write_text("HERMES_KANBAN_COMPACT_SHOW _compact_show_for_worker")
     assert module._worker_dispatch_contract()["ok"] is True
 
 
@@ -224,7 +229,7 @@ def test_worker_tool_envelope_rejects_large_or_mcp_toolset(monkeypatch, tmp_path
     class Completed:
         returncode = 0
         stderr = ""
-        stdout = '{"toolsets":["terminal","kanban"],"tool_count":2,"max_tokens":1024,"tools":["kanban_show","mcp_zoe_tools_memory_search"]}\n'
+        stdout = '{"toolsets":["file","kanban","terminal"],"tool_count":2,"max_tokens":1024,"file_read_max_chars":6000,"tool_output":{"max_bytes":8000,"max_line_length":300,"max_lines":120},"tools":["kanban_show","mcp_zoe_tools_memory_search"]}\n'
 
     monkeypatch.setattr(module.subprocess, "run", lambda *_args, **_kwargs: Completed())
 
@@ -246,7 +251,7 @@ def test_worker_tool_envelope_accepts_lean_kanban_tools(monkeypatch, tmp_path):
     class Completed:
         returncode = 0
         stderr = ""
-        stdout = '{"toolsets":["terminal","kanban"],"tool_count":3,"max_tokens":1024,"tools":["terminal","kanban_show","kanban_complete"]}\n'
+        stdout = '{"toolsets":["file","kanban","terminal"],"tool_count":3,"max_tokens":1024,"file_read_max_chars":6000,"tool_output":{"max_bytes":8000,"max_line_length":300,"max_lines":120},"tools":["terminal","kanban_show","kanban_complete"]}\n'
 
     monkeypatch.setattr(module.subprocess, "run", lambda *_args, **_kwargs: Completed())
 

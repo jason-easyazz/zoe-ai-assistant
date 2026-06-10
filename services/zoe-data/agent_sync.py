@@ -33,8 +33,10 @@ _HERMES_WORKER_SOULS = (
     Path.home() / ".hermes" / "profiles" / "zoe-reviewer" / "SOUL.md",
 )
 _HERMES_WORKER_CONFIGS = tuple(path.parent / "config.yaml" for path in _HERMES_WORKER_SOULS)
-_HERMES_WORKER_TOOLSETS = ["terminal", "file", "kanban", "skills", "no_mcp"]
+_HERMES_WORKER_TOOLSETS = ["terminal", "file", "kanban", "no_mcp"]
 _HERMES_WORKER_MAX_TOKENS = 1024
+_HERMES_WORKER_FILE_READ_MAX_CHARS = 6000
+_HERMES_WORKER_TOOL_OUTPUT = {"max_bytes": 8000, "max_line_length": 300, "max_lines": 120}
 _HERMES_WORKER_DISABLED_TOOLSETS = [
     "browser",
     "browser-cdp",
@@ -48,6 +50,7 @@ _HERMES_WORKER_DISABLED_TOOLSETS = [
     "memory",
     "messaging",
     "session_search",
+    "skills",
     "spotify",
     "stt",
     "todo",
@@ -253,11 +256,13 @@ def _build_hermes_worker_soul() -> str:
         "- Keep context small. Do not load Zoe's full conversational identity, broad "
         "memory, or unrelated product maps unless the ticket explicitly requires it.\n"
         "- Prefer focused file reads, targeted tests, and existing Zoe helper scripts.\n"
-        "- Use Zoe MCP tools when needed, including Greptile and board tools, but do "
-        "not update Multica manually except through the expected evidence/handoff path.\n"
+        "- Use only kanban, file, and terminal tools in this worker profile. "
+        "Zoe MCP, memory, browser, Greptile, and broad skills are intentionally unavailable; "
+        "block with a specific reason if the assigned phase truly requires them.\n"
         "- If blocked, give a specific `BLOCKER=<code>: <actionable detail>` reason.\n"
         "- Cost matters: avoid repeated broad repo scans, repeated provider calls, and "
-        "loops without new evidence.\n"
+        "loops without new evidence. Keep each tool result small: use targeted searches, "
+        "read narrow file ranges, and block rather than repeatedly exceeding provider context limits.\n"
     )
 
 
@@ -298,6 +303,9 @@ def _write_hermes_worker_profile_configs() -> dict[str, str]:
             memory_config["user_profile_enabled"] = False
             model_config = config.setdefault("model", {})
             model_config["max_tokens"] = _HERMES_WORKER_MAX_TOKENS
+            config["file_read_max_chars"] = _HERMES_WORKER_FILE_READ_MAX_CHARS
+            config["tool_output"] = dict(_HERMES_WORKER_TOOL_OUTPUT)
+            config["toolsets"] = list(_HERMES_WORKER_TOOLSETS)
             for server in (config.get("mcp_servers") or {}).values():
                 if isinstance(server, dict):
                     server["enabled"] = False
