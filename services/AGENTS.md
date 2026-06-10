@@ -35,4 +35,10 @@ Production runtime services for the Zoe assistant: the web/chat API, static UI, 
 
 ## Child DOX Index
 
-No child AGENTS.md files yet.
+- [zoe-data/AGENTS.md](zoe-data/AGENTS.md) — production web/chat API internals, critical files, memory scope rules
+- [zoe-ui/AGENTS.md](zoe-ui/AGENTS.md) — frontend docroot, SW_VERSION contract, nginx.conf
+- [zoe-auth/AGENTS.md](zoe-auth/AGENTS.md) — authentication, OIDC/SSO, touch-panel pairing
+- [homeassistant-mcp-bridge/AGENTS.md](homeassistant-mcp-bridge/AGENTS.md) — Home Assistant MCP bridge
+- [n8n-mcp-bridge/AGENTS.md](n8n-mcp-bridge/AGENTS.md) — n8n MCP bridge
+
+`livekit/` is a single config file (`config.yaml`) with no local editing rules; it stays owned by this doc.
