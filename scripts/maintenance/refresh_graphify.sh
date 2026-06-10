@@ -38,8 +38,7 @@ fi
 # nightly refresh (the old dirty-tree guard failed almost every night).
 REF="origin/main"
 if ! git fetch --quiet origin main; then
-  REF="HEAD"
-  log "git fetch failed; falling back to local HEAD"
+  fail "git fetch origin main failed; refusing to build the graph from unfetched state"
 fi
 current_head="$(git rev-parse --short=8 "$REF")"
 
