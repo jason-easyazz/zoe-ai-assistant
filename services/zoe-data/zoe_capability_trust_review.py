@@ -195,16 +195,20 @@ def _candidate_review_blockers(
     approved_ids: set[str],
     rejected_ids: set[str],
 ) -> tuple[str, ...]:
+    decision_blockers: list[str] = []
+    if candidate.capability_id in rejected_ids:
+        decision_blockers.append(f"review_rejected:{candidate.capability_id}")
+    if candidate.capability_id not in approved_ids:
+        decision_blockers.append(f"not_approved:{candidate.capability_id}")
+    if decision_blockers:
+        return tuple(decision_blockers)
+
     blockers: list[str] = []
     profile = profile_index.get(candidate.capability_id)
     if profile is None:
         blockers.append(f"unknown_capability_profile:{candidate.capability_id}")
     elif profile.trust_level != candidate.current_trust_level:
         blockers.append(f"stale_current_trust_level:{candidate.capability_id}")
-    if candidate.capability_id in rejected_ids:
-        blockers.append(f"review_rejected:{candidate.capability_id}")
-    if candidate.capability_id not in approved_ids:
-        blockers.append(f"not_approved:{candidate.capability_id}")
     if candidate.proposed_trust_level == candidate.current_trust_level:
         blockers.append(f"no_trust_change:{candidate.capability_id}")
     return tuple(blockers)

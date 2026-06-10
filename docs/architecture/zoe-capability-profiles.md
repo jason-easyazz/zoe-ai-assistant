@@ -14,12 +14,14 @@ Files:
 - `services/zoe-data/zoe_capability_profile_patch_writer.py`
 - `services/zoe-data/zoe_capability_profile_promotion.py`
 - `services/zoe-data/zoe_capability_profile_promotion_handoff.py`
+- `services/zoe-data/zoe_capability_outcome_profile_handoff.py`
 - `services/zoe-data/zoe_capability_trust_update.py`
 - `services/zoe-data/zoe_capability_trust_review.py`
 - `services/zoe-data/tests/test_zoe_capability_profile.py`
 - `services/zoe-data/tests/test_zoe_capability_profile_patch_writer.py`
 - `services/zoe-data/tests/test_zoe_capability_profile_promotion.py`
 - `services/zoe-data/tests/test_zoe_capability_profile_promotion_handoff.py`
+- `services/zoe-data/tests/test_zoe_capability_outcome_profile_handoff.py`
 - `services/zoe-data/tests/test_zoe_capability_trust_update.py`
 - `services/zoe-data/tests/test_zoe_capability_trust_review.py`
 
@@ -78,6 +80,14 @@ PR/rollback/verification refs, and current source text, then builds the
 promotion manifest, patch plan, and inert Multica handoff packet together. It
 does not create tickets, write files, or mutate profiles.
 
+Capability outcome profile handoff plans compose the retained-outcome path.
+`zoe_capability_outcome_profile_handoff.py` starts with an admitted and retained
+evolution outcome, builds trust-update candidates, applies an explicit trust
+review in memory, then hands the reviewed profile promotion into the same
+manifest, patch, and inert Multica handoff gates. Explicit reviewer, approval,
+PR, rollback, and verification refs are required before any handoff payload can
+be created.
+
 ## Next Use
 
 The next self-evolution slices should use these profiles to:
@@ -87,8 +97,6 @@ The next self-evolution slices should use these profiles to:
 - run `scripts/maintenance/pi_runtime_probe.py --json` before any Pi install or delegated execution proposal;
 - block privileged execution when profile approval rules are unmet;
 - add outcome eval traces against profile IDs;
-- connect promotion manifests to an explicit profile-file patch writer with PR
-  and rollback evidence;
-- hand reviewed promotion results to Multica through inert handoff plans before
-  any future ticket writer creates work;
+- keep retained-outcome profile promotions routed through the composed
+  outcome-to-handoff plan before any future ticket writer creates work;
 - require non-use, replacement, or failure evidence before retirement.

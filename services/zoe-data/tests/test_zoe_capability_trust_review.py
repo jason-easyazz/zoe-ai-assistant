@@ -222,6 +222,36 @@ def test_capability_trust_review_applies_approved_profiles_when_other_candidates
     assert "review_rejected:openclaw_fallback" in result.decisions[1].reason
 
 
+def test_capability_trust_review_rejected_unknown_profile_does_not_block_approved_profile():
+    approved = _candidate(
+        capability_id="hindsight_reflective_memory",
+        current_trust_level="experimental",
+        proposed_trust_level="assisted",
+    )
+    rejected_unknown = _candidate(
+        capability_id="self_evolution_loop",
+        current_trust_level="unknown",
+        proposed_trust_level="experimental",
+    )
+
+    result = review_capability_trust_update_plan(
+        _plan(approved, rejected_unknown),
+        reviewer_id="multica:reviewer",
+        approval_refs=("approval:multica:ZOE-406",),
+        approved_capability_ids=("hindsight_reflective_memory",),
+        rejected_capability_ids=("self_evolution_loop",),
+        profiles=DEFAULT_CAPABILITY_PROFILES,
+    )
+
+    assert result.allowed_to_apply is True
+    assert result.applied_capability_ids == ("hindsight_reflective_memory",)
+    assert result.blockers == ()
+    assert result.decisions[0].approved is True
+    assert result.decisions[1].approved is False
+    assert "review_rejected:self_evolution_loop" in result.decisions[1].reason
+    assert "unknown_capability_profile:self_evolution_loop" not in result.decisions[1].reason
+
+
 def test_capability_trust_review_clears_profiles_when_any_candidate_is_invalid():
     approved = _candidate(
         capability_id="hindsight_reflective_memory",
