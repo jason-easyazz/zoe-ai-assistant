@@ -59,8 +59,18 @@ while IFS= read -r line; do
           && ! is_merged_pr_head "$(git -C "$wt" branch --show-current 2>/dev/null)"; then
         reason="not merged into origin/main"
       else
-        mtime="$(stat -c %Y "$wt")"
-        if (( now - mtime < age_limit )); then
+        # Activity = newest of: root dir mtime, per-worktree git index mtime
+        # (updated by any git operation), and last commit time. Root mtime
+        # alone misses edits below the top level.
+        last_active="$(stat -c %Y "$wt")"
+        gitdir="$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null || true)"
+        if [[ -n "$gitdir" && -f "$gitdir/index" ]]; then
+          idx_mtime="$(stat -c %Y "$gitdir/index")"
+          (( idx_mtime > last_active )) && last_active="$idx_mtime"
+        fi
+        commit_time="$(git -C "$wt" log -1 --format=%ct 2>/dev/null || echo 0)"
+        (( commit_time > last_active )) && last_active="$commit_time"
+        if (( now - last_active < age_limit )); then
           reason="active within ${AGE_DAYS}d"
         fi
       fi
