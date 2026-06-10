@@ -831,7 +831,7 @@ async def lifespan(app: FastAPI):
                                             "title": title,
                                             "phase": (chain.get("pipeline") if isinstance(chain.get("pipeline"), dict) else {}).get("phase"),
                                             "pr_url": chain.get("pr_url"),
-                                            "status": "in_review" if chain.get("pr_url") else None,
+                                            **({"status": "in_review"} if chain.get("pr_url") else {}),
                                         },
                                     )
                                 except Exception as _push_exc:

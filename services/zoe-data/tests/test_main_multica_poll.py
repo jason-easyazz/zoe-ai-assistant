@@ -88,6 +88,8 @@ def test_poll_loop_keeps_blocked_broadcast_out_of_running_branch():
     assert '"multica_task_blocked"' in blocked_segment
     assert "_record_running_multica_chain_progress" in running_segment
     assert '"multica_task_progress"' in running_segment
+    assert '**({"status": "in_review"} if chain.get("pr_url") else {})' in running_segment
+    assert '"status": "in_review" if chain.get("pr_url") else None' not in running_segment
     assert '"multica_task_blocked"' not in running_segment
     assert "blocker" not in running_segment
 
