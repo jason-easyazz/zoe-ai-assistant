@@ -767,6 +767,7 @@ _AUTOPILOTS = [
     {
         "title": "Morning Checkin",
         "agent": "Zoe Core",
+        "status": "paused",
         "execution_mode": "run_only",
         "cron": "30 7 * * *",
         "issue_title_template": "",
@@ -774,6 +775,7 @@ _AUTOPILOTS = [
     {
         "title": "Evening Wind Down",
         "agent": "Zoe Core",
+        "status": "paused",
         "execution_mode": "run_only",
         "cron": "0 21 * * *",
         "issue_title_template": "",
@@ -795,6 +797,7 @@ _AUTOPILOTS = [
     {
         "title": "Reminder Scan",
         "agent": "Zoe Core",
+        "status": "paused",
         "execution_mode": "run_only",
         "cron": "*/5 * * * *",
         "issue_title_template": "Reminder Scan",
@@ -827,6 +830,7 @@ def step_i_create_autopilots(agent_ids: dict[str, str]):
             sql = (
                 "update autopilot set "
                 f"assignee_id={_sql_literal(agent_id)}, "
+                f"status={_sql_literal(apdef.get('status', 'active'))}, "
                 f"execution_mode={_sql_literal(apdef['execution_mode'])}, "
                 f"issue_title_template={_sql_literal(apdef.get('issue_title_template', ''))}, "
                 "updated_at=now() "
@@ -840,6 +844,7 @@ def step_i_create_autopilots(agent_ids: dict[str, str]):
         else:
             payload = {
                 "title": title,
+                "status": apdef.get("status", "active"),
                 "execution_mode": apdef["execution_mode"],
                 "issue_title_template": apdef.get("issue_title_template", ""),
                 "assignee_id": agent_id,

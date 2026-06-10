@@ -43,17 +43,20 @@ def test_managed_agents_keep_provider_specific_runtime_contract():
 def test_managed_autopilots_keep_execution_modes_and_templates():
     autopilots = {ap["title"]: ap for ap in _assigned_literal("_AUTOPILOTS")}
 
+    assert autopilots["Morning Checkin"]["status"] == "paused"
     assert autopilots["Morning Checkin"]["execution_mode"] == "run_only"
     assert autopilots["Morning Checkin"]["issue_title_template"] == ""
+    assert autopilots["Evening Wind Down"]["status"] == "paused"
     assert autopilots["Evening Wind Down"]["execution_mode"] == "run_only"
     assert autopilots["Evening Wind Down"]["issue_title_template"] == ""
+    assert autopilots["Reminder Scan"]["status"] == "paused"
     assert autopilots["Reminder Scan"]["execution_mode"] == "run_only"
     assert autopilots["Platform Health Check"]["agent"] == "Hermes"
     assert autopilots["Platform Health Check"]["execution_mode"] == "create_issue"
 
     source = _source()
     assert "update autopilot set" in source
-    assert "f\"status={_sql_literal" not in source
+    assert "status={_sql_literal(apdef.get('status', 'active'))}" in source
     assert "execution_mode={_sql_literal(apdef['execution_mode'])}" in source
     assert "issue_title_template={_sql_literal(apdef.get('issue_title_template', ''))}" in source
 
