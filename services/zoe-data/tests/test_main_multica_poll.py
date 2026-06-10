@@ -207,7 +207,7 @@ async def test_record_completed_multica_chain_preserves_legacy_closeout_completi
 
     await _record_completed_multica_chain(client, "issue-2", {"status": "done"})
 
-    assert client.calls[0][1]["pr_url"] is None
+    assert "pr_url" not in client.calls[0][1]
     assert client.calls[0][1]["phase"] == "closeout"
     assert client.calls[0][1]["evidence"] == "Engineering run done"
     assert client.calls[0][1]["status"] == "done"
