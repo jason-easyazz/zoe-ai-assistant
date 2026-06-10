@@ -110,8 +110,16 @@
     }
 
     function calendarAccentLabel(value) {
-        const category = calendarCategoryClass(value);
-        return category.charAt(0).toUpperCase() + category.slice(1);
+        const token = String(value || 'general').toLowerCase();
+        if (token === 'work') return 'Work';
+        if (token === 'personal') return 'Personal';
+        if (token === 'bucket') return 'Bucket';
+        if (token === 'shopping') return 'Shopping';
+        if (token === 'health') return 'Health';
+        if (token === 'routine') return 'Routine';
+        if (token === 'social') return 'Social';
+        if (token === 'family') return 'Family';
+        return 'General';
     }
 
     function renderCalendar(props) {
@@ -156,7 +164,13 @@
     }
 
     function weatherClass(props, current) {
-        const text = String((current && (current.icon || current.description || current.condition)) || props.condition || '').toLowerCase();
+        const text = [
+            current && current.description,
+            current && current.condition,
+            props.description,
+            props.condition,
+            current && current.icon
+        ].filter(Boolean).join(' ').toLowerCase();
         if (/thunder|storm/.test(text)) return 'weather-stormy';
         if (/rain|drizzle|shower/.test(text)) return 'weather-rainy';
         if (/snow|sleet|ice/.test(text)) return 'weather-snowy';
@@ -167,26 +181,49 @@
     }
 
     function weatherEmoji(current) {
-        const text = String((current && (current.icon_emoji || current.icon || current.description || current.condition)) || '').toLowerCase();
         if (current && current.icon_emoji) return current.icon_emoji;
-        if (/thunder|storm/.test(text)) return '⛈️';
-        if (/rain|drizzle|shower/.test(text)) return '🌧️';
-        if (/snow|sleet|ice/.test(text)) return '❄️';
-        if (/fog|mist|haze|smoke/.test(text)) return '🌫️';
-        if (/cloud|overcast/.test(text)) return '☁️';
+        const text = [
+            current && current.description,
+            current && current.condition,
+            current && current.icon
+        ].filter(Boolean).join(' ').toLowerCase();
+        const icon = String(current && current.icon || '').toLowerCase();
+        if (/thunder|storm|11/.test(text)) return '⛈️';
+        if (/rain|drizzle|shower|09|10/.test(text)) return '🌧️';
+        if (/snow|sleet|ice|13/.test(text)) return '❄️';
+        if (/fog|mist|haze|smoke|50/.test(text)) return '🌫️';
+        if (/part|02/.test(text)) return /n$/.test(icon) ? '🌙' : '🌤️';
+        if (/cloud|overcast|03|04/.test(text)) return '☁️';
         if (/night|\dn$/.test(text)) return '🌙';
         return '☀️';
     }
 
     function formatForecastLabel(value) {
         const raw = String(value || '');
-        if (/^\d{4}-\d{2}-\d{2}/.test(raw)) {
-            const date = new Date(raw + 'T12:00:00');
+        const datePart = raw.slice(0, 10);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(datePart)) {
+            const date = new Date(datePart + 'T12:00:00');
             if (!Number.isNaN(date.getTime())) {
                 return date.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
             }
         }
         return raw;
+    }
+
+    function formatForecastShort(value) {
+        const label = formatForecastLabel(value);
+        return label.replace(/^([A-Za-z]{3})\s+(\d+)\s+([A-Za-z]{3})$/, '$1 $2');
+    }
+
+    function formatHourLabel(value) {
+        const raw = String(value || '');
+        const match = raw.match(/T?(\d{1,2}):(\d{2})/);
+        if (!match) return raw || 'Now';
+        const hour = Number(match[1]);
+        if (!Number.isFinite(hour)) return raw;
+        if (hour === 0) return '12am';
+        if (hour === 12) return '12pm';
+        return (hour > 12 ? hour - 12 : hour) + (hour > 11 ? 'pm' : 'am');
     }
 
     function formatWind(value) {
@@ -224,19 +261,37 @@
         const location = props.location || {};
         const place = [location.city || current.city || props.city, location.country || current.country || props.country].filter(Boolean).join(', ') || 'Current location';
         const description = current.description || current.condition || props.description || 'Current conditions';
-        const points = daily.length ? daily.slice(0, 5) : hourly.slice(0, 5);
-        const forecastTiles = points.map(item => {
-            const label = formatForecastLabel(item.day || item.time || '');
+        const dailyRows = daily.slice(0, 5).map((item, index) => {
+            const label = formatForecastShort(item.day || item.time || '');
             const high = item.high != null ? formatTemp(item.high) : formatTemp(item.temp);
             const low = item.low != null ? formatTemp(item.low) : '';
             const band = forecastTempBand(item);
             const condition = item.description || item.condition || '';
             return [
-                '<div class="sky-weather-forecast-tile">',
-                '<div class="sky-weather-tile-top"><span>' + escapeHtml(label) + '</span><b aria-hidden="true">' + escapeHtml(weatherEmoji(item)) + '</b></div>',
-                '<div class="sky-weather-tile-temp"><strong>' + escapeHtml(high) + '</strong>' + (low ? '<small>' + escapeHtml(low) + '</small>' : '') + '</div>',
-                '<div class="sky-weather-temp-band" aria-hidden="true"><i style="left: ' + band.left + '%; width: ' + band.width + '%;"></i></div>',
-                '<em>' + escapeHtml(condition) + '</em>',
+                '<div class="sky-weather-day-row' + (index === 0 ? ' is-primary' : '') + '">',
+                '<div class="sky-weather-day-label"><span>' + escapeHtml(index === 0 ? 'Today' : label) + '</span><b aria-hidden="true">' + escapeHtml(weatherEmoji(item)) + '</b></div>',
+                '<div class="sky-weather-day-main"><strong>' + escapeHtml(condition || description) + '</strong><div class="sky-weather-temp-band" aria-hidden="true"><i style="left: ' + band.left + '%; width: ' + band.width + '%;"></i></div></div>',
+                '<div class="sky-weather-day-temp"><strong>' + escapeHtml(high) + '</strong>' + (low ? '<small>' + escapeHtml(low) + '</small>' : '') + '</div>',
+                '</div>'
+            ].join('');
+        }).join('');
+        const hourlyTiles = hourly.slice(0, 8).map((item, index) => {
+            const label = index === 0 ? 'Now' : formatHourLabel(item.time || item.day || '');
+            return [
+                '<div class="sky-weather-hour-tile">',
+                '<span>' + escapeHtml(label) + '</span>',
+                '<b aria-hidden="true">' + escapeHtml(weatherEmoji(item)) + '</b>',
+                '<strong>' + escapeHtml(formatTemp(item.temp != null ? item.temp : item.high)) + '</strong>',
+                '</div>'
+            ].join('');
+        }).join('');
+        const fallbackTiles = !dailyRows && hourly.slice(0, 5).map(item => {
+            const band = forecastTempBand(item);
+            return [
+                '<div class="sky-weather-day-row">',
+                '<div class="sky-weather-day-label"><span>' + escapeHtml(formatHourLabel(item.time || '')) + '</span><b aria-hidden="true">' + escapeHtml(weatherEmoji(item)) + '</b></div>',
+                '<div class="sky-weather-day-main"><strong>' + escapeHtml(item.description || item.condition || description) + '</strong><div class="sky-weather-temp-band" aria-hidden="true"><i style="left: ' + band.left + '%; width: ' + band.width + '%;"></i></div></div>',
+                '<div class="sky-weather-day-temp"><strong>' + escapeHtml(formatTemp(item.temp)) + '</strong></div>',
                 '</div>'
             ].join('');
         }).join('');
@@ -253,7 +308,11 @@
             '<div class="sky-weather-condition">' + escapeHtml(description) + '</div>',
             '<div class="sky-weather-meta">' + meta + '</div>',
             '</div>',
-            '<div class="sky-weather-forecast"><h4>' + escapeHtml(props.source === 'weather_forecast' ? 'Forecast' : 'Next up') + '</h4><div class="sky-weather-forecast-grid">' + forecastTiles + '</div></div>',
+            '<div class="sky-weather-forecast">',
+            '<div class="sky-weather-forecast-head"><h4>' + escapeHtml(props.source === 'weather_forecast' ? 'Forecast' : 'Next up') + '</h4><span>' + escapeHtml(daily.length ? daily.length + ' days' : hourly.length + ' hours') + '</span></div>',
+            hourlyTiles ? '<div class="sky-weather-hour-strip">' + hourlyTiles + '</div>' : '',
+            '<div class="sky-weather-day-list">' + (dailyRows || fallbackTiles || '<div class="sky-empty-data">No forecast data available yet.</div>') + '</div>',
+            '</div>',
             '</div>'
         ].join('');
         return cardFrame(Object.assign({ status: 'Weather', icon: 'W' }, props), body, { wide: true, tone: 'weather-card ' + weatherClass(props, current) });
