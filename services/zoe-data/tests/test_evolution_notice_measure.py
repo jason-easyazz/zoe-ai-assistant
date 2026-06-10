@@ -1,4 +1,5 @@
 import json
+import logging
 import sys
 import types
 
@@ -128,6 +129,62 @@ def test_load_target_patterns_extracts_contract_metadata():
     assert evolution_notice._load_target_patterns(raw) == ["turn lights on", "switch lights on"]
 
 
+def test_attach_notice_trace_failure_returns_original_row(caplog):
+    row = {"evidence": "not-json"}
+    signal = types.SimpleNamespace(
+        scope="system",
+        user_id=None,
+        evidence_refs=("trace:bad-json",),
+        signal_id="signal_bad_json",
+        source="evolution_notice:test_bad_json",
+    )
+
+    with caplog.at_level(logging.WARNING):
+        updated = evolution_notice._attach_notice_trace_to_row(
+            row,
+            proposal_id="prop_bad_json",
+            proposal_type="test_bad_json",
+            title="Bad JSON proposal",
+            signal=signal,
+        )
+
+    assert updated is row
+    assert updated["evidence"] == "not-json"
+    assert "trace collection failed for proposal_id=prop_bad_json" in caplog.text
+
+
+def test_attach_notice_trace_logs_rejected_collector_result(caplog):
+    row = {
+        "evidence": json.dumps({
+            "candidate_ids": ["existing_zoe_bad_scope_triage"],
+        })
+    }
+    signal = types.SimpleNamespace(
+        scope="bad_scope",
+        user_id=None,
+        evidence_refs=("trace:bad-scope",),
+        signal_id="signal_bad_scope",
+        source="evolution_notice:test_bad_scope",
+    )
+
+    with caplog.at_level(logging.WARNING):
+        updated = evolution_notice._attach_notice_trace_to_row(
+            row,
+            proposal_id="prop_bad_scope",
+            proposal_type="test_bad_scope",
+            title="Bad scope proposal",
+            signal=signal,
+        )
+
+    evidence = json.loads(updated["evidence"])
+    collection = evidence["observation_trace_collection"]
+    assert collection["ok"] is False
+    assert collection["persisted"] is False
+    assert collection["accepted_count"] == 0
+    assert "unknown scope" in collection["rejected"][0]["reason"]
+    assert "trace collection rejected for proposal_id=prop_bad_scope" in caplog.text
+
+
 @pytest.mark.asyncio
 async def test_record_frustration_signal_stores_runtime_intake_contract_snapshot(monkeypatch):
     db = _WriterDb()
@@ -166,6 +223,17 @@ async def test_record_frustration_signal_stores_runtime_intake_contract_snapshot
     assert evidence["signal"]["metadata"]["session_id"] == "sess-1"
     assert evidence["signal"]["metadata"]["repeat_count"] == 3
     assert evidence["candidate_ids"] == ["existing_zoe_frustration_triage"]
+    trace_collection = evidence["observation_trace_collection"]
+    assert trace_collection["ok"] is True
+    assert trace_collection["persisted"] is False
+    assert trace_collection["accepted_count"] == 1
+    trace = trace_collection["traces"][0]
+    assert trace["trace_type"] == "proposal"
+    assert trace["surface"] == "multica"
+    assert trace["scope"] == "personal"
+    assert trace["user_id"] == "jason"
+    assert trace["related_ids"] == ["existing_zoe_frustration_triage"]
+    assert trace["metadata"]["signal_source"] == "evolution_notice:user_frustration"
     assert contract["schema"] == "zoe_evolution_proposal"
     assert contract["legacy_writer"] == "runtime_evolution_intake"
     proposal = contract["proposal"]
@@ -215,6 +283,17 @@ async def test_record_user_issue_stores_runtime_intake_contract_snapshot(monkeyp
     assert evidence["signal"]["scope"] == "personal"
     assert evidence["signal"]["user_id"] == "jason"
     assert evidence["candidate_ids"] == ["existing_zoe_user_issue_triage"]
+    trace_collection = evidence["observation_trace_collection"]
+    assert trace_collection["ok"] is True
+    assert trace_collection["persisted"] is False
+    assert trace_collection["accepted_count"] == 1
+    trace = trace_collection["traces"][0]
+    assert trace["trace_type"] == "proposal"
+    assert trace["surface"] == "multica"
+    assert trace["scope"] == "personal"
+    assert trace["user_id"] == "jason"
+    assert trace["related_ids"] == ["existing_zoe_user_issue_triage"]
+    assert trace["metadata"]["signal_source"] == "evolution_notice:user_issue_report"
     assert contract["schema"] == "zoe_evolution_proposal"
     assert contract["legacy_writer"] == "runtime_evolution_intake"
     proposal = contract["proposal"]
@@ -274,6 +353,13 @@ async def test_run_evolution_notice_stores_contract_snapshots(monkeypatch):
     assert intent_evidence["signal"]["scope"] == "system"
     assert intent_evidence["signal"]["metadata"]["miss_count"] == 3
     assert intent_evidence["candidate_ids"] == ["existing_zoe_intent_pattern"]
+    intent_trace_collection = intent_evidence["observation_trace_collection"]
+    assert intent_trace_collection["ok"] is True
+    assert intent_trace_collection["persisted"] is False
+    assert intent_trace_collection["traces"][0]["trace_type"] == "proposal"
+    assert intent_trace_collection["traces"][0]["scope"] == "system"
+    assert intent_trace_collection["traces"][0]["related_ids"] == ["existing_zoe_intent_pattern"]
+    assert intent_trace_collection["traces"][0]["metadata"]["signal_source"] == "evolution_notice:intent_miss_cluster"
     assert intent_contract["legacy_writer"] == "runtime_evolution_intake"
     assert intent_contract["proposal"]["metadata"]["legacy_writer"] == "evolution_notice:intent_miss_cluster"
     assert intent_contract["proposal"]["metadata"]["legacy_target_patterns"] == [
@@ -291,6 +377,13 @@ async def test_run_evolution_notice_stores_contract_snapshots(monkeypatch):
     assert health_evidence["signal"]["scope"] == "system"
     assert health_evidence["signal"]["metadata"] == {"agent_tier": "gemma4", "total": 20, "errors": 3}
     assert health_evidence["candidate_ids"] == ["existing_zoe_agent_health_triage"]
+    health_trace_collection = health_evidence["observation_trace_collection"]
+    assert health_trace_collection["ok"] is True
+    assert health_trace_collection["persisted"] is False
+    assert health_trace_collection["traces"][0]["trace_type"] == "proposal"
+    assert health_trace_collection["traces"][0]["scope"] == "system"
+    assert health_trace_collection["traces"][0]["related_ids"] == ["existing_zoe_agent_health_triage"]
+    assert health_trace_collection["traces"][0]["metadata"]["signal_source"] == "evolution_notice:agent_health"
     assert health_contract["legacy_writer"] == "runtime_evolution_intake"
     health_proposal = health_contract["proposal"]
     assert health_proposal["metadata"]["legacy_proposal_type"] == "agent_health"
