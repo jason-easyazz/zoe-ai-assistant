@@ -123,7 +123,7 @@ while IFS= read -r line; do
     wt_branch=""
     wt_locked=0
   fi
-done < <(git worktree list --porcelain)
+done < <(git worktree list --porcelain; echo)
 
 log "candidates: ${#candidates[@]}; skipped: ${#skipped[@]} (min age ${MIN_AGE_DAYS}d)"
 
