@@ -827,10 +827,14 @@ def step_i_create_autopilots(agent_ids: dict[str, str]):
 
         if title in existing_titles:
             ap_id = existing_titles[title]
+            status_sql = (
+                f"status={_sql_literal(apdef['status'])}, "
+                if "status" in apdef else ""
+            )
             sql = (
                 "update autopilot set "
                 f"assignee_id={_sql_literal(agent_id)}, "
-                f"status={_sql_literal(apdef.get('status', 'active'))}, "
+                f"{status_sql}"
                 f"execution_mode={_sql_literal(apdef['execution_mode'])}, "
                 f"issue_title_template={_sql_literal(apdef.get('issue_title_template', ''))}, "
                 "updated_at=now() "
@@ -841,6 +845,7 @@ def step_i_create_autopilots(agent_ids: dict[str, str]):
                 print(f"  ↻ Autopilot '{title}' exists ({ap_id}) — refreshed settings")
             else:
                 print(f"  ⚠ Autopilot '{title}' refresh failed: {msg[:100]}")
+                continue
         else:
             payload = {
                 "title": title,

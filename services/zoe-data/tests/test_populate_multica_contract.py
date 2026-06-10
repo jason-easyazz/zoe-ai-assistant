@@ -19,7 +19,10 @@ def _assigned_literal(name: str):
         if isinstance(node, ast.Assign):
             for target in node.targets:
                 if isinstance(target, ast.Name) and target.id == name:
-                    return ast.literal_eval(node.value)
+                    try:
+                        return ast.literal_eval(node.value)
+                    except (ValueError, SyntaxError) as exc:
+                        raise AssertionError(f"{name} must remain a literal contract") from exc
     raise AssertionError(f"{name} assignment not found")
 
 
@@ -56,9 +59,12 @@ def test_managed_autopilots_keep_execution_modes_and_templates():
 
     source = _source()
     assert "update autopilot set" in source
-    assert "status={_sql_literal(apdef.get('status', 'active'))}" in source
+    assert "status_sql = (" in source
+    assert "if \"status\" in apdef else \"\"" in source
+    assert "status={_sql_literal(apdef.get('status', 'active'))}" not in source
     assert "execution_mode={_sql_literal(apdef['execution_mode'])}" in source
     assert "issue_title_template={_sql_literal(apdef.get('issue_title_template', ''))}" in source
+    assert "continue" in source[source.index("refresh failed"):source.index("else:", source.index("refresh failed"))]
 
 
 
