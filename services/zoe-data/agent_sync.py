@@ -21,10 +21,41 @@ import re
 import subprocess
 from pathlib import Path
 
+import yaml
+
 logger = logging.getLogger(__name__)
 
 _OPENCLAW_ZOE_SELF = Path.home() / ".openclaw" / "workspace" / "ZOE_SELF.md"
 _HERMES_SOUL = Path.home() / ".hermes" / "SOUL.md"
+_HERMES_WORKER_SOULS = (
+    Path.home() / ".hermes" / "profiles" / "zoe-coder" / "SOUL.md",
+    Path.home() / ".hermes" / "profiles" / "zoe-planner" / "SOUL.md",
+    Path.home() / ".hermes" / "profiles" / "zoe-reviewer" / "SOUL.md",
+)
+_HERMES_WORKER_CONFIGS = tuple(path.parent / "config.yaml" for path in _HERMES_WORKER_SOULS)
+_HERMES_WORKER_TOOLSETS = ["terminal", "file", "kanban", "skills", "no_mcp"]
+_HERMES_WORKER_DISABLED_TOOLSETS = [
+    "browser",
+    "browser-cdp",
+    "clarify",
+    "code_execution",
+    "computer_use",
+    "cron",
+    "cronjob",
+    "delegation",
+    "image_gen",
+    "memory",
+    "messaging",
+    "session_search",
+    "spotify",
+    "stt",
+    "todo",
+    "tts",
+    "video",
+    "vision",
+    "web",
+    "x_search",
+]
 _ZOE_COMPACT = Path.home() / ".zoe" / "zoe_self_compact.txt"
 _CAPABILITIES_MD = Path("/home/zoe/assistant/CAPABILITIES.md")
 _FEDERATION_SKILLS_MD = Path.home() / ".openclaw" / "workspace" / "FEDERATION_SKILLS.md"
@@ -202,6 +233,77 @@ def _build_compact(mcp_tools: list[str], skills: list[str]) -> str:
     if len(compact) > _MAX_COMPACT_CHARS:
         compact = compact[:_MAX_COMPACT_CHARS - 3] + "..."
     return compact
+
+
+def _build_hermes_worker_soul() -> str:
+    """Build lean identity for Hermes Kanban worker profiles.
+
+    These profiles execute Multica/Kanban tasks in paid background sessions. They
+    must not inherit Zoe's full conversational SOUL/ZOE_SELF block; the task body,
+    kanban-worker skill, and MCP tools are the worker contract.
+    """
+    return (
+        "You are Hermes, Zoe's scoped engineering worker for Multica/Kanban tasks.\n"
+        "Use the current Kanban card as the source of truth: run `kanban_show`, "
+        "read the Multica issue contract, make the smallest scoped change, gather "
+        "evidence, and finish with `kanban_complete` or `kanban_block`.\n\n"
+        "Operating rules:\n"
+        "- Do one assigned phase only; Zoe's engineering driver owns phase advancement.\n"
+        "- Keep context small. Do not load Zoe's full conversational identity, broad "
+        "memory, or unrelated product maps unless the ticket explicitly requires it.\n"
+        "- Prefer focused file reads, targeted tests, and existing Zoe helper scripts.\n"
+        "- Use Zoe MCP tools when needed, including Greptile and board tools, but do "
+        "not update Multica manually except through the expected evidence/handoff path.\n"
+        "- If blocked, give a specific `BLOCKER=<code>: <actionable detail>` reason.\n"
+        "- Cost matters: avoid repeated broad repo scans, repeated provider calls, and "
+        "loops without new evidence.\n"
+    )
+
+
+def _write_hermes_worker_souls(content: str) -> dict[str, str]:
+    """Write lean SOUL.md files for worker profiles and report per profile."""
+    results: dict[str, str] = {}
+    for soul_path in _HERMES_WORKER_SOULS:
+        try:
+            soul_path.parent.mkdir(parents=True, exist_ok=True)
+            soul_path.write_text(content)
+            results[str(soul_path)] = "updated"
+        except Exception as exc:
+            results[str(soul_path)] = f"error: {exc}"
+            logger.warning("agent_sync: worker SOUL write failed for %s: %s", soul_path, exc)
+    return results
+
+
+def _write_hermes_worker_profile_configs() -> dict[str, str]:
+    """Persist lean tool/MCP settings for paid Hermes worker profiles."""
+    results: dict[str, str] = {}
+    for config_path in _HERMES_WORKER_CONFIGS:
+        try:
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                config = yaml.safe_load(config_path.read_text()) or {}
+            except FileNotFoundError:
+                config = {}
+            if not isinstance(config, dict):
+                config = {}
+            platform_toolsets = config.setdefault("platform_toolsets", {})
+            platform_toolsets["cli"] = list(_HERMES_WORKER_TOOLSETS)
+            agent_config = config.setdefault("agent", {})
+            disabled = set(agent_config.get("disabled_toolsets") or [])
+            disabled.update(_HERMES_WORKER_DISABLED_TOOLSETS)
+            agent_config["disabled_toolsets"] = sorted(disabled)
+            memory_config = config.setdefault("memory", {})
+            memory_config["memory_enabled"] = False
+            memory_config["user_profile_enabled"] = False
+            for server in (config.get("mcp_servers") or {}).values():
+                if isinstance(server, dict):
+                    server["enabled"] = False
+            config_path.write_text(yaml.safe_dump(config, sort_keys=False))
+            results[str(config_path)] = "updated"
+        except Exception as exc:
+            results[str(config_path)] = f"error: {exc}"
+            logger.warning("agent_sync: worker config write failed for %s: %s", config_path, exc)
+    return results
 
 
 def _build_zoe_why() -> str:
@@ -575,6 +677,10 @@ async def run_agent_sync() -> dict:
     except Exception as exc:
         results["federation_skills_md"] = f"error: {exc}"
         logger.warning("agent_sync: FEDERATION_SKILLS.md write failed: %s", exc)
+
+    worker_soul = _build_hermes_worker_soul()
+    results["hermes_worker_souls"] = _write_hermes_worker_souls(worker_soul)
+    results["hermes_worker_configs"] = _write_hermes_worker_profile_configs()
 
     # Trigger graphify rebuild in background
     graphify_result = _trigger_graphify_rebuild()
