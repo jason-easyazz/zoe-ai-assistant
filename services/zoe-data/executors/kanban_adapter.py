@@ -376,13 +376,15 @@ def _harness_implement_hint(issue: dict | None = None) -> str:
             )
         else:
             focused_test = "services/zoe-data/tests/test_main_multica_poll.py"
+        helper_blocker = blocker or "UNKNOWN"
         return (
             "- HARNESS FOLLOW-UP FAST PATH: this is an engineering_blocker_followup ticket."
             " All paths below are relative to the task `workspace_path`; do not use the live checkout.\n"
             " Start only from these files:\n"
             "  * blocker follow-up logic: services/zoe-data/main.py\n"
             "  * focused tests: services/zoe-data/tests/test_main_multica_poll.py\n"
-            f" Run focused test first: `PYTHONPATH=services/zoe-data python3 -m pytest -q {focused_test}`."
+            f" Run focused test first with this exact short command: `python3 scripts/maintenance/run_harness_followup_test.py {helper_blocker}`."
+            f" That helper runs `{focused_test}`; do not copy the long pytest node id yourself."
             " Do not read the broad harness map, kanban_adapter.py, pipeline_store.py, or Hermes internals"
             " unless that focused test failure names them."
             " Use the existing repo/runtime environment only: do not create `.venv`, run `pip install`,"
