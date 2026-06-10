@@ -397,7 +397,7 @@ def _harness_implement_hint(issue: dict | None = None) -> str:
         "- HARNESS FAST PATH: this is a Zoe/Hermes harness ticket. Do not spend budget"
         " searching ~/.local, Hermes internals, or broad worktree inventories unless a named file"
         " explicitly requires it. All paths in this repo map are relative to the task"
-        " `workspace_path`; do not read them from `/home/zoe/assistant`.\n"
+        " `workspace_path`; do not use the live checkout.\n"
         " Start from this repo map:\n"
         "  * phase prompt/dispatch/task creation: services/zoe-data/executors/kanban_adapter.py\n"
         "  * task worktree creation and workspace_path pinning: services/zoe-data/worktree_bootstrap.py\n"
@@ -692,16 +692,26 @@ class KanbanAdapter:
         escalation = _model_escalation_active(issue, mode)
         escalation_marker = "zoe-model-escalation: true\n" if escalation else ""
         workspace = _workspace_for_phase(phase)
-        workspace_label = "main repo checkout" if workspace.startswith("dir:") else "isolated git worktree"
-        work_root_label = zoe_repo_root() if workspace.startswith("dir:") else "task workspace_path from kanban_show"
+        main_checkout = workspace.startswith("dir:")
+        workspace_label = "main repo checkout" if main_checkout else "isolated git worktree"
+        if main_checkout:
+            workspace_header = (
+                f"Repo: {zoe_repo_root()}  |  Base branch: main  |  Workspace: {workspace_label}\n"
+                f"Working root for this phase: {zoe_repo_root()}\n"
+            )
+        else:
+            workspace_header = (
+                "Repository: Zoe assistant  |  Base branch: main  |  Workspace: isolated git worktree\n"
+                "Working root for this phase: exact task workspace_path from kanban_show\n"
+                "Live checkout path intentionally omitted; all file, git, test, and PR commands must use workspace_path.\n"
+            )
         common = (
             f"Multica issue: {identifier} (id {issue_id})\n"
             f"zoe-ref: multica:{issue_id}:{phase}\n"
             f"zoe-chain: v4\n"
             f"{escalation_marker}"
             f"{mode_note}"
-            f"Live repo: {zoe_repo_root()}  |  Base branch: main  |  Workspace: {workspace_label}\n"
-            f"Working root for this phase: {work_root_label}\n\n"
+            f"{workspace_header}\n"
             f"Title: {title}\n\n{description}\n\n"
         )
         if phase == "scout":
@@ -814,8 +824,8 @@ class KanbanAdapter:
                 " exact task `workspace_path` shown by Kanban. File reads must use paths under that"
                 " workspace_path, never absolute live-checkout paths. If it shows the live repo checkout"
                 " instead of the task worktree, call `kanban_block` with BLOCKER=WORKTREE_PATH_VIOLATION"
-                " immediately; do not read from or `cd` into"
-                f" `{zoe_repo_root()}` for git, test, patch, read, or PR commands.\n"
+                " immediately; do not read from or `cd` into the live checkout for git, test,"
+                " patch, read, or PR commands.\n"
                 "- Commit verified changes from the isolated worktree, then publish"
                 " the branch and open ONE small PR (do not merge) with these commands"
                 " unless a phase fast path above explicitly requires a chained ship command:\n"
