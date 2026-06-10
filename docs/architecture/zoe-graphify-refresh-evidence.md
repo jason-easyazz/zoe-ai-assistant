@@ -213,3 +213,26 @@ Evidence:
 - the PR kept router matching deterministic while adding regression coverage for casual service false positives and explicit architecture service queries;
 - `graphify-out/GRAPH_REPORT.md` and `graphify-out/graph.json` contain the generated graph metrics for the final refresh;
 - structure, critical-file, offline-memory, and diff whitespace validators passed.
+
+## Refresh 2026-06-10 Hindsight Bake-Off User Parameterization Pass
+
+Trigger commit: `f05471cf1032a7d986d44f40211186b8a257c0d2` (PR #364)
+
+Commands:
+
+```bash
+OPENAI_API_KEY=$(grep "^OPENAI_API_KEY=" /home/zoe/assistant/.env | cut -d= -f2-) /home/zoe/.local/share/uv/tools/graphifyy/bin/graphify extract . --backend openai
+/home/zoe/.local/share/uv/tools/graphifyy/bin/graphify cluster-only . --no-viz
+python3 tools/audit/validate_structure.py
+python3 tools/audit/validate_critical_files.py
+python3 tools/audit/validate_offline_memory.py
+git diff --check
+```
+
+Evidence:
+
+- Graphify was refreshed after PR #364 parameterized Hindsight bake-off synthetic events and eval queries for multi-user runs;
+- focused verification for PR #364 covered `test_hindsight_bakeoff.py`, Python compilation of the bake-off module and runner, a disabled/offline `--user-id casey` JSON runner smoke test, and a blank `--user-id` argparse error smoke test;
+- the PR preserved default fixture behavior while allowing explicit user overrides without production chat wiring;
+- `graphify-out/GRAPH_REPORT.md` and `graphify-out/graph.json` contain the generated graph metrics for the final refresh;
+- structure, critical-file, offline-memory, and diff whitespace validators passed.
