@@ -35,7 +35,7 @@ Current merged foundation:
 Important non-complete truth:
 
 - Graphify was last successfully refreshed through source commit `e734c0da`.
-  A refresh attempt after `8ab2f0f` scanned 592 code files and 257 docs but
+  A refresh attempt after `f542a2a` scanned 592 code files and 257 docs but
   all 7 OpenAI semantic chunks failed with `insufficient_quota`; the partial
   graph output was discarded and the committed map must be treated as stale
   for changes after `e734c0da`.
@@ -99,7 +99,7 @@ Important non-complete truth:
 | MemPalace baseline | Complete foundation | `services/zoe-data/mempalace_baseline.py`, `scripts/maintenance/mempalace_baseline.py`, and `docs/architecture/zoe-mempalace-baseline.md` record a repeatable local benchmark; first run scored 1.0 avg with p95 200.90 ms and cleaned up 4 synthetic rows. | Expand with relational/supersession cases before comparing Graphiti-style backends. |
 | Hindsight bake-off | Partial with first live evidence | Offline sidecar client, retain-candidate helpers, synthetic fixtures, measured runner, read-only probes, availability doc, admission bridge, admitted retain-plan gate, admitted retain executor, and tests exist. First live offline sidecar retained 4/4 synthetic events with 0 extraction errors and recalled 4/4 cases at score 1.0 using local Gemma plus cached local BGE embeddings. Live p95 recall was 649.00 ms and warm p95 was 643.25 ms, above the 600 ms hot-path target; container memory was about 1 GiB. | Treat Hindsight as validated for offline experience recall but not yet accepted for hot-path prompt recall; next test lower budgets/caching/async routing and record whether p95 can clear 600 ms. |
 | Graphiti bake-off | Partial with blocker evidence | ADR plus `services/zoe-data/graphiti_bakeoff.py`, `services/zoe-data/graphiti_sidecar_probe.py`, `services/zoe-data/graphiti_runtime_probe.py`, tests, and `docs/architecture/zoe-graphiti-fixtures.md` define the first relationship fixture set, backend availability preflight, and runtime readiness gate. FalkorDB was reachable in a temporary local sidecar, but Zoe's normal Python runtime lacks Graphiti backend packages and the current local Gemma endpoint failed Graphiti structured extraction in a smoke test. | Create an approved optional-dependency/runtime proposal, then solve the local structured-output extraction path before any accepted fixture ingest/query measurements. |
-| Graphify current map | Stale after quota-blocked refresh | `graphify-out/GRAPH_REPORT.md` and `graphify-out/graph.json` were last successfully regenerated through source commit `e734c0da`. A post-`8ab2f0f` refresh attempt scanned 592 code files and 257 docs but all 7 OpenAI semantic chunks failed with `insufficient_quota`; the partial output was discarded. | Restore OpenAI quota or approved local/offline Graphify backend, then rerun Graphify before major cleanup. |
+| Graphify current map | Stale after quota-blocked refresh | `graphify-out/GRAPH_REPORT.md` and `graphify-out/graph.json` were last successfully regenerated through source commit `e734c0da`. A post-`f542a2a` refresh attempt scanned 592 code files and 257 docs but all 7 OpenAI semantic chunks failed with `insufficient_quota`; the partial output was discarded. | Restore OpenAI quota or approved local/offline Graphify backend, then rerun Graphify before major cleanup. |
 | Tool/capability inventory | Complete foundation | `docs/architecture/zoe-tool-capability-inventory.md` maps agent, MCP, Multica, Hermes, OpenClaw, and governance surfaces. | Keep updated when tool catalogs or execution lanes change. |
 | Memory read/write inventory | Complete foundation | `docs/architecture/zoe-memory-read-write-inventory.md` maps MemoryService operations, durable writes, prompt reads, MCP paths, Hindsight candidates, and metadata gaps. | Keep updated when memory write/read paths change. |
 | Zoe north-star layer | Complete foundation | `docs/strategy/zoe-evolution-harness-plan.md` and `docs/adr/ADR-zoe-north-star-layer.md` define capability profiles, trust/autonomy classes, discovery scoring, outcome evals, and hardware budgets. | Build capability profile inventory and candidate-scoring records. |
@@ -209,7 +209,7 @@ Keep each pull request small enough for Greptile and Zoe verification.
    - Use Greptile as the first review loop.
 2. Fresh Graphify and architecture inventory.
    - Status: stale after source commit `e734c0da`; later refresh attempts are blocked by OpenAI `insufficient_quota`.
-   - Latest blocked attempt after `8ab2f0f` scanned 592 code files and 257 docs; all 7 semantic chunks failed, and the partial graph output was discarded.
+   - Latest blocked attempt after `f542a2a` scanned 592 code files and 257 docs; all 7 semantic chunks failed, and the partial graph output was discarded.
    - Restore quota or approve a local/offline Graphify backend before treating Graphify as current for major cleanup.
    - Reconcile future generated reports against `docs/architecture/zoe-harness-current-inventory.md`.
 3. Tool and memory inventory.
