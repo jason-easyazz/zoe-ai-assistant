@@ -432,8 +432,9 @@ def _intent_gap_implement_hint(issue: dict | None = None, *, phase: str = "imple
         say_exactly_contract = (
             " Concrete edit contract for this exact-repeat gap: update `_AGENT_CHAT_RE` so"
             " `Say exactly: Zoe chat integration ok` routes to `extend_capability` through"
-            " the existing open-domain branch. Preferred deterministic path: from the repo root,"
-            " run `python3 scripts/maintenance/zoe_apply_intent_gap_contract.py say_exactly`,"
+            " the existing open-domain branch. Preferred deterministic path: after `kanban_show`,"
+            " run this from the task `workspace_path`, never from `/home/zoe/assistant`:"
+            " `python3 scripts/maintenance/zoe_apply_intent_gap_contract.py say_exactly`,"
             " then immediately run `python3 -m py_compile services/zoe-data/intent_router.py`"
             " and `PYTHONPATH=services/zoe-data python3 -m pytest -q"
             " services/zoe-data/tests/test_intent_open_domain.py`. Do not add a bespoke"

@@ -616,6 +616,14 @@ def worktree_path_violation_reason_from_log(
         return None
 
     for line in session.splitlines():
+        read_match = _READ_STEP_RE.search(line)
+        if read_match:
+            path = _read_path_key(read_match.group("path")).rstrip("/")
+            if path.startswith("/") and path != expected and not path.startswith(expected + "/"):
+                return (
+                    "BLOCKER=WORKTREE_PATH_VIOLATION: worker read "
+                    f"{path} outside pinned task worktree {expected}"
+                )
         match = _SHELL_CD_STEP_RE.match(line)
         if not match:
             continue
