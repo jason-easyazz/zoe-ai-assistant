@@ -264,16 +264,28 @@ async def test_run_evolution_notice_stores_contract_snapshots(monkeypatch):
     assert "target_patterns" in intent_sql
     assert "target_patterns" in health_sql
 
+    intent_evidence = json.loads(intent_args[4])
     intent_contract = json.loads(intent_args[5])
     health_evidence = json.loads(health_args[3])
     health_contract = json.loads(health_args[4])
     assert len(sync_calls) == 2
-    assert intent_contract["legacy_writer"] == "evolution_notice:intent_miss_cluster"
+    assert intent_evidence["source"] == "runtime_evolution_intake"
+    assert intent_evidence["signal"]["source"] == "evolution_notice:intent_miss_cluster"
+    assert intent_evidence["signal"]["scope"] == "system"
+    assert intent_evidence["signal"]["metadata"]["miss_count"] == 3
+    assert intent_evidence["candidate_ids"] == ["existing_zoe_intent_pattern"]
+    assert intent_contract["legacy_writer"] == "runtime_evolution_intake"
+    assert intent_contract["proposal"]["metadata"]["legacy_writer"] == "evolution_notice:intent_miss_cluster"
     assert intent_contract["proposal"]["metadata"]["legacy_target_patterns"] == [
         "turn on kitchen lights",
         "turn on kitchen lights",
         "turn on kitchen lights",
     ]
+    assert intent_contract["proposal"]["metadata"]["selected_candidate_id"] == "existing_zoe_intent_pattern"
+    assert intent_contract["proposal"]["approval_gate"]["allowed_to_execute"] is False
+    assert sync_calls[0]["proposal_id"] == intent_args[0]
+    assert sync_calls[0]["proposal_type"] == "intent_pattern"
+    assert sync_calls[0]["contract_snapshot"] == intent_args[5]
     assert health_evidence["source"] == "runtime_evolution_intake"
     assert health_evidence["signal"]["source"] == "evolution_notice:agent_health"
     assert health_evidence["signal"]["scope"] == "system"
