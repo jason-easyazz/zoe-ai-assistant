@@ -262,5 +262,6 @@ data/touch_cache/
 graphify-out/manifest.json
 graphify-out/cost.json
 graphify-out/cache/
+graphify-out/.last_refresh_error
 !.cursor/mcp.json
 .cursor/tmp/
