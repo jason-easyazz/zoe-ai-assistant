@@ -15,6 +15,7 @@ Files:
 - `services/zoe-data/zoe_capability_profile_promotion.py`
 - `services/zoe-data/zoe_capability_profile_promotion_handoff.py`
 - `services/zoe-data/zoe_capability_outcome_profile_handoff.py`
+- `services/zoe-data/zoe_capability_profile_ticket_gate.py`
 - `services/zoe-data/zoe_capability_trust_update.py`
 - `services/zoe-data/zoe_capability_trust_review.py`
 - `services/zoe-data/tests/test_zoe_capability_profile.py`
@@ -22,6 +23,7 @@ Files:
 - `services/zoe-data/tests/test_zoe_capability_profile_promotion.py`
 - `services/zoe-data/tests/test_zoe_capability_profile_promotion_handoff.py`
 - `services/zoe-data/tests/test_zoe_capability_outcome_profile_handoff.py`
+- `services/zoe-data/tests/test_zoe_capability_profile_ticket_gate.py`
 - `services/zoe-data/tests/test_zoe_capability_trust_update.py`
 - `services/zoe-data/tests/test_zoe_capability_trust_review.py`
 
@@ -88,6 +90,12 @@ manifest, patch, and inert Multica handoff gates. Explicit reviewer, approval,
 PR, rollback, and verification refs are required before any handoff payload can
 be created.
 
+Capability profile ticket gates are the final pure guard before any future
+Multica writer. `zoe_capability_profile_ticket_gate.py` accepts only a createable
+profile handoff plus explicit operator approval refs, verifies the promotion
+manifest and patch hashes against ticket metadata, and returns a ticket payload
+without submitting it.
+
 ## Next Use
 
 The next self-evolution slices should use these profiles to:
@@ -98,5 +106,5 @@ The next self-evolution slices should use these profiles to:
 - block privileged execution when profile approval rules are unmet;
 - add outcome eval traces against profile IDs;
 - keep retained-outcome profile promotions routed through the composed
-  outcome-to-handoff plan before any future ticket writer creates work;
+  outcome-to-handoff plan and ticket gate before any future writer creates work;
 - require non-use, replacement, or failure evidence before retirement.
