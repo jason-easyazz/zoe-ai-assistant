@@ -68,7 +68,7 @@ _CODE_AUDIT_BODY_RE = re.compile(
     re.IGNORECASE,
 )
 _INTENT_GAP_BODY_RE = re.compile(
-    r'INTENT-GAP IMPLEMENT FAST PATH|\bintent_gap\b|"source"\s*:\s*"intent_gap',
+    r'INTENT-GAP IMPLEMENT FAST PATH|\bintent_gap:[\w-]+|"source"\s*:\s*"intent_gap',
     re.IGNORECASE,
 )
 _BROAD_FIND_GREP_RE = re.compile(r"^find\s+\S+.*\b(?:grep|rg)\b", re.IGNORECASE)

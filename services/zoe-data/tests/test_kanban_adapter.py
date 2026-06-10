@@ -2709,6 +2709,68 @@ def test_phase_budget_blocks_intent_gap_pre_edit_churn_from_live_shape(tmp_path,
     assert "intent-gap repeated pre-edit reads" in reason
 
 
+
+def test_phase_budget_blocks_intent_gap_explore_budget_before_patch(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_INTENT_GAP_PRE_EDIT_EXPLORE_BUDGET", "3")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_intent.log").write_text(
+        """Query: work kanban task t_intent
+  ┊ 📖 read      /work/services/zoe-data/intent_router.py  0.1s
+  ┊ 🔎 grep      _AGENT_CHAT_RE /work/services/zoe-data/intent_router.py  0.1s
+  ┊ 📖 read      /work/services/zoe-data/tests/test_intent_open_domain.py  0.1s
+  ┊ 🔎 grep      list_show /work/services/zoe-data/tests/test_intent_open_domain.py  0.1s
+""",
+        encoding="utf-8",
+    )
+
+    reason = kb.phase_budget_reason(
+        "t_intent",
+        "implement",
+        {
+            "task": {
+                "started_at": 100,
+                "body": "INTENT-GAP IMPLEMENT FAST PATH",
+            },
+            "runs": [{"started_at": 100}],
+        },
+        now=120,
+    )
+
+    assert reason is not None
+    assert "intent-gap pre-edit exploration exceeded" in reason
+
+
+def test_phase_budget_does_not_apply_intent_gap_budget_to_plain_mentions(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ZOE_KANBAN_INTENT_GAP_PRE_EDIT_EXPLORE_BUDGET", "1")
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        """Query: work kanban task t_impl
+  ┊ 📖 read      /work/services/zoe-data/intent_router.py  0.1s
+  ┊ 🔎 grep      intent_gap /work/services/zoe-data/intent_router.py  0.1s
+""",
+        encoding="utf-8",
+    )
+
+    reason = kb.phase_budget_reason(
+        "t_impl",
+        "implement",
+        {
+            "task": {
+                "started_at": 100,
+                "body": "General cleanup mentions intent_gap in prose but is not fast path",
+            },
+            "runs": [{"started_at": 100}],
+        },
+        now=120,
+    )
+
+    assert reason is None
+
+
 def test_phase_budget_blocks_intent_gap_broad_find_before_patch(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     log_dir = tmp_path / "kanban" / "logs"

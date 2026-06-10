@@ -12,6 +12,7 @@ class RecordingClient:
         self.created = []
         self.labels = []
         self.notes = []
+        self.default_list_statuses: set[str] | None = None
 
     async def record_progress(self, *args, **kwargs):
         self.calls.append((args, kwargs))
@@ -24,6 +25,8 @@ class RecordingClient:
         issues = list(self.issues.values()) + list(self.created)
         if status is not None:
             issues = [issue for issue in issues if issue.get("status") == status]
+        elif self.default_list_statuses is not None:
+            issues = [issue for issue in issues if issue.get("status") in self.default_list_statuses]
         return issues[:limit] if limit is not None else issues
 
     async def create_issue(self, **kwargs):
@@ -355,6 +358,7 @@ async def test_record_blocked_multica_chain_creates_budget_followup_once():
     from multica_ticket_contract import parse_ticket_block
 
     client = RecordingClient()
+    client.default_list_statuses = {"backlog", "todo", "in_progress", "blocked", "in_review"}
     client.issues["issue-budget"] = {
         "id": "issue-budget",
         "identifier": "ZOE-1",
@@ -479,6 +483,7 @@ async def test_record_blocked_multica_chain_reuses_done_budget_followup():
     from multica_ticket_contract import describe_ticket, parse_ticket_block, write_ticket_block
 
     client = RecordingClient()
+    client.default_list_statuses = {"backlog", "todo", "in_progress", "blocked", "in_review"}
     client.issues["issue-budget"] = {
         "id": "issue-budget",
         "identifier": "ZOE-1",

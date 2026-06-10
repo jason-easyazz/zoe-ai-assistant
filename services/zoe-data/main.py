@@ -204,10 +204,10 @@ async def _ensure_blocker_followup_ticket(client, issue_id: str, chain: dict, bl
         # Dedup across the whole ticket system, not just active columns. A done/no-op
         # follow-up for the same parent and blocker is still the canonical audit trail;
         # creating another ticket hides the recurring harness failure in backlog noise.
-        candidates = await client.list_issues(limit=5000) or []
-        if not candidates:
-            for status in ("backlog", "todo", "in_progress", "blocked", "in_review", "done", "canceled"):
-                candidates.extend(await client.list_issues(status=status, limit=1000) or [])
+        candidates: list[dict] = []
+        for status in ("backlog", "todo", "in_progress", "blocked", "in_review", "done", "canceled"):
+            candidates.extend(await client.list_issues(status=status, limit=1000) or [])
+        candidates.extend(await client.list_issues(limit=5000) or [])
         seen_candidates: set[str] = set()
         for candidate in candidates:
             candidate_id = str(candidate.get("id") or "")
