@@ -290,3 +290,31 @@ Evidence:
 - `graphify-out/GRAPH_REPORT.md` records built-from commit `796705a8`;
 - estimated Graphify extraction cost was `$0.1951`;
 - structure, critical-file, offline-memory, and diff whitespace validators passed.
+
+## Refresh 2026-06-10 Worktree Read Guard Pass
+
+Trigger commit: `75f5345d4c5886e103ae2c65548a42bad6f76390` (PR #369)
+
+Commands:
+
+Note: these are literal Zoe-host local operator paths used for this refresh;
+`graphifyy` is the current uv tool install directory on the Zoe host.
+
+```bash
+OPENAI_API_KEY=$(grep "^OPENAI_API_KEY=" /home/zoe/assistant/.env | cut -d= -f2-) /home/zoe/.local/share/uv/tools/graphifyy/bin/graphify extract . --backend openai
+/home/zoe/.local/share/uv/tools/graphifyy/bin/graphify cluster-only . --no-viz
+python3 tools/audit/validate_structure.py
+python3 tools/audit/validate_critical_files.py
+python3 tools/audit/validate_offline_memory.py
+git diff --check
+```
+
+Evidence:
+
+- Graphify was refreshed after PR #369 added the pinned-worktree read guard and updated the say-exactly helper prompt to require the task `workspace_path`;
+- extract scanned 588 code files and 257 docs;
+- `graphify-out/graph.json` wrote 8,289 nodes, 14,760 edges, and 571 extract-time communities;
+- cluster-only regenerated 566 communities;
+- `graphify-out/GRAPH_REPORT.md` records built-from commit `75f5345d`;
+- estimated Graphify extraction cost was `$0.1978`;
+- structure, critical-file, offline-memory, and diff whitespace validators passed.
