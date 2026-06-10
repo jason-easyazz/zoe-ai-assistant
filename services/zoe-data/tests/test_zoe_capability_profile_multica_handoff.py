@@ -164,6 +164,23 @@ def test_profile_multica_handoff_blocks_missing_title():
     assert handoff.ticket_metadata == {}
 
 
+def test_profile_multica_handoff_blocks_missing_source_sha256():
+    promotion = _promotion_plan()
+    patch = _patch_plan(promotion)
+    missing_sha_patch = type(patch)(
+        target_path=patch.target_path,
+        source_sha256="",
+        patch=patch.patch,
+        records=patch.records,
+        metadata=patch.metadata,
+    )
+
+    handoff = build_capability_profile_multica_handoff(promotion, missing_sha_patch)
+
+    assert handoff.allowed_to_create_ticket is False
+    assert "missing_source_sha256" in handoff.blockers
+
+
 def test_blocked_profile_multica_handoff_cannot_carry_payloads():
     with pytest.raises(ValueError, match="blocked capability profile handoffs"):
         CapabilityProfileMulticaHandoff(
