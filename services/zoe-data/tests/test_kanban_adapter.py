@@ -2176,13 +2176,31 @@ def test_phase_budget_reason_recovers_hermes_iteration_budget_log(tmp_path, monk
     )
 
 
-def test_implement_edit_safety_blocks_python_patch_without_immediate_check(tmp_path, monkeypatch):
+def test_implement_edit_safety_allows_bounded_patched_file_read_before_check(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     log_dir = tmp_path / "kanban" / "logs"
     log_dir.mkdir(parents=True)
     (log_dir / "t_impl.log").write_text(
         "Query: work kanban task t_impl\n"
         "  ┊ 🔧 patch     /work/services/zoe-data/intent_router.py  5.9s\n"
+        "  ┊ 📖 read      /work/services/zoe-data/intent_router.py  0.1s\n"
+        "  ┊ 📖 read      /work/services/zoe-data/intent_router.py  0.1s\n"
+        "  ┊ 💻 $         python3 -m py_compile services/zoe-data/intent_router.py  0.2s\n",
+        encoding="utf-8",
+    )
+
+    assert kb.implement_edit_safety_reason_from_log("t_impl", "implement") is None
+
+
+def test_implement_edit_safety_blocks_excess_patched_file_reads_before_check(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 🔧 patch     /work/services/zoe-data/intent_router.py  5.9s\n"
+        "  ┊ 📖 read      /work/services/zoe-data/intent_router.py  0.1s\n"
+        "  ┊ 📖 read      /work/services/zoe-data/intent_router.py  0.1s\n"
         "  ┊ 📖 read      /work/services/zoe-data/intent_router.py  0.1s\n",
         encoding="utf-8",
     )
@@ -2193,6 +2211,65 @@ def test_implement_edit_safety_blocks_python_patch_without_immediate_check(tmp_p
         "BLOCKER=IMPLEMENT_EDIT_SAFETY: Python patch was followed by more "
         "exploration before py_compile/focused tests"
     )
+
+
+def test_implement_edit_safety_blocks_unrelated_file_read_before_check(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 🔧 patch     /work/services/zoe-data/intent_router.py  5.9s\n"
+        "  ┊ 📖 read      /work/services/zoe-data/main.py  0.1s\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.implement_edit_safety_reason_from_log("t_impl", "implement")
+
+    assert reason == (
+        "BLOCKER=IMPLEMENT_EDIT_SAFETY: Python patch was followed by more "
+        "exploration before py_compile/focused tests"
+    )
+
+
+def test_implement_edit_safety_repatch_resets_patched_file_read_budget(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 🔧 patch     /work/services/zoe-data/intent_router.py  5.9s\n"
+        "  ┊ 📖 read      /work/services/zoe-data/intent_router.py  0.1s\n"
+        "  ┊ 📖 read      /work/services/zoe-data/intent_router.py  0.1s\n"
+        "  ┊ 🔧 patch     /work/services/zoe-data/intent_router.py  0.5s\n"
+        "  ┊ 📖 read      /work/services/zoe-data/intent_router.py  0.1s\n",
+        encoding="utf-8",
+    )
+
+    assert kb.implement_edit_safety_reason_from_log("t_impl", "implement") is None
+
+
+def test_implement_edit_safety_allows_live_patch_review_shape(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 🔧 patch     /work/services/zoe-data/multica_ticket_contract.py  1.6s\n"
+        "  ┊ review diff\n"
+        "a//work/services/zoe-data/multica_ticket_contract.py → "
+        "b//work/services/zoe-data/multica_ticket_contract.py\n"
+        "@@ -31,6 +31,7 @@\n"
+        "  ┊ 🔧 patch     /work/services/zoe-data/multica_ticket_contract.py  0.5s\n"
+        "  ┊ review diff\n"
+        "a//work/services/zoe-data/multica_ticket_contract.py → "
+        "b//work/services/zoe-data/multica_ticket_contract.py\n"
+        "@@ -119,6 +119,7 @@\n"
+        "  ┊ 📖 read      /work/services/zoe-data/multica_ticket_contract.py  0.1s\n",
+        encoding="utf-8",
+    )
+
+    assert kb.implement_edit_safety_reason_from_log("t_impl", "implement") is None
 
 
 def test_implement_edit_safety_allows_immediate_python_check(tmp_path, monkeypatch):
@@ -2240,7 +2317,7 @@ def test_implement_edit_safety_blocks_explore_after_patch_review_diff(tmp_path, 
         "  ┊ review diff\n"
         "a//work/services/zoe-data/intent_router.py → b//work/services/zoe-data/intent_router.py\n"
         "@@ -410,7 +410,8 @@\n"
-        "  ┊ 📖 read      /work/services/zoe-data/intent_router.py  0.1s\n",
+        "  ┊ 🔎 grep      def execute_intent  0.1s\n",
         encoding="utf-8",
     )
 
