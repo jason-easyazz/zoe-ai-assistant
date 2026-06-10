@@ -29,6 +29,7 @@ _HERMES_SYSTEM_PROMPT_FILE = _HERMES_AGENT_ROOT / "agent" / "system_prompt.py"
 _HERMES_KANBAN_TOOLS_FILE = _HERMES_AGENT_ROOT / "tools" / "kanban_tools.py"
 _HERMES_WORKER_TOOL_LIMIT = 25
 _HERMES_WORKER_MAX_TOKENS = 1024
+_HERMES_WORKER_MIN_CONTEXT_LENGTH = 64000
 _HERMES_WORKER_TOOLSETS = ["file", "kanban", "terminal"]
 _HERMES_WORKER_FILE_READ_MAX_CHARS = 6000
 _HERMES_WORKER_TOOL_OUTPUT = {"max_bytes": 8000, "max_line_length": 300, "max_lines": 120}
@@ -212,7 +213,7 @@ toolsets = sorted(_get_platform_tools(CLI_CONFIG, "cli"))
 model_config = CLI_CONFIG.get("model") if isinstance(CLI_CONFIG.get("model"), dict) else {}
 tools = get_tool_definitions(enabled_toolsets=toolsets, quiet_mode=True)
 names = [((tool.get("function") or {}).get("name") or tool.get("name") or "") for tool in tools]
-print(json.dumps({"toolsets": toolsets, "tool_count": len(tools), "tools": names, "max_tokens": model_config.get("max_tokens"), "file_read_max_chars": CLI_CONFIG.get("file_read_max_chars"), "tool_output": CLI_CONFIG.get("tool_output")}))
+print(json.dumps({"toolsets": toolsets, "tool_count": len(tools), "tools": names, "max_tokens": model_config.get("max_tokens"), "context_length": model_config.get("context_length"), "file_read_max_chars": CLI_CONFIG.get("file_read_max_chars"), "tool_output": CLI_CONFIG.get("tool_output")}))
 """
     envelopes: dict[str, dict] = {}
     for soul_path in _HERMES_WORKER_SOULS:
@@ -251,16 +252,20 @@ print(json.dumps({"toolsets": toolsets, "tool_count": len(tools), "tools": names
         ]
         max_tokens = data.get("max_tokens")
         max_tokens_ok = isinstance(max_tokens, int) and 0 < max_tokens <= _HERMES_WORKER_MAX_TOKENS
+        context_length = data.get("context_length")
+        context_length_ok = isinstance(context_length, int) and context_length >= _HERMES_WORKER_MIN_CONTEXT_LENGTH
         toolsets_ok = sorted(data.get("toolsets") or []) == sorted(_HERMES_WORKER_TOOLSETS)
         file_read_ok = data.get("file_read_max_chars") == _HERMES_WORKER_FILE_READ_MAX_CHARS
         tool_output = data.get("tool_output") if isinstance(data.get("tool_output"), dict) else {}
         tool_output_ok = all(tool_output.get(key) == value for key, value in _HERMES_WORKER_TOOL_OUTPUT.items())
         envelopes[name] = {
-            "ok": data.get("tool_count", 9999) <= _HERMES_WORKER_TOOL_LIMIT and not disallowed and max_tokens_ok and toolsets_ok and file_read_ok and tool_output_ok,
+            "ok": data.get("tool_count", 9999) <= _HERMES_WORKER_TOOL_LIMIT and not disallowed and max_tokens_ok and context_length_ok and toolsets_ok and file_read_ok and tool_output_ok,
             "toolsets": data.get("toolsets") or [],
             "tool_count": data.get("tool_count"),
             "max_tokens": max_tokens,
             "max_tokens_ok": max_tokens_ok,
+            "context_length": context_length,
+            "context_length_ok": context_length_ok,
             "toolsets_ok": toolsets_ok,
             "file_read_max_chars": data.get("file_read_max_chars"),
             "file_read_ok": file_read_ok,

@@ -229,7 +229,7 @@ def test_worker_tool_envelope_rejects_large_or_mcp_toolset(monkeypatch, tmp_path
     class Completed:
         returncode = 0
         stderr = ""
-        stdout = '{"toolsets":["file","kanban","terminal"],"tool_count":2,"max_tokens":1024,"file_read_max_chars":6000,"tool_output":{"max_bytes":8000,"max_line_length":300,"max_lines":120},"tools":["kanban_show","mcp_zoe_tools_memory_search"]}\n'
+        stdout = '{"toolsets":["file","kanban","terminal"],"tool_count":2,"max_tokens":1024,"context_length":8192,"file_read_max_chars":6000,"tool_output":{"max_bytes":8000,"max_line_length":300,"max_lines":120},"tools":["kanban_show","mcp_zoe_tools_memory_search"]}\n'
 
     monkeypatch.setattr(module.subprocess, "run", lambda *_args, **_kwargs: Completed())
 
@@ -238,6 +238,7 @@ def test_worker_tool_envelope_rejects_large_or_mcp_toolset(monkeypatch, tmp_path
     assert result["zoe-coder"]["ok"] is False
     assert result["zoe-coder"]["disallowed_tools"] == ["mcp_zoe_tools_memory_search"]
     assert result["zoe-coder"]["max_tokens_ok"] is True
+    assert result["zoe-coder"]["context_length_ok"] is False
 
 
 def test_worker_tool_envelope_accepts_lean_kanban_tools(monkeypatch, tmp_path):
@@ -251,7 +252,7 @@ def test_worker_tool_envelope_accepts_lean_kanban_tools(monkeypatch, tmp_path):
     class Completed:
         returncode = 0
         stderr = ""
-        stdout = '{"toolsets":["file","kanban","terminal"],"tool_count":3,"max_tokens":1024,"file_read_max_chars":6000,"tool_output":{"max_bytes":8000,"max_line_length":300,"max_lines":120},"tools":["terminal","kanban_show","kanban_complete"]}\n'
+        stdout = '{"toolsets":["file","kanban","terminal"],"tool_count":3,"max_tokens":1024,"context_length":64000,"file_read_max_chars":6000,"tool_output":{"max_bytes":8000,"max_line_length":300,"max_lines":120},"tools":["terminal","kanban_show","kanban_complete"]}\n'
 
     monkeypatch.setattr(module.subprocess, "run", lambda *_args, **_kwargs: Completed())
 
@@ -259,3 +260,5 @@ def test_worker_tool_envelope_accepts_lean_kanban_tools(monkeypatch, tmp_path):
 
     assert result["ok"] is True
     assert result["max_tokens"] == 1024
+    assert result["context_length"] == 64000
+    assert result["context_length_ok"] is True

@@ -131,6 +131,7 @@ memory:
     assert updated["memory"]["memory_enabled"] is False
     assert updated["memory"]["user_profile_enabled"] is False
     assert updated["model"]["max_tokens"] == 1024
+    assert updated["model"]["context_length"] == 64000
     assert "memory" in updated["agent"]["disabled_toolsets"]
     assert "skills" in updated["agent"]["disabled_toolsets"]
     assert updated["toolsets"] == ["terminal", "file", "kanban", "no_mcp"]
