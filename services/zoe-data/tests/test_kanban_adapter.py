@@ -4422,10 +4422,12 @@ def test_implement_body_requires_pinned_worktree_before_git_or_pr_commands():
         "ZOE-GEN",
     )
 
-    assert "pwd && git branch --show-current" in body
-    assert "workspace_path" in body
+    assert "cd <workspace_path> && pwd && git branch --show-current" in body
+    assert "exact task `workspace_path`" in body
+    assert "File reads must use paths under that" in body
+    assert "never absolute live-checkout paths" in body
     assert "BLOCKER=WORKTREE_PATH_VIOLATION" in body
-    assert "do not `cd` into" in body
+    assert "do not read from or `cd` into" in body
     assert body.index("BLOCKER=WORKTREE_PATH_VIOLATION") < body.index("git push -u origin HEAD")
 
 
