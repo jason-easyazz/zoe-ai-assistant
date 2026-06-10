@@ -30,6 +30,8 @@ def _status():
         "blocked_shards": [],
         "median_accepted_duration_ms": 46704,
         "max_observed_rss_kb": 86408,
+        "artifact_dir": None,
+        "cluster": False,
         "results": [
             _result("data-core", ["services/zoe-data"]),
             _result("operators", ["scripts", "tools"]),
@@ -65,9 +67,43 @@ def test_build_shard_sync_plan_accepts_clean_current_shards():
     assert plan.accepted is True
     assert plan.status == "ready_for_artifact_merge_design"
     assert plan.blockers == ()
+    assert plan.summary["artifact_capture_ready"] is False
     assert plan.summary["artifact_sync_ready"] is False
     assert plan.summary["shards"] == ["data-core", "operators"]
-    assert "extend shard runner" in plan.required_next_steps[0]
+    assert "--artifact-dir" in plan.required_next_steps[0]
+
+
+def test_build_shard_sync_plan_reports_artifact_capture_and_sync_readiness():
+    status = _status()
+    status["artifact_dir"] = "/tmp/artifacts"
+    status["cluster"] = True
+    for result in status["results"]:
+        result["artifact_graph_json_exists"] = True
+        result["artifact_graph_report_exists"] = True
+
+    plan = MODULE.build_shard_sync_plan(status)
+
+    assert plan.accepted is True
+    assert plan.summary["artifact_capture_ready"] is True
+    assert plan.summary["artifact_report_ready"] is True
+    assert plan.summary["artifact_sync_ready"] is True
+
+
+def test_build_shard_sync_plan_never_sets_sync_ready_when_blocked():
+    status = _status()
+    status["all_accepted"] = False
+    status["artifact_dir"] = "/tmp/artifacts"
+    status["cluster"] = True
+    for result in status["results"]:
+        result["artifact_graph_json_exists"] = True
+        result["artifact_graph_report_exists"] = True
+
+    plan = MODULE.build_shard_sync_plan(status)
+
+    assert plan.accepted is False
+    assert plan.summary["artifact_capture_ready"] is True
+    assert plan.summary["artifact_report_ready"] is True
+    assert plan.summary["artifact_sync_ready"] is False
 
 
 def test_build_shard_sync_plan_rejects_partial_or_blocked_matrix():

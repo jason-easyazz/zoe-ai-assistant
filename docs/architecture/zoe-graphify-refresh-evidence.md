@@ -43,9 +43,10 @@ non-empty, and `GRAPH_REPORT.md` exists. Rejected runs write
 `graphify_shard_sync_plan.py` is the no-write bridge between accepted shard
 evidence and a future sharded sync implementation. It consumes a
 `graphify_local_shard_matrix` status JSON, rejects partial/blocked/nonlocal or
-malformed shard evidence, and emits a plan with `artifact_sync_ready=false` until
-per-shard `graphify-out` artifacts, deterministic graph merge handling, merged
-cluster/report generation, and inventory reconciliation are proven.
+malformed shard evidence, and distinguishes `artifact_capture_ready` from
+`artifact_sync_ready` so copied per-shard `graphify-out` artifacts do not imply
+that deterministic graph merge handling, merged cluster/report generation, and
+inventory reconciliation are already proven.
 
 Acceptance is fail-closed. The status JSON is rejected when Graphify times out,
 exits nonzero, omits `graphify-out/graph.json`, writes an empty graph, emits
@@ -129,6 +130,15 @@ Current evidence:
   runs, per-shard graph/report validation, deterministic graph JSON merge,
   merged cluster/report generation, and inventory comparison before any
   committed `graphify-out` replacement.
+- Artifact-preserving default shard run against `origin/main` copied accepted
+  per-shard outputs to `/tmp/zoe-graphify-shard-artifacts` without syncing the
+  repo: `data-core` accepted in 43.797 s over 293 code files and 10 docs,
+  producing 5,200 nodes, 11,394 edges, and a 5,034,475 byte `graph.json`;
+  `operators` accepted in 49.826 s over 182 code files and 9 docs, producing
+  1,660 nodes, 3,141 edges, and a 1,457,056 byte `graph.json`. The planner over
+  this artifact evidence returned `artifact_capture_ready=true`,
+  `artifact_report_ready=false`, and `artifact_sync_ready=false` because the run
+  was non-clustered and no merged graph/report has been produced.
 
 ## Refresh 2026-06-09 Foundation Pass
 

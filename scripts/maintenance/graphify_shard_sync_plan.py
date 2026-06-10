@@ -88,6 +88,15 @@ def build_shard_sync_plan(status: Mapping[str, Any]) -> ShardSyncPlan:
                     include_paths.add(path)
         _validate_shard_result(result, name or str(index), blockers, warnings)
 
+    artifact_capture_ready = bool(results) and all(
+        isinstance(result, Mapping) and result.get("artifact_graph_json_exists") is True for result in results
+    )
+    artifact_report_ready = artifact_capture_ready and all(
+        isinstance(result, Mapping) and result.get("artifact_graph_report_exists") is True for result in results
+    )
+
+    accepted = not blockers
+
     summary = {
         "ref": status.get("ref"),
         "model": status.get("model"),
@@ -97,16 +106,18 @@ def build_shard_sync_plan(status: Mapping[str, Any]) -> ShardSyncPlan:
         "max_observed_rss_kb": status.get("max_observed_rss_kb"),
         "shards": sorted(shard_names),
         "include_paths": sorted(include_paths),
-        "artifact_sync_ready": False,
+        "artifact_dir": status.get("artifact_dir"),
+        "artifact_capture_ready": artifact_capture_ready,
+        "artifact_report_ready": artifact_report_ready,
+        "artifact_sync_ready": accepted and bool(status.get("cluster")) and artifact_report_ready,
     }
     required_next_steps = (
-        "extend shard runner to keep per-shard graphify-out artifacts in explicit artifact directories",
+        "run shard matrix with --artifact-dir when artifact_capture_ready is false",
         "validate each artifact directory has graph.json and GRAPH_REPORT.md when clustering is enabled",
         "merge graph JSON with deterministic namespace/conflict handling and provenance per shard",
         "run cluster/report generation on the merged graph in a temporary output directory",
         "compare merged report against current inventory before any graphify-out replacement PR",
     )
-    accepted = not blockers
     return ShardSyncPlan(
         accepted=accepted,
         status="ready_for_artifact_merge_design" if accepted else "blocked",

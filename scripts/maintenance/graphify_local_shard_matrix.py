@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from statistics import median
@@ -70,6 +72,76 @@ def compact_shard_result(shard: GraphifyShard, status: dict[str, object]) -> dic
     return compact
 
 
+def validate_artifact_shard_name(value: str) -> str:
+    allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+    if not value or value in {".", ".."} or any(char not in allowed for char in value):
+        raise ValueError(f"invalid artifact shard name: {value!r}")
+    return value
+
+
+def capture_shard_artifact(
+    shard: GraphifyShard,
+    status: dict[str, object],
+    artifact_dir: Path,
+) -> dict[str, object]:
+    shard_name = validate_artifact_shard_name(shard.name)
+    artifact_root = artifact_dir.resolve()
+    shard_root = (artifact_root / shard_name).resolve()
+    if not _is_relative_to(shard_root, artifact_root):
+        raise ValueError(f"artifact shard path escapes artifact dir: {shard.name!r}")
+    destination = shard_root / "graphify-out"
+    result: dict[str, object] = {
+        "artifact_requested": True,
+        "artifact_copied": False,
+        "artifact_path": str(destination),
+        "artifact_graph_json_exists": False,
+        "artifact_graph_json_bytes": 0,
+        "artifact_graph_report_exists": False,
+    }
+    workdir = status.get("workdir")
+    if not status.get("accepted") or not workdir:
+        return result
+    source = Path(str(workdir)) / "graphify-out"
+    graph_json = source / "graph.json"
+    if not graph_json.exists():
+        return result
+    if destination.exists():
+        shutil.rmtree(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(source, destination)
+    copied_graph_json = destination / "graph.json"
+    result.update(
+        {
+            "artifact_copied": True,
+            "artifact_graph_json_exists": copied_graph_json.exists(),
+            "artifact_graph_json_bytes": copied_graph_json.stat().st_size if copied_graph_json.exists() else 0,
+            "artifact_graph_report_exists": (destination / "GRAPH_REPORT.md").exists(),
+        }
+    )
+    return result
+
+
+def _is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+    except ValueError:
+        return False
+    return True
+
+
+def cleanup_kept_probe_workdir(status: dict[str, object]) -> None:
+    workdir = status.get("workdir")
+    if not workdir:
+        return
+    workdir_path = Path(str(workdir)).resolve()
+    parent = workdir_path.parent
+    temp_root = Path(tempfile.gettempdir()).resolve()
+    if parent.name.startswith("zoe-graphify-local-probe.") and _is_relative_to(parent, temp_root):
+        shutil.rmtree(parent, ignore_errors=True)
+    else:
+        shutil.rmtree(workdir_path, ignore_errors=True)
+
+
 def summarize_shards(results: Sequence[dict[str, object]]) -> dict[str, object]:
     accepted = [result for result in results if result.get("accepted")]
     durations = [result["duration_ms"] for result in accepted if isinstance(result.get("duration_ms"), int)]
@@ -98,11 +170,16 @@ def run_shard_matrix(
     shards: Sequence[GraphifyShard] = (),
     timeout_sec: int = 600,
     cluster: bool = False,
+    artifact_dir: Path | None = None,
 ) -> dict[str, object]:
     selected = tuple(shards or default_shards())
     started_at = utc_now()
     compact_results: list[dict[str, object]] = []
+    if artifact_dir:
+        artifact_dir.mkdir(parents=True, exist_ok=True)
     for shard in selected:
+        if artifact_dir is not None:
+            validate_artifact_shard_name(shard.name)
         config = GraphifyLocalProbeConfig(
             root=root,
             graphify_bin=graphify_bin,
@@ -112,10 +189,17 @@ def run_shard_matrix(
             mode="scope",
             timeout_sec=timeout_sec,
             cluster=cluster,
-            keep_workdir=False,
+            keep_workdir=artifact_dir is not None,
             include_paths=shard.include_paths,
         )
-        compact_results.append(compact_shard_result(shard, run_probe(config)))
+        raw_status = run_probe(config)
+        compact = compact_shard_result(shard, raw_status)
+        if artifact_dir is not None:
+            try:
+                compact.update(capture_shard_artifact(shard, raw_status, artifact_dir))
+            finally:
+                cleanup_kept_probe_workdir(raw_status)
+        compact_results.append(compact)
     summary = summarize_shards(compact_results)
     return {
         "schema_version": 1,
@@ -127,6 +211,7 @@ def run_shard_matrix(
         "base_url": base_url,
         "model": model,
         "cluster": cluster,
+        "artifact_dir": str(artifact_dir) if artifact_dir else None,
         **summary,
     }
 
@@ -142,6 +227,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--cluster", action="store_true")
     parser.add_argument("--shard", action="append", default=[], help="Shard spec as name=path[,path]. May be repeated.")
     parser.add_argument("--allow-partial", action="store_true", help="Exit 0 when at least one shard is accepted.")
+    parser.add_argument("--artifact-dir", type=Path, help="Copy accepted per-shard graphify-out artifacts here; never syncs repo graphify-out.")
     parser.add_argument("--status-json", type=Path)
     return parser.parse_args(argv)
 
@@ -159,6 +245,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             shards=shards,
             timeout_sec=args.timeout_sec,
             cluster=args.cluster,
+            artifact_dir=args.artifact_dir,
         )
     except (ValueError, FileNotFoundError) as exc:
         print(f"error: {exc}", file=sys.stderr)

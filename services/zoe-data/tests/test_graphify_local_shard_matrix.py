@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -62,6 +63,13 @@ def test_parse_shard_validates_name_and_paths():
         else:
             raise AssertionError(f"invalid shard accepted: {value}")
 
+    for value in (".", "..", "bad/name"):
+        try:
+            module.validate_artifact_shard_name(value)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"invalid artifact shard accepted: {value}")
 
 
 
@@ -121,6 +129,73 @@ def test_run_shard_matrix_uses_scope_probe_per_shard(monkeypatch, tmp_path):
     assert all(call.mode == "scope" for call in calls)
     assert all(call.keep_workdir is False for call in calls)
     assert all(call.timeout_sec == 12 for call in calls)
+
+
+def test_run_shard_matrix_copies_artifacts_and_cleans_probe_workdir(monkeypatch, tmp_path):
+    module = _load_module()
+    calls = []
+    temp_parents = []
+
+    def fake_run_probe(config):
+        calls.append(config)
+        temp_parent = tmp_path / f"zoe-graphify-local-probe.{len(temp_parents)}"
+        temp_parent.mkdir()
+        temp_parents.append(temp_parent)
+        workdir = temp_parent / "graphify-local-scope"
+        graphify_out = workdir / "graphify-out"
+        graphify_out.mkdir(parents=True)
+        (graphify_out / "graph.json").write_text("{}", encoding="utf-8")
+        status = _status(model=config.model, accepted=True, duration_ms=25)
+        status["workdir"] = str(workdir)
+        return status
+
+    monkeypatch.setattr(module, "run_probe", fake_run_probe)
+    artifact_dir = tmp_path / "artifacts"
+    shards = (module.GraphifyShard("data-core", ("services/zoe-data",)),)
+
+    status = module.run_shard_matrix(root=tmp_path, model="gemma-e4b", shards=shards, artifact_dir=artifact_dir)
+
+    result = status["results"][0]
+    assert calls[0].keep_workdir is True
+    assert status["artifact_dir"] == str(artifact_dir)
+    assert result["artifact_copied"] is True
+    assert result["artifact_graph_json_exists"] is True
+    assert result["artifact_graph_json_bytes"] == 2
+    assert (artifact_dir / "data-core" / "graphify-out" / "graph.json").exists()
+    assert not temp_parents[0].exists()
+
+
+def test_cleanup_kept_probe_workdir_only_removes_parent_for_probe_temp(tmp_path):
+    module = _load_module()
+    parent = tmp_path / "repo-owned"
+    workdir = parent / "graphify-local-scope"
+    workdir.mkdir(parents=True)
+
+    module.cleanup_kept_probe_workdir({"workdir": str(workdir)})
+
+    assert parent.exists()
+    assert not workdir.exists()
+
+
+def test_run_shard_matrix_rejects_unsafe_artifact_shard_name(monkeypatch, tmp_path):
+    module = _load_module()
+
+    def fake_run_probe(config):
+        raise AssertionError("unsafe artifact shard name should be rejected before probing")
+
+    monkeypatch.setattr(module, "run_probe", fake_run_probe)
+
+    try:
+        module.run_shard_matrix(
+            root=tmp_path,
+            model="gemma-e4b",
+            shards=(module.GraphifyShard("bad/name", ("services/zoe-data",)),),
+            artifact_dir=tmp_path / "artifacts",
+        )
+    except ValueError as exc:
+        assert "invalid artifact shard name" in str(exc)
+    else:
+        raise AssertionError("unsafe artifact shard name accepted")
 
 
 def test_main_writes_status_json_and_allows_partial(monkeypatch, tmp_path, capsys):
