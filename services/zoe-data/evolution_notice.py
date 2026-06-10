@@ -88,6 +88,69 @@ async def _proposal_exists(title: str, prop_type: str, db) -> bool:
     return len(rows) > 0
 
 
+def _attach_notice_trace_to_row(
+    row: dict,
+    *,
+    proposal_id: str,
+    proposal_type: str,
+    title: str,
+    signal,
+) -> dict:
+    """Attach a non-persistent observation trace summary to proposal evidence."""
+
+    try:
+        from zoe_observation_trace import ObservationOutcome, ObservationTrace, ObservationTraceType
+        from zoe_observation_trace_collector import ObservationTraceCollectorPolicy, collect_observation_traces
+
+        evidence = json.loads(row["evidence"])
+        candidate_ids = tuple(str(item) for item in evidence.get("candidate_ids", ()))
+        trace = ObservationTrace(
+            trace_id=f"trace_notice_{proposal_id}",
+            trace_type=ObservationTraceType.PROPOSAL.value,
+            surface="multica",
+            scope=signal.scope,
+            user_id=signal.user_id,
+            outcome=ObservationOutcome.SUCCESS.value,
+            summary=f"Runtime notice proposal prepared for review: {title}",
+            evidence_refs=tuple(signal.evidence_refs),
+            subject_id=proposal_id,
+            related_ids=candidate_ids,
+            metadata={
+                "proposal_type": proposal_type,
+                "signal_id": signal.signal_id,
+                "signal_source": signal.source,
+            },
+        )
+        collection = collect_observation_traces(
+            (trace,),
+            policy=ObservationTraceCollectorPolicy(
+                max_batch_size=5,
+                allowed_surfaces=("multica",),
+                allowed_trace_types=(ObservationTraceType.PROPOSAL.value,),
+            ),
+        )
+        collection_snapshot = collection.to_dict()
+        if not collection.ok:
+            logger.warning(
+                "evolution_notice: trace collection rejected for proposal_id=%s proposal_type=%s rejected=%s",
+                proposal_id,
+                proposal_type,
+                collection_snapshot["rejected"],
+            )
+        evidence["observation_trace_collection"] = collection_snapshot
+        updated = dict(row)
+        updated["evidence"] = json.dumps(evidence, sort_keys=True)
+        return updated
+    except Exception as exc:
+        logger.warning(
+            "evolution_notice: trace collection failed for proposal_id=%s proposal_type=%s: %s",
+            proposal_id,
+            proposal_type,
+            exc,
+        )
+        return row
+
+
 async def run_evolution_notice() -> dict:
     """Run the NOTICE phase — returns summary dict."""
     from db_pool import get_db_ctx
@@ -169,7 +232,13 @@ async def run_evolution_notice() -> dict:
                 legacy_target_patterns=target_members,
                 metadata={"legacy_writer": "evolution_notice:intent_miss_cluster"},
             )
-            row = intake.to_legacy_row()
+            row = _attach_notice_trace_to_row(
+                intake.to_legacy_row(),
+                proposal_id=prop_id,
+                proposal_type=prop_type,
+                title=title,
+                signal=signal,
+            )
             await db.execute(
                 """INSERT INTO evolution_proposals
                    (id, type, title, description, evidence, target_patterns, status, proposed_at)
@@ -280,7 +349,13 @@ async def run_evolution_notice() -> dict:
                 rollback_plan="Reject or defer the proposal; no runtime change has been made by proposal creation.",
                 metadata={"legacy_writer": "evolution_notice:agent_health"},
             )
-            row_payload = intake.to_legacy_row()
+            row_payload = _attach_notice_trace_to_row(
+                intake.to_legacy_row(),
+                proposal_id=prop_id,
+                proposal_type="agent_health",
+                title=title,
+                signal=signal,
+            )
             await db.execute(
                 """INSERT INTO evolution_proposals
                    (id, type, title, description, evidence, target_patterns, status, proposed_at)
@@ -394,7 +469,13 @@ async def record_frustration_signal(
             legacy_target_patterns=(normalized_message,),
             metadata={"legacy_writer": "evolution_notice:user_frustration"},
         )
-        row = intake.to_legacy_row()
+        row = _attach_notice_trace_to_row(
+            intake.to_legacy_row(),
+            proposal_id=prop_id,
+            proposal_type="user_frustration",
+            title=title,
+            signal=signal,
+        )
         await db.execute(
             """INSERT INTO evolution_proposals
                (id, type, title, description, evidence, target_patterns, status, proposed_at)
@@ -502,7 +583,13 @@ async def record_user_issue(message: str, user_id: str) -> None:
             legacy_target_patterns=(message,),
             metadata={"legacy_writer": "evolution_notice:user_issue_report"},
         )
-        row = intake.to_legacy_row()
+        row = _attach_notice_trace_to_row(
+            intake.to_legacy_row(),
+            proposal_id=prop_id,
+            proposal_type="user_issue_report",
+            title=title,
+            signal=signal,
+        )
         await db.execute(
             """INSERT INTO evolution_proposals
                (id, type, title, description, evidence, target_patterns, status, proposed_at)
