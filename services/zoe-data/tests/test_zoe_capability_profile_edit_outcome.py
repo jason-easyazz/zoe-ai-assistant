@@ -190,6 +190,42 @@ async def test_profile_edit_outcome_blocks_when_pr_edit_gate_was_blocked():
     assert pr_edit_plan.allowed_to_prepare_pr_edit is True
 
 
+
+@pytest.mark.asyncio
+async def test_profile_edit_outcome_blocks_unsupported_target_backend_without_raising():
+    handoff, pr_edit_plan = await _allowed_pr_edit_plan()
+
+    plan = build_capability_profile_edit_outcome_plan(
+        pr_edit_plan,
+        verification_traces=(_verification_trace(),),
+        user_id="zoe_system",
+        promotion_manifest=handoff.promotion_manifest,
+        target_backends=("cloud_memory",),
+    )
+
+    assert plan.allowed_to_admit_memory is False
+    assert "unsupported_target_backend:cloud_memory" in plan.blockers
+    assert plan.admission_decision is None
+    assert plan.memory_candidate is None
+
+
+@pytest.mark.asyncio
+async def test_profile_edit_outcome_blocks_unchanged_trust_manifest_without_raising():
+    handoff, pr_edit_plan = await _allowed_pr_edit_plan()
+    manifest = handoff.promotion_manifest.replace('"to_trust_level": "assisted"', '"to_trust_level": "experimental"')
+
+    plan = build_capability_profile_edit_outcome_plan(
+        pr_edit_plan,
+        verification_traces=(_verification_trace(),),
+        user_id="zoe_system",
+        promotion_manifest=manifest,
+    )
+
+    assert plan.allowed_to_admit_memory is False
+    assert "unchanged_trust_level:hindsight_reflective_memory" in plan.blockers
+    assert plan.trust_records == ()
+    assert plan.memory_candidate is None
+
 @pytest.mark.asyncio
 async def test_profile_edit_outcome_rejects_invalid_manifest_before_memory_candidate():
     _handoff, pr_edit_plan = await _allowed_pr_edit_plan()

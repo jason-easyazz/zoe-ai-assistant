@@ -16,7 +16,7 @@ from typing import Any, Mapping, Sequence
 
 from zoe_capability_profile_pr_edit_gate import CapabilityProfilePREditPlan
 from zoe_capability_utils import merge_string_refs
-from zoe_memory_admission import MemoryAdmissionDecision, MemoryAdmissionRequest, evaluate_memory_admission
+from zoe_memory_admission import ADMITTED_WRITE_BACKENDS, MemoryAdmissionDecision, MemoryAdmissionRequest, evaluate_memory_admission
 from zoe_memory_contract import MemoryEvent, MemoryEventType, MemoryRelationship, MemoryScope, MemorySource, RelationshipType
 from zoe_memory_router import MemoryBackend
 from zoe_observation_trace import ObservationTrace
@@ -117,6 +117,7 @@ def build_capability_profile_edit_outcome_plan(
     manifest = _manifest(promotion_manifest, pr_edit_plan)
     if manifest.get("parse_error"):
         blockers.append("invalid_promotion_manifest")
+    blockers.extend(_manifest_trust_blockers(pr_edit_plan, manifest))
     trust_records = () if blockers else _trust_records(pr_edit_plan, manifest, verification_traces)
     if blockers:
         return CapabilityProfileEditOutcomePlan(
@@ -181,6 +182,9 @@ def _outcome_blockers(
         blockers.append("unsupported_scope")
     if not target_backends:
         blockers.append("missing_target_backends")
+    else:
+        unsupported = sorted(set(str(item) for item in target_backends if str(item)) - ADMITTED_WRITE_BACKENDS)
+        blockers.extend(f"unsupported_target_backend:{backend}" for backend in unsupported)
     if not traces:
         blockers.append("missing_verification_traces")
     for trace in traces:
@@ -210,6 +214,24 @@ def _manifest(promotion_manifest: str | Mapping[str, Any] | None, pr_edit_plan: 
         return {"parse_error": str(exc)}
     return value if isinstance(value, Mapping) else {"parse_error": "promotion manifest must decode to an object"}
 
+
+
+def _manifest_trust_blockers(pr_edit_plan: CapabilityProfilePREditPlan, manifest: Mapping[str, Any]) -> tuple[str, ...]:
+    records_by_capability = {
+        str(record.get("capability_id")): record
+        for record in manifest.get("records", [])
+        if isinstance(record, Mapping) and record.get("capability_id")
+    }
+    blockers: list[str] = []
+    for capability_id in pr_edit_plan.promoted_capability_ids:
+        record = records_by_capability.get(capability_id)
+        if not record:
+            continue
+        from_trust = str(record.get("from_trust_level") or "")
+        to_trust = str(record.get("to_trust_level") or "")
+        if from_trust and to_trust and from_trust == to_trust:
+            blockers.append(f"unchanged_trust_level:{capability_id}")
+    return tuple(blockers)
 
 def _trust_records(
     pr_edit_plan: CapabilityProfilePREditPlan,
