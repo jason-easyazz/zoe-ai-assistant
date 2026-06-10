@@ -3,6 +3,7 @@ import pytest
 from hindsight_retain_candidates import (
     HINDSIGHT_RETAIN_SOURCE,
     HindsightRetainAdmissionError,
+    admit_hindsight_retain_candidate,
     build_admitted_hindsight_retain_plan,
     build_hindsight_retain_admission_request,
     build_hindsight_retain_candidate,
@@ -151,6 +152,37 @@ def test_hindsight_retain_candidate_admission_can_approve_hindsight_with_evidenc
     assert "chat:offline-memory" in decision.evidence_refs
     assert "multica:retain-review" in decision.evidence_refs
     assert "approval:multica:retain-review" in decision.evidence_refs
+
+
+def test_admit_hindsight_retain_candidate_stub_is_pending_and_non_writing():
+    result = admit_hindsight_retain_candidate(" mem_evt_candidate ")
+
+    assert result.event_id == "mem_evt_candidate"
+    assert result.admission_id == "admit_hindsight_retain_mem_evt_candidate"
+    assert result.status == MemoryAdmissionStatus.PENDING_REVIEW
+    assert result.allowed_to_write_durable is False
+    assert result.reason == "admission_worker_not_wired"
+    assert result.evidence_refs == ()
+    assert result.side_effects == ()
+    assert result.to_dict() == {
+        "event_id": "mem_evt_candidate",
+        "admission_id": "admit_hindsight_retain_mem_evt_candidate",
+        "status": MemoryAdmissionStatus.PENDING_REVIEW.value,
+        "allowed_to_write_durable": False,
+        "reason": "admission_worker_not_wired",
+        "evidence_refs": [],
+        "side_effects": [],
+    }
+
+
+def test_admit_hindsight_retain_candidate_requires_event_id():
+    with pytest.raises(HindsightRetainAdmissionError, match="event_id is required"):
+        admit_hindsight_retain_candidate(" ")
+
+
+def test_admit_hindsight_retain_candidate_rejects_non_string_event_id():
+    with pytest.raises(TypeError, match="event_id must be str"):
+        admit_hindsight_retain_candidate(None)  # type: ignore[arg-type]
 
 
 def test_admitted_hindsight_retain_plan_requires_approved_hindsight_decision():

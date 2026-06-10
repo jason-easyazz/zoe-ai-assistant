@@ -43,6 +43,12 @@ auto-write to MemoryService, Hindsight, Graphiti, MemPalace, or Multica.
 Additional runtime writers should be wired in later small PRs after each
 backend path is reviewed and tested.
 
+`admit_hindsight_retain_candidate(event_id)` is the current runtime-facing
+admission interface for pending Hindsight retain candidates. It is intentionally
+inert until the admission worker is wired: it returns pending review,
+`allowed_to_write_durable: false`, and no side effects. Future chat/runtime code
+should call this interface rather than calling retain sidecars directly.
+
 ## Intended Flow
 
 1. Memory extraction or Hindsight reflection creates a pending candidate.
@@ -65,7 +71,10 @@ admission is pending or blocked.
 Hindsight retain plans follow the same rule: Zoe may create pending retain
 candidates for review, but the sidecar retain payload cannot be built or
 executed unless a matching admission decision allows durable writes to the
-Hindsight backend.
+Hindsight backend. The current `admit_hindsight_retain_candidate(event_id)`
+entrypoint is a no-op pending stub; a later worker must load the pending
+candidate, build the full admission request, evaluate evidence, and produce an
+admitted retain plan before any durable Hindsight write.
 
 ## Multica Bridge Rules
 
