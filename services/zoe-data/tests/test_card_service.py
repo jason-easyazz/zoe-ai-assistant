@@ -137,6 +137,8 @@ def test_global_card_service_instance():
         card_service._domain_builders.clear()
         card_service.register_domain_builder("calendar_timeline", card_service.build_calendar_timeline_card)
         card_service.register_domain_builder("calendar_event_editor", card_service.build_calendar_event_editor_card)
+        card_service.register_domain_builder("shopping_list", card_service.build_shopping_list_card)
+        card_service.register_domain_builder("shopping_item_editor", card_service.build_shopping_item_editor_card)
 
 
 def test_card_service_build_calendar_timeline_card():
@@ -170,3 +172,37 @@ def test_global_card_service_registers_calendar_builders():
     assert callable(editor)
     assert timeline({"qualifier": "today"})["content"]["view"] == "timeline"
     assert editor({"title": "Dentist"})["content"]["form_id"] == "calendar_event_editor"
+
+
+def test_card_service_build_shopping_list_card():
+    service = CardService()
+    card = service.build_shopping_list_card({"list_name": "Groceries", "items": ["milk", "bread"]})
+
+    assert card["card_type"] == CardType.GENERIC.value
+    assert card["producer"] == "zoe-shopping"
+    assert card["content"]["view"] == "list"
+    assert card["content"]["list_name"] == "Groceries"
+    assert card["content"]["items"] == ["milk", "bread"]
+    assert card["content"]["item_count"] == 2
+
+
+def test_card_service_build_shopping_item_editor_card():
+    service = CardService()
+    card = service.build_shopping_item_editor_card({"list_name": "Groceries", "item": "milk", "quantity": "2"})
+
+    assert card["card_type"] == CardType.ACTION_FORM.value
+    assert card["producer"] == "zoe-shopping"
+    assert card["content"]["form_id"] == "shopping_item_editor"
+    assert card["content"]["values"]["item"] == "milk"
+    assert card["content"]["values"]["list_name"] == "Groceries"
+    assert {field["name"] for field in card["content"]["fields"]} >= {"item", "list_name", "quantity"}
+
+
+def test_global_card_service_registers_shopping_builders():
+    list_builder = card_service.get_domain_builder("shopping_list")
+    editor_builder = card_service.get_domain_builder("shopping_item_editor")
+
+    assert callable(list_builder)
+    assert callable(editor_builder)
+    assert list_builder({"items": ["milk"]})["content"]["view"] == "list"
+    assert editor_builder({"item": "milk"})["content"]["form_id"] == "shopping_item_editor"

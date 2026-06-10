@@ -90,13 +90,44 @@ def _intent_card_data(intent) -> dict:
             logger.debug("calendar_show card contract build failed: %s", exc)
         return payload
     if name == "list_add":
-        return {
+        payload = {
             "type": "list",
             "data": {
-                "list_name": slots.get("list_name") or "List",
+                "list_name": slots.get("list_name") or slots.get("list_type") or "Shopping",
                 "item": slots.get("item") or slots.get("text") or "",
             },
         }
+        try:
+            from card_service import card_service
+
+            payload["card"] = card_service.build_shopping_item_editor_card(slots)
+        except Exception as exc:
+            logger.debug("list_add card contract build failed: %s", exc)
+        return payload
+    if name == "list_show":
+        raw_items = slots.get("items")
+        if isinstance(raw_items, list):
+            items = raw_items
+        elif raw_items:
+            items = [raw_items]
+        elif slots.get("item") or slots.get("text"):
+            items = [slots.get("item") or slots.get("text")]
+        else:
+            items = []
+        payload = {
+            "type": "list",
+            "data": {
+                "list_name": slots.get("list_name") or slots.get("list_type") or "Shopping",
+                "items": items,
+            },
+        }
+        try:
+            from card_service import card_service
+
+            payload["card"] = card_service.build_shopping_list_card(slots)
+        except Exception as exc:
+            logger.debug("list_show card contract build failed: %s", exc)
+        return payload
     if name == "timer_create":
         return {
             "type": "timer",
@@ -157,9 +188,9 @@ def _intent_action_form_payload(intent, panel_id: str | None = None) -> dict | N
             items = raw if isinstance(raw, list) else [str(raw)]
         return {
             "panel_type": "shopping_list",
-            "title": f"{slots.get('list_name', 'Shopping')} List",
+            "title": f"{slots.get('list_name') or slots.get('list_type') or 'Shopping'} List",
             "data": {
-                "list_name": slots.get("list_name") or "Shopping",
+                "list_name": slots.get("list_name") or slots.get("list_type") or "Shopping",
                 "items": items,
                 "item": slots.get("item") or "",
             },
