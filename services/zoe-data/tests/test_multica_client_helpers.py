@@ -11,6 +11,9 @@ class GuardedClient(MULClient):
     async def get_issue(self, issue_id):
         return {}
 
+    async def list_issues(self, *args, **kwargs):
+        return []
+
     async def update_issue(self, *args, **kwargs):
         raise AssertionError("description write must not run when get_issue fails")
 
@@ -33,6 +36,9 @@ async def test_record_progress_skips_when_get_issue_fails():
 @pytest.mark.asyncio
 async def test_record_progress_can_clear_blocker():
     class Client(MULClient):
+        def is_configured(self):
+            return True
+
         async def get_issue(self, issue_id):
             return {
                 "id": issue_id,
@@ -51,6 +57,9 @@ async def test_record_progress_can_clear_blocker():
 @pytest.mark.asyncio
 async def test_record_progress_writes_completion_reason():
     class Client(MULClient):
+        def is_configured(self):
+            return True
+
         async def get_issue(self, issue_id):
             return {
                 "id": issue_id,
@@ -151,3 +160,74 @@ async def test_create_issue_metadata_preserves_existing_ticket_fields():
     assert metadata["source"] == "override"
     assert metadata["last_evidence"] == "old evidence"
     assert metadata["updated_at"] != old_updated_at
+
+
+@pytest.mark.asyncio
+async def test_resolve_issue_returns_backend_id_match_without_listing():
+    class Client(MULClient):
+        def is_configured(self):
+            return True
+
+        async def get_issue(self, issue_id):
+            return {"id": issue_id, "identifier": "ZOE-1"}
+
+        async def list_issues(self, *args, **kwargs):
+            raise AssertionError("direct backend id match should not list issues")
+
+    assert await Client().resolve_issue("issue-1") == {"id": "issue-1", "identifier": "ZOE-1"}
+
+
+@pytest.mark.asyncio
+async def test_resolve_issue_falls_back_to_visible_identifier():
+    class Client(MULClient):
+        def is_configured(self):
+            return True
+
+        async def get_issue(self, issue_id):
+            return {}
+
+        async def list_issues(self, status=None, *, limit=None):
+            assert limit == 1000
+            return [{"id": "issue-1", "identifier": "ZOE-5465"}]
+
+    assert await Client().resolve_issue("zoe-5465") == {"id": "issue-1", "identifier": "ZOE-5465"}
+
+
+@pytest.mark.asyncio
+async def test_resolve_issue_returns_empty_when_reference_not_found():
+    class Client(MULClient):
+        def is_configured(self):
+            return True
+
+        async def get_issue(self, issue_id):
+            return {}
+
+        async def list_issues(self, status=None, *, limit=None):
+            return [{"id": "issue-1", "identifier": "ZOE-1"}]
+
+    assert await Client().resolve_issue("ZOE-9999") == {}
+
+
+@pytest.mark.asyncio
+async def test_record_progress_updates_resolved_backend_issue_id():
+    calls = []
+
+    class Client(MULClient):
+        def is_configured(self):
+            return True
+
+        async def get_issue(self, issue_id):
+            return {}
+
+        async def list_issues(self, status=None, *, limit=None):
+            return [{"id": "issue-1", "identifier": "ZOE-5465", "description": describe_ticket("Issue") }]
+
+        async def update_issue(self, issue_id, **kwargs):
+            calls.append((issue_id, kwargs))
+            return {"id": issue_id, **kwargs}
+
+    updated = await Client().record_progress("ZOE-5465", phase="done")
+
+    assert updated["id"] == "issue-1"
+    assert calls[0][0] == "issue-1"
+    assert parse_ticket_block(calls[0][1]["description"])["phase"] == "done"

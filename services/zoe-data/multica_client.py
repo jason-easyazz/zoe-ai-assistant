@@ -140,6 +140,31 @@ class MULClient:
             logger.warning("Multica get_issue(%s) failed: %s", issue_id, exc)
             return {}
 
+    async def resolve_issue(self, reference: str) -> dict:
+        """Resolve a Multica issue by backend id or visible identifier.
+
+        First attempts a direct backend-id lookup; if that returns nothing, falls
+        back to a full list scan capped at 1000 issues and matched on ``id`` or
+        ``identifier``. Workspaces with more than 1000 issues may not resolve
+        identifiers that fall outside the first page.
+        """
+        if not self.is_configured():
+            return {}
+        wanted = str(reference or "").strip()
+        if not wanted:
+            return {}
+        direct = await self.get_issue(wanted)
+        if direct.get("id"):
+            return direct
+        wanted_lower = wanted.lower()
+        for issue in await self.list_issues(limit=1000):
+            if wanted_lower in {
+                str(issue.get("id") or "").lower(),
+                str(issue.get("identifier") or "").lower(),
+            }:
+                return issue
+        return {}
+
     async def list_issues(
         self,
         status: str | None = None,
@@ -282,20 +307,20 @@ class MULClient:
         """Patch only the fenced Zoe ticket block in an issue description."""
         from multica_ticket_contract import write_ticket_block
 
-        issue = await self.get_issue(issue_id)
+        issue = await self.resolve_issue(issue_id)
         if not issue.get("id"):
             return {}
         original = issue.get("description") or ""
-        return await self.update_issue(issue_id, description=write_ticket_block(original, metadata))
+        return await self.update_issue(str(issue["id"]), description=write_ticket_block(original, metadata))
 
     async def append_issue_note(self, issue_id: str, note: str) -> dict:
         """Append a visible progress note while preserving existing description."""
-        issue = await self.get_issue(issue_id)
+        issue = await self.resolve_issue(issue_id)
         if not issue.get("id"):
             return {}
         original = (issue.get("description") or "").rstrip()
         updated = f"{original}\n\nZoe note: {note.strip()}" if original else f"Zoe note: {note.strip()}"
-        return await self.update_issue(issue_id, description=updated)
+        return await self.update_issue(str(issue["id"]), description=updated)
 
     async def create_child_issue(self, parent: dict, template: dict[str, Any]) -> dict:
         """Create a child issue linked to a parent via the Zoe ticket block.
@@ -352,7 +377,7 @@ class MULClient:
         """Record operator-visible Zoe progress on a Multica issue."""
         from multica_ticket_contract import update_ticket_progress
 
-        issue = await self.get_issue(issue_id)
+        issue = await self.resolve_issue(issue_id)
         if not issue.get("id"):
             return {}
         updated_description = update_ticket_progress(
@@ -367,7 +392,7 @@ class MULClient:
             dispatch_approved=dispatch_approved,
             completion_reason=completion_reason,
         )
-        return await self.update_issue(issue_id, status=status, description=updated_description)
+        return await self.update_issue(str(issue["id"]), status=status, description=updated_description)
 
 
 # Module-level singleton
