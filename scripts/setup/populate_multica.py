@@ -524,7 +524,7 @@ def _runtime_ids_by_provider(default_runtime_id: str) -> dict[str, str]:
         "select provider, id from agent_runtime "
         f"where workspace_id={_sql_literal(WORKSPACE_ID)} "
         "and status='online' "
-        "and provider in ('hermes', 'openclaw', 'cursor') "
+        "and provider in ('hermes') "
         "order by provider, daemon_id is null, updated_at desc;"
     )
     cmd = [
