@@ -5163,6 +5163,26 @@ def test_implement_body_does_not_add_joke_contract_for_other_intent_gaps():
     assert "`Tell me a joke.`, `Tell me a joke`, and `Tell me another joke.`" not in body
 
 
+def test_implement_body_includes_bare_say_exactly_intent_gap_contract():
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {
+            "id": "uuid-intent-exact-bare",
+            "identifier": "ZOE-5682",
+            "title": "Intent gap: say exactly",
+            "description": (
+                "Representative: say exactly. Acceptance: Say exactly: "
+                "Zoe chat integration ok routes to open-domain."
+            ),
+        },
+        "ZOE-5682",
+    )
+
+    assert "INTENT-GAP IMPLEMENT FAST PATH" in body
+    assert "Concrete edit contract for this exact-repeat gap" in body
+    assert "python3 scripts/maintenance/zoe_apply_intent_gap_contract.py say_exactly" in body
+
+
 def test_implement_body_includes_say_exactly_intent_gap_contract():
     body = ka.KanbanAdapter()._build_body(
         "implement",
@@ -5179,7 +5199,7 @@ def test_implement_body_includes_say_exactly_intent_gap_contract():
     assert "Concrete edit contract for this exact-repeat gap" in body
     assert "Say exactly: Zoe chat integration ok" in body
     assert "python3 scripts/maintenance/zoe_apply_intent_gap_contract.py say_exactly" in body
-    assert "run this from the task `workspace_path`, never from `/home/zoe/assistant`" in body
+    assert "run this from the task `workspace_path`, never from the live checkout" in body
     assert "to the agent path while preserving the raw phrase" in body
     assert "Do not add a bespoke" in body
 

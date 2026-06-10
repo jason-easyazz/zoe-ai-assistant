@@ -430,12 +430,16 @@ def _intent_gap_implement_hint(issue: dict | None = None, *, phase: str = "imple
         else " After the existing-PR checkout checks succeed, start the focused revision edit within 4 tool/model steps.\n"
     )
     say_exactly_contract = ""
-    if _SAY_EXACTLY_INTENT_GAP_TITLE_RE.search(title):
+    if (
+        _SAY_EXACTLY_INTENT_GAP_TITLE_RE.search(title)
+        or "say exactly: zoe chat integration ok" in haystack
+        or ("intent gap" in title.lower() and "say exactly" in title.lower())
+    ):
         say_exactly_contract = (
             " Concrete edit contract for this exact-repeat gap: update `_AGENT_CHAT_RE` so"
             " `Say exactly: Zoe chat integration ok` routes to `extend_capability` through"
             " the existing open-domain branch. Preferred deterministic path: after `kanban_show`,"
-            " run this from the task `workspace_path`, never from `/home/zoe/assistant`:"
+            " run this from the task `workspace_path`, never from the live checkout:"
             " `python3 scripts/maintenance/zoe_apply_intent_gap_contract.py say_exactly`,"
             " then immediately run `python3 -m py_compile services/zoe-data/intent_router.py`"
             " and `PYTHONPATH=services/zoe-data python3 -m pytest -q"
