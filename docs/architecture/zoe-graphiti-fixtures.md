@@ -65,6 +65,23 @@ Covered relationship topics:
 - Hermes as the trusted planning/Greptile lane;
 - Graphify refresh as a recurring system-understanding task.
 
+## Review-Only Runtime Proposal
+
+Graphiti adoption now has an inert proposal builder:
+
+```bash
+PYTHONPATH=services/zoe-data python3 scripts/maintenance/graphiti_runtime_proposal.py --legacy-row
+```
+
+The proposal builder runs the read-only runtime probe, attaches Zoe's existing
+`graphiti_falkordb_trial` candidate score, records package/backend/local-model
+readiness, and emits the legacy `evolution_proposals` row shape with a validated
+Zoe proposal contract in `target_patterns`. It does not write the database,
+install Graphiti packages, start FalkorDB or Neo4j, ingest fixtures, query graph
+data, or enable chat recall. On the current host the proposal remains blocked by
+`score_below_threshold` until optional dependency, sidecar, structured-output,
+latency, memory-footprint, and approval evidence are supplied.
+
 ## Acceptance Use
 
 The next Graphiti bake-off PR should:
