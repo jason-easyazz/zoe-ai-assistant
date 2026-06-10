@@ -4699,7 +4699,7 @@ def test_implement_body_includes_harness_repo_map_for_blocker_followup_source():
     assert "do not create `.venv`, run `pip install`" in body
     assert "BLOCKER=TEST_ENVIRONMENT" in body
     assert "If the focused test passes before any edit, do not inspect more blocker code" in body
-    assert "use at most two symbol greps and two reads per named file" in body
+    assert "use at most two symbol greps total and two reads per named file" in body
     assert "edit the named harness file already in scope" in body
     assert "services/zoe-data/main.py" in body
     assert "services/zoe-data/executors/kanban_adapter.py" in body
@@ -4750,7 +4750,7 @@ def test_implement_body_includes_harness_blocker_followup_focused_tests(
     assert expected_test in body
     assert "Use the existing repo/runtime environment only" in body
     assert "If the focused test passes before any edit, do not inspect more blocker code" in body
-    assert "use at most two symbol greps and two reads per named file" in body
+    assert "use at most two symbol greps total and two reads per named file" in body
     assert "edit the named harness file already in scope" in body
     assert "services/zoe-data/main.py" in body
     assert "services/zoe-data/executors/kanban_adapter.py" in body

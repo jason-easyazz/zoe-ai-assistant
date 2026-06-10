@@ -386,7 +386,7 @@ def _harness_implement_hint(issue: dict | None = None) -> str:
             " `kanban_block` with BLOCKER=TEST_ENVIRONMENT and the first import error instead of"
             " spending turns on environment repair."
             " If the focused test passes before any edit, do not inspect more blocker code:"
-            " use at most two symbol greps and two reads per named file, then edit the"
+            " use at most two symbol greps total and two reads per named file, then edit the"
             " named harness file already in scope (usually services/zoe-data/main.py,"
             " services/zoe-data/tests/test_main_multica_poll.py, or"
             " services/zoe-data/executors/kanban_adapter.py) with the smallest guard, or call `kanban_block` with"
