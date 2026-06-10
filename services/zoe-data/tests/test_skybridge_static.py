@@ -190,9 +190,22 @@ def test_skybridge_renderer_supports_real_data_cards():
     assert "renderCalendar(props)" in renderer
     assert "renderWeather(props)" in renderer
     assert "sky-premium-card" in renderer
+    assert "formatCalendarDate" in renderer
+    assert "calendarEventSortKey" in renderer
+    assert "calendarCategoryClass" in renderer
+    assert "sky-calendar-scene" in renderer
+    assert "sky-calendar-event-main" in renderer
+    assert "sky-calendar-category" in renderer
     assert "formatForecastLabel" in renderer
     assert "forecastTempBand(item)" in renderer
-    assert "sky-weather-tile-temp" in renderer
+    assert "formatHourLabel" in renderer
+    assert "const dayList = dailyRows;" in renderer
+    assert "fallbackTiles" not in renderer
+    assert "sky-weather-hour-strip" in renderer
+    assert "sky-weather-hour-tile" in renderer
+    assert "sky-weather-day-list" in renderer
+    assert "sky-weather-day-row" in renderer
+    assert "sky-weather-day-main" in renderer
     assert "sky-weather-temp-band" in renderer
     assert "Current location" in renderer
     assert "Geraldton" not in renderer
@@ -201,15 +214,65 @@ def test_skybridge_renderer_supports_real_data_cards():
     assert "props.source === 'weather_current'" in renderer
     assert "props.source === 'weather_forecast'" in renderer
     assert "sky-event-row" in html
-    assert "sky-weather-forecast-tile" in html
+    assert "sky-weather-hour-tile" in html
+    assert "sky-weather-day-row" in html
     assert "sky-weather-scene" in html
     assert "weather-sunny" in html
     assert "skybridge-runtime-overrides" in html
     assert "skybridge-premium-card-system" in html
+    assert "skybridge-calendar-widget-overrides" in html
     assert "skybridge-forecast-widget-overrides" in html
-    assert "skybridge-premium-cards-3" in html
+    assert "skybridge-weather-widget-v2" in html
+    assert "skybridge-premium-cards-5" in html
     assert "backdrop-filter: none !important" in html
     assert "No events " in renderer
+
+
+def test_skybridge_weather_renderer_uses_widget_forecast_structure():
+    renderer = read(UI / "js" / "skybridge-renderer.js")
+    html = read(UI / "skybridge.html")
+    forecast_label_helper = renderer[
+        renderer.index("function formatForecastLabel"):
+        renderer.index("function formatForecastShort")
+    ]
+
+    assert "const datePart = raw.slice(0, 10);" in forecast_label_helper
+    assert r"/^\d{4}-\d{2}-\d{2}$/.test(datePart)" in forecast_label_helper
+    assert "new Date(datePart + 'T12:00:00')" in forecast_label_helper
+    assert "new Date(raw + 'T12:00:00')" not in forecast_label_helper
+    assert "const dailyRows = daily.slice(0, 5).map" in renderer
+    assert "const hourlyTiles = hourly.slice(0, 8).map" in renderer
+    assert "fallbackTiles" not in renderer
+    assert "const dayList = dailyRows;" in renderer
+    assert "current && current.description" in renderer
+    assert "rain|drizzle|shower|09|10" in renderer
+    assert "cloud|overcast|03|04" in renderer
+    assert "replace(',', '')" in renderer
+    assert "sky-weather-forecast-head" in renderer
+    assert "sky-weather-forecast-grid" not in renderer
+    assert "sky-weather-forecast-tile" not in renderer
+    assert "grid-template-columns: repeat(8, minmax(54px, 1fr))" in html
+    assert "grid-template-columns: minmax(88px, 0.32fr) minmax(0, 1fr) auto" in html
+    assert "text-transform: capitalize" in html
+
+
+def test_skybridge_calendar_renderer_handles_datetime_dates_and_ordering():
+    renderer = read(UI / "js" / "skybridge-renderer.js")
+    calendar_date_helper = renderer[
+        renderer.index("function formatCalendarDate"):
+        renderer.index("function calendarEventSortKey")
+    ]
+
+    assert "const datePart = raw.slice(0, 10);" in calendar_date_helper
+    assert r"/^\d{4}-\d{2}-\d{2}$/.test(datePart)" in calendar_date_helper
+    assert "new Date(datePart + 'T12:00:00')" in calendar_date_helper
+    assert "new Date(raw + 'T12:00:00')" not in calendar_date_helper
+    assert "events.slice().sort((a, b) => calendarEventSortKey(a) - calendarEventSortKey(b)).slice(0, 8)" in renderer
+    assert "props.date || props.start_date || (visibleEvents[0] && visibleEvents[0].start_date)" in renderer
+    assert "props.date || props.start_date || (events[0] && events[0].start_date)" not in renderer
+    assert "const detail = [item.location].filter(Boolean).join(' · ');" in renderer
+    assert "const detail = [item.location, calendarAccentLabel(item.category)]" not in renderer
+    assert "return known.indexOf(token) >= 0 ? token : 'general';" in renderer
 
 
 def test_skybridge_is_registered_in_touch_menu():

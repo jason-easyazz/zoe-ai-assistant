@@ -80,17 +80,71 @@
         return start || item.start_date || 'Scheduled';
     }
 
+    function formatCalendarDate(value) {
+        const raw = String(value || '');
+        const datePart = raw.slice(0, 10);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(datePart)) {
+            const date = new Date(datePart + 'T12:00:00');
+            if (!Number.isNaN(date.getTime())) {
+                return {
+                    weekday: date.toLocaleDateString(undefined, { weekday: 'long' }),
+                    monthDay: date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+                };
+            }
+        }
+        return { weekday: 'Agenda', monthDay: raw || 'Today' };
+    }
+
+    function calendarEventSortKey(item) {
+        const datePart = String(item.start_date || item.date || '').slice(0, 10);
+        const timePart = item.all_day ? '00:00' : String(item.start_time || '00:00').slice(0, 5);
+        const sortable = datePart ? datePart + 'T' + timePart : '9999-12-31T' + timePart;
+        const timestamp = Date.parse(sortable);
+        return Number.isNaN(timestamp) ? Number.MAX_SAFE_INTEGER : timestamp;
+    }
+
+    function calendarCategoryClass(value) {
+        const token = safeClassTokens(String(value || 'general').toLowerCase()) || 'general';
+        const known = ['work', 'personal', 'bucket', 'shopping', 'health', 'routine', 'social', 'family', 'general'];
+        return known.indexOf(token) >= 0 ? token : 'general';
+    }
+
+    function calendarAccentLabel(value) {
+        const category = calendarCategoryClass(value);
+        return category.charAt(0).toUpperCase() + category.slice(1);
+    }
+
     function renderCalendar(props) {
         const events = Array.isArray(props.events) ? props.events : [];
-        const rows = events.slice(0, 8).map(item => {
+        const visibleEvents = events.slice().sort((a, b) => calendarEventSortKey(a) - calendarEventSortKey(b)).slice(0, 8);
+        const dateMeta = formatCalendarDate(props.date || props.start_date || (visibleEvents[0] && visibleEvents[0].start_date));
+        const rows = visibleEvents.map((item, index) => {
             const title = item.title || item.name || 'Calendar event';
-            const detail = [item.location, item.category].filter(Boolean).join(' · ');
-            return '<div class="sky-event-row"><span>' + escapeHtml(formatEventTime(item)) + '</span><strong>' + escapeHtml(title) + '</strong>' + (detail ? '<em>' + escapeHtml(detail) + '</em>' : '') + '</div>';
+            const category = calendarCategoryClass(item.category);
+            const detail = [item.location].filter(Boolean).join(' · ');
+            return [
+                '<div class="sky-event-row sky-calendar-event ' + escapeHtml(category) + '">',
+                '<div class="sky-calendar-time"><span>' + escapeHtml(formatEventTime(item)) + '</span>' + (index === 0 ? '<b>Next</b>' : '') + '</div>',
+                '<div class="sky-calendar-event-main"><strong>' + escapeHtml(title) + '</strong>' + (detail ? '<em>' + escapeHtml(detail) + '</em>' : '') + '</div>',
+                '<div class="sky-calendar-category">' + escapeHtml(calendarAccentLabel(item.category)) + '</div>',
+                '</div>'
+            ].join('');
         }).join('');
-        const empty = '<div class="sky-empty-data"><strong>No events ' + escapeHtml(props.qualifier || 'today') + '</strong><span>Your calendar is clear for this range.</span></div>';
+        const empty = [
+            '<div class="sky-empty-data sky-calendar-empty">',
+            '<div class="sky-calendar-empty-mark" aria-hidden="true"></div>',
+            '<strong>No events ' + escapeHtml(props.qualifier || 'today') + '</strong>',
+            '<span>Your calendar is clear for this range.</span>',
+            '</div>'
+        ].join('');
         const body = [
+            '<div class="sky-calendar-scene">',
+            '<div class="sky-calendar-summary">',
+            '<div class="sky-calendar-date"><span>' + escapeHtml(dateMeta.weekday) + '</span><strong>' + escapeHtml(dateMeta.monthDay) + '</strong></div>',
             '<div class="sky-widget-metric"><strong>' + escapeHtml(events.length) + '</strong><span>' + escapeHtml(events.length === 1 ? 'event' : 'events') + ' ' + escapeHtml(props.qualifier || '') + '</span></div>',
-            '<div class="sky-data-list">' + (rows || empty) + '</div>'
+            '</div>',
+            '<div class="sky-calendar-agenda"><div class="sky-calendar-rail" aria-hidden="true"></div><div class="sky-data-list">' + (rows || empty) + '</div></div>',
+            '</div>'
         ].join('');
         return cardFrame(Object.assign({ status: 'Calendar', icon: 'C' }, props), body, { wide: true, tone: 'calendar-card' });
     }
@@ -102,7 +156,13 @@
     }
 
     function weatherClass(props, current) {
-        const text = String((current && (current.icon || current.description || current.condition)) || props.condition || '').toLowerCase();
+        const text = [
+            current && current.description,
+            current && current.condition,
+            props.description,
+            props.condition,
+            current && current.icon
+        ].filter(Boolean).join(' ').toLowerCase();
         if (/thunder|storm/.test(text)) return 'weather-stormy';
         if (/rain|drizzle|shower/.test(text)) return 'weather-rainy';
         if (/snow|sleet|ice/.test(text)) return 'weather-snowy';
@@ -113,26 +173,59 @@
     }
 
     function weatherEmoji(current) {
-        const text = String((current && (current.icon_emoji || current.icon || current.description || current.condition)) || '').toLowerCase();
         if (current && current.icon_emoji) return current.icon_emoji;
-        if (/thunder|storm/.test(text)) return '⛈️';
-        if (/rain|drizzle|shower/.test(text)) return '🌧️';
-        if (/snow|sleet|ice/.test(text)) return '❄️';
-        if (/fog|mist|haze|smoke/.test(text)) return '🌫️';
-        if (/cloud|overcast/.test(text)) return '☁️';
+        const text = [
+            current && current.description,
+            current && current.condition,
+            current && current.icon
+        ].filter(Boolean).join(' ').toLowerCase();
+        const icon = String(current && current.icon || '').toLowerCase();
+        if (/thunder|storm|11/.test(text)) return '⛈️';
+        if (/rain|drizzle|shower|09|10/.test(text)) return '🌧️';
+        if (/snow|sleet|ice|13/.test(text)) return '❄️';
+        if (/fog|mist|haze|smoke|50/.test(text)) return '🌫️';
+        if (/part|02/.test(text)) return /n$/.test(icon) ? '🌙' : '🌤️';
+        if (/cloud|overcast|03|04/.test(text)) return '☁️';
         if (/night|\dn$/.test(text)) return '🌙';
         return '☀️';
     }
 
     function formatForecastLabel(value) {
         const raw = String(value || '');
-        if (/^\d{4}-\d{2}-\d{2}/.test(raw)) {
-            const date = new Date(raw + 'T12:00:00');
+        const datePart = raw.slice(0, 10);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(datePart)) {
+            const date = new Date(datePart + 'T12:00:00');
             if (!Number.isNaN(date.getTime())) {
                 return date.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
             }
         }
         return raw;
+    }
+
+    function formatForecastShort(value) {
+        const raw = String(value || '');
+        const datePart = raw.slice(0, 10);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(datePart)) {
+            const date = new Date(datePart + 'T12:00:00');
+            if (!Number.isNaN(date.getTime())) {
+                return date.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' }).replace(',', '');
+            }
+        }
+        const label = formatForecastLabel(value).replace(',', '');
+        return label
+            .replace(/^([A-Za-z]{3})\s+([A-Za-z]{3})\s+(\d+)$/, '$1 $3')
+            .replace(/^([A-Za-z]{3})\s+(\d+)\s+([A-Za-z]{3})$/, '$1 $2');
+    }
+
+    function formatHourLabel(value) {
+        const raw = String(value || '');
+        const match = raw.match(/T?(\d{1,2}):(\d{2})/);
+        if (!match) return raw || 'Now';
+        const hour = Number(match[1]);
+        if (!Number.isFinite(hour)) return raw;
+        if (hour === 0) return '12am';
+        if (hour === 12) return '12pm';
+        return (hour > 12 ? hour - 12 : hour) + (hour > 11 ? 'pm' : 'am');
     }
 
     function formatWind(value) {
@@ -170,22 +263,31 @@
         const location = props.location || {};
         const place = [location.city || current.city || props.city, location.country || current.country || props.country].filter(Boolean).join(', ') || 'Current location';
         const description = current.description || current.condition || props.description || 'Current conditions';
-        const points = daily.length ? daily.slice(0, 5) : hourly.slice(0, 5);
-        const forecastTiles = points.map(item => {
-            const label = formatForecastLabel(item.day || item.time || '');
+        const dailyRows = daily.slice(0, 5).map((item, index) => {
+            const label = formatForecastShort(item.day || item.time || '');
             const high = item.high != null ? formatTemp(item.high) : formatTemp(item.temp);
             const low = item.low != null ? formatTemp(item.low) : '';
             const band = forecastTempBand(item);
             const condition = item.description || item.condition || '';
             return [
-                '<div class="sky-weather-forecast-tile">',
-                '<div class="sky-weather-tile-top"><span>' + escapeHtml(label) + '</span><b aria-hidden="true">' + escapeHtml(weatherEmoji(item)) + '</b></div>',
-                '<div class="sky-weather-tile-temp"><strong>' + escapeHtml(high) + '</strong>' + (low ? '<small>' + escapeHtml(low) + '</small>' : '') + '</div>',
-                '<div class="sky-weather-temp-band" aria-hidden="true"><i style="left: ' + band.left + '%; width: ' + band.width + '%;"></i></div>',
-                '<em>' + escapeHtml(condition) + '</em>',
+                '<div class="sky-weather-day-row' + (index === 0 ? ' is-primary' : '') + '">',
+                '<div class="sky-weather-day-label"><span>' + escapeHtml(index === 0 ? 'Today' : label) + '</span><b aria-hidden="true">' + escapeHtml(weatherEmoji(item)) + '</b></div>',
+                '<div class="sky-weather-day-main"><strong>' + escapeHtml(condition || description) + '</strong><div class="sky-weather-temp-band" aria-hidden="true"><i style="left: ' + band.left + '%; width: ' + band.width + '%;"></i></div></div>',
+                '<div class="sky-weather-day-temp"><strong>' + escapeHtml(high) + '</strong>' + (low ? '<small>' + escapeHtml(low) + '</small>' : '') + '</div>',
                 '</div>'
             ].join('');
         }).join('');
+        const hourlyTiles = hourly.slice(0, 8).map((item, index) => {
+            const label = index === 0 ? 'Now' : formatHourLabel(item.time || item.day || '');
+            return [
+                '<div class="sky-weather-hour-tile">',
+                '<span>' + escapeHtml(label) + '</span>',
+                '<b aria-hidden="true">' + escapeHtml(weatherEmoji(item)) + '</b>',
+                '<strong>' + escapeHtml(formatTemp(item.temp != null ? item.temp : item.high)) + '</strong>',
+                '</div>'
+            ].join('');
+        }).join('');
+        const dayList = dailyRows;
         const meta = [
             ['🌡', 'Feels ' + formatTemp(current.feels_like)],
             ['💧', current.humidity == null ? 'Humidity --' : current.humidity + '% humidity'],
@@ -199,7 +301,11 @@
             '<div class="sky-weather-condition">' + escapeHtml(description) + '</div>',
             '<div class="sky-weather-meta">' + meta + '</div>',
             '</div>',
-            '<div class="sky-weather-forecast"><h4>' + escapeHtml(props.source === 'weather_forecast' ? 'Forecast' : 'Next up') + '</h4><div class="sky-weather-forecast-grid">' + forecastTiles + '</div></div>',
+            '<div class="sky-weather-forecast">',
+            '<div class="sky-weather-forecast-head"><h4>' + escapeHtml(props.source === 'weather_forecast' ? 'Forecast' : 'Next up') + '</h4><span>' + escapeHtml(daily.length ? daily.length + ' days' : hourly.length + ' hours') + '</span></div>',
+            hourlyTiles ? '<div class="sky-weather-hour-strip">' + hourlyTiles + '</div>' : '',
+            dayList ? '<div class="sky-weather-day-list">' + dayList + '</div>' : (!hourlyTiles ? '<div class="sky-weather-day-list"><div class="sky-empty-data">No forecast data available yet.</div></div>' : ''),
+            '</div>',
             '</div>'
         ].join('');
         return cardFrame(Object.assign({ status: 'Weather', icon: 'W' }, props), body, { wide: true, tone: 'weather-card ' + weatherClass(props, current) });
