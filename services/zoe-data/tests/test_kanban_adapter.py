@@ -2035,7 +2035,7 @@ async def test_poll_v4_todo_existing_phase_clears_stale_prior_blocker():
 
 
 @pytest.mark.asyncio
-async def test_poll_v4_audit_protocol_recovery_reports_partial_for_next_phase():
+async def test_poll_v4_blank_audit_protocol_violation_blocks():
     from pipeline_store import bootstrap_state
 
     await bootstrap_state(
@@ -2060,10 +2060,11 @@ async def test_poll_v4_audit_protocol_recovery_reports_partial_for_next_phase():
     a = _FakeAdapter(list_rows=rows, show_map=show)
     out = await a.poll("multica:uuid-9")
 
-    assert out["status"] == "partial"
-    assert out["blocker"] is None
-    assert out["pipeline"]["phase"] == "verify"
-    assert out["pipeline"]["status"] == "todo"
+    assert out["status"] == "blocked"
+    assert out["blocker"] == "PROTOCOL_VIOLATION"
+    assert out["pipeline"]["phase"] == "implement"
+    assert out["pipeline"]["status"] == "blocked"
+    assert out["pipeline"]["terminal_block"] is True
 
 
 @pytest.mark.asyncio
