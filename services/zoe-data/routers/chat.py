@@ -188,7 +188,7 @@ def _intent_action_form_payload(intent, panel_id: str | None = None) -> dict | N
             items = raw if isinstance(raw, list) else [str(raw)]
         return {
             "panel_type": "shopping_list",
-            "title": f"{slots.get('list_name', 'Shopping')} List",
+            "title": f"{slots.get('list_name') or slots.get('list_type') or 'Shopping'} List",
             "data": {
                 "list_name": slots.get("list_name") or slots.get("list_type") or "Shopping",
                 "items": items,

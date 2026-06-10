@@ -1,7 +1,7 @@
 """Tests for shopping/list intent canonical card emission."""
 
 from intent_router import Intent
-from routers.chat import _intent_card_data
+from routers.chat import _intent_action_form_payload, _intent_card_data
 
 
 def test_list_show_payload_keeps_compat_shape_and_adds_contract():
@@ -45,3 +45,10 @@ def test_list_show_payload_list_type_matches_contract():
 
     assert payload["data"]["list_name"] == "Hardware"
     assert payload["card"]["content"]["list_name"] == "Hardware"
+
+
+def test_list_action_form_title_list_type_matches_data():
+    payload = _intent_action_form_payload(Intent("list_show", {"list_type": "Hardware", "items": ["screws"]}))
+
+    assert payload["title"] == "Hardware List"
+    assert payload["data"]["list_name"] == "Hardware"
