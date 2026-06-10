@@ -75,3 +75,25 @@ Evidence:
 - estimated Graphify extraction cost was `$0.1962`;
 - query smoke test returned traversal results for `HindsightConfig`, `_validate_embeddings_offline_policy()`, and `_embeddings_base_url_from_env()`;
 - refresh ran in a clean worktree after PR #267 merged the Hindsight offline embedding guard.
+
+## Refresh 2026-06-10 Hindsight Latency Hardening Pass
+
+Trigger commit: `0146caad86aa4d1c4c64d5f6895df6cbc7038033`
+
+Commands:
+
+```bash
+OPENAI_API_KEY=$(grep "^OPENAI_API_KEY=" /home/zoe/assistant/.env | cut -d= -f2-) /home/zoe/.local/share/uv/tools/graphifyy/bin/graphify extract . --backend openai
+/home/zoe/.local/share/uv/tools/graphifyy/bin/graphify cluster-only . --no-viz
+python3 tools/audit/validate_structure.py
+python3 tools/audit/validate_critical_files.py
+python3 tools/audit/validate_offline_memory.py
+git diff --check
+```
+
+Evidence:
+
+- Graphify was refreshed in PR #351 after PR #349 merged;
+- `graphify-out/GRAPH_REPORT.md` and `graphify-out/graph.json` contain the generated graph metrics for the final refresh;
+- structure, critical-file, offline-memory, and diff whitespace validators passed;
+- refresh ran after PR #349 hardened Hindsight recall latency summaries so missing enabled latency remains unmeasured instead of becoming `0ms`.
