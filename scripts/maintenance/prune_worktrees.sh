@@ -90,7 +90,10 @@ fi
 for wt in "${candidates[@]}"; do
   branch="$(git -C "$wt" branch --show-current 2>/dev/null || true)"
   log "removing $wt"
-  git worktree remove "$wt"
+  if ! git worktree remove "$wt"; then
+    log "failed to remove $wt (in-progress operation or new changes?); skipping"
+    continue
+  fi
   if [[ -n "$branch" ]]; then
     if git branch -d "$branch" 2>/dev/null; then
       log "deleted merged branch $branch"
