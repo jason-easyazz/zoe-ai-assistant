@@ -76,6 +76,10 @@ _JOKE_INTENT_GAP_TITLE_RE = re.compile(
     r"\bintent[- ]gap\b.*['\"]?(?:tell\s+me\s+(?:another\s+)?joke|joke)['\"]?",
     re.IGNORECASE,
 )
+_SAY_EXACTLY_INTENT_GAP_TITLE_RE = re.compile(
+    r"\bintent[- ]gap\b.*\bsay\s+exactly[: ]+zoe\s+chat\s+integration\s+ok\b",
+    re.IGNORECASE,
+)
 _GITHUB_PR_URL_RE = re.compile(r"https://github\.com/[^/\s]+/[^/\s]+/pull/\d+")
 _SHELL_TOOL_LINE_RE = re.compile(r"(?:^|\s)(?:💻\s+)?\$\s+(?P<command>.+)$")
 
@@ -423,6 +427,19 @@ def _intent_gap_implement_hint(issue: dict | None = None, *, phase: str = "imple
         if phase == "implement"
         else " After the existing-PR checkout checks succeed, start the focused revision edit within 4 tool/model steps.\n"
     )
+    say_exactly_contract = ""
+    if _SAY_EXACTLY_INTENT_GAP_TITLE_RE.search(title):
+        say_exactly_contract = (
+            " Concrete edit contract for this exact-repeat gap: update `_AGENT_CHAT_RE` so"
+            " `Say exactly: Zoe chat integration ok` routes to `extend_capability` through"
+            " the existing open-domain branch. Preferred deterministic path: from the repo root,"
+            " run `python3 scripts/maintenance/zoe_apply_intent_gap_contract.py say_exactly`,"
+            " then immediately run `python3 -m py_compile services/zoe-data/intent_router.py`"
+            " and `PYTHONPATH=services/zoe-data python3 -m pytest -q"
+            " services/zoe-data/tests/test_intent_open_domain.py`. Do not add a bespoke"
+            " say/echo executor in this ticket; the acceptance goal is routing the request"
+            " to the agent path while preserving the raw phrase.\n"
+        )
     joke_contract = ""
     if _JOKE_INTENT_GAP_TITLE_RE.search(title):
         joke_contract = (
@@ -449,6 +466,7 @@ def _intent_gap_implement_hint(issue: dict | None = None, *, phase: str = "imple
         " `detect_intent`. Your first search should be one of those anchors;"
         " do not grep `_CALCULATE_`, `_execute_`, or unrelated domain sections"
         " for creative intent gaps."
+        f"{say_exactly_contract}"
         f"{joke_contract}"
         " If those files are not the right location, call `kanban_block` with"
         " BLOCKER=IMPLEMENT_BUDGET and the missing locator instead of exploring."
