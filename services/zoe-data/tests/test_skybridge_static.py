@@ -283,11 +283,13 @@ def test_skybridge_is_registered_in_touch_menu():
 
     assert "{ id: 'skybridge'" in menu
     assert "/touch/skybridge.html" in menu
-    assert "{ id: 'skybridge-calendar'" in menu
-    assert "path: '/touch/skybridge.html', href: '/touch/skybridge.html?q=show%20my%20calendar'" in menu
-    assert "item.href = p.href || p.path;" in menu
+    assert "{ id: 'skybridge', path: '/touch/skybridge.html'," not in menu
+    assert "q=show%20my%20calendar" not in menu
+    assert "Skybridge Calendar" not in menu
+    assert "Skybridge Interface" not in menu
     assert "verify=touch-menu-calendar" not in menu
-    assert "Skybridge Calendar" in menu
+    assert "item.href = p.path;" in menu
+    assert "'skybridge-calendar'" not in menu
     assert "'skybridge-calendar-test'" not in menu
     assert "'dashboard', 'skybridge'," not in menu
     assert "'skybridge.html'" in menu
