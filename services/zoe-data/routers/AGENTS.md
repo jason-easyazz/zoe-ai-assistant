@@ -23,7 +23,7 @@ Match the existing router style: APIRouter per module, explicit auth dependencie
 
 ## Verification
 
-Focused pytest in `../tests/` for the touched router plus a live `/health` check after restart.
+Focused pytest in `../tests/` for the touched router plus a live `/health` check after restart. These tests import service modules, so they run ONLY on the self-hosted Jetson runner, never GitHub-hosted runners (see `../tests/AGENTS.md`).
 
 ## Child DOX Index
 
