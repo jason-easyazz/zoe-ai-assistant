@@ -8,7 +8,7 @@
 importScripts('https://storage.googleapis.com/workbox-cdn/releases/7.0.0/workbox-sw.js');
 
 // Zoe UI Version 4.17.3 - public modules (with or without trailing path segment)
-const SW_VERSION = '4.63.10'; // agent activity sidebar: escape/slice fixes, task detail fetch
+const SW_VERSION = '4.63.11'; // skybridge: bypass stale cached voice surface
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
@@ -80,6 +80,12 @@ if (workbox) {
         new workbox.strategies.NetworkOnly()
     );
     
+    // Skybridge is a live voice/data surface. Never serve stale HTML or runtime JS.
+    workbox.routing.registerRoute(
+        ({ url }) => url.pathname === '/touch/skybridge.html' || url.pathname.startsWith('/touch/js/skybridge'),
+        new workbox.strategies.NetworkOnly()
+    );
+
     // 1. HTML Pages - Network First (fresh content, fallback to cache)
     workbox.routing.registerRoute(
         ({ request }) => request.destination === 'document',
@@ -570,4 +576,3 @@ self.addEventListener('activate', (event) => {
 // above, causing notifications to be shown twice. Removed intentionally.
 
 console.log(`🎯 Zoe Service Worker ${SW_VERSION} loaded successfully`);
-

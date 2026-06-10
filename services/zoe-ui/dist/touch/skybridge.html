@@ -2245,8 +2245,8 @@
             box-shadow:
                 0 24px 90px rgba(0,0,0,0.42),
                 inset 0 1px 0 rgba(255,255,255,0.1) !important;
-            backdrop-filter: blur(28px);
-            -webkit-backdrop-filter: blur(28px);
+            backdrop-filter: none !important;
+            -webkit-backdrop-filter: none !important;
             animation: none !important;
         }
 
@@ -2295,6 +2295,79 @@
         body.sky-empty .sky-stage {
             opacity: 0 !important;
             pointer-events: none !important;
+        }
+
+        body.sky-command-open .sky-command,
+        body.sky-voice-fallback .sky-command,
+        body:not(.sky-empty) .sky-command {
+            display: flex !important;
+            position: fixed !important;
+            left: 50% !important;
+            right: auto !important;
+            bottom: max(116px, calc(env(safe-area-inset-bottom, 0px) + 116px)) !important;
+            width: min(760px, calc(100vw - 40px)) !important;
+            min-height: 64px !important;
+            transform: translateX(-50%) !important;
+            align-items: center !important;
+            gap: 10px !important;
+            padding: 9px 10px 9px 16px !important;
+            border: 1px solid rgba(255,255,255,0.14) !important;
+            border-radius: 999px !important;
+            background:
+                linear-gradient(145deg, rgba(255,255,255,0.18), rgba(255,255,255,0.07)),
+                rgba(9, 13, 27, 0.76) !important;
+            box-shadow: 0 24px 86px rgba(0,0,0,0.34), inset 0 1px 0 rgba(255,255,255,0.1) !important;
+            backdrop-filter: blur(28px);
+            -webkit-backdrop-filter: blur(28px);
+            z-index: 32 !important;
+        }
+
+        body.sky-voice-fallback.sky-empty .sky-command {
+            bottom: max(44px, calc(env(safe-area-inset-bottom, 0px) + 34px)) !important;
+        }
+
+        .sky-command #skyHomeBtn {
+            display: none !important;
+        }
+
+        .sky-command input {
+            min-width: 0 !important;
+            flex: 1 1 auto !important;
+            height: 44px !important;
+            border: 0 !important;
+            outline: 0 !important;
+            background: transparent !important;
+            color: rgba(255,255,255,0.94) !important;
+            font-size: 17px !important;
+        }
+
+        .sky-command input::placeholder {
+            color: rgba(255,255,255,0.48) !important;
+        }
+
+        .sky-command button {
+            flex: 0 0 auto !important;
+            height: 44px !important;
+            min-width: 52px !important;
+            padding: 0 16px !important;
+            border: 1px solid rgba(255,255,255,0.13) !important;
+            border-radius: 999px !important;
+            background: rgba(255,255,255,0.1) !important;
+            color: rgba(255,255,255,0.88) !important;
+            font-weight: 700 !important;
+        }
+
+        .sky-command .primary {
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            border-color: rgba(90,224,224,0.38) !important;
+            background: linear-gradient(135deg, #7B61FF, #5AE0E0) !important;
+            color: #07111d !important;
+        }
+
+        body.sky-voice-fallback.sky-empty .sky-listening-copy {
+            color: rgba(255,255,255,0.7) !important;
         }
 
         .sky-card-stack {
@@ -2412,6 +2485,30 @@
                 height: 74px !important;
                 line-height: 74px !important;
                 font-size: 15px !important;
+            }
+
+            body.sky-command-open .sky-command,
+            body.sky-voice-fallback .sky-command,
+            body:not(.sky-empty) .sky-command {
+                width: calc(100vw - 24px) !important;
+                min-height: 60px !important;
+                bottom: max(104px, calc(env(safe-area-inset-bottom, 0px) + 104px)) !important;
+                padding: 8px 8px 8px 14px !important;
+            }
+
+            body.sky-voice-fallback.sky-empty .sky-command {
+                bottom: max(28px, calc(env(safe-area-inset-bottom, 0px) + 24px)) !important;
+            }
+
+            .sky-command input {
+                height: 42px !important;
+                font-size: 16px !important;
+            }
+
+            .sky-command button {
+                height: 42px !important;
+                min-width: 46px !important;
+                padding: 0 12px !important;
             }
         }
     </style>
@@ -2698,6 +2795,12 @@
                 font-size: 15px !important;
             }
         }
+
+        .sky-orb-panel,
+        .sky-stage {
+            backdrop-filter: none !important;
+            -webkit-backdrop-filter: none !important;
+        }
     </style>
 </head>
 <body>
@@ -2764,9 +2867,9 @@
     <script src="/touch/js/gestures.js"></script>
     <script src="/touch/js/touch-menu.js"></script>
     <script src="/js/touch-ui-executor.js"></script>
-    <script src="/touch/js/skybridge-capabilities.js?v=skybridge-minimal-1"></script>
-    <script src="/touch/js/skybridge-renderer.js?v=skybridge-minimal-1"></script>
-    <script src="/touch/js/skybridge-voice.js?v=skybridge-minimal-1"></script>
-    <script src="/touch/js/skybridge.js?v=skybridge-minimal-1"></script>
+    <script src="/touch/js/skybridge-capabilities.js?v=skybridge-orb-fallback-5"></script>
+    <script src="/touch/js/skybridge-renderer.js?v=skybridge-orb-fallback-5"></script>
+    <script src="/touch/js/skybridge-voice.js?v=skybridge-orb-fallback-5"></script>
+    <script src="/touch/js/skybridge.js?v=skybridge-orb-fallback-5"></script>
 </body>
 </html>

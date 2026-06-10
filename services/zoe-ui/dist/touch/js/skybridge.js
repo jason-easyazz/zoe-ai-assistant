@@ -11,6 +11,7 @@
     let cardSequence = 0;
     let currentUtterance = '';
     let voiceStartedByUser = false;
+    let commandFallbackOpen = false;
 
     const colors = {
         ambient: ['#5fc6ff', '#66d19e'],
@@ -24,6 +25,7 @@
         bindEvents();
         startOrb();
         renderHome();
+        syncVoiceFallbackState();
         loadBackendStatus();
         setMode(mode);
         if (typeof TouchMenu !== 'undefined') TouchMenu.init({ page: 'skybridge' });
@@ -75,6 +77,11 @@
             submitCommand(els.input.value);
             els.input.value = '';
         });
+        els.input.addEventListener('focus', () => openCommandFallback('Type anything Zoe should show.'));
+        els.input.addEventListener('input', () => {
+            commandFallbackOpen = true;
+            document.body.classList.add('sky-command-open');
+        });
         els.mic.addEventListener('click', toggleVoiceCapture);
         els.orbButton.addEventListener('click', toggleVoiceCapture);
         els.voiceAction.addEventListener('click', toggleVoiceCapture);
@@ -125,6 +132,8 @@
     async function submitCommand(text) {
         const query = String(text || '').trim();
         if (!query) return;
+        commandFallbackOpen = false;
+        document.body.classList.remove('sky-command-open');
         currentUtterance = 'Heard: ' + query;
         els.copy.textContent = currentUtterance;
         addTranscript('user', query);
@@ -248,6 +257,7 @@
                 addCard(card, false, index * 90);
             });
         }
+        syncVoiceFallbackState();
         updateVoiceHint('Touch the orb to speak', getMicGuidance(), 'Start mic');
         requestAnimationFrame(resizeOrb);
     }
@@ -336,16 +346,41 @@
         if (document.body.classList.contains('sky-empty') || !currentUtterance) {
             els.copy.textContent = copy[state] || copy.ambient;
         }
+        syncVoiceFallbackState();
+        if (!commandFallbackOpen && state !== 'ambient') document.body.classList.remove('sky-command-open');
         setStatus(state.charAt(0).toUpperCase() + state.slice(1));
         updateVoiceControl(state);
     }
 
+    function isLocalhost() {
+        return location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+    }
+
+    function canUseMicrophone() {
+        const nav = typeof navigator === 'undefined' ? null : navigator;
+        return (!!window.isSecureContext || isLocalhost()) && !!(nav && nav.mediaDevices && nav.mediaDevices.getUserMedia);
+    }
+
+    function syncVoiceFallbackState() {
+        document.body.classList.toggle('sky-voice-fallback', !canUseMicrophone());
+    }
+
+    function openCommandFallback(message) {
+        commandFallbackOpen = true;
+        document.body.classList.add('sky-command-open');
+        if (message) els.copy.textContent = message;
+        requestAnimationFrame(() => {
+            try { els.input.focus({ preventScroll: true }); } catch (_) { els.input.focus(); }
+        });
+    }
+
     function getMicGuidance() {
-        if (!window.isSecureContext && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
-            return 'Open Skybridge over HTTPS on the touch screen so the browser can allow microphone access.';
+        if (!window.isSecureContext && !isLocalhost()) {
+            return 'Voice needs HTTPS here. You can still type below and Zoe will render the cards.';
         }
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-            return 'This browser is not exposing a microphone API. Check kiosk permissions and use the HTTPS Zoe URL.';
+        const nav = typeof navigator === 'undefined' ? null : navigator;
+        if (!nav || !nav.mediaDevices || !nav.mediaDevices.getUserMedia) {
+            return 'This browser is not exposing a microphone. Type below and Zoe will render the cards.';
         }
         return 'The touch screen will ask for microphone access the first time.';
     }
@@ -376,12 +411,14 @@
     }
 
     function toggleVoiceCapture() {
-        if (!voice) {
-            showError('Voice transport is still connecting.');
+        syncVoiceFallbackState();
+        if (!canUseMicrophone()) {
+            openCommandFallback(getMicGuidance());
             return;
         }
-        if (!window.isSecureContext && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
-            showError('Microphone requires HTTPS. Open the touch screen using the HTTPS Zoe URL.');
+        if (!voice) {
+            openCommandFallback('Voice is still connecting. Type here or tap again in a moment.');
+            showError('Voice transport is still connecting.');
             return;
         }
         if (voice.isRecording) {
@@ -395,6 +432,7 @@
         voiceStartedByUser = true;
         voice.startRecording().catch(err => {
             voiceStartedByUser = false;
+            openCommandFallback('Microphone unavailable. Type here and Zoe will still render the cards.');
             showError(err.message || 'Microphone unavailable');
         });
     }

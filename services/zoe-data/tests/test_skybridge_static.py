@@ -16,6 +16,7 @@ def read(path: Path) -> str:
 
 def test_skybridge_page_loads_required_modules_in_order():
     html = read(UI / "skybridge.html")
+    auth = read(ROOT / "zoe-ui" / "dist" / "js" / "auth.js")
     expected = [
         "/js/auth.js",
         "/touch/js/skybridge-capabilities.js",
@@ -30,6 +31,7 @@ def test_skybridge_page_loads_required_modules_in_order():
     assert "/js/touch-ui-executor.js" in html
     assert "id=\"skyCards\"" in html
     assert "id=\"skyCommandForm\"" in html
+    assert "/api/skybridge/resolve" in auth
     assert "window.confirm = function() { return true; }" not in html
 
 
@@ -50,6 +52,10 @@ def test_skybridge_uses_login_orb_to_voice_pill_layout():
     assert "body.sky-empty .sky-command:focus-within" in html
     assert "body.sky-empty .sky-command:hover" in html
     assert "body:not(.sky-empty) .sky-command:hover" in html
+    assert "body.sky-voice-fallback .sky-command" in html
+    assert "body.sky-command-open .sky-command" in html
+    assert "Type below and Zoe will render the cards" in read(UI / "js" / "skybridge.js")
+    assert "canUseMicrophone()" in read(UI / "js" / "skybridge.js")
     assert "id=\"skyOrbButton\"" in html
     assert "id=\"skyVoiceHint\"" in html
     assert "Touch the orb to speak" in html
@@ -203,3 +209,14 @@ def test_skybridge_is_registered_in_touch_menu():
     assert "/touch/skybridge.html" in menu
     assert "'skybridge.html'" in menu
     assert "'dashboard', 'skybridge', 'calendar'" not in menu
+
+
+
+def test_service_worker_does_not_cache_skybridge_runtime():
+    sw = read(ROOT / "zoe-ui" / "dist" / "sw.js")
+
+    assert "Skybridge is a live voice/data surface" in sw
+    assert "4.63.11" in sw
+    assert "url.pathname === '/touch/skybridge.html'" in sw
+    assert "url.pathname.startsWith('/touch/js/skybridge')" in sw
+    assert "new workbox.strategies.NetworkOnly()" in sw
