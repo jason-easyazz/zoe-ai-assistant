@@ -11,7 +11,7 @@ THE production Zoe API: FastAPI app served by host uvicorn on port 8000. Owns ch
 - Agents and tools: `mcp_server.py`, `openclaw_ws.py`, `hermes_http.py`, `zoe_agent`-related modules, `executors/` (engineering-board executors, currently `kanban_adapter.py`).
 - Memory: `hindsight_memory.py`, `hindsight_retain_candidates.py`, `conversation_context.py`.
 - Streaming/UI protocol: `ag_ui_stream.py`, `card_service.py`, `card_contract.py`.
-- Engineering loop: `greploop_guard.py` lives in `scripts/maintenance/`; `greptile_client.py` and `background_runner.py` live here.
+- Engineering loop: `greptile_client.py` and `background_runner.py`. The Greploop guard script is NOT here — it lives at `scripts/maintenance/greploop_guard.py` (see `scripts/AGENTS.md`).
 
 ## Local Contracts
 
