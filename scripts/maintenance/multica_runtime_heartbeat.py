@@ -1,30 +1,17 @@
 #!/usr/bin/env python3
-"""multica_runtime_heartbeat.py — Reflect real local liveness into Multica's runtime registry.
+"""multica_runtime_heartbeat.py — Reflect Zoe API liveness into Multica.
 
 Why this exists
 ---------------
-Multica's runtime registry (``agent_runtime`` rows) is normally fed by a Multica
-*daemon* that registers and then heartbeats over the daemon-authenticated API.
-Multica's sweeper flips an ``online`` row to ``offline`` once its ``last_seen_at``
-goes stale (``staleThresholdSeconds`` = 150s server-side).
+Multica's runtime registry (``agent_runtime`` rows) is normally fed by a native
+Multica daemon. Zoe now runs that daemon for tool-backed runtimes such as
+Hermes, OpenClaw, and Cursor, so this reflector must not mark those daemon-owned
+rows.
 
-Zoe does NOT run a Multica daemon — the Zoe<->Multica pipeline talks to the
-*issues* REST API (executor_registry -> kanban_adapter), not the daemon/runtime
-protocol. The three Zoe runtime rows (openclaw-gateway, hermes-agent, Zoe Home
-Server) were seeded directly into the Multica DB by
-``scripts/setup/populate_multica.py`` with ``daemon_id = NULL``, so nothing ever
-heartbeats them and they permanently read "offline".
-
-This script closes that gap *honestly*: it probes the actual local processes and
-writes the truthful status (``online`` iff the process is really up) plus a fresh
-``last_seen_at`` directly into the Multica DB — the same channel
-``populate_multica.py`` already uses for these exact rows (POST /api/runtimes is
-405; PATCH only edits timezone/visibility). It is intended to run on a short
-systemd timer (< 150s cadence) so live runtimes stay online and dead ones flip
-offline within one tick.
-
-This is a cosmetic registry reflector. The Hermes Kanban execution pipeline does
-NOT depend on these rows; it exists so the Multica board shows reality.
+This script only reflects the seeded Zoe Home Server runtime row, which is a Zoe
+API surface rather than a native Multica daemon runtime. It updates only
+``daemon_id IS NULL`` rows so it cannot make a stale or legacy Hermes/OpenClaw
+row look dispatchable.
 
 Usage
 -----
@@ -102,12 +89,10 @@ def _zoe_alive() -> bool:
         return False
 
 
-# provider -> (human label, liveness probe). Keyed by the agent_runtime.provider
-# column so we update exactly the seeded Zoe rows and nothing else.
+# provider -> (human label, liveness probe). Only seeded non-daemon rows belong
+# here. Native Multica daemon rows heartbeat themselves.
 _RUNTIMES: tuple[tuple[str, str, Callable[[], bool]], ...] = (
     ("zoe", "Zoe Home Server", _zoe_alive),
-    ("hermes", "hermes-agent", lambda: _proc_alive("hermes gateway run")),
-    ("openclaw_gateway", "openclaw-gateway", lambda: _proc_alive("openclaw/dist/index.js gateway")),
 )
 
 
@@ -119,7 +104,7 @@ def _update_runtime(provider: str, online: bool) -> tuple[bool, str]:
         "SET status = :'st', "
         "    last_seen_at = CASE WHEN :'st' = 'online' THEN now() ELSE last_seen_at END, "
         "    updated_at = now() "
-        "WHERE workspace_id = :'ws'::uuid AND provider = :'provider';"
+        "WHERE workspace_id = :'ws'::uuid AND provider = :'provider' AND daemon_id IS NULL;"
     )
     # SQL is piped on stdin (not -c) so psql performs :'var' interpolation,
     # which quotes/escapes each value safely server-side.

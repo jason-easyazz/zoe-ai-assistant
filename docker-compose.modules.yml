@@ -56,8 +56,13 @@ services:
       APP_ENV: development
       JWT_SECRET: "${MULTICA_JWT_SECRET}"
       MULTICA_DEV_VERIFICATION_CODE: "${MULTICA_DEV_CODE}"
-      FRONTEND_ORIGIN: "http://localhost:3000"
-      MULTICA_APP_URL: "http://localhost:3000"
+      FRONTEND_ORIGIN: "http://zoe.local:3000"
+      # Multica backend v0.3.1 reads CORS_ALLOWED_ORIGINS for HTTP CORS and
+      # ALLOWED_ORIGINS for realtime WebSocket origin checks. Keep localhost
+      # dev origins explicit alongside Zoe's LAN origin.
+      CORS_ALLOWED_ORIGINS: "http://zoe.local,http://zoe.local:3000,http://localhost:3000,http://127.0.0.1:3000"
+      ALLOWED_ORIGINS: "http://zoe.local,http://zoe.local:3000,http://localhost:3000,http://127.0.0.1:3000"
+      MULTICA_APP_URL: "http://zoe.local:3000"
       ALLOW_SIGNUP: "true"
       # Email verification (ZOE-48): set RESEND_API_KEY or SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS
       # RESEND_API_KEY: "${RESEND_API_KEY:-}"

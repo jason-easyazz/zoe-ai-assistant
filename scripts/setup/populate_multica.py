@@ -91,6 +91,12 @@ def _patch(path: str, payload: dict) -> dict | None:
     return None
 
 
+def _sql_literal(value: Any) -> str:
+    if value is None:
+        return "NULL"
+    return "'" + str(value).replace("'", "''") + "'"
+
+
 def _post_with_workspace(path: str, payload: dict) -> dict | None:
     """POST with workspace_id as query param (used for sub-resource endpoints)."""
     params = {"workspace_id": WORKSPACE_ID}
@@ -116,6 +122,55 @@ def _db_exec(sql: str) -> tuple[bool, str]:
         return False, result.stderr
     except Exception as e:
         return False, str(e)
+
+
+def _db_update_one(sql: str) -> tuple[bool, str]:
+    ok, msg = _db_exec(sql)
+    if not ok:
+        return False, msg
+    command_tags = [line.strip() for line in msg.splitlines() if line.strip().startswith("UPDATE ")]
+    if command_tags != ["UPDATE 1"]:
+        return False, (msg.strip() or "update did not report row count")
+    return True, msg
+
+
+def _db_name_id_map(table: str, names: list[str]) -> dict[str, str]:
+    if not names:
+        return {}
+    allowed_tables = {"agent", "squad"}
+    if table not in allowed_tables:
+        print(f"  ⚠ Refusing to inspect unsupported table {table!r}")
+        return {}
+    names_sql = ", ".join(_sql_literal(name) for name in names)
+    sql = (
+        "select name, id from "
+        f"{table} where workspace_id={_sql_literal(WORKSPACE_ID)} "
+        f"and name in ({names_sql}) "
+        "order by name, archived_at nulls first, updated_at desc;"
+    )
+    cmd = [
+        "docker", "exec", _DB_CONTAINER,
+        "psql", "-U", _DB_USER, "-d", _DB_NAME,
+        "-t", "-A", "-F", "\t", "-c", sql,
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+    except Exception as exc:
+        print(f"  ⚠ Failed to inspect existing {table} rows: {exc}")
+        return {}
+    if result.returncode != 0:
+        print(f"  ⚠ Failed to inspect existing {table} rows: {(result.stderr or result.stdout)[:100]}")
+        return {}
+    found: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        if "\t" not in line:
+            continue
+        name, row_id = line.split("\t", 1)
+        name = name.strip()
+        row_id = row_id.strip()
+        if name and row_id and name not in found:
+            found[name] = row_id
+    return found
 
 
 # ── Step A — Update workspace context ─────────────────────────────────────────
@@ -397,29 +452,33 @@ _AGENT_DEFS = [
     {
         "name": "OpenClaw",
         "description": (
-            "Autonomous task execution agent. Receives approved Multica issues, implements "
-            "code changes, tests, and commits. Primary capability-building agent."
+            "Agentic execution runtime. Handles browser automation, code execution, skill "
+            "building, and simple-English Multica quick-create tasks through the native "
+            "Multica daemon."
         ),
         "instructions": (
-            "You are OpenClaw, Zoe's execution agent. You receive approved tasks from the "
-            "Multica board and implement them: writing code, adding intents, building skills, "
-            "fixing bugs, running tests, committing changes. Always read files before editing. "
-            "Work in small, testable increments."
+            "You are OpenClaw, Zoe's native agentic execution runtime. Use local tools to "
+            "create well-formed Multica issues from simple-English quick-create requests, "
+            "run browser/tool tasks when explicitly assigned, and report blockers clearly. "
+            "Do not decide Zoe engineering phase advancement; Zoe/Hermes harness owns that workflow."
         ),
-        "model": "Llama-3.2-3B-Instruct-Q4_K_M",
+        "model": "main",
     },
     {
         "name": "Hermes",
         "description": (
-            "OpenAI-compatible relay agent. Routes requests from external tools (Open WebUI, "
-            "voice clients) to OpenClaw. Entry point: port 8642."
+            "Zoe engineering and reasoning runtime. Handles Multica issue execution, architecture "
+            "review, code review, Greptile/PR loops, and deterministic harness repair through "
+            "the native Multica daemon."
         ),
         "instructions": (
-            "You are Hermes, an OpenAI-compatible API relay for the Zoe ecosystem. You accept "
-            "requests in OpenAI format and route them to the appropriate Zoe agent. You handle "
-            "voice client connections and external tool integrations."
+            "You are Hermes, Zoe's default engineering and reasoning agent. For Multica work, "
+            "follow the issue context, use available CLI/tools, keep changes scoped, provide "
+            "evidence, and surface blockers. Zoe driver owns phase advancement; do not create "
+            "unmanaged Kanban chains or bypass dispatch gates."
         ),
-        "model": "Llama-3.2-3B-Instruct-Q4_K_M",
+        # Multica daemon selector for the Hermes CLI profile, not a public OpenAI model id.
+        "model": "gpt-5.4",
     },
     {
         "name": "Agent Zero",
@@ -458,13 +517,33 @@ def step_f_create_agents(runtime_id: str) -> dict[str, str]:
     print("\n[F] Creating agents...")
     existing_raw = _get("/api/agents") or []
     existing: list[dict] = existing_raw if isinstance(existing_raw, list) else existing_raw.get("agents", [])
-    existing_names = {a["name"]: a["id"] for a in existing}
+    managed_names = [str(defn["name"]) for defn in _AGENT_DEFS]
+    existing_names = _db_name_id_map("agent", managed_names)
+    for agent in existing:
+        name = agent.get("name")
+        if name in managed_names and name not in existing_names:
+            existing_names[name] = agent["id"]
 
     agent_ids: dict[str, str] = dict(existing_names)
     for defn in _AGENT_DEFS:
         name = defn["name"]
         if name in existing_names:
-            print(f"  ↩ Agent '{name}' exists ({existing_names[name]}) — skipping")
+            agent_id = existing_names[name]
+            sql = (
+                "update agent set "
+                f"description={_sql_literal(defn['description'])}, "
+                f"instructions={_sql_literal(defn['instructions'])}, "
+                f"model={_sql_literal(defn['model'])}, "
+                f"runtime_id={_sql_literal(runtime_id)}, "
+                "runtime_mode='local', visibility='workspace', "
+                "archived_at=NULL, archived_by=NULL, updated_at=now() "
+                f"where id={_sql_literal(agent_id)};"
+            )
+            ok, msg = _db_update_one(sql)
+            if ok:
+                print(f"  ↻ Agent '{name}' exists ({agent_id}) — refreshed managed fields")
+            else:
+                print(f"  ⚠ Agent '{name}' exists ({agent_id}) — refresh failed: {msg[:100]}")
             continue
         result = _post("/api/agents", {
             "name": name,
@@ -542,21 +621,19 @@ def step_h_create_squads(agent_ids: dict[str, str]) -> dict[str, str]:
     print("\n[H] Creating squads...")
     existing_raw = _get("/api/squads") or []
     existing: list[dict] = existing_raw if isinstance(existing_raw, list) else existing_raw.get("squads", [])
-    existing_names = {s["name"]: s["id"] for s in existing}
-
-    squad_ids: dict[str, str] = dict(existing_names)
 
     squads_to_create = [
         {
             "name": "Zoe Operations Squad",
-            "leader": "OpenClaw",
+            "leader": "Hermes",
             "description": (
-                "Core operations team. Handles infrastructure, capability-building, and "
-                "self-improvement tasks. OpenClaw leads execution."
+                "Core operations team. Hermes leads engineering and harness work; OpenClaw "
+                "is available for browser/tool-heavy execution; Zoe Core provides user context."
             ),
             "instructions": (
-                "Handle all infrastructure, capability-building, and self-improvement tasks. "
-                "OpenClaw leads execution. Zoe Core provides context on user needs."
+                "Use Hermes as the default engineering lead for Multica source-of-truth tickets. "
+                "Delegate browser/tool-heavy execution to OpenClaw only when required. Keep work "
+                "cost-controlled and report blockers on the ticket."
             ),
             "members": ["Zoe Core", "Hermes", "Self-Improvement Agent"],
         },
@@ -575,6 +652,15 @@ def step_h_create_squads(agent_ids: dict[str, str]) -> dict[str, str]:
         },
     ]
 
+    managed_squad_names = [str(sq["name"]) for sq in squads_to_create]
+    existing_names = _db_name_id_map("squad", managed_squad_names)
+    for squad in existing:
+        name = squad.get("name")
+        if name in managed_squad_names and name not in existing_names:
+            existing_names[name] = squad["id"]
+
+    squad_ids: dict[str, str] = dict(existing_names)
+
     for sq in squads_to_create:
         name = sq["name"]
         leader_id = agent_ids.get(sq["leader"])
@@ -584,7 +670,19 @@ def step_h_create_squads(agent_ids: dict[str, str]) -> dict[str, str]:
 
         if name in existing_names:
             squad_id = existing_names[name]
-            print(f"  ↩ Squad '{name}' exists ({squad_id})")
+            sql = (
+                "update squad set "
+                f"description={_sql_literal(sq['description'])}, "
+                f"instructions={_sql_literal(sq['instructions'])}, "
+                f"leader_id={_sql_literal(leader_id)}, "
+                "archived_at=NULL, archived_by=NULL, updated_at=now() "
+                f"where id={_sql_literal(squad_id)};"
+            )
+            ok, msg = _db_update_one(sql)
+            if ok:
+                print(f"  ↻ Squad '{name}' exists ({squad_id}) — refreshed leader/context")
+            else:
+                print(f"  ⚠ Squad '{name}' exists ({squad_id}) — refresh failed: {msg[:100]}")
         else:
             result = _post("/api/squads", {
                 "name": name,
