@@ -106,6 +106,8 @@ _MARK_REVIEWED_VERDICT_RE = re.compile(
     re.IGNORECASE,
 )
 _ZERO_STEP_WARNED: set[str] = set()
+_POST_FOCUS_READ_BUDGET_DEFAULT = 2
+_POST_FOCUS_GREP_BUDGET_DEFAULT = 2
 
 
 def _limit(phase: str, kind: str) -> int:
@@ -267,16 +269,32 @@ def _pre_edit_repeat_read_budget() -> int:
 
 def _post_focus_read_budget() -> int:
     try:
-        return max(1, int(os.environ.get("ZOE_KANBAN_IMPLEMENT_POST_FOCUS_READ_BUDGET", "2")))
+        return max(
+            1,
+            int(
+                os.environ.get(
+                    "ZOE_KANBAN_IMPLEMENT_POST_FOCUS_READ_BUDGET",
+                    str(_POST_FOCUS_READ_BUDGET_DEFAULT),
+                )
+            ),
+        )
     except ValueError:
-        return 2
+        return _POST_FOCUS_READ_BUDGET_DEFAULT
 
 
 def _post_focus_grep_budget() -> int:
     try:
-        return max(1, int(os.environ.get("ZOE_KANBAN_IMPLEMENT_POST_FOCUS_GREP_BUDGET", "2")))
+        return max(
+            1,
+            int(
+                os.environ.get(
+                    "ZOE_KANBAN_IMPLEMENT_POST_FOCUS_GREP_BUDGET",
+                    str(_POST_FOCUS_GREP_BUDGET_DEFAULT),
+                )
+            ),
+        )
     except ValueError:
-        return 2
+        return _POST_FOCUS_GREP_BUDGET_DEFAULT
 
 
 def _read_path_key(raw_path: str) -> str:
