@@ -40,6 +40,13 @@ repo only when the status is accepted, blockers are empty, `graph.json` is
 non-empty, and `GRAPH_REPORT.md` exists. Rejected runs write
 `graphify-out/.last_refresh_error` and leave committed graph artifacts untouched.
 
+`graphify_shard_sync_plan.py` is the no-write bridge between accepted shard
+evidence and a future sharded sync implementation. It consumes a
+`graphify_local_shard_matrix` status JSON, rejects partial/blocked/nonlocal or
+malformed shard evidence, and emits a plan with `artifact_sync_ready=false` until
+per-shard `graphify-out` artifacts, deterministic graph merge handling, merged
+cluster/report generation, and inventory reconciliation are proven.
+
 Acceptance is fail-closed. The status JSON is rejected when Graphify times out,
 exits nonzero, omits `graphify-out/graph.json`, writes an empty graph, emits
 invalid JSON chunks, emits truncated chunks, or surfaces cloud quota errors.
@@ -116,6 +123,12 @@ Current evidence:
   and max observed child RSS 86,408 KB. This keeps the default local shard lane
   accepted on current main, but it does not make the committed full
   `graphify-out` map current.
+- No-write shard sync plan against the same current default shard evidence returned
+  `ready_for_artifact_merge_design` with no blockers or warnings, while keeping
+  `artifact_sync_ready=false`. Required next steps are artifact-preserving shard
+  runs, per-shard graph/report validation, deterministic graph JSON merge,
+  merged cluster/report generation, and inventory comparison before any
+  committed `graphify-out` replacement.
 
 ## Refresh 2026-06-09 Foundation Pass
 
