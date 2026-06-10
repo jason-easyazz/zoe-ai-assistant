@@ -795,6 +795,18 @@ async def lifespan(app: FastAPI):
                                 title[:40],
                                 blocker,
                             )
+                            try:
+                                await broadcaster.broadcast(
+                                    "all",
+                                    "multica_task_blocked",
+                                    {
+                                        "multica_issue_id": str(issue_id),
+                                        "title": title,
+                                        "blocker": blocker,
+                                    },
+                                )
+                            except Exception as _push_exc:
+                                logger.debug("multica_poll: ws block push failed: %s", _push_exc)
                         elif chain.get("found") and chain.get("status") == "running":
                             if await _record_running_multica_chain_progress(
                                 client,
@@ -808,18 +820,6 @@ async def lifespan(app: FastAPI):
                                     title[:40],
                                     f" PR={chain.get('pr_url')}" if chain.get("pr_url") else "",
                                 )
-                            try:
-                                await broadcaster.broadcast(
-                                    "all",
-                                    "multica_task_blocked",
-                                    {
-                                        "multica_issue_id": str(issue_id),
-                                        "title": title,
-                                        "blocker": blocker,
-                                    },
-                                )
-                            except Exception as _push_exc:
-                                logger.debug("multica_poll: ws block push failed: %s", _push_exc)
                     except Exception as _inner_exc:
                         logger.debug("multica_poll: inner error for issue %s: %s", issue_id, _inner_exc)
 

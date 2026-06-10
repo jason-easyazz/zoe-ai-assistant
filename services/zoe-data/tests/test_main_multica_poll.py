@@ -75,6 +75,22 @@ def test_tracked_multica_engineering_issues_includes_review_and_deduplicates():
     ]
 
 
+def test_poll_loop_keeps_blocked_broadcast_out_of_running_branch():
+    source = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
+    blocked_branch = source.index('elif chain.get("found") and chain.get("status") == "blocked"')
+    running_branch = source.index('elif chain.get("found") and chain.get("status") == "running"')
+    inner_except = source.index("except Exception as _inner_exc", running_branch)
+
+    blocked_segment = source[blocked_branch:running_branch]
+    running_segment = source[running_branch:inner_except]
+
+    assert "blocker = await _record_blocked_multica_chain" in blocked_segment
+    assert '"multica_task_blocked"' in blocked_segment
+    assert "_record_running_multica_chain_progress" in running_segment
+    assert '"multica_task_blocked"' not in running_segment
+    assert "blocker" not in running_segment
+
+
 @pytest.mark.asyncio
 async def test_record_running_multica_chain_progress_records_pr_url_and_review_status():
     from main import _record_running_multica_chain_progress
