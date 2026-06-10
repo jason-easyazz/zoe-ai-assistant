@@ -397,29 +397,32 @@ _AGENT_DEFS = [
     {
         "name": "OpenClaw",
         "description": (
-            "Autonomous task execution agent. Receives approved Multica issues, implements "
-            "code changes, tests, and commits. Primary capability-building agent."
+            "Agentic execution runtime. Handles browser automation, code execution, skill "
+            "building, and simple-English Multica quick-create tasks through the native "
+            "Multica daemon."
         ),
         "instructions": (
-            "You are OpenClaw, Zoe's execution agent. You receive approved tasks from the "
-            "Multica board and implement them: writing code, adding intents, building skills, "
-            "fixing bugs, running tests, committing changes. Always read files before editing. "
-            "Work in small, testable increments."
+            "You are OpenClaw, Zoe's native agentic execution runtime. Use local tools to "
+            "create well-formed Multica issues from simple-English quick-create requests, "
+            "run browser/tool tasks when explicitly assigned, and report blockers clearly. "
+            "Do not decide Zoe engineering phase advancement; Zoe/Hermes harness owns that workflow."
         ),
-        "model": "Llama-3.2-3B-Instruct-Q4_K_M",
+        "model": "main",
     },
     {
         "name": "Hermes",
         "description": (
-            "OpenAI-compatible relay agent. Routes requests from external tools (Open WebUI, "
-            "voice clients) to OpenClaw. Entry point: port 8642."
+            "Zoe engineering and reasoning runtime. Handles Multica issue execution, architecture "
+            "review, code review, Greptile/PR loops, and deterministic harness repair through "
+            "the native Multica daemon."
         ),
         "instructions": (
-            "You are Hermes, an OpenAI-compatible API relay for the Zoe ecosystem. You accept "
-            "requests in OpenAI format and route them to the appropriate Zoe agent. You handle "
-            "voice client connections and external tool integrations."
+            "You are Hermes, Zoe's default engineering and reasoning agent. For Multica work, "
+            "follow the issue context, use available CLI/tools, keep changes scoped, provide "
+            "evidence, and surface blockers. Zoe driver owns phase advancement; do not create "
+            "unmanaged Kanban chains or bypass dispatch gates."
         ),
-        "model": "Llama-3.2-3B-Instruct-Q4_K_M",
+        "model": "gpt-5.4",
     },
     {
         "name": "Agent Zero",
@@ -549,14 +552,15 @@ def step_h_create_squads(agent_ids: dict[str, str]) -> dict[str, str]:
     squads_to_create = [
         {
             "name": "Zoe Operations Squad",
-            "leader": "OpenClaw",
+            "leader": "Hermes",
             "description": (
-                "Core operations team. Handles infrastructure, capability-building, and "
-                "self-improvement tasks. OpenClaw leads execution."
+                "Core operations team. Hermes leads engineering and harness work; OpenClaw "
+                "is available for browser/tool-heavy execution; Zoe Core provides user context."
             ),
             "instructions": (
-                "Handle all infrastructure, capability-building, and self-improvement tasks. "
-                "OpenClaw leads execution. Zoe Core provides context on user needs."
+                "Use Hermes as the default engineering lead for Multica source-of-truth tickets. "
+                "Delegate browser/tool-heavy execution to OpenClaw only when required. Keep work "
+                "cost-controlled and report blockers on the ticket."
             ),
             "members": ["Zoe Core", "Hermes", "Self-Improvement Agent"],
         },
