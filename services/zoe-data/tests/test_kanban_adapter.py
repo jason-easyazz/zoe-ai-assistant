@@ -2431,7 +2431,7 @@ def test_implement_pre_edit_drift_allows_harness_followup_named_file_read_after_
     assert reason is None
 
 
-def test_implement_pre_edit_drift_does_not_charge_allowed_adapter_read_to_budget(
+def test_implement_pre_edit_drift_does_not_charge_allowed_named_file_read_to_budget(
     tmp_path, monkeypatch
 ):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
@@ -2449,6 +2449,31 @@ def test_implement_pre_edit_drift_does_not_charge_allowed_adapter_read_to_budget
         "services/zoe-data/tests/test_main_multica_poll.py::"
         "test_record_blocked_multica_chain_creates_iteration_budget_followup  3.3s\n"
         "  ┊ 📖 read      /work/services/zoe-data/executors/kanban_adapter.py  0.1s\n",
+        encoding="utf-8",
+    )
+
+    reason = kb.implement_pre_edit_drift_reason_from_log(
+        "t_impl",
+        "implement",
+        task_body='{"source":"engineering_blocker_followup"}',
+    )
+
+    assert reason is None
+
+
+def test_implement_pre_edit_drift_allows_multiple_distinct_named_file_reads_after_focused_test(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 💻 $         cd /work && PYTHONPATH=services/zoe-data python3 -m pytest -q "
+        "services/zoe-data/tests/test_main_multica_poll.py::"
+        "test_record_blocked_multica_chain_creates_iteration_budget_followup  3.3s\n"
+        "  ┊ 📖 read      /work/services/zoe-data/main.py  0.1s\n"
+        "  ┊ 📖 read      /work/services/zoe-data/tests/test_main_multica_poll.py  0.1s\n",
         encoding="utf-8",
     )
 

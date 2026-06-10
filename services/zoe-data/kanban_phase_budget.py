@@ -567,7 +567,6 @@ def implement_pre_edit_drift_reason_from_log(
             continue
         if not _EXPLORE_STEP_RE.search(line):
             continue
-        explore_steps += 1
         read_match = _READ_STEP_RE.search(line)
         if focused_harness_test_seen:
             path = _read_path_key(read_match.group("path")) if read_match else ""
@@ -583,6 +582,7 @@ def implement_pre_edit_drift_reason_from_log(
                 "exploring after focused test instead of editing the named harness file "
                 "or blocking ALREADY_COVERED"
             )
+        explore_steps += 1
         if explore_steps > explore_budget:
             return (
                 "BLOCKER=IMPLEMENT_HANDOFF_DRIFT: pre-edit exploration exceeded "
