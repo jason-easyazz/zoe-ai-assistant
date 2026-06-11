@@ -696,13 +696,15 @@ async def run_guard_once(
         status = await get_pr_status(repo=DEFAULT_REPO, pr_number=pr_number, default_branch=DEFAULT_BASE_BRANCH)
         comments = await list_pr_comments(repo=DEFAULT_REPO, pr_number=pr_number, default_branch=DEFAULT_BASE_BRANCH)
         findings = comments.get("findings") or []
+        actionable_findings = _actionable_greptile_findings(findings)
         if status.get("reviewIsRunning"):
             wait_count = int(state.get("waiting_greptile_count") or 0) + 1
             state["waiting_greptile_count"] = wait_count
             state["greptile"] = {
                 "status": status.get("reviewCompleteness") or "review_running",
                 "confidence": status.get("confidenceScore"),
-                "unaddressed_count": len(findings),
+                "unaddressed_count": len(actionable_findings),
+                "summary_count": max(0, len(findings) - len(actionable_findings)),
             }
             if wait_count > MAX_ITERATIONS:
                 state["terminal_state"] = "BLOCKED_GREPTILE_STUCK"
@@ -713,7 +715,7 @@ async def run_guard_once(
             _write_json(pr_number, "status.json", state)
             return {"ok": True, "state": "WAITING_GREPTILE", "greptile": status}
         state["waiting_greptile_count"] = 0
-        progress_key = f"{status.get('headSha')}:{status.get('confidenceScore')}:{len(findings)}"
+        progress_key = f"{status.get('headSha')}:{status.get('confidenceScore')}:{len(actionable_findings)}:{len(findings)}"
         blocked = _update_circuit_breakers(pr_number, state, progress_key)
         if blocked:
             state["terminal_state"] = blocked
@@ -723,19 +725,20 @@ async def run_guard_once(
         state["greptile"] = {
             "status": status.get("reviewCompleteness") or "reviewed",
             "confidence": status.get("confidenceScore"),
-            "unaddressed_count": len(findings),
+            "unaddressed_count": len(actionable_findings),
+            "summary_count": max(0, len(findings) - len(actionable_findings)),
         }
         _write_json(pr_number, "status.json", state)
-        if (status.get("confidenceScore") or 0) >= int(task.get("target_confidence") or 5) and not findings:
+        if (status.get("confidenceScore") or 0) >= int(task.get("target_confidence") or 5) and not actionable_findings:
             state["terminal_state"] = "READY_TO_MERGE"
             _write_json(pr_number, "status.json", state)
             return {"ok": True, "state": "READY_TO_MERGE", "greptile": status}
-        if not findings:
+        if not actionable_findings:
             triggered = await trigger_review(repo=DEFAULT_REPO, pr_number=pr_number, default_branch=DEFAULT_BASE_BRANCH)
             state["terminal_state"] = "WAITING_GREPTILE"
             _write_json(pr_number, "status.json", {**state, "triggered_review": triggered})
             return {"ok": True, "state": "WAITING_GREPTILE", "triggered_review": triggered}
-        finding = findings[0]
+        finding = actionable_findings[0]
         if any(str(finding.get("file_path") or "").startswith(prefix) for prefix in HIGH_RISK_PREFIXES):
             state["terminal_state"] = "ESCALATE_HERMES"
             _write_json(pr_number, "status.json", state)

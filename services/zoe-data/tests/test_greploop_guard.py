@@ -276,6 +276,99 @@ async def test_run_guard_once_active_review_does_not_trip_no_progress(tmp_path, 
 
 
 @pytest.mark.asyncio
+async def test_run_guard_once_ignores_pathless_greptile_summary_when_confident(tmp_path, monkeypatch):
+    async def fake_status(**_kwargs):
+        return {
+            "confidenceScore": 5,
+            "reviewIsRunning": False,
+            "headSha": "abc",
+            "reviewCompleteness": "No Greptile review comments",
+        }
+
+    async def fake_comments(**_kwargs):
+        return {
+            "findings": [
+                {
+                    "id": "summary-1",
+                    "file_path": "",
+                    "body": "Greptile summary with confidence 5/5 and no inline findings.",
+                    "addressed": False,
+                }
+            ]
+        }
+
+    async def fail_trigger(**_kwargs):
+        raise AssertionError("confident summary-only review must not retrigger Greptile")
+
+    async def fail_runner(*_args, **_kwargs):
+        raise AssertionError("pathless summary comments must not become repair packets")
+
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr("greptile_client.get_pr_status", fake_status)
+    monkeypatch.setattr("greptile_client.list_pr_comments", fake_comments)
+    monkeypatch.setattr("greptile_client.trigger_review", fail_trigger)
+    monkeypatch.setattr(greploop_guard, "_run_cheap_agent", fail_runner)
+
+    out = await greploop_guard.run_guard_once(66)
+
+    assert out["ok"] is True
+    assert out["state"] == "READY_TO_MERGE"
+    state = greploop_guard.read_guard_state(66)
+    assert state["terminal_state"] == "READY_TO_MERGE"
+    assert state["greptile"]["unaddressed_count"] == 0
+    assert state["greptile"]["summary_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_run_guard_once_retriggers_low_confidence_pathless_summary(tmp_path, monkeypatch):
+    async def fake_status(**_kwargs):
+        return {
+            "confidenceScore": 4,
+            "reviewIsRunning": False,
+            "headSha": "abc",
+            "reviewCompleteness": "Summary-only review below confidence target",
+        }
+
+    async def fake_comments(**_kwargs):
+        return {
+            "findings": [
+                {
+                    "id": "summary-1",
+                    "file_path": "",
+                    "body": "Greptile summary with confidence 4/5 and no inline findings.",
+                    "addressed": False,
+                }
+            ]
+        }
+
+    triggered = {}
+
+    async def fake_trigger(**kwargs):
+        triggered.update(kwargs)
+        return {"triggered": True}
+
+    async def fail_runner(*_args, **_kwargs):
+        raise AssertionError("pathless summary comments must not become repair packets")
+
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr("greptile_client.get_pr_status", fake_status)
+    monkeypatch.setattr("greptile_client.list_pr_comments", fake_comments)
+    monkeypatch.setattr("greptile_client.trigger_review", fake_trigger)
+    monkeypatch.setattr(greploop_guard, "_run_cheap_agent", fail_runner)
+
+    out = await greploop_guard.run_guard_once(66)
+
+    assert out["ok"] is True
+    assert out["state"] == "WAITING_GREPTILE"
+    assert out["triggered_review"] == {"triggered": True}
+    assert triggered["pr_number"] == 66
+    state = greploop_guard.read_guard_state(66)
+    assert state["terminal_state"] == "WAITING_GREPTILE"
+    assert state["greptile"]["unaddressed_count"] == 0
+    assert state["greptile"]["summary_count"] == 1
+
+
+@pytest.mark.asyncio
 async def test_run_guard_once_blocks_permanently_active_review(tmp_path, monkeypatch):
     async def fake_status(**_kwargs):
         return {
