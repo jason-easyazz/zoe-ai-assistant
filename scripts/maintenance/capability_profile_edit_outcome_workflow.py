@@ -3,13 +3,16 @@
 
 This operator runner is the next step after capability_profile_pr_edit_workflow.py.
 It consumes a reviewed PR-edit plan JSON plus verification traces and emits the
-profile-edit outcome plan. It is intentionally side-effect-free: it does not
-write MemoryService, Hindsight, Graphiti, Multica, profile files, or GitHub.
+profile-edit outcome plan. By default it is side-effect-free: it does not write
+MemoryService, Hindsight, Graphiti, Multica, profile files, or GitHub. Pass
+--execute-hindsight to execute the admitted Hindsight retain plan; that mode can
+perform a network write to the Hindsight sidecar when enabled.
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -20,7 +23,7 @@ DATA = ROOT / "services" / "zoe-data"
 if str(DATA) not in sys.path:
     sys.path.insert(0, str(DATA))
 
-from zoe_capability_profile_edit_outcome import build_capability_profile_edit_outcome_plan  # noqa: E402
+from zoe_capability_profile_edit_outcome import CapabilityProfileEditOutcomePlan, build_capability_profile_edit_outcome_plan  # noqa: E402
 from zoe_capability_profile_pr_edit_gate import CapabilityProfilePREditPlan  # noqa: E402
 from zoe_memory_router import MemoryBackend  # noqa: E402
 from zoe_observation_trace import ObservationTrace  # noqa: E402
@@ -121,9 +124,64 @@ def _verification_traces(paths: list[str]) -> tuple[ObservationTrace, ...]:
     return tuple(traces)
 
 
+def build_profile_edit_outcome_plan_from_args(args: argparse.Namespace) -> CapabilityProfileEditOutcomePlan:
+    target_backends = _non_empty(args.target_backend) or (MemoryBackend.HINDSIGHT.value, MemoryBackend.GRAPHITI.value)
+    return build_capability_profile_edit_outcome_plan(
+        _pr_edit_plan(args.pr_edit_plan_json_file),
+        verification_traces=_verification_traces(args.verification_trace_file),
+        user_id=args.user_id,
+        scope=args.scope,
+        target_backends=target_backends,
+        approval_refs=_non_empty(args.approval_ref),
+        admission_id=args.admission_id,
+        event_id=args.event_id,
+        promotion_manifest=_load_text_file(args.promotion_manifest_file, label="promotion manifest"),
+        metadata=_metadata(args.metadata_json),
+    )
+
+
+async def execute_profile_edit_outcome_plan_in_hindsight(
+    plan: CapabilityProfileEditOutcomePlan,
+    *,
+    client: Any | None = None,
+    config: Any | None = None,
+) -> dict[str, Any]:
+    if not plan.allowed_to_admit_memory or plan.admission_request is None or plan.admission_decision is None:
+        return {
+            "attempted": False,
+            "retained": False,
+            "reason": "profile_edit_outcome_not_admitted",
+            "execution": None,
+        }
+    from hindsight_retain_candidates import HindsightRetainAdmissionError, build_admitted_hindsight_retain_plan
+    from hindsight_retain_executor import execute_admitted_hindsight_retain_plan
+
+    resolved_config = config or (client.config if client else None)
+    try:
+        retain_plan = build_admitted_hindsight_retain_plan(
+            plan.admission_request,
+            plan.admission_decision,
+            config=resolved_config,
+        )
+    except HindsightRetainAdmissionError as exc:
+        return {
+            "attempted": False,
+            "retained": False,
+            "reason": str(exc),
+            "execution": None,
+        }
+    execution = await execute_admitted_hindsight_retain_plan(retain_plan, client=client, config=resolved_config)
+    return {
+        "attempted": execution.attempted,
+        "retained": execution.retained,
+        "reason": execution.reason,
+        "execution": execution.to_dict(),
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Build a memory/trust outcome plan from a verified capability-profile PR edit.",
+        description="Build or execute a memory/trust outcome plan from a verified capability-profile PR edit.",
     )
     parser.add_argument("--pr-edit-plan-json-file", required=True)
     parser.add_argument("--verification-trace-file", action="append", default=[], help="JSON object or list of ObservationTrace objects. May be repeated.")
@@ -135,33 +193,50 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--event-id")
     parser.add_argument("--promotion-manifest-file")
     parser.add_argument("--metadata-json", default="{}")
+    parser.add_argument("--execute-hindsight", action="store_true", help="Execute the admitted Hindsight retain plan. HindsightConfig still disables writes by default; inspect hindsight_execution.reason when rc=1.")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        target_backends = _non_empty(args.target_backend) or (MemoryBackend.HINDSIGHT.value, MemoryBackend.GRAPHITI.value)
-        plan = build_capability_profile_edit_outcome_plan(
-            _pr_edit_plan(args.pr_edit_plan_json_file),
-            verification_traces=_verification_traces(args.verification_trace_file),
-            user_id=args.user_id,
-            scope=args.scope,
-            target_backends=target_backends,
-            approval_refs=_non_empty(args.approval_ref),
-            admission_id=args.admission_id,
-            event_id=args.event_id,
-            promotion_manifest=_load_text_file(args.promotion_manifest_file, label="promotion manifest"),
-            metadata=_metadata(args.metadata_json),
-        )
+        plan = build_profile_edit_outcome_plan_from_args(args)
     except SystemExit as exc:
         if isinstance(exc.code, str):
             print(exc.code, file=sys.stderr)
             return 2
         raise
-    print(json.dumps(plan.to_dict(), indent=2, sort_keys=True))
+    payload = plan.to_dict()
+    execution = None
+    if args.execute_hindsight:
+        if plan.blockers:
+            execution = {
+                "attempted": False,
+                "retained": False,
+                "reason": "profile_edit_outcome_blocked",
+                "execution": None,
+            }
+        else:
+            try:
+                execution = asyncio.run(execute_profile_edit_outcome_plan_in_hindsight(plan))
+            except Exception as exc:
+                execution = {
+                    "attempted": False,
+                    "retained": False,
+                    "reason": "hindsight_execution_error",
+                    "error": str(exc),
+                    "execution": None,
+                }
+                payload["hindsight_execution"] = execution
+                print(json.dumps(payload, indent=2, sort_keys=True))
+                print(f"hindsight execution failed: {exc}", file=sys.stderr)
+                return 2
+        payload["hindsight_execution"] = execution
+    print(json.dumps(payload, indent=2, sort_keys=True))
     if plan.blockers:
         return 1
+    if args.execute_hindsight:
+        return 0 if execution and execution.get("retained") is True else 1
     return 0 if plan.allowed_to_admit_memory else 1
 
 
