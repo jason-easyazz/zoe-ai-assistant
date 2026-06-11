@@ -3,8 +3,10 @@
 
 This operator runner is the next step after capability_profile_pr_edit_workflow.py.
 It consumes a reviewed PR-edit plan JSON plus verification traces and emits the
-profile-edit outcome plan. It is intentionally side-effect-free: it does not
-write MemoryService, Hindsight, Graphiti, Multica, profile files, or GitHub.
+profile-edit outcome plan. By default it is side-effect-free: it does not write
+MemoryService, Hindsight, Graphiti, Multica, profile files, or GitHub. Pass
+--execute-hindsight to execute the admitted Hindsight retain plan; that mode can
+perform a network write to the Hindsight sidecar when enabled.
 """
 
 from __future__ import annotations
@@ -204,10 +206,18 @@ def main(argv: list[str] | None = None) -> int:
             print(exc.code, file=sys.stderr)
             return 2
         raise
-    payload = {"outcome_plan": plan.to_dict()}
+    payload = plan.to_dict()
     execution = None
     if args.execute_hindsight:
-        execution = asyncio.run(execute_profile_edit_outcome_plan_in_hindsight(plan))
+        if plan.blockers:
+            execution = {
+                "attempted": False,
+                "retained": False,
+                "reason": "profile_edit_outcome_blocked",
+                "execution": None,
+            }
+        else:
+            execution = asyncio.run(execute_profile_edit_outcome_plan_in_hindsight(plan))
         payload["hindsight_execution"] = execution
     print(json.dumps(payload, indent=2, sort_keys=True))
     if plan.blockers:
