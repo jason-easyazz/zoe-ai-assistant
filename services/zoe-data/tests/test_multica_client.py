@@ -71,6 +71,58 @@ async def test_list_issues_forwards_explicit_limit(monkeypatch):
     assert requests[0][1]["params"] == {"status": "backlog", "limit": 1000}
 
 
+@pytest.mark.asyncio
+async def test_lookup_evolution_resources_skips_matching_rows_without_ids(monkeypatch):
+    requests = []
+
+    class FakeResponse:
+        status_code = 200
+
+        def __init__(self, payload):
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    class FakeHttpClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url, **kwargs):
+            requests.append(url)
+            if url.endswith("/api/agents"):
+                return FakeResponse([
+                    {"name": "Self-Improvement Agent"},
+                    {"name": "Self-Improvement Agent", "id": "agent-1"},
+                ])
+            if url.endswith("/api/projects"):
+                return FakeResponse({"projects": [
+                    {"title": "Self-Improvement Engine"},
+                    {"title": "Self-Improvement Engine", "id": "project-1"},
+                ]})
+            return FakeResponse([])
+
+    monkeypatch.setenv("MULTICA_BASE_URL", "https://multica.example")
+    monkeypatch.setenv("MULTICA_API_TOKEN", "token-1")
+    monkeypatch.setenv("MULTICA_WORKSPACE_ID", "workspace-1")
+    monkeypatch.setattr(multica_client.httpx, "AsyncClient", lambda **_kwargs: FakeHttpClient())
+    multica_client._cached_self_imp_agent_id = None
+    multica_client._cached_self_imp_project_id = None
+
+    try:
+        agent_id, project_id = await multica_client._lookup_evolution_resources(multica_client.MULClient())
+    finally:
+        multica_client._cached_self_imp_agent_id = None
+        multica_client._cached_self_imp_project_id = None
+
+    assert requests == ["https://multica.example/api/agents", "https://multica.example/api/projects"]
+    assert agent_id == "agent-1"
+    assert project_id == "project-1"
+
+
 def test_get_multica_client_refreshes_cached_client_when_env_changes(monkeypatch):
     original_client = multica_client._client
     original_agent_id = multica_client._cached_self_imp_agent_id

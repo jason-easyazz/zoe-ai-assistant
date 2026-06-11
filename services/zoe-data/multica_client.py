@@ -443,8 +443,9 @@ async def _lookup_evolution_resources(client: MULClient) -> tuple[str | None, st
                 agents = agents_resp.json()
                 if isinstance(agents, list):
                     for a in agents:
-                        if a.get("name") == "Self-Improvement Agent":
-                            _cached_self_imp_agent_id = a["id"]
+                        agent_id = a.get("id")
+                        if a.get("name") == "Self-Improvement Agent" and agent_id:
+                            _cached_self_imp_agent_id = agent_id
                             break
 
             # Find Self-Improvement Engine project
@@ -453,8 +454,9 @@ async def _lookup_evolution_resources(client: MULClient) -> tuple[str | None, st
                 projects = projects_resp.json()
                 items = projects if isinstance(projects, list) else projects.get("projects", [])
                 for p in items:
-                    if p.get("title") == "Self-Improvement Engine":
-                        _cached_self_imp_project_id = p["id"]
+                    project_id = p.get("id")
+                    if p.get("title") == "Self-Improvement Engine" and project_id:
+                        _cached_self_imp_project_id = project_id
                         break
     except (httpx.HTTPError, ValueError, TypeError) as exc:
         logger.warning("Multica: resource lookup failed: %s", exc)
