@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -26,8 +26,10 @@ class FakeDb:
     def __init__(self, *, events=None, prefs=None):
         self.events = events or []
         self.prefs = prefs
+        self.fetch_args = None
 
-    async def fetch(self, *_args):
+    async def fetch(self, *args):
+        self.fetch_args = args
         return self.events
 
     async def fetchrow(self, *_args):
@@ -45,7 +47,56 @@ class GuardedGuestDb(FakeDb):
 def test_classify_calendar_and_weather_requests():
     assert classify_skybridge_intent("show my calendar").domain == "calendar"
     assert classify_skybridge_intent("show me the weather").domain == "weather"
+    assert classify_skybridge_intent("what is happening this week").domain == "calendar"
     assert classify_skybridge_intent("open settings") is None
+
+
+def test_classify_calendar_date_and_range_requests(monkeypatch):
+    class FrozenDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 6, 11)
+
+    monkeypatch.setattr(skybridge_service, "date", FrozenDate)
+
+    dated = classify_skybridge_intent("show me my calendar on the 17th of June")
+    assert dated.domain == "calendar"
+    assert dated.start_date == date(2026, 6, 17)
+    assert dated.end_date == date(2026, 6, 17)
+    assert dated.range_label == "17 June 2026"
+
+    week = classify_skybridge_intent("what is happening this week")
+    assert week.domain == "calendar"
+    assert week.start_date == date(2026, 6, 11)
+    assert week.end_date == date(2026, 6, 18)
+
+    tomorrow = classify_skybridge_intent("show me the weather for tomorrow")
+    assert tomorrow.domain == "weather"
+    assert tomorrow.action == "forecast"
+
+    next_week = classify_skybridge_intent("show my schedule next week")
+    assert next_week.domain == "calendar"
+    assert next_week.start_date == date(2026, 6, 15)
+    assert next_week.end_date == date(2026, 6, 21)
+    assert next_week.range_label == "next week"
+
+    iso = classify_skybridge_intent("show my calendar on 2026-06-17")
+    assert iso.domain == "calendar"
+    assert iso.start_date == date(2026, 6, 17)
+    assert iso.end_date == date(2026, 6, 17)
+    assert iso.range_label == "2026-06-17"
+
+    iso_after_count = classify_skybridge_intent("show my 10 events on 2026-06-17")
+    assert iso_after_count.domain == "calendar"
+    assert iso_after_count.start_date == date(2026, 6, 17)
+    assert iso_after_count.end_date == date(2026, 6, 17)
+    assert iso_after_count.range_label == "2026-06-17"
+
+    weekend = classify_skybridge_intent("what is happening this weekend")
+    assert weekend.domain == "calendar"
+    assert weekend.range_label == "today"
+    assert weekend.start_date == date(2026, 6, 11)
+    assert weekend.end_date == date(2026, 6, 11)
 
 
 @pytest.mark.asyncio
@@ -83,6 +134,43 @@ async def test_calendar_empty_state_still_returns_data_card():
     assert card["content"]["source"] == "calendar_show"
     assert card["content"]["events"] == []
     assert "0 events" in result["spoken_summary"]
+
+
+@pytest.mark.asyncio
+async def test_calendar_explicit_date_queries_requested_day(monkeypatch):
+    class FrozenDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 6, 11)
+
+    monkeypatch.setattr(skybridge_service, "date", FrozenDate)
+
+    db = FakeDb(events=[])
+    result = await resolve_skybridge_request("show my calendar on the 17th of June", "family-admin", db=db)
+
+    assert result["handled"] is True
+    assert result["intent"]["range"] == "17 June 2026"
+    assert db.fetch_args[2] == "2026-06-17"
+    assert db.fetch_args[3] == "2026-06-17"
+    assert result["cards"][0]["content"]["qualifier"] == "17 June 2026"
+
+
+@pytest.mark.asyncio
+async def test_calendar_happening_this_week_queries_range(monkeypatch):
+    class FrozenDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 6, 11)
+
+    monkeypatch.setattr(skybridge_service, "date", FrozenDate)
+
+    db = FakeDb(events=[])
+    result = await resolve_skybridge_request("what is happening this week", "family-admin", db=db)
+
+    assert result["handled"] is True
+    assert result["intent"]["range"] == "this week"
+    assert db.fetch_args[2] == "2026-06-11"
+    assert db.fetch_args[3] == (date(2026, 6, 11) + timedelta(days=7)).isoformat()
 
 
 @pytest.mark.asyncio
