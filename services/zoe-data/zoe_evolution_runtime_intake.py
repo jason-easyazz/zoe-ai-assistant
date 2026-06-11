@@ -28,6 +28,8 @@ from zoe_evolution_proposal_adapter import (
     legacy_signal_type_for_proposal_type,
     normalize_mcp_evolution_proposal_type,
 )
+from zoe_observation_trace import ObservationOutcome, ObservationTrace, ObservationTraceType
+from zoe_observation_trace_collector import ObservationTraceCollectorPolicy, collect_observation_traces
 
 RUNTIME_INTAKE_SOURCE = "runtime_evolution_intake"
 _SCHEMA = "zoe_evolution_proposal"
@@ -298,6 +300,8 @@ def build_runtime_evolution_proposal_intake(
     legacy_target_patterns: Sequence[str] = (),
     multica_issue_id: str | None = None,
     metadata: Mapping[str, Any] | None = None,
+    collect_observation_trace: bool = True,
+    trace_collector_policy: ObservationTraceCollectorPolicy | None = None,
 ) -> RuntimeEvolutionProposalIntake:
     """Build a review-only proposal row from runtime Notice/Search/Evaluate data.
 
@@ -316,6 +320,15 @@ def build_runtime_evolution_proposal_intake(
         explicit=approval_required,
     )
     evidence_payload = _evidence_payload(signal=signal, candidates=ranked_candidates, metadata=metadata)
+    if collect_observation_trace:
+        evidence_payload["observation_trace_collection"] = _collect_runtime_intake_signal_trace(
+            proposal_id=proposal_id,
+            proposal_type=proposal_type,
+            title=title,
+            signal=signal,
+            candidates=ranked_candidates,
+            policy=trace_collector_policy,
+        )
     proposal_metadata = dict(metadata or {})
     proposal_metadata.update(
         {
@@ -369,6 +382,49 @@ def build_runtime_evolution_proposal_intake(
             "contract_snapshot": target_patterns,
         },
     )
+
+
+
+def _collect_runtime_intake_signal_trace(
+    *,
+    proposal_id: str,
+    proposal_type: str,
+    title: str,
+    signal: EvolutionSignal,
+    candidates: Sequence[CandidateEvaluation],
+    policy: ObservationTraceCollectorPolicy | None,
+) -> dict[str, Any]:
+    trace = ObservationTrace(
+        trace_id=f"trace_runtime_intake_{proposal_id}",
+        trace_type=ObservationTraceType.PROPOSAL.value,
+        surface="local_service",
+        scope=signal.scope,
+        outcome=ObservationOutcome.SUCCESS.value,
+        summary=f"Runtime intake prepared review-only proposal {proposal_id}: {title}",
+        evidence_refs=tuple(signal.evidence_refs),
+        user_id=signal.user_id,
+        subject_id=proposal_id,
+        related_ids=tuple(candidate.candidate_id for candidate in candidates),
+        confidence=1.0,
+        metadata={
+            "proposal_type": proposal_type,
+            "source": RUNTIME_INTAKE_SOURCE,
+            "source_signal_id": signal.signal_id,
+            "selected_candidate_id": candidates[0].candidate_id,
+            "candidate_count": len(candidates),
+        },
+    )
+    active_policy = policy or ObservationTraceCollectorPolicy(
+        max_batch_size=1,
+        allowed_surfaces=("local_service",),
+        allowed_trace_types=(ObservationTraceType.PROPOSAL.value,),
+    )
+    collection = collect_observation_traces((trace,), policy=active_policy)
+    payload = collection.to_dict()
+    if not collection.ok:
+        reasons = "; ".join(item["reason"] for item in collection.rejected)
+        raise ValueError(f"{proposal_id}: observation_trace_collection rejected: {reasons}")
+    return payload
 
 
 def _evidence_refs(source_ref: str, evidence: str) -> tuple[str, ...]:

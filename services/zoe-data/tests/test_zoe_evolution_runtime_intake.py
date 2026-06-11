@@ -13,6 +13,8 @@ from zoe_evolution_runtime_intake import (
     build_pi_runtime_install_proposal_intake,
     build_runtime_evolution_proposal_intake,
 )
+from zoe_observation_trace import ObservationTraceType
+from zoe_observation_trace_collector import ObservationTraceCollectorPolicy
 
 
 def _signal(**overrides):
@@ -97,6 +99,18 @@ def test_runtime_intake_builds_review_only_legacy_row_with_candidate_search_evid
     assert evidence["source"] == "runtime_evolution_intake"
     assert evidence["signal"]["evidence_refs"] == ["trace:runtime-notice-calendar-gap"]
     assert "github:mcp-calendar" in evidence["candidate_evidence_refs"]
+    trace_collection = evidence["observation_trace_collection"]
+    assert trace_collection["ok"] is True
+    assert trace_collection["accepted_count"] == 1
+    assert trace_collection["persisted"] is False
+    trace = trace_collection["traces"][0]
+    assert trace["trace_type"] == ObservationTraceType.PROPOSAL.value
+    assert trace["surface"] == "local_service"
+    assert trace["subject_id"] == "prop_runtime_calendar_gap"
+    assert trace["related_ids"] == ["mcp_calendar_local", "existing_calendar_route"]
+    assert trace["evidence_refs"] == ["trace:runtime-notice-calendar-gap"]
+    assert trace["metadata"]["proposal_type"] == "code_improvement"
+    assert trace["metadata"]["source"] == "runtime_evolution_intake"
     assert intake.multica_payload["contract_snapshot"] == row["target_patterns"]
 
 
@@ -127,6 +141,68 @@ def test_runtime_intake_structured_metadata_overrides_caller_collisions():
     assert metadata["selected_candidate_id"] == "mcp_calendar_local"
     assert metadata["candidate_search"][0]["candidate_id"] == "mcp_calendar_local"
     assert metadata["caller_note"] == "preserved"
+
+
+
+
+def test_mcp_runtime_proposal_includes_observation_trace_collection():
+    intake = runtime_intake.build_mcp_runtime_evolution_proposal_intake(
+        proposal_id="prop_mcp_trace_collection",
+        title="Review MCP proposal",
+        description="MCP proposal writers should carry accepted observation trace evidence.",
+        evidence="User supplied evidence.",
+        proposal_type="intent_pattern",
+        user_id="jason",
+    )
+
+    evidence = json.loads(intake.evidence)
+    trace = evidence["observation_trace_collection"]["traces"][0]
+
+    assert evidence["observation_trace_collection"]["ok"] is True
+    assert trace["surface"] == "local_service"
+    assert trace["metadata"]["proposal_type"] == "intent_pattern"
+    assert trace["subject_id"] == "prop_mcp_trace_collection"
+
+
+def test_runtime_intake_trace_collection_fails_closed_when_policy_rejects_surface():
+    with pytest.raises(ValueError, match="observation_trace_collection rejected"):
+        build_runtime_evolution_proposal_intake(
+            proposal_id="prop_runtime_rejected_trace_policy",
+            proposal_type="code_improvement",
+            title="Review rejected trace policy",
+            problem_statement="Collector policy rejection should fail proposal intake closed.",
+            signal=_signal(),
+            candidates=(_candidate(),),
+            affected_capabilities=("calendar_sync",),
+            expected_benefit="Keep trace evidence trustworthy.",
+            verification_plan=("pytest:trace-policy",),
+            rollback_plan="Reject the proposal; no runtime change has been made.",
+            trace_collector_policy=ObservationTraceCollectorPolicy(
+                max_batch_size=1,
+                allowed_surfaces=("chat",),
+                allowed_trace_types=(ObservationTraceType.PROPOSAL.value,),
+            ),
+        )
+
+
+def test_runtime_intake_can_skip_observation_trace_collection_for_legacy_callers():
+    intake = build_runtime_evolution_proposal_intake(
+        proposal_id="prop_runtime_trace_collection_opt_out",
+        proposal_type="code_improvement",
+        title="Review trace opt out",
+        problem_statement="Legacy callers can opt out while migrating.",
+        signal=_signal(),
+        candidates=(_candidate(),),
+        affected_capabilities=("calendar_sync",),
+        expected_benefit="Keep migration compatibility.",
+        verification_plan=("pytest:trace-opt-out",),
+        rollback_plan="Reject the proposal; no runtime change has been made.",
+        collect_observation_trace=False,
+    )
+
+    evidence = json.loads(intake.evidence)
+
+    assert "observation_trace_collection" not in evidence
 
 
 def test_runtime_intake_validates_direct_construction_at_init():
@@ -299,6 +375,8 @@ def test_pi_runtime_install_proposal_is_inert_and_blocked_until_prerequisites_pa
     assert proposal["metadata"]["pi_runtime_probe"]["tools"] == {"node": None, "npm": None, "pi": None}
     assert proposal["metadata"]["pi_candidate_gate"]["allowed"] is False
     assert evidence["signal"]["metadata"]["probe_status"] == "disabled"
+    assert evidence["observation_trace_collection"]["ok"] is True
+    assert evidence["observation_trace_collection"]["traces"][0]["metadata"]["proposal_type"] == "code_improvement"
     assert intake.multica_payload["contract_snapshot"] == row["target_patterns"]
 
 
@@ -392,6 +470,8 @@ def test_graphiti_runtime_trial_proposal_is_inert_and_blocked_until_runtime_read
     assert evidence["signal"]["metadata"]["probe_status"] == "disabled"
     assert evidence["signal"]["metadata"]["backend_enabled"] is False
     assert evidence["signal"]["metadata"]["llm_enabled"] is False
+    assert evidence["observation_trace_collection"]["ok"] is True
+    assert evidence["observation_trace_collection"]["traces"][0]["metadata"]["proposal_type"] == "code_improvement"
     assert intake.multica_payload["contract_snapshot"] == row["target_patterns"]
 
 
