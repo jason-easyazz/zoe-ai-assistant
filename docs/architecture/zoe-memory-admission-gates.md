@@ -16,8 +16,10 @@ admission allows the Hindsight backend. Verified evolution outcomes can pass
 through `services/zoe-data/zoe_evolution_outcome_retain.py` to that same
 admitted Hindsight executor. Verified capability-profile PR edits can be
 converted into memory admission requests and capability trust evidence by
-`services/zoe-data/zoe_capability_profile_edit_outcome.py` without writing any
-backend.
+`services/zoe-data/zoe_capability_profile_edit_outcome.py`; the operator workflow
+`scripts/maintenance/capability_profile_edit_outcome_workflow.py` remains
+plan-only by default and can execute the admitted Hindsight retain path only when
+called with `--execute-hindsight`.
 
 ## Rules
 
@@ -41,9 +43,9 @@ backend.
 This is a schema, decision contract, Multica metadata bridge, outcome memory
 admission bridge, Hindsight admitted-executor bridge, admitted Hindsight
 outcome-retain bridge, and profile-edit outcome bridge. Hindsight can execute
-admitted retain plans, including approved evolution outcome memories, but
-production chat still does not auto-write to MemoryService, Hindsight, Graphiti,
-MemPalace, or Multica.
+admitted retain plans, including approved evolution outcome memories and
+explicitly executed profile-edit outcomes, but production chat still does not
+auto-write to MemoryService, Hindsight, Graphiti, MemPalace, or Multica.
 Additional runtime writers should be wired in later small PRs after each
 backend path is reviewed and tested.
 
@@ -74,7 +76,9 @@ admission is pending or blocked. Verified profile-edit outcomes can also build
 a pending, relationship-bearing memory event plus trust evidence records from
 PR, rollback, verification, Greptile, and promotion-manifest evidence; the
 normal admission decision still decides whether any durable backend may be
-written.
+written. The operator workflow returns structured non-retain results for pending
+approval, blocked gates, disabled Hindsight, and config errors, and only reports
+retained when the admitted executor confirms the write.
 
 Hindsight retain plans follow the same rule: Zoe may create pending retain
 candidates for review, but the sidecar retain payload cannot be built or
