@@ -554,7 +554,7 @@ async def _resolve_calendar_create(intent: SkybridgeIntent, user_id: str, db: An
         start.isoformat(),
         intent.target_time,
         start.isoformat(),
-        "",
+        None,
         None,
         "general",
         None,

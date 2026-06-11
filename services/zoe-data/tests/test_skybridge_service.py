@@ -406,6 +406,7 @@ async def test_calendar_context_add_event_refreshes_calendar_card(monkeypatch):
     assert event["title"] == "pick up the groceries"
     assert event["start_date"] == "2026-06-17"
     assert event["start_time"] == "15:00"
+    assert event["end_time"] is None
 
 
 @pytest.mark.asyncio
