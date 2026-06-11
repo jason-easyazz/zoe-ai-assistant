@@ -10,6 +10,7 @@ from typing import Any
 from calendar_utils import row_to_event
 from card_service import card_service
 from database import get_db_ctx
+from people_utils import row_to_person
 
 
 @dataclass(frozen=True)
@@ -19,6 +20,10 @@ class SkybridgeIntent:
     range_label: str = ""
     start_date: date | None = None
     end_date: date | None = None
+    query: str = ""
+    list_type: str = ""
+    context: str = ""
+    circle: str = ""
 
 
 MONTHS = {
@@ -48,6 +53,22 @@ MONTHS = {
     "dec": 12,
 }
 MONTH_PATTERN = "|".join(sorted(MONTHS, key=len, reverse=True))
+LIST_TYPES = ("shopping", "personal", "work", "bucket", "tasks")
+LIST_TYPE_ALIASES = {
+    "shopping": "shopping",
+    "groceries": "shopping",
+    "grocery": "shopping",
+    "personal": "personal",
+    "work": "work",
+    "bucket": "bucket",
+    "tasks": "tasks",
+    "task": "tasks",
+    "todo": "tasks",
+    "todos": "tasks",
+    "to do": "tasks",
+}
+PEOPLE_CONTEXTS = ("personal", "work")
+PEOPLE_CIRCLES = ("inner", "circle", "public")
 
 
 def _today() -> date:
@@ -128,6 +149,45 @@ def _calendar_date_from_text(text: str, today: date) -> tuple[str, date, date] |
     return None
 
 
+def _list_type_from_text(text: str) -> str:
+    for key, value in LIST_TYPE_ALIASES.items():
+        if f" {key} " in text:
+            return value
+    return ""
+
+
+def _people_filters_from_text(text: str) -> tuple[str, str, str]:
+    context = next((value for value in PEOPLE_CONTEXTS if f" {value} " in text), "")
+    circle = next((value for value in PEOPLE_CIRCLES if f" {value} " in text), "")
+    query = ""
+    match = re.search(r"\b(?:find|show|search for|look up)\s+(?:my\s+)?(?P<name>[a-z][a-z .'-]{1,80})\b", text)
+    if match:
+        candidate = match.group("name").strip()
+        stop_words = {
+            "people",
+            "contact",
+            "contacts",
+            "person",
+            "profile",
+            "family",
+            "friends",
+            "work contacts",
+            "personal contacts",
+            "my contacts",
+            "settings",
+            "dashboard",
+            "calendar",
+            "weather",
+            "list",
+            "lists",
+            "shopping list",
+            "tasks",
+        }
+        if candidate not in stop_words and not candidate.endswith(" contacts"):
+            query = candidate
+    return query, context, circle
+
+
 def classify_skybridge_intent(message: str) -> SkybridgeIntent | None:
     """Classify only domains that Skybridge can resolve to real data cards."""
     text = f" {(message or '').lower()} "
@@ -153,6 +213,20 @@ def classify_skybridge_intent(message: str) -> SkybridgeIntent | None:
             label, start, end = parsed_range
             return SkybridgeIntent("calendar", "show", label, start, end)
         return SkybridgeIntent("calendar", "show", "today", today, today)
+    if any(term in text for term in (" list", " lists", " shopping", " groceries", " grocery", " tasks", " todos")):
+        list_type = _list_type_from_text(text)
+        return SkybridgeIntent(domain="lists", action="show", list_type=list_type)
+    if any(term in text for term in (" people", " contacts", " contact", " person", " profile", " family", " friends")):
+        query, context, circle = _people_filters_from_text(text)
+        if " family " in text and not query:
+            query = "family"
+        if " friends " in text and not query:
+            query = "friend"
+        return SkybridgeIntent(domain="people", action="show", query=query, context=context, circle=circle)
+    if re.search(r"\b(?:find|search for|look up|show)\s+(?:my\s+)?[a-z][a-z .'-]{1,80}\b", text):
+        query, context, circle = _people_filters_from_text(text)
+        if query:
+            return SkybridgeIntent(domain="people", action="show", query=query, context=context, circle=circle)
     return None
 
 
@@ -184,6 +258,10 @@ async def _resolve_with_db(intent: SkybridgeIntent, user_id: str, db: Any) -> di
         return await _resolve_calendar(intent, user_id, db)
     if intent.domain == "weather":
         return await _resolve_weather(intent, user_id, db)
+    if intent.domain == "lists":
+        return await _resolve_lists(intent, user_id, db)
+    if intent.domain == "people":
+        return await _resolve_people(intent, user_id, db)
     return {"handled": False, "intent": None, "spoken_summary": "", "cards": []}
 
 
@@ -256,6 +334,184 @@ async def _resolve_weather(intent: SkybridgeIntent, user_id: str, db: Any) -> di
     return {
         "handled": True,
         "intent": {"domain": "weather", "action": intent.action},
+        "spoken_summary": spoken,
+        "cards": [card_service.convert_emit(card, target_major=1)],
+    }
+
+
+async def _resolve_lists(intent: SkybridgeIntent, user_id: str, db: Any) -> dict[str, Any]:
+    if user_id in {"guest", "voice-guest"}:
+        card = card_service.build_shopping_list_card(
+            {
+                "list_name": "Lists",
+                "list_type": intent.list_type or "all",
+                "lists": [],
+                "items": [],
+                "summary": "No list data is available for guest sessions.",
+            }
+        )
+        return {
+            "handled": True,
+            "intent": {"domain": "lists", "action": intent.action, "list_type": intent.list_type},
+            "spoken_summary": "No list data is available for guest sessions.",
+            "cards": [card_service.convert_emit(card, target_major=1)],
+        }
+
+    list_type = intent.list_type
+    if list_type:
+        rows = await db.fetch(
+            """
+            SELECT id, user_id, name, list_type, description, visibility, created_at, updated_at
+            FROM lists
+            WHERE list_type = $2 AND deleted = 0
+              AND (visibility = 'family' OR user_id = $1)
+            ORDER BY updated_at DESC
+            LIMIT 8
+            """,
+            user_id,
+            list_type,
+        )
+    else:
+        rows = await db.fetch(
+            """
+            SELECT id, user_id, name, list_type, description, visibility, created_at, updated_at
+            FROM lists
+            WHERE deleted = 0
+              AND (visibility = 'family' OR user_id = $1)
+            ORDER BY updated_at DESC
+            LIMIT 8
+            """,
+            user_id,
+        )
+    lists = [dict(row) for row in rows]
+    list_ids = [list_row["id"] for list_row in lists]
+    items_by_list: dict[Any, list[dict[str, Any]]] = {list_id: [] for list_id in list_ids}
+    if list_ids:
+        item_rows = await db.fetch(
+            """
+            SELECT id, list_id, text, completed, priority, category, quantity, sort_order,
+                   parent_id, assigned_to, created_at, updated_at
+            FROM list_items
+            WHERE list_id = ANY($1) AND deleted = 0
+            ORDER BY list_id, completed ASC, sort_order ASC, created_at ASC
+            """,
+            list_ids,
+        )
+        for item_row in item_rows:
+            item = dict(item_row)
+            bucket = items_by_list.setdefault(item.get("list_id"), [])
+            if len(bucket) < 24:
+                bucket.append(item)
+
+    selected = lists[0] if len(lists) == 1 else None
+    for list_row in lists:
+        items = items_by_list.get(list_row["id"], [])
+        list_row["items"] = items if selected else []
+        list_row["item_count"] = len(items)
+        list_row["open_count"] = sum(1 for item in items if not item.get("completed"))
+        list_row["completed_count"] = len(items) - list_row["open_count"]
+
+    items = selected.get("items", []) if selected else []
+    list_name = selected.get("name") if selected else (list_type.title() if list_type else "Lists")
+    summary_count = len(items) if selected else sum(item.get("item_count", 0) for item in lists)
+    spoken = f"{list_name} has {summary_count} item{'s' if summary_count != 1 else ''}."
+    card = card_service.build_shopping_list_card(
+        {
+            "list_id": selected.get("id") if selected else "lists-overview",
+            "list_name": list_name,
+            "list_type": selected.get("list_type") if selected else (list_type or "all"),
+            "lists": lists,
+            "items": items,
+            "summary": spoken,
+        }
+    )
+    return {
+        "handled": True,
+        "intent": {"domain": "lists", "action": intent.action, "list_type": list_type},
+        "spoken_summary": spoken,
+        "cards": [card_service.convert_emit(card, target_major=1)],
+    }
+
+
+async def _resolve_people(intent: SkybridgeIntent, user_id: str, db: Any) -> dict[str, Any]:
+    if user_id in {"guest", "voice-guest"}:
+        card = card_service.build_people_directory_card(
+            {
+                "title": "People",
+                "people": [],
+                "count": 0,
+                "summary": "No people data is available for guest sessions.",
+            }
+        )
+        return {
+            "handled": True,
+            "intent": {"domain": "people", "action": intent.action, "query": intent.query},
+            "spoken_summary": "No people data is available for guest sessions.",
+            "cards": [card_service.convert_emit(card, target_major=1)],
+        }
+
+    filters = ["deleted = 0", "(visibility = 'family' OR user_id = $1)", "(is_partial = 0 OR is_partial IS NULL)"]
+    params: list[Any] = [user_id]
+    if intent.context:
+        params.append(intent.context)
+        filters.append(f"context = ${len(params)}")
+    if intent.circle:
+        params.append(intent.circle)
+        filters.append(f"circle = ${len(params)}")
+    if intent.query:
+        params.append(f"%{intent.query}%")
+        query_index = len(params)
+        filters.append(
+            f"(name ILIKE ${query_index} OR relationship ILIKE ${query_index} OR email ILIKE ${query_index} OR phone ILIKE ${query_index})"
+        )
+    where = " AND ".join(filters)
+    rows = await db.fetch(
+        f"""
+        SELECT *
+        FROM people
+        WHERE {where}
+        ORDER BY name
+        LIMIT 12
+        """,
+        *params,
+    )
+    people = [row_to_person(row) for row in rows]
+    exact = None
+    if intent.query:
+        normalized_query = intent.query.strip().lower()
+        exact = next((person for person in people if str(person.get("name") or "").strip().lower() == normalized_query), None)
+    if exact or (intent.query and len(people) == 1):
+        person = exact or people[0]
+        summary = f"{person.get('name')} is in your people."
+        card = card_service.build_person_profile_card({"person": person, "summary": summary})
+        return {
+            "handled": True,
+            "intent": {"domain": "people", "action": intent.action, "query": intent.query},
+            "spoken_summary": summary,
+            "cards": [card_service.convert_emit(card, target_major=1)],
+        }
+
+    title = "People"
+    if intent.context:
+        title = f"{intent.context.title()} Contacts"
+    if intent.query:
+        title = f"People matching {intent.query}"
+    count = len(people)
+    spoken = f"I found {count} contact{'s' if count != 1 else ''}."
+    card = card_service.build_people_directory_card(
+        {
+            "title": title,
+            "people": people,
+            "count": count,
+            "query": intent.query,
+            "context": intent.context,
+            "circle": intent.circle,
+            "summary": spoken,
+        }
+    )
+    return {
+        "handled": True,
+        "intent": {"domain": "people", "action": intent.action, "query": intent.query, "context": intent.context},
         "spoken_summary": spoken,
         "cards": [card_service.convert_emit(card, target_major=1)],
     }

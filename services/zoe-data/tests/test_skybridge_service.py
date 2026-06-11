@@ -23,14 +23,34 @@ class Cursor:
 
 
 class FakeDb:
-    def __init__(self, *, events=None, prefs=None):
+    def __init__(self, *, events=None, prefs=None, lists=None, items_by_list=None, people=None):
         self.events = events or []
         self.prefs = prefs
+        self.lists = lists or []
+        self.items_by_list = items_by_list or {}
+        self.people = people or []
         self.fetch_args = None
+        self.list_item_fetch_count = 0
 
     async def fetch(self, *args):
         self.fetch_args = args
-        return self.events
+        sql = str(args[0])
+        if "FROM events" in sql:
+            return self.events
+        if "FROM lists" in sql:
+            return self.lists
+        if "FROM list_items" in sql:
+            self.list_item_fetch_count += 1
+            key = args[1]
+            if isinstance(key, (list, tuple, set)):
+                rows = []
+                for list_id in key:
+                    rows.extend(self.items_by_list.get(list_id, []))
+                return rows
+            return self.items_by_list.get(key, [])
+        if "FROM people" in sql:
+            return self.people
+        return []
 
     async def fetchrow(self, *_args):
         return self.prefs
@@ -48,6 +68,10 @@ def test_classify_calendar_and_weather_requests():
     assert classify_skybridge_intent("show my calendar").domain == "calendar"
     assert classify_skybridge_intent("show me the weather").domain == "weather"
     assert classify_skybridge_intent("what is happening this week").domain == "calendar"
+    assert classify_skybridge_intent("show my shopping list").domain == "lists"
+    assert classify_skybridge_intent("show my contacts").domain == "people"
+    assert classify_skybridge_intent("find Sarah").domain == "people"
+    assert classify_skybridge_intent("what is there to do this week") is None
     assert classify_skybridge_intent("open settings") is None
 
 
@@ -179,6 +203,158 @@ async def test_guest_calendar_request_does_not_fetch_family_events():
 
     assert result["handled"] is True
     assert result["cards"][0]["content"]["events"] == []
+
+
+@pytest.mark.asyncio
+async def test_lists_request_returns_real_list_items():
+    list_row = {
+        "id": "list-1",
+        "user_id": "family-admin",
+        "name": "Groceries",
+        "list_type": "shopping",
+        "description": "Weekly shop",
+        "visibility": "family",
+    }
+    item = {
+        "id": "item-1",
+        "list_id": "list-1",
+        "text": "Milk",
+        "completed": False,
+        "priority": "high",
+        "category": "dairy",
+        "quantity": "2L",
+    }
+
+    result = await resolve_skybridge_request(
+        "show my shopping list",
+        "family-admin",
+        db=FakeDb(lists=[list_row], items_by_list={"list-1": [item]}),
+    )
+
+    assert result["handled"] is True
+    assert result["intent"] == {"domain": "lists", "action": "show", "list_type": "shopping"}
+    card = result["cards"][0]
+    assert card["producer"] == "zoe-shopping"
+    assert card["content"]["source"] == "list_show"
+    assert card["content"]["items"][0]["text"] == "Milk"
+    assert card["content"]["open_count"] == 1
+    assert "Surface" not in str(card)
+
+
+@pytest.mark.asyncio
+async def test_lists_request_returns_overview_for_multiple_lists():
+    rows = [
+        {"id": "list-1", "name": "Groceries", "list_type": "shopping", "visibility": "family"},
+        {"id": "list-2", "name": "Hardware", "list_type": "shopping", "visibility": "family"},
+    ]
+
+    db = FakeDb(
+        lists=rows,
+        items_by_list={
+            "list-1": [{"id": "item-1", "list_id": "list-1", "text": "Milk", "completed": False}],
+            "list-2": [{"id": "item-2", "list_id": "list-2", "text": "Tape", "completed": True}],
+        },
+    )
+
+    result = await resolve_skybridge_request(
+        "show my shopping lists",
+        "family-admin",
+        db=db,
+    )
+
+    card = result["cards"][0]
+    assert card["content"]["source"] == "list_show"
+    assert card["content"]["items"] == []
+    assert card["content"]["lists"][0]["items"] == []
+    assert card["content"]["lists"][0]["open_count"] == 1
+    assert card["content"]["lists"][1]["completed_count"] == 1
+    assert db.list_item_fetch_count == 1
+
+
+@pytest.mark.asyncio
+async def test_guest_lists_request_does_not_fetch_private_lists():
+    result = await resolve_skybridge_request("show my shopping list", "guest", db=GuardedGuestDb())
+
+    assert result["handled"] is True
+    assert result["cards"][0]["content"]["source"] == "list_show"
+    assert result["cards"][0]["content"]["items"] == []
+
+
+@pytest.mark.asyncio
+async def test_people_request_returns_directory_card():
+    person = {
+        "id": "person-1",
+        "user_id": "family-admin",
+        "name": "Sarah Smith",
+        "relationship": "Friend",
+        "circle": "inner",
+        "context": "personal",
+        "email": "sarah@example.com",
+        "health_score": 0.82,
+        "visibility": "family",
+    }
+
+    result = await resolve_skybridge_request("show my contacts", "family-admin", db=FakeDb(people=[person]))
+
+    assert result["handled"] is True
+    assert result["intent"]["domain"] == "people"
+    card = result["cards"][0]
+    assert card["producer"] == "zoe-people"
+    assert card["content"]["source"] == "people_directory"
+    assert card["content"]["people"][0]["name"] == "Sarah Smith"
+    assert "Surface" not in str(card)
+
+
+@pytest.mark.asyncio
+async def test_people_search_returns_profile_card_for_exact_match():
+    person = {
+        "id": "person-1",
+        "user_id": "family-admin",
+        "name": "Sarah",
+        "relationship": "Friend",
+        "circle": "inner",
+        "context": "personal",
+        "notes": "Met through school.",
+        "visibility": "family",
+    }
+
+    result = await resolve_skybridge_request("find Sarah", "family-admin", db=FakeDb(people=[person]))
+
+    card = result["cards"][0]
+    assert result["intent"]["query"] == "sarah"
+    assert card["producer"] == "zoe-people"
+    assert card["content"]["source"] == "person_profile"
+    assert card["content"]["person"]["name"] == "Sarah"
+
+
+@pytest.mark.asyncio
+async def test_guest_people_request_does_not_fetch_private_people():
+    result = await resolve_skybridge_request("show my contacts", "guest", db=GuardedGuestDb())
+
+    assert result["handled"] is True
+    assert result["cards"][0]["content"]["source"] == "people_directory"
+    assert result["cards"][0]["content"]["people"] == []
+
+
+@pytest.mark.asyncio
+async def test_people_singular_contact_request_returns_directory_not_search():
+    person = {
+        "id": "person-1",
+        "user_id": "family-admin",
+        "name": "Sarah Smith",
+        "relationship": "Friend",
+        "visibility": "family",
+    }
+
+    intent = classify_skybridge_intent("show my contact")
+    assert intent.domain == "people"
+    assert intent.query == ""
+
+    result = await resolve_skybridge_request("show my contact", "family-admin", db=FakeDb(people=[person]))
+
+    assert result["handled"] is True
+    assert result["intent"]["query"] == ""
+    assert result["cards"][0]["content"]["source"] == "people_directory"
 
 
 @pytest.mark.asyncio

@@ -69,6 +69,9 @@
     function renderStatus(props) {
         if (props.source === 'calendar_show') return renderCalendar(props);
         if (props.source === 'weather_current' || props.source === 'weather_forecast') return renderWeather(props);
+        if (props.source === 'list_show') return renderZoeList(props);
+        if (props.source === 'people_directory') return renderPeopleDirectory(props);
+        if (props.source === 'person_profile') return renderPersonProfile(props);
         const body = [
             props.metric ? '<div class="sky-widget-metric"><strong>' + escapeHtml(props.metric) + '</strong><span>' + escapeHtml(props.metric_label || '') + '</span></div>' : '',
             '<div class="sky-card-body">' + escapeHtml(props.body || props.message || '') + '</div>'
@@ -307,6 +310,135 @@
             '</div>'
         ].join('');
         return cardFrame(Object.assign({ status: 'Weather', icon: 'W' }, props), body, { wide: true, tone: 'weather-card ' + weatherClass(props, current) });
+    }
+
+    function normalizeListItems(items) {
+        return Array.isArray(items) ? items : [];
+    }
+
+    function listAccentClass(value) {
+        const token = safeClassTokens(String(value || 'list').toLowerCase()) || 'list';
+        const known = ['shopping', 'work', 'personal', 'bucket', 'tasks', 'all'];
+        return known.indexOf(token) >= 0 ? token : 'list';
+    }
+
+    function renderListItemRow(item, index) {
+        const isObject = typeof item === 'object' && item;
+        const title = isObject ? (item.text || item.title || item.label || 'List item') : String(item || 'List item');
+        const completed = !!(isObject && item.completed);
+        const detail = isObject ? [item.quantity, item.category, item.assigned_to].filter(Boolean).join(' · ') : '';
+        const priority = isObject && item.priority ? '<b>' + escapeHtml(item.priority) + '</b>' : '';
+        return [
+            '<div class="sky-list-item-row' + (completed ? ' is-done' : '') + '">',
+            '<div class="sky-list-check" aria-hidden="true">' + (completed ? '✓' : '') + '</div>',
+            '<div class="sky-list-item-main"><strong>' + escapeHtml(title) + '</strong>' + (detail ? '<em>' + escapeHtml(detail) + '</em>' : '') + '</div>',
+            '<div class="sky-list-item-meta">' + (priority || '<span>' + escapeHtml(String(index + 1).padStart(2, '0')) + '</span>') + '</div>',
+            '</div>'
+        ].join('');
+    }
+
+    function renderZoeList(props) {
+        const items = normalizeListItems(props.items);
+        const lists = Array.isArray(props.lists) ? props.lists : [];
+        const listType = props.list_type || (lists[0] && lists[0].list_type) || 'all';
+        const accent = listAccentClass(listType);
+        const visibleItems = items.slice(0, 12);
+        const rows = visibleItems.map(renderListItemRow).join('');
+        const overviewRows = !items.length && lists.length ? lists.slice(0, 6).map(list => {
+            const openCount = list.open_count == null ? (list.item_count || 0) : list.open_count;
+            return [
+                '<div class="sky-list-overview-row ' + escapeHtml(listAccentClass(list.list_type)) + '">',
+                '<div><strong>' + escapeHtml(list.name || list.list_name || 'List') + '</strong><em>' + escapeHtml(list.description || list.list_type || '') + '</em></div>',
+                '<span>' + escapeHtml(openCount) + ' open</span>',
+                '</div>'
+            ].join('');
+        }).join('') : '';
+        const empty = [
+            '<div class="sky-empty-data sky-list-empty">',
+            '<strong>No items in ' + escapeHtml(props.list_name || 'this list') + '</strong>',
+            '<span>Zoe did not find active items for this request.</span>',
+            '</div>'
+        ].join('');
+        const body = [
+            '<div class="sky-list-scene ' + escapeHtml(accent) + '">',
+            '<div class="sky-list-hero">',
+            '<div><span>' + escapeHtml((props.list_type || 'list').toUpperCase()) + '</span><h3>' + escapeHtml(props.list_name || props.title || 'Lists') + '</h3></div>',
+            '<div class="sky-list-rings"><strong>' + escapeHtml(props.open_count == null ? (items.length || lists.length) : props.open_count) + '</strong><span>open</span></div>',
+            '</div>',
+            '<div class="sky-list-stats">',
+            '<div><strong>' + escapeHtml(props.item_count == null ? items.length : props.item_count) + '</strong><span>items</span></div>',
+            '<div><strong>' + escapeHtml(props.completed_count || 0) + '</strong><span>done</span></div>',
+            '<div><strong>' + escapeHtml(lists.length || 1) + '</strong><span>lists</span></div>',
+            '</div>',
+            '<div class="sky-list-items">' + (rows || overviewRows || empty) + '</div>',
+            '</div>'
+        ].join('');
+        return cardFrame(Object.assign({ status: 'Lists', icon: 'L' }, props), body, { wide: true, tone: 'zoe-list-card ' + accent, hideHeader: true, hideStatus: true });
+    }
+
+    function initialsFor(name) {
+        const parts = String(name || 'Z').trim().split(/\s+/).filter(Boolean);
+        return escapeHtml((parts[0] || 'Z').charAt(0).toUpperCase() + (parts[1] || '').charAt(0).toUpperCase());
+    }
+
+    function healthPercent(value) {
+        const number = Number(value);
+        if (!Number.isFinite(number)) return 50;
+        return Math.max(0, Math.min(100, Math.round(number <= 1 ? number * 100 : number)));
+    }
+
+    function personSubline(person) {
+        return [person.relationship, person.context, person.circle].filter(Boolean).join(' · ') || 'Contact';
+    }
+
+    function renderPeopleDirectory(props) {
+        const people = Array.isArray(props.people) ? props.people : [];
+        const rows = people.slice(0, 8).map(person => {
+            const health = healthPercent(person.health_score);
+            return [
+                '<div class="sky-person-row">',
+                '<div class="sky-person-avatar" aria-hidden="true">' + initialsFor(person.name) + '</div>',
+                '<div class="sky-person-main"><strong>' + escapeHtml(person.name || 'Person') + '</strong><em>' + escapeHtml(personSubline(person)) + '</em></div>',
+                '<div class="sky-person-health"><i style="width:' + health + '%"></i><span>' + health + '</span></div>',
+                '</div>'
+            ].join('');
+        }).join('');
+        const empty = '<div class="sky-empty-data sky-people-empty"><strong>No matching people</strong><span>Zoe did not find contacts for this request.</span></div>';
+        const body = [
+            '<div class="sky-people-scene">',
+            '<div class="sky-people-hero"><div><span>PEOPLE</span><h3>' + escapeHtml(props.title || 'People') + '</h3></div><div class="sky-people-count"><strong>' + escapeHtml(props.count == null ? people.length : props.count) + '</strong><span>found</span></div></div>',
+            '<div class="sky-people-filter-row">',
+            props.query ? '<span>Search ' + escapeHtml(props.query) + '</span>' : '',
+            props.context ? '<span>' + escapeHtml(props.context) + '</span>' : '',
+            props.circle ? '<span>' + escapeHtml(props.circle) + '</span>' : '',
+            '</div>',
+            '<div class="sky-people-list">' + (rows || empty) + '</div>',
+            '</div>'
+        ].join('');
+        return cardFrame(Object.assign({ status: 'People', icon: 'P' }, props), body, { wide: true, tone: 'people-card', hideHeader: true, hideStatus: true });
+    }
+
+    function renderPersonProfile(props) {
+        const person = props.person || {};
+        const health = healthPercent(person.health_score);
+        const contactRows = [
+            ['Phone', person.phone],
+            ['Email', person.email],
+            ['Birthday', person.birthday],
+            ['Last contact', person.last_contacted_at]
+        ].filter(pair => pair[1]).map(pair => '<div><span>' + escapeHtml(pair[0]) + '</span><strong>' + escapeHtml(pair[1]) + '</strong></div>').join('');
+        const body = [
+            '<div class="sky-profile-scene">',
+            '<div class="sky-profile-hero">',
+            '<div class="sky-profile-avatar" aria-hidden="true">' + initialsFor(person.name || props.title) + '</div>',
+            '<div class="sky-profile-title"><span>' + escapeHtml(personSubline(person)) + '</span><h3>' + escapeHtml(person.name || props.title || 'Person') + '</h3></div>',
+            '<div class="sky-profile-health"><strong>' + health + '</strong><span>connection</span><i style="height:' + health + '%"></i></div>',
+            '</div>',
+            contactRows ? '<div class="sky-profile-grid">' + contactRows + '</div>' : '',
+            person.notes ? '<p class="sky-profile-notes">' + escapeHtml(person.notes) + '</p>' : '',
+            '</div>'
+        ].join('');
+        return cardFrame(Object.assign({ status: 'Person', icon: 'P' }, props), body, { wide: true, tone: 'person-profile-card', hideHeader: true, hideStatus: true });
     }
 
 
