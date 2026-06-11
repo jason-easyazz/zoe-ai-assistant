@@ -1360,12 +1360,12 @@ async def _resolve_ws_user(session_id: str) -> str:
     return "voice-guest"
 
 
-async def _resolve_voice_cards(message_text: str, user_id: str) -> dict:
+async def _resolve_voice_cards(message_text: str, user_id: str, context: dict | None = None) -> dict:
     """Resolve voice text to real Skybridge data cards when a supported domain exists."""
     try:
         from skybridge_service import resolve_skybridge_request
 
-        return await resolve_skybridge_request(message_text, user_id)
+        return await resolve_skybridge_request(message_text, user_id, context=context)
     except Exception as exc:
         logger.warning("Voice WS Skybridge resolve failed: %s", exc)
         return {"handled": False, "cards": [], "spoken_summary": ""}
@@ -1390,6 +1390,7 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
     # Mutable cancel flag — text handler sets it; streaming pipeline checks it
     # between sentence boundaries. True mid-stream cancel requires task refactor (future).
     _ws_cancelled: list[bool] = [False]
+    skybridge_context: dict = {}
 
     try:
         while True:
@@ -1452,9 +1453,18 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
             _ws_cancelled[0] = False
 
             await websocket.send_json({"type": "state", "state": "thinking"})
-            skybridge_result = await _resolve_voice_cards(message_text, user_id)
-            for card_contract in skybridge_result.get("cards") or []:
-                await websocket.send_json({"type": "card", "card": card_contract})
+            skybridge_result = await _resolve_voice_cards(message_text, user_id, context=skybridge_context)
+            if skybridge_result.get("handled"):
+                skybridge_context = skybridge_result.get("skybridge_context") or skybridge_context
+                await websocket.send_json({"type": "cards", "result": skybridge_result})
+                await websocket.send_json({"type": "skybridge_context", "context": skybridge_context})
+                spoken_summary = str(skybridge_result.get("spoken_summary") or "").strip()
+                if spoken_summary:
+                    await websocket.send_json({"type": "transcript", "role": "assistant", "text": spoken_summary})
+                await websocket.send_json({"type": "state", "state": "ambient"})
+                await websocket.send_json({"type": "done"})
+                continue
+            skybridge_context = {}
 
             # ── Streaming LLM + per-sentence TTS ────────────────────────────────
             # Track LLM output and TTS output separately so fallback only re-runs

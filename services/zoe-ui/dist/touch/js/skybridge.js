@@ -12,6 +12,7 @@
     let currentUtterance = '';
     let voiceStartedByUser = false;
     let commandFallbackOpen = false;
+    let skybridgeContext = {};
 
     const colors = {
         ambient: ['#5fc6ff', '#66d19e'],
@@ -113,7 +114,10 @@
         });
         if (voice) voice.stop();
         voice = new window.SkybridgeVoice({ mode, onEvent: handleVoiceEvent });
-        voice.start().catch(err => showError(err.message || 'Voice failed to start'));
+        voice.start().catch(err => {
+            showError(err.message || 'Voice failed to start');
+            openCommandFallback('Voice is still connecting. Type here and Zoe will still render cards.');
+        });
         setStatus('Connecting ' + mode);
     }
 
@@ -126,8 +130,15 @@
             addTranscript(event.role, event.text);
         } else if (event.type === 'card') {
             addCard(event.card, true);
+        } else if (event.type === 'cards') {
+            renderSkybridgeResult(event.result || event);
+        } else if (event.type === 'skybridge_context') {
+            skybridgeContext = event.context || skybridgeContext || {};
         } else if (event.type === 'error') {
             showError(event.message);
+            if (/voice disconnected|transport unavailable|livekit unavailable|websocket|microphone|permission/i.test(event.message || '')) {
+                openCommandFallback('Voice needs attention. Type here and Zoe will still render cards.');
+            }
         } else if (event.type === 'done') {
             setState('ambient');
         }
@@ -153,39 +164,20 @@
             let resp = await fetch('/api/skybridge/resolve', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                body: JSON.stringify({ message: query })
+                body: JSON.stringify({ message: query, context: skybridgeContext })
             });
             if (resp.status === 401 || resp.status === 503) {
                 try { localStorage.removeItem('zoe_session'); } catch (_) {}
                 resp = await fetch('/api/skybridge/resolve', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                    body: JSON.stringify({ message: query })
+                    body: JSON.stringify({ message: query, context: skybridgeContext })
                 });
             }
             if (!resp.ok) throw new Error('Skybridge resolver unavailable');
             const data = await resp.json();
             if (!data || !data.handled) return false;
-            clearCards();
-            const intent = data.intent || {};
-            const cards = Array.isArray(data.cards) ? data.cards : [];
-            setContext(
-                intent.domain === 'calendar' ? 'Calendar' : (intent.domain === 'weather' ? 'Weather' : 'Skybridge'),
-                data.spoken_summary || 'Showing live data.'
-            );
-            currentUtterance = data.spoken_summary || currentUtterance;
-            els.copy.textContent = currentUtterance;
-            cards.forEach((card, index) => addCard(card, false, index * 90));
-            if (!cards.length) {
-                addCard({
-                    component: 'status',
-                    props: {
-                        title: 'No card returned',
-                        body: data.spoken_summary || 'Zoe understood the request but did not return a display card.',
-                        status: 'Resolver'
-                    }
-                }, true);
-            }
+            renderSkybridgeResult(data);
             return true;
         } catch (err) {
             if (isDataQuery(query)) {
@@ -204,8 +196,39 @@
         }
     }
 
+    function contextLabelFor(intent) {
+        const domain = intent && intent.domain;
+        if (domain === 'calendar') return 'Calendar';
+        if (domain === 'weather') return 'Weather';
+        if (domain === 'lists') return 'Lists';
+        if (domain === 'people') return 'People';
+        return 'Skybridge';
+    }
+
+    function renderSkybridgeResult(data) {
+        if (!data) return;
+        clearCards();
+        const intent = data.intent || {};
+        const cards = Array.isArray(data.cards) ? data.cards : [];
+        skybridgeContext = data.skybridge_context || skybridgeContext || {};
+        setContext(contextLabelFor(intent), data.spoken_summary || 'Showing live data.');
+        currentUtterance = data.spoken_summary || currentUtterance;
+        els.copy.textContent = currentUtterance;
+        cards.forEach((card, index) => addCard(card, false, index * 90));
+        if (!cards.length) {
+            addCard({
+                component: 'status',
+                props: {
+                    title: 'No card returned',
+                    body: data.spoken_summary || 'Zoe understood the request but did not return a display card.',
+                    status: 'Resolver'
+                }
+            }, true);
+        }
+    }
+
     function isDataQuery(query) {
-        return /\b(calendar|schedule|events|appointments|agenda|weather|forecast|temperature|rain|windy|wind)\b/i.test(query || '');
+        return /\b(calendar|schedule|events|appointments|agenda|weather|forecast|temperature|rain|windy|wind|list|shopping|groceries|grocery|tasks|todos|people|contacts|person|profile|remember|change|move|reschedule|add)\b/i.test(query || '');
     }
 
     function projectCards(query) {
@@ -253,6 +276,7 @@
         document.body.classList.remove('sky-command-open');
         syncVoiceFallbackState();
         currentUtterance = '';
+        skybridgeContext = {};
         setContext('Listening', 'The surface will build itself when Zoe understands what you need.');
         clearCards();
         els.copy.textContent = 'Listening. Ask Zoe for anything.';
@@ -428,6 +452,7 @@
         voice.startRecording().catch(err => {
             voiceStartedByUser = false;
             showError(err.message || 'Microphone unavailable');
+            openCommandFallback('Microphone is not available here. Type a request and Zoe will still render cards.');
         });
     }
 

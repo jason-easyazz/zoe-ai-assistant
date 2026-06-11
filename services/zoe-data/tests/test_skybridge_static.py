@@ -105,6 +105,8 @@ def test_skybridge_voice_normalizes_both_transports():
     assert "connectLiveKit()" in voice
     assert "handleServerEvent(msg)" in voice
     assert "this.emit({ type: 'card'" in voice
+    assert "this.emit({ type: 'cards'" in voice
+    assert "this.emit({ type: 'skybridge_context'" in voice
     assert "scheduleReconnect()" in voice
     assert "Malformed server event" in voice
     assert "Skybridge LiveKit event parse failed" in voice
@@ -163,6 +165,13 @@ def test_skybridge_uses_backend_status_contract():
     assert "getHomeCards()" in app
     assert "/api/skybridge/resolve" in app
     assert "resolveCommand(query)" in app
+    assert "skybridgeContext" in app
+    assert "JSON.stringify({ message: query, context: skybridgeContext })" in app
+    assert "renderSkybridgeResult(data)" in app
+    assert "function renderSkybridgeResult" in app
+    assert "Voice is still connecting. Type here and Zoe will still render cards." in app
+    assert "Microphone is not available here. Type a request and Zoe will still render cards." in app
+    assert "contextLabelFor(intent)" in app
     assert "isDataQuery(query)" in app
     assert "resp.status === 401 || resp.status === 503" in app
     assert "if (voice) voice.sendText(query)" in app
@@ -179,8 +188,12 @@ def test_skybridge_auth_and_voice_bus_contracts_are_wired():
     assert 'return "voice-guest"' in main
     assert 'return "family-admin"' not in main[main.index("async def _resolve_ws_user"):main.index("@app.websocket(\"/ws/voice/\")")]
     assert "async def _resolve_voice_cards" in main
-    assert "resolve_skybridge_request(message_text, user_id)" in main
-    assert '"type": "card", "card": card_contract' in main
+    assert "resolve_skybridge_request(message_text, user_id, context=context)" in main
+    assert "skybridge_context: dict = {}" in main
+    assert '"type": "cards", "result": skybridge_result' in main
+    assert '"type": "skybridge_context", "context": skybridge_context' in main
+    assert '"type": "transcript", "role": "assistant", "text": spoken_summary' in main
+    assert 'skybridge_context = {}\n\n            # ── Streaming LLM' in main
 
 
 def test_skybridge_renderer_supports_real_data_cards():
