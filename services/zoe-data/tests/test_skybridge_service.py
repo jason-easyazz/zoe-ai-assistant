@@ -191,6 +191,20 @@ def test_classify_skybridge_action_requests():
     assert lowercase_remember.action == "remember_fact"
     assert lowercase_remember.person_name == "Sarah"
 
+    assert classify_skybridge_intent("remember that my colleague has a car") is None
+    assert classify_skybridge_intent("remember that the manager likes coffee") is None
+
+
+def test_calendar_create_requires_unambiguous_bare_time():
+    calendar_context = {"intent": {"domain": "calendar"}, "cards": []}
+
+    assert classify_skybridge_intent("Can you add dentist at 9", calendar_context) is None
+
+    create_event = classify_skybridge_intent("Can you add dentist at 9am", calendar_context)
+    assert create_event.domain == "calendar"
+    assert create_event.action == "create_event"
+    assert create_event.target_time == "09:00"
+
 
 def test_classify_calendar_date_and_range_requests(monkeypatch):
     class FrozenDate(date):

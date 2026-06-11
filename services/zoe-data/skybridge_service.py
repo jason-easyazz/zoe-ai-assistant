@@ -230,6 +230,27 @@ def _parse_time(text: str) -> str:
     elif ampm.startswith("a") and hour == 12:
         hour = 0
     elif not ampm and 1 <= hour <= 11:
+        return ""
+    return f"{hour:02d}:{minute:02d}"
+
+
+def _parse_contextual_time(text: str, target: str, context: dict[str, Any] | None) -> str:
+    parsed = _parse_time(text)
+    if parsed:
+        return parsed
+    match = re.search(r"\b(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?\s*\b", text, re.IGNORECASE)
+    if not match:
+        return ""
+    hour = int(match.group("hour"))
+    minute = int(match.group("minute") or "0")
+    if not (1 <= hour <= 11) or minute > 59:
+        return ""
+    anchor_time = _parse_time(target)
+    if not anchor_time:
+        scored = sorted(((_score_event_for_target(event, target), event) for event in _context_events(context)), reverse=True, key=lambda pair: pair[0])
+        if scored and scored[0][0] > 0 and sum(1 for score, _event in scored if score == scored[0][0]) == 1:
+            anchor_time = str(scored[0][1].get("start_time") or "")[:5]
+    if anchor_time and int(anchor_time[:2]) >= 12:
         hour += 12
     return f"{hour:02d}:{minute:02d}"
 
@@ -275,7 +296,7 @@ def _calendar_update_from_text(message: str, context: dict[str, Any] | None) -> 
     if _context_domain(context) != "calendar" and not re.search(r"\b(calendar|schedule|event|appointment|meeting)\b", message, re.IGNORECASE):
         return None
     target = _clean_action_text(match.group("target"))
-    target_time = _parse_time(match.group("time"))
+    target_time = _parse_contextual_time(match.group("time"), target, context)
     return (target, target_time) if target_time else None
 
 
@@ -307,7 +328,11 @@ def _people_fact_from_text(message: str) -> tuple[str, str, str] | None:
     )
     if not match:
         return None
-    name = match.group("name").strip().title()
+    raw_name = match.group("name").strip()
+    first_word = raw_name.split()[0].lower()
+    if first_word in {"a", "an", "the", "my", "our", "your", "his", "her", "their", "this", "that"}:
+        return None
+    name = raw_name.title()
     fact = match.group("fact").strip(" .")
     birthday = _birthday_from_text(fact)
     fact = re.sub(
