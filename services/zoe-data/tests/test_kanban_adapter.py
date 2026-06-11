@@ -253,6 +253,49 @@ async def test_dispatch_verify_includes_already_covered_handoff():
 
 
 @pytest.mark.asyncio
+async def test_dispatch_review_includes_audit_pipeline_handoff():
+    from pipeline_evidence import EvidenceItem, PipelineState
+    from pipeline_store import save_state
+
+    state = PipelineState(
+        task_ref="multica:uuid-audit-review",
+        phase="review",
+        status="todo",
+        evidence_profile="audit",
+        attempts={"implement": 1, "verify": 1},
+        evidence=[
+            EvidenceItem(
+                kind="validator",
+                summary="focused validation passed",
+                passed=True,
+                metadata={"source": "audit_protocol_recovery", "phase": "verify"},
+            )
+        ],
+    )
+    save_state(state, event="transition")
+    a = _FakeAdapter()
+
+    result = await a.dispatch(
+        {
+            "id": "uuid-audit-review",
+            "identifier": "ZOE-AUDIT",
+            "title": "Audit no PR",
+            "description": "Original audit ticket.",
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["phase"] == "review"
+    create = [c for c in a.calls if c[0] == "create"][0]
+    body = create[create.index("--body") + 1]
+    assert "Zoe pipeline handoff (authoritative):" in body
+    assert "AUDIT_ONLY=1" in body
+    assert "PR_URL=" in body
+    assert "Do not hunt for PRs" in body
+    assert body.index("AUDIT_ONLY=1") < body.index("Original audit ticket")
+
+
+@pytest.mark.asyncio
 async def test_dispatch_does_not_parent_recovered_phase_to_blocked_prior_row():
     from pipeline_evidence import EvidenceItem, PipelineState
     from pipeline_store import save_state
