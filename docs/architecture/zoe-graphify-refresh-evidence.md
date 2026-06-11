@@ -48,6 +48,14 @@ malformed shard evidence, and distinguishes `artifact_capture_ready` from
 that deterministic graph merge handling, merged cluster/report generation, and
 inventory reconciliation are already proven.
 
+`refresh_graphify.sh` is the scheduled full-corpus refresh wrapper. It prefers
+Graphify's OpenRouter backend when `OPENROUTER_API_KEY` is available from the
+environment, `.env`, or `~/.hermes/.env`, while preserving
+`GRAPHIFY_BACKEND`/model overrides. It still builds from a clean `origin/main`
+snapshot, seeds the cache, scans Graphify output for quota/auth/provider failure
+text before syncing, requires non-empty `graph.json` and `GRAPH_REPORT.md`, and
+normalizes generated snapshot paths before `rsync` back to `graphify-out`.
+
 Acceptance is fail-closed. The status JSON is rejected when Graphify times out,
 exits nonzero, omits `graphify-out/graph.json`, writes an empty graph, emits
 invalid JSON chunks, emits truncated chunks, or surfaces cloud quota errors.
@@ -139,6 +147,13 @@ Current evidence:
   this artifact evidence returned `artifact_capture_ready=true`,
   `artifact_report_ready=false`, and `artifact_sync_ready=false` because the run
   was non-clustered and no merged graph/report has been produced.
+- Zoe host timer evidence on 2026-06-11 showed the local full-corpus wrapper
+  still fails with local Gemma: the daily `graphify_local_refresh.py` run timed
+  out after 1800 seconds with 617 code files, 257 docs, 54 context splits, 26
+  invalid JSON chunks, and 8 truncated chunks, and did not sync. The installed
+  Graphify tool now has an OpenRouter backend available, so scheduled full-corpus
+  refresh should use `refresh_graphify.sh --daily` with OpenRouter while keeping
+  local probes for bounded/offline evidence.
 
 ## Refresh 2026-06-09 Foundation Pass
 

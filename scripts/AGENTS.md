@@ -7,7 +7,7 @@ Operational scripting for Zoe hosts: setup, maintenance, deployment, migrations,
 ## Ownership
 
 - `setup/` — host/platform provisioning, including `setup/jetson/` systemd unit templates (e.g. `zoe-graphify-refresh.service` / `.timer`).
-- `maintenance/` — recurring operational jobs: `graphify_local_refresh.py` (nightly fail-closed local knowledge-graph refresh), `graphify_local_probe.py` (offline Graphify acceptance probe), `refresh_graphify.sh` (legacy/manual cloud-backed refresh), `prune_worktrees.sh` (stale worktree cleanup), `greploop_guard.py` (Greptile fix-packet loop), triage generators.
+- `maintenance/` — recurring operational jobs: `refresh_graphify.sh` (nightly fail-closed provider-backed knowledge-graph refresh), `graphify_local_refresh.py` (local/offline full-corpus experiment, not the scheduled default), `graphify_local_probe.py` (offline Graphify acceptance probe), `prune_worktrees.sh` (stale worktree cleanup), `greploop_guard.py` (Greptile fix-packet loop), triage generators.
 - `deploy/`, `migrations/`, `testing/`, `train/`, `utilities/`, `preview/` — task-specific script groups.
 
 ## Local Contracts
@@ -15,8 +15,9 @@ Operational scripting for Zoe hosts: setup, maintenance, deployment, migrations,
 - Scripts belong in a category subfolder, never in the repository root.
 - Installed systemd user units live in `~/.config/systemd/user/`; the copies here are templates. Keep both in sync when changing a unit.
 - Scripts run by timers/CI have no login session: prefix user-service systemctl calls with `XDG_RUNTIME_DIR=/run/user/$(id -u)`.
-- The recurring Graphify timer must call `graphify_local_refresh.py`, which runs against Zoe's localhost model path and syncs `graphify-out` only after an accepted clustered probe. It must fail closed and leave committed graph artifacts untouched on timeout, invalid JSON, truncation, missing graph output, or sync failure.
-- `refresh_graphify.sh` is legacy/manual cloud-backed evidence tooling. Do not wire it to recurring timers unless an operator explicitly approves a temporary cloud refresh. It must never require a clean live working tree and must never use `graphify update` (inflates the graph).
+- The recurring Graphify timer must call `refresh_graphify.sh --daily`. The wrapper prefers the OpenRouter backend when `OPENROUTER_API_KEY` is available from the environment, `.env`, or `~/.hermes/.env`; `GRAPHIFY_BACKEND` and `GRAPHIFY_MODEL`/`GRAPHIFY_OPENROUTER_MODEL` may override the default. It must fail closed and leave committed graph artifacts untouched on quota, auth, provider, timeout, missing graph output, or sync failure.
+- `graphify_local_refresh.py` remains local/offline evidence tooling for localhost model experiments. Do not wire it to recurring timers for the full Zoe corpus until it has accepted full-corpus evidence.
+- Never use `graphify update` (inflates the graph).
 - `prune_worktrees.sh` is dry-run by default; never pass `--execute` without operator review of the candidate list. Skips dirty, locked, live-checkout, unmerged, and recently-active worktrees.
 
 ## Work Guidance

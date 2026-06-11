@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 WorkingDirectory=/home/zoe/assistant
-ExecStart=/home/zoe/assistant/scripts/maintenance/graphify_local_refresh.py --timeout-sec 1800 --base-url http://127.0.0.1:11434/v1 --status-json /tmp/zoe-graphify-local-refresh-daily.json
+ExecStart=/home/zoe/assistant/scripts/maintenance/refresh_graphify.sh --daily
 StandardOutput=journal
 StandardError=journal
 TimeoutStartSec=2100
