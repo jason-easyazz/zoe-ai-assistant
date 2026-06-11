@@ -578,7 +578,8 @@ async def sync_evolution_proposal_to_multica(
                                 params=params,
                             )
                             if create_resp.status_code in (200, 201):
-                                label_id = create_resp.json().get("id")
+                                resp_body = create_resp.json()
+                                label_id = resp_body.get("id") if isinstance(resp_body, dict) else None
                         except (httpx.HTTPError, ValueError, TypeError):
                             pass
                     if label_id:
