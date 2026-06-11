@@ -54,6 +54,11 @@ def _blocked(reason: str) -> int:
 
 
 def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+    # Enforce the safety contract at runtime, not just by call-site convention:
+    # we never force-push, amend, or bypass hooks.
+    for arg in args:
+        if arg in _FORBIDDEN_GIT:
+            raise AssertionError(f"forbidden git flag: {arg!r}")
     return subprocess.run(["git", *args], cwd=cwd, text=True, capture_output=True)
 
 
@@ -216,7 +221,10 @@ def run(packet: dict, repo: Path) -> int:
     target.write_text(updated, encoding="utf-8")
 
     def _revert() -> None:
-        _git(["checkout", "--", rel], repo)
+        # Restore BOTH index and working tree from HEAD. `checkout -- <file>`
+        # restores only from the index, so after a `git add` it is a no-op and
+        # would leave the staged change behind.
+        _git(["checkout", "HEAD", "--", rel], repo)
 
     # Syntax gate for Python.
     if rel.endswith(".py"):
@@ -261,6 +269,9 @@ def run(packet: dict, repo: Path) -> int:
         return _blocked(f"git add failed: {add.stderr.strip()[:200]}")
     commit = _git(["commit", "-m", f"fix(review): {summary}"], repo)
     if commit.returncode != 0:
+        # The file is staged (git add succeeded) but uncommitted; restore it so
+        # we never leave a partial edit behind per the module contract.
+        _revert()
         return _blocked(f"git commit failed: {commit.stderr.strip()[:200]}")
     push = _git(["push", "origin", f"HEAD:{branch}"], repo)
     if push.returncode != 0:

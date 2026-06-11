@@ -44,6 +44,53 @@ def test_apply_edits_requires_unique_match():
     assert out == "a = 1\nb = 3\n"
 
 
+def test_git_rejects_forbidden_flags(tmp_path):
+    mod = _module()
+    for flag in ("--force", "--force-with-lease", "-f", "--amend", "--no-verify"):
+        with pytest.raises(AssertionError):
+            mod._git(["push", flag], tmp_path)
+
+
+def test_run_reverts_staged_change_when_commit_fails(tmp_path, monkeypatch):
+    mod = _module()
+    repo = _init_repo_with_remote(tmp_path)
+
+    monkeypatch.setattr(mod, "_load_openrouter_key", lambda: "test-key")
+    monkeypatch.setattr(
+        mod,
+        "call_llm",
+        lambda *a, **k: json.dumps(
+            {"edits": [{"old_string": "x = 1", "new_string": "x = 2"}], "summary": "bump x"}
+        ),
+    )
+    # Force `git commit` to fail after `git add` has already staged the file.
+    real_git = mod._git
+
+    def _fake_git(args, cwd):
+        if args[:1] == ["commit"]:
+            return subprocess.CompletedProcess(args, 1, "", "hook rejected")
+        return real_git(args, cwd)
+
+    monkeypatch.setattr(mod, "_git", _fake_git)
+
+    packet = {
+        "task_type": "FIX_GREPTILE_FINDING",
+        "allowed_files": ["mod.py"],
+        "issue_text": "x should be 2",
+        "max_changed_lines": 120,
+    }
+    rc = mod.run(packet, repo)
+    assert rc == 0
+    # No partial edit left behind: working tree and index both restored.
+    assert (repo / "mod.py").read_text(encoding="utf-8") == "x = 1\n"
+    porcelain = subprocess.run(
+        ["git", "-C", str(repo), "status", "--porcelain", "mod.py"],
+        text=True,
+        capture_output=True,
+    ).stdout.strip()
+    assert porcelain == ""
+
+
 def test_run_blocks_on_multiple_allowed_files(capsys):
     mod = _module()
     rc = mod.run({"task_type": "FIX_GREPTILE_FINDING", "allowed_files": ["a.py", "b.py"]}, Path("/tmp"))
