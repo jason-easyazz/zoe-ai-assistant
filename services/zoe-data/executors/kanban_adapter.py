@@ -1622,10 +1622,18 @@ class KanbanAdapter:
                                 already_covered = _already_covered_detail(current_phase, detail)
                             except KanbanCLIError:
                                 already_covered = False
+                        keep_terminal_for_sync = (
+                            current_phase == "closeout"
+                            and current_status in _TERMINAL_KANBAN_STATUSES
+                            and getattr(existing_state, "evidence_profile", "") == "audit"
+                        )
                         if (
                             current_status == "blocked"
                             and not already_covered
-                        ) or current_status in _TERMINAL_KANBAN_STATUSES:
+                        ) or (
+                            current_status in _TERMINAL_KANBAN_STATUSES
+                            and not keep_terminal_for_sync
+                        ):
                             stale_executor_phase = current_phase
                             stale_executor_status = current_status
                             phases = {

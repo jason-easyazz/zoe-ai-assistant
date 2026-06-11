@@ -1774,6 +1774,52 @@ async def test_poll_partial_chain_via_body_marker_is_redispatchable():
 
 
 @pytest.mark.asyncio
+async def test_poll_v4_keeps_audit_closeout_done_for_sync():
+    from pipeline_evidence import PipelineState
+    from pipeline_store import save_state
+
+    state = PipelineState(
+        task_ref="multica:uuid-audit-closeout",
+        phase="closeout",
+        status="todo",
+        evidence_profile="audit",
+        attempts={"closeout": 1},
+    )
+    save_state(state, event="operator_resumed")
+    rows = [
+        _row(
+            "closeout",
+            "done",
+            chain_version="v4",
+            issue_id="uuid-audit-closeout",
+            created_at=200.0,
+        ),
+    ]
+    show = {
+        "t_closeout": {
+            "latest_summary": None,
+            "comments": [],
+            "runs": [{"summary": "Completed the audit closeout using recorded pipeline evidence."}],
+        }
+    }
+    issue = {
+        "id": "uuid-audit-closeout",
+        "identifier": "ZOE-AUDIT",
+        "title": "Audit closeout",
+        "description": "",
+    }
+
+    out = await _FakeAdapter(list_rows=rows, show_map=show).poll(
+        "multica:uuid-audit-closeout",
+        issue=issue,
+    )
+
+    assert out["pipeline"]["phase"] == "retro"
+    assert out["pipeline"]["status"] == "todo"
+    assert "stale_executor_phase" not in out["pipeline"]
+
+
+@pytest.mark.asyncio
 async def test_poll_v4_done_phase_with_ready_next_phase_is_partial():
     rows = [_row("scout", "done", chain_version="v4")]
     show = {"t_scout": {"latest_summary": "TOOLS_USED=graphify\nSCOUT_SUMMARY=small", "comments": []}}
