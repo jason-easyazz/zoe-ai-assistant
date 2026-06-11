@@ -793,11 +793,25 @@ async def _resolve_lists(intent: SkybridgeIntent, user_id: str, db: Any) -> dict
     }
 
 
-async def _find_or_create_list(intent: SkybridgeIntent, user_id: str, db: Any, context: dict[str, Any] | None) -> tuple[str, str]:
+async def _find_or_create_list(intent: SkybridgeIntent, user_id: str, db: Any, context: dict[str, Any] | None) -> tuple[str, str] | None:
     hinted_id, hinted_type = _context_list_hint(context)
     list_type = intent.list_type or hinted_type or "shopping"
     if hinted_id:
-        return hinted_id, list_type
+        rows = await db.fetch(
+            """
+            SELECT id, name, list_type
+            FROM lists
+            WHERE id = $1 AND deleted = 0
+              AND (visibility = 'family' OR user_id = $2)
+            LIMIT 1
+            """,
+            hinted_id,
+            user_id,
+        )
+        if not rows:
+            return None
+        row = dict(rows[0])
+        return str(row["id"]), str(row.get("list_type") or list_type)
     rows = await db.fetch(
         """
         SELECT id, name, list_type
@@ -848,7 +862,16 @@ async def _resolve_list_add_item(intent: SkybridgeIntent, user_id: str, db: Any,
             "cards": [_status_card("What should I add?", "Say the item and the list, for example: add bread to the shopping list.")],
             "actions": [],
         }
-    list_id, list_type = await _find_or_create_list(intent, user_id, db, context)
+    list_target = await _find_or_create_list(intent, user_id, db, context)
+    if not list_target:
+        return {
+            "handled": True,
+            "intent": _intent_dict(intent),
+            "spoken_summary": "I could not find that list anymore.",
+            "cards": [_status_card("Which list should I use?", "The list from the visible card is no longer available. Show your lists again or name the list to update.")],
+            "actions": [],
+        }
+    list_id, list_type = list_target
     item_id = str(uuid.uuid4())
     await db.execute(
         """

@@ -40,6 +40,8 @@ class FakeDb:
         if "FROM events" in sql:
             return self.events
         if "FROM lists" in sql:
+            if "WHERE id = $1" in sql:
+                return [row for row in self.lists if row.get("id") == args[1]]
             return self.lists
         if "FROM list_items" in sql:
             self.list_item_fetch_count += 1
@@ -478,6 +480,27 @@ async def test_list_add_item_persists_and_refreshes_list_card():
     assert result["actions"][0]["domain"] == "lists"
     assert result["cards"][0]["content"]["items"][0]["text"] == "bread"
     assert result["skybridge_context"]["cards"][0]["content"]["items"][0]["text"] == "bread"
+
+
+@pytest.mark.asyncio
+async def test_list_add_item_rejects_stale_context_list_id():
+    context = {
+        "intent": {"domain": "lists"},
+        "cards": [{"content": {"source": "list_show", "list_id": "missing-list", "list_type": "shopping"}}],
+    }
+    db = FakeDb(lists=[], items_by_list={})
+
+    result = await resolve_skybridge_request(
+        "add bread to the shopping list",
+        "family-admin",
+        context=context,
+        db=db,
+    )
+
+    assert result["handled"] is True
+    assert result["actions"] == []
+    assert "could not find" in result["spoken_summary"]
+    assert not db.items_by_list
 
 
 @pytest.mark.asyncio
