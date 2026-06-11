@@ -193,7 +193,7 @@ def test_skybridge_auth_and_voice_bus_contracts_are_wired():
     assert '"type": "cards", "result": skybridge_result' in main
     assert '"type": "skybridge_context", "context": skybridge_context' in main
     assert '"type": "transcript", "role": "assistant", "text": spoken_summary' in main
-    assert 'continue\n\n            # ── Streaming LLM' in main
+    assert 'skybridge_context = {}\n\n            # ── Streaming LLM' in main
 
 
 def test_skybridge_renderer_supports_real_data_cards():

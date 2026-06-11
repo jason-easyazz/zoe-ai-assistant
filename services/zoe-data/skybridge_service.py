@@ -398,16 +398,16 @@ def classify_skybridge_intent(message: str, context: dict[str, Any] | None = Non
         list_type = _list_type_from_text(text)
         return SkybridgeIntent(domain="lists", action="show", list_type=list_type)
     if any(term in text for term in (" people", " contacts", " contact", " person", " profile", " family", " friends")):
-        query, context, circle = _people_filters_from_text(text)
+        query, people_ctx, circle = _people_filters_from_text(text)
         if " family " in text and not query:
             query = "family"
         if " friends " in text and not query:
             query = "friend"
-        return SkybridgeIntent(domain="people", action="show", query=query, context=context, circle=circle)
+        return SkybridgeIntent(domain="people", action="show", query=query, context=people_ctx, circle=circle)
     if re.search(r"\b(?:find|search for|look up|show)\s+(?:my\s+)?[a-z][a-z .'-]{1,80}\b", text):
-        query, context, circle = _people_filters_from_text(text)
+        query, people_ctx, circle = _people_filters_from_text(text)
         if query:
-            return SkybridgeIntent(domain="people", action="show", query=query, context=context, circle=circle)
+            return SkybridgeIntent(domain="people", action="show", query=query, context=people_ctx, circle=circle)
     return None
 
 
@@ -469,6 +469,15 @@ async def _maybe_commit(db: Any) -> None:
     commit = getattr(db, "commit", None)
     if callable(commit):
         await commit()
+
+
+def _affected_rows(result: Any) -> int | None:
+    if result is None:
+        return None
+    if isinstance(result, int):
+        return result
+    match = re.search(r"\b(?:INSERT|UPDATE|DELETE)\s+(\d+)\b", str(result))
+    return int(match.group(1)) if match else None
 
 
 def _status_card(title: str, body: str, *, status: str = "Needs context") -> dict[str, Any]:
@@ -593,12 +602,20 @@ async def _resolve_calendar_update_time(intent: SkybridgeIntent, user_id: str, d
         }
     event = matches[0]
     event_id = event.get("id")
-    await db.execute(
+    update_result = await db.execute(
         "UPDATE events SET start_time = $1, updated_at = NOW() WHERE id = $2 AND user_id = $3 AND deleted = 0",
         intent.target_time,
         event_id,
         user_id,
     )
+    if _affected_rows(update_result) == 0:
+        return {
+            "handled": True,
+            "intent": _intent_dict(intent),
+            "spoken_summary": "I can see that event, but I cannot move it from this account.",
+            "cards": [_status_card("I could not move that event", "The event is visible to the family, but this account does not own it. Ask the owner to move it or create a new event.")],
+            "actions": [],
+        }
     await _maybe_commit(db)
     start = date.fromisoformat(str(event.get("start_date") or _context_calendar_date(context).isoformat())[:10])
     refreshed = await _resolve_calendar(SkybridgeIntent("calendar", "show", start.isoformat(), start, start), user_id, db)
@@ -1044,6 +1061,26 @@ async def _resolve_people_remember_fact(intent: SkybridgeIntent, user_id: str, d
             "actions": [],
         }
     person = await _find_or_create_person(user_id, intent.person_name, db)
+    memory_bits = []
+    if intent.fact_text:
+        memory_bits.append(f"{intent.person_name} {intent.fact_text}")
+    if intent.birthday:
+        memory_bits.append(f"{intent.person_name}'s birthday is {intent.birthday}")
+    if memory_bits:
+        memory_stored = await _store_skybridge_memory_fact(
+            ". ".join(memory_bits),
+            user_id=user_id,
+            person_id=str(person.get("id") or ""),
+            person_name=intent.person_name,
+        )
+        if not memory_stored:
+            return {
+                "handled": True,
+                "intent": _intent_dict(intent),
+                "spoken_summary": "I could not save that memory.",
+                "cards": [_status_card("Memory was not saved", "Zoe could not store that people fact through the memory service, so the profile card was left unchanged.")],
+                "actions": [],
+            }
     updates = []
     params: list[Any] = []
     note_fact = intent.fact_text
@@ -1056,22 +1093,13 @@ async def _resolve_people_remember_fact(intent: SkybridgeIntent, user_id: str, d
     if updates:
         updates.append("updated_at = NOW()")
         params.extend([person["id"], user_id])
+        # MemoryService is the write gate for the fact; this table update is the
+        # people-card projection so the visible profile reflects the saved memory.
         await db.execute(
             f"UPDATE people SET {', '.join(updates)} WHERE id = ${len(params)-1} AND user_id = ${len(params)}",
             *params,
         )
         await _maybe_commit(db)
-    memory_bits = []
-    if note_fact:
-        memory_bits.append(f"{intent.person_name} {note_fact}")
-    if intent.birthday:
-        memory_bits.append(f"{intent.person_name}'s birthday is {intent.birthday}")
-    await _store_skybridge_memory_fact(
-        ". ".join(memory_bits),
-        user_id=user_id,
-        person_id=str(person.get("id") or ""),
-        person_name=intent.person_name,
-    )
     refreshed = await _resolve_people(
         SkybridgeIntent(domain="people", action="show", query=intent.person_name),
         user_id,

@@ -1464,6 +1464,7 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
                 await websocket.send_json({"type": "state", "state": "ambient"})
                 await websocket.send_json({"type": "done"})
                 continue
+            skybridge_context = {}
 
             # ── Streaming LLM + per-sentence TTS ────────────────────────────────
             # Track LLM output and TTS output separately so fallback only re-runs

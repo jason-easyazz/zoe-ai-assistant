@@ -76,12 +76,14 @@ class FakeDb:
                     "deleted": False,
                 }
             )
-            return None
+            return "INSERT 0 1"
         if "UPDATE events SET start_time" in sql:
+            updated = 0
             for event in self.events:
-                if event.get("id") == args[2]:
+                if event.get("id") == args[2] and event.get("user_id") == args[3]:
                     event["start_time"] = args[1]
-            return None
+                    updated += 1
+            return f"UPDATE {updated}"
         if "INSERT INTO lists" in sql:
             self.lists.append(
                 {
@@ -93,7 +95,7 @@ class FakeDb:
                     "visibility": args[6],
                 }
             )
-            return None
+            return "INSERT 0 1"
         if "INSERT INTO list_items" in sql:
             item = {
                 "id": args[1],
@@ -105,7 +107,7 @@ class FakeDb:
                 "completed": False,
             }
             self.items_by_list.setdefault(args[2], []).append(item)
-            return None
+            return "INSERT 0 1"
         if "INSERT INTO people" in sql:
             self.people.append(
                 {
@@ -119,8 +121,9 @@ class FakeDb:
                     "is_partial": bool(args[8]),
                 }
             )
-            return None
+            return "INSERT 0 1"
         if "UPDATE people SET" in sql:
+            updated = 0
             person_id = args[-2]
             for person in self.people:
                 if person.get("id") == person_id:
@@ -130,8 +133,9 @@ class FakeDb:
                         idx += 1
                     if "birthday =" in sql:
                         person["birthday"] = args[idx]
-            return None
-        return None
+                    updated += 1
+            return f"UPDATE {updated}"
+        return "UPDATE 0"
 
     async def commit(self):
         self.commits += 1
@@ -312,6 +316,33 @@ async def test_calendar_update_can_target_visible_event_by_start_time():
     assert result["handled"] is True
     assert result["intent"]["action"] == "update_time"
     assert result["cards"][0]["content"]["events"][0]["start_time"] == "16:00"
+
+
+@pytest.mark.asyncio
+async def test_calendar_update_does_not_confirm_family_event_owned_by_someone_else():
+    event = {
+        "id": "event-1",
+        "user_id": "other-family-user",
+        "title": "School pickup",
+        "start_date": "2026-06-17",
+        "start_time": "15:00",
+        "end_time": "15:30",
+        "category": "family",
+        "visibility": "family",
+        "deleted": False,
+    }
+    context = {
+        "intent": {"domain": "calendar"},
+        "cards": [{"content": {"source": "calendar_show", "start_date": "2026-06-17", "events": [event]}}],
+    }
+    db = FakeDb(events=[event])
+
+    result = await resolve_skybridge_request("move my 3pm to 4pm", "family-admin", context=context, db=db)
+
+    assert result["handled"] is True
+    assert result["actions"] == []
+    assert "cannot move" in result["spoken_summary"]
+    assert db.events[0]["start_time"] == "15:00"
 
 
 @pytest.mark.asyncio
@@ -626,6 +657,37 @@ async def test_people_remember_fact_creates_visible_profile_card(monkeypatch):
     assert "Likes flowers." in profile["notes"]
     assert db.people[0]["is_partial"] is False
     assert remembered["person_id"] == db.people[0]["id"]
+
+
+@pytest.mark.asyncio
+async def test_people_remember_fact_leaves_profile_unchanged_when_memory_rejects(monkeypatch):
+    person = {
+        "id": "person-1",
+        "user_id": "family-admin",
+        "name": "Sarah",
+        "relationship": "Friend",
+        "circle": "inner",
+        "context": "personal",
+        "notes": "",
+        "visibility": "family",
+    }
+
+    async def fake_memory(_fact, **_kwargs):
+        return False
+
+    db = FakeDb(people=[person])
+    monkeypatch.setattr(skybridge_service, "_store_skybridge_memory_fact", fake_memory)
+
+    result = await resolve_skybridge_request(
+        "remember that Sarah likes flowers",
+        "family-admin",
+        db=db,
+    )
+
+    assert result["handled"] is True
+    assert result["actions"] == []
+    assert "not saved" in result["cards"][0]["props"]["title"].lower()
+    assert db.people[0].get("notes", "") == ""
 
 
 @pytest.mark.asyncio
