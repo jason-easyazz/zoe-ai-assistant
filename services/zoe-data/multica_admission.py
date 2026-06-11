@@ -60,7 +60,7 @@ def ticket_is_dispatch_approved(
         return False
     # Fail closed on live-checkout path references: dispatching them would only
     # trip the runtime WORKTREE_PATH_VIOLATION guard after budget is burned.
-    if not validate_ticket_contract(issue.get("description") or "", metadata=metadata)["ok"]:
+    if not validate_ticket_contract(issue.get("description") or "")["ok"]:
         return False
     source = str(metadata.get("source") or "").lower()
     if "smoke" in source or "e2e" in source:

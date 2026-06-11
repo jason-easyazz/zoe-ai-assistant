@@ -175,8 +175,22 @@ def append_child_id(description: str | None, child_id: str) -> str:
 def _live_path_regex(live_root: str) -> re.Pattern[str]:
     # Match the live root and any path beneath it, stopping at whitespace or
     # shell/markdown delimiters so we capture a single path token cleanly. The
-    # boundary lookahead prevents matching a sibling like ``<root>-backup``.
-    return re.compile(re.escape(live_root) + r"(?![\w-])(?:/[^\s'\"`)\]>,;]*)?")
+    # boundary lookahead prevents matching a sibling like ``<root>-backup`` or
+    # ``<root>.bak`` whose name merely shares the root as a string prefix.
+    return re.compile(re.escape(live_root) + r"(?![\w.\-])(?:/[^\s'\"`)\]>,;]*)?")
+
+
+def _split_off_metadata_block(text: str) -> tuple[str, str, str]:
+    """Return (before, block, after) splitting out the fenced Zoe block.
+
+    The fenced metadata block is machine-managed JSON; live-path linting and
+    rewriting must operate on the human prose only, never inside the block.
+    """
+    match = _BLOCK_RE.search(text)
+    if not match:
+        return text, "", ""
+    start, end = match.span()
+    return text[:start], text[start:end], text[end:]
 
 
 def find_live_path_references(
@@ -185,14 +199,19 @@ def find_live_path_references(
     """Return unique live-checkout absolute paths referenced in the ticket text.
 
     These are the WORKTREE_PATH_VIOLATION class: any instruction that points the
-    worker at the shared live checkout instead of its pinned worktree.
+    worker at the shared live checkout instead of its pinned worktree. Only the
+    human prose is scanned; the fenced metadata block is machine-managed JSON
+    (e.g. a ``blocked_reason`` may legitimately quote an offending path) and is
+    skipped to avoid false positives.
     """
     root = _live_root(live_root)
+    before, _block, after = _split_off_metadata_block(description or "")
     seen: dict[str, None] = {}
-    for match in _live_path_regex(root).finditer(description or ""):
-        # Trim a trailing slash and any sentence punctuation the regex swept up.
-        token = match.group(0).rstrip("/.,;:")
-        seen.setdefault(token, None)
+    for prose in (before, after):
+        for match in _live_path_regex(root).finditer(prose):
+            # Trim a trailing slash and any sentence punctuation the regex swept up.
+            token = match.group(0).rstrip("/.,;:")
+            seen.setdefault(token, None)
     return list(seen)
 
 
@@ -201,10 +220,11 @@ def normalize_live_paths(description: str | None, *, live_root: str | None = Non
 
     ``<root>/services/x.py`` becomes ``services/x.py`` and a bare ``<root>``
     (e.g. ``cd <root>``) becomes ``.`` so the same prose works inside any pinned
-    worktree. Human prose and the fenced metadata block are otherwise untouched.
+    worktree. Only the human prose is rewritten; the fenced metadata block is
+    left byte-for-byte intact so stored JSON semantics are never altered.
     """
     root = _live_root(live_root)
-    text = description or ""
+    regex = _live_path_regex(root)
 
     def _replace(match: re.Match[str]) -> str:
         token = match.group(0)
@@ -217,14 +237,14 @@ def normalize_live_paths(description: str | None, *, live_root: str | None = Non
         relative = token[len(root) + 1 :]  # drop "<root>/"
         return (relative or ".") + trailing
 
-    return _live_path_regex(root).sub(_replace, text)
+    before, block, after = _split_off_metadata_block(description or "")
+    return regex.sub(_replace, before) + block + regex.sub(_replace, after)
 
 
 def validate_ticket_contract(
     description: str | None,
     *,
     live_root: str | None = None,
-    metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Lint a ticket for dispatch-blocking contract violations.
 

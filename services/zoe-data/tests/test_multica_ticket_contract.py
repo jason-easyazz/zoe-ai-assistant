@@ -123,5 +123,41 @@ def test_validate_ticket_contract_honors_custom_live_root():
 
 def test_sibling_path_with_root_prefix_is_not_flagged(monkeypatch):
     monkeypatch.setenv("ZOE_ASSISTANT_ROOT", LIVE)
-    # A different directory that merely shares the root as a string prefix.
+    # Directories that merely share the root as a string prefix (hyphen and dot).
     assert find_live_path_references(f"back up {LIVE}-backup/data first") == []
+    assert find_live_path_references(f"see {LIVE}.bak and {LIVE}.config") == []
+
+
+def test_metadata_block_is_not_scanned_for_live_paths(monkeypatch):
+    monkeypatch.setenv("ZOE_ASSISTANT_ROOT", LIVE)
+    # A blocked_reason that legitimately quotes the offending path must not
+    # re-trigger a violation (it lives inside the machine-managed JSON block).
+    description = describe_ticket(
+        "Edit services/zoe-data/x.py only.",
+        zoe_kind="harness_fix",
+        acceptance_criteria=["done"],
+        evidence_expectations=["tests"],
+    )
+    blocked = update_ticket_progress(
+        description,
+        blocker=f"WORKTREE_PATH_VIOLATION: worker read {LIVE}/services/zoe-data/x.py",
+    )
+    assert find_live_path_references(blocked) == []
+    assert validate_ticket_contract(blocked)["ok"] is True
+
+
+def test_normalize_leaves_metadata_block_intact(monkeypatch):
+    monkeypatch.setenv("ZOE_ASSISTANT_ROOT", LIVE)
+    description = describe_ticket(
+        f"Run {LIVE}/scripts/run.sh.",
+        zoe_kind="harness_fix",
+        acceptance_criteria=["done"],
+        evidence_expectations=["tests"],
+    )
+    normalized = normalize_live_paths(description)
+    # Prose rewritten...
+    assert "Run scripts/run.sh." in normalized
+    # ...but the fenced block is preserved verbatim and still parses.
+    block = description[description.index("```zoe-ticket") :]
+    assert block in normalized
+    assert parse_ticket_block(normalized).get("schema") == 1
