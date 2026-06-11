@@ -268,6 +268,41 @@ async def test_execute_profile_edit_outcome_plan_in_hindsight_posts_admitted_pay
     assert "approval:memory-admission:ZOE-777" in result["execution"]["evidence_refs"]
 
 
+def test_main_execute_hindsight_returns_0_for_successful_retain(tmp_path, capsys, monkeypatch):
+    pr_plan = _write_json(tmp_path / "pr-plan.json", _pr_edit_plan())
+    trace = _write_json(tmp_path / "trace.json", _trace())
+
+    async def fake_execute(plan):
+        assert plan.allowed_to_admit_memory is True
+        return {
+            "attempted": True,
+            "retained": True,
+            "reason": "retained",
+            "execution": {"event_id": "mem_evt_profile_edit_outcome_ZOE-777"},
+        }
+
+    monkeypatch.setattr(MODULE, "execute_profile_edit_outcome_plan_in_hindsight", fake_execute)
+    rc = MODULE.main([
+        "--pr-edit-plan-json-file",
+        str(pr_plan),
+        "--verification-trace-file",
+        str(trace),
+        "--user-id",
+        "zoe_system",
+        "--target-backend",
+        "hindsight",
+        "--approval-ref",
+        "approval:memory-admission:ZOE-777",
+        "--execute-hindsight",
+    ])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert payload["allowed_to_admit_memory"] is True
+    assert payload["hindsight_execution"]["retained"] is True
+    assert payload["hindsight_execution"]["reason"] == "retained"
+
+
 def test_main_execute_hindsight_respects_disabled_default(tmp_path, capsys, monkeypatch):
     monkeypatch.setenv("HINDSIGHT_ENABLED", "false")
     pr_plan = _write_json(tmp_path / "pr-plan.json", _pr_edit_plan())

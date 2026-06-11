@@ -23,9 +23,6 @@ DATA = ROOT / "services" / "zoe-data"
 if str(DATA) not in sys.path:
     sys.path.insert(0, str(DATA))
 
-from hindsight_memory import HindsightConfig, HindsightMemoryClient  # noqa: E402
-from hindsight_retain_candidates import HindsightRetainAdmissionError, build_admitted_hindsight_retain_plan  # noqa: E402
-from hindsight_retain_executor import execute_admitted_hindsight_retain_plan  # noqa: E402
 from zoe_capability_profile_edit_outcome import CapabilityProfileEditOutcomePlan, build_capability_profile_edit_outcome_plan  # noqa: E402
 from zoe_capability_profile_pr_edit_gate import CapabilityProfilePREditPlan  # noqa: E402
 from zoe_memory_router import MemoryBackend  # noqa: E402
@@ -146,8 +143,8 @@ def build_profile_edit_outcome_plan_from_args(args: argparse.Namespace) -> Capab
 async def execute_profile_edit_outcome_plan_in_hindsight(
     plan: CapabilityProfileEditOutcomePlan,
     *,
-    client: HindsightMemoryClient | None = None,
-    config: HindsightConfig | None = None,
+    client: Any | None = None,
+    config: Any | None = None,
 ) -> dict[str, Any]:
     if not plan.allowed_to_admit_memory or plan.admission_request is None or plan.admission_decision is None:
         return {
@@ -156,6 +153,9 @@ async def execute_profile_edit_outcome_plan_in_hindsight(
             "reason": "profile_edit_outcome_not_admitted",
             "execution": None,
         }
+    from hindsight_retain_candidates import HindsightRetainAdmissionError, build_admitted_hindsight_retain_plan
+    from hindsight_retain_executor import execute_admitted_hindsight_retain_plan
+
     resolved_config = config or (client.config if client else None)
     try:
         retain_plan = build_admitted_hindsight_retain_plan(
