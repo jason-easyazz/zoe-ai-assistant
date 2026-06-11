@@ -589,7 +589,7 @@ def _intent_gap_first_action_preamble(issue: dict | None = None) -> str:
         "CRITICAL FIRST ACTION FOR THIS INTENT-GAP TICKET:\n"
         "1. Call `kanban_show`.\n"
         "2. As the very next tool call, run exactly:\n"
-        "`cd <workspace_path> && /home/zoe/bin/zoe_apply_intent_gap_contract say_exactly --repo-root . "
+        "`cd <workspace_path> && python3 ./scripts/maintenance/zoe_apply_intent_gap_contract.py say_exactly --repo-root . "
         "--run-focused-checks --kanban-task <task_id_from_kanban_show>`\n"
         "Do not read issue evidence files, grep, inspect code, or open the live checkout before this helper.\n\n"
     )
