@@ -1061,6 +1061,14 @@ async def _resolve_people_remember_fact(intent: SkybridgeIntent, user_id: str, d
             "actions": [],
         }
     person = await _find_or_create_person(user_id, intent.person_name, db)
+    if person.get("user_id") and person.get("user_id") != user_id:
+        return {
+            "handled": True,
+            "intent": _intent_dict(intent),
+            "spoken_summary": "I can see that person, but I cannot update their profile from this account.",
+            "cards": [_status_card("I could not update that profile", "That person is visible to the family, but this account does not own the profile. Ask the owner to update it or create a new profile.")],
+            "actions": [],
+        }
     memory_bits = []
     if intent.fact_text:
         memory_bits.append(f"{intent.person_name} {intent.fact_text}")

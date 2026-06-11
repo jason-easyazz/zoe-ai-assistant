@@ -691,6 +691,41 @@ async def test_people_remember_fact_leaves_profile_unchanged_when_memory_rejects
 
 
 @pytest.mark.asyncio
+async def test_people_remember_fact_does_not_update_family_profile_owned_by_someone_else(monkeypatch):
+    person = {
+        "id": "person-1",
+        "user_id": "other-family-user",
+        "name": "Sarah",
+        "relationship": "Friend",
+        "circle": "inner",
+        "context": "personal",
+        "notes": "",
+        "visibility": "family",
+    }
+    remembered = {}
+
+    async def fake_memory(fact, **kwargs):
+        remembered["fact"] = fact
+        remembered.update(kwargs)
+        return True
+
+    db = FakeDb(people=[person])
+    monkeypatch.setattr(skybridge_service, "_store_skybridge_memory_fact", fake_memory)
+
+    result = await resolve_skybridge_request(
+        "remember that Sarah likes flowers",
+        "family-admin",
+        db=db,
+    )
+
+    assert result["handled"] is True
+    assert result["actions"] == []
+    assert "cannot update" in result["spoken_summary"]
+    assert remembered == {}
+    assert db.people[0].get("notes", "") == ""
+
+
+@pytest.mark.asyncio
 async def test_weather_current_request_returns_current_card(monkeypatch):
     async def fake_default(_db):
         return {"latitude": -28.7, "longitude": 114.6, "city": "Geraldton", "country": "AU"}
