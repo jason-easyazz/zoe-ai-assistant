@@ -127,6 +127,36 @@ def test_main_returns_1_for_pending_memory_approval(tmp_path, capsys):
     assert payload["trust_records"]
 
 
+def test_main_execute_hindsight_rejects_pending_memory_approval(tmp_path, capsys):
+    pr_plan = _write_json(tmp_path / "pr-plan.json", _pr_edit_plan())
+    trace = _write_json(tmp_path / "trace.json", _trace())
+
+    rc = MODULE.main([
+        "--pr-edit-plan-json-file",
+        str(pr_plan),
+        "--verification-trace-file",
+        str(trace),
+        "--user-id",
+        "zoe_system",
+        "--target-backend",
+        "hindsight",
+        "--execute-hindsight",
+    ])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 1
+    assert payload["allowed_to_admit_memory"] is False
+    assert payload["blockers"] == []
+    assert payload["admission_decision"]["status"] == "pending_review"
+    assert payload["admission_decision"]["blockers"] == ["approval_required"]
+    assert payload["hindsight_execution"] == {
+        "attempted": False,
+        "retained": False,
+        "reason": "profile_edit_outcome_not_admitted",
+        "execution": None,
+    }
+
+
 def test_main_keeps_blocked_pr_edit_plan_blocked(tmp_path, capsys):
     pr_plan = _write_json(
         tmp_path / "pr-plan.json",
