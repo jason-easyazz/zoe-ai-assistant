@@ -48,6 +48,7 @@ data/time_location_settings.json
 data/learning-archives/
 data/memvid/
 data/archives/
+data/autoresearch/
 
 # Database backup files
 data/*.db.backup*

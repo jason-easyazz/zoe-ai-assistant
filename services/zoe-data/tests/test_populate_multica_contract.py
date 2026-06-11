@@ -79,6 +79,14 @@ def test_autoresearch_skill_agent_and_scope_are_managed():
     assert assignments["Auto Research Engineer"] == ["Auto Research Engineer"]
     assert "Auto Research Engineer" in assignments["Hermes"]
 
+    source = _source()
+    squad_block = source[source.index("squads_to_create = ["):source.index("managed_squad_names =")]
+    assert '"name": "Autoresearch Lab"' in squad_block
+    assert '"leader": "Auto Research Engineer"' in squad_block
+    assert '"members": ["Hermes", "Self-Improvement Agent"]' in squad_block
+    assert '"name": "Research & Planning Squad"' in squad_block
+    assert '"members": ["Zoe Core", "Auto Research Engineer"]' in squad_block
+
 
 def test_managed_autopilots_keep_execution_modes_and_templates():
     autopilots = {ap["title"]: ap for ap in _assigned_literal("_AUTOPILOTS")}
