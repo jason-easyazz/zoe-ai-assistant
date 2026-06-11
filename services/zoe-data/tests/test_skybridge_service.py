@@ -321,6 +321,32 @@ async def test_calendar_update_can_target_visible_event_by_start_time():
 
 
 @pytest.mark.asyncio
+async def test_calendar_update_defaults_bare_voice_hour_to_pm():
+    event = {
+        "id": "event-1",
+        "user_id": "family-admin",
+        "title": "School pickup",
+        "start_date": "2026-06-17",
+        "start_time": "15:00",
+        "end_time": "15:30",
+        "category": "family",
+        "visibility": "family",
+        "deleted": False,
+    }
+    context = {
+        "intent": {"domain": "calendar"},
+        "cards": [{"content": {"source": "calendar_show", "start_date": "2026-06-17", "events": [event]}}],
+    }
+    db = FakeDb(events=[event])
+
+    result = await resolve_skybridge_request("move my 3pm to 4", "family-admin", context=context, db=db)
+
+    assert result["handled"] is True
+    assert result["intent"]["action"] == "update_time"
+    assert result["cards"][0]["content"]["events"][0]["start_time"] == "16:00"
+
+
+@pytest.mark.asyncio
 async def test_calendar_update_does_not_confirm_family_event_owned_by_someone_else():
     event = {
         "id": "event-1",

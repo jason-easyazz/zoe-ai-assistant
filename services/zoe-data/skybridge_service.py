@@ -227,8 +227,10 @@ def _parse_time(text: str) -> str:
         return ""
     if ampm.startswith("p") and hour < 12:
         hour += 12
-    if ampm.startswith("a") and hour == 12:
+    elif ampm.startswith("a") and hour == 12:
         hour = 0
+    elif not ampm and 1 <= hour <= 11:
+        hour += 12
     return f"{hour:02d}:{minute:02d}"
 
 
