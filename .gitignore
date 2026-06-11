@@ -49,6 +49,7 @@ data/learning-archives/
 data/memvid/
 data/archives/
 data/autoresearch/
+**/results.tsv
 
 # Database backup files
 data/*.db.backup*

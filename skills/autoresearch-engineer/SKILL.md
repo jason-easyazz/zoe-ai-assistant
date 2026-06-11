@@ -21,7 +21,8 @@ triggers:
   - "A/B test"
   - "fit check"
   - "Karpathy"
-allowed_endpoints: []
+allowed_endpoints:
+  - /api/autoresearch/status
 ---
 # Auto Research Engineer
 

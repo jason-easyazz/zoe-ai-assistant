@@ -30,6 +30,7 @@ from routers import (
     capability_matrix_router,
     music_router,
     skybridge_router,
+    autoresearch_router,
 )
 from routers.dashboard import router as dashboard_router
 from routers.stubs import router as stubs_router
@@ -1007,6 +1008,7 @@ app.include_router(panel_provision_router)
 app.include_router(capability_matrix_router)
 app.include_router(music_router)
 app.include_router(skybridge_router)
+app.include_router(autoresearch_router)
 
 from routers.portrait import router as portrait_router
 app.include_router(portrait_router)
