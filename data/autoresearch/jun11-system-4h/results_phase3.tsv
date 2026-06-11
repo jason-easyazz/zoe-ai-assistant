@@ -1,0 +1,4 @@
+round	commit	score	status	description
+1	ea8c86a	78	baseline	service broad exception quality after scorer correction
+2	c0462f5	108	keep	restore Multica operator issue fallback
+3	a08ff02	111	keep	narrow low-risk intent router errors
