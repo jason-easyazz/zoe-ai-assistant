@@ -551,7 +551,9 @@ async def sync_evolution_proposal_to_multica(
             )
             resp.raise_for_status()
             issue = resp.json()
-            issue_id: str = issue.get("id", "")
+            issue_id: str = issue.get("id", "") if isinstance(issue, dict) else ""
+            if not issue_id:
+                return None
 
             # Attach label (defaults to "evolution-proposal"; user-reported issues use "user-feedback")
             labels_resp = await http.get(

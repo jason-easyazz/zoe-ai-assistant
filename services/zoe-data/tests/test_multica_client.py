@@ -347,5 +347,47 @@ async def test_sync_evolution_proposal_ignores_non_dict_created_label_response(m
     assert not any(url.endswith("/api/issues/issue-1/labels") for _method, url, _kwargs in requests)
 
 
+@pytest.mark.asyncio
+async def test_sync_evolution_proposal_returns_none_for_non_dict_created_issue(monkeypatch):
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return ["not-a-dict"]
+
+    class FakeHttpClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def post(self, url, **_kwargs):
+            return FakeResponse()
+
+        async def get(self, url, **_kwargs):
+            raise AssertionError(f"unexpected get after missing issue id: {url}")
+
+    monkeypatch.setenv("MULTICA_BASE_URL", "https://multica.example")
+    monkeypatch.setenv("MULTICA_API_TOKEN", "token-1")
+    monkeypatch.setenv("MULTICA_WORKSPACE_ID", "workspace-1")
+    monkeypatch.setenv("HERMES_MULTICA_AGENT_ID", "hermes-agent")
+    monkeypatch.setattr(multica_client, "_lookup_evolution_resources", lambda _client: _async_tuple())
+    monkeypatch.setattr(multica_client.httpx, "AsyncClient", lambda **_kwargs: FakeHttpClient())
+
+    issue_id = await multica_client.sync_evolution_proposal_to_multica(
+        proposal_id="proposal-1",
+        title="Improve recall",
+        description="Recall needs reviewable evidence before execution.",
+        evidence="trace:recall-1",
+        proposal_type="intent_pattern",
+    )
+
+    assert issue_id is None
+
+
 async def _async_tuple():
     return None, None
