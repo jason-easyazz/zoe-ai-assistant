@@ -292,6 +292,7 @@ async def test_dispatch_review_includes_audit_pipeline_handoff():
     assert "AUDIT_ONLY=1" in body
     assert "PR_URL=" in body
     assert "Do not hunt for PRs" in body
+    assert "kanban_complete(summary=\"REVIEW=approved" in body
     assert body.index("AUDIT_ONLY=1") < body.index("Original audit ticket")
 
 
