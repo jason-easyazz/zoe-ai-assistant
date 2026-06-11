@@ -142,6 +142,19 @@ async def test_find_issue_fallback_supports_legacy_list_issues_client(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_find_issue_fallback_suppresses_legacy_list_failure(monkeypatch):
+    class Client:
+        async def list_issues(self, **kwargs):
+            if kwargs:
+                raise TypeError("legacy signature")
+            raise RuntimeError("legacy list failed")
+
+    monkeypatch.setattr(multica_operator, "get_multica_client", lambda: Client())
+
+    assert await multica_operator.find_issue("issue-1") == {}
+
+
+@pytest.mark.asyncio
 async def test_good_evening_passes_context_and_fallback_to_composer(monkeypatch):
     from proactive import composer
 

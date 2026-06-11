@@ -33,7 +33,10 @@ async def find_issue(reference: str) -> dict[str, Any]:
         except TypeError:
             if status:
                 return []
-            result = await client.list_issues()
+            try:
+                result = await client.list_issues()
+            except Exception:
+                return []
         except Exception:
             return []
         return [issue for issue in (result or []) if isinstance(issue, dict)]
