@@ -598,6 +598,7 @@ async def lifespan(app: FastAPI):
 
                 in_progress_issues = await client.list_issues(status="in_progress") or []
                 in_review_issues = await client.list_issues(status="in_review") or []
+                blocked_issues = await client.list_issues(status="blocked") or []
 
                 # Webhook bridge: Hermes-assigned todos / in_progress (no chain) → issue.assigned.
                 try:
@@ -699,6 +700,22 @@ async def lifespan(app: FastAPI):
                                             _tid,
                                             _ip_exc,
                                         )
+                                elif (_candidate.get("status") or "") == "blocked":
+                                    try:
+                                        _phase = (_chain.get("pipeline") or {}).get("phase")
+                                        await client.record_progress(
+                                            _tid,
+                                            phase=_phase,
+                                            evidence="Engineering run resumed",
+                                            status="in_progress",
+                                            clear_blocker=True,
+                                        )
+                                    except Exception as _resume_exc:
+                                        logger.debug(
+                                            "multica_poll: clear stale blocked status failed for %s: %s",
+                                            _tid,
+                                            _resume_exc,
+                                        )
                                 _wh_dispatched += 1
                                 _wh_dispatched_ids.add(_tid)
                                 logger.info(
@@ -715,6 +732,15 @@ async def lifespan(app: FastAPI):
                                 if str(_ip_issue.get("id") or "") in _wh_dispatched_ids:
                                     continue
                                 await _maybe_dispatch_hermes_issue(_ip_issue, from_todo=False)
+                                if _wh_dispatched >= _wh_limit:
+                                    break
+                        # Resume blocked issues only when the journal says a non-terminal next
+                        # phase is ready; terminal/fingerprint blocks remain operator-visible.
+                        if _wh_dispatched < _wh_limit:
+                            for _blocked in blocked_issues or []:
+                                if str(_blocked.get("id") or "") in _wh_dispatched_ids:
+                                    continue
+                                await _maybe_dispatch_hermes_issue(_blocked, from_todo=False)
                                 if _wh_dispatched >= _wh_limit:
                                     break
                         # Reuse the todo list already fetched above for the stale autopilot pass.

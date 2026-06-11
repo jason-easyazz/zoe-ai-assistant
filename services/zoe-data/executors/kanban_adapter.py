@@ -84,6 +84,42 @@ _GITHUB_PR_URL_RE = re.compile(r"https://github\.com/[^/\s]+/[^/\s]+/pull/\d+")
 _SHELL_TOOL_LINE_RE = re.compile(r"(?:^|\s)(?:💻\s+)?\$\s+(?P<command>.+)$")
 
 
+def _detail_text(detail: dict[str, Any]) -> str:
+    parts: list[str] = []
+    summary = detail.get("latest_summary")
+    if summary:
+        parts.append(summary if isinstance(summary, str) else json.dumps(summary))
+    for comment in detail.get("comments") or []:
+        if isinstance(comment, dict):
+            body = comment.get("body") or comment.get("text")
+            if body:
+                parts.append(str(body))
+    for run in detail.get("runs") or []:
+        if isinstance(run, dict):
+            for key in ("summary", "error"):
+                value = run.get(key)
+                if value:
+                    parts.append(str(value))
+    metadata = detail.get("metadata")
+    if metadata:
+        parts.append(metadata if isinstance(metadata, str) else json.dumps(metadata))
+    return "\n".join(parts)
+
+
+def _already_covered_row(phase: str, row: dict) -> bool:
+    if phase != "implement":
+        return False
+    text = "\n".join(
+        str(row.get(key) or "")
+        for key in ("block_reason", "reason", "latest_summary", "result")
+    )
+    return "ALREADY_COVERED" in text.upper()
+
+
+def _already_covered_detail(phase: str, detail: dict[str, Any]) -> bool:
+    return phase == "implement" and "ALREADY_COVERED" in _detail_text(detail).upper()
+
+
 def _row_ref_key(row: dict) -> str:
     """Correlate a Kanban list row back to its ``multica:{id}:{phase}`` ref.
 
@@ -410,6 +446,53 @@ def _harness_implement_hint(issue: dict | None = None) -> str:
         " not inside the external Hermes worker. Start editing within 6 tool/model steps or"
         " call `kanban_block` with BLOCKER=IMPLEMENT_BUDGET and the missing locator.\n"
     )
+
+
+def _issue_with_phase_handoff(issue: dict, phase: str, state: Any | None) -> dict:
+    if state is None or phase not in {"verify", "review", "closeout", "retro"}:
+        return issue
+    evidence = list(getattr(state, "evidence", []) or [])
+    already_covered = any(
+        getattr(item, "metadata", {}).get("source") == "already_covered"
+        for item in evidence
+    )
+    audit_profile = getattr(state, "evidence_profile", "") == "audit"
+    if not already_covered and not audit_profile:
+        return issue
+    description = str(issue.get("description") or "")
+    if "Zoe pipeline handoff (authoritative):" in description:
+        return issue
+
+    validator_summary = next(
+        (getattr(item, "summary", "") for item in reversed(evidence) if getattr(item, "kind", "") == "validator"),
+        "",
+    )
+    if phase == "verify" and already_covered:
+        handoff = (
+            "Zoe pipeline handoff (authoritative):\n"
+            "IMPLEMENT_ALREADY_COVERED=1\n"
+            "AUDIT_ONLY=1\n"
+            "PR_URL=\n"
+            "TESTS=focused intent helper and router tests passed before edit; no PR required\n"
+            "VALIDATORS=run focused validation from this verify worktree\n"
+            "SUMMARY=Implementation was already present. Do not rerun zoe_apply_intent_gap_contract.py. "
+            "Verify the acceptance criteria with focused checks from workspace_path, then call kanban_complete "
+            "with VALIDATORS and TESTS if they pass; call kanban_block only if focused validation fails.\n\n"
+        )
+    else:
+        handoff = (
+            "Zoe pipeline handoff (authoritative):\n"
+            f"IMPLEMENT_ALREADY_COVERED={1 if already_covered else 0}\n"
+            f"AUDIT_ONLY={1 if audit_profile else 0}\n"
+            "PR_URL=\n"
+            f"VERIFY_EVIDENCE={validator_summary or 'audit/no-PR evidence recorded in pipeline journal'}\n"
+            "SUMMARY=This is the no-code/no-PR audit path. Do not hunt for PRs, branches, or rerun "
+            "zoe_apply_intent_gap_contract.py. Use the recorded pipeline evidence and acceptance criteria, "
+            "then complete this phase or block with a concrete evidence mismatch.\n\n"
+        )
+    updated = dict(issue)
+    updated["description"] = handoff + description
+    return updated
 
 
 def _intent_gap_implement_hint(issue: dict | None = None, *, phase: str = "implement") -> str:
@@ -903,7 +986,10 @@ class KanbanAdapter:
                 f" mark-reviewed multica:{issue_id} --critical-count <N> --summary \"<short verdict>\"\n"
                 "  Replace <N> with the actual unresolved critical finding count; approval requires zero.\n"
                 "  This command shape is complete; do not call `--help` after it. If it succeeds,"
-                " immediately call `kanban_complete` in the same turn.\n"
+                " immediately call `kanban_complete` in the same turn with a non-empty summary.\n"
+                "- For audit/no-PR approval, the complete call must include a summary/result, for example:\n"
+                "  kanban_complete(summary=\"REVIEW=approved\\nSUMMARY=audit/no-PR evidence matches acceptance criteria\", "
+                "result={\"review\":\"approved\",\"summary\":\"audit/no-PR evidence matches acceptance criteria\"}).\n"
                 "- TERMINAL PROTOCOL: end with `kanban_complete` or `kanban_block` (no silent exit).\n"
                 "- Do NOT approve if verification or the Greptile gate is unavailable; set the task blocked"
                 " with an explicit reason instead.\n"
@@ -1363,9 +1449,10 @@ class KanbanAdapter:
                     parent = previous.get("id")
 
         phase, assignee, skills = entry
+        task_issue = _issue_with_phase_handoff(issue, phase, state)
         args = [
             "create",
-            self._title(phase, identifier, issue),
+            self._title(phase, identifier, task_issue),
             "--assignee",
             assignee,
             "--workspace",
@@ -1384,7 +1471,7 @@ class KanbanAdapter:
             "--created-by",
             "zoe-bridge",
             "--body",
-            self._build_body(phase, issue, identifier, mode=mode),
+            self._build_body(phase, task_issue, identifier, mode=mode),
             "--json",
         ]
         for skill in skills:
@@ -1517,10 +1604,37 @@ class KanbanAdapter:
                             if phase in expected_phase_names
                         }
                     else:
-                        current_row = phases.get(str(existing_state.phase or "")) or {}
+                        current_phase = str(existing_state.phase or "")
+                        current_row = phases.get(current_phase) or {}
                         current_status = (current_row.get("status") or "").lower()
-                        if current_status == "blocked" or current_status in _TERMINAL_KANBAN_STATUSES:
-                            stale_executor_phase = str(existing_state.phase or "")
+                        already_covered = _already_covered_row(current_phase, current_row)
+                        if (
+                            current_status == "blocked"
+                            and not already_covered
+                            and current_phase == "implement"
+                            and current_row.get("id")
+                        ):
+                            try:
+                                detail = await self._run(
+                                    ["show", str(current_row.get("id")), "--json"],
+                                    expect_json=True,
+                                )
+                                already_covered = _already_covered_detail(current_phase, detail)
+                            except KanbanCLIError:
+                                already_covered = False
+                        keep_terminal_for_sync = (
+                            current_phase == "closeout"
+                            and current_status in _TERMINAL_KANBAN_STATUSES
+                            and getattr(existing_state, "evidence_profile", "") == "audit"
+                        )
+                        if (
+                            current_status == "blocked"
+                            and not already_covered
+                        ) or (
+                            current_status in _TERMINAL_KANBAN_STATUSES
+                            and not keep_terminal_for_sync
+                        ):
+                            stale_executor_phase = current_phase
                             stale_executor_status = current_status
                             phases = {
                                 phase: row

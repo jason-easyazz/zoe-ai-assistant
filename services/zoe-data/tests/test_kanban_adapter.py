@@ -212,6 +212,91 @@ async def test_dispatch_retro_uses_main_repo_workspace():
 
 
 @pytest.mark.asyncio
+async def test_dispatch_verify_includes_already_covered_handoff():
+    from pipeline_evidence import EvidenceItem, PipelineState
+    from pipeline_store import save_state
+
+    state = PipelineState(
+        task_ref="multica:uuid-already-covered-verify",
+        phase="verify",
+        status="todo",
+        evidence_profile="audit",
+        attempts={"implement": 1},
+        evidence=[
+            EvidenceItem(
+                kind="tool",
+                summary="focused harness test passed before edit; implementation already covered",
+                passed=True,
+                metadata={"source": "already_covered", "phase": "implement"},
+            )
+        ],
+    )
+    save_state(state, event="already_covered_implementation_skipped")
+    a = _FakeAdapter()
+
+    result = await a.dispatch(
+        {
+            "id": "uuid-already-covered-verify",
+            "identifier": "ZOE-COVERED",
+            "title": "Intent gap: already covered",
+            "description": "Original ticket evidence should appear after handoff.",
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["phase"] == "verify"
+    create = [c for c in a.calls if c[0] == "create"][0]
+    body = create[create.index("--body") + 1]
+    assert "IMPLEMENT_ALREADY_COVERED=1" in body
+    assert "Do not rerun zoe_apply_intent_gap_contract.py" in body
+    assert body.index("IMPLEMENT_ALREADY_COVERED=1") < body.index("Original ticket evidence")
+
+
+@pytest.mark.asyncio
+async def test_dispatch_review_includes_audit_pipeline_handoff():
+    from pipeline_evidence import EvidenceItem, PipelineState
+    from pipeline_store import save_state
+
+    state = PipelineState(
+        task_ref="multica:uuid-audit-review",
+        phase="review",
+        status="todo",
+        evidence_profile="audit",
+        attempts={"implement": 1, "verify": 1},
+        evidence=[
+            EvidenceItem(
+                kind="validator",
+                summary="focused validation passed",
+                passed=True,
+                metadata={"source": "audit_protocol_recovery", "phase": "verify"},
+            )
+        ],
+    )
+    save_state(state, event="transition")
+    a = _FakeAdapter()
+
+    result = await a.dispatch(
+        {
+            "id": "uuid-audit-review",
+            "identifier": "ZOE-AUDIT",
+            "title": "Audit no PR",
+            "description": "Original audit ticket.",
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["phase"] == "review"
+    create = [c for c in a.calls if c[0] == "create"][0]
+    body = create[create.index("--body") + 1]
+    assert "Zoe pipeline handoff (authoritative):" in body
+    assert "AUDIT_ONLY=1" in body
+    assert "PR_URL=" in body
+    assert "Do not hunt for PRs" in body
+    assert "kanban_complete(summary=\"REVIEW=approved" in body
+    assert body.index("AUDIT_ONLY=1") < body.index("Original audit ticket")
+
+
+@pytest.mark.asyncio
 async def test_dispatch_does_not_parent_recovered_phase_to_blocked_prior_row():
     from pipeline_evidence import EvidenceItem, PipelineState
     from pipeline_store import save_state
@@ -1689,6 +1774,52 @@ async def test_poll_partial_chain_via_body_marker_is_redispatchable():
 
 
 @pytest.mark.asyncio
+async def test_poll_v4_keeps_audit_closeout_done_for_sync():
+    from pipeline_evidence import PipelineState
+    from pipeline_store import save_state
+
+    state = PipelineState(
+        task_ref="multica:uuid-audit-closeout",
+        phase="closeout",
+        status="todo",
+        evidence_profile="audit",
+        attempts={"closeout": 1},
+    )
+    save_state(state, event="operator_resumed")
+    rows = [
+        _row(
+            "closeout",
+            "done",
+            chain_version="v4",
+            issue_id="uuid-audit-closeout",
+            created_at=200.0,
+        ),
+    ]
+    show = {
+        "t_closeout": {
+            "latest_summary": None,
+            "comments": [],
+            "runs": [{"summary": "Completed the audit closeout using recorded pipeline evidence."}],
+        }
+    }
+    issue = {
+        "id": "uuid-audit-closeout",
+        "identifier": "ZOE-AUDIT",
+        "title": "Audit closeout",
+        "description": "",
+    }
+
+    out = await _FakeAdapter(list_rows=rows, show_map=show).poll(
+        "multica:uuid-audit-closeout",
+        issue=issue,
+    )
+
+    assert out["pipeline"]["phase"] == "retro"
+    assert out["pipeline"]["status"] == "todo"
+    assert "stale_executor_phase" not in out["pipeline"]
+
+
+@pytest.mark.asyncio
 async def test_poll_v4_done_phase_with_ready_next_phase_is_partial():
     rows = [_row("scout", "done", chain_version="v4")]
     show = {"t_scout": {"latest_summary": "TOOLS_USED=graphify\nSCOUT_SUMMARY=small", "comments": []}}
@@ -1884,6 +2015,63 @@ async def test_poll_v4_resumed_todo_ignores_stale_blocked_current_phase():
     assert out["pipeline"]["stale_executor_phase"] == "implement"
     assert out["pipeline"]["stale_executor_status"] == "blocked"
 
+
+
+@pytest.mark.asyncio
+async def test_poll_v4_keeps_already_covered_implement_for_sync():
+    from pipeline_evidence import PipelineState
+    from pipeline_store import save_state
+
+    state = PipelineState(
+        task_ref="multica:uuid-already-covered",
+        phase="implement",
+        status="todo",
+        attempts={"implement": 1},
+    )
+    save_state(state, event="operator_resumed")
+    rows = [
+        _row(
+            "implement",
+            "blocked",
+            chain_version="v4",
+            issue_id="uuid-already-covered",
+            block_reason=None,
+            created_at=200.0,
+        ),
+        _row(
+            "verify",
+            "blocked",
+            chain_version="v4",
+            issue_id="uuid-already-covered",
+            created_at=100.0,
+        ),
+    ]
+    show = {
+        "t_implement": {
+            "latest_summary": "BLOCKER=ALREADY_COVERED: focused tests passed; no PR required",
+            "comments": [],
+        },
+        "t_verify": {
+            "latest_summary": "BLOCKER=WORKTREE_PATH_VIOLATION: stale verify",
+            "comments": [],
+        },
+    }
+    issue = {
+        "id": "uuid-already-covered",
+        "identifier": "ZOE-COVERED",
+        "title": "Intent gap: already covered",
+        "description": "",
+    }
+
+    out = await _FakeAdapter(list_rows=rows, show_map=show).poll(
+        "multica:uuid-already-covered",
+        issue=issue,
+    )
+
+    assert out["status"] == "running"
+    assert out["pipeline"]["phase"] == "verify"
+    assert out["pipeline"]["status"] == "todo"
+    assert "stale_executor_phase" not in out["pipeline"]
 
 
 @pytest.mark.asyncio

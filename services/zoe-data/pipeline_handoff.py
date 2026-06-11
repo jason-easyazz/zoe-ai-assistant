@@ -77,6 +77,18 @@ _STABLE_BLOCKER_RE = re.compile(rf"\b(?:{'|'.join(_STABLE_BLOCKER_TOKENS)})\b", 
 _SURFACED_BLOCKER_RE = re.compile(rf"\b(?:{'|'.join(_SURFACED_BLOCKER_TOKENS)})\b", re.I)
 
 
+_REAL_PR_URL_RE = re.compile(r"^https://github\.com/[^/\s]+/[^/\s]+/pull/\d+(?:[/?#].*)?$", re.I)
+
+
+def _usable_pr_url(raw: str | None) -> str:
+    value = str(raw or "").strip()
+    if not value:
+        return ""
+    if value.lower() in {"blank", "none", "n/a", "not applicable", "<url>", "<url or blank>"}:
+        return ""
+    return value if _REAL_PR_URL_RE.match(value) else ""
+
+
 def _task_body(detail: dict[str, Any]) -> str:
     task = detail.get("task") if isinstance(detail.get("task"), dict) else {}
     return str(task.get("body") or "")
@@ -153,6 +165,16 @@ def _reported_test_evidence_passed(raw: str, *, phase: PipelinePhase) -> bool:
         raw,
         unavailable_markers=("no tests",),
     )
+
+
+def _first_run_summary(detail: dict[str, Any]) -> str:
+    for run in detail.get("runs") or []:
+        if not isinstance(run, dict):
+            continue
+        summary = str(run.get("summary") or "").strip()
+        if summary:
+            return summary
+    return ""
 
 
 def _structured_handoff_fields(detail: dict[str, Any]) -> dict[str, str]:
@@ -600,15 +622,15 @@ def evidence_from_handoff(
     )
 
     if phase == "closeout":
-        summary_raw = fields.get("SUMMARY") or fields.get("CLOSEOUT") or ""
+        summary_raw = fields.get("CLOSEOUT") or _first_run_summary(detail) or fields.get("SUMMARY")
         audit_only = (fields.get("AUDIT_ONLY") or "").strip().lower() in {"1", "true", "yes"}
         # Some audit/no-code closeout workers omit AUDIT_ONLY but still report an
         # audit-only summary and no PR. Treat only that explicit audit wording as inferred audit.
         inferred_audit = bool(
             summary_raw
             and "audit" in summary_raw.lower()
-            and not (fields.get("PR_URL") or "").strip()
-            and not ticket_pr_url
+            and not _usable_pr_url(fields.get("PR_URL"))
+            and not _usable_pr_url(ticket_pr_url)
         )
         if audit_only or inferred_audit:
             items.append(
@@ -631,7 +653,7 @@ def evidence_from_handoff(
             metadata["follow_up"] = follow_up
         items.append(EvidenceItem(kind="log", summary=retro_raw[:500], passed=True, metadata=metadata))
 
-    pr_url = fields.get("PR_URL") or ticket_pr_url
+    pr_url = _usable_pr_url(fields.get("PR_URL")) or _usable_pr_url(ticket_pr_url)
     if pr_url and phase in {"implement", "verify", "closeout"}:
         items.append(EvidenceItem(kind="pr", summary=pr_url[:500], artifact=pr_url, passed=True))
 

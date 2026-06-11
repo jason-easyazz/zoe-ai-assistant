@@ -498,6 +498,96 @@ async def test_sync_pipeline_skips_already_covered_implement_block(isolated_stor
 
 
 @pytest.mark.asyncio
+async def test_sync_pipeline_ignores_older_later_phase_block_after_retry(isolated_store):
+    await store.bootstrap_state(
+        "multica:already-covered-retry",
+        issue={"metadata": {"evidence_profile": "code"}},
+    )
+    phases = {
+        "verify": {
+            "id": "t_old_verify",
+            "status": "blocked",
+            "created_at": 100.0,
+        },
+        "implement": {
+            "id": "t_new_impl",
+            "status": "blocked",
+            "created_at": 200.0,
+            "block_reason": None,
+        },
+    }
+
+    async def fetch_detail(task_id: str):
+        if task_id == "t_new_impl":
+            return {
+                "latest_summary": "BLOCKER=ALREADY_COVERED: focused tests passed; no PR required",
+                "comments": [],
+            }
+        return {
+            "latest_summary": "BLOCKER=WORKTREE_PATH_VIOLATION: stale verify from previous attempt",
+            "comments": [],
+        }
+
+    state = await store.sync_pipeline_from_chain(
+        "multica:already-covered-retry",
+        phases,
+        fetch_detail,
+    )
+
+    assert state.phase == "verify"
+    assert state.status == "todo"
+    assert state.history[-1].outcome == "skip_implementation"
+    events = [
+        json.loads(line)["event"]
+        for line in isolated_store.read_text(encoding="utf-8").strip().splitlines()
+    ]
+    assert "already_covered_implementation_skipped" in events
+    assert "verification_failed" not in events
+
+
+@pytest.mark.asyncio
+async def test_sync_pipeline_accepts_audit_closeout_run_summary_log(isolated_store):
+    state = store.PipelineState(
+        task_ref="multica:audit-closeout",
+        phase="closeout",
+        status="running",
+        evidence_profile="audit",
+        attempts={"closeout": 1},
+    )
+    store.save_state(state, event="effect_requested")
+    phases = {
+        "closeout": {
+            "id": "t_closeout",
+            "status": "done",
+        }
+    }
+
+    async def fetch_detail(_task_id: str):
+        return {
+            "latest_summary": None,
+            "comments": [],
+            "runs": [
+                {
+                    "summary": "Completed the audit closeout using recorded pipeline evidence.",
+                    "metadata": {"result": "audit path executed"},
+                }
+            ],
+            "log_tail": "PR_URL=<url>\nSUMMARY=template placeholder, not a real PR",
+        }
+
+    state = await store.sync_pipeline_from_chain(
+        "multica:audit-closeout",
+        phases,
+        fetch_detail,
+    )
+
+    assert state.phase == "retro"
+    assert state.status == "todo"
+    assert any(item.kind == "log" and item.passed is True for item in state.evidence)
+    assert not any(item.kind == "pr" for item in state.evidence)
+
+
+@pytest.mark.asyncio
 async def test_sync_pipeline_blocks_code_implement_without_pr(isolated_store):
     await store.bootstrap_state("multica:no-pr-code", issue={"metadata": {"evidence_profile": "code"}})
 
