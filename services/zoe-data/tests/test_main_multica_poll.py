@@ -59,6 +59,20 @@ def test_poll_dispatches_ready_work_only_when_runtime_pause_is_inactive():
     assert active_branch < backfill < paused_branch
 
 
+def test_poll_dispatch_backfills_ready_blocked_pipeline_before_todo():
+    source = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
+    blocked_fetch = source.index('blocked_issues = await client.list_issues(status="blocked")')
+    blocked_loop = source.index('for _blocked in blocked_issues or []:', blocked_fetch)
+    todo_loop = source.index('for _todo in stale_todos or []:', blocked_loop)
+    clear_blocker = source.index(
+        'clear_blocker=True',
+        source.index('elif (_candidate.get("status") or "") == "blocked":'),
+    )
+
+    assert blocked_fetch < blocked_loop < todo_loop
+    assert clear_blocker < blocked_loop
+
+
 def test_tracked_multica_engineering_issues_includes_review_and_deduplicates():
     from main import _tracked_multica_engineering_issues
 
