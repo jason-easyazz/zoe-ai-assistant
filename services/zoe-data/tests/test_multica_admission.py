@@ -69,6 +69,24 @@ def test_unapproved_or_unstructured_backlog_is_not_admitted():
     )[0] is None
 
 
+def test_live_path_ticket_is_not_dispatch_approved(monkeypatch):
+    monkeypatch.setenv("ZOE_ASSISTANT_ROOT", "/home/zoe/assistant")
+    clean = _issue("ZOE-1", "Clean fix", dispatch_approved=True)
+    assert ticket_is_dispatch_approved(clean, hermes_agent_id=HERMES)
+
+    # Same approved ticket, but the prose pins the worker to the live checkout.
+    polluted = dict(clean)
+    polluted["description"] = (
+        clean["description"] + "\n\nEdit /home/zoe/assistant/services/zoe-data/x.py here."
+    )
+    assert not ticket_is_dispatch_approved(polluted, hermes_agent_id=HERMES)
+    # And it must not be selected for dispatch.
+    selected, _held = select_next_approved_issue(
+        [polluted], [polluted], hermes_agent_id=HERMES
+    )
+    assert selected is None
+
+
 def test_selects_one_approved_issue_by_queue_order():
     second = _issue("ZOE-2", "Second fix", dispatch_approved=True, queue_order=2)
     first = _issue("ZOE-1", "First fix", dispatch_approved=True, queue_order=1)
