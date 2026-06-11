@@ -275,6 +275,11 @@ def run(packet: dict, repo: Path) -> int:
         return _blocked(f"git commit failed: {commit.stderr.strip()[:200]}")
     push = _git(["push", "origin", f"HEAD:{branch}"], repo)
     if push.returncode != 0:
+        # Roll the local commit back so the branch is not left ahead of origin.
+        # The guard captured HEAD before invoking us and diffs against it; an
+        # unpushed commit would corrupt that base on the next invocation.
+        _git(["reset", "--mixed", "HEAD~1"], repo)
+        _revert()
         return _blocked(f"git push failed: {push.stderr.strip()[:200]}")
 
     print(redact(f"APPLIED: {rel} — {summary} (+{added}/-{removed}), pushed to {branch}"))
