@@ -1887,6 +1887,63 @@ async def test_poll_v4_resumed_todo_ignores_stale_blocked_current_phase():
 
 
 @pytest.mark.asyncio
+async def test_poll_v4_keeps_already_covered_implement_for_sync():
+    from pipeline_evidence import PipelineState
+    from pipeline_store import save_state
+
+    state = PipelineState(
+        task_ref="multica:uuid-already-covered",
+        phase="implement",
+        status="todo",
+        attempts={"implement": 1},
+    )
+    save_state(state, event="operator_resumed")
+    rows = [
+        _row(
+            "implement",
+            "blocked",
+            chain_version="v4",
+            issue_id="uuid-already-covered",
+            block_reason=None,
+            created_at=200.0,
+        ),
+        _row(
+            "verify",
+            "blocked",
+            chain_version="v4",
+            issue_id="uuid-already-covered",
+            created_at=100.0,
+        ),
+    ]
+    show = {
+        "t_implement": {
+            "latest_summary": "BLOCKER=ALREADY_COVERED: focused tests passed; no PR required",
+            "comments": [],
+        },
+        "t_verify": {
+            "latest_summary": "BLOCKER=WORKTREE_PATH_VIOLATION: stale verify",
+            "comments": [],
+        },
+    }
+    issue = {
+        "id": "uuid-already-covered",
+        "identifier": "ZOE-COVERED",
+        "title": "Intent gap: already covered",
+        "description": "",
+    }
+
+    out = await _FakeAdapter(list_rows=rows, show_map=show).poll(
+        "multica:uuid-already-covered",
+        issue=issue,
+    )
+
+    assert out["status"] == "running"
+    assert out["pipeline"]["phase"] == "verify"
+    assert out["pipeline"]["status"] == "todo"
+    assert "stale_executor_phase" not in out["pipeline"]
+
+
+@pytest.mark.asyncio
 async def test_poll_v4_resumed_todo_ignores_stale_blocked_current_phase_with_prior_done():
     from pipeline_evidence import PipelineState
     from pipeline_store import save_state

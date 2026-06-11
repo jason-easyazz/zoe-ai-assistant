@@ -65,6 +65,45 @@ def _is_stale_duplicate_block(row: dict) -> bool:
     return "DUPLICATE_REDISPATCH" in reason
 
 
+def _row_created_at(row: dict) -> float | None:
+    raw = row.get("created_at")
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _drop_stale_later_phase_rows(
+    phases: dict[str, dict],
+    current_phase: PipelinePhase,
+) -> dict[str, dict]:
+    """Ignore later-phase terminal rows from an older attempt.
+
+    A retry can create a new implement row after an earlier verify row blocked. If
+    sync consumes that old verify block immediately after the new implement row,
+    the pipeline oscillates back to implement and redispatches forever.
+    """
+    current_row = phases.get(current_phase) or {}
+    current_created = _row_created_at(current_row)
+    if current_created is None:
+        return phases
+    current_status = (current_row.get("status") or "").lower()
+    if current_status not in _TERMINAL:
+        return phases
+
+    filtered: dict[str, dict] = {}
+    for phase, row in phases.items():
+        if phase in PHASE_ORDER and _phase_after(phase, current_phase):
+            created = _row_created_at(row)
+            status = (row.get("status") or "").lower()
+            if created is not None and created < current_created and status in _TERMINAL:
+                continue
+        filtered[phase] = row
+    return filtered
+
+
 def store_path() -> Path:
     override = os.environ.get("ZOE_PIPELINE_STORE_PATH", "").strip()
     if override:
@@ -580,6 +619,8 @@ async def _sync_pipeline_from_chain_once(
         row = phases.get(state.phase) or {}
         if (row.get("status") or "").lower() != "blocked":
             return state
+
+    phases = _drop_stale_later_phase_rows(phases, state.phase)
 
     blocked_catch_up_allowed_from: PipelinePhase | None = None
     for phase in PHASE_ORDER:

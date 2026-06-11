@@ -84,6 +84,42 @@ _GITHUB_PR_URL_RE = re.compile(r"https://github\.com/[^/\s]+/[^/\s]+/pull/\d+")
 _SHELL_TOOL_LINE_RE = re.compile(r"(?:^|\s)(?:💻\s+)?\$\s+(?P<command>.+)$")
 
 
+def _detail_text(detail: dict[str, Any]) -> str:
+    parts: list[str] = []
+    summary = detail.get("latest_summary")
+    if summary:
+        parts.append(summary if isinstance(summary, str) else json.dumps(summary))
+    for comment in detail.get("comments") or []:
+        if isinstance(comment, dict):
+            body = comment.get("body") or comment.get("text")
+            if body:
+                parts.append(str(body))
+    for run in detail.get("runs") or []:
+        if isinstance(run, dict):
+            for key in ("summary", "error"):
+                value = run.get(key)
+                if value:
+                    parts.append(str(value))
+    metadata = detail.get("metadata")
+    if metadata:
+        parts.append(metadata if isinstance(metadata, str) else json.dumps(metadata))
+    return "\n".join(parts)
+
+
+def _already_covered_row(phase: str, row: dict) -> bool:
+    if phase != "implement":
+        return False
+    text = "\n".join(
+        str(row.get(key) or "")
+        for key in ("block_reason", "reason", "latest_summary", "result")
+    )
+    return "ALREADY_COVERED" in text.upper()
+
+
+def _already_covered_detail(phase: str, detail: dict[str, Any]) -> bool:
+    return phase == "implement" and "ALREADY_COVERED" in _detail_text(detail).upper()
+
+
 def _row_ref_key(row: dict) -> str:
     """Correlate a Kanban list row back to its ``multica:{id}:{phase}`` ref.
 
@@ -1517,10 +1553,29 @@ class KanbanAdapter:
                             if phase in expected_phase_names
                         }
                     else:
-                        current_row = phases.get(str(existing_state.phase or "")) or {}
+                        current_phase = str(existing_state.phase or "")
+                        current_row = phases.get(current_phase) or {}
                         current_status = (current_row.get("status") or "").lower()
-                        if current_status == "blocked" or current_status in _TERMINAL_KANBAN_STATUSES:
-                            stale_executor_phase = str(existing_state.phase or "")
+                        already_covered = _already_covered_row(current_phase, current_row)
+                        if (
+                            current_status == "blocked"
+                            and not already_covered
+                            and current_phase == "implement"
+                            and current_row.get("id")
+                        ):
+                            try:
+                                detail = await self._run(
+                                    ["show", str(current_row.get("id")), "--json"],
+                                    expect_json=True,
+                                )
+                                already_covered = _already_covered_detail(current_phase, detail)
+                            except KanbanCLIError:
+                                already_covered = False
+                        if (
+                            current_status == "blocked"
+                            and not already_covered
+                        ) or current_status in _TERMINAL_KANBAN_STATUSES:
+                            stale_executor_phase = current_phase
                             stale_executor_status = current_status
                             phases = {
                                 phase: row
