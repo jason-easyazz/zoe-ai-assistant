@@ -25,9 +25,13 @@ def test_report_module_self_loads_env_on_import(monkeypatch, tmp_path):
     monkeypatch.delenv("MULTICA_BASE_URL", raising=False)
     monkeypatch.setattr(runtime_env, "_ENV_BOOTSTRAPPED", False)
 
-    _module()
-
-    assert os.environ.get("MULTICA_BASE_URL") == "http://fixture:8080"
+    # bootstrap writes os.environ directly (not via monkeypatch), so pop it in a
+    # finally to guarantee the fixture value never leaks into later tests.
+    try:
+        _module()
+        assert os.environ.get("MULTICA_BASE_URL") == "http://fixture:8080"
+    finally:
+        os.environ.pop("MULTICA_BASE_URL", None)
 
 
 def test_probe_reports_http_status(monkeypatch):
