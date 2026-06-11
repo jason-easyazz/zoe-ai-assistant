@@ -25,6 +25,7 @@ import asyncio
 import json
 import logging
 import struct
+import time
 import uuid
 from dataclasses import dataclass, field
 from enum import IntEnum, auto
@@ -162,6 +163,8 @@ class AiortcRoom:
         self._sub_pc: Optional[RTCPeerConnection] = None
         self._ws = None
         self._ws_lock = asyncio.Lock()
+        self._signal_task: Optional[asyncio.Task] = None
+        self._ping_task: Optional[asyncio.Task] = None
         self._conn_state = _ConnState.CONN_DISCONNECTED
         self._remote_participants: Dict[str, _RemoteParticipant] = {}
         # msid → (participant_sid, track_sid)
@@ -169,6 +172,7 @@ class AiortcRoom:
         self.local_participant = _LocalParticipant(self)
         self._data_channel = None
         self._ice_gathering_complete = asyncio.Event()
+        self._last_pong_at: Optional[float] = None
 
     # ── Event API ─────────────────────────────────────────────────────────────
     def on(self, event: str):
@@ -203,11 +207,21 @@ class AiortcRoom:
         log.info("[aiortc] Connecting to %s", ws_url.split("?")[0])
         self._ws = await websockets.connect(ws_url)
         self._conn_state = _ConnState.CONN_CONNECTED
-        asyncio.ensure_future(self._signal_loop())
+        self._signal_task = asyncio.create_task(
+            self._signal_loop(), name="livekit_aiortc_signal"
+        )
         log.info("[aiortc] Room connected")
 
     async def disconnect(self) -> None:
         self._conn_state = _ConnState.CONN_DISCONNECTED
+        current = asyncio.current_task()
+        if self._ping_task and self._ping_task is not current:
+            self._ping_task.cancel()
+            try:
+                await self._ping_task
+            except asyncio.CancelledError:
+                pass
+        self._ping_task = None
         if self._sub_pc:
             await self._sub_pc.close()
             self._sub_pc = None
@@ -217,6 +231,13 @@ class AiortcRoom:
             except Exception:
                 pass
             self._ws = None
+        if self._signal_task and self._signal_task is not current:
+            self._signal_task.cancel()
+            try:
+                await self._signal_task
+            except asyncio.CancelledError:
+                pass
+        self._signal_task = None
 
     # ── Signalling loop ───────────────────────────────────────────────────────
     async def _signal_loop(self) -> None:
@@ -233,9 +254,11 @@ class AiortcRoom:
                 msg_type = resp.WhichOneof("message")
                 await self._dispatch(msg_type, resp)
         except Exception as exc:
-            log.debug("[aiortc] Signal loop ended: %s", exc)
+            log.warning("[aiortc] Signal loop ended: %s", exc)
         finally:
             self._conn_state = _ConnState.CONN_DISCONNECTED
+            if self._ping_task:
+                self._ping_task.cancel()
 
     async def _dispatch(self, msg_type: str, resp: lk_rtc.SignalResponse) -> None:
         if msg_type == "join":
@@ -250,15 +273,59 @@ class AiortcRoom:
             await self._on_participant_update(resp.update)
         elif msg_type == "track_published":
             log.debug("[aiortc] track_published: %s", resp.track_published)
+        elif msg_type in ("pong", "pong_resp"):
+            self._last_pong_at = time.monotonic()
 
     async def _on_join(self, join) -> None:
         log.info("[aiortc] Joined room '%s' as '%s'",
                  join.room.name, join.participant.identity)
+        ping_interval = max(1, int(join.ping_interval or 5))
+        ping_timeout = max(ping_interval + 1, int(join.ping_timeout or 15))
+        if self._ping_task:
+            self._ping_task.cancel()
+        self._ping_task = asyncio.create_task(
+            self._ping_loop(ping_interval, ping_timeout),
+            name="livekit_aiortc_ping",
+        )
         await self._ensure_sub_pc()
         for p in join.other_participants:
             self._upsert_participant(p.identity, p.sid)
             self._emit("participant_connected",
                        self._remote_participants[p.sid])
+
+    async def _ping_loop(self, interval_s: int, timeout_s: int) -> None:
+        """Keep the LiveKit signalling session alive.
+
+        LiveKit advertises its heartbeat interval in JoinResponse. The native
+        SDK handles this automatically; this aiortc adapter must send protocol
+        pings itself or the server expires the participant after ~15 seconds.
+        """
+        self._last_pong_at = time.monotonic()
+        try:
+            while self._conn_state == _ConnState.CONN_CONNECTED:
+                await asyncio.sleep(interval_s)
+                timestamp_ms = int(time.time() * 1000)
+                legacy_req = lk_rtc.SignalRequest()
+                legacy_req.ping = timestamp_ms
+                await self._ws_send(legacy_req)
+                structured_req = lk_rtc.SignalRequest()
+                structured_req.ping_req.timestamp = timestamp_ms
+                structured_req.ping_req.rtt = 0
+                await self._ws_send(structured_req)
+                if (
+                    self._last_pong_at is not None
+                    and time.monotonic() - self._last_pong_at > timeout_s
+                ):
+                    raise TimeoutError(
+                        f"LiveKit signalling pong timeout after {timeout_s}s"
+                    )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning("[aiortc] Heartbeat failed: %s", exc)
+            self._conn_state = _ConnState.CONN_DISCONNECTED
+            if self._ws:
+                await self._ws.close()
 
     async def _on_offer(self, offer) -> None:
         """Handle SDP re-offer from LiveKit server (subscriber PC)."""
@@ -287,10 +354,13 @@ class AiortcRoom:
     async def _on_trickle(self, trickle) -> None:
         """Add an ICE candidate received from the server."""
         pc = self._sub_pc
-        if not pc or not trickle.candidate_init:
+        candidate_init = getattr(trickle, "candidate_init", None)
+        if candidate_init is None:
+            candidate_init = getattr(trickle, "candidateInit", None)
+        if not pc or not candidate_init:
             return
         try:
-            init = json.loads(trickle.candidate_init)
+            init = json.loads(candidate_init)
             cand_sdp = init.get("candidate", "")
             if not cand_sdp:
                 return
@@ -429,10 +499,7 @@ class AiortcRoom:
     async def _ws_send(self, req: lk_rtc.SignalRequest) -> None:
         if self._ws:
             async with self._ws_lock:
-                try:
-                    await self._ws.send(req.SerializeToString())
-                except Exception as exc:
-                    log.debug("[aiortc] WS send error: %s", exc)
+                await self._ws.send(req.SerializeToString())
 
 
 # ── Public factory functions (mirrors livekit.rtc API surface) ────────────────
