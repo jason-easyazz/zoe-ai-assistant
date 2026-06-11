@@ -31,6 +31,8 @@ class FakeDb:
         self.people = people or []
         self.fetch_args = None
         self.list_item_fetch_count = 0
+        self.executed = []
+        self.commits = 0
 
     async def fetch(self, *args):
         self.fetch_args = args
@@ -55,8 +57,84 @@ class FakeDb:
     async def fetchrow(self, *_args):
         return self.prefs
 
-    async def execute(self, *_args):
-        raise AssertionError("Skybridge service must use asyncpg fetch/fetchrow APIs")
+    async def execute(self, *args):
+        self.executed.append(args)
+        sql = str(args[0])
+        if "INSERT INTO events" in sql:
+            self.events.append(
+                {
+                    "id": args[1],
+                    "user_id": args[2],
+                    "title": args[3],
+                    "start_date": args[4],
+                    "start_time": args[5],
+                    "end_date": args[6],
+                    "end_time": args[7],
+                    "category": args[9],
+                    "location": args[10],
+                    "visibility": args[14],
+                    "deleted": False,
+                }
+            )
+            return None
+        if "UPDATE events SET start_time" in sql:
+            for event in self.events:
+                if event.get("id") == args[2]:
+                    event["start_time"] = args[1]
+            return None
+        if "INSERT INTO lists" in sql:
+            self.lists.append(
+                {
+                    "id": args[1],
+                    "user_id": args[2],
+                    "name": args[3],
+                    "list_type": args[4],
+                    "description": args[5],
+                    "visibility": args[6],
+                }
+            )
+            return None
+        if "INSERT INTO list_items" in sql:
+            item = {
+                "id": args[1],
+                "list_id": args[2],
+                "text": args[3],
+                "priority": args[4],
+                "category": args[5],
+                "quantity": args[6],
+                "completed": False,
+            }
+            self.items_by_list.setdefault(args[2], []).append(item)
+            return None
+        if "INSERT INTO people" in sql:
+            self.people.append(
+                {
+                    "id": args[1],
+                    "user_id": args[2],
+                    "name": args[3],
+                    "relationship": args[4],
+                    "circle": args[5],
+                    "context": args[6],
+                    "visibility": args[7],
+                    "is_partial": bool(args[8]),
+                }
+            )
+            return None
+        if "UPDATE people SET" in sql:
+            person_id = args[-2]
+            for person in self.people:
+                if person.get("id") == person_id:
+                    idx = 1
+                    if "notes =" in sql:
+                        person["notes"] = args[idx]
+                        idx += 1
+                    if "birthday =" in sql:
+                        person["birthday"] = args[idx]
+            return None
+        return None
+
+    async def commit(self):
+        self.commits += 1
 
 
 class GuardedGuestDb(FakeDb):
@@ -73,6 +151,39 @@ def test_classify_calendar_and_weather_requests():
     assert classify_skybridge_intent("find Sarah").domain == "people"
     assert classify_skybridge_intent("what is there to do this week") is None
     assert classify_skybridge_intent("open settings") is None
+
+
+def test_classify_skybridge_action_requests():
+    calendar_context = {"intent": {"domain": "calendar"}, "cards": []}
+
+    add_item = classify_skybridge_intent("Can you add bread to the shopping list")
+    assert add_item.domain == "lists"
+    assert add_item.action == "add_item"
+    assert add_item.item_text == "bread"
+    assert add_item.list_type == "shopping"
+
+    create_event = classify_skybridge_intent("Can you add pick up the groceries at 3pm", calendar_context)
+    assert create_event.domain == "calendar"
+    assert create_event.action == "create_event"
+    assert create_event.title == "pick up the groceries"
+    assert create_event.target_time == "15:00"
+
+    move_event = classify_skybridge_intent("Can you change my appointment to 9am", calendar_context)
+    assert move_event.domain == "calendar"
+    assert move_event.action == "update_time"
+    assert move_event.target_time == "09:00"
+
+    remember = classify_skybridge_intent("Can you remember that Sarah likes flowers and her birthday is the 1st of may")
+    assert remember.domain == "people"
+    assert remember.action == "remember_fact"
+    assert remember.person_name == "Sarah"
+    assert remember.fact_text == "likes flowers"
+    assert remember.birthday == "1 May"
+
+    lowercase_remember = classify_skybridge_intent("remember that sarah likes flowers")
+    assert lowercase_remember.domain == "people"
+    assert lowercase_remember.action == "remember_fact"
+    assert lowercase_remember.person_name == "Sarah"
 
 
 def test_classify_calendar_date_and_range_requests(monkeypatch):
@@ -147,6 +258,81 @@ async def test_calendar_request_returns_real_event_card():
     assert card["content"]["source"] == "calendar_show"
     assert card["content"]["events"][0]["title"] == "Dentist"
     assert "Surface" not in str(card)
+
+
+@pytest.mark.asyncio
+async def test_calendar_update_time_refreshes_visible_calendar_card():
+    event = {
+        "id": "event-1",
+        "user_id": "family-admin",
+        "title": "Dentist appointment",
+        "start_date": "2026-06-17",
+        "start_time": "15:00",
+        "end_time": "15:30",
+        "category": "health",
+        "visibility": "family",
+        "deleted": False,
+    }
+    context = {
+        "intent": {"domain": "calendar"},
+        "cards": [{"content": {"source": "calendar_show", "start_date": "2026-06-17", "events": [event]}}],
+    }
+    db = FakeDb(events=[event])
+
+    result = await resolve_skybridge_request("change my appointment to 9am", "family-admin", context=context, db=db)
+
+    assert result["handled"] is True
+    assert result["intent"]["action"] == "update_time"
+    assert result["actions"][0]["type"] == "updated"
+    assert result["cards"][0]["content"]["events"][0]["start_time"] == "09:00"
+    assert result["skybridge_context"]["intent"]["action"] == "update_time"
+
+
+@pytest.mark.asyncio
+async def test_calendar_update_can_target_visible_event_by_start_time():
+    event = {
+        "id": "event-1",
+        "user_id": "family-admin",
+        "title": "School pickup",
+        "start_date": "2026-06-17",
+        "start_time": "15:00",
+        "end_time": "15:30",
+        "category": "family",
+        "visibility": "family",
+        "deleted": False,
+    }
+    context = {
+        "intent": {"domain": "calendar"},
+        "cards": [{"content": {"source": "calendar_show", "start_date": "2026-06-17", "events": [event]}}],
+    }
+    db = FakeDb(events=[event])
+
+    result = await resolve_skybridge_request("move my 3pm to 4pm", "family-admin", context=context, db=db)
+
+    assert result["handled"] is True
+    assert result["intent"]["action"] == "update_time"
+    assert result["cards"][0]["content"]["events"][0]["start_time"] == "16:00"
+
+
+@pytest.mark.asyncio
+async def test_calendar_context_add_event_refreshes_calendar_card(monkeypatch):
+    class FrozenDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 6, 11)
+
+    monkeypatch.setattr(skybridge_service, "date", FrozenDate)
+    context = {"intent": {"domain": "calendar"}, "cards": [{"content": {"source": "calendar_show", "start_date": "2026-06-17", "events": []}}]}
+    db = FakeDb(events=[])
+
+    result = await resolve_skybridge_request("add pick up the groceries at 3pm", "family-admin", context=context, db=db)
+
+    assert result["handled"] is True
+    assert result["intent"]["action"] == "create_event"
+    event = result["cards"][0]["content"]["events"][0]
+    assert event["title"] == "pick up the groceries"
+    assert event["start_date"] == "2026-06-17"
+    assert event["start_time"] == "15:00"
 
 
 @pytest.mark.asyncio
@@ -239,6 +425,28 @@ async def test_lists_request_returns_real_list_items():
     assert card["content"]["items"][0]["text"] == "Milk"
     assert card["content"]["open_count"] == 1
     assert "Surface" not in str(card)
+
+
+@pytest.mark.asyncio
+async def test_list_add_item_persists_and_refreshes_list_card():
+    list_row = {
+        "id": "list-1",
+        "user_id": "family-admin",
+        "name": "Groceries",
+        "list_type": "shopping",
+        "description": "Weekly shop",
+        "visibility": "family",
+    }
+    db = FakeDb(lists=[list_row], items_by_list={"list-1": []})
+    context = {"intent": {"domain": "lists"}, "cards": [{"content": {"source": "list_show", "list_id": "list-1", "list_type": "shopping"}}]}
+
+    result = await resolve_skybridge_request("add bread to the shopping list", "family-admin", context=context, db=db)
+
+    assert result["handled"] is True
+    assert result["intent"]["action"] == "add_item"
+    assert result["actions"][0]["domain"] == "lists"
+    assert result["cards"][0]["content"]["items"][0]["text"] == "bread"
+    assert result["skybridge_context"]["cards"][0]["content"]["items"][0]["text"] == "bread"
 
 
 @pytest.mark.asyncio
@@ -355,6 +563,69 @@ async def test_people_singular_contact_request_returns_directory_not_search():
     assert result["handled"] is True
     assert result["intent"]["query"] == ""
     assert result["cards"][0]["content"]["source"] == "people_directory"
+
+
+@pytest.mark.asyncio
+async def test_people_remember_fact_updates_profile_card_and_memory(monkeypatch):
+    person = {
+        "id": "person-1",
+        "user_id": "family-admin",
+        "name": "Sarah",
+        "relationship": "Friend",
+        "circle": "inner",
+        "context": "personal",
+        "notes": "",
+        "visibility": "family",
+    }
+    remembered = {}
+
+    async def fake_memory(fact, **kwargs):
+        remembered["fact"] = fact
+        remembered.update(kwargs)
+        return True
+
+    monkeypatch.setattr(skybridge_service, "_store_skybridge_memory_fact", fake_memory)
+    result = await resolve_skybridge_request(
+        "remember that Sarah likes flowers and her birthday is the 1st of may",
+        "family-admin",
+        db=FakeDb(people=[person]),
+    )
+
+    assert result["handled"] is True
+    assert result["intent"]["action"] == "remember_fact"
+    profile = result["cards"][0]["content"]["person"]
+    assert profile["name"] == "Sarah"
+    assert profile["birthday"] == "1 May"
+    assert "Likes flowers." in profile["notes"]
+    assert remembered["fact"] == "Sarah likes flowers. Sarah's birthday is 1 May"
+    assert remembered["person_id"] == "person-1"
+
+
+@pytest.mark.asyncio
+async def test_people_remember_fact_creates_visible_profile_card(monkeypatch):
+    remembered = {}
+
+    async def fake_memory(fact, **kwargs):
+        remembered["fact"] = fact
+        remembered.update(kwargs)
+        return True
+
+    db = FakeDb(people=[])
+    monkeypatch.setattr(skybridge_service, "_store_skybridge_memory_fact", fake_memory)
+
+    result = await resolve_skybridge_request(
+        "remember that sarah likes flowers and her birthday is the 1st of may",
+        "family-admin",
+        db=db,
+    )
+
+    assert result["handled"] is True
+    profile = result["cards"][0]["content"]["person"]
+    assert profile["name"] == "Sarah"
+    assert profile["birthday"] == "1 May"
+    assert "Likes flowers." in profile["notes"]
+    assert db.people[0]["is_partial"] is False
+    assert remembered["person_id"] == db.people[0]["id"]
 
 
 @pytest.mark.asyncio

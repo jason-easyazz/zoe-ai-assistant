@@ -28,10 +28,12 @@ async def get_skybridge_status():
         "entrypoint": "/touch/skybridge.html",
         "version": 1,
         "card_contract": {
-            "status": "wired_for_calendar_weather_lists_people",
+            "status": "wired_for_calendar_weather_lists_people_actions_v1",
             "supported_major": 1,
             "data_domains": ["calendar", "weather", "lists", "people"],
             "voice_ws_domains": ["calendar", "weather", "lists", "people"],
+            "action_domains": ["calendar", "lists", "people"],
+            "context_refresh": True,
             "client_capability_cards": True,
         },
         "transports": {
@@ -41,7 +43,7 @@ async def get_skybridge_status():
         "capabilities": {
             "pages": 15,
             "settings": 22,
-            "dynamic_cards": "calendar_weather_lists_people_data_cards",
+            "dynamic_cards": "calendar_weather_lists_people_data_and_action_cards",
         },
     }
 
@@ -54,4 +56,7 @@ async def resolve_skybridge_command(
 ):
     """Resolve a typed Skybridge command into real data cards when supported."""
     message = str((payload or {}).get("message") or "").strip()
-    return await resolve_skybridge_request(message, user.get("user_id", "voice-guest"), db=db)
+    context = (payload or {}).get("context")
+    if not isinstance(context, dict):
+        context = None
+    return await resolve_skybridge_request(message, user.get("user_id", "voice-guest"), context=context, db=db)
