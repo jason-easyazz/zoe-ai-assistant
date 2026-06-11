@@ -1,6 +1,9 @@
 import importlib.util
 import json
 import sys
+
+import httpx
+import pytest
 from pathlib import Path
 
 
@@ -96,11 +99,12 @@ def test_main_builds_approved_profile_edit_outcome_plan(tmp_path, capsys):
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
     assert rc == 0
-    assert payload["allowed_to_admit_memory"] is True
-    assert payload["admission_decision"]["status"] == "approved"
-    assert payload["memory_candidate"]["event_id"] == "mem_evt_profile_edit_outcome_ZOE-777"
-    assert payload["trust_records"][0]["to_trust_level"] == "assisted"
-    assert "greptile:pass:777" in payload["trust_records"][0]["evidence_refs"]
+    outcome = payload["outcome_plan"]
+    assert outcome["allowed_to_admit_memory"] is True
+    assert outcome["admission_decision"]["status"] == "approved"
+    assert outcome["memory_candidate"]["event_id"] == "mem_evt_profile_edit_outcome_ZOE-777"
+    assert outcome["trust_records"][0]["to_trust_level"] == "assisted"
+    assert "greptile:pass:777" in outcome["trust_records"][0]["evidence_refs"]
 
 
 def test_main_returns_1_for_pending_memory_approval(tmp_path, capsys):
@@ -118,10 +122,11 @@ def test_main_returns_1_for_pending_memory_approval(tmp_path, capsys):
 
     payload = json.loads(capsys.readouterr().out)
     assert rc == 1
-    assert payload["allowed_to_admit_memory"] is False
-    assert payload["admission_decision"]["status"] == "pending_review"
-    assert payload["admission_decision"]["blockers"] == ["approval_required"]
-    assert payload["trust_records"]
+    outcome = payload["outcome_plan"]
+    assert outcome["allowed_to_admit_memory"] is False
+    assert outcome["admission_decision"]["status"] == "pending_review"
+    assert outcome["admission_decision"]["blockers"] == ["approval_required"]
+    assert outcome["trust_records"]
 
 
 def test_main_keeps_blocked_pr_edit_plan_blocked(tmp_path, capsys):
@@ -149,9 +154,10 @@ def test_main_keeps_blocked_pr_edit_plan_blocked(tmp_path, capsys):
 
     payload = json.loads(capsys.readouterr().out)
     assert rc == 1
-    assert "pr_edit_plan_not_allowed" in payload["blockers"]
-    assert "missing_greptile_refs" in payload["blockers"]
-    assert payload["memory_candidate"] is None
+    outcome = payload["outcome_plan"]
+    assert "pr_edit_plan_not_allowed" in outcome["blockers"]
+    assert "missing_greptile_refs" in outcome["blockers"]
+    assert outcome["memory_candidate"] is None
 
 
 def test_main_returns_2_for_invalid_verification_trace(tmp_path, capsys):
@@ -191,3 +197,66 @@ def test_main_returns_2_for_unexpected_trace_field(tmp_path, capsys):
     assert rc == 2
     assert "invalid verification trace" in captured.err
     assert "unexpected" in captured.err
+
+
+@pytest.mark.asyncio
+async def test_execute_profile_edit_outcome_plan_in_hindsight_posts_admitted_payload(tmp_path):
+    args = MODULE.build_parser().parse_args([
+        "--pr-edit-plan-json-file",
+        str(_write_json(tmp_path / "pr-plan.json", _pr_edit_plan())),
+        "--verification-trace-file",
+        str(_write_json(tmp_path / "trace.json", _trace())),
+        "--user-id",
+        "zoe_system",
+        "--target-backend",
+        "hindsight",
+        "--approval-ref",
+        "approval:memory-admission:ZOE-777",
+    ])
+    plan = MODULE.build_profile_edit_outcome_plan_from_args(args)
+    seen = {}
+
+    async def handler(request):
+        seen["path"] = request.url.path
+        seen["payload"] = json.loads(request.read().decode())
+        return httpx.Response(200, json={"success": True, "items_count": 1})
+
+    from hindsight_memory import HindsightConfig, HindsightMemoryClient
+
+    config = HindsightConfig(enabled=True, bank_prefix="zoe-test", async_retain=False)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = HindsightMemoryClient(config, client=http_client)
+        result = await MODULE.execute_profile_edit_outcome_plan_in_hindsight(plan, client=client)
+
+    assert result["attempted"] is True
+    assert result["retained"] is True
+    assert result["reason"] == "retained"
+    assert seen["path"] == "/v1/default/banks/zoe-test-project-zoe_system/memories"
+    assert seen["payload"]["items"][0]["document_id"] == "mem_evt_profile_edit_outcome_ZOE-777"
+    assert "approval:memory-admission:ZOE-777" in result["execution"]["evidence_refs"]
+
+
+def test_main_execute_hindsight_respects_disabled_default(tmp_path, capsys):
+    pr_plan = _write_json(tmp_path / "pr-plan.json", _pr_edit_plan())
+    trace = _write_json(tmp_path / "trace.json", _trace())
+
+    rc = MODULE.main([
+        "--pr-edit-plan-json-file",
+        str(pr_plan),
+        "--verification-trace-file",
+        str(trace),
+        "--user-id",
+        "zoe_system",
+        "--target-backend",
+        "hindsight",
+        "--approval-ref",
+        "approval:memory-admission:ZOE-777",
+        "--execute-hindsight",
+    ])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 1
+    assert payload["outcome_plan"]["allowed_to_admit_memory"] is True
+    assert payload["hindsight_execution"]["attempted"] is False
+    assert payload["hindsight_execution"]["retained"] is False
+    assert payload["hindsight_execution"]["reason"] == "disabled"
