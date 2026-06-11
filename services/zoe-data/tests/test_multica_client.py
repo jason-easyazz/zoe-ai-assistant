@@ -230,5 +230,67 @@ async def test_sync_evolution_proposal_embeds_contract_marker(monkeypatch):
     assert metadata["evolution_contract_allowed_to_prepare"] is True
 
 
+@pytest.mark.asyncio
+async def test_sync_evolution_proposal_skips_label_rows_without_ids(monkeypatch):
+    requests = []
+
+    class FakeResponse:
+        def __init__(self, payload, status_code=200):
+            self._payload = payload
+            self.status_code = status_code
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    class FakeHttpClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def post(self, url, **kwargs):
+            requests.append(("POST", url, kwargs))
+            if url.endswith("/api/issues"):
+                return FakeResponse({"id": "issue-1"})
+            if url.endswith("/api/issues/issue-1/labels"):
+                return FakeResponse({"ok": True})
+            return FakeResponse({"id": "created-label"}, status_code=201)
+
+        async def get(self, url, **kwargs):
+            requests.append(("GET", url, kwargs))
+            if url.endswith("/api/labels"):
+                return FakeResponse([
+                    {"name": "evolution-proposal"},
+                    {"name": "evolution-proposal", "id": "label-1"},
+                ])
+            return FakeResponse([])
+
+    monkeypatch.setenv("MULTICA_BASE_URL", "https://multica.example")
+    monkeypatch.setenv("MULTICA_API_TOKEN", "token-1")
+    monkeypatch.setenv("MULTICA_WORKSPACE_ID", "workspace-1")
+    monkeypatch.setenv("HERMES_MULTICA_AGENT_ID", "hermes-agent")
+    monkeypatch.setattr(multica_client, "_lookup_evolution_resources", lambda _client: _async_tuple())
+    monkeypatch.setattr(multica_client.httpx, "AsyncClient", lambda **_kwargs: FakeHttpClient())
+
+    issue_id = await multica_client.sync_evolution_proposal_to_multica(
+        proposal_id="proposal-1",
+        title="Improve recall",
+        description="Recall needs reviewable evidence before execution.",
+        evidence="trace:recall-1",
+        proposal_type="intent_pattern",
+    )
+
+    assert issue_id == "issue-1"
+    assert ("POST", "https://multica.example/api/issues/issue-1/labels", {
+        "json": {"label_id": "label-1"},
+        "headers": multica_client.MULClient()._headers(),
+        "params": {"workspace_id": "workspace-1"},
+    }) in requests
+
+
 async def _async_tuple():
     return None, None

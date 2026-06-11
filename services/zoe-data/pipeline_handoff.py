@@ -356,7 +356,7 @@ def _pr_url_from_ticket_block(detail: dict[str, Any]) -> str:
         from multica_ticket_contract import parse_ticket_block
 
         metadata = parse_ticket_block(body)
-    except (ImportError, TypeError, ValueError):
+    except (AttributeError, ImportError, KeyError, TypeError, ValueError):
         metadata = {}
     if isinstance(metadata, dict):
         return str(metadata.get("pr_url") or "").strip()

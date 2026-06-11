@@ -565,8 +565,9 @@ async def sync_evolution_proposal_to_multica(
                     label_id: str | None = None
                     for lbl in labels:
                         if lbl.get("name") == label_name:
-                            label_id = lbl["id"]
-                            break
+                            label_id = lbl.get("id")
+                            if label_id:
+                                break
                     if label_id is None:
                         # Create label on first use
                         try:
