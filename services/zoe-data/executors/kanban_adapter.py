@@ -448,6 +448,33 @@ def _harness_implement_hint(issue: dict | None = None) -> str:
     )
 
 
+def _issue_with_phase_handoff(issue: dict, phase: str, state: Any | None) -> dict:
+    if phase != "verify" or state is None:
+        return issue
+    already_covered = any(
+        getattr(item, "metadata", {}).get("source") == "already_covered"
+        for item in getattr(state, "evidence", []) or []
+    )
+    if not already_covered:
+        return issue
+    description = str(issue.get("description") or "")
+    if "IMPLEMENT_ALREADY_COVERED=1" in description:
+        return issue
+    handoff = (
+        "Zoe previous phase handoff (authoritative):\n"
+        "IMPLEMENT_ALREADY_COVERED=1\n"
+        "PR_URL=\n"
+        "TESTS=focused intent helper and router tests passed before edit; no PR required\n"
+        "VALIDATORS=run focused validation from this verify worktree\n"
+        "SUMMARY=Implementation was already present. Do not rerun zoe_apply_intent_gap_contract.py. "
+        "Verify the acceptance criteria with focused checks from workspace_path, then call kanban_complete "
+        "with VALIDATORS and TESTS if they pass; call kanban_block only if focused validation fails.\n\n"
+    )
+    updated = dict(issue)
+    updated["description"] = handoff + description
+    return updated
+
+
 def _intent_gap_implement_hint(issue: dict | None = None, *, phase: str = "implement") -> str:
     issue = issue or {}
     title = str(issue.get("title") or "")
@@ -1399,9 +1426,10 @@ class KanbanAdapter:
                     parent = previous.get("id")
 
         phase, assignee, skills = entry
+        task_issue = _issue_with_phase_handoff(issue, phase, state)
         args = [
             "create",
-            self._title(phase, identifier, issue),
+            self._title(phase, identifier, task_issue),
             "--assignee",
             assignee,
             "--workspace",
@@ -1420,7 +1448,7 @@ class KanbanAdapter:
             "--created-by",
             "zoe-bridge",
             "--body",
-            self._build_body(phase, issue, identifier, mode=mode),
+            self._build_body(phase, task_issue, identifier, mode=mode),
             "--json",
         ]
         for skill in skills:
