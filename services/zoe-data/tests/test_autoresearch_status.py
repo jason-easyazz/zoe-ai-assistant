@@ -59,6 +59,29 @@ def test_autoresearch_status_reports_latest_results(tmp_path, monkeypatch):
     assert data["runs"][0]["latest_decision"] == "keep"
 
 
+def test_autoresearch_status_reports_unavailable_with_stable_schema(tmp_path, monkeypatch):
+    from routers import autoresearch
+
+    monkeypatch.setenv("ZOE_AUTORESEARCH_RUN_ROOT", str(tmp_path))
+
+    def _raise_oserror():
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(autoresearch.Path, "iterdir", lambda self: _raise_oserror())
+    app = FastAPI()
+    app.include_router(autoresearch.router)
+
+    resp = TestClient(app).get("/api/autoresearch/status")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is False
+    assert data["status"] == "unavailable"
+    assert data["run_count"] == 0
+    assert data["latest"] is None
+    assert data["runs"] == []
+
+
 def test_autoresearch_status_skips_run_removed_mid_request(tmp_path, monkeypatch):
     from routers import autoresearch
 

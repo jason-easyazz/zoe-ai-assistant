@@ -69,7 +69,7 @@ async def autoresearch_status() -> dict[str, Any]:
     try:
         run_dirs = [p for p in root.iterdir() if p.is_dir()]
     except OSError:
-        return {"ok": False, "surface": "autoresearch", "status": "unavailable", "run_count": 0, "runs": []}
+        return {"ok": False, "surface": "autoresearch", "status": "unavailable", "run_count": 0, "latest": None, "runs": []}
 
     summaries = (_run_summary(p) for p in run_dirs)
     runs = sorted((row for row in summaries if row is not None), key=lambda row: row["updated_at"], reverse=True)
