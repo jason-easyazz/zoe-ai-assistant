@@ -14,6 +14,12 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "services" / "zoe-data"))
 
+import runtime_env  # noqa: E402
+
+# Self-load repo .env so the report works without manual `set -a && . ./.env`.
+# Real environment variables take precedence (runtime_env skips keys already set).
+runtime_env.bootstrap_runtime_env()
+
 
 def _uploads_configured() -> bool:
     if os.environ.get("LOCAL_UPLOAD_DIR") and os.environ.get("LOCAL_UPLOAD_BASE_URL"):
