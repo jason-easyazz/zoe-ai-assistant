@@ -449,27 +449,47 @@ def _harness_implement_hint(issue: dict | None = None) -> str:
 
 
 def _issue_with_phase_handoff(issue: dict, phase: str, state: Any | None) -> dict:
-    if phase != "verify" or state is None:
+    if state is None or phase not in {"verify", "review", "closeout", "retro"}:
         return issue
+    evidence = list(getattr(state, "evidence", []) or [])
     already_covered = any(
         getattr(item, "metadata", {}).get("source") == "already_covered"
-        for item in getattr(state, "evidence", []) or []
+        for item in evidence
     )
-    if not already_covered:
+    audit_profile = getattr(state, "evidence_profile", "") == "audit"
+    if not already_covered and not audit_profile:
         return issue
     description = str(issue.get("description") or "")
-    if "IMPLEMENT_ALREADY_COVERED=1" in description:
+    if "Zoe pipeline handoff (authoritative):" in description:
         return issue
-    handoff = (
-        "Zoe previous phase handoff (authoritative):\n"
-        "IMPLEMENT_ALREADY_COVERED=1\n"
-        "PR_URL=\n"
-        "TESTS=focused intent helper and router tests passed before edit; no PR required\n"
-        "VALIDATORS=run focused validation from this verify worktree\n"
-        "SUMMARY=Implementation was already present. Do not rerun zoe_apply_intent_gap_contract.py. "
-        "Verify the acceptance criteria with focused checks from workspace_path, then call kanban_complete "
-        "with VALIDATORS and TESTS if they pass; call kanban_block only if focused validation fails.\n\n"
+
+    validator_summary = next(
+        (getattr(item, "summary", "") for item in reversed(evidence) if getattr(item, "kind", "") == "validator"),
+        "",
     )
+    if phase == "verify" and already_covered:
+        handoff = (
+            "Zoe pipeline handoff (authoritative):\n"
+            "IMPLEMENT_ALREADY_COVERED=1\n"
+            "AUDIT_ONLY=1\n"
+            "PR_URL=\n"
+            "TESTS=focused intent helper and router tests passed before edit; no PR required\n"
+            "VALIDATORS=run focused validation from this verify worktree\n"
+            "SUMMARY=Implementation was already present. Do not rerun zoe_apply_intent_gap_contract.py. "
+            "Verify the acceptance criteria with focused checks from workspace_path, then call kanban_complete "
+            "with VALIDATORS and TESTS if they pass; call kanban_block only if focused validation fails.\n\n"
+        )
+    else:
+        handoff = (
+            "Zoe pipeline handoff (authoritative):\n"
+            f"IMPLEMENT_ALREADY_COVERED={1 if already_covered else 0}\n"
+            f"AUDIT_ONLY={1 if audit_profile else 0}\n"
+            "PR_URL=\n"
+            f"VERIFY_EVIDENCE={validator_summary or 'audit/no-PR evidence recorded in pipeline journal'}\n"
+            "SUMMARY=This is the no-code/no-PR audit path. Do not hunt for PRs, branches, or rerun "
+            "zoe_apply_intent_gap_contract.py. Use the recorded pipeline evidence and acceptance criteria, "
+            "then complete this phase or block with a concrete evidence mismatch.\n\n"
+        )
     updated = dict(issue)
     updated["description"] = handoff + description
     return updated
