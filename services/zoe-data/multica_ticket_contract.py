@@ -3,12 +3,24 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from datetime import datetime, timezone
 from typing import Any
 
 FENCE_LANG = "zoe-ticket"
 SCHEMA_VERSION = 1
+
+# Default live checkout root. Tickets that hardcode this absolute path steer the
+# worker out of its pinned, isolated worktree and trip the runtime
+# WORKTREE_PATH_VIOLATION guard after budget is already burned, so we lint for it
+# at dispatch instead.
+DEFAULT_LIVE_ROOT = "/home/zoe/assistant"
+
+
+def _live_root(live_root: str | None = None) -> str:
+    root = (live_root or os.environ.get("ZOE_ASSISTANT_ROOT") or DEFAULT_LIVE_ROOT).rstrip("/")
+    return root or DEFAULT_LIVE_ROOT
 
 _BLOCK_RE = re.compile(
     r"(?P<prefix>^|\n)```zoe-ticket\s*\n(?P<body>.*?)\n```(?P<suffix>\n|$)",
@@ -158,3 +170,83 @@ def append_child_id(description: str | None, child_id: str) -> str:
     metadata["child_issue_ids"] = children
     metadata["updated_at"] = datetime.now(timezone.utc).isoformat()
     return write_ticket_block(description, metadata)
+
+
+def _live_path_regex(live_root: str) -> re.Pattern[str]:
+    # Match the live root and any path beneath it, stopping at whitespace or
+    # shell/markdown delimiters so we capture a single path token cleanly. The
+    # boundary lookahead prevents matching a sibling like ``<root>-backup``.
+    return re.compile(re.escape(live_root) + r"(?![\w-])(?:/[^\s'\"`)\]>,;]*)?")
+
+
+def find_live_path_references(
+    description: str | None, *, live_root: str | None = None
+) -> list[str]:
+    """Return unique live-checkout absolute paths referenced in the ticket text.
+
+    These are the WORKTREE_PATH_VIOLATION class: any instruction that points the
+    worker at the shared live checkout instead of its pinned worktree.
+    """
+    root = _live_root(live_root)
+    seen: dict[str, None] = {}
+    for match in _live_path_regex(root).finditer(description or ""):
+        # Trim a trailing slash and any sentence punctuation the regex swept up.
+        token = match.group(0).rstrip("/.,;:")
+        seen.setdefault(token, None)
+    return list(seen)
+
+
+def normalize_live_paths(description: str | None, *, live_root: str | None = None) -> str:
+    """Rewrite hardcoded live-checkout paths to worktree-relative equivalents.
+
+    ``<root>/services/x.py`` becomes ``services/x.py`` and a bare ``<root>``
+    (e.g. ``cd <root>``) becomes ``.`` so the same prose works inside any pinned
+    worktree. Human prose and the fenced metadata block are otherwise untouched.
+    """
+    root = _live_root(live_root)
+    text = description or ""
+
+    def _replace(match: re.Match[str]) -> str:
+        token = match.group(0)
+        trailing = ""
+        # Preserve a trailing slash if the original had one.
+        if token.endswith("/") and token != root + "/":
+            token, trailing = token.rstrip("/"), "/"
+        if token == root:
+            return "." + trailing
+        relative = token[len(root) + 1 :]  # drop "<root>/"
+        return (relative or ".") + trailing
+
+    return _live_path_regex(root).sub(_replace, text)
+
+
+def validate_ticket_contract(
+    description: str | None,
+    *,
+    live_root: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Lint a ticket for dispatch-blocking contract violations.
+
+    Currently enforces the WORKTREE_PATH_VIOLATION class: a ticket must not pin
+    the worker to the shared live checkout. Returns a structured result so the
+    admission gate can fail closed and an operator/auto-fixer can normalize.
+
+    Returns ``{"ok", "violations", "normalized_description"}`` where
+    ``normalized_description`` is provided only when a safe rewrite exists.
+    """
+    root = _live_root(live_root)
+    violations: list[str] = []
+
+    live_paths = find_live_path_references(description, live_root=root)
+    for path in live_paths:
+        violations.append(
+            "WORKTREE_PATH_VIOLATION: ticket references live checkout path "
+            f"{path}; use a worktree-relative path so the worker stays in its "
+            "pinned isolated worktree"
+        )
+
+    result: dict[str, Any] = {"ok": not violations, "violations": violations}
+    if live_paths:
+        result["normalized_description"] = normalize_live_paths(description, live_root=root)
+    return result

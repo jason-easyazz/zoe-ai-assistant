@@ -1,8 +1,11 @@
 from multica_ticket_contract import (
     append_child_id,
     describe_ticket,
+    find_live_path_references,
+    normalize_live_paths,
     parse_ticket_block,
     update_ticket_progress,
+    validate_ticket_contract,
     write_ticket_block,
 )
 
@@ -66,3 +69,59 @@ def test_replacing_middle_block_preserves_suffix_newline():
     updated = write_ticket_block(description, {"schema": 1, "zoe_kind": "bug"})
 
     assert "```\nTrailing prose" in updated
+
+
+LIVE = "/home/zoe/assistant"
+
+
+def test_find_live_path_references_detects_root_and_nested(monkeypatch):
+    monkeypatch.setenv("ZOE_ASSISTANT_ROOT", LIVE)
+    text = (
+        f"cd {LIVE} && edit {LIVE}/services/zoe-data/x.py, then check "
+        f"{LIVE}/scripts/run.sh."
+    )
+    refs = find_live_path_references(text)
+    assert LIVE in refs
+    assert f"{LIVE}/services/zoe-data/x.py" in refs
+    assert f"{LIVE}/scripts/run.sh" in refs
+
+
+def test_find_live_path_references_clean_ticket(monkeypatch):
+    monkeypatch.setenv("ZOE_ASSISTANT_ROOT", LIVE)
+    # Worktree-relative paths are fine and must not be flagged.
+    assert find_live_path_references("edit services/zoe-data/x.py and run tests") == []
+
+
+def test_normalize_live_paths_rewrites_to_relative(monkeypatch):
+    monkeypatch.setenv("ZOE_ASSISTANT_ROOT", LIVE)
+    text = f"cd {LIVE} && python {LIVE}/scripts/run.sh services/x.py"
+    normalized = normalize_live_paths(text)
+    assert normalized == "cd . && python scripts/run.sh services/x.py"
+    assert LIVE not in normalized
+
+
+def test_validate_ticket_contract_blocks_live_path(monkeypatch):
+    monkeypatch.setenv("ZOE_ASSISTANT_ROOT", LIVE)
+    result = validate_ticket_contract(f"Please edit {LIVE}/services/zoe-data/x.py")
+    assert result["ok"] is False
+    assert any("WORKTREE_PATH_VIOLATION" in v for v in result["violations"])
+    assert "normalized_description" in result
+    assert LIVE not in result["normalized_description"]
+
+
+def test_validate_ticket_contract_passes_clean_ticket(monkeypatch):
+    monkeypatch.setenv("ZOE_ASSISTANT_ROOT", LIVE)
+    result = validate_ticket_contract("Edit services/zoe-data/x.py; run focused tests.")
+    assert result == {"ok": True, "violations": []}
+
+
+def test_validate_ticket_contract_honors_custom_live_root():
+    result = validate_ticket_contract("touch /srv/app/main.py", live_root="/srv/app")
+    assert result["ok"] is False
+    assert result["normalized_description"] == "touch main.py"
+
+
+def test_sibling_path_with_root_prefix_is_not_flagged(monkeypatch):
+    monkeypatch.setenv("ZOE_ASSISTANT_ROOT", LIVE)
+    # A different directory that merely shares the root as a string prefix.
+    assert find_live_path_references(f"back up {LIVE}-backup/data first") == []
