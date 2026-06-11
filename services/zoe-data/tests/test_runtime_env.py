@@ -9,7 +9,7 @@ def test_bootstrap_runtime_env_loads_hermes_key_from_service_env(monkeypatch, tm
     monkeypatch.setattr(runtime_env, "_ENV_FILES", (str(env_file),))
     monkeypatch.delenv("HERMES_API_KEY", raising=False)
     monkeypatch.delenv("API_SERVER_KEY", raising=False)
-    runtime_env._ENV_BOOTSTRAPPED = False
+    monkeypatch.setattr(runtime_env, "_ENV_BOOTSTRAPPED", False)
 
     runtime_env.bootstrap_runtime_env()
 
@@ -37,7 +37,7 @@ def test_bootstrap_runtime_env_skips_non_bootstrap_keys(monkeypatch, tmp_path):
     monkeypatch.setattr(runtime_env, "_ENV_FILES", (str(env_file),))
     monkeypatch.delenv("HERMES_API_KEY", raising=False)
     monkeypatch.delenv("DEBUG", raising=False)
-    runtime_env._ENV_BOOTSTRAPPED = False
+    monkeypatch.setattr(runtime_env, "_ENV_BOOTSTRAPPED", False)
 
     runtime_env.bootstrap_runtime_env()
 
