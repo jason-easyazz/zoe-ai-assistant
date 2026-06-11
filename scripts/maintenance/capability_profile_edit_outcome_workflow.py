@@ -217,7 +217,20 @@ def main(argv: list[str] | None = None) -> int:
                 "execution": None,
             }
         else:
-            execution = asyncio.run(execute_profile_edit_outcome_plan_in_hindsight(plan))
+            try:
+                execution = asyncio.run(execute_profile_edit_outcome_plan_in_hindsight(plan))
+            except Exception as exc:
+                execution = {
+                    "attempted": False,
+                    "retained": False,
+                    "reason": "hindsight_execution_error",
+                    "error": str(exc),
+                    "execution": None,
+                }
+                payload["hindsight_execution"] = execution
+                print(json.dumps(payload, indent=2, sort_keys=True))
+                print(f"hindsight execution failed: {exc}", file=sys.stderr)
+                return 2
         payload["hindsight_execution"] = execution
     print(json.dumps(payload, indent=2, sort_keys=True))
     if plan.blockers:

@@ -268,7 +268,8 @@ async def test_execute_profile_edit_outcome_plan_in_hindsight_posts_admitted_pay
     assert "approval:memory-admission:ZOE-777" in result["execution"]["evidence_refs"]
 
 
-def test_main_execute_hindsight_respects_disabled_default(tmp_path, capsys):
+def test_main_execute_hindsight_respects_disabled_default(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("HINDSIGHT_ENABLED", "false")
     pr_plan = _write_json(tmp_path / "pr-plan.json", _pr_edit_plan())
     trace = _write_json(tmp_path / "trace.json", _trace())
 
@@ -292,3 +293,33 @@ def test_main_execute_hindsight_respects_disabled_default(tmp_path, capsys):
     assert payload["hindsight_execution"]["attempted"] is False
     assert payload["hindsight_execution"]["retained"] is False
     assert payload["hindsight_execution"]["reason"] == "disabled"
+
+
+def test_main_execute_hindsight_reports_config_errors_cleanly(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("HINDSIGHT_ENABLED", "true")
+    monkeypatch.setenv("HINDSIGHT_BASE_URL", "https://example.com")
+    pr_plan = _write_json(tmp_path / "pr-plan.json", _pr_edit_plan())
+    trace = _write_json(tmp_path / "trace.json", _trace())
+
+    rc = MODULE.main([
+        "--pr-edit-plan-json-file",
+        str(pr_plan),
+        "--verification-trace-file",
+        str(trace),
+        "--user-id",
+        "zoe_system",
+        "--target-backend",
+        "hindsight",
+        "--approval-ref",
+        "approval:memory-admission:ZOE-777",
+        "--execute-hindsight",
+    ])
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert rc == 2
+    assert payload["allowed_to_admit_memory"] is True
+    assert payload["hindsight_execution"]["attempted"] is False
+    assert payload["hindsight_execution"]["retained"] is False
+    assert payload["hindsight_execution"]["reason"] == "hindsight_execution_error"
+    assert "hindsight execution failed" in captured.err
