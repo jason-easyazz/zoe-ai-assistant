@@ -6,6 +6,7 @@ import json
 import os
 import re
 from datetime import datetime, timezone
+from functools import lru_cache
 from typing import Any
 
 FENCE_LANG = "zoe-ticket"
@@ -172,6 +173,7 @@ def append_child_id(description: str | None, child_id: str) -> str:
     return write_ticket_block(description, metadata)
 
 
+@lru_cache(maxsize=8)
 def _live_path_regex(live_root: str) -> re.Pattern[str]:
     # Match the live root and any path beneath it, stopping at whitespace or
     # shell/markdown delimiters so we capture a single path token cleanly. The
