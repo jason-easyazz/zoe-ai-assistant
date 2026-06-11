@@ -28,6 +28,7 @@ def test_autoresearch_status_reports_idle_when_no_runs(tmp_path, monkeypatch):
     assert data["surface"] == "autoresearch"
     assert data["status"] == "idle"
     assert data["run_count"] == 0
+    assert data["latest"] is None
     assert data["runs"] == []
 
 
@@ -35,9 +36,9 @@ def test_autoresearch_status_reports_latest_results(tmp_path, monkeypatch):
     run_dir = tmp_path / "night-run"
     run_dir.mkdir()
     (run_dir / "results.tsv").write_text(
-        "round\tchange\tbefore\tafter\tdecision\n"
-        "1\tbaseline\t10\t10\tkept\n"
-        "2\ttighten copy\t10\t12\tkept\n",
+        "round\tcommit\tscore\tstatus\tdescription\n"
+        "1\tabc123\t10\tbaseline\tbaseline prompt\n"
+        "2\tdef456\t12\tkeep\ttighten copy\n",
         encoding="utf-8",
     )
     monkeypatch.setenv("ZOE_AUTORESEARCH_RUN_ROOT", str(tmp_path))
@@ -53,8 +54,9 @@ def test_autoresearch_status_reports_latest_results(tmp_path, monkeypatch):
     assert data["latest"]["id"] == "night-run"
     assert data["latest"]["rounds"] == 2
     assert data["latest"]["latest_round"] == "2"
+    assert data["latest"]["latest_change"] == "tighten copy"
     assert data["latest"]["latest_after"] == "12"
-    assert data["runs"][0]["latest_decision"] == "kept"
+    assert data["runs"][0]["latest_decision"] == "keep"
 
 
 def test_autoresearch_status_skips_run_removed_mid_request(tmp_path, monkeypatch):

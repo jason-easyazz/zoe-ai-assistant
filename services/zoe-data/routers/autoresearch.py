@@ -38,10 +38,10 @@ def _latest_result(run_dir: Path) -> dict[str, Any]:
         "rounds": len(rows),
         "results_readable": True,
         "latest_round": latest.get("round") or latest.get("round_id"),
-        "latest_change": latest.get("change") or latest.get("hypothesis"),
+        "latest_change": latest.get("change") or latest.get("hypothesis") or latest.get("description"),
         "latest_before": latest.get("before") or latest.get("score_before"),
-        "latest_after": latest.get("after") or latest.get("score_after"),
-        "latest_decision": latest.get("decision") or latest.get("kept"),
+        "latest_after": latest.get("after") or latest.get("score_after") or latest.get("score"),
+        "latest_decision": latest.get("decision") or latest.get("kept") or latest.get("status"),
     }
 
 
