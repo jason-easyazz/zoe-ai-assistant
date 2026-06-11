@@ -1,6 +1,9 @@
 import asyncio
 import importlib.util
+import os
 from pathlib import Path
+
+import runtime_env
 
 
 def _module():
@@ -13,6 +16,18 @@ def _module():
     assert spec and spec.loader
     spec.loader.exec_module(module)
     return module
+
+
+def test_report_module_self_loads_env_on_import(monkeypatch, tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("MULTICA_BASE_URL=http://fixture:8080\n", encoding="utf-8")
+    monkeypatch.setattr(runtime_env, "_ENV_FILES", (str(env_file),))
+    monkeypatch.delenv("MULTICA_BASE_URL", raising=False)
+    runtime_env._ENV_BOOTSTRAPPED = False
+
+    _module()
+
+    assert os.environ.get("MULTICA_BASE_URL") == "http://fixture:8080"
 
 
 def test_probe_reports_http_status(monkeypatch):
