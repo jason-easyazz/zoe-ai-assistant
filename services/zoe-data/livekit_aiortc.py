@@ -173,6 +173,7 @@ class AiortcRoom:
         self._data_channel = None
         self._ice_gathering_complete = asyncio.Event()
         self._last_pong_at: Optional[float] = None
+        self._use_structured_ping = hasattr(lk_rtc.SignalRequest(), "ping_req")
 
     # ── Event API ─────────────────────────────────────────────────────────────
     def on(self, event: str):
@@ -305,13 +306,13 @@ class AiortcRoom:
             while self._conn_state == _ConnState.CONN_CONNECTED:
                 await asyncio.sleep(interval_s)
                 timestamp_ms = int(time.time() * 1000)
-                legacy_req = lk_rtc.SignalRequest()
-                legacy_req.ping = timestamp_ms
-                await self._ws_send(legacy_req)
-                structured_req = lk_rtc.SignalRequest()
-                structured_req.ping_req.timestamp = timestamp_ms
-                structured_req.ping_req.rtt = 0
-                await self._ws_send(structured_req)
+                req = lk_rtc.SignalRequest()
+                if self._use_structured_ping:
+                    req.ping_req.timestamp = timestamp_ms
+                    req.ping_req.rtt = 0
+                else:
+                    req.ping = timestamp_ms
+                await self._ws_send(req)
                 if (
                     self._last_pong_at is not None
                     and time.monotonic() - self._last_pong_at > timeout_s
@@ -499,7 +500,11 @@ class AiortcRoom:
     async def _ws_send(self, req: lk_rtc.SignalRequest) -> None:
         if self._ws:
             async with self._ws_lock:
-                await self._ws.send(req.SerializeToString())
+                try:
+                    await self._ws.send(req.SerializeToString())
+                except Exception as exc:
+                    log.warning("[aiortc] WS send error: %s", exc)
+                    raise
 
 
 # ── Public factory functions (mirrors livekit.rtc API surface) ────────────────
