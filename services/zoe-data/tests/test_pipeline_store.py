@@ -546,6 +546,46 @@ async def test_sync_pipeline_ignores_older_later_phase_block_after_retry(isolate
 
 
 @pytest.mark.asyncio
+async def test_sync_pipeline_accepts_audit_closeout_run_summary_log(isolated_store):
+    state = store.PipelineState(
+        task_ref="multica:audit-closeout",
+        phase="closeout",
+        status="running",
+        evidence_profile="audit",
+        attempts={"closeout": 1},
+    )
+    store.save_state(state, event="effect_requested")
+    phases = {
+        "closeout": {
+            "id": "t_closeout",
+            "status": "done",
+        }
+    }
+
+    async def fetch_detail(_task_id: str):
+        return {
+            "latest_summary": None,
+            "comments": [],
+            "runs": [
+                {
+                    "summary": "Completed the audit closeout using recorded pipeline evidence.",
+                    "metadata": {"result": "audit path executed"},
+                }
+            ],
+        }
+
+    state = await store.sync_pipeline_from_chain(
+        "multica:audit-closeout",
+        phases,
+        fetch_detail,
+    )
+
+    assert state.phase == "retro"
+    assert state.status == "todo"
+    assert any(item.kind == "log" and item.passed is True for item in state.evidence)
+
+
+@pytest.mark.asyncio
 async def test_sync_pipeline_blocks_code_implement_without_pr(isolated_store):
     await store.bootstrap_state("multica:no-pr-code", issue={"metadata": {"evidence_profile": "code"}})
 

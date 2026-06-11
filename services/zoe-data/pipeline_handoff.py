@@ -155,6 +155,16 @@ def _reported_test_evidence_passed(raw: str, *, phase: PipelinePhase) -> bool:
     )
 
 
+def _first_run_summary(detail: dict[str, Any]) -> str:
+    for run in detail.get("runs") or []:
+        if not isinstance(run, dict):
+            continue
+        summary = str(run.get("summary") or "").strip()
+        if summary:
+            return summary
+    return ""
+
+
 def _structured_handoff_fields(detail: dict[str, Any]) -> dict[str, str]:
     """Extract explicit KEY=value equivalents from Kanban metadata."""
     out: dict[str, str] = {}
@@ -600,7 +610,7 @@ def evidence_from_handoff(
     )
 
     if phase == "closeout":
-        summary_raw = fields.get("SUMMARY") or fields.get("CLOSEOUT") or ""
+        summary_raw = fields.get("SUMMARY") or fields.get("CLOSEOUT") or _first_run_summary(detail)
         audit_only = (fields.get("AUDIT_ONLY") or "").strip().lower() in {"1", "true", "yes"}
         # Some audit/no-code closeout workers omit AUDIT_ONLY but still report an
         # audit-only summary and no PR. Treat only that explicit audit wording as inferred audit.
