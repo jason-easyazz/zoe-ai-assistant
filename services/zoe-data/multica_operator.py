@@ -21,7 +21,12 @@ async def find_issue(reference: str) -> dict[str, Any]:
     wanted = str(reference or "").strip().lower()
     if not wanted:
         return {}
-    issues = await client.list_issues()
+
+    try:
+        issues = await client.list_issues(limit=1000)
+    except TypeError:
+        issues = await client.list_issues()
+
     for issue in issues or []:
         if not isinstance(issue, dict):
             continue

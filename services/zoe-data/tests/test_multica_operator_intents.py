@@ -110,3 +110,29 @@ async def test_find_issue_accepts_empty_issue_response(monkeypatch):
     monkeypatch.setattr(multica_operator, "get_multica_client", lambda: EmptyClient())
 
     assert await multica_operator.find_issue("ZOE-1") == {}
+
+
+@pytest.mark.asyncio
+async def test_find_issue_fallback_requests_large_issue_page(monkeypatch):
+    calls = []
+
+    class Client:
+        async def list_issues(self, **kwargs):
+            calls.append(kwargs)
+            return [{"id": "issue-1", "identifier": "ZOE-1"}]
+
+    monkeypatch.setattr(multica_operator, "get_multica_client", lambda: Client())
+
+    assert await multica_operator.find_issue("ZOE-1") == {"id": "issue-1", "identifier": "ZOE-1"}
+    assert calls == [{"limit": 1000}]
+
+
+@pytest.mark.asyncio
+async def test_find_issue_fallback_supports_legacy_list_issues_client(monkeypatch):
+    class Client:
+        async def list_issues(self):
+            return [{"id": "issue-1", "identifier": "ZOE-1"}]
+
+    monkeypatch.setattr(multica_operator, "get_multica_client", lambda: Client())
+
+    assert await multica_operator.find_issue("issue-1") == {"id": "issue-1", "identifier": "ZOE-1"}

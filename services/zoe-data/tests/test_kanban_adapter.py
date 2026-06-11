@@ -5325,7 +5325,7 @@ def test_implement_body_includes_intent_gap_fast_path():
     assert "Open-domain Q&A / creative" in body
     assert "do not grep `_CALCULATE_`, `_execute_`" in body
     assert "`Tell me a joke.`, `Tell me a joke`, and `Tell me another joke.`" in body
-    assert "/home/zoe/bin/zoe_apply_intent_gap_contract joke --repo-root ." in body
+    assert "python3 ./scripts/maintenance/zoe_apply_intent_gap_contract.py joke --repo-root ." in body
     assert "python3 -m py_compile services/zoe-data/intent_router.py" in body
     assert "services/zoe-data/tests/test_intent_open_domain.py" in body
     assert "Intent(\"extend_capability\", {\"raw\": <original text>})" in body
@@ -5370,7 +5370,7 @@ def test_implement_body_includes_bare_say_exactly_intent_gap_contract():
     assert "INTENT-GAP IMPLEMENT FAST PATH" in body
     assert "Concrete edit contract for this exact-repeat gap" in body
     assert "your NEXT tool call must be the terminal command" in body
-    assert "cd <workspace_path> && /home/zoe/bin/zoe_apply_intent_gap_contract say_exactly --repo-root ." in body
+    assert "cd <workspace_path> && python3 ./scripts/maintenance/zoe_apply_intent_gap_contract.py say_exactly --repo-root ." in body
     assert "--run-focused-checks --kanban-task <task_id_from_kanban_show>" in body
     assert "BLOCKER=INTENT_GAP_HELPER_UNAVAILABLE" in body
     assert body.index("your NEXT tool call must be the terminal command") < body.index(
@@ -5393,7 +5393,7 @@ def test_implement_body_includes_say_exactly_intent_gap_contract():
     assert "INTENT-GAP IMPLEMENT FAST PATH" in body
     assert "Concrete edit contract for this exact-repeat gap" in body
     assert "Say exactly: Zoe chat integration ok" in body
-    assert "cd <workspace_path> && /home/zoe/bin/zoe_apply_intent_gap_contract say_exactly --repo-root ." in body
+    assert "cd <workspace_path> && python3 ./scripts/maintenance/zoe_apply_intent_gap_contract.py say_exactly --repo-root ." in body
     assert "--run-focused-checks --kanban-task <task_id_from_kanban_show>" in body
     assert "terminal_action: kanban_block:ALREADY_COVERED" in body
     assert "Never run this from the live" in body
@@ -5436,7 +5436,7 @@ def test_implement_revision_body_includes_intent_gap_fast_path():
     assert "Open-domain Q&A / creative" in body
     assert "do not grep `_CALCULATE_`, `_execute_`" in body
     assert "`Tell me a joke.`, `Tell me a joke`, and `Tell me another joke.`" in body
-    assert "/home/zoe/bin/zoe_apply_intent_gap_contract joke --repo-root ." in body
+    assert "python3 ./scripts/maintenance/zoe_apply_intent_gap_contract.py joke --repo-root ." in body
     assert "python3 -m py_compile services/zoe-data/intent_router.py" in body
     assert "services/zoe-data/tests/test_intent_open_domain.py" in body
     assert "Intent(\"extend_capability\", {\"raw\": <original text>})" in body

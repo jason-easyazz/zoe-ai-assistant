@@ -178,7 +178,7 @@ def _ticket_metadata(issue: dict | None = None) -> dict[str, Any]:
             parsed = parse_ticket_block(issue.get("description") or "")
             if isinstance(parsed, dict):
                 meta = {**parsed, **meta}
-        except (ImportError, TypeError, ValueError) as exc:
+        except (AttributeError, ImportError, KeyError, TypeError, ValueError) as exc:
             logger.debug("_ticket_metadata: parse_ticket_block failed: %s", exc)
     issue["_zoe_ticket_metadata_cache"] = dict(meta)
     return meta
@@ -523,7 +523,7 @@ def _intent_gap_implement_hint(issue: dict | None = None, *, phase: str = "imple
             " `Say exactly: Zoe chat integration ok` routes to `extend_capability` through"
             " the existing open-domain branch. Preferred deterministic path: after `kanban_show`,"
             " your NEXT tool call must be the terminal command"
-            " `cd <workspace_path> && /home/zoe/bin/zoe_apply_intent_gap_contract say_exactly --repo-root ."
+            " `cd <workspace_path> && python3 ./scripts/maintenance/zoe_apply_intent_gap_contract.py say_exactly --repo-root ."
             " --run-focused-checks --kanban-task <task_id_from_kanban_show>`"
             " using the exact task `workspace_path`. Do not narrate, wait, plan, or heartbeat first."
             " If you cannot run that exact helper as the next tool call, call `kanban_block`"
@@ -546,7 +546,7 @@ def _intent_gap_implement_hint(issue: dict | None = None, *, phase: str = "imple
             " `Tell me a joke.`, `Tell me a joke`, and `Tell me another joke.` route"
             " to `extend_capability` through the existing open-domain/creative branch."
             " Preferred deterministic path: from the repo root, run"
-            " `/home/zoe/bin/zoe_apply_intent_gap_contract joke --repo-root .`, then"
+            " `python3 ./scripts/maintenance/zoe_apply_intent_gap_contract.py joke --repo-root .`, then"
             " immediately run `python3 -m py_compile services/zoe-data/intent_router.py`"
             " and `PYTHONPATH=services/zoe-data python3 -m pytest -q"
             " services/zoe-data/tests/test_intent_open_domain.py`."
@@ -1423,7 +1423,7 @@ class KanbanAdapter:
                         "reason": "current issue plan no longer includes inactive journal phase",
                     },
                 )
-            except (RuntimeError, TypeError, ValueError) as exc:
+            except (AttributeError, KeyError, RuntimeError, TypeError, ValueError) as exc:
                 logger.warning(
                     "kanban_adapter: plan_adjusted save skipped for %s: %s; "
                     "phase adjustment will still be applied via effect_requested",
@@ -1550,7 +1550,7 @@ class KanbanAdapter:
                     event="effect_requested",
                     extra={"phase": phase, "task_id": task_id},
                 )
-            except (RuntimeError, TypeError, ValueError) as exc:
+            except (AttributeError, KeyError, RuntimeError, TypeError, ValueError) as exc:
                 logger.warning("kanban_adapter: effect_requested save skipped for %s: %s", external_ref, exc)
 
         logger.info(
@@ -1807,7 +1807,7 @@ class KanbanAdapter:
             elif pipeline_info.get("terminal_block"):
                 agg = "blocked"
                 blocker = blocker or f"pipeline terminal block at {current_phase}"
-        except (RuntimeError, TypeError, ValueError) as exc:
+        except (AttributeError, KeyError, RuntimeError, TypeError, ValueError) as exc:
             logger.warning("kanban_adapter: pipeline sync failed for %s: %s", external_ref, exc)
             pipeline_info = {
                 "tracked": False,
