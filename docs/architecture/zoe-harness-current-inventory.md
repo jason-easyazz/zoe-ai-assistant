@@ -28,7 +28,7 @@ Source basis:
 | Memory API | `services/zoe-data/routers/memories.py` | Memory list, review, search, export, opt-out, and forget endpoints. | Active. |
 | People/notes/journal | `services/zoe-data/routers/people.py`, `services/zoe-data/routers/notes.py`, `services/zoe-data/routers/journal.py` | Domain routers that can write derived memories through `MemoryService`. | Active. |
 | Multica | `services/zoe-data/multica_*.py`, `services/zoe-data/pipeline_*.py` | Governed execution, phase lanes, evidence gates, and proposal workflow. | Active. |
-| Greptile/Greploop | `services/zoe-data/greptile_client.py`, `services/zoe-data/greploop_guard.py` | PR review state and bounded repair loop support. | Active. |
+| Greptile/Greploop | `services/zoe-data/greptile_client.py`, `services/zoe-data/greploop_guard.py` | PR review state and bounded repair loop support. | Active; pathless PR-summary comments are counted as summaries, not repair-packet findings. |
 | Hermes/OpenClaw escalation | `services/zoe-data/zoe_agent.py`, `services/zoe-data/routers/openclaw.py`, `services/zoe-data/openclaw_ws.py` | Escalation and execution surfaces. | Active; Hermes preferred by operating guide. |
 | MCP server | `services/zoe-data/mcp_server.py` | Tool bridge including memory, Graphify, and operational tools. | Active; high surface area. |
 | Graphify outputs | `graphify-out/` | Code/system graph intelligence. | Refreshed from Pi harness merge source commit `a3fe849c`; rerun after substantial code or architecture changes. |
@@ -137,7 +137,7 @@ Important routing notes:
 | MCP memory tools | `services/zoe-data/mcp_server.py` | Store/search/review/export/delete memory operations. | Uses `MemoryService`. | High-risk bridge; must enforce user/scope/evidence before self-evolution writes. |
 | OpenClaw context | `services/zoe-data/openclaw_ws.py` | Supplies MemPalace facts to OpenClaw sessions. | Gateway session per user. | Escalation packets should carry compact cited memory, not raw broad dumps. |
 | Hindsight sidecar | `services/zoe-data/hindsight_memory.py` | Optional offline recall/retain sidecar client. | Disabled unless enabled; offline-only config guard. | Not measured live; not wired into production chat. |
-| Hindsight retain candidates | `services/zoe-data/hindsight_retain_candidates.py` | Converts events into pending `MemoryService` rows. | Pending candidate path. | Needs Multica/admission approval before trusted memory. |
+| Hindsight retain candidates | `services/zoe-data/hindsight_retain_candidates.py`, `scripts/maintenance/capability_profile_edit_outcome_workflow.py` | Converts events into pending `MemoryService` rows and can execute admitted profile-edit outcome retain plans on explicit operator request. | Pending candidate path plus admitted Hindsight execution gate. | Needs Multica/admission approval before trusted memory; production chat remains unwired. |
 
 ## Execution And Self-Evolution Surfaces
 
@@ -148,7 +148,7 @@ Important routing notes:
 | Worktree bootstrap | `services/zoe-data/worktree_bootstrap.py` | Branch/worktree setup for PR work. | Should remain the default execution setup for code-producing evolution proposals. |
 | Kanban adapter | `services/zoe-data/executors/kanban_adapter.py` | Hermes/Graphify/scout/implement/review lane prompting. | Needs inventory-backed cleanup boundaries before main-engine refactors. |
 | Greptile client | `services/zoe-data/greptile_client.py` | PR review status/comments. | Active and required for review loop. |
-| Greploop guard | `services/zoe-data/greploop_guard.py` | Bounded repair-loop state. | Active and required for small PR repair loops. |
+| Greploop guard | `services/zoe-data/greploop_guard.py` | Bounded repair-loop state. | Active and required for small PR repair loops; filters pathless Greptile summaries before packet selection. |
 | Hermes escalation | `services/zoe-data/zoe_agent.py` | Preferred planning/code/reasoning escalation path. | Needs structured proposal evidence before autonomous execution. |
 | OpenClaw escalation | `services/zoe-data/zoe_agent.py`, `services/zoe-data/routers/openclaw.py`, `services/zoe-data/openclaw_ws.py` | Browser/manual/fallback execution surface. | Should stay explicit and measurable, not hidden inside memory or chat cleanup. |
 
