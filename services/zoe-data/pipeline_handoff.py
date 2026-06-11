@@ -653,7 +653,7 @@ def evidence_from_handoff(
             metadata["follow_up"] = follow_up
         items.append(EvidenceItem(kind="log", summary=retro_raw[:500], passed=True, metadata=metadata))
 
-    pr_url = _usable_pr_url(fields.get("PR_URL") or ticket_pr_url)
+    pr_url = _usable_pr_url(fields.get("PR_URL")) or _usable_pr_url(ticket_pr_url)
     if pr_url and phase in {"implement", "verify", "closeout"}:
         items.append(EvidenceItem(kind="pr", summary=pr_url[:500], artifact=pr_url, passed=True))
 

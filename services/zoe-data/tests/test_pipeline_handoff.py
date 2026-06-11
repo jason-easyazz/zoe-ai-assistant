@@ -976,3 +976,19 @@ PR_URL=""", "comments": []}
     items = evidence_from_handoff("closeout", detail, skills=())
 
     assert not any(item.kind == "log" for item in items)
+
+
+
+def test_closeout_placeholder_pr_url_does_not_shadow_ticket_pr_url():
+    detail = {
+        "latest_summary": "PR_URL=<url>\nSUMMARY=closeout template text",
+        "comments": [],
+        "task": {
+            "body": "```zoe-ticket\n{\"pr_url\": \"https://github.com/o/r/pull/99\"}\n```"
+        },
+    }
+
+    items = evidence_from_handoff("closeout", detail, skills=())
+
+    pr = next(item for item in items if item.kind == "pr")
+    assert pr.artifact == "https://github.com/o/r/pull/99"

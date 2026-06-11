@@ -738,6 +738,8 @@ async def lifespan(app: FastAPI):
                         # phase is ready; terminal/fingerprint blocks remain operator-visible.
                         if _wh_dispatched < _wh_limit:
                             for _blocked in blocked_issues or []:
+                                if str(_blocked.get("id") or "") in _wh_dispatched_ids:
+                                    continue
                                 await _maybe_dispatch_hermes_issue(_blocked, from_todo=False)
                                 if _wh_dispatched >= _wh_limit:
                                     break
