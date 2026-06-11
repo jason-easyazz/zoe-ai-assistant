@@ -45,8 +45,11 @@ def _latest_result(run_dir: Path) -> dict[str, Any]:
     }
 
 
-def _run_summary(run_dir: Path) -> dict[str, Any]:
-    stat = run_dir.stat()
+def _run_summary(run_dir: Path) -> dict[str, Any] | None:
+    try:
+        stat = run_dir.stat()
+    except OSError:
+        return None
     summary: dict[str, Any] = {
         "id": run_dir.name,
         "path": str(run_dir.relative_to(_repo_root())) if run_dir.is_relative_to(_repo_root()) else str(run_dir),
@@ -68,7 +71,8 @@ async def autoresearch_status() -> dict[str, Any]:
     except OSError:
         return {"ok": False, "surface": "autoresearch", "status": "unavailable", "run_count": 0, "runs": []}
 
-    runs = sorted((_run_summary(p) for p in run_dirs), key=lambda row: row["updated_at"], reverse=True)
+    summaries = (_run_summary(p) for p in run_dirs)
+    runs = sorted((row for row in summaries if row is not None), key=lambda row: row["updated_at"], reverse=True)
     latest = runs[0] if runs else None
     return {
         "ok": True,

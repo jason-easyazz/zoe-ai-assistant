@@ -32,6 +32,23 @@ def _assigned_literal(name: str):
     raise AssertionError(f"{name} assignment not found")
 
 
+
+def _function_literal_assignment(function_name: str, assignment_name: str):
+    for node in _module().body:
+        if not isinstance(node, ast.FunctionDef) or node.name != function_name:
+            continue
+        for child in ast.walk(node):
+            if not isinstance(child, ast.Assign):
+                continue
+            if any(isinstance(target, ast.Name) and target.id == assignment_name for target in child.targets):
+                try:
+                    return ast.literal_eval(child.value)
+                except (ValueError, SyntaxError) as exc:
+                    raise AssertionError(
+                        f"{function_name}.{assignment_name} must remain a literal contract"
+                    ) from exc
+    raise AssertionError(f"{assignment_name} assignment not found in {function_name}")
+
 def test_managed_agents_keep_provider_specific_runtime_contract():
     agent_defs = _assigned_literal("_AGENT_DEFS")
     providers = {agent["name"]: agent.get("runtime_provider") for agent in agent_defs}
@@ -79,13 +96,14 @@ def test_autoresearch_skill_agent_and_scope_are_managed():
     assert assignments["Auto Research Engineer"] == ["Auto Research Engineer"]
     assert "Auto Research Engineer" in assignments["Hermes"]
 
-    source = _source()
-    squad_block = source[source.index("squads_to_create = ["):source.index("managed_squad_names =")]
-    assert '"name": "Autoresearch Lab"' in squad_block
-    assert '"leader": "Auto Research Engineer"' in squad_block
-    assert '"members": ["Hermes", "Self-Improvement Agent"]' in squad_block
-    assert '"name": "Research & Planning Squad"' in squad_block
-    assert '"members": ["Zoe Core", "Auto Research Engineer"]' in squad_block
+    squads = {
+        squad["name"]: squad
+        for squad in _function_literal_assignment("step_h_create_squads", "squads_to_create")
+    }
+    assert squads["Autoresearch Lab"]["leader"] == "Auto Research Engineer"
+    assert squads["Autoresearch Lab"]["members"] == ["Hermes", "Self-Improvement Agent"]
+    assert "locked" in squads["Autoresearch Lab"]["instructions"]
+    assert squads["Research & Planning Squad"]["members"] == ["Zoe Core", "Auto Research Engineer"]
 
 
 def test_managed_autopilots_keep_execution_modes_and_templates():

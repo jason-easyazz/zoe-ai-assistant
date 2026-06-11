@@ -55,3 +55,29 @@ def test_autoresearch_status_reports_latest_results(tmp_path, monkeypatch):
     assert data["latest"]["latest_round"] == "2"
     assert data["latest"]["latest_after"] == "12"
     assert data["runs"][0]["latest_decision"] == "kept"
+
+
+def test_autoresearch_status_skips_run_removed_mid_request(tmp_path, monkeypatch):
+    from routers import autoresearch
+
+    run_dir = tmp_path / "vanishing-run"
+    run_dir.mkdir()
+    monkeypatch.setenv("ZOE_AUTORESEARCH_RUN_ROOT", str(tmp_path))
+
+    original_summary = autoresearch._run_summary
+
+    def _vanish(path):
+        path.rmdir()
+        return original_summary(path)
+
+    monkeypatch.setattr(autoresearch, "_run_summary", _vanish)
+    app = FastAPI()
+    app.include_router(autoresearch.router)
+
+    resp = TestClient(app).get("/api/autoresearch/status")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["status"] == "idle"
+    assert data["run_count"] == 0

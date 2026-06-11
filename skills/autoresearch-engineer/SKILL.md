@@ -83,8 +83,8 @@ Use a fresh branch for every run or fix. Branch names should begin with `autores
 
 Keep a result log outside committed source unless the human explicitly asks for a tracked report. Preferred names:
 
-- `results.tsv` for experiment rounds, untracked by Git.
-- `run.log` for the most recent scorer output, untracked by Git.
+- `results.tsv` for experiment rounds, untracked by Git by default via `**/results.tsv`.
+- `run.log` for the most recent scorer output, untracked by Git via `*.log`.
 
 `results.tsv` columns:
 
