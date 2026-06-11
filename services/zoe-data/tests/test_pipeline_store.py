@@ -572,6 +572,7 @@ async def test_sync_pipeline_accepts_audit_closeout_run_summary_log(isolated_sto
                     "metadata": {"result": "audit path executed"},
                 }
             ],
+            "log_tail": "PR_URL=<url>\nSUMMARY=template placeholder, not a real PR",
         }
 
     state = await store.sync_pipeline_from_chain(
@@ -583,6 +584,7 @@ async def test_sync_pipeline_accepts_audit_closeout_run_summary_log(isolated_sto
     assert state.phase == "retro"
     assert state.status == "todo"
     assert any(item.kind == "log" and item.passed is True for item in state.evidence)
+    assert not any(item.kind == "pr" for item in state.evidence)
 
 
 @pytest.mark.asyncio
