@@ -28,10 +28,10 @@ async def get_skybridge_status():
         "entrypoint": "/touch/skybridge.html",
         "version": 1,
         "card_contract": {
-            "status": "wired_for_calendar_weather",
+            "status": "wired_for_calendar_weather_lists_people",
             "supported_major": 1,
-            "data_domains": ["calendar", "weather"],
-            "voice_ws_domains": ["calendar", "weather"],
+            "data_domains": ["calendar", "weather", "lists", "people"],
+            "voice_ws_domains": ["calendar", "weather", "lists", "people"],
             "client_capability_cards": True,
         },
         "transports": {
@@ -41,7 +41,7 @@ async def get_skybridge_status():
         "capabilities": {
             "pages": 15,
             "settings": 22,
-            "dynamic_cards": "calendar_weather_data_cards",
+            "dynamic_cards": "calendar_weather_lists_people_data_cards",
         },
     }
 

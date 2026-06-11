@@ -186,6 +186,7 @@ def test_skybridge_auth_and_voice_bus_contracts_are_wired():
 def test_skybridge_renderer_supports_real_data_cards():
     renderer = read(UI / "js" / "skybridge-renderer.js")
     html = read(UI / "skybridge.html")
+    data_widgets_css = read(UI / "css" / "skybridge-data-widgets.css")
 
     assert "renderCalendar(props)" in renderer
     assert "renderWeather(props)" in renderer
@@ -215,9 +216,23 @@ def test_skybridge_renderer_supports_real_data_cards():
     assert "props.source === 'calendar_show'" in renderer
     assert "props.source === 'weather_current'" in renderer
     assert "props.source === 'weather_forecast'" in renderer
+    assert "props.source === 'list_show'" in renderer
+    assert "props.source === 'people_directory'" in renderer
+    assert "props.source === 'person_profile'" in renderer
+    assert "renderZoeList(props)" in renderer
+    assert "renderPeopleDirectory(props)" in renderer
+    assert "renderPersonProfile(props)" in renderer
+    assert "sky-list-scene" in renderer
+    assert "sky-people-scene" in renderer
+    assert "sky-profile-scene" in renderer
     assert "sky-event-row" in html
     assert "sky-weather-hour-tile" in html
     assert "sky-weather-day-row" in html
+    assert "/touch/css/skybridge-data-widgets.css?v=skybridge-lists-people-1" in html
+    assert "skybridge-lists-people-widgets" not in html
+    assert "sky-list-item-row" in data_widgets_css
+    assert "sky-person-row" in data_widgets_css
+    assert "sky-profile-health" in data_widgets_css
     assert "sky-weather-scene" in html
     assert "weather-sunny" in html
     assert "skybridge-runtime-overrides" in html

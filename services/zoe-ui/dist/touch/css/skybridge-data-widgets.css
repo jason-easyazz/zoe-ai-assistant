@@ -1,0 +1,363 @@
+body:not(.sky-empty) .zoe-list-card {
+    background:
+        radial-gradient(circle at 18% 8%, rgba(251,146,60,0.24), transparent 34%),
+        radial-gradient(circle at 92% 20%, rgba(34,197,94,0.18), transparent 32%),
+        linear-gradient(145deg, rgba(18,22,30,0.96), rgba(8,10,16,0.98)) !important;
+    border-color: rgba(255,255,255,0.15) !important;
+}
+
+body:not(.sky-empty) .zoe-list-card.work {
+    background:
+        radial-gradient(circle at 16% 8%, rgba(59,130,246,0.24), transparent 34%),
+        radial-gradient(circle at 92% 20%, rgba(90,224,224,0.14), transparent 32%),
+        linear-gradient(145deg, rgba(17,24,39,0.96), rgba(7,11,19,0.98)) !important;
+}
+
+body:not(.sky-empty) .zoe-list-card.personal {
+    background:
+        radial-gradient(circle at 16% 8%, rgba(168,85,247,0.24), transparent 34%),
+        radial-gradient(circle at 92% 20%, rgba(236,72,153,0.16), transparent 32%),
+        linear-gradient(145deg, rgba(24,18,34,0.96), rgba(10,8,16,0.98)) !important;
+}
+
+body:not(.sky-empty) .sky-list-scene,
+body:not(.sky-empty) .sky-people-scene,
+body:not(.sky-empty) .sky-profile-scene {
+    display: grid;
+    gap: 18px;
+    min-height: 100%;
+}
+
+body:not(.sky-empty) .sky-list-hero,
+body:not(.sky-empty) .sky-people-hero,
+body:not(.sky-empty) .sky-profile-hero {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 18px;
+}
+
+body:not(.sky-empty) .sky-profile-hero {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+body:not(.sky-empty) .sky-list-hero span,
+body:not(.sky-empty) .sky-people-hero span,
+body:not(.sky-empty) .sky-profile-title span {
+    display: block;
+    color: rgba(255,255,255,0.58);
+    font-size: 0.76rem;
+    font-weight: 800;
+    letter-spacing: 0;
+    text-transform: uppercase;
+}
+
+body:not(.sky-empty) .sky-list-hero h3,
+body:not(.sky-empty) .sky-people-hero h3,
+body:not(.sky-empty) .sky-profile-title h3 {
+    margin: 4px 0 0;
+    color: white;
+    font-size: clamp(1.7rem, 3vw, 3.2rem);
+    line-height: 0.98;
+    letter-spacing: 0;
+}
+
+body:not(.sky-empty) .sky-list-rings,
+body:not(.sky-empty) .sky-people-count {
+    width: 96px;
+    height: 96px;
+    border-radius: 32px;
+    display: grid;
+    place-items: center;
+    background: linear-gradient(180deg, rgba(255,255,255,0.18), rgba(255,255,255,0.07));
+    border: 1px solid rgba(255,255,255,0.18);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.18), 0 18px 45px rgba(0,0,0,0.24);
+}
+
+body:not(.sky-empty) .sky-list-rings strong,
+body:not(.sky-empty) .sky-people-count strong {
+    color: white;
+    font-size: 2.05rem;
+    line-height: 1;
+}
+
+body:not(.sky-empty) .sky-list-rings span,
+body:not(.sky-empty) .sky-people-count span {
+    color: rgba(255,255,255,0.58);
+    font-size: 0.76rem;
+    font-weight: 800;
+}
+
+body:not(.sky-empty) .sky-list-stats {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+}
+
+body:not(.sky-empty) .sky-list-stats div,
+body:not(.sky-empty) .sky-profile-grid div {
+    border-radius: 18px;
+    padding: 12px 14px;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.12);
+}
+
+body:not(.sky-empty) .sky-list-stats strong,
+body:not(.sky-empty) .sky-profile-grid strong {
+    display: block;
+    color: white;
+    font-size: 1rem;
+    overflow-wrap: anywhere;
+}
+
+body:not(.sky-empty) .sky-list-stats span,
+body:not(.sky-empty) .sky-profile-grid span {
+    display: block;
+    color: rgba(255,255,255,0.55);
+    font-size: 0.74rem;
+    font-weight: 800;
+    text-transform: uppercase;
+}
+
+body:not(.sky-empty) .sky-list-items,
+body:not(.sky-empty) .sky-people-list {
+    display: grid;
+    gap: 10px;
+}
+
+body:not(.sky-empty) .sky-list-item-row,
+body:not(.sky-empty) .sky-list-overview-row,
+body:not(.sky-empty) .sky-person-row {
+    display: grid;
+    align-items: center;
+    gap: 12px;
+    border-radius: 20px;
+    padding: 12px;
+    background: rgba(255,255,255,0.085);
+    border: 1px solid rgba(255,255,255,0.12);
+    min-width: 0;
+}
+
+body:not(.sky-empty) .sky-list-item-row {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+body:not(.sky-empty) .sky-person-row {
+    grid-template-columns: auto minmax(0, 1fr) minmax(72px, 0.22fr);
+}
+
+body:not(.sky-empty) .sky-list-overview-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    border-left: 4px solid rgba(251,146,60,0.9);
+}
+
+body:not(.sky-empty) .sky-list-overview-row.work { border-left-color: rgba(59,130,246,0.9); }
+body:not(.sky-empty) .sky-list-overview-row.personal { border-left-color: rgba(168,85,247,0.9); }
+body:not(.sky-empty) .sky-list-overview-row.tasks { border-left-color: rgba(90,224,224,0.9); }
+
+body:not(.sky-empty) .sky-list-check {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    color: white;
+    font-size: 0.82rem;
+    font-weight: 900;
+    border: 2px solid rgba(255,255,255,0.45);
+    background: rgba(255,255,255,0.06);
+}
+
+body:not(.sky-empty) .sky-list-item-row.is-done .sky-list-check {
+    background: linear-gradient(135deg, #34D399, #5AE0E0);
+    border-color: transparent;
+}
+
+body:not(.sky-empty) .sky-list-item-row.is-done .sky-list-item-main strong {
+    color: rgba(255,255,255,0.58);
+    text-decoration: line-through;
+}
+
+body:not(.sky-empty) .sky-list-item-main,
+body:not(.sky-empty) .sky-person-main {
+    min-width: 0;
+}
+
+body:not(.sky-empty) .sky-list-item-main strong,
+body:not(.sky-empty) .sky-list-overview-row strong,
+body:not(.sky-empty) .sky-person-main strong {
+    display: block;
+    color: white;
+    font-size: 1rem;
+    overflow-wrap: anywhere;
+}
+
+body:not(.sky-empty) .sky-list-item-main em,
+body:not(.sky-empty) .sky-list-overview-row em,
+body:not(.sky-empty) .sky-person-main em {
+    display: block;
+    color: rgba(255,255,255,0.55);
+    font-style: normal;
+    font-size: 0.82rem;
+    margin-top: 3px;
+    overflow-wrap: anywhere;
+}
+
+body:not(.sky-empty) .sky-list-item-meta b,
+body:not(.sky-empty) .sky-list-item-meta span,
+body:not(.sky-empty) .sky-list-overview-row > span,
+body:not(.sky-empty) .sky-people-filter-row span {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    padding: 6px 9px;
+    color: rgba(255,255,255,0.78);
+    background: rgba(255,255,255,0.1);
+    font-size: 0.74rem;
+    font-weight: 800;
+}
+
+body:not(.sky-empty) .people-card,
+body:not(.sky-empty) .person-profile-card {
+    background:
+        radial-gradient(circle at 18% 10%, rgba(90,224,224,0.22), transparent 34%),
+        radial-gradient(circle at 90% 18%, rgba(168,85,247,0.18), transparent 32%),
+        linear-gradient(145deg, rgba(13,20,25,0.96), rgba(8,9,15,0.98)) !important;
+}
+
+body:not(.sky-empty) .sky-people-filter-row {
+    min-height: 30px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+body:not(.sky-empty) .sky-person-avatar,
+body:not(.sky-empty) .sky-profile-avatar {
+    display: grid;
+    place-items: center;
+    color: white;
+    font-weight: 900;
+    background:
+        linear-gradient(145deg, rgba(90,224,224,0.9), rgba(168,85,247,0.76)),
+        rgba(255,255,255,0.08);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.28), 0 14px 35px rgba(90,224,224,0.14);
+}
+
+body:not(.sky-empty) .sky-person-avatar {
+    width: 46px;
+    height: 46px;
+    border-radius: 16px;
+    font-size: 0.95rem;
+}
+
+body:not(.sky-empty) .sky-profile-avatar {
+    width: 92px;
+    height: 92px;
+    border-radius: 32px;
+    font-size: 1.8rem;
+}
+
+body:not(.sky-empty) .sky-person-health {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+}
+
+body:not(.sky-empty) .sky-person-health::before {
+    content: "";
+    grid-column: 1;
+    grid-row: 1;
+    height: 7px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.12);
+}
+
+body:not(.sky-empty) .sky-person-health i {
+    grid-column: 1;
+    grid-row: 1;
+    height: 7px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #5AE0E0, #A78BFA);
+}
+
+body:not(.sky-empty) .sky-person-health span {
+    color: rgba(255,255,255,0.62);
+    font-size: 0.74rem;
+    font-weight: 800;
+}
+
+body:not(.sky-empty) .sky-profile-health {
+    position: relative;
+    width: 78px;
+    height: 108px;
+    border-radius: 28px;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.12);
+}
+
+body:not(.sky-empty) .sky-profile-health i {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: linear-gradient(180deg, rgba(90,224,224,0.78), rgba(167,139,250,0.78));
+    z-index: 0;
+}
+
+body:not(.sky-empty) .sky-profile-health strong,
+body:not(.sky-empty) .sky-profile-health span {
+    position: relative;
+    z-index: 1;
+    color: white;
+}
+
+body:not(.sky-empty) .sky-profile-health strong {
+    font-size: 1.5rem;
+    line-height: 1;
+}
+
+body:not(.sky-empty) .sky-profile-health span {
+    font-size: 0.68rem;
+    font-weight: 800;
+}
+
+body:not(.sky-empty) .sky-profile-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+}
+
+body:not(.sky-empty) .sky-profile-notes {
+    margin: 0;
+    border-radius: 22px;
+    padding: 16px 18px;
+    color: rgba(255,255,255,0.82);
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.12);
+    line-height: 1.45;
+}
+
+@media (max-width: 780px) {
+    body:not(.sky-empty) .sky-list-hero,
+    body:not(.sky-empty) .sky-people-hero,
+    body:not(.sky-empty) .sky-profile-hero {
+        grid-template-columns: 1fr;
+    }
+
+    body:not(.sky-empty) .sky-person-row {
+        grid-template-columns: auto minmax(0, 1fr);
+    }
+
+    body:not(.sky-empty) .sky-person-health {
+        grid-column: 1 / -1;
+    }
+
+    body:not(.sky-empty) .sky-profile-grid {
+        grid-template-columns: 1fr;
+    }
+}

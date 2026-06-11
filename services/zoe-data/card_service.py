@@ -117,15 +117,59 @@ def list_items(slots: dict[str, Any] | None = None) -> list[str]:
 def build_shopping_list_content(slots: dict[str, Any] | None = None) -> dict[str, Any]:
     """Build canonical content for a shopping/list view card."""
     slots = slots or {}
-    list_name = _text(slots.get("list_name") or slots.get("list_type"), "Shopping")
-    items = list_items(slots)
+    list_name = _text(slots.get("list_name") or slots.get("name") or slots.get("list_type"), "Shopping")
+    raw_items = slots.get("items") or []
+    items = raw_items if isinstance(raw_items, list) else list_items(slots)
+    open_count = sum(1 for item in items if not (isinstance(item, dict) and item.get("completed")))
+    completed_count = max(0, len(items) - open_count)
     return {
         "title": f"{list_name} List",
+        "summary": _text(slots.get("summary"), "Showing list"),
+        "list_id": _text(slots.get("list_id") or slots.get("id"), "list"),
         "list_name": list_name,
+        "list_type": _text(slots.get("list_type"), "shopping"),
+        "lists": slots.get("lists") or [],
         "items": items,
         "item_count": len(items),
+        "open_count": open_count,
+        "completed_count": completed_count,
         "view": "list",
         "source": "list_show",
+    }
+
+
+def build_people_directory_content(slots: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Build canonical content for people directory/search cards."""
+    slots = slots or {}
+    people = slots.get("people") or []
+    if not isinstance(people, list):
+        people = [people]
+    query = _text(slots.get("query"))
+    title = _text(slots.get("title"), "People")
+    return {
+        "title": title,
+        "summary": _text(slots.get("summary"), "Showing people"),
+        "source": "people_directory",
+        "view": "directory",
+        "query": query,
+        "context": _text(slots.get("context")),
+        "circle": _text(slots.get("circle")),
+        "people": people,
+        "count": int(slots.get("count") if slots.get("count") is not None else len(people)),
+    }
+
+
+def build_person_profile_content(slots: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Build canonical content for a single person profile card."""
+    slots = slots or {}
+    person = slots.get("person") or {}
+    name = _text(person.get("name") or slots.get("name"), "Person")
+    return {
+        "title": name,
+        "summary": _text(slots.get("summary"), "Showing person"),
+        "source": "person_profile",
+        "view": "profile",
+        "person": person,
     }
 
 
@@ -283,6 +327,20 @@ class CardService:
             producer="zoe-shopping",
         )
 
+    def build_people_directory_card(self, slots: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self.build_card(
+            CardType.GENERIC.value,
+            build_people_directory_content(slots),
+            producer="zoe-people",
+        )
+
+    def build_person_profile_card(self, slots: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self.build_card(
+            CardType.GENERIC.value,
+            build_person_profile_content(slots),
+            producer="zoe-people",
+        )
+
     def build_shopping_item_editor_card(self, slots: dict[str, Any] | None = None) -> dict[str, Any]:
         return self.build_card(
             CardType.ACTION_FORM.value,
@@ -300,3 +358,5 @@ card_service.register_domain_builder("weather_current", card_service.build_weath
 card_service.register_domain_builder("weather_forecast", card_service.build_weather_forecast_card)
 card_service.register_domain_builder("shopping_list", card_service.build_shopping_list_card)
 card_service.register_domain_builder("shopping_item_editor", card_service.build_shopping_item_editor_card)
+card_service.register_domain_builder("people_directory", card_service.build_people_directory_card)
+card_service.register_domain_builder("person_profile", card_service.build_person_profile_card)
