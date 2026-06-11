@@ -23,7 +23,7 @@ def test_report_module_self_loads_env_on_import(monkeypatch, tmp_path):
     env_file.write_text("MULTICA_BASE_URL=http://fixture:8080\n", encoding="utf-8")
     monkeypatch.setattr(runtime_env, "_ENV_FILES", (str(env_file),))
     monkeypatch.delenv("MULTICA_BASE_URL", raising=False)
-    runtime_env._ENV_BOOTSTRAPPED = False
+    monkeypatch.setattr(runtime_env, "_ENV_BOOTSTRAPPED", False)
 
     _module()
 

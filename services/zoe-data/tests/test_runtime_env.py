@@ -21,7 +21,7 @@ def test_real_environment_overrides_env_file(monkeypatch, tmp_path):
     env_file.write_text("MULTICA_BASE_URL=http://fixture:8080\n", encoding="utf-8")
     monkeypatch.setattr(runtime_env, "_ENV_FILES", (str(env_file),))
     monkeypatch.setenv("MULTICA_BASE_URL", "http://real:9090")
-    runtime_env._ENV_BOOTSTRAPPED = False
+    monkeypatch.setattr(runtime_env, "_ENV_BOOTSTRAPPED", False)
 
     runtime_env.bootstrap_runtime_env()
 
