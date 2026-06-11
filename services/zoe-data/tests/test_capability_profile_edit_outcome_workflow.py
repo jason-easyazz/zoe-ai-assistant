@@ -303,11 +303,20 @@ def test_main_execute_hindsight_returns_0_for_successful_retain(tmp_path, capsys
     assert payload["hindsight_execution"]["reason"] == "retained"
 
 
-def test_main_execute_hindsight_respects_disabled_default(tmp_path, capsys, monkeypatch):
-    monkeypatch.setenv("HINDSIGHT_ENABLED", "false")
+def test_main_execute_hindsight_surfaces_disabled_execution(tmp_path, capsys, monkeypatch):
     pr_plan = _write_json(tmp_path / "pr-plan.json", _pr_edit_plan())
     trace = _write_json(tmp_path / "trace.json", _trace())
 
+    async def fake_execute(plan):
+        assert plan.allowed_to_admit_memory is True
+        return {
+            "attempted": False,
+            "retained": False,
+            "reason": "disabled",
+            "execution": None,
+        }
+
+    monkeypatch.setattr(MODULE, "execute_profile_edit_outcome_plan_in_hindsight", fake_execute)
     rc = MODULE.main([
         "--pr-edit-plan-json-file",
         str(pr_plan),

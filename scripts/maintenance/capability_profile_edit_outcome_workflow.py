@@ -193,7 +193,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--event-id")
     parser.add_argument("--promotion-manifest-file")
     parser.add_argument("--metadata-json", default="{}")
-    parser.add_argument("--execute-hindsight", action="store_true", help="Execute the admitted Hindsight retain plan. HindsightConfig still disables writes by default.")
+    parser.add_argument("--execute-hindsight", action="store_true", help="Execute the admitted Hindsight retain plan. HindsightConfig still disables writes by default; inspect hindsight_execution.reason when rc=1.")
     return parser
 
 
