@@ -64,7 +64,7 @@ async def autoresearch_status() -> dict[str, Any]:
     """Return the latest local autoresearch run state for integrations."""
     root = _run_root()
     if not root.exists():
-        return {"ok": True, "surface": "autoresearch", "status": "idle", "run_count": 0, "runs": []}
+        return {"ok": True, "surface": "autoresearch", "status": "idle", "run_count": 0, "latest": None, "runs": []}
 
     try:
         run_dirs = [p for p in root.iterdir() if p.is_dir()]
