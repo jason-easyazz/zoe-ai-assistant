@@ -82,8 +82,40 @@ def test_summarize_run_lower_is_better_direction():
     )
     summary = summarize_run(rows, higher_is_better=False)
     assert summary.best_score == 80
+    assert summary.final_score == 80
     assert summary.improved is True
-    assert summary.net_improvement == -20
+    # Improvement is reported as a positive magnitude even when lower is better.
+    assert summary.net_improvement == 20
+
+
+def test_summarize_run_final_score_reflects_last_keep_not_best():
+    # A later kept round scores worse than an earlier one: the promoted branch
+    # ends at 55, so final_score (and net_improvement) must reflect 55, not 80.
+    rows = parse_results(
+        "round\tcommit\tscore\tstatus\tdescription\n"
+        "1\tc0\t50\tbaseline\tbase\n"
+        "2\tc1\t80\tkeep\tbig win\n"
+        "3\tc2\t55\tkeep\tregressed but kept\n"
+    )
+    summary = summarize_run(rows, higher_is_better=True)
+    assert summary.best_score == 80
+    assert summary.final_score == 55
+    assert summary.improved is True
+    assert summary.net_improvement == 5
+
+
+def test_summarize_run_regressed_end_state_is_not_an_improvement():
+    # Last kept round lands below baseline — not promotable despite a kept round.
+    rows = parse_results(
+        "round\tcommit\tscore\tstatus\tdescription\n"
+        "1\tc0\t50\tbaseline\tbase\n"
+        "2\tc1\t70\tkeep\tup\n"
+        "3\tc2\t40\tkeep\tdown past baseline\n"
+    )
+    summary = summarize_run(rows, higher_is_better=True)
+    assert summary.final_score == 40
+    assert summary.improved is False
+    assert summary.net_improvement is None
 
 
 def test_decide_promotion_promotes_real_improvement():
@@ -166,6 +198,54 @@ def test_prepare_promotion_reads_run_dir(tmp_path):
     assert parse_ticket_block(plan["audit_description"])["source"] == (
         "autoresearch_audit:jun11-demo"
     )
+
+
+def test_emit_audit_cli_creates_backlog_audit_record(tmp_path, monkeypatch, capsys):
+    import multica_client
+
+    from autoresearch_bridge import _main
+
+    run_dir = tmp_path / "jun11-demo"
+    run_dir.mkdir()
+    (run_dir / "program.md").write_text(PROGRAM, encoding="utf-8")
+    (run_dir / "results.tsv").write_text(RESULTS, encoding="utf-8")
+
+    calls: dict[str, object] = {}
+
+    class _FakeClient:
+        async def create_issue(self, *, title, description, status):
+            calls.update(title=title, description=description, status=status)
+            return {"id": "audit-1", "identifier": "ZOE-9999"}
+
+    monkeypatch.setattr(multica_client, "get_multica_client", lambda: _FakeClient())
+
+    rc = _main([str(run_dir), "--emit-audit", "--pr-url", "https://github/pr/9"])
+    assert rc == 0
+    # The audit record lands in the backlog, non-dispatchable, with the run marker.
+    assert calls["status"] == "backlog"
+    assert calls["title"] == "autoresearch(jun11-demo): promote validated keeper"
+    assert "autoresearch_audit:jun11-demo" in calls["description"]
+    assert '"audit_ticket"' in capsys.readouterr().out
+
+
+def test_emit_audit_cli_is_noop_for_unpromotable_run(tmp_path, monkeypatch):
+    import multica_client
+
+    from autoresearch_bridge import _main
+
+    run_dir = tmp_path / "jun11-flat"
+    run_dir.mkdir()
+    (run_dir / "program.md").write_text(PROGRAM, encoding="utf-8")
+    (run_dir / "results.tsv").write_text(
+        "round\tcommit\tscore\tstatus\tdescription\n1\tc0\t50\tbaseline\tbase\n",
+        encoding="utf-8",
+    )
+
+    def _boom():  # pragma: no cover - must never be called
+        raise AssertionError("create_issue must not run for an unpromotable run")
+
+    monkeypatch.setattr(multica_client, "get_multica_client", _boom)
+    assert _main([str(run_dir), "--emit-audit"]) == 0
 
 
 def test_prepare_promotion_no_keeper_is_inert(tmp_path):

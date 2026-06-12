@@ -186,8 +186,12 @@ def summarize_run(rows: list[dict[str, str]], *, higher_is_better: bool = True) 
     )
     summary.baseline_score = _to_float((baseline_row or {}).get("score"))
 
-    # Best score = best across baseline + kept rounds, per locked direction.
+    # best_score  = best observed across baseline + kept rounds (informational).
+    # final_score = score of the LAST kept round. Because worse rounds are reverted,
+    # the run branch ends at the last kept commit, so final_score is the asset's
+    # actual accumulated state — and that, not best-ever, is what gets promoted.
     best_score: float | None = summary.baseline_score
+    final_score: float | None = summary.baseline_score
     best_hypothesis = ""
     for row in rows:
         status = (row.get("status") or "").lower()
@@ -200,17 +204,24 @@ def summarize_run(rows: list[dict[str, str]], *, higher_is_better: bool = True) 
             best_score = score
             if status == STATUS_KEEP:
                 best_hypothesis = row.get("description") or ""
+        if status == STATUS_KEEP:
+            final_score = score
     summary.best_score = best_score
-    summary.final_score = best_score
+    summary.final_score = final_score
     summary.best_hypothesis = best_hypothesis
 
+    # Promotion keys off the committed end state (final_score), so a run that
+    # regresses below baseline by its last kept round is never sold as a win.
     if (
         summary.baseline_score is not None
-        and best_score is not None
-        and _is_better(best_score, summary.baseline_score, higher_is_better)
+        and final_score is not None
+        and _is_better(final_score, summary.baseline_score, higher_is_better)
     ):
         summary.improved = True
-        summary.net_improvement = round(best_score - summary.baseline_score, 6)
+        raw_delta = round(final_score - summary.baseline_score, 6)
+        # Normalize so an improvement is always reported as a positive magnitude,
+        # regardless of whether higher or lower is better.
+        summary.net_improvement = raw_delta if higher_is_better else -raw_delta
     return summary
 
 
