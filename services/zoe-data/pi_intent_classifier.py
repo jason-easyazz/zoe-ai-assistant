@@ -333,8 +333,8 @@ def _runtime_probe_env(env: Mapping[str, str] | None, config: PiIntentClassifier
             "ZOE_PI_TIMEOUT_SECONDS": str(config.timeout_seconds),
         }
     )
-    values.setdefault("ZOE_PI_ALLOW_EXECUTION", "false")
-    values.setdefault("ZOE_PI_LOCAL_MODEL_CONFIGURED", "false")
+    values.setdefault("ZOE_PI_ALLOW_EXECUTION", values.get("ZOE_PI_ALLOW_EXECUTION", "false"))
+    values.setdefault("ZOE_PI_LOCAL_MODEL_CONFIGURED", values.get("ZOE_PI_LOCAL_MODEL_CONFIGURED", "false"))
     values["PATH"] = _path_with_node(values.get("PATH", ""))
     return values
 
