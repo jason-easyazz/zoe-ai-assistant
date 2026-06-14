@@ -749,3 +749,106 @@ async def test_record_blocked_multica_chain_reuses_existing_protocol_followup():
     assert client.created == []
     assert client.labels == []
     assert client.notes == []
+
+
+@pytest.mark.asyncio
+async def test_poll_chain_guarded_returns_sentinel_on_timeout(monkeypatch):
+    import asyncio
+
+    import executor_registry
+    from main import _poll_chain_guarded
+
+    async def _hang(*_args, **_kwargs):
+        await asyncio.sleep(10)
+
+    monkeypatch.setattr(executor_registry, "poll_ref", _hang)
+    chain = await _poll_chain_guarded("multica:dead", issue={"id": "dead"}, timeout=0.01)
+    assert chain == {"found": False, "status": "poll_timeout", "timed_out": True}
+
+
+@pytest.mark.asyncio
+async def test_poll_chain_guarded_returns_sentinel_on_error(monkeypatch):
+    import executor_registry
+    from main import _poll_chain_guarded
+
+    async def _boom(*_args, **_kwargs):
+        raise RuntimeError("executor gone")
+
+    monkeypatch.setattr(executor_registry, "poll_ref", _boom)
+    chain = await _poll_chain_guarded("multica:x", issue={"id": "x"}, timeout=1.0)
+    assert chain["found"] is False
+    assert chain["status"] == "poll_error"
+
+
+@pytest.mark.asyncio
+async def test_poll_chain_guarded_passes_through_live_result(monkeypatch):
+    import executor_registry
+    from main import _poll_chain_guarded
+
+    async def _ok(ref, *, issue=None):
+        return {"found": True, "status": "running", "ref": ref}
+
+    monkeypatch.setattr(executor_registry, "poll_ref", _ok)
+    chain = await _poll_chain_guarded("multica:live", issue={"id": "live"}, timeout=1.0)
+    assert chain == {"found": True, "status": "running", "ref": "multica:live"}
+
+
+@pytest.mark.asyncio
+async def test_recover_stale_in_progress_resets_dead_chain_and_frees_lane():
+    import datetime as dt
+
+    from main import _recover_stale_in_progress_issues
+
+    now = dt.datetime(2026, 6, 14, 12, 0, tzinfo=dt.timezone.utc)
+    old = (now - dt.timedelta(hours=72)).isoformat()
+    client = RecordingClient()
+
+    zombie = {"id": "zombie", "identifier": "ZOE-DEAD", "assignee_id": "hermes", "updated_at": old}
+
+    async def _poll(_issue):
+        return {"found": False, "status": "poll_timeout", "timed_out": True}
+
+    live = await _recover_stale_in_progress_issues(
+        client, [zombie], hermes_id="hermes", poll_chain=_poll, now=now, max_age_hours=6
+    )
+
+    assert live == []  # lane freed
+    assert len(client.calls) == 1
+    args, kwargs = client.calls[0]
+    assert args[0] == "zombie"
+    assert kwargs["status"] == "blocked"
+    assert "stale in_progress reset" in kwargs["blocker"]
+
+
+@pytest.mark.asyncio
+async def test_recover_stale_in_progress_keeps_live_and_foreign_issues():
+    import datetime as dt
+
+    from main import _recover_stale_in_progress_issues
+
+    now = dt.datetime(2026, 6, 14, 12, 0, tzinfo=dt.timezone.utc)
+    old = (now - dt.timedelta(hours=72)).isoformat()
+    client = RecordingClient()
+
+    live_run = {"id": "live", "assignee_id": "hermes", "updated_at": old}
+    foreign = {"id": "foreign", "assignee_id": "other-agent", "updated_at": old}
+    autopilot = {"id": "ap", "assignee_id": "hermes", "title": "Autopilot: tracker", "updated_at": old}
+
+    async def _poll(issue):
+        # Only the genuine run is active; the others are skipped on
+        # ownership/title before any age-based reset is considered.
+        if issue["id"] == "live":
+            return {"found": True, "status": "running"}
+        return {"found": False, "status": "not_found"}
+
+    kept = await _recover_stale_in_progress_issues(
+        client,
+        [live_run, foreign, autopilot],
+        hermes_id="hermes",
+        poll_chain=_poll,
+        now=now,
+        max_age_hours=6,
+    )
+
+    assert kept == [live_run, foreign, autopilot]
+    assert client.calls == []  # nothing reset

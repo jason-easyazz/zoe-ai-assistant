@@ -1,6 +1,8 @@
 """Helpers for the Multica poll-loop webhook dispatch bridge."""
 from __future__ import annotations
 
+import datetime as _dt
+
 
 def chain_needs_dispatch(chain: dict) -> bool:
     """Return True when a Hermes-assigned Multica issue should receive a Kanban phase.
@@ -61,3 +63,35 @@ def chain_is_running(chain: dict) -> bool:
         return True
     pipeline = chain.get("pipeline") or {}
     return pipeline.get("status") == "running"
+
+
+def _issue_age_hours(issue: dict, *, now: _dt.datetime) -> float | None:
+    """Hours since the issue's last metadata update (falls back to created_at)."""
+    raw = (issue or {}).get("updated_at") or (issue or {}).get("created_at") or ""
+    if not raw:
+        return None
+    try:
+        ts = _dt.datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=_dt.timezone.utc)
+    return (now - ts).total_seconds() / 3600.0
+
+
+def is_stale_in_progress(
+    issue: dict, chain: dict, *, now: _dt.datetime, max_age_hours: float
+) -> bool:
+    """Return True when an ``in_progress`` issue is a dead chain holding the lane.
+
+    A live chain advances and records progress, bumping the issue's metadata, so
+    an ``in_progress`` ticket whose chain is no longer active (or could not be
+    polled — e.g. a timed-out/dead executor ref) and that has had no metadata
+    update for at least ``max_age_hours`` is a zombie occupying the single
+    one-ticket lane. Resumable chains (``partial`` / pipeline ``todo``) stay
+    active, so they are never reclaimed here.
+    """
+    if chain_is_active(chain):
+        return False
+    age = _issue_age_hours(issue, now=now)
+    return age is not None and age >= max_age_hours
