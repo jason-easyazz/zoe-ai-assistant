@@ -4,9 +4,12 @@ import types
 
 import pytest
 
+import routers.voice_tts as voice_tts
 from routers.voice_tts import (
+    _broadcast_skybridge_ui,
     _broadcast_weather_ui,
     _should_supersede_voice_weather_action,
+    voice_command,
 )
 
 
@@ -188,3 +191,161 @@ async def test_broadcast_weather_ui_supersedes_stale_rows_after_deduped_enqueue(
     assert db.events.index("transaction_exit") < db.events.index(
         "broadcast:voice_weather_nav_panel-1_turn-1"
     )
+
+
+@pytest.mark.asyncio
+async def test_broadcast_skybridge_ui_opens_skybridge_with_card_payload(monkeypatch) -> None:
+    db = _Db()
+    enqueue_calls = []
+    broadcasts = []
+
+    async def get_db():
+        yield db
+
+    async def enqueue_ui_action(_db, **kwargs):
+        enqueue_calls.append(kwargs)
+        return {
+            "id": kwargs["idempotency_key"],
+            "status": "queued",
+            "panel_id": kwargs["panel_id"],
+        }
+
+    class Broadcaster:
+        async def broadcast(self, channel, event, payload):
+            broadcasts.append((channel, event, payload))
+
+    monkeypatch.setitem(sys.modules, "database", types.SimpleNamespace(get_db=get_db))
+    monkeypatch.setitem(
+        sys.modules,
+        "ui_orchestrator",
+        types.SimpleNamespace(enqueue_ui_action=enqueue_ui_action),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "push",
+        types.SimpleNamespace(broadcaster=Broadcaster()),
+    )
+
+    card = {
+        "schema_version": "1.0.0",
+        "card_type": "generic",
+        "card_id": "11111111-1111-1111-1111-111111111111",
+        "content": {"title": "Weather", "source": "weather_current"},
+        "producer": "test",
+        "producer_version": "1",
+        "created_at": "2026-06-14T00:00:00Z",
+    }
+    result = {
+        "handled": True,
+        "spoken_summary": "Here is the weather.",
+        "intent": {"domain": "weather", "action": "current"},
+        "cards": [card],
+    }
+
+    await _broadcast_skybridge_ui("panel-1", result, utterance="show weather", turn_key="turn-1")
+
+    assert [call["action_type"] for call in enqueue_calls] == ["panel_navigate", "show_card"]
+    assert enqueue_calls[0]["payload"]["url"] == "/touch/skybridge.html?q=show+weather"
+    assert enqueue_calls[1]["payload"]["type"] == "skybridge"
+    assert enqueue_calls[1]["payload"]["card"] == card
+    assert enqueue_calls[1]["payload"]["result"] == result
+    assert [item[2]["action"]["action_type"] for item in broadcasts] == ["panel_navigate", "show_card"]
+    broadcast_card = broadcasts[1][2]["action"]["payload"]
+    assert broadcast_card["card"] == card
+    assert broadcast_card["cards"] == [card]
+    assert "result" not in broadcast_card
+
+
+@pytest.mark.asyncio
+async def test_voice_command_uses_skybridge_fast_path(monkeypatch) -> None:
+    calls: dict[str, object] = {"broadcast": [], "events": []}
+
+    async def resolve_skybridge_request(text, user_id, *, context=None, db=None):
+        calls["resolver"] = {
+            "text": text,
+            "user_id": user_id,
+            "context": context,
+            "db": db,
+        }
+        return {
+            "handled": True,
+            "spoken_summary": "It is sunny in Perth.",
+            "intent": {"domain": "weather", "action": "current"},
+            "skybridge_context": {"domain": "weather"},
+            "cards": [
+                {
+                    "schema_version": "1.0.0",
+                    "card_type": "generic",
+                    "card_id": "22222222-2222-2222-2222-222222222222",
+                    "content": {"title": "Weather", "source": "weather_current"},
+                    "producer": "test",
+                    "producer_version": "1",
+                    "created_at": "2026-06-14T00:00:00Z",
+                }
+            ],
+        }
+
+    async def broadcast_skybridge_ui(panel_id, result, *, utterance="", turn_key=None):
+        calls["broadcast_skybridge_ui"] = {
+            "panel_id": panel_id,
+            "result": result,
+            "utterance": utterance,
+            "turn_key": turn_key,
+        }
+
+    class Broadcaster:
+        async def broadcast(self, channel, event, payload):
+            calls["broadcast"].append((channel, event, payload))
+            calls["events"].append(event)
+
+    class Audio:
+        body = b"RIFF-test"
+        media_type = "audio/wav"
+
+    async def synthesize(payload, caller=None):
+        calls["synthesize"] = payload
+        calls["events"].append("synthesize")
+        return Audio()
+
+    async def no_user(*_args, **_kwargs):
+        return None
+
+    async def save_chat(*args, **_kwargs):
+        calls["save_chat"] = args
+
+    async def memory_passes(*args, **_kwargs):
+        calls["memory_passes"] = args
+
+    skybridge_module = types.SimpleNamespace(resolve_skybridge_request=resolve_skybridge_request)
+    monkeypatch.setitem(sys.modules, "skybridge_service", skybridge_module)
+    monkeypatch.setitem(sys.modules, "push", types.SimpleNamespace(broadcaster=Broadcaster()))
+    monkeypatch.setattr(voice_tts, "_broadcast_skybridge_ui", broadcast_skybridge_ui)
+    monkeypatch.setattr(voice_tts, "synthesize", synthesize)
+    monkeypatch.setattr(voice_tts, "_resolve_recent_panel_session_user", no_user)
+    monkeypatch.setattr(voice_tts, "_resolve_panel_default_user", no_user)
+    monkeypatch.setattr(voice_tts, "_schedule_voice_chat_save", save_chat)
+    monkeypatch.setattr(voice_tts, "_run_voice_memory_passes", memory_passes)
+    monkeypatch.setattr(voice_tts.asyncio, "ensure_future", lambda coro: coro.close() if hasattr(coro, "close") else None)
+    monkeypatch.setattr(voice_tts, "_VOICE_SESSIONS", {})
+
+    response = await voice_command(
+        {"text": "show weather", "panel_id": "panel-sky", "session_id": "session-sky"},
+        caller={"user_id": "guest", "panel_id": "panel-sky"},
+        db=object(),
+    )
+
+    assert response["ok"] is True
+    assert response["panel_id"] == "panel-sky"
+    assert response["reply"] == "It is sunny in Perth."
+    assert response["intent"] == "skybridge:weather"
+    assert response["skybridge"] is True
+    assert response["audio_base64"]
+    assert calls["resolver"]["text"] == "show weather"
+    assert calls["resolver"]["user_id"] == "guest"
+    assert calls["broadcast_skybridge_ui"]["panel_id"] == "panel-sky"
+    assert calls["broadcast_skybridge_ui"]["utterance"] == "show weather"
+    assert calls["synthesize"] == {"text": "It is sunny in Perth."}
+    assert ("all", "voice:responding", {"panel_id": "panel-sky", "text": "It is sunny in Perth."}) in calls["broadcast"]
+    assert ("all", "voice:done", {"panel_id": "panel-sky"}) in calls["broadcast"]
+    assert calls["events"].index("synthesize") < calls["events"].index("voice:done")
+    assert voice_tts._VOICE_SESSIONS["panel-sky"]["skybridge_context"] == {"domain": "weather"}
