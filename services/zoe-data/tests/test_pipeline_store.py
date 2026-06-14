@@ -1107,6 +1107,7 @@ async def test_already_covered_run_converges_instead_of_review_implement_loop(is
     state = await store.sync_pipeline_from_chain(
         ref, {"verify": {"id": "t_verify", "status": "done"}}, fetch_plain
     )
+    assert state.phase == "review", f"expected verify to advance to review, got {state.phase!r}"
 
     # 3) review on an already-covered run has no PR -> normally request_changes ->
     # implement (the loop). With the fix it recovers to complete and moves forward.
