@@ -7,7 +7,7 @@ THE production Zoe API: FastAPI app served by host uvicorn on port 8000. Owns ch
 ## Ownership
 
 - App entry and core: `main.py`, `database.py` (+ `db_pool.py`, `db_compat.py`, `alembic/` migrations), `auth.py`.
-- Routing/NLU: `intent_router.py`, `intent_classifier_llm.py`, `routers/` (see child doc).
+- Routing/NLU: `intent_router.py`, `intent_classifier_llm.py`, `pi_intent_classifier.py`, `routers/` (see child doc).
 - Agents and tools: `mcp_server.py`, `openclaw_ws.py`, `hermes_http.py`, `zoe_agent`-related modules, `executors/` (engineering-board executors, currently `kanban_adapter.py`).
 - Memory: `hindsight_memory.py`, `hindsight_retain_candidates.py`, `conversation_context.py`.
 - Streaming/UI protocol: `ag_ui_stream.py`, `card_service.py`, `card_contract.py`.
@@ -24,6 +24,7 @@ THE production Zoe API: FastAPI app served by host uvicorn on port 8000. Owns ch
 
 ## Work Guidance
 
+- Pi/Gemma intent governance is an ambiguous-miss fallback only; deterministic intents stay first, cloud providers are rejected when offline-only mode is active, and memory-write intents must not be created from ambiguous Pi classifications.
 - Build the minimal working feature, then run a cleanup pass moving reusable mechanics into service-layer helpers; domain policy stays in routes/actions/intents.
 - Use async/await for I/O; no blocking operations on the main thread.
 
