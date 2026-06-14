@@ -120,7 +120,7 @@
                     headers: { 'X-Session-ID': getSession() }
                 });
                 if (profile.ok) return;
-                if (profile.status === 401 || profile.status === 403) {
+                if (profile.status === 401 || profile.status === 403 || profile.status === 404) {
                     console.warn('[auth] Touch guest session was rejected; refreshing guest session');
                     setSession(null);
                 } else {
