@@ -244,12 +244,19 @@ def implement_edit_safety_reason_from_log(task_id: str, phase: str, *, session: 
     for line in session.splitlines():
         if not _STEP_LINE_RE.match(line):
             continue
-        patch_match = _PATCH_PATH_RE.search(line) if _PYTHON_PATCH_RE.search(line) else None
-        if patch_match:
+        any_patch = _PATCH_PATH_RE.search(line)
+        if any_patch and _PYTHON_PATCH_RE.search(line):
             pending_python_patch = True
-            path_key = _read_path_key(patch_match.group("path"))
+            path_key = _read_path_key(any_patch.group("path"))
             patched_python_paths.add(path_key)
             post_patch_read_counts.pop(path_key, None)
+            continue
+        if any_patch:
+            # A patch/edit of another file (e.g. a .yml or .md) is productive
+            # work, not the "patch then keep reading/grepping" failure this guard
+            # targets — multi-file tasks routinely edit a .py then a config file.
+            # Allow it; the pending Python patch still requires its syntax/test
+            # check before any *exploration* (reads beyond budget / greps).
             continue
         if not pending_python_patch:
             continue
