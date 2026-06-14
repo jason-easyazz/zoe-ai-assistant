@@ -253,11 +253,9 @@ async def _classify_with_pi_rpc(
         raw = await worker.prompt(prompt, timeout_seconds=active_config.timeout_seconds)
     except asyncio.TimeoutError:
         logger.debug("Pi RPC intent governor timed out after %.2fs", active_config.timeout_seconds)
-        await worker.reset()
         return None
     except Exception as exc:
         logger.debug("Pi RPC intent governor failed: %s", exc)
-        await worker.reset()
         return None
     latency_ms = (time.perf_counter() - start) * 1000
     return _parse_pi_classification(raw, latency_ms=latency_ms)
