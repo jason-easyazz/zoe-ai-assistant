@@ -70,6 +70,8 @@ def _demo_samples() -> list[PiRouteSample]:
 
 async def _run_zoe_baseline(case: PiIntentEvalCase) -> dict[str, Any]:
     with _temporary_env({"ZOE_PI_INTENT_ENABLED": "false"}):
+        from intent_router import detect_and_extract_intent
+
         start = time.perf_counter()
         intent = await detect_and_extract_intent(case.text)
         latency_ms = (time.perf_counter() - start) * 1000
@@ -82,6 +84,8 @@ async def _run_zoe_baseline(case: PiIntentEvalCase) -> dict[str, Any]:
 
 
 async def _run_pi(case: PiIntentEvalCase, *, transport: str, enable_execution: bool, local_model_configured: bool) -> dict[str, Any]:
+    from pi_intent_classifier import classify_with_pi_intent_governor
+
     updates = {
         "ZOE_PI_INTENT_ENABLED": "true",
         "ZOE_PI_INTENT_TRANSPORT": transport,
@@ -101,22 +105,20 @@ async def _run_pi(case: PiIntentEvalCase, *, transport: str, enable_execution: b
     }
 
 
-async def _run_cases(*, run_pi: bool, transport: str, enable_execution: bool, local_model_configured: bool) -> tuple[list[dict[str, Any]], list[PiRouteSample]]:
+async def _run_cases(*, transport: str, enable_execution: bool, local_model_configured: bool) -> tuple[list[dict[str, Any]], list[PiRouteSample]]:
     comparisons: list[dict[str, Any]] = []
     samples: list[PiRouteSample] = []
     for case in DEFAULT_PI_INTENT_EVAL_CASES:
         case.validate()
         zoe = await _run_zoe_baseline(case)
-        pi = None
-        if run_pi:
-            pi = await _run_pi(
-                case,
-                transport=transport,
-                enable_execution=enable_execution,
-                local_model_configured=local_model_configured,
-            )
+        pi = await _run_pi(
+            case,
+            transport=transport,
+            enable_execution=enable_execution,
+            local_model_configured=local_model_configured,
+        )
         comparisons.append({"case": case.to_dict(), "zoe": zoe, "pi": pi})
-        if pi and not case.negative and case.intent_group != "chat":
+        if not case.negative and case.intent_group != "chat":
             samples.append(
                 PiRouteSample(
                     case_id=case.case_id,
@@ -153,7 +155,6 @@ def main() -> int:
     if args.run_pi:
         comparisons, measured_samples = asyncio.run(
             _run_cases(
-                run_pi=True,
                 transport=args.transport,
                 enable_execution=args.allow_execution,
                 local_model_configured=args.local_model_configured,

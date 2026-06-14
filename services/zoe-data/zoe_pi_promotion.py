@@ -257,7 +257,7 @@ def evaluate_pi_promotion(
         blockers.append("rollback_blocked")
 
     state = "promote" if not blockers else "keep_shadow"
-    if promoted and {"timeout_rate_too_high", "correction_rate_too_high", "latency_not_faster_than_zoe"}.intersection(blockers):
+    if promoted and {"accuracy_delta_below_threshold", "timeout_rate_too_high", "correction_rate_too_high", "latency_not_faster_than_zoe"}.intersection(blockers):
         state = "rollback"
     if "rollback_blocked" in blockers:
         state = "blocked"
