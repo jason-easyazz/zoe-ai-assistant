@@ -687,6 +687,10 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
             wrap.style.animationDelay = `${Math.min(index * 90, 360)}ms`;
             wrap.innerHTML = sanitizeSkybridgeHtml(window.SkybridgeRenderer.render(card));
             cardRoot.appendChild(wrap);
+            try {
+                const node = wrap.firstElementChild;
+                if (window.SkybridgeHydrateAuthCard && node) window.SkybridgeHydrateAuthCard(node, card);
+            } catch (_) {}
         });
         try {
             document.body.classList.remove('sky-empty');

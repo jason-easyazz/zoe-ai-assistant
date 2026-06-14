@@ -41,9 +41,9 @@ def test_skybridge_push_socket_uses_authenticated_session_query():
     main = (ROOT / "zoe-data" / "main.py").read_text(encoding="utf-8")
 
     assert "/js/websocket-sync.js?v=skybridge-auth-ready-1" in html
-    assert "/touch/js/skybridge.js?v=skybridge-auth-card-1" in html
-    assert "/touch/js/skybridge-renderer.js?v=skybridge-auth-card-1" in html
-    assert "/js/touch-ui-executor.js?v=skybridge-auth-card-1" in html
+    assert "/touch/js/skybridge.js?v=skybridge-auth-identity-1" in html
+    assert "/touch/js/skybridge-renderer.js?v=skybridge-auth-identity-1" in html
+    assert "/js/touch-ui-executor.js?v=skybridge-auth-identity-1" in html
     assert "initPush(panelId, sessionId)" in sync
     assert "params.set('panel_id', panelId)" in sync
     assert "else params.set('channel', 'all')" in sync
@@ -212,8 +212,9 @@ def test_skybridge_uses_backend_status_contract():
     assert "contextLabelFor(intent)" in app
     assert "isDataQuery(query)" in app
     assert "resp.status === 401 || resp.status === 503" in app
-    assert "const panelId = new URLSearchParams(location.search).get('panel_id')" in app
-    assert app.count("if (!route) route = '/touch/index.html' + (panelId ? '?panel_id=' + encodeURIComponent(panelId) : '');") >= 2
+    assert "function prepareAuthRoute" in app
+    assert "function buildLoginRoute(panelId)" in app
+    assert "return route || buildLoginRoute(panelId)" in app
     assert "if (voice) voice.sendText(query)" in app
     assert "event.role === 'user') projectCards" not in app
     assert "projectCommand(query);\n        if (voice) voice.sendText(query);" not in app
@@ -290,7 +291,7 @@ def test_skybridge_renderer_supports_real_data_cards():
     assert "sky-event-row" in html
     assert "sky-weather-hour-tile" in html
     assert "sky-weather-day-row" in html
-    assert "/touch/css/skybridge-data-widgets.css?v=skybridge-auth-card-1" in html
+    assert "/touch/css/skybridge-data-widgets.css?v=skybridge-auth-identity-1" in html
     assert "skybridge-lists-people-widgets" not in html
     assert "sky-list-item-row" in data_widgets_css
     assert "sky-person-row" in data_widgets_css
@@ -414,10 +415,26 @@ def test_skybridge_auth_challenge_card_contract():
     assert "const finalStep = props.final_step || 'Return to Zoe'" in renderer
     assert "escapeHtml(finalStep)" in renderer
     assert "escapeHtml(action)" not in renderer[renderer.index("function renderAuthChallenge"):renderer.index("function renderStatus")]
+    assert "data-auth-profiles" in renderer
+    assert "sky-auth-profile-grid" in renderer
+    assert "data-user-id" in renderer
+    assert "data-user-name" in renderer
+    assert "data-user-avatar" in renderer
     assert "data-challenge-id" in renderer
     assert "data-action-context" in renderer
     assert "btn.dataset.skyAction === 'auth'" in app
-    assert "if (!route) route = '/touch/index.html'" in app
+    assert "function hydrateAuthCard" in app
+    assert "AbortController" in app
+    assert "node.dataset.authHydrationId" in app
+    assert "!node.isConnected" in app
+    assert "function authNameMatches" in app
+    assert "wanted.includes(name)" not in app
+    assert "/api/auth/profiles?panel_id=" in app
+    assert "window.SkybridgeHydrateAuthCard = hydrateAuthCard" in app
+    assert "trySelectAuthProfile" in app
+    assert "selected_user_id" in app
+    assert "if (!route) route = '/touch/index.html'" not in app
+    assert "return route || buildLoginRoute(panelId)" in app
     assert "encodeURIComponent(panelId)" in app
     assert "storedChallenge.panel_id" in app
     assert "zoe_panel_auth_challenge" in app
@@ -426,11 +443,18 @@ def test_skybridge_auth_challenge_card_contract():
     assert "renderSkybridgeAuthChallenge(payload)" in executor
     assert "component: 'auth_challenge'" in executor
     assert "buildTouchLoginRoute(panelId)" in executor
+    assert "window.SkybridgeHydrateAuthCard" in executor
     assert "redirectToTouchLogin" in executor
     assert "sky-card.auth-challenge" in css
     assert "sky-auth-scene" in css
+    assert "sky-auth-profile" in css
+    assert "sky-auth-footer" in css
     assert '"component": "auth_challenge"' in service
     assert '"route": ""' in service
+    touch_index = read(UI / "index.html")
+    assert "parsed && (parsed.challenge_id || parsed.selected_user_id)" in touch_index
+    assert "const preferredUserId = pending && pending.selected_user_id" in touch_index
+    assert "!pending.challenge_id" in touch_index
     assert '"summary": "Please authenticate on the touch panel to continue."' in voice
     assert '"challenge_id": challenge_id' in voice
 
