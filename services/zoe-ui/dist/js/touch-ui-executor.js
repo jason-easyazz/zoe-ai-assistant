@@ -2273,7 +2273,14 @@ body.light-mode .zaf-btn-cancel { background: rgba(0,0,0,0.07); color: rgba(26,2
         return false;
     }
 
-    function init() {
+    async function init() {
+        if (window.zoeAuthReady && typeof window.zoeAuthReady.then === 'function') {
+            try {
+                await window.zoeAuthReady;
+            } catch (_) {
+                // Auth bootstrap is best-effort; continue so the panel can retry.
+            }
+        }
         state.panelId = getPanelId();
         const session = getSession();
         state.sessionId = session && session.session_id ? session.session_id : null;
