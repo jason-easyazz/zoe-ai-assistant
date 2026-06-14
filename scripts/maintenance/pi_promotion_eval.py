@@ -21,8 +21,6 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "services" / "zoe-data"))
 
-from intent_router import detect_and_extract_intent  # noqa: E402
-from pi_intent_classifier import classify_with_pi_intent_governor  # noqa: E402
 from zoe_pi_promotion import (  # noqa: E402
     DEFAULT_PI_INTENT_EVAL_CASES,
     PiIntentEvalCase,
