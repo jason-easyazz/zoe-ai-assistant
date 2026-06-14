@@ -583,6 +583,13 @@ async def lifespan(app: FastAPI):
     _consolidation_bg_task = start_memory_consolidation_background()
     _zoe_update_bg_task = start_zoe_update_background_tasks()
 
+    try:
+        from routers.voice_tts import warm_faster_whisper_worker
+        asyncio.create_task(warm_faster_whisper_worker(), name="faster_whisper_warmup")
+        logger.info("Voice STT worker warmup scheduled")
+    except Exception as _voice_warmup_exc:
+        logger.warning("Voice STT worker warmup scheduling failed (non-fatal): %s", _voice_warmup_exc)
+
     # Runtime health probe — run once immediately, then refresh every 5 min
     await _probe_runtimes()
     _runtime_health_task = asyncio.create_task(_runtime_health_refresh_loop(), name="runtime_health_refresh")

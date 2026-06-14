@@ -2029,6 +2029,65 @@ async def _run_faster_whisper_worker(wav_path: str) -> str:
     return await _faster_whisper_worker.transcribe(wav_path)
 
 
+async def _reset_faster_whisper_worker() -> None:
+    global _faster_whisper_worker
+    worker = _faster_whisper_worker
+    _faster_whisper_worker = None
+    if worker is not None:
+        await worker.stop()
+
+
+def _voice_stt_warmup_enabled() -> bool:
+    return (os.environ.get("ZOE_WHISPER_WARMUP") or "true").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+def _write_warmup_silence_wav(path: str, *, seconds: float = 1.0, sample_rate: int = 16000) -> None:
+    frame_count = max(1, int(sample_rate * seconds))
+    with wave.open(path, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(b"\x00\x00" * frame_count)
+
+
+async def warm_faster_whisper_worker() -> bool:
+    """Prime the persistent faster-whisper worker without blocking API startup."""
+    if not _voice_stt_warmup_enabled():
+        logger.info("faster-whisper warmup disabled by ZOE_WHISPER_WARMUP")
+        return False
+    if _use_in_process_faster_whisper() or not _use_persistent_faster_whisper_worker():
+        logger.info("faster-whisper warmup skipped; persistent worker is not active")
+        return False
+    timeout = _env_float("ZOE_WHISPER_WARMUP_TIMEOUT_S", 45.0)
+    tmp_path = ""
+    started = time.monotonic()
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            tmp_path = tmp.name
+        _write_warmup_silence_wav(tmp_path)
+        await asyncio.wait_for(_run_faster_whisper_worker(tmp_path), timeout=timeout)
+        logger.info("faster-whisper worker warmup completed in %.2fs", time.monotonic() - started)
+        return True
+    except asyncio.CancelledError:
+        await _reset_faster_whisper_worker()
+        raise
+    except Exception as exc:
+        await _reset_faster_whisper_worker()
+        logger.warning("faster-whisper worker warmup failed: %s", exc)
+        return False
+    finally:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
 async def _run_faster_whisper_in_process(wav_path: str) -> str:
     """Transcribe using the faster-whisper Python library in the API worker."""
     model = await _get_faster_whisper_model()

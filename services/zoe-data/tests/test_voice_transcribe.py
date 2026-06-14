@@ -197,6 +197,82 @@ def test_faster_whisper_in_process_opt_in(monkeypatch):
     assert asyncio.run(voice_tts._run_faster_whisper("/tmp/audio.wav")) == "in-process:/tmp/audio.wav"
 
 
+def test_warm_faster_whisper_worker_primes_persistent_worker(monkeypatch):
+    from routers import voice_tts
+
+    calls = []
+
+    async def _fake_worker(path: str) -> str:
+        calls.append(Path(path).exists())
+        return ""
+
+    monkeypatch.delenv("ZOE_WHISPER_WARMUP", raising=False)
+    monkeypatch.delenv("ZOE_WHISPER_IN_PROCESS", raising=False)
+    monkeypatch.delenv("ZOE_WHISPER_PERSISTENT_WORKER", raising=False)
+    monkeypatch.setenv("ZOE_WHISPER_WARMUP_TIMEOUT_S", "2")
+    monkeypatch.setattr(voice_tts, "_run_faster_whisper_worker", _fake_worker)
+
+    assert asyncio.run(voice_tts.warm_faster_whisper_worker()) is True
+    assert calls == [True]
+
+
+def test_warm_faster_whisper_worker_respects_opt_out(monkeypatch):
+    from routers import voice_tts
+
+    async def _unexpected_worker(path: str) -> str:
+        raise AssertionError("worker should not be called")
+
+    monkeypatch.setenv("ZOE_WHISPER_WARMUP", "false")
+    monkeypatch.setattr(voice_tts, "_run_faster_whisper_worker", _unexpected_worker)
+
+    assert asyncio.run(voice_tts.warm_faster_whisper_worker()) is False
+
+
+def test_warm_faster_whisper_worker_resets_worker_after_timeout(monkeypatch):
+    from routers import voice_tts
+
+    stopped = []
+
+    class _Worker:
+        async def stop(self):
+            stopped.append(True)
+
+    async def _timeout_worker(path: str) -> str:
+        raise asyncio.TimeoutError("warmup timed out")
+
+    monkeypatch.delenv("ZOE_WHISPER_WARMUP", raising=False)
+    monkeypatch.delenv("ZOE_WHISPER_IN_PROCESS", raising=False)
+    monkeypatch.delenv("ZOE_WHISPER_PERSISTENT_WORKER", raising=False)
+    monkeypatch.setattr(voice_tts, "_run_faster_whisper_worker", _timeout_worker)
+    monkeypatch.setattr(voice_tts, "_faster_whisper_worker", _Worker())
+
+    assert asyncio.run(voice_tts.warm_faster_whisper_worker()) is False
+    assert stopped == [True]
+    assert voice_tts._faster_whisper_worker is None
+
+
+@pytest.mark.parametrize(
+    "env_name",
+    ["ZOE_WHISPER_IN_PROCESS", "ZOE_WHISPER_PERSISTENT_WORKER"],
+)
+def test_warm_faster_whisper_worker_skips_when_persistent_path_inactive(monkeypatch, env_name):
+    from routers import voice_tts
+
+    async def _unexpected_worker(path: str) -> str:
+        raise AssertionError("worker should not be called")
+
+    monkeypatch.delenv("ZOE_WHISPER_WARMUP", raising=False)
+    monkeypatch.delenv("ZOE_WHISPER_IN_PROCESS", raising=False)
+    monkeypatch.delenv("ZOE_WHISPER_PERSISTENT_WORKER", raising=False)
+    monkeypatch.setattr(voice_tts, "_run_faster_whisper_worker", _unexpected_worker)
+    if env_name == "ZOE_WHISPER_IN_PROCESS":
+        monkeypatch.setenv(env_name, "true")
+    else:
+        monkeypatch.setenv(env_name, "false")
+
+    assert asyncio.run(voice_tts.warm_faster_whisper_worker()) is False
+
+
 def test_faster_whisper_worker_reuses_process(monkeypatch):
     from routers import voice_tts
 
