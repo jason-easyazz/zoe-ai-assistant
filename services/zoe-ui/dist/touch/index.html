@@ -1097,10 +1097,12 @@
 
             renderProfiles();
 
+            const params = new URLSearchParams(window.location.search);
+            const routeUserId = params.get('user_id') || '';
             const pending = getPendingPanelChallenge();
-            const preferredUserId = pending && pending.selected_user_id
-                ? pending.selected_user_id
-                : panelContext.default_user_id;
+            const preferredUserId = routeUserId
+                || (pending && pending.selected_user_id ? pending.selected_user_id : '')
+                || panelContext.default_user_id;
             if (preferredUserId) {
                 const preferredProfile = userProfiles.find(p => p.user_id === preferredUserId);
                 if (preferredProfile) {
@@ -1625,8 +1627,8 @@
             }
             
             const pendingChallenge = getPendingPanelChallenge();
-            if (pendingChallenge) {
-                // Force auth UI when resuming a voice challenge; do not auto-redirect.
+            if (pendingChallenge || params.get('auth') === 'skybridge' || params.get('user_id')) {
+                // Force auth UI when resuming a voice/Skybridge auth handoff; do not auto-redirect.
                 showProfiles();
                 return;
             }
