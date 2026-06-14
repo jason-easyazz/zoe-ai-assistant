@@ -41,7 +41,9 @@ def test_skybridge_push_socket_uses_authenticated_session_query():
     main = (ROOT / "zoe-data" / "main.py").read_text(encoding="utf-8")
 
     assert "/js/websocket-sync.js?v=skybridge-auth-ready-1" in html
-    assert "/touch/js/skybridge.js?v=skybridge-render-ack-1" in html
+    assert "/touch/js/skybridge.js?v=skybridge-auth-card-1" in html
+    assert "/touch/js/skybridge-renderer.js?v=skybridge-auth-card-1" in html
+    assert "/js/touch-ui-executor.js?v=skybridge-auth-card-1" in html
     assert "initPush(panelId, sessionId)" in sync
     assert "params.set('panel_id', panelId)" in sync
     assert "else params.set('channel', 'all')" in sync
@@ -210,6 +212,8 @@ def test_skybridge_uses_backend_status_contract():
     assert "contextLabelFor(intent)" in app
     assert "isDataQuery(query)" in app
     assert "resp.status === 401 || resp.status === 503" in app
+    assert "const panelId = new URLSearchParams(location.search).get('panel_id')" in app
+    assert app.count("if (!route) route = '/touch/index.html' + (panelId ? '?panel_id=' + encodeURIComponent(panelId) : '');") >= 2
     assert "if (voice) voice.sendText(query)" in app
     assert "event.role === 'user') projectCards" not in app
     assert "projectCommand(query);\n        if (voice) voice.sendText(query);" not in app
@@ -286,7 +290,7 @@ def test_skybridge_renderer_supports_real_data_cards():
     assert "sky-event-row" in html
     assert "sky-weather-hour-tile" in html
     assert "sky-weather-day-row" in html
-    assert "/touch/css/skybridge-data-widgets.css?v=skybridge-lists-people-1" in html
+    assert "/touch/css/skybridge-data-widgets.css?v=skybridge-auth-card-1" in html
     assert "skybridge-lists-people-widgets" not in html
     assert "sky-list-item-row" in data_widgets_css
     assert "sky-person-row" in data_widgets_css
@@ -394,6 +398,38 @@ def test_touch_executor_renders_skybridge_card_contracts():
     assert "payload && payload.card ? [payload.card]" in executor
     assert "sanitizeSkybridgeHtml(window.SkybridgeRenderer.render(card))" in executor
     assert "if (renderSkybridgeCardPayload(payload))" in executor
+
+
+def test_skybridge_auth_challenge_card_contract():
+    html = read(UI / "skybridge.html")
+    app = read(UI / "js" / "skybridge.js")
+    renderer = read(UI / "js" / "skybridge-renderer.js")
+    executor = (ROOT / "zoe-ui" / "dist" / "js" / "touch-ui-executor.js").read_text(encoding="utf-8")
+    css = read(UI / "css" / "skybridge-data-widgets.css")
+    service = read(DATA / "skybridge_service.py")
+    voice = read(DATA / "routers" / "voice_tts.py")
+
+    assert "auth_challenge: renderAuthChallenge" in renderer
+    assert "function renderAuthChallenge(props)" in renderer
+    assert "data-challenge-id" in renderer
+    assert "data-action-context" in renderer
+    assert "btn.dataset.skyAction === 'auth'" in app
+    assert "if (!route) route = '/touch/index.html'" in app
+    assert "encodeURIComponent(panelId)" in app
+    assert "storedChallenge.panel_id" in app
+    assert "zoe_panel_auth_challenge" in app
+    assert "zoe_redirect_after_login" in app
+    assert "function renderSkybridgeAuthChallenge(payload)" in executor
+    assert "renderSkybridgeAuthChallenge(payload)" in executor
+    assert "component: 'auth_challenge'" in executor
+    assert "buildTouchLoginRoute(panelId)" in executor
+    assert "redirectToTouchLogin" in executor
+    assert "sky-card.auth-challenge" in css
+    assert "sky-auth-scene" in css
+    assert '"component": "auth_challenge"' in service
+    assert '"route": ""' in service
+    assert '"summary": "Please authenticate on the touch panel to continue."' in voice
+    assert '"challenge_id": challenge_id' in voice
 
 
 def test_voice_command_has_skybridge_first_touch_path():
