@@ -2429,13 +2429,13 @@ async def voice_command(
                 utterance=text,
                 turn_key=_turn_key,
             )
+            _skybridge_audio = await synthesize({"text": _skybridge_reply}, caller=caller)
             try:
                 from push import broadcaster as _bc_sky
                 await _bc_sky.broadcast("all", "voice:responding", {"panel_id": panel_id, "text": _skybridge_reply[:200]})
                 await _bc_sky.broadcast("all", "voice:done", {"panel_id": panel_id})
             except Exception:
                 pass
-            _skybridge_audio = await synthesize({"text": _skybridge_reply}, caller=caller)
             await _schedule_voice_chat_save(session_id, text, _skybridge_reply, effective_user)
             asyncio.ensure_future(_run_voice_memory_passes(text, _skybridge_reply, effective_user, session_id))
             return {

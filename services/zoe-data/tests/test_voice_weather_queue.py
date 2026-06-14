@@ -258,7 +258,7 @@ async def test_broadcast_skybridge_ui_opens_skybridge_with_card_payload(monkeypa
 
 @pytest.mark.asyncio
 async def test_voice_command_uses_skybridge_fast_path(monkeypatch) -> None:
-    calls: dict[str, object] = {"broadcast": []}
+    calls: dict[str, object] = {"broadcast": [], "events": []}
 
     async def resolve_skybridge_request(text, user_id, *, context=None, db=None):
         calls["resolver"] = {
@@ -296,6 +296,7 @@ async def test_voice_command_uses_skybridge_fast_path(monkeypatch) -> None:
     class Broadcaster:
         async def broadcast(self, channel, event, payload):
             calls["broadcast"].append((channel, event, payload))
+            calls["events"].append(event)
 
     class Audio:
         body = b"RIFF-test"
@@ -303,6 +304,7 @@ async def test_voice_command_uses_skybridge_fast_path(monkeypatch) -> None:
 
     async def synthesize(payload, caller=None):
         calls["synthesize"] = payload
+        calls["events"].append("synthesize")
         return Audio()
 
     async def no_user(*_args, **_kwargs):
@@ -345,4 +347,5 @@ async def test_voice_command_uses_skybridge_fast_path(monkeypatch) -> None:
     assert calls["synthesize"] == {"text": "It is sunny in Perth."}
     assert ("all", "voice:responding", {"panel_id": "panel-sky", "text": "It is sunny in Perth."}) in calls["broadcast"]
     assert ("all", "voice:done", {"panel_id": "panel-sky"}) in calls["broadcast"]
+    assert calls["events"].index("synthesize") < calls["events"].index("voice:done")
     assert voice_tts._VOICE_SESSIONS["panel-sky"]["skybridge_context"] == {"domain": "weather"}
