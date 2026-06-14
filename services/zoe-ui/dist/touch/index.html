@@ -830,7 +830,7 @@
   window.fetch=function(u,o){o=o||{};o.headers=o.headers||{};const sid=getSession();if(sid){o.headers["X-Session-ID"]=sid;} if(typeof u==="string"){u=u.replace(/[?&]user_id=[^&]*/g,"");} return origFetch(u,o);};
 })();
 </script>
-    <script src="/js/auth.js?v=skybridge-voice-home-1"></script>
+    <script src="/js/auth.js?v=skybridge-push-session-1"></script>
 <!-- PWA Meta Tags -->
     <meta name="application-name" content="Zoe AI">
     <meta name="apple-mobile-web-app-capable" content="yes">

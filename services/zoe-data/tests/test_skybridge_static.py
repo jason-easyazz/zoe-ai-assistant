@@ -33,6 +33,18 @@ def test_skybridge_page_loads_required_modules_in_order():
     assert "window.confirm = function() { return true; }" not in html
 
 
+def test_skybridge_push_socket_uses_authenticated_session_query():
+    html = read(UI / "skybridge.html")
+    sync = (ROOT / "zoe-ui" / "dist" / "js" / "websocket-sync.js").read_text(encoding="utf-8")
+
+    assert "/js/websocket-sync.js?v=skybridge-push-session-1" in html
+    assert "initPush(panelId, sessionId)" in sync
+    assert "params.set('session_id', sessionId)" in sync
+    assert "const pushUrl = `${protocol}//${window.location.host}/ws/push?${params.toString()}`;" in sync
+    assert "window.zoePushWs = this.push;" in sync
+    assert "/ws/push?channel=all`" not in sync
+
+
 def test_skybridge_uses_login_orb_to_voice_pill_layout():
     html = read(UI / "skybridge.html")
 
