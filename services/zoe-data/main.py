@@ -1236,6 +1236,7 @@ async def _panel_allows_guest_push(panel_id: str) -> bool:
     except Exception as exc:
         logger.debug("push websocket guest panel validation failed: %s", exc)
         return False
+    return False
 
 
 @app.websocket("/ws/push")

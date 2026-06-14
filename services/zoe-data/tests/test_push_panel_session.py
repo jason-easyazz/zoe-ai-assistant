@@ -44,6 +44,17 @@ def _install_database(monkeypatch: pytest.MonkeyPatch, db: _Db):
     return db
 
 
+def _install_empty_database(monkeypatch: pytest.MonkeyPatch):
+    module = types.ModuleType("database")
+
+    async def get_db():
+        if False:
+            yield None
+
+    module.get_db = get_db
+    monkeypatch.setitem(sys.modules, "database", module)
+
+
 @pytest.mark.asyncio
 async def test_panel_push_session_allows_bound_panel_user(monkeypatch):
     db = _install_database(monkeypatch, _Db({"user_id": "guest"}))
@@ -137,6 +148,18 @@ async def test_panel_push_session_rejects_guest_panel_when_guest_disabled(monkey
 @pytest.mark.asyncio
 async def test_panel_push_session_rejects_inactive_guest_panel(monkeypatch):
     _install_database(monkeypatch, _Db({"allow_guest": 1, "is_active": 0}))
+
+    async def resolve(_session_id):
+        return None
+
+    monkeypatch.setattr(main, "_resolve_ws_session", resolve)
+
+    assert await main._session_can_subscribe_panel("zoe-touch-pi", "stale-guest-session") is False
+
+
+@pytest.mark.asyncio
+async def test_panel_push_session_rejects_when_guest_panel_db_yields_nothing(monkeypatch):
+    _install_empty_database(monkeypatch)
 
     async def resolve(_session_id):
         return None
