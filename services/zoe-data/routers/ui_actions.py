@@ -123,6 +123,32 @@ async def get_pending_ui_actions(
     )
     await db.commit()
 
+    # Skybridge voice cards are state replacement, not a backlog. If a page
+    # reload or lost ack leaves older cards queued, skip everything except the
+    # newest card for this panel so the surface cannot visually rewind.
+    await db.execute(
+        """UPDATE ui_actions
+           SET status = 'skipped', error_code = 'superseded',
+               error_message = 'Superseded by newer Skybridge voice card',
+               updated_at = NOW()
+           WHERE user_id = ? AND panel_id = ?
+             AND requested_by = 'voice'
+             AND action_type = 'show_card'
+             AND status IN ('queued', 'running')
+             AND payload::jsonb->>'source' = 'voice:skybridge'
+             AND created_at::timestamptz < (
+                 SELECT MAX(created_at::timestamptz)
+                 FROM ui_actions
+                 WHERE user_id = ? AND panel_id = ?
+                   AND requested_by = 'voice'
+                   AND action_type = 'show_card'
+                   AND status IN ('queued', 'running')
+                   AND payload::jsonb->>'source' = 'voice:skybridge'
+             )""",
+        (panel_user_id, panel_id, panel_user_id, panel_id),
+    )
+    await db.commit()
+
     cursor = await db.execute(
         """SELECT id, panel_id, chat_session_id, action_type, payload, status, requires_confirmation,
                   confirmation_token, retry_count, max_retries, created_at, updated_at
@@ -156,12 +182,25 @@ async def ack_ui_action(
         # Unknown or missing status — treat as a no-op ack to be idempotent.
         return {"status": "already_acked", "action_id": action_id}
 
-    # Accept ack by DB uuid (id) OR by idempotency_key — the SSE broadcast uses the
-    # idempotency_key as its action id, while the DB stores a separate UUID.
+    panel_id = str((payload or {}).get("panel_id") or "").strip()
+
+    # Accept ack by DB uuid (id) OR by idempotency_key. Kiosk pages can reload
+    # between polling and acking, but panel-targeted cross-user acks are only
+    # accepted from a user currently registered on that panel.
     cursor = await db.execute(
-        """SELECT id, panel_id, status FROM ui_actions
-           WHERE (id = ? OR idempotency_key = ?) AND user_id = ?""",
-        (action_id, action_id, user_id),
+        """SELECT id, user_id, panel_id, status FROM ui_actions
+           WHERE (id = ? OR idempotency_key = ?)
+             AND (
+               user_id = ?
+               OR (
+                 ? != '' AND panel_id = ?
+                 AND EXISTS (
+                   SELECT 1 FROM ui_panel_sessions
+                   WHERE panel_id = ? AND user_id = ?
+                 )
+               )
+             )""",
+        (action_id, action_id, user_id, panel_id, panel_id, panel_id, user_id),
     )
     existing = await cursor.fetchone()
     if not existing:
@@ -171,6 +210,7 @@ async def ack_ui_action(
 
     # Use the real DB id for the update (in case we matched on idempotency_key)
     real_id = existing["id"]
+    action_user_id = existing["user_id"]
     error_code = payload.get("error_code")
     error_message = payload.get("error_message")
     retries = payload.get("retry_count")
@@ -183,12 +223,12 @@ async def ack_ui_action(
                updated_at = NOW(),
                acked_at = CASE WHEN ? IS NOT NULL THEN NOW() ELSE acked_at END
            WHERE id = ? AND user_id = ?""",
-        (status, error_code, error_message, retries, acked_at, real_id, user_id),
+        (status, error_code, error_message, retries, acked_at, real_id, action_user_id),
     )
     await append_ledger(
         db,
         action_id=real_id,
-        user_id=user_id,
+        user_id=action_user_id,
         panel_id=existing["panel_id"],
         event_type=f"ack:{status}",
         event_data={

@@ -227,6 +227,15 @@ def test_skybridge_auth_and_voice_bus_contracts_are_wired():
     assert 'skybridge_context = {}\n\n            # ── Streaming LLM' in main
 
 
+def test_skybridge_touch_executor_card_shell_spans_panel_grid():
+    html = read(UI / "skybridge.html")
+
+    assert ".sky-card-shell {" in html
+    assert "grid-column: span 12 !important;" in html
+    assert ".sky-card-shell > .sky-card" in html
+    assert "body:not(.sky-empty) .sky-card-shell" in html
+
+
 def test_skybridge_renderer_supports_real_data_cards():
     renderer = read(UI / "js" / "skybridge-renderer.js")
     html = read(UI / "skybridge.html")
@@ -391,7 +400,9 @@ def test_voice_command_has_skybridge_first_touch_path():
     assert "\"url\": url" in voice
     assert "\"type\": \"skybridge\"" in voice
     assert "payload={**card_payload, \"result\": skybridge_result}" in voice
-    assert "\"payload\": card_payload" in voice
+    assert "Keep the card queued" in voice
+    assert "poll /api/ui/actions/pending and render it" in voice
+    assert "{**card_message, \"payload\": card_payload}" not in voice
 
 
 
@@ -420,3 +431,14 @@ def test_skybridge_has_typed_fallback_for_insecure_voice_contexts():
     assert "syncVoiceFallbackState();" in app
     assert "Microphone needs HTTPS here" in app
     assert "resp.status === 401 || resp.status === 503" in app
+
+
+
+def test_skybridge_has_touch_panel_fit_overrides():
+    html = read(UI / "skybridge.html")
+
+    assert 'id="skybridge-touch-panel-fit"' in html
+    assert '@media (min-width: 900px) and (max-height: 760px)' in html
+    assert 'height: min(472px, calc(100dvh - 154px))' in html
+    assert 'grid-template-columns: repeat(8, minmax(46px, 1fr))' in html
+    assert 'body:not(.sky-empty) .sky-command' in html

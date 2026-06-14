@@ -1379,6 +1379,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
             error_code: result.error_code || null,
             error_message: result.error_message || null,
             ui_context: buildContext(),
+            panel_id: state.panelId,
         });
         const session = getSession();
         const headers = { 'Content-Type': 'application/json' };

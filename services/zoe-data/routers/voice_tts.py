@@ -685,6 +685,7 @@ async def _broadcast_skybridge_ui(
                 requested_by="voice",
                 idempotency_key=f"voice_skybridge_nav_{panel_id}_{delivery_key}",
                 broadcast=False,
+                commit=False,
             )
             card_message = await _enqueue_ui_action(
                 _db,
@@ -695,34 +696,45 @@ async def _broadcast_skybridge_ui(
                 requested_by="voice",
                 idempotency_key=f"voice_skybridge_card_{panel_id}_{delivery_key}",
                 broadcast=False,
+                commit=False,
             )
+            current_card_id = card_message.get("action_id") or card_message.get("id")
+            if current_card_id:
+                await _db.execute(
+                    """UPDATE ui_actions
+                       SET status = 'skipped',
+                           error_code = 'superseded',
+                           error_message = 'Superseded by newer Skybridge voice card',
+                           updated_at = NOW()
+                       WHERE user_id = ?
+                         AND panel_id = ?
+                         AND requested_by = 'voice'
+                         AND action_type = 'show_card'
+                         AND status IN ('queued', 'running')
+                         AND id != ?
+                         AND payload::jsonb->>'source' = 'voice:skybridge'""",
+                    (_panel_user_id, panel_id, current_card_id),
+                )
+            await _db.commit()
             nav_delivered = await broadcaster.broadcast_to_panel(
                 panel_id,
                 "ui_action",
                 {**nav_message, "payload": nav_payload},
             )
-            card_delivered = await broadcaster.broadcast_to_panel(
-                panel_id,
-                "ui_action",
-                {**card_message, "payload": card_payload},
-            )
-            delivered_ids = []
+            # Keep the card queued. Navigating the old Skybridge page immediately
+            # can unload the socket before a following show_card frame is handled;
+            # the freshly loaded page will poll /api/ui/actions/pending and render it.
             if nav_delivered:
-                delivered_ids.append(nav_message["action_id"])
-            if card_delivered:
-                delivered_ids.append(card_message["action_id"])
-            if delivered_ids:
-                for _action_id in delivered_ids:
-                    await _db.execute(
-                        """UPDATE ui_actions
-                           SET status = 'success',
-                               error_code = NULL,
-                               error_message = 'Delivered over panel push',
-                               updated_at = NOW(),
-                               acked_at = NOW()
-                           WHERE id = ?""",
-                        (_action_id,),
-                    )
+                await _db.execute(
+                    """UPDATE ui_actions
+                       SET status = 'success',
+                           error_code = NULL,
+                           error_message = 'Delivered over panel push',
+                           updated_at = NOW(),
+                           acked_at = NOW()
+                       WHERE id = ?""",
+                    (nav_message["action_id"],),
+                )
                 await _db.commit()
             break
     except Exception as exc:
