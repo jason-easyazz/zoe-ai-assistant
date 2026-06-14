@@ -185,9 +185,11 @@ async def test_pending_actions_skips_superseded_skybridge_voice_cards(monkeypatc
         db=db,
     )
 
-    cleanup_sql = db.executes[2][0]
-    cleanup_params = db.executes[2][1]
-    assert "Superseded by newer Skybridge voice card" in cleanup_sql
+    cleanup_sql, cleanup_params = next(
+        (sql, params)
+        for sql, params in db.executes
+        if "Superseded by newer Skybridge voice card" in sql
+    )
     assert "payload::jsonb->>'source' = 'voice:skybridge'" in cleanup_sql
     assert cleanup_params == ("guest", "zoe-touch-pi", "guest", "zoe-touch-pi")
     assert result["count"] == 1
