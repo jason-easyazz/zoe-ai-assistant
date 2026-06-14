@@ -239,7 +239,7 @@
             if (!pending.ok) return;
             const payload = await pending.json();
             const actions = Array.isArray(payload.actions) ? payload.actions : [];
-            await Promise.all(actions
+            await Promise.allSettled(actions
                 .filter(action => action && action.action_type === 'show_card')
                 .filter(action => action.payload && action.payload.source === 'voice:skybridge')
                 .map(action => fetch(`/api/ui/actions/${encodeURIComponent(action.id)}/ack`, {

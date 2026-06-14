@@ -200,6 +200,7 @@ def test_skybridge_uses_backend_status_contract():
     assert "function retireRenderedVoiceCards" in app
     assert "/api/ui/actions/pending?panel_id=" in app
     assert "action.payload.source === 'voice:skybridge'" in app
+    assert "Promise.allSettled(actions" in app
     assert "skybridge-direct-render" in app
     assert "Voice is still connecting. Type here and Zoe will still render cards." in app
     assert "Microphone is not available here. Type a request and Zoe will still render cards." in app
