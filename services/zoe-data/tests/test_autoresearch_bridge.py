@@ -71,6 +71,7 @@ def test_summarize_run_tracks_best_and_net_improvement():
     assert summary.improved is True
     assert summary.net_improvement == 21
     assert summary.best_hypothesis == "personalize greeting"
+    assert summary.final_hypothesis == "personalize greeting"
     assert summary.keeper_commits == ["c2", "c4"]
 
 
@@ -102,6 +103,10 @@ def test_summarize_run_final_score_reflects_last_keep_not_best():
     assert summary.final_score == 55
     assert summary.improved is True
     assert summary.net_improvement == 5
+    # best_hypothesis points at the intermediate high (c1), but the PR actually
+    # promotes the last kept commit (c2), so final_hypothesis must describe that.
+    assert summary.best_hypothesis == "big win"
+    assert summary.final_hypothesis == "regressed but kept"
 
 
 def test_summarize_run_regressed_end_state_is_not_an_improvement():
@@ -157,8 +162,28 @@ def test_pr_body_reports_scores_assets_and_model():
     assert "deepseek/deepseek-chat-v3.1" in body
     assert "Baseline score: 50" in body
     assert "Final score: 71" in body
+    assert "Promoted change (last kept round): personalize greeting" in body
     assert "`copy/onboarding_email.md`" in body
     assert "Greptile" in body
+
+
+def test_pr_body_distinguishes_promoted_from_best_scoring_round():
+    # Non-monotonic kept sequence: the best-scoring round is reverted, so the PR
+    # body must surface the promoted (last kept) change distinctly from the best.
+    program = parse_program(PROGRAM)
+    summary = summarize_run(
+        parse_results(
+            "round\tcommit\tscore\tstatus\tdescription\n"
+            "1\tc0\t50\tbaseline\tbase\n"
+            "2\tc1\t80\tkeep\tbig win\n"
+            "3\tc2\t55\tkeep\tsmall tweak\n"
+        ),
+        higher_is_better=True,
+    )
+    body = build_pr_body("jun11-demo", program, summary)
+    assert "Final score: 55" in body
+    assert "Promoted change (last kept round): small tweak" in body
+    assert "Best-scoring round" in body and "big win" in body
 
 
 def test_audit_ticket_is_never_dispatch_approved():

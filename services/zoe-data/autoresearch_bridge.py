@@ -74,6 +74,7 @@ class RunSummary:
     improved: bool = False
     net_improvement: float | None = None
     best_hypothesis: str = ""
+    final_hypothesis: str = ""
     keeper_commits: list[str] = field(default_factory=list)
 
 
@@ -193,6 +194,7 @@ def summarize_run(rows: list[dict[str, str]], *, higher_is_better: bool = True) 
     best_score: float | None = summary.baseline_score
     final_score: float | None = summary.baseline_score
     best_hypothesis = ""
+    final_hypothesis = ""
     for row in rows:
         status = (row.get("status") or "").lower()
         if status not in {STATUS_BASELINE, STATUS_KEEP}:
@@ -206,9 +208,13 @@ def summarize_run(rows: list[dict[str, str]], *, higher_is_better: bool = True) 
                 best_hypothesis = row.get("description") or ""
         if status == STATUS_KEEP:
             final_score = score
+            # The last kept round is the actual promoted end state, so its
+            # description is what a reviewer should read to gauge the diff.
+            final_hypothesis = row.get("description") or ""
     summary.best_score = best_score
     summary.final_score = final_score
     summary.best_hypothesis = best_hypothesis
+    summary.final_hypothesis = final_hypothesis
 
     # Promotion keys off the committed end state (final_score), so a run that
     # regresses below baseline by its last kept round is never sold as a win.
@@ -289,7 +295,10 @@ def build_pr_body(run_id: str, program: Program, summary: RunSummary) -> str:
         f"- Net improvement: {summary.net_improvement}",
         f"- Rounds: {summary.rounds} (kept {summary.kept}, discarded "
         f"{summary.discarded}, crashed {summary.crashed}, blocked {summary.blocked})",
-        f"- Best hypothesis: {summary.best_hypothesis or '(n/a)'}",
+        f"- Promoted change (last kept round): "
+        f"{summary.final_hypothesis or '(n/a)'}",
+        f"- Best-scoring round (may be an intermediate, reverted state): "
+        f"{summary.best_hypothesis or '(n/a)'}",
         "",
         "### Asset allowlist (only files this run was permitted to change)",
         paths,
@@ -326,7 +335,8 @@ def build_audit_ticket(
         f"(net {summary.net_improvement}).",
         f"Rounds: {summary.rounds}; kept {summary.kept}, discarded "
         f"{summary.discarded}, crashed {summary.crashed}, blocked {summary.blocked}.",
-        f"Best hypothesis: {summary.best_hypothesis or '(n/a)'}.",
+        f"Promoted change (last kept round): {summary.final_hypothesis or '(n/a)'}.",
+        f"Best-scoring round (may be reverted): {summary.best_hypothesis or '(n/a)'}.",
         f"Assets: {', '.join(program.asset_paths) or '(none)'}.",
     ]
     if pr_url:
