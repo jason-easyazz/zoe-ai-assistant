@@ -62,7 +62,7 @@ def test_poll_dispatches_ready_work_only_when_runtime_pause_is_inactive():
 def test_poll_dispatch_backfills_ready_blocked_pipeline_before_todo():
     source = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
     blocked_fetch = source.index('blocked_issues = await client.list_issues(status="blocked")')
-    blocked_loop = source.index('for _blocked in blocked_issues or []:', blocked_fetch)
+    blocked_loop = source.index('for _blocked in _blk_window:', blocked_fetch)
     todo_loop = source.index('for _todo in stale_todos or []:', blocked_loop)
     clear_blocker = source.index(
         'clear_blocker=True',
