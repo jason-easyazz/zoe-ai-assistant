@@ -40,8 +40,10 @@ def test_skybridge_push_socket_uses_authenticated_session_query():
     assert "/js/websocket-sync.js?v=skybridge-push-session-1" in html
     assert "initPush(panelId, sessionId)" in sync
     assert "params.set('session_id', sessionId)" in sync
+    assert "initPush called without sessionId; push will be rejected" in sync
     assert "const pushUrl = `${protocol}//${window.location.host}/ws/push?${params.toString()}`;" in sync
     assert "window.zoePushWs = this.push;" in sync
+    assert "originalConnect" not in sync
     assert "/ws/push?channel=all`" not in sync
 
 

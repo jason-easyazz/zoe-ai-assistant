@@ -293,11 +293,11 @@ window.ZoeWebSockets = {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const params = new URLSearchParams({ channel: 'all' });
         if (sessionId) params.set('session_id', sessionId);
+        else console.warn('[ZoeWS] initPush called without sessionId; push will be rejected');
         const pushUrl = `${protocol}//${window.location.host}/ws/push?${params.toString()}`;
         this.push = new ZoeWebSocketSync('/ws/push', 'all');
         window.zoePushWs = this.push;
         // Override the connect method to use the correct URL with query param.
-        const originalConnect = this.push.connect.bind(this.push);
         this.push.connect = function() {
             if (this.ws && this.ws.readyState === WebSocket.OPEN) return;
             console.log('[ZoeWS] Connecting push channel:', pushUrl);
@@ -433,7 +433,6 @@ window.ZoeWebSockets = {
         console.log('[ZoeWS] Panel push channel connected, panel_id:', panelId);
     }
 };
-
 
 
 
