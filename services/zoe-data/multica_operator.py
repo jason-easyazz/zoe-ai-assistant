@@ -15,7 +15,17 @@ from multica_ticket_contract import (
 
 async def find_issue(reference: str) -> dict[str, Any]:
     client = get_multica_client()
-    return await client.resolve_issue(reference)
+    if hasattr(client, "resolve_issue"):
+        return await client.resolve_issue(reference)
+    # Best-effort compatibility for older test/fake clients; real clients should expose resolve_issue.
+    issues = await client.list_issues()
+    if not issues:
+        return {}
+    wanted = str(reference).strip().lower()
+    for issue in issues:
+        if str(issue.get("identifier") or "").lower() == wanted or str(issue.get("id") or "").lower() == wanted:
+            return issue
+    return {}
 
 
 async def create_ticket(title: str, *, source: str = "operator") -> dict[str, Any]:

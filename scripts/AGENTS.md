@@ -7,7 +7,7 @@ Operational scripting for Zoe hosts: setup, maintenance, deployment, migrations,
 ## Ownership
 
 - `setup/` — host/platform provisioning, including `setup/jetson/` systemd unit templates (e.g. `zoe-graphify-refresh.service` / `.timer`).
-- `maintenance/` — recurring operational jobs: `refresh_graphify.sh` (nightly fail-closed OpenRouter/Gemini knowledge-graph refresh), `graphify_openrouter_cli.py` (repo-owned OpenRouter Graphify launcher), `graphify_local_refresh.py` / `graphify_local_probe.py` (offline local probes; not sufficient for full-corpus scheduled refresh), `prune_worktrees.sh` (stale worktree cleanup), `greploop_guard.py` (Greptile fix-packet loop), triage generators.
+- `maintenance/` — recurring operational jobs: `refresh_graphify.sh` (nightly fail-closed OpenRouter/Gemini knowledge-graph refresh), `graphify_openrouter_cli.py` (repo-owned OpenRouter Graphify launcher), `graphify_local_refresh.py` / `graphify_local_probe.py` (offline local probes; not sufficient for full-corpus scheduled refresh), `prune_worktrees.sh` (stale worktree cleanup), `greploop_guard.py` (Greptile fix-packet loop), triage generators, and `pi_intent_probe.py` for local Pi/Gemma ambiguous-intent timing evidence.
 - `deploy/`, `migrations/`, `testing/`, `train/`, `utilities/`, `preview/` — task-specific script groups.
 
 ## Local Contracts
