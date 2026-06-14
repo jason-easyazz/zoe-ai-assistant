@@ -1302,9 +1302,22 @@ async def detect_and_extract_intent(
     Returns None when no intent matched OR when LLM extraction failed (caller
     should fall through to Zoe Agent).
     """
+    async def _try_pi_governor() -> Optional["Intent"]:
+        try:
+            from pi_intent_classifier import PI_INTENT_EXECUTE_THRESHOLD, classify_with_pi_intent_governor
+            context_turns = ""
+            if context and context.is_fresh() and context.last_text:
+                context_turns = f"previous={context.last_text!r}; previous_intent={context.last_intent}"
+            pi_classified = await classify_with_pi_intent_governor(text, context_turns=context_turns)
+            if pi_classified and pi_classified.intent and pi_classified.confidence >= PI_INTENT_EXECUTE_THRESHOLD:
+                return Intent(pi_classified.intent, dict(pi_classified.slots), confidence=pi_classified.confidence)
+        except Exception as exc:
+            logger.debug("detect_and_extract_intent: Pi/Gemma governor failed: %s", exc)
+        return None
+
     intent = detect_intent(text, context=context)
     if intent is None:
-        return None
+        return await _try_pi_governor()
     if intent.slots and "raw" in intent.slots:
         try:
             from nlu_extractor import extract_slots_for_intent  # lazy — avoids circular at load
@@ -1318,8 +1331,8 @@ async def detect_and_extract_intent(
                 intent.name,
                 _exc,
             )
-        # Extraction failed — let caller fall through to Zoe Agent
-        return None
+        # Extraction failed — let Pi/Gemma classify the ambiguous utterance once before Zoe Agent fallback.
+        return await _try_pi_governor()
     return intent
 
 
