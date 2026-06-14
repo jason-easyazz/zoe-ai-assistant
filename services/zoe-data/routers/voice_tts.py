@@ -646,15 +646,11 @@ async def _broadcast_skybridge_ui(
     url = "/touch/skybridge.html" + (f"?q={query}" if query else "")
     cards = skybridge_result.get("cards") if isinstance(skybridge_result.get("cards"), list) else []
     summary = str(skybridge_result.get("spoken_summary") or "Showing this in Skybridge.")
-    nav_action = {
-        "id": f"voice_skybridge_nav_{panel_id}_{delivery_key}",
-        "action_type": "panel_navigate",
-        "payload": {
-            "url": url,
-            "label": "Opening Skybridge",
-            "panel_id": panel_id,
-            "source": "voice:skybridge",
-        },
+    nav_payload = {
+        "url": url,
+        "label": "Opening Skybridge",
+        "panel_id": panel_id,
+        "source": "voice:skybridge",
     }
     card_payload = {
         "type": "skybridge",
@@ -664,19 +660,9 @@ async def _broadcast_skybridge_ui(
         "panel_id": panel_id,
         "source": "voice:skybridge",
     }
-    card_action = {
-        "id": f"voice_skybridge_card_{panel_id}_{delivery_key}",
-        "action_type": "show_card",
-        "payload": card_payload,
-    }
-    try:
-        from push import broadcaster
-        await broadcaster.broadcast("all", "ui_action", {"action": nav_action})
-        await broadcaster.broadcast("all", "ui_action", {"action": card_action})
-    except Exception as exc:
-        logger.debug("voice skybridge ui broadcast failed (non-fatal): %s", exc)
     try:
         from database import get_db as _get_db
+        from push import broadcaster
         from ui_orchestrator import enqueue_ui_action as _enqueue_ui_action
         async for _db in _get_db():
             _panel_user_id = "family-admin"
@@ -690,16 +676,17 @@ async def _broadcast_skybridge_ui(
                     _panel_user_id = str(_row["user_id"])
             except Exception:
                 pass
-            await _enqueue_ui_action(
+            nav_message = await _enqueue_ui_action(
                 _db,
                 user_id=_panel_user_id,
                 panel_id=panel_id,
                 action_type="panel_navigate",
-                payload=nav_action["payload"],
+                payload=nav_payload,
                 requested_by="voice",
                 idempotency_key=f"voice_skybridge_nav_{panel_id}_{delivery_key}",
+                broadcast=False,
             )
-            await _enqueue_ui_action(
+            card_message = await _enqueue_ui_action(
                 _db,
                 user_id=_panel_user_id,
                 panel_id=panel_id,
@@ -707,7 +694,36 @@ async def _broadcast_skybridge_ui(
                 payload={**card_payload, "result": skybridge_result},
                 requested_by="voice",
                 idempotency_key=f"voice_skybridge_card_{panel_id}_{delivery_key}",
+                broadcast=False,
             )
+            nav_delivered = await broadcaster.broadcast_to_panel(
+                panel_id,
+                "ui_action",
+                {**nav_message, "payload": nav_payload},
+            )
+            card_delivered = await broadcaster.broadcast_to_panel(
+                panel_id,
+                "ui_action",
+                {**card_message, "payload": card_payload},
+            )
+            delivered_ids = []
+            if nav_delivered:
+                delivered_ids.append(nav_message["action_id"])
+            if card_delivered:
+                delivered_ids.append(card_message["action_id"])
+            if delivered_ids:
+                for _action_id in delivered_ids:
+                    await _db.execute(
+                        """UPDATE ui_actions
+                           SET status = 'success',
+                               error_code = NULL,
+                               error_message = 'Delivered over panel push',
+                               updated_at = NOW(),
+                               acked_at = NOW()
+                           WHERE id = ?""",
+                        (_action_id,),
+                    )
+                await _db.commit()
             break
     except Exception as exc:
         logger.debug("voice skybridge ui enqueue failed (non-fatal): %s", exc)

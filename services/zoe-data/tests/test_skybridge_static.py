@@ -41,6 +41,7 @@ def test_skybridge_push_socket_uses_authenticated_session_query():
     main = (ROOT / "zoe-data" / "main.py").read_text(encoding="utf-8")
 
     assert "/js/websocket-sync.js?v=skybridge-auth-ready-1" in html
+    assert "/touch/js/skybridge.js?v=skybridge-push-ack-1" in html
     assert "initPush(panelId, sessionId)" in sync
     assert "params.set('panel_id', panelId)" in sync
     assert "else params.set('channel', 'all')" in sync
@@ -198,6 +199,9 @@ def test_skybridge_uses_backend_status_contract():
     assert "function renderSkybridgeResult" in app
     assert "Voice is still connecting. Type here and Zoe will still render cards." in app
     assert "Microphone is not available here. Type a request and Zoe will still render cards." in app
+    assert "Type here while voice reconnects..." in app
+    assert "Voice reconnecting" in app
+    assert "Voice needs attention" not in app
     assert "contextLabelFor(intent)" in app
     assert "isDataQuery(query)" in app
     assert "resp.status === 401 || resp.status === 503" in app
@@ -280,7 +284,7 @@ def test_skybridge_renderer_supports_real_data_cards():
     assert "skybridge-calendar-widget-overrides" in html
     assert "skybridge-forecast-widget-overrides" in html
     assert "skybridge-weather-widget-v2" in html
-    assert "skybridge-calendar-menu-6" in html
+    assert "skybridge-push-ack-1" in html
     assert "backdrop-filter: none !important" in html
     assert "No events " in renderer
 
