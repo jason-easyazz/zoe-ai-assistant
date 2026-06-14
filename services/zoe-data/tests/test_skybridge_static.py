@@ -432,9 +432,13 @@ def test_skybridge_auth_challenge_card_contract():
 
     assert "auth_challenge: renderAuthChallenge" in renderer
     assert "function renderAuthChallenge(props)" in renderer
-    assert "<strong>Who's speaking?</strong>" in renderer
-    assert "sky-auth-request" in renderer
-    assert "PIN or password appears after selection." in renderer
+    assert "sky-auth-people-only" in renderer
+    assert "Choose your profile" in renderer
+    assert "Who's speaking?" not in renderer
+    assert "sky-auth-request" not in renderer
+    assert "PIN or password appears after selection." not in renderer
+    assert "hideActions: true" in renderer
+    assert "!(options && options.hideActions)" in renderer
     assert "escapeHtml(action)" not in renderer[renderer.index("function renderAuthChallenge"):renderer.index("function renderStatus")]
     assert "data-auth-profiles" in renderer
     assert "sky-auth-profile-grid" in renderer
@@ -443,8 +447,9 @@ def test_skybridge_auth_challenge_card_contract():
     assert "data-user-avatar" in renderer
     assert "data-challenge-id" in renderer
     assert "data-action-context" in renderer
-    assert "Choose who is speaking" in renderer
-    assert "PIN / Password" in app
+    assert "Choose your profile" in renderer
+    assert "PIN / Password" not in app
+    assert 'aria-label="Sign in as ' in app
     assert "data-route=\"" in app
     assert "buildLoginRoute(panelId, profile.user_id)" in app
     assert "btn.dataset.skyAction === 'auth'" in app
@@ -478,7 +483,8 @@ def test_skybridge_auth_challenge_card_contract():
     assert "sky-auth-footer" in css
     assert "Skybridge premium auth picker" in css
     assert "grid-template-columns: repeat(auto-fit, minmax(154px, 1fr))" in css
-    assert "sky-auth-request" in css
+    assert "Skybridge profile-tile auth picker" in css
+    assert "sky-auth-people-only" in css
     assert "filter: blur" not in css[css.index("/* Skybridge premium auth picker */"):]
     assert '"component": "auth_challenge"' in service
     assert '"route": ""' in service
