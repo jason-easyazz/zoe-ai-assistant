@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
+import subprocess
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -12,6 +16,20 @@ DATA = ROOT / "zoe-data"
 
 def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def test_skybridge_runtime_scripts_parse_as_javascript():
+    node = shutil.which("node") or shutil.which("nodejs")
+    if not node:
+        pytest.skip("Node.js is not installed on this host")
+    for script in [
+        UI / "js" / "skybridge-renderer.js",
+        UI / "js" / "skybridge.js",
+        UI / "js" / "skybridge-voice.js",
+        UI / "js" / "skybridge-capabilities.js",
+        ROOT / "zoe-ui" / "dist" / "js" / "touch-ui-executor.js",
+    ]:
+        subprocess.run([node, "--check", str(script)], check=True, capture_output=True, text=True)
 
 
 def test_skybridge_page_loads_required_modules_in_order():
@@ -41,9 +59,9 @@ def test_skybridge_push_socket_uses_authenticated_session_query():
     main = (ROOT / "zoe-data" / "main.py").read_text(encoding="utf-8")
 
     assert "/js/websocket-sync.js?v=skybridge-auth-ready-1" in html
-    assert "/touch/js/skybridge.js?v=skybridge-auth-identity-1" in html
-    assert "/touch/js/skybridge-renderer.js?v=skybridge-auth-identity-1" in html
-    assert "/js/touch-ui-executor.js?v=skybridge-auth-identity-1" in html
+    assert "/touch/js/skybridge.js?v=skybridge-auth-premium-1" in html
+    assert "/touch/js/skybridge-renderer.js?v=skybridge-auth-premium-1" in html
+    assert "/js/touch-ui-executor.js?v=skybridge-auth-premium-1" in html
     assert "initPush(panelId, sessionId)" in sync
     assert "params.set('panel_id', panelId)" in sync
     assert "else params.set('channel', 'all')" in sync
@@ -293,7 +311,7 @@ def test_skybridge_renderer_supports_real_data_cards():
     assert "sky-event-row" in html
     assert "sky-weather-hour-tile" in html
     assert "sky-weather-day-row" in html
-    assert "/touch/css/skybridge-data-widgets.css?v=skybridge-auth-identity-1" in html
+    assert "/touch/css/skybridge-data-widgets.css?v=skybridge-auth-premium-1" in html
     assert "skybridge-lists-people-widgets" not in html
     assert "sky-list-item-row" in data_widgets_css
     assert "sky-person-row" in data_widgets_css
@@ -414,8 +432,9 @@ def test_skybridge_auth_challenge_card_contract():
 
     assert "auth_challenge: renderAuthChallenge" in renderer
     assert "function renderAuthChallenge(props)" in renderer
-    assert "const finalStep = props.final_step || 'Return to Zoe'" in renderer
-    assert "escapeHtml(finalStep)" in renderer
+    assert "<strong>Who's speaking?</strong>" in renderer
+    assert "sky-auth-request" in renderer
+    assert "PIN or password appears after selection." in renderer
     assert "escapeHtml(action)" not in renderer[renderer.index("function renderAuthChallenge"):renderer.index("function renderStatus")]
     assert "data-auth-profiles" in renderer
     assert "sky-auth-profile-grid" in renderer
@@ -424,6 +443,10 @@ def test_skybridge_auth_challenge_card_contract():
     assert "data-user-avatar" in renderer
     assert "data-challenge-id" in renderer
     assert "data-action-context" in renderer
+    assert "Choose who is speaking" in renderer
+    assert "PIN / Password" in app
+    assert "data-route=\"" in app
+    assert "buildLoginRoute(panelId, profile.user_id)" in app
     assert "btn.dataset.skyAction === 'auth'" in app
     assert "function hydrateAuthCard" in app
     assert "AbortController" in app
@@ -453,6 +476,10 @@ def test_skybridge_auth_challenge_card_contract():
     assert "sky-auth-scene" in css
     assert "sky-auth-profile" in css
     assert "sky-auth-footer" in css
+    assert "Skybridge premium auth picker" in css
+    assert "grid-template-columns: repeat(auto-fit, minmax(154px, 1fr))" in css
+    assert "sky-auth-request" in css
+    assert "filter: blur" not in css[css.index("/* Skybridge premium auth picker */"):]
     assert '"component": "auth_challenge"' in service
     assert '"route": ""' in service
     touch_index = read(UI / "index.html")
