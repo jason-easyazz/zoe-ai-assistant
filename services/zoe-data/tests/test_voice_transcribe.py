@@ -135,17 +135,43 @@ def test_faster_whisper_subprocess_signal_does_not_exit_worker(monkeypatch):
         asyncio.run(voice_tts._run_faster_whisper_subprocess("/tmp/example.wav"))
 
 
-def test_faster_whisper_defaults_to_subprocess(monkeypatch):
+def test_faster_whisper_defaults_to_persistent_worker(monkeypatch):
     from routers import voice_tts
 
     async def _fake_subprocess(path: str) -> str:
         return f"child:{path}"
 
+    async def _fake_worker(path: str) -> str:
+        return f"persistent:{path}"
+
     async def _fake_in_process(path: str) -> str:
-        return f"worker:{path}"
+        return f"in-process:{path}"
 
     monkeypatch.delenv("ZOE_WHISPER_IN_PROCESS", raising=False)
+    monkeypatch.delenv("ZOE_WHISPER_PERSISTENT_WORKER", raising=False)
     monkeypatch.setattr(voice_tts, "_run_faster_whisper_subprocess", _fake_subprocess)
+    monkeypatch.setattr(voice_tts, "_run_faster_whisper_worker", _fake_worker)
+    monkeypatch.setattr(voice_tts, "_run_faster_whisper_in_process", _fake_in_process)
+
+    assert asyncio.run(voice_tts._run_faster_whisper("/tmp/audio.wav")) == "persistent:/tmp/audio.wav"
+
+
+def test_faster_whisper_subprocess_fallback_opt_out(monkeypatch):
+    from routers import voice_tts
+
+    async def _fake_subprocess(path: str) -> str:
+        return f"child:{path}"
+
+    async def _fake_worker(path: str) -> str:
+        return f"persistent:{path}"
+
+    async def _fake_in_process(path: str) -> str:
+        return f"in-process:{path}"
+
+    monkeypatch.delenv("ZOE_WHISPER_IN_PROCESS", raising=False)
+    monkeypatch.setenv("ZOE_WHISPER_PERSISTENT_WORKER", "false")
+    monkeypatch.setattr(voice_tts, "_run_faster_whisper_subprocess", _fake_subprocess)
+    monkeypatch.setattr(voice_tts, "_run_faster_whisper_worker", _fake_worker)
     monkeypatch.setattr(voice_tts, "_run_faster_whisper_in_process", _fake_in_process)
 
     assert asyncio.run(voice_tts._run_faster_whisper("/tmp/audio.wav")) == "child:/tmp/audio.wav"
@@ -157,14 +183,70 @@ def test_faster_whisper_in_process_opt_in(monkeypatch):
     async def _fake_subprocess(path: str) -> str:
         return f"child:{path}"
 
+    async def _fake_worker(path: str) -> str:
+        return f"persistent:{path}"
+
     async def _fake_in_process(path: str) -> str:
-        return f"worker:{path}"
+        return f"in-process:{path}"
 
     monkeypatch.setenv("ZOE_WHISPER_IN_PROCESS", "true")
     monkeypatch.setattr(voice_tts, "_run_faster_whisper_subprocess", _fake_subprocess)
+    monkeypatch.setattr(voice_tts, "_run_faster_whisper_worker", _fake_worker)
     monkeypatch.setattr(voice_tts, "_run_faster_whisper_in_process", _fake_in_process)
 
-    assert asyncio.run(voice_tts._run_faster_whisper("/tmp/audio.wav")) == "worker:/tmp/audio.wav"
+    assert asyncio.run(voice_tts._run_faster_whisper("/tmp/audio.wav")) == "in-process:/tmp/audio.wav"
+
+
+def test_faster_whisper_worker_reuses_process(monkeypatch):
+    from routers import voice_tts
+
+    worker = voice_tts._FasterWhisperWorker()
+    starts = []
+
+    class _Stream:
+        def __init__(self, lines=None):
+            self.lines = list(lines or [])
+
+        async def readline(self):
+            return self.lines.pop(0)
+
+    class _Stdin:
+        def __init__(self):
+            self.writes = []
+
+        def write(self, data):
+            self.writes.append(data)
+
+        async def drain(self):
+            return None
+
+    class _Proc:
+        returncode = None
+
+        def __init__(self):
+            self.stdin = _Stdin()
+            self.stdout = _Stream([
+                b'{"ready": true}\n',
+                b'{"text": "first"}\n',
+                b'{"text": "second"}\n',
+            ])
+
+        def terminate(self):
+            self.returncode = -15
+
+        async def wait(self):
+            return self.returncode
+
+    async def _fake_exec(*_args, **_kwargs):
+        starts.append(1)
+        return _Proc()
+
+    monkeypatch.setattr(voice_tts.asyncio, "create_subprocess_exec", _fake_exec)
+    monkeypatch.setenv("ZOE_WHISPER_TIMEOUT_S", "2")
+
+    assert asyncio.run(worker.transcribe("/tmp/one.wav")) == "first"
+    assert asyncio.run(worker.transcribe("/tmp/two.wav")) == "second"
+    assert len(starts) == 1
 
 
 @pytest.mark.parametrize(
