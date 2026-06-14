@@ -214,16 +214,15 @@ async def ack_ui_action(
     error_code = payload.get("error_code")
     error_message = payload.get("error_message")
     retries = payload.get("retry_count")
-    now_sql = "NOW()"
-    acked_at = now_sql if status in {"success", "failed", "blocked"} else None
+    should_set_acked_at = status in {"success", "failed", "blocked"}
 
     await db.execute(
         """UPDATE ui_actions
            SET status = ?, error_code = ?, error_message = ?, retry_count = COALESCE(?, retry_count),
                updated_at = NOW(),
-               acked_at = CASE WHEN ? IS NOT NULL THEN NOW() ELSE acked_at END
+               acked_at = CASE WHEN CAST(? AS boolean) THEN NOW() ELSE acked_at END
            WHERE id = ? AND user_id = ?""",
-        (status, error_code, error_message, retries, acked_at, real_id, action_user_id),
+        (status, error_code, error_message, retries, should_set_acked_at, real_id, action_user_id),
     )
     await append_ledger(
         db,
