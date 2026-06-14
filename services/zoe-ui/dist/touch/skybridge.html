@@ -1973,6 +1973,11 @@
                 padding-bottom: 12px;
             }
 
+            body:not(.sky-empty) .sky-card-shell {
+                grid-column: span 12 !important;
+                width: 100% !important;
+            }
+
             body:not(.sky-empty) .sky-card,
             body:not(.sky-empty) .sky-card.page-card,
             body:not(.sky-empty) .sky-card.setting-card,
@@ -2313,6 +2318,17 @@
         .sky-card-stack::-webkit-scrollbar,
         .sky-card-stack::before {
             display: none !important;
+        }
+
+        .sky-card-shell {
+            grid-column: span 12 !important;
+            min-width: 0 !important;
+            width: 100% !important;
+        }
+
+        .sky-card-shell > .sky-card {
+            width: 100% !important;
+            height: 100% !important;
         }
 
         .sky-card,

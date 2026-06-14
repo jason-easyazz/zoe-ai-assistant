@@ -227,6 +227,15 @@ def test_skybridge_auth_and_voice_bus_contracts_are_wired():
     assert 'skybridge_context = {}\n\n            # ── Streaming LLM' in main
 
 
+def test_skybridge_touch_executor_card_shell_spans_panel_grid():
+    html = read(UI / "skybridge.html")
+
+    assert ".sky-card-shell {" in html
+    assert "grid-column: span 12 !important;" in html
+    assert ".sky-card-shell > .sky-card" in html
+    assert "body:not(.sky-empty) .sky-card-shell" in html
+
+
 def test_skybridge_renderer_supports_real_data_cards():
     renderer = read(UI / "js" / "skybridge-renderer.js")
     html = read(UI / "skybridge.html")
