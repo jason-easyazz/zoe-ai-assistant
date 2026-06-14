@@ -290,8 +290,12 @@ window.ZoeWebSockets = {
         // Connect directly to /ws/push with the session query expected by the
         // authenticated push endpoint. Browser WebSockets cannot send the
         // X-Session-ID header used by fetch(), so the query param is required.
+        // Touch panels use their dedicated panel channel so panel-scoped voice
+        // card actions are delivered without relying on global broadcasts.
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const params = new URLSearchParams({ channel: 'all' });
+        const params = new URLSearchParams();
+        if (panelId) params.set('panel_id', panelId);
+        else params.set('channel', 'all');
         if (sessionId) params.set('session_id', sessionId);
         else console.warn('[ZoeWS] initPush called without sessionId; push will be rejected');
         const pushUrl = `${protocol}//${window.location.host}/ws/push?${params.toString()}`;
@@ -433,7 +437,6 @@ window.ZoeWebSockets = {
         console.log('[ZoeWS] Panel push channel connected, panel_id:', panelId);
     }
 };
-
 
 
 
