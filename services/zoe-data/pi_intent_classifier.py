@@ -16,6 +16,7 @@ import os
 import re
 import shutil
 import time
+import uuid
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -93,6 +94,7 @@ class PiIntentClassifierConfig:
     max_words: int = PI_INTENT_MAX_WORDS
     offline_only: bool = True
     no_approve: bool = True
+    transport: str = "print"
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "PiIntentClassifierConfig":
@@ -108,6 +110,7 @@ class PiIntentClassifierConfig:
             max_words=int(values.get("ZOE_PI_INTENT_MAX_WORDS") or PI_INTENT_MAX_WORDS),
             offline_only=_env_bool(values.get("ZOE_PI_OFFLINE_ONLY"), default=True),
             no_approve=_env_bool(values.get("ZOE_PI_INTENT_NO_APPROVE"), default=True),
+            transport=(values.get("ZOE_PI_INTENT_TRANSPORT") or "print").strip().lower() or "print",
         )
 
     def validate(self) -> None:
@@ -117,6 +120,8 @@ class PiIntentClassifierConfig:
             raise ValueError("ZOE_PI_INTENT_MAX_WORDS must be positive")
         if self.offline_only and self.provider.lower() not in {"ollama", "local", "llama", "llamacpp"}:
             raise ValueError("Pi intent classification requires a local/offline provider")
+        if self.transport not in {"print", "rpc"}:
+            raise ValueError("ZOE_PI_INTENT_TRANSPORT must be print or rpc")
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
@@ -130,6 +135,7 @@ class PiIntentClassifierConfig:
             "max_words": self.max_words,
             "offline_only": self.offline_only,
             "no_approve": self.no_approve,
+            "transport": self.transport,
         }
 
 
@@ -201,6 +207,14 @@ async def classify_with_pi_intent_governor(
         return None
 
     prompt = _classification_prompt(text, context_turns=context_turns)
+    if active_config.transport == "rpc":
+        return await _classify_with_pi_rpc(active_config, runtime_env, prompt)
+    return await _classify_with_pi_print(active_config, runtime_env, prompt)
+
+
+async def _classify_with_pi_print(
+    active_config: PiIntentClassifierConfig, runtime_env: Mapping[str, str], prompt: str
+) -> PiIntentClassification | None:
     cmd = _pi_command(active_config, prompt)
     run_env = _pi_subprocess_env(runtime_env)
     start = time.perf_counter()
@@ -228,6 +242,23 @@ async def classify_with_pi_intent_governor(
         logger.debug("Pi intent governor failed rc=%s stderr=%s", proc.returncode, stderr.decode(errors="replace")[:500])
         return None
     return _parse_pi_classification(stdout.decode(errors="replace"), latency_ms=latency_ms)
+
+
+async def _classify_with_pi_rpc(
+    active_config: PiIntentClassifierConfig, runtime_env: Mapping[str, str], prompt: str
+) -> PiIntentClassification | None:
+    worker = _rpc_worker_for(active_config, runtime_env)
+    start = time.perf_counter()
+    try:
+        raw = await worker.prompt(prompt, timeout_seconds=active_config.timeout_seconds)
+    except asyncio.TimeoutError:
+        logger.debug("Pi RPC intent governor timed out after %.2fs", active_config.timeout_seconds)
+        return None
+    except Exception as exc:
+        logger.debug("Pi RPC intent governor failed: %s", exc)
+        return None
+    latency_ms = (time.perf_counter() - start) * 1000
+    return _parse_pi_classification(raw, latency_ms=latency_ms)
 
 
 def _classification_prompt(text: str, *, context_turns: str = "") -> str:
@@ -264,6 +295,142 @@ def _pi_command(config: PiIntentClassifierConfig, prompt: str) -> list[str]:
         cmd.append("--no-approve")
     cmd.append(prompt)
     return cmd
+
+
+def _pi_rpc_command(config: PiIntentClassifierConfig) -> list[str]:
+    cmd = [
+        config.command,
+        "--mode",
+        "rpc",
+        "--no-session",
+        "--provider",
+        config.provider,
+        "--model",
+        config.model,
+    ]
+    if config.no_approve:
+        cmd.append("--no-approve")
+    if config.offline_only:
+        cmd.append("--offline")
+    return cmd
+
+
+@dataclass(frozen=True)
+class _RpcWorkerKey:
+    command: str
+    provider: str
+    model: str
+    cwd: str
+    no_approve: bool
+    offline_only: bool
+
+
+class _PiRpcIntentWorker:
+    def __init__(self, config: PiIntentClassifierConfig, env: Mapping[str, str]) -> None:
+        self.config = config
+        self.env = _pi_subprocess_env(env)
+        self.proc: asyncio.subprocess.Process | None = None
+        self._lock = asyncio.Lock()
+
+    async def prompt(self, prompt: str, *, timeout_seconds: float) -> str:
+        async with self._lock:
+            try:
+                await self._ensure_started()
+                assert self.proc is not None and self.proc.stdin is not None and self.proc.stdout is not None
+                request_id = f"zoe-intent-{uuid.uuid4().hex}"
+                payload = json.dumps({"id": request_id, "type": "prompt", "message": prompt}, separators=(",", ":"))
+                self.proc.stdin.write((payload + "\n").encode())
+                await self.proc.stdin.drain()
+                return await asyncio.wait_for(self._read_turn(), timeout=timeout_seconds)
+            except Exception:
+                await self._reset_process_locked()
+                raise
+
+    async def reset(self) -> None:
+        async with self._lock:
+            await self._reset_process_locked()
+
+    async def _reset_process_locked(self) -> None:
+        proc = self.proc
+        self.proc = None
+        if proc and proc.returncode is None:
+            proc.terminate()
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=1.0)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+
+    async def _ensure_started(self) -> None:
+        if self.proc and self.proc.returncode is None:
+            return
+        self.proc = await asyncio.create_subprocess_exec(
+            *_pi_rpc_command(self.config),
+            cwd=self.config.cwd,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            env=self.env,
+        )
+
+    async def _read_turn(self) -> str:
+        assert self.proc is not None and self.proc.stdout is not None
+        latest_text = ""
+        while True:
+            line = await self.proc.stdout.readline()
+            if not line:
+                raise RuntimeError("Pi RPC process closed")
+            try:
+                event = json.loads(line.decode(errors="replace"))
+            except json.JSONDecodeError:
+                continue
+            text = _assistant_text_from_rpc_event(event)
+            if text:
+                latest_text = text
+            if event.get("type") == "agent_end":
+                return latest_text
+
+
+_RPC_WORKERS: dict[_RpcWorkerKey, _PiRpcIntentWorker] = {}
+
+
+def _rpc_worker_for(config: PiIntentClassifierConfig, env: Mapping[str, str]) -> _PiRpcIntentWorker:
+    key = _RpcWorkerKey(config.command, config.provider, config.model, config.cwd, config.no_approve, config.offline_only)
+    worker = _RPC_WORKERS.get(key)
+    if worker is None:
+        worker = _PiRpcIntentWorker(config, env)
+        _RPC_WORKERS[key] = worker
+    return worker
+
+
+def _assistant_text_from_rpc_event(event: Mapping[str, Any]) -> str:
+    message = event.get("message")
+    if isinstance(message, Mapping) and message.get("role") == "assistant":
+        text = _text_from_message_content(message.get("content"))
+        if text:
+            return text
+    if event.get("type") == "agent_end" and isinstance(event.get("messages"), list):
+        for item in reversed(event["messages"]):
+            if isinstance(item, Mapping) and item.get("role") == "assistant":
+                text = _text_from_message_content(item.get("content"))
+                if text:
+                    return text
+    assistant_event = event.get("assistantMessageEvent")
+    if isinstance(assistant_event, Mapping) and assistant_event.get("type") == "text_end":
+        return str(assistant_event.get("content") or "")
+    return ""
+
+
+def _text_from_message_content(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, Mapping) and item.get("type") == "text":
+                parts.append(str(item.get("text") or ""))
+        return "".join(parts)
+    return ""
 
 
 def _parse_pi_classification(raw: str, *, latency_ms: float) -> PiIntentClassification | None:
