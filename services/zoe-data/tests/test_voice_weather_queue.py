@@ -5,6 +5,7 @@ import types
 import pytest
 
 from routers.voice_tts import (
+    _broadcast_skybridge_ui,
     _broadcast_weather_ui,
     _should_supersede_voice_weather_action,
 )
@@ -188,3 +189,62 @@ async def test_broadcast_weather_ui_supersedes_stale_rows_after_deduped_enqueue(
     assert db.events.index("transaction_exit") < db.events.index(
         "broadcast:voice_weather_nav_panel-1_turn-1"
     )
+
+
+@pytest.mark.asyncio
+async def test_broadcast_skybridge_ui_opens_skybridge_with_card_payload(monkeypatch) -> None:
+    db = _Db()
+    enqueue_calls = []
+    broadcasts = []
+
+    async def get_db():
+        yield db
+
+    async def enqueue_ui_action(_db, **kwargs):
+        enqueue_calls.append(kwargs)
+        return {
+            "id": kwargs["idempotency_key"],
+            "status": "queued",
+            "panel_id": kwargs["panel_id"],
+        }
+
+    class Broadcaster:
+        async def broadcast(self, channel, event, payload):
+            broadcasts.append((channel, event, payload))
+
+    monkeypatch.setitem(sys.modules, "database", types.SimpleNamespace(get_db=get_db))
+    monkeypatch.setitem(
+        sys.modules,
+        "ui_orchestrator",
+        types.SimpleNamespace(enqueue_ui_action=enqueue_ui_action),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "push",
+        types.SimpleNamespace(broadcaster=Broadcaster()),
+    )
+
+    card = {
+        "schema_version": "1.0.0",
+        "card_type": "generic",
+        "card_id": "11111111-1111-1111-1111-111111111111",
+        "content": {"title": "Weather", "source": "weather_current"},
+        "producer": "test",
+        "producer_version": "1",
+        "created_at": "2026-06-14T00:00:00Z",
+    }
+    result = {
+        "handled": True,
+        "spoken_summary": "Here is the weather.",
+        "intent": {"domain": "weather", "action": "current"},
+        "cards": [card],
+    }
+
+    await _broadcast_skybridge_ui("panel-1", result, utterance="show weather", turn_key="turn-1")
+
+    assert [call["action_type"] for call in enqueue_calls] == ["panel_navigate", "show_card"]
+    assert enqueue_calls[0]["payload"]["url"] == "/touch/skybridge.html?q=show+weather"
+    assert enqueue_calls[1]["payload"]["type"] == "skybridge"
+    assert enqueue_calls[1]["payload"]["card"] == card
+    assert enqueue_calls[1]["payload"]["result"] == result
+    assert [item[2]["action"]["action_type"] for item in broadcasts] == ["panel_navigate", "show_card"]

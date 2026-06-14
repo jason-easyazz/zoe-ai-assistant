@@ -53,7 +53,7 @@
     const AUTH_CHALLENGE_TTL_MS = 10 * 60 * 1000;
 
     const AUTO_HOME_TIMEOUT_S = Number(window.ZOE_AUTO_HOME_TIMEOUT_S || 20);
-    const HOME_PATH = '/touch/dashboard.html';
+    const HOME_PATH = '/touch/skybridge.html';
 
     function isHomePath(path) {
         try {
@@ -601,6 +601,40 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
         showBar: function (_text) { /* no-op */ },
     };
 
+    function renderSkybridgeCardPayload(payload) {
+        const result = payload && payload.result;
+        const cards = (
+            result && Array.isArray(result.cards) ? result.cards :
+            Array.isArray(payload && payload.cards) ? payload.cards :
+            payload && payload.card ? [payload.card] : []
+        ).filter(Boolean);
+        const cardRoot = document.getElementById('skyCards');
+        if (!cardRoot || !window.SkybridgeRenderer || typeof window.SkybridgeRenderer.render !== 'function' || !cards.length) {
+            return false;
+        }
+        cardRoot.innerHTML = '';
+        cards.forEach((card, index) => {
+            const wrap = document.createElement('div');
+            wrap.className = 'sky-card-shell';
+            wrap.style.animationDelay = `${Math.min(index * 90, 360)}ms`;
+            wrap.innerHTML = window.SkybridgeRenderer.render(card);
+            cardRoot.appendChild(wrap);
+        });
+        try {
+            document.body.classList.remove('sky-empty');
+            document.body.classList.add('sky-has-cards');
+            const copy = document.getElementById('skyListeningCopy');
+            if (copy && result && result.spoken_summary) copy.textContent = result.spoken_summary;
+            const title = document.getElementById('skyContextTitle');
+            if (title) title.textContent = 'Skybridge';
+            const detail = document.getElementById('skyContextDetail');
+            if (detail && result && result.spoken_summary) detail.textContent = result.spoken_summary;
+        } catch (_) {
+            // Non-fatal; the cards are already rendered.
+        }
+        return true;
+    }
+
     function setOrbMode(mode) {
         // Drive the floating orb (orb-loader.js) if present
         const orb = document.getElementById('zoeOrb') || document.querySelector('.zoe-orb');
@@ -642,7 +676,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
             'settings':   _page('settings.html'),
             'smart home': _page('smart-home.html'),
             'smarthome':  _page('smart-home.html'),
-            'home':       _page('dashboard.html'),
+            'home':       _page('skybridge.html'),
             'dashboard':  _page('dashboard.html'),
             'people':     _page('people.html'),
             'memories':   _page('memories.html'),
@@ -1224,6 +1258,9 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                 // Ignore cards targeting a different panel.
                 if (payload.panel_id && payload.panel_id !== state.panelId) {
                     return { status: 'skipped', error_code: 'wrong_panel' };
+                }
+                if (renderSkybridgeCardPayload(payload)) {
+                    return { status: 'success' };
                 }
                 const cardType = payload.type || 'answer';
                 const cardData = payload.data || {};

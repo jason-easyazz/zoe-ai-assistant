@@ -311,7 +311,8 @@ def test_skybridge_is_registered_in_touch_menu():
 
     assert "{ id: 'skybridge'" in menu
     assert "/touch/skybridge.html" in menu
-    assert "{ id: 'skybridge', path: '/touch/skybridge.html'," not in menu
+    assert "{ id: 'skybridge', path: '/touch/skybridge.html',  label: 'Home'" in menu
+    assert "{ id: 'dashboard', path: '/touch/dashboard.html',  label: 'Home'" not in menu
     assert "q=show%20my%20calendar" not in menu
     assert "Skybridge Calendar" not in menu
     assert "Skybridge Interface" not in menu
@@ -322,6 +323,39 @@ def test_skybridge_is_registered_in_touch_menu():
     assert "'dashboard', 'skybridge'," not in menu
     assert "'skybridge.html'" in menu
     assert "'dashboard', 'skybridge', 'calendar'" not in menu
+
+
+def test_touch_defaults_to_skybridge_home():
+    auth = (ROOT / "zoe-ui" / "dist" / "js" / "auth.js").read_text(encoding="utf-8")
+    touch_index = read(UI / "index.html")
+    executor = (ROOT / "zoe-ui" / "dist" / "js" / "touch-ui-executor.js").read_text(encoding="utf-8")
+    menu = read(UI / "js" / "touch-menu.js")
+
+    assert "const HOME_PATH = '/touch/skybridge.html';" in executor
+    assert "let dest = '/touch/skybridge.html';" in touch_index
+    assert "window.location.href = '/touch/skybridge.html';" in touch_index
+    assert "window.location.href = '/touch/skybridge.html';" in auth
+    assert "return '/touch/skybridge.html';" in menu
+
+
+def test_touch_executor_renders_skybridge_card_contracts():
+    executor = (ROOT / "zoe-ui" / "dist" / "js" / "touch-ui-executor.js").read_text(encoding="utf-8")
+
+    assert "function renderSkybridgeCardPayload(payload)" in executor
+    assert "payload && payload.card ? [payload.card]" in executor
+    assert "window.SkybridgeRenderer.render(card)" in executor
+    assert "if (renderSkybridgeCardPayload(payload))" in executor
+
+
+def test_voice_command_has_skybridge_first_touch_path():
+    voice = read(DATA / "routers" / "voice_tts.py")
+
+    assert "async def _broadcast_skybridge_ui" in voice
+    assert "resolve_skybridge_request(" in voice
+    assert "intent\": f\"skybridge:" in voice
+    assert "\"url\": url" in voice
+    assert "\"type\": \"skybridge\"" in voice
+    assert "\"result\": skybridge_result" in voice
 
 
 

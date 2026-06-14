@@ -631,6 +631,88 @@ async def _broadcast_calendar_ui(
         logger.debug("voice calendar ui enqueue failed (non-fatal): %s", exc)
 
 
+async def _broadcast_skybridge_ui(
+    panel_id: str,
+    skybridge_result: dict,
+    *,
+    utterance: str = "",
+    turn_key: Optional[str] = None,
+) -> None:
+    """Display a Skybridge result on the touch panel without routing to a domain page."""
+    if not skybridge_result or not skybridge_result.get("handled"):
+        return
+    delivery_key = turn_key or str(time.monotonic_ns())
+    query = quote_plus(str(utterance or skybridge_result.get("spoken_summary") or ""))
+    url = "/touch/skybridge.html" + (f"?q={query}" if query else "")
+    cards = skybridge_result.get("cards") if isinstance(skybridge_result.get("cards"), list) else []
+    summary = str(skybridge_result.get("spoken_summary") or "Showing this in Skybridge.")
+    nav_action = {
+        "id": f"voice_skybridge_nav_{panel_id}_{delivery_key}",
+        "action_type": "panel_navigate",
+        "payload": {
+            "url": url,
+            "label": "Opening Skybridge",
+            "panel_id": panel_id,
+            "source": "voice:skybridge",
+        },
+    }
+    card_action = {
+        "id": f"voice_skybridge_card_{panel_id}_{delivery_key}",
+        "action_type": "show_card",
+        "payload": {
+            "type": "skybridge",
+            "data": {"summary": summary[:300]},
+            "card": cards[0] if cards else None,
+            "cards": cards,
+            "result": skybridge_result,
+            "panel_id": panel_id,
+            "source": "voice:skybridge",
+        },
+    }
+    try:
+        from database import get_db as _get_db
+        from ui_orchestrator import enqueue_ui_action as _enqueue_ui_action
+        async for _db in _get_db():
+            _panel_user_id = "family-admin"
+            try:
+                _cur = await _db.execute(
+                    "SELECT user_id FROM ui_panel_sessions WHERE panel_id = ? ORDER BY last_seen_at DESC LIMIT 1",
+                    (panel_id,),
+                )
+                _row = await _cur.fetchone()
+                if _row and _row["user_id"]:
+                    _panel_user_id = str(_row["user_id"])
+            except Exception:
+                pass
+            await _enqueue_ui_action(
+                _db,
+                user_id=_panel_user_id,
+                panel_id=panel_id,
+                action_type="panel_navigate",
+                payload=nav_action["payload"],
+                requested_by="voice",
+                idempotency_key=f"voice_skybridge_nav_{panel_id}_{delivery_key}",
+            )
+            await _enqueue_ui_action(
+                _db,
+                user_id=_panel_user_id,
+                panel_id=panel_id,
+                action_type="show_card",
+                payload=card_action["payload"],
+                requested_by="voice",
+                idempotency_key=f"voice_skybridge_card_{panel_id}_{delivery_key}",
+            )
+            break
+    except Exception as exc:
+        logger.debug("voice skybridge ui enqueue failed (non-fatal): %s", exc)
+    try:
+        from push import broadcaster
+        await broadcaster.broadcast("all", "ui_action", {"action": nav_action})
+        await broadcaster.broadcast("all", "ui_action", {"action": card_action})
+    except Exception as exc:
+        logger.debug("voice skybridge ui broadcast failed (non-fatal): %s", exc)
+
+
 async def _broadcast_shopping_chat_ui(
     panel_id: str,
     list_type: str,
@@ -2322,6 +2404,52 @@ async def voice_command(
         await _bc.broadcast("all", "voice:thinking", {"panel_id": panel_id})
     except Exception:
         pass
+
+    # Skybridge-first touch prototype: supported visual domains render as cards
+    # on the single Skybridge surface instead of navigating to domain pages.
+    try:
+        from skybridge_service import resolve_skybridge_request
+
+        _voice_entry = _VOICE_SESSIONS.get(panel_id, {})
+        _skybridge_context = _voice_entry.get("skybridge_context") or {}
+        _skybridge_result = await resolve_skybridge_request(
+            text,
+            effective_user,
+            context=_skybridge_context,
+            db=db,
+        )
+        if _skybridge_result and _skybridge_result.get("handled"):
+            _VOICE_SESSIONS.setdefault(panel_id, {})["skybridge_context"] = (
+                _skybridge_result.get("skybridge_context") or {}
+            )
+            _skybridge_reply = str(_skybridge_result.get("spoken_summary") or "Showing that in Skybridge.")
+            await _broadcast_skybridge_ui(
+                panel_id,
+                _skybridge_result,
+                utterance=text,
+                turn_key=_turn_key,
+            )
+            try:
+                from push import broadcaster as _bc_sky
+                await _bc_sky.broadcast("all", "voice:responding", {"panel_id": panel_id, "text": _skybridge_reply[:200]})
+                await _bc_sky.broadcast("all", "voice:done", {"panel_id": panel_id})
+            except Exception:
+                pass
+            _skybridge_audio = await synthesize({"text": _skybridge_reply}, caller=caller)
+            await _schedule_voice_chat_save(session_id, text, _skybridge_reply, effective_user)
+            asyncio.ensure_future(_run_voice_memory_passes(text, _skybridge_reply, effective_user, session_id))
+            return {
+                "ok": True,
+                "panel_id": panel_id,
+                "reply": _skybridge_reply,
+                "audio_base64": base64.b64encode(_skybridge_audio.body).decode("ascii"),
+                "content_type": _skybridge_audio.media_type,
+                "intent": f"skybridge:{(_skybridge_result.get('intent') or {}).get('domain', 'unknown')}",
+                "skybridge": True,
+            }
+        _VOICE_SESSIONS.setdefault(panel_id, {})["skybridge_context"] = {}
+    except Exception as _skybridge_exc:
+        logger.debug("voice/command skybridge fast path failed (non-fatal): %s", _skybridge_exc)
 
     # Fallback audio used when any part of the pipeline fails — panel never goes silent.
     _FALLBACK_PHRASE = "Sorry, something went wrong. Please try again."
