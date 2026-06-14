@@ -449,18 +449,21 @@
             return;
         }
         const baseAction = props.actions && props.actions[0] ? props.actions[0] : {};
+        const panelId = currentPanelId({});
         target.innerHTML = profiles.map(profile => {
             const name = window.SkybridgeRenderer.escapeHtml(profile.username || profile.name || profile.user_id);
-            const role = window.SkybridgeRenderer.escapeHtml(profile.role || (profile.user_id === defaultUserId ? 'Default profile' : 'Profile'));
+            const roleText = profile.user_id === defaultUserId ? 'Default profile' : (profile.role || 'Profile');
+            const role = window.SkybridgeRenderer.escapeHtml(roleText);
             const avatar = window.SkybridgeRenderer.escapeHtml(authInitials(profile));
             const userId = window.SkybridgeRenderer.escapeHtml(profile.user_id);
+            const route = window.SkybridgeRenderer.escapeHtml(buildLoginRoute(panelId, profile.user_id));
             const selected = profile.user_id === defaultUserId ? ' is-default' : '';
             const challengeId = window.SkybridgeRenderer.escapeHtml(baseAction.challenge_id || '');
             const actionContext = window.SkybridgeRenderer.escapeHtml(baseAction.action_context || 'Enter PIN');
-            return '<button type="button" class="sky-auth-profile' + selected + '" data-sky-action="auth" data-route="" data-challenge-id="' + challengeId + '" data-action-context="' + actionContext + '" data-user-id="' + userId + '" data-user-name="' + name + '" data-user-avatar="' + avatar + '">' +
+            return '<button type="button" class="sky-auth-profile' + selected + '" data-sky-action="auth" data-route="' + route + '" data-challenge-id="' + challengeId + '" data-action-context="' + actionContext + '" data-user-id="' + userId + '" data-user-name="' + name + '" data-user-avatar="' + avatar + '">' +
                 '<span class="sky-auth-avatar">' + avatar + '</span>' +
                 '<span class="sky-auth-person"><strong>' + name + '</strong><small>' + role + '</small></span>' +
-                '<span class="sky-auth-enter">PIN</span>' +
+                '<span class="sky-auth-enter">PIN / Password</span>' +
                 '</button>';
         }).join('');
     }
