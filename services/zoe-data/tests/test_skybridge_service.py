@@ -466,7 +466,9 @@ async def test_guest_calendar_request_does_not_fetch_family_events():
     assert result["handled"] is True
     assert result["auth_required"] is True
     assert result["actions"][0]["type"] == "auth_required"
-    assert result["cards"][0]["props"]["status"] == "Authentication"
+    assert result["cards"][0]["component"] == "auth_challenge"
+    assert result["cards"][0]["props"]["actions"][0]["type"] == "auth"
+    assert result["cards"][0]["props"]["actions"][0]["route"] == ""
 
 
 @pytest.mark.asyncio
@@ -616,7 +618,9 @@ async def test_guest_lists_request_does_not_fetch_private_lists():
     assert result["handled"] is True
     assert result["auth_required"] is True
     assert result["actions"][0]["domain"] == "lists"
-    assert result["cards"][0]["props"]["status"] == "Authentication"
+    assert result["cards"][0]["component"] == "auth_challenge"
+    assert result["cards"][0]["props"]["actions"][0]["type"] == "auth"
+    assert result["cards"][0]["props"]["actions"][0]["route"] == ""
 
 
 @pytest.mark.asyncio
@@ -673,7 +677,9 @@ async def test_guest_people_request_does_not_fetch_private_people():
     assert result["handled"] is True
     assert result["auth_required"] is True
     assert result["actions"][0]["domain"] == "people"
-    assert result["cards"][0]["props"]["status"] == "Authentication"
+    assert result["cards"][0]["component"] == "auth_challenge"
+    assert result["cards"][0]["props"]["actions"][0]["type"] == "auth"
+    assert result["cards"][0]["props"]["actions"][0]["route"] == ""
 
 
 @pytest.mark.asyncio

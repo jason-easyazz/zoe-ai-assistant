@@ -17,8 +17,10 @@
         const label = escapeHtml(action.label || action.title || 'Open');
         const query = escapeHtml(action.query || '');
         const route = escapeHtml(action.route || '');
+        const challengeId = escapeHtml(action.challenge_id || '');
+        const actionContext = escapeHtml(action.action_context || action.reason || '');
         const kind = action.kind === 'warn' ? ' warn' : (index === 0 ? ' primary' : '');
-        return '<button type="button" class="' + kind.trim() + '" data-sky-action="' + escapeHtml(action.type || 'query') + '" data-query="' + query + '" data-route="' + route + '">' + label + '</button>';
+        return '<button type="button" class="' + kind.trim() + '" data-sky-action="' + escapeHtml(action.type || 'query') + '" data-query="' + query + '" data-route="' + route + '" data-challenge-id="' + challengeId + '" data-action-context="' + actionContext + '">' + label + '</button>';
     }
 
     function safeClassTokens(value) {
@@ -64,6 +66,29 @@
             actions,
             '</article>'
         ].join('');
+    }
+
+    function renderAuthChallenge(props) {
+        const title = props.title || 'Confirm it is you';
+        const body = props.body || props.message || 'Zoe needs to know who is speaking before showing or changing personal data.';
+        const domain = props.domain ? String(props.domain) : 'Private data';
+        const action = props.action ? String(props.action).replace(/_/g, ' ') : 'Continue';
+        const bodyHtml = [
+            '<div class="sky-auth-scene">',
+            '<div class="sky-auth-orb" aria-hidden="true"><span></span></div>',
+            '<div class="sky-auth-copy">',
+            '<span>' + escapeHtml(domain) + '</span>',
+            '<strong>' + escapeHtml(title) + '</strong>',
+            '<p>' + escapeHtml(body) + '</p>',
+            '</div>',
+            '<div class="sky-auth-steps" aria-label="Authentication steps">',
+            '<div><b>1</b><span>Choose profile</span></div>',
+            '<div><b>2</b><span>Enter PIN</span></div>',
+            '<div><b>3</b><span>' + escapeHtml(action) + '</span></div>',
+            '</div>',
+            '</div>'
+        ].join('');
+        return cardFrame(props, bodyHtml, { wide: true, tone: 'auth-challenge', hideHeader: true, hideStatus: true });
     }
 
     function renderStatus(props) {
@@ -542,6 +567,7 @@
         media: renderList,
         smart_home: renderList,
         research_report: renderList,
+        auth_challenge: renderAuthChallenge,
         stream_text: renderStatus,
         unsupported_contract: renderUnsupportedContract
     };

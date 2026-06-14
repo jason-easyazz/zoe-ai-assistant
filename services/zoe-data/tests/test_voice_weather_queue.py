@@ -61,6 +61,54 @@ def test_ignores_non_weather_actions() -> None:
     )
 
 
+@pytest.mark.asyncio
+async def test_request_auth_ui_includes_skybridge_card_metadata(monkeypatch):
+    calls = {"broadcast": None, "enqueue": None}
+
+    class Cursor:
+        async def fetchone(self):
+            return {"user_id": "family-admin"}
+
+    class Db:
+        async def execute(self, *_args, **_kwargs):
+            return Cursor()
+
+    async def get_db():
+        yield Db()
+
+    async def enqueue_ui_action(_db, **kwargs):
+        calls["enqueue"] = kwargs
+        return {"action_id": "auth-action"}
+
+    async def broadcast(channel, event_type, payload):
+        calls["broadcast"] = {"channel": channel, "event_type": event_type, "payload": payload}
+        return True
+
+    monkeypatch.setitem(sys.modules, "database", types.SimpleNamespace(get_db=get_db))
+    monkeypatch.setitem(sys.modules, "ui_orchestrator", types.SimpleNamespace(enqueue_ui_action=enqueue_ui_action))
+    monkeypatch.setitem(sys.modules, "push", types.SimpleNamespace(broadcaster=types.SimpleNamespace(broadcast=broadcast)))
+
+    delivered = await voice_tts._request_auth_ui(
+        panel_id="panel-auth",
+        challenge_id="challenge-123",
+        reason="Private list request",
+    )
+
+    assert delivered is True
+    payload = calls["broadcast"]["payload"]["action"]["payload"]
+    assert payload["panel_id"] == "panel-auth"
+    assert payload["challenge_id"] == "challenge-123"
+    assert payload["action_context"] == "Private list request"
+    assert payload["title"] == "Confirm it is you"
+    assert payload["message"] == "Zoe needs to know who is speaking before showing or changing personal data."
+    assert payload["domain"] == "Private data"
+    assert payload["intent_action"] == "continue"
+    assert payload["cta"] == "Continue"
+    assert payload["summary"] == "Please authenticate on the touch panel to continue."
+    assert calls["enqueue"]["action_type"] == "panel_request_auth"
+    assert calls["enqueue"]["payload"] == payload
+
+
 class _Cursor:
     def __init__(self, *, row: dict | None = None, rows: list[dict] | None = None):
         self._row = row

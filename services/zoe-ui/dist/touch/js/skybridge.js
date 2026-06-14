@@ -94,8 +94,28 @@
         els.cards.addEventListener('click', event => {
             const btn = event.target.closest('button[data-sky-action]');
             if (!btn) return;
-            const route = btn.dataset.route;
+            let route = btn.dataset.route;
             const query = btn.dataset.query;
+            if (btn.dataset.skyAction === 'auth') {
+                let storedChallenge = {};
+                try { storedChallenge = JSON.parse(sessionStorage.getItem('zoe_panel_auth_challenge') || '{}') || {}; } catch (_) {}
+                const panelId = new URLSearchParams(location.search).get('panel_id') || localStorage.getItem('zoe_touch_panel_id') || storedChallenge.panel_id || '';
+                try {
+                    const challengeId = btn.dataset.challengeId || '';
+                    const actionContext = btn.dataset.actionContext || 'Enter PIN';
+                    if (challengeId) {
+                        sessionStorage.setItem('zoe_panel_auth_challenge', JSON.stringify({
+                            challenge_id: challengeId,
+                            panel_id: panelId,
+                            action_context: actionContext
+                        }));
+                    }
+                    sessionStorage.setItem('zoe_redirect_after_login', location.pathname + location.search);
+                    if (!route) route = '/touch/index.html' + (panelId ? '?panel_id=' + encodeURIComponent(panelId) : '');
+                } catch (_) {
+                    if (!route) route = '/touch/index.html' + (panelId ? '?panel_id=' + encodeURIComponent(panelId) : '');
+                }
+            }
             if (route && route.startsWith('/')) {
                 location.href = route;
             } else if (route) {

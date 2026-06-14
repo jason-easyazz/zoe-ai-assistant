@@ -1233,6 +1233,12 @@ async def _request_auth_ui(panel_id: str, challenge_id: str, reason: str) -> boo
             "panel_id": panel_id,
             "challenge_id": challenge_id,
             "action_context": reason,
+            "summary": "Please authenticate on the touch panel to continue.",
+            "title": "Confirm it is you",
+            "message": "Zoe needs to know who is speaking before showing or changing personal data.",
+            "domain": "Private data",
+            "intent_action": "continue",
+            "cta": "Continue",
         },
     }
     delivered = False
