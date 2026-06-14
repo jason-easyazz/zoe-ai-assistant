@@ -557,7 +557,16 @@ def _auth_required_result(intent: SkybridgeIntent) -> dict[str, Any]:
         "auth_required": True,
         "intent": _intent_dict(intent),
         "spoken_summary": "Please authenticate on the touch panel to continue.",
-        "cards": [_status_card(title, body, status="Authentication")],
+        "cards": [{
+            "component": "auth_challenge",
+            "props": {
+                "title": title,
+                "body": body,
+                "domain": domain,
+                "action": intent.action,
+                "actions": [{"type": "auth", "label": "Sign in", "route": ""}],
+            },
+        }],
         "actions": [{"type": "auth_required", "domain": intent.domain, "action": intent.action}],
     }
 

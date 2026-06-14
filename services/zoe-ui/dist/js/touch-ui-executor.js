@@ -623,6 +623,52 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
         return template.innerHTML;
     }
 
+    function buildTouchLoginRoute(panelId) {
+        return '/touch/index.html' + (panelId ? '?panel_id=' + encodeURIComponent(panelId) : '');
+    }
+
+    function renderSkybridgeAuthChallenge(payload) {
+        const cardRoot = document.getElementById('skyCards');
+        if (!cardRoot || !window.SkybridgeRenderer || typeof window.SkybridgeRenderer.render !== 'function') {
+            return false;
+        }
+        const challengeId = String(payload.challenge_id || '').trim();
+        if (!challengeId) return false;
+        const panelId = payload.panel_id || state.panelId || getPanelId();
+        const actionContext = payload.action_context || payload.reason || 'Enter PIN';
+        try {
+            sessionStorage.setItem('zoe_panel_auth_challenge', JSON.stringify({
+                challenge_id: challengeId,
+                panel_id: panelId,
+                action_context: actionContext,
+            }));
+            sessionStorage.setItem('zoe_redirect_after_login', window.location.pathname + window.location.search);
+        } catch (_) {
+            // Non-fatal: the Continue action will still open the login page.
+        }
+        const card = {
+            component: 'auth_challenge',
+            props: {
+                id: 'auth-' + challengeId,
+                title: payload.title || 'Confirm it is you',
+                body: payload.message || payload.body || 'Zoe needs to know who is speaking before showing or changing personal data.',
+                domain: payload.domain || 'Private data',
+                action: payload.intent_action || payload.action || 'Continue',
+                actions: [{
+                    type: 'auth',
+                    label: payload.cta || 'Continue',
+                    route: buildTouchLoginRoute(panelId),
+                    challenge_id: challengeId,
+                    action_context: actionContext,
+                }],
+            },
+        };
+        return renderSkybridgeCardPayload({
+            cards: [card],
+            data: { summary: payload.summary || 'Please authenticate on the touch panel to continue.' },
+        });
+    }
+
     function renderSkybridgeCardPayload(payload) {
         const result = payload && payload.result;
         const cards = (
@@ -1206,6 +1252,9 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                         return { status: 'skipped', error_code: 'duplicate_challenge' };
                     }
                     rememberAuthChallenge(challengeId);
+                    if (renderSkybridgeAuthChallenge(payload)) {
+                        return { status: 'success' };
+                    }
                     redirectToTouchLogin({
                         challenge_id: challengeId,
                         action_context: payload.action_context || payload.reason || 'Enter PIN'
