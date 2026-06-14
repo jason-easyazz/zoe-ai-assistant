@@ -97,7 +97,7 @@ async def test_panel_push_session_rejects_empty_user_id(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_panel_push_session_rejects_invalid_session(monkeypatch):
-    db = _install_database(monkeypatch, _Db({"user_id": "guest"}))
+    db = _install_database(monkeypatch, _Db(None))
 
     async def resolve(_session_id):
         return None
@@ -105,4 +105,42 @@ async def test_panel_push_session_rejects_invalid_session(monkeypatch):
     monkeypatch.setattr(main, "_resolve_ws_session", resolve)
 
     assert await main._session_can_subscribe_panel("zoe-touch-pi", None) is False
-    assert db.calls == []
+    assert "FROM panels WHERE panel_id = ?" in db.calls[0][0]
+
+
+@pytest.mark.asyncio
+async def test_panel_push_session_allows_registered_guest_panel_without_valid_session(monkeypatch):
+    db = _install_database(monkeypatch, _Db({"allow_guest": 1, "is_active": 1}))
+
+    async def resolve(_session_id):
+        return None
+
+    monkeypatch.setattr(main, "_resolve_ws_session", resolve)
+
+    assert await main._session_can_subscribe_panel("zoe-touch-pi", "stale-guest-session") is True
+    assert "FROM panels WHERE panel_id = ?" in db.calls[0][0]
+    assert db.calls[0][1] == ("zoe-touch-pi",)
+
+
+@pytest.mark.asyncio
+async def test_panel_push_session_rejects_guest_panel_when_guest_disabled(monkeypatch):
+    _install_database(monkeypatch, _Db({"allow_guest": 0, "is_active": 1}))
+
+    async def resolve(_session_id):
+        return None
+
+    monkeypatch.setattr(main, "_resolve_ws_session", resolve)
+
+    assert await main._session_can_subscribe_panel("zoe-touch-pi", "stale-guest-session") is False
+
+
+@pytest.mark.asyncio
+async def test_panel_push_session_rejects_inactive_guest_panel(monkeypatch):
+    _install_database(monkeypatch, _Db({"allow_guest": 1, "is_active": 0}))
+
+    async def resolve(_session_id):
+        return None
+
+    monkeypatch.setattr(main, "_resolve_ws_session", resolve)
+
+    assert await main._session_can_subscribe_panel("zoe-touch-pi", "stale-guest-session") is False
