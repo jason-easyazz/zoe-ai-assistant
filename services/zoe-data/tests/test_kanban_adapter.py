@@ -2475,6 +2475,26 @@ def test_implement_edit_safety_still_blocks_read_exploration_after_multifile_edi
     )
 
 
+def test_implement_edit_safety_still_blocks_grep_exploration_after_multifile_edits(tmp_path, monkeypatch):
+    # The relaxation covers edits only; a grep (like read/find) after a Python
+    # patch with no syntax check yet is still the exploration we block.
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    log_dir = tmp_path / "kanban" / "logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "t_impl.log").write_text(
+        "Query: work kanban task t_impl\n"
+        "  ┊ 🔧 patch     /work/services/zoe-data/tests/test_pipeline_evidence.py  5.9s\n"
+        "  ┊ 🔧 patch     /work/.github/workflows/validate.yml  1.2s\n"
+        "  ┊ 🔎 grep      required_evidence  0.1s\n",
+        encoding="utf-8",
+    )
+
+    assert kb.implement_edit_safety_reason_from_log("t_impl", "implement") == (
+        "BLOCKER=IMPLEMENT_EDIT_SAFETY: Python patch was followed by more "
+        "exploration before py_compile/focused tests"
+    )
+
+
 def test_implement_edit_safety_allows_live_patch_review_shape(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     log_dir = tmp_path / "kanban" / "logs"
