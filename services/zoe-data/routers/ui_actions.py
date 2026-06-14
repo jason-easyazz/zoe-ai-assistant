@@ -156,12 +156,16 @@ async def ack_ui_action(
         # Unknown or missing status — treat as a no-op ack to be idempotent.
         return {"status": "already_acked", "action_id": action_id}
 
-    # Accept ack by DB uuid (id) OR by idempotency_key — the SSE broadcast uses the
-    # idempotency_key as its action id, while the DB stores a separate UUID.
+    panel_id = str((payload or {}).get("panel_id") or "").strip()
+
+    # Accept ack by DB uuid (id) OR by idempotency_key.  Kiosk pages can reload
+    # between polling and acking, so allow a panel-targeted ack when the action id
+    # matches and the payload's panel_id matches the action's panel_id.
     cursor = await db.execute(
-        """SELECT id, panel_id, status FROM ui_actions
-           WHERE (id = ? OR idempotency_key = ?) AND user_id = ?""",
-        (action_id, action_id, user_id),
+        """SELECT id, user_id, panel_id, status FROM ui_actions
+           WHERE (id = ? OR idempotency_key = ?)
+             AND (user_id = ? OR (? != '' AND panel_id = ?))""",
+        (action_id, action_id, user_id, panel_id, panel_id),
     )
     existing = await cursor.fetchone()
     if not existing:
@@ -171,6 +175,7 @@ async def ack_ui_action(
 
     # Use the real DB id for the update (in case we matched on idempotency_key)
     real_id = existing["id"]
+    action_user_id = existing["user_id"]
     error_code = payload.get("error_code")
     error_message = payload.get("error_message")
     retries = payload.get("retry_count")
@@ -183,12 +188,12 @@ async def ack_ui_action(
                updated_at = NOW(),
                acked_at = CASE WHEN ? IS NOT NULL THEN NOW() ELSE acked_at END
            WHERE id = ? AND user_id = ?""",
-        (status, error_code, error_message, retries, acked_at, real_id, user_id),
+        (status, error_code, error_message, retries, acked_at, real_id, action_user_id),
     )
     await append_ledger(
         db,
         action_id=real_id,
-        user_id=user_id,
+        user_id=action_user_id,
         panel_id=existing["panel_id"],
         event_type=f"ack:{status}",
         event_data={
