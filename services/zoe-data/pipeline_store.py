@@ -488,6 +488,25 @@ def _protocol_only_block(detail: dict[str, Any]) -> bool:
     return protocol_seen
 
 
+def _run_is_already_covered(state: PipelineState) -> bool:
+    """True when this run already proved no code change is needed.
+
+    When ``implement`` finds the work already covered it records a
+    ``skip_implementation`` transition carrying an ``ALREADY_COVERED`` reason and
+    flips the run to the ``audit`` profile. History is append-only — unlike
+    ``evidence``, which ``transition`` clears on ``request_changes`` /
+    ``verification_failed`` — so it is the reliable marker across the loop-back
+    transitions. Such a run has nothing left to implement/verify/review/merge, so
+    its downstream no-op phases must converge to ``complete`` instead of bouncing
+    review -> implement forever.
+    """
+    return any(
+        record.outcome == "skip_implementation"
+        and "ALREADY_COVERED" in str(getattr(record, "reason", "") or "").upper()
+        for record in state.history
+    )
+
+
 def _append_audit_protocol_recovery_evidence(state: PipelineState, phase: PipelinePhase) -> PipelineState:
     kind_by_phase = {
         "scout": "tool",
@@ -709,8 +728,12 @@ async def _sync_pipeline_from_chain_once(
         if (
             state.evidence_profile == "audit"
             and outcome in {"block", "verification_failed", "request_changes", "merge_blocked"}
-            and _protocol_only_block(detail)
+            and (_protocol_only_block(detail) or _run_is_already_covered(state))
         ):
+            # An already-covered run has no diff to verify/review/merge, so a
+            # no-op downstream block (e.g. review request_changes with no PR) is
+            # recovered to completion. Without this it bounces review -> implement
+            # forever, never reaching a terminal handoff and holding the lane.
             state = _append_audit_protocol_recovery_evidence(state, phase)  # type: ignore[arg-type]
             if can_complete_phase(state):
                 state = await _run_io(

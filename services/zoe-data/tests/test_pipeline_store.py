@@ -1075,6 +1075,55 @@ async def test_sync_pipeline_recovers_audit_protocol_only_block(isolated_store):
     assert "audit_protocol_recovered" in isolated_store.read_text(encoding="utf-8")
 
 
+@pytest.mark.asyncio
+async def test_already_covered_run_converges_instead_of_review_implement_loop(isolated_store):
+    # Regression: an already-covered run (implementation proven unnecessary) used
+    # to bounce review -> implement forever, because review's no-PR request_changes
+    # is not "protocol-only" and so was never recovered. It must now converge.
+    ref = "multica:already-covered-converge"
+    await store.bootstrap_state(ref, issue={"metadata": {"evidence_profile": "code"}})
+
+    async def fetch_impl(_task_id):
+        return {
+            "latest_summary": "BLOCKER=ALREADY_COVERED: focused tests passed; no PR required",
+            "comments": [],
+        }
+
+    # 1) implement proves the work already covered -> skip to verify, audit profile.
+    state = await store.sync_pipeline_from_chain(
+        ref,
+        {"implement": {"id": "t_impl", "status": "blocked",
+                       "block_reason": "ALREADY_COVERED: focused tests passed; no PR required"}},
+        fetch_impl,
+    )
+    assert state.phase == "verify"
+    assert state.evidence_profile == "audit"
+    assert _run_is_already_covered_marker(state)
+
+    async def fetch_plain(_task_id):
+        return {"latest_summary": "", "comments": []}
+
+    # 2) verify completes for the audit no-op run.
+    state = await store.sync_pipeline_from_chain(
+        ref, {"verify": {"id": "t_verify", "status": "done"}}, fetch_plain
+    )
+
+    # 3) review on an already-covered run has no PR -> normally request_changes ->
+    # implement (the loop). With the fix it recovers to complete and moves forward.
+    state = await store.sync_pipeline_from_chain(
+        ref,
+        {"review": {"id": "t_review", "status": "blocked", "block_reason": "no PR to review"}},
+        fetch_plain,
+    )
+    assert state.phase != "implement", "already-covered run must not loop back to implement"
+    assert store.PHASE_ORDER.index(state.phase) >= store.PHASE_ORDER.index("review")
+
+
+def _run_is_already_covered_marker(state) -> bool:
+    return any(
+        r.outcome == "skip_implementation" and "ALREADY_COVERED" in str(getattr(r, "reason", "") or "").upper()
+        for r in state.history
+    )
 
 
 @pytest.mark.asyncio
