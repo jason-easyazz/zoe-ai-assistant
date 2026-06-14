@@ -40,6 +40,21 @@ def _oidc_client_id_configured() -> bool:
     return bool(os.environ.get("MULTICA_OIDC_CLIENT_ID"))
 
 
+def _native_comment_guard_status() -> str:
+    """Report the posture of the native comment task guard.
+
+    The guard suppresses no-op agent follow-up tasks for comments on done issues
+    so they do not burn agent spend; operators need to see its state in the
+    health report. Returns ``"unset"`` when the flag is absent or blank,
+    ``"enabled"`` for a truthy value, and ``"disabled"`` only when explicitly
+    turned off.
+    """
+    raw = os.environ.get("ZOE_MULTICA_NATIVE_COMMENT_GUARD")
+    if raw is None or raw.strip() == "":
+        return "unset"
+    return "enabled" if raw.strip().lower() in {"1", "true", "yes", "on"} else "disabled"
+
+
 async def _probe(url: str, *, headers: dict[str, str] | None = None) -> dict:
     try:
         async with httpx.AsyncClient(timeout=5.0, follow_redirects=True) as client:
@@ -70,6 +85,7 @@ async def run(*, ensure_shape: bool = False) -> dict:
             os.environ.get("RESEND_API_KEY") or os.environ.get("SMTP_HOST")
         ),
         "hermes_agent_id": get_engineering_multica_agent_id(),
+        "native_comment_guard": _native_comment_guard_status(),
         "checks": {},
     }
     if not client.is_configured():

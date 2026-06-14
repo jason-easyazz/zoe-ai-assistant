@@ -91,3 +91,51 @@ def test_oidc_client_id_requires_explicit_configuration(monkeypatch):
     assert module._oidc_client_id_configured() is False
     monkeypatch.setenv("MULTICA_OIDC_CLIENT_ID", "multica")
     assert module._oidc_client_id_configured() is True
+
+
+def test_native_comment_guard_unset_is_not_an_error(monkeypatch):
+    module = _module()
+    monkeypatch.delenv("ZOE_MULTICA_NATIVE_COMMENT_GUARD", raising=False)
+    assert module._native_comment_guard_status() == "unset"
+    # Blank string is treated the same as absent.
+    monkeypatch.setenv("ZOE_MULTICA_NATIVE_COMMENT_GUARD", "  ")
+    assert module._native_comment_guard_status() == "unset"
+
+
+def test_native_comment_guard_enabled_for_truthy_values(monkeypatch):
+    module = _module()
+    for value in ("1", "true", "TRUE", "yes", "On"):
+        monkeypatch.setenv("ZOE_MULTICA_NATIVE_COMMENT_GUARD", value)
+        assert module._native_comment_guard_status() == "enabled"
+
+
+def test_native_comment_guard_disabled_only_when_explicitly_off(monkeypatch):
+    module = _module()
+    for value in ("false", "0", "no", "off"):
+        monkeypatch.setenv("ZOE_MULTICA_NATIVE_COMMENT_GUARD", value)
+        assert module._native_comment_guard_status() == "disabled"
+
+
+def test_report_surfaces_guard_status_without_a_live_database(monkeypatch):
+    import multica_client
+
+    module = _module()
+    monkeypatch.setenv("ZOE_MULTICA_NATIVE_COMMENT_GUARD", "false")
+
+    class _Unconfigured:
+        def is_configured(self):
+            return False
+
+    # run() does `from multica_client import ...` at call time, so patch the
+    # source module rather than the script module.
+    monkeypatch.setattr(multica_client, "get_multica_client", lambda: _Unconfigured())
+    monkeypatch.setattr(
+        multica_client, "get_engineering_multica_agent_id", lambda: None
+    )
+
+    report = asyncio.run(module.run())
+    # The field is present even on the unconfigured early-return path, and an
+    # explicitly-off guard is surfaced as "disabled". ok is False here only
+    # because the client is unconfigured, not because the guard is off.
+    assert report["native_comment_guard"] == "disabled"
+    assert report["ok"] is False
