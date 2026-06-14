@@ -178,6 +178,7 @@
             const data = await resp.json();
             if (!data || !data.handled) return false;
             renderSkybridgeResult(data);
+            retireRenderedVoiceCards(data);
             return true;
         } catch (err) {
             if (isDataQuery(query)) {
@@ -224,6 +225,35 @@
                     status: 'Resolver'
                 }
             }, true);
+        }
+    }
+
+    async function retireRenderedVoiceCards(data) {
+        if (!data || !data.handled) return;
+        const panelId = new URLSearchParams(location.search).get('panel_id');
+        if (!panelId) return;
+        try {
+            const pending = await fetch(`/api/ui/actions/pending?panel_id=${encodeURIComponent(panelId)}&limit=20`, {
+                headers: { 'Accept': 'application/json' }
+            });
+            if (!pending.ok) return;
+            const payload = await pending.json();
+            const actions = Array.isArray(payload.actions) ? payload.actions : [];
+            await Promise.all(actions
+                .filter(action => action && action.action_type === 'show_card')
+                .filter(action => action.payload && action.payload.source === 'voice:skybridge')
+                .map(action => fetch(`/api/ui/actions/${encodeURIComponent(action.id)}/ack`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        status: 'success',
+                        panel_id: panelId,
+                        ui_context: { page: location.pathname, source: 'skybridge-direct-render' }
+                    }),
+                    keepalive: true
+                })));
+        } catch (_) {
+            // Non-fatal: the queued card will be superseded by the next voice turn.
         }
     }
 

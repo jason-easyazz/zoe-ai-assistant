@@ -41,7 +41,7 @@ def test_skybridge_push_socket_uses_authenticated_session_query():
     main = (ROOT / "zoe-data" / "main.py").read_text(encoding="utf-8")
 
     assert "/js/websocket-sync.js?v=skybridge-auth-ready-1" in html
-    assert "/touch/js/skybridge.js?v=skybridge-push-ack-1" in html
+    assert "/touch/js/skybridge.js?v=skybridge-render-ack-1" in html
     assert "initPush(panelId, sessionId)" in sync
     assert "params.set('panel_id', panelId)" in sync
     assert "else params.set('channel', 'all')" in sync
@@ -197,6 +197,10 @@ def test_skybridge_uses_backend_status_contract():
     assert "JSON.stringify({ message: query, context: skybridgeContext })" in app
     assert "renderSkybridgeResult(data)" in app
     assert "function renderSkybridgeResult" in app
+    assert "function retireRenderedVoiceCards" in app
+    assert "/api/ui/actions/pending?panel_id=" in app
+    assert "action.payload.source === 'voice:skybridge'" in app
+    assert "skybridge-direct-render" in app
     assert "Voice is still connecting. Type here and Zoe will still render cards." in app
     assert "Microphone is not available here. Type a request and Zoe will still render cards." in app
     assert "Type here while voice reconnects..." in app
