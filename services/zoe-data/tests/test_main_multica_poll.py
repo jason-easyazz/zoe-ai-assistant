@@ -62,7 +62,7 @@ def test_poll_dispatches_ready_work_only_when_runtime_pause_is_inactive():
 def test_poll_dispatch_backfills_ready_blocked_pipeline_before_todo():
     source = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
     blocked_fetch = source.index('blocked_issues = await client.list_issues(status="blocked")')
-    blocked_loop = source.index('for _blocked in blocked_issues or []:', blocked_fetch)
+    blocked_loop = source.index('for _blocked in _blk_window:', blocked_fetch)
     todo_loop = source.index('for _todo in stale_todos or []:', blocked_loop)
     clear_blocker = source.index(
         'clear_blocker=True',
@@ -878,3 +878,46 @@ async def test_recover_stale_in_progress_keeps_issue_when_reset_fails():
         _FailingClient(), [zombie], hermes_id="hermes", poll_chain=_poll, now=now, max_age_hours=6
     )
     assert live == [zombie]
+
+
+def test_bounded_blocked_resume_window_empty_or_nonpositive_budget():
+    from main import _bounded_blocked_resume_window
+
+    assert _bounded_blocked_resume_window([], 0, 4) == ([], 0)
+    assert _bounded_blocked_resume_window([{"id": "a"}], 0, 0) == ([], 0)
+    assert _bounded_blocked_resume_window([{"id": "a"}], 0, -1) == ([], 0)
+
+
+def test_bounded_blocked_resume_window_returns_all_and_preserves_offset_when_budget_covers():
+    from main import _bounded_blocked_resume_window
+
+    items = [{"id": "a"}, {"id": "b"}]
+    # budget covers the whole list -> return all, but keep the caller's place
+    # (mod length) so rotation survives a list that shrinks then grows back.
+    window, nxt = _bounded_blocked_resume_window(items, 5, 4)
+    assert window == items
+    assert nxt == 1  # 5 % 2
+
+
+def test_bounded_blocked_resume_window_rotates_and_covers_all_across_cycles():
+    from main import _bounded_blocked_resume_window
+
+    items = [{"id": x} for x in "abcde"]  # 5 items, budget 2
+    offset = 0
+    seen: list[str] = []
+    for _ in range(3):
+        window, offset = _bounded_blocked_resume_window(items, offset, 2)
+        assert len(window) == 2
+        seen.extend(i["id"] for i in window)
+    assert set("abcde").issubset(set(seen))
+    # Offset advances by budget modulo length: 0 -> 2 -> 4 -> 1.
+    assert offset == 1
+
+
+def test_bounded_blocked_resume_window_wraps_at_end():
+    from main import _bounded_blocked_resume_window
+
+    items = [{"id": x} for x in "abcd"]  # 4 items, budget 3, start near end
+    window, nxt = _bounded_blocked_resume_window(items, 3, 3)
+    assert [i["id"] for i in window] == ["d", "a", "b"]
+    assert nxt == 2

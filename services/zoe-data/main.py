@@ -85,6 +85,34 @@ for _handler in logging.getLogger().handlers:
     _handler.addFilter(RequestIdFilter())
 
 
+# Rotating cursor for the blocked-resume scan (see _bounded_blocked_resume_window).
+_BLOCKED_RESUME_CURSOR: dict[str, int] = {"offset": 0}
+
+
+def _bounded_blocked_resume_window(
+    blocked: list[dict], offset: int, budget: int
+) -> tuple[list[dict], int]:
+    """Return a rotating slice of at most ``budget`` blocked issues, plus the next offset.
+
+    Resuming a blocked chain requires an expensive (and memory-heavy) executor
+    poll, so polling *every* blocked chain each 30s cycle can starve admission and
+    dispatch — and on constrained hardware it can OOM. Bound the work per cycle to
+    ``budget`` chains and rotate the starting offset so, across consecutive cycles,
+    every blocked chain is still eventually polled (no chain is permanently
+    skipped). Returns the whole list when ``budget`` covers it.
+    """
+    count = len(blocked)
+    if count == 0 or budget <= 0:
+        return [], 0
+    if budget >= count:
+        # Whole list covered this cycle; preserve the caller's place so a list
+        # that briefly shrinks below budget and grows back keeps rotating.
+        return list(blocked), offset % count
+    start = offset % count
+    window = [blocked[(start + step) % count] for step in range(budget)]
+    return window, (start + budget) % count
+
+
 async def _poll_chain_guarded(ref: str, *, issue: dict | None, timeout: float) -> dict:
     """Poll a chain without letting one dead ref wedge the whole poll loop.
 
@@ -846,8 +874,28 @@ async def lifespan(app: FastAPI):
                                     break
                         # Resume blocked issues only when the journal says a non-terminal next
                         # phase is ready; terminal/fingerprint blocks remain operator-visible.
+                        # Each resume check is an expensive executor poll, so bound how many
+                        # blocked chains we probe per cycle (rotating across cycles) — probing
+                        # all of them every cycle can starve admission and OOM the host.
                         if _wh_dispatched < _wh_limit:
-                            for _blocked in blocked_issues or []:
+                            try:
+                                _blk_budget = int(
+                                    os.environ.get("ZOE_MULTICA_BLOCKED_RESUME_BUDGET", "4") or "4"
+                                )
+                            except ValueError:
+                                _blk_budget = 4
+                            if _blk_budget <= 0:
+                                logger.warning(
+                                    "multica_poll: ZOE_MULTICA_BLOCKED_RESUME_BUDGET=%s is not "
+                                    "positive; blocked-resume polling disabled this cycle",
+                                    _blk_budget,
+                                )
+                            _blk_window, _BLOCKED_RESUME_CURSOR["offset"] = _bounded_blocked_resume_window(
+                                list(blocked_issues or []),
+                                _BLOCKED_RESUME_CURSOR["offset"],
+                                _blk_budget,
+                            )
+                            for _blocked in _blk_window:
                                 if str(_blocked.get("id") or "") in _wh_dispatched_ids:
                                     continue
                                 await _maybe_dispatch_hermes_issue(_blocked, from_todo=False)
