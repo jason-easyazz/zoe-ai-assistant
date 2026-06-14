@@ -19,6 +19,14 @@ def _fake_pi_runtime(tmp_path):
     return bindir
 
 
+def _fake_node_runtime(tmp_path):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    _write_exe(bindir / "node", "#!/bin/sh\nexit 0\n")
+    _write_exe(bindir / "npm", "#!/bin/sh\nexit 0\n")
+    return bindir
+
+
 def _admin_app():
     app = FastAPI()
     app.include_router(system_router)
@@ -64,10 +72,12 @@ def test_pi_intent_status_endpoint_reports_execution_disabled_when_tools_exist(t
 
 
 def test_pi_intent_status_endpoint_reports_missing_pi_when_tools_absent(tmp_path, monkeypatch):
+    bindir = _fake_node_runtime(tmp_path)
+    monkeypatch.setenv("PATH", str(bindir))
     monkeypatch.setenv("ZOE_PI_INTENT_ENABLED", "true")
     monkeypatch.setenv("ZOE_PI_CWD", str(tmp_path))
     monkeypatch.setenv("ZOE_PI_LOCAL_MODEL_CONFIGURED", "true")
-    monkeypatch.delenv("ZOE_PI_ALLOW_EXECUTION", raising=False)
+    monkeypatch.setenv("ZOE_PI_ALLOW_EXECUTION", "true")
     app = _admin_app()
 
     resp = TestClient(app).get("/api/system/pi-intent/status")
