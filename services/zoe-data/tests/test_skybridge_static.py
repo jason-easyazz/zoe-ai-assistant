@@ -213,8 +213,10 @@ def test_skybridge_uses_backend_status_contract():
     assert "isDataQuery(query)" in app
     assert "resp.status === 401 || resp.status === 503" in app
     assert "function prepareAuthRoute" in app
-    assert "function buildLoginRoute(panelId)" in app
-    assert "return route || buildLoginRoute(panelId)" in app
+    assert "function buildLoginRoute(panelId, selectedUserId)" in app
+    assert "params.set('user_id', selectedUserId)" in app
+    assert "params.set('auth', 'skybridge')" in app
+    assert "return route || buildLoginRoute(panelId, selectedUserId)" in app
     assert "if (voice) voice.sendText(query)" in app
     assert "event.role === 'user') projectCards" not in app
     assert "projectCommand(query);\n        if (voice) voice.sendText(query);" not in app
@@ -434,7 +436,9 @@ def test_skybridge_auth_challenge_card_contract():
     assert "trySelectAuthProfile" in app
     assert "selected_user_id" in app
     assert "if (!route) route = '/touch/index.html'" not in app
-    assert "return route || buildLoginRoute(panelId)" in app
+    assert "params.set('user_id', selectedUserId)" in app
+    assert "params.set('auth', 'skybridge')" in app
+    assert "return route || buildLoginRoute(panelId, selectedUserId)" in app
     assert "encodeURIComponent(panelId)" in app
     assert "storedChallenge.panel_id" in app
     assert "zoe_panel_auth_challenge" in app
@@ -453,7 +457,9 @@ def test_skybridge_auth_challenge_card_contract():
     assert '"route": ""' in service
     touch_index = read(UI / "index.html")
     assert "parsed && (parsed.challenge_id || parsed.selected_user_id)" in touch_index
-    assert "const preferredUserId = pending && pending.selected_user_id" in touch_index
+    assert "const routeUserId = params.get('user_id') || ''" in touch_index
+    assert "params.get('auth') === 'skybridge'" in touch_index
+    assert "const preferredUserId = routeUserId" in touch_index
     assert "!pending.challenge_id" in touch_index
     assert '"summary": "Please authenticate on the touch panel to continue."' in voice
     assert '"challenge_id": challenge_id' in voice

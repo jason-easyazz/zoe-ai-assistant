@@ -119,8 +119,13 @@
             || '';
     }
 
-    function buildLoginRoute(panelId) {
-        return '/touch/index.html' + (panelId ? '?panel_id=' + encodeURIComponent(panelId) : '');
+    function buildLoginRoute(panelId, selectedUserId) {
+        const params = new URLSearchParams();
+        if (panelId) params.set('panel_id', panelId);
+        if (selectedUserId) params.set('user_id', selectedUserId);
+        if (selectedUserId) params.set('auth', 'skybridge');
+        const query = params.toString();
+        return '/touch/index.html' + (query ? '?' + query : '');
     }
 
     function prepareAuthRoute(btn, route) {
@@ -146,7 +151,7 @@
         } catch (_) {
             // Route still preserves panel id even when storage is unavailable.
         }
-        return route || buildLoginRoute(panelId);
+        return route || buildLoginRoute(panelId, selectedUserId);
     }
 
     function setMode(nextMode) {
