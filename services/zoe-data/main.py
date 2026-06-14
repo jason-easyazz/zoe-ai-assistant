@@ -85,6 +85,83 @@ for _handler in logging.getLogger().handlers:
     _handler.addFilter(RequestIdFilter())
 
 
+async def _poll_chain_guarded(ref: str, *, issue: dict | None, timeout: float) -> dict:
+    """Poll a chain without letting one dead ref wedge the whole poll loop.
+
+    ``poll_ref`` has no internal timeout, so a died executor reference can hang
+    indefinitely and freeze the entire Multica poll loop (observed: a single
+    stale ``in_progress`` chain stalled all admission/dispatch for days). Bound
+    the call and, on timeout/error, return a safe not-found sentinel so callers
+    treat the chain as inactive and simply skip it this cycle.
+    """
+    from executor_registry import poll_ref  # type: ignore[import]
+
+    try:
+        return await asyncio.wait_for(poll_ref(ref, issue=issue), timeout=timeout)
+    except asyncio.TimeoutError:
+        logger.warning("multica_poll: poll_ref timed out for %s after %ss", ref, timeout)
+        return {"found": False, "status": "poll_timeout", "timed_out": True}
+    except Exception as exc:
+        logger.warning("multica_poll: poll_ref error for %s: %s", ref, exc)
+        return {"found": False, "status": "poll_error", "error": str(exc)}
+
+
+async def _recover_stale_in_progress_issues(
+    client,
+    in_progress_issues: list[dict],
+    *,
+    hermes_id: str,
+    poll_chain,
+    now,
+    max_age_hours: float,
+) -> list[dict]:
+    """Reset dead ``in_progress`` chains to ``blocked`` so a zombie can't hold the lane.
+
+    The single-ticket lane is guarded by the presence of an ``in_progress``
+    issue. If a chain dies mid-run, its ticket sits ``in_progress`` forever and
+    the guard correctly — but unhelpfully — refuses to admit anything else. This
+    mirrors the existing stale ``Autopilot:`` todo cleanup: detect Hermes-owned
+    ``in_progress`` chains that are no longer active and untouched for
+    ``max_age_hours``, reset them to ``blocked`` (operator-visible), and return
+    the issues that are still legitimately in progress.
+    """
+    from multica_poll_dispatch import is_stale_in_progress  # type: ignore[import]
+
+    live: list[dict] = []
+    for issue in in_progress_issues or []:
+        if str(issue.get("assignee_id") or "") != hermes_id:
+            live.append(issue)
+            continue
+        if (issue.get("title") or "").lower().startswith("autopilot:"):
+            live.append(issue)
+            continue
+        chain = await poll_chain(issue)
+        if not is_stale_in_progress(issue, chain, now=now, max_age_hours=max_age_hours):
+            live.append(issue)
+            continue
+        try:
+            await client.record_progress(
+                str(issue.get("id")),
+                status="blocked",
+                blocker=(
+                    "stale in_progress reset: chain inactive and no metadata update "
+                    f"for >= {max_age_hours}h; freed the single ticket lane"
+                ),
+            )
+            logger.info(
+                "multica_poll: recovered stale in_progress %s -> blocked",
+                issue.get("identifier") or issue.get("id"),
+            )
+        except Exception as exc:
+            logger.warning(
+                "multica_poll: stale in_progress recovery failed for %s: %s",
+                issue.get("id"),
+                exc,
+            )
+            live.append(issue)
+    return live
+
+
 async def _record_running_multica_chain_progress(
     client,
     issue_id: str,
@@ -605,13 +682,52 @@ async def lifespan(app: FastAPI):
                 try:
                     from multica_webhook_emitter import emit_issue_assigned, is_configured as _wh_ok
                     from multica_client import get_engineering_multica_agent_id  # type: ignore[import]
-                    from executor_registry import poll_ref  # type: ignore[import]
                     from multica_poll_dispatch import chain_is_running, chain_needs_dispatch  # type: ignore[import]
                     from multica_dispatch_control import dispatch_is_paused, pause_reason
 
                     _dispatch_paused = dispatch_is_paused()
                     if _wh_ok() and not _dispatch_paused:
                         _hermes = str(get_engineering_multica_agent_id())
+
+                        # Bound every chain poll and reclaim zombie in_progress
+                        # chains, so one dead executor ref can neither wedge the
+                        # loop nor jam the single lane indefinitely.
+                        try:
+                            _poll_timeout = float(
+                                os.environ.get("ZOE_MULTICA_POLL_REF_TIMEOUT_S", "20") or "20"
+                            )
+                        except ValueError:
+                            _poll_timeout = 20.0
+                        try:
+                            _stale_ip_hours = float(
+                                os.environ.get("ZOE_MULTICA_STALE_IN_PROGRESS_HOURS", "6") or "6"
+                            )
+                        except ValueError:
+                            _stale_ip_hours = 6.0
+                        _chain_cache: dict[str, dict] = {}
+
+                        async def _poll_chain(_issue: dict) -> dict:
+                            _tid = str(_issue.get("id") or "")
+                            if _tid not in _chain_cache:
+                                _chain_cache[_tid] = await _poll_chain_guarded(
+                                    f"multica:{_tid}", issue=_issue, timeout=_poll_timeout
+                                )
+                            return _chain_cache[_tid]
+
+                        # Recover dead in_progress chains before the idle check so a
+                        # freed lane can admit new work this same cycle.
+                        if _stale_ip_hours > 0 and in_progress_issues:
+                            import datetime as _dt
+
+                            in_progress_issues = await _recover_stale_in_progress_issues(
+                                client,
+                                in_progress_issues,
+                                hermes_id=_hermes,
+                                poll_chain=_poll_chain,
+                                now=_dt.datetime.now(_dt.timezone.utc),
+                                max_age_hours=_stale_ip_hours,
+                            )
+
                         # Throttle first-dispatch: cap new chains per cycle so a
                         # wave of assigned todos can't spawn N concurrent chains
                         # (mirrors the compatibility sync limit / kanban.max_in_progress).
@@ -648,13 +764,6 @@ async def lifespan(app: FastAPI):
                                         "multica_poll: admitted %s from backlog into the single ticket lane",
                                         _admitted.get("identifier") or _admitted.get("id"),
                                     )
-                        _chain_cache: dict[str, dict] = {}
-
-                        async def _poll_chain(_issue: dict) -> dict:
-                            _tid = str(_issue.get("id") or "")
-                            if _tid not in _chain_cache:
-                                _chain_cache[_tid] = await poll_ref(f"multica:{_tid}", issue=_issue)
-                            return _chain_cache[_tid]
 
                         _running_chains = 0
                         for _ip_issue in in_progress_issues:

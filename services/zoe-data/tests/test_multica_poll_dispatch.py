@@ -1,6 +1,20 @@
 """Tests for Multica poll-loop dispatch helpers."""
-from multica_poll_dispatch import chain_is_active, chain_is_running, chain_needs_dispatch
+import datetime as dt
+
+from multica_poll_dispatch import (
+    chain_is_active,
+    chain_is_running,
+    chain_needs_dispatch,
+    is_stale_in_progress,
+)
 import executors.kanban_adapter as ka
+
+
+_NOW = dt.datetime(2026, 6, 14, 12, 0, tzinfo=dt.timezone.utc)
+
+
+def _aged(hours):
+    return (_NOW - dt.timedelta(hours=hours)).isoformat()
 
 
 def test_chain_needs_dispatch_not_found():
@@ -105,3 +119,42 @@ def test_chain_is_running_excludes_partial_backfill_work():
     assert chain_is_running({"pipeline": {"status": "running"}}) is True
     assert chain_is_running({"pipeline": {"status": "todo"}}) is False
     assert chain_is_running({"status": "running", "pipeline": {"terminal_block": True}}) is False
+
+
+def test_is_stale_in_progress_reclaims_old_dead_chain():
+    # Chain no longer active (e.g. not_found) and untouched past the window.
+    issue = {"updated_at": _aged(8)}
+    assert is_stale_in_progress(
+        issue, {"found": False, "status": "not_found"}, now=_NOW, max_age_hours=6
+    ) is True
+
+
+def test_is_stale_in_progress_reclaims_timed_out_poll():
+    # A dead executor ref returns the poll-timeout sentinel; treat as inactive.
+    issue = {"updated_at": _aged(72)}
+    sentinel = {"found": False, "status": "poll_timeout", "timed_out": True}
+    assert is_stale_in_progress(issue, sentinel, now=_NOW, max_age_hours=6) is True
+
+
+def test_is_stale_in_progress_spares_active_chain_even_when_old():
+    issue = {"updated_at": _aged(48)}
+    for chain in (
+        {"found": True, "status": "running"},
+        {"found": True, "status": "partial"},
+        {"pipeline": {"status": "todo"}},
+    ):
+        assert is_stale_in_progress(issue, chain, now=_NOW, max_age_hours=6) is False
+
+
+def test_is_stale_in_progress_spares_recently_updated_chain():
+    issue = {"updated_at": _aged(1)}
+    assert is_stale_in_progress(
+        issue, {"found": False, "status": "not_found"}, now=_NOW, max_age_hours=6
+    ) is False
+
+
+def test_is_stale_in_progress_needs_a_timestamp_to_judge_age():
+    # No updated_at/created_at -> cannot prove staleness, so never reclaim.
+    assert is_stale_in_progress(
+        {}, {"found": False, "status": "not_found"}, now=_NOW, max_age_hours=6
+    ) is False
