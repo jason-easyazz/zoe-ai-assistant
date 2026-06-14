@@ -1649,7 +1649,7 @@ def _normalize_voice_command_text(text: str) -> str:
         (r"\b(show|open|display|bring up|pull up)\s+(?:me\s+)?(?:the\s+)?whether\b", r"\1 weather"),
         (r"\bwhat(?:'s| is)\s+the\s+whether\b", "what is the weather"),
         (r"\bhow(?:'s| is)\s+the\s+whether\b", "how is the weather"),
-        (r"^whether\b(?=\s*(?:today|tomorrow|forecast|this week|now)?\b)", "weather"),
+        (r"^whether\b(?=\s+(?:today|tomorrow|forecast|this week|now)\b)", "weather"),
     ]
     for pattern, repl in replacements:
         normalized = re.sub(pattern, repl, normalized, flags=re.IGNORECASE)
@@ -1687,9 +1687,6 @@ async def _run_faster_whisper_subprocess(wav_path: str) -> str:
     """Transcribe with faster-whisper in a child process so native crashes cannot kill the API worker."""
     model_name = (os.environ.get("ZOE_WHISPER_MODEL") or "base.en").strip()
     device = "cuda" if os.environ.get("ZOE_WHISPER_DEVICE", "").lower() == "cuda" else "cpu"
-    default_compute = "int8_float16" if device == "cuda" else "int8"
-    compute_type = os.environ.get("ZOE_WHISPER_COMPUTE_TYPE", default_compute).strip() or default_compute
-    lang = (os.environ.get("ZOE_WHISPER_LANG") or "en").strip()
     timeout = _env_float("ZOE_WHISPER_TIMEOUT_S", 20.0)
 
     code = r"""
