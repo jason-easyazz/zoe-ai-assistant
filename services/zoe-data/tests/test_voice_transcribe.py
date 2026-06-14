@@ -116,6 +116,74 @@ def test_transcribe_503_when_whisper_missing(client, monkeypatch, tmp_path):
     assert "whisper.cpp binary not found" in record["error"]
 
 
+def test_faster_whisper_subprocess_signal_does_not_exit_worker(monkeypatch):
+    from routers import voice_tts
+
+    class _Proc:
+        returncode = -11
+
+        async def communicate(self):
+            return b"", b"native crash"
+
+    async def _fake_exec(*args, **kwargs):
+        return _Proc()
+
+    monkeypatch.setattr(voice_tts.asyncio, "create_subprocess_exec", _fake_exec)
+    monkeypatch.setenv("ZOE_WHISPER_TIMEOUT_S", "5")
+
+    with pytest.raises(RuntimeError, match="signal 11"):
+        asyncio.run(voice_tts._run_faster_whisper_subprocess("/tmp/example.wav"))
+
+
+def test_faster_whisper_defaults_to_subprocess(monkeypatch):
+    from routers import voice_tts
+
+    async def _fake_subprocess(path: str) -> str:
+        return f"child:{path}"
+
+    async def _fake_in_process(path: str) -> str:
+        return f"worker:{path}"
+
+    monkeypatch.delenv("ZOE_WHISPER_IN_PROCESS", raising=False)
+    monkeypatch.setattr(voice_tts, "_run_faster_whisper_subprocess", _fake_subprocess)
+    monkeypatch.setattr(voice_tts, "_run_faster_whisper_in_process", _fake_in_process)
+
+    assert asyncio.run(voice_tts._run_faster_whisper("/tmp/audio.wav")) == "child:/tmp/audio.wav"
+
+
+def test_faster_whisper_in_process_opt_in(monkeypatch):
+    from routers import voice_tts
+
+    async def _fake_subprocess(path: str) -> str:
+        return f"child:{path}"
+
+    async def _fake_in_process(path: str) -> str:
+        return f"worker:{path}"
+
+    monkeypatch.setenv("ZOE_WHISPER_IN_PROCESS", "true")
+    monkeypatch.setattr(voice_tts, "_run_faster_whisper_subprocess", _fake_subprocess)
+    monkeypatch.setattr(voice_tts, "_run_faster_whisper_in_process", _fake_in_process)
+
+    assert asyncio.run(voice_tts._run_faster_whisper("/tmp/audio.wav")) == "worker:/tmp/audio.wav"
+
+
+@pytest.mark.parametrize(
+    ("raw", "normalized"),
+    [
+        ("show whether", "show weather"),
+        ("open the whether", "open weather"),
+        ("what's the whether", "what is the weather"),
+        ("how is the whether", "how is the weather"),
+        ("whether tomorrow", "weather tomorrow"),
+        ("whether or not it rains, remind me", "whether or not it rains, remind me"),
+    ],
+)
+def test_normalize_voice_command_text_weather_homophones(raw, normalized):
+    from routers import voice_tts
+
+    assert voice_tts._normalize_voice_command_text(raw) == normalized
+
+
 def test_stt_audit_log_rotates_when_capped(monkeypatch, tmp_path):
     from routers import voice_tts
 
