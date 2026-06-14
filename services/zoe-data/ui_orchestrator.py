@@ -113,7 +113,8 @@ async def enqueue_ui_action(
 
     if idempotency_key:
         cursor = await db.execute(
-            """SELECT id, status
+            """SELECT id, status, action_type, payload, panel_id, chat_session_id,
+                      requires_confirmation, confirmation_token
                FROM ui_actions
                WHERE user_id = ? AND idempotency_key = ?
                LIMIT 1""",
@@ -121,11 +122,26 @@ async def enqueue_ui_action(
         )
         existing = await cursor.fetchone()
         if existing:
+            existing_payload = existing["payload"]
+            if isinstance(existing_payload, str):
+                try:
+                    existing_payload = json.loads(existing_payload)
+                except json.JSONDecodeError:
+                    existing_payload = {}
             return {
                 "id": existing["id"],
+                "action_id": existing["id"],
+                "user_id": user_id,
+                "panel_id": existing["panel_id"] or panel_id,
+                "chat_session_id": existing["chat_session_id"],
+                "action_type": existing["action_type"],
+                "payload": existing_payload or {},
                 "status": existing["status"],
+                "requires_confirmation": bool(existing["requires_confirmation"]),
+                "confirmation_token": existing["confirmation_token"]
+                if existing["requires_confirmation"]
+                else None,
                 "deduped": True,
-                "panel_id": panel_id,
             }
 
     action_id = uuid.uuid4().hex[:16]

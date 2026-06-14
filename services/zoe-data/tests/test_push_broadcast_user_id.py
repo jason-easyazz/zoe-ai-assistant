@@ -99,3 +99,40 @@ async def test_broadcast_empty_channel_returns_zero(bc):
     """broadcast() on an empty or missing channel returns 0."""
     result = await bc.broadcast("nonexistent", "evt", {}, user_id="u1")
     assert result == 0
+
+
+async def _connect_panel(bc, ws, panel_id='panel-1'):
+    ws.accept = AsyncMock()
+    ws.send_json = AsyncMock()
+    await bc.connect_panel(ws, panel_id=panel_id)
+    ws.send_json.reset_mock()
+
+
+@pytest.mark.asyncio
+async def test_broadcast_to_panel_reports_dedicated_panel_delivery(bc):
+    """Dedicated panel channel delivery is counted for durable action retirement."""
+    ws = _make_ws()
+    await _connect_panel(bc, ws, panel_id='panel-1')
+
+    delivered = await bc.broadcast_to_panel('panel-1', 'ui_action', {'panel_id': 'panel-1'})
+
+    assert delivered == 1
+    ws.send_json.assert_awaited_once()
+    message = ws.send_json.await_args.args[0]
+    assert message['channel'] == 'panel_panel-1'
+    assert message['type'] == 'ui_action'
+
+
+@pytest.mark.asyncio
+async def test_broadcast_to_panel_fallback_does_not_report_delivery(bc):
+    """Global fallback is not proof the target panel received the action."""
+    ws = _make_ws()
+    await _connect(bc, ws, channel='all', user_id=None)
+
+    delivered = await bc.broadcast_to_panel('panel-1', 'ui_action', {'panel_id': 'panel-1'})
+
+    assert delivered == 0
+    ws.send_json.assert_awaited_once()
+    message = ws.send_json.await_args.args[0]
+    assert message['channel'] == 'all'
+    assert message['type'] == 'ui_action'

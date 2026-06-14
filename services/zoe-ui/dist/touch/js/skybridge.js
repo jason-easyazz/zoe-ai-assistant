@@ -137,7 +137,7 @@
         } else if (event.type === 'error') {
             showError(event.message);
             if (/voice disconnected|transport unavailable|livekit unavailable|websocket|microphone|permission/i.test(event.message || '')) {
-                openCommandFallback('Voice needs attention. Type here and Zoe will still render cards.');
+                openCommandFallback('Type here while voice reconnects...');
             }
         } else if (event.type === 'done') {
             setState('ambient');
@@ -340,7 +340,7 @@
         const text = message || 'Something needs attention.';
         setStatus(text);
         if (/microphone|secure|permission|voice upload|transport unavailable/i.test(text)) {
-            updateVoiceHint('Voice needs attention', text, 'Try again');
+            updateVoiceHint('Voice reconnecting', text, 'Try again');
         }
         const transportNotice = /voice disconnected|transport unavailable|livekit unavailable/i.test(text);
         if (transportNotice && (document.body.classList.contains('sky-empty') || currentUtterance)) return;

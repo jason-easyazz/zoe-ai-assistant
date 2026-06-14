@@ -131,8 +131,9 @@ class _Db:
         if "FROM ui_actions" in sql:
             return _Cursor(rows=self.voice_rows)
         if "UPDATE ui_actions" in sql:
-            self.updated_ids.append(params[1])
-            self.events.append(f"updated:{params[1]}")
+            updated_id = params[1] if len(params) > 1 else params[0]
+            self.updated_ids.append(updated_id)
+            self.events.append(f"updated:{updated_id}")
             return _Cursor()
         raise AssertionError(f"unexpected SQL: {sql}")
 
@@ -205,14 +206,18 @@ async def test_broadcast_skybridge_ui_opens_skybridge_with_card_payload(monkeypa
     async def enqueue_ui_action(_db, **kwargs):
         enqueue_calls.append(kwargs)
         return {
-            "id": kwargs["idempotency_key"],
+            "action_id": f"db-{kwargs['action_type']}",
             "status": "queued",
             "panel_id": kwargs["panel_id"],
+            "action_type": kwargs["action_type"],
+            "payload": kwargs["payload"],
         }
 
     class Broadcaster:
-        async def broadcast(self, channel, event, payload):
-            broadcasts.append((channel, event, payload))
+        async def broadcast_to_panel(self, panel_id, event, payload):
+            assert panel_id == "panel-1"
+            broadcasts.append((panel_id, event, payload))
+            return 1
 
     monkeypatch.setitem(sys.modules, "database", types.SimpleNamespace(get_db=get_db))
     monkeypatch.setitem(
@@ -246,14 +251,19 @@ async def test_broadcast_skybridge_ui_opens_skybridge_with_card_payload(monkeypa
 
     assert [call["action_type"] for call in enqueue_calls] == ["panel_navigate", "show_card"]
     assert enqueue_calls[0]["payload"]["url"] == "/touch/skybridge.html?q=show+weather"
+    assert enqueue_calls[0]["broadcast"] is False
     assert enqueue_calls[1]["payload"]["type"] == "skybridge"
     assert enqueue_calls[1]["payload"]["card"] == card
     assert enqueue_calls[1]["payload"]["result"] == result
-    assert [item[2]["action"]["action_type"] for item in broadcasts] == ["panel_navigate", "show_card"]
-    broadcast_card = broadcasts[1][2]["action"]["payload"]
+    assert enqueue_calls[1]["broadcast"] is False
+    assert [item[1] for item in broadcasts] == ["ui_action", "ui_action"]
+    assert [item[2]["action_id"] for item in broadcasts] == ["db-panel_navigate", "db-show_card"]
+    assert [item[2]["action_type"] for item in broadcasts] == ["panel_navigate", "show_card"]
+    broadcast_card = broadcasts[1][2]["payload"]
     assert broadcast_card["card"] == card
     assert broadcast_card["cards"] == [card]
     assert "result" not in broadcast_card
+    assert db.updated_ids == ["db-panel_navigate", "db-show_card"]
 
 
 @pytest.mark.asyncio
