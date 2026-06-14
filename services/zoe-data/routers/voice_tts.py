@@ -1726,10 +1726,20 @@ async def _run_whisper_cpp(wav_path: str) -> str:
 _faster_whisper_model = None
 _faster_whisper_model_name: str = ""
 _faster_whisper_lock = asyncio.Lock()
+_faster_whisper_worker: "_FasterWhisperWorker | None" = None
 
 
 def _use_in_process_faster_whisper() -> bool:
     return (os.environ.get("ZOE_WHISPER_IN_PROCESS") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _use_persistent_faster_whisper_worker() -> bool:
+    return (os.environ.get("ZOE_WHISPER_PERSISTENT_WORKER") or "true").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
 
 
 def _normalize_voice_command_text(text: str) -> str:
@@ -1759,8 +1769,8 @@ async def _get_faster_whisper_model():
             from faster_whisper import WhisperModel  # type: ignore
             device = "cuda" if os.environ.get("ZOE_WHISPER_DEVICE", "").lower() == "cuda" else "cpu"
             # int8_float16 = int8-quantized weights + float16 compute: best speed/memory for Jetson
-            # Falls back to int8 if VRAM is very tight
-            default_compute = "int8_float16" if device == "cuda" else "int8"
+            # CPU defaults to float32; ctranslate2 int8 is not supported on Jetson ARM.
+            default_compute = "int8_float16" if device == "cuda" else "float32"
             compute_type = os.environ.get("ZOE_WHISPER_COMPUTE_TYPE", default_compute).strip() or default_compute
             logger.info("Loading faster-whisper model=%s device=%s", model_name, device)
             _faster_whisper_model = WhisperModel(model_name, device=device, compute_type=compute_type)
@@ -1791,7 +1801,7 @@ from faster_whisper import WhisperModel
 wav_path = sys.argv[1]
 model_name = os.environ.get("ZOE_WHISPER_MODEL") or "base.en"
 device = "cuda" if os.environ.get("ZOE_WHISPER_DEVICE", "").lower() == "cuda" else "cpu"
-default_compute = "int8_float16" if device == "cuda" else "int8"
+default_compute = "int8_float16" if device == "cuda" else "float32"
 compute_type = (os.environ.get("ZOE_WHISPER_COMPUTE_TYPE") or default_compute).strip() or default_compute
 lang = (os.environ.get("ZOE_WHISPER_LANG") or "en").strip()
 
@@ -1857,6 +1867,168 @@ print(json.dumps({"text": text}), flush=True)
     return str(payload.get("text") or "").strip()
 
 
+class _FasterWhisperWorker:
+    """Long-lived isolated faster-whisper process with one loaded model."""
+
+    def __init__(self) -> None:
+        self.proc: asyncio.subprocess.Process | None = None
+        self.lock = asyncio.Lock()
+        self.model_key = ""
+
+    def _current_model_key(self) -> str:
+        model_name = (os.environ.get("ZOE_WHISPER_MODEL") or "base.en").strip()
+        device = "cuda" if os.environ.get("ZOE_WHISPER_DEVICE", "").lower() == "cuda" else "cpu"
+        default_compute = "int8_float16" if device == "cuda" else "float32"
+        compute_type = (os.environ.get("ZOE_WHISPER_COMPUTE_TYPE") or default_compute).strip() or default_compute
+        return "|".join((model_name, device, compute_type))
+
+    async def stop(self) -> None:
+        proc = self.proc
+        self.proc = None
+        self.model_key = ""
+        if proc and proc.returncode is None:
+            proc.terminate()
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=2.0)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+
+    async def _stderr_snippet(self, limit: int = 1200) -> str:
+        if not self.proc or not self.proc.stderr:
+            return ""
+        try:
+            data = await asyncio.wait_for(self.proc.stderr.read(limit), timeout=0.2)
+        except Exception:
+            return ""
+        return data.decode(errors="ignore").strip()
+
+    async def _ensure_started(self) -> None:
+        key = self._current_model_key()
+        if self.proc and self.proc.returncode is None and self.model_key == key:
+            return
+        await self.stop()
+        startup_timeout = _env_float("ZOE_WHISPER_WORKER_START_TIMEOUT_S", 30.0)
+        code = r"""
+import json
+import os
+import sys
+
+from faster_whisper import WhisperModel
+
+model_name = os.environ.get("ZOE_WHISPER_MODEL") or "base.en"
+device = "cuda" if os.environ.get("ZOE_WHISPER_DEVICE", "").lower() == "cuda" else "cpu"
+default_compute = "int8_float16" if device == "cuda" else "float32"
+compute_type = (os.environ.get("ZOE_WHISPER_COMPUTE_TYPE") or default_compute).strip() or default_compute
+lang = (os.environ.get("ZOE_WHISPER_LANG") or "en").strip()
+
+def _env_float(name, default):
+    try:
+        return float(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+def _env_int(name, default):
+    try:
+        return int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+model = WhisperModel(model_name, device=device, compute_type=compute_type)
+print(json.dumps({"ready": True, "model": model_name, "device": device, "compute_type": compute_type}), flush=True)
+
+for line in sys.stdin:
+    try:
+        payload = json.loads(line)
+        wav_path = str(payload.get("wav_path") or "")
+        segments, _info = model.transcribe(
+            wav_path,
+            language=lang,
+            vad_filter=True,
+            vad_parameters={
+                "threshold": _env_float("ZOE_WHISPER_VAD_THRESHOLD", 0.50),
+                "min_speech_duration_ms": _env_int("ZOE_WHISPER_MIN_SPEECH_MS", 120),
+                "min_silence_duration_ms": _env_int("ZOE_WHISPER_MIN_SILENCE_MS", 350),
+                "speech_pad_ms": _env_int("ZOE_WHISPER_SPEECH_PAD_MS", 220),
+            },
+        )
+        text = " ".join(seg.text.strip() for seg in segments).strip()
+        print(json.dumps({"text": text}), flush=True)
+    except Exception as exc:
+        print(json.dumps({"error": str(exc)}), flush=True)
+"""
+        logger.info("Starting faster-whisper worker key=%s", key)
+        self.proc = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-u",
+            "-c",
+            code,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=os.environ.copy(),
+        )
+        if not self.proc.stdout:
+            await self.stop()
+            raise RuntimeError("faster-whisper worker stdout unavailable")
+        try:
+            ready_raw = await asyncio.wait_for(self.proc.stdout.readline(), timeout=startup_timeout)
+        except asyncio.TimeoutError as exc:
+            detail = await self._stderr_snippet()
+            await self.stop()
+            suffix = f": {detail[:500]}" if detail else ""
+            raise RuntimeError(f"faster-whisper worker startup timed out after {startup_timeout:.1f}s{suffix}") from exc
+        if self.proc.returncode is not None:
+            detail = await self._stderr_snippet()
+            suffix = f": {detail[:500]}" if detail else ""
+            raise RuntimeError(f"faster-whisper worker exited during startup ({self.proc.returncode}){suffix}")
+        try:
+            ready = json.loads(ready_raw.decode(errors="ignore"))
+        except json.JSONDecodeError as exc:
+            detail = await self._stderr_snippet()
+            await self.stop()
+            suffix = f": {detail[:500]}" if detail else ""
+            raise RuntimeError(f"faster-whisper worker returned invalid startup output: {ready_raw[:300]!r}{suffix}") from exc
+        if not ready.get("ready"):
+            await self.stop()
+            raise RuntimeError(f"faster-whisper worker did not become ready: {ready}")
+        self.model_key = key
+
+    async def transcribe(self, wav_path: str) -> str:
+        async with self.lock:
+            await self._ensure_started()
+            if not self.proc or not self.proc.stdin or not self.proc.stdout or self.proc.returncode is not None:
+                raise RuntimeError("faster-whisper worker is not running")
+            timeout = _env_float("ZOE_WHISPER_TIMEOUT_S", 20.0)
+            request = json.dumps({"wav_path": wav_path}) + "\n"
+            try:
+                self.proc.stdin.write(request.encode())
+                await self.proc.stdin.drain()
+                raw = await asyncio.wait_for(self.proc.stdout.readline(), timeout=timeout)
+            except Exception:
+                await self.stop()
+                raise
+            if self.proc.returncode is not None:
+                code = self.proc.returncode
+                await self.stop()
+                raise RuntimeError(f"faster-whisper worker exited ({code})")
+            try:
+                payload = json.loads(raw.decode(errors="ignore"))
+            except json.JSONDecodeError as exc:
+                await self.stop()
+                raise RuntimeError(f"faster-whisper worker returned invalid output: {raw[:300]!r}") from exc
+            if payload.get("error"):
+                raise RuntimeError(f"faster-whisper worker failed: {str(payload['error'])[:500]}")
+            return str(payload.get("text") or "").strip()
+
+
+async def _run_faster_whisper_worker(wav_path: str) -> str:
+    global _faster_whisper_worker
+    if _faster_whisper_worker is None:
+        _faster_whisper_worker = _FasterWhisperWorker()
+    return await _faster_whisper_worker.transcribe(wav_path)
+
+
 async def _run_faster_whisper_in_process(wav_path: str) -> str:
     """Transcribe using the faster-whisper Python library in the API worker."""
     model = await _get_faster_whisper_model()
@@ -1914,6 +2086,8 @@ async def _run_faster_whisper(wav_path: str) -> str:
     """Transcribe using faster-whisper when whisper.cpp is unavailable."""
     if _use_in_process_faster_whisper():
         return await _run_faster_whisper_in_process(wav_path)
+    if _use_persistent_faster_whisper_worker():
+        return await _run_faster_whisper_worker(wav_path)
     return await _run_faster_whisper_subprocess(wav_path)
 
 

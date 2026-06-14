@@ -13,6 +13,8 @@ passlib[bcrypt]==1.7.4
 ag-ui-protocol==0.1.14
 
 # ── Voice dependencies (Jetson/server-side) ───────────────────────────────
+# Jetson torch/ctranslate2 wheels currently emit runtime failures with NumPy 2.x.
+numpy<2
 # Cloud TTS fallback (fast, AU Neural voice)
 edge-tts>=6.1.12
 # Primary offline TTS: ~82M ONNX model, sub-100ms on Jetson CUDA
