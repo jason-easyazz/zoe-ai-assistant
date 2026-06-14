@@ -153,6 +153,8 @@ def test_classify_calendar_and_weather_requests():
     assert classify_skybridge_intent("show me the weather").domain == "weather"
     assert classify_skybridge_intent("what is happening this week").domain == "calendar"
     assert classify_skybridge_intent("show my shopping list").domain == "lists"
+    assert classify_skybridge_intent("what's on my shopping list").domain == "lists"
+    assert classify_skybridge_intent("whats on my grocery list").domain == "lists"
     assert classify_skybridge_intent("show my contacts").domain == "people"
     assert classify_skybridge_intent("find Sarah").domain == "people"
     assert classify_skybridge_intent("what is there to do this week") is None
@@ -462,7 +464,9 @@ async def test_guest_calendar_request_does_not_fetch_family_events():
     result = await resolve_skybridge_request("show my calendar", "guest", db=GuardedGuestDb())
 
     assert result["handled"] is True
-    assert result["cards"][0]["content"]["events"] == []
+    assert result["auth_required"] is True
+    assert result["actions"][0]["type"] == "auth_required"
+    assert result["cards"][0]["props"]["status"] == "Authentication"
 
 
 @pytest.mark.asyncio
@@ -499,6 +503,37 @@ async def test_lists_request_returns_real_list_items():
     assert card["content"]["items"][0]["text"] == "Milk"
     assert card["content"]["open_count"] == 1
     assert "Surface" not in str(card)
+
+
+@pytest.mark.asyncio
+async def test_shopping_list_question_returns_list_card_not_calendar():
+    list_row = {
+        "id": "list-1",
+        "user_id": "family-admin",
+        "name": "Groceries",
+        "list_type": "shopping",
+        "description": "Weekly shop",
+        "visibility": "family",
+    }
+    item = {
+        "id": "item-1",
+        "list_id": "list-1",
+        "text": "Milk",
+        "completed": False,
+    }
+
+    result = await resolve_skybridge_request(
+        "What's on my shopping list?",
+        "family-admin",
+        db=FakeDb(lists=[list_row], items_by_list={"list-1": [item]}),
+    )
+
+    assert result["handled"] is True
+    assert result["intent"]["domain"] == "lists"
+    card = result["cards"][0]
+    assert card["content"]["source"] == "list_show"
+    assert card["content"]["items"][0]["text"] == "Milk"
+    assert card["producer"] != "zoe-calendar"
 
 
 @pytest.mark.asyncio
@@ -579,8 +614,9 @@ async def test_guest_lists_request_does_not_fetch_private_lists():
     result = await resolve_skybridge_request("show my shopping list", "guest", db=GuardedGuestDb())
 
     assert result["handled"] is True
-    assert result["cards"][0]["content"]["source"] == "list_show"
-    assert result["cards"][0]["content"]["items"] == []
+    assert result["auth_required"] is True
+    assert result["actions"][0]["domain"] == "lists"
+    assert result["cards"][0]["props"]["status"] == "Authentication"
 
 
 @pytest.mark.asyncio
@@ -635,8 +671,9 @@ async def test_guest_people_request_does_not_fetch_private_people():
     result = await resolve_skybridge_request("show my contacts", "guest", db=GuardedGuestDb())
 
     assert result["handled"] is True
-    assert result["cards"][0]["content"]["source"] == "people_directory"
-    assert result["cards"][0]["content"]["people"] == []
+    assert result["auth_required"] is True
+    assert result["actions"][0]["domain"] == "people"
+    assert result["cards"][0]["props"]["status"] == "Authentication"
 
 
 @pytest.mark.asyncio

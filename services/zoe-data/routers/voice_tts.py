@@ -1273,6 +1273,98 @@ async def _request_auth_ui(panel_id: str, challenge_id: str, reason: str) -> boo
     return delivered
 
 
+async def _request_voice_identity_challenge(
+    *,
+    panel_id: str,
+    text: str,
+    session_id: str,
+    caller: dict | None,
+    reason: str = "Voice command needs identity. Enter your PIN to continue.",
+) -> dict:
+    """Hold a voice turn and ask the touch panel to identify the speaker."""
+    import uuid as _uuid_mod
+
+    _pending_id = _uuid_mod.uuid4().hex
+    _PENDING_VOICE_IDENT[panel_id] = {
+        "pending_id": _pending_id,
+        "transcript": text,
+        "session_id": session_id,
+        "expire_at": time.monotonic() + 120,
+    }
+    _pin_phrase = "Please authenticate on the touch panel. Choose your profile and enter your PIN to continue."
+    _pin_b64 = None
+    _pin_content_type = "audio/wav"
+    try:
+        _pin_audio_resp = await synthesize({"text": _pin_phrase}, caller=caller)
+        _pin_b64 = base64.b64encode(_pin_audio_resp.body).decode("ascii")
+        _pin_content_type = _pin_audio_resp.media_type
+    except Exception as _tts_exc:
+        logger.warning("voice/command auth challenge TTS failed: %s", _tts_exc)
+    _challenge_id = None
+    try:
+        from routers.panel_auth import create_pin_challenge_internal
+        from database import get_db as _get_db
+        async for _db in _get_db():
+            _challenge = await create_pin_challenge_internal(
+                panel_id=panel_id,
+                user_id=None,
+                action_context={
+                    "kind": "voice_turn",
+                    "pending_id": _pending_id,
+                    "panel_id": panel_id,
+                    "pending_transcript": text,
+                    "pending_session_id": session_id,
+                },
+                db=_db,
+            )
+            _challenge_id = (_challenge or {}).get("challenge_id")
+            break
+    except Exception as _challenge_exc:
+        logger.warning("voice/command PIN challenge failed: %s", _challenge_exc)
+    if not _challenge_id:
+        _fail_phrase = "I could not open the authentication screen just now. Please open the touch login page and try again."
+        _fail_audio = await synthesize({"text": _fail_phrase}, caller=caller)
+        return {
+            "ok": True,
+            "panel_id": panel_id,
+            "reply": _fail_phrase,
+            "status": "auth_unavailable",
+            "audio_base64": base64.b64encode(_fail_audio.body).decode("ascii"),
+            "content_type": _fail_audio.media_type,
+        }
+
+    _requested = await _request_auth_ui(
+        panel_id=panel_id,
+        challenge_id=_challenge_id,
+        reason=reason,
+    )
+    if not _requested:
+        logger.warning(
+            "voice/command auth challenge created but panel auth action was not delivered: panel=%s challenge=%s",
+            panel_id,
+            _challenge_id,
+        )
+    try:
+        from voice_metrics import voice_turn_count
+        voice_turn_count.labels(outcome="ok", path="awaiting_pin").inc()
+    except Exception:
+        pass
+    try:
+        from push import broadcaster as _bc_auth_state
+        await _bc_auth_state.broadcast("all", "voice:responding", {"panel_id": panel_id, "text": _pin_phrase[:200]})
+        await _bc_auth_state.broadcast("all", "voice:done", {"panel_id": panel_id})
+    except Exception:
+        pass
+    return {
+        "ok": True,
+        "panel_id": panel_id,
+        "reply": _pin_phrase,
+        "status": "awaiting_pin",
+        "audio_base64": _pin_b64,
+        "content_type": _pin_content_type,
+    }
+
+
 async def _resolve_panel_default_user(panel_id: str, db) -> Optional[str]:
     """Best-effort panel user resolution for voice fallback identity."""
     try:
@@ -2560,6 +2652,44 @@ async def voice_command(
             context=_skybridge_context,
             db=db,
         )
+        if _skybridge_result and _skybridge_result.get("auth_required"):
+            _intent = _skybridge_result.get("intent") or {}
+            try:
+                from guest_policy import record_policy_decision as _record_guest_policy
+                _record_guest_policy(
+                    "auth_required",
+                    surface="voice",
+                    resource="skybridge",
+                    action=f"{_intent.get('domain', 'unknown')}:{_intent.get('action', 'show')}",
+                )
+            except Exception as _policy_exc:
+                logger.warning("voice/command skybridge auth policy record failed: %s", _policy_exc)
+            try:
+                return await _request_voice_identity_challenge(
+                    panel_id=panel_id,
+                    text=text,
+                    session_id=session_id,
+                    caller=caller,
+                    reason="Skybridge needs to know who is speaking before showing personal data.",
+                )
+            except Exception as _auth_exc:
+                logger.warning("voice/command skybridge auth challenge failed: %s", _auth_exc)
+                _auth_fail_phrase = "Authentication is required before I can show that. I could not open the touch panel authentication screen just now."
+                try:
+                    _auth_fail_audio = await synthesize({"text": _auth_fail_phrase}, caller=caller)
+                    _auth_fail_b64 = base64.b64encode(_auth_fail_audio.body).decode("ascii")
+                    _auth_fail_type = _auth_fail_audio.media_type
+                except Exception:
+                    _auth_fail_b64 = None
+                    _auth_fail_type = "audio/wav"
+                return {
+                    "ok": True,
+                    "panel_id": panel_id,
+                    "reply": _auth_fail_phrase,
+                    "status": "auth_unavailable",
+                    "audio_base64": _auth_fail_b64,
+                    "content_type": _auth_fail_type,
+                }
         if _skybridge_result and _skybridge_result.get("handled"):
             _VOICE_SESSIONS.setdefault(panel_id, {})["skybridge_context"] = (
                 _skybridge_result.get("skybridge_context") or {}
@@ -3050,78 +3180,13 @@ async def voice_command(
                     resource="scope_gate",
                     action=_scope_action,
                 )
-                import uuid as _uuid_mod
-                _pending_id = _uuid_mod.uuid4().hex
-                _pending_payload = {
-                    "pending_id": _pending_id,
-                    "transcript": text,
-                    "session_id": session_id,
-                    "expire_at": time.monotonic() + 120,
-                }
-                _PENDING_VOICE_IDENT[panel_id] = {
-                    **_pending_payload,
-                }
-                _pin_phrase = "Please authenticate on the touch panel. Choose your profile and enter your PIN to continue."
-                _pin_audio_resp = await synthesize({"text": _pin_phrase}, caller=caller)
-                _pin_b64 = base64.b64encode(_pin_audio_resp.body).decode("ascii")
-                _challenge_id = None
-                try:
-                    from routers.panel_auth import create_pin_challenge_internal
-                    from database import get_db as _get_db
-                    async for _db in _get_db():
-                        _challenge = await create_pin_challenge_internal(
-                            panel_id=panel_id,
-                            user_id=None,
-                            action_context={
-                                "kind": "voice_turn",
-                                "pending_id": _pending_id,
-                                "panel_id": panel_id,
-                                # Durable replay fallback if process-local in-memory maps are lost.
-                                "pending_transcript": text,
-                                "pending_session_id": session_id,
-                            },
-                            db=_db,
-                        )
-                        _challenge_id = (_challenge or {}).get("challenge_id")
-                        break
-                except Exception as _challenge_exc:
-                    logger.warning("voice/command PIN challenge failed: %s", _challenge_exc)
-                if not _challenge_id:
-                    _fail_phrase = "I could not open the authentication screen just now. Please open the touch login page and try again."
-                    _fail_audio = await synthesize({"text": _fail_phrase}, caller=caller)
-                    return {
-                        "ok": True,
-                        "panel_id": panel_id,
-                        "reply": _fail_phrase,
-                        "status": "auth_unavailable",
-                        "audio_base64": base64.b64encode(_fail_audio.body).decode("ascii"),
-                        "content_type": _fail_audio.media_type,
-                    }
-
-                _requested = await _request_auth_ui(
+                return await _request_voice_identity_challenge(
                     panel_id=panel_id,
-                    challenge_id=_challenge_id,
+                    text=text,
+                    session_id=session_id,
+                    caller=caller,
                     reason="Voice command needs identity. Enter your PIN to continue.",
                 )
-                if not _requested:
-                    logger.warning(
-                        "voice/command auth challenge created but panel auth action was not delivered: panel=%s challenge=%s",
-                        panel_id,
-                        _challenge_id,
-                    )
-                try:
-                    from voice_metrics import voice_turn_count
-                    voice_turn_count.labels(outcome="ok", path="awaiting_pin").inc()
-                except Exception:
-                    pass
-                return {
-                    "ok": True,
-                    "panel_id": panel_id,
-                    "reply": _pin_phrase,
-                    "status": "awaiting_pin",
-                    "audio_base64": _pin_b64,
-                    "content_type": _pin_audio_resp.media_type,
-                }
             _record_guest_policy(
                 "guest_allowed" if not _ident_for_scope else "auth_ok",
                 surface="voice",

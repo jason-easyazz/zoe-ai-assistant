@@ -4,6 +4,7 @@ import types
 
 import pytest
 
+import skybridge_service
 import routers.voice_tts as voice_tts
 from routers.voice_tts import (
     _broadcast_skybridge_ui,
@@ -394,6 +395,12 @@ async def test_voice_command_uses_skybridge_fast_path(monkeypatch, utterance, re
 
     skybridge_module = types.SimpleNamespace(resolve_skybridge_request=resolve_skybridge_request)
     monkeypatch.setitem(sys.modules, "skybridge_service", skybridge_module)
+    monkeypatch.setattr(skybridge_service, "resolve_skybridge_request", resolve_skybridge_request)
+    monkeypatch.setitem(
+        sys.modules,
+        "guest_policy",
+        types.SimpleNamespace(record_policy_decision=lambda *_args, **_kwargs: None),
+    )
     monkeypatch.setitem(sys.modules, "push", types.SimpleNamespace(broadcaster=Broadcaster()))
     monkeypatch.setattr(voice_tts, "_broadcast_skybridge_ui", broadcast_skybridge_ui)
     monkeypatch.setattr(voice_tts, "synthesize", synthesize)
@@ -425,3 +432,188 @@ async def test_voice_command_uses_skybridge_fast_path(monkeypatch, utterance, re
     assert ("all", "voice:done", {"panel_id": "panel-sky"}) in calls["broadcast"]
     assert calls["events"].index("synthesize") < calls["events"].index("voice:done")
     assert voice_tts._VOICE_SESSIONS["panel-sky"]["skybridge_context"] == {"domain": "weather"}
+
+
+@pytest.mark.asyncio
+async def test_voice_skybridge_private_request_challenges_guest_before_cards(monkeypatch) -> None:
+    calls: dict[str, object] = {"broadcast_called": False, "challenge_called": False}
+
+    async def resolve_skybridge_request(text, user_id, *, context=None, db=None):
+        calls["resolver"] = {"text": text, "user_id": user_id, "context": context, "db": db}
+        return {
+            "handled": True,
+            "auth_required": True,
+            "spoken_summary": "Please authenticate on the touch panel to continue.",
+            "intent": {"domain": "lists", "action": "show", "list_type": "shopping"},
+            "cards": [
+                {
+                    "component": "status",
+                    "props": {"title": "Sign in to view lists", "status": "Authentication"},
+                }
+            ],
+        }
+
+    async def broadcast_skybridge_ui(*_args, **_kwargs):
+        calls["broadcast_called"] = True
+
+    async def request_voice_identity_challenge(**kwargs):
+        calls["challenge_called"] = True
+        calls["challenge"] = kwargs
+        return {
+            "ok": True,
+            "panel_id": kwargs["panel_id"],
+            "reply": "Please authenticate on the touch panel.",
+            "status": "awaiting_pin",
+            "audio_base64": "UklGRg==",
+            "content_type": "audio/wav",
+        }
+
+    class Broadcaster:
+        async def broadcast(self, *_args, **_kwargs):
+            return True
+
+    async def no_user(*_args, **_kwargs):
+        return None
+
+    skybridge_module = types.SimpleNamespace(resolve_skybridge_request=resolve_skybridge_request)
+    monkeypatch.setitem(sys.modules, "skybridge_service", skybridge_module)
+    monkeypatch.setattr(skybridge_service, "resolve_skybridge_request", resolve_skybridge_request)
+    monkeypatch.setitem(sys.modules, "push", types.SimpleNamespace(broadcaster=Broadcaster()))
+    monkeypatch.setattr(voice_tts, "_broadcast_skybridge_ui", broadcast_skybridge_ui)
+    monkeypatch.setattr(voice_tts, "_request_voice_identity_challenge", request_voice_identity_challenge)
+    monkeypatch.setattr(voice_tts, "_resolve_recent_panel_session_user", no_user)
+    monkeypatch.setattr(voice_tts, "_resolve_panel_default_user", no_user)
+    monkeypatch.setattr(voice_tts, "_VOICE_SESSIONS", {})
+
+    response = await voice_command(
+        {"text": "what's on my shopping list", "panel_id": "panel-auth", "session_id": "session-auth"},
+        caller={"user_id": "guest", "panel_id": "panel-auth"},
+        db=object(),
+    )
+
+    assert response["ok"] is True
+    assert response["status"] == "awaiting_pin"
+    assert calls["resolver"]["user_id"] == "guest"
+    assert calls["challenge_called"] is True
+    assert calls["challenge"]["text"] == "what's on my shopping list"
+    assert calls["challenge"]["session_id"] == "session-auth"
+    assert calls["broadcast_called"] is False
+
+
+@pytest.mark.asyncio
+async def test_voice_skybridge_auth_challenge_failure_does_not_fall_through(monkeypatch) -> None:
+    calls: dict[str, object] = {"broadcast_called": False}
+
+    async def resolve_skybridge_request(text, user_id, *, context=None, db=None):
+        return {
+            "handled": True,
+            "auth_required": True,
+            "spoken_summary": "Please authenticate on the touch panel to continue.",
+            "intent": {"domain": "lists", "action": "show", "list_type": "shopping"},
+            "cards": [],
+        }
+
+    async def broadcast_skybridge_ui(*_args, **_kwargs):
+        calls["broadcast_called"] = True
+
+    async def request_voice_identity_challenge(**_kwargs):
+        raise RuntimeError("panel auth unavailable")
+
+    class Broadcaster:
+        async def broadcast(self, *_args, **_kwargs):
+            return True
+
+    class Audio:
+        body = b"RIFF-test"
+        media_type = "audio/wav"
+
+    async def synthesize(payload, caller=None):
+        calls["synthesize"] = payload
+        return Audio()
+
+    async def no_user(*_args, **_kwargs):
+        return None
+
+    skybridge_module = types.SimpleNamespace(resolve_skybridge_request=resolve_skybridge_request)
+    monkeypatch.setitem(sys.modules, "skybridge_service", skybridge_module)
+    monkeypatch.setattr(skybridge_service, "resolve_skybridge_request", resolve_skybridge_request)
+    monkeypatch.setitem(
+        sys.modules,
+        "guest_policy",
+        types.SimpleNamespace(record_policy_decision=lambda *_args, **_kwargs: None),
+    )
+    monkeypatch.setitem(sys.modules, "push", types.SimpleNamespace(broadcaster=Broadcaster()))
+    monkeypatch.setattr(voice_tts, "_broadcast_skybridge_ui", broadcast_skybridge_ui)
+    monkeypatch.setattr(voice_tts, "_request_voice_identity_challenge", request_voice_identity_challenge)
+    monkeypatch.setattr(voice_tts, "synthesize", synthesize)
+    monkeypatch.setattr(voice_tts, "_resolve_recent_panel_session_user", no_user)
+    monkeypatch.setattr(voice_tts, "_resolve_panel_default_user", no_user)
+    monkeypatch.setattr(voice_tts, "_VOICE_SESSIONS", {})
+
+    response = await voice_command(
+        {"text": "what's on my shopping list", "panel_id": "panel-auth", "session_id": "session-auth"},
+        caller={"user_id": "guest", "panel_id": "panel-auth"},
+        db=object(),
+    )
+
+    assert response["ok"] is True
+    assert response["status"] == "auth_unavailable"
+    assert "Authentication is required" in response["reply"]
+    assert response["audio_base64"]
+    assert calls["broadcast_called"] is False
+
+
+@pytest.mark.asyncio
+async def test_voice_identity_challenge_survives_tts_failure(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    async def synthesize(_payload, caller=None):
+        raise RuntimeError("tts unavailable")
+
+    async def create_pin_challenge_internal(**kwargs):
+        calls["challenge"] = kwargs
+        return {"challenge_id": "challenge-1"}
+
+    async def get_db():
+        yield object()
+
+    async def request_auth_ui(**kwargs):
+        calls["request_auth"] = kwargs
+        return True
+
+    class Metric:
+        def labels(self, **_kwargs):
+            return self
+
+        def inc(self):
+            calls["metric"] = True
+
+    monkeypatch.setattr(voice_tts, "synthesize", synthesize)
+    monkeypatch.setattr(voice_tts, "_request_auth_ui", request_auth_ui)
+    monkeypatch.setitem(
+        sys.modules,
+        "routers.panel_auth",
+        types.SimpleNamespace(create_pin_challenge_internal=create_pin_challenge_internal),
+    )
+    monkeypatch.setitem(sys.modules, "database", types.SimpleNamespace(get_db=get_db))
+    monkeypatch.setitem(sys.modules, "voice_metrics", types.SimpleNamespace(voice_turn_count=Metric()))
+    monkeypatch.setitem(
+        sys.modules,
+        "push",
+        types.SimpleNamespace(broadcaster=types.SimpleNamespace(broadcast=lambda *_args, **_kwargs: None)),
+    )
+    monkeypatch.setattr(voice_tts, "_PENDING_VOICE_IDENT", {})
+
+    response = await voice_tts._request_voice_identity_challenge(
+        panel_id="panel-auth",
+        text="show my calendar",
+        session_id="session-auth",
+        caller={"user_id": "guest"},
+    )
+
+    assert response["status"] == "awaiting_pin"
+    assert response["audio_base64"] is None
+    assert response["content_type"] == "audio/wav"
+    assert calls["challenge"]["panel_id"] == "panel-auth"
+    assert calls["request_auth"]["challenge_id"] == "challenge-1"
+    assert voice_tts._PENDING_VOICE_IDENT["panel-auth"]["transcript"] == "show my calendar"

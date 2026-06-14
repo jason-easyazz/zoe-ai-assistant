@@ -402,6 +402,9 @@ def classify_skybridge_intent(message: str, context: dict[str, Any] | None = Non
     if any(term in text for term in (" weather", " forecast", " temperature", " rain", " windy", " wind ")):
         action = "forecast" if any(term in text for term in ("forecast", "tomorrow", "week", "next few days")) else "current"
         return SkybridgeIntent(domain="weather", action=action)
+    if any(term in text for term in (" list", " lists", " shopping", " groceries", " grocery", " tasks", " todos")):
+        list_type = _list_type_from_text(text)
+        return SkybridgeIntent(domain="lists", action="show", list_type=list_type)
     if any(
         term in text
         for term in (
@@ -421,9 +424,6 @@ def classify_skybridge_intent(message: str, context: dict[str, Any] | None = Non
             label, start, end = parsed_range
             return SkybridgeIntent("calendar", "show", label, start, end)
         return SkybridgeIntent("calendar", "show", "today", today, today)
-    if any(term in text for term in (" list", " lists", " shopping", " groceries", " grocery", " tasks", " todos")):
-        list_type = _list_type_from_text(text)
-        return SkybridgeIntent(domain="lists", action="show", list_type=list_type)
     if any(term in text for term in (" people", " contacts", " contact", " person", " profile", " family", " friends")):
         query, people_ctx, circle = _people_filters_from_text(text)
         if " family " in text and not query:
@@ -456,6 +456,9 @@ async def resolve_skybridge_request(
             "skybridge_context": context or {},
         }
 
+    if skybridge_intent_requires_identity(intent) and _is_guest_user(user_id):
+        return _attach_skybridge_context(_auth_required_result(intent))
+
     if db is not None:
         return _attach_skybridge_context(await _resolve_with_db(intent, user_id, db, context=context))
 
@@ -470,6 +473,15 @@ def _attach_skybridge_context(result: dict[str, Any]) -> dict[str, Any]:
             "cards": result.get("cards") or [],
         }
     return result
+
+
+def _is_guest_user(user_id: str | None) -> bool:
+    return (user_id or "").strip() in {"", "guest", "voice-guest"}
+
+
+def skybridge_intent_requires_identity(intent: SkybridgeIntent | None) -> bool:
+    """Return whether a Skybridge intent reads or mutates personal user data."""
+    return bool(intent and intent.domain in {"calendar", "lists", "people"})
 
 
 async def _resolve_with_db(intent: SkybridgeIntent, user_id: str, db: Any, *, context: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -526,6 +538,27 @@ def _intent_dict(intent: SkybridgeIntent) -> dict[str, Any]:
         "action": intent.action,
         "list_type": intent.list_type,
         "target_time": intent.target_time,
+    }
+
+
+def _auth_required_result(intent: SkybridgeIntent) -> dict[str, Any]:
+    domain_labels = {
+        "calendar": "calendar",
+        "lists": "lists",
+        "people": "people",
+    }
+    domain = domain_labels.get(intent.domain, "this data")
+    title = f"Sign in to view {domain}"
+    if intent.action in {"create_event", "update_time", "add_item", "remember_fact"}:
+        title = f"Sign in to change {domain}"
+    body = "Zoe needs to know who is speaking before showing or changing personal data."
+    return {
+        "handled": True,
+        "auth_required": True,
+        "intent": _intent_dict(intent),
+        "spoken_summary": "Please authenticate on the touch panel to continue.",
+        "cards": [_status_card(title, body, status="Authentication")],
+        "actions": [{"type": "auth_required", "domain": intent.domain, "action": intent.action}],
     }
 
 
