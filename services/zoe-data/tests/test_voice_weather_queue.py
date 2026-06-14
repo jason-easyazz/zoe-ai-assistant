@@ -325,8 +325,15 @@ async def test_broadcast_skybridge_ui_skips_supersession_when_card_id_missing(mo
     assert not any("payload::jsonb" in sql for sql, _params in db.executed)
 
 
+@pytest.mark.parametrize(
+    ("utterance", "resolver_text"),
+    [
+        ("show weather", "show weather"),
+        ("show whether", "show weather"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_voice_command_uses_skybridge_fast_path(monkeypatch) -> None:
+async def test_voice_command_uses_skybridge_fast_path(monkeypatch, utterance, resolver_text) -> None:
     calls: dict[str, object] = {"broadcast": [], "events": []}
 
     async def resolve_skybridge_request(text, user_id, *, context=None, db=None):
@@ -398,7 +405,7 @@ async def test_voice_command_uses_skybridge_fast_path(monkeypatch) -> None:
     monkeypatch.setattr(voice_tts, "_VOICE_SESSIONS", {})
 
     response = await voice_command(
-        {"text": "show weather", "panel_id": "panel-sky", "session_id": "session-sky"},
+        {"text": utterance, "panel_id": "panel-sky", "session_id": "session-sky"},
         caller={"user_id": "guest", "panel_id": "panel-sky"},
         db=object(),
     )
@@ -409,10 +416,10 @@ async def test_voice_command_uses_skybridge_fast_path(monkeypatch) -> None:
     assert response["intent"] == "skybridge:weather"
     assert response["skybridge"] is True
     assert response["audio_base64"]
-    assert calls["resolver"]["text"] == "show weather"
+    assert calls["resolver"]["text"] == resolver_text
     assert calls["resolver"]["user_id"] == "guest"
     assert calls["broadcast_skybridge_ui"]["panel_id"] == "panel-sky"
-    assert calls["broadcast_skybridge_ui"]["utterance"] == "show weather"
+    assert calls["broadcast_skybridge_ui"]["utterance"] == resolver_text
     assert calls["synthesize"] == {"text": "It is sunny in Perth."}
     assert ("all", "voice:responding", {"panel_id": "panel-sky", "text": "It is sunny in Perth."}) in calls["broadcast"]
     assert ("all", "voice:done", {"panel_id": "panel-sky"}) in calls["broadcast"]

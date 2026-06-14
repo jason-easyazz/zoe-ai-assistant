@@ -1640,6 +1640,22 @@ def _use_in_process_faster_whisper() -> bool:
     return (os.environ.get("ZOE_WHISPER_IN_PROCESS") or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _normalize_voice_command_text(text: str) -> str:
+    """Correct common STT homophones that block deterministic voice intents."""
+    normalized = (text or "").strip()
+    if not normalized:
+        return normalized
+    replacements = [
+        (r"\b(show|open|display|bring up|pull up)\s+(?:me\s+)?(?:the\s+)?whether\b", r"\1 weather"),
+        (r"\bwhat(?:'s| is)\s+the\s+whether\b", "what is the weather"),
+        (r"\bhow(?:'s| is)\s+the\s+whether\b", "how is the weather"),
+        (r"^whether\b(?=\s*(?:today|tomorrow|forecast|this week|now)?\b)", "weather"),
+    ]
+    for pattern, repl in replacements:
+        normalized = re.sub(pattern, repl, normalized, flags=re.IGNORECASE)
+    return normalized
+
+
 async def _get_faster_whisper_model():
     """Lazy-load and cache a faster-whisper WhisperModel instance."""
     global _faster_whisper_model, _faster_whisper_model_name
@@ -2205,6 +2221,10 @@ async def voice_command(
     _quick_intent_name: Optional[str] = None
     if not text:
         raise HTTPException(status_code=400, detail="text is required")
+    normalized_text = _normalize_voice_command_text(text)
+    if normalized_text != text:
+        logger.info("voice/command normalized transcript %r -> %r", text[:80], normalized_text[:80])
+        text = normalized_text
 
     # Classify identity source for Pass 3 observability (Pass 1 is measurement-only).
     try:
