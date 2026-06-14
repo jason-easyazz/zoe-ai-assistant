@@ -63,6 +63,12 @@ class PiIntentEvalCase:
             raise ValueError(f"{self.case_id}: expected_intent is required")
         if self.expected_intent in PRIVILEGED_INTENTS:
             raise ValueError(f"{self.case_id}: privileged intents are not eligible for Pi auto-promotion")
+        if (
+            not self.negative
+            and self.intent_group != "chat"
+            and self.expected_intent not in LOW_RISK_PI_INTENT_GROUPS[self.intent_group]
+        ):
+            raise ValueError(f"{self.case_id}: expected_intent does not belong to intent_group {self.intent_group!r}")
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
@@ -232,7 +238,8 @@ def evaluate_pi_promotion(
         sample.validate()
     sample_count = len(group_samples)
     if sample_count == 0:
-        return _empty_decision(intent_group, state="keep_shadow", blockers=("insufficient_samples",))
+        state = "rollback" if promoted else "keep_shadow"
+        return _empty_decision(intent_group, state=state, blockers=("insufficient_samples",))
 
     zoe_accuracy = _rate(sample.zoe_correct for sample in group_samples)
     pi_accuracy = _rate(sample.pi_correct for sample in group_samples)

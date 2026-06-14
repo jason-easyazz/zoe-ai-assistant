@@ -46,6 +46,19 @@ def test_eval_case_rejects_privileged_expected_intent():
         case.validate()
 
 
+def test_eval_case_rejects_expected_intent_outside_group():
+    case = PiIntentEvalCase(
+        case_id="bad_group",
+        text="rain later",
+        expected_intent="reminder_list",
+        intent_group="weather",
+        route_class="fallback",
+    )
+
+    with pytest.raises(ValueError, match="expected_intent does not belong"):
+        case.validate()
+
+
 def test_intent_group_for_intent_maps_low_risk_groups_only():
     assert intent_group_for_intent("weather") == "weather"
     assert intent_group_for_intent("reminder_create") == "reminders"
@@ -100,6 +113,13 @@ def test_promoted_group_rolls_back_on_accuracy_regression():
 
     assert decision.state == "rollback"
     assert "accuracy_delta_below_threshold" in decision.blockers
+
+
+def test_promoted_group_rolls_back_when_evidence_stops():
+    decision = evaluate_pi_promotion([], intent_group="weather", policy=PiPromotionPolicy(min_samples=10), promoted=True)
+
+    assert decision.state == "rollback"
+    assert decision.blockers == ("insufficient_samples",)
 
 
 def test_promoted_group_rolls_back_on_timeout_regression():
