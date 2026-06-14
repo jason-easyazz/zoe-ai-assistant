@@ -256,14 +256,10 @@ async def test_broadcast_skybridge_ui_opens_skybridge_with_card_payload(monkeypa
     assert enqueue_calls[1]["payload"]["card"] == card
     assert enqueue_calls[1]["payload"]["result"] == result
     assert enqueue_calls[1]["broadcast"] is False
-    assert [item[1] for item in broadcasts] == ["ui_action", "ui_action"]
-    assert [item[2]["action_id"] for item in broadcasts] == ["db-panel_navigate", "db-show_card"]
-    assert [item[2]["action_type"] for item in broadcasts] == ["panel_navigate", "show_card"]
-    broadcast_card = broadcasts[1][2]["payload"]
-    assert broadcast_card["card"] == card
-    assert broadcast_card["cards"] == [card]
-    assert "result" not in broadcast_card
-    assert db.updated_ids == ["db-panel_navigate", "db-show_card"]
+    assert [item[1] for item in broadcasts] == ["ui_action"]
+    assert [item[2]["action_id"] for item in broadcasts] == ["db-panel_navigate"]
+    assert [item[2]["action_type"] for item in broadcasts] == ["panel_navigate"]
+    assert db.updated_ids == ["db-panel_navigate"]
 
 
 @pytest.mark.asyncio

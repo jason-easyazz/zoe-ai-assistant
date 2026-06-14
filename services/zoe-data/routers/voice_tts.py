@@ -701,28 +701,20 @@ async def _broadcast_skybridge_ui(
                 "ui_action",
                 {**nav_message, "payload": nav_payload},
             )
-            card_delivered = await broadcaster.broadcast_to_panel(
-                panel_id,
-                "ui_action",
-                {**card_message, "payload": card_payload},
-            )
-            delivered_ids = []
+            # Keep the card queued. Navigating the old Skybridge page immediately
+            # can unload the socket before a following show_card frame is handled;
+            # the freshly loaded page will poll /api/ui/actions/pending and render it.
             if nav_delivered:
-                delivered_ids.append(nav_message["action_id"])
-            if card_delivered:
-                delivered_ids.append(card_message["action_id"])
-            if delivered_ids:
-                for _action_id in delivered_ids:
-                    await _db.execute(
-                        """UPDATE ui_actions
-                           SET status = 'success',
-                               error_code = NULL,
-                               error_message = 'Delivered over panel push',
-                               updated_at = NOW(),
-                               acked_at = NOW()
-                           WHERE id = ?""",
-                        (_action_id,),
-                    )
+                await _db.execute(
+                    """UPDATE ui_actions
+                       SET status = 'success',
+                           error_code = NULL,
+                           error_message = 'Delivered over panel push',
+                           updated_at = NOW(),
+                           acked_at = NOW()
+                       WHERE id = ?""",
+                    (nav_message["action_id"],),
+                )
                 await _db.commit()
             break
     except Exception as exc:
