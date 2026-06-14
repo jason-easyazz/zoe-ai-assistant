@@ -89,6 +89,7 @@ class _Db:
     def __init__(self):
         self.events: list[str] = []
         self.updated_ids: list[str] = []
+        self.executed: list[tuple[str, tuple]] = []
         self.voice_rows = [
             {
                 "id": "old-nav-null-key",
@@ -129,6 +130,7 @@ class _Db:
         self.events.append("commit")
 
     async def execute(self, sql: str, params: tuple = ()):
+        self.executed.append((sql, params))
         if "FROM ui_panel_sessions" in sql:
             return _Cursor(row={"user_id": "panel-user"})
         if "FROM ui_actions" in sql:
@@ -264,6 +266,63 @@ async def test_broadcast_skybridge_ui_opens_skybridge_with_card_payload(monkeypa
     assert [item[2]["action_type"] for item in broadcasts] == ["panel_navigate"]
     assert db.updated_ids == ["panel-1", "db-panel_navigate"]
     assert "commit" in db.events
+    cleanup_sql = next(sql for sql, _params in db.executed if "payload::jsonb" in sql)
+    assert "payload::jsonb->>'source' = 'voice:skybridge'" in cleanup_sql
+
+
+@pytest.mark.asyncio
+async def test_broadcast_skybridge_ui_skips_supersession_when_card_id_missing(monkeypatch) -> None:
+    db = _Db()
+    enqueue_calls = []
+    broadcasts = []
+
+    async def get_db():
+        yield db
+
+    async def enqueue_ui_action(_db, **kwargs):
+        enqueue_calls.append(kwargs)
+        if kwargs["action_type"] == "show_card":
+            return {
+                "status": "queued",
+                "panel_id": kwargs["panel_id"],
+                "action_type": kwargs["action_type"],
+                "payload": kwargs["payload"],
+            }
+        return {
+            "action_id": "db-panel_navigate",
+            "status": "queued",
+            "panel_id": kwargs["panel_id"],
+            "action_type": kwargs["action_type"],
+            "payload": kwargs["payload"],
+        }
+
+    class Broadcaster:
+        async def broadcast_to_panel(self, panel_id, event, payload):
+            broadcasts.append((panel_id, event, payload))
+            return 1
+
+    monkeypatch.setitem(sys.modules, "database", types.SimpleNamespace(get_db=get_db))
+    monkeypatch.setitem(
+        sys.modules,
+        "ui_orchestrator",
+        types.SimpleNamespace(enqueue_ui_action=enqueue_ui_action),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "push",
+        types.SimpleNamespace(broadcaster=Broadcaster()),
+    )
+
+    await _broadcast_skybridge_ui(
+        "panel-1",
+        {"handled": True, "spoken_summary": "Showing it.", "cards": []},
+        utterance="show weather",
+        turn_key="turn-no-card-id",
+    )
+
+    assert [call["action_type"] for call in enqueue_calls] == ["panel_navigate", "show_card"]
+    assert [item[1] for item in broadcasts] == ["ui_action"]
+    assert not any("payload::jsonb" in sql for sql, _params in db.executed)
 
 
 @pytest.mark.asyncio

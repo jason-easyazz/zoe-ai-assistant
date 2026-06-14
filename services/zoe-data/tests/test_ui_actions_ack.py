@@ -29,8 +29,17 @@ class _AckDb:
 
     async def execute(self, sql, params=()):
         if "FROM ui_actions" in sql:
-            assert "panel_id" in sql
-            assert params == ("action-1", "action-1", "browser-user", "zoe-touch-pi", "zoe-touch-pi")
+            assert "EXISTS" in sql
+            assert "FROM ui_panel_sessions" in sql
+            assert params == (
+                "action-1",
+                "action-1",
+                "browser-user",
+                "zoe-touch-pi",
+                "zoe-touch-pi",
+                "zoe-touch-pi",
+                "browser-user",
+            )
             return _Cursor({
                 "id": "action-1",
                 "user_id": "panel-owner",
@@ -77,6 +86,44 @@ async def test_ack_ui_action_accepts_matching_panel_when_user_differs(monkeypatc
     assert len(db.updated) == 1
     assert len(db.ledger) == 1
     assert db.commits == 1
+
+
+class _UnauthorizedAckDb:
+    def __init__(self):
+        self.updated = []
+        self.commits = 0
+
+    async def execute(self, sql, params=()):
+        if "FROM ui_actions" in sql:
+            assert "FROM ui_panel_sessions" in sql
+            return _Cursor(None)
+        if "UPDATE ui_actions" in sql:
+            self.updated.append((sql, params))
+            return _Cursor()
+        raise AssertionError(f"unexpected SQL: {sql}")
+
+    async def commit(self):
+        self.commits += 1
+
+
+@pytest.mark.asyncio
+async def test_ack_ui_action_rejects_panel_ack_when_user_not_registered(monkeypatch):
+    async def allow(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(ui_actions, "require_feature_access", allow)
+
+    db = _UnauthorizedAckDb()
+    result = await ack_ui_action(
+        "action-1",
+        {"status": "failed", "panel_id": "zoe-touch-pi"},
+        user={"user_id": "other-guest", "role": "guest"},
+        db=db,
+    )
+
+    assert result == {"status": "already_acked", "action_id": "action-1"}
+    assert db.updated == []
+    assert db.commits == 0
 
 
 class _RowsCursor:
@@ -141,7 +188,7 @@ async def test_pending_actions_skips_superseded_skybridge_voice_cards(monkeypatc
     cleanup_sql = db.executes[2][0]
     cleanup_params = db.executes[2][1]
     assert "Superseded by newer Skybridge voice card" in cleanup_sql
-    assert "payload::text LIKE" in cleanup_sql
+    assert "payload::jsonb->>'source' = 'voice:skybridge'" in cleanup_sql
     assert cleanup_params == ("guest", "zoe-touch-pi", "guest", "zoe-touch-pi")
     assert result["count"] == 1
     assert result["actions"][0]["id"] == "new-card"

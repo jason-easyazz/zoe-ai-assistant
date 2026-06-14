@@ -699,21 +699,22 @@ async def _broadcast_skybridge_ui(
                 commit=False,
             )
             current_card_id = card_message.get("action_id") or card_message.get("id")
-            await _db.execute(
-                """UPDATE ui_actions
-                   SET status = 'skipped',
-                       error_code = 'superseded',
-                       error_message = 'Superseded by newer Skybridge voice card',
-                       updated_at = NOW()
-                   WHERE user_id = ?
-                     AND panel_id = ?
-                     AND requested_by = 'voice'
-                     AND action_type = 'show_card'
-                     AND status IN ('queued', 'running')
-                     AND id != ?
-                     AND payload::text LIKE '%"source": "voice:skybridge"%'""",
-                (_panel_user_id, panel_id, current_card_id),
-            )
+            if current_card_id:
+                await _db.execute(
+                    """UPDATE ui_actions
+                       SET status = 'skipped',
+                           error_code = 'superseded',
+                           error_message = 'Superseded by newer Skybridge voice card',
+                           updated_at = NOW()
+                       WHERE user_id = ?
+                         AND panel_id = ?
+                         AND requested_by = 'voice'
+                         AND action_type = 'show_card'
+                         AND status IN ('queued', 'running')
+                         AND id != ?
+                         AND payload::jsonb->>'source' = 'voice:skybridge'""",
+                    (_panel_user_id, panel_id, current_card_id),
+                )
             await _db.commit()
             nav_delivered = await broadcaster.broadcast_to_panel(
                 panel_id,

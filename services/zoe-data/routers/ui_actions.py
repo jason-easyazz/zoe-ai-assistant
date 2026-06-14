@@ -135,7 +135,7 @@ async def get_pending_ui_actions(
              AND requested_by = 'voice'
              AND action_type = 'show_card'
              AND status IN ('queued', 'running')
-             AND payload::text LIKE '%"source": "voice:skybridge"%'
+             AND payload::jsonb->>'source' = 'voice:skybridge'
              AND created_at::timestamptz < (
                  SELECT MAX(created_at::timestamptz)
                  FROM ui_actions
@@ -143,7 +143,7 @@ async def get_pending_ui_actions(
                    AND requested_by = 'voice'
                    AND action_type = 'show_card'
                    AND status IN ('queued', 'running')
-                   AND payload::text LIKE '%"source": "voice:skybridge"%'
+                   AND payload::jsonb->>'source' = 'voice:skybridge'
              )""",
         (panel_user_id, panel_id, panel_user_id, panel_id),
     )
@@ -184,14 +184,23 @@ async def ack_ui_action(
 
     panel_id = str((payload or {}).get("panel_id") or "").strip()
 
-    # Accept ack by DB uuid (id) OR by idempotency_key.  Kiosk pages can reload
-    # between polling and acking, so allow a panel-targeted ack when the action id
-    # matches and the payload's panel_id matches the action's panel_id.
+    # Accept ack by DB uuid (id) OR by idempotency_key. Kiosk pages can reload
+    # between polling and acking, but panel-targeted cross-user acks are only
+    # accepted from a user currently registered on that panel.
     cursor = await db.execute(
         """SELECT id, user_id, panel_id, status FROM ui_actions
            WHERE (id = ? OR idempotency_key = ?)
-             AND (user_id = ? OR (? != '' AND panel_id = ?))""",
-        (action_id, action_id, user_id, panel_id, panel_id),
+             AND (
+               user_id = ?
+               OR (
+                 ? != '' AND panel_id = ?
+                 AND EXISTS (
+                   SELECT 1 FROM ui_panel_sessions
+                   WHERE panel_id = ? AND user_id = ?
+                 )
+               )
+             )""",
+        (action_id, action_id, user_id, panel_id, panel_id, panel_id, user_id),
     )
     existing = await cursor.fetchone()
     if not existing:
