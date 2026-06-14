@@ -64,6 +64,7 @@ Create or verify these files before the first run. Names may vary by project, bu
    - Usually `program.md`, `instructions.md`, or a Multica issue description.
    - Edited only by the human/operator.
    - Defines the goal, why it matters, the asset allowlist, scoring command, target score, run cadence, and stop conditions.
+   - May optionally pin the model for the loop with a `Model:` (or `Run model:`) line, e.g. `Model: deepseek/deepseek-chat-v3.1`. When omitted, the run uses the invoking session's default model. The bridge parses this line, records it in the promotion PR body and audit record, and a runner may pass it through to the loop.
 
 2. Agent-editable asset file or files:
    - The only files the Auto Research Engineer may change.
@@ -149,6 +150,14 @@ For Zoe repositories, this skill does not bypass engineering governance:
 - Do not create root Markdown files unless explicitly approved.
 - Do not edit production scoring, tests, or runtime services as part of an autoresearch run unless they are the declared asset and separately approved.
 - Do not run unbounded overnight loops without an explicit operator-approved max time, max rounds, and stop mechanism.
+
+## Promotion (Governed)
+
+A finished run that nets a real improvement does not commit straight to production. Promote it through the same review gate as any other change:
+
+- Use `services/zoe-data/autoresearch_bridge.py` (`prepare_promotion(<run_dir>)`) to read the run's `program.md` + `results.tsv` and produce a promotion plan. It promotes only when there is at least one `keep` round AND a net improvement over baseline in the locked direction; flat or regressed runs stay a no-op.
+- Open the validated keeper as a normal PR from the `autoresearch/<tag>` branch using the generated PR body. The diff must still pass Greptile review and all required checks before merge — promotion never bypasses the gate.
+- Optionally emit a Multica **audit record** (`--emit-audit`) that documents the run. The audit ticket is built without `dispatch_approved` and with empty acceptance/evidence, so the admission gate fails closed and it can never be picked up as a work order.
 
 ## Morning Report
 
