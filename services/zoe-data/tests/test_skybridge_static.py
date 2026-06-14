@@ -411,6 +411,9 @@ def test_skybridge_auth_challenge_card_contract():
 
     assert "auth_challenge: renderAuthChallenge" in renderer
     assert "function renderAuthChallenge(props)" in renderer
+    assert "const finalStep = props.final_step || 'Return to Zoe'" in renderer
+    assert "escapeHtml(finalStep)" in renderer
+    assert "escapeHtml(action)" not in renderer[renderer.index("function renderAuthChallenge"):renderer.index("function renderStatus")]
     assert "data-challenge-id" in renderer
     assert "data-action-context" in renderer
     assert "btn.dataset.skyAction === 'auth'" in app

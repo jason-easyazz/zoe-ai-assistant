@@ -72,7 +72,7 @@
         const title = props.title || 'Confirm it is you';
         const body = props.body || props.message || 'Zoe needs to know who is speaking before showing or changing personal data.';
         const domain = props.domain ? String(props.domain) : 'Private data';
-        const action = props.action ? String(props.action).replace(/_/g, ' ') : 'Continue';
+        const finalStep = props.final_step || 'Return to Zoe';
         const bodyHtml = [
             '<div class="sky-auth-scene">',
             '<div class="sky-auth-orb" aria-hidden="true"><span></span></div>',
@@ -84,7 +84,7 @@
             '<div class="sky-auth-steps" aria-label="Authentication steps">',
             '<div><b>1</b><span>Choose profile</span></div>',
             '<div><b>2</b><span>Enter PIN</span></div>',
-            '<div><b>3</b><span>' + escapeHtml(action) + '</span></div>',
+            '<div><b>3</b><span>' + escapeHtml(finalStep) + '</span></div>',
             '</div>',
             '</div>'
         ].join('');
