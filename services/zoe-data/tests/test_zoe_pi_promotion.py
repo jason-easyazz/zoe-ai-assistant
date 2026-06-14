@@ -152,6 +152,16 @@ def test_promoted_group_rolls_back_on_user_corrections():
     assert "correction_rate_too_high" in decision.blockers
 
 
+def test_rollback_blocked_overrides_promoted_regression():
+    samples = [_sample(i, rollback_blocked=i == 0) for i in range(10)]
+    policy = PiPromotionPolicy(min_samples=10)
+
+    decision = evaluate_pi_promotion(samples, intent_group="weather", policy=policy, promoted=True)
+
+    assert decision.state == "blocked"
+    assert "rollback_blocked" in decision.blockers
+
+
 def test_sample_rejects_secret_metadata():
     sample = _sample(1, metadata={"api_key": "nope"})
 
@@ -164,5 +174,19 @@ def test_summary_lists_promotable_groups():
     report = summarize_pi_promotion(samples, policy=PiPromotionPolicy(min_samples=10))
 
     assert "weather" in report["promotable_groups"]
+    assert report["promoted_groups"] == []
     assert report["sample_count"] == 10
     assert report["policy"]["accuracy_win_margin"] == 0.05
+
+
+def test_summary_lists_rollback_groups_for_active_promotions():
+    samples = [_sample(i, zoe="weather", pi="reminder_list") for i in range(10)]
+    report = summarize_pi_promotion(samples, policy=PiPromotionPolicy(min_samples=10), promoted_groups=["weather"])
+
+    assert report["promoted_groups"] == ["weather"]
+    assert "weather" in report["rollback_groups"]
+
+
+def test_summary_rejects_unknown_promoted_groups():
+    with pytest.raises(ValueError, match="unknown promoted_groups"):
+        summarize_pi_promotion([], promoted_groups=["device_control"])

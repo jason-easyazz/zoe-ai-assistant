@@ -290,9 +290,26 @@ def evaluate_pi_promotion(
     )
 
 
-def summarize_pi_promotion(samples: Sequence[PiRouteSample], *, policy: PiPromotionPolicy | None = None) -> dict[str, Any]:
+def summarize_pi_promotion(
+    samples: Sequence[PiRouteSample],
+    *,
+    policy: PiPromotionPolicy | None = None,
+    promoted_groups: Sequence[str] | None = None,
+) -> dict[str, Any]:
     active_policy = policy or PiPromotionPolicy()
-    decisions = [evaluate_pi_promotion(samples, intent_group=group, policy=active_policy).to_dict() for group in sorted(LOW_RISK_PI_INTENT_GROUPS)]
+    active_promoted_groups = set(promoted_groups or ())
+    unknown_groups = sorted(active_promoted_groups - set(LOW_RISK_PI_INTENT_GROUPS))
+    if unknown_groups:
+        raise ValueError(f"unknown promoted_groups: {', '.join(unknown_groups)}")
+    decisions = [
+        evaluate_pi_promotion(
+            samples,
+            intent_group=group,
+            policy=active_policy,
+            promoted=group in active_promoted_groups,
+        ).to_dict()
+        for group in sorted(LOW_RISK_PI_INTENT_GROUPS)
+    ]
     return {
         "policy": {
             "min_samples": active_policy.min_samples,
@@ -302,6 +319,7 @@ def summarize_pi_promotion(samples: Sequence[PiRouteSample], *, policy: PiPromot
             "require_latency_win": active_policy.require_latency_win,
         },
         "sample_count": len(samples),
+        "promoted_groups": sorted(active_promoted_groups),
         "decisions": decisions,
         "promotable_groups": [decision["intent_group"] for decision in decisions if decision["state"] == "promote"],
         "rollback_groups": [decision["intent_group"] for decision in decisions if decision["state"] == "rollback"],

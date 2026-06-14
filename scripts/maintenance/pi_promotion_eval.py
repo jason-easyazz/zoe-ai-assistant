@@ -23,6 +23,7 @@ sys.path.insert(0, str(ROOT / "services" / "zoe-data"))
 
 from zoe_pi_promotion import (  # noqa: E402
     DEFAULT_PI_INTENT_EVAL_CASES,
+    LOW_RISK_PI_INTENT_GROUPS,
     PiIntentEvalCase,
     PiPromotionPolicy,
     PiRouteSample,
@@ -145,6 +146,13 @@ def main() -> int:
     parser.add_argument("--allow-execution", action="store_true", help="Temporarily set ZOE_PI_ALLOW_EXECUTION=true")
     parser.add_argument("--local-model-configured", action="store_true", help="Temporarily set ZOE_PI_LOCAL_MODEL_CONFIGURED=true")
     parser.add_argument("--min-samples", type=int, default=30)
+    parser.add_argument(
+        "--promoted-group",
+        action="append",
+        choices=sorted(LOW_RISK_PI_INTENT_GROUPS),
+        default=[],
+        help="Intent group currently promoted through Pi; repeat for multiple groups",
+    )
     args = parser.parse_args()
 
     policy = PiPromotionPolicy(min_samples=args.min_samples)
@@ -164,7 +172,7 @@ def main() -> int:
     payload = {
         "eval_cases": eval_cases_to_dict(DEFAULT_PI_INTENT_EVAL_CASES),
         "comparisons": comparisons,
-        "promotion_report": summarize_pi_promotion(samples, policy=policy),
+        "promotion_report": summarize_pi_promotion(samples, policy=policy, promoted_groups=args.promoted_group),
     }
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0
