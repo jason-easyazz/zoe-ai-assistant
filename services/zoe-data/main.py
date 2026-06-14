@@ -1108,7 +1108,6 @@ async def _session_can_subscribe_panel(panel_id: str, session_id: str | None) ->
     except Exception as exc:
         logger.debug("push websocket panel session validation failed: %s", exc)
         return False
-    return False
 
 
 @app.websocket("/ws/push")
