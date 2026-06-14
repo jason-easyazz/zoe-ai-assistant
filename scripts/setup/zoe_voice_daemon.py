@@ -1190,9 +1190,10 @@ def main():
             elif (not WAKEWORD_DEBUG) and mx >= 0.18 and mx < WAKEWORD_THRESHOLD and (now - last_near) >= 12.0:
                 last_near = now
                 log.info(
-                    "wakeword near-miss: max_score=%.4f (need %.4f) — lower WAKEWORD_THRESHOLD or say Hey Jarvis more clearly",
+                    "wakeword near-miss: max_score=%.4f (need %.4f) — lower WAKEWORD_THRESHOLD or say %s more clearly",
                     mx,
                     WAKEWORD_THRESHOLD,
+                    os.environ.get("_ZOE_WAKE_PHRASE_LOG", "the wake phrase"),
                 )
 
             if scores and mx >= WAKEWORD_THRESHOLD:
