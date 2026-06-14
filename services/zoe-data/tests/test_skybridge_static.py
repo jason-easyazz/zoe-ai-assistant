@@ -54,7 +54,7 @@ def test_skybridge_push_socket_uses_authenticated_session_query():
     assert "FROM ui_panel_sessions WHERE panel_id = ?" in main
     assert "not device_info and not await _session_can_subscribe_panel(panel_id, session_id)" in main
     assert "Touch guest session was rejected; refreshing guest session" in auth
-    assert "profile.status === 401 || profile.status === 403" in auth
+    assert "profile.status === 401 || profile.status === 403 || profile.status === 404" in auth
     assert "keeping existing session" in auth
     assert "window.zoeAuthReady = new Promise" in auth
     assert "await window.zoeAuthReady" in executor
