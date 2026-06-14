@@ -77,3 +77,72 @@ async def test_ack_ui_action_accepts_matching_panel_when_user_differs(monkeypatc
     assert len(db.updated) == 1
     assert len(db.ledger) == 1
     assert db.commits == 1
+
+
+class _RowsCursor:
+    def __init__(self, row=None, rows=None):
+        self._row = row
+        self._rows = rows or []
+
+    async def fetchone(self):
+        return self._row
+
+    async def fetchall(self):
+        return self._rows
+
+
+class _PendingDb:
+    def __init__(self):
+        self.executes = []
+        self.commits = 0
+
+    async def execute(self, sql, params=()):
+        self.executes.append((sql, params))
+        if "FROM ui_panel_sessions" in sql:
+            return _RowsCursor(row={"user_id": "guest"})
+        if "UPDATE ui_actions" in sql:
+            return _RowsCursor()
+        if "FROM ui_actions" in sql:
+            return _RowsCursor(rows=[{
+                "id": "new-card",
+                "panel_id": "zoe-touch-pi",
+                "chat_session_id": None,
+                "action_type": "show_card",
+                "payload": '{"source":"voice:skybridge","cards":[]}',
+                "status": "queued",
+                "requires_confirmation": 0,
+                "confirmation_token": None,
+                "retry_count": 0,
+                "max_retries": 3,
+                "created_at": "2026-06-14T00:00:00Z",
+                "updated_at": "2026-06-14T00:00:00Z",
+            }])
+        raise AssertionError(f"unexpected SQL: {sql}")
+
+    async def commit(self):
+        self.commits += 1
+
+
+@pytest.mark.asyncio
+async def test_pending_actions_skips_superseded_skybridge_voice_cards(monkeypatch):
+    async def allow(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(ui_actions, "require_feature_access", allow)
+
+    db = _PendingDb()
+    result = await ui_actions.get_pending_ui_actions(
+        panel_id="zoe-touch-pi",
+        limit=10,
+        user={"user_id": "guest", "role": "guest"},
+        db=db,
+    )
+
+    cleanup_sql = db.executes[2][0]
+    cleanup_params = db.executes[2][1]
+    assert "Superseded by newer Skybridge voice card" in cleanup_sql
+    assert "payload::text LIKE" in cleanup_sql
+    assert cleanup_params == ("guest", "zoe-touch-pi", "guest", "zoe-touch-pi")
+    assert result["count"] == 1
+    assert result["actions"][0]["id"] == "new-card"
+    assert db.commits == 2

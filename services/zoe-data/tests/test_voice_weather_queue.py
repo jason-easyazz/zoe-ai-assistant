@@ -125,6 +125,9 @@ class _Db:
     def transaction(self):
         return _Transaction(self)
 
+    async def commit(self):
+        self.events.append("commit")
+
     async def execute(self, sql: str, params: tuple = ()):
         if "FROM ui_panel_sessions" in sql:
             return _Cursor(row={"user_id": "panel-user"})
@@ -259,7 +262,8 @@ async def test_broadcast_skybridge_ui_opens_skybridge_with_card_payload(monkeypa
     assert [item[1] for item in broadcasts] == ["ui_action"]
     assert [item[2]["action_id"] for item in broadcasts] == ["db-panel_navigate"]
     assert [item[2]["action_type"] for item in broadcasts] == ["panel_navigate"]
-    assert db.updated_ids == ["db-panel_navigate"]
+    assert db.updated_ids == ["panel-1", "db-panel_navigate"]
+    assert "commit" in db.events
 
 
 @pytest.mark.asyncio

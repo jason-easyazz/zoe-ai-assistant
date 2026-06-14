@@ -123,6 +123,32 @@ async def get_pending_ui_actions(
     )
     await db.commit()
 
+    # Skybridge voice cards are state replacement, not a backlog. If a page
+    # reload or lost ack leaves older cards queued, skip everything except the
+    # newest card for this panel so the surface cannot visually rewind.
+    await db.execute(
+        """UPDATE ui_actions
+           SET status = 'skipped', error_code = 'superseded',
+               error_message = 'Superseded by newer Skybridge voice card',
+               updated_at = NOW()
+           WHERE user_id = ? AND panel_id = ?
+             AND requested_by = 'voice'
+             AND action_type = 'show_card'
+             AND status IN ('queued', 'running')
+             AND payload::text LIKE '%"source": "voice:skybridge"%'
+             AND created_at::timestamptz < (
+                 SELECT MAX(created_at::timestamptz)
+                 FROM ui_actions
+                 WHERE user_id = ? AND panel_id = ?
+                   AND requested_by = 'voice'
+                   AND action_type = 'show_card'
+                   AND status IN ('queued', 'running')
+                   AND payload::text LIKE '%"source": "voice:skybridge"%'
+             )""",
+        (panel_user_id, panel_id, panel_user_id, panel_id),
+    )
+    await db.commit()
+
     cursor = await db.execute(
         """SELECT id, panel_id, chat_session_id, action_type, payload, status, requires_confirmation,
                   confirmation_token, retry_count, max_retries, created_at, updated_at
