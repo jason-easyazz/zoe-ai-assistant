@@ -122,6 +122,16 @@ def test_promoted_group_rolls_back_when_evidence_stops():
     assert decision.blockers == ("insufficient_samples",)
 
 
+def test_promoted_group_rolls_back_when_evidence_is_too_thin():
+    samples = [_sample(1)]
+    policy = PiPromotionPolicy(min_samples=10)
+
+    decision = evaluate_pi_promotion(samples, intent_group="weather", policy=policy, promoted=True)
+
+    assert decision.state == "rollback"
+    assert "insufficient_samples" in decision.blockers
+
+
 def test_promoted_group_rolls_back_on_timeout_regression():
     samples = [_sample(i) for i in range(9)] + [_sample(99, timed_out=True, pi=None, pi_ms=1200)]
     policy = PiPromotionPolicy(min_samples=10, max_timeout_rate=0.05)
