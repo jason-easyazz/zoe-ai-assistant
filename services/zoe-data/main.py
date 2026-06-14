@@ -105,7 +105,9 @@ def _bounded_blocked_resume_window(
     if count == 0 or budget <= 0:
         return [], 0
     if budget >= count:
-        return list(blocked), 0
+        # Whole list covered this cycle; preserve the caller's place so a list
+        # that briefly shrinks below budget and grows back keeps rotating.
+        return list(blocked), offset % count
     start = offset % count
     window = [blocked[(start + step) % count] for step in range(budget)]
     return window, (start + budget) % count
@@ -882,6 +884,12 @@ async def lifespan(app: FastAPI):
                                 )
                             except ValueError:
                                 _blk_budget = 4
+                            if _blk_budget <= 0:
+                                logger.warning(
+                                    "multica_poll: ZOE_MULTICA_BLOCKED_RESUME_BUDGET=%s is not "
+                                    "positive; blocked-resume polling disabled this cycle",
+                                    _blk_budget,
+                                )
                             _blk_window, _BLOCKED_RESUME_CURSOR["offset"] = _bounded_blocked_resume_window(
                                 list(blocked_issues or []),
                                 _BLOCKED_RESUME_CURSOR["offset"],

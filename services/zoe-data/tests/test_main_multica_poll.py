@@ -880,20 +880,23 @@ async def test_recover_stale_in_progress_keeps_issue_when_reset_fails():
     assert live == [zombie]
 
 
-def test_bounded_blocked_resume_window_empty_or_zero_budget():
+def test_bounded_blocked_resume_window_empty_or_nonpositive_budget():
     from main import _bounded_blocked_resume_window
 
     assert _bounded_blocked_resume_window([], 0, 4) == ([], 0)
     assert _bounded_blocked_resume_window([{"id": "a"}], 0, 0) == ([], 0)
+    assert _bounded_blocked_resume_window([{"id": "a"}], 0, -1) == ([], 0)
 
 
-def test_bounded_blocked_resume_window_returns_all_when_budget_covers():
+def test_bounded_blocked_resume_window_returns_all_and_preserves_offset_when_budget_covers():
     from main import _bounded_blocked_resume_window
 
     items = [{"id": "a"}, {"id": "b"}]
+    # budget covers the whole list -> return all, but keep the caller's place
+    # (mod length) so rotation survives a list that shrinks then grows back.
     window, nxt = _bounded_blocked_resume_window(items, 5, 4)
     assert window == items
-    assert nxt == 0
+    assert nxt == 1  # 5 % 2
 
 
 def test_bounded_blocked_resume_window_rotates_and_covers_all_across_cycles():
