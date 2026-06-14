@@ -35,10 +35,12 @@ def test_skybridge_page_loads_required_modules_in_order():
 
 def test_skybridge_push_socket_uses_authenticated_session_query():
     html = read(UI / "skybridge.html")
+    auth = (ROOT / "zoe-ui" / "dist" / "js" / "auth.js").read_text(encoding="utf-8")
+    executor = (ROOT / "zoe-ui" / "dist" / "js" / "touch-ui-executor.js").read_text(encoding="utf-8")
     sync = (ROOT / "zoe-ui" / "dist" / "js" / "websocket-sync.js").read_text(encoding="utf-8")
     main = (ROOT / "zoe-data" / "main.py").read_text(encoding="utf-8")
 
-    assert "/js/websocket-sync.js?v=skybridge-panel-push-1" in html
+    assert "/js/websocket-sync.js?v=skybridge-auth-ready-1" in html
     assert "initPush(panelId, sessionId)" in sync
     assert "params.set('panel_id', panelId)" in sync
     assert "else params.set('channel', 'all')" in sync
@@ -51,6 +53,9 @@ def test_skybridge_push_socket_uses_authenticated_session_query():
     assert "async def _session_can_subscribe_panel" in main
     assert "FROM ui_panel_sessions WHERE panel_id = ?" in main
     assert "not device_info and not await _session_can_subscribe_panel(panel_id, session_id)" in main
+    assert "Touch guest session was rejected; refreshing guest session" in auth
+    assert "window.zoeAuthReady = new Promise" in auth
+    assert "await window.zoeAuthReady" in executor
 
 
 def test_skybridge_uses_login_orb_to_voice_pill_layout():

@@ -113,7 +113,20 @@
         const currentPath = window.location.pathname;
         if (!currentPath.startsWith('/touch/')) return;
         if (currentPath === '/touch/index.html') return;
-        if (isAuthenticated()) return;
+        if (isAuthenticated()) {
+            if (!isGuestSession()) return;
+            try {
+                const profile = await originalFetch(`${AUTH_CONFIG.authBaseUrl}/profile`, {
+                    headers: { 'X-Session-ID': getSession() }
+                });
+                if (profile.ok) return;
+                console.warn('[auth] Touch guest session was rejected; refreshing guest session');
+                setSession(null);
+            } catch (_) {
+                console.warn('[auth] Touch guest session validation failed; refreshing guest session');
+                setSession(null);
+            }
+        }
         try {
             const response = await originalFetch('/api/auth/guest', {
                 method: 'POST',
@@ -493,20 +506,25 @@
         } catch (_e) {}
     }
 
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', async () => {
-            await bootstrapTouchGuestSession();
-            await enforceAuth();
-            await populateUserProfile();
-            console.log('✅ Zoe Auth initialized (DOMContentLoaded)');
-        });
-    } else {
-        // DOM already loaded
-        (async () => {
-            await bootstrapTouchGuestSession();
-            await enforceAuth();
-            await populateUserProfile();
-            console.log('✅ Zoe Auth initialized (immediate)');
-        })();
+    async function runAuthInitialization(source) {
+        await bootstrapTouchGuestSession();
+        await enforceAuth();
+        await populateUserProfile();
+        console.log(`✅ Zoe Auth initialized (${source})`);
     }
+
+    window.zoeAuthReady = new Promise((resolve) => {
+        const run = async (source) => {
+            try {
+                await runAuthInitialization(source);
+            } finally {
+                resolve();
+            }
+        };
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', () => run('DOMContentLoaded'), { once: true });
+        } else {
+            run('immediate');
+        }
+    });
 })();
