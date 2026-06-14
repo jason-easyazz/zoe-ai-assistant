@@ -1197,7 +1197,7 @@ async def _session_can_subscribe_panel(panel_id: str, session_id: str | None) ->
     """Allow browser panel sockets only for sessions bound to that panel."""
     user = await _resolve_ws_session(session_id)
     if user is None:
-        return False
+        return await _panel_allows_guest_push(panel_id)
     user_id = str(user.get("user_id") or "")
     role = str(user.get("role") or "").lower()
     if not user_id:
@@ -1217,6 +1217,26 @@ async def _session_can_subscribe_panel(panel_id: str, session_id: str | None) ->
     except Exception as exc:
         logger.debug("push websocket panel session validation failed: %s", exc)
         return False
+
+
+async def _panel_allows_guest_push(panel_id: str) -> bool:
+    """Return true when a registered active panel explicitly allows guest use."""
+    try:
+        from database import get_db
+
+        async for db in get_db():
+            cursor = await db.execute(
+                "SELECT allow_guest, is_active FROM panels WHERE panel_id = ? LIMIT 1",
+                (panel_id,),
+            )
+            row = await cursor.fetchone()
+            if not row:
+                return False
+            return bool(row["allow_guest"]) and bool(row["is_active"])
+    except Exception as exc:
+        logger.debug("push websocket guest panel validation failed: %s", exc)
+        return False
+    return False
 
 
 @app.websocket("/ws/push")
