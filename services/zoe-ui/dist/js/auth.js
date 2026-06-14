@@ -120,11 +120,16 @@
                     headers: { 'X-Session-ID': getSession() }
                 });
                 if (profile.ok) return;
-                console.warn('[auth] Touch guest session was rejected; refreshing guest session');
-                setSession(null);
+                if (profile.status === 401 || profile.status === 403) {
+                    console.warn('[auth] Touch guest session was rejected; refreshing guest session');
+                    setSession(null);
+                } else {
+                    console.warn('[auth] Touch guest session check returned', profile.status, '- keeping existing session');
+                    return;
+                }
             } catch (_) {
-                console.warn('[auth] Touch guest session validation failed; refreshing guest session');
-                setSession(null);
+                console.warn('[auth] Touch guest session validation failed (network error); keeping existing session');
+                return;
             }
         }
         try {
