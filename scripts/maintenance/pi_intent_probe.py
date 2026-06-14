@@ -72,6 +72,10 @@ async def _run_probe(text: str) -> dict:
     }
 
 
+async def _run_probes(text: str, *, repeat: int) -> list[dict]:
+    return [await _run_probe(text) for _ in range(repeat)]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Probe Pi/Gemma ambiguous-intent classification")
     parser.add_argument("text", nargs="?", default="anything I should remember right now")
@@ -81,6 +85,8 @@ def main() -> int:
     parser.add_argument("--local-model-configured", action="store_true", help="Temporarily set ZOE_PI_LOCAL_MODEL_CONFIGURED=true for this probe")
     parser.add_argument("--timeout", type=float, default=None, help="Override ZOE_PI_INTENT_TIMEOUT_SECONDS")
     parser.add_argument("--model", default=None, help="Override ZOE_PI_INTENT_MODEL")
+    parser.add_argument("--transport", choices=["print", "rpc"], default=None, help="Override ZOE_PI_INTENT_TRANSPORT")
+    parser.add_argument("--repeat", type=int, default=1, help="Run classification this many times in one process")
     parser.add_argument("--write-local-model-config", action="store_true", help="Write ~/.pi/agent/models.json for Zoe's local llama.cpp endpoint")
     args = parser.parse_args()
 
@@ -93,6 +99,8 @@ def main() -> int:
         os.environ["ZOE_PI_LOCAL_MODEL_CONFIGURED"] = "true"
     if args.timeout is not None:
         os.environ["ZOE_PI_INTENT_TIMEOUT_SECONDS"] = str(args.timeout)
+    if args.transport:
+        os.environ["ZOE_PI_INTENT_TRANSPORT"] = args.transport
     model = args.model or os.environ.get("ZOE_PI_INTENT_MODEL") or "gemma-4-E2B-it-Q4_K_M.gguf"
     if args.model:
         os.environ["ZOE_PI_INTENT_MODEL"] = args.model
@@ -100,9 +108,12 @@ def main() -> int:
     if args.write_local_model_config:
         written_config = str(_write_local_model_config(model=model))
 
+    repeat = max(1, args.repeat)
+    probes = asyncio.run(_run_probes(args.text, repeat=repeat))
     payload = {
         "status": pi_intent_status(),
-        "probe": asyncio.run(_run_probe(args.text)),
+        "probe": probes[-1],
+        "probes": probes,
         "written_config": written_config,
     }
     if args.json:
@@ -112,6 +123,8 @@ def main() -> int:
         probe = payload["probe"]
         print(f"Pi intent status: {status.get('status')} ({status.get('reason') or 'ok'})")
         print(f"Elapsed: {probe['elapsed_ms']:.1f} ms")
+        if repeat > 1:
+            print("Runs: " + ", ".join(f"{item['elapsed_ms']:.1f} ms" for item in payload["probes"]))
         print(f"Classification: {probe['classification']}")
         if payload.get("written_config"):
             print(f"Wrote Pi model config: {payload['written_config']}")
