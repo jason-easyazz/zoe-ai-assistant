@@ -71,6 +71,25 @@ def test_pi_intent_status_endpoint_reports_execution_disabled_when_tools_exist(t
     assert data["probe"]["config"]["local_model_configured"] is True
 
 
+def test_pi_intent_status_endpoint_reports_available_execution_disabled_when_tools_exist_and_allow_execution_false(tmp_path, monkeypatch):
+    bindir = _fake_pi_runtime(tmp_path)
+    monkeypatch.setenv("PATH", str(bindir))
+    monkeypatch.setenv("ZOE_PI_INTENT_ENABLED", "true")
+    monkeypatch.setenv("ZOE_PI_CWD", str(tmp_path))
+    monkeypatch.setenv("ZOE_PI_LOCAL_MODEL_CONFIGURED", "true")
+    monkeypatch.setenv("ZOE_PI_ALLOW_EXECUTION", "false")
+    app = _admin_app()
+
+    resp = TestClient(app).get("/api/system/pi-intent/status")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is False
+    assert data["status"] == "available_execution_disabled"
+    assert data["probe"]["config"]["allow_execution"] is False
+    assert data["probe"]["config"]["local_model_configured"] is True
+
+
 def test_pi_intent_status_endpoint_reports_missing_pi_when_tools_absent(tmp_path, monkeypatch):
     bindir = _fake_node_runtime(tmp_path)
     monkeypatch.setenv("PATH", str(bindir))
