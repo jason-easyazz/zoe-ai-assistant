@@ -19,8 +19,11 @@
         const route = escapeHtml(action.route || '');
         const challengeId = escapeHtml(action.challenge_id || '');
         const actionContext = escapeHtml(action.action_context || action.reason || '');
+        const userId = escapeHtml(action.user_id || '');
+        const userName = escapeHtml(action.username || action.name || '');
+        const userAvatar = escapeHtml(action.avatar || '');
         const kind = action.kind === 'warn' ? ' warn' : (index === 0 ? ' primary' : '');
-        return '<button type="button" class="' + kind.trim() + '" data-sky-action="' + escapeHtml(action.type || 'query') + '" data-query="' + query + '" data-route="' + route + '" data-challenge-id="' + challengeId + '" data-action-context="' + actionContext + '">' + label + '</button>';
+        return '<button type="button" class="' + kind.trim() + '" data-sky-action="' + escapeHtml(action.type || 'query') + '" data-query="' + query + '" data-route="' + route + '" data-challenge-id="' + challengeId + '" data-action-context="' + actionContext + '" data-user-id="' + userId + '" data-user-name="' + userName + '" data-user-avatar="' + userAvatar + '">' + label + '</button>';
     }
 
     function safeClassTokens(value) {
@@ -75,17 +78,18 @@
         const finalStep = props.final_step || 'Return to Zoe';
         const bodyHtml = [
             '<div class="sky-auth-scene">',
+            '<div class="sky-auth-hero">',
             '<div class="sky-auth-orb" aria-hidden="true"><span></span></div>',
             '<div class="sky-auth-copy">',
             '<span>' + escapeHtml(domain) + '</span>',
             '<strong>' + escapeHtml(title) + '</strong>',
             '<p>' + escapeHtml(body) + '</p>',
             '</div>',
-            '<div class="sky-auth-steps" aria-label="Authentication steps">',
-            '<div><b>1</b><span>Choose profile</span></div>',
-            '<div><b>2</b><span>Enter PIN</span></div>',
-            '<div><b>3</b><span>' + escapeHtml(finalStep) + '</span></div>',
             '</div>',
+            '<div class="sky-auth-profile-grid" data-auth-profiles aria-label="Choose profile">',
+            '<div class="sky-auth-loading"><i></i><span>Finding people for this panel...</span></div>',
+            '</div>',
+            '<div class="sky-auth-footer"><span>Say a name or tap a profile.</span><span>PIN opens next.</span><span>' + escapeHtml(finalStep) + '</span></div>',
             '</div>'
         ].join('');
         return cardFrame(props, bodyHtml, { wide: true, tone: 'auth-challenge', hideHeader: true, hideStatus: true });

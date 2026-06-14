@@ -487,3 +487,249 @@ body:not(.sky-empty) .sky-auth-steps span {
         grid-template-columns: minmax(0, 1fr);
     }
 }
+
+
+/* Skybridge identity auth card */
+body:not(.sky-empty) .sky-card.auth-challenge {
+    background:
+        radial-gradient(circle at 14% 10%, rgba(106, 231, 255, 0.34), transparent 30%),
+        radial-gradient(circle at 88% 4%, rgba(149, 116, 255, 0.30), transparent 34%),
+        linear-gradient(150deg, rgba(28, 34, 52, 0.94), rgba(8, 10, 18, 0.98) 58%, rgba(4, 7, 14, 0.99)) !important;
+    border: 1px solid rgba(255,255,255,0.18) !important;
+    box-shadow: 0 28px 88px rgba(0,0,0,0.38), inset 0 1px 0 rgba(255,255,255,0.14) !important;
+    padding: clamp(22px, 3vw, 34px) !important;
+}
+
+body:not(.sky-empty) .sky-auth-scene {
+    display: grid;
+    grid-template-columns: minmax(0, 0.92fr) minmax(320px, 1.08fr);
+    gap: clamp(22px, 3vw, 36px);
+    align-items: stretch;
+}
+
+body:not(.sky-empty) .sky-auth-hero {
+    min-height: 330px;
+    border-radius: 34px;
+    padding: clamp(24px, 3vw, 34px);
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    background:
+        linear-gradient(150deg, rgba(255,255,255,0.14), rgba(255,255,255,0.045)),
+        radial-gradient(circle at 28% 22%, rgba(90,224,224,0.24), transparent 42%);
+    border: 1px solid rgba(255,255,255,0.16);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.14);
+}
+
+body:not(.sky-empty) .sky-auth-orb {
+    width: clamp(118px, 15vw, 168px);
+    height: clamp(118px, 15vw, 168px);
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background:
+        radial-gradient(circle at 30% 24%, rgba(255,255,255,0.98), rgba(104,238,234,0.88) 23%, rgba(124,91,255,0.76) 57%, rgba(16,23,38,0.95) 100%);
+    box-shadow: 0 0 74px rgba(90,224,224,0.32), 0 18px 54px rgba(0,0,0,0.32), inset 0 1px 22px rgba(255,255,255,0.48);
+}
+
+body:not(.sky-empty) .sky-auth-orb span {
+    width: 39%;
+    height: 39%;
+    border-radius: 36%;
+    background: rgba(5,9,17,0.46);
+    border: 1px solid rgba(255,255,255,0.26);
+}
+
+body:not(.sky-empty) .sky-auth-copy span {
+    display: inline-flex;
+    width: fit-content;
+    border-radius: 999px;
+    padding: 8px 12px;
+    background: rgba(255,255,255,0.12);
+    border: 1px solid rgba(255,255,255,0.14);
+    color: rgba(255,255,255,0.78);
+    font-size: 0.72rem;
+    font-weight: 850;
+    text-transform: uppercase;
+}
+
+body:not(.sky-empty) .sky-auth-copy strong {
+    display: block;
+    max-width: 11ch;
+    margin-top: 18px;
+    color: #fff;
+    font-size: clamp(2.4rem, 5vw, 4.8rem);
+    line-height: 0.92;
+    letter-spacing: 0;
+}
+
+body:not(.sky-empty) .sky-auth-copy p {
+    max-width: 35ch;
+    margin: 18px 0 0;
+    color: rgba(255,255,255,0.72);
+    font-size: clamp(1rem, 1.6vw, 1.22rem);
+    line-height: 1.45;
+}
+
+body:not(.sky-empty) .sky-auth-profile-grid {
+    display: grid;
+    align-content: center;
+    gap: 14px;
+    min-height: 330px;
+}
+
+body:not(.sky-empty) .sky-auth-profile {
+    appearance: none;
+    width: 100%;
+    min-height: 92px;
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 28px;
+    padding: 14px 16px;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 16px;
+    align-items: center;
+    color: #fff;
+    text-align: left;
+    cursor: pointer;
+    background:
+        linear-gradient(135deg, rgba(255,255,255,0.15), rgba(255,255,255,0.055)),
+        rgba(255,255,255,0.055);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.12), 0 14px 34px rgba(0,0,0,0.18);
+    transition: transform 180ms ease, border-color 180ms ease, background 180ms ease, box-shadow 180ms ease;
+}
+
+body:not(.sky-empty) .sky-auth-profile:hover,
+body:not(.sky-empty) .sky-auth-profile:focus-visible {
+    transform: translateY(-2px);
+    border-color: rgba(108, 235, 241, 0.52);
+    background:
+        linear-gradient(135deg, rgba(112,232,238,0.22), rgba(137,112,255,0.12)),
+        rgba(255,255,255,0.075);
+    box-shadow: 0 18px 48px rgba(74, 209, 226, 0.12), inset 0 1px 0 rgba(255,255,255,0.18);
+}
+
+body:not(.sky-empty) .sky-auth-profile.is-default {
+    border-color: rgba(122, 246, 230, 0.42);
+}
+
+body:not(.sky-empty) .sky-auth-avatar {
+    width: 62px;
+    height: 62px;
+    border-radius: 23px;
+    display: grid;
+    place-items: center;
+    color: rgba(5,9,18,0.94);
+    font-size: 1.45rem;
+    font-weight: 950;
+    background: linear-gradient(135deg, #7df3ef, #8e7cff 62%, #f7fbff);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.58), 0 12px 28px rgba(0,0,0,0.24);
+}
+
+body:not(.sky-empty) .sky-auth-person {
+    min-width: 0;
+    display: grid;
+    gap: 4px;
+}
+
+body:not(.sky-empty) .sky-auth-person strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: clamp(1.1rem, 2.1vw, 1.55rem);
+    line-height: 1.05;
+    font-weight: 900;
+}
+
+body:not(.sky-empty) .sky-auth-person small {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: rgba(255,255,255,0.58);
+    font-size: 0.82rem;
+    font-weight: 800;
+    text-transform: capitalize;
+}
+
+body:not(.sky-empty) .sky-auth-enter {
+    min-width: 58px;
+    border-radius: 999px;
+    padding: 9px 12px;
+    text-align: center;
+    color: rgba(6,10,18,0.96);
+    background: linear-gradient(135deg, #8ff8f2, #a7b6ff);
+    font-weight: 950;
+    font-size: 0.78rem;
+}
+
+body:not(.sky-empty) .sky-auth-loading,
+body:not(.sky-empty) .sky-auth-empty {
+    min-height: 180px;
+    border-radius: 28px;
+    display: grid;
+    place-items: center;
+    gap: 14px;
+    text-align: center;
+    color: rgba(255,255,255,0.68);
+    background: rgba(255,255,255,0.07);
+    border: 1px solid rgba(255,255,255,0.12);
+    font-weight: 800;
+}
+
+body:not(.sky-empty) .sky-auth-loading i {
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    border: 3px solid rgba(255,255,255,0.18);
+    border-top-color: rgba(122,246,230,0.88);
+    animation: sky-auth-spin 900ms linear infinite;
+}
+
+body:not(.sky-empty) .sky-auth-footer {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+}
+
+body:not(.sky-empty) .sky-auth-footer span {
+    min-height: 48px;
+    border-radius: 18px;
+    display: grid;
+    place-items: center;
+    padding: 10px;
+    color: rgba(255,255,255,0.68);
+    background: rgba(255,255,255,0.07);
+    border: 1px solid rgba(255,255,255,0.10);
+    font-size: 0.82rem;
+    font-weight: 850;
+    text-align: center;
+}
+
+@keyframes sky-auth-spin {
+    to { transform: rotate(360deg); }
+}
+
+@media (max-width: 900px) {
+    body:not(.sky-empty) .sky-auth-scene {
+        grid-template-columns: minmax(0, 1fr);
+    }
+    body:not(.sky-empty) .sky-auth-hero {
+        min-height: 250px;
+    }
+    body:not(.sky-empty) .sky-auth-profile-grid {
+        min-height: 0;
+    }
+}
+
+@media (max-width: 620px) {
+    body:not(.sky-empty) .sky-auth-profile {
+        grid-template-columns: auto minmax(0, 1fr);
+    }
+    body:not(.sky-empty) .sky-auth-enter {
+        grid-column: 1 / -1;
+    }
+    body:not(.sky-empty) .sky-auth-footer {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}

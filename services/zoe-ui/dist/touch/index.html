@@ -1097,14 +1097,17 @@
 
             renderProfiles();
 
-            // If the panel declares a default user and that user is present,
-            // skip the picker and jump straight to PIN entry.
-            if (panelContext.default_user_id) {
-                const defaultProfile = userProfiles.find(p => p.user_id === panelContext.default_user_id);
-                if (defaultProfile) {
-                    const avatar = defaultProfile.avatar
-                        || (defaultProfile.username ? defaultProfile.username.charAt(0).toUpperCase() : '?');
-                    selectProfile(defaultProfile.user_id, defaultProfile.username, avatar);
+            const pending = getPendingPanelChallenge();
+            const preferredUserId = pending && pending.selected_user_id
+                ? pending.selected_user_id
+                : panelContext.default_user_id;
+            if (preferredUserId) {
+                const preferredProfile = userProfiles.find(p => p.user_id === preferredUserId);
+                if (preferredProfile) {
+                    const avatar = pending && pending.selected_avatar
+                        ? pending.selected_avatar
+                        : (preferredProfile.avatar || (preferredProfile.username ? preferredProfile.username.charAt(0).toUpperCase() : '?'));
+                    selectProfile(preferredProfile.user_id, preferredProfile.username, avatar);
                 }
             }
         }
@@ -1160,7 +1163,7 @@
                 const raw = sessionStorage.getItem('zoe_panel_auth_challenge');
                 if (!raw) return null;
                 const parsed = JSON.parse(raw);
-                return parsed && parsed.challenge_id ? parsed : null;
+                return parsed && (parsed.challenge_id || parsed.selected_user_id) ? parsed : null;
             } catch (_) {
                 return null;
             }
@@ -1168,7 +1171,7 @@
 
         async function resolvePendingPanelChallenge(pinValue) {
             const pending = getPendingPanelChallenge();
-            if (!pending || !pinValue) return true;
+            if (!pending || !pending.challenge_id || !pinValue) return true;
             try {
                 const payload = {
                     challenge_id: pending.challenge_id,

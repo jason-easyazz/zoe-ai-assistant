@@ -13,6 +13,8 @@
     let voiceStartedByUser = false;
     let commandFallbackOpen = false;
     let skybridgeContext = {};
+    let authProfiles = [];
+    let authHydrationSequence = 0;
 
     const colors = {
         ambient: ['#5fc6ff', '#66d19e'],
@@ -97,24 +99,7 @@
             let route = btn.dataset.route;
             const query = btn.dataset.query;
             if (btn.dataset.skyAction === 'auth') {
-                let storedChallenge = {};
-                try { storedChallenge = JSON.parse(sessionStorage.getItem('zoe_panel_auth_challenge') || '{}') || {}; } catch (_) {}
-                const panelId = new URLSearchParams(location.search).get('panel_id') || localStorage.getItem('zoe_touch_panel_id') || storedChallenge.panel_id || '';
-                try {
-                    const challengeId = btn.dataset.challengeId || '';
-                    const actionContext = btn.dataset.actionContext || 'Enter PIN';
-                    if (challengeId) {
-                        sessionStorage.setItem('zoe_panel_auth_challenge', JSON.stringify({
-                            challenge_id: challengeId,
-                            panel_id: panelId,
-                            action_context: actionContext
-                        }));
-                    }
-                    sessionStorage.setItem('zoe_redirect_after_login', location.pathname + location.search);
-                    if (!route) route = '/touch/index.html' + (panelId ? '?panel_id=' + encodeURIComponent(panelId) : '');
-                } catch (_) {
-                    if (!route) route = '/touch/index.html' + (panelId ? '?panel_id=' + encodeURIComponent(panelId) : '');
-                }
+                route = prepareAuthRoute(btn, route);
             }
             if (route && route.startsWith('/')) {
                 location.href = route;
@@ -124,6 +109,44 @@
                 submitCommand(query);
             }
         });
+    }
+
+    function currentPanelId(storedChallenge) {
+        return new URLSearchParams(location.search).get('panel_id')
+            || localStorage.getItem('zoe_touch_panel_id')
+            || localStorage.getItem('zoe_panel_id')
+            || (storedChallenge && storedChallenge.panel_id)
+            || '';
+    }
+
+    function buildLoginRoute(panelId) {
+        return '/touch/index.html' + (panelId ? '?panel_id=' + encodeURIComponent(panelId) : '');
+    }
+
+    function prepareAuthRoute(btn, route) {
+        let storedChallenge = {};
+        try { storedChallenge = JSON.parse(sessionStorage.getItem('zoe_panel_auth_challenge') || '{}') || {}; } catch (_) {}
+        const panelId = currentPanelId(storedChallenge);
+        const challengeId = btn.dataset.challengeId || storedChallenge.challenge_id || '';
+        const actionContext = btn.dataset.actionContext || storedChallenge.action_context || 'Enter PIN';
+        const selectedUserId = btn.dataset.userId || storedChallenge.selected_user_id || '';
+        const selectedUsername = btn.dataset.userName || storedChallenge.selected_username || '';
+        const selectedAvatar = btn.dataset.userAvatar || storedChallenge.selected_avatar || '';
+        const authState = Object.assign({}, storedChallenge, {
+            challenge_id: challengeId,
+            panel_id: panelId,
+            action_context: actionContext,
+            selected_user_id: selectedUserId,
+            selected_username: selectedUsername,
+            selected_avatar: selectedAvatar
+        });
+        try {
+            sessionStorage.setItem('zoe_panel_auth_challenge', JSON.stringify(authState));
+            sessionStorage.setItem('zoe_redirect_after_login', location.pathname + location.search);
+        } catch (_) {
+            // Route still preserves panel id even when storage is unavailable.
+        }
+        return route || buildLoginRoute(panelId);
     }
 
     function setMode(nextMode) {
@@ -147,6 +170,7 @@
         } else if (event.type === 'state') {
             setState(event.state || 'ambient');
         } else if (event.type === 'transcript') {
+            if (event.role === 'user' && trySelectAuthProfile(event.text)) return;
             addTranscript(event.role, event.text);
         } else if (event.type === 'card') {
             addCard(event.card, true);
@@ -167,6 +191,10 @@
     async function submitCommand(text) {
         const query = String(text || '').trim();
         if (!query) return;
+        if (trySelectAuthProfile(query)) {
+            els.input.value = '';
+            return;
+        }
         currentUtterance = 'Heard: ' + query;
         els.copy.textContent = currentUtterance;
         addTranscript('user', query);
@@ -361,9 +389,103 @@
         } else {
             els.cards.appendChild(node);
         }
+        hydrateAuthCard(node, card);
         while (els.cards.children.length > 8) {
             els.cards.removeChild(els.cards.lastElementChild);
         }
+    }
+
+    async function hydrateAuthCard(node, card) {
+        if (!node || !node.classList || !node.classList.contains('auth-challenge')) return;
+        const target = node.querySelector('[data-auth-profiles]');
+        if (!target) return;
+        const hydrationId = String(++authHydrationSequence);
+        node.dataset.authHydrationId = hydrationId;
+        const props = (card && card.props) || {};
+        const panelId = currentPanelId({});
+        let profiles = Array.isArray(props.profiles) ? props.profiles : [];
+        let defaultUserId = props.default_user_id || '';
+        const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        const timeoutId = controller ? setTimeout(() => controller.abort(), 8000) : null;
+        try {
+            const url = panelId ? '/api/auth/profiles?panel_id=' + encodeURIComponent(panelId) : '/api/auth/profiles';
+            const resp = await fetch(url, {
+                headers: { 'Accept': 'application/json' },
+                signal: controller ? controller.signal : undefined
+            });
+            if (resp.ok) {
+                const data = await resp.json();
+                if (Array.isArray(data)) {
+                    profiles = data;
+                } else if (data && Array.isArray(data.profiles)) {
+                    profiles = data.profiles;
+                    defaultUserId = data.default_user_id || defaultUserId;
+                }
+            }
+        } catch (_) {
+            // Keep any profiles already supplied with the card.
+        } finally {
+            if (timeoutId) clearTimeout(timeoutId);
+        }
+        if (!node.isConnected || node.dataset.authHydrationId !== hydrationId) return;
+        const nextProfiles = profiles.filter(profile => profile && profile.user_id && profile.user_id !== 'guest');
+        authProfiles = nextProfiles;
+        renderAuthProfiles(target, nextProfiles, defaultUserId, props);
+    }
+
+    function authInitials(profile) {
+        const raw = String(profile.avatar || profile.username || profile.name || profile.user_id || '?').trim();
+        return raw.charAt(0).toUpperCase() || '?';
+    }
+
+    function renderAuthProfiles(target, profiles, defaultUserId, props) {
+        if (!profiles.length) {
+            target.innerHTML = '<div class="sky-auth-empty">No profiles are linked to this panel yet.</div>';
+            return;
+        }
+        const baseAction = props.actions && props.actions[0] ? props.actions[0] : {};
+        target.innerHTML = profiles.map(profile => {
+            const name = window.SkybridgeRenderer.escapeHtml(profile.username || profile.name || profile.user_id);
+            const role = window.SkybridgeRenderer.escapeHtml(profile.role || (profile.user_id === defaultUserId ? 'Default profile' : 'Profile'));
+            const avatar = window.SkybridgeRenderer.escapeHtml(authInitials(profile));
+            const userId = window.SkybridgeRenderer.escapeHtml(profile.user_id);
+            const selected = profile.user_id === defaultUserId ? ' is-default' : '';
+            const challengeId = window.SkybridgeRenderer.escapeHtml(baseAction.challenge_id || '');
+            const actionContext = window.SkybridgeRenderer.escapeHtml(baseAction.action_context || 'Enter PIN');
+            return '<button type="button" class="sky-auth-profile' + selected + '" data-sky-action="auth" data-route="" data-challenge-id="' + challengeId + '" data-action-context="' + actionContext + '" data-user-id="' + userId + '" data-user-name="' + name + '" data-user-avatar="' + avatar + '">' +
+                '<span class="sky-auth-avatar">' + avatar + '</span>' +
+                '<span class="sky-auth-person"><strong>' + name + '</strong><small>' + role + '</small></span>' +
+                '<span class="sky-auth-enter">PIN</span>' +
+                '</button>';
+        }).join('');
+    }
+
+    function normalizeProfileName(value) {
+        return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ' ).trim();
+    }
+
+    function authNameMatches(wanted, profile) {
+        const name = normalizeProfileName(profile.username || profile.name || profile.user_id);
+        const userId = normalizeProfileName(profile.user_id);
+        if (!name) return false;
+        if (wanted === name || wanted === userId) return true;
+        const spoken = wanted.replace(/^(i am|i'm|this is|it is|it's|its|select|choose|use|as)\s+/, '').replace(/\s+(please|thanks)$/,'').trim();
+        if (spoken === name || spoken === userId) return true;
+        const tokens = wanted.split(/\s+/).filter(Boolean);
+        if (!name.includes(' ') && name.length >= 2 && tokens.includes(name)) return true;
+        return name.includes(' ') && (' ' + wanted + ' ').includes(' ' + name + ' ');
+    }
+
+    function trySelectAuthProfile(text) {
+        if (!document.querySelector('.sky-card.auth-challenge') || !authProfiles.length) return false;
+        const wanted = normalizeProfileName(text);
+        if (!wanted) return false;
+        const match = authProfiles.find(profile => authNameMatches(wanted, profile));
+        if (!match) return false;
+        const button = els.cards.querySelector('button.sky-auth-profile[data-user-id="' + CSS.escape(match.user_id) + '"]');
+        if (!button) return false;
+        button.click();
+        return true;
     }
 
     function setContext(title, detail) {
@@ -580,6 +702,8 @@
         };
         draw();
     }
+
+    window.SkybridgeHydrateAuthCard = hydrateAuthCard;
 
     window.addEventListener('beforeunload', () => {
         if (animationFrame) cancelAnimationFrame(animationFrame);
