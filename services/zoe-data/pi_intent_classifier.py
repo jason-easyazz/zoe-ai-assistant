@@ -342,7 +342,7 @@ class _PiRpcIntentWorker:
                 self.proc.stdin.write((payload + "\n").encode())
                 await self.proc.stdin.drain()
                 return await asyncio.wait_for(self._read_turn(), timeout=timeout_seconds)
-            except Exception:
+            except BaseException:
                 await self._reset_process_locked()
                 raise
 
