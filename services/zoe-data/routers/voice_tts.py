@@ -656,18 +656,18 @@ async def _broadcast_skybridge_ui(
             "source": "voice:skybridge",
         },
     }
+    card_payload = {
+        "type": "skybridge",
+        "data": {"summary": summary[:300]},
+        "card": cards[0] if cards else None,
+        "cards": cards,
+        "panel_id": panel_id,
+        "source": "voice:skybridge",
+    }
     card_action = {
         "id": f"voice_skybridge_card_{panel_id}_{delivery_key}",
         "action_type": "show_card",
-        "payload": {
-            "type": "skybridge",
-            "data": {"summary": summary[:300]},
-            "card": cards[0] if cards else None,
-            "cards": cards,
-            "result": skybridge_result,
-            "panel_id": panel_id,
-            "source": "voice:skybridge",
-        },
+        "payload": card_payload,
     }
     try:
         from database import get_db as _get_db
@@ -698,7 +698,7 @@ async def _broadcast_skybridge_ui(
                 user_id=_panel_user_id,
                 panel_id=panel_id,
                 action_type="show_card",
-                payload=card_action["payload"],
+                payload={**card_payload, "result": skybridge_result},
                 requested_by="voice",
                 idempotency_key=f"voice_skybridge_card_{panel_id}_{delivery_key}",
             )

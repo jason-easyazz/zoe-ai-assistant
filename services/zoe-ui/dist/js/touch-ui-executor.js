@@ -601,6 +601,28 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
         showBar: function (_text) { /* no-op */ },
     };
 
+    function sanitizeSkybridgeHtml(html) {
+        const template = document.createElement('template');
+        template.innerHTML = String(html || '');
+        template.content.querySelectorAll('script, iframe, object, embed, link, meta, style').forEach((node) => {
+            node.remove();
+        });
+        template.content.querySelectorAll('*').forEach((node) => {
+            Array.from(node.attributes || []).forEach((attr) => {
+                const name = String(attr.name || '').toLowerCase();
+                const value = String(attr.value || '').trim().toLowerCase();
+                if (name.startsWith('on')) {
+                    node.removeAttribute(attr.name);
+                    return;
+                }
+                if ((name === 'href' || name === 'src' || name === 'xlink:href') && /^(javascript|data):/.test(value)) {
+                    node.removeAttribute(attr.name);
+                }
+            });
+        });
+        return template.innerHTML;
+    }
+
     function renderSkybridgeCardPayload(payload) {
         const result = payload && payload.result;
         const cards = (
@@ -617,18 +639,19 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
             const wrap = document.createElement('div');
             wrap.className = 'sky-card-shell';
             wrap.style.animationDelay = `${Math.min(index * 90, 360)}ms`;
-            wrap.innerHTML = window.SkybridgeRenderer.render(card);
+            wrap.innerHTML = sanitizeSkybridgeHtml(window.SkybridgeRenderer.render(card));
             cardRoot.appendChild(wrap);
         });
         try {
             document.body.classList.remove('sky-empty');
             document.body.classList.add('sky-has-cards');
             const copy = document.getElementById('skyListeningCopy');
-            if (copy && result && result.spoken_summary) copy.textContent = result.spoken_summary;
+            const summary = (result && result.spoken_summary) || (payload && payload.data && payload.data.summary) || '';
+            if (copy && summary) copy.textContent = summary;
             const title = document.getElementById('skyContextTitle');
             if (title) title.textContent = 'Skybridge';
             const detail = document.getElementById('skyContextDetail');
-            if (detail && result && result.spoken_summary) detail.textContent = result.spoken_summary;
+            if (detail && summary) detail.textContent = summary;
         } catch (_) {
             // Non-fatal; the cards are already rendered.
         }

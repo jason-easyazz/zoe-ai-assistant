@@ -342,8 +342,12 @@ def test_touch_executor_renders_skybridge_card_contracts():
     executor = (ROOT / "zoe-ui" / "dist" / "js" / "touch-ui-executor.js").read_text(encoding="utf-8")
 
     assert "function renderSkybridgeCardPayload(payload)" in executor
+    assert "function sanitizeSkybridgeHtml(html)" in executor
+    assert "querySelectorAll('script, iframe, object, embed, link, meta, style')" in executor
+    assert "name.startsWith('on')" in executor
+    assert "/^(javascript|data):/.test(value)" in executor
     assert "payload && payload.card ? [payload.card]" in executor
-    assert "window.SkybridgeRenderer.render(card)" in executor
+    assert "sanitizeSkybridgeHtml(window.SkybridgeRenderer.render(card))" in executor
     assert "if (renderSkybridgeCardPayload(payload))" in executor
 
 
@@ -355,7 +359,8 @@ def test_voice_command_has_skybridge_first_touch_path():
     assert "intent\": f\"skybridge:" in voice
     assert "\"url\": url" in voice
     assert "\"type\": \"skybridge\"" in voice
-    assert "\"result\": skybridge_result" in voice
+    assert "payload={**card_payload, \"result\": skybridge_result}" in voice
+    assert "\"payload\": card_payload" in voice
 
 
 
