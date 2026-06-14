@@ -48,7 +48,8 @@ class _AckDb:
             })
         if "UPDATE ui_actions" in sql:
             self.updated.append((sql, params))
-            assert params[-2:] == ("action-1", "panel-owner")
+            assert "CAST(? AS boolean)" in sql
+            assert params == ("success", None, None, None, True, "action-1", "panel-owner")
             return _Cursor()
         if "INSERT INTO ui_action_ledger" in sql:
             self.ledger.append((sql, params))
