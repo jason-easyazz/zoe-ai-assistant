@@ -84,8 +84,6 @@ async def _run_zoe_baseline(case: PiIntentEvalCase) -> dict[str, Any]:
 
 
 async def _run_pi(case: PiIntentEvalCase, *, transport: str, enable_execution: bool, local_model_configured: bool) -> dict[str, Any]:
-    from pi_intent_classifier import classify_with_pi_intent_governor
-
     updates = {
         "ZOE_PI_INTENT_ENABLED": "true",
         "ZOE_PI_INTENT_TRANSPORT": transport,
@@ -93,6 +91,8 @@ async def _run_pi(case: PiIntentEvalCase, *, transport: str, enable_execution: b
         "ZOE_PI_LOCAL_MODEL_CONFIGURED": "true" if local_model_configured else "false",
     }
     with _temporary_env(updates):
+        from pi_intent_classifier import classify_with_pi_intent_governor
+
         start = time.perf_counter()
         result = await classify_with_pi_intent_governor(case.text)
         latency_ms = (time.perf_counter() - start) * 1000
