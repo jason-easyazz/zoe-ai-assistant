@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from typing import Any
 
 from multica_client import get_engineering_multica_agent_id, get_multica_client
@@ -15,7 +17,45 @@ from multica_ticket_contract import (
 
 async def find_issue(reference: str) -> dict[str, Any]:
     client = get_multica_client()
-    return await client.resolve_issue(reference)
+    resolve_issue = getattr(client, "resolve_issue", None)
+    if callable(resolve_issue):
+        return await resolve_issue(reference)
+    wanted = str(reference or "").strip().lower()
+    if not wanted:
+        return {}
+
+    async def _list_visible(status: str | None) -> list[dict[str, Any]]:
+        kwargs: dict[str, Any] = {"limit": 1000}
+        if status:
+            kwargs["status"] = status
+        try:
+            result = await client.list_issues(**kwargs)
+        except TypeError:
+            if status:
+                return []
+            try:
+                result = await client.list_issues()
+            except Exception:
+                return []
+        except Exception:
+            return []
+        return [issue for issue in (result or []) if isinstance(issue, dict)]
+
+    visible_statuses = [None, "backlog", "todo", "in_progress", "blocked", "in_review", "done", "cancelled"]
+    pages = await asyncio.gather(*(_list_visible(status) for status in visible_statuses))
+    seen: set[str] = set()
+    for page in pages:
+        for issue in page:
+            issue_id = str(issue.get("id") or "").lower()
+            if issue_id in seen:
+                continue
+            seen.add(issue_id)
+            if wanted in {
+                issue_id,
+                str(issue.get("identifier") or "").lower(),
+            }:
+                return issue
+    return {}
 
 
 async def create_ticket(title: str, *, source: str = "operator") -> dict[str, Any]:

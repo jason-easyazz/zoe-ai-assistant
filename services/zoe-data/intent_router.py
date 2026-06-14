@@ -1275,7 +1275,7 @@ def detect_intent(
             _clean = _re.sub(r'https?://\S+', '[URL]', _clean)
             with open(_MISS_PATH, "a") as _f:
                 _f.write(_json.dumps({"text": _clean, "ts": __import__("time").time()}) + "\n")
-        except Exception:
+        except (OSError, TypeError, ValueError, re.error):
             pass  # Never let logging break intent routing
     return None
 
@@ -1376,7 +1376,7 @@ async def _run_mcporter(cmd: str) -> Optional[str]:
     except asyncio.TimeoutError:
         logger.warning("mcporter-safe timed out")
         return None
-    except Exception as e:
+    except (OSError, UnicodeError, ValueError) as e:
         logger.error(f"mcporter error: {e}")
         return None
 
@@ -1397,18 +1397,24 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
         return await _execute_daily_briefing(user_id)
 
     if intent.name == "good_evening":
+        fallback = "Good evening! Hope your day went well. Let me know if there's anything you need."
         try:
             from proactive.composer import compose_message
-            result = await compose_message(
-                "Good evening — provide a brief, warm check-in for the end of day. "
-                "Mention any outstanding reminders or tomorrow's early events if known, "
-                "otherwise just a warm sign-off. Keep it under 3 sentences.",
-                user_id,
+            return await compose_message(
+                "good_evening",
+                {
+                    "user_id": user_id,
+                    "request": (
+                        "Provide a brief, warm end-of-day check-in. Mention outstanding "
+                        "reminders or tomorrow's early events if known; otherwise give a "
+                        "warm sign-off. Keep it under 3 sentences."
+                    ),
+                },
+                fallback,
             )
-            return result
-        except Exception as _e:
+        except (ImportError, RuntimeError, TypeError, ValueError) as _e:
             logger.warning("good_evening composer failed: %s", _e)
-            return "Good evening! Hope your day went well. Let me know if there's anything you need."
+            return fallback
 
     if intent.name == "daily_briefing":
         return await _execute_daily_briefing(user_id)

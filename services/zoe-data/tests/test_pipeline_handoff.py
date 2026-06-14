@@ -992,3 +992,20 @@ def test_closeout_placeholder_pr_url_does_not_shadow_ticket_pr_url():
 
     pr = next(item for item in items if item.kind == "pr")
     assert pr.artifact == "https://github.com/o/r/pull/99"
+
+
+def test_pr_url_from_ticket_block_treats_malformed_metadata_as_absent(monkeypatch):
+    import sys
+    import types
+    from pipeline_handoff import _pr_url_from_ticket_block
+
+    def _raise_key_error(_body):
+        raise KeyError("bad ticket block")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "multica_ticket_contract",
+        types.SimpleNamespace(parse_ticket_block=_raise_key_error),
+    )
+
+    assert _pr_url_from_ticket_block({"task": {"body": "```zoe-ticket\n{}\n```"}}) == ""

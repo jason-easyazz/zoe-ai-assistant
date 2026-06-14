@@ -77,7 +77,7 @@ _JOKE_INTENT_GAP_TITLE_RE = re.compile(
     re.IGNORECASE,
 )
 _SAY_EXACTLY_INTENT_GAP_TITLE_RE = re.compile(
-    r"\bintent[- ]gap\b.*\bsay\s+exactly[: ]+zoe\s+chat\s+integration\s+ok\b",
+    r"\bintent[- ]gap\b.*\bsay\s+exactly(?:[: ]+zoe\s+chat\s+integration\s+ok)?\b",
     re.IGNORECASE,
 )
 _GITHUB_PR_URL_RE = re.compile(r"https://github\.com/[^/\s]+/[^/\s]+/pull/\d+")
@@ -178,7 +178,7 @@ def _ticket_metadata(issue: dict | None = None) -> dict[str, Any]:
             parsed = parse_ticket_block(issue.get("description") or "")
             if isinstance(parsed, dict):
                 meta = {**parsed, **meta}
-        except Exception as exc:  # noqa: BLE001
+        except (AttributeError, ImportError, KeyError, TypeError, ValueError) as exc:
             logger.debug("_ticket_metadata: parse_ticket_block failed: %s", exc)
     issue["_zoe_ticket_metadata_cache"] = dict(meta)
     return meta
@@ -513,16 +513,29 @@ def _intent_gap_implement_hint(issue: dict | None = None, *, phase: str = "imple
         else " After the existing-PR checkout checks succeed, start the focused revision edit within 4 tool/model steps.\n"
     )
     say_exactly_contract = ""
-    if _SAY_EXACTLY_INTENT_GAP_TITLE_RE.search(title):
+    if (
+        _SAY_EXACTLY_INTENT_GAP_TITLE_RE.search(title)
+        or "say exactly: zoe chat integration ok" in haystack
+        or ("intent gap" in title.lower() and "say exactly" in title.lower())
+    ):
         say_exactly_contract = (
             " Concrete edit contract for this exact-repeat gap: update `_AGENT_CHAT_RE` so"
             " `Say exactly: Zoe chat integration ok` routes to `extend_capability` through"
             " the existing open-domain branch. Preferred deterministic path: after `kanban_show`,"
-            " run this from the task `workspace_path`, never from `/home/zoe/assistant`:"
-            " `python3 scripts/maintenance/zoe_apply_intent_gap_contract.py say_exactly`,"
-            " then immediately run `python3 -m py_compile services/zoe-data/intent_router.py`"
+            " your NEXT tool call must be the terminal command"
+            " `cd <workspace_path> && python3 ./scripts/maintenance/zoe_apply_intent_gap_contract.py say_exactly --repo-root ."
+            " --run-focused-checks --kanban-task <task_id_from_kanban_show>`"
+            " using the exact task `workspace_path`. Do not narrate, wait, plan, or heartbeat first."
+            " If you cannot run that exact helper as the next tool call, call `kanban_block`"
+            " with BLOCKER=INTENT_GAP_HELPER_UNAVAILABLE. Never run this from the live"
+            " checkout. The helper runs `python3 -m py_compile services/zoe-data/intent_router.py`"
             " and `PYTHONPATH=services/zoe-data python3 -m pytest -q"
-            " services/zoe-data/tests/test_intent_open_domain.py`. Do not add a bespoke"
+            " services/zoe-data/tests/test_intent_open_domain.py` for you."
+            " The helper is the edit/context authority for this fast path; do not read"
+            " `services/zoe-data/intent_router.py` after it runs. If the helper reports"
+            " `terminal_action: kanban_block:ALREADY_COVERED`, stop immediately; the task"
+            " already has its terminal Kanban action. Do not inspect more files, call"
+            " `kanban_complete`, or open a PR. Do not add a bespoke"
             " say/echo executor in this ticket; the acceptance goal is routing the request"
             " to the agent path while preserving the raw phrase.\n"
         )
@@ -533,7 +546,7 @@ def _intent_gap_implement_hint(issue: dict | None = None, *, phase: str = "imple
             " `Tell me a joke.`, `Tell me a joke`, and `Tell me another joke.` route"
             " to `extend_capability` through the existing open-domain/creative branch."
             " Preferred deterministic path: from the repo root, run"
-            " `python3 scripts/maintenance/zoe_apply_intent_gap_contract.py joke`, then"
+            " `python3 ./scripts/maintenance/zoe_apply_intent_gap_contract.py joke --repo-root .`, then"
             " immediately run `python3 -m py_compile services/zoe-data/intent_router.py`"
             " and `PYTHONPATH=services/zoe-data python3 -m pytest -q"
             " services/zoe-data/tests/test_intent_open_domain.py`."
@@ -557,6 +570,28 @@ def _intent_gap_implement_hint(issue: dict | None = None, *, phase: str = "imple
         " If those files are not the right location, call `kanban_block` with"
         " BLOCKER=IMPLEMENT_BUDGET and the missing locator instead of exploring."
         f"{edit_deadline}"
+    )
+
+
+def _intent_gap_first_action_preamble(issue: dict | None = None) -> str:
+    """Put the deterministic helper command before issue evidence paths."""
+    issue = issue or {}
+    title = str(issue.get("title") or "")
+    description = str(issue.get("description") or "")
+    haystack = f"{title} {description}".lower()
+    if not (
+        _SAY_EXACTLY_INTENT_GAP_TITLE_RE.search(title)
+        or "say exactly: zoe chat integration ok" in haystack
+        or ("intent gap" in title.lower() and "say exactly" in title.lower())
+    ):
+        return ""
+    return (
+        "CRITICAL FIRST ACTION FOR THIS INTENT-GAP TICKET:\n"
+        "1. Call `kanban_show`.\n"
+        "2. As the very next tool call, run exactly:\n"
+        "`cd <workspace_path> && python3 ./scripts/maintenance/zoe_apply_intent_gap_contract.py say_exactly --repo-root . "
+        "--run-focused-checks --kanban-task <task_id_from_kanban_show>`\n"
+        "Do not read issue evidence files, grep, inspect code, or open the live checkout before this helper.\n\n"
     )
 
 
@@ -820,9 +855,12 @@ class KanbanAdapter:
             code_audit_hint = _code_audit_implement_hint(issue)
             harness_hint = _harness_implement_hint(issue)
             intent_gap_hint = _intent_gap_implement_hint(issue, phase=phase)
+            intent_gap_first_action = (
+                _intent_gap_first_action_preamble(issue) if phase == "implement" else ""
+            )
             # Implement body intentionally omits full prior-phase logs; workers should
             # call kanban_show and read SCOUT_SUMMARY= from scout metadata when present.
-            return common + overnight_hint + (
+            return intent_gap_first_action + common + overnight_hint + (
                 "You are the implementer (zoe-coder).\n"
                 f"{code_audit_hint}"
                 f"{harness_hint}"
@@ -1428,7 +1466,7 @@ class KanbanAdapter:
                         "reason": "current issue plan no longer includes inactive journal phase",
                     },
                 )
-            except Exception as exc:
+            except (AttributeError, KeyError, RuntimeError, TypeError, ValueError) as exc:
                 logger.warning(
                     "kanban_adapter: plan_adjusted save skipped for %s: %s; "
                     "phase adjustment will still be applied via effect_requested",
@@ -1555,7 +1593,7 @@ class KanbanAdapter:
                     event="effect_requested",
                     extra={"phase": phase, "task_id": task_id},
                 )
-            except Exception as exc:
+            except (AttributeError, KeyError, RuntimeError, TypeError, ValueError) as exc:
                 logger.warning("kanban_adapter: effect_requested save skipped for %s: %s", external_ref, exc)
 
         logger.info(
@@ -1812,7 +1850,7 @@ class KanbanAdapter:
             elif pipeline_info.get("terminal_block"):
                 agg = "blocked"
                 blocker = blocker or f"pipeline terminal block at {current_phase}"
-        except Exception as exc:
+        except (AttributeError, KeyError, RuntimeError, TypeError, ValueError) as exc:
             logger.warning("kanban_adapter: pipeline sync failed for %s: %s", external_ref, exc)
             pipeline_info = {
                 "tracked": False,
