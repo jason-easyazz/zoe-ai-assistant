@@ -36,15 +36,21 @@ def test_skybridge_page_loads_required_modules_in_order():
 def test_skybridge_push_socket_uses_authenticated_session_query():
     html = read(UI / "skybridge.html")
     sync = (ROOT / "zoe-ui" / "dist" / "js" / "websocket-sync.js").read_text(encoding="utf-8")
+    main = (ROOT / "zoe-data" / "main.py").read_text(encoding="utf-8")
 
-    assert "/js/websocket-sync.js?v=skybridge-push-session-1" in html
+    assert "/js/websocket-sync.js?v=skybridge-panel-push-1" in html
     assert "initPush(panelId, sessionId)" in sync
+    assert "params.set('panel_id', panelId)" in sync
+    assert "else params.set('channel', 'all')" in sync
     assert "params.set('session_id', sessionId)" in sync
     assert "initPush called without sessionId; push will be rejected" in sync
     assert "const pushUrl = `${protocol}//${window.location.host}/ws/push?${params.toString()}`;" in sync
     assert "window.zoePushWs = this.push;" in sync
     assert "originalConnect" not in sync
     assert "/ws/push?channel=all`" not in sync
+    assert "async def _session_can_subscribe_panel" in main
+    assert "FROM ui_panel_sessions WHERE panel_id = ?" in main
+    assert "not device_info and not await _session_can_subscribe_panel(panel_id, session_id)" in main
 
 
 def test_skybridge_uses_login_orb_to_voice_pill_layout():

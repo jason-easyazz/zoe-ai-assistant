@@ -1084,6 +1084,33 @@ async def internal_broadcast(payload: dict, _: None = Depends(require_internal_t
     return {"ok": True}
 
 
+async def _session_can_subscribe_panel(panel_id: str, session_id: str | None) -> bool:
+    """Allow browser panel sockets only for sessions bound to that panel."""
+    user = await _resolve_ws_session(session_id)
+    if user is None:
+        return False
+    user_id = str(user.get("user_id") or "")
+    role = str(user.get("role") or "").lower()
+    if not user_id:
+        return False
+    if role in {"admin", "agent"}:
+        return True
+    try:
+        from database import get_db
+
+        async for db in get_db():
+            cursor = await db.execute(
+                "SELECT user_id FROM ui_panel_sessions WHERE panel_id = ? ORDER BY last_seen_at DESC LIMIT 1",
+                (panel_id,),
+            )
+            row = await cursor.fetchone()
+            return bool(row and str(row["user_id"]) == user_id)
+    except Exception as exc:
+        logger.debug("push websocket panel session validation failed: %s", exc)
+        return False
+    return False
+
+
 @app.websocket("/ws/push")
 async def websocket_push(
     websocket: WebSocket,
@@ -1106,12 +1133,13 @@ async def websocket_push(
         if token_header:
             from routers.panel_auth import lookup_device_token
             device_info = lookup_device_token(token_header)
-        # If token missing or invalid, close immediately.
-        # lookup_device_token already returns None for revoked tokens; no need to re-check.
-        if not device_info:
+        session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")
+        # Browser WebSockets cannot send X-Device-Token. Accept a panel channel
+        # subscription when the browser session is already bound to this panel.
+        if not device_info and not await _session_can_subscribe_panel(panel_id, session_id):
             await websocket.close(1008, "Invalid device token")
             return
-        # Panel token verified – proceed with panel subscription
+        # Panel token or bound browser session verified; subscribe to panel push.
         await broadcaster.connect_panel(websocket, panel_id)
     else:
         # Non-panel: perform lightweight session validation via zoe-auth HTTP.
