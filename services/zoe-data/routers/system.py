@@ -173,6 +173,14 @@ async def get_memory_router_status(user: dict = Depends(require_admin)):
     return memory_router_runtime_status()
 
 
+@router.get("/pi-intent/status")
+async def get_pi_intent_status(user: dict = Depends(require_admin)):
+    """Read-only status for Zoe's Pi/Gemma ambiguous-intent governor."""
+    from pi_intent_classifier import pi_intent_status
+
+    return pi_intent_status()
+
+
 def _load_skills_and_cron():
     skills = []
     skills_dir = os.path.expanduser("~/.openclaw/workspace/skills")
