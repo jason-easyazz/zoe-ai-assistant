@@ -324,7 +324,7 @@ async def test_voice_command_uses_skybridge_fast_path(monkeypatch) -> None:
     monkeypatch.setattr(voice_tts, "_schedule_voice_chat_save", save_chat)
     monkeypatch.setattr(voice_tts, "_run_voice_memory_passes", memory_passes)
     monkeypatch.setattr(voice_tts.asyncio, "ensure_future", lambda coro: coro.close() if hasattr(coro, "close") else None)
-    voice_tts._VOICE_SESSIONS.pop("panel-sky", None)
+    monkeypatch.setattr(voice_tts, "_VOICE_SESSIONS", {})
 
     response = await voice_command(
         {"text": "show weather", "panel_id": "panel-sky", "session_id": "session-sky"},

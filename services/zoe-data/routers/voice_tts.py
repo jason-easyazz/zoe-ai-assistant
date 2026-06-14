@@ -670,6 +670,12 @@ async def _broadcast_skybridge_ui(
         "payload": card_payload,
     }
     try:
+        from push import broadcaster
+        await broadcaster.broadcast("all", "ui_action", {"action": nav_action})
+        await broadcaster.broadcast("all", "ui_action", {"action": card_action})
+    except Exception as exc:
+        logger.debug("voice skybridge ui broadcast failed (non-fatal): %s", exc)
+    try:
         from database import get_db as _get_db
         from ui_orchestrator import enqueue_ui_action as _enqueue_ui_action
         async for _db in _get_db():
@@ -705,12 +711,6 @@ async def _broadcast_skybridge_ui(
             break
     except Exception as exc:
         logger.debug("voice skybridge ui enqueue failed (non-fatal): %s", exc)
-    try:
-        from push import broadcaster
-        await broadcaster.broadcast("all", "ui_action", {"action": nav_action})
-        await broadcaster.broadcast("all", "ui_action", {"action": card_action})
-    except Exception as exc:
-        logger.debug("voice skybridge ui broadcast failed (non-fatal): %s", exc)
 
 
 async def _broadcast_shopping_chat_ui(
