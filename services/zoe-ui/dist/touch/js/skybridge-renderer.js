@@ -50,7 +50,7 @@
         const tone = safeTone ? ' ' + safeTone : '';
         const showHeader = !(options && options.hideHeader);
         const showStatus = !(options && options.hideStatus);
-        const actions = Array.isArray(props.actions) && props.actions.length
+        const actions = !(options && options.hideActions) && Array.isArray(props.actions) && props.actions.length
             ? '<div class="sky-actions">' + props.actions.map(buttonHtml).join('') + '</div>'
             : '';
         return [
@@ -72,27 +72,14 @@
     }
 
     function renderAuthChallenge(props) {
-        const requestTitle = props.title || 'Private request';
-        const body = props.body || props.message || 'Zoe needs to know who is speaking before showing or changing personal data.';
-        const domain = props.domain ? String(props.domain) : 'Private data';
         const bodyHtml = [
-            '<div class="sky-auth-scene">',
-            '<div class="sky-auth-hero">',
-            '<div class="sky-auth-orb" aria-hidden="true"><span></span></div>',
-            '<div class="sky-auth-copy">',
-            '<span>' + escapeHtml(domain) + '</span>',
-            "<strong>Who's speaking?</strong>",
-            '<p>Choose your name to continue. Zoe will ask for your PIN or password next.</p>',
-            '<small class="sky-auth-request">' + escapeHtml(requestTitle) + '</small>',
-            '</div>',
-            '</div>',
-            '<div class="sky-auth-profile-grid" data-auth-profiles aria-label="Choose who is speaking">',
+            '<div class="sky-auth-scene sky-auth-people-only">',
+            '<div class="sky-auth-profile-grid" data-auth-profiles aria-label="Choose your profile">',
             '<div class="sky-auth-loading"><i></i><span>Finding people for this panel...</span></div>',
             '</div>',
-            '<div class="sky-auth-footer"><span>' + escapeHtml(body) + '</span><span>PIN or password appears after selection.</span></div>',
             '</div>'
         ].join('');
-        return cardFrame(props, bodyHtml, { wide: true, tone: 'auth-challenge', hideHeader: true, hideStatus: true });
+        return cardFrame(props, bodyHtml, { wide: true, tone: 'auth-challenge', hideHeader: true, hideStatus: true, hideActions: true });
     }
 
     function renderStatus(props) {
