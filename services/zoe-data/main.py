@@ -101,8 +101,8 @@ async def _poll_chain_guarded(ref: str, *, issue: dict | None, timeout: float) -
     except asyncio.TimeoutError:
         logger.warning("multica_poll: poll_ref timed out for %s after %ss", ref, timeout)
         return {"found": False, "status": "poll_timeout", "timed_out": True}
-    except Exception as exc:  # pragma: no cover - defensive; logged for operators
-        logger.debug("multica_poll: poll_ref error for %s: %s", ref, exc)
+    except Exception as exc:
+        logger.warning("multica_poll: poll_ref error for %s: %s", ref, exc)
         return {"found": False, "status": "poll_error", "error": str(exc)}
 
 
@@ -152,8 +152,8 @@ async def _recover_stale_in_progress_issues(
                 "multica_poll: recovered stale in_progress %s -> blocked",
                 issue.get("identifier") or issue.get("id"),
             )
-        except Exception as exc:  # pragma: no cover - defensive; keep issue if reset fails
-            logger.debug(
+        except Exception as exc:
+            logger.warning(
                 "multica_poll: stale in_progress recovery failed for %s: %s",
                 issue.get("id"),
                 exc,

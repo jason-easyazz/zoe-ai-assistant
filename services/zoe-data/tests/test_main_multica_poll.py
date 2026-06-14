@@ -852,3 +852,29 @@ async def test_recover_stale_in_progress_keeps_live_and_foreign_issues():
 
     assert kept == [live_run, foreign, autopilot]
     assert client.calls == []  # nothing reset
+
+
+@pytest.mark.asyncio
+async def test_recover_stale_in_progress_keeps_issue_when_reset_fails():
+    import datetime as dt
+
+    from main import _recover_stale_in_progress_issues
+
+    now = dt.datetime(2026, 6, 14, 12, 0, tzinfo=dt.timezone.utc)
+    old = (now - dt.timedelta(hours=72)).isoformat()
+
+    class _FailingClient:
+        async def record_progress(self, *_args, **_kwargs):
+            raise RuntimeError("multica unreachable")
+
+    zombie = {"id": "zombie", "assignee_id": "hermes", "updated_at": old}
+
+    async def _poll(_issue):
+        return {"found": False, "status": "poll_timeout", "timed_out": True}
+
+    # If the reset call fails, the stale issue is conservatively kept in the lane
+    # (better than dropping it from tracking) and the failure is surfaced.
+    live = await _recover_stale_in_progress_issues(
+        _FailingClient(), [zombie], hermes_id="hermes", poll_chain=_poll, now=now, max_age_hours=6
+    )
+    assert live == [zombie]
