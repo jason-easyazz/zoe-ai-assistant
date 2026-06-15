@@ -250,7 +250,7 @@ def summarize_pi_intent_shadow(records: Sequence[Mapping[str, Any]]) -> dict[str
         "intent_groups": groups,
         "accuracy_available": labeled_sample_count > 0,
         "labeled_sample_count": labeled_sample_count,
-        "promotion_ready": labeled_sample_count > 0,
+        "promotion_ready": labeled_sample_count >= 30,
         "promotion_ready_reason": (
             "labeled outcome evidence is available for promotion scoring"
             if labeled_sample_count
