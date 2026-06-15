@@ -79,7 +79,7 @@ branch) before verify/review advance; audit-only tickets use `AUDIT_ONLY=1` /
 
 **Capture-on-exit:** if implement finishes a diff but exits before pushing, the
 adapter's `_maybe_recover_unshipped_diff` commits + pushes the `wt/<task_id>` branch
-and opens a PR (only inside the task's own worktree branch; never main, never the
+and opens a PR (only inside the task's own worktree branch; never main/master, never the
 live checkout, never `--force`, never an empty PR). See
 [MULTICA_HERMES_PR_LOOP.md](./MULTICA_HERMES_PR_LOOP.md).
 

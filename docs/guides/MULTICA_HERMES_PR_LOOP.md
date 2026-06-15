@@ -132,7 +132,7 @@ A worker blocks (`kanban_block`) with a `BLOCKER=` fingerprint rather than drift
 | Guard / `BLOCKER` | Phase | What it prevents |
 |-------------------|-------|------------------|
 | `IMPLEMENT_HANDOFF_DRIFT` | implement | Burning the pre-edit explore budget hunting context instead of using the scout handoff; classified with `IMPLEMENT_BUDGET`. |
-| `WORKTREE_PATH_VIOLATION` | all | Any command run against the live checkout (`/home/zoe/assistant`) instead of the task `workspace_path`. |
+| `WORKTREE_PATH_VIOLATION` | all except `retro` | Any command run against the live checkout (`/home/zoe/assistant`) instead of the task `workspace_path`. (`retro` is exempt — it runs read-only in the live checkout via `workspace_kind=dir`.) |
 | `IMPLEMENT_EDIT_SAFETY` | implement | Committing/continuing with a malformed or unsafe edit; the worker blocks instead. |
 | `ITERATION_BUDGET` | all | Exceeding the per-phase turn/iteration budget; the run blocks instead of looping. |
 
