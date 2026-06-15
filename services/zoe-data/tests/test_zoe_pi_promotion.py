@@ -155,6 +155,48 @@ def test_intent_group_for_intent_maps_low_risk_groups_only():
     assert intent_group_for_intent("extend_capability") is None
 
 
+def test_non_comparable_baseline_blocks_promotion():
+    samples = [
+        _sample(
+            i,
+            metadata={"baseline_comparable": False, "baseline_kind": "router_only_not_comparable"},
+        )
+        for i in range(10)
+    ]
+    policy = PiPromotionPolicy(min_samples=10)
+
+    decision = evaluate_pi_promotion(samples, intent_group="weather", policy=policy)
+
+    assert decision.state == "keep_shadow"
+    assert "baseline_not_comparable" in decision.blockers
+
+
+def test_non_comparable_baseline_does_not_roll_back_promoted_group_without_regression():
+    samples = [
+        _sample(
+            i,
+            metadata={"baseline_comparable": False, "baseline_kind": "router_only_not_comparable"},
+        )
+        for i in range(10)
+    ]
+    policy = PiPromotionPolicy(min_samples=10)
+
+    decision = evaluate_pi_promotion(samples, intent_group="weather", policy=policy, promoted=True)
+
+    assert decision.state == "keep_shadow"
+    assert "baseline_not_comparable" in decision.blockers
+
+
+def test_policy_can_disable_comparable_baseline_requirement_for_smoke_data():
+    samples = [_sample(i, metadata={"baseline_comparable": False}) for i in range(10)]
+    policy = PiPromotionPolicy(min_samples=10, require_comparable_baseline=False)
+
+    decision = evaluate_pi_promotion(samples, intent_group="weather", policy=policy)
+
+    assert decision.state == "promote"
+    assert "baseline_not_comparable" not in decision.blockers
+
+
 def test_promotion_requires_five_percent_accuracy_win_and_latency_win():
     samples = [_sample(i) for i in range(10)]
     policy = PiPromotionPolicy(min_samples=10, accuracy_win_margin=0.05)

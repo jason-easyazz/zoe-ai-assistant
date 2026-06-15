@@ -72,17 +72,44 @@ def _demo_samples() -> list[PiRouteSample]:
     return samples
 
 
-async def _run_zoe_baseline(case: PiIntentEvalCase) -> dict[str, Any]:
+async def _run_zoe_baseline(
+    case: PiIntentEvalCase,
+    *,
+    fallback_baseline_latency_ms: float | None = None,
+    extraction_failed_baseline_latency_ms: float | None = None,
+) -> dict[str, Any]:
     with _temporary_env({"ZOE_PI_INTENT_ENABLED": "false"}):
         from intent_router import detect_and_extract_intent
 
         start = time.perf_counter()
         intent = await detect_and_extract_intent(case.text)
-        latency_ms = (time.perf_counter() - start) * 1000
+        router_latency_ms = (time.perf_counter() - start) * 1000
+
+    latency_ms = router_latency_ms
+    baseline_kind = "router"
+    baseline_comparable = True
+    if case.route_class == "fallback":
+        if fallback_baseline_latency_ms is None:
+            baseline_kind = "router_only_not_comparable"
+            baseline_comparable = False
+        else:
+            latency_ms = fallback_baseline_latency_ms
+            baseline_kind = "operator_fallback_override"
+    elif case.route_class == "extraction_failed":
+        if extraction_failed_baseline_latency_ms is None:
+            baseline_kind = "router_only_not_comparable"
+            baseline_comparable = False
+        else:
+            latency_ms = extraction_failed_baseline_latency_ms
+            baseline_kind = "operator_extraction_failed_override"
+
     return {
         "intent": intent.name if intent else None,
         "confidence": getattr(intent, "confidence", None) if intent else None,
         "latency_ms": latency_ms,
+        "router_latency_ms": router_latency_ms,
+        "baseline_kind": baseline_kind,
+        "baseline_comparable": baseline_comparable,
         "correct": (intent.name if intent else None) == case.expected_intent,
     }
 
@@ -115,12 +142,18 @@ async def _run_cases(
     transport: str,
     enable_execution: bool,
     local_model_configured: bool,
+    fallback_baseline_latency_ms: float | None = None,
+    extraction_failed_baseline_latency_ms: float | None = None,
 ) -> tuple[list[dict[str, Any]], list[PiRouteSample]]:
     comparisons: list[dict[str, Any]] = []
     samples: list[PiRouteSample] = []
     for case in cases:
         case.validate()
-        zoe = await _run_zoe_baseline(case)
+        zoe = await _run_zoe_baseline(
+            case,
+            fallback_baseline_latency_ms=fallback_baseline_latency_ms,
+            extraction_failed_baseline_latency_ms=extraction_failed_baseline_latency_ms,
+        )
         pi = await _run_pi(
             case,
             transport=transport,
@@ -142,6 +175,11 @@ async def _run_cases(
                     pi_transport=transport,
                     route_class=case.route_class,
                     timed_out=bool(pi["timed_out"]),
+                    metadata={
+                        "baseline_kind": zoe["baseline_kind"],
+                        "baseline_comparable": zoe["baseline_comparable"],
+                        "router_latency_ms": zoe["router_latency_ms"],
+                    },
                 )
             )
     return comparisons, samples
@@ -154,6 +192,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--transport", choices=["print", "rpc"], default="rpc")
     parser.add_argument("--allow-execution", action="store_true", help="Temporarily set ZOE_PI_ALLOW_EXECUTION=true")
     parser.add_argument("--local-model-configured", action="store_true", help="Temporarily set ZOE_PI_LOCAL_MODEL_CONFIGURED=true")
+    parser.add_argument(
+        "--fallback-baseline-latency-ms",
+        type=float,
+        default=None,
+        help="Measured Zoe fallback/agent latency to use for fallback route-class speed comparisons",
+    )
+    parser.add_argument(
+        "--extraction-failed-baseline-latency-ms",
+        type=float,
+        default=None,
+        help="Measured Zoe fallback latency after deterministic slot extraction fails",
+    )
     parser.add_argument("--min-samples", type=int, default=30)
     parser.add_argument(
         "--cases-file",
@@ -186,6 +236,8 @@ def main(argv: list[str] | None = None) -> int:
                 transport=args.transport,
                 enable_execution=args.allow_execution,
                 local_model_configured=args.local_model_configured,
+                fallback_baseline_latency_ms=args.fallback_baseline_latency_ms,
+                extraction_failed_baseline_latency_ms=args.extraction_failed_baseline_latency_ms,
             )
         )
         samples.extend(measured_samples)
