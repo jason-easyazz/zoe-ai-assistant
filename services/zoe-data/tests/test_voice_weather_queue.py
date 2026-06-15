@@ -9,6 +9,7 @@ import routers.voice_tts as voice_tts
 from routers.voice_tts import (
     _broadcast_skybridge_ui,
     _broadcast_weather_ui,
+    _should_supersede_voice_skybridge_action,
     _should_supersede_voice_weather_action,
     voice_command,
 )
@@ -56,6 +57,34 @@ def test_ignores_non_weather_actions() -> None:
     )
     assert not _should_supersede_voice_weather_action(
         _row("show_card", {"type": "calendar"}),
+        "new-nav",
+        "new-card",
+    )
+
+
+def test_supersedes_stale_voice_actions_for_skybridge_surface() -> None:
+    assert _should_supersede_voice_skybridge_action(
+        _row("panel_navigate", {"url": "/touch/calendar.html"}),
+        "new-nav",
+        "new-card",
+    )
+    assert _should_supersede_voice_skybridge_action(
+        _row("panel_navigate", {"url": "/touch/weather.html?panel_id=panel-1"}),
+        "new-nav",
+        "new-card",
+    )
+    assert _should_supersede_voice_skybridge_action(
+        _row("show_card", {"type": "calendar"}),
+        "new-nav",
+        "new-card",
+    )
+    assert _should_supersede_voice_skybridge_action(
+        _row("show_card", {"source": "voice:skybridge"}),
+        "new-nav",
+        "new-card",
+    )
+    assert not _should_supersede_voice_skybridge_action(
+        _row("panel_navigate", {"url": "/touch/skybridge.html"}, key="new-nav"),
         "new-nav",
         "new-card",
     )
@@ -313,10 +342,16 @@ async def test_broadcast_skybridge_ui_opens_skybridge_with_card_payload(monkeypa
     assert [item[1] for item in broadcasts] == ["ui_action"]
     assert [item[2]["action_id"] for item in broadcasts] == ["db-panel_navigate"]
     assert [item[2]["action_type"] for item in broadcasts] == ["panel_navigate"]
-    assert db.updated_ids == ["panel-1", "db-panel_navigate"]
+    assert db.updated_ids == [
+        "old-nav-null-key",
+        "old-card",
+        "current-nav",
+        "current-card",
+        "calendar",
+        "db-panel_navigate",
+    ]
     assert "commit" in db.events
-    cleanup_sql = next(sql for sql, _params in db.executed if "payload::jsonb" in sql)
-    assert "payload::jsonb->>'source' = 'voice:skybridge'" in cleanup_sql
+    assert not any("payload::jsonb" in sql for sql, _params in db.executed)
 
 
 @pytest.mark.asyncio
@@ -371,18 +406,20 @@ async def test_broadcast_skybridge_ui_skips_supersession_when_card_id_missing(mo
 
     assert [call["action_type"] for call in enqueue_calls] == ["panel_navigate", "show_card"]
     assert [item[1] for item in broadcasts] == ["ui_action"]
+    assert "calendar" in db.updated_ids
     assert not any("payload::jsonb" in sql for sql, _params in db.executed)
 
 
 @pytest.mark.parametrize(
-    ("utterance", "resolver_text"),
+    ("utterance", "resolver_text", "domain", "reply"),
     [
-        ("show weather", "show weather"),
-        ("show whether", "show weather"),
+        ("show weather", "show weather", "weather", "It is sunny in Perth."),
+        ("show whether", "show weather", "weather", "It is sunny in Perth."),
+        ("show my calendar", "show my calendar", "calendar", "Here is your calendar."),
     ],
 )
 @pytest.mark.asyncio
-async def test_voice_command_uses_skybridge_fast_path(monkeypatch, utterance, resolver_text) -> None:
+async def test_voice_command_uses_skybridge_fast_path(monkeypatch, utterance, resolver_text, domain, reply) -> None:
     calls: dict[str, object] = {"broadcast": [], "events": []}
 
     async def resolve_skybridge_request(text, user_id, *, context=None, db=None):
@@ -394,15 +431,15 @@ async def test_voice_command_uses_skybridge_fast_path(monkeypatch, utterance, re
         }
         return {
             "handled": True,
-            "spoken_summary": "It is sunny in Perth.",
-            "intent": {"domain": "weather", "action": "current"},
-            "skybridge_context": {"domain": "weather"},
+            "spoken_summary": reply,
+            "intent": {"domain": domain, "action": "current"},
+            "skybridge_context": {"domain": domain},
             "cards": [
                 {
                     "schema_version": "1.0.0",
                     "card_type": "generic",
                     "card_id": "22222222-2222-2222-2222-222222222222",
-                    "content": {"title": "Weather", "source": "weather_current"},
+                    "content": {"title": domain.title(), "source": f"{domain}_current"},
                     "producer": "test",
                     "producer_version": "1",
                     "created_at": "2026-06-14T00:00:00Z",
@@ -467,19 +504,19 @@ async def test_voice_command_uses_skybridge_fast_path(monkeypatch, utterance, re
 
     assert response["ok"] is True
     assert response["panel_id"] == "panel-sky"
-    assert response["reply"] == "It is sunny in Perth."
-    assert response["intent"] == "skybridge:weather"
+    assert response["reply"] == reply
+    assert response["intent"] == f"skybridge:{domain}"
     assert response["skybridge"] is True
     assert response["audio_base64"]
     assert calls["resolver"]["text"] == resolver_text
     assert calls["resolver"]["user_id"] == "guest"
     assert calls["broadcast_skybridge_ui"]["panel_id"] == "panel-sky"
     assert calls["broadcast_skybridge_ui"]["utterance"] == resolver_text
-    assert calls["synthesize"] == {"text": "It is sunny in Perth."}
-    assert ("all", "voice:responding", {"panel_id": "panel-sky", "text": "It is sunny in Perth."}) in calls["broadcast"]
+    assert calls["synthesize"] == {"text": reply}
+    assert ("all", "voice:responding", {"panel_id": "panel-sky", "text": reply}) in calls["broadcast"]
     assert ("all", "voice:done", {"panel_id": "panel-sky"}) in calls["broadcast"]
     assert calls["events"].index("synthesize") < calls["events"].index("voice:done")
-    assert voice_tts._VOICE_SESSIONS["panel-sky"]["skybridge_context"] == {"domain": "weather"}
+    assert voice_tts._VOICE_SESSIONS["panel-sky"]["skybridge_context"] == {"domain": domain}
 
 
 @pytest.mark.asyncio

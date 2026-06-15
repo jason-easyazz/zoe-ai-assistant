@@ -88,6 +88,7 @@
         if (props.source === 'list_show') return renderZoeList(props);
         if (props.source === 'people_directory') return renderPeopleDirectory(props);
         if (props.source === 'person_profile') return renderPersonProfile(props);
+        if (props.source === 'clock_show') return renderClock(props);
         const body = [
             props.metric ? '<div class="sky-widget-metric"><strong>' + escapeHtml(props.metric) + '</strong><span>' + escapeHtml(props.metric_label || '') + '</span></div>' : '',
             '<div class="sky-card-body">' + escapeHtml(props.body || props.message || '') + '</div>'
@@ -342,6 +343,39 @@
             '</div>'
         ].join('');
         return cardFrame(Object.assign({ status: 'Weather', icon: 'W' }, props), body, { wide: true, tone: 'weather-card ' + weatherClass(props, current) });
+    }
+
+    function clockParts(timezone) {
+        const options = timezone ? { timeZone: timezone } : {};
+        const now = new Date();
+        const time = new Intl.DateTimeFormat(undefined, Object.assign({
+            hour: 'numeric',
+            minute: '2-digit',
+            hour12: true
+        }, options)).formatToParts(now);
+        const date = new Intl.DateTimeFormat(undefined, Object.assign({
+            weekday: 'long',
+            day: 'numeric',
+            month: 'long'
+        }, options)).format(now);
+        const hour = (time.find(part => part.type === 'hour') || {}).value || '';
+        const minute = (time.find(part => part.type === 'minute') || {}).value || '';
+        const dayPeriod = (time.find(part => part.type === 'dayPeriod') || {}).value || '';
+        return { hour, minute, dayPeriod, date };
+    }
+
+    function renderClock(props) {
+        const timezone = props.timezone || '';
+        const parts = clockParts(timezone);
+        const body = [
+            '<div class="sky-clock-scene sky-live-clock" data-timezone="' + escapeHtml(timezone) + '">',
+            '<div class="sky-clock-main">',
+            '<div class="sky-clock-time"><span data-clock-hour>' + escapeHtml(parts.hour || props.hour || '') + '</span><i>:</i><span data-clock-minute>' + escapeHtml(parts.minute || props.minute || '') + '</span><b data-clock-meridiem>' + escapeHtml(parts.dayPeriod || props.meridiem || '') + '</b></div>',
+            '<div class="sky-clock-date" data-clock-date>' + escapeHtml(parts.date || [props.weekday, props.date_label].filter(Boolean).join(', ')) + '</div>',
+            '</div>',
+            '</div>'
+        ].join('');
+        return cardFrame(Object.assign({ status: 'Clock', icon: 'C' }, props), body, { wide: true, tone: 'clock-card', hideHeader: true, hideStatus: true, hideActions: true });
     }
 
     function normalizeListItems(items) {

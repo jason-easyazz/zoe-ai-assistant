@@ -30,6 +30,98 @@ body:not(.sky-empty) .sky-accent-all {
     --sky-card-accent: var(--sky-accent-general);
 }
 
+body:not(.sky-empty) .clock-card.sky-premium-card {
+    background:
+        radial-gradient(circle at 13% 10%, rgba(90,224,224,0.2), transparent 34%),
+        radial-gradient(circle at 88% 12%, rgba(147,51,234,0.2), transparent 36%),
+        linear-gradient(145deg, rgba(14,19,30,0.96), rgba(5,7,12,0.99)) !important;
+    border-color: rgba(255,255,255,0.15) !important;
+    min-height: min(610px, calc(100dvh - 110px)) !important;
+    padding: clamp(24px, 2.5vw, 34px) !important;
+    position: relative;
+    overflow: hidden !important;
+}
+
+body:not(.sky-empty) .sky-clock-scene {
+    height: 100%;
+    min-height: 100%;
+    position: static;
+    text-align: center;
+}
+
+body:not(.sky-empty) .sky-clock-main {
+    position: static;
+}
+
+body:not(.sky-empty) .sky-clock-time {
+    position: absolute;
+    top: 53%;
+    left: 0;
+    right: 0;
+    transform: translateY(-50%);
+    display: flex;
+    align-items: baseline;
+    justify-content: center;
+    gap: clamp(10px, 1.4vw, 18px);
+    color: white;
+    font-variant-numeric: tabular-nums;
+    line-height: 0.78;
+}
+
+body:not(.sky-empty) .sky-clock-time span {
+    font-size: clamp(12.2rem, 23.5vw, 20.2rem);
+    font-weight: 860;
+    letter-spacing: 0;
+}
+
+body:not(.sky-empty) .sky-clock-time i {
+    font-size: clamp(9.4rem, 18vw, 15.4rem);
+    font-style: normal;
+    opacity: 0.42;
+}
+
+body:not(.sky-empty) .sky-clock-time b {
+    margin-left: clamp(6px, 0.9vw, 12px);
+    color: rgba(255,255,255,0.56);
+    font-size: clamp(2.1rem, 3.5vw, 3.15rem);
+    font-weight: 850;
+    letter-spacing: 0;
+    text-transform: uppercase;
+}
+
+body:not(.sky-empty) .sky-clock-date {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: clamp(28px, 5vh, 42px);
+    z-index: 8;
+    color: rgba(255,255,255,0.66);
+    font-size: clamp(1.7rem, 3.2vw, 2.65rem);
+    font-weight: 800;
+    line-height: 1;
+}
+
+body:not(.sky-empty) .sky-clock-footer {
+    display: flex;
+    justify-content: center;
+    position: absolute;
+    left: clamp(26px, 3vw, 42px);
+    right: clamp(26px, 3vw, 42px);
+    bottom: clamp(24px, 3vh, 36px);
+}
+
+body:not(.sky-empty) .sky-clock-zone {
+    display: inline-flex;
+    width: fit-content;
+    border-radius: 999px;
+    padding: 10px 16px;
+    color: rgba(255,255,255,0.54);
+    background: rgba(255,255,255,0.065);
+    border: 1px solid rgba(255,255,255,0.095);
+    font-size: clamp(0.98rem, 1.5vw, 1.28rem);
+    font-weight: 800;
+}
+
 body:not(.sky-empty) .zoe-list-card {
     --sky-card-accent: var(--sky-accent-shopping);
     background:
