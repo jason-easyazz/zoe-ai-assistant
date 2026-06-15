@@ -42,6 +42,11 @@ Environment variables:
 | `ZOE_PI_CWD` | `/home/zoe/assistant` | Project directory for Pi runtime discovery. |
 | `ZOE_PI_AGENT_DIR` | unset | Optional explicit `.pi/agents` directory. |
 | `ZOE_PI_TIMEOUT_SECONDS` | `2.0` | Future runtime command timeout. |
+| `ZOE_PI_INTENT_SHADOW_ENABLED` | `false` | Collect Pi-vs-Zoe intent comparison records without executing Pi output. |
+| `ZOE_PI_INTENT_SHADOW_PATH` | `~/.zoe/data/pi-intent-shadow.jsonl` | JSONL evidence path for shadow records. |
+| `ZOE_PI_INTENT_SHADOW_MAX_WORDS` | `32` | Maximum utterance length eligible for shadow comparison. |
+| `ZOE_PI_INTENT_SHADOW_INCLUDE_PREVIEW` | `true` | Store a short sanitized text preview alongside the text hash. |
+| `ZOE_PI_INTENT_SHADOW_FORCE_ENABLED` | `true` | Force the classifier on inside shadow mode while keeping live routing unchanged. |
 
 ## Probe
 
@@ -51,6 +56,23 @@ PYTHONPATH=services/zoe-data python3 scripts/maintenance/pi_runtime_probe.py --j
 
 The probe is safe to run in production-adjacent environments because it only
 uses filesystem and `PATH` checks. It does not execute `pi`.
+
+## Intent Shadow Evidence
+
+Pi intent shadow mode is disabled by default. When
+`ZOE_PI_INTENT_SHADOW_ENABLED=true`, Zoe's current intent route remains
+authoritative and Pi output is never executed by the shadow path. The shadow
+producer records sanitized JSONL evidence containing Zoe intent, Pi intent,
+route class, confidence, agreement, timeout, and latency fields.
+
+Admin status is available at:
+
+```bash
+GET /api/system/pi-intent/shadow-status
+```
+
+The first runtime slice reports agreement and latency only. It deliberately does
+not claim promotion accuracy until an outcome label or correction path exists.
 
 
 ## Review-Only Runtime Proposal

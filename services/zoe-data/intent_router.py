@@ -15,6 +15,7 @@ import logging
 import os
 import re
 import shlex
+import time
 import shutil
 import unicodedata
 from dataclasses import dataclass, field
@@ -1302,28 +1303,81 @@ async def detect_and_extract_intent(
     Returns None when no intent matched OR when LLM extraction failed (caller
     should fall through to Zoe Agent).
     """
-    async def _try_pi_governor() -> Optional["Intent"]:
+    def _context_turns() -> str:
+        if context and context.is_fresh() and context.last_text:
+            return f"previous={context.last_text!r}; previous_intent={context.last_intent}"
+        return ""
+
+    shadow_unset = object()
+
+    def _env_enabled(name: str) -> bool:
+        return str(os.environ.get(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+    def _schedule_pi_shadow(
+        zoe_intent: Optional["Intent"],
+        *,
+        route_class: str,
+        zoe_latency_ms: float | None,
+        pi_result=shadow_unset,
+    ) -> None:
+        if not _env_enabled("ZOE_PI_INTENT_SHADOW_ENABLED"):
+            return
+
+        async def _runner() -> None:
+            try:
+                from pi_intent_shadow import maybe_record_pi_intent_shadow
+
+                kwargs = {
+                    "zoe_intent": zoe_intent.name if zoe_intent else None,
+                    "zoe_confidence": zoe_intent.confidence if zoe_intent else None,
+                    "zoe_latency_ms": zoe_latency_ms,
+                    "route_class": route_class,
+                    "user_id": user_id,
+                    "context_turns": _context_turns(),
+                }
+                if pi_result is not shadow_unset:
+                    kwargs["pi_result"] = pi_result
+                await maybe_record_pi_intent_shadow(text, **kwargs)
+            except Exception as exc:
+                logger.debug("detect_and_extract_intent: Pi shadow evidence failed: %s", exc)
+
+        task = asyncio.create_task(_runner())
+        task.add_done_callback(lambda done: done.exception() if not done.cancelled() else None)
+
+    async def _try_pi_governor() -> tuple[Optional["Intent"], object | None]:
+        pi_classified = None
         try:
             from pi_intent_classifier import PI_INTENT_EXECUTE_THRESHOLD, classify_with_pi_intent_governor
-            context_turns = ""
-            if context and context.is_fresh() and context.last_text:
-                context_turns = f"previous={context.last_text!r}; previous_intent={context.last_intent}"
-            pi_classified = await classify_with_pi_intent_governor(text, context_turns=context_turns)
+            pi_classified = await classify_with_pi_intent_governor(text, context_turns=_context_turns())
             if pi_classified and pi_classified.intent and pi_classified.confidence >= PI_INTENT_EXECUTE_THRESHOLD:
-                return Intent(pi_classified.intent, dict(pi_classified.slots), confidence=pi_classified.confidence)
+                return Intent(pi_classified.intent, dict(pi_classified.slots), confidence=pi_classified.confidence), pi_classified
         except Exception as exc:
             logger.debug("detect_and_extract_intent: Pi/Gemma governor failed: %s", exc)
-        return None
+        return None, pi_classified
 
+    started = time.perf_counter()
     intent = detect_intent(text, context=context)
+    detect_latency_ms = (time.perf_counter() - started) * 1000
     if intent is None:
-        return await _try_pi_governor()
+        routed_intent, pi_classified = await _try_pi_governor()
+        _schedule_pi_shadow(
+            None,
+            route_class="fallback",
+            zoe_latency_ms=detect_latency_ms,
+            pi_result=pi_classified if _env_enabled("ZOE_PI_INTENT_ENABLED") else shadow_unset,
+        )
+        return routed_intent
     if intent.slots and "raw" in intent.slots:
         try:
             from nlu_extractor import extract_slots_for_intent  # lazy — avoids circular at load
             structured = await extract_slots_for_intent(intent.name, intent.slots["raw"])
             if structured:
                 intent.slots = structured
+                _schedule_pi_shadow(
+                    intent,
+                    route_class="deterministic",
+                    zoe_latency_ms=(time.perf_counter() - started) * 1000,
+                )
                 return intent
         except Exception as _exc:
             logger.warning(
@@ -1332,7 +1386,15 @@ async def detect_and_extract_intent(
                 _exc,
             )
         # Extraction failed — let Pi/Gemma classify the ambiguous utterance once before Zoe Agent fallback.
-        return await _try_pi_governor()
+        routed_intent, pi_classified = await _try_pi_governor()
+        _schedule_pi_shadow(
+            None,
+            route_class="extraction_failed",
+            zoe_latency_ms=(time.perf_counter() - started) * 1000,
+            pi_result=pi_classified if _env_enabled("ZOE_PI_INTENT_ENABLED") else shadow_unset,
+        )
+        return routed_intent
+    _schedule_pi_shadow(intent, route_class="deterministic", zoe_latency_ms=detect_latency_ms)
     return intent
 
 
