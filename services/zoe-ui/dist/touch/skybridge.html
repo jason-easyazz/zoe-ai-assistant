@@ -3944,8 +3944,8 @@
             body:not(.sky-empty) .sky-weather-scene {
                 height: 100% !important;
                 min-height: 0 !important;
-                grid-template-columns: minmax(0, 0.9fr) minmax(540px, 1fr) !important;
-                gap: 24px !important;
+                grid-template-columns: minmax(0, 0.78fr) minmax(610px, 1fr) !important;
+                gap: 22px !important;
                 padding: 28px !important;
             }
 
@@ -3959,7 +3959,7 @@
             body:not(.sky-empty) .sky-weather-location {
                 max-width: 320px !important;
                 padding: 9px 14px !important;
-                font-size: 15px !important;
+                font-size: 16px !important;
             }
 
             body:not(.sky-empty) .sky-weather-temp {
@@ -3972,7 +3972,7 @@
             }
 
             body:not(.sky-empty) .sky-weather-condition {
-                font-size: 24px !important;
+                font-size: 26px !important;
                 line-height: 1.08 !important;
             }
 
@@ -3983,26 +3983,27 @@
             }
 
             body:not(.sky-empty) .sky-weather-pill {
-                min-height: 52px !important;
-                padding: 10px 14px !important;
+                min-height: 56px !important;
+                padding: 11px 15px !important;
                 border-radius: 18px !important;
-                font-size: 15px !important;
+                font-size: 16px !important;
             }
 
             body:not(.sky-empty) .sky-weather-forecast {
-                gap: 10px !important;
-                padding: 14px !important;
+                gap: 11px !important;
+                padding: 16px 14px 18px !important;
                 border-radius: 26px !important;
                 overflow: hidden !important;
             }
 
             body:not(.sky-empty) .sky-weather-forecast-head h4 {
-                font-size: 13px !important;
+                font-size: 16px !important;
+                letter-spacing: 0.09em !important;
             }
 
             body:not(.sky-empty) .sky-weather-forecast-head span {
-                padding: 5px 9px !important;
-                font-size: 11px !important;
+                padding: 7px 12px !important;
+                font-size: 13px !important;
             }
 
             body:not(.sky-empty) .sky-weather-hour-strip {
@@ -4011,22 +4012,22 @@
             }
 
             body:not(.sky-empty) .sky-weather-hour-tile {
-                min-height: 92px !important;
+                min-height: 94px !important;
                 gap: 5px !important;
-                padding: 9px 6px !important;
-                border-radius: 19px !important;
+                padding: 9px 7px !important;
+                border-radius: 20px !important;
             }
 
             body:not(.sky-empty) .sky-weather-hour-tile span {
-                font-size: 13px !important;
+                font-size: 14px !important;
             }
 
             body:not(.sky-empty) .sky-weather-hour-tile b {
-                font-size: 24px !important;
+                font-size: 25px !important;
             }
 
             body:not(.sky-empty) .sky-weather-hour-tile strong {
-                font-size: 18px !important;
+                font-size: 19px !important;
             }
 
             body:not(.sky-empty) .sky-weather-day-list {
@@ -4035,9 +4036,9 @@
             }
 
             body:not(.sky-empty) .sky-weather-day-row {
-                min-height: 58px !important;
-                grid-template-columns: minmax(118px, 0.32fr) minmax(0, 1fr) auto !important;
-                gap: 14px !important;
+                min-height: 57px !important;
+                grid-template-columns: minmax(128px, 0.34fr) minmax(0, 1fr) auto !important;
+                gap: 15px !important;
                 padding: 9px 13px !important;
                 border-radius: 19px !important;
             }
@@ -4048,11 +4049,11 @@
 
             body:not(.sky-empty) .sky-weather-day-label span,
             body:not(.sky-empty) .sky-weather-day-main strong {
-                font-size: 16px !important;
+                font-size: 17px !important;
             }
 
             body:not(.sky-empty) .sky-weather-day-label b {
-                font-size: 24px !important;
+                font-size: 25px !important;
             }
 
             body:not(.sky-empty) .sky-weather-day-main {
@@ -4060,23 +4061,215 @@
             }
 
             body:not(.sky-empty) .sky-weather-temp-band {
-                height: 6px !important;
+                height: 7px !important;
             }
 
             body:not(.sky-empty) .sky-weather-day-temp strong {
-                font-size: 25px !important;
+                font-size: 28px !important;
             }
 
             body:not(.sky-empty) .sky-weather-day-temp small {
-                font-size: 15px !important;
+                font-size: 16px !important;
             }
 
             body:not(.sky-empty) .calendar-card.sky-premium-card,
             body:not(.sky-empty) .zoe-list-card.sky-premium-card,
+            body:not(.sky-empty) .sky-card.list-card.sky-premium-card,
             body:not(.sky-empty) .people-card.sky-premium-card,
-            body:not(.sky-empty) .person-card.sky-premium-card {
-                max-height: calc(100dvh - 92px) !important;
+            body:not(.sky-empty) .person-profile-card.sky-premium-card,
+            body:not(.sky-empty) .sky-card.auth-challenge {
+                height: min(604px, calc(100dvh - 92px)) !important;
+                min-height: 0 !important;
+                max-height: min(604px, calc(100dvh - 92px)) !important;
                 overflow: hidden !important;
+            }
+
+            body:not(.sky-empty) .calendar-card .sky-calendar-scene,
+            body:not(.sky-empty) .zoe-list-card .sky-list-scene,
+            body:not(.sky-empty) .people-card .sky-people-scene,
+            body:not(.sky-empty) .person-profile-card .sky-profile-scene {
+                height: 100% !important;
+                min-height: 0 !important;
+            }
+
+            body:not(.sky-empty) .calendar-card .sky-calendar-scene {
+                grid-template-columns: minmax(300px, 0.34fr) minmax(0, 1fr) !important;
+                gap: 22px !important;
+                padding: 28px !important;
+            }
+
+            body:not(.sky-empty) .calendar-card .sky-calendar-summary {
+                padding: 22px !important;
+            }
+
+            body:not(.sky-empty) .calendar-card .sky-calendar-date strong {
+                font-size: 74px !important;
+            }
+
+            body:not(.sky-empty) .calendar-card .sky-data-list {
+                gap: 12px !important;
+            }
+
+            body:not(.sky-empty) .calendar-card .sky-event-row {
+                min-height: 76px !important;
+                padding: 14px 16px !important;
+            }
+
+            body:not(.sky-empty) .calendar-card .sky-calendar-time span,
+            body:not(.sky-empty) .calendar-card .sky-calendar-event-main strong {
+                font-size: 18px !important;
+            }
+
+            body:not(.sky-empty) .calendar-card .sky-calendar-event-main em {
+                font-size: 15px !important;
+            }
+
+            body:not(.sky-empty) .zoe-list-card .sky-list-scene {
+                grid-template-rows: auto auto minmax(0, 1fr) !important;
+                gap: 14px !important;
+            }
+
+            body:not(.sky-empty) .zoe-list-card .sky-list-hero h3,
+            body:not(.sky-empty) .people-card .sky-people-hero h3,
+            body:not(.sky-empty) .person-profile-card .sky-profile-title h3 {
+                font-size: 42px !important;
+                line-height: 1 !important;
+            }
+
+            body:not(.sky-empty) .zoe-list-card .sky-list-rings,
+            body:not(.sky-empty) .people-card .sky-people-count {
+                width: 104px !important;
+                height: 104px !important;
+                border-radius: 30px !important;
+            }
+
+            body:not(.sky-empty) .zoe-list-card .sky-list-stats div,
+            body:not(.sky-empty) .person-profile-card .sky-profile-grid div {
+                padding: 14px 16px !important;
+                border-radius: 18px !important;
+            }
+
+            body:not(.sky-empty) .zoe-list-card .sky-list-items,
+            body:not(.sky-empty) .people-card .sky-people-list {
+                align-content: start !important;
+                gap: 10px !important;
+                min-height: 0 !important;
+                overflow: hidden !important;
+            }
+
+            body:not(.sky-empty) .zoe-list-card .sky-list-item-row:nth-child(n+6),
+            body:not(.sky-empty) .zoe-list-card .sky-list-overview-row:nth-child(n+6),
+            body:not(.sky-empty) .people-card .sky-person-row:nth-child(n+6) {
+                display: none !important;
+            }
+
+            body:not(.sky-empty) .zoe-list-card .sky-list-item-row,
+            body:not(.sky-empty) .zoe-list-card .sky-list-overview-row,
+            body:not(.sky-empty) .people-card .sky-person-row {
+                min-height: 62px !important;
+                padding: 12px 14px !important;
+                border-radius: 18px !important;
+            }
+
+            body:not(.sky-empty) .zoe-list-card .sky-list-item-main strong,
+            body:not(.sky-empty) .zoe-list-card .sky-list-overview-row strong,
+            body:not(.sky-empty) .people-card .sky-person-main strong {
+                font-size: 18px !important;
+                line-height: 1.12 !important;
+            }
+
+            body:not(.sky-empty) .zoe-list-card .sky-list-item-main em,
+            body:not(.sky-empty) .zoe-list-card .sky-list-overview-row em,
+            body:not(.sky-empty) .people-card .sky-person-main em {
+                font-size: 14px !important;
+            }
+
+            body:not(.sky-empty) .sky-card.list-card.sky-premium-card {
+                align-content: start !important;
+            }
+
+            body:not(.sky-empty) .sky-card.list-card .sky-card-grid {
+                display: grid !important;
+                grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+                gap: 12px !important;
+                margin-top: 18px !important;
+                max-height: none !important;
+                overflow: hidden !important;
+            }
+
+            body:not(.sky-empty) .sky-card.list-card .sky-field {
+                min-height: 102px !important;
+                padding: 14px 16px !important;
+                border-radius: 18px !important;
+            }
+
+            body:not(.sky-empty) .sky-card.list-card .sky-field strong {
+                font-size: 20px !important;
+                line-height: 1.12 !important;
+            }
+
+            body:not(.sky-empty) .sky-card.list-card .sky-field em,
+            body:not(.sky-empty) .sky-card.list-card .sky-field span {
+                font-size: 15px !important;
+                line-height: 1.25 !important;
+            }
+
+            body:not(.sky-empty) .person-profile-card .sky-profile-scene {
+                align-content: stretch !important;
+                grid-template-rows: auto auto minmax(0, 1fr) !important;
+                gap: 18px !important;
+            }
+
+            body:not(.sky-empty) .person-profile-card .sky-profile-hero {
+                grid-template-columns: auto minmax(0, 1fr) 132px !important;
+                gap: 20px !important;
+            }
+
+            body:not(.sky-empty) .person-profile-card .sky-profile-avatar {
+                width: 106px !important;
+                height: 106px !important;
+                border-radius: 30px !important;
+            }
+
+            body:not(.sky-empty) .person-profile-card .sky-profile-health {
+                width: 132px !important;
+                height: 106px !important;
+                border-radius: 28px !important;
+            }
+
+            body:not(.sky-empty) .person-profile-card .sky-profile-health strong {
+                font-size: 34px !important;
+            }
+
+            body:not(.sky-empty) .person-profile-card .sky-profile-health span {
+                font-size: 13px !important;
+                white-space: nowrap !important;
+            }
+
+            body:not(.sky-empty) .person-profile-card .sky-profile-notes {
+                min-height: 118px !important;
+                font-size: 18px !important;
+                line-height: 1.42 !important;
+            }
+
+            body:not(.sky-empty) .sky-card.auth-challenge {
+                display: grid !important;
+                align-items: center !important;
+                width: min(980px, calc(100vw - 96px)) !important;
+            }
+
+            body:not(.sky-empty) .sky-auth-people-only .sky-auth-profile-grid {
+                grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+                gap: 18px !important;
+            }
+
+            body:not(.sky-empty) .sky-auth-people-only .sky-auth-profile {
+                min-height: 132px !important;
+                border-radius: 30px !important;
+            }
+
+            body:not(.sky-empty) .sky-auth-people-only .sky-auth-person strong {
+                font-size: 34px !important;
             }
 
             body:not(.sky-empty) .sky-command,
@@ -4113,9 +4306,10 @@
             body.sky-state-thinking .sky-orb-button,
             body.sky-state-responding .sky-orb-button {
                 bottom: 21px !important;
-                left: calc(50% - 410px) !important;
+                left: calc(50% - 425px) !important;
                 width: 58px !important;
                 height: 58px !important;
+                animation: sky-panel-orb-float 3.4s ease-in-out infinite !important;
             }
 
             body:not(.sky-empty) .sky-orb-panel::after,
@@ -4143,8 +4337,8 @@
             body.sky-state-thinking .sky-listening-copy,
             body.sky-state-responding .sky-listening-copy {
                 bottom: 18px !important;
-                left: calc(50% - 330px) !important;
-                width: min(760px, calc(100vw - 330px)) !important;
+                left: calc(50% - 350px) !important;
+                width: min(780px, calc(100vw - 310px)) !important;
                 max-width: none !important;
                 right: auto !important;
                 height: 64px !important;
@@ -4153,6 +4347,17 @@
                 font-weight: 520 !important;
                 line-height: 64px !important;
                 letter-spacing: 0 !important;
+            }
+
+            @keyframes sky-panel-orb-float {
+                0%, 100% {
+                    margin-bottom: 0;
+                    filter: saturate(1) brightness(1);
+                }
+                50% {
+                    margin-bottom: 3px;
+                    filter: saturate(1.08) brightness(1.06);
+                }
             }
         }
     </style>

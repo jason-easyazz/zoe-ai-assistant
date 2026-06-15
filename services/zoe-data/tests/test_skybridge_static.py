@@ -566,10 +566,22 @@ def test_skybridge_has_touch_panel_fit_overrides():
     assert 'height: min(604px, calc(100dvh - 92px))' in html
     assert 'weather-card.sky-premium-card::before' in html
     assert 'display: none !important' in html
-    assert 'min-height: 58px !important' in html
+    assert 'min-height: 57px !important' in html
+    assert 'font-size: 16px !important' in html
+    assert 'font-size: 13px !important' in html
+    assert 'minmax(610px, 1fr)' in html
+    assert 'font-size: 28px !important' in html
     assert 'width: min(920px, calc(100vw - 180px))' in html
-    assert 'left: calc(50% - 410px)' in html
-    assert 'left: calc(50% - 330px)' in html
+    assert 'left: calc(50% - 425px)' in html
+    assert 'left: calc(50% - 350px)' in html
+    assert 'person-profile-card.sky-premium-card' in html
+    assert 'sky-list-item-row:nth-child(n+6)' in html
+    assert 'sky-card.list-card.sky-premium-card' in html
+    assert 'grid-template-columns: repeat(2, minmax(0, 1fr)) !important' in html
+    assert 'grid-template-columns: repeat(3, minmax(0, 1fr)) !important' in html
+    assert 'sky-panel-orb-float' in html
+    assert 'margin-bottom: 3px' in html
+    assert 'width: 132px !important' in html
     assert 'max-width: none !important' in html
     assert 'grid-template-columns: repeat(8, minmax(46px, 1fr))' in html
     assert 'body:not(.sky-empty) .sky-command' in html
