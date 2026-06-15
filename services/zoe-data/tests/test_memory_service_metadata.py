@@ -1,6 +1,6 @@
 import pytest
 
-from memory_service import MemoryService, MemoryServiceError, _memory_visible_to_user
+from memory_service import MemoryService, MemoryServiceError, _memory_visible_to_user, is_guest_memory_user
 
 
 class _FakeCollection:
@@ -207,6 +207,31 @@ def test_memory_visible_to_user_matches_user_id_or_wing_or_shared_visibility():
     assert _memory_visible_to_user({"user_id": "alex", "wing": "jason", "visibility": "personal"}, "jason") is True
     assert _memory_visible_to_user({"user_id": "alex", "visibility": "personal"}, "jason") is False
     assert _memory_visible_to_user({"user_id": "alex", "visibility": "family"}, "jason") is True
+
+
+def test_guest_memory_user_detection_blocks_unauthenticated_identities():
+    assert is_guest_memory_user(None) is True
+    assert is_guest_memory_user("") is True
+    assert is_guest_memory_user("guest") is True
+    assert is_guest_memory_user("anonymous") is True
+    assert is_guest_memory_user("voice-guest") is True
+    assert is_guest_memory_user("jason") is False
+
+
+def test_memory_visible_to_user_blocks_family_rows_for_guest_callers():
+    assert _memory_visible_to_user({"user_id": "jason", "visibility": "family"}, "guest") is False
+    assert _memory_visible_to_user({"wing": "jason", "visibility": "family"}, "anonymous") is False
+    assert _memory_visible_to_user({"user_id": "guest", "visibility": "family"}, "guest") is False
+    assert _memory_visible_to_user({"user_id": "guest", "visibility": "personal"}, "guest") is False
+
+
+@pytest.mark.asyncio
+async def test_guest_prompt_and_search_reads_return_no_rows_without_collection_access():
+    service = MemoryService(data_dir="/tmp/zoe-test-memory-guest")
+    service._collection = lambda: (_ for _ in ()).throw(AssertionError("guest read should not touch storage"))
+
+    assert await service.load_for_prompt("guest", limit=10) == []
+    assert await service.search("remember me", user_id="guest", limit=10) == []
 
 
 def test_metadata_prompt_read_blocks_cross_user_disputed_and_superseded_rows():

@@ -330,3 +330,27 @@ class TestChatCapabilityShortcutExists:
             assert cue in "is it going to rain outside today"[:len(cue)] or cue in (
                 "will it rain tomorrow is it sunny is it cloudy need an umbrella bring a jacket"
             ), f"cue missing from test string: {cue}"
+
+
+# -- Guest memory prompt guards ------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_guest_user_facts_skip_memory_service(monkeypatch):
+    import memory_service
+
+    def fail_get_memory_service():
+        raise AssertionError("guest prompt facts must not touch MemoryService")
+
+    monkeypatch.setattr(memory_service, "get_memory_service", fail_get_memory_service)
+
+    assert await zoe_agent._mempalace_load_user_facts("guest") == ""
+
+
+@pytest.mark.asyncio
+async def test_guest_semantic_memory_context_skips_mempalace_search(monkeypatch):
+    async def fail_search(*args, **kwargs):
+        raise AssertionError("guest semantic prompt context must not search memory")
+
+    monkeypatch.setattr(zoe_agent, "_mempalace_search", fail_search)
+
+    assert await zoe_agent._build_memory_context("do you remember my plan", user_id="guest") == ""
