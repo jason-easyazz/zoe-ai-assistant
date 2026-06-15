@@ -115,6 +115,21 @@ Add `--run-pi --transport rpc` only when the local/offline Pi intent runtime is
 configured. The report still remains evidence-only; `ZOE_PI_INTENT_PROMOTED_GROUPS`
 changes must pass the promotion actions and guarded apply helper described above.
 
+Sanitized JSONL evidence can be exported into the same eval-case format. For Pi
+shadow records this uses `text_preview` plus a trusted `outcome_label`; unlabeled,
+privileged, secret-looking, or overlong rows are skipped:
+
+```bash
+scripts/maintenance/pi_eval_export.py ~/.zoe/data/pi-intent-shadow.jsonl \
+  --source intent_miss \
+  --case-prefix shadow \
+  --output /tmp/pi-intent-export.jsonl \
+  --summary
+scripts/maintenance/pi_promotion_eval.py \
+  --cases-file /tmp/pi-intent-export.jsonl \
+  --no-default-cases
+```
+
 ## Review-Only Runtime Proposal
 
 Pi adoption now has an inert proposal builder:
