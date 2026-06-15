@@ -576,7 +576,8 @@ def test_skybridge_has_touch_panel_fit_overrides():
     assert 'left: calc(50% - 425px)' in html
     assert 'left: calc(50% - 350px)' in html
     assert 'person-profile-card.sky-premium-card' in html
-    assert 'sky-list-item-row:nth-child(n+6)' in html
+    assert 'sky-list-item-row:nth-child(n+8)' in html
+    assert 'min-height: 50px !important' in html
     assert 'sky-card.list-card.sky-premium-card' in html
     assert 'grid-template-columns: repeat(2, minmax(0, 1fr)) !important' in html
     assert 'grid-template-columns: repeat(3, minmax(0, 1fr)) !important' in html
