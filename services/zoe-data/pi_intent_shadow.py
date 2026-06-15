@@ -13,16 +13,23 @@ import json
 import os
 import re
 import time
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from zoe_pi_promotion import intent_group_for_intent
+from zoe_pi_promotion import (
+    LOW_RISK_PI_INTENT_GROUPS,
+    PiPromotionPolicy,
+    PiRouteSample,
+    intent_group_for_intent,
+    summarize_pi_promotion as summarize_pi_route_promotion,
+)
 
 _DEFAULT_SHADOW_PATH = "~/.zoe/data/pi-intent-shadow.jsonl"
 _UNSET = object()
 _DEFAULT_MAX_REPORT_RECORDS = 500
-_SECRET_KEY_RE = re.compile(r"(?i)(api[_-]?key|token|secret|password|authorization|bearer)")
+_SECRET_KEY_RE = re.compile(r"(?i)(api[_-]?key|\btoken\b|\bsecret\b|password|authorization|\bbearer\b)")
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.\w+")
 _URL_RE = re.compile(r"https?://\S+")
 _PHONE_RE = re.compile(r"\b\d[\d\s\-]{6,}\b")
@@ -44,7 +51,7 @@ class PiIntentShadowConfig:
         return cls(
             enabled=_env_bool(values.get("ZOE_PI_INTENT_SHADOW_ENABLED"), default=False),
             path=(values.get("ZOE_PI_INTENT_SHADOW_PATH") or _DEFAULT_SHADOW_PATH).strip() or _DEFAULT_SHADOW_PATH,
-            max_words=int(values.get("ZOE_PI_INTENT_SHADOW_MAX_WORDS") or 32),
+            max_words=_int_env(values.get("ZOE_PI_INTENT_SHADOW_MAX_WORDS"), default=32),
             include_preview=_env_bool(values.get("ZOE_PI_INTENT_SHADOW_INCLUDE_PREVIEW"), default=True),
             force_classifier_enabled=_env_bool(values.get("ZOE_PI_INTENT_SHADOW_FORCE_ENABLED"), default=True),
         )
@@ -133,12 +140,19 @@ async def maybe_record_pi_intent_shadow(
 
 
 def pi_intent_shadow_status(env: Mapping[str, str] | None = None, *, limit: int = _DEFAULT_MAX_REPORT_RECORDS) -> dict[str, Any]:
-    config = PiIntentShadowConfig.from_env(env)
+    values = env if env is not None else os.environ
+    config = PiIntentShadowConfig.from_env(values)
     records = load_pi_intent_shadow_records(config.path, limit=limit)
+    samples = shadow_records_to_route_samples(records)
+    requested_promoted_groups = _csv_env(values.get("ZOE_PI_INTENT_PROMOTED_GROUPS"))
+    promoted_groups = [group for group in requested_promoted_groups if group in LOW_RISK_PI_INTENT_GROUPS]
+    ignored_promoted_groups = [group for group in requested_promoted_groups if group not in LOW_RISK_PI_INTENT_GROUPS]
     return {
         "config": config.to_dict(),
         "record_count_window": len(records),
         "report": summarize_pi_intent_shadow(records),
+        "promotion_report": summarize_pi_route_promotion(samples, promoted_groups=promoted_groups),
+        "ignored_promoted_groups": ignored_promoted_groups,
     }
 
 
@@ -146,9 +160,10 @@ def load_pi_intent_shadow_records(path: str, *, limit: int = _DEFAULT_MAX_REPORT
     target = Path(path).expanduser()
     if not target.exists():
         return []
-    rows = target.read_text(encoding="utf-8", errors="replace").splitlines()
+    with target.open("r", encoding="utf-8", errors="replace") as handle:
+        rows = deque(handle, maxlen=max(1, limit))
     records: list[dict[str, Any]] = []
-    for line in rows[-max(1, limit) :]:
+    for line in rows:
         try:
             item = json.loads(line)
         except json.JSONDecodeError:
@@ -156,6 +171,39 @@ def load_pi_intent_shadow_records(path: str, *, limit: int = _DEFAULT_MAX_REPORT
         if isinstance(item, dict):
             records.append(item)
     return records
+
+
+def shadow_records_to_route_samples(records: Sequence[Mapping[str, Any]]) -> list[PiRouteSample]:
+    samples: list[PiRouteSample] = []
+    for index, record in enumerate(records):
+        expected_intent = record.get("outcome_label")
+        intent_group = intent_group_for_intent(str(expected_intent) if expected_intent else None)
+        if not expected_intent or not intent_group:
+            continue
+        zoe_latency_ms = _optional_float_value(record.get("zoe_latency_ms"))
+        pi_latency_ms = _optional_float_value(record.get("pi_latency_ms"))
+        if zoe_latency_ms is None or pi_latency_ms is None:
+            continue
+        try:
+            samples.append(
+                PiRouteSample(
+                    case_id=str(record.get("text_hash") or f"shadow_{index}"),
+                    intent_group=intent_group,
+                    expected_intent=str(expected_intent),
+                    zoe_intent=_optional_str(record.get("zoe_intent")),
+                    pi_intent=_optional_str(record.get("pi_intent")),
+                    zoe_latency_ms=zoe_latency_ms,
+                    pi_latency_ms=pi_latency_ms,
+                    pi_confidence=_float_value(record.get("pi_confidence"), default=0.0),
+                    pi_transport=str(record.get("pi_transport") or "rpc"),
+                    route_class=str(record.get("route_class") or "fallback"),
+                    timed_out=bool(record.get("timed_out")),
+                    metadata={"source": "pi_intent_shadow", "text_hash": str(record.get("text_hash") or "")},
+                )
+            )
+        except (TypeError, ValueError):
+            continue
+    return samples
 
 
 def summarize_pi_intent_shadow(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
@@ -170,6 +218,9 @@ def summarize_pi_intent_shadow(records: Sequence[Mapping[str, Any]]) -> dict[str
             "avg_pi_latency_ms": None,
             "intent_groups": {},
             "accuracy_available": False,
+            "labeled_sample_count": 0,
+            "promotion_ready": False,
+            "promotion_ready_reason": "runtime shadow records are unlabeled agreement evidence, not accuracy labels",
         }
     groups: dict[str, dict[str, int]] = {}
     agreements = 0
@@ -193,6 +244,7 @@ def summarize_pi_intent_shadow(records: Sequence[Mapping[str, Any]]) -> dict[str
             zoe_latencies.append(float(record["zoe_latency_ms"]))
         if isinstance(record.get("pi_latency_ms"), (int, float)):
             pi_latencies.append(float(record["pi_latency_ms"]))
+    labeled_sample_count = sum(1 for record in records if record.get("outcome_label"))
     return {
         "sample_count": total,
         "agreement_rate": agreements / total,
@@ -201,9 +253,14 @@ def summarize_pi_intent_shadow(records: Sequence[Mapping[str, Any]]) -> dict[str
         "avg_zoe_latency_ms": _avg(zoe_latencies),
         "avg_pi_latency_ms": _avg(pi_latencies),
         "intent_groups": groups,
-        "accuracy_available": any(record.get("outcome_label") for record in records),
-        "promotion_ready": False,
-        "promotion_ready_reason": "runtime shadow records are unlabeled agreement evidence, not accuracy labels",
+        "accuracy_available": labeled_sample_count > 0,
+        "labeled_sample_count": labeled_sample_count,
+        "promotion_ready": labeled_sample_count >= PiPromotionPolicy().min_samples,
+        "promotion_ready_reason": (
+            "labeled outcome evidence is available for promotion scoring"
+            if labeled_sample_count
+            else "runtime shadow records are unlabeled agreement evidence, not accuracy labels"
+        ),
     }
 
 
@@ -234,6 +291,34 @@ def _avg(values: Sequence[float]) -> float | None:
     return sum(values) / len(values)
 
 
+def _optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    return str(value)
+
+
+def _float_value(value: Any, *, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _optional_float_value(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _csv_env(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return sorted({item.strip() for item in value.split(",") if item.strip()})
+
+
 def _safe_env_value(env: Mapping[str, str], key: str) -> str | None:
     value = env.get(key)
     if not value or _SECRET_KEY_RE.search(key):
@@ -257,6 +342,13 @@ def _float_env(value: str | None, *, default: float) -> float:
         return default
 
 
+def _int_env(value: str | None, *, default: int) -> int:
+    try:
+        return int(value) if value is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
 def _env_bool(value: str | None, *, default: bool = False) -> bool:
     if value is None:
         return default
@@ -268,5 +360,6 @@ __all__ = [
     "load_pi_intent_shadow_records",
     "maybe_record_pi_intent_shadow",
     "pi_intent_shadow_status",
+    "shadow_records_to_route_samples",
     "summarize_pi_intent_shadow",
 ]
