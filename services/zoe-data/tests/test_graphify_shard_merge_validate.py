@@ -191,6 +191,27 @@ def test_validate_shard_merge_blocks_links_with_missing_endpoints(tmp_path):
     assert any(blocker.endswith(":missing_func") for blocker in result.blockers)
 
 
+def test_validate_shard_merge_blocks_malformed_rejected_count(tmp_path):
+    graph = _graph([_node("data_file"), _node("data_func")], [_link("data_file", "data_func")])
+    status = _status([_result("data-core", _write_artifact(tmp_path, "data-core", graph))])
+    status["rejected_count"] = "unknown"
+
+    result = MODULE.validate_shard_merge(status)
+
+    assert result.accepted is False
+    assert "invalid_rejected_count" in result.blockers
+    assert "rejected_shards_present" in result.blockers
+
+
+def test_without_merge_only_fields_does_not_mutate_input():
+    payload = {"id": "node", "graphify_shards": ["data-core"]}
+
+    projected = MODULE._without_merge_only_fields(payload)
+
+    assert projected == {"id": "node"}
+    assert payload == {"id": "node", "graphify_shards": ["data-core"]}
+
+
 def test_main_writes_validation_and_merged_graph_json(tmp_path, capsys):
     graph = _graph([_node("data_file"), _node("data_func")], [_link("data_file", "data_func")])
     status = _status([_result("data-core", _write_artifact(tmp_path, "data-core", graph))])

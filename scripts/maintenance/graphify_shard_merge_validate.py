@@ -54,7 +54,8 @@ def validate_shard_merge(status: Mapping[str, Any]) -> GraphifyShardMergeValidat
         blockers.append("unexpected_probe_type")
     if status.get("all_accepted") is not True:
         blockers.append("not_all_shards_accepted")
-    if int(status.get("rejected_count") or 0) != 0:
+    rejected_count = _coerce_int(status.get("rejected_count"), "rejected_count", blockers)
+    if rejected_count != 0:
         blockers.append("rejected_shards_present")
     if status.get("blocked_shards"):
         blockers.append("blocked_shards_present")
@@ -252,9 +253,17 @@ def _load_graph(path: Path) -> dict[str, Any]:
     return payload
 
 
-def _without_merge_only_fields(payload: dict[str, Any]) -> dict[str, Any]:
-    payload.pop("graphify_shards", None)
-    return payload
+def _coerce_int(value: Any, field: str, blockers: list[str]) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        blockers.append(f"invalid_{field}")
+        return -1
+
+
+def _without_merge_only_fields(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Return payload without merge-only bookkeeping keys."""
+    return {key: value for key, value in payload.items() if key != "graphify_shards"}
 
 
 def _add_provenance(payload: dict[str, Any], shard: str) -> None:
