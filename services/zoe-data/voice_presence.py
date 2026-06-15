@@ -77,7 +77,7 @@ def wake_ack_time_period(now: datetime | None = None) -> str:
         return "morning"
     if 12 <= hour < 17:
         return "afternoon"
-    if 17 <= hour < 23:
+    if 17 <= hour < 24:
         return "evening"
     return "night"
 
@@ -122,7 +122,7 @@ def wake_ack_variant(
     phrases = wake_ack_phrases(env)
     audio_paths = wake_ack_audio_paths(env)
     labels = wake_ack_variant_labels(env)
-    variant_count = max(len(phrases), len(audio_paths), len(labels), 1)
+    variant_count = max(len(phrases), len(audio_paths), 1)
     if index is None:
         selected = _select_wake_ack_index(labels, variant_count, now)
     else:
