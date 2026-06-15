@@ -310,6 +310,8 @@ def summarize_pi_promotion(
         ).to_dict()
         for group in sorted(LOW_RISK_PI_INTENT_GROUPS)
     ]
+    promotable_groups = [decision["intent_group"] for decision in decisions if decision["state"] == "promote"]
+    rollback_groups = [decision["intent_group"] for decision in decisions if decision["state"] == "rollback"]
     return {
         "policy": {
             "min_samples": active_policy.min_samples,
@@ -321,8 +323,42 @@ def summarize_pi_promotion(
         "sample_count": len(samples),
         "promoted_groups": sorted(active_promoted_groups),
         "decisions": decisions,
-        "promotable_groups": [decision["intent_group"] for decision in decisions if decision["state"] == "promote"],
-        "rollback_groups": [decision["intent_group"] for decision in decisions if decision["state"] == "rollback"],
+        "promotable_groups": promotable_groups,
+        "rollback_groups": rollback_groups,
+        "promotion_actions": build_pi_promotion_actions(
+            current_promoted_groups=sorted(active_promoted_groups),
+            promotable_groups=promotable_groups,
+            rollback_groups=rollback_groups,
+        ),
+    }
+
+
+def build_pi_promotion_actions(
+    *,
+    current_promoted_groups: Sequence[str],
+    promotable_groups: Sequence[str],
+    rollback_groups: Sequence[str],
+) -> dict[str, Any]:
+    current = set(current_promoted_groups)
+    promotable = set(promotable_groups)
+    rollback = set(rollback_groups)
+    unknown = sorted((current | promotable | rollback) - set(LOW_RISK_PI_INTENT_GROUPS))
+    if unknown:
+        raise ValueError(f"unknown promotion action groups: {', '.join(unknown)}")
+    overlap = sorted(promotable & rollback)
+    if overlap:
+        raise ValueError(f"conflicting promotion action groups: {', '.join(overlap)}")
+    next_promoted = sorted((current | promotable) - rollback)
+    promote = sorted(promotable - current)
+    remove = sorted(rollback & current)
+    keep = sorted(current - set(remove))
+    return {
+        "promote_groups": promote,
+        "rollback_groups": remove,
+        "keep_promoted_groups": keep,
+        "next_promoted_groups": next_promoted,
+        "env": {"ZOE_PI_INTENT_PROMOTED_GROUPS": ",".join(next_promoted)},
+        "requires_operator_apply": bool(promote or remove),
     }
 
 
@@ -384,6 +420,7 @@ __all__ = [
     "PiPromotionDecision",
     "PiPromotionPolicy",
     "PiRouteSample",
+    "build_pi_promotion_actions",
     "eval_cases_to_dict",
     "evaluate_pi_promotion",
     "intent_group_for_intent",
