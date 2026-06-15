@@ -10,6 +10,8 @@ from pi_intent_classifier import (
     _classification_prompt,
     _parse_pi_classification,
     classify_with_pi_intent_governor,
+    pi_intent_is_promoted,
+    pi_intent_promotion_status,
     pi_intent_status,
 )
 
@@ -85,6 +87,7 @@ def test_pi_intent_status_disabled_by_default():
     assert status["ok"] is False
     assert status["status"] == "disabled"
     assert status["config"]["enabled"] is False
+    assert status["promotion"]["active_groups"] == []
 
 
 def test_pi_intent_status_requires_explicit_execution_and_local_model_flags(tmp_path):
@@ -115,6 +118,25 @@ def test_pi_intent_status_is_available_with_explicit_operator_gates(tmp_path):
 
     assert status["ok"] is True
     assert status["status"] == "available"
+
+
+def test_pi_intent_promotion_status_filters_to_low_risk_groups():
+    status = pi_intent_promotion_status({"ZOE_PI_INTENT_PROMOTED_GROUPS": "weather,device_control,reminders"})
+
+    assert status["active_groups"] == ["reminders", "weather"]
+    assert status["ignored_groups"] == ["device_control"]
+    assert pi_intent_is_promoted("weather", {"ZOE_PI_INTENT_PROMOTED_GROUPS": "weather"}) is True
+    assert pi_intent_is_promoted("extend_capability", {"ZOE_PI_INTENT_PROMOTED_GROUPS": "extend_capability"}) is False
+
+
+def test_pi_intent_promotion_status_cache_tracks_env_value(monkeypatch):
+    monkeypatch.setenv("ZOE_PI_INTENT_PROMOTED_GROUPS", "weather")
+    first = pi_intent_promotion_status()
+    monkeypatch.setenv("ZOE_PI_INTENT_PROMOTED_GROUPS", "reminders")
+    second = pi_intent_promotion_status()
+
+    assert first["active_groups"] == ["weather"]
+    assert second["active_groups"] == ["reminders"]
 
 
 def test_pi_intent_config_rejects_cloud_provider_when_offline_only():
@@ -331,6 +353,33 @@ async def test_pi_intent_governor_times_out_without_exception(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_detect_and_extract_intent_does_not_execute_unpromoted_pi_result(tmp_path, monkeypatch):
+    bindir = _fake_runtime(
+        tmp_path,
+        response={
+            "intent": "reminder_list",
+            "slots": {},
+            "confidence": 0.86,
+            "task_lane": "fast_tool",
+            "reason": "reminder query phrased unusually",
+        },
+    )
+    monkeypatch.setenv("PATH", str(bindir))
+    monkeypatch.setenv("ZOE_PI_INTENT_ENABLED", "true")
+    monkeypatch.setenv("ZOE_PI_CWD", str(tmp_path))
+    monkeypatch.setenv("ZOE_PI_ALLOW_EXECUTION", "true")
+    monkeypatch.setenv("ZOE_PI_LOCAL_MODEL_CONFIGURED", "true")
+    monkeypatch.setenv("ZOE_PI_INTENT_MODEL", "gemma-4-E2B-it-Q4_K_M.gguf")
+    monkeypatch.delenv("ZOE_PI_INTENT_PROMOTED_GROUPS", raising=False)
+
+    from intent_router import detect_and_extract_intent
+
+    intent = await detect_and_extract_intent("anything I should remember right now")
+
+    assert intent is None
+
+
+@pytest.mark.asyncio
 async def test_detect_and_extract_intent_uses_pi_for_deterministic_miss(tmp_path, monkeypatch):
     bindir = _fake_runtime(
         tmp_path,
@@ -348,6 +397,7 @@ async def test_detect_and_extract_intent_uses_pi_for_deterministic_miss(tmp_path
     monkeypatch.setenv("ZOE_PI_ALLOW_EXECUTION", "true")
     monkeypatch.setenv("ZOE_PI_LOCAL_MODEL_CONFIGURED", "true")
     monkeypatch.setenv("ZOE_PI_INTENT_MODEL", "gemma-4-E2B-it-Q4_K_M.gguf")
+    monkeypatch.setenv("ZOE_PI_INTENT_PROMOTED_GROUPS", "reminders")
 
     from intent_router import detect_and_extract_intent
 
@@ -376,6 +426,7 @@ async def test_detect_and_extract_intent_uses_pi_when_slot_extraction_fails(tmp_
     monkeypatch.setenv("ZOE_PI_ALLOW_EXECUTION", "true")
     monkeypatch.setenv("ZOE_PI_LOCAL_MODEL_CONFIGURED", "true")
     monkeypatch.setenv("ZOE_PI_INTENT_MODEL", "gemma-4-E2B-it-Q4_K_M.gguf")
+    monkeypatch.setenv("ZOE_PI_INTENT_PROMOTED_GROUPS", "reminders")
 
     import sys
     import types

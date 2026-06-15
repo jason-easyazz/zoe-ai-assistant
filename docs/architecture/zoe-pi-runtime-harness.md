@@ -47,7 +47,7 @@ Environment variables:
 | `ZOE_PI_INTENT_SHADOW_MAX_WORDS` | `32` | Maximum utterance length eligible for shadow comparison. |
 | `ZOE_PI_INTENT_SHADOW_INCLUDE_PREVIEW` | `true` | Store a short sanitized text preview alongside the text hash. |
 | `ZOE_PI_INTENT_SHADOW_FORCE_ENABLED` | `true` | Force the classifier on inside shadow mode while keeping live routing unchanged. |
-| `ZOE_PI_INTENT_PROMOTED_GROUPS` | unset | Comma-separated intent groups currently promoted through Pi for rollback reporting. |
+| `ZOE_PI_INTENT_PROMOTED_GROUPS` | unset | Comma-separated low-risk intent groups promoted through Pi for live fallback execution and rollback reporting. Unknown or privileged groups are ignored. |
 
 ## Probe
 
@@ -76,7 +76,9 @@ The first runtime slice reports agreement and latency for all records. When a
 record includes `outcome_label`, the admin report also converts it into the same
 Pi promotion scoring contract used by `pi_promotion_eval.py`, including
 `promotable_groups` and `rollback_groups`. Unlabeled records are never treated as
-accuracy evidence.
+accuracy evidence. Pi live execution remains separately gated by
+`ZOE_PI_INTENT_PROMOTED_GROUPS`, so enabling the classifier alone does not promote
+all Pi classifications into executable Zoe routes.
 
 
 ## Review-Only Runtime Proposal
