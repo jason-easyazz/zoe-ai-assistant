@@ -80,6 +80,9 @@ async def maybe_record_pi_intent_shadow(
     zoe_confidence: float | None = None,
     zoe_latency_ms: float | None = None,
     route_class: str,
+    baseline_kind: str | None = None,
+    baseline_comparable: bool | None = None,
+    router_latency_ms: float | None = None,
     user_id: str = "unknown",
     context_turns: str = "",
     env: Mapping[str, str] | None = None,
@@ -114,6 +117,9 @@ async def maybe_record_pi_intent_shadow(
     pi_latency_ms = float(pi_result.latency_ms) if pi_result else elapsed_ms
     timeout_seconds = _float_env(runtime_env.get("ZOE_PI_INTENT_TIMEOUT_SECONDS"), default=4.0)
     timed_out = pi_result is None and elapsed_ms >= (timeout_seconds * 1000 * 0.95)
+    resolved_baseline_kind, resolved_baseline_comparable = _resolve_baseline_metadata(
+        route_class, baseline_kind=baseline_kind, baseline_comparable=baseline_comparable
+    )
     record = {
         "ts": time.time(),
         "text_hash": _hash_text(text),
@@ -124,6 +130,9 @@ async def maybe_record_pi_intent_shadow(
         "zoe_intent_group": intent_group_for_intent(zoe_intent),
         "zoe_confidence": zoe_confidence,
         "zoe_latency_ms": zoe_latency_ms,
+        "baseline_kind": resolved_baseline_kind,
+        "baseline_comparable": resolved_baseline_comparable,
+        "router_latency_ms": router_latency_ms,
         "pi_intent": pi_intent,
         "pi_intent_group": intent_group_for_intent(pi_intent),
         "pi_confidence": pi_confidence,
@@ -184,6 +193,15 @@ def shadow_records_to_route_samples(records: Sequence[Mapping[str, Any]]) -> lis
         pi_latency_ms = _optional_float_value(record.get("pi_latency_ms"))
         if zoe_latency_ms is None or pi_latency_ms is None:
             continue
+        route_class = str(record.get("route_class") or "fallback")
+        explicit_baseline_comparable = (
+            _bool_record_value(record.get("baseline_comparable")) if record.get("baseline_comparable") is not None else None
+        )
+        baseline_kind, baseline_comparable = _resolve_baseline_metadata(
+            route_class,
+            baseline_kind=_optional_str(record.get("baseline_kind")),
+            baseline_comparable=explicit_baseline_comparable,
+        )
         try:
             samples.append(
                 PiRouteSample(
@@ -196,11 +214,17 @@ def shadow_records_to_route_samples(records: Sequence[Mapping[str, Any]]) -> lis
                     pi_latency_ms=pi_latency_ms,
                     pi_confidence=_float_value(record.get("pi_confidence"), default=0.0),
                     pi_transport=str(record.get("pi_transport") or "rpc"),
-                    route_class=str(record.get("route_class") or "fallback"),
+                    route_class=route_class,
                     timed_out=_bool_record_value(record.get("timed_out")),
                     user_corrected=_bool_record_value(record.get("user_corrected")),
                     rollback_blocked=_bool_record_value(record.get("rollback_blocked")),
-                    metadata={"source": "pi_intent_shadow", "text_hash": str(record.get("text_hash") or "")},
+                    metadata={
+                        "source": "pi_intent_shadow",
+                        "text_hash": str(record.get("text_hash") or ""),
+                        "baseline_kind": baseline_kind,
+                        "baseline_comparable": baseline_comparable,
+                        "router_latency_ms": _optional_float_value(record.get("router_latency_ms")),
+                    },
                 )
             )
         except (TypeError, ValueError):
@@ -264,6 +288,40 @@ def summarize_pi_intent_shadow(records: Sequence[Mapping[str, Any]]) -> dict[str
             else "runtime shadow records are unlabeled agreement evidence, not accuracy labels"
         ),
     }
+
+
+def _resolve_baseline_metadata(
+    route_class: str,
+    *,
+    baseline_kind: str | None = None,
+    baseline_comparable: bool | None = None,
+) -> tuple[str, bool]:
+    if baseline_kind is not None:
+        resolved_kind = str(baseline_kind) if baseline_kind else _default_baseline_kind(route_class)
+    elif route_class == "deterministic":
+        resolved_kind = "router"
+    elif route_class == "extraction_failed":
+        resolved_kind = "router_extraction_failed_not_comparable"
+    else:
+        resolved_kind = "router_only_not_comparable"
+    if baseline_comparable is not None:
+        resolved_comparable = bool(baseline_comparable)
+    elif baseline_kind is not None:
+        resolved_comparable = resolved_kind not in {
+            "router_only_not_comparable",
+            "router_extraction_failed_not_comparable",
+        }
+    else:
+        resolved_comparable = route_class == "deterministic"
+    return resolved_kind, resolved_comparable
+
+
+def _default_baseline_kind(route_class: str) -> str:
+    if route_class == "deterministic":
+        return "router"
+    if route_class == "extraction_failed":
+        return "router_extraction_failed_not_comparable"
+    return "router_only_not_comparable"
 
 
 def _append_jsonl(path: str, record: Mapping[str, Any]) -> None:

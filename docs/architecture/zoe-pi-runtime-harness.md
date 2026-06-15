@@ -99,10 +99,15 @@ Admin status is available at:
 GET /api/system/pi-intent/shadow-status
 ```
 
-The first runtime slice reports agreement and latency for all records. When a
-record includes `outcome_label`, the admin report also converts it into the same
+The first runtime slice reports agreement and latency for all records. Shadow
+records also carry `baseline_kind`, `baseline_comparable`, and `router_latency_ms`.
+Deterministic router records are comparable by default; fallback and
+extraction_failed records are marked non-comparable unless an operator/reviewed
+producer explicitly labels them with measured Zoe fallback or agent latency. When
+a record includes `outcome_label`, the admin report also converts it into the same
 Pi promotion scoring contract used by `pi_promotion_eval.py`, including
-`promotable_groups` and `rollback_groups`. Reviewed records may also set
+`promotable_groups` and `rollback_groups`; non-comparable fallback evidence blocks
+promotion instead of being treated as a speed win. Reviewed records may also set
 `user_corrected=true` or `rollback_blocked=true`; those fields feed the same
 rollback gates as synthetic promotion samples. The promotion report includes
 `route_class_breakdown` for deterministic, fallback, and extraction_failed

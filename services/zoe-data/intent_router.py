@@ -1326,6 +1326,9 @@ async def detect_and_extract_intent(
         route_class: str,
         zoe_latency_ms: float | None,
         pi_result=shadow_unset,
+        baseline_kind: str | None = None,
+        baseline_comparable: bool | None = None,
+        router_latency_ms: float | None = None,
     ) -> None:
         if not _env_enabled("ZOE_PI_INTENT_SHADOW_ENABLED"):
             return
@@ -1339,6 +1342,9 @@ async def detect_and_extract_intent(
                     "zoe_confidence": zoe_intent.confidence if zoe_intent else None,
                     "zoe_latency_ms": zoe_latency_ms,
                     "route_class": route_class,
+                    "baseline_kind": baseline_kind,
+                    "baseline_comparable": baseline_comparable,
+                    "router_latency_ms": router_latency_ms,
                     "user_id": user_id,
                     "context_turns": _context_turns(),
                 }
@@ -1378,6 +1384,9 @@ async def detect_and_extract_intent(
             route_class="fallback",
             zoe_latency_ms=detect_latency_ms,
             pi_result=pi_classified if _env_enabled("ZOE_PI_INTENT_ENABLED") else shadow_unset,
+            baseline_kind="router_only_not_comparable",
+            baseline_comparable=False,
+            router_latency_ms=detect_latency_ms,
         )
         return routed_intent
     if intent.slots and "raw" in intent.slots:
@@ -1390,6 +1399,9 @@ async def detect_and_extract_intent(
                     intent,
                     route_class="deterministic",
                     zoe_latency_ms=(time.perf_counter() - started) * 1000,
+                    baseline_kind="router",
+                    baseline_comparable=True,
+                    router_latency_ms=detect_latency_ms,
                 )
                 return intent
         except Exception as _exc:
@@ -1399,15 +1411,26 @@ async def detect_and_extract_intent(
                 _exc,
             )
         # Extraction failed — let Pi/Gemma classify the ambiguous utterance once before Zoe Agent fallback.
+        extraction_failed_latency_ms = (time.perf_counter() - started) * 1000
         routed_intent, pi_classified = await _try_pi_governor()
         _schedule_pi_shadow(
             None,
             route_class="extraction_failed",
-            zoe_latency_ms=(time.perf_counter() - started) * 1000,
+            zoe_latency_ms=extraction_failed_latency_ms,
             pi_result=pi_classified if _env_enabled("ZOE_PI_INTENT_ENABLED") else shadow_unset,
+            baseline_kind="router_extraction_failed_not_comparable",
+            baseline_comparable=False,
+            router_latency_ms=detect_latency_ms,
         )
         return routed_intent
-    _schedule_pi_shadow(intent, route_class="deterministic", zoe_latency_ms=detect_latency_ms)
+    _schedule_pi_shadow(
+        intent,
+        route_class="deterministic",
+        zoe_latency_ms=detect_latency_ms,
+        baseline_kind="router",
+        baseline_comparable=True,
+        router_latency_ms=detect_latency_ms,
+    )
     return intent
 
 
