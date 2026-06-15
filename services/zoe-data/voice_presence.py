@@ -11,12 +11,14 @@ import base64
 import mimetypes
 import os
 import re
+import threading
 from pathlib import Path
 from typing import Any, Mapping
 
 _WAKE_TEXT_RE = re.compile(r"^\s*(?:hey|hi|hello)\s+zoe[.!?\s]*$", re.I)
 _AUDIO_CACHE: dict[str, Any] = {}
 _VARIANT_CURSOR = 0
+_VARIANT_LOCK = threading.Lock()
 
 
 def is_wake_text(text: str | None) -> bool:
@@ -77,8 +79,9 @@ def wake_ack_variant(env: Mapping[str, str] | None = None, *, index: int | None 
     audio_paths = wake_ack_audio_paths(env)
     variant_count = max(len(phrases), len(audio_paths), 1)
     if index is None:
-        selected = _VARIANT_CURSOR % variant_count
-        _VARIANT_CURSOR += 1
+        with _VARIANT_LOCK:
+            selected = _VARIANT_CURSOR % variant_count
+            _VARIANT_CURSOR += 1
     else:
         selected = index % variant_count
     phrase = phrases[selected] if selected < len(phrases) else ""

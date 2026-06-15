@@ -1,12 +1,14 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+import voice_presence
 from voice_presence import (
-    _AUDIO_CACHE,
     is_wake_payload,
     is_wake_text,
     wake_ack_audio_payload,
@@ -15,6 +17,11 @@ from voice_presence import (
     wake_ack_variant,
     wake_presence_events,
 )
+
+@pytest.fixture(autouse=True)
+def _reset_voice_presence_state(monkeypatch):
+    monkeypatch.setattr(voice_presence, "_AUDIO_CACHE", {})
+    monkeypatch.setattr(voice_presence, "_VARIANT_CURSOR", 0)
 
 
 def test_is_wake_text_matches_only_wake_phrase():
@@ -60,7 +67,6 @@ def test_wake_ack_phrase_uses_env_mapping():
 
 
 def test_wake_ack_audio_payload_reads_and_caches_file(tmp_path):
-    _AUDIO_CACHE.clear()
     audio_path = tmp_path / "wake.wav"
     audio_path.write_bytes(b"RIFFwake")
 
@@ -73,7 +79,7 @@ def test_wake_ack_audio_payload_reads_and_caches_file(tmp_path):
 
     cached = wake_ack_audio_payload({"ZOE_WAKE_ACK_AUDIO_PATH": str(audio_path)})
     assert cached == payload
-    assert len(_AUDIO_CACHE) == 1
+    assert len(voice_presence._AUDIO_CACHE) == 1
 
 
 def test_wake_presence_events_can_include_cached_audio():
@@ -114,7 +120,6 @@ def test_wake_ack_variant_selects_index_aligned_phrase_and_audio(tmp_path):
 
 
 def test_wake_ack_events_uses_selected_cached_variant(tmp_path):
-    _AUDIO_CACHE.clear()
     audio_path = tmp_path / "wake.wav"
     audio_path.write_bytes(b"RIFF")
 
@@ -212,7 +217,6 @@ def test_websocket_wake_can_emit_cached_audio_without_reasoning(monkeypatch, tmp
     from fastapi.testclient import TestClient
     import main
 
-    _AUDIO_CACHE.clear()
     audio_path = tmp_path / "wake.wav"
     audio_path.write_bytes(b"RIFF")
 
@@ -262,7 +266,6 @@ def test_voice_wake_endpoint_uses_cached_audio_before_live_tts(monkeypatch, tmp_
     from fastapi.testclient import TestClient
     from routers import voice_tts
 
-    _AUDIO_CACHE.clear()
     audio_path = tmp_path / "wake.wav"
     audio_path.write_bytes(b"RIFF")
 
