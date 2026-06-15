@@ -1288,12 +1288,117 @@ def detect_intent(
     return None
 
 
+def _relative_reminder_now():
+    from datetime import datetime
+
+    return datetime.now().replace(second=0, microsecond=0)
+
+
+def _parse_relative_reminder_duration(raw: str):
+    from datetime import timedelta
+
+    value = re.sub(r"\s+", " ", str(raw or "").strip().lower())
+    if not value:
+        return None
+
+    if value == "half an hour":
+        return timedelta(minutes=30)
+
+    quantity_words = {
+        "a": 1,
+        "an": 1,
+        "one": 1,
+        "two": 2,
+        "three": 3,
+        "four": 4,
+        "five": 5,
+        "six": 6,
+        "seven": 7,
+        "eight": 8,
+        "nine": 9,
+        "ten": 10,
+        "a few": 3,
+        "a couple": 2,
+        "a couple of": 2,
+    }
+    m = re.match(
+        r"^(?P<qty>\d+|a\s+few|a\s+couple(?:\s+of)?|an?|one|two|three|four|five|six|seven|eight|nine|ten)\s+"
+        r"(?P<unit>min(?:ute)?s?|hours?|days?|weeks?)$",
+        value,
+        flags=re.IGNORECASE,
+    )
+    if not m:
+        return None
+
+    qty_text = m.group("qty").lower()
+    quantity = int(qty_text) if qty_text.isdigit() else quantity_words.get(qty_text)
+    if not quantity or quantity < 1:
+        return None
+
+    unit = m.group("unit").lower()
+    if unit.startswith("min"):
+        return timedelta(minutes=quantity)
+    if unit.startswith("hour"):
+        return timedelta(hours=quantity)
+    if unit.startswith("day"):
+        return timedelta(days=quantity)
+    if unit.startswith("week"):
+        return timedelta(weeks=quantity)
+    return None
+
+
+def _extract_relative_reminder_slots(text: str) -> Optional[dict]:
+    raw = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not raw:
+        return None
+
+    duration_pattern = (
+        r"(?P<duration>"
+        r"\d+\s+(?:min(?:ute)?s?|hours?|days?|weeks?)|"
+        r"half\s+an\s+hour|"
+        r"(?:a\s+few|a\s+couple(?:\s+of)?|an?|one|two|three|four|five|six|seven|eight|nine|ten)\s+"
+        r"(?:min(?:ute)?s?|hours?|days?|weeks?)"
+        r")"
+    )
+    patterns = [
+        rf"^remind me in {duration_pattern}\s+(?:to|about)\s+(?P<title>.+)$",
+        rf"^remind me (?:to|about)\s+(?P<title>.+?)\s+in {duration_pattern}$",
+        rf"^remember to\s+(?P<title>.+?)\s+in {duration_pattern}$",
+        rf"^set a reminder in {duration_pattern}\s+(?:to|for|about)\s+(?P<title>.+)$",
+        rf"^set a reminder (?:to|for|about)\s+(?P<title>.+?)\s+in {duration_pattern}$",
+    ]
+    title = ""
+    duration_text = ""
+    for pattern in patterns:
+        match = re.match(pattern, raw, flags=re.IGNORECASE)
+        if match:
+            title = match.group("title").strip(" ,.-")
+            duration_text = match.group("duration")
+            break
+    if not title or not duration_text:
+        return None
+
+    if re.search(r"\bevery\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|day|week|month|year)\b", title, flags=re.IGNORECASE):
+        return None
+    if re.search(r"\b(?:next|this|coming|last)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", title, flags=re.IGNORECASE):
+        return None
+
+    delta = _parse_relative_reminder_duration(duration_text)
+    if not delta:
+        return None
+    due = _relative_reminder_now() + delta
+    return {"title": title, "date": due.date().isoformat(), "time": due.strftime("%H:%M")}
+
+
 def _extract_simple_reminder_slots(text: str) -> Optional[dict]:
     """Fast slots for common reminder phrases; complex relative phrasing still uses NLU."""
 
     raw = re.sub(r"\s+", " ", str(text or "")).strip()
     if not raw:
         return None
+    relative_slots = _extract_relative_reminder_slots(raw)
+    if relative_slots:
+        return relative_slots
 
     patterns = [
         r"^remind me (?:to|about)\s+(.+)$",
