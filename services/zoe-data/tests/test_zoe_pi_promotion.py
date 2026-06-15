@@ -309,6 +309,9 @@ def test_route_class_breakdown_compares_baselines_independently():
     assert breakdown["fallback"]["zoe_accuracy"] == 0.0
     assert breakdown["fallback"]["pi_accuracy"] == 0.5
     assert breakdown["fallback"]["accuracy_delta"] == 0.5
+    assert breakdown["fallback"]["zoe_p95_latency_ms"] == 895.0
+    assert breakdown["fallback"]["pi_p95_latency_ms"] == 1155.0
+    assert breakdown["fallback"]["latency_delta_ms"] == -260.0
     assert breakdown["fallback"]["timeout_rate"] == 0.5
     assert breakdown["extraction_failed"]["sample_count"] == 0
     assert breakdown["extraction_failed"]["zoe_p95_latency_ms"] is None
