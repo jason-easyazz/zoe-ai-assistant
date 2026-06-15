@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from pi_runtime_probe import probe_pi_runtime
+from zoe_pi_promotion import LOW_RISK_PI_INTENT_GROUPS, intent_group_for_intent
 
 logger = logging.getLogger(__name__)
 
@@ -169,7 +170,7 @@ class PiIntentClassification:
 
 def pi_intent_status(env: Mapping[str, str] | None = None) -> dict[str, Any]:
     config = PiIntentClassifierConfig.from_env(env)
-    status = {"config": _safe_config_dict(config)}
+    status = {"config": _safe_config_dict(config), "promotion": pi_intent_promotion_status(env)}
     if not config.enabled:
         status.update({"ok": False, "status": "disabled", "reason": "ZOE_PI_INTENT_ENABLED is false"})
         return status
@@ -184,6 +185,26 @@ def pi_intent_status(env: Mapping[str, str] | None = None) -> dict[str, Any]:
         }
     )
     return status
+
+
+def pi_intent_promotion_status(env: Mapping[str, str] | None = None) -> dict[str, Any]:
+    values = env if env is not None else os.environ
+    requested_groups = _csv_env(values.get("ZOE_PI_INTENT_PROMOTED_GROUPS"))
+    active_groups = [group for group in requested_groups if group in LOW_RISK_PI_INTENT_GROUPS]
+    ignored_groups = [group for group in requested_groups if group not in LOW_RISK_PI_INTENT_GROUPS]
+    return {
+        "requested_groups": requested_groups,
+        "active_groups": active_groups,
+        "ignored_groups": ignored_groups,
+        "allowlisted_groups": sorted(LOW_RISK_PI_INTENT_GROUPS),
+    }
+
+
+def pi_intent_is_promoted(intent: str | None, env: Mapping[str, str] | None = None) -> bool:
+    group = intent_group_for_intent(intent)
+    if not group:
+        return False
+    return group in set(pi_intent_promotion_status(env)["active_groups"])
 
 
 async def classify_with_pi_intent_governor(
@@ -560,6 +581,12 @@ def _bounded_float(value: Any, *, default: float) -> float:
     return min(1.0, max(0.0, parsed))
 
 
+def _csv_env(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return sorted({item.strip() for item in value.split(",") if item.strip()})
+
+
 def _env_bool(value: str | None, *, default: bool) -> bool:
     if value is None or str(value).strip() == "":
         return default
@@ -576,6 +603,8 @@ __all__ = [
     "PI_INTENT_HINT_THRESHOLD",
     "PiIntentClassification",
     "PiIntentClassifierConfig",
+    "pi_intent_is_promoted",
+    "pi_intent_promotion_status",
     "classify_with_pi_intent_governor",
     "pi_intent_status",
 ]

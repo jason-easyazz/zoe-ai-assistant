@@ -164,6 +164,7 @@ async def test_intent_router_reuses_live_pi_result_for_shadow_fallback(tmp_path,
     monkeypatch.setenv("ZOE_PI_INTENT_ENABLED", "true")
     monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_ENABLED", "true")
     monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_PATH", str(path))
+    monkeypatch.setenv("ZOE_PI_INTENT_PROMOTED_GROUPS", "reminders")
     monkeypatch.setattr("pi_intent_classifier.classify_with_pi_intent_governor", fake_classify)
 
     from intent_router import detect_and_extract_intent
