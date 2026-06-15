@@ -195,6 +195,7 @@ def test_zoe_baseline_timeout_is_not_comparable(monkeypatch):
 
 def test_run_pi_fast_no_result_is_not_timeout(monkeypatch):
     _install_fake_pi_classifier(monkeypatch, result=None)
+    monkeypatch.setenv("ZOE_PI_INTENT_PREFILTER_ENABLED", "false")
     module = _load_module()
     case = module.PiIntentEvalCase("casual", "that movie was good", None, "chat", "fallback", negative=True)
 
@@ -204,6 +205,7 @@ def test_run_pi_fast_no_result_is_not_timeout(monkeypatch):
 
     assert result["intent"] is None
     assert result["timed_out"] is False
+    assert result["prefilter_enabled"] == "false"
     assert result["correct"] is True
 
 
