@@ -77,10 +77,12 @@ GET /api/system/pi-intent/shadow-status
 The first runtime slice reports agreement and latency for all records. When a
 record includes `outcome_label`, the admin report also converts it into the same
 Pi promotion scoring contract used by `pi_promotion_eval.py`, including
-`promotable_groups` and `rollback_groups`. Unlabeled records are never treated as
-accuracy evidence. Pi live execution remains separately gated by
-`ZOE_PI_INTENT_PROMOTED_GROUPS`, so enabling the classifier alone does not promote
-all Pi classifications into executable Zoe routes. The report includes a read-only
+`promotable_groups` and `rollback_groups`. Reviewed records may also set
+`user_corrected=true` or `rollback_blocked=true`; those fields feed the same
+rollback gates as synthetic promotion samples. Unlabeled records are never treated
+as accuracy evidence. Pi live execution remains separately gated by
+`ZOE_PI_INTENT_PROMOTED_GROUPS`, so enabling the classifier alone does not
+promote all Pi classifications into executable Zoe routes. The report includes a read-only
 `promotion_actions.env.ZOE_PI_INTENT_PROMOTED_GROUPS` recommendation for operator
 review; Zoe does not rewrite env or auto-promote groups from shadow evidence.
 Operators can inspect or explicitly apply that single env update with:
