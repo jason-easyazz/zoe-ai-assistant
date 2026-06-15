@@ -485,7 +485,7 @@ def _failure_reasons(sample: PiRouteSample) -> list[str]:
         reasons.append("user_corrected")
     if sample.timed_out:
         reasons.append("timed_out")
-    if not sample.pi_correct:
+    if sample.pi_intent != sample.expected_intent:
         reasons.append("pi_wrong_intent")
     return reasons
 

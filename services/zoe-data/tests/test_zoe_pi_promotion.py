@@ -277,6 +277,12 @@ def test_failure_examples_prioritize_review_and_timeout_signals():
     assert "text" not in examples[0]
 
 
+def test_failure_examples_separate_timeout_from_wrong_intent():
+    examples = build_pi_failure_examples([_sample(1, pi="weather", timed_out=True)])
+
+    assert examples[0]["reasons"] == ["timed_out"]
+
+
 def test_summary_lists_promotable_groups():
     samples = [_sample(i) for i in range(10)]
     report = summarize_pi_promotion(samples, policy=PiPromotionPolicy(min_samples=10))
