@@ -1103,7 +1103,7 @@
 
         .sky-orb-button span {
             position: relative;
-            display: grid;
+            display: none !important;
             gap: 8px;
             place-items: center;
             padding-top: 46%;
@@ -1118,7 +1118,7 @@
         }
 
         body.sky-empty .sky-orb-button span {
-            opacity: 1;
+            opacity: 0;
             transform: translateY(0);
         }
 
@@ -3979,7 +3979,7 @@
             body:not(.sky-empty) .sky-weather-meta {
                 grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
                 gap: 8px !important;
-                max-width: 420px !important;
+                max-width: 520px !important;
             }
 
             body:not(.sky-empty) .sky-weather-pill {

@@ -570,6 +570,7 @@ def test_skybridge_has_touch_panel_fit_overrides():
     assert 'font-size: 16px !important' in html
     assert 'font-size: 13px !important' in html
     assert 'minmax(610px, 1fr)' in html
+    assert 'max-width: 520px !important' in html
     assert 'font-size: 28px !important' in html
     assert 'width: min(920px, calc(100vw - 180px))' in html
     assert 'left: calc(50% - 425px)' in html
@@ -585,3 +586,5 @@ def test_skybridge_has_touch_panel_fit_overrides():
     assert 'max-width: none !important' in html
     assert 'grid-template-columns: repeat(8, minmax(46px, 1fr))' in html
     assert 'body:not(.sky-empty) .sky-command' in html
+    assert '.sky-orb-button span' in html
+    assert 'display: none !important' in html
