@@ -123,10 +123,27 @@ def test_pi_intent_status_is_available_with_explicit_operator_gates(tmp_path):
 def test_pi_intent_promotion_status_filters_to_low_risk_groups():
     status = pi_intent_promotion_status({"ZOE_PI_INTENT_PROMOTED_GROUPS": "weather,device_control,reminders"})
 
+    assert status["auto_promote_requested"] is False
+    assert status["auto_promote_status"] == "evidence_only"
     assert status["active_groups"] == ["reminders", "weather"]
     assert status["ignored_groups"] == ["device_control"]
     assert pi_intent_is_promoted("weather", {"ZOE_PI_INTENT_PROMOTED_GROUPS": "weather"}) is True
     assert pi_intent_is_promoted("extend_capability", {"ZOE_PI_INTENT_PROMOTED_GROUPS": "extend_capability"}) is False
+
+
+def test_pi_intent_promotion_status_reports_auto_promote_request_without_enabling_groups():
+    status = pi_intent_promotion_status(
+        {
+            "ZOE_PI_INTENT_AUTO_PROMOTE": "true",
+            "ZOE_PI_INTENT_PROMOTED_GROUPS": "device_control",
+        }
+    )
+
+    assert status["auto_promote_requested"] is True
+    assert status["auto_promote_status"] == "requires_explicit_apply_path"
+    assert status["active_groups"] == []
+    assert status["ignored_groups"] == ["device_control"]
+    assert "guarded promotion actions" in status["auto_promote_reason"]
 
 
 def test_pi_intent_promotion_status_cache_tracks_env_value(monkeypatch):
