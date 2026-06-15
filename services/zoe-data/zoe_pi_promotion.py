@@ -345,10 +345,13 @@ def build_pi_promotion_actions(
     unknown = sorted((current | promotable | rollback) - set(LOW_RISK_PI_INTENT_GROUPS))
     if unknown:
         raise ValueError(f"unknown promotion action groups: {', '.join(unknown)}")
+    overlap = sorted(promotable & rollback)
+    if overlap:
+        raise ValueError(f"conflicting promotion action groups: {', '.join(overlap)}")
     next_promoted = sorted((current | promotable) - rollback)
     promote = sorted(promotable - current)
     remove = sorted(rollback & current)
-    keep = sorted((current & set(LOW_RISK_PI_INTENT_GROUPS)) - set(remove))
+    keep = sorted(current - set(remove))
     return {
         "promote_groups": promote,
         "rollback_groups": remove,

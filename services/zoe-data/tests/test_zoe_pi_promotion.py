@@ -264,6 +264,32 @@ def test_summary_includes_operator_rollback_actions():
     assert report["promotion_actions"]["env"] == {"ZOE_PI_INTENT_PROMOTED_GROUPS": "reminders"}
 
 
+def test_build_pi_promotion_actions_reports_no_change_steady_state():
+    actions = build_pi_promotion_actions(
+        current_promoted_groups=["weather"],
+        promotable_groups=["weather"],
+        rollback_groups=[],
+    )
+
+    assert actions == {
+        "promote_groups": [],
+        "rollback_groups": [],
+        "keep_promoted_groups": ["weather"],
+        "next_promoted_groups": ["weather"],
+        "env": {"ZOE_PI_INTENT_PROMOTED_GROUPS": "weather"},
+        "requires_operator_apply": False,
+    }
+
+
+def test_build_pi_promotion_actions_rejects_conflicting_groups():
+    with pytest.raises(ValueError, match="conflicting promotion action groups"):
+        build_pi_promotion_actions(
+            current_promoted_groups=[],
+            promotable_groups=["weather"],
+            rollback_groups=["weather"],
+        )
+
+
 def test_build_pi_promotion_actions_rejects_unknown_groups():
     with pytest.raises(ValueError, match="unknown promotion action groups"):
         build_pi_promotion_actions(
