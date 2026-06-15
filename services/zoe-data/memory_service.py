@@ -82,13 +82,22 @@ _BLOCKED_READ_STATUSES = {"archived", "rejected", "superseded", "pending", "disp
 def _memory_visible_to_user(metadata: Mapping[str, Any], user_id: str) -> bool:
     """Return True only for the caller's personal rows or shared family rows."""
 
+    caller = str(user_id or "").strip().lower()
+    if is_guest_memory_user(caller):
+        return False
+
     visibility = str(metadata.get("visibility") or "").strip().lower()
     if visibility == "family":
         return True
-    caller = str(user_id or "").strip().lower()
     uid = str(metadata.get("user_id") or "").strip().lower()
     wing = str(metadata.get("wing") or "").strip().lower()
     return bool(caller and ((uid and uid == caller) or (wing and wing == caller)))
+
+
+def is_guest_memory_user(user_id: str | None) -> bool:
+    """Return True for unauthenticated identities that must not receive prompt memory."""
+
+    return str(user_id or "").strip().lower() in {"", "guest", "anonymous", "voice-guest"}
 
 
 def _memory_status_visible(metadata: Mapping[str, Any]) -> bool:
@@ -303,6 +312,8 @@ class MemoryService:
         self, user_id: str, *, limit: int = 20
     ) -> list[MemoryRef]:
         """Fast metadata-filter read for system prompt injection."""
+        if is_guest_memory_user(user_id):
+            return []
         self._require(user_id, "user_id is required")
         try:
             rows = await self._run_sync(self._metadata_read, user_id, limit)
@@ -323,6 +334,8 @@ class MemoryService:
         limit: int = 10,
         timeout_s: float = 2.0,
     ) -> list[MemoryRef]:
+        if is_guest_memory_user(user_id):
+            return []
         self._require(user_id, "user_id is required")
         if not query or not query.strip():
             return []
