@@ -59,9 +59,9 @@ def test_skybridge_push_socket_uses_authenticated_session_query():
     main = (ROOT / "zoe-data" / "main.py").read_text(encoding="utf-8")
 
     assert "/js/websocket-sync.js?v=skybridge-auth-ready-1" in html
-    assert "/touch/js/skybridge.js?v=skybridge-auth-premium-1" in html
-    assert "/touch/js/skybridge-renderer.js?v=skybridge-auth-premium-1" in html
-    assert "/js/touch-ui-executor.js?v=skybridge-auth-premium-1" in html
+    assert "/touch/js/skybridge.js?v=skybridge-auth-nametiles-1" in html
+    assert "/touch/js/skybridge-renderer.js?v=skybridge-auth-nametiles-1" in html
+    assert "/js/touch-ui-executor.js?v=skybridge-auth-nametiles-1" in html
     assert "initPush(panelId, sessionId)" in sync
     assert "params.set('panel_id', panelId)" in sync
     assert "else params.set('channel', 'all')" in sync
@@ -311,7 +311,7 @@ def test_skybridge_renderer_supports_real_data_cards():
     assert "sky-event-row" in html
     assert "sky-weather-hour-tile" in html
     assert "sky-weather-day-row" in html
-    assert "/touch/css/skybridge-data-widgets.css?v=skybridge-auth-premium-1" in html
+    assert "/touch/css/skybridge-data-widgets.css?v=skybridge-auth-nametiles-1" in html
     assert "skybridge-lists-people-widgets" not in html
     assert "sky-list-item-row" in data_widgets_css
     assert "sky-person-row" in data_widgets_css
@@ -444,12 +444,12 @@ def test_skybridge_auth_challenge_card_contract():
     assert "sky-auth-profile-grid" in renderer
     assert "data-user-id" in renderer
     assert "data-user-name" in renderer
-    assert "data-user-avatar" in renderer
     assert "data-challenge-id" in renderer
     assert "data-action-context" in renderer
     assert "Choose your profile" in renderer
     assert "PIN / Password" not in app
     assert 'aria-label="Sign in as ' in app
+    assert '<span class="sky-auth-avatar">' not in app
     assert "data-route=\"" in app
     assert "buildLoginRoute(panelId, profile.user_id)" in app
     assert "btn.dataset.skyAction === 'auth'" in app
@@ -484,7 +484,10 @@ def test_skybridge_auth_challenge_card_contract():
     assert "Skybridge premium auth picker" in css
     assert "grid-template-columns: repeat(auto-fit, minmax(154px, 1fr))" in css
     assert "Skybridge profile-tile auth picker" in css
+    assert "Skybridge name-only auth tiles" in css
     assert "sky-auth-people-only" in css
+    assert "sky-auth-avatar" in css
+    assert "display: none !important" in css[css.index("/* Skybridge name-only auth tiles */"):]
     assert "filter: blur" not in css[css.index("/* Skybridge premium auth picker */"):]
     assert '"component": "auth_challenge"' in service
     assert '"route": ""' in service
