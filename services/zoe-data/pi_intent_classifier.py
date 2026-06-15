@@ -371,7 +371,7 @@ class _PiRpcIntentWorker:
                 payload = json.dumps({"id": request_id, "type": "prompt", "message": prompt}, separators=(",", ":"))
                 self.proc.stdin.write((payload + "\n").encode())
                 await self.proc.stdin.drain()
-                return await asyncio.wait_for(self._read_turn(), timeout=timeout_seconds)
+                return await asyncio.wait_for(self._read_turn(request_id), timeout=timeout_seconds)
             except BaseException:
                 await self._reset_process_locked()
                 raise
@@ -403,7 +403,7 @@ class _PiRpcIntentWorker:
             env=self.env,
         )
 
-    async def _read_turn(self) -> str:
+    async def _read_turn(self, request_id: str) -> str:
         assert self.proc is not None and self.proc.stdout is not None
         latest_text = ""
         while True:
@@ -413,6 +413,8 @@ class _PiRpcIntentWorker:
             try:
                 event = json.loads(line.decode(errors="replace"))
             except json.JSONDecodeError:
+                continue
+            if not _rpc_event_matches_request(event, request_id):
                 continue
             text = _assistant_text_from_rpc_event(event)
             if text:
@@ -431,6 +433,17 @@ def _rpc_worker_for(config: PiIntentClassifierConfig, env: Mapping[str, str]) ->
         worker = _PiRpcIntentWorker(config, env)
         _RPC_WORKERS[key] = worker
     return worker
+
+
+def _rpc_event_matches_request(event: Mapping[str, Any], request_id: str) -> bool:
+    event_ids = [event.get("id"), event.get("request_id"), event.get("requestId")]
+    turn = event.get("turn")
+    if isinstance(turn, Mapping):
+        event_ids.extend([turn.get("id"), turn.get("request_id"), turn.get("requestId")])
+    present_ids = [str(value) for value in event_ids if value is not None]
+    if event.get("type") == "agent_end" and not present_ids:
+        return False
+    return not present_ids or request_id in present_ids
 
 
 def _assistant_text_from_rpc_event(event: Mapping[str, Any]) -> str:

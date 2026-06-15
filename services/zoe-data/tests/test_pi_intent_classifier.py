@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 
@@ -70,13 +71,15 @@ def _fake_rpc_runtime(tmp_path, *, response=None):
         "        fh.write(json.dumps({'event': 'start', 'argv': sys.argv, 'openai': os.environ.get('OPENAI_API_KEY'), 'openrouter': os.environ.get('OPENROUTER_API_KEY')}) + '\\n')\n"
         "payload = json.loads(os.environ['PI_TEST_PAYLOAD'])\n"
         "for line in sys.stdin:\n"
+        "    request = json.loads(line)\n"
         "    if record:\n"
         "        with open(record, 'a') as fh:\n"
-        "            fh.write(json.dumps({'event': 'request', 'body': json.loads(line)}) + '\\n')\n"
+        "            fh.write(json.dumps({'event': 'request', 'body': request}) + '\\n')\n"
         "    text = json.dumps(payload)\n"
-        "    print(json.dumps({'type': 'message_end', 'message': {'role': 'assistant', 'content': [{'type': 'text', 'text': text}]}}), flush=True)\n"
-        "    print(json.dumps({'type': 'turn_end', 'message': {'role': 'assistant', 'content': [{'type': 'text', 'text': text}]}}), flush=True)\n"
-        "    print(json.dumps({'type': 'agent_end', 'messages': [{'role': 'assistant', 'content': [{'type': 'text', 'text': text}]}]}), flush=True)\n",
+        "    event_id = request.get('id')\n"
+        "    print(json.dumps({'id': event_id, 'type': 'message_end', 'message': {'role': 'assistant', 'content': [{'type': 'text', 'text': text}]}}), flush=True)\n"
+        "    print(json.dumps({'id': event_id, 'type': 'turn_end', 'message': {'role': 'assistant', 'content': [{'type': 'text', 'text': text}]}}), flush=True)\n"
+        "    print(json.dumps({'id': event_id, 'type': 'agent_end', 'messages': [{'role': 'assistant', 'content': [{'type': 'text', 'text': text}]}]}), flush=True)\n",
     )
     return bindir, payload
 
@@ -260,6 +263,108 @@ async def test_pi_rpc_timeout_resets_process_under_worker_lock(tmp_path, monkeyp
     assert len(workers) == 1
     worker = next(iter(workers.values()))
     assert worker.proc is None
+
+
+@pytest.mark.asyncio
+async def test_pi_rpc_cancellation_resets_process_under_worker_lock(tmp_path, monkeypatch):
+    bindir = tmp_path / "rpc-cancel-bin"
+    bindir.mkdir()
+    _write_exe(bindir / "node", "#!/bin/sh\nexit 0\n")
+    _write_exe(bindir / "npm", "#!/bin/sh\nexit 0\n")
+    record = tmp_path / "rpc-cancel-record.jsonl"
+    _write_exe(
+        bindir / "pi",
+        "#!/usr/bin/python3\n"
+        "import json, os, sys, time\n"
+        "record = os.environ['PI_TEST_RECORD']\n"
+        "for line in sys.stdin:\n"
+        "    with open(record, 'a') as fh:\n"
+        "        fh.write(json.dumps({'event': 'request', 'body': json.loads(line)}) + '\\n')\n"
+        "    time.sleep(10)\n",
+    )
+    workers = {}
+    monkeypatch.setattr(pi_intent_classifier, "_RPC_WORKERS", workers)
+    env = {
+        "PATH": str(bindir),
+        "ZOE_PI_INTENT_ENABLED": "true",
+        "ZOE_PI_INTENT_TRANSPORT": "rpc",
+        "ZOE_PI_COMMAND": "pi",
+        "ZOE_PI_CWD": str(tmp_path),
+        "ZOE_PI_ALLOW_EXECUTION": "true",
+        "ZOE_PI_LOCAL_MODEL_CONFIGURED": "true",
+        "ZOE_PI_INTENT_TIMEOUT_SECONDS": "5",
+        "PI_TEST_RECORD": str(record),
+    }
+
+    task = asyncio.create_task(classify_with_pi_intent_governor("rain later", env=env))
+    try:
+        for _ in range(100):
+            if record.exists():
+                break
+            await asyncio.sleep(0.01)
+        assert record.exists()
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        if not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    assert len(workers) == 1
+    worker = next(iter(workers.values()))
+    assert worker.proc is None
+
+
+@pytest.mark.asyncio
+async def test_pi_rpc_ignores_stale_response_with_mismatched_request_id(tmp_path, monkeypatch):
+    bindir = tmp_path / "rpc-stale-bin"
+    bindir.mkdir()
+    _write_exe(bindir / "node", "#!/bin/sh\nexit 0\n")
+    _write_exe(bindir / "npm", "#!/bin/sh\nexit 0\n")
+    stale_payload = json.dumps({"intent": "reminder_list", "slots": {}, "confidence": 0.99, "task_lane": "fast_tool"})
+    fresh_payload = json.dumps({"intent": "weather", "slots": {"forecast": True}, "confidence": 0.92, "task_lane": "fast_tool"})
+    _write_exe(
+        bindir / "pi",
+        "#!/usr/bin/python3\n"
+        "import json, sys\n"
+        f"stale_payload = {json.dumps(stale_payload)}\n"
+        f"fresh_payload = {json.dumps(fresh_payload)}\n"
+        "for line in sys.stdin:\n"
+        "    request = json.loads(line)\n"
+        "    idless = {'type': 'agent_end', 'messages': [{'role': 'assistant', 'content': [{'type': 'text', 'text': stale_payload}]}]}\n"
+        "    stale = {'id': 'stale-request', 'type': 'agent_end', 'messages': [{'role': 'assistant', 'content': [{'type': 'text', 'text': stale_payload}]}]}\n"
+        "    fresh = {'id': request['id'], 'type': 'agent_end', 'messages': [{'role': 'assistant', 'content': [{'type': 'text', 'text': fresh_payload}]}]}\n"
+        "    print(json.dumps(idless), flush=True)\n"
+        "    print(json.dumps(stale), flush=True)\n"
+        "    print(json.dumps(fresh), flush=True)\n",
+    )
+    workers = {}
+    monkeypatch.setattr(pi_intent_classifier, "_RPC_WORKERS", workers)
+    env = {
+        "PATH": str(bindir),
+        "ZOE_PI_INTENT_ENABLED": "true",
+        "ZOE_PI_INTENT_TRANSPORT": "rpc",
+        "ZOE_PI_COMMAND": "pi",
+        "ZOE_PI_CWD": str(tmp_path),
+        "ZOE_PI_ALLOW_EXECUTION": "true",
+        "ZOE_PI_LOCAL_MODEL_CONFIGURED": "true",
+        "ZOE_PI_INTENT_TIMEOUT_SECONDS": "2",
+    }
+
+    try:
+        result = await classify_with_pi_intent_governor("rain later", env=env)
+    finally:
+        for worker in list(workers.values()):
+            await worker.reset()
+
+    assert result is not None
+    assert result.intent == "weather"
+    assert result.slots == {"forecast": True}
 
 
 def test_pi_prompt_sanitizes_user_json_braces():

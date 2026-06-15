@@ -130,8 +130,11 @@ scripts/maintenance/pi_promotion_eval.py \
 ```
 
 Add `--run-pi --transport rpc` only when the local/offline Pi intent runtime is
-configured. The report still remains evidence-only; `ZOE_PI_INTENT_PROMOTED_GROUPS`
-changes must pass the promotion actions and guarded apply helper described above.
+configured. The RPC path keeps a warm worker but resets it on timeout or task
+cancellation, and ignores response events whose request id does not match the
+current prompt. The report still remains evidence-only;
+`ZOE_PI_INTENT_PROMOTED_GROUPS` changes must pass the promotion actions and
+guarded apply helper described above.
 
 Sanitized JSONL evidence can be exported into the same eval-case format. For Pi
 shadow records this uses `text_preview` plus a trusted `outcome_label`; unlabeled,
