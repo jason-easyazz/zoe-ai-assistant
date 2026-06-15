@@ -9,6 +9,9 @@ from zoe_pi_promotion import (
     eval_cases_to_dict,
     evaluate_pi_promotion,
     intent_group_for_intent,
+    load_pi_intent_eval_cases,
+    merge_pi_intent_eval_cases,
+    summarize_eval_case_sources,
     summarize_pi_promotion,
 )
 
@@ -32,6 +35,89 @@ def test_default_eval_cases_validate_and_include_negative_chat_cases():
 
     assert any(case["case_id"] == "weather_rain_later" for case in payload)
     assert any(case["negative"] and case["intent_group"] == "chat" for case in payload)
+
+
+def test_eval_case_from_mapping_parses_string_false_negative():
+    case = PiIntentEvalCase.from_mapping(
+        {
+            "case_id": "weather_string_bool",
+            "text": "rain later",
+            "expected_intent": "weather",
+            "intent_group": "weather",
+            "route_class": "fallback",
+            "negative": "false",
+        }
+    )
+
+    assert case.negative is False
+
+
+def test_summarize_eval_case_sources_counts_sources():
+    cases = [
+        PiIntentEvalCase("one", "rain later", "weather", "weather", "fallback", source="synthetic"),
+        PiIntentEvalCase("two", "rain tonight", "weather", "weather", "fallback", source="intent_miss"),
+        PiIntentEvalCase("three", "rain tomorrow", "weather", "weather", "fallback", source="synthetic"),
+    ]
+
+    assert summarize_eval_case_sources(cases) == {"intent_miss": 1, "synthetic": 2}
+
+
+def test_load_pi_intent_eval_cases_from_jsonl(tmp_path):
+    path = tmp_path / "cases.jsonl"
+    path.write_text(
+        '\n'.join(
+            [
+                '{"case_id":"weather_file","text":"rain later","expected_intent":"weather","intent_group":"weather","route_class":"fallback","source":"synthetic"}',
+                '{"case_id":"casual_file","text":"I like the breakfast service","expected_intent":null,"intent_group":"chat","route_class":"fallback","source":"known_failure","negative":true}',
+            ]
+        )
+        + '\n',
+        encoding="utf-8",
+    )
+
+    cases = load_pi_intent_eval_cases(path)
+
+    assert [case.case_id for case in cases] == ["weather_file", "casual_file"]
+    assert cases[0].source == "synthetic"
+    assert cases[1].negative is True
+
+
+def test_load_pi_intent_eval_cases_from_json_object(tmp_path):
+    path = tmp_path / "cases.json"
+    path.write_text(
+        '{"cases":[{"case_id":"timer_file","text":"timer for five","expected_intent":"timer_create","intent_group":"timers","route_class":"fallback","source":"intent_miss"}]}',
+        encoding="utf-8",
+    )
+
+    cases = load_pi_intent_eval_cases(path)
+
+    assert len(cases) == 1
+    assert cases[0].case_id == "timer_file"
+    assert cases[0].source == "intent_miss"
+
+
+def test_load_pi_intent_eval_cases_rejects_duplicate_case_ids(tmp_path):
+    path = tmp_path / "cases.jsonl"
+    path.write_text(
+        '\n'.join(
+            [
+                '{"case_id":"dup","text":"rain later","expected_intent":"weather","intent_group":"weather","route_class":"fallback"}',
+                '{"case_id":"dup","text":"rain tonight","expected_intent":"weather","intent_group":"weather","route_class":"fallback"}',
+            ]
+        )
+        + '\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="duplicate eval case_id"):
+        load_pi_intent_eval_cases(path)
+
+
+def test_merge_pi_intent_eval_cases_rejects_duplicate_case_ids():
+    case = PiIntentEvalCase("same", "rain later", "weather", "weather", "fallback")
+
+    with pytest.raises(ValueError, match="duplicate eval case_id"):
+        merge_pi_intent_eval_cases([case], [case])
 
 
 def test_eval_case_rejects_privileged_expected_intent():

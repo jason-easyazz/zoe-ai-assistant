@@ -28,6 +28,9 @@ from zoe_pi_promotion import (  # noqa: E402
     PiPromotionPolicy,
     PiRouteSample,
     eval_cases_to_dict,
+    load_pi_intent_eval_cases,
+    merge_pi_intent_eval_cases,
+    summarize_eval_case_sources,
     summarize_pi_promotion,
 )
 
@@ -106,10 +109,16 @@ async def _run_pi(case: PiIntentEvalCase, *, transport: str, enable_execution: b
     }
 
 
-async def _run_cases(*, transport: str, enable_execution: bool, local_model_configured: bool) -> tuple[list[dict[str, Any]], list[PiRouteSample]]:
+async def _run_cases(
+    cases: list[PiIntentEvalCase],
+    *,
+    transport: str,
+    enable_execution: bool,
+    local_model_configured: bool,
+) -> tuple[list[dict[str, Any]], list[PiRouteSample]]:
     comparisons: list[dict[str, Any]] = []
     samples: list[PiRouteSample] = []
-    for case in DEFAULT_PI_INTENT_EVAL_CASES:
+    for case in cases:
         case.validate()
         zoe = await _run_zoe_baseline(case)
         pi = await _run_pi(
@@ -138,7 +147,7 @@ async def _run_cases(*, transport: str, enable_execution: bool, local_model_conf
     return comparisons, samples
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Report Pi intent promotion gates")
     parser.add_argument("--demo", action="store_true", help="Include deterministic demo samples for policy smoke testing")
     parser.add_argument("--run-pi", action="store_true", help="Run configured local Pi against built-in eval cases")
@@ -147,15 +156,25 @@ def main() -> int:
     parser.add_argument("--local-model-configured", action="store_true", help="Temporarily set ZOE_PI_LOCAL_MODEL_CONFIGURED=true")
     parser.add_argument("--min-samples", type=int, default=30)
     parser.add_argument(
+        "--cases-file",
+        action="append",
+        default=[],
+        help="JSON or JSONL eval cases file. Repeat to combine datasets.",
+    )
+    parser.add_argument("--no-default-cases", action="store_true", help="Use only --cases-file datasets")
+    parser.add_argument(
         "--promoted-group",
         action="append",
         choices=sorted(LOW_RISK_PI_INTENT_GROUPS),
         default=[],
         help="Intent group currently promoted through Pi; repeat for multiple groups",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     policy = PiPromotionPolicy(min_samples=args.min_samples)
+    loaded_case_groups = [load_pi_intent_eval_cases(path) for path in args.cases_file]
+    base_cases = [] if args.no_default_cases else list(DEFAULT_PI_INTENT_EVAL_CASES)
+    eval_cases = merge_pi_intent_eval_cases(base_cases, *loaded_case_groups)
     comparisons: list[dict[str, Any]] = []
     samples: list[PiRouteSample] = []
     if args.demo:
@@ -163,6 +182,7 @@ def main() -> int:
     if args.run_pi:
         comparisons, measured_samples = asyncio.run(
             _run_cases(
+                eval_cases,
                 transport=args.transport,
                 enable_execution=args.allow_execution,
                 local_model_configured=args.local_model_configured,
@@ -170,7 +190,9 @@ def main() -> int:
         )
         samples.extend(measured_samples)
     payload = {
-        "eval_cases": eval_cases_to_dict(DEFAULT_PI_INTENT_EVAL_CASES),
+        "eval_case_files": args.cases_file,
+        "eval_cases": eval_cases_to_dict(eval_cases),
+        "eval_case_source_counts": summarize_eval_case_sources(eval_cases),
         "comparisons": comparisons,
         "promotion_report": summarize_pi_promotion(samples, policy=policy, promoted_groups=args.promoted_group),
     }

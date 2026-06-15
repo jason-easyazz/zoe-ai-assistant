@@ -8,7 +8,9 @@ comparable path for a low-risk intent group.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 
@@ -69,6 +71,23 @@ class PiIntentEvalCase:
             and self.expected_intent not in LOW_RISK_PI_INTENT_GROUPS[self.intent_group]
         ):
             raise ValueError(f"{self.case_id}: expected_intent does not belong to intent_group {self.intent_group!r}")
+
+    @classmethod
+    def from_mapping(cls, payload: Mapping[str, Any], *, source_path: str = "<memory>") -> "PiIntentEvalCase":
+        case = cls(
+            case_id=str(payload.get("case_id") or "").strip(),
+            text=str(payload.get("text") or "").strip(),
+            expected_intent=_optional_str(payload.get("expected_intent")),
+            intent_group=str(payload.get("intent_group") or "").strip(),
+            route_class=str(payload.get("route_class") or "").strip(),
+            source=str(payload.get("source") or "synthetic").strip(),
+            negative=_bool_value(payload.get("negative", False)),
+        )
+        try:
+            case.validate()
+        except ValueError as exc:
+            raise ValueError(f"{source_path}: {exc}") from exc
+        return case
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
@@ -362,8 +381,86 @@ def build_pi_promotion_actions(
     }
 
 
+def load_pi_intent_eval_cases(path: str | Path) -> list[PiIntentEvalCase]:
+    target = Path(path)
+    raw = target.read_text(encoding="utf-8")
+    if target.suffix == ".jsonl":
+        cases: list[PiIntentEvalCase] = []
+        for line_number, line in enumerate(raw.splitlines(), start=1):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            try:
+                payload = json.loads(stripped)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"{target}:{line_number}: invalid JSONL row: {exc.msg}") from exc
+            if not isinstance(payload, Mapping):
+                raise ValueError(f"{target}:{line_number}: eval case row must be an object")
+            cases.append(PiIntentEvalCase.from_mapping(payload, source_path=f"{target}:{line_number}"))
+        return _dedupe_eval_cases(cases)
+
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{target}: invalid JSON: {exc.msg}") from exc
+    if isinstance(payload, Mapping):
+        rows = payload.get("cases")
+    else:
+        rows = payload
+    if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes)):
+        raise ValueError(f"{target}: eval cases must be a JSON array or object with a cases array")
+    cases: list[PiIntentEvalCase] = []
+    for index, row in enumerate(rows, start=1):
+        if not isinstance(row, Mapping):
+            raise ValueError(f"{target}:{index}: eval case must be an object")
+        cases.append(PiIntentEvalCase.from_mapping(row, source_path=f"{target}:{index}"))
+    return _dedupe_eval_cases(cases)
+
+
+def merge_pi_intent_eval_cases(*case_groups: Sequence[PiIntentEvalCase]) -> list[PiIntentEvalCase]:
+    merged: list[PiIntentEvalCase] = []
+    for cases in case_groups:
+        merged.extend(cases)
+    return _dedupe_eval_cases(merged)
+
+def summarize_eval_case_sources(cases: Sequence[PiIntentEvalCase]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for case in cases:
+        case.validate()
+        counts[case.source] = counts.get(case.source, 0) + 1
+    return dict(sorted(counts.items()))
+
 def eval_cases_to_dict(cases: Sequence[PiIntentEvalCase] = DEFAULT_PI_INTENT_EVAL_CASES) -> list[dict[str, Any]]:
     return [case.to_dict() for case in cases]
+
+
+def _dedupe_eval_cases(cases: Sequence[PiIntentEvalCase]) -> list[PiIntentEvalCase]:
+    seen: set[str] = set()
+    output: list[PiIntentEvalCase] = []
+    for case in cases:
+        case.validate()
+        if case.case_id in seen:
+            raise ValueError(f"duplicate eval case_id: {case.case_id}")
+        seen.add(case.case_id)
+        output.append(case)
+    return output
+
+
+def _bool_value(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def _empty_decision(intent_group: str, *, state: str, blockers: tuple[str, ...]) -> PiPromotionDecision:
@@ -424,5 +521,8 @@ __all__ = [
     "eval_cases_to_dict",
     "evaluate_pi_promotion",
     "intent_group_for_intent",
+    "load_pi_intent_eval_cases",
+    "merge_pi_intent_eval_cases",
+    "summarize_eval_case_sources",
     "summarize_pi_promotion",
 ]
