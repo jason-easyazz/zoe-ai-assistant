@@ -79,7 +79,16 @@ def review_is_running(status: dict[str, Any]) -> bool:
     for review in status.get("codeReviews") or []:
         if isinstance(review, dict):
             candidates.extend([review.get("status"), review.get("state"), review.get("conclusion")])
-    return any(str(value).lower() in {"running", "queued", "pending", "in_progress", "in-progress"} for value in candidates if value)
+    running_states = {
+        "running",
+        "queued",
+        "pending",
+        "in_progress",
+        "in-progress",
+        "reviewing_files",
+        "reviewing-files",
+    }
+    return any(str(value).lower() in running_states for value in candidates if value)
 
 
 def _load_api_key() -> str:

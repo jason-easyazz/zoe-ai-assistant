@@ -37,6 +37,24 @@ def _init_auth_tables(db_path: str) -> None:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS panels (
+            panel_id TEXT PRIMARY KEY,
+            name TEXT,
+            allow_guest INTEGER DEFAULT 1
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS panel_user_bindings (
+            panel_id TEXT,
+            user_id TEXT,
+            binding_type TEXT
+        )
+        """
+    )
     conn.commit()
     conn.close()
 
@@ -85,6 +103,43 @@ def test_profiles_endpoint_returns_non_system_users(sqlite_auth_db):
     assert len(profiles) == 1
     assert profiles[0]["user_id"] == "jason"
     assert profiles[0]["avatar"] == "J"
+
+
+def test_profiles_endpoint_returns_panel_scoped_identity_picker_shape(sqlite_auth_db):
+    conn = sqlite3.connect(sqlite_auth_db)
+    conn.executemany(
+        "INSERT INTO auth_users(user_id, username, role, password_hash) VALUES (?, ?, ?, ?)",
+        [
+            ("jason", "Jason", "admin", "hash"),
+            ("sarah", "Sarah", "user", "hash"),
+            ("guestish", "Guestish", "user", "hash"),
+        ],
+    )
+    conn.execute(
+        "INSERT INTO panels(panel_id, name, allow_guest) VALUES (?, ?, ?)",
+        ("zoe-touch-pi", "Kitchen", 0),
+    )
+    conn.executemany(
+        "INSERT INTO panel_user_bindings(panel_id, user_id, binding_type) VALUES (?, ?, ?)",
+        [
+            ("zoe-touch-pi", "jason", "default"),
+            ("zoe-touch-pi", "sarah", "allowed"),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    client = TestClient(app)
+    response = client.get("/api/auth/profiles?panel_id=zoe-touch-pi")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["panel_id"] == "zoe-touch-pi"
+    assert payload["panel_name"] == "Kitchen"
+    assert payload["allow_guest"] is False
+    assert payload["default_user_id"] == "jason"
+    assert [p["user_id"] for p in payload["profiles"]] == ["jason", "sarah"]
+    assert payload["profiles"][0]["avatar"] == "J"
 
 
 def test_login_requires_initial_password_setup_marker(sqlite_auth_db):

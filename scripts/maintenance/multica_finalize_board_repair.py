@@ -2,6 +2,7 @@
 """Mark Multica issues done per triage ledger after board-repair PR lands."""
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import sys
@@ -48,6 +49,9 @@ def _load_dotenv() -> None:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--execute", action="store_true", help="Apply the printed changes.")
+    args = parser.parse_args()
     _load_dotenv()
     triage_path = ROOT / ".cursor" / "tmp" / "multica-triage.json"
     if not triage_path.exists():
@@ -67,6 +71,7 @@ def main() -> int:
 
     async def run() -> int:
         updated = 0
+        labels = await client.list_labels()
         for item in data.get("issues", []):
             ident = item.get("identifier") or ""
             disp = item.get("disposition")
@@ -86,17 +91,22 @@ def main() -> int:
                 note = "fixed on fix/multica-board-repair branch (board repair)"
             if not close:
                 continue
-            await client.update_issue(
-                uid,
-                status="done",
-                description=(item.get("title", "") + f"\n\n---\n{note}")[:4000],
-            )
-            updated += 1
             print(f"  {ident}: done ({note[:60]})")
+            if not args.execute:
+                continue
+            label_name = "board-repair-closed"
+            await client.ensure_label(label_name, existing=labels)
+            await client.attach_label(uid, label_name)
+            await client.append_issue_note(uid, note)
+            await client.update_issue(uid, status="done")
+            updated += 1
         return updated
 
     n = asyncio.run(run())
-    print(f"Closed/updated {n} issue(s)")
+    if args.execute:
+        print(f"Closed/updated {n} issue(s)")
+    else:
+        print("Dry-run only; pass --execute to apply.")
     return 0
 
 

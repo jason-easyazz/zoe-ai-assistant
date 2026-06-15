@@ -44,8 +44,8 @@ async def dispatch_issue(issue: dict) -> dict:
     return await adapter.dispatch(issue)
 
 
-async def poll_ref(external_ref: str, *, backend: str = "kanban") -> dict:
+async def poll_ref(external_ref: str, *, backend: str = "kanban", issue: dict | None = None) -> dict:
     """Poll an external reference for its aggregate status."""
     if backend == "kanban":
-        return await _kanban.poll(external_ref)
+        return await _kanban.poll(external_ref, issue=issue)
     return {"found": False, "status": "not_found", "reason": f"unknown backend {backend}"}

@@ -35,11 +35,16 @@ _CREATE_ISSUES = (
     os.environ.get("ZOE_MULTICA_AUTOPILOT_CREATE_ISSUES")
     or os.environ.get("ZOE_MULTICA_AUTOPIOT_CREATE_ISSUES", "false")
 ).lower() in ("1", "true", "yes")
+# Default empty: no autopilot run creates a Multica tracker ("Autopilot: …")
+# issue wrapper. These wrappers accumulated into thousands of done rows and
+# added no signal (e.g. Platform Health Check already opens a dedicated
+# "Platform health failures detected" issue on failure). Opt back in per
+# autopilot title via this env var (comma-separated, case-insensitive).
 _CREATE_ISSUES_FOR = {
     t.strip().lower()
     for t in (
         os.environ.get("ZOE_MULTICA_AUTOPILOT_CREATE_ISSUES_FOR")
-        or os.environ.get("ZOE_MULTICA_AUTOPIOT_CREATE_ISSUES_FOR", "Platform Health Check")
+        or os.environ.get("ZOE_MULTICA_AUTOPIOT_CREATE_ISSUES_FOR", "")
     ).split(",")
     if t.strip()
 }
@@ -47,12 +52,10 @@ _STALE_AUTOPILOT_HOURS = float(
     os.environ.get("ZOE_MULTICA_AUTOPILOT_STALE_HOURS")
     or os.environ.get("ZOE_MULTICA_AUTOPIOT_STALE_HOURS", "2")
 )
-# Dedupe engineering dispatch: the Zoe poll webhook bridge + the hourly Hermes
-# cron (dispatch-hermes-board.sh -> sync_multica_to_kanban.py) are the owners of
-# Hermes-assigned Multica issues. The Multica "Board Review" autopilot would
-# dispatch the same issue pool through the executor seam, so it is disabled by
-# default to avoid duplicate Kanban chains. Set this flag true to restore the
-# autopilot as the engineering dispatcher (e.g. if the cron + poll loop are paused).
+# Dedupe engineering dispatch: Zoe's poll bridge and compatibility sync command
+# share the deterministic driver gate. The Multica "Board Review" autopilot
+# would dispatch the same issue pool through the executor seam, so it remains
+# disabled by default to avoid duplicate phase effects.
 _BOARD_REVIEW_AUTOPILOT_ENABLED = (
     os.environ.get("ZOE_BOARD_REVIEW_AUTOPILOT_ENABLED", "false").lower()
     in ("1", "true", "yes")
@@ -232,7 +235,7 @@ async def _run_platform_health_check() -> None:
     script = Path(
         os.environ.get(
             "ZOE_HEALTH_CHECK_SCRIPT",
-            str(Path.home() / "bin" / "zoe-health-check.sh"),
+            str(Path.home() / "assistant" / "scripts" / "maintenance" / "platform_health_check.sh"),
         )
     )
     if not script.exists():
@@ -268,16 +271,34 @@ async def _run_platform_health_check() -> None:
             from multica_client import get_multica_client  # type: ignore[import]
 
             client = get_multica_client()
-            await client.create_issue(
-                title="Platform health failures detected",
-                description=(
-                    "The scheduled Platform Health Check found failing services.\n\n"
-                    f"```\n{tail}\n```"
-                ),
-                priority="high",
-                assignee_id=_hermes_agent_id(),
-                assignee_type="agent",
+            title = "Platform health failures detected"
+            description = (
+                "The scheduled Platform Health Check found failing services.\n\n"
+                f"```\n{tail}\n```"
             )
+            open_issues = []
+            for status in ("backlog", "todo", "in_progress", "blocked", "in_review"):
+                open_issues.extend(await client.list_issues(status=status, limit=1000))
+            existing = next(
+                (
+                    issue
+                    for issue in open_issues
+                    if issue.get("title") == title
+                ),
+                None,
+            )
+            if existing and existing.get("id"):
+                await client.update_issue(
+                    str(existing["id"]),
+                    description=description,
+                )
+            else:
+                await client.create_issue(
+                    title=title,
+                    description=description,
+                    priority="high",
+                    status="backlog",
+                )
         except Exception as exc:
             logger.warning("autopilot: failed to create health failure issue: %s", exc)
 
@@ -321,7 +342,7 @@ async def _run_board_review() -> None:
                         title,
                     )
                     continue
-                existing = await poll_ref(f"multica:{issue_id}")
+                existing = await poll_ref(f"multica:{issue_id}", issue=issue)
                 if existing.get("found") and existing.get("status") in ("running", "blocked"):
                     continue
                 result = await dispatch_issue(issue)
@@ -336,6 +357,8 @@ def _should_create_tracker_issue(autopilot_title: str, mode: str, task_fn) -> bo
     if mode != "create_issue" or not _is_configured():
         return False
     title_lower = autopilot_title.lower().strip()
+    if task_fn is _run_platform_health_check:
+        return False
     if title_lower in _CREATE_ISSUES_FOR:
         return True
     if _CREATE_ISSUES:
@@ -450,7 +473,7 @@ async def _fire_autopilot_job(
 
     1. Creates a Multica issue (if mode == 'create_issue').
     2. Runs the matching Zoe task function if one is mapped.
-    3. Marks the issue done on success, or resets it to todo on failure/no-op.
+    3. Marks a wrapper issue done on success or cancelled on failure/no-op.
     """
     logger.info(
         "autopilot fire: id=%s title=%r mode=%s",
@@ -548,7 +571,13 @@ async def sync_autopilots_from_multica(scheduler) -> int:
     for ap in autopilots:
         ap_id: str = str(ap.get("id", "")).strip()
         ap_title: str = (ap.get("title") or ap.get("name") or "").strip()
-        ap_mode: str = ap.get("mode") or "create_issue"
+        raw_mode = ap.get("execution_mode") or ap.get("mode")
+        if not raw_mode:
+            logger.debug(
+                "sync_autopilots: autopilot %s has no execution_mode/mode; defaulting to create_issue",
+                ap_id,
+            )
+        ap_mode: str = raw_mode or "create_issue"
         ap_assignee: str | None = ap.get("assignee_agent_id") or ap.get("assignee_id")
 
         if not ap_id or not ap_title:

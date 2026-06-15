@@ -15,6 +15,7 @@ import logging
 import os
 import re
 import shlex
+import time
 import shutil
 import unicodedata
 from dataclasses import dataclass, field
@@ -410,7 +411,9 @@ _GREETING_RE = re.compile(
 _AGENT_CHAT_RE = re.compile(
     r"^(?:tell me about|what(?:'s| is) the (?:capital|weather)|"
     r"search the web|write me (?:an? )?(?:email|haiku|poem)|"
-    r"can you explain|set up (?:a )?new automation|what is happening in)",
+    r"can you explain|set up (?:a )?new automation|what is happening in|"
+    r"tell me (?:a|another) joke|make me laugh|(?:do you |have you )?(?:got|have) any jokes|know any (?:good )?jokes|"
+    r"say exactly[: ]+.+)",
     re.IGNORECASE,
 )
 
@@ -1126,6 +1129,49 @@ def detect_intent(
         return Intent("a2a_federation_status", {})
 
     # ── Multica board visibility ───────────────────────────────────────────────
+    if re.search(r"\b(?:pause|stop)\s+(?:multica\s+|engineering\s+)?dispatch\b", t, re.I):
+        return Intent("engineering_dispatch_pause", {})
+    if re.search(r"\bresume\s+(?:multica\s+|engineering\s+)?dispatch\b", t, re.I):
+        return Intent("engineering_dispatch_resume", {})
+    _MOVE_TODO_RE = re.search(
+        r"\bmove\s+(?P<reference>ZOE-\d+|[0-9a-f-]{32,36})\s+to\s+todo\b",
+        text,
+        re.I,
+    )
+    if _MOVE_TODO_RE:
+        return Intent(
+            "engineering_ticket_move_todo",
+            {"reference": _MOVE_TODO_RE.group("reference")},
+        )
+    _SPLIT_TICKET_RE = re.search(
+        r"\bsplit\s+(?P<reference>ZOE-\d+|[0-9a-f-]{32,36})\s+into\s+(?P<title>.+)$",
+        text.strip(),
+        re.I,
+    )
+    if _SPLIT_TICKET_RE:
+        return Intent(
+            "engineering_ticket_split",
+            {
+                "reference": _SPLIT_TICKET_RE.group("reference"),
+                "title": _SPLIT_TICKET_RE.group("title").strip(),
+            },
+        )
+    if re.search(r"\b(?:show|list)\s+(?:the\s+)?multica\s+backlog\b", t, re.I):
+        return Intent("engineering_ticket_list", {"status": "backlog"})
+    _BARE_BLOCKED_RE = re.fullmatch(
+        r"\s*(?:what(?:'s| is)|show|list)\s+(?:currently\s+)?blocked\s*[?.!]?\s*",
+        text,
+        re.I,
+    )
+    _QUALIFIED_BLOCKED_RE = re.search(
+        r"\b(?:show|list|what(?:'s| is))\b.*\b(?:multica|engineering|tickets?)\b.*\bblocked\b"
+        r"|\b(?:show|list|what(?:'s| is))\b.*\bblocked\b.*\b(?:multica|engineering|tickets?)\b",
+        text,
+        re.I,
+    )
+    if _BARE_BLOCKED_RE or _QUALIFIED_BLOCKED_RE:
+        return Intent("engineering_ticket_list", {"status": "blocked"})
+
     _BOARD_RE = re.compile(
         r"what'?s?\s+on\s+(?:the\s+)?(?:multica\s+)?board\b"
         r"|show\s+(?:the\s+)?(?:multica\s+)?(?:active\s+)?(?:board|tasks?)\b"
@@ -1138,6 +1184,16 @@ def detect_intent(
     )
     if _BOARD_RE.search(t):
         return Intent("board_status", {})
+
+    _AGENT_ACTIVITY_RE = re.compile(
+        r"show\s+(?:me\s+)?(?:my\s+)?(?:agent\s+)?activity\b"
+        r"|what(?:'s| is)\s+running\s+in\s+the\s+background\b"
+        r"|(?:any\s+)?background\s+tasks?\s+(?:running|active|pending)\b"
+        r"|list\s+(?:my\s+)?(?:agent\s+)?(?:background\s+)?tasks?\b",
+        re.I,
+    )
+    if _AGENT_ACTIVITY_RE.search(t):
+        return Intent("agent_tasks_status", {})
 
     _eng_match = _ENGINEERING_TASK_RE.search(text.strip())
     if _eng_match:
@@ -1247,15 +1303,81 @@ async def detect_and_extract_intent(
     Returns None when no intent matched OR when LLM extraction failed (caller
     should fall through to Zoe Agent).
     """
+    def _context_turns() -> str:
+        if context and context.is_fresh() and context.last_text:
+            return f"previous={context.last_text!r}; previous_intent={context.last_intent}"
+        return ""
+
+    shadow_unset = object()
+
+    def _env_enabled(name: str) -> bool:
+        return str(os.environ.get(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+    def _schedule_pi_shadow(
+        zoe_intent: Optional["Intent"],
+        *,
+        route_class: str,
+        zoe_latency_ms: float | None,
+        pi_result=shadow_unset,
+    ) -> None:
+        if not _env_enabled("ZOE_PI_INTENT_SHADOW_ENABLED"):
+            return
+
+        async def _runner() -> None:
+            try:
+                from pi_intent_shadow import maybe_record_pi_intent_shadow
+
+                kwargs = {
+                    "zoe_intent": zoe_intent.name if zoe_intent else None,
+                    "zoe_confidence": zoe_intent.confidence if zoe_intent else None,
+                    "zoe_latency_ms": zoe_latency_ms,
+                    "route_class": route_class,
+                    "user_id": user_id,
+                    "context_turns": _context_turns(),
+                }
+                if pi_result is not shadow_unset:
+                    kwargs["pi_result"] = pi_result
+                await maybe_record_pi_intent_shadow(text, **kwargs)
+            except Exception as exc:
+                logger.debug("detect_and_extract_intent: Pi shadow evidence failed: %s", exc)
+
+        task = asyncio.create_task(_runner())
+        task.add_done_callback(lambda done: done.exception() if not done.cancelled() else None)
+
+    async def _try_pi_governor() -> tuple[Optional["Intent"], object | None]:
+        pi_classified = None
+        try:
+            from pi_intent_classifier import PI_INTENT_EXECUTE_THRESHOLD, classify_with_pi_intent_governor
+            pi_classified = await classify_with_pi_intent_governor(text, context_turns=_context_turns())
+            if pi_classified and pi_classified.intent and pi_classified.confidence >= PI_INTENT_EXECUTE_THRESHOLD:
+                return Intent(pi_classified.intent, dict(pi_classified.slots), confidence=pi_classified.confidence), pi_classified
+        except Exception as exc:
+            logger.debug("detect_and_extract_intent: Pi/Gemma governor failed: %s", exc)
+        return None, pi_classified
+
+    started = time.perf_counter()
     intent = detect_intent(text, context=context)
+    detect_latency_ms = (time.perf_counter() - started) * 1000
     if intent is None:
-        return None
+        routed_intent, pi_classified = await _try_pi_governor()
+        _schedule_pi_shadow(
+            None,
+            route_class="fallback",
+            zoe_latency_ms=detect_latency_ms,
+            pi_result=pi_classified if _env_enabled("ZOE_PI_INTENT_ENABLED") else shadow_unset,
+        )
+        return routed_intent
     if intent.slots and "raw" in intent.slots:
         try:
             from nlu_extractor import extract_slots_for_intent  # lazy — avoids circular at load
             structured = await extract_slots_for_intent(intent.name, intent.slots["raw"])
             if structured:
                 intent.slots = structured
+                _schedule_pi_shadow(
+                    intent,
+                    route_class="deterministic",
+                    zoe_latency_ms=(time.perf_counter() - started) * 1000,
+                )
                 return intent
         except Exception as _exc:
             logger.warning(
@@ -1263,8 +1385,16 @@ async def detect_and_extract_intent(
                 intent.name,
                 _exc,
             )
-        # Extraction failed — let caller fall through to Zoe Agent
-        return None
+        # Extraction failed — let Pi/Gemma classify the ambiguous utterance once before Zoe Agent fallback.
+        routed_intent, pi_classified = await _try_pi_governor()
+        _schedule_pi_shadow(
+            None,
+            route_class="extraction_failed",
+            zoe_latency_ms=(time.perf_counter() - started) * 1000,
+            pi_result=pi_classified if _env_enabled("ZOE_PI_INTENT_ENABLED") else shadow_unset,
+        )
+        return routed_intent
+    _schedule_pi_shadow(intent, route_class="deterministic", zoe_latency_ms=detect_latency_ms)
     return intent
 
 
@@ -1451,6 +1581,33 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
                     "Hermes runs on port 8642, OpenClaw on port 18789.")
 
     # ── Multica Board Status ───────────────────────────────────────────────────
+    if intent.name == "agent_tasks_status":
+        try:
+            from db_pool import get_db_ctx as _get_pg_db
+
+            async with _get_pg_db() as db:
+                rows = await db.fetch(
+                    "SELECT id, task, status, created_at "
+                    "FROM background_tasks WHERE user_id=$1 "
+                    "ORDER BY created_at DESC LIMIT 10",
+                    user_id,
+                )
+
+            if not rows:
+                return "No background agent tasks right now."
+
+            lines = ["**Agent activity** — recent tasks:\n"]
+            for row in rows[:10]:
+                title = (row["task"] or "task").split("\n", 1)[0][:72]
+                when = row["created_at"]
+                if hasattr(when, "isoformat"):
+                    when = when.isoformat()
+                lines.append(f"- **{title}** — `{row['status']}` ({when})")
+            return "\n".join(lines)
+        except Exception as exc:
+            logger.warning("agent_tasks_status: %s", exc)
+            return "I couldn't load agent activity right now. Check the sidebar or try again."
+
     if intent.name == "board_status":
         try:
             import httpx as _httpx
@@ -1459,7 +1616,7 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
                 board = resp.json()
 
             available = board.get("available", False)
-            active = board.get("active", [])
+            groups = board.get("groups") or {}
 
             if not available:
                 reason = board.get("reason", "Multica not configured")
@@ -1471,15 +1628,36 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
                     "will appear here for your approval."
                 )
 
-            if not active:
-                return ("**Multica Board** — nothing active right now.\n\n"
-                        "Ask me to build something (a widget, a page, a new skill) and I'll "
-                        "create a board item for your approval before starting.")
+            ordered_statuses = ("blocked", "in_progress", "in_review", "todo", "backlog")
+            open_items = [
+                (status, item)
+                for status in ordered_statuses
+                for item in groups.get(status, [])
+            ]
+            if not open_items:
+                return (
+                    "**Multica Tickets** — nothing open right now.\n\n"
+                    "New requests are captured in Multica and wait for approval before entering "
+                    "the one-ticket engineering lane."
+                )
 
-            lines = [f"**Multica Board** — {len(active)} active item(s):\n"]
-            for item in active[:5]:
-                lines.append(f"- **{item.get('title','?')}** — `{item.get('status','?')}` "
-                              f"| {item.get('description','')[:60]}")
+            lines = [f"**Multica Tickets** — {len(open_items)} open item(s):\n"]
+            for status, item in open_items[:10]:
+                metadata = [
+                    value
+                    for value in (
+                        f"phase: {item.get('phase')}" if item.get("phase") else "",
+                        f"blocked: {item.get('blocker')}" if item.get("blocker") else "",
+                        f"children: {item.get('child_count')}" if item.get("child_count") else "",
+                        f"PR: {item.get('pr_url')}" if item.get("pr_url") else "",
+                    )
+                    if value
+                ]
+                suffix = f" | {' | '.join(metadata)}" if metadata else ""
+                lines.append(
+                    f"- `{item.get('identifier') or item.get('id')}` "
+                    f"**{item.get('title', '?')}** — `{status}`{suffix}"
+                )
             return "\n".join(lines)
         except Exception as exc:
             logger.warning("board_status: %s", exc)
@@ -1495,23 +1673,40 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
                 get_engineering_multica_agent_id,
                 get_multica_client,
             )
+            from multica_ticket_contract import describe_ticket  # type: ignore[import]
 
             client = get_multica_client()
             if not client.is_configured():
                 return "Multica isn't connected, so I can't track that engineering task on the board."
+            description = describe_ticket(
+                task_text,
+                zoe_kind="operator_task",
+                evidence_profile="code",
+                engineering_mode="interactive",
+                acceptance_criteria=["Deliver the requested behavior in a small, reviewable change."],
+                evidence_expectations=["Focused tests or validators", "PR URL when code changes are made"],
+                source="chat_engineering_task",
+            )
             issue = await client.create_issue(
                 title=task_text[:120],
-                description=task_text,
+                description=description,
                 priority="medium",
+                status="todo",
                 assignee_id=get_engineering_multica_agent_id(),
                 assignee_type="agent",
             )
+            if issue.get("id"):
+                await client.attach_label(str(issue["id"]), "operator-task")
+            else:
+                return (
+                    "I tried to add that engineering task to Multica, but the API didn't return an issue. "
+                    "Please try again."
+                )
             ident = issue.get("identifier") or issue.get("id") or "(new)"
             return (
-                "I've added that to the Multica board for Hermes.\n\n"
+                "I've added that to Multica for Zoe's engineering driver.\n\n"
                 f"- Issue: `{ident}`\n"
-                "It'll be picked up by the Kanban engineering loop (implement → review → closeout) "
-                "and I'll keep the board status in sync."
+                "Zoe will dispatch one bounded Hermes phase at a time and keep the ticket status in sync."
             )
         except Exception as exc:
             logger.warning("engineering_task_create: %s", exc)
@@ -1539,7 +1734,7 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
             lines = ["**Active Hermes engineering issues:**"]
             for status, issue in active[:5]:
                 ident = issue.get("identifier") or issue.get("id")
-                chain = await poll_ref(f"multica:{issue.get('id')}")
+                chain = await poll_ref(f"multica:{issue.get('id')}", issue=issue)
                 phase = chain.get("status") if chain.get("found") else status
                 pr = f" | PR: {chain.get('pr_url')}" if chain.get("pr_url") else ""
                 lines.append(f"- `{ident}` — {phase} — {(issue.get('title') or '')[:80]}{pr}")
@@ -1547,6 +1742,82 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
         except Exception as exc:
             logger.warning("engineering_task_status: %s", exc)
             return "I couldn't check Hermes engineering status right now."
+
+    if intent.name == "engineering_dispatch_pause":
+        try:
+            from multica_dispatch_control import pause_dispatch
+
+            pause_dispatch(f"paused from chat by {user_id}")
+            return "Engineering dispatch is paused. Active work can finish, but no new ticket will start."
+        except Exception as exc:
+            logger.warning("engineering_dispatch_pause: %s", exc)
+            return "I couldn't pause engineering dispatch right now."
+
+    if intent.name == "engineering_dispatch_resume":
+        try:
+            from multica_dispatch_control import resume_dispatch
+
+            changed = resume_dispatch()
+            return (
+                "Engineering dispatch is running again; the next approved ticket can enter the single lane."
+                if changed
+                else "Engineering dispatch was already running."
+            )
+        except Exception as exc:
+            logger.warning("engineering_dispatch_resume: %s", exc)
+            return "I couldn't resume engineering dispatch right now."
+
+    if intent.name == "engineering_ticket_move_todo":
+        try:
+            from multica_operator import move_to_todo
+
+            issue = await move_to_todo(intent.slots.get("reference", ""), approve=True)
+            if not issue.get("id"):
+                return "I couldn't find or update that Multica ticket."
+            return (
+                f"Moved `{issue.get('identifier') or issue.get('id')}` to todo and approved it for "
+                "the one-ticket engineering lane."
+            )
+        except Exception as exc:
+            logger.warning("engineering_ticket_move_todo: %s", exc)
+            return "I couldn't update that Multica ticket right now."
+
+    if intent.name == "engineering_ticket_split":
+        try:
+            from multica_operator import split_ticket
+
+            child = await split_ticket(
+                intent.slots.get("reference", ""),
+                child_title=intent.slots.get("title", ""),
+            )
+            if not child.get("id"):
+                return "I couldn't split that Multica ticket."
+            return (
+                f"Created child ticket `{child.get('identifier') or child.get('id')}` and blocked the parent "
+                "until its children are complete."
+            )
+        except Exception as exc:
+            logger.warning("engineering_ticket_split: %s", exc)
+            return "I couldn't split that Multica ticket right now."
+
+    if intent.name == "engineering_ticket_list":
+        status = intent.slots.get("status", "backlog")
+        try:
+            from multica_client import get_multica_client
+
+            issues = await get_multica_client().list_issues(status=status)
+            if not issues:
+                return f"No Multica tickets are currently `{status}`."
+            lines = [f"**Multica {status}:**"]
+            for issue in issues[:10]:
+                lines.append(
+                    f"- `{issue.get('identifier') or issue.get('id')}` — "
+                    f"{(issue.get('title') or 'Untitled')[:90]}"
+                )
+            return "\n".join(lines)
+        except Exception as exc:
+            logger.warning("engineering_ticket_list: %s", exc)
+            return f"I couldn't list Multica tickets in `{status}` right now."
 
     # ── Evolution Proposals Review ─────────────────────────────────────────────
     if intent.name == "evolution_proposals_review":
@@ -1634,15 +1905,42 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
     if intent.name == "user_issue_report":
         import random as _random
         _acks = [
-            "Got it, I've made a note of that.",
-            "Noted — I'll look into it.",
-            "Thanks for letting me know, I'll flag that for review.",
-            "I've logged that. I'll work on it.",
+            "Got it, I've logged that for review.",
+            "Noted. I've added that to the ticket backlog.",
+            "Thanks for letting me know. I've captured it so it can be triaged properly.",
+            "I've logged that as feedback rather than letting it disappear into chat.",
         ]
+        message = intent.slots.get("message", "")
+        try:
+            from multica_client import get_multica_client  # type: ignore[import]
+            from multica_ticket_contract import describe_ticket  # type: ignore[import]
+
+            client = get_multica_client()
+            if client.is_configured():
+                description = describe_ticket(
+                    f"User reported:\n\n{message}",
+                    zoe_kind="bug",
+                    evidence_profile="code",
+                    engineering_mode="interactive",
+                    acceptance_criteria=["Reproduce or explain the reported behavior.", "Propose a safe fix or mark blocked with reason."],
+                    evidence_expectations=["Issue triage note", "Test or validator if code changes are made"],
+                    source=f"chat_user_issue:{user_id}",
+                )
+                issue = await client.create_issue(
+                    title=f"User feedback: {message[:95]}",
+                    description=description,
+                    priority="medium",
+                    status="backlog",
+                )
+                if issue.get("id"):
+                    await client.attach_label(str(issue["id"]), "user-feedback")
+                    return _random.choice(_acks)
+        except Exception as _exc:
+            logger.warning("user_issue_report: Multica capture failed: %s", _exc)
         try:
             from evolution_notice import record_user_issue  # type: ignore[import]
             await record_user_issue(
-                message=intent.slots.get("message", ""),
+                message=message,
                 user_id=user_id,
             )
         except Exception as _exc:

@@ -5,8 +5,10 @@ import logging
 import os
 import re
 import shutil
+import sys
 import tempfile
 import time
+import wave
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -419,6 +421,22 @@ async def _synthesize_kokoro(text: str, voice: str = "af_sky") -> Optional[bytes
         return None
 
 
+def _should_supersede_voice_weather_action(row, nav_key: str, card_key: str) -> bool:
+    if row["idempotency_key"] in {nav_key, card_key}:
+        return False
+    try:
+        payload = json.loads(row["payload"] or "{}")
+    except Exception:
+        payload = {}
+    return (
+        row["action_type"] == "panel_navigate"
+        and payload.get("url") == "/touch/weather.html"
+    ) or (
+        row["action_type"] == "show_card"
+        and payload.get("type") == "weather"
+    )
+
+
 def _split_sentences(text: str) -> list[str]:
     """Split text into spoken sentences for streaming TTS.
 
@@ -473,12 +491,6 @@ async def _broadcast_weather_ui(
         },
     }
     try:
-        from push import broadcaster
-        await broadcaster.broadcast("all", "ui_action", {"action": nav_action})
-        await broadcaster.broadcast("all", "ui_action", {"action": card_action})
-    except Exception as exc:
-        logger.debug("voice weather ui broadcast failed (non-fatal): %s", exc)
-    try:
         from database import get_db as _get_db
         from ui_orchestrator import enqueue_ui_action as _enqueue_ui_action
         async for _db in _get_db():
@@ -493,24 +505,59 @@ async def _broadcast_weather_ui(
                     _panel_user_id = str(_row["user_id"])
             except Exception:
                 pass
-            await _enqueue_ui_action(
-                _db,
-                user_id=_panel_user_id,
-                panel_id=panel_id,
-                action_type="panel_navigate",
-                payload=nav_action["payload"],
-                requested_by="voice",
-                idempotency_key=f"voice_weather_nav_{panel_id}_{delivery_key}",
-            )
-            await _enqueue_ui_action(
-                _db,
-                user_id=_panel_user_id,
-                panel_id=panel_id,
-                action_type="show_card",
-                payload=card_action["payload"],
-                requested_by="voice",
-                idempotency_key=f"voice_weather_card_{panel_id}_{delivery_key}",
-            )
+            nav_key = f"voice_weather_nav_{panel_id}_{delivery_key}"
+            card_key = f"voice_weather_card_{panel_id}_{delivery_key}"
+            async with _db.transaction():
+                await _enqueue_ui_action(
+                    _db,
+                    user_id=_panel_user_id,
+                    panel_id=panel_id,
+                    action_type="panel_navigate",
+                    payload=nav_action["payload"],
+                    requested_by="voice",
+                    idempotency_key=nav_key,
+                    commit=False,
+                    broadcast=False,
+                )
+                await _enqueue_ui_action(
+                    _db,
+                    user_id=_panel_user_id,
+                    panel_id=panel_id,
+                    action_type="show_card",
+                    payload=card_action["payload"],
+                    requested_by="voice",
+                    idempotency_key=card_key,
+                    commit=False,
+                    broadcast=False,
+                )
+                _cur = await _db.execute(
+                    """SELECT id, action_type, payload, idempotency_key
+                       FROM ui_actions
+                       WHERE panel_id = ?
+                         AND requested_by = 'voice'
+                         AND status IN ('queued', 'running')""",
+                    (panel_id,),
+                )
+                _rows = await _cur.fetchall()
+                _superseded_at = datetime.now(timezone.utc).isoformat()
+                for _row in _rows:
+                    if not _should_supersede_voice_weather_action(_row, nav_key, card_key):
+                        continue
+                    await _db.execute(
+                        """UPDATE ui_actions
+                           SET status = 'skipped',
+                               error_code = 'superseded',
+                               error_message = 'Superseded by newer voice weather request',
+                               updated_at = ?
+                           WHERE id = ?""",
+                        (_superseded_at, _row["id"]),
+                    )
+            try:
+                from push import broadcaster
+                await broadcaster.broadcast("all", "ui_action", {"action": nav_action})
+                await broadcaster.broadcast("all", "ui_action", {"action": card_action})
+            except Exception as exc:
+                logger.debug("voice weather ui broadcast failed (non-fatal): %s", exc)
             break
     except Exception as exc:
         logger.debug("voice weather ui enqueue failed (non-fatal): %s", exc)
@@ -583,6 +630,116 @@ async def _broadcast_calendar_ui(
             break
     except Exception as exc:
         logger.debug("voice calendar ui enqueue failed (non-fatal): %s", exc)
+
+
+async def _broadcast_skybridge_ui(
+    panel_id: str,
+    skybridge_result: dict,
+    *,
+    utterance: str = "",
+    turn_key: Optional[str] = None,
+) -> None:
+    """Display a Skybridge result on the touch panel without routing to a domain page."""
+    if not skybridge_result or not skybridge_result.get("handled"):
+        return
+    delivery_key = turn_key or str(time.monotonic_ns())
+    query = quote_plus(str(utterance or skybridge_result.get("spoken_summary") or ""))
+    url = "/touch/skybridge.html" + (f"?q={query}" if query else "")
+    cards = skybridge_result.get("cards") if isinstance(skybridge_result.get("cards"), list) else []
+    summary = str(skybridge_result.get("spoken_summary") or "Showing this in Skybridge.")
+    nav_payload = {
+        "url": url,
+        "label": "Opening Skybridge",
+        "panel_id": panel_id,
+        "source": "voice:skybridge",
+    }
+    card_payload = {
+        "type": "skybridge",
+        "data": {"summary": summary[:300]},
+        "card": cards[0] if cards else None,
+        "cards": cards,
+        "panel_id": panel_id,
+        "source": "voice:skybridge",
+    }
+    try:
+        from database import get_db as _get_db
+        from push import broadcaster
+        from ui_orchestrator import enqueue_ui_action as _enqueue_ui_action
+        async for _db in _get_db():
+            _panel_user_id = "family-admin"
+            try:
+                _cur = await _db.execute(
+                    "SELECT user_id FROM ui_panel_sessions WHERE panel_id = ? ORDER BY last_seen_at DESC LIMIT 1",
+                    (panel_id,),
+                )
+                _row = await _cur.fetchone()
+                if _row and _row["user_id"]:
+                    _panel_user_id = str(_row["user_id"])
+            except Exception:
+                pass
+            nav_message = await _enqueue_ui_action(
+                _db,
+                user_id=_panel_user_id,
+                panel_id=panel_id,
+                action_type="panel_navigate",
+                payload=nav_payload,
+                requested_by="voice",
+                idempotency_key=f"voice_skybridge_nav_{panel_id}_{delivery_key}",
+                broadcast=False,
+                commit=False,
+            )
+            card_message = await _enqueue_ui_action(
+                _db,
+                user_id=_panel_user_id,
+                panel_id=panel_id,
+                action_type="show_card",
+                payload={**card_payload, "result": skybridge_result},
+                requested_by="voice",
+                idempotency_key=f"voice_skybridge_card_{panel_id}_{delivery_key}",
+                broadcast=False,
+                commit=False,
+            )
+            current_card_id = card_message.get("action_id") or card_message.get("id")
+            if current_card_id:
+                await _db.execute(
+                    """UPDATE ui_actions
+                       SET status = 'skipped',
+                           error_code = 'superseded',
+                           error_message = 'Superseded by newer Skybridge voice card',
+                           updated_at = NOW()
+                       WHERE user_id = ?
+                         AND panel_id = ?
+                         AND requested_by = 'voice'
+                         AND action_type = 'show_card'
+                         AND status IN ('queued', 'running')
+                         AND id != ?
+                         AND payload::jsonb->>'source' = 'voice:skybridge'""",
+                    (_panel_user_id, panel_id, current_card_id),
+                )
+            await _db.commit()
+            nav_delivered = await broadcaster.broadcast_to_panel(
+                panel_id,
+                "ui_action",
+                {**nav_message, "payload": nav_payload},
+            )
+            # Keep the card queued. Navigating the old Skybridge page immediately
+            # can unload the socket before a following show_card frame is handled;
+            # the freshly loaded page will poll /api/ui/actions/pending and render it.
+            if nav_delivered:
+                await _db.execute(
+                    """UPDATE ui_actions
+                       SET status = 'success',
+                           error_code = NULL,
+                           error_message = 'Delivered over panel push',
+                           updated_at = NOW(),
+                           acked_at = NOW()
+                       WHERE id = ?""",
+                    (nav_message["action_id"],),
+                )
+                await _db.commit()
+            break
+    except Exception as exc:
+        logger.debug("voice skybridge ui enqueue failed (non-fatal): %s", exc)
 
 
 async def _broadcast_shopping_chat_ui(
@@ -1076,6 +1233,12 @@ async def _request_auth_ui(panel_id: str, challenge_id: str, reason: str) -> boo
             "panel_id": panel_id,
             "challenge_id": challenge_id,
             "action_context": reason,
+            "summary": "Please authenticate on the touch panel to continue.",
+            "title": "Confirm it is you",
+            "message": "Zoe needs to know who is speaking before showing or changing personal data.",
+            "domain": "Private data",
+            "intent_action": "continue",
+            "cta": "Continue",
         },
     }
     delivered = False
@@ -1114,6 +1277,98 @@ async def _request_auth_ui(panel_id: str, challenge_id: str, reason: str) -> boo
     except Exception as exc:
         logger.warning("voice auth ui enqueue failed: %s", exc)
     return delivered
+
+
+async def _request_voice_identity_challenge(
+    *,
+    panel_id: str,
+    text: str,
+    session_id: str,
+    caller: dict | None,
+    reason: str = "Voice command needs identity. Enter your PIN to continue.",
+) -> dict:
+    """Hold a voice turn and ask the touch panel to identify the speaker."""
+    import uuid as _uuid_mod
+
+    _pending_id = _uuid_mod.uuid4().hex
+    _PENDING_VOICE_IDENT[panel_id] = {
+        "pending_id": _pending_id,
+        "transcript": text,
+        "session_id": session_id,
+        "expire_at": time.monotonic() + 120,
+    }
+    _pin_phrase = "Please authenticate on the touch panel. Choose your profile and enter your PIN to continue."
+    _pin_b64 = None
+    _pin_content_type = "audio/wav"
+    try:
+        _pin_audio_resp = await synthesize({"text": _pin_phrase}, caller=caller)
+        _pin_b64 = base64.b64encode(_pin_audio_resp.body).decode("ascii")
+        _pin_content_type = _pin_audio_resp.media_type
+    except Exception as _tts_exc:
+        logger.warning("voice/command auth challenge TTS failed: %s", _tts_exc)
+    _challenge_id = None
+    try:
+        from routers.panel_auth import create_pin_challenge_internal
+        from database import get_db as _get_db
+        async for _db in _get_db():
+            _challenge = await create_pin_challenge_internal(
+                panel_id=panel_id,
+                user_id=None,
+                action_context={
+                    "kind": "voice_turn",
+                    "pending_id": _pending_id,
+                    "panel_id": panel_id,
+                    "pending_transcript": text,
+                    "pending_session_id": session_id,
+                },
+                db=_db,
+            )
+            _challenge_id = (_challenge or {}).get("challenge_id")
+            break
+    except Exception as _challenge_exc:
+        logger.warning("voice/command PIN challenge failed: %s", _challenge_exc)
+    if not _challenge_id:
+        _fail_phrase = "I could not open the authentication screen just now. Please open the touch login page and try again."
+        _fail_audio = await synthesize({"text": _fail_phrase}, caller=caller)
+        return {
+            "ok": True,
+            "panel_id": panel_id,
+            "reply": _fail_phrase,
+            "status": "auth_unavailable",
+            "audio_base64": base64.b64encode(_fail_audio.body).decode("ascii"),
+            "content_type": _fail_audio.media_type,
+        }
+
+    _requested = await _request_auth_ui(
+        panel_id=panel_id,
+        challenge_id=_challenge_id,
+        reason=reason,
+    )
+    if not _requested:
+        logger.warning(
+            "voice/command auth challenge created but panel auth action was not delivered: panel=%s challenge=%s",
+            panel_id,
+            _challenge_id,
+        )
+    try:
+        from voice_metrics import voice_turn_count
+        voice_turn_count.labels(outcome="ok", path="awaiting_pin").inc()
+    except Exception:
+        pass
+    try:
+        from push import broadcaster as _bc_auth_state
+        await _bc_auth_state.broadcast("all", "voice:responding", {"panel_id": panel_id, "text": _pin_phrase[:200]})
+        await _bc_auth_state.broadcast("all", "voice:done", {"panel_id": panel_id})
+    except Exception:
+        pass
+    return {
+        "ok": True,
+        "panel_id": panel_id,
+        "reply": _pin_phrase,
+        "status": "awaiting_pin",
+        "audio_base64": _pin_b64,
+        "content_type": _pin_content_type,
+    }
 
 
 async def _resolve_panel_default_user(panel_id: str, db) -> Optional[str]:
@@ -1477,6 +1732,36 @@ async def _run_whisper_cpp(wav_path: str) -> str:
 _faster_whisper_model = None
 _faster_whisper_model_name: str = ""
 _faster_whisper_lock = asyncio.Lock()
+_faster_whisper_worker: "_FasterWhisperWorker | None" = None
+
+
+def _use_in_process_faster_whisper() -> bool:
+    return (os.environ.get("ZOE_WHISPER_IN_PROCESS") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _use_persistent_faster_whisper_worker() -> bool:
+    return (os.environ.get("ZOE_WHISPER_PERSISTENT_WORKER") or "true").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+def _normalize_voice_command_text(text: str) -> str:
+    """Correct common STT homophones that block deterministic voice intents."""
+    normalized = (text or "").strip()
+    if not normalized:
+        return normalized
+    replacements = [
+        (r"\b(show|open|display|bring up|pull up)\s+(?:me\s+)?(?:the\s+)?whether\b", r"\1 weather"),
+        (r"\bwhat(?:'s| is)\s+the\s+whether\b", "what is the weather"),
+        (r"\bhow(?:'s| is)\s+the\s+whether\b", "how is the weather"),
+        (r"^whether\b(?=\s+(?:today|tomorrow|forecast|this week|now)\b)", "weather"),
+    ]
+    for pattern, repl in replacements:
+        normalized = re.sub(pattern, repl, normalized, flags=re.IGNORECASE)
+    return normalized
 
 
 async def _get_faster_whisper_model():
@@ -1490,8 +1775,8 @@ async def _get_faster_whisper_model():
             from faster_whisper import WhisperModel  # type: ignore
             device = "cuda" if os.environ.get("ZOE_WHISPER_DEVICE", "").lower() == "cuda" else "cpu"
             # int8_float16 = int8-quantized weights + float16 compute: best speed/memory for Jetson
-            # Falls back to int8 if VRAM is very tight
-            default_compute = "int8_float16" if device == "cuda" else "int8"
+            # CPU defaults to float32; ctranslate2 int8 is not supported on Jetson ARM.
+            default_compute = "int8_float16" if device == "cuda" else "float32"
             compute_type = os.environ.get("ZOE_WHISPER_COMPUTE_TYPE", default_compute).strip() or default_compute
             logger.info("Loading faster-whisper model=%s device=%s", model_name, device)
             _faster_whisper_model = WhisperModel(model_name, device=device, compute_type=compute_type)
@@ -1506,17 +1791,320 @@ async def _get_faster_whisper_model():
             return None
 
 
-async def _run_faster_whisper(wav_path: str) -> str:
-    """Transcribe using faster-whisper Python library (fallback when whisper.cpp unavailable)."""
+async def _run_faster_whisper_subprocess(wav_path: str) -> str:
+    """Transcribe with faster-whisper in a child process so native crashes cannot kill the API worker."""
+    model_name = (os.environ.get("ZOE_WHISPER_MODEL") or "base.en").strip()
+    device = "cuda" if os.environ.get("ZOE_WHISPER_DEVICE", "").lower() == "cuda" else "cpu"
+    timeout = _env_float("ZOE_WHISPER_TIMEOUT_S", 20.0)
+
+    code = r"""
+import json
+import os
+import sys
+
+from faster_whisper import WhisperModel
+
+wav_path = sys.argv[1]
+model_name = os.environ.get("ZOE_WHISPER_MODEL") or "base.en"
+device = "cuda" if os.environ.get("ZOE_WHISPER_DEVICE", "").lower() == "cuda" else "cpu"
+default_compute = "int8_float16" if device == "cuda" else "float32"
+compute_type = (os.environ.get("ZOE_WHISPER_COMPUTE_TYPE") or default_compute).strip() or default_compute
+lang = (os.environ.get("ZOE_WHISPER_LANG") or "en").strip()
+
+def _env_float(name, default):
+    try:
+        return float(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+def _env_int(name, default):
+    try:
+        return int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+model = WhisperModel(model_name, device=device, compute_type=compute_type)
+segments, _info = model.transcribe(
+    wav_path,
+    language=lang,
+    vad_filter=True,
+    vad_parameters={
+        "threshold": _env_float("ZOE_WHISPER_VAD_THRESHOLD", 0.50),
+        "min_speech_duration_ms": _env_int("ZOE_WHISPER_MIN_SPEECH_MS", 120),
+        "min_silence_duration_ms": _env_int("ZOE_WHISPER_MIN_SILENCE_MS", 350),
+        "speech_pad_ms": _env_int("ZOE_WHISPER_SPEECH_PAD_MS", 220),
+    },
+)
+text = " ".join(seg.text.strip() for seg in segments).strip()
+print(json.dumps({"text": text}), flush=True)
+"""
+
+    logger.info("Running faster-whisper subprocess model=%s device=%s", model_name, device)
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-c",
+        code,
+        wav_path,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=os.environ.copy(),
+    )
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError as exc:
+        proc.kill()
+        await proc.wait()
+        raise RuntimeError(f"faster-whisper timed out after {timeout:.1f}s") from exc
+
+    stderr = err.decode(errors="ignore").strip()
+    stdout = out.decode(errors="ignore").strip()
+    if proc.returncode != 0:
+        if proc.returncode and proc.returncode < 0:
+            reason = f"signal {-proc.returncode}"
+        else:
+            reason = f"exit {proc.returncode}"
+        detail = stderr or stdout or "no stderr"
+        raise RuntimeError(f"faster-whisper subprocess failed ({reason}): {detail[:500]}")
+
+    try:
+        payload = json.loads(stdout.splitlines()[-1] if stdout else "{}")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"faster-whisper subprocess returned invalid output: {stdout[:500]}") from exc
+    return str(payload.get("text") or "").strip()
+
+
+class _FasterWhisperWorker:
+    """Long-lived isolated faster-whisper process with one loaded model."""
+
+    def __init__(self) -> None:
+        self.proc: asyncio.subprocess.Process | None = None
+        self.lock = asyncio.Lock()
+        self.model_key = ""
+
+    def _current_model_key(self) -> str:
+        model_name = (os.environ.get("ZOE_WHISPER_MODEL") or "base.en").strip()
+        device = "cuda" if os.environ.get("ZOE_WHISPER_DEVICE", "").lower() == "cuda" else "cpu"
+        default_compute = "int8_float16" if device == "cuda" else "float32"
+        compute_type = (os.environ.get("ZOE_WHISPER_COMPUTE_TYPE") or default_compute).strip() or default_compute
+        return "|".join((model_name, device, compute_type))
+
+    async def stop(self) -> None:
+        proc = self.proc
+        self.proc = None
+        self.model_key = ""
+        if proc and proc.returncode is None:
+            proc.terminate()
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=2.0)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+
+    async def _stderr_snippet(self, limit: int = 1200) -> str:
+        if not self.proc or not self.proc.stderr:
+            return ""
+        try:
+            data = await asyncio.wait_for(self.proc.stderr.read(limit), timeout=0.2)
+        except Exception:
+            return ""
+        return data.decode(errors="ignore").strip()
+
+    async def _ensure_started(self) -> None:
+        key = self._current_model_key()
+        if self.proc and self.proc.returncode is None and self.model_key == key:
+            return
+        await self.stop()
+        startup_timeout = _env_float("ZOE_WHISPER_WORKER_START_TIMEOUT_S", 30.0)
+        code = r"""
+import json
+import os
+import sys
+
+from faster_whisper import WhisperModel
+
+model_name = os.environ.get("ZOE_WHISPER_MODEL") or "base.en"
+device = "cuda" if os.environ.get("ZOE_WHISPER_DEVICE", "").lower() == "cuda" else "cpu"
+default_compute = "int8_float16" if device == "cuda" else "float32"
+compute_type = (os.environ.get("ZOE_WHISPER_COMPUTE_TYPE") or default_compute).strip() or default_compute
+lang = (os.environ.get("ZOE_WHISPER_LANG") or "en").strip()
+
+def _env_float(name, default):
+    try:
+        return float(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+def _env_int(name, default):
+    try:
+        return int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+model = WhisperModel(model_name, device=device, compute_type=compute_type)
+print(json.dumps({"ready": True, "model": model_name, "device": device, "compute_type": compute_type}), flush=True)
+
+for line in sys.stdin:
+    try:
+        payload = json.loads(line)
+        wav_path = str(payload.get("wav_path") or "")
+        segments, _info = model.transcribe(
+            wav_path,
+            language=lang,
+            vad_filter=True,
+            vad_parameters={
+                "threshold": _env_float("ZOE_WHISPER_VAD_THRESHOLD", 0.50),
+                "min_speech_duration_ms": _env_int("ZOE_WHISPER_MIN_SPEECH_MS", 120),
+                "min_silence_duration_ms": _env_int("ZOE_WHISPER_MIN_SILENCE_MS", 350),
+                "speech_pad_ms": _env_int("ZOE_WHISPER_SPEECH_PAD_MS", 220),
+            },
+        )
+        text = " ".join(seg.text.strip() for seg in segments).strip()
+        print(json.dumps({"text": text}), flush=True)
+    except Exception as exc:
+        print(json.dumps({"error": str(exc)}), flush=True)
+"""
+        logger.info("Starting faster-whisper worker key=%s", key)
+        self.proc = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-u",
+            "-c",
+            code,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=os.environ.copy(),
+        )
+        if not self.proc.stdout:
+            await self.stop()
+            raise RuntimeError("faster-whisper worker stdout unavailable")
+        try:
+            ready_raw = await asyncio.wait_for(self.proc.stdout.readline(), timeout=startup_timeout)
+        except asyncio.TimeoutError as exc:
+            detail = await self._stderr_snippet()
+            await self.stop()
+            suffix = f": {detail[:500]}" if detail else ""
+            raise RuntimeError(f"faster-whisper worker startup timed out after {startup_timeout:.1f}s{suffix}") from exc
+        if self.proc.returncode is not None:
+            detail = await self._stderr_snippet()
+            suffix = f": {detail[:500]}" if detail else ""
+            raise RuntimeError(f"faster-whisper worker exited during startup ({self.proc.returncode}){suffix}")
+        try:
+            ready = json.loads(ready_raw.decode(errors="ignore"))
+        except json.JSONDecodeError as exc:
+            detail = await self._stderr_snippet()
+            await self.stop()
+            suffix = f": {detail[:500]}" if detail else ""
+            raise RuntimeError(f"faster-whisper worker returned invalid startup output: {ready_raw[:300]!r}{suffix}") from exc
+        if not ready.get("ready"):
+            await self.stop()
+            raise RuntimeError(f"faster-whisper worker did not become ready: {ready}")
+        self.model_key = key
+
+    async def transcribe(self, wav_path: str) -> str:
+        async with self.lock:
+            await self._ensure_started()
+            if not self.proc or not self.proc.stdin or not self.proc.stdout or self.proc.returncode is not None:
+                raise RuntimeError("faster-whisper worker is not running")
+            timeout = _env_float("ZOE_WHISPER_TIMEOUT_S", 20.0)
+            request = json.dumps({"wav_path": wav_path}) + "\n"
+            try:
+                self.proc.stdin.write(request.encode())
+                await self.proc.stdin.drain()
+                raw = await asyncio.wait_for(self.proc.stdout.readline(), timeout=timeout)
+            except Exception:
+                await self.stop()
+                raise
+            if self.proc.returncode is not None:
+                code = self.proc.returncode
+                await self.stop()
+                raise RuntimeError(f"faster-whisper worker exited ({code})")
+            try:
+                payload = json.loads(raw.decode(errors="ignore"))
+            except json.JSONDecodeError as exc:
+                await self.stop()
+                raise RuntimeError(f"faster-whisper worker returned invalid output: {raw[:300]!r}") from exc
+            if payload.get("error"):
+                raise RuntimeError(f"faster-whisper worker failed: {str(payload['error'])[:500]}")
+            return str(payload.get("text") or "").strip()
+
+
+async def _run_faster_whisper_worker(wav_path: str) -> str:
+    global _faster_whisper_worker
+    if _faster_whisper_worker is None:
+        _faster_whisper_worker = _FasterWhisperWorker()
+    return await _faster_whisper_worker.transcribe(wav_path)
+
+
+async def _reset_faster_whisper_worker() -> None:
+    global _faster_whisper_worker
+    worker = _faster_whisper_worker
+    _faster_whisper_worker = None
+    if worker is not None:
+        await worker.stop()
+
+
+def _voice_stt_warmup_enabled() -> bool:
+    return (os.environ.get("ZOE_WHISPER_WARMUP") or "true").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+def _write_warmup_silence_wav(path: str, *, seconds: float = 1.0, sample_rate: int = 16000) -> None:
+    frame_count = max(1, int(sample_rate * seconds))
+    with wave.open(path, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(b"\x00\x00" * frame_count)
+
+
+async def warm_faster_whisper_worker() -> bool:
+    """Prime the persistent faster-whisper worker without blocking API startup."""
+    if not _voice_stt_warmup_enabled():
+        logger.info("faster-whisper warmup disabled by ZOE_WHISPER_WARMUP")
+        return False
+    if _use_in_process_faster_whisper() or not _use_persistent_faster_whisper_worker():
+        logger.info("faster-whisper warmup skipped; persistent worker is not active")
+        return False
+    timeout = _env_float("ZOE_WHISPER_WARMUP_TIMEOUT_S", 45.0)
+    tmp_path = ""
+    started = time.monotonic()
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            tmp_path = tmp.name
+        _write_warmup_silence_wav(tmp_path)
+        await asyncio.wait_for(_run_faster_whisper_worker(tmp_path), timeout=timeout)
+        logger.info("faster-whisper worker warmup completed in %.2fs", time.monotonic() - started)
+        return True
+    except asyncio.CancelledError:
+        await _reset_faster_whisper_worker()
+        raise
+    except Exception as exc:
+        await _reset_faster_whisper_worker()
+        logger.warning("faster-whisper worker warmup failed: %s", exc)
+        return False
+    finally:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
+async def _run_faster_whisper_in_process(wav_path: str) -> str:
+    """Transcribe using the faster-whisper Python library in the API worker."""
     model = await _get_faster_whisper_model()
     if model is None:
         raise RuntimeError("faster-whisper not available; install with: pip install faster-whisper")
     lang = (os.environ.get("ZOE_WHISPER_LANG") or "en").strip()
-    vad_threshold = float(os.environ.get("ZOE_WHISPER_VAD_THRESHOLD", "0.50"))
-    min_speech_ms = int(os.environ.get("ZOE_WHISPER_MIN_SPEECH_MS", "120"))
-    min_silence_ms = int(os.environ.get("ZOE_WHISPER_MIN_SILENCE_MS", "350"))
-    speech_pad_ms = int(os.environ.get("ZOE_WHISPER_SPEECH_PAD_MS", "220"))
-    timeout = float(os.environ.get("ZOE_WHISPER_TIMEOUT_S", "20"))
+    vad_threshold = _env_float("ZOE_WHISPER_VAD_THRESHOLD", 0.50)
+    min_speech_ms = _env_int("ZOE_WHISPER_MIN_SPEECH_MS", 120)
+    min_silence_ms = _env_int("ZOE_WHISPER_MIN_SILENCE_MS", 350)
+    speech_pad_ms = _env_int("ZOE_WHISPER_SPEECH_PAD_MS", 220)
+    timeout = _env_float("ZOE_WHISPER_TIMEOUT_S", 20.0)
 
     _MAX_STT_OOM_RETRIES = 2
 
@@ -1559,6 +2147,104 @@ async def _run_faster_whisper(wav_path: str) -> str:
     return text
 
 
+async def _run_faster_whisper(wav_path: str) -> str:
+    """Transcribe using faster-whisper when whisper.cpp is unavailable."""
+    if _use_in_process_faster_whisper():
+        return await _run_faster_whisper_in_process(wav_path)
+    if _use_persistent_faster_whisper_worker():
+        return await _run_faster_whisper_worker(wav_path)
+    return await _run_faster_whisper_subprocess(wav_path)
+
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _voice_stt_log_path() -> Path:
+    configured = (os.environ.get("ZOE_VOICE_STT_LOG") or "").strip()
+    if configured:
+        return Path(configured)
+    return Path.home() / ".zoe-voice" / "voice_stt.jsonl"
+
+
+def _wav_duration_seconds(wav_path: str) -> float | None:
+    try:
+        with wave.open(wav_path, "rb") as wf:
+            rate = wf.getframerate() or 0
+            if rate <= 0:
+                return None
+            return round(wf.getnframes() / float(rate), 3)
+    except Exception:
+        return None
+
+
+def _rotate_voice_stt_log(path: Path) -> None:
+    max_bytes = _env_int("ZOE_VOICE_STT_LOG_MAX_BYTES", 5_000_000)
+    if max_bytes <= 0 or not path.exists():
+        return
+    try:
+        if path.stat().st_size < max_bytes:
+            return
+        rotated = path.with_name(path.name + ".1")
+        if rotated.exists():
+            rotated.unlink()
+        path.replace(rotated)
+    except OSError as exc:
+        logger.debug("voice STT audit rotation failed: %s", exc)
+
+
+def _log_voice_stt_sample(
+    *,
+    route: str,
+    panel_id: str,
+    audio_bytes: int,
+    suffix: str,
+    transcript: str = "",
+    duration_seconds: float | None = None,
+    stt_seconds: float | None = None,
+    error: str | None = None,
+) -> None:
+    try:
+        path = _voice_stt_log_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        record = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "route": route,
+            "panel_id": panel_id,
+            "audio_bytes": audio_bytes,
+            "audio_suffix": suffix,
+            "audio_duration_seconds": duration_seconds,
+            "stt_seconds": round(stt_seconds, 3) if stt_seconds is not None else None,
+            "transcript": transcript,
+            "transcript_chars": len(transcript or ""),
+            "model": (os.environ.get("ZOE_WHISPER_MODEL") or "base.en").strip(),
+            "device": (os.environ.get("ZOE_WHISPER_DEVICE") or "").strip(),
+            "compute_type": (os.environ.get("ZOE_WHISPER_COMPUTE_TYPE") or "").strip(),
+            "vad_threshold": _env_float("ZOE_WHISPER_VAD_THRESHOLD", 0.50),
+            "min_speech_ms": _env_int("ZOE_WHISPER_MIN_SPEECH_MS", 120),
+            "min_silence_ms": _env_int("ZOE_WHISPER_MIN_SILENCE_MS", 350),
+            "speech_pad_ms": _env_int("ZOE_WHISPER_SPEECH_PAD_MS", 220),
+        }
+        if error:
+            record["error"] = error[:500]
+        _rotate_voice_stt_log(path)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception as exc:
+        logger.debug("voice STT audit log failed: %s", exc)
+
+
 async def _transcribe_audio(wav_path: str) -> str:
     """
     Transcription waterfall:
@@ -1593,11 +2279,16 @@ async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_
     elif len(raw) >= 2 and raw[:2] == b"\xff\xfb":
         suffix = ".mp3"
 
+    duration_s: float | None = None
+    stt_s: float | None = None
+    t_stt_start: float | None = None
     try:
         text = ""
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp.write(raw)
             wav_path = tmp.name
+        duration_s = _wav_duration_seconds(wav_path) if suffix == ".wav" else None
+        t_stt_start = time.monotonic()
         try:
             text = await _transcribe_audio(wav_path)
         finally:
@@ -1605,9 +2296,22 @@ async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_
                 os.unlink(wav_path)
             except OSError:
                 pass
-        logger.info("voice/transcribe panel=%s chars=%d", panel_id, len(text))
-        # Broadcast the transcribed user text so the UI shows what was heard.
         stripped = text.strip()
+        stt_s = time.monotonic() - t_stt_start
+        _log_voice_stt_sample(
+            route="transcribe",
+            panel_id=panel_id,
+            audio_bytes=len(raw),
+            suffix=suffix,
+            transcript=stripped,
+            duration_seconds=duration_s,
+            stt_seconds=stt_s,
+        )
+        logger.info(
+            "voice/transcribe panel=%s audio=%.2fs STT=%.2fs chars=%d",
+            panel_id, duration_s or 0.0, stt_s, len(stripped),
+        )
+        # Broadcast the transcribed user text so the UI shows what was heard.
         if stripped:
             try:
                 from push import broadcaster
@@ -1624,13 +2328,46 @@ async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_
         except Exception:
             pass
         return {"ok": True, "panel_id": panel_id, "text": stripped}
-    except asyncio.TimeoutError:
+    except asyncio.TimeoutError as exc:
+        if t_stt_start is not None:
+            stt_s = time.monotonic() - t_stt_start
+        _log_voice_stt_sample(
+            route="transcribe",
+            panel_id=panel_id,
+            audio_bytes=len(raw),
+            suffix=suffix,
+            duration_seconds=duration_s,
+            stt_seconds=stt_s,
+            error=str(exc) or "Transcription timed out",
+        )
         logger.warning("voice/transcribe timeout panel=%s", panel_id)
         raise HTTPException(status_code=504, detail="Transcription timed out") from None
     except RuntimeError as exc:
+        if t_stt_start is not None:
+            stt_s = time.monotonic() - t_stt_start
+        _log_voice_stt_sample(
+            route="transcribe",
+            panel_id=panel_id,
+            audio_bytes=len(raw),
+            suffix=suffix,
+            duration_seconds=duration_s,
+            stt_seconds=stt_s,
+            error=str(exc),
+        )
         logger.warning("voice/transcribe unavailable: %s", exc)
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
+        if t_stt_start is not None:
+            stt_s = time.monotonic() - t_stt_start
+        _log_voice_stt_sample(
+            route="transcribe",
+            panel_id=panel_id,
+            audio_bytes=len(raw),
+            suffix=suffix,
+            duration_seconds=duration_s,
+            stt_seconds=stt_s,
+            error=str(exc),
+        )
         logger.error("voice/transcribe error: %s", exc)
         raise HTTPException(status_code=500, detail="Transcription failed") from exc
 
@@ -1812,6 +2549,10 @@ async def voice_command(
     _quick_intent_name: Optional[str] = None
     if not text:
         raise HTTPException(status_code=400, detail="text is required")
+    normalized_text = _normalize_voice_command_text(text)
+    if normalized_text != text:
+        logger.info("voice/command normalized transcript %r -> %r", text[:80], normalized_text[:80])
+        text = normalized_text
 
     # Classify identity source for Pass 3 observability (Pass 1 is measurement-only).
     try:
@@ -2136,6 +2877,90 @@ async def voice_command(
         await _bc.broadcast("all", "voice:thinking", {"panel_id": panel_id})
     except Exception:
         pass
+
+    # Skybridge-first touch prototype: supported visual domains render as cards
+    # on the single Skybridge surface instead of navigating to domain pages.
+    try:
+        from skybridge_service import resolve_skybridge_request
+
+        _voice_entry = _VOICE_SESSIONS.get(panel_id, {})
+        _skybridge_context = _voice_entry.get("skybridge_context") or {}
+        _skybridge_result = await resolve_skybridge_request(
+            text,
+            effective_user,
+            context=_skybridge_context,
+            db=db,
+        )
+        if _skybridge_result and _skybridge_result.get("auth_required"):
+            _intent = _skybridge_result.get("intent") or {}
+            try:
+                from guest_policy import record_policy_decision as _record_guest_policy
+                _record_guest_policy(
+                    "auth_required",
+                    surface="voice",
+                    resource="skybridge",
+                    action=f"{_intent.get('domain', 'unknown')}:{_intent.get('action', 'show')}",
+                )
+            except Exception as _policy_exc:
+                logger.warning("voice/command skybridge auth policy record failed: %s", _policy_exc)
+            try:
+                return await _request_voice_identity_challenge(
+                    panel_id=panel_id,
+                    text=text,
+                    session_id=session_id,
+                    caller=caller,
+                    reason="Skybridge needs to know who is speaking before showing personal data.",
+                )
+            except Exception as _auth_exc:
+                logger.warning("voice/command skybridge auth challenge failed: %s", _auth_exc)
+                _auth_fail_phrase = "Authentication is required before I can show that. I could not open the touch panel authentication screen just now."
+                try:
+                    _auth_fail_audio = await synthesize({"text": _auth_fail_phrase}, caller=caller)
+                    _auth_fail_b64 = base64.b64encode(_auth_fail_audio.body).decode("ascii")
+                    _auth_fail_type = _auth_fail_audio.media_type
+                except Exception:
+                    _auth_fail_b64 = None
+                    _auth_fail_type = "audio/wav"
+                return {
+                    "ok": True,
+                    "panel_id": panel_id,
+                    "reply": _auth_fail_phrase,
+                    "status": "auth_unavailable",
+                    "audio_base64": _auth_fail_b64,
+                    "content_type": _auth_fail_type,
+                }
+        if _skybridge_result and _skybridge_result.get("handled"):
+            _VOICE_SESSIONS.setdefault(panel_id, {})["skybridge_context"] = (
+                _skybridge_result.get("skybridge_context") or {}
+            )
+            _skybridge_reply = str(_skybridge_result.get("spoken_summary") or "Showing that in Skybridge.")
+            await _broadcast_skybridge_ui(
+                panel_id,
+                _skybridge_result,
+                utterance=text,
+                turn_key=_turn_key,
+            )
+            _skybridge_audio = await synthesize({"text": _skybridge_reply}, caller=caller)
+            try:
+                from push import broadcaster as _bc_sky
+                await _bc_sky.broadcast("all", "voice:responding", {"panel_id": panel_id, "text": _skybridge_reply[:200]})
+                await _bc_sky.broadcast("all", "voice:done", {"panel_id": panel_id})
+            except Exception:
+                pass
+            await _schedule_voice_chat_save(session_id, text, _skybridge_reply, effective_user)
+            asyncio.ensure_future(_run_voice_memory_passes(text, _skybridge_reply, effective_user, session_id))
+            return {
+                "ok": True,
+                "panel_id": panel_id,
+                "reply": _skybridge_reply,
+                "audio_base64": base64.b64encode(_skybridge_audio.body).decode("ascii"),
+                "content_type": _skybridge_audio.media_type,
+                "intent": f"skybridge:{(_skybridge_result.get('intent') or {}).get('domain', 'unknown')}",
+                "skybridge": True,
+            }
+        _VOICE_SESSIONS.setdefault(panel_id, {})["skybridge_context"] = {}
+    except Exception as _skybridge_exc:
+        logger.debug("voice/command skybridge fast path failed (non-fatal): %s", _skybridge_exc)
 
     # Fallback audio used when any part of the pipeline fails — panel never goes silent.
     _FALLBACK_PHRASE = "Sorry, something went wrong. Please try again."
@@ -2594,78 +3419,13 @@ async def voice_command(
                     resource="scope_gate",
                     action=_scope_action,
                 )
-                import uuid as _uuid_mod
-                _pending_id = _uuid_mod.uuid4().hex
-                _pending_payload = {
-                    "pending_id": _pending_id,
-                    "transcript": text,
-                    "session_id": session_id,
-                    "expire_at": time.monotonic() + 120,
-                }
-                _PENDING_VOICE_IDENT[panel_id] = {
-                    **_pending_payload,
-                }
-                _pin_phrase = "Please authenticate on the touch panel. Choose your profile and enter your PIN to continue."
-                _pin_audio_resp = await synthesize({"text": _pin_phrase}, caller=caller)
-                _pin_b64 = base64.b64encode(_pin_audio_resp.body).decode("ascii")
-                _challenge_id = None
-                try:
-                    from routers.panel_auth import create_pin_challenge_internal
-                    from database import get_db as _get_db
-                    async for _db in _get_db():
-                        _challenge = await create_pin_challenge_internal(
-                            panel_id=panel_id,
-                            user_id=None,
-                            action_context={
-                                "kind": "voice_turn",
-                                "pending_id": _pending_id,
-                                "panel_id": panel_id,
-                                # Durable replay fallback if process-local in-memory maps are lost.
-                                "pending_transcript": text,
-                                "pending_session_id": session_id,
-                            },
-                            db=_db,
-                        )
-                        _challenge_id = (_challenge or {}).get("challenge_id")
-                        break
-                except Exception as _challenge_exc:
-                    logger.warning("voice/command PIN challenge failed: %s", _challenge_exc)
-                if not _challenge_id:
-                    _fail_phrase = "I could not open the authentication screen just now. Please open the touch login page and try again."
-                    _fail_audio = await synthesize({"text": _fail_phrase}, caller=caller)
-                    return {
-                        "ok": True,
-                        "panel_id": panel_id,
-                        "reply": _fail_phrase,
-                        "status": "auth_unavailable",
-                        "audio_base64": base64.b64encode(_fail_audio.body).decode("ascii"),
-                        "content_type": _fail_audio.media_type,
-                    }
-
-                _requested = await _request_auth_ui(
+                return await _request_voice_identity_challenge(
                     panel_id=panel_id,
-                    challenge_id=_challenge_id,
+                    text=text,
+                    session_id=session_id,
+                    caller=caller,
                     reason="Voice command needs identity. Enter your PIN to continue.",
                 )
-                if not _requested:
-                    logger.warning(
-                        "voice/command auth challenge created but panel auth action was not delivered: panel=%s challenge=%s",
-                        panel_id,
-                        _challenge_id,
-                    )
-                try:
-                    from voice_metrics import voice_turn_count
-                    voice_turn_count.labels(outcome="ok", path="awaiting_pin").inc()
-                except Exception:
-                    pass
-                return {
-                    "ok": True,
-                    "panel_id": panel_id,
-                    "reply": _pin_phrase,
-                    "status": "awaiting_pin",
-                    "audio_base64": _pin_b64,
-                    "content_type": _pin_audio_resp.media_type,
-                }
             _record_guest_policy(
                 "guest_allowed" if not _ident_for_scope else "auth_ok",
                 surface="voice",
@@ -3174,10 +3934,12 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth),
 
     # ── Phase 1: STT ──
     t_stt_start = time.monotonic()
+    duration_s: float | None = None
     try:
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp.write(raw)
             wav_path = tmp.name
+        duration_s = _wav_duration_seconds(wav_path) if suffix == ".wav" else None
         try:
             transcript = await _transcribe_audio(wav_path)
         finally:
@@ -3186,6 +3948,16 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth),
             except OSError:
                 pass
     except Exception as exc:
+        t_stt = time.monotonic() - t_stt_start
+        _log_voice_stt_sample(
+            route="turn",
+            panel_id=panel_id,
+            audio_bytes=len(raw),
+            suffix=suffix,
+            duration_seconds=duration_s,
+            stt_seconds=t_stt,
+            error=str(exc),
+        )
         logger.error("voice/turn STT failed: %s", exc)
         try:
             from voice_metrics import voice_turn_count, voice_failure_reason_count
@@ -3207,6 +3979,15 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth),
         pass
 
     transcript = transcript.strip()
+    _log_voice_stt_sample(
+        route="turn",
+        panel_id=panel_id,
+        audio_bytes=len(raw),
+        suffix=suffix,
+        transcript=transcript,
+        duration_seconds=duration_s,
+        stt_seconds=t_stt,
+    )
     if not transcript:
         try:
             from voice_metrics import voice_turn_count, voice_failure_reason_count

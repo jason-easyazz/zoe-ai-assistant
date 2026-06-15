@@ -1,0 +1,13 @@
+[Unit]
+Description=Periodic Zoe->Multica runtime heartbeat (keeps live runtimes online)
+
+[Timer]
+# Cadence must stay below Multica's 150s stale threshold so live runtimes are
+# never falsely swept offline between beats (60s beat + <=30s sweep < 150s).
+OnBootSec=60s
+OnUnitActiveSec=60s
+AccuracySec=10s
+Unit=zoe-multica-heartbeat.service
+
+[Install]
+WantedBy=timers.target

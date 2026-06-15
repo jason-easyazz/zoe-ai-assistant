@@ -26,6 +26,7 @@
         '/touch/memories.html': 'memories',
         '/touch/settings.html': 'settings',
         '/touch/updates.html': 'updates',
+        '/touch/skybridge.html': 'skybridge',
     };
     let _capabilityMatrix = null;
 
@@ -112,7 +113,25 @@
         const currentPath = window.location.pathname;
         if (!currentPath.startsWith('/touch/')) return;
         if (currentPath === '/touch/index.html') return;
-        if (isAuthenticated()) return;
+        if (isAuthenticated()) {
+            if (!isGuestSession()) return;
+            try {
+                const profile = await originalFetch(`${AUTH_CONFIG.authBaseUrl}/profile`, {
+                    headers: { 'X-Session-ID': getSession() }
+                });
+                if (profile.ok) return;
+                if (profile.status === 401 || profile.status === 403 || profile.status === 404) {
+                    console.warn('[auth] Touch guest session was rejected; refreshing guest session');
+                    setSession(null);
+                } else {
+                    console.warn('[auth] Touch guest session check returned', profile.status, '- keeping existing session');
+                    return;
+                }
+            } catch (_) {
+                console.warn('[auth] Touch guest session validation failed (network error); keeping existing session');
+                return;
+            }
+        }
         try {
             const response = await originalFetch('/api/auth/guest', {
                 method: 'POST',
@@ -336,13 +355,16 @@
                 const allowed = !pageId || !cap || !cap.matrix || !cap.matrix.pages
                     ? true
                     : !!cap.matrix.pages[pageId];
+                if (!allowed && pageId === 'skybridge') {
+                    return;
+                }
                 if (!allowed) {
                     try {
                         if (typeof showNotification === 'function') {
                             showNotification('Please sign in with an allowed profile for this page.', 'error');
                         }
                     } catch (_) {}
-                    window.location.href = '/touch/dashboard.html';
+                    window.location.href = '/touch/skybridge.html';
                     return;
                 }
             }
@@ -421,7 +443,8 @@
                     if (u) pathname = new URL(u, window.location.origin).pathname;
                 } catch (_e) {}
                 const skipClear = /\/api\/auth\/(login|register|password|refresh|guest)/i.test(pathname);
-                const allowSessionClear = /\/api\/auth\/(profile|me|session|logout)/i.test(pathname);
+                const allowSessionClear = /\/api\/auth\/(profile|me|session|logout)/i.test(pathname) ||
+                    pathname === '/api/skybridge/resolve';
                 const sidBefore = getSession();
                 if (sidBefore && allowSessionClear && !skipClear && !options.__zoe401Retried) {
                     console.warn('⚠️ 401 — clearing stale session and retrying once without X-Session-ID:', url);
@@ -488,20 +511,25 @@
         } catch (_e) {}
     }
 
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', async () => {
-            await bootstrapTouchGuestSession();
-            await enforceAuth();
-            await populateUserProfile();
-            console.log('✅ Zoe Auth initialized (DOMContentLoaded)');
-        });
-    } else {
-        // DOM already loaded
-        (async () => {
-            await bootstrapTouchGuestSession();
-            await enforceAuth();
-            await populateUserProfile();
-            console.log('✅ Zoe Auth initialized (immediate)');
-        })();
+    async function runAuthInitialization(source) {
+        await bootstrapTouchGuestSession();
+        await enforceAuth();
+        await populateUserProfile();
+        console.log(`✅ Zoe Auth initialized (${source})`);
     }
+
+    window.zoeAuthReady = new Promise((resolve) => {
+        const run = async (source) => {
+            try {
+                await runAuthInitialization(source);
+            } finally {
+                resolve();
+            }
+        };
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', () => run('DOMContentLoaded'), { once: true });
+        } else {
+            run('immediate');
+        }
+    });
 })();

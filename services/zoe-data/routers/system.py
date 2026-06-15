@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import re
-from typing import Optional
+from typing import Any, Literal, Optional
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
@@ -165,6 +165,30 @@ async def get_system_status(
     }
 
 
+@router.get("/memory-router/status")
+async def get_memory_router_status(user: dict = Depends(require_admin)):
+    """Read-only status for Zoe's disabled-by-default memory router runtime."""
+    from zoe_memory_router_runtime import memory_router_runtime_status
+
+    return memory_router_runtime_status()
+
+
+@router.get("/pi-intent/status")
+async def get_pi_intent_status(user: dict = Depends(require_admin)):
+    """Read-only status for Zoe's Pi/Gemma ambiguous-intent governor."""
+    from pi_intent_classifier import pi_intent_status
+
+    return pi_intent_status()
+
+
+@router.get("/pi-intent/shadow-status")
+async def get_pi_intent_shadow_status(user: dict = Depends(require_admin)):
+    """Read-only status for Zoe's disabled-by-default Pi-vs-Zoe shadow evidence."""
+    from pi_intent_shadow import pi_intent_shadow_status
+
+    return pi_intent_shadow_status()
+
+
 def _load_skills_and_cron():
     skills = []
     skills_dir = os.path.expanduser("~/.openclaw/workspace/skills")
@@ -210,6 +234,123 @@ def _load_skills_and_cron():
 
 
 _DEFAULT_OPENCLAW_PREFS = {"openclaw_auto_update": "notify"}
+
+
+class HermesProfilesRequest(BaseModel):
+    profiles: list[dict[str, Any]]
+    confirm_paid_auto: bool = False
+
+
+class HermesProfilesApplyRequest(BaseModel):
+    profiles: list[dict[str, Any]] | None = None
+    confirm_paid_auto: bool = False
+    restart: bool = False
+    force_restart: bool = False
+
+
+class HermesProfilesRollbackRequest(BaseModel):
+    backup_dir: str | None = None
+
+
+def _hermes_profile_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, RuntimeError):
+        status = 409
+    elif isinstance(exc, OSError):
+        status = 503
+    else:
+        status = 400
+    return HTTPException(status_code=status, detail=str(exc))
+
+
+@router.get("/hermes/model-profiles/status")
+async def get_hermes_model_profiles_status(user: dict = Depends(require_admin)):
+    from hermes_model_profiles import count_running_workers, draft_path
+
+    try:
+        return {
+            "ok": True,
+            "running_workers": count_running_workers(),
+            "draft_exists": draft_path().exists(),
+        }
+    except OSError as exc:
+        raise _hermes_profile_error(exc) from exc
+
+
+@router.get("/hermes/model-profiles")
+async def get_hermes_model_profiles(user: dict = Depends(require_admin)):
+    from hermes_model_profiles import count_running_workers, list_profiles, load_draft
+
+    try:
+        draft = load_draft()
+        profiles = list_profiles()
+        running_workers = count_running_workers()
+    except (ValueError, TypeError, OSError) as exc:
+        raise _hermes_profile_error(exc) from exc
+    return {
+        "profiles": profiles,
+        "draft": draft,
+        "running_workers": running_workers,
+    }
+
+
+@router.put("/hermes/model-profiles/draft")
+async def put_hermes_model_profiles_draft(
+    body: HermesProfilesRequest,
+    user: dict = Depends(require_admin),
+):
+    from hermes_model_profiles import save_draft
+
+    try:
+        return save_draft(body.profiles, confirm_paid_auto=body.confirm_paid_auto)
+    except (ValueError, TypeError, OSError) as exc:
+        raise _hermes_profile_error(exc) from exc
+
+
+@router.post("/hermes/model-profiles/validate")
+async def post_hermes_model_profiles_validate(
+    body: HermesProfilesRequest,
+    user: dict = Depends(require_admin),
+):
+    from hermes_model_profiles import build_diff
+
+    try:
+        return build_diff(body.profiles, confirm_paid_auto=body.confirm_paid_auto)
+    except (ValueError, TypeError, OSError) as exc:
+        raise _hermes_profile_error(exc) from exc
+
+
+@router.post("/hermes/model-profiles/apply")
+async def post_hermes_model_profiles_apply(
+    body: HermesProfilesApplyRequest,
+    user: dict = Depends(require_admin),
+):
+    from hermes_model_profiles import apply_profiles
+
+    actor = str(user.get("user_id") or user.get("username") or "unknown")
+    try:
+        return apply_profiles(
+            body.profiles,
+            actor=actor,
+            confirm_paid_auto=body.confirm_paid_auto,
+            restart=body.restart,
+            force_restart=body.force_restart,
+        )
+    except (RuntimeError, ValueError, TypeError, OSError) as exc:
+        raise _hermes_profile_error(exc) from exc
+
+
+@router.post("/hermes/model-profiles/rollback")
+async def post_hermes_model_profiles_rollback(
+    body: HermesProfilesRollbackRequest,
+    user: dict = Depends(require_admin),
+):
+    from hermes_model_profiles import rollback_profiles
+
+    actor = str(user.get("user_id") or user.get("username") or "unknown")
+    try:
+        return rollback_profiles(body.backup_dir, actor=actor)
+    except (ValueError, TypeError, OSError) as exc:
+        raise _hermes_profile_error(exc) from exc
 
 
 @router.get("/openclaw/preferences")
@@ -624,7 +765,7 @@ def _build_agent_card() -> dict:
         "url": base_url,
         "description": (
             "Personal AI companion with persistent memory, voice, home automation, "
-            "web capabilities, and a proactive open-loops engine for Samantha-tier continuity."
+            "web capabilities, and a proactive open-loops engine for Zoe-level continuity."
         ),
         "provider": {
             "name": "Zoe",
@@ -746,6 +887,57 @@ async def a2a_task_stream(body: _A2ATaskRequest, user: dict = Depends(get_a2a_ca
     )
 
 
+@_agent_card_router.get("/tasks")
+async def list_agent_tasks(
+    limit: int = 20,
+    status: Literal["running", "pending", "done", "error", "blocked"] | None = None,
+    user: dict = Depends(get_current_user),
+):
+    """List recent background tasks for the current user."""
+    from db_pool import get_db_ctx as _get_pg_db
+
+    user_id = user.get("user_id", "")
+    if limit < 1 or limit > 100:
+        limit = 20
+
+    def _ts(val):
+        return val.isoformat() if hasattr(val, "isoformat") else val
+
+    try:
+        async with _get_pg_db() as db:
+            if status:
+                rows = await db.fetch(
+                    "SELECT id, task, status, created_at, completed_at, multica_issue_id "
+                    "FROM background_tasks WHERE user_id=$1 AND status=$2 "
+                    "ORDER BY created_at DESC LIMIT $3",
+                    user_id, status, limit,
+                )
+            else:
+                rows = await db.fetch(
+                    "SELECT id, task, status, created_at, completed_at, multica_issue_id "
+                    "FROM background_tasks WHERE user_id=$1 "
+                    "ORDER BY created_at DESC LIMIT $2",
+                    user_id, limit,
+                )
+    except Exception as exc:
+        logger.error("list_agent_tasks DB error for user=%s: %s", user_id, exc)
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
+
+    return {
+        "tasks": [
+            {
+                "task_id": str(r["id"]),
+                "task": r["task"],
+                "status": r["status"],
+                "created_at": _ts(r["created_at"]),
+                "completed_at": _ts(r["completed_at"]),
+                "multica_issue_id": r["multica_issue_id"],
+            }
+            for r in rows
+        ]
+    }
+
+
 @_agent_card_router.get("/tasks/{task_id}")
 async def a2a_task_result(task_id: str, user: dict = Depends(get_a2a_caller)):
     """Poll for the result of a previously submitted A2A task."""
@@ -820,7 +1012,7 @@ async def list_engineering_workflow_tasks(
     status: str | None = None,
     user: dict = Depends(require_admin),
 ):
-    """Status view: Hermes-assigned Multica issues with their Kanban chain state."""
+    """Status view: Hermes-assigned Multica issues with journaled driver state."""
     from executor_registry import poll_ref  # type: ignore[import]
     from multica_client import MULClient, get_engineering_multica_agent_id  # type: ignore[import]
 
@@ -836,7 +1028,7 @@ async def list_engineering_workflow_tasks(
                 continue
             if (issue.get("title") or "").lower().startswith("autopilot:"):
                 continue
-            chain = await poll_ref(f"multica:{issue.get('id')}")
+            chain = await poll_ref(f"multica:{issue.get('id')}", issue=issue)
             tasks.append({
                 "issue_id": issue.get("id"),
                 "identifier": issue.get("identifier"),
@@ -1190,22 +1382,73 @@ async def get_llm_stats(
 
 
 @_agent_card_router.get("/board")
-async def get_agent_board():
-    """Return active Multica board issues for AG-UI display.
+async def get_agent_board(user: dict = Depends(get_current_user)):  # noqa: ARG001 - auth-only
+    """Return Multica engineering ticket state for AG-UI display.
 
     Falls back gracefully if Multica is not configured or unavailable.
     """
     try:
-        from multica_client import MULClient  # type: ignore[import]
+        from executor_registry import poll_ref  # type: ignore[import]
+        from multica_client import MULClient, get_engineering_multica_agent_id  # type: ignore[import]
+
         client = MULClient()
         if not client.is_configured():
-            return {"active": [], "available": False, "reason": "Multica not configured"}
-        issues = await client.list_issues(status="in_progress")
-        return {"active": issues, "available": True}
+            return {"active": [], "groups": {}, "available": False, "reason": "Multica not configured"}
+
+        statuses = ("backlog", "todo", "in_progress", "blocked", "in_review")
+        hermes_id = str(get_engineering_multica_agent_id())
+        groups: dict[str, list[dict]] = {status: [] for status in statuses}
+        active: list[dict] = []
+        hermes_issues: list[dict] = []
+
+        status_results = await asyncio.gather(
+            *(client.list_issues(status=status) for status in statuses),
+            return_exceptions=True,
+        )
+        for status, issues_or_exc in zip(statuses, status_results):
+            if isinstance(issues_or_exc, Exception):
+                continue
+            for issue in issues_or_exc or []:
+                enriched = dict(issue)
+                try:
+                    from multica_ticket_contract import parse_ticket_block
+
+                    ticket = parse_ticket_block(issue.get("description") or "")
+                except Exception:
+                    ticket = {}
+                enriched["phase"] = ticket.get("phase")
+                enriched["blocker"] = ticket.get("blocked_reason")
+                enriched["pr_url"] = ticket.get("pr_url")
+                enriched["child_count"] = len(ticket.get("child_issue_ids") or [])
+                if status in {"in_progress", "blocked", "in_review"} and str(issue.get("assignee_id") or "") == hermes_id:
+                    hermes_issues.append(enriched)
+                groups[status].append(enriched)
+                if status in {"in_progress", "in_review"}:
+                    active.append(enriched)
+
+        async def enrich_chain(issue: dict) -> None:
+            try:
+                chain = await poll_ref(f"multica:{issue.get('id')}", issue=issue)
+            except Exception as exc:
+                issue["chain_error"] = str(exc)
+                return
+            issue["chain"] = chain
+            pipeline = chain.get("pipeline") if isinstance(chain, dict) else None
+            if isinstance(pipeline, dict):
+                issue["phase"] = pipeline.get("phase")
+                issue["needs_split"] = pipeline.get("needs_split")
+                issue["split_packet"] = pipeline.get("split_packet")
+            issue["blocker"] = chain.get("blocker") if isinstance(chain, dict) else None
+            issue["pr_url"] = chain.get("pr_url") if isinstance(chain, dict) else None
+
+        if hermes_issues:
+            await asyncio.gather(*(enrich_chain(issue) for issue in hermes_issues))
+
+        return {"active": active, "groups": groups, "available": True}
     except ImportError:
-        return {"active": [], "available": False, "reason": "Multica client not installed"}
+        return {"active": [], "groups": {}, "available": False, "reason": "Multica client not installed"}
     except Exception as exc:
-        return {"active": [], "available": False, "reason": str(exc)}
+        return {"active": [], "groups": {}, "available": False, "reason": str(exc)}
 
 
 @_agent_card_router.post("/board/approve")
@@ -1477,6 +1720,7 @@ async def evolution_proposal_action(
                         description=proposal["description"],
                         evidence=proposal.get("evidence", ""),
                         proposal_type=proposal.get("type", "intent_pattern"),
+                        contract_snapshot=proposal.get("target_patterns"),
                     )
                     if new_id:
                         multica_issue_id = new_id
@@ -1548,7 +1792,7 @@ async def evolution_proposal_action(
                         proposal_id, _dispatch.get("chain") if _dispatch.get("ok") else _dispatch,
                     )
                 else:
-                    # No Multica issue to anchor the Kanban chain (Multica
+                    # No Multica issue to anchor the journaled engineering run (Multica
                     # unconfigured or the issue sync failed). Surface it so the
                     # approved proposal does not sit undispatched silently.
                     _dispatch = {"ok": False, "reason": "no multica_issue_id; proposal approved but not dispatched"}

@@ -31,6 +31,7 @@ SAME_ERROR_LIMIT = int(os.environ.get("ZOE_PR_GUARD_SAME_ERROR_LIMIT", "3"))
 MAX_COST_USD = float(os.environ.get("ZOE_PR_GUARD_MAX_COST_USD", "0.25"))
 MAX_OUTPUT_CHARS = int(os.environ.get("ZOE_PR_GUARD_MAX_OUTPUT_CHARS", "12000"))
 
+# Cheap-model repair packets must never merge or bypass hooks; use merge_pr_when_ready().
 FORBIDDEN_ACTIONS = [
     "merge_pr",
     "force_push",
@@ -39,6 +40,7 @@ FORBIDDEN_ACTIONS = [
     "amend_commit",
     "bypass_hooks",
 ]
+_CI_OK_CONCLUSIONS = frozenset({"SUCCESS", "NEUTRAL", "SKIPPED"})
 ALLOWED_TASK_TYPES = {"FIX_GREPTILE_FINDING", "FIX_CI_FAILURE", "SUMMARIZE_BLOCKER"}
 HIGH_RISK_PREFIXES = (
     ".github/workflows/",
@@ -362,6 +364,322 @@ async def _run_cheap_agent(packet: GuardPacket, *, task_id: str | None = None) -
     return status, f"elapsed={elapsed:.1f}s estimated_cost_usd={estimated_cost}\n{output}"
 
 
+def _run_gh(args: list[str], *, repo: str = DEFAULT_REPO, check: bool = False) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["gh", *args, "--repo", repo],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=check,
+    )
+
+
+def _parse_gh_json(proc: subprocess.CompletedProcess[str]) -> dict[str, Any]:
+    if proc.returncode != 0:
+        raise GuardError((proc.stderr or proc.stdout or "gh command failed").strip())
+    try:
+        return json.loads(proc.stdout or "{}")
+    except json.JSONDecodeError as exc:
+        raise GuardError(f"gh returned non-JSON: {exc}") from exc
+
+
+_BLOCKED_MERGE_STATE_STATUSES = frozenset({"DIRTY", "UNSTABLE", "BEHIND", "BLOCKED", "UNKNOWN"})
+
+
+def _ci_status_from_rollup(rollup: list[dict[str, Any]]) -> dict[str, Any]:
+    if not rollup:
+        return {"ok": False, "reason": "CI_NO_CHECKS", "pending": [], "failures": []}
+    pending: list[str] = []
+    failures: list[str] = []
+    for check in rollup:
+        if not isinstance(check, dict):
+            continue
+        name = str(check.get("name") or "check")
+        status = str(check.get("status") or "").upper()
+        conclusion = str(check.get("conclusion") or "").upper()
+        if status in {"IN_PROGRESS", "PENDING", "QUEUED"}:
+            pending.append(name)
+            continue
+        if status == "COMPLETED" and conclusion:
+            if conclusion not in _CI_OK_CONCLUSIONS:
+                failures.append(f"{name}:{conclusion}")
+        elif status and status not in {"COMPLETED"}:
+            pending.append(name)
+    if pending:
+        return {"ok": False, "reason": "CI_PENDING", "pending": pending, "failures": failures}
+    if failures:
+        return {"ok": False, "reason": "CI_FAILED", "failures": failures, "pending": pending}
+    return {"ok": True, "pending": pending, "failures": failures}
+
+
+def _actionable_greptile_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Inline review comments only; PR-level Greptile summaries are not merge blockers."""
+    return [f for f in findings if (f.get("file_path") or "").strip()]
+
+
+def _greptile_confidence_from_github_comments(
+    pr_number: int, *, repo: str = DEFAULT_REPO
+) -> int | None:
+    """Parse Greptile confidence from PR issue comments (summary posts)."""
+    from greptile_client import parse_confidence_score
+
+    proc = subprocess.run(
+        ["gh", "api", f"repos/{repo}/issues/{int(pr_number)}/comments", "--paginate"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+    )
+    if proc.returncode != 0:
+        return None
+    try:
+        rows = json.loads(proc.stdout or "[]")
+    except json.JSONDecodeError:
+        return None
+    for row in reversed(rows if isinstance(rows, list) else []):
+        if not isinstance(row, dict):
+            continue
+        login = str((row.get("user") or {}).get("login") or "").lower()
+        if "greptile" not in login:
+            continue
+        score = parse_confidence_score(row.get("body"))
+        if score is not None:
+            return score
+    return None
+
+
+def _gh_unresolved_review_thread_count(
+    pr_number: int, *, repo: str = DEFAULT_REPO
+) -> int | None:
+    """Count open GitHub review threads.
+
+    Returns ``None`` when the GitHub API check fails (caller must block merge).
+    """
+    try:
+        owner, name = repo.split("/", 1)
+    except ValueError:
+        return None
+    query_first = (
+        "query($owner:String!,$repo:String!,$pr:Int!){"
+        "repository(owner:$owner,name:$repo){pullRequest(number:$pr){"
+        "reviewThreads(first:100){"
+        "pageInfo{hasNextPage endCursor}"
+        "nodes{isResolved}}}}}"
+    )
+    query_next = (
+        "query($owner:String!,$repo:String!,$pr:Int!,$after:String!){"
+        "repository(owner:$owner,name:$repo){pullRequest(number:$pr){"
+        "reviewThreads(first:100,after:$after){"
+        "pageInfo{hasNextPage endCursor}"
+        "nodes{isResolved}}}}}"
+    )
+    unresolved = 0
+    after: str | None = None
+    for _ in range(50):  # up to 5000 threads
+        cmd = [
+            "gh",
+            "api",
+            "graphql",
+            "-f",
+            f"query={query_next if after else query_first}",
+            "-f",
+            f"owner={owner}",
+            "-f",
+            f"repo={name}",
+            "-F",
+            f"pr={int(pr_number)}",
+        ]
+        if after:
+            cmd.extend(["-f", f"after={after}"])
+        proc = subprocess.run(cmd, cwd=REPO_ROOT, text=True, capture_output=True)
+        if proc.returncode != 0:
+            return None
+        try:
+            data = json.loads(proc.stdout or "{}")
+            threads = (
+                data.get("data", {})
+                .get("repository", {})
+                .get("pullRequest", {})
+                .get("reviewThreads", {})
+            )
+        except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
+            return None
+        nodes = threads.get("nodes") or []
+        unresolved += sum(
+            1 for node in nodes if isinstance(node, dict) and not node.get("isResolved")
+        )
+        page_info = threads.get("pageInfo") or {}
+        if not page_info.get("hasNextPage"):
+            break
+        after = page_info.get("endCursor")
+        if not after:
+            break
+    return unresolved
+
+
+def _gh_mergeable_state(pr_number: int, *, repo: str = DEFAULT_REPO) -> dict[str, Any]:
+    proc = _run_gh(
+        [
+            "pr",
+            "view",
+            str(int(pr_number)),
+            "--json",
+            "mergeable,mergeStateStatus,state,statusCheckRollup",
+        ],
+        repo=repo,
+    )
+    if proc.returncode != 0:
+        return {"ok": False, "reason": "GH_PR_VIEW_FAILED", "detail": (proc.stderr or proc.stdout or "").strip()}
+    data = _parse_gh_json(proc)
+    if str(data.get("state") or "").upper() == "MERGED":
+        return {"ok": True, "already_merged": True, "mergeStateStatus": data.get("mergeStateStatus")}
+    mergeable = str(data.get("mergeable") or "").upper()
+    merge_state = str(data.get("mergeStateStatus") or "").upper()
+    if mergeable != "MERGEABLE" or merge_state in _BLOCKED_MERGE_STATE_STATUSES:
+        return {
+            "ok": False,
+            "reason": "GH_NOT_MERGEABLE",
+            "mergeable": mergeable,
+            "mergeStateStatus": data.get("mergeStateStatus"),
+        }
+    ci = _ci_status_from_rollup(data.get("statusCheckRollup") or [])
+    if not ci.get("ok"):
+        return {**ci, "mergeStateStatus": data.get("mergeStateStatus")}
+    return {"ok": True, "mergeStateStatus": data.get("mergeStateStatus"), "ci": ci}
+
+
+async def assess_merge_readiness(
+    pr_number: int,
+    *,
+    target_confidence: int = 5,
+    repo: str = DEFAULT_REPO,
+    default_branch: str = DEFAULT_BASE_BRANCH,
+) -> dict[str, Any]:
+    """Return whether a PR is safe to squash-merge via normal gh (no admin/force)."""
+    from greptile_client import get_pr_status, list_pr_comments, parse_confidence_score
+
+    pr_number = int(pr_number)
+    status = await get_pr_status(repo=repo, pr_number=pr_number, default_branch=default_branch)
+    comments = await list_pr_comments(
+        repo=repo,
+        pr_number=pr_number,
+        default_branch=default_branch,
+        unaddressed_only=False,
+    )
+    findings = comments.get("findings") or []
+    actionable = [
+        f
+        for f in _actionable_greptile_findings(findings)
+        if not f.get("addressed")
+    ]
+    unresolved_threads = _gh_unresolved_review_thread_count(pr_number, repo=repo)
+    blockers: list[str] = []
+    if status.get("reviewIsRunning"):
+        blockers.append("GREPTILE_REVIEW_RUNNING")
+    if unresolved_threads is None:
+        blockers.append("GREPTILE_THREAD_CHECK_FAILED")
+    elif unresolved_threads:
+        blockers.append(f"GREPTILE_UNRESOLVED_THREADS:{unresolved_threads}")
+    confidence = int(status.get("confidenceScore") or 0)
+    for row in findings:
+        score = parse_confidence_score(row.get("body"))
+        if score is not None:
+            confidence = max(confidence, score)
+    gh_confidence = _greptile_confidence_from_github_comments(pr_number, repo=repo)
+    if gh_confidence is not None:
+        confidence = max(confidence, gh_confidence)
+    if confidence < int(target_confidence):
+        blockers.append(f"GREPTILE_CONFIDENCE:{confidence}<{target_confidence}")
+    gh_state = _gh_mergeable_state(pr_number, repo=repo)
+    if not gh_state.get("ok"):
+        blockers.append(str(gh_state.get("reason") or "GH_NOT_READY"))
+    return {
+        "ready": not blockers,
+        "blockers": blockers,
+        "greptile": status,
+        "unaddressed_count": len(actionable),
+        "unresolved_review_threads": unresolved_threads if unresolved_threads is not None else -1,
+        "gh": gh_state,
+        "target_confidence": int(target_confidence),
+    }
+
+
+async def merge_pr_when_ready(
+    pr_number: int,
+    *,
+    target_confidence: int = 5,
+    repo: str = DEFAULT_REPO,
+    default_branch: str = DEFAULT_BASE_BRANCH,
+) -> dict[str, Any]:
+    """Squash-merge via `gh pr merge` when Greptile + CI are clear. Never uses admin or force."""
+    pr_number = int(pr_number)
+    with acquire_lock(pr_number):
+        assessment = await assess_merge_readiness(
+            pr_number,
+            target_confidence=target_confidence,
+            repo=repo,
+            default_branch=default_branch,
+        )
+        state = _load_status(pr_number)
+        if not assessment["ready"]:
+            state["terminal_state"] = "BLOCKED_NOT_READY"
+            state["merge_blockers"] = assessment["blockers"]
+            _write_json(pr_number, "status.json", state)
+            _record_guardrail(pr_number, f"merge blocked: {assessment['blockers']}")
+            return {
+                "ok": False,
+                "state": "BLOCKED_NOT_READY",
+                "blockers": assessment["blockers"],
+                "assessment": assessment,
+            }
+        gh_state = assessment.get("gh") or {}
+        if gh_state.get("already_merged"):
+            proc = _run_gh(
+                ["pr", "view", str(pr_number), "--json", "mergeCommit,url,state"],
+                repo=repo,
+            )
+            merged = _parse_gh_json(proc) if proc.returncode == 0 else {}
+            state["terminal_state"] = "MERGED"
+            _write_json(pr_number, "status.json", state)
+            return {
+                "ok": True,
+                "state": "MERGED",
+                "already_merged": True,
+                "merge_commit": (merged.get("mergeCommit") or {}).get("oid"),
+                "pr_url": merged.get("url"),
+            }
+        proc = _run_gh(["pr", "merge", str(pr_number), "--squash"], repo=repo)
+        if proc.returncode != 0:
+            detail = (proc.stderr or proc.stdout or "").strip()
+            state["terminal_state"] = "BLOCKED_MERGE_FAILED"
+            state["merge_error"] = detail[:2000]
+            _write_json(pr_number, "status.json", state)
+            _record_guardrail(pr_number, f"gh pr merge failed: {detail[:500]}")
+            return {
+                "ok": False,
+                "state": "BLOCKED_MERGE_FAILED",
+                "error": detail,
+                "assessment": assessment,
+            }
+        view = _run_gh(
+            ["pr", "view", str(pr_number), "--json", "mergeCommit,url,state,mergedAt"],
+            repo=repo,
+        )
+        merged = _parse_gh_json(view) if view.returncode == 0 else {}
+        state["terminal_state"] = "MERGED"
+        state["merge_commit"] = (merged.get("mergeCommit") or {}).get("oid")
+        state["pr_url"] = merged.get("url")
+        _write_json(pr_number, "status.json", state)
+        _append_progress(pr_number, f"merged squash {state.get('merge_commit') or ''}".strip())
+        return {
+            "ok": True,
+            "state": "MERGED",
+            "merge_commit": state.get("merge_commit"),
+            "pr_url": merged.get("url"),
+            "merged_at": merged.get("mergedAt"),
+            "assessment": assessment,
+        }
+
+
 async def run_guard_once(
     pr_number: int, *, packet_only: bool = False, target_confidence: int = 5
 ) -> dict[str, Any]:
@@ -378,7 +696,26 @@ async def run_guard_once(
         status = await get_pr_status(repo=DEFAULT_REPO, pr_number=pr_number, default_branch=DEFAULT_BASE_BRANCH)
         comments = await list_pr_comments(repo=DEFAULT_REPO, pr_number=pr_number, default_branch=DEFAULT_BASE_BRANCH)
         findings = comments.get("findings") or []
-        progress_key = f"{status.get('headSha')}:{status.get('confidenceScore')}:{len(findings)}"
+        actionable_findings = _actionable_greptile_findings(findings)
+        if status.get("reviewIsRunning"):
+            wait_count = int(state.get("waiting_greptile_count") or 0) + 1
+            state["waiting_greptile_count"] = wait_count
+            state["greptile"] = {
+                "status": status.get("reviewCompleteness") or "review_running",
+                "confidence": status.get("confidenceScore"),
+                "unaddressed_count": len(actionable_findings),
+                "summary_count": max(0, len(findings) - len(actionable_findings)),
+            }
+            if wait_count > MAX_ITERATIONS:
+                state["terminal_state"] = "BLOCKED_GREPTILE_STUCK"
+                _write_json(pr_number, "status.json", state)
+                _record_guardrail(pr_number, "Greptile review stayed active past wait limit")
+                return {"ok": False, "state": "BLOCKED_GREPTILE_STUCK", "greptile": status}
+            state["terminal_state"] = "WAITING_GREPTILE"
+            _write_json(pr_number, "status.json", state)
+            return {"ok": True, "state": "WAITING_GREPTILE", "greptile": status}
+        state["waiting_greptile_count"] = 0
+        progress_key = f"{status.get('headSha')}:{status.get('confidenceScore')}:{len(actionable_findings)}:{len(findings)}"
         blocked = _update_circuit_breakers(pr_number, state, progress_key)
         if blocked:
             state["terminal_state"] = blocked
@@ -388,23 +725,20 @@ async def run_guard_once(
         state["greptile"] = {
             "status": status.get("reviewCompleteness") or "reviewed",
             "confidence": status.get("confidenceScore"),
-            "unaddressed_count": len(findings),
+            "unaddressed_count": len(actionable_findings),
+            "summary_count": max(0, len(findings) - len(actionable_findings)),
         }
         _write_json(pr_number, "status.json", state)
-        if status.get("reviewIsRunning"):
-            state["terminal_state"] = "WAITING_GREPTILE"
-            _write_json(pr_number, "status.json", state)
-            return {"ok": True, "state": "WAITING_GREPTILE", "greptile": status}
-        if (status.get("confidenceScore") or 0) >= int(task.get("target_confidence") or 5) and not findings:
+        if (status.get("confidenceScore") or 0) >= int(task.get("target_confidence") or 5) and not actionable_findings:
             state["terminal_state"] = "READY_TO_MERGE"
             _write_json(pr_number, "status.json", state)
             return {"ok": True, "state": "READY_TO_MERGE", "greptile": status}
-        if not findings:
+        if not actionable_findings:
             triggered = await trigger_review(repo=DEFAULT_REPO, pr_number=pr_number, default_branch=DEFAULT_BASE_BRANCH)
             state["terminal_state"] = "WAITING_GREPTILE"
             _write_json(pr_number, "status.json", {**state, "triggered_review": triggered})
             return {"ok": True, "state": "WAITING_GREPTILE", "triggered_review": triggered}
-        finding = findings[0]
+        finding = actionable_findings[0]
         if any(str(finding.get("file_path") or "").startswith(prefix) for prefix in HIGH_RISK_PREFIXES):
             state["terminal_state"] = "ESCALATE_HERMES"
             _write_json(pr_number, "status.json", state)

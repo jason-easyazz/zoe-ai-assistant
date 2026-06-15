@@ -50,6 +50,9 @@ jobs:
       - name: Validate critical files
         run: python3 tools/audit/validate_critical_files.py
 
+      - name: Validate offline memory policy
+        run: python3 tools/audit/validate_offline_memory.py
+
       - name: Run Alembic migrations on CI PostgreSQL
         run: |
           cd services/zoe-data
@@ -89,6 +92,11 @@ jobs:
             services/zoe-data/tests/test_ui_orchestrator_types.py \
             services/zoe-data/tests/test_greptile_client.py \
             services/zoe-data/tests/test_greploop_guard.py \
+            services/zoe-data/tests/test_zoe_agent_self_url.py \
+            services/zoe-data/tests/test_pipeline_store.py \
+            services/zoe-data/tests/test_pipeline_evidence.py \
+            services/zoe-data/tests/test_multica_poll_dispatch.py \
+            services/zoe-data/tests/test_main_multica_poll.py \
             -x -q \
             --override-ini="asyncio_mode=auto"
           PYTHONPATH="${{ github.workspace }}/services/zoe-auth:${{ github.workspace }}/services/zoe-auth/tests" pytest \

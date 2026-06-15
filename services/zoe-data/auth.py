@@ -6,6 +6,7 @@ import os
 import time
 import logging
 import httpx
+import hmac
 from fastapi import Request, HTTPException, Depends
 from typing import Any, Optional, Dict, Tuple
 
@@ -91,6 +92,8 @@ async def _validate_with_auth_service(session_id: str) -> Optional[dict]:
                 if prof.status_code == 200:
                     return _normalize_auth_user(prof.json())
                 if prof.status_code in (401, 403):
+                    return None
+                if prof.status_code == 404:
                     return None
                 if prof.status_code >= 500:
                     logger.warning("zoe-auth profile %s for session validation", prof.status_code)
@@ -295,7 +298,7 @@ async def require_internal_token(request: Request) -> None:
         return
     if _ZOE_INTERNAL_TOKEN:
         provided = request.headers.get("X-Internal-Token", "")
-        if provided and provided == _ZOE_INTERNAL_TOKEN:
+        if provided and hmac.compare_digest(provided, _ZOE_INTERNAL_TOKEN):
             return
     raise HTTPException(
         status_code=403,

@@ -3,14 +3,49 @@ set -euo pipefail
 
 ROOT="${ZOE_ASSISTANT_ROOT:-/home/zoe/assistant}"
 GRAPHIFY_BIN="${GRAPHIFY_BIN:-/home/zoe/.local/share/uv/tools/graphifyy/bin/graphify}"
+GRAPHIFY_PYTHON="${GRAPHIFY_PYTHON:-/home/zoe/.local/share/uv/tools/graphifyy/bin/python}"
 MODE="${1:-}"
 LOCK_FILE="${TMPDIR:-/tmp}/zoe-graphify-refresh.lock"
+ERROR_MARKER="graphify-out/.last_refresh_error"
+REF="origin/main"
 
-log() {
-  printf '[graphify-refresh] %s\n' "$*"
+log() { printf '[graphify-refresh] %s\n' "$*"; }
+
+fail() {
+  log "$*"
+  printf '%s %s\n' "$(date -Is)" "$*" >"$ROOT/$ERROR_MARKER" 2>/dev/null || true
+  exit 1
+}
+
+load_env_value() {
+  local name="$1"
+  if [[ -n "${!name:-}" ]]; then
+    return 0
+  fi
+  local value
+  value="$(python3 - "$name" <<'READ_DOTENV_VALUE'
+from pathlib import Path
+import sys
+wanted = sys.argv[1]
+for env_path in (Path('.env'), Path.home() / '.hermes' / '.env'):
+    if not env_path.exists():
+        continue
+    for line in env_path.read_text(encoding='utf-8', errors='ignore').splitlines():
+        if not line or line.lstrip().startswith('#') or '=' not in line:
+            continue
+        key, value = line.split('=', 1)
+        if key.strip() == wanted:
+            print(value.strip().strip('"').strip("'"))
+            raise SystemExit
+READ_DOTENV_VALUE
+)"
+  if [[ -n "$value" ]]; then
+    export "$name=$value"
+  fi
 }
 
 cd "$ROOT"
+trap 'fail "unexpected failure at line $LINENO"' ERR
 
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
@@ -18,41 +53,26 @@ if ! flock -n 9; then
   exit 0
 fi
 
-if [[ ! -x "$GRAPHIFY_BIN" ]]; then
-  log "graphify executable not found: $GRAPHIFY_BIN"
-  exit 1
-fi
+[[ -x "$GRAPHIFY_BIN" ]] || fail "graphify executable not found: $GRAPHIFY_BIN"
+[[ -x "$GRAPHIFY_PYTHON" ]] || fail "graphify python not found: $GRAPHIFY_PYTHON"
+[[ -f graphify-out/GRAPH_REPORT.md ]] || fail "missing graphify-out/GRAPH_REPORT.md"
 
-if [[ ! -f graphify-out/GRAPH_REPORT.md ]]; then
-  log "missing graphify-out/GRAPH_REPORT.md"
-  exit 1
+if ! git fetch --quiet origin main; then
+  fail "git fetch origin main failed; refusing to build the graph from unfetched state"
 fi
-
-if [[ "${GRAPHIFY_ALLOW_DIRTY:-0}" != "1" ]]; then
-  dirty_source="$(git status --porcelain --untracked-files=no -- . ':(exclude)graphify-out' || true)"
-  if [[ -n "$dirty_source" ]]; then
-    log "source tree has tracked changes outside graphify-out; commit or stash before refreshing"
-    exit 2
-  fi
-fi
-
-current_head="$(git rev-parse --short=8 HEAD)"
+current_head="$(git rev-parse --short=8 "$REF")"
 built_head="$(python3 - <<'PY'
 from pathlib import Path
 import re
-
-report = Path("graphify-out/GRAPH_REPORT.md").read_text(encoding="utf-8", errors="ignore")
-match = re.search(r"Built from commit:\s*`?([0-9a-fA-F]{7,40})`?", report)
-print(match.group(1)[:8] if match else "")
+report = Path('graphify-out/GRAPH_REPORT.md').read_text(encoding='utf-8', errors='ignore')
+match = re.search(r'Built from commit:\s*`?([0-9a-fA-F]{7,40})`?', report)
+print(match.group(1)[:8] if match else '')
 PY
 )"
-
 report_age_seconds="$(python3 - <<'PY'
 from pathlib import Path
 import time
-
-path = Path("graphify-out/GRAPH_REPORT.md")
-print(int(time.time() - path.stat().st_mtime))
+print(int(time.time() - Path('graphify-out/GRAPH_REPORT.md').stat().st_mtime))
 PY
 )"
 
@@ -67,32 +87,93 @@ fi
 
 if [[ "$should_refresh" != "1" ]]; then
   log "graph is current for $current_head; no refresh needed"
+  rm -f "$ERROR_MARKER"
   exit 0
 fi
 
-if [[ -z "${OPENAI_API_KEY:-}" && -f .env ]]; then
-  OPENAI_API_KEY="$(python3 - <<'PY'
+for env_name in OPENROUTER_API_KEY GRAPHIFY_OPENROUTER_MODEL GEMINI_API_KEY GOOGLE_API_KEY GRAPHIFY_MAX_OUTPUT_TOKENS; do
+  load_env_value "$env_name"
+done
+if [[ -z "${OPENROUTER_API_KEY:-}" && -z "${GEMINI_API_KEY:-}${GOOGLE_API_KEY:-}" ]]; then
+  fail "OPENROUTER_API_KEY or GEMINI_API_KEY is required in environment, .env, or ~/.hermes/.env"
+fi
+export OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}"
+export GEMINI_API_KEY="${GEMINI_API_KEY:-}"
+export GOOGLE_API_KEY="${GOOGLE_API_KEY:-}"
+export GRAPHIFY_OPENROUTER_MODEL="${GRAPHIFY_OPENROUTER_MODEL:-openai/gpt-4.1-mini}"
+export GRAPHIFY_MAX_OUTPUT_TOKENS="${GRAPHIFY_MAX_OUTPUT_TOKENS:-}"
+
+SNAPSHOT_PARENT="$(mktemp -d "${TMPDIR:-/tmp}/zoe-graphify-snapshot.XXXXXX")"
+SNAPSHOT_DIR="$SNAPSHOT_PARENT/src"
+cleanup() {
+  git worktree remove --force "$SNAPSHOT_DIR" >/dev/null 2>&1 || true
+  rm -rf "$SNAPSHOT_PARENT"
+  git worktree prune >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+log "creating snapshot worktree at $SNAPSHOT_DIR from $REF ($current_head)"
+git worktree add --detach "$SNAPSHOT_DIR" "$REF" >/dev/null || fail "git worktree add failed for $REF at $SNAPSHOT_DIR"
+
+if [[ -d graphify-out/cache ]]; then
+  mkdir -p "$SNAPSHOT_DIR/graphify-out"
+  cp -a graphify-out/cache "$SNAPSHOT_DIR/graphify-out/"
+fi
+
+GRAPHIFY_RUN_LOG="$SNAPSHOT_PARENT/graphify-refresh.log"
+OPENROUTER_CLI="$ROOT/scripts/maintenance/graphify_openrouter_cli.py"
+PROVIDER_ERROR_PATTERN="Error code:|insufficient_quota|more credits|rate[_ -]?limit|authentication|invalid api key|permission_denied|chunk .* failed|semantic extraction failed"
+
+run_graphify_provider() {
+  local provider="$1"
+  : >"$GRAPHIFY_RUN_LOG"
+  if [[ "$provider" == "openrouter" ]]; then
+    log "refreshing graphify graph for $current_head via OpenRouter (${GRAPHIFY_OPENROUTER_MODEL})"
+    (cd "$SNAPSHOT_DIR" && "$GRAPHIFY_PYTHON" "$OPENROUTER_CLI" extract . --backend openrouter && "$GRAPHIFY_BIN" cluster-only . --no-viz) 2>&1 | tee "$GRAPHIFY_RUN_LOG"
+  else
+    log "refreshing graphify graph for $current_head via Gemini"
+    (cd "$SNAPSHOT_DIR" && rm -rf graphify-out/graph.json graphify-out/GRAPH_REPORT.md graphify-out/.graphify_analysis.json graphify-out/.graphify_labels.json && "$GRAPHIFY_BIN" extract . --backend gemini && "$GRAPHIFY_BIN" cluster-only . --no-viz) 2>&1 | tee "$GRAPHIFY_RUN_LOG"
+  fi
+}
+
+provider_ok=0
+if [[ -n "${OPENROUTER_API_KEY:-}" ]]; then
+  if run_graphify_provider openrouter && ! grep -Eiq "$PROVIDER_ERROR_PATTERN" "$GRAPHIFY_RUN_LOG"; then
+    provider_ok=1
+  else
+    log "OpenRouter refresh failed; trying Gemini fallback if configured"
+  fi
+fi
+if [[ "$provider_ok" != "1" && -n "${GEMINI_API_KEY:-}${GOOGLE_API_KEY:-}" ]]; then
+  if run_graphify_provider gemini && ! grep -Eiq "$PROVIDER_ERROR_PATTERN" "$GRAPHIFY_RUN_LOG"; then
+    provider_ok=1
+  fi
+fi
+if [[ "$provider_ok" != "1" ]]; then
+  fail "graphify backend/model error for $current_head; leaving existing graphify-out unchanged (see systemd journal output)"
+fi
+if [[ ! -s "$SNAPSHOT_DIR/graphify-out/graph.json" || ! -s "$SNAPSHOT_DIR/graphify-out/GRAPH_REPORT.md" ]]; then
+  fail "graphify backend completed without required output files for $current_head; leaving existing graphify-out unchanged"
+fi
+
+python3 - "$SNAPSHOT_DIR" "$ROOT" <<'NORMALIZE_GRAPHIFY_PATHS'
+import re
+import sys
 from pathlib import Path
-
-for line in Path(".env").read_text(encoding="utf-8", errors="ignore").splitlines():
-    if not line or line.lstrip().startswith("#") or "=" not in line:
+snapshot = Path(sys.argv[1]).resolve()
+root = Path(sys.argv[2]).resolve()
+out = snapshot / 'graphify-out'
+pattern = re.compile(r'/tmp/zoe-graphify-(?:snapshot|local-probe)\.[^/]+/(?:src|graphify-local-repo)')
+for path in out.rglob('*'):
+    if path.suffix not in {'.json', '.md'}:
         continue
-    key, value = line.split("=", 1)
-    if key.strip() == "OPENAI_API_KEY":
-        value = value.strip().strip('"').strip("'")
-        print(value)
-        break
-PY
-)"
-fi
+    text = path.read_text(encoding='utf-8', errors='ignore')
+    updated = pattern.sub(str(root), text).replace(str(snapshot), str(root))
+    if updated != text:
+        path.write_text(updated, encoding='utf-8')
+NORMALIZE_GRAPHIFY_PATHS
 
-if [[ -z "${OPENAI_API_KEY:-}" ]]; then
-  log "OPENAI_API_KEY is required; set it in the environment or .env"
-  exit 1
-fi
-export OPENAI_API_KEY
-
-log "refreshing graphify graph for $current_head"
-"$GRAPHIFY_BIN" extract . --backend openai
-"$GRAPHIFY_BIN" cluster-only . --no-viz
-log "graphify refresh complete"
+log "syncing refreshed graph back to $ROOT/graphify-out"
+rsync -a --delete "$SNAPSHOT_DIR/graphify-out/" "$ROOT/graphify-out/" || fail "rsync of refreshed graph back to $ROOT/graphify-out failed; live copy may be partial"
+rm -f "$ERROR_MARKER"
+log "graphify refresh complete for $current_head"

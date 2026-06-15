@@ -71,6 +71,7 @@
 
 ### Agentic Engineering Loop
 - [ ] Keep the task small: one feature, one fix, or one reviewable unit
+- [ ] Close one contract loop end-to-end before starting the next: prove the contract reaches its intended consumer, not just that the schema exists
 - [ ] Search existing Zoe code before creating new abstractions
 - [ ] For uncertain package/SDK/framework APIs, use `opensrc` or upstream source before guessing
 - [ ] Build the minimal working version first; do not mix broad refactors into the feature pass
@@ -97,12 +98,13 @@
 
 ### Agentic Workflow Checks:
 1. [ ] Feature or fix works locally, or blocker is clearly stated
-2. [ ] Cleanup pass checked for duplicated runtime mechanics
-3. [ ] Repeated provider calls, parsing, validation, command execution, or payload transforms were moved to service-layer helpers where appropriate
-4. [ ] Domain policy stayed in routes, actions, intents, or UI handlers
-5. [ ] For package integrations, source files/examples referenced during implementation are named in the summary
-6. [ ] Mergeable work is prepared as a small PR and sent through Greptile/review loop when appropriate
-7. [ ] Cheap-model PR repair uses a generated guard packet, never a broad "fix the PR" prompt
+2. [ ] New contracts have last-mile evidence: cards reach their bus, memory metadata reaches storage, handoffs use schemas, or the missing consumer is explicitly blocked
+3. [ ] Cleanup pass checked for duplicated runtime mechanics
+4. [ ] Repeated provider calls, parsing, validation, command execution, or payload transforms were moved to service-layer helpers where appropriate
+5. [ ] Domain policy stayed in routes, actions, intents, or UI handlers
+6. [ ] For package integrations, source files/examples referenced during implementation are named in the summary
+7. [ ] Mergeable work is prepared as a small PR and sent through Greptile/review loop when appropriate
+8. [ ] Cheap-model PR repair uses a generated guard packet, never a broad "fix the PR" prompt
 
 ### Validation Steps:
 1. [ ] Run: `python3 tools/audit/validate_structure.py`
@@ -161,6 +163,7 @@ ls -1 *.md | wc -l
 - Huge or unclear PR that should be split before review
 - Agent is guessing package APIs instead of checking source
 - Cleanup pass is turning into a whole-app refactor
+- Contract schema added without a tested consumer or explicit blocked last-mile note
 
 ## 📖 REFERENCE DOCS
 
@@ -175,7 +178,6 @@ ls -1 *.md | wc -l
 
 **Last Updated**: November 7, 2025  
 **Status**: ✅ Active
-
 
 
 

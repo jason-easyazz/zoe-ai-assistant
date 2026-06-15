@@ -2758,6 +2758,7 @@
     <script src="js/common.js?v=9.0&t=1760020000"></script>
     <script src="/js/notifications-panel.js"></script>
         <script src="js/chat-sessions.js?v=2.1"></script>
+        <script src="js/agent-activity.js?v=1.0"></script>
     <script>
         // Cache buster - force browser to reload this script
         console.log('🔄 Chat.html v12 — AG-UI rich components: maps, charts, price tables, action menus, plugin manager, background tasks');
@@ -3551,6 +3552,8 @@
                 ws.onmessage = (evt) => {
                     try {
                         const msg = JSON.parse(evt.data);
+                        // Broadcast to agent-activity so sidebar refreshes instantly
+                        window.dispatchEvent(new CustomEvent('zoe:push_event', { detail: msg }));
                         if (msg.type === 'background_task_done' || msg.type === 'background_task_error') {
                             checkPendingTasks();
                         }
@@ -6031,6 +6034,39 @@
         document.addEventListener('zoe:multica_task_done', (e) => {
             const title = (e.detail && e.detail.title) ? e.detail.title : 'board task';
             showNotification(`Board task complete: ${title}`, 'success');
+        });
+
+        // Agent Activity sidebar — render selected task result in chat
+        window.addEventListener('zoe:agent_activity_select', (e) => {
+            const task = e.detail;
+            if (!task) return;
+            const messagesContainer = document.getElementById('messagesContainer');
+            if (!messagesContainer) return;
+
+            // Remove any previous agent-activity-view panels
+            messagesContainer.querySelectorAll('.aa-result-panel').forEach(el => el.remove());
+
+            const statusEmoji = task.status === 'done' ? '✓' : task.status === 'error' ? '✗' : '⏳';
+            const resultText  = task.result || '*(no output yet)*';
+            const taskTitle   = (task.task || '').split('\n').find(l => l.trim()) || 'Agent task';
+
+            const panel = document.createElement('div');
+            panel.className = 'message-group assistant aa-result-panel';
+            panel.style.cssText = 'margin-top:12px;';
+            panel.innerHTML = `
+                <div class="message-bubble assistant" style="border-left:3px solid #7B61FF;padding-left:12px;">
+                    <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:#7B61FF;margin-bottom:6px;">
+                        ${statusEmoji} Agent Task Result
+                    </div>
+                    <div style="font-size:12px;color:var(--clr-text-muted,#64748b);margin-bottom:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                        ${escapeHtml(taskTitle.slice(0, 120))}
+                    </div>
+                    <div style="font-size:13px;white-space:pre-wrap;max-height:400px;overflow-y:auto;">
+                        ${escapeHtml(resultText.slice(0, 4000))}
+                    </div>
+                </div>`;
+            messagesContainer.appendChild(panel);
+            panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
         });
 
         // Feedback Actions

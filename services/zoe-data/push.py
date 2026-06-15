@@ -114,18 +114,21 @@ class PushBroadcaster:
 
         return delivered
 
-    async def broadcast_to_panel(self, panel_id: str, event_type: str, data: dict):
-        """Send an event only to the named panel's dedicated channel.
+    async def broadcast_to_panel(self, panel_id: str, event_type: str, data: dict) -> int:
+        """Send an event to the named panel's dedicated channel.
 
-        Falls back to 'all' channel broadcast if the panel has no dedicated channel
-        (e.g. it connected with plain connect() before this feature was deployed).
+        Returns only confirmed delivery to the panel-specific channel. A legacy
+        fallback still broadcasts to all so older clients can opportunistically
+        receive the event, but that fallback is not proof the target panel saw it.
         """
         panel_channel = f"panel_{panel_id}"
         if panel_channel in self._connections and self._connections[panel_channel]:
-            await self.broadcast(panel_channel, event_type, data)
-        else:
-            # Fallback: broadcast to all with panel_id in data so clients can filter.
-            await self.broadcast("all", event_type, data)
+            return await self.broadcast(panel_channel, event_type, data)
+
+        # Fallback: broadcast to all with panel_id in data so clients can filter,
+        # but report zero dedicated panel deliveries for durable queue semantics.
+        await self.broadcast("all", event_type, data)
+        return 0
 
     async def broadcast_all(self, event_type: str, data: dict):
         """Broadcast to all channels."""

@@ -1,6 +1,6 @@
 // Unified AI Processing System for Zoe
 // Handles natural language processing across all pages
-// Your personal AI companion - like Samantha from "Her"
+// Your personal Zoe AI companion
 
 class ZoeAIProcessor {
     constructor() {
@@ -10,7 +10,7 @@ class ZoeAIProcessor {
         this.userPreferences = this.loadUserPreferences();
         this.initializeMemory();
         
-        // Samantha-level personality and intelligence
+        // Zoe-level personality and intelligence
         this.personality = {
             mood: 'cheerful',
             traits: ['helpful', 'curious', 'empathetic', 'playful', 'intelligent'],
@@ -653,7 +653,7 @@ class ZoeAIProcessor {
     }
 
     generateResponse(intent, data, context) {
-        // Samantha-level conversational responses
+        // Zoe-level conversational responses
         const responses = {
             'addToList': [
                 `Perfect! I've added "${data.text}" to your ${data.category} list. ✨`,

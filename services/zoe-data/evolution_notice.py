@@ -88,10 +88,77 @@ async def _proposal_exists(title: str, prop_type: str, db) -> bool:
     return len(rows) > 0
 
 
+def _attach_notice_trace_to_row(
+    row: dict,
+    *,
+    proposal_id: str,
+    proposal_type: str,
+    title: str,
+    signal,
+) -> dict:
+    """Attach a non-persistent observation trace summary to proposal evidence."""
+
+    try:
+        from zoe_observation_trace import ObservationOutcome, ObservationTrace, ObservationTraceType
+        from zoe_observation_trace_collector import ObservationTraceCollectorPolicy, collect_observation_traces
+
+        evidence = json.loads(row["evidence"])
+        candidate_ids = tuple(str(item) for item in evidence.get("candidate_ids", ()))
+        trace = ObservationTrace(
+            trace_id=f"trace_notice_{proposal_id}",
+            trace_type=ObservationTraceType.PROPOSAL.value,
+            surface="multica",
+            scope=signal.scope,
+            user_id=signal.user_id,
+            outcome=ObservationOutcome.SUCCESS.value,
+            summary=f"Runtime notice proposal prepared for review: {title}",
+            evidence_refs=tuple(signal.evidence_refs),
+            subject_id=proposal_id,
+            related_ids=candidate_ids,
+            metadata={
+                "proposal_type": proposal_type,
+                "signal_id": signal.signal_id,
+                "signal_source": signal.source,
+            },
+        )
+        collection = collect_observation_traces(
+            (trace,),
+            policy=ObservationTraceCollectorPolicy(
+                max_batch_size=5,
+                allowed_surfaces=("multica",),
+                allowed_trace_types=(ObservationTraceType.PROPOSAL.value,),
+            ),
+        )
+        collection_snapshot = collection.to_dict()
+        if not collection.ok:
+            logger.warning(
+                "evolution_notice: trace collection rejected for proposal_id=%s proposal_type=%s rejected=%s",
+                proposal_id,
+                proposal_type,
+                collection_snapshot["rejected"],
+            )
+        evidence["observation_trace_collection"] = collection_snapshot
+        updated = dict(row)
+        updated["evidence"] = json.dumps(evidence, sort_keys=True)
+        return updated
+    except Exception as exc:
+        logger.warning(
+            "evolution_notice: trace collection failed for proposal_id=%s proposal_type=%s: %s",
+            proposal_id,
+            proposal_type,
+            exc,
+        )
+        return row
+
+
 async def run_evolution_notice() -> dict:
     """Run the NOTICE phase — returns summary dict."""
     from db_pool import get_db_ctx
     from multica_client import sync_evolution_proposal_to_multica
+    from zoe_candidate_scoring import CandidateEvaluation, CandidateScore
+    from zoe_evolution_proposal import EvolutionSignal, EvolutionSignalType
+    from zoe_evolution_proposal_adapter import build_existing_zoe_proposal_candidate
+    from zoe_evolution_runtime_intake import build_runtime_evolution_proposal_intake
 
     created = 0
     skipped = 0
@@ -121,17 +188,67 @@ async def run_evolution_notice() -> dict:
                 "miss_count": len(members),
                 "examples": members[:5],
             })
-            target_patterns = json.dumps(members[:20])
+            target_members = members[:20]
+            evidence_ref = f"intent_miss_cluster:{prop_id}"
+            signal = EvolutionSignal(
+                signal_id=f"signal_{prop_id}",
+                signal_type=EvolutionSignalType.REPEATED_FAILURE.value,
+                summary=description,
+                source="evolution_notice:intent_miss_cluster",
+                evidence_refs=(evidence_ref,),
+                scope="system",
+                metadata={
+                    "miss_count": len(members),
+                    "examples": members[:5],
+                    "representative": rep,
+                },
+            )
+            candidate = build_existing_zoe_proposal_candidate(
+                proposal_type=prop_type,
+                title=title,
+                evidence_refs=(
+                    evidence_ref,
+                    "services/zoe-data/evolution_notice.py:run_evolution_notice",
+                    "training/data/intent-misses.jsonl",
+                ),
+                legacy_writer="evolution_notice:intent_miss_cluster",
+                runtime_notes="Creates a review-only intent-gap proposal from clustered misses; no execution is granted.",
+                target_patterns=target_members,
+            )
+            intake = build_runtime_evolution_proposal_intake(
+                proposal_id=prop_id,
+                proposal_type=prop_type,
+                title=title,
+                problem_statement=description,
+                signal=signal,
+                candidates=(candidate,),
+                affected_capabilities=("intent_router", "chat_router", "observation_trace"),
+                expected_benefit="Create a reviewable Zoe intent-gap proposal from clustered miss evidence before implementation work.",
+                verification_plan=(
+                    "human_or_multica_review_required_before_approval",
+                    "implementation_pr_must_attach_tests_and_evidence_before_completion",
+                ),
+                rollback_plan="Reject or defer the proposal; no runtime change has been made by proposal creation.",
+                legacy_target_patterns=target_members,
+                metadata={"legacy_writer": "evolution_notice:intent_miss_cluster"},
+            )
+            row = _attach_notice_trace_to_row(
+                intake.to_legacy_row(),
+                proposal_id=prop_id,
+                proposal_type=prop_type,
+                title=title,
+                signal=signal,
+            )
             await db.execute(
                 """INSERT INTO evolution_proposals
                    (id, type, title, description, evidence, target_patterns, status, proposed_at)
                    VALUES ($1,$2,$3,$4,$5,$6,'pending',$7)""",
-                prop_id,
-                prop_type,
-                title,
-                description,
-                evidence,
-                target_patterns,
+                row["id"],
+                row["type"],
+                row["title"],
+                row["description"],
+                row["evidence"],
+                row["target_patterns"],
                 time.time(),
             )
             created += 1
@@ -147,11 +264,7 @@ async def run_evolution_notice() -> dict:
 
             # Sync to Multica board
             multica_id = await sync_evolution_proposal_to_multica(
-                proposal_id=prop_id,
-                title=title,
-                description=description,
-                evidence=evidence,
-                proposal_type=prop_type,
+                **dict(intake.multica_payload),
             )
             if multica_id:
                 await db.execute(
@@ -182,31 +295,86 @@ async def run_evolution_notice() -> dict:
                 continue
             prop_id = uuid.uuid4().hex
             description = f"{tier} had {errors}/{total} ({int(100*errors/total)}%) slow/error calls in 24h."
-            evidence_data = json.dumps({"agent_tier": tier, "total": total, "errors": errors})
+            evidence_ref = f"llm_call_log:agent_health:{tier}:{prop_id}"
+            signal = EvolutionSignal(
+                signal_id=f"signal_{prop_id}",
+                signal_type=EvolutionSignalType.OUTCOME_EVAL_FAILURE.value,
+                summary=description,
+                source="evolution_notice:agent_health",
+                evidence_refs=(evidence_ref,),
+                scope="system",
+                metadata={"agent_tier": tier, "total": total, "errors": errors},
+            )
+            candidate = CandidateEvaluation(
+                candidate_id="existing_zoe_agent_health_triage",
+                name="Existing Zoe agent health triage",
+                source="existing_zoe",
+                task="review agent health spike",
+                score=CandidateScore(
+                    fit=4,
+                    activity=4,
+                    license=5,
+                    offline=5,
+                    security=4,
+                    footprint=5,
+                    tests=3,
+                    maintainability=4,
+                    overlap=5,
+                ),
+                evidence_refs=(
+                    evidence_ref,
+                    "services/zoe-data/evolution_notice.py:run_evolution_notice",
+                    "llm_call_log:agent_tier_latency",
+                ),
+                license_risk="compatible",
+                offline_viability="required",
+                runtime_notes="Creates a review-only agent-health evolution proposal and Multica ticket; no execution is granted.",
+                overlaps_existing=("evolution_proposals", "multica_governance", "llm_call_log"),
+                recommendation="needs_review",
+                metadata={"legacy_proposal_type": "agent_health"},
+            )
+            intake = build_runtime_evolution_proposal_intake(
+                proposal_id=prop_id,
+                proposal_type="agent_health",
+                title=title,
+                problem_statement=description,
+                signal=signal,
+                candidates=(candidate,),
+                affected_capabilities=("agent_runtime", "multica_governance", "observation_trace"),
+                expected_benefit="Create a reviewable Zoe health proposal from measured LLM error evidence before implementation work.",
+                verification_plan=(
+                    "human_or_multica_review_required_before_approval",
+                    "implementation_pr_must_attach_tests_and_evidence_before_completion",
+                ),
+                rollback_plan="Reject or defer the proposal; no runtime change has been made by proposal creation.",
+                metadata={"legacy_writer": "evolution_notice:agent_health"},
+            )
+            row_payload = _attach_notice_trace_to_row(
+                intake.to_legacy_row(),
+                proposal_id=prop_id,
+                proposal_type="agent_health",
+                title=title,
+                signal=signal,
+            )
             await db.execute(
                 """INSERT INTO evolution_proposals
-                   (id, type, title, description, evidence, status, proposed_at)
-                   VALUES ($1,'agent_health',$2,$3,$4,'pending',$5)""",
-                prop_id,
-                title,
-                description,
-                evidence_data,
+                   (id, type, title, description, evidence, target_patterns, status, proposed_at)
+                   VALUES ($1,'agent_health',$2,$3,$4,$5,'pending',$6)""",
+                row_payload["id"],
+                row_payload["title"],
+                row_payload["description"],
+                row_payload["evidence"],
+                row_payload["target_patterns"],
                 time.time(),
             )
             created += 1
 
-            # Sync to Multica board
-            multica_id = await sync_evolution_proposal_to_multica(
-                proposal_id=prop_id,
-                title=title,
-                description=description,
-                evidence=evidence_data,
-                proposal_type="agent_health",
-            )
+            multica_payload = dict(intake.multica_payload)
+            multica_id = await sync_evolution_proposal_to_multica(**multica_payload)
             if multica_id:
                 await db.execute(
                     "UPDATE evolution_proposals SET multica_issue_id=$1 WHERE id=$2",
-                    multica_id, prop_id,
+                    multica_id, row_payload["id"],
                 )
 
     return {"created": created, "skipped_dedup": skipped, "clusters": len(clusters)}
@@ -221,6 +389,9 @@ async def record_frustration_signal(
     """Write a user frustration proposal (called from chat.py inline)."""
     from db_pool import get_db_ctx
     from multica_client import sync_evolution_proposal_to_multica
+    from zoe_candidate_scoring import CandidateEvaluation, CandidateScore
+    from zoe_evolution_proposal import EvolutionSignal, EvolutionSignalType
+    from zoe_evolution_runtime_intake import build_runtime_evolution_proposal_intake
 
     title = f"User frustration: '{normalized_message[:60]}'"
     async with get_db_ctx() as db:
@@ -238,21 +409,82 @@ async def record_frustration_signal(
             f"User {user_id} sent a substantially similar message {repeat_count} times "
             f"in session {session_id} without a satisfying response."
         )
-        evidence = json.dumps({
-            "user_id": user_id,
-            "session_id": session_id,
-            "repeat_count": repeat_count,
-            "message": normalized_message,
-        })
+        evidence_ref = f"chat_user_frustration:{user_id}:{session_id}:{prop_id}"
+        signal = EvolutionSignal(
+            signal_id=f"signal_{prop_id}",
+            signal_type=EvolutionSignalType.USER_REQUEST.value,
+            summary=description,
+            source="evolution_notice:user_frustration",
+            evidence_refs=(evidence_ref,),
+            user_id=user_id,
+            scope="personal",
+            metadata={
+                "session_id": session_id,
+                "repeat_count": repeat_count,
+                "message_excerpt": normalized_message[:500],
+            },
+        )
+        candidate = CandidateEvaluation(
+            candidate_id="existing_zoe_frustration_triage",
+            name="Existing Zoe frustration triage",
+            source="existing_zoe",
+            task="review repeated user frustration",
+            score=CandidateScore(
+                fit=4,
+                activity=4,
+                license=5,
+                offline=5,
+                security=4,
+                footprint=5,
+                tests=3,
+                maintainability=4,
+                overlap=5,
+            ),
+            evidence_refs=(
+                evidence_ref,
+                "services/zoe-data/evolution_notice.py:record_frustration_signal",
+                "services/zoe-data/routers/chat.py:frustration_signal",
+            ),
+            license_risk="compatible",
+            offline_viability="required",
+            runtime_notes="Creates a review-only evolution proposal and Multica ticket; no execution or memory write is granted.",
+            overlaps_existing=("evolution_proposals", "multica_governance"),
+            recommendation="needs_review",
+            metadata={"legacy_proposal_type": "user_frustration"},
+        )
+        intake = build_runtime_evolution_proposal_intake(
+            proposal_id=prop_id,
+            proposal_type="user_frustration",
+            title=title,
+            problem_statement=description,
+            signal=signal,
+            candidates=(candidate,),
+            affected_capabilities=("chat_experience", "memory_router", "observation_trace"),
+            expected_benefit="Create a reviewable Zoe improvement proposal with explicit repeated-frustration evidence before implementation work.",
+            verification_plan=(
+                "human_or_multica_review_required_before_approval",
+                "implementation_pr_must_attach_tests_and_evidence_before_completion",
+            ),
+            rollback_plan="Reject or defer the proposal; no runtime change has been made by proposal creation.",
+            legacy_target_patterns=(normalized_message,),
+            metadata={"legacy_writer": "evolution_notice:user_frustration"},
+        )
+        row = _attach_notice_trace_to_row(
+            intake.to_legacy_row(),
+            proposal_id=prop_id,
+            proposal_type="user_frustration",
+            title=title,
+            signal=signal,
+        )
         await db.execute(
             """INSERT INTO evolution_proposals
                (id, type, title, description, evidence, target_patterns, status, proposed_at)
                VALUES ($1,'user_frustration',$2,$3,$4,$5,'pending',$6)""",
-            prop_id,
-            title,
-            description,
-            evidence,
-            json.dumps([normalized_message]),
+            row["id"],
+            row["title"],
+            row["description"],
+            row["evidence"],
+            row["target_patterns"],
             time.time(),
         )
         logger.info(
@@ -260,18 +492,12 @@ async def record_frustration_signal(
             user_id, normalized_message[:60], repeat_count,
         )
 
-        # Sync to Multica board
-        multica_id = await sync_evolution_proposal_to_multica(
-            proposal_id=prop_id,
-            title=title,
-            description=description,
-            evidence=evidence,
-            proposal_type="user_frustration",
-        )
+        multica_payload = dict(intake.multica_payload)
+        multica_id = await sync_evolution_proposal_to_multica(**multica_payload)
         if multica_id:
             await db.execute(
                 "UPDATE evolution_proposals SET multica_issue_id=$1 WHERE id=$2",
-                multica_id, prop_id,
+                multica_id, row["id"],
             )
 
 
@@ -284,6 +510,9 @@ async def record_user_issue(message: str, user_id: str) -> None:
     """
     from db_pool import get_db_ctx
     from multica_client import sync_evolution_proposal_to_multica
+    from zoe_candidate_scoring import CandidateEvaluation, CandidateScore
+    from zoe_evolution_proposal import EvolutionSignal, EvolutionSignalType
+    from zoe_evolution_runtime_intake import build_runtime_evolution_proposal_intake
 
     title = f"User report: '{message[:60]}'"
     async with get_db_ctx() as db:
@@ -298,16 +527,78 @@ async def record_user_issue(message: str, user_id: str) -> None:
 
         prop_id = uuid.uuid4().hex
         description = f"User {user_id} explicitly reported a problem: {message}"
-        evidence = json.dumps({"user_id": user_id, "message": message})
+        evidence_ref = f"chat_user_issue:{user_id}:{prop_id}"
+        signal = EvolutionSignal(
+            signal_id=f"signal_{prop_id}",
+            signal_type=EvolutionSignalType.USER_REQUEST.value,
+            summary=description,
+            source="evolution_notice:user_issue_report",
+            evidence_refs=(evidence_ref,),
+            user_id=user_id,
+            scope="personal",
+            metadata={"message_excerpt": message[:500]},
+        )
+        candidate = CandidateEvaluation(
+            candidate_id="existing_zoe_user_issue_triage",
+            name="Existing Zoe user issue triage",
+            source="existing_zoe",
+            task="review user-reported issue",
+            score=CandidateScore(
+                fit=4,
+                activity=4,
+                license=5,
+                offline=5,
+                security=4,
+                footprint=5,
+                tests=3,
+                maintainability=4,
+                overlap=5,
+            ),
+            evidence_refs=(
+                evidence_ref,
+                "services/zoe-data/evolution_notice.py:record_user_issue",
+                "services/zoe-data/intent_router.py:user_issue_report",
+            ),
+            license_risk="compatible",
+            offline_viability="required",
+            runtime_notes="Creates a review-only evolution proposal and Multica ticket; no execution or memory write is granted.",
+            overlaps_existing=("evolution_proposals", "multica_governance"),
+            recommendation="needs_review",
+            metadata={"legacy_proposal_type": "user_issue_report"},
+        )
+        intake = build_runtime_evolution_proposal_intake(
+            proposal_id=prop_id,
+            proposal_type="user_issue_report",
+            title=title,
+            problem_statement=description,
+            signal=signal,
+            candidates=(candidate,),
+            affected_capabilities=("chat_experience", "intent_router", "multica_governance"),
+            expected_benefit="Create a reviewable Zoe improvement proposal with explicit user evidence before implementation work.",
+            verification_plan=(
+                "human_or_multica_review_required_before_approval",
+                "implementation_pr_must_attach_tests_and_evidence_before_completion",
+            ),
+            rollback_plan="Reject or defer the proposal; no runtime change has been made by proposal creation.",
+            legacy_target_patterns=(message,),
+            metadata={"legacy_writer": "evolution_notice:user_issue_report"},
+        )
+        row = _attach_notice_trace_to_row(
+            intake.to_legacy_row(),
+            proposal_id=prop_id,
+            proposal_type="user_issue_report",
+            title=title,
+            signal=signal,
+        )
         await db.execute(
             """INSERT INTO evolution_proposals
                (id, type, title, description, evidence, target_patterns, status, proposed_at)
                VALUES ($1,'user_issue_report',$2,$3,$4,$5,'pending',$6)""",
-            prop_id,
-            title,
-            description,
-            evidence,
-            json.dumps([message]),
+            row["id"],
+            row["title"],
+            row["description"],
+            row["evidence"],
+            row["target_patterns"],
             time.time(),
         )
         logger.info(
@@ -315,23 +606,38 @@ async def record_user_issue(message: str, user_id: str) -> None:
             user_id, message[:60],
         )
 
-        multica_id = await sync_evolution_proposal_to_multica(
-            proposal_id=prop_id,
-            title=title,
-            description=description,
-            evidence=evidence,
-            proposal_type="user_issue_report",
-            label_name="user-feedback",
-        )
+        multica_payload = dict(intake.multica_payload)
+        multica_payload["label_name"] = "user-feedback"
+        multica_id = await sync_evolution_proposal_to_multica(**multica_payload)
         if multica_id:
             await db.execute(
                 "UPDATE evolution_proposals SET multica_issue_id=$1 WHERE id=$2",
-                multica_id, prop_id,
+                multica_id, row["id"],
             )
 
 
 # ── MEASURE phase ─────────────────────────────────────────────────────────────
 _MEASURE_WINDOW_S = 48 * 3600  # 48-hour monitoring window post-deployment
+
+
+def _load_target_patterns(raw: str | None) -> list[str]:
+    """Load target patterns from legacy arrays or proposal contract envelopes."""
+
+    if not raw:
+        return []
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+    if isinstance(payload, list):
+        return [str(item) for item in payload if item is not None]
+    if isinstance(payload, dict) and payload.get("schema") == "zoe_evolution_proposal":
+        proposal = payload.get("proposal")
+        metadata = proposal.get("metadata") if isinstance(proposal, dict) else None
+        target_patterns = metadata.get("legacy_target_patterns") if isinstance(metadata, dict) else None
+        if isinstance(target_patterns, list):
+            return [str(item) for item in target_patterns if item is not None]
+    return []
 
 
 async def run_measure_phase() -> dict:
@@ -361,7 +667,7 @@ async def run_measure_phase() -> dict:
 
         for row in rows:
             proposal_id = row["id"]
-            target_patterns: list[str] = json.loads(row["target_patterns"] or "[]")
+            target_patterns = _load_target_patterns(row["target_patterns"])
 
             # Heuristic: count intent misses for the target patterns in the 48h
             # BEFORE deploy vs the 48h AFTER deploy. If miss count dropped by

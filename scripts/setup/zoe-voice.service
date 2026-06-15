@@ -23,12 +23,10 @@ RestartSec=5
 StartLimitInterval=120
 StartLimitBurst=5
 
-# Systemd watchdog: if the process hangs (e.g., blocked on ALSA) for more than
-# WatchdogSec seconds, systemd will SIGABRT and restart the daemon.
-# The daemon does not call sd_notify — systemd monitors the main PID directly.
-# For sd_notify support, add python-systemd to pi-requirements.txt and call:
-#   import systemd.daemon; systemd.daemon.notify("WATCHDOG=1")  inside the main loop.
-WatchdogSec=90
+# The daemon exposes /health but does not send sd_notify watchdog heartbeats.
+# Keep systemd's watchdog disabled; otherwise systemd kills a healthy listener
+# every WatchdogSec interval.
+WatchdogSec=0
 
 # Logging
 StandardOutput=journal
