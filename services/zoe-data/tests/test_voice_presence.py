@@ -29,6 +29,7 @@ from voice_presence import (
 def _reset_voice_presence_state(monkeypatch):
     monkeypatch.setattr(voice_presence, "_AUDIO_CACHE", {})
     monkeypatch.setattr(voice_presence, "_VARIANT_CURSOR", 0)
+    monkeypatch.setattr(voice_presence, "_PROCESSING_ACK_CURSOR", 0)
 
 
 def test_is_wake_text_matches_only_wake_phrase():
@@ -250,6 +251,17 @@ def test_processing_ack_variant_rotates_without_reasoning():
     assert processing_ack_variant(env)["phrase"] == "Checking."
     assert processing_ack_variant(env)["phrase"] == "On it."
     assert processing_ack_variant(env)["phrase"] == "Checking."
+
+
+def test_processing_ack_rotation_is_independent_from_wake_rotation():
+    wake_env = {"ZOE_WAKE_ACK_PHRASES": "Yes.|Morning.|Evening."}
+    processing_env = {"ZOE_PROCESSING_ACK_PHRASES": "Let me check.|One moment."}
+
+    assert wake_ack_variant(wake_env)["phrase"] == "Yes."
+    assert wake_ack_variant(wake_env)["phrase"] == "Morning."
+    assert wake_ack_variant(wake_env)["phrase"] == "Evening."
+
+    assert processing_ack_variant(processing_env)["phrase"] == "Let me check."
 
 
 def test_processing_ack_event_can_include_cached_audio(tmp_path):

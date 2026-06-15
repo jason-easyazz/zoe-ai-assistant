@@ -12,11 +12,15 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+import voice_presence
 from routers import voice_livekit
 
 
 @pytest.fixture(autouse=True)
-def _reset_health():
+def _reset_health(monkeypatch):
+    monkeypatch.setattr(voice_presence, "_AUDIO_CACHE", {})
+    monkeypatch.setattr(voice_presence, "_VARIANT_CURSOR", 0)
+    monkeypatch.setattr(voice_presence, "_PROCESSING_ACK_CURSOR", 0)
     voice_livekit.reset_voice_health_for_tests()
     yield
     voice_livekit.reset_voice_health_for_tests()

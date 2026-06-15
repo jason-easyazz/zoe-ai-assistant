@@ -20,6 +20,7 @@ _DEFAULT_PROCESSING_ACK_PHRASES = "Let me check.|One moment.|I will check that."
 _WAKE_TEXT_RE = re.compile(r"^\s*(?:hey|hi|hello)\s+zoe[.!?\s]*$", re.I)
 _AUDIO_CACHE: dict[str, Any] = {}
 _VARIANT_CURSOR = 0
+_PROCESSING_ACK_CURSOR = 0
 _VARIANT_LOCK = threading.Lock()
 
 
@@ -163,7 +164,7 @@ def processing_ack_variant(
     These phrases are for perceived latency only. They do not imply completion,
     memory writes, tool success, or authority to execute anything.
     """
-    global _VARIANT_CURSOR
+    global _PROCESSING_ACK_CURSOR
     values = env if env is not None else os.environ
     phrases = processing_ack_phrases(values)
     audio_paths = _split_variants(values.get("ZOE_PROCESSING_ACK_AUDIO_PATHS"))
@@ -173,8 +174,8 @@ def processing_ack_variant(
     variant_count = max(len(phrases), len(audio_paths), 1)
     if index is None:
         with _VARIANT_LOCK:
-            selected = _VARIANT_CURSOR % variant_count
-            _VARIANT_CURSOR += 1
+            selected = _PROCESSING_ACK_CURSOR % variant_count
+            _PROCESSING_ACK_CURSOR += 1
     else:
         selected = index % variant_count
     phrase = phrases[selected] if selected < len(phrases) else ""

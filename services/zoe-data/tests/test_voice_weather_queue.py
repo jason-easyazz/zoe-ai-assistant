@@ -4,6 +4,7 @@ import types
 
 import pytest
 
+import voice_presence
 import skybridge_service
 import routers.voice_tts as voice_tts
 from routers.voice_tts import (
@@ -12,6 +13,13 @@ from routers.voice_tts import (
     _should_supersede_voice_weather_action,
     voice_command,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_voice_presence_state(monkeypatch):
+    monkeypatch.setattr(voice_presence, "_AUDIO_CACHE", {})
+    monkeypatch.setattr(voice_presence, "_VARIANT_CURSOR", 0)
+    monkeypatch.setattr(voice_presence, "_PROCESSING_ACK_CURSOR", 0)
 
 
 def _row(action_type: str, payload: dict, key: str = "old-key") -> dict:
