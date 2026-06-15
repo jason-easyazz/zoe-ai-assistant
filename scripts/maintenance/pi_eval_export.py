@@ -19,16 +19,11 @@ from typing import Any, Mapping, Sequence
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "services" / "zoe-data"))
 
+from pi_intent_evidence import has_secret_evidence_text, sanitize_evidence_text  # noqa: E402
 from zoe_pi_promotion import PiIntentEvalCase, intent_group_for_intent, merge_pi_intent_eval_cases  # noqa: E402
 
 _ALLOWED_SOURCES = {"intent_miss", "chat_log", "voice_log", "known_failure", "synthetic"}
 _ALLOWED_ROUTE_CLASSES = {"deterministic", "fallback", "extraction_failed"}
-_EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.\w+")
-_URL_RE = re.compile(r"https?://\S+")
-_PHONE_RE = re.compile(r"\b\d[\d\s\-]{5,}\d\b")
-_NAME_RE = re.compile(r"(^|\s)(?!Call\b|Email\b|Tell\b|Ask\b|Remind\b|Show\b|Set\b|Add\b|What\b|Will\b|Can\b|Please\b)([A-Z][a-z]+ [A-Z][a-z]+\b)")
-_SPACE_RE = re.compile(r"\s+")
-_SECRET_TEXT_RE = re.compile(r"(?i)(api[\s_-]?key|authorization|bearer\s+[a-z0-9._\-]+|password\s*(is|=)|secret\s*(is|=)|token\s*(is|=))")
 
 
 def load_jsonl(path: str | Path) -> list[dict[str, Any]]:
@@ -86,10 +81,10 @@ def _case_from_row(
     raw_text = _first_text(row, ("text_preview", "text", "transcript", "message", "utterance"))
     if not raw_text:
         return None
-    if _SECRET_TEXT_RE.search(raw_text) or len(str(raw_text).split()) > max_words:
+    if has_secret_evidence_text(raw_text) or len(str(raw_text).split()) > max_words:
         return None
     text = sanitize_eval_text(raw_text)
-    if not text or _SECRET_TEXT_RE.search(text):
+    if not text or has_secret_evidence_text(text):
         return None
 
     expected_intent = _optional_str(row.get("expected_intent") or row.get("outcome_label") or row.get("label"))
@@ -124,12 +119,7 @@ def _case_from_row(
 
 
 def sanitize_eval_text(text: str) -> str:
-    clean = _EMAIL_RE.sub("[EMAIL]", str(text or ""))
-    clean = _URL_RE.sub("[URL]", clean)
-    clean = _PHONE_RE.sub("[NUMBER]", clean)
-    clean = _NAME_RE.sub(lambda match: f"{match.group(1)}[NAME]", clean)
-    clean = _SPACE_RE.sub(" ", clean).strip()
-    return clean[:160]
+    return sanitize_evidence_text(text)
 
 
 def cases_to_jsonl(cases: Sequence[PiIntentEvalCase]) -> str:

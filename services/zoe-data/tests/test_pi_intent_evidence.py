@@ -64,6 +64,8 @@ def test_sanitize_evidence_text_redacts_common_pii():
         "Call [NAME] on [NUMBER] via [URL]"
     )
     assert sanitize_evidence_text("Jason Smith asked about the weather") == "[NAME] asked about the weather"
+    assert sanitize_evidence_text("Will Smith called about the meeting") == "[NAME] called about the meeting"
+    assert sanitize_evidence_text("Can Chen asked about the plan") == "[NAME] asked about the plan"
 
 
 def test_detect_intent_miss_produces_pi_evidence_when_enabled(tmp_path, monkeypatch):

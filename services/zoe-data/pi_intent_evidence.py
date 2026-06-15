@@ -18,7 +18,7 @@ _DEFAULT_MISS_PATH = "~/.zoe/data/pi-intent-miss-evidence.jsonl"
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.\w+")
 _URL_RE = re.compile(r"https?://\S+")
 _PHONE_RE = re.compile(r"\b\d[\d\s\-]{5,}\d\b")
-_NAME_RE = re.compile(r"(^|\s)(?!Call\b|Email\b|Tell\b|Ask\b|Remind\b|Show\b|Set\b|Add\b|What\b|Will\b|Can\b|Please\b)([A-Z][a-z]+ [A-Z][a-z]+\b)")
+_NAME_RE = re.compile(r"(^|\s)(?!Call\b|Email\b|Tell\b|Ask\b|Remind\b|Show\b|Set\b|Add\b|What\b|Please\b)([A-Z][a-z]+ [A-Z][a-z]+\b)")
 _SPACE_RE = re.compile(r"\s+")
 _SECRET_KEY_RE = re.compile(r"(?i)(api[_-]?key|\btoken\b|\bsecret\b|password|authorization|\bbearer\b)")
 _SECRET_TEXT_RE = re.compile(r"(?i)(api[\s_-]?key|authorization|bearer\s+[a-z0-9._\-]+|password\s*(is|=)|secret\s*(is|=)|token\s*(is|=))")
@@ -63,6 +63,10 @@ def sanitize_evidence_text(text: str) -> str:
     return clean[:160]
 
 
+def has_secret_evidence_text(text: str) -> bool:
+    return bool(_SECRET_TEXT_RE.search(str(text or "")))
+
+
 def _append_jsonl(path: str, record: Mapping[str, Any]) -> None:
     _reject_secret_keys(record)
     target = Path(path).expanduser()
@@ -90,4 +94,4 @@ def _env_bool(value: str | None, *, default: bool = False) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
-__all__ = ["record_intent_miss_evidence", "sanitize_evidence_text"]
+__all__ = ["has_secret_evidence_text", "record_intent_miss_evidence", "sanitize_evidence_text"]
