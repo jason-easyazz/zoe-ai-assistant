@@ -1746,6 +1746,45 @@ async def _run_mcporter(cmd: str) -> Optional[str]:
         return None
 
 
+async def _load_direct_execution_user(db, user_id: str) -> Optional[dict]:
+    cursor = await db.execute("SELECT id, role, name FROM users WHERE id = ?", (user_id,))
+    row = await cursor.fetchone()
+    if not row:
+        return None
+    return {
+        "user_id": row["id"],
+        "role": row.get("role", "user") if hasattr(row, "get") else row["role"],
+        "username": row.get("name", "") if hasattr(row, "get") else "",
+    }
+
+
+async def _execute_reminder_create_direct(intent: Intent, user_id: str) -> Optional[str]:
+    slots = intent.slots or {}
+    title = str(slots.get("title") or "").strip()
+    if not title:
+        return None
+    try:
+        from database import get_db_ctx
+        from models import ReminderCreate
+        from reminder_service import create_reminder_record
+
+        async with get_db_ctx() as db:
+            user = await _load_direct_execution_user(db, user_id)
+            if not user:
+                return None
+            payload = ReminderCreate(
+                title=title,
+                due_date=slots.get("date") or None,
+                due_time=slots.get("time") or None,
+                category=slots.get("category") or "general",
+            )
+            reminder = await create_reminder_record(payload, user=user, db=db)
+        return _format_response(intent, json.dumps(reminder, default=str))
+    except Exception as exc:
+        logger.debug("reminder_create direct execution unavailable: %s", exc)
+        return None
+
+
 async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optional[str]:
     if intent.name == "lets_talk":
         # Navigation is handled by _broadcast_intent_nav via _INTENT_PANEL_NAV in chat.py.
@@ -2309,6 +2348,11 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
     # Route directly to the weather backend helpers for deterministic voice UX.
     if intent.name == "weather":
         return await _execute_weather_direct(user_id=user_id, forecast=bool(intent.slots.get("forecast")))
+
+    if intent.name == "reminder_create":
+        direct_result = await _execute_reminder_create_direct(intent, user_id)
+        if direct_result:
+            return direct_result
 
     try:
         cmd = _build_command(intent, user_id)
