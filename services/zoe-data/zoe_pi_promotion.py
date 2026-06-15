@@ -344,12 +344,55 @@ def summarize_pi_promotion(
         "decisions": decisions,
         "promotable_groups": promotable_groups,
         "rollback_groups": rollback_groups,
+        "failure_examples": build_pi_failure_examples(samples),
         "promotion_actions": build_pi_promotion_actions(
             current_promoted_groups=sorted(active_promoted_groups),
             promotable_groups=promotable_groups,
             rollback_groups=rollback_groups,
         ),
     }
+
+
+def build_pi_failure_examples(samples: Sequence[PiRouteSample], *, limit: int = 5) -> list[dict[str, Any]]:
+    examples: list[tuple[tuple[int, float], dict[str, Any]]] = []
+    for sample in samples:
+        sample.validate()
+        reasons = _failure_reasons(sample)
+        if not reasons:
+            continue
+        severity = 0
+        if sample.rollback_blocked:
+            severity = max(severity, 4)
+        if sample.user_corrected:
+            severity = max(severity, 3)
+        if sample.timed_out:
+            severity = max(severity, 2)
+        if "pi_wrong_intent" in reasons:
+            severity = max(severity, 1)
+        source = _optional_str(sample.metadata.get("source")) if isinstance(sample.metadata, Mapping) else None
+        examples.append(
+            (
+                (severity, sample.pi_latency_ms),
+                {
+                    "case_id": sample.case_id,
+                    "intent_group": sample.intent_group,
+                    "expected_intent": sample.expected_intent,
+                    "zoe_intent": sample.zoe_intent,
+                    "pi_intent": sample.pi_intent,
+                    "route_class": sample.route_class,
+                    "pi_transport": sample.pi_transport,
+                    "reasons": reasons,
+                    "timed_out": sample.timed_out,
+                    "user_corrected": sample.user_corrected,
+                    "rollback_blocked": sample.rollback_blocked,
+                    "zoe_latency_ms": sample.zoe_latency_ms,
+                    "pi_latency_ms": sample.pi_latency_ms,
+                    "source": source,
+                },
+            )
+        )
+    ranked = sorted(examples, key=lambda item: (-item[0][0], -item[0][1], item[1]["case_id"]))
+    return [example for _, example in ranked[: max(0, limit)]]
 
 
 def build_pi_promotion_actions(
@@ -432,6 +475,19 @@ def summarize_eval_case_sources(cases: Sequence[PiIntentEvalCase]) -> dict[str, 
 
 def eval_cases_to_dict(cases: Sequence[PiIntentEvalCase] = DEFAULT_PI_INTENT_EVAL_CASES) -> list[dict[str, Any]]:
     return [case.to_dict() for case in cases]
+
+
+def _failure_reasons(sample: PiRouteSample) -> list[str]:
+    reasons: list[str] = []
+    if sample.rollback_blocked:
+        reasons.append("rollback_blocked")
+    if sample.user_corrected:
+        reasons.append("user_corrected")
+    if sample.timed_out:
+        reasons.append("timed_out")
+    if not sample.pi_correct:
+        reasons.append("pi_wrong_intent")
+    return reasons
 
 
 def _dedupe_eval_cases(cases: Sequence[PiIntentEvalCase]) -> list[PiIntentEvalCase]:
@@ -517,6 +573,7 @@ __all__ = [
     "PiPromotionDecision",
     "PiPromotionPolicy",
     "PiRouteSample",
+    "build_pi_failure_examples",
     "build_pi_promotion_actions",
     "eval_cases_to_dict",
     "evaluate_pi_promotion",

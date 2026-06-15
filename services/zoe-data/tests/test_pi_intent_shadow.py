@@ -438,3 +438,37 @@ def test_shadow_status_blocks_promoted_group_on_reviewed_rollback_block(tmp_path
         "env": {"ZOE_PI_INTENT_PROMOTED_GROUPS": "weather"},
         "requires_operator_apply": False,
     }
+
+
+def test_shadow_status_includes_failure_examples_without_text(tmp_path):
+    path = tmp_path / "shadow.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "text_hash": "weather_failure_hash",
+                "outcome_label": "weather",
+                "zoe_intent": "weather",
+                "pi_intent": "reminder_list",
+                "zoe_latency_ms": 120,
+                "pi_latency_ms": 500,
+                "pi_confidence": 0.9,
+                "pi_transport": "rpc",
+                "route_class": "fallback",
+                "agreement": False,
+                "timed_out": False,
+                "pi_no_result": False,
+                "text_preview": "rain later",
+            }
+        )
+        + "\n"
+    )
+
+    status = pi_intent_shadow_status({"ZOE_PI_INTENT_SHADOW_PATH": str(path)})
+
+    examples = status["promotion_report"]["failure_examples"]
+    assert len(examples) == 1
+    assert examples[0]["case_id"] == "weather_failure_hash"
+    assert examples[0]["reasons"] == ["pi_wrong_intent"]
+    assert examples[0]["source"] == "pi_intent_shadow"
+    assert "text_preview" not in examples[0]
+    assert "rain later" not in json.dumps(examples)

@@ -5,6 +5,7 @@ from zoe_pi_promotion import (
     PiIntentEvalCase,
     PiPromotionPolicy,
     PiRouteSample,
+    build_pi_failure_examples,
     build_pi_promotion_actions,
     eval_cases_to_dict,
     evaluate_pi_promotion,
@@ -254,6 +255,26 @@ def test_sample_rejects_secret_metadata():
 
     with pytest.raises(ValueError, match="secret field"):
         sample.validate()
+
+
+def test_failure_examples_prioritize_review_and_timeout_signals():
+    examples = build_pi_failure_examples(
+        [
+            _sample(1, pi="reminder_list", pi_ms=200, metadata={"source": "synthetic"}),
+            _sample(2, pi=None, pi_ms=900, timed_out=True),
+            _sample(3, user_corrected=True, pi_ms=150),
+            _sample(4, rollback_blocked=True, pi_ms=100),
+            _sample(5, pi="weather"),
+        ],
+        limit=3,
+    )
+
+    assert [item["case_id"] for item in examples] == ["case_4", "case_3", "case_2"]
+    assert examples[0]["reasons"] == ["rollback_blocked"]
+    assert examples[1]["reasons"] == ["user_corrected"]
+    assert examples[2]["reasons"] == ["timed_out", "pi_wrong_intent"]
+    assert examples[2]["pi_intent"] is None
+    assert "text" not in examples[0]
 
 
 def test_summary_lists_promotable_groups():
