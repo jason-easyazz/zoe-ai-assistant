@@ -8,25 +8,46 @@ import json
 import logging
 import time
 from typing import Any, Dict, Optional
-from pythonjsonlogger import jsonlogger
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 from contextvars import ContextVar
 
+logger = logging.getLogger(__name__)
+
+# python-json-logger is an optional dependency. The formatter moved modules in
+# 3.1 (``pythonjsonlogger.json``) from the legacy ``pythonjsonlogger.jsonlogger``.
+# Support both, and degrade to standard logging if the package is absent so that
+# importing this module (and the service) never hard-fails on a missing optional.
+try:
+    from pythonjsonlogger.json import JsonFormatter as _JsonFormatter
+except ImportError:
+    try:
+        from pythonjsonlogger.jsonlogger import JsonFormatter as _JsonFormatter
+    except ImportError:
+        _JsonFormatter = None
+
+_JSON_LOGGING_AVAILABLE = _JsonFormatter is not None
+_FormatterBase = _JsonFormatter if _JSON_LOGGING_AVAILABLE else logging.Formatter
+
 # Context variable for request-scoped logging metadata
 _request_metadata_ctx: ContextVar[Optional[Dict[str, Any]]] = ContextVar("request_metadata", default=None)
 
 
-class ZoeJsonFormatter(jsonlogger.JsonFormatter):
+class ZoeJsonFormatter(_FormatterBase):
     """JSON log formatter for Zoe services with structured fields."""
-    
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Remove the default timestamp field since we add our own ISO format
-        if "timestamp" in self._skip_fields:
-            self._skip_fields.remove("timestamp")
-    
+        # Remove the default timestamp field since we add our own ISO format.
+        # ``_skip_fields`` shape varies across versions; guard defensively.
+        skip = getattr(self, "_skip_fields", None)
+        try:
+            if skip is not None and "timestamp" in skip:
+                skip.pop("timestamp", None) if isinstance(skip, dict) else skip.remove("timestamp")
+        except (KeyError, ValueError):
+            pass
+
     def add_fields(self, log_record: Dict[str, Any], record: logging.LogRecord, message_dict: Dict[str, Any]) -> None:
         """Add structured fields to the log record."""
         super().add_fields(log_record, record, message_dict)
@@ -52,11 +73,19 @@ def setup_json_logging(extra_filters=None) -> None:
     Args:
         extra_filters: Optional list of logging.Filter instances to add to the handler.
     """
+    if not _JSON_LOGGING_AVAILABLE:
+        # Optional dependency missing — keep standard logging rather than crash.
+        logging.getLogger().setLevel(logging.INFO)
+        logger.warning(
+            "python-json-logger not installed; falling back to standard logging"
+        )
+        return
+
     # Remove existing handlers to avoid duplicate logs
     root_logger = logging.getLogger()
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)
-    
+
     # Create JSON formatter
     formatter = ZoeJsonFormatter(
         "%(timestamp)s %(level)s %(logger_name)s %(request_id)s %(message)s",
