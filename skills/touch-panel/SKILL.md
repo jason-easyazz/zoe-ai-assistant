@@ -17,11 +17,11 @@ Zoe drives physical kiosk panels via `panel_*` MCP tools and can SSH into them f
 | Field | Value |
 |---|---|
 | Hostname | `zoe-touch` |
-| IP | `192.168.1.61` |
+| IP | `<TOUCH_PANEL_IP>` |
 | SSH user | `pi` |
 | OS | Debian 12 aarch64 |
 | Panel ID | `zoe-touch-pi` |
-| Zoe server | `192.168.1.218` |
+| Zoe server | `<ZOE_SERVER_IP>` |
 
 **NEVER use `zoe.the411.life` from or for the panel** — Cloudflare Access blocks it with HTTP 302.
 
@@ -126,7 +126,7 @@ Wake word runs on Pi → STT via `POST /api/voice/transcribe` (whisper.cpp on Je
 
 ## Multi-panel support
 
-Always call `GET /api/panels` to discover panels dynamically. Never hardcode `192.168.1.61`. The registry returns `ip_address`, `ssh_user`, `ssh_key_path`, `ssh_port`.
+Always call `GET /api/panels` to discover panels dynamically. Never hardcode `<TOUCH_PANEL_IP>`. The registry returns `ip_address`, `ssh_user`, `ssh_key_path`, `ssh_port`.
 
 ---
 
@@ -135,8 +135,8 @@ Always call `GET /api/panels` to discover panels dynamically. Never hardcode `19
 ```bash
 # From Jetson repo root — deploy scripts/config to panel
 scripts/setup/touchscreen/install_touchscreen.sh \
-  --host 192.168.1.61 --user pi \
-  --server-url https://192.168.1.218 --panel-id zoe-touch-pi
+  --host <TOUCH_PANEL_IP> --user pi \
+  --server-url https://<ZOE_SERVER_IP> --panel-id zoe-touch-pi
 
 # After HTML/JS changes
 docker compose restart zoe-ui

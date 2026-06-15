@@ -1,0 +1,44 @@
+# llama.cpp server hosting the local Zoe model (Gemma 4 E2B GGUF), port 11434.
+#
+# This unit is platform-specific. Before installing, set:
+#   - the llama-server binary path (built for your platform / GPU)
+#   - the --model path to your downloaded GGUF
+# See HARDWARE_COMPATIBILITY.md and scripts/setup/download_gguf_models.sh.
+[Unit]
+Description=llama.cpp server for Zoe (local Gemma model, port 11434)
+After=network.target
+
+[Service]
+Type=simple
+LimitMEMLOCK=infinity
+# Point LD_LIBRARY_PATH at the directory of your llama.cpp build.
+Environment=LD_LIBRARY_PATH=%h/llama.cpp/build/bin
+ExecStart=%h/llama.cpp/build/bin/llama-server \
+  --model %h/models/gemma4-e2b/gemma-4-E2B-it-Q4_K_M.gguf \
+  --host 0.0.0.0 \
+  --port 11434 \
+  --ctx-size 16384 \
+  --n-gpu-layers 99 \
+  --threads 4 \
+  --parallel 1 \
+  --batch-size 512 \
+  --ubatch-size 256 \
+  --cont-batching \
+  --cache-type-k q8_0 \
+  --cache-type-v q8_0 \
+  --flash-attn on \
+  --temp 0.6 \
+  --top-k 40 \
+  --top-p 0.90 \
+  --repeat-penalty 1.05 \
+  --jinja \
+  --chat-template-kwargs '{"enable_thinking":false}' \
+  --mlock \
+  --metrics
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

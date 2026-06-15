@@ -103,7 +103,7 @@ loadSessions().catch(err => {
 - Browser will remember for this session
 
 **Option 2**: Use HTTP instead of HTTPS
-- Access via `http://192.168.1.53` instead of `https://192.168.1.53`
+- Access via `http://<ZOE_SERVER_IP>` instead of `https://<ZOE_SERVER_IP>`
 - Code now supports both protocols
 
 **Option 3**: Install proper SSL certificate

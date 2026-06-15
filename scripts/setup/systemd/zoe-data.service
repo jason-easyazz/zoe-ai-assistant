@@ -1,0 +1,26 @@
+[Unit]
+Description=Zoe Data Service (primary backend API, port 8000)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/assistant/services/zoe-data
+ExecStart=/usr/bin/python3 -m uvicorn main:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+
+# Secrets and tunables live in .env (copied from .env.example). Do NOT
+# hard-code POSTGRES_URL / OPENCLAW_GATEWAY_TOKEN here -- keep them in .env.
+EnvironmentFile=%h/assistant/services/zoe-data/.env
+EnvironmentFile=-%h/.hermes/.env
+
+# Local LLM (llama-server) endpoint.
+Environment=GEMMA_SERVER_URL=http://127.0.0.1:11434/v1
+Environment=JETSON_AGENT_MODE=true
+Environment=MEMPALACE_DATA_DIR=%h/.mempalace
+
+# Jetson/CUDA library paths -- adjust for your platform (see HARDWARE_COMPATIBILITY.md).
+Environment=LD_LIBRARY_PATH=%h/.local/lib:/usr/local/cuda-12.6/lib64:/usr/lib/aarch64-linux-gnu
+
+[Install]
+WantedBy=default.target
