@@ -9,6 +9,7 @@ from pi_intent_classifier import (
     PI_INTENT_EXECUTE_THRESHOLD,
     PiIntentClassifierConfig,
     _classification_prompt,
+    _probe_pi_runtime_cached,
     _parse_pi_classification,
     _rpc_response_matches_request,
     classify_with_pi_intent_governor,
@@ -16,6 +17,11 @@ from pi_intent_classifier import (
     pi_intent_promotion_status,
     pi_intent_status,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_pi_runtime_probe_cache(monkeypatch):
+    monkeypatch.setattr(pi_intent_classifier, "_RUNTIME_PROBE_CACHE", {})
 
 
 def _write_exe(path, body):
@@ -293,6 +299,46 @@ async def test_pi_rpc_failed_response_resets_process_under_worker_lock(tmp_path,
 
 
 @pytest.mark.asyncio
+async def test_pi_rpc_returns_on_turn_end_without_waiting_for_late_agent_end(tmp_path, monkeypatch):
+    bindir = tmp_path / "rpc-turn-end-bin"
+    bindir.mkdir()
+    _write_exe(bindir / "node", "#!/bin/sh\nexit 0\n")
+    _write_exe(bindir / "npm", "#!/bin/sh\nexit 0\n")
+    payload = json.dumps({"intent": "weather", "slots": {}, "confidence": 0.91, "task_lane": "fast_tool"})
+    script = f"""#!/usr/bin/python3
+import json, sys, time
+payload = {payload!r}
+for line in sys.stdin:
+    request = json.loads(line)
+    print(json.dumps({{'id': request['id'], 'type': 'response', 'command': 'prompt', 'success': True}}), flush=True)
+    print(json.dumps({{'type': 'turn_end', 'message': {{'role': 'assistant', 'content': [{{'type': 'text', 'text': payload}}]}}}}), flush=True)
+    time.sleep(10)
+"""
+    _write_exe(bindir / "pi", script)
+    workers = {}
+    monkeypatch.setattr(pi_intent_classifier, "_RPC_WORKERS", workers)
+    env = {
+        "PATH": str(bindir),
+        "ZOE_PI_INTENT_ENABLED": "true",
+        "ZOE_PI_INTENT_TRANSPORT": "rpc",
+        "ZOE_PI_COMMAND": "pi",
+        "ZOE_PI_CWD": str(tmp_path),
+        "ZOE_PI_ALLOW_EXECUTION": "true",
+        "ZOE_PI_LOCAL_MODEL_CONFIGURED": "true",
+        "ZOE_PI_INTENT_TIMEOUT_SECONDS": "0.5",
+    }
+
+    try:
+        result = await classify_with_pi_intent_governor("rain later", env=env)
+    finally:
+        for worker in list(workers.values()):
+            await worker.reset()
+
+    assert result is not None
+    assert result.intent == "weather"
+
+
+@pytest.mark.asyncio
 async def test_pi_rpc_timeout_resets_process_under_worker_lock(tmp_path, monkeypatch):
     bindir = tmp_path / "rpc-timeout-bin"
     bindir.mkdir()
@@ -426,6 +472,53 @@ async def test_pi_rpc_ignores_stale_response_with_mismatched_request_id(tmp_path
     assert result is not None
     assert result.intent == "weather"
     assert result.slots == {"forecast": True}
+
+
+def test_pi_runtime_probe_cache_reuses_probe_until_ttl_expires(tmp_path, monkeypatch):
+    bindir = _fake_runtime(tmp_path)
+    calls = 0
+    original_probe = pi_intent_classifier.probe_pi_runtime
+    monkeypatch.setattr(pi_intent_classifier, "_RUNTIME_PROBE_CACHE", {})
+
+    def spy_probe(env):
+        nonlocal calls
+        calls += 1
+        return original_probe(env)
+
+    monkeypatch.setattr(pi_intent_classifier, "probe_pi_runtime", spy_probe)
+    env = {
+        "PATH": str(bindir),
+        "ZOE_PI_ENABLED": "true",
+        "ZOE_PI_ALLOW_EXECUTION": "true",
+        "ZOE_PI_LOCAL_MODEL_CONFIGURED": "true",
+        "ZOE_PI_COMMAND": "pi",
+        "ZOE_PI_CWD": str(tmp_path),
+    }
+
+    first = _probe_pi_runtime_cached(env, ttl_seconds=60)
+    second = _probe_pi_runtime_cached(env, ttl_seconds=60)
+    third = _probe_pi_runtime_cached(env, ttl_seconds=0)
+
+    assert first.ok is True
+    assert second is first
+    assert third.ok is True
+    assert calls == 2
+
+
+def test_pi_runtime_probe_cache_evicts_old_entries(monkeypatch):
+    calls = 0
+
+    def fake_probe(env):
+        nonlocal calls
+        calls += 1
+        return {"path": env.get("PATH")}
+
+    monkeypatch.setattr(pi_intent_classifier, "probe_pi_runtime", fake_probe)
+    for index in range(40):
+        _probe_pi_runtime_cached({"PATH": f"/tmp/pi-{index}"}, ttl_seconds=60)
+
+    assert calls == 40
+    assert len(pi_intent_classifier._RUNTIME_PROBE_CACHE) <= pi_intent_classifier._RUNTIME_PROBE_CACHE_MAX_ENTRIES
 
 
 def test_pi_prompt_sanitizes_user_json_braces():

@@ -30,6 +30,8 @@ PI_INTENT_EXECUTE_THRESHOLD = 0.78
 PI_INTENT_HINT_THRESHOLD = 0.55
 PI_INTENT_DEFAULT_TIMEOUT_S = 4.0
 PI_INTENT_MAX_WORDS = 32
+PI_RUNTIME_PROBE_CACHE_TTL_S = 5.0
+_RUNTIME_PROBE_CACHE_MAX_ENTRIES = 32
 
 _ALLOWED_EXECUTABLE_INTENTS = {
     "time_query",
@@ -114,6 +116,7 @@ class PiIntentClassifierConfig:
     offline_only: bool = True
     no_approve: bool = True
     transport: str = "print"
+    runtime_probe_cache_ttl_seconds: float = PI_RUNTIME_PROBE_CACHE_TTL_S
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "PiIntentClassifierConfig":
@@ -130,6 +133,11 @@ class PiIntentClassifierConfig:
             offline_only=_env_bool(values.get("ZOE_PI_OFFLINE_ONLY"), default=True),
             no_approve=_env_bool(values.get("ZOE_PI_INTENT_NO_APPROVE"), default=True),
             transport=(values.get("ZOE_PI_INTENT_TRANSPORT") or "print").strip().lower() or "print",
+            runtime_probe_cache_ttl_seconds=float(
+                values.get("ZOE_PI_INTENT_RUNTIME_PROBE_CACHE_TTL_SECONDS")
+                or values.get("ZOE_PI_RUNTIME_PROBE_CACHE_TTL_SECONDS")
+                or PI_RUNTIME_PROBE_CACHE_TTL_S
+            ),
         )
 
     def validate(self) -> None:
@@ -139,6 +147,8 @@ class PiIntentClassifierConfig:
             raise ValueError("ZOE_PI_INTENT_MAX_WORDS must be positive")
         if self.offline_only and self.provider.lower() not in {"ollama", "local", "llama", "llamacpp"}:
             raise ValueError("Pi intent classification requires a local/offline provider")
+        if self.runtime_probe_cache_ttl_seconds < 0:
+            raise ValueError("ZOE_PI_INTENT_RUNTIME_PROBE_CACHE_TTL_SECONDS must be zero or positive")
         if self.transport not in {"print", "rpc"}:
             raise ValueError("ZOE_PI_INTENT_TRANSPORT must be print or rpc")
 
@@ -155,6 +165,7 @@ class PiIntentClassifierConfig:
             "offline_only": self.offline_only,
             "no_approve": self.no_approve,
             "transport": self.transport,
+            "runtime_probe_cache_ttl_seconds": self.runtime_probe_cache_ttl_seconds,
         }
 
 
@@ -248,7 +259,7 @@ async def classify_with_pi_intent_governor(
         return None
 
     runtime_env = _runtime_probe_env(env, active_config)
-    probe = probe_pi_runtime(runtime_env)
+    probe = _probe_pi_runtime_cached(runtime_env, ttl_seconds=active_config.runtime_probe_cache_ttl_seconds)
     if not probe.ok:
         logger.debug("Pi intent governor unavailable: %s", probe.to_dict())
         return None
@@ -445,6 +456,8 @@ class _PiRpcIntentWorker:
             text = _assistant_text_from_rpc_event(event)
             if text:
                 latest_text = text
+            if event.get("type") == "turn_end" and latest_text:
+                return latest_text
             if event.get("type") == "agent_end":
                 return latest_text
 
@@ -561,6 +574,50 @@ def _task_lane_for_intent(intent: str | None) -> str:
         if intent in intents:
             return lane
     return "chat"
+
+
+_RUNTIME_PROBE_CACHE: dict[tuple[str, ...], tuple[float, Any]] = {}
+
+
+def _probe_pi_runtime_cached(runtime_env: Mapping[str, str], *, ttl_seconds: float):
+    if ttl_seconds <= 0:
+        return probe_pi_runtime(runtime_env)
+    key = _runtime_probe_cache_key(runtime_env)
+    now = time.monotonic()
+    cached = _RUNTIME_PROBE_CACHE.get(key)
+    if cached and now - cached[0] <= ttl_seconds:
+        return cached[1]
+    _evict_runtime_probe_cache(now=now, ttl_seconds=ttl_seconds, incoming_key=key)
+    probe = probe_pi_runtime(runtime_env)
+    _RUNTIME_PROBE_CACHE[key] = (now, probe)
+    return probe
+
+
+def _evict_runtime_probe_cache(*, now: float, ttl_seconds: float, incoming_key: tuple[str, ...]) -> None:
+    expired_keys = [key for key, (cached_at, _probe) in _RUNTIME_PROBE_CACHE.items() if now - cached_at > ttl_seconds]
+    for key in expired_keys:
+        _RUNTIME_PROBE_CACHE.pop(key, None)
+    if incoming_key in _RUNTIME_PROBE_CACHE or len(_RUNTIME_PROBE_CACHE) < _RUNTIME_PROBE_CACHE_MAX_ENTRIES:
+        return
+    oldest_key = min(_RUNTIME_PROBE_CACHE, key=lambda key: _RUNTIME_PROBE_CACHE[key][0])
+    _RUNTIME_PROBE_CACHE.pop(oldest_key, None)
+
+
+def _runtime_probe_cache_key(runtime_env: Mapping[str, str]) -> tuple[str, ...]:
+    fields = (
+        "ZOE_PI_ENABLED",
+        "ZOE_PI_ALLOW_EXECUTION",
+        "ZOE_PI_OFFLINE_ONLY",
+        "ZOE_PI_LOCAL_MODEL_REQUIRED",
+        "ZOE_PI_LOCAL_MODEL_CONFIGURED",
+        "ZOE_PI_COMMAND",
+        "ZOE_PI_CWD",
+        "ZOE_PI_AGENT_DIR",
+        "ZOE_PI_TIMEOUT_SECONDS",
+        "PATH",
+        "HOME",
+    )
+    return tuple(str(runtime_env.get(field) or "") for field in fields)
 
 
 def _runtime_probe_env(env: Mapping[str, str] | None, config: PiIntentClassifierConfig) -> dict[str, str]:
