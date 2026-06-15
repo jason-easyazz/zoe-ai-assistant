@@ -612,3 +612,14 @@ def test_skybridge_has_touch_panel_fit_overrides():
     assert '.sky-orb-button span' in html
     assert '.sky-orb-button::before' in html
     assert 'display: none !important' in html
+
+
+def test_skybridge_list_create_has_database_conflict_guard():
+    service = read(DATA / "skybridge_service.py")
+    migration = read(DATA / "alembic" / "versions" / "0011_unique_active_list_names.py")
+
+    assert "ON CONFLICT (user_id, lower(name)) WHERE deleted = 0 DO NOTHING" in service
+    assert "idx_lists_active_user_lower_name" in migration
+    assert "ON lists (user_id, lower(name))" in migration
+    assert "WHERE deleted = 0" in migration
+    assert "UPDATE list_items" in migration

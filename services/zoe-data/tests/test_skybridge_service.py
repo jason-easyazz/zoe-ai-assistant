@@ -607,6 +607,30 @@ async def test_new_named_work_list_is_created_and_displayed():
 
 
 @pytest.mark.asyncio
+async def test_create_existing_list_reports_existing_not_created():
+    db = FakeDb(
+        lists=[
+            {
+                "id": "existing-projects",
+                "user_id": "jason",
+                "name": "Projects",
+                "list_type": "work",
+                "visibility": "personal",
+                "deleted": 0,
+            }
+        ],
+        items_by_list={"existing-projects": []},
+    )
+
+    result = await resolve_skybridge_request("create a work list called Projects", "jason", db=db)
+
+    assert result["handled"] is True
+    assert result["spoken_summary"] == "You already have a Projects list."
+    assert result["actions"][0]["type"] == "existing"
+    assert len([item for item in db.lists if item["name"] == "Projects"]) == 1
+
+
+@pytest.mark.asyncio
 async def test_new_list_prompt_accepts_bare_name_followup():
     context = {"intent": {"domain": "lists", "action": "create_list", "list_type": "personal"}, "cards": []}
     db = FakeDb(lists=[], items_by_list={})

@@ -934,6 +934,7 @@ async def _ensure_default_lists(user_id: str, db: Any) -> None:
             """
             INSERT INTO lists (id, user_id, name, list_type, description, visibility)
             VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (user_id, lower(name)) WHERE deleted = 0 DO NOTHING
             """,
             str(uuid.uuid4()),
             user_id,
@@ -1037,11 +1038,13 @@ async def _resolve_list_create(intent: SkybridgeIntent, user_id: str, db: Any) -
         user_id,
         intent.list_name,
     )
+    created = False
     if not existing:
-        await db.execute(
+        status = await db.execute(
             """
             INSERT INTO lists (id, user_id, name, list_type, description, visibility)
             VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (user_id, lower(name)) WHERE deleted = 0 DO NOTHING
             """,
             str(uuid.uuid4()),
             user_id,
@@ -1050,11 +1053,12 @@ async def _resolve_list_create(intent: SkybridgeIntent, user_id: str, db: Any) -
             "",
             "personal" if list_type in {"work", "personal", "tasks"} else "family",
         )
+        created = str(status).endswith(" 1")
         await _maybe_commit(db)
     result = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type, list_name=intent.list_name), user_id, db)
     result["intent"] = {"domain": "lists", "action": "create_list", "list_type": list_type, "list_name": intent.list_name}
-    result["spoken_summary"] = f"Created {intent.list_name}."
-    result["actions"] = [{"type": "created", "domain": "lists", "list_name": intent.list_name, "list_type": list_type}]
+    result["spoken_summary"] = f"Created {intent.list_name}." if created else f"You already have a {intent.list_name} list."
+    result["actions"] = [{"type": "created" if created else "existing", "domain": "lists", "list_name": intent.list_name, "list_type": list_type}]
     return result
 
 
@@ -1098,6 +1102,7 @@ async def _find_or_create_list(intent: SkybridgeIntent, user_id: str, db: Any, c
         """
         INSERT INTO lists (id, user_id, name, list_type, description, visibility)
         VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (user_id, lower(name)) WHERE deleted = 0 DO NOTHING
         """,
         list_id,
         user_id,
@@ -1107,6 +1112,19 @@ async def _find_or_create_list(intent: SkybridgeIntent, user_id: str, db: Any, c
         "family",
     )
     await _maybe_commit(db)
+    rows = await db.fetch(
+        """
+        SELECT id, name, list_type
+        FROM lists
+        WHERE user_id = $1 AND deleted = 0 AND lower(name) = lower($2)
+        LIMIT 1
+        """,
+        user_id,
+        list_name,
+    )
+    if rows:
+        row = dict(rows[0])
+        return str(row["id"]), str(row.get("list_type") or list_type)
     return list_id, list_type
 
 
