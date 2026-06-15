@@ -18,6 +18,7 @@ import shutil
 import time
 import uuid
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any, Mapping
 
 from pi_runtime_probe import probe_pi_runtime
@@ -189,13 +190,13 @@ def pi_intent_status(env: Mapping[str, str] | None = None) -> dict[str, Any]:
 
 def pi_intent_promotion_status(env: Mapping[str, str] | None = None) -> dict[str, Any]:
     values = env if env is not None else os.environ
-    requested_groups = _csv_env(values.get("ZOE_PI_INTENT_PROMOTED_GROUPS"))
-    active_groups = [group for group in requested_groups if group in LOW_RISK_PI_INTENT_GROUPS]
-    ignored_groups = [group for group in requested_groups if group not in LOW_RISK_PI_INTENT_GROUPS]
+    requested_groups, active_groups, ignored_groups = _pi_intent_promotion_groups(
+        values.get("ZOE_PI_INTENT_PROMOTED_GROUPS") or ""
+    )
     return {
-        "requested_groups": requested_groups,
-        "active_groups": active_groups,
-        "ignored_groups": ignored_groups,
+        "requested_groups": list(requested_groups),
+        "active_groups": list(active_groups),
+        "ignored_groups": list(ignored_groups),
         "allowlisted_groups": sorted(LOW_RISK_PI_INTENT_GROUPS),
     }
 
@@ -579,6 +580,14 @@ def _bounded_float(value: Any, *, default: float) -> float:
     except (TypeError, ValueError):
         parsed = default
     return min(1.0, max(0.0, parsed))
+
+
+@lru_cache(maxsize=16)
+def _pi_intent_promotion_groups(value: str) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    requested_groups = tuple(_csv_env(value))
+    active_groups = tuple(group for group in requested_groups if group in LOW_RISK_PI_INTENT_GROUPS)
+    ignored_groups = tuple(group for group in requested_groups if group not in LOW_RISK_PI_INTENT_GROUPS)
+    return requested_groups, active_groups, ignored_groups
 
 
 def _csv_env(value: str | None) -> list[str]:

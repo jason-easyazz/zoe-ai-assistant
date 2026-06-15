@@ -129,6 +129,16 @@ def test_pi_intent_promotion_status_filters_to_low_risk_groups():
     assert pi_intent_is_promoted("extend_capability", {"ZOE_PI_INTENT_PROMOTED_GROUPS": "extend_capability"}) is False
 
 
+def test_pi_intent_promotion_status_cache_tracks_env_value(monkeypatch):
+    monkeypatch.setenv("ZOE_PI_INTENT_PROMOTED_GROUPS", "weather")
+    first = pi_intent_promotion_status()
+    monkeypatch.setenv("ZOE_PI_INTENT_PROMOTED_GROUPS", "reminders")
+    second = pi_intent_promotion_status()
+
+    assert first["active_groups"] == ["weather"]
+    assert second["active_groups"] == ["reminders"]
+
+
 def test_pi_intent_config_rejects_cloud_provider_when_offline_only():
     config = PiIntentClassifierConfig.from_env(
         {
