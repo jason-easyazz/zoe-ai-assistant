@@ -92,6 +92,28 @@ scripts/maintenance/pi_promotion_eval.py --demo --min-samples 10 \
 
 The apply helper only writes `ZOE_PI_INTENT_PROMOTED_GROUPS`; it rejects any other env key in the report.
 
+## Evaluation Datasets
+
+The promotion evaluator can load sanitized JSON or JSONL case files so Zoe can
+grow evidence from intent misses, known failures, chat/voice-derived examples,
+synthetic ambiguous phrasing, and negative casual-chat cases without editing
+Python code. The seed dataset lives at:
+
+```bash
+data/eval/pi_intent_eval_cases.jsonl
+```
+
+Run the seed dataset without touching live routing:
+
+```bash
+scripts/maintenance/pi_promotion_eval.py \
+  --cases-file data/eval/pi_intent_eval_cases.jsonl \
+  --no-default-cases
+```
+
+Add `--run-pi --transport rpc` only when the local/offline Pi intent runtime is
+configured. The report still remains evidence-only; `ZOE_PI_INTENT_PROMOTED_GROUPS`
+changes must pass the promotion actions and guarded apply helper described above.
 
 ## Review-Only Runtime Proposal
 
