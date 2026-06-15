@@ -182,3 +182,24 @@ async def test_bare_numeric_time_reminder_still_uses_existing_extractor(monkeypa
     assert intent is not None
     assert intent.name == "reminder_create"
     assert intent.slots == {"title": "bare numeric time reminder", "date": "2026-06-15", "time": "17:00"}
+
+
+@pytest.mark.asyncio
+async def test_time_before_day_reminder_skips_llm_extractor(monkeypatch):
+    module = types.ModuleType("nlu_extractor")
+
+    async def fail_extract(_intent_name, _raw):
+        raise AssertionError("time-before-day simple reminder should not call the LLM slot extractor")
+
+    module.extract_slots_for_intent = fail_extract
+    monkeypatch.setitem(sys.modules, "nlu_extractor", module)
+
+    from intent_router import detect_and_extract_intent
+
+    intent = await detect_and_extract_intent("remind me to call mum at 10am tomorrow", user_id="guest")
+
+    assert intent is not None
+    assert intent.name == "reminder_create"
+    assert intent.slots["title"] == "call mum"
+    assert intent.slots["time"] == "10:00"
+    assert intent.slots["date"]
