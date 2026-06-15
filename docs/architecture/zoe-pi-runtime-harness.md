@@ -82,8 +82,9 @@ Pi promotion scoring contract used by `pi_promotion_eval.py`, including
 `user_corrected=true` or `rollback_blocked=true`; those fields feed the same
 rollback gates as synthetic promotion samples. The promotion report includes
 `route_class_breakdown` for deterministic, fallback, and extraction_failed
-baselines, plus compact `failure_examples` with IDs, intents, latency,
-transport, and reason flags, but not raw text or text previews. Unlabeled
+baselines, `transport_breakdown` for print vs RPC latency and accuracy, plus
+compact `failure_examples` with IDs, intents, latency, transport, and reason
+flags, but not raw text or text previews. Unlabeled
 records are never treated as accuracy evidence. Pi live execution remains
 separately gated by
 `ZOE_PI_INTENT_PROMOTED_GROUPS`, so enabling the classifier alone does not
