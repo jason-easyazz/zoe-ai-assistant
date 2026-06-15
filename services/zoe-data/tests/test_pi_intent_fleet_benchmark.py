@@ -12,10 +12,13 @@ def _load_module():
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     old_path = list(sys.path)
+    old_modules = set(sys.modules)
     try:
         spec.loader.exec_module(module)
     finally:
         sys.path[:] = old_path
+        for name in set(sys.modules) - old_modules:
+            sys.modules.pop(name, None)
     return module
 
 
