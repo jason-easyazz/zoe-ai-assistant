@@ -1278,6 +1278,12 @@ def detect_intent(
                 _f.write(_json.dumps({"text": _clean, "ts": __import__("time").time()}) + "\n")
         except Exception:
             pass  # Never let logging break intent routing
+        try:
+            from pi_intent_evidence import record_intent_miss_evidence
+
+            record_intent_miss_evidence(text, route_class="fallback")
+        except Exception:
+            pass  # Never let evidence collection break intent routing
     return None
 
 

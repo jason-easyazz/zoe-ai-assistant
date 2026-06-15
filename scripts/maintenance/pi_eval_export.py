@@ -25,8 +25,8 @@ _ALLOWED_SOURCES = {"intent_miss", "chat_log", "voice_log", "known_failure", "sy
 _ALLOWED_ROUTE_CLASSES = {"deterministic", "fallback", "extraction_failed"}
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.\w+")
 _URL_RE = re.compile(r"https?://\S+")
-_PHONE_RE = re.compile(r"\b\d[\d\s\-]{6,}\b")
-_NAME_RE = re.compile(r"\b[A-Z][a-z]+ [A-Z][a-z]+\b")
+_PHONE_RE = re.compile(r"\b\d[\d\s\-]{5,}\d\b")
+_NAME_RE = re.compile(r"(?<=\s)[A-Z][a-z]+ [A-Z][a-z]+\b")
 _SPACE_RE = re.compile(r"\s+")
 _SECRET_TEXT_RE = re.compile(r"(?i)(api[\s_-]?key|authorization|bearer\s+[a-z0-9._\-]+|password\s*(is|=)|secret\s*(is|=)|token\s*(is|=))")
 
