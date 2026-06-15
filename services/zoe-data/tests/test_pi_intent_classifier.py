@@ -71,13 +71,15 @@ def _fake_rpc_runtime(tmp_path, *, response=None):
         "        fh.write(json.dumps({'event': 'start', 'argv': sys.argv, 'openai': os.environ.get('OPENAI_API_KEY'), 'openrouter': os.environ.get('OPENROUTER_API_KEY')}) + '\\n')\n"
         "payload = json.loads(os.environ['PI_TEST_PAYLOAD'])\n"
         "for line in sys.stdin:\n"
+        "    request = json.loads(line)\n"
         "    if record:\n"
         "        with open(record, 'a') as fh:\n"
-        "            fh.write(json.dumps({'event': 'request', 'body': json.loads(line)}) + '\\n')\n"
+        "            fh.write(json.dumps({'event': 'request', 'body': request}) + '\\n')\n"
         "    text = json.dumps(payload)\n"
-        "    print(json.dumps({'type': 'message_end', 'message': {'role': 'assistant', 'content': [{'type': 'text', 'text': text}]}}), flush=True)\n"
-        "    print(json.dumps({'type': 'turn_end', 'message': {'role': 'assistant', 'content': [{'type': 'text', 'text': text}]}}), flush=True)\n"
-        "    print(json.dumps({'type': 'agent_end', 'messages': [{'role': 'assistant', 'content': [{'type': 'text', 'text': text}]}]}), flush=True)\n",
+        "    event_id = request.get('id')\n"
+        "    print(json.dumps({'id': event_id, 'type': 'message_end', 'message': {'role': 'assistant', 'content': [{'type': 'text', 'text': text}]}}), flush=True)\n"
+        "    print(json.dumps({'id': event_id, 'type': 'turn_end', 'message': {'role': 'assistant', 'content': [{'type': 'text', 'text': text}]}}), flush=True)\n"
+        "    print(json.dumps({'id': event_id, 'type': 'agent_end', 'messages': [{'role': 'assistant', 'content': [{'type': 'text', 'text': text}]}]}), flush=True)\n",
     )
     return bindir, payload
 
@@ -326,8 +328,10 @@ async def test_pi_rpc_ignores_stale_response_with_mismatched_request_id(tmp_path
         f"fresh_payload = {json.dumps(fresh_payload)}\n"
         "for line in sys.stdin:\n"
         "    request = json.loads(line)\n"
+        "    idless = {'type': 'agent_end', 'messages': [{'role': 'assistant', 'content': [{'type': 'text', 'text': stale_payload}]}]}\n"
         "    stale = {'id': 'stale-request', 'type': 'agent_end', 'messages': [{'role': 'assistant', 'content': [{'type': 'text', 'text': stale_payload}]}]}\n"
         "    fresh = {'id': request['id'], 'type': 'agent_end', 'messages': [{'role': 'assistant', 'content': [{'type': 'text', 'text': fresh_payload}]}]}\n"
+        "    print(json.dumps(idless), flush=True)\n"
         "    print(json.dumps(stale), flush=True)\n"
         "    print(json.dumps(fresh), flush=True)\n",
     )

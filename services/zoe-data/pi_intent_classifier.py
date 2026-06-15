@@ -440,7 +440,9 @@ def _rpc_event_matches_request(event: Mapping[str, Any], request_id: str) -> boo
     turn = event.get("turn")
     if isinstance(turn, Mapping):
         event_ids.extend([turn.get("id"), turn.get("request_id"), turn.get("requestId")])
-    present_ids = [str(value) for value in event_ids if value]
+    present_ids = [str(value) for value in event_ids if value is not None]
+    if event.get("type") == "agent_end" and not present_ids:
+        return False
     return not present_ids or request_id in present_ids
 
 
