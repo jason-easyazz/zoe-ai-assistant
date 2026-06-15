@@ -193,7 +193,15 @@ def pi_intent_promotion_status(env: Mapping[str, str] | None = None) -> dict[str
     requested_groups, active_groups, ignored_groups = _pi_intent_promotion_groups(
         values.get("ZOE_PI_INTENT_PROMOTED_GROUPS") or ""
     )
+    auto_promote_enabled = _env_bool(values.get("ZOE_PI_INTENT_AUTO_PROMOTE"), default=False)
     return {
+        "auto_promote_enabled": auto_promote_enabled,
+        "auto_promote_status": "evidence_only" if not auto_promote_enabled else "requires_explicit_apply_path",
+        "auto_promote_reason": (
+            "ZOE_PI_INTENT_AUTO_PROMOTE is false; reports remain recommendations only"
+            if not auto_promote_enabled
+            else "auto-promote is requested but this runtime only exposes guarded promotion actions"
+        ),
         "requested_groups": list(requested_groups),
         "active_groups": list(active_groups),
         "ignored_groups": list(ignored_groups),
