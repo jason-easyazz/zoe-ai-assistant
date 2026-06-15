@@ -140,3 +140,33 @@ def test_pi_intent_status_endpoint_rejects_non_admin():
     resp = TestClient(app).get("/api/system/pi-intent/status")
 
     assert resp.status_code == 403
+
+
+def test_pi_intent_shadow_status_endpoint_is_admin_scoped(tmp_path, monkeypatch):
+    path = tmp_path / "shadow.jsonl"
+    path.write_text('{"agreement":true,"timed_out":false,"zoe_intent_group":"weather","pi_latency_ms":100,"zoe_latency_ms":5}\n')
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_ENABLED", "true")
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_PATH", str(path))
+    app = _admin_app()
+
+    resp = TestClient(app).get("/api/system/pi-intent/shadow-status")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["config"]["enabled"] is True
+    assert data["record_count_window"] == 1
+    assert data["report"]["agreement_rate"] == 1.0
+
+
+def test_pi_intent_shadow_status_endpoint_rejects_non_admin():
+    app = FastAPI()
+    app.include_router(system_router)
+
+    async def fake_non_admin():
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    app.dependency_overrides[require_admin] = fake_non_admin
+
+    resp = TestClient(app).get("/api/system/pi-intent/shadow-status")
+
+    assert resp.status_code == 403
