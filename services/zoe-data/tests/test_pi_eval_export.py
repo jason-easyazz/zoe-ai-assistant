@@ -125,20 +125,6 @@ def test_skips_privileged_intent_with_explicit_intent_group():
     assert len(cases) == 0
 
 
-def test_skips_privileged_intent_with_explicit_intent_group():
-    module = _load_module()
-    rows = [
-        {
-            "text_preview": "upgrade yourself",
-            "expected_intent": "extend_capability",
-            "intent_group": "weather",
-        }
-    ]
-
-    cases = module.export_eval_cases(rows, source="intent_miss")
-    assert len(cases) == 0
-
-
 def test_cli_output_feeds_pi_promotion_eval(tmp_path, capsys):
     export_module = _load_module()
     eval_module = _load_eval_module()
