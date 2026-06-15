@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 
@@ -31,8 +32,9 @@ def test_record_intent_miss_evidence_writes_sanitized_jsonl(tmp_path):
 
     assert result is not None
     saved = json.loads(path.read_text(encoding="utf-8"))
+    expected_user_hash = hashlib.sha256(b"jason").hexdigest()[:16]
     assert saved["source"] == "intent_miss"
-    assert saved["user_hash"] != "b23a6a8439c0dde5"
+    assert saved["user_hash"] == expected_user_hash
     assert saved["route_class"] == "fallback"
     assert saved["text"] == "email [EMAIL] if rain later"
     assert saved["text_hash"]
@@ -78,6 +80,7 @@ def test_detect_intent_miss_produces_pi_evidence_when_enabled(tmp_path, monkeypa
     assert legacy_path.exists()
     assert evidence_path.exists()
     saved = json.loads(evidence_path.read_text(encoding="utf-8"))
+    expected_user_hash = hashlib.sha256(b"jason").hexdigest()[:16]
     assert saved["text"] == "email [EMAIL] if rain later"
     assert saved["source"] == "intent_miss"
-    assert saved["user_hash"] != "b23a6a8439c0dde5"
+    assert saved["user_hash"] == expected_user_hash
