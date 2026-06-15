@@ -1347,10 +1347,16 @@ async def detect_and_extract_intent(
     async def _try_pi_governor() -> tuple[Optional["Intent"], object | None]:
         pi_classified = None
         try:
-            from pi_intent_classifier import PI_INTENT_EXECUTE_THRESHOLD, classify_with_pi_intent_governor
+            from pi_intent_classifier import PI_INTENT_EXECUTE_THRESHOLD, classify_with_pi_intent_governor, pi_intent_is_promoted
+
             pi_classified = await classify_with_pi_intent_governor(text, context_turns=_context_turns())
             if pi_classified and pi_classified.intent and pi_classified.confidence >= PI_INTENT_EXECUTE_THRESHOLD:
-                return Intent(pi_classified.intent, dict(pi_classified.slots), confidence=pi_classified.confidence), pi_classified
+                if pi_intent_is_promoted(pi_classified.intent):
+                    return Intent(pi_classified.intent, dict(pi_classified.slots), confidence=pi_classified.confidence), pi_classified
+                logger.debug(
+                    "detect_and_extract_intent: Pi intent %s classified but not promoted for execution",
+                    pi_classified.intent,
+                )
         except Exception as exc:
             logger.debug("detect_and_extract_intent: Pi/Gemma governor failed: %s", exc)
         return None, pi_classified
