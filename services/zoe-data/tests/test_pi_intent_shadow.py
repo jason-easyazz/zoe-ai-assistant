@@ -121,6 +121,9 @@ def test_shadow_summary_empty_is_explicitly_not_accuracy_ready():
     assert report["sample_count"] == 0
     assert report["no_result_rate"] == 0.0
     assert report["accuracy_available"] is False
+    assert report["labeled_sample_count_by_group"]["weather"] == 0
+    assert report["sample_deficit_by_group"]["weather"] == PiPromotionPolicy().min_samples
+    assert report["promotion_ready_groups"] == []
 
 
 @pytest.mark.asyncio
@@ -340,7 +343,34 @@ def test_shadow_summary_needs_min_samples_for_promotion_ready():
 
     assert report["accuracy_available"] is True
     assert report["labeled_sample_count"] == 29
+    assert report["labeled_sample_count_by_group"]["weather"] == 29
+    assert report["sample_deficit_by_group"]["weather"] == 1
     assert report["promotion_ready"] is False
+    assert report["promotion_ready_groups"] == []
+
+
+def test_shadow_summary_requires_min_samples_in_one_group_for_promotion_ready():
+    records = [{"outcome_label": "weather"} for _ in range(15)]
+    records.extend({"outcome_label": "timer_create"} for _ in range(15))
+
+    report = summarize_pi_intent_shadow(records)
+
+    assert report["accuracy_available"] is True
+    assert report["labeled_sample_count"] == 30
+    assert report["labeled_sample_count_by_group"]["weather"] == 15
+    assert report["labeled_sample_count_by_group"]["timers"] == 15
+    assert report["sample_deficit_by_group"]["weather"] == 15
+    assert report["sample_deficit_by_group"]["timers"] == 15
+    assert report["promotion_ready"] is False
+    assert report["promotion_ready_groups"] == []
+
+
+def test_shadow_summary_names_groups_with_enough_labeled_evidence():
+    report = summarize_pi_intent_shadow([{"outcome_label": "weather"} for _ in range(PiPromotionPolicy().min_samples)])
+
+    assert report["promotion_ready"] is True
+    assert report["promotion_ready_groups"] == ["weather"]
+    assert report["sample_deficit_by_group"]["weather"] == 0
 
 
 def test_labeled_shadow_fallback_without_comparable_baseline_blocks_promotion(tmp_path):
@@ -414,6 +444,8 @@ def test_shadow_status_includes_promotion_report_for_labeled_records(tmp_path):
     assert status["report"]["accuracy_available"] is True
     assert status["report"]["labeled_sample_count"] == 30
     assert status["report"]["promotion_ready"] is True
+    assert status["report"]["promotion_ready_groups"] == ["weather"]
+    assert status["report"]["sample_deficit_by_group"]["weather"] == 0
     assert "weather" in status["promotion_report"]["promotable_groups"]
     assert status["promotion_report"]["promoted_groups"] == ["weather"]
     assert status["promotion_report"]["promotion_actions"]["next_promoted_groups"] == ["weather"]

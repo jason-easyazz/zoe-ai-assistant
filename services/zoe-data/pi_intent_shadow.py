@@ -235,6 +235,8 @@ def shadow_records_to_route_samples(records: Sequence[Mapping[str, Any]]) -> lis
 def summarize_pi_intent_shadow(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     total = len(records)
     if total == 0:
+        labeled_counts = _labeled_counts_by_group(())
+        sample_deficits = {group: PiPromotionPolicy().min_samples for group in labeled_counts}
         return {
             "sample_count": 0,
             "agreement_rate": 0.0,
@@ -245,7 +247,10 @@ def summarize_pi_intent_shadow(records: Sequence[Mapping[str, Any]]) -> dict[str
             "intent_groups": {},
             "accuracy_available": False,
             "labeled_sample_count": 0,
+            "labeled_sample_count_by_group": labeled_counts,
+            "sample_deficit_by_group": sample_deficits,
             "promotion_ready": False,
+            "promotion_ready_groups": [],
             "promotion_ready_reason": "runtime shadow records are unlabeled agreement evidence, not accuracy labels",
         }
     groups: dict[str, dict[str, int]] = {}
@@ -270,7 +275,16 @@ def summarize_pi_intent_shadow(records: Sequence[Mapping[str, Any]]) -> dict[str
             zoe_latencies.append(float(record["zoe_latency_ms"]))
         if isinstance(record.get("pi_latency_ms"), (int, float)):
             pi_latencies.append(float(record["pi_latency_ms"]))
-    labeled_sample_count = sum(1 for record in records if record.get("outcome_label"))
+    policy = PiPromotionPolicy()
+    labeled_counts = _labeled_counts_by_group(records)
+    labeled_sample_count = sum(labeled_counts.values())
+    sample_deficits = {
+        group: max(0, policy.min_samples - labeled_counts.get(group, 0))
+        for group in sorted(LOW_RISK_PI_INTENT_GROUPS)
+    }
+    promotion_ready_groups = [
+        group for group in sorted(LOW_RISK_PI_INTENT_GROUPS) if sample_deficits[group] == 0
+    ]
     return {
         "sample_count": total,
         "agreement_rate": agreements / total,
@@ -281,13 +295,30 @@ def summarize_pi_intent_shadow(records: Sequence[Mapping[str, Any]]) -> dict[str
         "intent_groups": groups,
         "accuracy_available": labeled_sample_count > 0,
         "labeled_sample_count": labeled_sample_count,
-        "promotion_ready": labeled_sample_count >= PiPromotionPolicy().min_samples,
-        "promotion_ready_reason": (
-            "labeled outcome evidence is available for promotion scoring"
-            if labeled_sample_count
-            else "runtime shadow records are unlabeled agreement evidence, not accuracy labels"
-        ),
+        "labeled_sample_count_by_group": labeled_counts,
+        "sample_deficit_by_group": sample_deficits,
+        "promotion_ready": bool(promotion_ready_groups),
+        "promotion_ready_groups": promotion_ready_groups,
+        "promotion_ready_reason": _promotion_ready_reason(labeled_sample_count, promotion_ready_groups),
     }
+
+
+def _labeled_counts_by_group(records: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    counts = {group: 0 for group in sorted(LOW_RISK_PI_INTENT_GROUPS)}
+    for record in records:
+        intent = _optional_str(record.get("outcome_label"))
+        group = intent_group_for_intent(intent)
+        if group in counts:
+            counts[group] += 1
+    return counts
+
+
+def _promotion_ready_reason(labeled_sample_count: int, ready_groups: Sequence[str]) -> str:
+    if ready_groups:
+        return "one or more intent groups have enough labeled outcome evidence for promotion scoring"
+    if labeled_sample_count:
+        return "labeled outcome evidence exists, but no intent group has enough labels for promotion scoring"
+    return "runtime shadow records are unlabeled agreement evidence, not accuracy labels"
 
 
 def _resolve_baseline_metadata(
