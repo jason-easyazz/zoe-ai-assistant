@@ -78,7 +78,9 @@ Pi promotion scoring contract used by `pi_promotion_eval.py`, including
 `promotable_groups` and `rollback_groups`. Unlabeled records are never treated as
 accuracy evidence. Pi live execution remains separately gated by
 `ZOE_PI_INTENT_PROMOTED_GROUPS`, so enabling the classifier alone does not promote
-all Pi classifications into executable Zoe routes.
+all Pi classifications into executable Zoe routes. The report includes a read-only
+`promotion_actions.env.ZOE_PI_INTENT_PROMOTED_GROUPS` recommendation for operator
+review; Zoe does not rewrite env or auto-promote groups from shadow evidence.
 
 
 ## Review-Only Runtime Proposal
