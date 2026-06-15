@@ -102,6 +102,27 @@ def test_websocket_hey_zoe_can_emit_configured_ack_phrase(monkeypatch):
             assert ws.receive_json() == {"type": "done"}
 
 
+def test_websocket_raw_text_hey_zoe_can_emit_configured_ack_phrase(monkeypatch):
+    from fastapi.testclient import TestClient
+    import main
+
+    async def _unexpected_resolve(*_args, **_kwargs):
+        raise AssertionError("raw wake phrase must not enter Skybridge/card resolution")
+
+    monkeypatch.setattr(main, "_resolve_voice_cards", _unexpected_resolve)
+    monkeypatch.setenv("ZOE_WAKE_ACK_PHRASE", "Yes Jason?")
+
+    with TestClient(main.app) as client:
+        with client.websocket_connect("/ws/voice/") as ws:
+            assert ws.receive_json() == {"type": "state", "state": "ambient"}
+            ws.send_text("hey zoe")
+
+            assert ws.receive_json() == {"type": "state", "state": "wake"}
+            assert ws.receive_json() == {"type": "transcript", "role": "zoe", "text": "Yes Jason?"}
+            assert ws.receive_json() == {"type": "state", "state": "listening"}
+            assert ws.receive_json() == {"type": "done"}
+
+
 def test_websocket_ignores_non_object_json_and_stays_alive(monkeypatch):
     from fastapi.testclient import TestClient
     import main

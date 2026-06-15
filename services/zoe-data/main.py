@@ -1694,7 +1694,7 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
                     msg = __import__("json").loads(text_data)
                 except ValueError:
                     msg = None
-                if hasattr(msg, "get"):
+                if isinstance(msg, dict):
                     if is_wake_payload(msg):
                         for event in wake_presence_events(ack_phrase=wake_ack_phrase()):
                             await websocket.send_json(event)
