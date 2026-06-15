@@ -322,7 +322,16 @@ def test_transport_breakdown_separates_print_and_rpc_latency():
     samples = [
         _sample(1, pi_transport="print", zoe_ms=900, pi_ms=700),
         _sample(2, pi_transport="rpc", zoe_ms=900, pi_ms=300),
-        _sample(3, pi_transport="rpc", zoe="weather", pi="weather", zoe_ms=50, pi_ms=80),
+        _sample(
+            3,
+            pi_transport="rpc",
+            zoe="weather",
+            pi="weather",
+            zoe_ms=50,
+            pi_ms=1200,
+            timed_out=True,
+            user_corrected=True,
+        ),
     ]
 
     breakdown = build_pi_transport_breakdown(samples)
@@ -341,11 +350,13 @@ def test_transport_breakdown_separates_print_and_rpc_latency():
     }
     assert breakdown["rpc"]["sample_count"] == 2
     assert breakdown["rpc"]["zoe_accuracy"] == 0.5
-    assert breakdown["rpc"]["pi_accuracy"] == 1.0
-    assert breakdown["rpc"]["accuracy_delta"] == 0.5
+    assert breakdown["rpc"]["pi_accuracy"] == 0.5
+    assert breakdown["rpc"]["accuracy_delta"] == 0.0
     assert breakdown["rpc"]["zoe_p95_latency_ms"] == 857.5
-    assert breakdown["rpc"]["pi_p95_latency_ms"] == 289.0
-    assert breakdown["rpc"]["latency_delta_ms"] == 568.5
+    assert breakdown["rpc"]["pi_p95_latency_ms"] == 1155.0
+    assert breakdown["rpc"]["latency_delta_ms"] == -297.5
+    assert breakdown["rpc"]["timeout_rate"] == 0.5
+    assert breakdown["rpc"]["correction_rate"] == 0.5
 
 
 def test_summary_lists_promotable_groups():

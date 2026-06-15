@@ -381,6 +381,11 @@ def build_pi_route_class_breakdown(samples: Sequence[PiRouteSample]) -> dict[str
 
 
 def build_pi_transport_breakdown(samples: Sequence[PiRouteSample]) -> dict[str, dict[str, Any]]:
+    """Summarize Pi print and RPC evidence separately.
+
+    Empty buckets retain the existing promotion-report convention: rates and
+    accuracy fields are 0.0, while sample_count=0 is the no-evidence signal.
+    """
     breakdown: dict[str, dict[str, Any]] = {}
     for transport in sorted(PI_TRANSPORTS):
         transport_samples = [sample for sample in samples if sample.pi_transport == transport]
