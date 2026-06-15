@@ -56,11 +56,13 @@ def test_implement_requires_tool_evidence_before_complete():
     state = PipelineState(task_ref="multica:1", phase="implement")
 
     assert can_complete_phase(state) is False
-    assert missing_required_evidence(state) == {"tool"}
+    assert missing_required_evidence(state) == {"pr", "tool"}
     with pytest.raises(ValueError, match="missing required evidence"):
         transition(state, "complete")
 
     state = with_evidence(state, EvidenceItem(kind="tool", summary="graphify query ran", passed=True))
+    assert missing_required_evidence(state) == {"pr"}
+    state = with_evidence(state, EvidenceItem(kind="pr", summary="opened PR for implement", passed=True))
     next_state = transition(state, "complete")
 
     assert next_state.phase == "verify"
@@ -294,7 +296,7 @@ def test_skip_implementation_rejects_implement_without_evidence():
         status="blocked",
     )
 
-    with pytest.raises(ValueError, match="implement is missing required evidence: tool"):
+    with pytest.raises(ValueError, match="implement is missing required evidence: pr, tool"):
         transition(state, "skip_implementation")
 
 
