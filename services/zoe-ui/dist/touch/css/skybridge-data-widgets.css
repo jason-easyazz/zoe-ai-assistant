@@ -96,13 +96,13 @@ body:not(.sky-empty) .sky-list-switcher {
 }
 
 body:not(.sky-empty) .sky-list-tab {
-    min-height: 42px;
+    min-height: 56px;
     display: flex;
     align-items: center;
     justify-content: center;
     border-radius: 16px;
     border: 1px solid rgba(255,255,255,0.14);
-    padding: 8px 10px;
+    padding: 12px 14px;
     color: rgba(255,255,255,0.88);
     background: rgba(255,255,255,0.08);
     font: inherit;
@@ -113,7 +113,7 @@ body:not(.sky-empty) .sky-list-tab span {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 0.86rem;
+    font-size: 1rem;
     font-weight: 850;
 }
 
@@ -320,6 +320,11 @@ body:not(.sky-empty) .sky-people-list {
     gap: 10px;
 }
 
+body:not(.sky-empty) .sky-list-items.is-list-detail {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-content: start;
+}
+
 body:not(.sky-empty) .sky-list-item-row,
 body:not(.sky-empty) .sky-list-overview-row,
 body:not(.sky-empty) .sky-person-row {
@@ -335,6 +340,17 @@ body:not(.sky-empty) .sky-person-row {
 
 body:not(.sky-empty) .sky-list-item-row {
     grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+body:not(.sky-empty) .sky-list-item-row.is-recent {
+    border-color: rgba(90,224,224,0.42);
+    background: linear-gradient(145deg, rgba(90,224,224,0.18), rgba(255,255,255,0.09));
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.16), 0 12px 28px rgba(90,224,224,0.08);
+}
+
+body:not(.sky-empty) .sky-list-item-row.is-recent .sky-list-check {
+    border-color: rgba(90,224,224,0.74);
+    background: rgba(90,224,224,0.14);
 }
 
 body:not(.sky-empty) .sky-person-row {
