@@ -5,6 +5,12 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 def _comment_value(path: Path, key: str) -> str:
+    """Return the value from the first commented '# KEY=value' line.
+
+    Only reliable for keys with a single entry, such as
+    ZOE_PROCESSING_ACK_PHRASES. Keys that appear twice as example plus empty
+    placeholder should be checked with raw text substring matching instead.
+    """
     prefix = f"# {key}="
     for line in path.read_text(encoding="utf-8").splitlines():
         if line.startswith(prefix):
