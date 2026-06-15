@@ -327,7 +327,7 @@ def _clean_action_text(value: str) -> str:
 
 def _list_add_from_text(message: str) -> tuple[str, str] | None:
     match = re.search(
-        r"\badd\s+(?P<item>.+?)\s+to\s+(?:the\s+|my\s+)?(?P<list>shopping list|grocery list|groceries|list|task list|todo list|tasks|todos)\b",
+        r"\badd\s+(?P<item>.+?)\s+to\s+(?:the\s+|my\s+)?(?P<list>shopping list|grocery list|groceries|work list|personal list|list|task list|todo list|tasks|todos)\b",
         message,
         re.IGNORECASE,
     )
@@ -336,6 +336,23 @@ def _list_add_from_text(message: str) -> tuple[str, str] | None:
     item = _clean_action_text(match.group("item"))
     list_phrase = f" {match.group('list').lower()} "
     list_type = _list_type_from_text(list_phrase) or ("shopping" if "grocery" in list_phrase else "")
+    return item, list_type or "shopping"
+
+
+def _contextual_list_add_from_text(message: str, context: dict[str, Any] | None) -> tuple[str, str] | None:
+    if _context_domain(context) != "lists":
+        return None
+    match = re.search(r"\badd\s+(?P<item>.+?)\s*$", message, re.IGNORECASE)
+    if not match:
+        return None
+    if re.search(r"\b(?:at|for)\s+\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)?\b", message, re.IGNORECASE):
+        return None
+    if re.search(r"\bto\s+", message, re.IGNORECASE):
+        return None
+    item = _clean_action_text(match.group("item"))
+    if not item or item.lower() in {"item", "something", "this", "that"}:
+        return None
+    _list_id, list_type = _context_list_hint(context)
     return item, list_type or "shopping"
 
 
@@ -462,6 +479,10 @@ def classify_skybridge_intent(message: str, context: dict[str, Any] | None = Non
     if list_create:
         list_name, list_type = list_create
         return SkybridgeIntent(domain="lists", action="create_list", list_name=list_name, list_type=list_type)
+    contextual_list_add = _contextual_list_add_from_text(raw_message, context)
+    if contextual_list_add:
+        item, list_type = contextual_list_add
+        return SkybridgeIntent(domain="lists", action="add_item", item_text=item, list_type=list_type)
     calendar_create = _calendar_create_from_text(raw_message, context)
     if calendar_create:
         title, target_time = calendar_create
@@ -926,9 +947,9 @@ async def _ensure_default_lists(user_id: str, db: Any) -> None:
         user_id,
     )
     existing_rows = [dict(row) for row in rows]
-    existing = {(str(row.get("list_type") or ""), str(row.get("name") or "").strip().lower()) for row in existing_rows}
+    existing_types = {str(row.get("list_type") or "").strip().lower() for row in existing_rows}
     for list_type, name, description, visibility in DEFAULT_USER_LISTS:
-        if (list_type, name.lower()) in existing:
+        if list_type in existing_types:
             continue
         await db.execute(
             """
@@ -1087,7 +1108,9 @@ async def _find_or_create_list(intent: SkybridgeIntent, user_id: str, db: Any, c
         FROM lists
         WHERE list_type = $2 AND deleted = 0
           AND (visibility = 'family' OR user_id = $1)
-        ORDER BY updated_at DESC
+        ORDER BY
+          CASE WHEN user_id = $1 THEN 0 ELSE 1 END,
+          updated_at DESC
         LIMIT 1
         """,
         user_id,
@@ -1109,7 +1132,7 @@ async def _find_or_create_list(intent: SkybridgeIntent, user_id: str, db: Any, c
         list_name,
         list_type,
         "",
-        "family",
+        "family" if list_type == "shopping" else "personal",
     )
     await _maybe_commit(db)
     rows = await db.fetch(
@@ -1145,6 +1168,7 @@ async def _resolve_list_add_item(intent: SkybridgeIntent, user_id: str, db: Any,
             "cards": [_status_card("What should I add?", "Say the item and the list, for example: add bread to the shopping list.")],
             "actions": [],
         }
+    await _ensure_default_lists(user_id, db)
     list_target = await _find_or_create_list(intent, user_id, db, context)
     if not list_target:
         return {
@@ -1172,6 +1196,30 @@ async def _resolve_list_add_item(intent: SkybridgeIntent, user_id: str, db: Any,
     )
     await _maybe_commit(db)
     refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type), user_id, db)
+    card_content = refreshed.get("cards", [{}])[0].get("content", {}) if refreshed.get("cards") else {}
+    items = card_content.get("items")
+    if isinstance(items, list):
+        found_recent = False
+        for item in items:
+            if isinstance(item, dict) and str(item.get("id") or "") == item_id:
+                item["recent"] = True
+                found_recent = True
+        if not found_recent:
+            items.insert(
+                0,
+                {
+                    "id": item_id,
+                    "list_id": list_id,
+                    "text": intent.item_text,
+                    "completed": False,
+                    "priority": "normal",
+                    "category": "",
+                    "quantity": "",
+                    "recent": True,
+                },
+            )
+        items.sort(key=lambda row: 0 if isinstance(row, dict) and str(row.get("id") or "") == item_id else 1)
+        card_content["recent_item_id"] = item_id
     refreshed["intent"] = {"domain": "lists", "action": "add_item", "list_type": list_type, "item_id": item_id}
     refreshed["spoken_summary"] = f"Added {intent.item_text} to the {list_type} list."
     refreshed["actions"] = [{"type": "created", "domain": "lists", "id": item_id, "list_id": list_id}]

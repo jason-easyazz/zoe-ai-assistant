@@ -359,11 +359,12 @@
         const isObject = typeof item === 'object' && item;
         const title = isObject ? (item.text || item.title || item.label || 'List item') : String(item || 'List item');
         const completed = !!(isObject && item.completed);
+        const recent = !!(isObject && item.recent);
         const detail = isObject ? [item.quantity, item.category, item.assigned_to].filter(Boolean).join(' · ') : '';
         const priorityValue = isObject && item.priority ? String(item.priority).trim().toLowerCase() : '';
         const priority = priorityValue && priorityValue !== 'normal' ? '<b>' + escapeHtml(item.priority) + '</b>' : '';
         return [
-            '<div class="sky-list-item-row' + (completed ? ' is-done' : '') + '">',
+            '<div class="sky-list-item-row' + (completed ? ' is-done' : '') + (recent ? ' is-recent' : '') + '">',
             '<div class="sky-list-check" aria-hidden="true">' + (completed ? '✓' : '') + '</div>',
             '<div class="sky-list-item-main"><strong>' + escapeHtml(title) + '</strong>' + (detail ? '<em>' + escapeHtml(detail) + '</em>' : '') + '</div>',
             priority ? '<div class="sky-list-item-meta">' + priority + '</div>' : '',
@@ -394,9 +395,10 @@
         const listType = props.list_type || (lists[0] && lists[0].list_type) || 'all';
         const accent = listAccentClass(listType);
         const selectedId = props.list_id && props.list_id !== 'lists-overview' ? props.list_id : '';
-        const visibleItems = items.slice(0, 12);
+        const visibleItems = items.slice(0, 16);
         const rows = visibleItems.map(renderListItemRow).join('');
         const overviewRows = !items.length && lists.length ? '<div class="sky-list-columns">' + lists.slice(0, 6).map(renderListColumn).join('') + '</div>' : '';
+        const itemsClass = 'sky-list-items ' + (rows ? 'is-list-detail' : 'is-list-overview');
         const empty = [
             '<div class="sky-empty-data sky-list-empty">',
             '<strong>No items in ' + escapeHtml(props.list_name || 'this list') + '</strong>',
@@ -406,7 +408,7 @@
         const body = [
             '<div class="sky-list-scene ' + escapeHtml(accent) + '">',
             renderListSwitcher(lists, selectedId),
-            '<div class="sky-list-items">' + (rows || overviewRows || empty) + '</div>',
+            '<div class="' + itemsClass + '">' + (rows || overviewRows || empty) + '</div>',
             '</div>'
         ].join('');
         return cardFrame(Object.assign({ status: 'Lists', icon: 'L' }, props), body, { wide: true, tone: 'zoe-list-card ' + accent, hideHeader: true, hideStatus: true, hideActions: true });
