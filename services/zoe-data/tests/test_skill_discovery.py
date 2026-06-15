@@ -11,12 +11,13 @@ gets a fresh parse.
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, __file__.rsplit("/tests/", 1)[0])
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import skill_discovery as sd  # noqa: E402
 
@@ -25,13 +26,15 @@ import skill_discovery as sd  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
-def _clear_caches():
-    """Each test starts with both caches invalidated."""
-    sd.invalidate_openclaw_cache()
-    sd.invalidate_hermes_cache()
-    yield
-    sd.invalidate_openclaw_cache()
-    sd.invalidate_hermes_cache()
+def _clear_caches(monkeypatch):
+    """Force a fresh parse each test by marking both caches dirty.
+
+    Sets the module-level dirty flags via ``monkeypatch.setattr`` (per the repo
+    test rule for module globals) so pytest restores them automatically after
+    each test — equivalent to calling ``invalidate_*_cache()`` but self-cleaning.
+    """
+    monkeypatch.setattr(sd, "_openclaw_cache_dirty", True)
+    monkeypatch.setattr(sd, "_hermes_cache_dirty", True)
 
 
 def _write_skill_dir(parent: Path, name: str, body: str) -> Path:
