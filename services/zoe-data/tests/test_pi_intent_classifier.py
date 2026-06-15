@@ -14,6 +14,7 @@ from pi_intent_classifier import (
     _rpc_response_matches_request,
     classify_with_pi_intent_governor,
     pi_intent_is_promoted,
+    pi_intent_prefilter_allows,
     pi_intent_promotion_status,
     pi_intent_status,
 )
@@ -189,6 +190,26 @@ def test_pi_intent_config_rejects_unknown_transport():
 
     with pytest.raises(ValueError, match="TRANSPORT"):
         config.validate()
+
+
+def test_pi_intent_config_exposes_prefilter_default():
+    config = PiIntentClassifierConfig.from_env({})
+
+    assert config.prefilter_enabled is True
+    assert config.to_dict()["prefilter_enabled"] is True
+
+
+def test_pi_intent_prefilter_allows_low_risk_tasks_and_rejects_casual_chat():
+    assert pi_intent_prefilter_allows("rain later") is True
+    assert pi_intent_prefilter_allows("what is 18 times 7") is True
+    assert pi_intent_prefilter_allows("18 plus 7") is True
+    assert pi_intent_prefilter_allows("is it cold outside") is True
+    assert pi_intent_prefilter_allows("add bread to shopping") is True
+    assert pi_intent_prefilter_allows("anything I should remember right now") is True
+    assert pi_intent_prefilter_allows("I like the breakfast service") is False
+    assert pi_intent_prefilter_allows("that is a hot take") is False
+    assert pi_intent_prefilter_allows("add to that point") is False
+    assert pi_intent_prefilter_allows("minus any drama") is False
 
 
 def test_pi_rpc_response_match_requires_prompt_command():
@@ -595,6 +616,7 @@ async def test_pi_intent_governor_rejects_unknown_intent(tmp_path):
         "ZOE_PI_CWD": str(tmp_path),
         "ZOE_PI_ALLOW_EXECUTION": "true",
         "ZOE_PI_LOCAL_MODEL_CONFIGURED": "true",
+        "ZOE_PI_INTENT_PREFILTER_ENABLED": "false",
     }
 
     assert await classify_with_pi_intent_governor("please do something weird", env=env) is None
@@ -635,6 +657,47 @@ async def test_pi_intent_governor_times_out_without_exception(tmp_path):
     }
 
     assert await classify_with_pi_intent_governor("weather later", env=env) is None
+
+
+@pytest.mark.asyncio
+async def test_pi_intent_governor_prefilter_skips_casual_chat_before_runtime_probe(tmp_path, monkeypatch):
+    calls = 0
+
+    def fake_probe(_env):
+        nonlocal calls
+        calls += 1
+        raise AssertionError("runtime probe should not run for prefiltered casual chat")
+
+    monkeypatch.setattr(pi_intent_classifier, "probe_pi_runtime", fake_probe)
+    env = {
+        "PATH": str(tmp_path),
+        "ZOE_PI_INTENT_ENABLED": "true",
+        "ZOE_PI_ALLOW_EXECUTION": "true",
+        "ZOE_PI_LOCAL_MODEL_CONFIGURED": "true",
+    }
+
+    result = await classify_with_pi_intent_governor("that movie was pretty good", env=env)
+
+    assert result is None
+    assert calls == 0
+
+
+@pytest.mark.asyncio
+async def test_pi_intent_governor_prefilter_can_be_disabled(tmp_path):
+    bindir = _fake_runtime(tmp_path)
+    env = {
+        "PATH": str(bindir),
+        "ZOE_PI_INTENT_ENABLED": "true",
+        "ZOE_PI_INTENT_PREFILTER_ENABLED": "false",
+        "ZOE_PI_CWD": str(tmp_path),
+        "ZOE_PI_ALLOW_EXECUTION": "true",
+        "ZOE_PI_LOCAL_MODEL_CONFIGURED": "true",
+    }
+
+    result = await classify_with_pi_intent_governor("that movie was pretty good", env=env)
+
+    assert result is not None
+    assert result.intent == "weather"
 
 
 @pytest.mark.asyncio
