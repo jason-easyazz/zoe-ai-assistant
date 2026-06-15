@@ -1,0 +1,22 @@
+[Unit]
+Description=Hermes Agent gateway (engineering/planning/review, port 8642)
+After=network-online.target
+Wants=network-online.target
+# Limit restart rate to avoid log floods while the local model warms up.
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+WorkingDirectory=%h
+ExecStart=%h/.local/bin/hermes gateway run --replace
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=240
+KillMode=process
+Environment=HOME=%h
+Environment=HERMES_HOME=%h/.hermes
+EnvironmentFile=-%h/assistant/.env
+EnvironmentFile=-%h/.hermes/.env
+
+[Install]
+WantedBy=default.target

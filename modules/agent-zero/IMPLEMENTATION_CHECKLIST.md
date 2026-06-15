@@ -126,7 +126,7 @@ async def compare(self, item_a: str, item_b: str) -> Dict[str, Any]:
 
 1. **Open Agent Zero UI:**
    ```bash
-   open http://192.168.1.218:50001
+   open http://<ZOE_SERVER_IP>:50001
    ```
 
 2. **Configure Anthropic API Key:**
@@ -390,7 +390,7 @@ If you get stuck:
 1. **Check Agent Zero logs:** `docker logs zoe-agent0`
 2. **Check bridge logs:** `docker logs agent-zero-bridge`
 3. **Review Agent Zero docs:** https://github.com/frdel/agent-zero
-4. **Test Agent Zero UI directly:** http://192.168.1.218:50001
+4. **Test Agent Zero UI directly:** http://<ZOE_SERVER_IP>:50001
 
 The placeholder implementation provides the correct structure - you just need to fill in the actual Agent Zero API calls!
 

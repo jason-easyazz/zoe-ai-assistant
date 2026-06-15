@@ -274,7 +274,7 @@ if (message.includes("run") || message.includes("execute") || message.includes("
 ```javascript
 // In zoe-backend skill (SKILL.md)
 async function controlDevice(entityId, action, params) {
-  const response = await fetch('http://192.168.1.218:8000/api/homeassistant/control', {
+  const response = await fetch('http://<ZOE_SERVER_IP>:8000/api/homeassistant/control', {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${process.env.ZOE_AUTH_TOKEN}`,
@@ -294,7 +294,7 @@ async function controlDevice(entityId, action, params) {
 ```javascript
 async function searchMemories(query, userId) {
   const response = await fetch(
-    `http://192.168.1.218:8003/api/memories/search?q=${encodeURIComponent(query)}&user_id=${userId}`,
+    `http://<ZOE_SERVER_IP>:8003/api/memories/search?q=${encodeURIComponent(query)}&user_id=${userId}`,
     {
       headers: {
         'Authorization': `Bearer ${process.env.ZOE_AUTH_TOKEN}`
@@ -315,7 +315,7 @@ async function searchMemories(query, userId) {
 async function performResearch(query, depth, userId) {
   await notifyUser("🔍 Starting research (1-2 min)...");
   
-  const response = await fetch('http://192.168.1.218:8101/tools/research', {
+  const response = await fetch('http://<ZOE_SERVER_IP>:8101/tools/research', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({
@@ -334,7 +334,7 @@ async function performResearch(query, depth, userId) {
 async function createPlan(task, userId) {
   await notifyUser("📋 Creating plan...");
   
-  const response = await fetch('http://192.168.1.218:8101/tools/plan', {
+  const response = await fetch('http://<ZOE_SERVER_IP>:8101/tools/plan', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({
@@ -437,8 +437,8 @@ free -h
 df -h
 
 # 3. Verify network access
-curl http://192.168.1.218:8000/health
-curl http://192.168.1.218:8101/health
+curl http://<ZOE_SERVER_IP>:8000/health
+curl http://<ZOE_SERVER_IP>:8101/health
 ```
 
 ### Phase 2: Install Moltbot (10-15 min)
@@ -461,7 +461,7 @@ pnpm run clawdbot onboard
 cp -r /home/zoe/moltbot-skills/* ~/clawd/skills/
 
 # 2. Get Zoe JWT token
-curl -X POST http://192.168.1.218:8000/api/auth/login \
+curl -X POST http://<ZOE_SERVER_IP>:8000/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{"username": "admin", "password": "your-password"}'
 
@@ -489,13 +489,13 @@ clawdbot channels login whatsapp
 ### Phase 5: Testing (10 min)
 ```bash
 # Test 1: Direct Zoe API
-curl -X POST http://192.168.1.218:8000/api/chat \
+curl -X POST http://<ZOE_SERVER_IP>:8000/api/chat \
   -H "Authorization: Bearer TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"message": "What devices are available?", "user_id": "test"}'
 
 # Test 2: Direct Agent Zero
-curl -X POST http://192.168.1.218:8101/tools/research \
+curl -X POST http://<ZOE_SERVER_IP>:8101/tools/research \
   -H "Content-Type: application/json" \
   -d '{"query": "test query", "depth": "quick", "user_id": "test"}'
 
@@ -519,10 +519,10 @@ curl -X POST http://192.168.1.218:8101/tools/research \
 docker ps | grep zoe-core
 
 # Check network connectivity
-curl http://192.168.1.218:8000/health
+curl http://<ZOE_SERVER_IP>:8000/health
 
 # Verify JWT token
-curl http://192.168.1.218:8000/api/auth/verify \
+curl http://<ZOE_SERVER_IP>:8000/api/auth/verify \
   -H "Authorization: Bearer YOUR_TOKEN"
 ```
 
@@ -545,7 +545,7 @@ docker logs agent-zero-bridge
 docker logs zoe-agent0
 
 # Check API key
-curl http://192.168.1.218:8101/tools/status
+curl http://<ZOE_SERVER_IP>:8101/tools/status
 ```
 
 **Solution:**
