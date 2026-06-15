@@ -327,8 +327,13 @@ def test_skybridge_renderer_supports_real_data_cards():
     assert "/touch/css/skybridge-data-widgets.css?v=skybridge-panel-session-2" in html
     assert "skybridge-lists-people-widgets" not in html
     assert "sky-list-item-row" in data_widgets_css
-    assert "sky-person-row" in data_widgets_css
+    assert "sky-person-card" in renderer
+    assert "sky-person-card" in data_widgets_css
+    assert "sky-people-grid" in renderer
+    assert "sky-people-grid" in data_widgets_css
     assert "sky-profile-health" in data_widgets_css
+    assert "--sky-accent-work: 37, 99, 235" in data_widgets_css
+    assert "--sky-accent-personal: 147, 51, 234" in data_widgets_css
     assert "sky-weather-scene" in html
     assert "weather-sunny" in html
     assert "skybridge-runtime-overrides" in html
@@ -411,7 +416,10 @@ def test_skybridge_calendar_renderer_handles_datetime_dates_and_ordering():
     assert "const detail = [item.location].filter(Boolean).join(' · ');" in renderer
     assert "const detail = [item.location, calendarAccentLabel(item.category)]" not in renderer
     assert "calendarAccentLabel" not in renderer
-    assert "return known.indexOf(token) >= 0 ? token : 'general';" in renderer
+    assert "function accentClass(value, fallback)" in renderer
+    assert "return accentClass(value, 'general');" in renderer
+    assert "'medical'" in renderer
+    assert "'household'" in renderer
 
 
 def test_skybridge_is_registered_in_touch_menu():

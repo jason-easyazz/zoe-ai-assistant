@@ -4130,16 +4130,15 @@
                 gap: 12px !important;
             }
 
-            body:not(.sky-empty) .people-card .sky-people-hero h3,
+            body:not(.sky-empty) .people-card .sky-people-title strong,
             body:not(.sky-empty) .person-profile-card .sky-profile-title h3 {
-                font-size: 42px !important;
+                font-size: 34px !important;
                 line-height: 1 !important;
             }
 
-            body:not(.sky-empty) .people-card .sky-people-count {
-                width: 104px !important;
-                height: 104px !important;
-                border-radius: 30px !important;
+            body:not(.sky-empty) .people-card .sky-people-toolbar {
+                grid-template-columns: minmax(0, 1fr) auto !important;
+                gap: 12px !important;
             }
 
             body:not(.sky-empty) .person-profile-card .sky-profile-grid div {
@@ -4163,11 +4162,15 @@
             }
 
             body:not(.sky-empty) .zoe-list-card .sky-list-items,
-            body:not(.sky-empty) .people-card .sky-people-list {
+            body:not(.sky-empty) .people-card .sky-people-grid {
                 align-content: start !important;
                 gap: 10px !important;
                 min-height: 0 !important;
                 overflow: hidden !important;
+            }
+
+            body:not(.sky-empty) .people-card .sky-people-grid {
+                grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
             }
 
             body:not(.sky-empty) .zoe-list-card .sky-list-items {
@@ -4180,15 +4183,15 @@
 
             body:not(.sky-empty) .zoe-list-card .sky-list-item-row:nth-child(n+17),
             body:not(.sky-empty) .zoe-list-card .sky-list-overview-row:nth-child(n+7),
-            body:not(.sky-empty) .people-card .sky-person-row:nth-child(n+6) {
+            body:not(.sky-empty) .people-card .sky-person-card:nth-child(n+10) {
                 display: none !important;
             }
 
             body:not(.sky-empty) .zoe-list-card .sky-list-item-row,
             body:not(.sky-empty) .zoe-list-card .sky-list-overview-row,
-            body:not(.sky-empty) .people-card .sky-person-row {
-                min-height: 62px !important;
-                padding: 12px 14px !important;
+            body:not(.sky-empty) .people-card .sky-person-card {
+                min-height: 124px !important;
+                padding: 13px !important;
                 border-radius: 18px !important;
             }
 
@@ -4218,7 +4221,7 @@
             body:not(.sky-empty) .zoe-list-card .sky-list-item-main strong,
             body:not(.sky-empty) .zoe-list-card .sky-list-overview-row strong,
             body:not(.sky-empty) .people-card .sky-person-main strong {
-                font-size: 18px !important;
+                font-size: 17px !important;
                 line-height: 1.12 !important;
             }
 
@@ -4586,15 +4589,17 @@
             white-space: nowrap;
         }
 
-        body:not(.sky-empty) .sky-calendar-event.work { --sky-cal-accent: #3B82F6; }
-        body:not(.sky-empty) .sky-calendar-event.personal { --sky-cal-accent: #A855F7; }
-        body:not(.sky-empty) .sky-calendar-event.bucket { --sky-cal-accent: #10B981; }
-        body:not(.sky-empty) .sky-calendar-event.shopping { --sky-cal-accent: #FB923C; }
-        body:not(.sky-empty) .sky-calendar-event.health { --sky-cal-accent: #EC4899; }
-        body:not(.sky-empty) .sky-calendar-event.routine { --sky-cal-accent: #9CA3AF; }
-        body:not(.sky-empty) .sky-calendar-event.social { --sky-cal-accent: #22C55E; }
-        body:not(.sky-empty) .sky-calendar-event.family { --sky-cal-accent: #9333EA; }
-        body:not(.sky-empty) .sky-calendar-event.general { --sky-cal-accent: #5AE0E0; }
+        body:not(.sky-empty) .sky-calendar-event.work { --sky-cal-accent: rgb(37, 99, 235); }
+        body:not(.sky-empty) .sky-calendar-event.personal { --sky-cal-accent: rgb(147, 51, 234); }
+        body:not(.sky-empty) .sky-calendar-event.bucket { --sky-cal-accent: rgb(5, 150, 105); }
+        body:not(.sky-empty) .sky-calendar-event.shopping { --sky-cal-accent: rgb(234, 88, 12); }
+        body:not(.sky-empty) .sky-calendar-event.health { --sky-cal-accent: rgb(190, 24, 93); }
+        body:not(.sky-empty) .sky-calendar-event.routine { --sky-cal-accent: rgb(55, 65, 81); }
+        body:not(.sky-empty) .sky-calendar-event.social { --sky-cal-accent: rgb(22, 163, 74); }
+        body:not(.sky-empty) .sky-calendar-event.family { --sky-cal-accent: rgb(147, 51, 234); }
+        body:not(.sky-empty) .sky-calendar-event.medical { --sky-cal-accent: rgb(239, 68, 68); }
+        body:not(.sky-empty) .sky-calendar-event.household { --sky-cal-accent: rgb(107, 114, 128); }
+        body:not(.sky-empty) .sky-calendar-event.general { --sky-cal-accent: rgb(90, 224, 224); }
 
         body:not(.sky-empty) .sky-calendar-empty {
             min-height: 210px;

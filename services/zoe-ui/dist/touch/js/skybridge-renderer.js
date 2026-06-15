@@ -126,10 +126,26 @@
         return Number.isNaN(timestamp) ? Number.MAX_SAFE_INTEGER : timestamp;
     }
 
+    function accentClass(value, fallback) {
+        const token = safeClassTokens(String(value || fallback || 'general').toLowerCase()) || 'general';
+        const aliases = {
+            task: 'tasks',
+            todo: 'tasks',
+            todos: 'tasks',
+            grocery: 'shopping',
+            groceries: 'shopping',
+            friend: 'social',
+            friends: 'social',
+            contact: 'personal',
+            contacts: 'personal'
+        };
+        const normalized = aliases[token] || token;
+        const known = ['work', 'personal', 'bucket', 'shopping', 'health', 'routine', 'social', 'family', 'medical', 'household', 'tasks', 'all', 'general'];
+        return known.indexOf(normalized) >= 0 ? normalized : (fallback || 'general');
+    }
+
     function calendarCategoryClass(value) {
-        const token = safeClassTokens(String(value || 'general').toLowerCase()) || 'general';
-        const known = ['work', 'personal', 'bucket', 'shopping', 'health', 'routine', 'social', 'family', 'general'];
-        return known.indexOf(token) >= 0 ? token : 'general';
+        return accentClass(value, 'general');
     }
 
     function renderCalendar(props) {
@@ -333,9 +349,7 @@
     }
 
     function listAccentClass(value) {
-        const token = safeClassTokens(String(value || 'list').toLowerCase()) || 'list';
-        const known = ['shopping', 'work', 'personal', 'bucket', 'tasks', 'all'];
-        return known.indexOf(token) >= 0 ? token : 'list';
+        return accentClass(value, 'general');
     }
 
     function listLabel(list) {
@@ -429,28 +443,42 @@
         return [person.relationship, person.context, person.circle].filter(Boolean).join(' · ') || 'Contact';
     }
 
+    function personAccentClass(person) {
+        return accentClass(person.context || person.circle || 'personal', 'personal');
+    }
+
     function renderPeopleDirectory(props) {
         const people = Array.isArray(props.people) ? props.people : [];
-        const rows = people.slice(0, 8).map(person => {
+        const workCount = people.filter(person => personAccentClass(person) === 'work').length;
+        const personalCount = people.filter(person => personAccentClass(person) !== 'work').length;
+        const rows = people.slice(0, 12).map(person => {
             const health = healthPercent(person.health_score);
+            const accent = personAccentClass(person);
             return [
-                '<div class="sky-person-row">',
+                '<button type="button" class="sky-person-card sky-accent-' + escapeHtml(accent) + '" data-sky-action="query" data-query="' + escapeHtml('find ' + (person.name || 'person')) + '">',
                 '<div class="sky-person-avatar" aria-hidden="true">' + initialsFor(person.name) + '</div>',
                 '<div class="sky-person-main"><strong>' + escapeHtml(person.name || 'Person') + '</strong><em>' + escapeHtml(personSubline(person)) + '</em></div>',
-                '<div class="sky-person-health"><i style="width:' + health + '%"></i><span>' + health + '</span></div>',
-                '</div>'
+                '<div class="sky-person-health" aria-label="Connection score ' + health + '"><i style="width:' + health + '%"></i><span>' + health + '</span></div>',
+                '</button>'
             ].join('');
         }).join('');
         const empty = '<div class="sky-empty-data sky-people-empty"><strong>No matching people</strong><span>Zoe did not find contacts for this request.</span></div>';
         const body = [
             '<div class="sky-people-scene">',
-            '<div class="sky-people-hero"><div><span>PEOPLE</span><h3>' + escapeHtml(props.title || 'People') + '</h3></div><div class="sky-people-count"><strong>' + escapeHtml(props.count == null ? people.length : props.count) + '</strong><span>found</span></div></div>',
+            '<div class="sky-people-toolbar">',
+            '<div class="sky-people-title"><span>People</span><strong>' + escapeHtml(props.title || 'People') + '</strong></div>',
+            '<div class="sky-people-chips">',
+            '<span class="sky-accent-personal">' + escapeHtml(personalCount) + ' personal</span>',
+            '<span class="sky-accent-work">' + escapeHtml(workCount) + ' work</span>',
+            '<span>' + escapeHtml(props.count == null ? people.length : props.count) + ' found</span>',
+            '</div>',
+            '</div>',
             '<div class="sky-people-filter-row">',
             props.query ? '<span>Search ' + escapeHtml(props.query) + '</span>' : '',
             props.context ? '<span>' + escapeHtml(props.context) + '</span>' : '',
             props.circle ? '<span>' + escapeHtml(props.circle) + '</span>' : '',
             '</div>',
-            '<div class="sky-people-list">' + (rows || empty) + '</div>',
+            '<div class="sky-people-grid">' + (rows || empty) + '</div>',
             '</div>'
         ].join('');
         return cardFrame(Object.assign({ status: 'People', icon: 'P' }, props), body, { wide: true, tone: 'people-card', hideHeader: true, hideStatus: true });
@@ -459,6 +487,7 @@
     function renderPersonProfile(props) {
         const person = props.person || {};
         const health = healthPercent(person.health_score);
+        const accent = personAccentClass(person);
         const contactRows = [
             ['Phone', person.phone],
             ['Email', person.email],
@@ -476,7 +505,7 @@
             person.notes ? '<p class="sky-profile-notes">' + escapeHtml(person.notes) + '</p>' : '',
             '</div>'
         ].join('');
-        return cardFrame(Object.assign({ status: 'Person', icon: 'P' }, props), body, { wide: true, tone: 'person-profile-card', hideHeader: true, hideStatus: true });
+        return cardFrame(Object.assign({ status: 'Person', icon: 'P' }, props), body, { wide: true, tone: 'person-profile-card sky-accent-' + accent, hideHeader: true, hideStatus: true });
     }
 
 
