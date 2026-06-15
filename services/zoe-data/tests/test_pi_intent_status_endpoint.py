@@ -41,6 +41,7 @@ def _admin_app():
 def test_pi_intent_status_endpoint_is_admin_scoped_and_disabled_by_default(monkeypatch):
     monkeypatch.delenv("ZOE_PI_INTENT_ENABLED", raising=False)
     monkeypatch.delenv("ZOE_PI_INTENT_PROMOTED_GROUPS", raising=False)
+    monkeypatch.delenv("ZOE_PI_INTENT_PROMOTED_GROUPS", raising=False)
     app = _admin_app()
 
     resp = TestClient(app).get("/api/system/pi-intent/status")
