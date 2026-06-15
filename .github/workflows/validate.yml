@@ -42,7 +42,7 @@ jobs:
             fastapi "httpx>=0.27.0,<0.28" "apscheduler==3.10.4" "sqlalchemy>=2.0,<3.0" \
             pydantic pywebpush py-vapid cryptography \
             "ag-ui-protocol==0.1.14" websockets python-jose passlib \
-            python-multipart uvicorn prometheus-client
+            python-multipart uvicorn prometheus-client "python-json-logger>=4.1.0"
 
       - name: Validate project structure
         run: python3 tools/audit/validate_structure.py
