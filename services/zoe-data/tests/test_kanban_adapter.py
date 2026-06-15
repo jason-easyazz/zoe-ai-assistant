@@ -1117,6 +1117,20 @@ async def test_implement_body_mentions_scope_split_packet():
 
 
 @pytest.mark.asyncio
+async def test_implement_body_requires_shipping_a_pr_not_blocking_for_review():
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {"id": "uuid-1", "identifier": "ZOE-9", "title": "Fix thing", "description": ""},
+        "ZOE-9",
+    )
+    # The worker must ship a PR on completion, not present a finished diff and
+    # block "for review" (observed failure mode with conservative models).
+    assert "COMPLETION MEANS YOU SHIP A PR" in body
+    assert "block for review" in body
+    assert "PROTOCOL VIOLATION" in body
+
+
+@pytest.mark.asyncio
 async def test_retro_body_prefers_cheap_summary_models():
     body = ka.KanbanAdapter()._build_body(
         "retro",
