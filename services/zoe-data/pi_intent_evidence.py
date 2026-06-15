@@ -18,7 +18,7 @@ _DEFAULT_MISS_PATH = "~/.zoe/data/pi-intent-miss-evidence.jsonl"
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.\w+")
 _URL_RE = re.compile(r"https?://\S+")
 _PHONE_RE = re.compile(r"\b\d[\d\s\-]{5,}\d\b")
-_NAME_RE = re.compile(r"(?<=\s)[A-Z][a-z]+ [A-Z][a-z]+\b")
+_NAME_RE = re.compile(r"(^|\s)(?!Call\b|Email\b|Tell\b|Ask\b|Remind\b|Show\b|Set\b|Add\b|What\b|Will\b|Can\b|Please\b)([A-Z][a-z]+ [A-Z][a-z]+\b)")
 _SPACE_RE = re.compile(r"\s+")
 _SECRET_KEY_RE = re.compile(r"(?i)(api[_-]?key|\btoken\b|\bsecret\b|password|authorization|\bbearer\b)")
 _SECRET_TEXT_RE = re.compile(r"(?i)(api[\s_-]?key|authorization|bearer\s+[a-z0-9._\-]+|password\s*(is|=)|secret\s*(is|=)|token\s*(is|=))")
@@ -58,7 +58,7 @@ def sanitize_evidence_text(text: str) -> str:
     clean = _EMAIL_RE.sub("[EMAIL]", str(text or ""))
     clean = _URL_RE.sub("[URL]", clean)
     clean = _PHONE_RE.sub("[NUMBER]", clean)
-    clean = _NAME_RE.sub("[NAME]", clean)
+    clean = _NAME_RE.sub(lambda match: f"{match.group(1)}[NAME]", clean)
     clean = _SPACE_RE.sub(" ", clean).strip()
     return clean[:160]
 

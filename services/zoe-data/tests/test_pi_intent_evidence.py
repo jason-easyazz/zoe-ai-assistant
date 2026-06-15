@@ -32,6 +32,7 @@ def test_record_intent_miss_evidence_writes_sanitized_jsonl(tmp_path):
     assert result is not None
     saved = json.loads(path.read_text(encoding="utf-8"))
     assert saved["source"] == "intent_miss"
+    assert saved["user_hash"] != "b23a6a8439c0dde5"
     assert saved["route_class"] == "fallback"
     assert saved["text"] == "email [EMAIL] if rain later"
     assert saved["text_hash"]
@@ -60,6 +61,7 @@ def test_sanitize_evidence_text_redacts_common_pii():
     assert sanitize_evidence_text("Call Jason Smith on 0400 111 222 via https://example.com") == (
         "Call [NAME] on [NUMBER] via [URL]"
     )
+    assert sanitize_evidence_text("Jason Smith asked about the weather") == "[NAME] asked about the weather"
 
 
 def test_detect_intent_miss_produces_pi_evidence_when_enabled(tmp_path, monkeypatch):
@@ -69,7 +71,7 @@ def test_detect_intent_miss_produces_pi_evidence_when_enabled(tmp_path, monkeypa
     monkeypatch.setenv("ZOE_PI_INTENT_MISS_EVIDENCE_ENABLED", "true")
     monkeypatch.setenv("ZOE_PI_INTENT_MISS_EVIDENCE_PATH", str(evidence_path))
 
-    intent = detect_intent("email jason@example.com if rain later", log_miss=True)
+    intent = detect_intent("email jason@example.com if rain later", log_miss=True, user_id="jason")
 
     assert intent is None
     legacy_path = home / "training" / "data" / "intent-misses.jsonl"
@@ -78,3 +80,4 @@ def test_detect_intent_miss_produces_pi_evidence_when_enabled(tmp_path, monkeypa
     saved = json.loads(evidence_path.read_text(encoding="utf-8"))
     assert saved["text"] == "email [EMAIL] if rain later"
     assert saved["source"] == "intent_miss"
+    assert saved["user_hash"] != "b23a6a8439c0dde5"

@@ -502,6 +502,7 @@ def detect_intent(
     text: str,
     log_miss: bool = True,
     context: "Optional[ConversationContext]" = None,
+    user_id: str = "unknown",
 ) -> Optional[Intent]:
     t = _normalize_chat_intent_text(text)
 
@@ -1281,7 +1282,7 @@ def detect_intent(
         try:
             from pi_intent_evidence import record_intent_miss_evidence
 
-            record_intent_miss_evidence(text, route_class="fallback")
+            record_intent_miss_evidence(text, route_class="fallback", user_id=user_id if isinstance(user_id, str) else "unknown")
         except Exception:
             pass  # Never let evidence collection break intent routing
     return None
@@ -1368,7 +1369,7 @@ async def detect_and_extract_intent(
         return None, pi_classified
 
     started = time.perf_counter()
-    intent = detect_intent(text, context=context)
+    intent = detect_intent(text, context=context, user_id=user_id)
     detect_latency_ms = (time.perf_counter() - started) * 1000
     if intent is None:
         routed_intent, pi_classified = await _try_pi_governor()
