@@ -1292,8 +1292,8 @@ class KanbanAdapter:
         """Return the worktree branch's existing PR URL, or open one. None on failure.
 
         Tries ``gh pr view`` first (a PR may already exist for the branch), then
-        falls back to ``gh pr create`` against the branch's upstream base. Shared
-        by the pushed-branch and unshipped-diff recovery paths.
+        falls back to ``gh pr create`` against the repo's default base branch.
+        Shared by the pushed-branch and unshipped-diff recovery paths.
         """
         try:
             pr_url = (
@@ -1313,24 +1313,18 @@ class KanbanAdapter:
             )
             pr_url = ""
         if not pr_url:
-            try:
-                upstream = (
-                    await self._run_worktree_command(
-                        ["git", "rev-parse", "--abbrev-ref", "HEAD@{upstream}"],
-                        cwd=wt_path,
-                        timeout=10,
-                    )
-                ).strip()
-                base_branch = upstream.split("/", 1)[-1].strip() or "main"
-            except KanbanCLIError:
-                base_branch = "main"
             identifier = (issue or {}).get("identifier") or row.get("title") or task_id
             title = str(row.get("title") or (issue or {}).get("title") or identifier)
             if not title.startswith(str(identifier)):
                 title = f"{identifier}: {title}"
+            # No --base: gh defaults to the repo's default branch (main), which is
+            # what task worktrees branch off. Do NOT derive the base from
+            # HEAD@{upstream}: `git push -u origin <branch>` sets the upstream to
+            # the task branch itself, so that would yield `gh pr create --base
+            # wt/<task_id>` (head == base) and fail.
             pr_url = (
                 await self._run_worktree_command(
-                    ["gh", "pr", "create", "--base", base_branch, "--title", title[:240], "--body", body],
+                    ["gh", "pr", "create", "--title", title[:240], "--body", body],
                     cwd=wt_path,
                     timeout=45,
                 )

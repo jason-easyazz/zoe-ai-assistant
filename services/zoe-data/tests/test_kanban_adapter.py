@@ -1410,8 +1410,6 @@ async def test_poll_recovers_pr_after_push_then_api_interruption(tmp_path, monke
             self.worktree_commands.append(args)
             if args[:3] == ["git", "branch", "--show-current"]:
                 return "wt/t_implement"
-            if args[:3] == ["git", "rev-parse", "--abbrev-ref"]:
-                return "origin/release"
             if args[:3] == ["gh", "pr", "view"]:
                 raise ka.KanbanCLIError("no pull request found")
             if args[:3] == ["gh", "pr", "create"]:
@@ -1435,7 +1433,10 @@ async def test_poll_recovers_pr_after_push_then_api_interruption(tmp_path, monke
     complete = next(call for call in a.calls if call[0] == "complete")
     assert "PR_URL=https://github.com/jason-easyazz/zoe-ai-assistant/pull/999" in "\n".join(complete)
     create_cmd = next(cmd for cmd in a.worktree_commands if cmd[:3] == ["gh", "pr", "create"])
-    assert create_cmd[create_cmd.index("--base") + 1] == "release"
+    # No --base is passed: gh defaults to the repo's default branch. Deriving the
+    # base from HEAD@{upstream} is wrong after `git push -u` (upstream == the task
+    # branch itself), which would make head == base and fail.
+    assert "--base" not in create_cmd
 
 
 @pytest.mark.asyncio
@@ -1672,8 +1673,6 @@ async def test_poll_creates_pr_when_pr_view_returns_no_url(tmp_path, monkeypatch
             self.worktree_commands.append(args)
             if args[:3] == ["git", "branch", "--show-current"]:
                 return "wt/t_implement"
-            if args[:3] == ["git", "rev-parse", "--abbrev-ref"]:
-                return "origin/main"
             if args[:3] == ["gh", "pr", "view"]:
                 return "null"
             if args[:3] == ["gh", "pr", "create"]:
@@ -5573,8 +5572,6 @@ async def test_recover_unshipped_diff_commits_pushes_and_opens_pr(tmp_path, monk
                 return "1"
             if args[:2] == ["git", "push"]:
                 return ""
-            if args[:3] == ["git", "rev-parse", "--abbrev-ref"]:
-                return "origin/main"
             if args[:3] == ["gh", "pr", "view"]:
                 raise ka.KanbanCLIError("no pull request found")
             if args[:3] == ["gh", "pr", "create"]:
