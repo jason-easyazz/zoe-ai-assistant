@@ -126,8 +126,8 @@ def probe_pi_runtime(env: Mapping[str, str] | None = None) -> PiRuntimeProbeResu
         )
 
     tools = _tool_snapshot(config.command, env)
-    tool_versions = _tool_version_snapshot(tools, env)
-    requirements = _pi_requirements_snapshot(node_version=tool_versions.get("node"))
+    tool_versions = _tool_version_snapshot(tools, env, timeout_seconds=config.timeout_seconds)
+    requirements = _pi_requirements_snapshot(node_version=tool_versions.get("node"), node_found=bool(tools.get("node")))
     install_plan = _pi_install_plan_snapshot()
 
     if not config.enabled:
@@ -280,15 +280,25 @@ def _tool_snapshot(pi_command: str, env: Mapping[str, str] | None = None) -> dic
     }
 
 
-def _tool_version_snapshot(tools: Mapping[str, str | None], env: Mapping[str, str] | None = None) -> dict[str, str | None]:
+def _tool_version_snapshot(
+    tools: Mapping[str, str | None],
+    env: Mapping[str, str] | None = None,
+    *,
+    timeout_seconds: float = 1.0,
+) -> dict[str, str | None]:
     return {
-        "node": _command_version(tools.get("node"), env),
-        "npm": _command_version(tools.get("npm"), env),
+        "node": _command_version(tools.get("node"), env, timeout_seconds=timeout_seconds),
+        "npm": _command_version(tools.get("npm"), env, timeout_seconds=timeout_seconds),
         "pi": None,
     }
 
 
-def _command_version(command_path: str | None, env: Mapping[str, str] | None = None) -> str | None:
+def _command_version(
+    command_path: str | None,
+    env: Mapping[str, str] | None = None,
+    *,
+    timeout_seconds: float = 1.0,
+) -> str | None:
     if not command_path:
         return None
     values = dict(os.environ if env is None else env)
@@ -298,7 +308,7 @@ def _command_version(command_path: str | None, env: Mapping[str, str] | None = N
             check=False,
             capture_output=True,
             text=True,
-            timeout=1.0,
+            timeout=timeout_seconds,
             env=values,
         )
     except (OSError, subprocess.SubprocessError):
@@ -307,8 +317,8 @@ def _command_version(command_path: str | None, env: Mapping[str, str] | None = N
     return output[0].strip() if output else None
 
 
-def _pi_requirements_snapshot(*, node_version: str | None = None) -> dict[str, Any]:
-    node_status = "missing" if node_version is None else "unknown"
+def _pi_requirements_snapshot(*, node_version: str | None = None, node_found: bool = False) -> dict[str, Any]:
+    node_status = "unknown" if node_found else "missing"
     parsed = _parse_semver(node_version)
     if parsed is not None:
         node_status = "ok" if parsed >= PI_MIN_NODE_VERSION else "too_old"
@@ -342,7 +352,8 @@ def _parse_semver(value: str | None) -> tuple[int, int, int] | None:
     match = re.search(r"(\d+)\.(\d+)\.(\d+)", value)
     if not match:
         return None
-    return tuple(int(part) for part in match.groups())
+    major, minor, patch = match.groups()
+    return (int(major), int(minor), int(patch))
 
 
 def _format_semver(version: tuple[int, int, int]) -> str:

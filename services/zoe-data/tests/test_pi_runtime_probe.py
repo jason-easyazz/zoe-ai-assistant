@@ -175,6 +175,53 @@ def test_probe_accepts_enabled_pi_with_supported_node_version(tmp_path):
     assert result.to_dict()["requirements"]["node"]["status"] == "ok"
 
 
+def test_probe_reports_unknown_when_node_version_is_unreadable(tmp_path):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    node = bindir / "node"
+    node.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    node.chmod(0o755)
+    npm = bindir / "npm"
+    npm.write_text("#!/bin/sh\necho 10.9.3\n", encoding="utf-8")
+    npm.chmod(0o755)
+    pi = bindir / "pi"
+    pi.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    pi.chmod(0o755)
+
+    result = probe_pi_runtime(env={"PATH": str(bindir), "ZOE_PI_ENABLED": "true"})
+
+    assert result.status == "available_execution_disabled"
+    assert result.tools["node"] == str(node)
+    assert result.tool_versions["node"] is None
+    assert result.to_dict()["requirements"]["node"] == {
+        "minimum": "22.19.0",
+        "detected": None,
+        "status": "unknown",
+    }
+
+
+def test_probe_respects_configured_version_timeout(tmp_path):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    node = bindir / "node"
+    node.write_text("#!/bin/sh\n/bin/sleep 0.2\necho v22.19.0\n", encoding="utf-8")
+    node.chmod(0o755)
+    npm = bindir / "npm"
+    npm.write_text("#!/bin/sh\necho 10.9.3\n", encoding="utf-8")
+    npm.chmod(0o755)
+    pi = bindir / "pi"
+    pi.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    pi.chmod(0o755)
+
+    result = probe_pi_runtime(
+        env={"PATH": str(bindir), "ZOE_PI_ENABLED": "true", "ZOE_PI_TIMEOUT_SECONDS": "0.05"}
+    )
+
+    assert result.status == "available_execution_disabled"
+    assert result.tool_versions["node"] is None
+    assert result.to_dict()["requirements"]["node"]["status"] == "unknown"
+
+
 def test_disabled_runtime_does_not_surface_agent_files(tmp_path):
     agent_dir = tmp_path / ".pi" / "agents"
     agent_dir.mkdir(parents=True)
