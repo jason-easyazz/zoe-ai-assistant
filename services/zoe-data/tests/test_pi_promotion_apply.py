@@ -2,6 +2,8 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pytest
+
 
 def _load_module():
     path = Path(__file__).resolve().parents[3] / "scripts" / "maintenance" / "pi_promotion_apply.py"
@@ -44,7 +46,7 @@ def test_dry_run_does_not_write_env_file(tmp_path):
     env_path = tmp_path / ".env"
     env_path.write_text("A=1\n", encoding="utf-8")
 
-    result = module.apply_pi_promotion_report(_report("weather"), env_path, apply=False, confirm=None)
+    result = module.apply_pi_promotion_report(_report("weather"), env_path, apply_changes=False, confirm=None)
 
     assert result["ok"] is True
     assert result["mode"] == "dry_run"
@@ -56,7 +58,7 @@ def test_apply_requires_confirmation(tmp_path):
     module = _load_module()
     env_path = tmp_path / ".env"
 
-    result = module.apply_pi_promotion_report(_report("weather"), env_path, apply=True, confirm=None)
+    result = module.apply_pi_promotion_report(_report("weather"), env_path, apply_changes=True, confirm=None)
 
     assert result["ok"] is False
     assert result["mode"] == "apply_rejected"
@@ -71,7 +73,7 @@ def test_apply_writes_only_promoted_groups_key(tmp_path):
     result = module.apply_pi_promotion_report(
         _report("weather,reminders"),
         env_path,
-        apply=True,
+        apply_changes=True,
         confirm=module.CONFIRM_TOKEN,
     )
 
@@ -85,9 +87,19 @@ def test_rejects_unexpected_env_keys():
     report = _report("weather")
     report["promotion_actions"]["env"]["OPENAI_API_KEY"] = "nope"
 
-    import pytest
     with pytest.raises(module.PiPromotionApplyError, match="unsupported promotion env keys"):
         module.promotion_env_value(report)
+
+
+def test_cli_requires_env_file(tmp_path):
+    module = _load_module()
+    report_path = tmp_path / "report.json"
+    report_path.write_text(json.dumps({"promotion_report": _report("weather")}), encoding="utf-8")
+
+    with pytest.raises(SystemExit) as excinfo:
+        module.main(["--report", str(report_path)])
+
+    assert excinfo.value.code == 2
 
 
 def test_cli_reads_full_eval_payload_and_dry_runs(tmp_path, capsys):

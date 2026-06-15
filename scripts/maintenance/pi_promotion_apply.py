@@ -14,7 +14,6 @@ import sys
 from pathlib import Path
 from typing import Any, Mapping
 
-ROOT = Path(__file__).resolve().parents[2]
 PROMOTION_ENV_KEY = "ZOE_PI_INTENT_PROMOTED_GROUPS"
 CONFIRM_TOKEN = "APPLY_PI_PROMOTION"
 
@@ -79,26 +78,18 @@ def build_env_update(existing_text: str, value: str) -> tuple[str, dict[str, Any
     }
 
 
-def plan_pi_promotion_apply(report: Mapping[str, Any], env_path: Path) -> dict[str, Any]:
-    next_value = promotion_env_value(report)
-    existing = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
-    _updated, update = build_env_update(existing, next_value)
-    actions = report.get("promotion_actions") if isinstance(report.get("promotion_actions"), Mapping) else {}
-    return {
-        "ok": True,
-        "mode": "dry_run",
-        "env_file": str(env_path),
-        "update": update,
-        "promotion_actions": actions,
-    }
-
-
-def apply_pi_promotion_report(report: Mapping[str, Any], env_path: Path, *, apply: bool, confirm: str | None) -> dict[str, Any]:
+def apply_pi_promotion_report(
+    report: Mapping[str, Any],
+    env_path: Path,
+    *,
+    apply_changes: bool,
+    confirm: str | None,
+) -> dict[str, Any]:
     next_value = promotion_env_value(report)
     existing = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
     updated, update = build_env_update(existing, next_value)
     actions = report.get("promotion_actions") if isinstance(report.get("promotion_actions"), Mapping) else {}
-    if not apply:
+    if not apply_changes:
         return {
             "ok": True,
             "mode": "dry_run",
@@ -141,13 +132,13 @@ def _normalize_group_value(value: str) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report", default="-", help="Promotion report JSON path, or - for stdin")
-    parser.add_argument("--env-file", default=str(ROOT / ".env"), help="Env file to plan/update")
+    parser.add_argument("--env-file", required=True, help="Env file to plan/update")
     parser.add_argument("--apply", action="store_true", help="Write the env-file update")
     parser.add_argument("--confirm", help=f"Required with --apply: {CONFIRM_TOKEN}")
     args = parser.parse_args(argv)
     try:
         report = load_promotion_report(args.report)
-        result = apply_pi_promotion_report(report, Path(args.env_file), apply=args.apply, confirm=args.confirm)
+        result = apply_pi_promotion_report(report, Path(args.env_file), apply_changes=args.apply, confirm=args.confirm)
     except (OSError, json.JSONDecodeError, PiPromotionApplyError) as exc:
         result = {"ok": False, "mode": "error", "error": str(exc), "env_file": args.env_file}
     print(json.dumps(result, indent=2, sort_keys=True))
