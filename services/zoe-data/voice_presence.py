@@ -16,9 +16,11 @@ import threading
 from pathlib import Path
 from typing import Any, Mapping
 
+_DEFAULT_PROCESSING_ACK_PHRASES = "Let me check.|One moment.|I will check that."
 _WAKE_TEXT_RE = re.compile(r"^\s*(?:hey|hi|hello)\s+zoe[.!?\s]*$", re.I)
 _AUDIO_CACHE: dict[str, Any] = {}
 _VARIANT_CURSOR = 0
+_PROCESSING_ACK_CURSOR = 0
 _VARIANT_LOCK = threading.Lock()
 
 
@@ -42,6 +44,11 @@ def is_wake_payload(payload: Mapping[str, Any] | None) -> bool:
 def _split_variants(value: str | None) -> list[str]:
     return [item.strip() for item in str(value or "").split("|") if item.strip()]
 
+
+def _env_bool(value: str | None, *, default: bool = False) -> bool:
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 def wake_ack_phrases(env: Mapping[str, str] | None = None) -> list[str]:
     """Resolve configured wake phrases, preserving single-phrase compatibility."""
@@ -67,6 +74,20 @@ def wake_ack_variant_labels(env: Mapping[str, str] | None = None) -> list[str]:
     """Resolve optional pipe-aligned labels for time-aware wake variants."""
     values = env if env is not None else os.environ
     return [label.lower() for label in _split_variants(values.get("ZOE_WAKE_ACK_VARIANT_LABELS"))]
+
+
+def processing_ack_phrases(env: Mapping[str, str] | None = None) -> list[str]:
+    """Resolve short transition phrases for slow voice turns."""
+    values = env if env is not None else os.environ
+    phrases = _split_variants(values.get("ZOE_PROCESSING_ACK_PHRASES"))
+    if phrases:
+        return phrases
+    phrase = str(values.get("ZOE_PROCESSING_ACK_PHRASE") or "").strip()
+    if phrase:
+        return [phrase]
+    if _env_bool(values.get("ZOE_PROCESSING_ACK_DEFAULT_ENABLED"), default=True):
+        return _split_variants(_DEFAULT_PROCESSING_ACK_PHRASES)
+    return []
 
 
 def wake_ack_time_period(now: datetime | None = None) -> str:
@@ -133,6 +154,35 @@ def wake_ack_variant(
     return {"phrase": phrase, "audio_path": audio_path, "index": selected, "label": label}
 
 
+def processing_ack_variant(
+    env: Mapping[str, str] | None = None,
+    *,
+    index: int | None = None,
+) -> dict[str, Any]:
+    """Pick a short acknowledgement for slow voice processing.
+
+    These phrases are for perceived latency only. They do not imply completion,
+    memory writes, tool success, or authority to execute anything.
+    """
+    global _PROCESSING_ACK_CURSOR
+    values = env if env is not None else os.environ
+    phrases = processing_ack_phrases(values)
+    audio_paths = _split_variants(values.get("ZOE_PROCESSING_ACK_AUDIO_PATHS"))
+    if not audio_paths:
+        audio_path = str(values.get("ZOE_PROCESSING_ACK_AUDIO_PATH") or "").strip()
+        audio_paths = [audio_path] if audio_path else []
+    variant_count = max(len(phrases), len(audio_paths), 1)
+    if index is None:
+        with _VARIANT_LOCK:
+            selected = _PROCESSING_ACK_CURSOR % variant_count
+            _PROCESSING_ACK_CURSOR += 1
+    else:
+        selected = index % variant_count
+    phrase = phrases[selected] if selected < len(phrases) else ""
+    audio_path = audio_paths[selected] if selected < len(audio_paths) else ""
+    return {"phrase": phrase, "audio_path": audio_path, "index": selected}
+
+
 def wake_ack_audio_payload(env: Mapping[str, str] | None = None, *, audio_path: str | None = None) -> dict[str, Any] | None:
     """Return cached wake acknowledgement audio from a pre-generated file.
 
@@ -174,6 +224,18 @@ def wake_ack_audio_payload(env: Mapping[str, str] | None = None, *, audio_path: 
     return dict(payload)
 
 
+def processing_ack_audio_payload(
+    env: Mapping[str, str] | None = None,
+    *,
+    audio_path: str | None = None,
+) -> dict[str, Any] | None:
+    """Return cached processing acknowledgement audio from a file only."""
+    payload = wake_ack_audio_payload(env, audio_path=audio_path)
+    if payload:
+        payload["source"] = "cached_processing_ack"
+    return payload
+
+
 def wake_presence_events(*, ack_phrase: str = "", ack_audio: Mapping[str, Any] | None = None) -> list[dict[str, Any]]:
     """Build the instant websocket events for a wake turn.
 
@@ -210,3 +272,18 @@ def wake_ack_events(env: Mapping[str, str] | None = None, *, now: datetime | Non
     variant = wake_ack_variant(env, now=now)
     audio = wake_ack_audio_payload(env, audio_path=variant.get("audio_path"))
     return wake_presence_events(ack_phrase=str(variant.get("phrase") or ""), ack_audio=audio)
+
+
+def processing_ack_event(env: Mapping[str, str] | None = None, *, index: int | None = None) -> dict[str, Any] | None:
+    """Build one data-channel event for the slow-turn intent buffer."""
+    variant = processing_ack_variant(env, index=index)
+    phrase = str(variant.get("phrase") or "").strip()
+    audio = processing_ack_audio_payload(env, audio_path=str(variant.get("audio_path") or ""))
+    if not phrase and not audio:
+        return None
+    event: dict[str, Any] = {"type": "voice:processing_ack", "text": phrase, "source": "intent_buffer"}
+    if audio and audio.get("audio_base64"):
+        event["audio_base64"] = audio["audio_base64"]
+        event["content_type"] = str(audio.get("content_type") or "audio/wav")
+        event["audio_source"] = str(audio.get("source") or "cached_processing_ack")
+    return event

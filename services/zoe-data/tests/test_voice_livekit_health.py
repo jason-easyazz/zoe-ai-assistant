@@ -1,6 +1,7 @@
 import asyncio
 import json
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -11,11 +12,15 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+import voice_presence
 from routers import voice_livekit
 
 
 @pytest.fixture(autouse=True)
-def _reset_health():
+def _reset_health(monkeypatch):
+    monkeypatch.setattr(voice_presence, "_AUDIO_CACHE", {})
+    monkeypatch.setattr(voice_presence, "_VARIANT_CURSOR", 0)
+    monkeypatch.setattr(voice_presence, "_PROCESSING_ACK_CURSOR", 0)
     voice_livekit.reset_voice_health_for_tests()
     yield
     voice_livekit.reset_voice_health_for_tests()
@@ -88,6 +93,42 @@ async def test_pipeline_failure_updates_health(monkeypatch):
     assert health["last_stage"] == "stt_failed"
     assert "stt unavailable" in health["last_error"]
     assert local.messages[-1] == {"type": "state", "state": "ambient"}
+
+
+@pytest.mark.asyncio
+async def test_pipeline_emits_processing_ack_before_slow_response(monkeypatch):
+    from routers import voice_tts
+
+    async def _fake_transcribe(_path: str) -> str:
+        return "will I need an umbrella later"
+
+    async def _fake_agent(message, session_id, user_id, voice_mode=False):
+        await asyncio.sleep(0)
+        assert message == "will I need an umbrella later"
+        assert session_id == "s1"
+        assert user_id == "u1"
+        assert voice_mode is True
+        return "It looks like rain later. Take a jacket."
+
+    class Audio:
+        body = b"RIFF-final"
+        media_type = "audio/wav"
+
+    async def _fake_synthesize(_payload, caller=None):
+        return Audio()
+
+    monkeypatch.setattr(voice_tts, "_transcribe_audio", _fake_transcribe)
+    monkeypatch.setattr(voice_tts, "synthesize", _fake_synthesize)
+    monkeypatch.setitem(sys.modules, "zoe_agent", types.SimpleNamespace(run_zoe_agent=_fake_agent))
+    monkeypatch.setenv("ZOE_PROCESSING_ACK_PHRASE", "Let me check.")
+    local = _LocalParticipant()
+
+    await voice_livekit._run_pipeline(local, [b"\x00\x00" * 160], "u1", "s1")
+
+    transcript_messages = [item for item in local.messages if item.get("type") == "transcript"]
+    assert transcript_messages[0] == {"type": "transcript", "role": "user", "text": "will I need an umbrella later"}
+    assert transcript_messages[1] == {"type": "transcript", "role": "zoe", "text": "Let me check."}
+    assert transcript_messages[2] == {"type": "transcript", "role": "zoe", "text": "It looks like rain later. Take a jacket."}
 
 
 @pytest.mark.asyncio
