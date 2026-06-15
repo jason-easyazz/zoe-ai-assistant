@@ -14,6 +14,10 @@ RestartSec=5
 
 # Secrets and tunables live in .env (copied from .env.example). Do NOT
 # hard-code POSTGRES_URL / OPENCLAW_GATEWAY_TOKEN here -- keep them in .env.
+# Root .env is loaded first (POSTGRES_URL, tokens); the service-local .env
+# loads after it and wins on any overlapping keys. Both are referenced by the
+# install steps in README.md.
+EnvironmentFile=%h/assistant/.env
 EnvironmentFile=%h/assistant/services/zoe-data/.env
 EnvironmentFile=-%h/.hermes/.env
 
