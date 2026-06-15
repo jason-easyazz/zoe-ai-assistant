@@ -223,6 +223,8 @@ async def test_named_time_reminder_still_uses_existing_extractor(monkeypatch, te
     [
         "remind me about tomorrow",
         "remind me about Monday",
+        "remind me about tomorrow at 10am",
+        "remind me about Monday at 5pm",
     ],
 )
 @pytest.mark.asyncio

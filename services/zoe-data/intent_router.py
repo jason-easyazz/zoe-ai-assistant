@@ -1355,7 +1355,7 @@ def _extract_simple_reminder_slots(text: str) -> Optional[dict]:
     if re.search(r"\bat\s+\d{1,4}(?::\d{2})?\b(?!\s*(?:am|pm))", body, flags=re.IGNORECASE):
         return None
     if re.match(
-        r"^(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)$",
+        r"^(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
         body,
         flags=re.IGNORECASE,
     ):
