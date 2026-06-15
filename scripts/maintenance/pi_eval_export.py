@@ -98,7 +98,7 @@ def _case_from_row(
         expected_intent = None
         intent_group = "chat"
     else:
-        intent_group = _optional_str(row.get("intent_group")) or intent_group_for_intent(expected_intent)
+        intent_group = intent_group_for_intent(expected_intent)
         if not expected_intent or not intent_group:
             return None
 
