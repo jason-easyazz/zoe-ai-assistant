@@ -85,12 +85,9 @@ def test_rejects_unexpected_env_keys():
     report = _report("weather")
     report["promotion_actions"]["env"]["OPENAI_API_KEY"] = "nope"
 
-    try:
+    import pytest
+    with pytest.raises(module.PiPromotionApplyError, match="unsupported promotion env keys"):
         module.promotion_env_value(report)
-    except module.PiPromotionApplyError as exc:
-        assert "unsupported promotion env keys" in str(exc)
-    else:
-        raise AssertionError("expected PiPromotionApplyError")
 
 
 def test_cli_reads_full_eval_payload_and_dry_runs(tmp_path, capsys):
