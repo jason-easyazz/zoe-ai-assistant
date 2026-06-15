@@ -38,6 +38,11 @@ def _patch_step(path: str) -> str:
     return f"  \u250a \U0001f527 patch     {path}  1.5s"
 
 
+def _focused_test_step(node_id: str) -> str:
+    """A focused-harness-test command step (``python3 -m pytest .../X.py::test``)."""
+    return f"  \u250a \U0001f4bb $         python3 -m pytest {node_id}  0.5s"
+
+
 def _py_compile_step(target: str) -> str:
     """A py_compile check step line in the canonical Hermes log shape."""
     return f"  \u250a \U0001f4bb $         python3 -m py_compile {target}  0.2s"
@@ -229,6 +234,55 @@ def test_edit_safety_returns_none_when_check_follows_python_patch(monkeypatch):
     )
 
 
+def test_pre_edit_drift_already_covered_for_blocker_followup():
+    """An engineering-blocker-followup whose focused harness test runs before any
+    edit yields ALREADY_COVERED (work already done), not IMPLEMENT_HANDOFF_DRIFT.
+
+    Exercises the harness_followup path: only fires when task_body carries
+    ``"source": "engineering_blocker_followup"`` and a focused
+    ``python3 -m pytest .../X.py::test`` step precedes a non-allowlisted read.
+    """
+    session = "\n".join(
+        [
+            _focused_test_step(
+                "services/zoe-data/tests/test_kanban_phase_budget.py::test_x"
+            ),
+            # A read of a path outside the post-focus allowlist after the focused
+            # test stands the guard down to ALREADY_COVERED.
+            _read_step("/work/services/zoe-data/intent_router.py"),
+        ]
+    )
+    assert kb.implement_pre_edit_drift_reason_from_log(
+        "t_followup",
+        "implement",
+        task_body='{"source": "engineering_blocker_followup"}',
+        session=session,
+    ) == (
+        "BLOCKER=ALREADY_COVERED: focused harness test passed before edit; "
+        "no code change required for this blocker follow-up"
+    )
+
+
+def test_pre_edit_drift_ignores_focused_test_without_followup_task_body():
+    """Without the engineering_blocker_followup source, the focused-test path is
+    inert: the same session is treated as ordinary exploration (no ALREADY_COVERED)."""
+    session = "\n".join(
+        [
+            _focused_test_step(
+                "services/zoe-data/tests/test_kanban_phase_budget.py::test_x"
+            ),
+            _read_step("/work/services/zoe-data/intent_router.py"),
+        ]
+    )
+    # task_body omitted -> harness_followup False -> not ALREADY_COVERED.
+    assert kb.implement_pre_edit_drift_reason_from_log(
+        "t_plain", "implement", session=session
+    ) != (
+        "BLOCKER=ALREADY_COVERED: focused harness test passed before edit; "
+        "no code change required for this blocker follow-up"
+    )
+
+
 def test_edit_safety_fires_on_excess_patched_file_reads(monkeypatch):
     """A third read of the patched file (budget=2) trips the guard."""
     monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_POST_PATCH_FILE_READ_BUDGET", "2")
@@ -246,9 +300,13 @@ def test_edit_safety_fires_on_excess_patched_file_reads(monkeypatch):
     )
 
 
-def test_edit_safety_fires_on_unrelated_file_read_after_patch(monkeypatch):
-    """Reading any other file (not just the patched one) also trips the guard."""
-    monkeypatch.setenv("ZOE_KANBAN_IMPLEMENT_POST_PATCH_FILE_READ_BUDGET", "2")
+def test_edit_safety_fires_on_unrelated_file_read_after_patch():
+    """Reading any other file (not just the patched one) also trips the guard.
+
+    No POST_PATCH_FILE_READ_BUDGET override here on purpose: that budget only
+    governs re-reads of the *patched* file; a read of any unrelated path blocks
+    immediately regardless of the budget, so this exercises default behavior.
+    """
     session = (
         f"{_patch_step('/work/services/zoe-data/intent_router.py')}\n"
         f"{_read_step('/work/services/zoe-data/main.py')}\n"
