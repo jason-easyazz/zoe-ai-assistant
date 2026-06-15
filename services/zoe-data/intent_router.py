@@ -1288,6 +1288,139 @@ def detect_intent(
     return None
 
 
+def _extract_simple_reminder_slots(text: str) -> Optional[dict]:
+    """Fast slots for common reminder phrases; complex relative phrasing still uses NLU."""
+
+    raw = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not raw:
+        return None
+
+    patterns = [
+        r"^remind me (?:to|about)\s+(.+)$",
+        r"^remember to\s+(.+)$",
+        r"^set a reminder (?:to|for|about)\s+(.+)$",
+        r"^reminder (?:to|for|about)\s+(.+)$",
+        r"^(?:add|create|make|schedule)\s+(?:a |an )?reminder\s+(?:to|for|about)?\s*(.+)$",
+    ]
+    body = ""
+    for pattern in patterns:
+        m = re.match(pattern, raw, flags=re.IGNORECASE)
+        if m:
+            body = m.group(1).strip()
+            break
+    if not body:
+        return None
+    if re.search(r"\bin\s+\d+\s+(?:min(?:ute)?s?|hours?|days?|weeks?)\b", body, flags=re.IGNORECASE):
+        return None
+    if re.search(
+        r"\bin\s+(?:(?:a\s+few|a\s+couple(?:\s+of)?|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:min(?:ute)?s?|hours?|days?|weeks?)|an?\s+(?:min(?:ute)?|hour|day|week)|half\s+an\s+hour)\b",
+        body,
+        flags=re.IGNORECASE,
+    ):
+        return None
+    if re.search(
+        r"\b(?:next|this|coming|last)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
+        body,
+        flags=re.IGNORECASE,
+    ):
+        return None
+    if re.search(
+        r"\bevery\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|day|week|month|year)\b",
+        body,
+        flags=re.IGNORECASE,
+    ):
+        return None
+    if re.search(
+        r"\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)$",
+        body,
+        flags=re.IGNORECASE,
+    ) and not re.search(
+        r"\son\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)$",
+        body,
+        flags=re.IGNORECASE,
+    ):
+        return None
+    if re.search(
+        r"\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(?:at\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm)\b",
+        body,
+        flags=re.IGNORECASE,
+    ):
+        return None
+    if re.search(
+        r"\b(?:noon|midnight|morning|afternoon|evening|(?:to)?night|bedtime|lunchtime|dinnertime)\b",
+        body,
+        flags=re.IGNORECASE,
+    ):
+        return None
+    if re.search(r"\bat\s+\d{1,4}(?::\d{2})?\b(?!\s*(?:am|pm))", body, flags=re.IGNORECASE):
+        return None
+    if re.match(
+        r"^(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
+        body,
+        flags=re.IGNORECASE,
+    ):
+        return None
+    if re.search(
+        r"\bon\s+(?:the\s+)?(?:\d{1,2}(?:st|nd|rd|th)?|(?:my|your|his|her|their)\s+birthday|new\s+year'?s?|christmas|easter|thanksgiving)$",
+        body,
+        flags=re.IGNORECASE,
+    ):
+        return None
+
+    def _pop_time(value: str) -> tuple[str, str]:
+        value = value.strip()
+        time_patterns = [
+            r"\s+at\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm))$",
+            r"\s+(\d{1,2}(?::\d{2})\s*(?:am|pm)|\d{1,2}\s*(?:am|pm))$",
+        ]
+        for pattern in time_patterns:
+            m = re.search(pattern, value, flags=re.IGNORECASE)
+            if not m:
+                continue
+            parsed = _parse_time(m.group(1))
+            if parsed:
+                return value[:m.start()].strip(), parsed
+        return value, ""
+
+    def _pop_date(value: str) -> tuple[str, str]:
+        value = value.strip()
+        day_names = "monday|tuesday|wednesday|thursday|friday|saturday|sunday"
+        month_names = (
+            "january|february|march|april|may|june|july|august|september|october|november|december|"
+            "jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec"
+        )
+        date_patterns = [
+            rf"\s+on\s+(today|tomorrow|{day_names})$",
+            r"\s+(today|tomorrow)$",
+            rf"\s+on\s+((?:{month_names})\s+\d{{1,2}}(?:st|nd|rd|th)?(?:\s+\d{{4}})?)$",
+            rf"\s+on\s+(\d{{1,2}}(?:st|nd|rd|th)?\s+(?:of\s+)?(?:{month_names})(?:\s+\d{{4}})?)$",
+            r"\s+on\s+(\d{4}-\d{2}-\d{2})$",
+        ]
+        for pattern in date_patterns:
+            m = re.search(pattern, value, flags=re.IGNORECASE)
+            if not m:
+                continue
+            parsed = _parse_date(m.group(1))
+            if parsed:
+                return value[:m.start()].strip(), parsed
+        return value, ""
+
+    body, date = _pop_date(body)
+    body, time_value = _pop_time(body)
+    if not date:
+        body, date = _pop_date(body)
+
+    title = re.sub(r"\s+", " ", body).strip(" ,.-")
+    title = re.sub(r"^(?:to|for|about)\s+", "", title, flags=re.IGNORECASE).strip()
+    if not title:
+        return None
+
+    slots = {"title": title, "date": date or _parse_date("today") or ""}
+    if time_value:
+        slots["time"] = time_value
+    return slots
+
+
 async def detect_and_extract_intent(
     text: str,
     user_id: str = "family-admin",
@@ -1390,6 +1523,19 @@ async def detect_and_extract_intent(
         )
         return routed_intent
     if intent.slots and "raw" in intent.slots:
+        if intent.name == "reminder_create":
+            structured = _extract_simple_reminder_slots(intent.slots["raw"])
+            if structured:
+                intent.slots = structured
+                _schedule_pi_shadow(
+                    intent,
+                    route_class="deterministic",
+                    zoe_latency_ms=(time.perf_counter() - started) * 1000,
+                    baseline_kind="router",
+                    baseline_comparable=True,
+                    router_latency_ms=detect_latency_ms,
+                )
+                return intent
         try:
             from nlu_extractor import extract_slots_for_intent  # lazy — avoids circular at load
             structured = await extract_slots_for_intent(intent.name, intent.slots["raw"])
