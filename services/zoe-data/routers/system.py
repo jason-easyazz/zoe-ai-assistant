@@ -181,6 +181,14 @@ async def get_pi_intent_status(user: dict = Depends(require_admin)):
     return pi_intent_status()
 
 
+@router.get("/pi-intent/shadow-status")
+async def get_pi_intent_shadow_status(user: dict = Depends(require_admin)):
+    """Read-only status for Zoe's disabled-by-default Pi-vs-Zoe shadow evidence."""
+    from pi_intent_shadow import pi_intent_shadow_status
+
+    return pi_intent_shadow_status()
+
+
 def _load_skills_and_cron():
     skills = []
     skills_dir = os.path.expanduser("~/.openclaw/workspace/skills")
