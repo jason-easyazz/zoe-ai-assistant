@@ -625,7 +625,8 @@ async def _resolve_with_db(intent: SkybridgeIntent, user_id: str, db: Any, *, co
 
 def _resolve_clock(intent: SkybridgeIntent) -> dict[str, Any]:
     now, timezone_name = _clock_now()
-    spoken = now.strftime("It is %-I:%M %p.")
+    hour_str = str(now.hour % 12 or 12)
+    spoken = f"It is {hour_str}:{now.strftime('%M %p')}."
     return {
         "handled": True,
         "intent": {"domain": "clock", "action": intent.action, "timezone": timezone_name},
@@ -638,7 +639,7 @@ def _resolve_clock(intent: SkybridgeIntent) -> dict[str, Any]:
                 "summary": spoken,
                 "timezone": timezone_name,
                 "iso": now.isoformat(),
-                "hour": now.strftime("%-I"),
+                "hour": hour_str,
                 "minute": now.strftime("%M"),
                 "meridiem": now.strftime("%p"),
                 "weekday": now.strftime("%A"),
