@@ -56,6 +56,14 @@ def test_exports_labeled_shadow_rows_as_sanitized_eval_cases():
     assert cases[0].source == "intent_miss"
 
 
+def test_sanitize_eval_text_reuses_evidence_sanitizer_for_name_prefixes():
+    module = _load_module()
+
+    assert module.sanitize_eval_text("Jason Smith asked about the weather") == "[NAME] asked about the weather"
+    assert module.sanitize_eval_text("Will Smith called about the meeting") == "[NAME] called about the meeting"
+    assert module.sanitize_eval_text("Can Chen asked about the plan") == "[NAME] asked about the plan"
+
+
 def test_exports_negative_chat_rows():
     module = _load_module()
 

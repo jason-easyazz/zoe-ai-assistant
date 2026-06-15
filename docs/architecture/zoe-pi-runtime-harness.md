@@ -47,6 +47,8 @@ Environment variables:
 | `ZOE_PI_INTENT_SHADOW_MAX_WORDS` | `32` | Maximum utterance length eligible for shadow comparison. |
 | `ZOE_PI_INTENT_SHADOW_INCLUDE_PREVIEW` | `true` | Store a short sanitized text preview alongside the text hash. |
 | `ZOE_PI_INTENT_SHADOW_FORCE_ENABLED` | `true` | Force the classifier on inside shadow mode while keeping live routing unchanged. |
+| `ZOE_PI_INTENT_MISS_EVIDENCE_ENABLED` | `false` | Write sanitized intent-miss candidate rows for later review/labeling. |
+| `ZOE_PI_INTENT_MISS_EVIDENCE_PATH` | `~/.zoe/data/pi-intent-miss-evidence.jsonl` | JSONL path for structured intent-miss candidates. |
 | `ZOE_PI_INTENT_PROMOTED_GROUPS` | unset | Comma-separated low-risk intent groups promoted through Pi for live fallback execution and rollback reporting. Unknown or privileged groups are ignored. |
 
 ## Probe
@@ -91,6 +93,12 @@ scripts/maintenance/pi_promotion_eval.py --demo --min-samples 10 \
 ```
 
 The apply helper only writes `ZOE_PI_INTENT_PROMOTED_GROUPS`; it rejects any other env key in the report.
+
+Optional structured intent-miss evidence can be enabled with
+`ZOE_PI_INTENT_MISS_EVIDENCE_ENABLED=true`. This writes sanitized candidate rows
+to `ZOE_PI_INTENT_MISS_EVIDENCE_PATH` without changing the live route. These rows
+start unlabeled and must be reviewed by an operator before adding an
+`outcome_label` for promotion scoring.
 
 ## Evaluation Datasets
 
