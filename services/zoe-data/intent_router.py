@@ -1332,6 +1332,12 @@ def _extract_simple_reminder_slots(text: str) -> Optional[dict]:
         flags=re.IGNORECASE,
     ):
         return None
+    if re.search(
+        r"\bon\s+(?:the\s+)?(?:\d{1,2}(?:st|nd|rd|th)?|(?:my|your|his|her|their)\s+birthday|new\s+year'?s?|christmas|easter|thanksgiving)$",
+        body,
+        flags=re.IGNORECASE,
+    ):
+        return None
 
     def _pop_time(value: str) -> tuple[str, str]:
         value = value.strip()

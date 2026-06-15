@@ -188,6 +188,35 @@ async def test_standalone_day_reminder_still_uses_existing_extractor(monkeypatch
 @pytest.mark.parametrize(
     "text",
     [
+        "remind me to pick up the package on the 15th",
+        "remind me to call mum on her birthday",
+    ],
+)
+@pytest.mark.asyncio
+async def test_unsupported_on_date_phrase_still_uses_existing_extractor(monkeypatch, text):
+    calls = []
+    module = types.ModuleType("nlu_extractor")
+
+    async def fake_extract(intent_name, raw):
+        calls.append((intent_name, raw))
+        return {"title": "unsupported on date reminder", "date": "2026-07-15"}
+
+    module.extract_slots_for_intent = fake_extract
+    monkeypatch.setitem(sys.modules, "nlu_extractor", module)
+
+    from intent_router import detect_and_extract_intent
+
+    intent = await detect_and_extract_intent(text, user_id="guest")
+
+    assert calls == [("reminder_create", text)]
+    assert intent is not None
+    assert intent.name == "reminder_create"
+    assert intent.slots == {"title": "unsupported on date reminder", "date": "2026-07-15"}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
         "remind me to call mum at 5",
         "remind me to call mum at 5:30",
     ],
