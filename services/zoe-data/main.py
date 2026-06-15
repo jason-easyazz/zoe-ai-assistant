@@ -169,6 +169,56 @@ async def _runtime_health_refresh_loop() -> None:
         await _probe_runtimes()
 
 
+_MEMPALACE_MIG_FLAG_KEY = "mempalace_wing_migration_done"
+
+
+async def _run_mempalace_migration_gate(get_db_ctx=None, migrate=None, flag_path=None) -> bool:
+    """Run the one-time MemPalace wing migration, gated by a DB flag.
+
+    The expensive ChromaDB re-tag only runs on first startup. ``migrate``
+    swallows its own errors and only writes its filesystem flag on a *truly*
+    successful run, so the DB gate flag is persisted only when that filesystem
+    flag exists afterwards — otherwise a silently-failed migration would be
+    permanently skipped on every future restart. Returns True when the DB gate
+    flag is (or already was) set.
+    """
+    if get_db_ctx is None:
+        from db_pool import get_db_ctx as get_db_ctx  # noqa: PLW0127
+    async with get_db_ctx() as db:
+        rows = await db.execute_fetchall(
+            "SELECT value FROM system_preferences WHERE key = $1",
+            (_MEMPALACE_MIG_FLAG_KEY,),
+        )
+    if rows:
+        logger.debug("MemPalace migration already done (DB flag present); skipping")
+        return True
+
+    if migrate is None:
+        from zoe_agent import migrate_mempalace_legacy_records as migrate
+    if flag_path is None:
+        from zoe_agent import _MIGRATION_DONE_FLAG as flag_path
+    await asyncio.get_event_loop().run_in_executor(None, migrate)
+
+    if not os.path.exists(flag_path):
+        logger.warning(
+            "MemPalace migration did not complete (filesystem flag %s absent);"
+            " deferring DB gate flag so it retries next startup",
+            flag_path,
+        )
+        return False
+
+    async with get_db_ctx() as db:
+        await db.execute(
+            "INSERT INTO system_preferences (key, value, updated_by, updated_at)"
+            " VALUES ($1, $2, $3, NOW()::text)"
+            " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value,"
+            " updated_at = NOW()::text",
+            (_MEMPALACE_MIG_FLAG_KEY, "true", "startup"),
+        )
+    logger.info("MemPalace migration complete; DB flag set (%s=true)", _MEMPALACE_MIG_FLAG_KEY)
+    return True
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _openclaw_bg_task, _digest_bg_task, _zoe_update_bg_task, _consolidation_bg_task, _runtime_health_task
@@ -178,28 +228,7 @@ async def lifespan(app: FastAPI):
     # One-time MemPalace migration: re-tag legacy records from wing="zoe" to wing="family-admin".
     # Gated behind a DB flag so the expensive ChromaDB scan only runs on first startup.
     try:
-        from db_pool import get_db_ctx as _get_pg_db_mig
-        _mig_flag_key = "mempalace_wing_migration_done"
-        async with _get_pg_db_mig() as _mig_db:
-            _mig_rows = await _mig_db.execute_fetchall(
-                "SELECT value FROM system_preferences WHERE key = $1",
-                (_mig_flag_key,),
-            )
-            _mig_row = _mig_rows[0] if _mig_rows else None
-        if _mig_row is None:
-            from zoe_agent import migrate_mempalace_legacy_records
-            await asyncio.get_event_loop().run_in_executor(None, migrate_mempalace_legacy_records)
-            async with _get_pg_db_mig() as _mig_db:
-                await _mig_db.execute(
-                    "INSERT INTO system_preferences (key, value, updated_by, updated_at)"
-                    " VALUES ($1, $2, $3, NOW()::text)"
-                    " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value,"
-                    " updated_at = NOW()::text",
-                    (_mig_flag_key, "true", "startup"),
-                )
-            logger.info("MemPalace migration complete; DB flag set (%s=true)", _mig_flag_key)
-        else:
-            logger.debug("MemPalace migration already done (DB flag present); skipping")
+        await _run_mempalace_migration_gate()
     except Exception as _mig_exc:
         logger.warning("MemPalace migration (non-fatal): %s", _mig_exc)
     # Load device tokens into memory so voice daemons can authenticate.
