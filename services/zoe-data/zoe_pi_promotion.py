@@ -33,7 +33,12 @@ PRIVILEGED_INTENTS = {
     "install_runtime",
 }
 
+# Static eval-case labels. Runtime-only sources such as pi_intent_shadow are
+# intentionally excluded because they are produced after collection/labeling.
 EVAL_SOURCES = {"synthetic", "intent_miss", "chat_log", "voice_log", "known_failure"}
+# Sources counted as real/log-derived promotion evidence. Synthetic cases remain
+# useful smoke tests, but should be visible separately in promotion reports.
+REAL_PROMOTION_EVIDENCE_SOURCES = {"intent_miss", "chat_log", "voice_log", "known_failure", "pi_intent_shadow"}
 ROUTE_CLASSES = {"deterministic", "fallback", "extraction_failed"}
 PI_TRANSPORTS = {"print", "rpc"}
 DECISION_STATES = {"promote", "keep_shadow", "rollback", "blocked"}
@@ -355,6 +360,7 @@ def summarize_pi_promotion(
         "rollback_groups": rollback_groups,
         "route_class_breakdown": build_pi_route_class_breakdown(samples),
         "transport_breakdown": build_pi_transport_breakdown(samples),
+        "source_breakdown": build_pi_source_breakdown(samples, policy=active_policy),
         "failure_examples": build_pi_failure_examples(samples),
         "promotion_actions": build_pi_promotion_actions(
             current_promoted_groups=sorted(active_promoted_groups),
@@ -415,6 +421,52 @@ def build_pi_transport_breakdown(samples: Sequence[PiRouteSample]) -> dict[str, 
             "correction_rate": _rate(sample.user_corrected for sample in transport_samples),
         }
     return breakdown
+
+
+def build_pi_source_breakdown(
+    samples: Sequence[PiRouteSample],
+    *,
+    policy: PiPromotionPolicy | None = None,
+) -> dict[str, Any]:
+    """Summarize where promotion samples came from.
+
+    This is reporting-only evidence. Promotion decisions still use the explicit
+    speed/accuracy gates, while operators can see whether the sample set is
+    synthetic-heavy or backed by runtime/log-derived labels.
+    """
+    active_policy = policy or PiPromotionPolicy()
+    source_counts: dict[str, int] = {}
+    source_counts_by_group: dict[str, dict[str, int]] = {
+        group: {} for group in sorted(LOW_RISK_PI_INTENT_GROUPS)
+    }
+    real_counts_by_group = {group: 0 for group in sorted(LOW_RISK_PI_INTENT_GROUPS)}
+    real_sample_count = 0
+    for sample in samples:
+        sample.validate()
+        source = _sample_source(sample)
+        source_counts[source] = source_counts.get(source, 0) + 1
+        group_counts = source_counts_by_group.setdefault(sample.intent_group, {})
+        group_counts[source] = group_counts.get(source, 0) + 1
+        if source in REAL_PROMOTION_EVIDENCE_SOURCES:
+            real_sample_count += 1
+            real_counts_by_group[sample.intent_group] = real_counts_by_group.get(sample.intent_group, 0) + 1
+    real_deficits = {
+        group: max(0, active_policy.min_samples - real_counts_by_group.get(group, 0))
+        for group in sorted(LOW_RISK_PI_INTENT_GROUPS)
+    }
+    return {
+        "sample_count": len(samples),
+        "source_counts": dict(sorted(source_counts.items())),
+        "source_counts_by_group": {
+            group: dict(sorted(counts.items())) for group, counts in sorted(source_counts_by_group.items())
+        },
+        "real_source_sample_count": real_sample_count,
+        "synthetic_sample_count": source_counts.get("synthetic", 0),
+        "unknown_source_sample_count": source_counts.get("unknown", 0),
+        "real_source_sample_count_by_group": real_counts_by_group,
+        "real_source_sample_deficit_by_group": real_deficits,
+        "real_source_ready_groups": [group for group in sorted(real_deficits) if real_deficits[group] == 0],
+    }
 
 
 def build_pi_failure_examples(samples: Sequence[PiRouteSample], *, limit: int = 5) -> list[dict[str, Any]]:
@@ -541,6 +593,14 @@ def eval_cases_to_dict(cases: Sequence[PiIntentEvalCase] = DEFAULT_PI_INTENT_EVA
     return [case.to_dict() for case in cases]
 
 
+def _sample_source(sample: PiRouteSample) -> str:
+    if isinstance(sample.metadata, Mapping):
+        source = _optional_str(sample.metadata.get("source"))
+        if source:
+            return source
+    return "unknown"
+
+
 def _failure_reasons(sample: PiRouteSample) -> list[str]:
     reasons: list[str] = []
     if sample.rollback_blocked:
@@ -640,6 +700,7 @@ __all__ = [
     "PiRouteSample",
     "build_pi_failure_examples",
     "build_pi_route_class_breakdown",
+    "build_pi_source_breakdown",
     "build_pi_transport_breakdown",
     "build_pi_promotion_actions",
     "eval_cases_to_dict",

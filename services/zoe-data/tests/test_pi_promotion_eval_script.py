@@ -216,6 +216,35 @@ def test_zoe_baseline_timeout_is_not_comparable(monkeypatch):
     assert result["baseline_timed_out"] is True
     assert result["baseline_response_chars"] == 0
 
+def test_run_cases_preserves_eval_case_source_in_sample_metadata(monkeypatch):
+    _install_fake_intent_router(monkeypatch, intent_name=None)
+    _install_fake_zoe_agent(monkeypatch, [], response="fallback answer")
+    _install_fake_pi_classifier(monkeypatch, result=types.SimpleNamespace(intent="weather", confidence=0.93))
+    module = _load_module()
+    case = module.PiIntentEvalCase(
+        "weather_miss",
+        "will it rain later",
+        "weather",
+        "weather",
+        "fallback",
+        source="intent_miss",
+    )
+
+    _comparisons, samples = asyncio.run(
+        module._run_cases(
+            [case],
+            transport="rpc",
+            enable_execution=True,
+            local_model_configured=True,
+            measure_zoe_agent_baseline=True,
+        )
+    )
+
+    assert len(samples) == 1
+    assert samples[0].metadata["source"] == "intent_miss"
+    assert samples[0].metadata["baseline_kind"] == "zoe_agent_fallback_baseline"
+
+
 def test_run_pi_fast_no_result_is_not_timeout(monkeypatch):
     _install_fake_pi_classifier(monkeypatch, result=None)
     monkeypatch.setenv("ZOE_PI_INTENT_PREFILTER_ENABLED", "false")
