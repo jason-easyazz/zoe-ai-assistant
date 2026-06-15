@@ -297,15 +297,23 @@ async def test_pi_rpc_cancellation_resets_process_under_worker_lock(tmp_path, mo
     }
 
     task = asyncio.create_task(classify_with_pi_intent_governor("rain later", env=env))
-    for _ in range(100):
-        if record.exists():
-            break
-        await asyncio.sleep(0.01)
-    assert record.exists()
+    try:
+        for _ in range(100):
+            if record.exists():
+                break
+            await asyncio.sleep(0.01)
+        assert record.exists()
 
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        if not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
     assert len(workers) == 1
     worker = next(iter(workers.values()))
