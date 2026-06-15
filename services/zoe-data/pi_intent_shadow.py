@@ -197,7 +197,9 @@ def shadow_records_to_route_samples(records: Sequence[Mapping[str, Any]]) -> lis
                     pi_confidence=_float_value(record.get("pi_confidence"), default=0.0),
                     pi_transport=str(record.get("pi_transport") or "rpc"),
                     route_class=str(record.get("route_class") or "fallback"),
-                    timed_out=bool(record.get("timed_out")),
+                    timed_out=_bool_record_value(record.get("timed_out")),
+                    user_corrected=_bool_record_value(record.get("user_corrected")),
+                    rollback_blocked=_bool_record_value(record.get("rollback_blocked")),
                     metadata={"source": "pi_intent_shadow", "text_hash": str(record.get("text_hash") or "")},
                 )
             )
@@ -311,6 +313,16 @@ def _optional_float_value(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _bool_record_value(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
 
 
 def _csv_env(value: str | None) -> list[str]:

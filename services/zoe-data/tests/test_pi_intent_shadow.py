@@ -209,6 +209,8 @@ def test_labeled_shadow_records_convert_to_route_samples():
                 "pi_confidence": 0.9,
                 "pi_transport": "rpc",
                 "route_class": "fallback",
+                "user_corrected": "true",
+                "rollback_blocked": False,
             },
             {"outcome_label": "extend_capability", "zoe_intent": None, "pi_intent": "extend_capability"},
         ]
@@ -218,6 +220,8 @@ def test_labeled_shadow_records_convert_to_route_samples():
     assert samples[0].intent_group == "weather"
     assert samples[0].zoe_correct is False
     assert samples[0].pi_correct is True
+    assert samples[0].user_corrected is True
+    assert samples[0].rollback_blocked is False
 
 
 def test_labeled_shadow_records_skip_missing_latency():
@@ -344,3 +348,41 @@ def test_shadow_status_lists_rollback_groups_for_labeled_promoted_regression(tmp
 
     assert "weather" in status["promotion_report"]["rollback_groups"]
     assert status["promotion_report"]["promotion_actions"]["next_promoted_groups"] == []
+
+
+def test_shadow_status_rolls_back_promoted_group_on_reviewed_corrections(tmp_path):
+    path = tmp_path / "shadow.jsonl"
+    rows = []
+    for index in range(30):
+        rows.append(
+            json.dumps(
+                {
+                    "text_hash": f"weather_corrected_{index}",
+                    "outcome_label": "weather",
+                    "zoe_intent": "reminder_list",
+                    "pi_intent": "weather",
+                    "zoe_latency_ms": 500,
+                    "pi_latency_ms": 120,
+                    "pi_confidence": 0.9,
+                    "pi_transport": "rpc",
+                    "route_class": "fallback",
+                    "agreement": False,
+                    "timed_out": False,
+                    "pi_no_result": False,
+                    "user_corrected": index == 0,
+                }
+            )
+        )
+    path.write_text("\n".join(rows) + "\n")
+
+    status = pi_intent_shadow_status(
+        {
+            "ZOE_PI_INTENT_SHADOW_PATH": str(path),
+            "ZOE_PI_INTENT_PROMOTED_GROUPS": "weather",
+        }
+    )
+
+    weather = next(
+        decision for decision in status["promotion_report"]["decisions"] if decision["intent_group"] == "weather"
+    )
+    assert weather["state"] == "rollback"
