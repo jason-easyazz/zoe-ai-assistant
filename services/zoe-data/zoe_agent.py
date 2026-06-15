@@ -1385,7 +1385,7 @@ async def _mempalace_load_user_facts(user_id: str, limit: int = 20) -> str:
         if is_guest_memory_user(user_id):
             return ""
     except Exception:
-        pass
+        return ""
     cached = _USER_FACTS_CACHE.get(user_id)
     if cached is not None and cached[0] > now:
         return cached[1]

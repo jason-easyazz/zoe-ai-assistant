@@ -231,7 +231,9 @@ async def test_guest_prompt_and_search_reads_return_no_rows_without_collection_a
     service._collection = lambda: (_ for _ in ()).throw(AssertionError("guest read should not touch storage"))
 
     assert await service.load_for_prompt("guest", limit=10) == []
+    assert await service.load_for_prompt("", limit=10) == []
     assert await service.search("remember me", user_id="guest", limit=10) == []
+    assert await service.search("remember me", user_id="", limit=10) == []
 
 
 def test_metadata_prompt_read_blocks_cross_user_disputed_and_superseded_rows():

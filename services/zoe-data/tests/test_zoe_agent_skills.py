@@ -347,6 +347,22 @@ async def test_guest_user_facts_skip_memory_service(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_guest_user_facts_fail_closed_when_memory_service_import_fails(monkeypatch):
+    import builtins
+
+    original_import = builtins.__import__
+
+    def fail_memory_service_import(name, *args, **kwargs):
+        if name == "memory_service":
+            raise RuntimeError("memory_service import failed")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fail_memory_service_import)
+
+    assert await zoe_agent._mempalace_load_user_facts("guest") == ""
+
+
+@pytest.mark.asyncio
 async def test_guest_semantic_memory_context_skips_mempalace_search(monkeypatch):
     async def fail_search(*args, **kwargs):
         raise AssertionError("guest semantic prompt context must not search memory")

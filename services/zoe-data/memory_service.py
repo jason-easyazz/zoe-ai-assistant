@@ -334,10 +334,10 @@ class MemoryService:
         limit: int = 10,
         timeout_s: float = 2.0,
     ) -> list[MemoryRef]:
+        if is_guest_memory_user(user_id):
+            return []
         self._require(user_id, "user_id is required")
         if not query or not query.strip():
-            return []
-        if is_guest_memory_user(user_id):
             return []
         t0 = time.monotonic()
         try:
