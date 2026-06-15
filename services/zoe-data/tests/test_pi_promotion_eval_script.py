@@ -78,10 +78,12 @@ def test_cli_loads_cases_file_without_default_cases(tmp_path, capsys):
 
 def test_zoe_baseline_uses_current_router_hit_for_stale_fallback_fixture(monkeypatch):
     _install_fake_intent_router(monkeypatch)
+    calls = []
+    _install_fake_zoe_agent(monkeypatch, calls)
     module = _load_module()
     case = module.PiIntentEvalCase("weather", "rain later", "weather", "weather", "fallback")
 
-    result = asyncio.run(module._run_zoe_baseline(case))
+    result = asyncio.run(module._run_zoe_baseline(case, measure_zoe_agent_baseline=True))
 
     assert result["baseline_kind"] == "router"
     assert result["baseline_comparable"] is True
@@ -90,6 +92,7 @@ def test_zoe_baseline_uses_current_router_hit_for_stale_fallback_fixture(monkeyp
     assert result["baseline_timed_out"] is False
     assert result["baseline_response_chars"] is None
     assert result["baseline_error"] is None
+    assert calls == []
 
 
 def test_zoe_baseline_uses_operator_fallback_latency_override(monkeypatch):
