@@ -174,6 +174,7 @@ class PiPromotionPolicy:
     max_timeout_rate: float = 0.05
     max_correction_rate: float = 0.03
     require_latency_win: bool = True
+    require_comparable_baseline: bool = True
 
     def validate(self) -> None:
         if self.min_samples <= 0:
@@ -280,17 +281,23 @@ def evaluate_pi_promotion(
         blockers.append("timeout_rate_too_high")
     if correction_rate > active_policy.max_correction_rate:
         blockers.append("correction_rate_too_high")
+    if active_policy.require_comparable_baseline and any(
+        sample.metadata.get("baseline_comparable") is False for sample in group_samples
+    ):
+        blockers.append("baseline_not_comparable")
     if any(sample.rollback_blocked for sample in group_samples):
         blockers.append("rollback_blocked")
 
     state = "promote" if not blockers else "keep_shadow"
-    if promoted and {
+    rollback_blockers = {
         "accuracy_delta_below_threshold",
         "insufficient_samples",
         "timeout_rate_too_high",
         "correction_rate_too_high",
         "latency_not_faster_than_zoe",
-    }.intersection(blockers):
+    }
+    # Non-comparable baseline evidence blocks promotion, but does not prove a promoted route regressed.
+    if promoted and rollback_blockers.intersection(blockers):
         state = "rollback"
     if "rollback_blocked" in blockers:
         state = "blocked"
@@ -339,6 +346,7 @@ def summarize_pi_promotion(
             "max_timeout_rate": active_policy.max_timeout_rate,
             "max_correction_rate": active_policy.max_correction_rate,
             "require_latency_win": active_policy.require_latency_win,
+            "require_comparable_baseline": active_policy.require_comparable_baseline,
         },
         "sample_count": len(samples),
         "promoted_groups": sorted(active_promoted_groups),

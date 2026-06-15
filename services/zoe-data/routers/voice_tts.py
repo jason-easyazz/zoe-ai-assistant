@@ -4115,10 +4115,18 @@ async def voice_wake(payload: dict, caller: dict = Depends(_require_voice_auth))
     """
     Signal from the Pi daemon that the wake word was detected.
     Used to update panel state (show orb animation, open mic indicator).
-    Returns TTS audio for the wake acknowledgement chime/phrase if configured.
+    Returns cached or fallback TTS audio for the wake acknowledgement.
     """
     panel_id = str((payload or {}).get("panel_id", caller.get("panel_id") or "unknown"))
     ack_phrase = os.environ.get("ZOE_WAKE_ACK_PHRASE", "").strip()
+    try:
+        from voice_presence import wake_ack_variant
+
+        ack_variant = wake_ack_variant()
+        ack_phrase = str(ack_variant.get("phrase") or ack_phrase).strip()
+    except Exception as exc:
+        logger.warning("voice/wake ack variant lookup failed: %s", exc)
+        ack_variant = {"audio_path": ""}
 
     logger.info("voice/wake panel=%s", panel_id)
 
@@ -4134,7 +4142,18 @@ async def voice_wake(payload: dict, caller: dict = Depends(_require_voice_auth))
 
     audio_b64: Optional[str] = None
     content_type = "audio/wav"
-    if ack_phrase:
+    try:
+        from voice_presence import wake_ack_audio_payload
+
+        cached_audio = wake_ack_audio_payload(audio_path=str(ack_variant.get("audio_path") or ""))
+    except Exception as exc:
+        logger.warning("voice/wake cached ack lookup failed: %s", exc)
+        cached_audio = None
+
+    if cached_audio:
+        audio_b64 = str(cached_audio.get("audio_base64") or "") or None
+        content_type = str(cached_audio.get("content_type") or "audio/wav")
+    elif ack_phrase:
         try:
             audio_resp = await synthesize({"text": ack_phrase}, caller=caller)
             audio_b64 = base64.b64encode(audio_resp.body).decode("ascii")

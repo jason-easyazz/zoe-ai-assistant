@@ -62,6 +62,8 @@ async def test_shadow_records_sanitized_pi_comparison(tmp_path, monkeypatch):
     assert record is not None
     assert record["agreement"] is True
     assert record["pi_latency_ms"] == 123.0
+    assert record["baseline_kind"] == "router"
+    assert record["baseline_comparable"] is True
     saved = json.loads(path.read_text().strip())
     assert saved["text_preview"] == "email [EMAIL] if rain later"
     assert saved["text_hash"]
@@ -143,6 +145,57 @@ async def test_intent_router_shadow_does_not_change_live_route(monkeypatch):
     assert calls[0]["zoe_intent"] == "weather"
     assert calls[0]["route_class"] == "deterministic"
     assert calls[0]["user_id"] == "jason"
+    assert calls[0]["baseline_kind"] == "router"
+    assert calls[0]["baseline_comparable"] is True
+    assert calls[0]["router_latency_ms"] is not None
+
+
+@pytest.mark.asyncio
+async def test_intent_router_shadow_extraction_failed_records_pre_pi_latency_and_baseline(monkeypatch):
+    monkeypatch.setenv("ZOE_PI_INTENT_ENABLED", "true")
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_ENABLED", "true")
+    monkeypatch.setenv("ZOE_PI_INTENT_PROMOTED_GROUPS", "reminders")
+    calls = []
+
+    async def fake_shadow(text, **kwargs):
+        calls.append({"text": text, **kwargs})
+        return {"pi_intent": "reminder_create", "agreement": False}
+
+    async def fake_extract(_intent_name, _raw):
+        return None
+
+    async def fake_classify(text, *, context_turns="", env=None, config=None):
+        return PiIntentClassification(
+            intent="reminder_create",
+            slots={"title": "call mum"},
+            confidence=0.89,
+            task_lane="fast_tool",
+            source="pi_test",
+            latency_ms=250.0,
+        )
+
+    from intent_router import detect_and_extract_intent
+    import intent_router
+
+    ticks = iter([100.0, 100.002, 100.006])
+    monkeypatch.setattr(intent_router.time, "perf_counter", lambda: next(ticks))
+    monkeypatch.setattr("nlu_extractor.extract_slots_for_intent", fake_extract)
+    monkeypatch.setattr("pi_intent_classifier.classify_with_pi_intent_governor", fake_classify)
+    monkeypatch.setattr("pi_intent_shadow.maybe_record_pi_intent_shadow", fake_shadow)
+
+    intent = await detect_and_extract_intent("remind me to call mum", user_id="jason")
+    await asyncio.sleep(0)
+
+    assert intent is not None
+    assert intent.name == "reminder_create"
+    assert calls
+    assert calls[0]["route_class"] == "extraction_failed"
+    assert calls[0]["baseline_kind"] == "router_extraction_failed_not_comparable"
+    assert calls[0]["baseline_comparable"] is False
+    assert calls[0]["zoe_latency_ms"] == pytest.approx(6.0)
+    assert calls[0]["router_latency_ms"] == pytest.approx(2.0)
+    with pytest.raises(StopIteration):
+        next(ticks)
 
 
 @pytest.mark.asyncio
@@ -180,6 +233,9 @@ async def test_intent_router_reuses_live_pi_result_for_shadow_fallback(tmp_path,
     assert record["route_class"] == "fallback"
     assert record["pi_intent"] == "reminder_list"
     assert record["pi_no_result"] is False
+    assert record["baseline_kind"] == "router_only_not_comparable"
+    assert record["baseline_comparable"] is False
+    assert record["router_latency_ms"] is not None
 
 
 def test_shadow_config_uses_default_for_invalid_max_words():
@@ -223,6 +279,31 @@ def test_labeled_shadow_records_convert_to_route_samples():
     assert samples[0].pi_correct is True
     assert samples[0].user_corrected is True
     assert samples[0].rollback_blocked is False
+    assert samples[0].metadata["baseline_kind"] == "router_only_not_comparable"
+    assert samples[0].metadata["baseline_comparable"] is False
+
+
+def test_labeled_shadow_record_with_explicit_comparable_kind_defaults_to_comparable():
+    samples = shadow_records_to_route_samples(
+        [
+            {
+                "text_hash": "reviewed_fallback",
+                "outcome_label": "weather",
+                "zoe_intent": "reminder_list",
+                "pi_intent": "weather",
+                "zoe_latency_ms": 500,
+                "pi_latency_ms": 120,
+                "pi_confidence": 0.9,
+                "pi_transport": "rpc",
+                "route_class": "fallback",
+                "baseline_kind": "operator_fallback_override",
+            }
+        ]
+    )
+
+    assert len(samples) == 1
+    assert samples[0].metadata["baseline_kind"] == "operator_fallback_override"
+    assert samples[0].metadata["baseline_comparable"] is True
 
 
 def test_labeled_shadow_records_skip_missing_latency():
@@ -262,6 +343,40 @@ def test_shadow_summary_needs_min_samples_for_promotion_ready():
     assert report["promotion_ready"] is False
 
 
+def test_labeled_shadow_fallback_without_comparable_baseline_blocks_promotion(tmp_path):
+    path = tmp_path / "shadow.jsonl"
+    rows = []
+    for index in range(PiPromotionPolicy().min_samples):
+        rows.append(
+            json.dumps(
+                {
+                    "text_hash": f"weather_router_only_{index}",
+                    "outcome_label": "weather",
+                    "zoe_intent": "reminder_list",
+                    "pi_intent": "weather",
+                    "zoe_latency_ms": 500,
+                    "pi_latency_ms": 120,
+                    "pi_confidence": 0.9,
+                    "pi_transport": "rpc",
+                    "route_class": "fallback",
+                    "agreement": False,
+                    "timed_out": False,
+                    "pi_no_result": False,
+                }
+            )
+        )
+    path.write_text("\n".join(rows) + "\n")
+
+    status = pi_intent_shadow_status({"ZOE_PI_INTENT_SHADOW_PATH": str(path)})
+
+    weather = next(
+        decision for decision in status["promotion_report"]["decisions"] if decision["intent_group"] == "weather"
+    )
+    assert weather["state"] == "keep_shadow"
+    assert "baseline_not_comparable" in weather["blockers"]
+    assert "weather" not in status["promotion_report"]["promotable_groups"]
+
+
 def test_shadow_status_includes_promotion_report_for_labeled_records(tmp_path):
     path = tmp_path / "shadow.jsonl"
     rows = []
@@ -281,6 +396,9 @@ def test_shadow_status_includes_promotion_report_for_labeled_records(tmp_path):
                     "agreement": False,
                     "timed_out": False,
                     "pi_no_result": False,
+                    "baseline_kind": "operator_fallback_override",
+                    "baseline_comparable": True,
+                    "router_latency_ms": 5,
                 }
             )
         )

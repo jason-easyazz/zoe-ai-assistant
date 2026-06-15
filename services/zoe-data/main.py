@@ -44,6 +44,7 @@ from routers.system import (
 )
 from system_updates import start_zoe_update_background_tasks
 from routers.openclaw import router as openclaw_router
+from voice_presence import is_wake_payload, is_wake_text, wake_ack_events
 import logging
 from middleware.logging import setup_json_logging
 
@@ -1688,15 +1689,26 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
                 if text_data == "ping":
                     await websocket.send_json({"type": "pong"})
                     continue
+                msg = None
                 try:
                     msg = __import__("json").loads(text_data)
+                except ValueError:
+                    msg = None
+                if isinstance(msg, dict):
+                    if is_wake_payload(msg):
+                        for event in wake_ack_events():
+                            await websocket.send_json(event)
+                        continue
                     if msg.get("type") == "text":
                         message_text = msg.get("message", "").strip()
                     elif msg.get("type") == "cancel":
                         _ws_cancelled[0] = True
                         continue
-                except Exception:
-                    pass
+                else:
+                    if is_wake_text(text_data):
+                        for event in wake_ack_events():
+                            await websocket.send_json(event)
+                        continue
 
             if not message_text:
                 continue
