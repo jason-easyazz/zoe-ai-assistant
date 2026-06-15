@@ -19,6 +19,26 @@ def test_evidence_from_implement_handoff_parses_tools_and_tests():
     assert "pr" in kinds
 
 
+def test_implement_evidence_recovers_pr_url_from_prose_without_structured_field():
+    # Observed with MiniMax M3 (ZOE-5798): the worker opened a real PR but
+    # reported it in prose ("PR opened: <url>") instead of a structured PR_URL=
+    # field, so the pr-evidence gate wrongly blocked. The handoff text URL must
+    # still produce a 'pr' EvidenceItem.
+    detail = {
+        "latest_summary": (
+            "TOOLS_USED=graphify\nTESTS=pytest -q passed\n"
+            "Shipped\n- Branch pushed to origin.\n"
+            "- PR opened against main: https://github.com/o/r/pull/514\n"
+            "- kanban_complete recorded with PR URL and tests."
+        ),
+        "comments": [],
+    }
+    items = evidence_from_handoff("implement", detail)
+    pr_items = [i for i in items if i.kind == "pr"]
+    assert pr_items, "a PR mentioned only in prose must still yield pr evidence"
+    assert pr_items[0].artifact == "https://github.com/o/r/pull/514"
+
+
 def test_implement_evidence_recovers_live_run_metadata_and_ticket_pr_url():
     detail = {
         "latest_summary": (
