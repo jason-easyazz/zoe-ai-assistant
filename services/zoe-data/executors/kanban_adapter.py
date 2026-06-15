@@ -824,6 +824,15 @@ class KanbanAdapter:
             # call kanban_show and read SCOUT_SUMMARY= from scout metadata when present.
             return common + overnight_hint + (
                 "You are the implementer (zoe-coder).\n"
+                "- COMPLETION MEANS YOU SHIP A PR (read this first): when your edits are made and"
+                " focused tests pass, you MUST commit, publish the branch, and open ONE PR (exact"
+                " push/PR commands are given below), then call `kanban_complete` with PR_URL=. Greptile"
+                " and CI review the PR automatically — there is NO separate human-review step to wait"
+                " for. Stopping with a finished diff and calling `kanban_block` to 'block for review',"
+                " 'hand off for review', or because a human should look at it is a PROTOCOL VIOLATION"
+                " that wastes the run: open the PR yourself instead. `kanban_block` is ONLY for genuine"
+                " blockers where you cannot ship (dirty tree, missing auth, ambiguous product decision,"
+                " repeated test failure, scope too broad).\n"
                 f"{code_audit_hint}"
                 f"{harness_hint}"
                 f"{intent_gap_hint}"
