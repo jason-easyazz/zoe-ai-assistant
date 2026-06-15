@@ -65,6 +65,7 @@ Environment variables:
 | `ZOE_PI_INTENT_MISS_EVIDENCE_PATH` | `~/.zoe/data/pi-intent-miss-evidence.jsonl` | JSONL path for structured intent-miss candidates. |
 | `ZOE_PI_INTENT_AUTO_PROMOTE` | `false` | Report whether automatic Pi promotion was requested. Current runtime remains evidence-only and requires the guarded apply helper. |
 | `ZOE_PI_INTENT_PROMOTED_GROUPS` | unset | Comma-separated low-risk intent groups promoted through Pi for live fallback execution and rollback reporting. Unknown or privileged groups are ignored. |
+| `ZOE_PI_INTENT_RUNTIME_PROBE_CACHE_TTL_SECONDS` | `5.0` | Cache Pi readiness checks inside the intent classifier to avoid repeated `PATH`/version discovery during shadow and eval loops. Set to `0` to disable. |
 
 Readiness report fields:
 
