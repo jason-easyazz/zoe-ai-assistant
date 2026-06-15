@@ -1,6 +1,6 @@
 import pytest
 
-from intent_router import Intent, execute_intent
+from intent_router import Intent, _load_direct_execution_user, execute_intent
 from models import ReminderCreate
 from reminder_service import create_reminder_record
 
@@ -91,3 +91,47 @@ async def test_execute_reminder_create_uses_direct_path_before_mcporter(monkeypa
 
     assert result == "Reminder set: check the oven."
     assert calls == [("reminder_create", {"title": "check the oven", "date": "2026-06-15", "time": "23:00"}, "family-admin")]
+
+
+@pytest.mark.asyncio
+async def test_load_direct_execution_user_defaults_null_role_to_user():
+    class FakeUserDB:
+        async def execute(self, _sql, _params):
+            return _Cursor({"id": "zoe-user", "role": None, "name": "Zoe User"})
+
+    user = await _load_direct_execution_user(FakeUserDB(), "zoe-user")
+
+    assert user == {"user_id": "zoe-user", "role": "user", "username": "Zoe User"}
+
+
+@pytest.mark.asyncio
+async def test_execute_reminder_create_falls_back_to_mcporter_when_direct_unavailable(monkeypatch):
+    calls = []
+
+    async def fake_direct(intent, user_id):
+        calls.append(("direct", intent.name, user_id))
+        return None
+
+    def fake_build_command(intent, user_id):
+        calls.append(("build", intent.name, user_id))
+        return "mcporter-safe call zoe-data.reminder_create"
+
+    async def fake_mcporter(cmd):
+        calls.append(("mcporter", cmd))
+        return "{}"
+
+    monkeypatch.setattr("intent_router._execute_reminder_create_direct", fake_direct)
+    monkeypatch.setattr("intent_router._build_command", fake_build_command)
+    monkeypatch.setattr("intent_router._run_mcporter", fake_mcporter)
+
+    result = await execute_intent(
+        Intent("reminder_create", {"title": "check the oven", "date": "2026-06-15", "time": "23:00"}),
+        "family-admin",
+    )
+
+    assert result == "Reminder set: check the oven for 2026-06-15 at 23:00."
+    assert calls == [
+        ("direct", "reminder_create", "family-admin"),
+        ("build", "reminder_create", "family-admin"),
+        ("mcporter", "mcporter-safe call zoe-data.reminder_create"),
+    ]

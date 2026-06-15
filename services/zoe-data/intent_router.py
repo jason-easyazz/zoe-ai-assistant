@@ -1751,9 +1751,10 @@ async def _load_direct_execution_user(db, user_id: str) -> Optional[dict]:
     row = await cursor.fetchone()
     if not row:
         return None
+    raw_role = row.get("role") if hasattr(row, "get") else row["role"]
     return {
         "user_id": row["id"],
-        "role": row.get("role", "user") if hasattr(row, "get") else row["role"],
+        "role": raw_role or "user",
         "username": row.get("name", "") if hasattr(row, "get") else "",
     }
 
