@@ -293,6 +293,7 @@ def test_shadow_status_includes_promotion_report_for_labeled_records(tmp_path):
     assert status["report"]["promotion_ready"] is True
     assert "weather" in status["promotion_report"]["promotable_groups"]
     assert status["promotion_report"]["promoted_groups"] == ["weather"]
+    assert status["promotion_report"]["promotion_actions"]["next_promoted_groups"] == ["weather"]
 
 
 def test_shadow_status_ignores_unknown_promoted_groups(tmp_path):
@@ -342,3 +343,4 @@ def test_shadow_status_lists_rollback_groups_for_labeled_promoted_regression(tmp
     )
 
     assert "weather" in status["promotion_report"]["rollback_groups"]
+    assert status["promotion_report"]["promotion_actions"]["next_promoted_groups"] == []
