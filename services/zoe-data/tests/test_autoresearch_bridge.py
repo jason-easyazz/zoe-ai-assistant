@@ -1,6 +1,7 @@
 """Tests for the autoresearch -> governed-pipeline promotion bridge."""
 
 from autoresearch_bridge import (
+    _to_float,
     build_audit_ticket,
     build_pr_body,
     decide_promotion,
@@ -285,3 +286,9 @@ def test_prepare_promotion_no_keeper_is_inert(tmp_path):
     assert plan["promote"] is False
     assert "pr_body" not in plan
     assert "audit_description" not in plan
+
+
+def test_to_float_helper_parses_valid_none_and_invalid():
+    assert _to_float("3.5") == 3.5
+    assert _to_float(None) is None
+    assert _to_float("not-a-number") is None
