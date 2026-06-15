@@ -279,6 +279,8 @@ async def test_unsupported_on_date_phrase_still_uses_existing_extractor(monkeypa
         "remind me to prepare for Black Friday",
         "remind me to shop Cyber Monday",
         "remind me to call mum Tuesday",
+        "remind me to call mum Tuesday at 5pm",
+        "remind me to call mum Friday 9am",
     ],
 )
 def test_bare_trailing_weekday_reminder_is_not_fast_path(text):
