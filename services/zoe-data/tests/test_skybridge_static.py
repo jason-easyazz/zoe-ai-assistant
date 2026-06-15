@@ -92,7 +92,7 @@ def test_touch_kiosk_guest_sessions_are_not_sent_to_data_api():
     assert "pathname.startsWith('/api/ui/')" in auth
     assert "function getDataApiSession" in executor
     assert "if (isGuestSession(session)) return null;" in executor
-    assert "const session = getDataApiSession();" in executor
+    assert executor.count("const session = getDataApiSession();") >= 2
 
 def test_skybridge_uses_login_orb_to_voice_pill_layout():
     html = read(UI / "skybridge.html")
