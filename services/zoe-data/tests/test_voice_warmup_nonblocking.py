@@ -116,7 +116,7 @@ def test_warmup_low_memory_guard_falls_open_when_meminfo_unreadable(monkeypatch)
 # ---------------------------------------------------------------------------
 
 
-def test_available_memory_mb_parses_memavailable(tmp_path):
+def test_available_memory_mb_parses_memavailable(tmp_path, monkeypatch):
     from routers import voice_tts
 
     fake_meminfo = tmp_path / "meminfo"
@@ -128,15 +128,11 @@ def test_available_memory_mb_parses_memavailable(tmp_path):
         "Cached:          2048000 kB\n"
     )
 
-    real_path = voice_tts.Path
-    try:
-        voice_tts.Path = lambda *_args, **_kw: fake_meminfo
-        assert voice_tts._available_memory_mb() == 8000
-    finally:
-        voice_tts.Path = real_path
+    monkeypatch.setattr(voice_tts, "Path", lambda *_args, **_kw: fake_meminfo)
+    assert voice_tts._available_memory_mb() == 8000
 
 
-def test_available_memory_mb_falls_back_to_free_plus_buffers_cached(tmp_path):
+def test_available_memory_mb_falls_back_to_free_plus_buffers_cached(tmp_path, monkeypatch):
     from routers import voice_tts
 
     fake_meminfo = tmp_path / "meminfo"
@@ -148,13 +144,9 @@ def test_available_memory_mb_falls_back_to_free_plus_buffers_cached(tmp_path):
         "Cached:         1024000 kB\n"
     )
 
-    real_path = voice_tts.Path
-    try:
-        voice_tts.Path = lambda *_args, **_kw: fake_meminfo
-        # (2_048_000 + 512_000 + 1_024_000) kB = 3_584_000 kB // 1024 = 3500 MB
-        assert voice_tts._available_memory_mb() == 3500
-    finally:
-        voice_tts.Path = real_path
+    monkeypatch.setattr(voice_tts, "Path", lambda *_args, **_kw: fake_meminfo)
+    # (2_048_000 + 512_000 + 1_024_000) kB = 3_584_000 kB // 1024 = 3500 MB
+    assert voice_tts._available_memory_mb() == 3500
 
 
 def test_should_skip_warmup_for_low_memory_returns_reason_string(monkeypatch):
@@ -230,15 +222,20 @@ def test_warmup_offloads_tempfile_create_and_wav_write_to_thread(monkeypatch):
 
 
 def test_warmup_does_not_block_event_loop_during_slow_io(monkeypatch):
-    """A blocking tempfile create must not delay other event-loop tasks."""
+    """A blocking tempfile create must not stall concurrent event-loop tasks.
+
+    A heartbeat coroutine ticks every 20ms for the duration of the warmup while
+    the offloaded ``_create_warmup_wav_path`` sleeps 0.3s. If that sleep ran on
+    the event-loop thread instead of a worker thread, one heartbeat interval
+    would balloon to ~0.3s; with the ``asyncio.to_thread`` offload every gap
+    stays close to 20ms. This genuinely exercises concurrency (unlike awaiting a
+    no-await coroutine, which would complete before the warmup task is even
+    scheduled and pass regardless of blocking).
+    """
     from routers import voice_tts
 
-    loop_scheduled_at: list[float] = []
-
     def _slow_create() -> str:
-        # Simulate slow disk I/O. If the warmup ran this on the event-loop
-        # thread, the other coroutine below would be delayed past 0.3s.
-        time.sleep(0.3)
+        time.sleep(0.3)  # simulate slow disk I/O
         import tempfile
 
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
@@ -250,17 +247,22 @@ def test_warmup_does_not_block_event_loop_during_slow_io(monkeypatch):
     async def _fake_worker(path: str) -> str:
         return ""
 
-    async def _ping_loop() -> None:
-        # Should run nearly immediately because slow_create is offloaded.
-        loop_scheduled_at.append(time.monotonic())
+    async def _heartbeat(max_gap: list[float]) -> None:
+        prev = time.monotonic()
+        # Tick well past the 0.3s slow_create window.
+        for _ in range(30):
+            await asyncio.sleep(0.02)
+            now = time.monotonic()
+            max_gap[0] = max(max_gap[0], now - prev)
+            prev = now
 
     async def _drive() -> float:
-        task_a = asyncio.create_task(voice_tts.warm_faster_whisper_worker())
-        # Schedule the ping at the same time — if warmup blocked the loop, the
-        # ping would only get to run after the 0.3s sleep.
-        await _ping_loop()
-        await task_a
-        return time.monotonic()
+        max_gap = [0.0]
+        warm = asyncio.create_task(voice_tts.warm_faster_whisper_worker())
+        beat = asyncio.create_task(_heartbeat(max_gap))
+        assert await warm is True
+        await beat
+        return max_gap[0]
 
     monkeypatch.delenv("ZOE_WHISPER_WARMUP", raising=False)
     monkeypatch.delenv("ZOE_WHISPER_IN_PROCESS", raising=False)
@@ -270,17 +272,10 @@ def test_warmup_does_not_block_event_loop_during_slow_io(monkeypatch):
     monkeypatch.setattr(voice_tts, "_write_warmup_silence_wav", _quick_write)
     monkeypatch.setattr(voice_tts, "_run_faster_whisper_worker", _fake_worker)
 
-    started = time.monotonic()
-    total = asyncio.run(_drive())
-    ping_at = loop_scheduled_at[0]
+    max_gap = asyncio.run(_drive())
 
-    # If the slow_create ran on the event-loop thread, ping_at would be
-    # roughly `started + 0.3`. With to_thread offload, ping_at should land
-    # within tens of milliseconds of `started`.
-    ping_delay = ping_at - started
-    assert ping_delay < 0.1, f"ping was delayed by {ping_delay:.3f}s; warmup blocked the event loop"
-    # Whole run will take at least 0.3s because of the slow helper.
-    assert total - started >= 0.3
+    # With the offload the loop keeps ticking; a stall would show one ~0.3s gap.
+    assert max_gap < 0.15, f"event loop stalled for {max_gap:.3f}s during warmup"
 
 
 # ---------------------------------------------------------------------------
