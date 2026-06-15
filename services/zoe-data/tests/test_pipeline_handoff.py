@@ -39,6 +39,24 @@ def test_implement_evidence_recovers_pr_url_from_prose_without_structured_field(
     assert pr_items[0].artifact == "https://github.com/o/r/pull/514"
 
 
+def test_closeout_evidence_recovers_pr_url_from_prose_without_structured_field():
+    # The prose-recovery path guards on phase in {implement, verify, closeout}.
+    # closeout also runs the inferred_audit computation, so confirm a PR mentioned
+    # only in prose still yields a 'pr' EvidenceItem in the closeout phase.
+    detail = {
+        "latest_summary": (
+            "Closeout summary\n- Verified tests pass.\n"
+            "- PR merged against main: https://github.com/o/r/pull/520\n"
+            "- kanban_complete recorded."
+        ),
+        "comments": [],
+    }
+    items = evidence_from_handoff("closeout", detail)
+    pr_items = [i for i in items if i.kind == "pr"]
+    assert pr_items, "a PR mentioned only in prose must still yield pr evidence at closeout"
+    assert pr_items[0].artifact == "https://github.com/o/r/pull/520"
+
+
 def test_implement_evidence_recovers_live_run_metadata_and_ticket_pr_url():
     detail = {
         "latest_summary": (
