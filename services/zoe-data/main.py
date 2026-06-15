@@ -44,7 +44,7 @@ from routers.system import (
 )
 from system_updates import start_zoe_update_background_tasks
 from routers.openclaw import router as openclaw_router
-from voice_presence import is_wake_payload, is_wake_text, wake_ack_phrase, wake_presence_events
+from voice_presence import is_wake_payload, is_wake_text, wake_ack_events
 import logging
 from middleware.logging import setup_json_logging
 
@@ -1696,7 +1696,7 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
                     msg = None
                 if isinstance(msg, dict):
                     if is_wake_payload(msg):
-                        for event in wake_presence_events(ack_phrase=wake_ack_phrase()):
+                        for event in wake_ack_events():
                             await websocket.send_json(event)
                         continue
                     if msg.get("type") == "text":
@@ -1706,7 +1706,7 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
                         continue
                 else:
                     if is_wake_text(text_data):
-                        for event in wake_presence_events(ack_phrase=wake_ack_phrase()):
+                        for event in wake_ack_events():
                             await websocket.send_json(event)
                         continue
 
