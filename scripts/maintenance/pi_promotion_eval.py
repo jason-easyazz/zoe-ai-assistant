@@ -96,7 +96,11 @@ async def _run_zoe_baseline(
     baseline_response_chars: int | None = None
     baseline_error: str | None = None
     agent_baseline: dict[str, Any] | None = None
-    if case.route_class == "fallback":
+    if intent is not None:
+        # A current router hit is Zoe's comparable baseline, even when the
+        # fixture came from an older fallback/extraction-failure trace.
+        pass
+    elif case.route_class == "fallback":
         if fallback_baseline_latency_ms is not None:
             latency_ms = fallback_baseline_latency_ms
             baseline_kind = "operator_fallback_override"
