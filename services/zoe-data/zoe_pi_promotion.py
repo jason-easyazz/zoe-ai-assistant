@@ -344,6 +344,7 @@ def summarize_pi_promotion(
         "decisions": decisions,
         "promotable_groups": promotable_groups,
         "rollback_groups": rollback_groups,
+        "route_class_breakdown": build_pi_route_class_breakdown(samples),
         "failure_examples": build_pi_failure_examples(samples),
         "promotion_actions": build_pi_promotion_actions(
             current_promoted_groups=sorted(active_promoted_groups),
@@ -351,6 +352,30 @@ def summarize_pi_promotion(
             rollback_groups=rollback_groups,
         ),
     }
+
+
+def build_pi_route_class_breakdown(samples: Sequence[PiRouteSample]) -> dict[str, dict[str, Any]]:
+    breakdown: dict[str, dict[str, Any]] = {}
+    for route_class in sorted(ROUTE_CLASSES):
+        route_samples = [sample for sample in samples if sample.route_class == route_class]
+        for sample in route_samples:
+            sample.validate()
+        zoe_p95 = _percentile([sample.zoe_latency_ms for sample in route_samples], 95)
+        pi_p95 = _percentile([sample.pi_latency_ms for sample in route_samples], 95)
+        zoe_accuracy = _rate(sample.zoe_correct for sample in route_samples)
+        pi_accuracy = _rate(sample.pi_correct for sample in route_samples)
+        breakdown[route_class] = {
+            "sample_count": len(route_samples),
+            "zoe_accuracy": zoe_accuracy,
+            "pi_accuracy": pi_accuracy,
+            "accuracy_delta": pi_accuracy - zoe_accuracy,
+            "zoe_p95_latency_ms": zoe_p95,
+            "pi_p95_latency_ms": pi_p95,
+            "latency_delta_ms": None if zoe_p95 is None or pi_p95 is None else zoe_p95 - pi_p95,
+            "timeout_rate": _rate(sample.timed_out for sample in route_samples),
+            "correction_rate": _rate(sample.user_corrected for sample in route_samples),
+        }
+    return breakdown
 
 
 def build_pi_failure_examples(samples: Sequence[PiRouteSample], *, limit: int = 5) -> list[dict[str, Any]]:
@@ -574,6 +599,7 @@ __all__ = [
     "PiPromotionPolicy",
     "PiRouteSample",
     "build_pi_failure_examples",
+    "build_pi_route_class_breakdown",
     "build_pi_promotion_actions",
     "eval_cases_to_dict",
     "evaluate_pi_promotion",
