@@ -1845,8 +1845,14 @@ class KanbanAdapter:
         affect reported chain status.
         """
         try:
-            from worktree_bootstrap import remove_task_worktree
+            from worktree_bootstrap import remove_task_worktree, resolve_base_ref
         except Exception:  # noqa: BLE001 - cleanup is optional, never fatal.
+            return
+        try:
+            # Resolve (and fetch) the base ref once per chain, not once per phase.
+            base_ref = await asyncio.to_thread(resolve_base_ref)
+        except Exception as exc:  # noqa: BLE001 - skip cleanup, never fatal.
+            logger.warning("kanban_adapter: base ref resolve failed, skipping cleanup: %s", exc)
             return
         seen: set[str] = set()
         for row in phases.values():
@@ -1855,7 +1861,7 @@ class KanbanAdapter:
                 continue
             seen.add(task_id)
             try:
-                await asyncio.to_thread(remove_task_worktree, task_id)
+                await asyncio.to_thread(remove_task_worktree, task_id, base_ref=base_ref)
             except Exception as exc:  # noqa: BLE001 - log and continue.
                 logger.warning(
                     "kanban_adapter: worktree cleanup failed for %s: %s", task_id, exc

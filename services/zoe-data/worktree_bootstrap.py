@@ -269,10 +269,21 @@ def _worktree_is_dirty(wt_path: Path) -> bool:
     return status.returncode != 0 or bool(status.stdout.strip())
 
 
+def resolve_base_ref(base_branch: str = "main") -> str:
+    """Public wrapper: fetch+resolve ``origin/<base_branch>`` once.
+
+    Callers cleaning several task worktrees in one pass (e.g. a completed chain)
+    should resolve the base ref once and pass it to ``remove_task_worktree`` via
+    ``base_ref`` so each removal does not re-run ``git fetch``.
+    """
+    return _base_ref(Path(zoe_repo_root()), base_branch)
+
+
 def remove_task_worktree(
     task_id: str,
     *,
     base_branch: str = "main",
+    base_ref: str | None = None,
     require_merged: bool = True,
     consult_pr: bool = True,
 ) -> bool:
@@ -283,6 +294,9 @@ def remove_task_worktree(
     registered, has no uncommitted changes, and (when ``require_merged``) the
     branch is merged into ``origin/<base_branch>`` — a true ancestor merge or a
     squash-merged PR. Otherwise it is a no-op and returns ``False``.
+
+    Pass ``base_ref`` (from :func:`resolve_base_ref`) to skip the per-call
+    ``git fetch`` when cleaning many worktrees at once.
 
     Returns ``True`` only when the worktree was actually removed.
     """
@@ -299,7 +313,7 @@ def remove_task_worktree(
         return False
 
     if require_merged:
-        base_ref = _base_ref(repo, base_branch)
+        base_ref = base_ref or _base_ref(repo, base_branch)
         if not _branch_merged(repo, branch, base_ref, consult_pr=consult_pr):
             logger.info(
                 "worktree_bootstrap: keeping %s — %s not merged into %s",
@@ -383,10 +397,12 @@ def prune_merged_worktrees(
             reason = "live checkout"
         elif locked:
             reason = "locked"
+        elif not branch:
+            # Classify detached HEADs before touching the tree — a missing/half-
+            # removed path would otherwise read as "dirty" and hide the real state.
+            reason = "detached HEAD"
         elif _worktree_is_dirty(Path(path)):
             reason = "dirty"
-        elif not branch:
-            reason = "detached HEAD"
         else:
             age_src = _run_git(["git", "log", "-1", "--format=%ct"], cwd=path, timeout=30)
             try:

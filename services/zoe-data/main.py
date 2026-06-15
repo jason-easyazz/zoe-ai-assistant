@@ -667,7 +667,14 @@ async def lifespan(app: FastAPI):
     async def _multica_poll_loop():
         import time as _t
         _last_worktree_prune = 0.0
-        _prune_interval_s = float(os.environ.get("ZOE_WORKTREE_PRUNE_INTERVAL_S", "86400") or "86400")
+        try:
+            _prune_interval_s = float(os.environ.get("ZOE_WORKTREE_PRUNE_INTERVAL_S", "86400") or "86400")
+        except ValueError:
+            logger.warning(
+                "multica_poll: invalid ZOE_WORKTREE_PRUNE_INTERVAL_S=%r; using 86400",
+                os.environ.get("ZOE_WORKTREE_PRUNE_INTERVAL_S"),
+            )
+            _prune_interval_s = 86400.0
         while True:
             try:
                 await asyncio.sleep(30)

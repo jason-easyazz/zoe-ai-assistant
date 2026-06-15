@@ -307,6 +307,31 @@ def test_prune_merged_worktrees_respects_min_age(git_repo):
     assert wt.exists()
 
 
+def test_prune_classifies_detached_head_before_dirty(git_repo):
+    wt = wb.ensure_worktree("t_detach")
+    _commit_on_worktree(wt, "extra.txt")
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=wt, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    subprocess.run(["git", "checkout", "--detach", head], cwd=wt, check=True, capture_output=True)
+
+    results = wb.prune_merged_worktrees(min_age_days=0, consult_pr=False)
+    decisions = {r["worktree"]: r["decision"] for r in results}
+    assert decisions[str(wt.resolve())] == "skip:detached HEAD"
+    assert wt.exists()
+
+
+def test_remove_task_worktree_skips_fetch_when_base_ref_passed(git_repo, monkeypatch):
+    wb.ensure_worktree("t_nofetch")
+
+    def _no_fetch(repo, base_branch):
+        raise AssertionError("_base_ref should not be called when base_ref is provided")
+
+    monkeypatch.setattr(wb, "_base_ref", _no_fetch)
+    # Fresh wt branch off main is an ancestor of main → merged with the passed ref.
+    assert wb.remove_task_worktree("t_nofetch", base_ref="main", consult_pr=False) is True
+
+
 def test_prune_merged_worktrees_dry_run_reports_without_removing(git_repo):
     wt = wb.ensure_worktree("t_dryrun")
     results = wb.prune_merged_worktrees(min_age_days=0, execute=False, consult_pr=False)
