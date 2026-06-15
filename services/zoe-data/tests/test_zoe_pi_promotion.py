@@ -7,6 +7,7 @@ from zoe_pi_promotion import (
     PiRouteSample,
     build_pi_failure_examples,
     build_pi_route_class_breakdown,
+    build_pi_source_breakdown,
     build_pi_transport_breakdown,
     build_pi_promotion_actions,
     eval_cases_to_dict,
@@ -360,6 +361,30 @@ def test_route_class_breakdown_compares_baselines_independently():
     assert breakdown["extraction_failed"]["zoe_p95_latency_ms"] is None
 
 
+def test_source_breakdown_counts_real_synthetic_and_unknown_sources():
+    samples = [
+        _sample(1, metadata={"source": "synthetic"}),
+        _sample(2, metadata={"source": "intent_miss"}),
+        _sample(3),
+        _sample(4, group="timers", expected="timer_create", zoe="weather", pi="timer_create", metadata={"source": "pi_intent_shadow"}),
+    ]
+
+    breakdown = build_pi_source_breakdown(samples, policy=PiPromotionPolicy(min_samples=2))
+
+    assert breakdown["sample_count"] == 4
+    assert breakdown["source_counts"] == {"intent_miss": 1, "pi_intent_shadow": 1, "synthetic": 1, "unknown": 1}
+    assert breakdown["real_source_sample_count"] == 2
+    assert breakdown["synthetic_sample_count"] == 1
+    assert breakdown["unknown_source_sample_count"] == 1
+    assert breakdown["source_counts_by_group"]["weather"] == {"intent_miss": 1, "synthetic": 1, "unknown": 1}
+    assert breakdown["source_counts_by_group"]["timers"] == {"pi_intent_shadow": 1}
+    assert breakdown["real_source_sample_count_by_group"]["weather"] == 1
+    assert breakdown["real_source_sample_count_by_group"]["timers"] == 1
+    assert breakdown["real_source_sample_deficit_by_group"]["weather"] == 1
+    assert breakdown["real_source_sample_deficit_by_group"]["timers"] == 1
+    assert breakdown["real_source_ready_groups"] == []
+
+
 def test_transport_breakdown_separates_print_and_rpc_latency():
     samples = [
         _sample(1, pi_transport="print", zoe_ms=900, pi_ms=700),
@@ -413,6 +438,8 @@ def test_summary_lists_promotable_groups():
     assert report["route_class_breakdown"]["fallback"]["latency_delta_ms"] > 0
     assert report["transport_breakdown"]["rpc"]["sample_count"] == 10
     assert report["transport_breakdown"]["rpc"]["latency_delta_ms"] > 0
+    assert report["source_breakdown"]["unknown_source_sample_count"] == 10
+    assert report["source_breakdown"]["real_source_sample_deficit_by_group"]["weather"] == 10
 
 
 def test_summary_lists_rollback_groups_for_active_promotions():

@@ -68,6 +68,7 @@ def _demo_samples() -> list[PiRouteSample]:
                 pi_latency_ms=320,
                 pi_confidence=0.9,
                 pi_transport="rpc",
+                metadata={"source": "synthetic"},
             )
         )
     return samples
@@ -275,6 +276,7 @@ async def _run_cases(
                     route_class=case.route_class,
                     timed_out=bool(pi["timed_out"]),
                     metadata={
+                        "source": case.source,
                         "baseline_kind": zoe["baseline_kind"],
                         "baseline_comparable": zoe["baseline_comparable"],
                         "baseline_timed_out": zoe["baseline_timed_out"],
