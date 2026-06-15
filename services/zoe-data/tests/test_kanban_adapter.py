@@ -5027,7 +5027,10 @@ def test_implement_body_requires_pinned_worktree_before_git_or_pr_commands():
     assert "File reads must use paths under that" in body
     assert "never absolute live-checkout paths" in body
     assert "BLOCKER=WORKTREE_PATH_VIOLATION" in body
-    assert "do not read from or `cd` into" in body
+    # The live checkout must be off-limits for every command shape, including the
+    # `git -C <liveroot>` orientation form that previously slipped past the guard.
+    assert "NEVER touch the live checkout" in body
+    assert "git -C" in body and "git worktree list" in body
     assert body.index("BLOCKER=WORKTREE_PATH_VIOLATION") < body.index("git push -u origin HEAD")
 
 
