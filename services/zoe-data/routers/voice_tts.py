@@ -2052,6 +2052,61 @@ def _voice_stt_warmup_enabled() -> bool:
     }
 
 
+def _available_memory_mb() -> Optional[int]:
+    """Return roughly available system memory in MB, or None if undetectable.
+
+    Reads /proc/meminfo (Linux-only) so we don't add a new dependency. This is
+    used as a soft guard for the optional faster-whisper startup warmup so it
+    can be skipped when the host is under memory pressure.
+    """
+    try:
+        meminfo = Path("/proc/meminfo")
+        if not meminfo.is_file():
+            return None
+        available_kb: Optional[int] = None
+        total_kb: Optional[int] = None
+        free_kb: Optional[int] = None
+        buffers_kb: Optional[int] = None
+        cached_kb: Optional[int] = None
+        for raw in meminfo.read_text(errors="ignore").splitlines():
+            if raw.startswith("MemAvailable:"):
+                available_kb = int(raw.split()[1])
+            elif raw.startswith("MemTotal:"):
+                total_kb = int(raw.split()[1])
+            elif raw.startswith("MemFree:"):
+                free_kb = int(raw.split()[1])
+            elif raw.startswith("Buffers:"):
+                buffers_kb = int(raw.split()[1])
+            elif raw.startswith("Cached:"):
+                cached_kb = int(raw.split()[1])
+        if available_kb is not None:
+            return available_kb // 1024
+        if total_kb is not None and free_kb is not None:
+            extras = (buffers_kb or 0) + (cached_kb or 0)
+            return (free_kb + extras) // 1024
+        return None
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _should_skip_warmup_for_low_memory() -> Optional[str]:
+    """Return a skip-reason string if warmup should be skipped for low memory, else None.
+
+    Configurable via ZOE_WHISPER_WARMUP_MIN_AVAIL_MB (default 1024 MB). Set to 0
+    to disable the guard. Returns None when memory is healthy or undetectable —
+    we never block the warmup solely because we couldn't read /proc/meminfo.
+    """
+    threshold_mb = _env_float("ZOE_WHISPER_WARMUP_MIN_AVAIL_MB", 1024.0)
+    if threshold_mb <= 0:
+        return None
+    avail_mb = _available_memory_mb()
+    if avail_mb is None:
+        return None
+    if avail_mb < threshold_mb:
+        return f"available memory {avail_mb}MB below threshold {int(threshold_mb)}MB"
+    return None
+
+
 def _write_warmup_silence_wav(path: str, *, seconds: float = 1.0, sample_rate: int = 16000) -> None:
     frame_count = max(1, int(sample_rate * seconds))
     with wave.open(path, "wb") as wf:
@@ -2061,21 +2116,44 @@ def _write_warmup_silence_wav(path: str, *, seconds: float = 1.0, sample_rate: i
         wf.writeframes(b"\x00\x00" * frame_count)
 
 
+def _create_warmup_wav_path() -> str:
+    """Create an empty temp wav file and return its path. Sync helper.
+
+    Runs in a worker thread via ``asyncio.to_thread`` so it never blocks the
+    event loop while allocating a temp file on disk.
+    """
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        return tmp.name
+
+
 async def warm_faster_whisper_worker() -> bool:
-    """Prime the persistent faster-whisper worker without blocking API startup."""
+    """Prime the persistent faster-whisper worker without blocking API startup.
+
+    This coroutine is scheduled as a background task during lifespan startup
+    (see ``main.py``). To guarantee it can never stall zoe-data's :8000 bind
+    we (1) early-return when available system memory is below the configured
+    threshold and (2) offload every synchronous I/O step (tempfile creation,
+    silence-wav write) to a worker thread via ``asyncio.to_thread``. The
+    subprocess model load itself already runs in a child process, not on the
+    event-loop thread.
+    """
     if not _voice_stt_warmup_enabled():
         logger.info("faster-whisper warmup disabled by ZOE_WHISPER_WARMUP")
         return False
     if _use_in_process_faster_whisper() or not _use_persistent_faster_whisper_worker():
         logger.info("faster-whisper warmup skipped; persistent worker is not active")
         return False
+    skip_reason = _should_skip_warmup_for_low_memory()
+    if skip_reason is not None:
+        logger.warning("faster-whisper warmup skipped (%s); will warm lazily on first use", skip_reason)
+        return False
     timeout = _env_float("ZOE_WHISPER_WARMUP_TIMEOUT_S", 45.0)
     tmp_path = ""
     started = time.monotonic()
     try:
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-            tmp_path = tmp.name
-        _write_warmup_silence_wav(tmp_path)
+        # Offload all sync I/O to a worker thread so this coroutine is pure async I/O.
+        tmp_path = await asyncio.to_thread(_create_warmup_wav_path)
+        await asyncio.to_thread(_write_warmup_silence_wav, tmp_path)
         await asyncio.wait_for(_run_faster_whisper_worker(tmp_path), timeout=timeout)
         logger.info("faster-whisper worker warmup completed in %.2fs", time.monotonic() - started)
         return True
@@ -2089,6 +2167,7 @@ async def warm_faster_whisper_worker() -> bool:
     finally:
         if tmp_path:
             try:
+                # ``os.unlink`` is sync but tiny; safe to run inline.
                 os.unlink(tmp_path)
             except OSError:
                 pass
