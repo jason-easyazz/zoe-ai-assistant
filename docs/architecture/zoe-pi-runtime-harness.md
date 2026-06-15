@@ -167,9 +167,13 @@ with no tools, extensions, skills, prompt templates, themes, or context files.
 The evaluator treats fallback and extraction-failed router misses as
 `router_only_not_comparable` unless an operator supplies measured comparable
 latency with `--fallback-baseline-latency-ms` and/or
-`--extraction-failed-baseline-latency-ms`. The report still remains
-evidence-only; `ZOE_PI_INTENT_PROMOTED_GROUPS` changes must pass the promotion
-actions and guarded apply helper described above.
+`--extraction-failed-baseline-latency-ms`, or explicitly opts into live Zoe Agent
+fallback measurement with `--measure-zoe-agent-baseline`. Zoe Agent baseline
+measurement runs `run_zoe_agent()` for fallback/extraction_failed cases with a
+per-case timeout and max-token cap, and only marks the baseline comparable when
+Zoe Agent returns before timeout. The report still remains evidence-only;
+`ZOE_PI_INTENT_PROMOTED_GROUPS` changes must pass the promotion actions and
+guarded apply helper described above.
 
 ### Latest Local Pi/Gemma Intent Eval
 
@@ -192,6 +196,12 @@ Decision: keep Pi intent routing in shadow/evidence mode. Pi is accurate enough
 on the seed eval to justify more measurement, but promotion requires measured
 Zoe fallback/agent latency or labeled runtime shadow records, not router-only
 miss timing.
+
+Single-case measured fallback smoke on 2026-06-15 using `rain later`, local
+Gemma, RPC transport, `--measure-zoe-agent-baseline`, 20s timeout, and 128-token
+Zoe Agent cap: Zoe Agent fallback returned in about 6.75s with 260 response
+characters; Pi RPC classified `weather` in about 4.09s. This is useful evidence,
+but not enough sample volume for promotion.
 
 Sanitized JSONL evidence can be exported into the same eval-case format. For Pi
 shadow records this uses `text_preview` plus a trusted `outcome_label`; unlabeled,
