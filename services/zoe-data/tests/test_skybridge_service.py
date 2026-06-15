@@ -588,6 +588,7 @@ async def test_new_list_without_name_returns_action_form_prompt():
     assert result["handled"] is True
     assert result["intent"]["action"] == "create_list"
     assert result["cards"][0]["component"] == "action_form"
+    assert result["cards"][0]["props"]["actions"] == []
     assert "What should I name" in result["spoken_summary"]
 
 

@@ -529,6 +529,20 @@
     }
 
     function renderActionForm(props) {
+        if (props.source === 'list_create') {
+            const fields = (props.fields || []).slice(0, 2).map(field => {
+                const value = field.value == null || field.value === '' ? 'Not set' : field.value;
+                return '<div class="sky-list-create-field"><span>' + escapeHtml(field.label || field.name || 'Field') + '</span><strong>' + escapeHtml(value) + '</strong></div>';
+            }).join('');
+            const actions = props.actions || [];
+            const body = [
+                '<div class="sky-list-create-prompt">',
+                '<div class="sky-list-create-copy"><span>New list</span><h3>Name this list</h3><p>' + escapeHtml(props.summary || 'What should I name it?') + '</p></div>',
+                '<div class="sky-list-create-fields">' + fields + '</div>',
+                '</div>'
+            ].join('');
+            return cardFrame(Object.assign({}, props, { actions }), body, { wide: true, tone: 'zoe-list-card list-create-card personal', hideHeader: true, hideStatus: true });
+        }
         const fields = (props.fields || []).slice(0, 6).map(field => {
             const value = field.value == null || field.value === '' ? 'Not set' : field.value;
             return '<div class="sky-field"><span>' + escapeHtml(field.label || field.name || 'Field') + '</span><strong>' + escapeHtml(value) + '</strong></div>';

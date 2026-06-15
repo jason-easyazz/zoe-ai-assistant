@@ -378,6 +378,7 @@ def test_skybridge_list_renderer_has_switcher_columns_and_new_list_action():
     assert 'data-query="new list"' in renderer
     assert "renderListColumn" in renderer
     assert "sky-list-columns" in renderer
+    assert "sky-list-create-prompt" in renderer
     assert "sky-list-rings" not in renderer
     assert "sky-list-hero" not in renderer
     assert "+ ' open'" not in renderer
@@ -385,6 +386,7 @@ def test_skybridge_list_renderer_has_switcher_columns_and_new_list_action():
     assert ".sky-list-tab.shopping" in css
     assert ".sky-list-tab.work" in css
     assert ".sky-list-tab.personal" in css
+    assert ".sky-list-create-prompt" in css
 
 
 def test_skybridge_calendar_renderer_handles_datetime_dates_and_ordering():

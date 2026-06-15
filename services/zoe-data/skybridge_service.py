@@ -1011,10 +1011,7 @@ def _new_list_prompt_card(list_type: str) -> dict[str, Any]:
                 {"label": "List type", "name": "list_type", "value": label},
                 {"label": "Name", "name": "name", "value": "Say or type the list name"},
             ],
-            "actions": [
-                {"type": "query", "label": "Work list", "query": "new work list called Projects"},
-                {"type": "query", "label": "Personal list", "query": "new personal list called Errands"},
-            ],
+            "actions": [],
         },
     }
 
