@@ -96,23 +96,30 @@ async def test_trailing_relative_reminder_still_uses_existing_extractor(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_modifier_day_reminder_still_uses_existing_extractor(monkeypatch):
+@pytest.mark.parametrize(
+    "text",
+    [
+        "remind me to call mum next Tuesday",
+        "remind me to pick up kids this Saturday",
+        "remind me to submit the form coming Monday",
+    ],
+)
+async def test_modifier_day_reminder_still_uses_existing_extractor(monkeypatch, text):
     calls = []
     module = types.ModuleType("nlu_extractor")
 
     async def fake_extract(intent_name, raw):
         calls.append((intent_name, raw))
-        return {"title": "call mum", "date": "2026-06-23"}
+        return {"title": "modifier day reminder", "date": "2026-06-23"}
 
     module.extract_slots_for_intent = fake_extract
     monkeypatch.setitem(sys.modules, "nlu_extractor", module)
 
     from intent_router import detect_and_extract_intent
 
-    text = "remind me to call mum next Tuesday"
     intent = await detect_and_extract_intent(text, user_id="guest")
 
     assert calls == [("reminder_create", text)]
     assert intent is not None
     assert intent.name == "reminder_create"
-    assert intent.slots == {"title": "call mum", "date": "2026-06-23"}
+    assert intent.slots == {"title": "modifier day reminder", "date": "2026-06-23"}
