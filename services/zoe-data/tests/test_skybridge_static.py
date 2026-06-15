@@ -378,6 +378,9 @@ def test_skybridge_list_renderer_has_switcher_columns_and_new_list_action():
     assert 'data-query="new list"' in renderer
     assert "renderListColumn" in renderer
     assert "sky-list-columns" in renderer
+    assert "items.slice(0, 16)" in renderer
+    assert "is-list-detail" in renderer
+    assert "is-recent" in renderer
     assert "sky-list-create-prompt" in renderer
     assert "sky-list-rings" not in renderer
     assert "sky-list-hero" not in renderer
@@ -386,6 +389,8 @@ def test_skybridge_list_renderer_has_switcher_columns_and_new_list_action():
     assert ".sky-list-tab.shopping" in css
     assert ".sky-list-tab.work" in css
     assert ".sky-list-tab.personal" in css
+    assert ".sky-list-items.is-list-detail" in css
+    assert ".sky-list-item-row.is-recent" in css
     assert ".sky-list-create-prompt" in css
 
 
@@ -596,9 +601,11 @@ def test_skybridge_has_touch_panel_fit_overrides():
     assert 'left: calc(50% - 425px)' in html
     assert 'left: calc(50% - 350px)' in html
     assert 'person-profile-card.sky-premium-card' in html
-    assert 'sky-list-item-row:nth-child(n+10)' in html
-    assert 'min-height: 44px !important' in html
+    assert 'sky-list-item-row:nth-child(n+17)' in html
+    assert 'min-height: 48px !important' in html
     assert 'sky-list-switcher' in html
+    assert 'min-height: 56px !important' in html
+    assert 'font-size: 18px !important' in html
     assert 'sky-list-column li:nth-child(n+4)' in html
     assert 'sky-card.list-card.sky-premium-card' in html
     assert 'grid-template-columns: repeat(2, minmax(0, 1fr)) !important' in html
