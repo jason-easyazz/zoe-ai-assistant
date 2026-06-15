@@ -285,11 +285,11 @@ def _tool_snapshot(pi_command: str, env: Mapping[str, str] | None = None) -> dic
 def _path_with_nvm_node_bin(path: str) -> str:
     parts = [part for part in path.split(os.pathsep) if part]
     joined = os.pathsep.join(parts)
-    if shutil.which("node", path=joined) and shutil.which("npm", path=joined) and shutil.which("pi", path=joined):
+    if parts and shutil.which("node", path=joined) and shutil.which("npm", path=joined) and shutil.which("pi", path=joined):
         return joined
     node_bin = _discover_nvm_node_bin()
     if node_bin and node_bin not in parts:
-        parts.append(node_bin)
+        parts.insert(0, node_bin)
     return os.pathsep.join(parts)
 
 
