@@ -233,3 +233,34 @@ async def test_time_before_day_reminder_skips_llm_extractor(monkeypatch):
     assert intent.slots["title"] == "call mum"
     assert intent.slots["time"] == "10:00"
     assert intent.slots["date"]
+
+
+@pytest.mark.parametrize(
+    ("text", "expected_time"),
+    [
+        ("remind me to call mum on Tuesday", None),
+        ("remind me to call mum at 10am on Tuesday", "10:00"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_on_day_reminder_skips_llm_extractor_without_stray_on(monkeypatch, text, expected_time):
+    module = types.ModuleType("nlu_extractor")
+
+    async def fail_extract(_intent_name, _raw):
+        raise AssertionError("on-day simple reminder should not call the LLM slot extractor")
+
+    module.extract_slots_for_intent = fail_extract
+    monkeypatch.setitem(sys.modules, "nlu_extractor", module)
+
+    from intent_router import detect_and_extract_intent
+
+    intent = await detect_and_extract_intent(text, user_id="guest")
+
+    assert intent is not None
+    assert intent.name == "reminder_create"
+    assert intent.slots["title"] == "call mum"
+    assert intent.slots["date"]
+    if expected_time:
+        assert intent.slots["time"] == expected_time
+    else:
+        assert "time" not in intent.slots
