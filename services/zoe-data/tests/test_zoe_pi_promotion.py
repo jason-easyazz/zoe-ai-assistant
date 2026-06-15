@@ -6,6 +6,7 @@ from zoe_pi_promotion import (
     PiPromotionPolicy,
     PiRouteSample,
     build_pi_failure_examples,
+    build_pi_route_class_breakdown,
     build_pi_promotion_actions,
     eval_cases_to_dict,
     evaluate_pi_promotion,
@@ -283,6 +284,36 @@ def test_failure_examples_separate_timeout_from_wrong_intent():
     assert examples[0]["reasons"] == ["timed_out"]
 
 
+def test_route_class_breakdown_compares_baselines_independently():
+    samples = [
+        _sample(1, route_class="deterministic", zoe="weather", pi="weather", zoe_ms=40, pi_ms=80),
+        _sample(2, route_class="fallback", zoe="reminder_list", pi="weather", zoe_ms=900, pi_ms=300),
+        _sample(3, route_class="fallback", zoe="reminder_list", pi=None, zoe_ms=800, pi_ms=1200, timed_out=True),
+    ]
+
+    breakdown = build_pi_route_class_breakdown(samples)
+
+    assert sorted(breakdown) == ["deterministic", "extraction_failed", "fallback"]
+    assert breakdown["deterministic"] == {
+        "sample_count": 1,
+        "zoe_accuracy": 1.0,
+        "pi_accuracy": 1.0,
+        "accuracy_delta": 0.0,
+        "zoe_p95_latency_ms": 40.0,
+        "pi_p95_latency_ms": 80.0,
+        "latency_delta_ms": -40.0,
+        "timeout_rate": 0.0,
+        "correction_rate": 0.0,
+    }
+    assert breakdown["fallback"]["sample_count"] == 2
+    assert breakdown["fallback"]["zoe_accuracy"] == 0.0
+    assert breakdown["fallback"]["pi_accuracy"] == 0.5
+    assert breakdown["fallback"]["accuracy_delta"] == 0.5
+    assert breakdown["fallback"]["timeout_rate"] == 0.5
+    assert breakdown["extraction_failed"]["sample_count"] == 0
+    assert breakdown["extraction_failed"]["zoe_p95_latency_ms"] is None
+
+
 def test_summary_lists_promotable_groups():
     samples = [_sample(i) for i in range(10)]
     report = summarize_pi_promotion(samples, policy=PiPromotionPolicy(min_samples=10))
@@ -291,6 +322,8 @@ def test_summary_lists_promotable_groups():
     assert report["promoted_groups"] == []
     assert report["sample_count"] == 10
     assert report["policy"]["accuracy_win_margin"] == 0.05
+    assert report["route_class_breakdown"]["fallback"]["sample_count"] == 10
+    assert report["route_class_breakdown"]["fallback"]["latency_delta_ms"] > 0
 
 
 def test_summary_lists_rollback_groups_for_active_promotions():
