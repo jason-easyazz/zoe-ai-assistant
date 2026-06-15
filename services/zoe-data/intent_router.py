@@ -1319,12 +1319,18 @@ def _extract_simple_reminder_slots(text: str) -> Optional[dict]:
     ):
         return None
     if re.search(
-        r"\b(?:noon|midnight|morning|afternoon|evening|night|bedtime|lunchtime|dinnertime)\b",
+        r"\b(?:noon|midnight|morning|afternoon|evening|(?:to)?night|bedtime|lunchtime|dinnertime)\b",
         body,
         flags=re.IGNORECASE,
     ):
         return None
     if re.search(r"\bat\s+\d{1,4}(?::\d{2})?\b(?!\s*(?:am|pm))", body, flags=re.IGNORECASE):
+        return None
+    if re.match(
+        r"^(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)$",
+        body,
+        flags=re.IGNORECASE,
+    ):
         return None
 
     def _pop_time(value: str) -> tuple[str, str]:
