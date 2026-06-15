@@ -5,6 +5,7 @@ from zoe_pi_promotion import (
     PiIntentEvalCase,
     PiPromotionPolicy,
     PiRouteSample,
+    build_pi_promotion_actions,
     eval_cases_to_dict,
     evaluate_pi_promotion,
     intent_group_for_intent,
@@ -185,6 +186,117 @@ def test_summary_lists_rollback_groups_for_active_promotions():
 
     assert report["promoted_groups"] == ["weather"]
     assert "weather" in report["rollback_groups"]
+
+
+def test_summary_includes_operator_promotion_actions():
+    samples = [
+        PiRouteSample(
+            case_id=f"weather_{index}",
+            intent_group="weather",
+            expected_intent="weather",
+            zoe_intent="reminder_list",
+            pi_intent="weather",
+            zoe_latency_ms=500,
+            pi_latency_ms=100,
+            pi_confidence=0.9,
+        )
+        for index in range(30)
+    ] + [
+        PiRouteSample(
+            case_id=f"reminder_{index}",
+            intent_group="reminders",
+            expected_intent="reminder_list",
+            zoe_intent="weather",
+            pi_intent="reminder_list",
+            zoe_latency_ms=450,
+            pi_latency_ms=90,
+            pi_confidence=0.9,
+        )
+        for index in range(30)
+    ]
+
+    report = summarize_pi_promotion(samples, promoted_groups=["reminders"])
+
+    assert report["promotion_actions"]["promote_groups"] == ["weather"]
+    assert report["promotion_actions"] == {
+        "promote_groups": ["weather"],
+        "rollback_groups": [],
+        "keep_promoted_groups": ["reminders"],
+        "next_promoted_groups": ["reminders", "weather"],
+        "env": {"ZOE_PI_INTENT_PROMOTED_GROUPS": "reminders,weather"},
+        "requires_operator_apply": True,
+    }
+
+
+def test_summary_includes_operator_rollback_actions():
+    samples = [
+        PiRouteSample(
+            case_id=f"weather_bad_{index}",
+            intent_group="weather",
+            expected_intent="weather",
+            zoe_intent="weather",
+            pi_intent="reminder_list",
+            zoe_latency_ms=100,
+            pi_latency_ms=500,
+            pi_confidence=0.9,
+        )
+        for index in range(30)
+    ] + [
+        PiRouteSample(
+            case_id=f"reminder_good_{index}",
+            intent_group="reminders",
+            expected_intent="reminder_list",
+            zoe_intent="weather",
+            pi_intent="reminder_list",
+            zoe_latency_ms=450,
+            pi_latency_ms=90,
+            pi_confidence=0.9,
+        )
+        for index in range(30)
+    ]
+
+    report = summarize_pi_promotion(samples, promoted_groups=["weather", "reminders"])
+
+    assert report["rollback_groups"] == ["weather"]
+    assert report["promotion_actions"]["rollback_groups"] == ["weather"]
+    assert report["promotion_actions"]["keep_promoted_groups"] == ["reminders"]
+    assert report["promotion_actions"]["next_promoted_groups"] == ["reminders"]
+    assert report["promotion_actions"]["env"] == {"ZOE_PI_INTENT_PROMOTED_GROUPS": "reminders"}
+
+
+def test_build_pi_promotion_actions_reports_no_change_steady_state():
+    actions = build_pi_promotion_actions(
+        current_promoted_groups=["weather"],
+        promotable_groups=["weather"],
+        rollback_groups=[],
+    )
+
+    assert actions == {
+        "promote_groups": [],
+        "rollback_groups": [],
+        "keep_promoted_groups": ["weather"],
+        "next_promoted_groups": ["weather"],
+        "env": {"ZOE_PI_INTENT_PROMOTED_GROUPS": "weather"},
+        "requires_operator_apply": False,
+    }
+
+
+def test_build_pi_promotion_actions_rejects_conflicting_groups():
+    with pytest.raises(ValueError, match="conflicting promotion action groups"):
+        build_pi_promotion_actions(
+            current_promoted_groups=[],
+            promotable_groups=["weather"],
+            rollback_groups=["weather"],
+        )
+
+
+def test_build_pi_promotion_actions_rejects_unknown_groups():
+    with pytest.raises(ValueError, match="unknown promotion action groups"):
+        build_pi_promotion_actions(
+            current_promoted_groups=["weather"],
+            promotable_groups=["device_control"],
+            rollback_groups=[],
+        )
 
 
 def test_summary_rejects_unknown_promoted_groups():

@@ -40,6 +40,7 @@ def _admin_app():
 
 def test_pi_intent_status_endpoint_is_admin_scoped_and_disabled_by_default(monkeypatch):
     monkeypatch.delenv("ZOE_PI_INTENT_ENABLED", raising=False)
+    monkeypatch.delenv("ZOE_PI_INTENT_PROMOTED_GROUPS", raising=False)
     app = _admin_app()
 
     resp = TestClient(app).get("/api/system/pi-intent/status")
@@ -50,6 +51,7 @@ def test_pi_intent_status_endpoint_is_admin_scoped_and_disabled_by_default(monke
     assert data["status"] == "disabled"
     assert data["config"]["enabled"] is False
     assert data["config"]["transport"] == "print"
+    assert data["promotion"]["active_groups"] == []
 
 
 def test_pi_intent_status_endpoint_reports_execution_disabled_when_tools_exist(tmp_path, monkeypatch):
@@ -112,6 +114,7 @@ def test_pi_intent_status_endpoint_reports_available_with_explicit_gates(tmp_pat
     monkeypatch.setenv("PATH", str(bindir))
     monkeypatch.setenv("ZOE_PI_INTENT_ENABLED", "true")
     monkeypatch.setenv("ZOE_PI_INTENT_TRANSPORT", "rpc")
+    monkeypatch.setenv("ZOE_PI_INTENT_PROMOTED_GROUPS", "weather,device_control")
     monkeypatch.setenv("ZOE_PI_CWD", str(tmp_path))
     monkeypatch.setenv("ZOE_PI_ALLOW_EXECUTION", "true")
     monkeypatch.setenv("ZOE_PI_LOCAL_MODEL_CONFIGURED", "true")
@@ -124,6 +127,8 @@ def test_pi_intent_status_endpoint_reports_available_with_explicit_gates(tmp_pat
     assert data["ok"] is True
     assert data["status"] == "available"
     assert data["config"]["transport"] == "rpc"
+    assert data["promotion"]["active_groups"] == ["weather"]
+    assert data["promotion"]["ignored_groups"] == ["device_control"]
     assert data["probe"]["config"]["allow_execution"] is True
     assert data["probe"]["config"]["local_model_configured"] is True
 

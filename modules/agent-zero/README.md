@@ -73,7 +73,7 @@ docker ps | grep agent
 curl http://localhost:8101/health
 
 # Check Agent Zero UI
-open http://192.168.1.218:50001
+open http://<ZOE_SERVER_IP>:50001
 ```
 
 ### 4. Environment Configuration

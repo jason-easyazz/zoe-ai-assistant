@@ -164,6 +164,7 @@ async def test_intent_router_reuses_live_pi_result_for_shadow_fallback(tmp_path,
     monkeypatch.setenv("ZOE_PI_INTENT_ENABLED", "true")
     monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_ENABLED", "true")
     monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_PATH", str(path))
+    monkeypatch.setenv("ZOE_PI_INTENT_PROMOTED_GROUPS", "reminders")
     monkeypatch.setattr("pi_intent_classifier.classify_with_pi_intent_governor", fake_classify)
 
     from intent_router import detect_and_extract_intent
@@ -292,6 +293,7 @@ def test_shadow_status_includes_promotion_report_for_labeled_records(tmp_path):
     assert status["report"]["promotion_ready"] is True
     assert "weather" in status["promotion_report"]["promotable_groups"]
     assert status["promotion_report"]["promoted_groups"] == ["weather"]
+    assert status["promotion_report"]["promotion_actions"]["next_promoted_groups"] == ["weather"]
 
 
 def test_shadow_status_ignores_unknown_promoted_groups(tmp_path):
@@ -341,3 +343,4 @@ def test_shadow_status_lists_rollback_groups_for_labeled_promoted_regression(tmp
     )
 
     assert "weather" in status["promotion_report"]["rollback_groups"]
+    assert status["promotion_report"]["promotion_actions"]["next_promoted_groups"] == []

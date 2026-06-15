@@ -77,7 +77,7 @@ curl -X POST http://localhost:8101/tools/plan \
 Container ID: d6f0119dbecc
 Status: Up 22 hours
 Port: 0.0.0.0:50001->80/tcp
-Web UI: http://192.168.1.218:50001
+Web UI: http://<ZOE_SERVER_IP>:50001
 ```
 
 ### Bridge Container

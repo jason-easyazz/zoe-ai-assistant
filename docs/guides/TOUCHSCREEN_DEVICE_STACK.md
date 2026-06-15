@@ -1,11 +1,11 @@
-# Raspberry Pi Touchscreen Stack (192.168.1.61)
+# Raspberry Pi Touchscreen Stack (<TOUCH_PANEL_IP>)
 
-This document is the source of truth for the physical touchscreen device at `192.168.1.61` (`zoe-touch`).
+This document is the source of truth for the physical touchscreen device at `<TOUCH_PANEL_IP>` (`zoe-touch`).
 
 ## Device Identity
 
 - Hostname: `zoe-touch`
-- IP: `192.168.1.61`
+- IP: `<TOUCH_PANEL_IP>`
 - OS: Debian 12 (bookworm)
 - User: `pi`
 - Architecture: `aarch64`
@@ -15,7 +15,7 @@ This document is the source of truth for the physical touchscreen device at `192
 
 The touchscreen does not host the full Zoe backend stack. It runs Chromium in kiosk mode and loads the touch dashboard from the Zoe server:
 
-- Active URL: `https://192.168.1.218/touch/dashboard.html?panel_id=zoe-touch-pi&kiosk=1`
+- Active URL: `https://<ZOE_SERVER_IP>/touch/dashboard.html?panel_id=zoe-touch-pi&kiosk=1`
 - Purpose:
   - display touch UI
   - send panel actions/events
@@ -40,11 +40,11 @@ Chromium process is launched with the following important arguments:
 - `--user-data-dir=/home/pi/.config/chromium-kiosk`
 - `--touch-events=enabled`
 - `--ignore-certificate-errors`
-- URL target: `https://192.168.1.218/touch/dashboard.html?panel_id=zoe-touch-pi&kiosk=1`
+- URL target: `https://<ZOE_SERVER_IP>/touch/dashboard.html?panel_id=zoe-touch-pi&kiosk=1`
 
 ## Files and Configurations that Define this Device
 
-### On the touchscreen (`192.168.1.61`)
+### On the touchscreen (`<TOUCH_PANEL_IP>`)
 
 - `/opt/TouchKio/start-kiosk.sh`
 - `/opt/TouchKio/config.json`
@@ -72,11 +72,11 @@ The repo now includes touchscreen deployment templates in:
 
 - `scripts/setup/touchscreen/`
 
-These files are intended to mirror and version-control the runtime config used on `192.168.1.61`.
+These files are intended to mirror and version-control the runtime config used on `<TOUCH_PANEL_IP>`.
 
 ## Operational Rules
 
-- Treat `192.168.1.61` as a dedicated kiosk endpoint.
+- Treat `<TOUCH_PANEL_IP>` as a dedicated kiosk endpoint.
 - Do not run unrelated services on this device.
 - Any kiosk/autostart/rotation changes must be reflected in `scripts/setup/touchscreen/`.
 - Any touch UI behavior changes must be reflected in `services/zoe-ui/dist/touch/`.
