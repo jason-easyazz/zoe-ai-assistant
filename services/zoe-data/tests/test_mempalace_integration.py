@@ -7,6 +7,7 @@ all-agent read paths, memory capture, nightly digest, dedup, timeout safety.
 Run: cd services/zoe-data && python -m pytest tests/test_mempalace_integration.py -v
 """
 import asyncio
+import contextlib
 import hashlib
 import importlib
 import os
@@ -530,6 +531,124 @@ async def test_migration_retags_legacy_records(tmp_path, monkeypatch):
 
     assert col._store["old_record_1"]["metadata"]["wing"] == "family-admin"
     assert "added_at" in col._store["old_record_1"]["metadata"]
+
+
+def test_migration_only_runs_once(tmp_path, monkeypatch):
+    """migrate_mempalace_legacy_records is idempotent: a second call must be a no-op.
+
+    This mirrors the filesystem-flag guard that the DB-flag gate in lifespan relies on.
+    We verify that calling the function twice doesn't re-process records added between
+    the two calls.
+    """
+    col = _GLOBAL_COLLECTION
+    flag_path = str(tmp_path / ".migration_v1_done")
+    import zoe_agent as _pa
+    monkeypatch.setattr(_pa, "_MIGRATION_DONE_FLAG", flag_path)
+
+    # Seed a legacy record and run once.
+    col.upsert(
+        ids=["legacy_1"],
+        documents=["Original record"],
+        metadatas=[{"wing": "zoe"}],
+    )
+    migrate_mempalace_legacy_records()
+    assert col._store["legacy_1"]["metadata"]["wing"] == "family-admin"
+    assert os.path.exists(flag_path), "filesystem flag must be written after first run"
+
+    # Add a new record after migration completes (simulates data added between restarts).
+    col.upsert(
+        ids=["new_record"],
+        documents=["New record added after migration"],
+        metadatas=[{"wing": "zoe"}],
+    )
+
+    # Second call — must be a no-op because the flag file exists.
+    migrate_mempalace_legacy_records()
+    assert col._store["new_record"]["metadata"]["wing"] == "zoe", (
+        "Second call should be a no-op; new_record's wing must remain 'zoe'"
+    )
+
+
+# ---------------------------------------------------------------------------
+# DB-flag gate (lifespan) — exercises main._run_mempalace_migration_gate
+# ---------------------------------------------------------------------------
+
+def _fake_db_ctx(rows, inserts):
+    class _FakeDB:
+        async def execute_fetchall(self, sql, params):
+            return rows
+
+        async def execute(self, sql, params):
+            inserts.append(params)
+
+    @contextlib.asynccontextmanager
+    async def _ctx():
+        yield _FakeDB()
+
+    return _ctx
+
+
+@pytest.mark.asyncio
+async def test_migration_gate_skips_when_db_flag_present(tmp_path):
+    """Existing DB flag → migration is never invoked and no INSERT happens."""
+    import main
+
+    inserts: list = []
+    called = {"migrate": False}
+
+    def _migrate():
+        called["migrate"] = True
+
+    result = await main._run_mempalace_migration_gate(
+        get_db_ctx=_fake_db_ctx([("true",)], inserts),
+        migrate=_migrate,
+        flag_path=str(tmp_path / "flag"),
+    )
+    assert result is True
+    assert called["migrate"] is False
+    assert inserts == []
+
+
+@pytest.mark.asyncio
+async def test_migration_gate_runs_and_sets_flag_on_success(tmp_path):
+    """No DB flag + successful migration (fs flag written) → DB flag persisted."""
+    import main
+
+    inserts: list = []
+    flag = tmp_path / "flag"
+
+    def _migrate():
+        flag.write_text("done")  # simulate a truly successful run
+
+    result = await main._run_mempalace_migration_gate(
+        get_db_ctx=_fake_db_ctx([], inserts),
+        migrate=_migrate,
+        flag_path=str(flag),
+    )
+    assert result is True
+    assert len(inserts) == 1
+    assert inserts[0][0] == "mempalace_wing_migration_done"
+
+
+@pytest.mark.asyncio
+async def test_migration_gate_defers_db_flag_when_migration_fails(tmp_path):
+    """P1 regression: a silently-failed migration (no fs flag) must NOT write the
+    DB gate flag, so the migration retries on the next startup."""
+    import main
+
+    inserts: list = []
+    flag = tmp_path / "flag"  # never created → swallowed-failure case
+
+    def _migrate():
+        pass  # migrate swallowed its own error; no fs flag written
+
+    result = await main._run_mempalace_migration_gate(
+        get_db_ctx=_fake_db_ctx([], inserts),
+        migrate=_migrate,
+        flag_path=str(flag),
+    )
+    assert result is False
+    assert inserts == []
 
 
 # ---------------------------------------------------------------------------
