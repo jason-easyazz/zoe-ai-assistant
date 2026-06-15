@@ -95,6 +95,20 @@
         return normalized === 'voice' || normalized.startsWith('voice:') || normalized.startsWith('voice_');
     }
 
+    function isExpiredSession(session) {
+        if (!session || !session.expires_at) return false;
+        const expiresAt = new Date(session.expires_at);
+        if (Number.isNaN(expiresAt.getTime())) return false;
+        return new Date() >= expiresAt;
+    }
+
+    function isGuestSession(session) {
+        if (!session) return false;
+        const role = String(session.role || session.user_info?.role || '').toLowerCase();
+        const userId = String(session.user_id || session.user_info?.user_id || '').toLowerCase();
+        return role === 'guest' || userId === 'guest';
+    }
+
     function getSession() {
         try {
             if (window.zoeAuth && typeof window.zoeAuth.getCurrentSession === 'function') {
@@ -105,6 +119,19 @@
         } catch (e) {
             return null;
         }
+    }
+
+    function getDataApiSession() {
+        const session = getSession();
+        if (!session || !session.session_id) return null;
+        if (isExpiredSession(session)) {
+            try { localStorage.removeItem('zoe_session'); } catch (_) {}
+            return null;
+        }
+        // Zoe Data already maps missing X-Session-ID to guest. Sending an
+        // auth-service guest session makes Data reject kiosk bind/poll calls.
+        if (isGuestSession(session)) return null;
+        return session;
     }
 
     function getPanelId() {
@@ -164,7 +191,7 @@
     }
 
     async function api(path, options) {
-        const session = getSession();
+        const session = getDataApiSession();
         const headers = Object.assign({ 'Content-Type': 'application/json' }, options && options.headers ? options.headers : {});
         if (session && session.session_id) {
             headers['X-Session-ID'] = session.session_id;
@@ -1434,7 +1461,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
             ui_context: buildContext(),
             panel_id: state.panelId,
         });
-        const session = getSession();
+        const session = getDataApiSession();
         const headers = { 'Content-Type': 'application/json' };
         if (session && session.session_id) headers['X-Session-ID'] = session.session_id;
         try {

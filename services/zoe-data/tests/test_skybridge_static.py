@@ -58,10 +58,10 @@ def test_skybridge_push_socket_uses_authenticated_session_query():
     sync = (ROOT / "zoe-ui" / "dist" / "js" / "websocket-sync.js").read_text(encoding="utf-8")
     main = (ROOT / "zoe-data" / "main.py").read_text(encoding="utf-8")
 
-    assert "/js/websocket-sync.js?v=skybridge-auth-ready-1" in html
-    assert "/touch/js/skybridge.js?v=skybridge-auth-nametiles-1" in html
-    assert "/touch/js/skybridge-renderer.js?v=skybridge-auth-nametiles-1" in html
-    assert "/js/touch-ui-executor.js?v=skybridge-auth-nametiles-1" in html
+    assert "/js/websocket-sync.js?v=skybridge-panel-session-2" in html
+    assert "/touch/js/skybridge.js?v=skybridge-panel-session-2" in html
+    assert "/touch/js/skybridge-renderer.js?v=skybridge-panel-session-2" in html
+    assert "/js/touch-ui-executor.js?v=skybridge-panel-session-2" in html
     assert "initPush(panelId, sessionId)" in sync
     assert "params.set('panel_id', panelId)" in sync
     assert "else params.set('channel', 'all')" in sync
@@ -80,6 +80,19 @@ def test_skybridge_push_socket_uses_authenticated_session_query():
     assert "window.zoeAuthReady = new Promise" in auth
     assert "await window.zoeAuthReady" in executor
 
+
+
+def test_touch_kiosk_guest_sessions_are_not_sent_to_data_api():
+    auth = (ROOT / "zoe-ui" / "dist" / "js" / "auth.js").read_text(encoding="utf-8")
+    executor = (ROOT / "zoe-ui" / "dist" / "js" / "touch-ui-executor.js").read_text(encoding="utf-8")
+
+    assert "function shouldAttachSessionToUrl" in auth
+    assert "pathname.startsWith('/api/auth/')" in auth
+    assert "return !isGuestSessionObject(session);" in auth
+    assert "pathname.startsWith('/api/ui/')" in auth
+    assert "function getDataApiSession" in executor
+    assert "if (isGuestSession(session)) return null;" in executor
+    assert "const session = getDataApiSession();" in executor
 
 def test_skybridge_uses_login_orb_to_voice_pill_layout():
     html = read(UI / "skybridge.html")
@@ -311,7 +324,7 @@ def test_skybridge_renderer_supports_real_data_cards():
     assert "sky-event-row" in html
     assert "sky-weather-hour-tile" in html
     assert "sky-weather-day-row" in html
-    assert "/touch/css/skybridge-data-widgets.css?v=skybridge-auth-nametiles-1" in html
+    assert "/touch/css/skybridge-data-widgets.css?v=skybridge-panel-session-2" in html
     assert "skybridge-lists-people-widgets" not in html
     assert "sky-list-item-row" in data_widgets_css
     assert "sky-person-row" in data_widgets_css
@@ -550,6 +563,13 @@ def test_skybridge_has_touch_panel_fit_overrides():
 
     assert 'id="skybridge-touch-panel-fit"' in html
     assert '@media (min-width: 900px) and (max-height: 760px)' in html
-    assert 'height: min(472px, calc(100dvh - 154px))' in html
+    assert 'height: min(604px, calc(100dvh - 92px))' in html
+    assert 'weather-card.sky-premium-card::before' in html
+    assert 'display: none !important' in html
+    assert 'min-height: 58px !important' in html
+    assert 'width: min(920px, calc(100vw - 180px))' in html
+    assert 'left: calc(50% - 410px)' in html
+    assert 'left: calc(50% - 330px)' in html
+    assert 'max-width: none !important' in html
     assert 'grid-template-columns: repeat(8, minmax(46px, 1fr))' in html
     assert 'body:not(.sky-empty) .sky-command' in html
