@@ -700,6 +700,7 @@ __all__ = [
     "PiRouteSample",
     "build_pi_failure_examples",
     "build_pi_route_class_breakdown",
+    "build_pi_source_breakdown",
     "build_pi_transport_breakdown",
     "build_pi_promotion_actions",
     "eval_cases_to_dict",
