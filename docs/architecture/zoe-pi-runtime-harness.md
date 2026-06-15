@@ -78,7 +78,7 @@ PYTHONPATH=services/zoe-data python3 scripts/maintenance/pi_runtime_probe.py --j
 ```
 
 The probe is safe to run in production-adjacent environments because it only
-uses filesystem and `PATH` checks plus `node --version` and `npm --version`.
+uses filesystem, `PATH`, and `~/.nvm/versions/node/*/bin` checks plus `node --version` and `npm --version`.
 It does not execute `pi`, install packages, or run agent/model tasks.
 
 ## Intent Shadow Evidence
