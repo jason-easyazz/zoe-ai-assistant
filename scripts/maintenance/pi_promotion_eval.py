@@ -14,6 +14,7 @@ import json
 import os
 import sys
 import time
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -77,6 +78,9 @@ async def _run_zoe_baseline(
     *,
     fallback_baseline_latency_ms: float | None = None,
     extraction_failed_baseline_latency_ms: float | None = None,
+    measure_zoe_agent_baseline: bool = False,
+    zoe_agent_baseline_timeout_seconds: float = 30.0,
+    zoe_agent_baseline_max_tokens: int = 256,
 ) -> dict[str, Any]:
     with _temporary_env({"ZOE_PI_INTENT_ENABLED": "false"}):
         from intent_router import detect_and_extract_intent
@@ -88,20 +92,44 @@ async def _run_zoe_baseline(
     latency_ms = router_latency_ms
     baseline_kind = "router"
     baseline_comparable = True
+    baseline_timed_out = False
+    baseline_response_chars: int | None = None
+    baseline_error: str | None = None
+    agent_baseline: dict[str, Any] | None = None
     if case.route_class == "fallback":
-        if fallback_baseline_latency_ms is None:
-            baseline_kind = "router_only_not_comparable"
-            baseline_comparable = False
-        else:
+        if fallback_baseline_latency_ms is not None:
             latency_ms = fallback_baseline_latency_ms
             baseline_kind = "operator_fallback_override"
-    elif case.route_class == "extraction_failed":
-        if extraction_failed_baseline_latency_ms is None:
+        elif measure_zoe_agent_baseline:
+            agent_baseline = await _run_zoe_agent_baseline(
+                case,
+                timeout_seconds=zoe_agent_baseline_timeout_seconds,
+                max_tokens=zoe_agent_baseline_max_tokens,
+            )
+        else:
             baseline_kind = "router_only_not_comparable"
             baseline_comparable = False
-        else:
+    elif case.route_class == "extraction_failed":
+        if extraction_failed_baseline_latency_ms is not None:
             latency_ms = extraction_failed_baseline_latency_ms
             baseline_kind = "operator_extraction_failed_override"
+        elif measure_zoe_agent_baseline:
+            agent_baseline = await _run_zoe_agent_baseline(
+                case,
+                timeout_seconds=zoe_agent_baseline_timeout_seconds,
+                max_tokens=zoe_agent_baseline_max_tokens,
+            )
+        else:
+            baseline_kind = "router_only_not_comparable"
+            baseline_comparable = False
+
+    if agent_baseline is not None:
+        latency_ms = agent_baseline["latency_ms"]
+        baseline_kind = agent_baseline["baseline_kind"]
+        baseline_comparable = agent_baseline["baseline_comparable"]
+        baseline_timed_out = agent_baseline["timed_out"]
+        baseline_response_chars = agent_baseline["response_chars"]
+        baseline_error = agent_baseline.get("error")
 
     return {
         "intent": intent.name if intent else None,
@@ -110,9 +138,65 @@ async def _run_zoe_baseline(
         "router_latency_ms": router_latency_ms,
         "baseline_kind": baseline_kind,
         "baseline_comparable": baseline_comparable,
+        "baseline_timed_out": baseline_timed_out,
+        "baseline_response_chars": baseline_response_chars,
+        "baseline_error": baseline_error,
         "correct": (intent.name if intent else None) == case.expected_intent,
     }
 
+
+async def _run_zoe_agent_baseline(
+    case: PiIntentEvalCase,
+    *,
+    timeout_seconds: float,
+    max_tokens: int,
+) -> dict[str, Any]:
+    from zoe_agent import run_zoe_agent
+
+    session_id = f"pi-eval-baseline-{case.case_id}-{uuid.uuid4().hex[:8]}"
+    start = time.perf_counter()
+    try:
+        response = await asyncio.wait_for(
+            run_zoe_agent(
+                case.text,
+                session_id,
+                "pi-eval",
+                history=[],
+                db_memory_context="",
+                portrait="",
+                max_tokens_override=max_tokens,
+            ),
+            timeout=timeout_seconds,
+        )
+        latency_ms = (time.perf_counter() - start) * 1000
+        return {
+            "latency_ms": latency_ms,
+            "baseline_kind": f"zoe_agent_{case.route_class}_baseline",
+            "baseline_comparable": True,
+            "timed_out": False,
+            "response_chars": len(response or ""),
+            "error": None,
+        }
+    except asyncio.TimeoutError:
+        latency_ms = (time.perf_counter() - start) * 1000
+        return {
+            "latency_ms": latency_ms,
+            "baseline_kind": f"zoe_agent_{case.route_class}_timeout",
+            "baseline_comparable": False,
+            "timed_out": True,
+            "response_chars": 0,
+            "error": "TimeoutError",
+        }
+    except Exception as exc:
+        latency_ms = (time.perf_counter() - start) * 1000
+        return {
+            "latency_ms": latency_ms,
+            "baseline_kind": f"zoe_agent_{case.route_class}_error",
+            "baseline_comparable": False,
+            "timed_out": False,
+            "response_chars": 0,
+            "error": exc.__class__.__name__,
+        }
 
 async def _run_pi(case: PiIntentEvalCase, *, transport: str, enable_execution: bool, local_model_configured: bool) -> dict[str, Any]:
     updates = {
@@ -144,6 +228,9 @@ async def _run_cases(
     local_model_configured: bool,
     fallback_baseline_latency_ms: float | None = None,
     extraction_failed_baseline_latency_ms: float | None = None,
+    measure_zoe_agent_baseline: bool = False,
+    zoe_agent_baseline_timeout_seconds: float = 30.0,
+    zoe_agent_baseline_max_tokens: int = 256,
 ) -> tuple[list[dict[str, Any]], list[PiRouteSample]]:
     comparisons: list[dict[str, Any]] = []
     samples: list[PiRouteSample] = []
@@ -153,6 +240,9 @@ async def _run_cases(
             case,
             fallback_baseline_latency_ms=fallback_baseline_latency_ms,
             extraction_failed_baseline_latency_ms=extraction_failed_baseline_latency_ms,
+            measure_zoe_agent_baseline=measure_zoe_agent_baseline,
+            zoe_agent_baseline_timeout_seconds=zoe_agent_baseline_timeout_seconds,
+            zoe_agent_baseline_max_tokens=zoe_agent_baseline_max_tokens,
         )
         pi = await _run_pi(
             case,
@@ -178,6 +268,9 @@ async def _run_cases(
                     metadata={
                         "baseline_kind": zoe["baseline_kind"],
                         "baseline_comparable": zoe["baseline_comparable"],
+                        "baseline_timed_out": zoe["baseline_timed_out"],
+                        "baseline_response_chars": zoe["baseline_response_chars"],
+                        "baseline_error": zoe["baseline_error"],
                         "router_latency_ms": zoe["router_latency_ms"],
                     },
                 )
@@ -203,6 +296,23 @@ def main(argv: list[str] | None = None) -> int:
         type=float,
         default=None,
         help="Measured Zoe fallback latency after deterministic slot extraction fails",
+    )
+    parser.add_argument(
+        "--measure-zoe-agent-baseline",
+        action="store_true",
+        help="Measure comparable Zoe Agent fallback latency for fallback/extraction_failed route classes",
+    )
+    parser.add_argument(
+        "--zoe-agent-baseline-timeout-seconds",
+        type=float,
+        default=30.0,
+        help="Timeout for each measured Zoe Agent fallback baseline case",
+    )
+    parser.add_argument(
+        "--zoe-agent-baseline-max-tokens",
+        type=int,
+        default=256,
+        help="max_tokens_override passed to Zoe Agent when measuring comparable fallback baselines",
     )
     parser.add_argument("--min-samples", type=int, default=30)
     parser.add_argument(
@@ -238,6 +348,9 @@ def main(argv: list[str] | None = None) -> int:
                 local_model_configured=args.local_model_configured,
                 fallback_baseline_latency_ms=args.fallback_baseline_latency_ms,
                 extraction_failed_baseline_latency_ms=args.extraction_failed_baseline_latency_ms,
+                measure_zoe_agent_baseline=args.measure_zoe_agent_baseline,
+                zoe_agent_baseline_timeout_seconds=args.zoe_agent_baseline_timeout_seconds,
+                zoe_agent_baseline_max_tokens=args.zoe_agent_baseline_max_tokens,
             )
         )
         samples.extend(measured_samples)
