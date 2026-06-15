@@ -338,17 +338,52 @@
         return known.indexOf(token) >= 0 ? token : 'list';
     }
 
+    function listLabel(list) {
+        return list.name || list.list_name || list.title || list.list_type || 'List';
+    }
+
+    function listQuery(list) {
+        return 'show my ' + listLabel(list) + ' list';
+    }
+
+    function renderListSwitcher(lists, selectedId) {
+        const tabs = (Array.isArray(lists) ? lists : []).slice(0, 6).map(list => {
+            const accent = listAccentClass(list.list_type);
+            const selected = selectedId && String(list.id || '') === String(selectedId) ? ' is-active' : '';
+            return '<button type="button" class="sky-list-tab ' + escapeHtml(accent) + selected + '" data-sky-action="query" data-query="' + escapeHtml(listQuery(list)) + '"><span>' + escapeHtml(listLabel(list)) + '</span></button>';
+        }).join('');
+        return '<div class="sky-list-switcher">' + tabs + '<button type="button" class="sky-list-tab new-list" data-sky-action="query" data-query="new list"><span>New list</span></button></div>';
+    }
+
     function renderListItemRow(item, index) {
         const isObject = typeof item === 'object' && item;
         const title = isObject ? (item.text || item.title || item.label || 'List item') : String(item || 'List item');
         const completed = !!(isObject && item.completed);
         const detail = isObject ? [item.quantity, item.category, item.assigned_to].filter(Boolean).join(' · ') : '';
-        const priority = isObject && item.priority ? '<b>' + escapeHtml(item.priority) + '</b>' : '';
+        const priorityValue = isObject && item.priority ? String(item.priority).trim().toLowerCase() : '';
+        const priority = priorityValue && priorityValue !== 'normal' ? '<b>' + escapeHtml(item.priority) + '</b>' : '';
         return [
             '<div class="sky-list-item-row' + (completed ? ' is-done' : '') + '">',
             '<div class="sky-list-check" aria-hidden="true">' + (completed ? '✓' : '') + '</div>',
             '<div class="sky-list-item-main"><strong>' + escapeHtml(title) + '</strong>' + (detail ? '<em>' + escapeHtml(detail) + '</em>' : '') + '</div>',
-            '<div class="sky-list-item-meta">' + (priority || '<span>' + escapeHtml(String(index + 1).padStart(2, '0')) + '</span>') + '</div>',
+            priority ? '<div class="sky-list-item-meta">' + priority + '</div>' : '',
+            '</div>'
+        ].join('');
+    }
+
+    function renderListColumn(list) {
+        const items = Array.isArray(list.items) ? list.items : [];
+        const accent = listAccentClass(list.list_type);
+        const preview = items.slice(0, 4).map((item) => {
+            const title = typeof item === 'object' && item ? (item.text || item.title || item.label || 'Item') : String(item || 'Item');
+            return '<li><strong>' + escapeHtml(title) + '</strong></li>';
+        }).join('');
+        return [
+            '<div class="sky-list-column ' + escapeHtml(accent) + '">',
+            '<button type="button" class="sky-list-column-head" data-sky-action="query" data-query="' + escapeHtml(listQuery(list)) + '">',
+            '<strong>' + escapeHtml(listLabel(list)) + '</strong>',
+            '</button>',
+            preview ? '<ul>' + preview + '</ul>' : '<p>No items</p>',
             '</div>'
         ].join('');
     }
@@ -358,17 +393,10 @@
         const lists = Array.isArray(props.lists) ? props.lists : [];
         const listType = props.list_type || (lists[0] && lists[0].list_type) || 'all';
         const accent = listAccentClass(listType);
+        const selectedId = props.list_id && props.list_id !== 'lists-overview' ? props.list_id : '';
         const visibleItems = items.slice(0, 12);
         const rows = visibleItems.map(renderListItemRow).join('');
-        const overviewRows = !items.length && lists.length ? lists.slice(0, 6).map(list => {
-            const openCount = list.open_count == null ? (list.item_count || 0) : list.open_count;
-            return [
-                '<div class="sky-list-overview-row ' + escapeHtml(listAccentClass(list.list_type)) + '">',
-                '<div><strong>' + escapeHtml(list.name || list.list_name || 'List') + '</strong><em>' + escapeHtml(list.description || list.list_type || '') + '</em></div>',
-                '<span>' + escapeHtml(openCount) + ' open</span>',
-                '</div>'
-            ].join('');
-        }).join('') : '';
+        const overviewRows = !items.length && lists.length ? '<div class="sky-list-columns">' + lists.slice(0, 6).map(renderListColumn).join('') + '</div>' : '';
         const empty = [
             '<div class="sky-empty-data sky-list-empty">',
             '<strong>No items in ' + escapeHtml(props.list_name || 'this list') + '</strong>',
@@ -377,19 +405,11 @@
         ].join('');
         const body = [
             '<div class="sky-list-scene ' + escapeHtml(accent) + '">',
-            '<div class="sky-list-hero">',
-            '<div><span>' + escapeHtml((props.list_type || 'list').toUpperCase()) + '</span><h3>' + escapeHtml(props.list_name || props.title || 'Lists') + '</h3></div>',
-            '<div class="sky-list-rings"><strong>' + escapeHtml(props.open_count == null ? (items.length || lists.length) : props.open_count) + '</strong><span>open</span></div>',
-            '</div>',
-            '<div class="sky-list-stats">',
-            '<div><strong>' + escapeHtml(props.item_count == null ? items.length : props.item_count) + '</strong><span>items</span></div>',
-            '<div><strong>' + escapeHtml(props.completed_count || 0) + '</strong><span>done</span></div>',
-            '<div><strong>' + escapeHtml(lists.length || 1) + '</strong><span>lists</span></div>',
-            '</div>',
+            renderListSwitcher(lists, selectedId),
             '<div class="sky-list-items">' + (rows || overviewRows || empty) + '</div>',
             '</div>'
         ].join('');
-        return cardFrame(Object.assign({ status: 'Lists', icon: 'L' }, props), body, { wide: true, tone: 'zoe-list-card ' + accent, hideHeader: true, hideStatus: true });
+        return cardFrame(Object.assign({ status: 'Lists', icon: 'L' }, props), body, { wide: true, tone: 'zoe-list-card ' + accent, hideHeader: true, hideStatus: true, hideActions: true });
     }
 
     function initialsFor(name) {
@@ -509,6 +529,20 @@
     }
 
     function renderActionForm(props) {
+        if (props.source === 'list_create') {
+            const fields = (props.fields || []).slice(0, 2).map(field => {
+                const value = field.value == null || field.value === '' ? 'Not set' : field.value;
+                return '<div class="sky-list-create-field"><span>' + escapeHtml(field.label || field.name || 'Field') + '</span><strong>' + escapeHtml(value) + '</strong></div>';
+            }).join('');
+            const actions = props.actions || [];
+            const body = [
+                '<div class="sky-list-create-prompt">',
+                '<div class="sky-list-create-copy"><span>New list</span><h3>Name this list</h3><p>' + escapeHtml(props.summary || 'What should I name it?') + '</p></div>',
+                '<div class="sky-list-create-fields">' + fields + '</div>',
+                '</div>'
+            ].join('');
+            return cardFrame(Object.assign({}, props, { actions }), body, { wide: true, tone: 'zoe-list-card list-create-card personal', hideHeader: true, hideStatus: true });
+        }
         const fields = (props.fields || []).slice(0, 6).map(field => {
             const value = field.value == null || field.value === '' ? 'Not set' : field.value;
             return '<div class="sky-field"><span>' + escapeHtml(field.label || field.name || 'Field') + '</span><strong>' + escapeHtml(value) + '</strong></div>';

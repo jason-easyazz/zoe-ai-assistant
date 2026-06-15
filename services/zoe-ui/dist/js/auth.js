@@ -5,7 +5,7 @@
 
 (function() {
     'use strict';
-    
+
     const AUTH_CONFIG = {
         sessionKey: 'zoe_session',
         authBaseUrl: '/api/auth'  // Use relative URL for nginx proxy
@@ -30,13 +30,44 @@
     };
     let _capabilityMatrix = null;
 
+    function isExpiredSessionObject(session) {
+        if (!session || !session.expires_at) return false;
+        const expiresAt = new Date(session.expires_at);
+        if (Number.isNaN(expiresAt.getTime())) return false;
+        return new Date() >= expiresAt;
+    }
+
+    function isGuestSessionObject(session) {
+        if (!session) return false;
+        const role = String(session.role || session.user_info?.role || '').toLowerCase();
+        const userId = String(session.user_id || session.user_info?.user_id || '').toLowerCase();
+        return role === 'guest' || userId === 'guest';
+    }
+
+    function shouldAttachSessionToUrl(urlString, session) {
+        if (!session || !session.session_id) return false;
+        if (isExpiredSessionObject(session)) return false;
+        let pathname = '';
+        try { pathname = new URL(String(urlString || ''), window.location.origin).pathname; } catch (_) {}
+        if (!pathname) return true;
+        if (pathname.startsWith('/api/auth/')) return true;
+        // Zoe Data treats missing X-Session-ID as guest. Auth-service guest
+        // sessions do not resolve in Zoe Data and break kiosk bind/poll loops.
+        return !isGuestSessionObject(session);
+    }
+
     // Get session ID from localStorage
-    function getSession() {
+    function getSession(urlString) {
         const sessionStr = localStorage.getItem(AUTH_CONFIG.sessionKey);
         if (!sessionStr) return '';
-        
+
         try {
             const session = JSON.parse(sessionStr);
+            if (isExpiredSessionObject(session)) {
+                setSession(null);
+                return '';
+            }
+            if (!shouldAttachSessionToUrl(urlString || window.location.href, session)) return '';
             return session.session_id || '';
         } catch (error) {
             return '';
@@ -47,7 +78,7 @@
     function getSessionObject() {
         const sessionStr = localStorage.getItem(AUTH_CONFIG.sessionKey);
         if (!sessionStr) return null;
-        
+
         try {
             return JSON.parse(sessionStr);
         } catch (error) {
@@ -78,16 +109,9 @@
     function isAuthenticated() {
         const session = getSessionObject();
         if (!session) return false;
-        
-        // Check if session is expired
-        if (session.expires_at) {
-            const expiresAt = new Date(session.expires_at);
-            const now = new Date();
-            if (now >= expiresAt) {
-                return false;
-            }
-        }
-        
+
+        if (isExpiredSessionObject(session)) return false;
+
         return !!session.session_id;
     }
 
@@ -180,14 +204,14 @@
     async function getCurrentUser() {
         const sessionId = getSession();
         if (!sessionId) return null;
-        
+
         try {
             const response = await originalFetch(`${AUTH_CONFIG.authBaseUrl}/profile`, {
                 headers: {
                     'X-Session-ID': sessionId
                 }
             });
-            
+
             if (response.ok) {
                 const data = await response.json();
                 return data;
@@ -269,22 +293,22 @@
             currentPath === '/modules/orbit' ||
             currentPath.startsWith('/modules/orbit/');
         // Only allow the main login pages and auth.html to skip authentication
-        const isLoginPage = currentPath === '/index.html' || 
-                           currentPath === '/' || 
+        const isLoginPage = currentPath === '/index.html' ||
+                           currentPath === '/' ||
                            currentPath === '/touch/index.html';
         const isAuthPage = currentPath === '/auth.html';
-        
+
         // Skip auth check for login/auth and public game modules only.
         if (isLoginPage || isAuthPage || isPublicGameModule) {
             console.log('✅ Auth check skipped - on login/auth page');
             return;
         }
-        
+
         // Get session for debugging
         const session = getSessionObject();
         console.log('🔐 Auth check on:', currentPath);
         console.log('📦 Session data:', session ? '(exists)' : '(none)');
-        
+
         // Check if user has valid session using isAuthenticated
         if (!isAuthenticated()) {
             // Kiosk degraded mode: keep touch surface available for household-safe
@@ -294,7 +318,7 @@
                 return;
             }
             console.warn('⚠️ No valid session - redirecting to login');
-            
+
             // Show user-friendly message
             const showError = () => {
                 const errorDiv = document.createElement('div');
@@ -325,9 +349,9 @@
                         <p style="font-size: 16px; color: #ccc; margin-bottom: 30px;">
                             Your session has expired or is invalid. Please log in again to continue.
                         </p>
-                        <button onclick="localStorage.removeItem('zoe_session'); window.location.href='${_loginDest}';" 
-                                style="background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
-                                       border: none; color: white; padding: 16px 32px; font-size: 16px; 
+                        <button onclick="localStorage.removeItem('zoe_session'); window.location.href='${_loginDest}';"
+                                style="background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+                                       border: none; color: white; padding: 16px 32px; font-size: 16px;
                                        border-radius: 12px; cursor: pointer; font-weight: 600;">
                             Go to Login
                         </button>
@@ -335,7 +359,7 @@
                 `;
                 document.body.appendChild(errorDiv);
             };
-            
+
             // Wait for DOM if not ready
             if (document.body) {
                 showError();
@@ -374,30 +398,21 @@
 
     // Setup fetch interceptor - Install IMMEDIATELY to avoid race conditions
     const originalFetch = window.fetch;
-    
+
     function setupFetchInterceptor() {
         // Idempotent guard - only install once
         if (window.fetch.__zoeInterceptorApplied) {
             console.log('[auth] Interceptor already active, skipping');
             return;
         }
-        
+
         window.fetch = function(url, options = {}) {
-            // Initialize options
-            options.headers = options.headers || {};
-            
-            // Add session ID header if available
-            const sessionId = getSession();
-            if (sessionId) {
-                options.headers['X-Session-ID'] = sessionId;
-            }
-            
             // Extract URL string (handle Request objects)
             let urlString = url;
             if (url instanceof Request) {
                 urlString = url.url;
             }
-            
+
             // Remove user_id query parameters (legacy cleanup) and fix malformed URLs
             if (typeof urlString === 'string') {
                 // Use same protocol as current page (don't force HTTPS if on HTTP/local)
@@ -407,13 +422,13 @@
                     console.log('🔒 Forced HTTP → HTTPS (mixed content prevention):', urlString);
                 }
                 // If on HTTP/local, keep HTTP (allows self-signed certs to work)
-                
+
                 // NOTE: DO NOT remove user_id parameter - it's required for user isolation!
                 // Legacy code that was stripping user_id has been removed.
-                
+
                 // Clean up any trailing ? or &
                 urlString = urlString.replace(/[?&]$/, '');
-                
+
                 // Log the FINAL URL that will be used
                 if (urlString.startsWith('https://')) {
                     console.log('✅ Final HTTPS URL:', urlString);
@@ -427,11 +442,19 @@
                 } else {
                     console.log('📍 Final relative URL:', urlString);
                 }
-                
+
                 // Use the cleaned URL
                 url = urlString;
             }
-            
+
+            // Add session ID only when this target can validate it. Guest kiosk
+            // calls to Zoe Data must remain headerless.
+            options.headers = options.headers || {};
+            const sessionId = getSession(urlString);
+            if (sessionId) {
+                options.headers['X-Session-ID'] = sessionId;
+            }
+
             // Make request
             return originalFetch(url, options).then(response => {
                 if (response.status !== 401) {
@@ -444,7 +467,8 @@
                 } catch (_e) {}
                 const skipClear = /\/api\/auth\/(login|register|password|refresh|guest)/i.test(pathname);
                 const allowSessionClear = /\/api\/auth\/(profile|me|session|logout)/i.test(pathname) ||
-                    pathname === '/api/skybridge/resolve';
+                    pathname === '/api/skybridge/resolve' ||
+                    pathname.startsWith('/api/ui/');
                 const sidBefore = getSession();
                 if (sidBefore && allowSessionClear && !skipClear && !options.__zoe401Retried) {
                     console.warn('⚠️ 401 — clearing stale session and retrying once without X-Session-ID:', url);
@@ -464,11 +488,11 @@
                 return Promise.reject(new Error('Unauthorized'));
             });
         };
-        
+
         // Mark interceptor as installed
-        window.fetch.__zoeInterceptorApplied = { 
-            appliedAt: Date.now(), 
-            original: originalFetch 
+        window.fetch.__zoeInterceptorApplied = {
+            appliedAt: Date.now(),
+            original: originalFetch
         };
         console.log('[auth] ✅ Fetch interceptor installed');
     }
@@ -493,7 +517,7 @@
     // This prevents race condition where DOMContentLoaded triggers both
     // the interceptor installation AND the first API calls
     setupFetchInterceptor();
-    
+
     // Auth enforcement can wait for DOM (needs UI elements)
     async function populateUserProfile() {
         try {

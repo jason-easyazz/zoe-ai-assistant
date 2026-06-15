@@ -42,6 +42,10 @@ class FakeDb:
         if "FROM lists" in sql:
             if "WHERE id = $1" in sql:
                 return [row for row in self.lists if row.get("id") == args[1]]
+            if "lower(name) = lower($2)" in sql:
+                user_id = args[1]
+                name = str(args[2]).lower()
+                return [row for row in self.lists if row.get("user_id") == user_id and str(row.get("name", "")).lower() == name]
             return self.lists
         if "FROM list_items" in sql:
             self.list_item_fetch_count += 1
@@ -155,6 +159,9 @@ def test_classify_calendar_and_weather_requests():
     assert classify_skybridge_intent("show my shopping list").domain == "lists"
     assert classify_skybridge_intent("what's on my shopping list").domain == "lists"
     assert classify_skybridge_intent("whats on my grocery list").domain == "lists"
+    assert classify_skybridge_intent("show my lists").action == "overview"
+    assert classify_skybridge_intent("new list").action == "create_list"
+    assert classify_skybridge_intent("create a work list called Projects").list_name == "Projects"
     assert classify_skybridge_intent("show my contacts").domain == "people"
     assert classify_skybridge_intent("find Sarah").domain == "people"
     assert classify_skybridge_intent("what is there to do this week") is None
@@ -561,6 +568,83 @@ async def test_list_add_item_persists_and_refreshes_list_card():
 
 
 @pytest.mark.asyncio
+async def test_lists_request_seeds_default_lists_and_returns_switcher_actions():
+    db = FakeDb(lists=[], items_by_list={})
+
+    result = await resolve_skybridge_request("show my lists", "jason", db=db)
+
+    assert result["handled"] is True
+    names = {item["name"] for item in result["cards"][0]["content"]["lists"]}
+    assert {"Shopping", "Work", "Personal"}.issubset(names)
+    actions = result["cards"][0]["content"]["actions"]
+    assert any(action["label"] == "New list" for action in actions)
+    assert db.commits >= 1
+
+
+@pytest.mark.asyncio
+async def test_new_list_without_name_returns_action_form_prompt():
+    result = await resolve_skybridge_request("new list", "jason", db=FakeDb())
+
+    assert result["handled"] is True
+    assert result["intent"]["action"] == "create_list"
+    assert result["cards"][0]["component"] == "action_form"
+    assert result["cards"][0]["props"]["actions"] == []
+    assert "What should I name" in result["spoken_summary"]
+
+
+@pytest.mark.asyncio
+async def test_new_named_work_list_is_created_and_displayed():
+    db = FakeDb(lists=[], items_by_list={})
+
+    result = await resolve_skybridge_request("create a work list called Projects", "jason", db=db)
+
+    assert result["handled"] is True
+    assert result["intent"]["action"] == "create_list"
+    assert result["intent"]["list_type"] == "work"
+    assert result["intent"]["list_name"] == "Projects"
+    assert any(item["name"] == "Projects" and item["list_type"] == "work" for item in db.lists)
+    assert result["cards"][0]["content"]["list_name"] == "Projects"
+
+
+@pytest.mark.asyncio
+async def test_create_existing_list_reports_existing_not_created():
+    db = FakeDb(
+        lists=[
+            {
+                "id": "existing-projects",
+                "user_id": "jason",
+                "name": "Projects",
+                "list_type": "work",
+                "visibility": "personal",
+                "deleted": 0,
+            }
+        ],
+        items_by_list={"existing-projects": []},
+    )
+
+    result = await resolve_skybridge_request("create a work list called Projects", "jason", db=db)
+
+    assert result["handled"] is True
+    assert result["spoken_summary"] == "You already have a Projects list."
+    assert result["actions"][0]["type"] == "existing"
+    assert len([item for item in db.lists if item["name"] == "Projects"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_new_list_prompt_accepts_bare_name_followup():
+    context = {"intent": {"domain": "lists", "action": "create_list", "list_type": "personal"}, "cards": []}
+    db = FakeDb(lists=[], items_by_list={})
+
+    result = await resolve_skybridge_request("Camping", "jason", context=context, db=db)
+
+    assert result["handled"] is True
+    assert result["intent"]["action"] == "create_list"
+    assert result["intent"]["list_name"] == "Camping"
+    assert result["intent"]["list_type"] == "personal"
+    assert any(item["name"] == "Camping" and item["list_type"] == "personal" for item in db.lists)
+
+
+@pytest.mark.asyncio
 async def test_list_add_item_rejects_stale_context_list_id():
     context = {
         "intent": {"domain": "lists"},
@@ -605,9 +689,10 @@ async def test_lists_request_returns_overview_for_multiple_lists():
     card = result["cards"][0]
     assert card["content"]["source"] == "list_show"
     assert card["content"]["items"] == []
-    assert card["content"]["lists"][0]["items"] == []
+    assert card["content"]["lists"][0]["items"][0]["text"] == "Milk"
     assert card["content"]["lists"][0]["open_count"] == 1
     assert card["content"]["lists"][1]["completed_count"] == 1
+    assert card["content"]["actions"][-1]["label"] == "New list"
     assert db.list_item_fetch_count == 1
 
 
