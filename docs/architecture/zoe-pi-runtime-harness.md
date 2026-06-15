@@ -158,25 +158,34 @@ frame before accepting idless session events, resets on timeout or task
 cancellation, and ignores response events whose request id does not match the
 current prompt. Pi intent classification launches in a stripped classifier mode
 with no tools, extensions, skills, prompt templates, themes, or context files.
-The report still remains evidence-only; `ZOE_PI_INTENT_PROMOTED_GROUPS` changes
-must pass the promotion actions and guarded apply helper described above.
+The evaluator treats fallback and extraction-failed router misses as
+`router_only_not_comparable` unless an operator supplies measured comparable
+latency with `--fallback-baseline-latency-ms` and/or
+`--extraction-failed-baseline-latency-ms`. The report still remains
+evidence-only; `ZOE_PI_INTENT_PROMOTED_GROUPS` changes must pass the promotion
+actions and guarded apply helper described above.
 
 ### Latest Local Pi/Gemma Intent Eval
 
 Measured on 2026-06-15 with the built-in eval cases, local Gemma, and RPC
-transport after the stripped classifier launch and RPC protocol fix:
+transport after the stripped classifier launch, RPC protocol fix, and baseline
+comparability guard:
 
 - eligible samples: 9;
 - Pi accuracy: 100%;
-- Zoe baseline accuracy on the same eligible samples: 33.3%;
+- Zoe router-only baseline accuracy on the same eligible samples: 33.3%;
 - Pi timeout rate on eligible samples: 0%;
-- Pi RPC p95 latency: about 3.59s;
-- Zoe comparable p95 latency: about 1.09s;
-- promotable groups: none, because Pi still fails the latency gate.
+- Pi RPC p95 latency: about 3.98s in the latest run;
+- Zoe router-only p95 latency: about 1.70s in the latest run, but fallback and
+  extraction-failed cases are now explicitly marked not comparable;
+- promotable groups: none, because the seed fallback/extraction-failed evidence
+  lacks a measured comparable Zoe fallback baseline and Pi still loses the
+  router-only latency gate.
 
-Decision: keep Pi intent routing in shadow/evidence mode. Pi is now accurate
-enough on the seed eval to justify more measurement, but it is not fast enough
-to promote into live Zoe routing.
+Decision: keep Pi intent routing in shadow/evidence mode. Pi is accurate enough
+on the seed eval to justify more measurement, but promotion requires measured
+Zoe fallback/agent latency or labeled runtime shadow records, not router-only
+miss timing.
 
 Sanitized JSONL evidence can be exported into the same eval-case format. For Pi
 shadow records this uses `text_preview` plus a trusted `outcome_label`; unlabeled,
