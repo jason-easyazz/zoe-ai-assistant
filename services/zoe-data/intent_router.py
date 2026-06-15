@@ -1324,13 +1324,14 @@ def _extract_simple_reminder_slots(text: str) -> Optional[dict]:
         flags=re.IGNORECASE,
     ):
         return None
+    if re.search(r"\bat\s+\d{1,4}(?::\d{2})?\b(?!\s*(?:am|pm))", body, flags=re.IGNORECASE):
+        return None
 
     def _pop_time(value: str) -> tuple[str, str]:
         value = value.strip()
         time_patterns = [
-            r"\s+at\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)$",
+            r"\s+at\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm))$",
             r"\s+(\d{1,2}(?::\d{2})\s*(?:am|pm)|\d{1,2}\s*(?:am|pm))$",
-            r"\s+at\s+(\d{3,4})$",
         ]
         for pattern in time_patterns:
             m = re.search(pattern, value, flags=re.IGNORECASE)
