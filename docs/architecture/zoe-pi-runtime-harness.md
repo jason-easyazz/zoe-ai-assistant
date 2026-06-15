@@ -49,6 +49,7 @@ Environment variables:
 | `ZOE_PI_INTENT_SHADOW_FORCE_ENABLED` | `true` | Force the classifier on inside shadow mode while keeping live routing unchanged. |
 | `ZOE_PI_INTENT_MISS_EVIDENCE_ENABLED` | `false` | Write sanitized intent-miss candidate rows for later review/labeling. |
 | `ZOE_PI_INTENT_MISS_EVIDENCE_PATH` | `~/.zoe/data/pi-intent-miss-evidence.jsonl` | JSONL path for structured intent-miss candidates. |
+| `ZOE_PI_INTENT_AUTO_PROMOTE` | `false` | Report whether automatic Pi promotion was requested. Current runtime remains evidence-only and requires the guarded apply helper. |
 | `ZOE_PI_INTENT_PROMOTED_GROUPS` | unset | Comma-separated low-risk intent groups promoted through Pi for live fallback execution and rollback reporting. Unknown or privileged groups are ignored. |
 
 ## Probe
@@ -87,6 +88,8 @@ as accuracy evidence. Pi live execution remains separately gated by
 promote all Pi classifications into executable Zoe routes. The report includes a read-only
 `promotion_actions.env.ZOE_PI_INTENT_PROMOTED_GROUPS` recommendation for operator
 review; Zoe does not rewrite env or auto-promote groups from shadow evidence.
+`ZOE_PI_INTENT_AUTO_PROMOTE=true` is reported for visibility, but current runtime
+still requires the guarded apply helper rather than silently editing configuration.
 Operators can inspect or explicitly apply that single env update with:
 
 ```bash
