@@ -219,6 +219,43 @@ def test_labeled_shadow_records_convert_to_route_samples():
     assert samples[0].pi_correct is True
 
 
+def test_labeled_shadow_records_skip_missing_latency():
+    samples = shadow_records_to_route_samples(
+        [
+            {
+                "text_hash": "missing_zoe_latency",
+                "outcome_label": "weather",
+                "zoe_intent": "reminder_list",
+                "pi_intent": "weather",
+                "zoe_latency_ms": None,
+                "pi_latency_ms": 120,
+                "pi_transport": "rpc",
+                "route_class": "fallback",
+            },
+            {
+                "text_hash": "missing_pi_latency",
+                "outcome_label": "weather",
+                "zoe_intent": "reminder_list",
+                "pi_intent": "weather",
+                "zoe_latency_ms": 500,
+                "pi_latency_ms": None,
+                "pi_transport": "rpc",
+                "route_class": "fallback",
+            },
+        ]
+    )
+
+    assert samples == []
+
+
+def test_shadow_summary_needs_min_samples_for_promotion_ready():
+    report = summarize_pi_intent_shadow([{"outcome_label": "weather"} for _ in range(29)])
+
+    assert report["accuracy_available"] is True
+    assert report["labeled_sample_count"] == 29
+    assert report["promotion_ready"] is False
+
+
 def test_shadow_status_includes_promotion_report_for_labeled_records(tmp_path):
     path = tmp_path / "shadow.jsonl"
     rows = []

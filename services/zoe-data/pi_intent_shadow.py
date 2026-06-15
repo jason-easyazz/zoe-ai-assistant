@@ -20,6 +20,7 @@ from typing import Any, Mapping, Sequence
 
 from zoe_pi_promotion import (
     LOW_RISK_PI_INTENT_GROUPS,
+    PiPromotionPolicy,
     PiRouteSample,
     intent_group_for_intent,
     summarize_pi_promotion as summarize_pi_route_promotion,
@@ -179,6 +180,10 @@ def shadow_records_to_route_samples(records: Sequence[Mapping[str, Any]]) -> lis
         intent_group = intent_group_for_intent(str(expected_intent) if expected_intent else None)
         if not expected_intent or not intent_group:
             continue
+        zoe_latency_ms = _optional_float_value(record.get("zoe_latency_ms"))
+        pi_latency_ms = _optional_float_value(record.get("pi_latency_ms"))
+        if zoe_latency_ms is None or pi_latency_ms is None:
+            continue
         try:
             samples.append(
                 PiRouteSample(
@@ -187,8 +192,8 @@ def shadow_records_to_route_samples(records: Sequence[Mapping[str, Any]]) -> lis
                     expected_intent=str(expected_intent),
                     zoe_intent=_optional_str(record.get("zoe_intent")),
                     pi_intent=_optional_str(record.get("pi_intent")),
-                    zoe_latency_ms=_float_value(record.get("zoe_latency_ms")),
-                    pi_latency_ms=_float_value(record.get("pi_latency_ms")),
+                    zoe_latency_ms=zoe_latency_ms,
+                    pi_latency_ms=pi_latency_ms,
                     pi_confidence=_float_value(record.get("pi_confidence"), default=0.0),
                     pi_transport=str(record.get("pi_transport") or "rpc"),
                     route_class=str(record.get("route_class") or "fallback"),
@@ -250,7 +255,7 @@ def summarize_pi_intent_shadow(records: Sequence[Mapping[str, Any]]) -> dict[str
         "intent_groups": groups,
         "accuracy_available": labeled_sample_count > 0,
         "labeled_sample_count": labeled_sample_count,
-        "promotion_ready": labeled_sample_count >= 30,
+        "promotion_ready": labeled_sample_count >= PiPromotionPolicy().min_samples,
         "promotion_ready_reason": (
             "labeled outcome evidence is available for promotion scoring"
             if labeled_sample_count
@@ -297,6 +302,15 @@ def _float_value(value: Any, *, default: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _optional_float_value(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _csv_env(value: str | None) -> list[str]:
