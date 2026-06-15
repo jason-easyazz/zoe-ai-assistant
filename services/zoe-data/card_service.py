@@ -120,8 +120,9 @@ def build_shopping_list_content(slots: dict[str, Any] | None = None) -> dict[str
     list_name = _text(slots.get("list_name") or slots.get("name") or slots.get("list_type"), "Shopping")
     raw_items = slots.get("items") or []
     items = raw_items if isinstance(raw_items, list) else list_items(slots)
-    open_count = sum(1 for item in items if not (isinstance(item, dict) and item.get("completed")))
-    completed_count = max(0, len(items) - open_count)
+    item_count = int(slots.get("item_count")) if slots.get("item_count") is not None else len(items)
+    open_count = int(slots.get("open_count")) if slots.get("open_count") is not None else sum(1 for item in items if not (isinstance(item, dict) and item.get("completed")))
+    completed_count = int(slots.get("completed_count")) if slots.get("completed_count") is not None else max(0, item_count - open_count)
     return {
         "title": f"{list_name} List",
         "summary": _text(slots.get("summary"), "Showing list"),
@@ -130,11 +131,12 @@ def build_shopping_list_content(slots: dict[str, Any] | None = None) -> dict[str
         "list_type": _text(slots.get("list_type"), "shopping"),
         "lists": slots.get("lists") or [],
         "items": items,
-        "item_count": len(items),
+        "item_count": item_count,
         "open_count": open_count,
         "completed_count": completed_count,
         "view": "list",
         "source": "list_show",
+        "actions": slots.get("actions") or [],
     }
 
 

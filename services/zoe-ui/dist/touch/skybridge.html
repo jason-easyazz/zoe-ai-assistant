@@ -4126,38 +4126,40 @@
             }
 
             body:not(.sky-empty) .zoe-list-card .sky-list-scene {
-                grid-template-rows: auto auto minmax(0, 1fr) !important;
-                gap: 10px !important;
+                grid-template-rows: auto minmax(0, 1fr) !important;
+                gap: 12px !important;
             }
 
-            body:not(.sky-empty) .zoe-list-card .sky-list-hero h3,
             body:not(.sky-empty) .people-card .sky-people-hero h3,
             body:not(.sky-empty) .person-profile-card .sky-profile-title h3 {
                 font-size: 42px !important;
                 line-height: 1 !important;
             }
 
-            body:not(.sky-empty) .zoe-list-card .sky-list-rings,
             body:not(.sky-empty) .people-card .sky-people-count {
                 width: 104px !important;
                 height: 104px !important;
                 border-radius: 30px !important;
             }
 
-            body:not(.sky-empty) .zoe-list-card .sky-list-rings {
-                width: 94px !important;
-                height: 94px !important;
-                border-radius: 28px !important;
-            }
-
-            body:not(.sky-empty) .zoe-list-card .sky-list-stats div,
             body:not(.sky-empty) .person-profile-card .sky-profile-grid div {
                 padding: 14px 16px !important;
                 border-radius: 18px !important;
             }
 
-            body:not(.sky-empty) .zoe-list-card .sky-list-stats div {
-                padding: 10px 14px !important;
+            body:not(.sky-empty) .zoe-list-card .sky-list-switcher {
+                grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+                gap: 7px !important;
+            }
+
+            body:not(.sky-empty) .zoe-list-card .sky-list-tab {
+                min-height: 42px !important;
+                padding: 8px 10px !important;
+                border-radius: 14px !important;
+            }
+
+            body:not(.sky-empty) .zoe-list-card .sky-list-tab span {
+                font-size: 14px !important;
             }
 
             body:not(.sky-empty) .zoe-list-card .sky-list-items,
@@ -4169,11 +4171,11 @@
             }
 
             body:not(.sky-empty) .zoe-list-card .sky-list-items {
-                gap: 7px !important;
+                gap: 6px !important;
             }
 
-            body:not(.sky-empty) .zoe-list-card .sky-list-item-row:nth-child(n+8),
-            body:not(.sky-empty) .zoe-list-card .sky-list-overview-row:nth-child(n+8),
+            body:not(.sky-empty) .zoe-list-card .sky-list-item-row:nth-child(n+10),
+            body:not(.sky-empty) .zoe-list-card .sky-list-overview-row:nth-child(n+7),
             body:not(.sky-empty) .people-card .sky-person-row:nth-child(n+6) {
                 display: none !important;
             }
@@ -4188,9 +4190,25 @@
 
             body:not(.sky-empty) .zoe-list-card .sky-list-item-row,
             body:not(.sky-empty) .zoe-list-card .sky-list-overview-row {
-                min-height: 50px !important;
-                padding: 8px 12px !important;
+                min-height: 44px !important;
+                padding: 7px 12px !important;
                 border-radius: 16px !important;
+            }
+
+            body:not(.sky-empty) .zoe-list-card .sky-list-columns {
+                grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+                gap: 9px !important;
+                overflow: hidden !important;
+            }
+
+            body:not(.sky-empty) .zoe-list-card .sky-list-column {
+                padding: 10px !important;
+                border-radius: 18px !important;
+                min-height: 0 !important;
+            }
+
+            body:not(.sky-empty) .zoe-list-card .sky-list-column li:nth-child(n+4) {
+                display: none !important;
             }
 
             body:not(.sky-empty) .zoe-list-card .sky-list-item-main strong,

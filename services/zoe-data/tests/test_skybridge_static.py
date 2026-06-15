@@ -369,6 +369,24 @@ def test_skybridge_weather_renderer_uses_widget_forecast_structure():
     assert "text-transform: capitalize" in html
 
 
+def test_skybridge_list_renderer_has_switcher_columns_and_new_list_action():
+    renderer = read(UI / "js" / "skybridge-renderer.js")
+    css = read(UI / "css" / "skybridge-data-widgets.css")
+
+    assert "renderListSwitcher" in renderer
+    assert "sky-list-tab" in renderer
+    assert 'data-query="new list"' in renderer
+    assert "renderListColumn" in renderer
+    assert "sky-list-columns" in renderer
+    assert "sky-list-rings" not in renderer
+    assert "sky-list-hero" not in renderer
+    assert "+ ' open'" not in renderer
+    assert "padStart(2, '0')" not in renderer[renderer.index("function renderListItemRow"):renderer.index("function renderListColumn")]
+    assert ".sky-list-tab.shopping" in css
+    assert ".sky-list-tab.work" in css
+    assert ".sky-list-tab.personal" in css
+
+
 def test_skybridge_calendar_renderer_handles_datetime_dates_and_ordering():
     renderer = read(UI / "js" / "skybridge-renderer.js")
     calendar_date_helper = renderer[
@@ -576,8 +594,10 @@ def test_skybridge_has_touch_panel_fit_overrides():
     assert 'left: calc(50% - 425px)' in html
     assert 'left: calc(50% - 350px)' in html
     assert 'person-profile-card.sky-premium-card' in html
-    assert 'sky-list-item-row:nth-child(n+8)' in html
-    assert 'min-height: 50px !important' in html
+    assert 'sky-list-item-row:nth-child(n+10)' in html
+    assert 'min-height: 44px !important' in html
+    assert 'sky-list-switcher' in html
+    assert 'sky-list-column li:nth-child(n+4)' in html
     assert 'sky-card.list-card.sky-premium-card' in html
     assert 'grid-template-columns: repeat(2, minmax(0, 1fr)) !important' in html
     assert 'grid-template-columns: repeat(3, minmax(0, 1fr)) !important' in html

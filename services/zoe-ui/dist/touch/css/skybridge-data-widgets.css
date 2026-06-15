@@ -20,6 +20,13 @@ body:not(.sky-empty) .zoe-list-card.personal {
         linear-gradient(145deg, rgba(24,18,34,0.96), rgba(10,8,16,0.98)) !important;
 }
 
+body:not(.sky-empty) .zoe-list-card.tasks {
+    background:
+        radial-gradient(circle at 16% 8%, rgba(90,224,224,0.2), transparent 34%),
+        radial-gradient(circle at 92% 20%, rgba(34,197,94,0.14), transparent 32%),
+        linear-gradient(145deg, rgba(12,25,28,0.96), rgba(6,12,16,0.98)) !important;
+}
+
 body:not(.sky-empty) .sky-list-scene,
 body:not(.sky-empty) .sky-people-scene,
 body:not(.sky-empty) .sky-profile-scene {
@@ -28,7 +35,6 @@ body:not(.sky-empty) .sky-profile-scene {
     min-height: 100%;
 }
 
-body:not(.sky-empty) .sky-list-hero,
 body:not(.sky-empty) .sky-people-hero,
 body:not(.sky-empty) .sky-profile-hero {
     display: grid;
@@ -41,7 +47,6 @@ body:not(.sky-empty) .sky-profile-hero {
     grid-template-columns: auto minmax(0, 1fr) auto;
 }
 
-body:not(.sky-empty) .sky-list-hero span,
 body:not(.sky-empty) .sky-people-hero span,
 body:not(.sky-empty) .sky-profile-title span {
     display: block;
@@ -52,7 +57,6 @@ body:not(.sky-empty) .sky-profile-title span {
     text-transform: uppercase;
 }
 
-body:not(.sky-empty) .sky-list-hero h3,
 body:not(.sky-empty) .sky-people-hero h3,
 body:not(.sky-empty) .sky-profile-title h3 {
     margin: 4px 0 0;
@@ -62,7 +66,6 @@ body:not(.sky-empty) .sky-profile-title h3 {
     letter-spacing: 0;
 }
 
-body:not(.sky-empty) .sky-list-rings,
 body:not(.sky-empty) .sky-people-count {
     width: 96px;
     height: 96px;
@@ -74,27 +77,155 @@ body:not(.sky-empty) .sky-people-count {
     box-shadow: inset 0 1px 0 rgba(255,255,255,0.18), 0 18px 45px rgba(0,0,0,0.24);
 }
 
-body:not(.sky-empty) .sky-list-rings strong,
 body:not(.sky-empty) .sky-people-count strong {
     color: white;
     font-size: 2.05rem;
     line-height: 1;
 }
 
-body:not(.sky-empty) .sky-list-rings span,
 body:not(.sky-empty) .sky-people-count span {
     color: rgba(255,255,255,0.58);
     font-size: 0.76rem;
     font-weight: 800;
 }
 
-body:not(.sky-empty) .sky-list-stats {
+body:not(.sky-empty) .sky-list-switcher {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(124px, 1fr));
+    gap: 8px;
+}
+
+body:not(.sky-empty) .sky-list-tab {
+    min-height: 42px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 16px;
+    border: 1px solid rgba(255,255,255,0.14);
+    padding: 8px 10px;
+    color: rgba(255,255,255,0.88);
+    background: rgba(255,255,255,0.08);
+    font: inherit;
+    text-align: center;
+}
+
+body:not(.sky-empty) .sky-list-tab span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.86rem;
+    font-weight: 850;
+}
+
+body:not(.sky-empty) .sky-list-tab.shopping,
+body:not(.sky-empty) .sky-list-column.shopping {
+    border-color: rgba(251,146,60,0.42);
+    background: linear-gradient(145deg, rgba(251,146,60,0.18), rgba(255,255,255,0.07));
+}
+
+body:not(.sky-empty) .sky-list-tab.work,
+body:not(.sky-empty) .sky-list-column.work {
+    border-color: rgba(59,130,246,0.46);
+    background: linear-gradient(145deg, rgba(59,130,246,0.2), rgba(255,255,255,0.07));
+}
+
+body:not(.sky-empty) .sky-list-tab.personal,
+body:not(.sky-empty) .sky-list-column.personal {
+    border-color: rgba(168,85,247,0.48);
+    background: linear-gradient(145deg, rgba(168,85,247,0.2), rgba(255,255,255,0.07));
+}
+
+body:not(.sky-empty) .sky-list-tab.tasks,
+body:not(.sky-empty) .sky-list-column.tasks {
+    border-color: rgba(90,224,224,0.42);
+    background: linear-gradient(145deg, rgba(90,224,224,0.18), rgba(255,255,255,0.07));
+}
+
+body:not(.sky-empty) .sky-list-tab.is-active {
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.2), 0 12px 30px rgba(0,0,0,0.18);
+    outline: 1px solid rgba(255,255,255,0.28);
+}
+
+body:not(.sky-empty) .sky-list-tab.new-list {
+    border-style: dashed;
+    background: rgba(255,255,255,0.055);
+}
+
+body:not(.sky-empty) .sky-list-columns {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 10px;
+    min-height: 0;
 }
 
-body:not(.sky-empty) .sky-list-stats div,
+body:not(.sky-empty) .sky-list-column {
+    min-width: 0;
+    border-radius: 22px;
+    border: 1px solid rgba(255,255,255,0.13);
+    padding: 12px;
+}
+
+body:not(.sky-empty) .sky-list-column-head {
+    width: 100%;
+    border: 0;
+    padding: 0;
+    display: block;
+    color: white;
+    background: transparent;
+    font: inherit;
+    text-align: left;
+}
+
+body:not(.sky-empty) .sky-list-column-head span {
+    color: rgba(255,255,255,0.55);
+    font-size: 0.72rem;
+    font-weight: 850;
+}
+
+body:not(.sky-empty) .sky-list-column-head strong {
+    color: white;
+    font-size: 1.12rem;
+    line-height: 1.08;
+}
+
+body:not(.sky-empty) .sky-list-column-head b {
+    color: rgba(255,255,255,0.62);
+    font-size: 0.78rem;
+}
+
+body:not(.sky-empty) .sky-list-column ul {
+    list-style: none;
+    display: grid;
+    gap: 7px;
+    margin: 12px 0 0;
+    padding: 0;
+}
+
+body:not(.sky-empty) .sky-list-column li {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: center;
+    color: rgba(255,255,255,0.85);
+    font-size: 0.86rem;
+}
+
+body:not(.sky-empty) .sky-list-column li span {
+    color: rgba(255,255,255,0.42);
+    font-weight: 850;
+}
+
+body:not(.sky-empty) .sky-list-column li strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+body:not(.sky-empty) .sky-list-column p {
+    margin: 12px 0 0;
+    color: rgba(255,255,255,0.54);
+    font-size: 0.86rem;
+}
+
 body:not(.sky-empty) .sky-profile-grid div {
     border-radius: 18px;
     padding: 12px 14px;
@@ -102,7 +233,6 @@ body:not(.sky-empty) .sky-profile-grid div {
     border: 1px solid rgba(255,255,255,0.12);
 }
 
-body:not(.sky-empty) .sky-list-stats strong,
 body:not(.sky-empty) .sky-profile-grid strong {
     display: block;
     color: white;
@@ -110,7 +240,6 @@ body:not(.sky-empty) .sky-profile-grid strong {
     overflow-wrap: anywhere;
 }
 
-body:not(.sky-empty) .sky-list-stats span,
 body:not(.sky-empty) .sky-profile-grid span {
     display: block;
     color: rgba(255,255,255,0.55);
@@ -343,7 +472,6 @@ body:not(.sky-empty) .sky-profile-notes {
 }
 
 @media (max-width: 780px) {
-    body:not(.sky-empty) .sky-list-hero,
     body:not(.sky-empty) .sky-people-hero,
     body:not(.sky-empty) .sky-profile-hero {
         grid-template-columns: 1fr;
