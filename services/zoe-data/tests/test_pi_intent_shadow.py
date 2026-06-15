@@ -183,7 +183,7 @@ async def test_intent_router_shadow_extraction_failed_records_pre_pi_latency_and
     monkeypatch.setattr("pi_intent_classifier.classify_with_pi_intent_governor", fake_classify)
     monkeypatch.setattr("pi_intent_shadow.maybe_record_pi_intent_shadow", fake_shadow)
 
-    intent = await detect_and_extract_intent("remind me to call mum", user_id="jason")
+    intent = await detect_and_extract_intent("remind me in 5 minutes to call mum", user_id="jason")
     await asyncio.sleep(0)
 
     assert intent is not None
