@@ -12,6 +12,7 @@ from pi_intent_shadow import (
     shadow_records_to_route_samples,
     summarize_pi_intent_shadow,
 )
+from zoe_pi_promotion import PiPromotionPolicy
 
 
 @pytest.mark.asyncio
@@ -352,8 +353,10 @@ def test_shadow_status_lists_rollback_groups_for_labeled_promoted_regression(tmp
 
 def test_shadow_status_rolls_back_promoted_group_on_reviewed_corrections(tmp_path):
     path = tmp_path / "shadow.jsonl"
+    policy = PiPromotionPolicy()
+    correction_count = int(policy.max_correction_rate * policy.min_samples) + 1
     rows = []
-    for index in range(30):
+    for index in range(policy.min_samples):
         rows.append(
             json.dumps(
                 {
@@ -369,7 +372,7 @@ def test_shadow_status_rolls_back_promoted_group_on_reviewed_corrections(tmp_pat
                     "agreement": False,
                     "timed_out": False,
                     "pi_no_result": False,
-                    "user_corrected": index == 0,
+                    "user_corrected": index < correction_count,
                 }
             )
         )
@@ -386,3 +389,52 @@ def test_shadow_status_rolls_back_promoted_group_on_reviewed_corrections(tmp_pat
         decision for decision in status["promotion_report"]["decisions"] if decision["intent_group"] == "weather"
     )
     assert weather["state"] == "rollback"
+    assert "correction_rate_too_high" in weather["blockers"]
+    assert status["promotion_report"]["promotion_actions"]["rollback_groups"] == ["weather"]
+
+
+def test_shadow_status_blocks_promoted_group_on_reviewed_rollback_block(tmp_path):
+    path = tmp_path / "shadow.jsonl"
+    rows = []
+    for index in range(PiPromotionPolicy().min_samples):
+        rows.append(
+            json.dumps(
+                {
+                    "text_hash": f"weather_blocked_{index}",
+                    "outcome_label": "weather",
+                    "zoe_intent": "reminder_list",
+                    "pi_intent": "weather",
+                    "zoe_latency_ms": 500,
+                    "pi_latency_ms": 120,
+                    "pi_confidence": 0.9,
+                    "pi_transport": "rpc",
+                    "route_class": "fallback",
+                    "agreement": False,
+                    "timed_out": False,
+                    "pi_no_result": False,
+                    "rollback_blocked": index == 0,
+                }
+            )
+        )
+    path.write_text("\n".join(rows) + "\n")
+
+    status = pi_intent_shadow_status(
+        {
+            "ZOE_PI_INTENT_SHADOW_PATH": str(path),
+            "ZOE_PI_INTENT_PROMOTED_GROUPS": "weather",
+        }
+    )
+
+    weather = next(
+        decision for decision in status["promotion_report"]["decisions"] if decision["intent_group"] == "weather"
+    )
+    assert weather["state"] == "blocked"
+    assert "rollback_blocked" in weather["blockers"]
+    assert status["promotion_report"]["promotion_actions"] == {
+        "promote_groups": [],
+        "rollback_groups": [],
+        "keep_promoted_groups": ["weather"],
+        "next_promoted_groups": ["weather"],
+        "env": {"ZOE_PI_INTENT_PROMOTED_GROUPS": "weather"},
+        "requires_operator_apply": False,
+    }
