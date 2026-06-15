@@ -3,6 +3,7 @@
 - **Status:** Proposal (no behavior change in this PR)
 - **Date:** 2026-06-15
 - **Scope:** How autonomous engineering work is dispatched, tracked, and reconciled across the Multica → executor pipeline.
+- **Charter alignment:** This RFC touches the "Proactive autonomy ceiling" open question in [`ZOE_DESIGN_PRINCIPLES.md`](./ZOE_DESIGN_PRINCIPLES.md) §7 (kill-switch, approval-gating, artifact-backed status). As a proposal it does not yet *answer* that question, so it does not amend the charter here. The **implementation PR that actually sets the autonomy ceiling (migration step 1/2) must co-amend §7 in the same commit**, per the charter's amendment process.
 
 ## 1. Problem
 
@@ -64,6 +65,8 @@ Each adapter implements:
 
 `RunStatus.evidence` is a list of `{ kind: pr | test | tool | validator, summary, passed }`. The dispatcher maps `RunStatus` onto Multica status + the `zoe-ticket` block, advancing phase **only** on artifact-backed evidence.
 
+**`run_handle` durability (required):** the handle MUST be **persisted on the ticket** (in the `zoe-ticket` block), not held only in dispatcher memory. Multica-as-source-of-truth only holds if the dispatcher can **re-hydrate an in-progress run after a restart** (e.g. the host service bounces mid-run). On startup the dispatcher reconciles each ticket's persisted `run_handle` via `poll` before considering any new dispatch — so a crash never orphans a run or causes a duplicate dispatch. A handle that no longer resolves is quarantined (needs-attention), never silently re-dispatched.
+
 ## 6. Ticket schema (additions to the `zoe-ticket` block)
 
 Add: `executor`, `run_handle` (opaque), `run_state`, `last_reconciled_at`. Keep the existing `phase`, `pr_url`, `evidence`, `blocked_reason`, `dispatch_approved`.
@@ -71,7 +74,7 @@ Add: `executor`, `run_handle` (opaque), `run_state`, `last_reconciled_at`. Keep 
 ## 7. Migration path (each step a clean, separate PR)
 
 1. **Consolidate dispatch** to one loop and make the kill switch cover it (retire / guard the second dispatch path).
-2. **Make status artifact-backed** + add a reconciler that quarantines un-backed statuses.
+2. **Make status artifact-backed** + add a reconciler that quarantines un-backed statuses. **From this step on, Multica wins:** the journal is internal-only and is **never read for status or run-tracking** — any journal/Multica disagreement resolves to Multica. (This closes the dual-truth window: steps 1–4 keep the journal *writing*, but step 2 makes it non-authoritative immediately, so nothing reads a competing truth during the migration.)
 3. **Extract the Hermes executor behind the adapter interface** (the reference implementation).
 4. **Add the Codex adapter**, then Cursor background-agents, then Claude Code cloud.
 5. **Demote the journal** to internal log; Multica becomes the projection of record.
@@ -82,6 +85,6 @@ Add: `executor`, `run_handle` (opaque), `run_state`, `last_reconciled_at`. Keep 
 
 ## 9. Open questions
 
-- Where does the single dispatcher live — the `zoe-data` service, or a dedicated orchestrator process?
+- Where does the single dispatcher live — the `zoe-data` service, or a dedicated orchestrator process? **Constraint:** per the repo's architecture rules, orchestration loops belong in `intent_router.py` / Zoe Agent / Hermes / OpenClaw — **never in `chat.py`** (the production chat router must not be forked into unrelated concerns). If the dispatcher lands inside `zoe-data`, it must be its own module/loop, not bolted onto the chat path.
 - Cloud executors (Codex / Cursor / Claude Code) need repo access + PR credentials — what is the per-backend auth model?
 - Concurrency: keep the single lane, or introduce per-executor lanes with explicit limits?
