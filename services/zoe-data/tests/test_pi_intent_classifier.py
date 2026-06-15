@@ -616,6 +616,7 @@ async def test_pi_intent_governor_rejects_unknown_intent(tmp_path):
         "ZOE_PI_CWD": str(tmp_path),
         "ZOE_PI_ALLOW_EXECUTION": "true",
         "ZOE_PI_LOCAL_MODEL_CONFIGURED": "true",
+        "ZOE_PI_INTENT_PREFILTER_ENABLED": "false",
     }
 
     assert await classify_with_pi_intent_governor("please do something weird", env=env) is None
