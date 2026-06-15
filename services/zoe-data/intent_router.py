@@ -1331,6 +1331,16 @@ def _extract_simple_reminder_slots(text: str) -> Optional[dict]:
     ):
         return None
     if re.search(
+        r"\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)$",
+        body,
+        flags=re.IGNORECASE,
+    ) and not re.search(
+        r"\son\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)$",
+        body,
+        flags=re.IGNORECASE,
+    ):
+        return None
+    if re.search(
         r"\b(?:noon|midnight|morning|afternoon|evening|(?:to)?night|bedtime|lunchtime|dinnertime)\b",
         body,
         flags=re.IGNORECASE,
@@ -1375,7 +1385,7 @@ def _extract_simple_reminder_slots(text: str) -> Optional[dict]:
         )
         date_patterns = [
             rf"\s+on\s+(today|tomorrow|{day_names})$",
-            rf"\s+(today|tomorrow|{day_names})$",
+            r"\s+(today|tomorrow)$",
             rf"\s+on\s+((?:{month_names})\s+\d{{1,2}}(?:st|nd|rd|th)?(?:\s+\d{{4}})?)$",
             rf"\s+on\s+(\d{{1,2}}(?:st|nd|rd|th)?\s+(?:of\s+)?(?:{month_names})(?:\s+\d{{4}})?)$",
             r"\s+on\s+(\d{4}-\d{2}-\d{2})$",

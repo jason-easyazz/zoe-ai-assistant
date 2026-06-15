@@ -276,6 +276,20 @@ async def test_unsupported_on_date_phrase_still_uses_existing_extractor(monkeypa
 @pytest.mark.parametrize(
     "text",
     [
+        "remind me to prepare for Black Friday",
+        "remind me to shop Cyber Monday",
+        "remind me to call mum Tuesday",
+    ],
+)
+def test_bare_trailing_weekday_reminder_is_not_fast_path(text):
+    from intent_router import _extract_simple_reminder_slots
+
+    assert _extract_simple_reminder_slots(text) is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
         "remind me to call mum at 5",
         "remind me to call mum at 5:30",
     ],
