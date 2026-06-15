@@ -101,6 +101,9 @@ async def test_trailing_relative_reminder_still_uses_existing_extractor(monkeypa
         "remind me to call mum in a few days",
         "remind me to call mum in two hours",
         "remind me to check the filter in a couple of weeks",
+        "remind me to check the oven in an hour",
+        "remind me to check the oven in half an hour",
+        "remind me to call mum in a day",
     ],
 )
 @pytest.mark.asyncio

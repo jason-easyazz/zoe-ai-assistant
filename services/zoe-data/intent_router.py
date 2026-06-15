@@ -1313,7 +1313,7 @@ def _extract_simple_reminder_slots(text: str) -> Optional[dict]:
     if re.search(r"\bin\s+\d+\s+(?:min(?:ute)?s?|hours?|days?|weeks?)\b", body, flags=re.IGNORECASE):
         return None
     if re.search(
-        r"\bin\s+(?:a\s+few|a\s+couple(?:\s+of)?|an?\s+hour|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:min(?:ute)?s?|hours?|days?|weeks?)\b",
+        r"\bin\s+(?:(?:a\s+few|a\s+couple(?:\s+of)?|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:min(?:ute)?s?|hours?|days?|weeks?)|an?\s+(?:min(?:ute)?|hour|day|week)|half\s+an\s+hour)\b",
         body,
         flags=re.IGNORECASE,
     ):
