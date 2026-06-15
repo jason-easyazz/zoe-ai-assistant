@@ -1824,6 +1824,9 @@ class KanbanAdapter:
                 agg = "blocked"
                 blocker = blocker or "pipeline_store_unavailable"
 
+        if agg == "done":
+            await self._cleanup_chain_worktrees(phases)
+
         return {
             "found": True,
             "status": agg,
@@ -1832,6 +1835,37 @@ class KanbanAdapter:
             "blocker": blocker,
             "pipeline": pipeline_info,
         }
+
+    async def _cleanup_chain_worktrees(self, phases: dict[str, dict]) -> None:
+        """Remove task worktrees once a chain reaches terminal ``done``.
+
+        Best-effort and idempotent: ``remove_task_worktree`` only acts when the
+        task branch is merged (ancestor or squash-merged PR) and the worktree is
+        clean, so repeated calls across polls are no-ops. Failures here must never
+        affect reported chain status.
+        """
+        try:
+            from worktree_bootstrap import remove_task_worktree, resolve_base_ref
+        except Exception:  # noqa: BLE001 - cleanup is optional, never fatal.
+            return
+        try:
+            # Resolve (and fetch) the base ref once per chain, not once per phase.
+            base_ref = await asyncio.to_thread(resolve_base_ref)
+        except Exception as exc:  # noqa: BLE001 - skip cleanup, never fatal.
+            logger.warning("kanban_adapter: base ref resolve failed, skipping cleanup: %s", exc)
+            return
+        seen: set[str] = set()
+        for row in phases.values():
+            task_id = str(row.get("id") or "").strip()
+            if not task_id or task_id in seen:
+                continue
+            seen.add(task_id)
+            try:
+                await asyncio.to_thread(remove_task_worktree, task_id, base_ref=base_ref)
+            except Exception as exc:  # noqa: BLE001 - log and continue.
+                logger.warning(
+                    "kanban_adapter: worktree cleanup failed for %s: %s", task_id, exc
+                )
 
     async def _extract_pr_url(
         self,

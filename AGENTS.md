@@ -71,8 +71,12 @@ Trunk-based development off protected `main`. No permanent `develop` or `staging
 - One branch per issue or Multica task, created from fresh `origin/main`.
 - Naming: `codex/<slug>` (agent work), `feature/<slug>`, `fix/<slug>`, `verify/<slug>` (throwaway validation).
 - Use a dedicated git worktree under `~/.worktrees/<slug>` for development; do not switch the live checkout (`/home/zoe/assistant`) to feature branches for agent work.
-- Branches die at merge: remote branches auto-delete (`delete_branch_on_merge`); remove the local worktree when done.
-- Prune stale worktrees with `scripts/maintenance/prune_worktrees.sh` (dry-run first, `--execute` after operator review). Never prune dirty, locked, or unmerged worktrees.
+- Branches die at merge: remote branches auto-delete (`delete_branch_on_merge`); local task worktrees are reclaimed automatically — see below.
+- Automatic cleanup (Multica owns its worktrees):
+  - On chain completion, the harness removes each task's worktree + `wt/<id>` branch once merged (`worktree_bootstrap.remove_task_worktree`, called from `kanban_adapter`).
+  - A daily safety-net sweep in the Multica poll loop reclaims orphaned merged worktrees (`worktree_bootstrap.prune_merged_worktrees`). Interval via `ZOE_WORKTREE_PRUNE_INTERVAL_S` (default 86400).
+  - Both detect **squash-merged** branches via `gh pr view` (not just git-ancestor merges) and never touch dirty, locked, unmerged, or the live checkout.
+- Manual prune still available: `scripts/maintenance/prune_worktrees.sh` (dry-run first, `--execute` after operator review).
 
 # DOX framework
 

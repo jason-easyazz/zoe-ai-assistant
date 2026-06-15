@@ -666,6 +666,15 @@ async def lifespan(app: FastAPI):
     # Multica board polling loop (30s interval, no-op if ZOE_MULTICA=false)
     async def _multica_poll_loop():
         import time as _t
+        _last_worktree_prune = 0.0
+        try:
+            _prune_interval_s = float(os.environ.get("ZOE_WORKTREE_PRUNE_INTERVAL_S", "86400") or "86400")
+        except ValueError:
+            logger.warning(
+                "multica_poll: invalid ZOE_WORKTREE_PRUNE_INTERVAL_S=%r; using 86400",
+                os.environ.get("ZOE_WORKTREE_PRUNE_INTERVAL_S"),
+            )
+            _prune_interval_s = 86400.0
         while True:
             try:
                 await asyncio.sleep(30)
@@ -681,6 +690,21 @@ async def lifespan(app: FastAPI):
                         logger.info("multica_poll: close_stale_autopilot_wrappers closed %d", _n_stale)
                 except Exception as _stale_exc:
                     logger.debug("multica_poll: stale wrapper cleanup failed: %s", _stale_exc)
+                # Daily safety-net: reclaim merged/squash-merged task worktrees that
+                # crashed or lost their terminal handoff and never self-cleaned.
+                if _t.time() - _last_worktree_prune >= _prune_interval_s:
+                    _last_worktree_prune = _t.time()
+                    try:
+                        from worktree_bootstrap import prune_merged_worktrees
+
+                        _pruned = await asyncio.to_thread(prune_merged_worktrees)
+                        _removed = [r for r in _pruned if r.get("decision") == "removed"]
+                        if _removed:
+                            logger.info(
+                                "multica_poll: pruned %d stale merged worktree(s)", len(_removed)
+                            )
+                    except Exception as _prune_exc:
+                        logger.warning("multica_poll: worktree prune sweep failed: %s", _prune_exc)
                 # Fast-path: auto-close stale autopilot tracker todos (no agent needed)
                 stale_todos = await client.list_issues(status="todo")
                 _now_ts = _t.time()
