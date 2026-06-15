@@ -75,6 +75,18 @@ class TestSelectSkills:
         assert skills == set(zoe_agent._SKILL_TOOLS.keys())
 
 
+# ── Zoe self URL ──────────────────────────────────────────────────────────────
+
+def test_zoe_base_url_uses_env_and_strips_trailing_slash(monkeypatch):
+    monkeypatch.setenv("ZOE_CHAT_URL", "https://zoe.example.test/base/")
+    assert zoe_agent._zoe_base_url() == "https://zoe.example.test/base"
+
+
+def test_zoe_base_url_defaults_to_local_service(monkeypatch):
+    monkeypatch.delenv("ZOE_CHAT_URL", raising=False)
+    assert zoe_agent._zoe_base_url() == "http://localhost:8000"
+
+
 # ── _build_tools ──────────────────────────────────────────────────────────────
 
 class TestBuildTools:

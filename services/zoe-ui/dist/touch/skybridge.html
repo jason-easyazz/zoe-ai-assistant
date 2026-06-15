@@ -1,0 +1,4405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <script>
+    (function(){
+        if (localStorage.getItem('zoe_kiosk') === '1') return;
+        var p = new URLSearchParams(location.search);
+        if (p.get('kiosk') === '1') localStorage.setItem('zoe_kiosk', '1');
+    })();
+    (function(){
+        var s = localStorage.getItem('zoe_theme') || 'auto';
+        var h = new Date().getHours();
+        var dark = s === 'dark' || (s === 'auto' && (h < 7 || h >= 19));
+        if (dark) document.documentElement.classList.add('dark-mode');
+    })();
+    window.prompt = function(msg, def) { return def || ''; };
+    window.alert = function() {};
+    </script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0b0d12">
+    <title>Zoe Skybridge</title>
+    <link rel="stylesheet" href="/touch/css/touch-adapter.css">
+    <link rel="stylesheet" href="/touch/css/skybridge-data-widgets.css?v=skybridge-auth-nametiles-1">
+    <script src="/lib/livekit/livekit-client.umd.min.js" onerror="console.warn('LiveKit client not loaded')"></script>
+    <style>
+        :root {
+            --sky-bg: #0b0d12;
+            --sky-panel: rgba(19, 23, 31, 0.78);
+            --sky-panel-strong: rgba(24, 30, 42, 0.94);
+            --sky-border: rgba(255, 255, 255, 0.1);
+            --sky-text: #f6f8fb;
+            --sky-muted: rgba(246, 248, 251, 0.64);
+            --sky-soft: rgba(246, 248, 251, 0.1);
+            --sky-blue: #5fc6ff;
+            --sky-green: #66d19e;
+            --sky-amber: #f7bf5f;
+            --sky-coral: #ff7b7b;
+            --sky-violet: #8c7dff;
+            --sky-radius: 8px;
+        }
+
+        * { box-sizing: border-box; }
+        html, body {
+            width: 100%;
+            min-height: 100%;
+            margin: 0;
+            background:
+                radial-gradient(circle at 14% 12%, rgba(95, 198, 255, 0.16), transparent 30%),
+                radial-gradient(circle at 88% 18%, rgba(102, 209, 158, 0.12), transparent 28%),
+                linear-gradient(145deg, #0b0d12 0%, #11151d 48%, #080a0e 100%);
+            color: var(--sky-text);
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", system-ui, sans-serif;
+            overflow: hidden;
+            touch-action: manipulation;
+            padding-top: var(--ta-nav-h, 64px);
+        }
+
+        body {
+            display: grid;
+            grid-template-rows: auto 1fr auto;
+            height: 100dvh;
+        }
+
+        .sky-topbar {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 18px;
+            align-items: center;
+            padding: 18px 28px 12px;
+        }
+
+        .sky-title {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            min-width: 0;
+        }
+
+        .sky-mark {
+            width: 42px;
+            height: 42px;
+            border-radius: 50%;
+            background:
+                radial-gradient(circle at 35% 30%, #ffffff 0%, rgba(255,255,255,0.35) 12%, transparent 30%),
+                conic-gradient(from 210deg, var(--sky-blue), var(--sky-green), var(--sky-amber), var(--sky-violet), var(--sky-blue));
+            box-shadow: 0 0 34px rgba(95, 198, 255, 0.24);
+            flex: 0 0 auto;
+        }
+
+        .sky-heading {
+            min-width: 0;
+        }
+
+        .sky-heading h1 {
+            margin: 0;
+            font-size: 24px;
+            line-height: 1.05;
+            font-weight: 700;
+            letter-spacing: 0;
+        }
+
+        .sky-heading p {
+            margin: 5px 0 0;
+            color: var(--sky-muted);
+            font-size: 13px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .sky-status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 12px;
+            border: 1px solid var(--sky-border);
+            background: rgba(255, 255, 255, 0.06);
+            border-radius: var(--sky-radius);
+            min-height: 44px;
+        }
+
+        .sky-status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--sky-green);
+            box-shadow: 0 0 18px rgba(102, 209, 158, 0.72);
+        }
+
+        .sky-status-text {
+            font-size: 13px;
+            color: var(--sky-muted);
+        }
+
+        .sky-orb-button,
+        .sky-voice-hint {
+            display: none;
+        }
+
+        .sky-shell {
+            display: grid;
+            grid-template-columns: minmax(300px, 34vw) minmax(0, 1fr);
+            gap: 22px;
+            min-height: 0;
+            padding: 8px 28px 18px;
+        }
+
+        .sky-orb-panel,
+        .sky-stage {
+            min-height: 0;
+            border: 1px solid var(--sky-border);
+            background: linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.035));
+            backdrop-filter: blur(22px);
+            -webkit-backdrop-filter: blur(22px);
+            border-radius: var(--sky-radius);
+            box-shadow: 0 22px 80px rgba(0, 0, 0, 0.32);
+        }
+
+        .sky-orb-panel {
+            display: grid;
+            grid-template-rows: minmax(0, 1fr) auto;
+            overflow: hidden;
+            position: relative;
+        }
+
+        #skyOrb {
+            width: 100%;
+            height: 100%;
+            min-height: 320px;
+            display: block;
+        }
+
+        .sky-listening-copy {
+            position: absolute;
+            left: 22px;
+            right: 22px;
+            bottom: 112px;
+            text-align: center;
+            color: var(--sky-muted);
+            font-size: 15px;
+            line-height: 1.45;
+            pointer-events: none;
+        }
+
+        .sky-transcript {
+            display: grid;
+            gap: 8px;
+            padding: 16px;
+            border-top: 1px solid var(--sky-border);
+            background: rgba(0, 0, 0, 0.14);
+            max-height: 190px;
+            overflow: auto;
+        }
+
+        .sky-line {
+            font-size: 13px;
+            line-height: 1.45;
+            color: var(--sky-muted);
+        }
+
+        .sky-line strong {
+            color: var(--sky-text);
+            font-weight: 650;
+        }
+
+        .sky-stage {
+            display: grid;
+            grid-template-rows: auto 1fr;
+            overflow: hidden;
+        }
+
+        .sky-stage-header {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 16px;
+            align-items: center;
+            padding: 16px 18px;
+            border-bottom: 1px solid var(--sky-border);
+        }
+
+        .sky-context h2 {
+            margin: 0;
+            font-size: 18px;
+            font-weight: 700;
+            letter-spacing: 0;
+        }
+
+        .sky-context p {
+            margin: 4px 0 0;
+            color: var(--sky-muted);
+            font-size: 13px;
+        }
+
+        .sky-mode-toggle {
+            display: flex;
+            gap: 6px;
+            padding: 4px;
+            border: 1px solid var(--sky-border);
+            background: rgba(0,0,0,0.16);
+            border-radius: var(--sky-radius);
+        }
+
+        .sky-mode-toggle button,
+        .sky-card button,
+        .sky-command button {
+            min-height: 44px;
+            border: 0;
+            border-radius: 7px;
+            color: var(--sky-text);
+            background: rgba(255,255,255,0.08);
+            padding: 0 14px;
+            font: inherit;
+            cursor: pointer;
+        }
+
+        .sky-mode-toggle button.active {
+            background: rgba(95, 198, 255, 0.2);
+            color: #d9f4ff;
+        }
+
+        .sky-card-stack {
+            min-height: 0;
+            overflow: auto;
+            padding: 18px;
+            display: grid;
+            grid-template-columns: repeat(12, minmax(0, 1fr));
+            align-content: start;
+            gap: 14px;
+        }
+
+        .sky-card {
+            grid-column: span 6;
+            min-height: 168px;
+            border: 1px solid var(--sky-border);
+            border-radius: var(--sky-radius);
+            background: var(--sky-panel);
+            padding: 16px;
+            display: grid;
+            gap: 12px;
+            align-content: start;
+            box-shadow: 0 12px 30px rgba(0,0,0,0.2);
+        }
+
+        .sky-card.wide { grid-column: span 12; }
+        .sky-card.compact { grid-column: span 4; min-height: 132px; }
+
+        .sky-card-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+        }
+
+        .sky-card-title {
+            margin: 0;
+            font-size: 17px;
+            font-weight: 700;
+            letter-spacing: 0;
+        }
+
+        .sky-card-kicker {
+            margin: 0 0 4px;
+            color: var(--sky-muted);
+            font-size: 12px;
+            text-transform: uppercase;
+        }
+
+        .sky-badge {
+            flex: 0 0 auto;
+            border-radius: 999px;
+            border: 1px solid var(--sky-border);
+            padding: 5px 9px;
+            color: var(--sky-muted);
+            font-size: 12px;
+            background: rgba(255,255,255,0.05);
+        }
+
+        .sky-card-body {
+            color: rgba(246,248,251,0.78);
+            font-size: 14px;
+            line-height: 1.45;
+        }
+
+        .sky-card-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+        }
+
+        .sky-field {
+            border: 1px solid var(--sky-border);
+            background: rgba(0,0,0,0.14);
+            border-radius: 7px;
+            padding: 10px;
+            min-width: 0;
+        }
+
+        .sky-field span {
+            display: block;
+            color: var(--sky-muted);
+            font-size: 12px;
+            margin-bottom: 5px;
+        }
+
+        .sky-field strong {
+            display: block;
+            font-size: 14px;
+            overflow-wrap: anywhere;
+        }
+
+        .sky-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-self: start;
+        }
+
+        .sky-actions button.primary {
+            background: linear-gradient(135deg, rgba(95,198,255,0.88), rgba(102,209,158,0.88));
+            color: #071017;
+            font-weight: 700;
+        }
+
+        .sky-actions button.warn {
+            background: rgba(255, 123, 123, 0.18);
+            color: #ffd5d5;
+        }
+
+        .sky-command {
+            display: grid;
+            grid-template-columns: auto minmax(0, 1fr) auto auto;
+            gap: 10px;
+            align-items: center;
+            padding: 12px 28px max(18px, env(safe-area-inset-bottom, 18px));
+            background: rgba(5, 7, 10, 0.72);
+            border-top: 1px solid var(--sky-border);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+        }
+
+        .sky-command input {
+            width: 100%;
+            min-height: 48px;
+            border: 1px solid var(--sky-border);
+            border-radius: var(--sky-radius);
+            background: rgba(255,255,255,0.08);
+            color: var(--sky-text);
+            padding: 0 14px;
+            font: inherit;
+            outline: none;
+        }
+
+        .sky-command input:focus {
+            border-color: rgba(95, 198, 255, 0.7);
+            box-shadow: 0 0 0 3px rgba(95, 198, 255, 0.12);
+        }
+
+        .sky-command .primary {
+            background: var(--sky-green);
+            color: #071017;
+            font-weight: 700;
+        }
+
+        .sky-command .recording {
+            background: var(--sky-coral);
+            color: #190707;
+        }
+
+        @media (max-width: 980px) {
+            .sky-shell {
+                grid-template-columns: 1fr;
+            }
+            .sky-orb-panel {
+                min-height: 330px;
+            }
+            #skyOrb {
+                min-height: 260px;
+            }
+            .sky-card { grid-column: span 12; }
+            .sky-card.compact { grid-column: span 6; }
+        }
+
+        @media (max-width: 640px) {
+            body { overflow-y: auto; overflow-x: hidden; height: auto; max-width: 100vw; }
+            .sky-topbar,
+            .sky-shell,
+            .sky-command {
+                padding-left: 14px;
+                padding-right: 14px;
+            }
+            .sky-topbar,
+            .sky-stage-header,
+            .sky-command {
+                grid-template-columns: 1fr;
+            }
+            #ztm-tabs {
+                overflow-x: auto;
+                scrollbar-width: none;
+            }
+            #ztm-tabs::-webkit-scrollbar {
+                display: none;
+            }
+            #ztm-right {
+                display: none;
+            }
+            .sky-heading p,
+            .sky-listening-copy {
+                white-space: normal;
+                overflow: visible;
+                overflow-wrap: anywhere;
+                text-overflow: clip;
+            }
+            .sky-heading p {
+                max-width: 270px;
+            }
+            .sky-listening-copy {
+                left: 38px;
+                right: auto;
+                transform: none;
+                width: 300px;
+                font-size: 14px;
+            }
+            .sky-mode-toggle {
+                justify-self: start;
+            }
+            .sky-card.compact { grid-column: span 12; }
+        }
+
+        /* Skybridge presentation layer: voice-first, cinematic, card-native. */
+        html, body {
+            background:
+                radial-gradient(circle at 20% 30%, rgba(95, 198, 255, 0.22), transparent 34%),
+                radial-gradient(circle at 78% 18%, rgba(102, 209, 158, 0.18), transparent 28%),
+                radial-gradient(circle at 70% 86%, rgba(247, 191, 95, 0.1), transparent 26%),
+                linear-gradient(145deg, #080a10 0%, #11151d 42%, #07080c 100%);
+        }
+
+        body::before {
+            content: "";
+            position: fixed;
+            inset: 64px 0 0;
+            pointer-events: none;
+            background-image:
+                linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px);
+            background-size: 72px 72px;
+            mask-image: radial-gradient(circle at 50% 42%, black 0%, transparent 72%);
+            opacity: 0.22;
+        }
+
+        .sky-topbar {
+            padding: 20px 34px 10px;
+        }
+
+        .sky-heading h1 {
+            font-size: clamp(30px, 4vw, 54px);
+            font-weight: 760;
+        }
+
+        .sky-heading p {
+            font-size: 15px;
+            color: rgba(246,248,251,0.72);
+        }
+
+        .sky-status {
+            border-color: rgba(255,255,255,0.14);
+            background: rgba(255,255,255,0.075);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.1);
+        }
+
+        .sky-shell {
+            grid-template-columns: minmax(360px, 40vw) minmax(0, 1fr);
+            gap: 26px;
+            padding: 12px 34px 20px;
+        }
+
+        .sky-orb-panel,
+        .sky-stage {
+            border-color: rgba(255,255,255,0.12);
+            background:
+                linear-gradient(180deg, rgba(255,255,255,0.11), rgba(255,255,255,0.035)),
+                rgba(7, 9, 14, 0.62);
+            border-radius: 18px;
+            box-shadow:
+                0 28px 90px rgba(0,0,0,0.44),
+                inset 0 1px 0 rgba(255,255,255,0.09);
+        }
+
+        .sky-orb-panel {
+            min-height: 0;
+        }
+
+        #skyOrb {
+            min-height: 520px;
+            filter: saturate(1.1);
+        }
+
+        .sky-listening-copy {
+            bottom: 92px;
+            max-width: 360px;
+            margin: 0 auto;
+            font-size: 18px;
+            color: rgba(246,248,251,0.72);
+        }
+
+        .sky-transcript {
+            max-height: 118px;
+            background: rgba(0,0,0,0.22);
+        }
+
+        .sky-stage-header {
+            padding: 22px 24px;
+            background: linear-gradient(90deg, rgba(255,255,255,0.075), transparent);
+        }
+
+        .sky-context h2 {
+            font-size: clamp(28px, 3.2vw, 44px);
+            line-height: 1;
+        }
+
+        .sky-context p {
+            font-size: 15px;
+            color: rgba(246,248,251,0.7);
+        }
+
+        .sky-mode-toggle {
+            border-radius: 12px;
+        }
+
+        .sky-mode-toggle button {
+            border-radius: 10px;
+            font-weight: 700;
+        }
+
+        .sky-card-stack {
+            position: relative;
+            padding: 24px;
+            gap: 16px;
+            align-content: start;
+            scrollbar-width: thin;
+        }
+
+        .sky-card-stack::before {
+            content: "";
+            position: sticky;
+            top: -24px;
+            grid-column: 1 / -1;
+            height: 0;
+            z-index: 2;
+            box-shadow: 0 0 68px 44px rgba(7,9,14,0.55);
+            pointer-events: none;
+        }
+
+        .sky-card {
+            position: relative;
+            overflow: hidden;
+            min-height: 0;
+            border-radius: 16px;
+            border-color: rgba(255,255,255,0.13);
+            background:
+                linear-gradient(145deg, rgba(255,255,255,0.12), rgba(255,255,255,0.045)),
+                rgba(17, 21, 29, 0.74);
+            box-shadow:
+                0 18px 48px rgba(0,0,0,0.28),
+                inset 0 1px 0 rgba(255,255,255,0.08);
+            opacity: 1;
+            transform: none;
+        }
+
+        .sky-card::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background: radial-gradient(circle at 18% 10%, rgba(95,198,255,0.16), transparent 38%);
+            pointer-events: none;
+            opacity: 0.9;
+        }
+
+        .sky-card > * {
+            position: relative;
+            z-index: 1;
+        }
+
+        .sky-card.hero {
+            min-height: 230px;
+            padding: 24px;
+            background:
+                radial-gradient(circle at 10% 0%, rgba(95,198,255,0.28), transparent 38%),
+                linear-gradient(145deg, rgba(255,255,255,0.14), rgba(255,255,255,0.045)),
+                rgba(12, 16, 24, 0.86);
+        }
+
+        .sky-card.hero .sky-card-title {
+            font-size: clamp(28px, 3vw, 42px);
+            line-height: 1.03;
+        }
+
+        .sky-card.hero .sky-card-body {
+            max-width: 58ch;
+            font-size: 16px;
+        }
+
+        .sky-card.wide {
+            grid-column: span 12;
+        }
+
+        .sky-card.page-card,
+        .sky-card.setting-card {
+            grid-column: span 6;
+        }
+
+        .sky-card-title {
+            font-size: 22px;
+            line-height: 1.12;
+        }
+
+        .sky-card-kicker {
+            letter-spacing: 0.08em;
+            color: rgba(246,248,251,0.6);
+        }
+
+        .sky-card-body {
+            font-size: 15px;
+            color: rgba(246,248,251,0.78);
+        }
+
+        .sky-card-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+        }
+
+        .sky-card.page-card .sky-card-grid,
+        .sky-card.setting-card .sky-card-grid,
+        .sky-card.list-card .sky-card-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .sky-field {
+            border-color: rgba(255,255,255,0.1);
+            background: rgba(0,0,0,0.18);
+            border-radius: 12px;
+        }
+
+        .sky-actions button,
+        .sky-command button {
+            border-radius: 12px;
+            font-weight: 700;
+        }
+
+        .sky-actions button.primary,
+        .sky-command .primary {
+            background: linear-gradient(135deg, #6bd6ff, #73e0aa);
+        }
+
+        .sky-command {
+            padding: 14px 34px max(20px, env(safe-area-inset-bottom, 20px));
+            background: rgba(5, 7, 10, 0.84);
+        }
+
+        .sky-command input {
+            min-height: 56px;
+            border-radius: 16px;
+            font-size: 17px;
+        }
+
+        body.sky-empty {
+            grid-template-rows: auto 1fr auto;
+        }
+
+        body.sky-empty .sky-topbar {
+            grid-template-columns: 1fr;
+            justify-items: center;
+            padding-top: clamp(28px, 5vh, 64px);
+        }
+
+        body.sky-empty .sky-title {
+            flex-direction: column;
+            text-align: center;
+            gap: 16px;
+        }
+
+        body.sky-empty .sky-mark {
+            width: 54px;
+            height: 54px;
+        }
+
+        body.sky-empty .sky-heading h1 {
+            font-size: clamp(42px, 7vw, 82px);
+        }
+
+        body.sky-empty .sky-heading p {
+            max-width: min(620px, 84vw);
+            white-space: normal;
+            font-size: 17px;
+        }
+
+        body.sky-empty .sky-status {
+            position: fixed;
+            right: 34px;
+            top: calc(var(--ta-nav-h, 64px) + 24px);
+            z-index: 4;
+        }
+
+        body.sky-empty .sky-shell {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding-top: 0;
+            padding-bottom: 28px;
+        }
+
+        body.sky-empty .sky-orb-panel {
+            width: min(900px, calc(100vw - 68px));
+            min-height: min(58vh, 620px);
+            border-color: transparent;
+            background: transparent;
+            box-shadow: none;
+        }
+
+        body.sky-empty #skyOrb {
+            min-height: min(58vh, 620px);
+        }
+
+        body.sky-empty .sky-listening-copy {
+            bottom: 44px;
+            font-size: clamp(20px, 3vw, 34px);
+            line-height: 1.18;
+            max-width: 720px;
+            color: rgba(246,248,251,0.82);
+            text-shadow: 0 10px 40px rgba(0,0,0,0.45);
+        }
+
+        body.sky-empty .sky-transcript,
+        body.sky-empty .sky-stage {
+            display: none;
+        }
+
+        body.sky-empty .sky-command {
+            max-width: min(860px, calc(100vw - 48px));
+            width: 100%;
+            justify-self: center;
+            margin: 0 auto max(18px, env(safe-area-inset-bottom, 18px));
+            border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 22px;
+            background: rgba(12, 15, 22, 0.82);
+            box-shadow: 0 24px 80px rgba(0,0,0,0.42);
+        }
+
+        @media (max-width: 980px) {
+            .sky-shell {
+                grid-template-columns: 1fr;
+            }
+            #skyOrb {
+                min-height: 360px;
+            }
+            .sky-card.page-card,
+            .sky-card.setting-card {
+                grid-column: span 12;
+            }
+        }
+
+        @media (max-width: 640px) {
+            .sky-topbar {
+                padding-top: 16px;
+            }
+            .sky-heading h1 {
+                font-size: 32px;
+            }
+            .sky-shell {
+                gap: 16px;
+            }
+            .sky-card-stack {
+                padding: 14px;
+            }
+            .sky-card-grid {
+                grid-template-columns: 1fr;
+            }
+            body.sky-empty .sky-status {
+                position: static;
+                justify-self: stretch;
+            }
+            body.sky-empty .sky-shell {
+                padding-top: 0;
+            }
+            body.sky-empty .sky-orb-panel {
+                width: calc(100vw - 28px);
+                min-height: 440px;
+            }
+            body.sky-empty #skyOrb {
+                min-height: 420px;
+            }
+            body.sky-empty .sky-command {
+                grid-template-columns: 1fr;
+                max-width: calc(100vw - 28px);
+            }
+        }
+
+        /* Login-screen composition reset: Zoe login calm, dynamic card surface. */
+        html,
+        body {
+            padding-top: 0 !important;
+            background:
+                radial-gradient(circle at 50% 34%, rgba(123, 97, 255, 0.2), transparent 31%),
+                radial-gradient(circle at 54% 42%, rgba(90, 224, 224, 0.13), transparent 30%),
+                linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            color: #fff;
+            overflow: hidden;
+        }
+
+        body {
+            position: relative;
+            display: block;
+            min-height: 100dvh;
+        }
+
+        #ztm-nav {
+            display: none !important;
+        }
+
+        body::before {
+            inset: 0;
+            background:
+                radial-gradient(circle at 50% 42%, rgba(123, 97, 255, 0.18), transparent 25%),
+                radial-gradient(circle at 50% 42%, rgba(90, 224, 224, 0.08), transparent 42%);
+            mask-image: none;
+            opacity: 1;
+        }
+
+        body::after {
+            content: "";
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            background:
+                linear-gradient(180deg, rgba(255,255,255,0.035), transparent 20%, transparent 78%, rgba(0,0,0,0.18)),
+                radial-gradient(ellipse at center, transparent 42%, rgba(5, 7, 18, 0.28) 100%);
+            z-index: 0;
+        }
+
+        .sky-topbar,
+        .sky-shell,
+        .sky-command {
+            position: relative;
+            z-index: 1;
+        }
+
+        .sky-topbar {
+            position: fixed;
+            top: max(24px, env(safe-area-inset-top, 24px));
+            left: clamp(22px, 4vw, 56px);
+            right: clamp(22px, 4vw, 56px);
+            padding: 0;
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            align-items: start;
+            gap: 18px;
+            z-index: 5;
+            pointer-events: none;
+        }
+
+        .sky-title {
+            justify-self: start;
+            align-items: flex-start;
+            gap: 10px;
+            min-width: 0;
+        }
+
+        .sky-mark {
+            display: none;
+        }
+
+        .sky-heading h1 {
+            margin: 0;
+            font-size: clamp(28px, 3vw, 44px);
+            font-weight: 400;
+            line-height: 1;
+            background: linear-gradient(135deg, #ffffff, #5AE0E0);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+        }
+
+        .sky-heading p {
+            margin: 7px 0 0;
+            color: rgba(255,255,255,0.5);
+            font-size: 14px;
+            letter-spacing: 0;
+            white-space: normal;
+        }
+
+        .sky-status {
+            display: none;
+        }
+
+        .sky-transport-toggle {
+            position: fixed;
+            top: max(28px, env(safe-area-inset-top, 28px));
+            right: clamp(22px, 4vw, 56px);
+            display: flex;
+            gap: 6px;
+            padding: 5px;
+            border-radius: 999px;
+            border: 1px solid rgba(255,255,255,0.1);
+            background: rgba(9, 13, 27, 0.46);
+            backdrop-filter: blur(18px);
+            -webkit-backdrop-filter: blur(18px);
+            z-index: 6;
+            pointer-events: auto;
+            transition: opacity 280ms ease, transform 280ms ease;
+        }
+
+        .sky-transport-toggle button {
+            min-height: 34px;
+            border: 0;
+            border-radius: 999px;
+            padding: 0 12px;
+            color: rgba(255,255,255,0.62);
+            background: transparent;
+            font: inherit;
+            font-size: 13px;
+            font-weight: 700;
+            cursor: pointer;
+        }
+
+        .sky-transport-toggle button.active {
+            color: #081016;
+            background: linear-gradient(135deg, #7B61FF, #5AE0E0);
+        }
+
+        .sky-shell {
+            display: block !important;
+            height: 100dvh;
+            min-height: 100dvh;
+            padding: 0 !important;
+            overflow: hidden;
+        }
+
+        .sky-orb-panel {
+            position: fixed !important;
+            inset: 0 !important;
+            width: 100vw !important;
+            height: 100dvh !important;
+            min-height: 0 !important;
+            border: 0;
+            background: transparent;
+            box-shadow: none;
+            pointer-events: none;
+            overflow: visible;
+        }
+
+        #skyOrb {
+            display: none !important;
+        }
+
+        .sky-orb-panel::before {
+            content: "";
+            position: fixed;
+            left: 50%;
+            top: 38%;
+            width: clamp(250px, 28vw, 350px);
+            height: clamp(250px, 28vw, 350px);
+            transform: translate(-50%, -50%);
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            box-shadow:
+                0 0 60px rgba(123, 97, 255, 0.42),
+                0 0 120px rgba(90, 224, 224, 0.22),
+                inset 0 0 60px rgba(255, 255, 255, 0.1);
+            animation: sky-login-breathe 4s ease-in-out infinite;
+            transition:
+                top 620ms cubic-bezier(0.2, 0.9, 0.2, 1),
+                left 620ms cubic-bezier(0.2, 0.9, 0.2, 1),
+                width 620ms cubic-bezier(0.2, 0.9, 0.2, 1),
+                height 620ms cubic-bezier(0.2, 0.9, 0.2, 1),
+                opacity 360ms ease;
+            z-index: 4;
+        }
+
+        .sky-orb-panel::after {
+            content: "";
+            position: fixed;
+            left: 50%;
+            top: 38%;
+            width: clamp(330px, 38vw, 500px);
+            height: clamp(330px, 38vw, 500px);
+            transform: translate(-50%, -50%);
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(123, 97, 255, 0.15), rgba(90, 224, 224, 0.09) 34%, transparent 68%);
+            animation: sky-login-halo 4s ease-in-out infinite;
+            transition:
+                top 620ms cubic-bezier(0.2, 0.9, 0.2, 1),
+                left 620ms cubic-bezier(0.2, 0.9, 0.2, 1),
+                width 620ms cubic-bezier(0.2, 0.9, 0.2, 1),
+                height 620ms cubic-bezier(0.2, 0.9, 0.2, 1),
+                border-radius 620ms cubic-bezier(0.2, 0.9, 0.2, 1);
+            z-index: 3;
+        }
+
+        .sky-listening-copy {
+            position: fixed;
+            left: 50%;
+            right: auto !important;
+            top: calc(38% + clamp(170px, 19vw, 235px));
+            bottom: auto !important;
+            width: min(620px, 86vw);
+            transform: translateX(-50%) !important;
+            margin: 0;
+            text-align: center;
+            color: rgba(255,255,255,0.28) !important;
+            font-size: clamp(16px, 1.45vw, 21px) !important;
+            line-height: 1.4;
+            pointer-events: none;
+            transition:
+                top 620ms cubic-bezier(0.2, 0.9, 0.2, 1),
+                left 620ms cubic-bezier(0.2, 0.9, 0.2, 1),
+                width 620ms cubic-bezier(0.2, 0.9, 0.2, 1),
+                height 620ms cubic-bezier(0.2, 0.9, 0.2, 1),
+                color 260ms ease;
+            z-index: 5;
+        }
+
+        .sky-orb-button {
+            position: fixed;
+            left: 50%;
+            top: 38%;
+            width: clamp(250px, 28vw, 350px);
+            height: clamp(250px, 28vw, 350px);
+            transform: translate(-50%, -50%);
+            display: grid;
+            place-items: center;
+            border: 0;
+            border-radius: 50%;
+            background: transparent;
+            color: white;
+            cursor: pointer;
+            z-index: 6;
+            pointer-events: auto;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+
+        .sky-orb-button::before {
+            content: "";
+            position: absolute;
+            inset: 18%;
+            border-radius: 50%;
+            border: 1px solid rgba(255,255,255,0.2);
+            background:
+                radial-gradient(circle at 34% 26%, rgba(255,255,255,0.42), transparent 20%),
+                linear-gradient(135deg, rgba(255,255,255,0.08), rgba(255,255,255,0));
+            opacity: 0;
+            transition: opacity 200ms ease, transform 260ms ease;
+        }
+
+        .sky-orb-button:hover::before,
+        .sky-orb-button:focus-visible::before {
+            opacity: 1;
+            transform: scale(1.04);
+        }
+
+        .sky-orb-button span {
+            position: relative;
+            display: grid;
+            gap: 8px;
+            place-items: center;
+            padding-top: 46%;
+            font-size: 14px;
+            font-weight: 750;
+            letter-spacing: 0;
+            color: rgba(255,255,255,0.78);
+            text-shadow: 0 2px 18px rgba(0,0,0,0.36);
+            opacity: 0;
+            transform: translateY(8px);
+            transition: opacity 220ms ease, transform 220ms ease;
+        }
+
+        body.sky-empty .sky-orb-button span {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        body.sky-state-listening .sky-orb-panel::before {
+            animation-duration: 1.55s;
+            box-shadow:
+                0 0 70px rgba(90, 224, 224, 0.58),
+                0 0 170px rgba(123, 97, 255, 0.34),
+                inset 0 0 70px rgba(255, 255, 255, 0.18);
+        }
+
+        body.sky-state-thinking .sky-orb-panel::before {
+            background: linear-gradient(135deg, #f7bf5f 0%, #5AE0E0 100%);
+        }
+
+        body.sky-state-responding .sky-orb-panel::before {
+            background: linear-gradient(135deg, #8c7dff 0%, #ff7b7b 100%);
+        }
+
+        .sky-voice-hint {
+            position: fixed;
+            left: 50%;
+            top: calc(38% + clamp(202px, 22vw, 276px));
+            width: min(620px, calc(100vw - 40px));
+            transform: translateX(-50%);
+            display: grid;
+            grid-template-columns: auto 1fr auto;
+            gap: 12px;
+            align-items: center;
+            padding: 12px 14px;
+            border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 999px;
+            background:
+                linear-gradient(145deg, rgba(255,255,255,0.1), rgba(255,255,255,0.035)),
+                rgba(8, 12, 26, 0.64);
+            box-shadow: 0 24px 70px rgba(0,0,0,0.34);
+            backdrop-filter: blur(22px);
+            -webkit-backdrop-filter: blur(22px);
+            color: rgba(255,255,255,0.72);
+            z-index: 6;
+            pointer-events: auto;
+            transition: opacity 260ms ease, transform 320ms ease, top 620ms cubic-bezier(0.2, 0.9, 0.2, 1);
+        }
+
+        .sky-voice-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #5AE0E0;
+            box-shadow: 0 0 20px rgba(90, 224, 224, 0.72);
+        }
+
+        .sky-voice-hint strong {
+            display: block;
+            color: #fff;
+            font-size: 14px;
+            line-height: 1.1;
+        }
+
+        .sky-voice-hint span {
+            display: block;
+            margin-top: 2px;
+            font-size: 12px;
+            color: rgba(255,255,255,0.48);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .sky-voice-hint button {
+            min-height: 38px;
+            border: 0;
+            border-radius: 999px;
+            padding: 0 14px;
+            background: rgba(255,255,255,0.1);
+            color: #fff;
+            font-weight: 750;
+            cursor: pointer;
+        }
+
+        body.sky-empty .sky-topbar {
+            top: calc(38% + clamp(145px, 16vw, 210px));
+            left: 0;
+            right: 0;
+            display: grid;
+            grid-template-columns: 1fr;
+            justify-items: center;
+            pointer-events: none;
+        }
+
+        body.sky-empty .sky-title {
+            justify-self: center;
+            align-items: center;
+            text-align: center;
+            transform: none;
+        }
+
+        body.sky-empty .sky-heading h1 {
+            font-size: clamp(48px, 7vw, 76px);
+            font-weight: 300;
+        }
+
+        body.sky-empty .sky-heading p {
+            margin-top: 13px;
+            color: rgba(255,255,255,0.22);
+            font-size: clamp(16px, 1.7vw, 22px);
+        }
+
+        body.sky-empty .sky-listening-copy {
+            display: none;
+        }
+
+        body.sky-empty .sky-command {
+            opacity: 0.88;
+            pointer-events: auto;
+            transform: translateX(-50%) translateY(0);
+        }
+
+        body.sky-empty .sky-transport-toggle {
+            opacity: 0;
+            pointer-events: none;
+            transform: translateY(-8px);
+        }
+
+        .sky-stage {
+            position: fixed;
+            left: 50%;
+            right: auto;
+            top: 188px;
+            bottom: 106px;
+            width: min(1120px, calc(100vw - 64px));
+            transform: translateX(-50%);
+            border: 0;
+            border-radius: 0;
+            background: transparent;
+            box-shadow: none;
+            overflow: visible;
+            opacity: 1;
+            transition: opacity 260ms ease, transform 520ms cubic-bezier(0.2, 0.9, 0.2, 1);
+        }
+
+        .sky-stage-header {
+            display: none;
+        }
+
+        .sky-card-stack {
+            display: grid;
+            grid-template-columns: repeat(12, minmax(0, 1fr));
+            gap: 16px;
+            max-height: calc(100dvh - 294px);
+            padding: 0;
+            overflow: auto;
+            align-content: start;
+            scrollbar-width: none;
+        }
+
+        .sky-card-stack::-webkit-scrollbar,
+        .sky-card-stack::before {
+            display: none;
+        }
+
+        .sky-card,
+        .sky-card.page-card,
+        .sky-card.setting-card,
+        .sky-card.list-card,
+        .sky-card:first-child {
+            grid-column: span 6;
+            min-height: 220px;
+            padding: 22px;
+            border-radius: 28px;
+            border: 1px solid rgba(255,255,255,0.16);
+            background:
+                radial-gradient(circle at 15% 2%, rgba(255,255,255,0.22), transparent 24%),
+                radial-gradient(circle at 86% 18%, rgba(90, 224, 224, 0.18), transparent 42%),
+                linear-gradient(145deg, rgba(255,255,255,0.18), rgba(255,255,255,0.055)),
+                rgba(16, 22, 42, 0.78);
+            box-shadow:
+                0 28px 90px rgba(0,0,0,0.42),
+                inset 0 1px 0 rgba(255,255,255,0.16),
+                inset 0 -42px 70px rgba(0,0,0,0.12);
+            backdrop-filter: blur(28px) saturate(1.2);
+            -webkit-backdrop-filter: blur(28px) saturate(1.2);
+            opacity: 1;
+            transform: none;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .sky-card::after {
+            content: "";
+            position: absolute;
+            inset: auto 18px 14px 18px;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.22), transparent);
+            opacity: 0.55;
+        }
+
+        .sky-card:first-child {
+            grid-column: span 7;
+            min-height: 280px;
+        }
+
+        .sky-card.list-card {
+            grid-column: span 5;
+        }
+
+        .sky-card-title {
+            font-weight: 650;
+            font-size: clamp(26px, 2.8vw, 42px);
+            line-height: 1.02;
+        }
+
+        .sky-card-body {
+            font-size: 16px;
+            color: rgba(255,255,255,0.76);
+        }
+
+        .sky-widget-top {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 16px;
+            margin-bottom: 18px;
+        }
+
+        .sky-widget-glyph {
+            width: 58px;
+            height: 58px;
+            display: grid;
+            place-items: center;
+            flex: 0 0 auto;
+            border-radius: 18px;
+            color: #071018;
+            font-size: 26px;
+            font-weight: 850;
+            background:
+                radial-gradient(circle at 28% 18%, rgba(255,255,255,0.8), transparent 28%),
+                linear-gradient(135deg, #7B61FF, #5AE0E0);
+            box-shadow: 0 16px 42px rgba(90, 224, 224, 0.22);
+        }
+
+        .sky-widget-title {
+            min-width: 0;
+        }
+
+        .sky-widget-title p {
+            margin: 0 0 7px;
+            color: rgba(255,255,255,0.48);
+            font-size: 12px;
+            font-weight: 800;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+        }
+
+        .sky-widget-title h3 {
+            margin: 0;
+        }
+
+        .sky-widget-metric {
+            margin: 4px 0 18px;
+            display: flex;
+            align-items: flex-end;
+            gap: 10px;
+        }
+
+        .sky-widget-metric strong {
+            font-size: clamp(38px, 5vw, 68px);
+            line-height: 0.92;
+            font-weight: 700;
+            letter-spacing: 0;
+        }
+
+        .sky-widget-metric span {
+            padding-bottom: 8px;
+            color: rgba(255,255,255,0.52);
+            font-size: 15px;
+            font-weight: 700;
+        }
+
+        .sky-widget-strip {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 10px;
+            margin-top: 18px;
+        }
+
+        .sky-field {
+            padding: 14px;
+            border-radius: 18px;
+            border: 1px solid rgba(255,255,255,0.08);
+            background: rgba(255,255,255,0.07);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.08);
+        }
+
+        .sky-field span {
+            display: block;
+            margin-bottom: 7px;
+            color: rgba(255,255,255,0.45);
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        .sky-field strong {
+            display: block;
+            color: rgba(255,255,255,0.9);
+            font-size: 15px;
+            line-height: 1.28;
+        }
+
+        .sky-field em {
+            display: block;
+            margin-top: 7px;
+            color: rgba(255,255,255,0.5);
+            font-size: 13px;
+            font-style: normal;
+            line-height: 1.3;
+        }
+
+        .sky-data-list {
+            display: grid;
+            gap: 10px;
+        }
+
+        .sky-event-row,
+        .sky-empty-data,
+        .sky-forecast-tile {
+            padding: 16px;
+            border-radius: 18px;
+            border: 1px solid rgba(255,255,255,0.09);
+            background: linear-gradient(145deg, rgba(255,255,255,0.1), rgba(255,255,255,0.045));
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.1);
+        }
+
+        .sky-event-row {
+            display: grid;
+            grid-template-columns: minmax(86px, 0.24fr) minmax(0, 1fr);
+            gap: 12px;
+            align-items: center;
+        }
+
+        .sky-event-row span,
+        .sky-forecast-tile span {
+            color: rgba(255,255,255,0.52);
+            font-size: 12px;
+            font-weight: 800;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+        }
+
+        .sky-event-row strong,
+        .sky-empty-data strong,
+        .sky-forecast-tile strong {
+            color: rgba(255,255,255,0.92);
+            font-size: 16px;
+            line-height: 1.25;
+        }
+
+        .sky-event-row em {
+            grid-column: 2;
+            color: rgba(255,255,255,0.5);
+            font-size: 13px;
+            font-style: normal;
+        }
+
+        .sky-empty-data {
+            display: grid;
+            gap: 6px;
+        }
+
+        .sky-empty-data span,
+        .sky-forecast-tile em {
+            color: rgba(255,255,255,0.52);
+            font-size: 13px;
+            font-style: normal;
+            line-height: 1.32;
+        }
+
+        .sky-forecast-row {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: 10px;
+            margin-top: 12px;
+        }
+
+        .sky-forecast-tile {
+            display: grid;
+            gap: 7px;
+            min-height: 118px;
+        }
+
+        .sky-actions button,
+        .sky-command button {
+            border-radius: 14px;
+            font-weight: 700;
+        }
+
+        .sky-actions button.primary,
+        .sky-command .primary {
+            background: linear-gradient(135deg, #7B61FF, #5AE0E0);
+            color: #081016;
+        }
+
+        .sky-command {
+            position: fixed;
+            left: 50%;
+            bottom: max(22px, env(safe-area-inset-bottom, 22px));
+            width: min(780px, calc(100vw - 56px));
+            transform: translateX(-50%);
+            grid-template-columns: auto minmax(0, 1fr) auto auto;
+            padding: 10px;
+            border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 28px;
+            background: rgba(9, 13, 27, 0.58);
+            backdrop-filter: blur(22px);
+            -webkit-backdrop-filter: blur(22px);
+            box-shadow: 0 26px 90px rgba(0,0,0,0.42);
+            opacity: 0.42;
+            transition: opacity 220ms ease, transform 260ms ease;
+            z-index: 7;
+        }
+
+        .sky-command:focus-within,
+        .sky-command:hover {
+            opacity: 1;
+        }
+
+        .sky-command input {
+            min-height: 54px;
+            border: 0;
+            border-radius: 22px;
+            background: rgba(255,255,255,0.065);
+        }
+
+        .sky-command button {
+            min-height: 54px;
+            border-radius: 20px;
+        }
+
+        body:not(.sky-empty) .sky-orb-panel::before {
+            top: 104px;
+            left: calc(50% - min(332px, 36vw));
+            width: 60px;
+            height: 60px;
+            opacity: 0.92;
+        }
+
+        body:not(.sky-empty) .sky-orb-panel::after {
+            top: 104px;
+            left: 50%;
+            width: min(780px, calc(100vw - 56px));
+            height: 78px;
+            border-radius: 999px;
+            background:
+                linear-gradient(145deg, rgba(255,255,255,0.14), rgba(255,255,255,0.055)),
+                rgba(9, 13, 27, 0.76);
+            border: 1px solid rgba(255,255,255,0.12);
+            box-shadow:
+                0 24px 90px rgba(0,0,0,0.42),
+                inset 0 1px 0 rgba(255,255,255,0.08);
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            opacity: 1;
+            z-index: 3;
+        }
+
+        body:not(.sky-empty) .sky-topbar {
+            top: max(24px, env(safe-area-inset-top, 24px));
+        }
+
+        body:not(.sky-empty) .sky-title {
+            justify-self: start;
+            align-items: flex-start;
+            text-align: left;
+        }
+
+        body:not(.sky-empty) .sky-heading h1 {
+            font-size: 28px;
+            font-weight: 400;
+        }
+
+        body:not(.sky-empty) .sky-heading p {
+            font-size: 13px;
+            color: rgba(255,255,255,0.5);
+        }
+
+        body:not(.sky-empty) .sky-transcript {
+            display: none;
+        }
+
+        body:not(.sky-empty) .sky-listening-copy {
+            display: block;
+            top: 104px !important;
+            left: calc(50% - min(260px, 28vw)) !important;
+            width: min(602px, calc(100vw - 230px));
+            height: 78px;
+            transform: none !important;
+            text-align: left;
+            color: rgba(255,255,255,0.78) !important;
+            font-size: clamp(16px, 1.4vw, 20px) !important;
+            line-height: 78px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            z-index: 5;
+        }
+
+        body:not(.sky-empty) .sky-orb-button {
+            top: 104px;
+            left: calc(50% - min(332px, 36vw));
+            width: 60px;
+            height: 60px;
+        }
+
+        body:not(.sky-empty) .sky-orb-button span {
+            opacity: 0;
+        }
+
+        body:not(.sky-empty) .sky-voice-hint {
+            top: 104px;
+            width: min(780px, calc(100vw - 56px));
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        body.sky-empty .sky-stage {
+            opacity: 0;
+            pointer-events: none;
+            transform: translateX(-50%) translateY(20px);
+        }
+
+        body:not(.sky-empty) .sky-transport-toggle {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        @keyframes sky-login-breathe {
+            0%, 100% {
+                transform: translate(-50%, -50%) scale(1);
+                box-shadow:
+                    0 0 60px rgba(123, 97, 255, 0.42),
+                    0 0 120px rgba(90, 224, 224, 0.22),
+                    inset 0 0 60px rgba(255, 255, 255, 0.1);
+            }
+            50% {
+                transform: translate(-50%, -50%) scale(1.05) translateY(-8px);
+                box-shadow:
+                    0 0 86px rgba(123, 97, 255, 0.58),
+                    0 0 160px rgba(90, 224, 224, 0.28),
+                    inset 0 0 60px rgba(255, 255, 255, 0.16);
+            }
+        }
+
+        @keyframes sky-login-halo {
+            0%, 100% { opacity: 0.82; transform: translate(-50%, -50%) scale(1); }
+            50% { opacity: 1; transform: translate(-50%, -50%) scale(1.04); }
+        }
+
+        @media (max-width: 780px) {
+            html,
+            body {
+                width: 100vw;
+                max-width: 100vw;
+                overflow-x: hidden;
+            }
+
+            .sky-topbar {
+                left: 18px;
+                right: 18px;
+            }
+
+            .sky-heading h1 {
+                font-size: 30px;
+            }
+
+            .sky-heading p {
+                display: none;
+            }
+
+            .sky-transport-toggle {
+                top: 78px;
+                left: 18px;
+                right: auto;
+                max-width: calc(100vw - 36px);
+            }
+
+            .sky-stage {
+                left: 14px !important;
+                right: 14px !important;
+                width: calc(100vw - 28px) !important;
+                max-width: calc(100vw - 28px) !important;
+                top: 228px !important;
+                bottom: max(96px, calc(74px + env(safe-area-inset-bottom, 22px))) !important;
+                transform: none !important;
+                overflow: hidden;
+            }
+
+            .sky-card,
+            .sky-card.page-card,
+            .sky-card.setting-card,
+            .sky-card.list-card,
+            .sky-card:first-child {
+                grid-column: 1 / -1 !important;
+                width: 100%;
+                max-width: 100%;
+                min-width: 0;
+                min-height: 0;
+                padding: 18px;
+                overflow: hidden;
+            }
+
+            .sky-card,
+            .sky-card * {
+                box-sizing: border-box;
+                min-width: 0 !important;
+                max-width: 100% !important;
+                white-space: normal !important;
+                overflow-wrap: anywhere !important;
+                word-break: break-word;
+            }
+
+            body:not(.sky-empty) .sky-orb-panel::before,
+            body:not(.sky-empty) .sky-orb-panel::after,
+            body:not(.sky-empty) .sky-orb-button {
+                top: 152px;
+            }
+
+            body:not(.sky-empty) .sky-orb-panel::before {
+                left: 48px;
+                width: 52px;
+                height: 52px;
+            }
+
+            body:not(.sky-empty) .sky-orb-button {
+                left: 48px;
+                width: 52px;
+                height: 52px;
+            }
+
+            body:not(.sky-empty) .sky-orb-panel::after {
+                left: 14px !important;
+                width: calc(100vw - 28px) !important;
+                height: 68px !important;
+                transform: none !important;
+            }
+
+            body:not(.sky-empty) .sky-listening-copy {
+                top: 152px !important;
+                left: 86px !important;
+                width: calc(100vw - 112px);
+                height: 68px;
+                line-height: 68px;
+                font-size: 16px !important;
+            }
+
+            .sky-card-stack {
+                grid-template-columns: minmax(0, 1fr) !important;
+                max-height: calc(100dvh - 314px) !important;
+                width: 100% !important;
+                overflow-x: hidden !important;
+            }
+
+            .sky-voice-hint {
+                top: auto;
+                bottom: max(92px, calc(74px + env(safe-area-inset-bottom, 22px)));
+                grid-template-columns: auto 1fr;
+                border-radius: 22px;
+            }
+
+            .sky-voice-hint button {
+                grid-column: 1 / -1;
+            }
+
+            .sky-widget-strip {
+                grid-template-columns: minmax(0, 1fr);
+            }
+
+            .sky-card-grid,
+            .sky-card.page-card .sky-card-grid,
+            .sky-card.setting-card .sky-card-grid,
+            .sky-card.list-card .sky-card-grid {
+                grid-template-columns: minmax(0, 1fr) !important;
+            }
+
+            .sky-badge {
+                display: none;
+            }
+
+            .sky-card-title,
+            .sky-card-body,
+            .sky-field,
+            .sky-field strong,
+            .sky-field span {
+                min-width: 0;
+                overflow-wrap: anywhere;
+                white-space: normal;
+            }
+
+            .sky-command,
+            body.sky-empty .sky-command {
+                width: calc(100vw - 24px);
+                grid-template-columns: 1fr auto;
+                border-radius: 22px;
+            }
+
+            .sky-command #skyHomeBtn,
+            .sky-command .primary {
+                display: none;
+            }
+
+            body.sky-empty .sky-topbar {
+                top: calc(38% + 152px);
+            }
+
+            body.sky-empty .sky-orb-panel::before {
+                width: clamp(220px, 64vw, 300px);
+                height: clamp(220px, 64vw, 300px);
+            }
+
+            body.sky-empty .sky-orb-panel::after {
+                width: clamp(280px, 82vw, 390px);
+                height: clamp(280px, 82vw, 390px);
+            }
+        }
+
+        /* Final Skybridge composition lock: explicit idle and active states. */
+        body.sky-empty .sky-orb-panel::before {
+            top: 38% !important;
+            left: 50% !important;
+            width: min(330px, calc(100vw - 64px)) !important;
+            height: min(330px, calc(100vw - 64px)) !important;
+            transform: translate(-50%, -50%) !important;
+            border-radius: 50% !important;
+        }
+
+        body.sky-empty .sky-orb-panel::after {
+            top: 38% !important;
+            left: 50% !important;
+            width: min(470px, calc(100vw - 28px)) !important;
+            height: min(470px, calc(100vw - 28px)) !important;
+            transform: translate(-50%, -50%) !important;
+            border-radius: 50% !important;
+        }
+
+        body.sky-empty .sky-heading p {
+            display: block !important;
+        }
+
+        body:not(.sky-empty) .sky-command {
+            opacity: 0.08;
+            pointer-events: auto;
+            transform: translateX(-50%) translateY(18px);
+        }
+
+        body.sky-empty .sky-command:focus-within,
+        body.sky-empty .sky-command:hover,
+        body:not(.sky-empty) .sky-command:focus-within,
+        body:not(.sky-empty) .sky-command:hover {
+            opacity: 1;
+            pointer-events: auto;
+            transform: translateX(-50%) translateY(0);
+        }
+
+        body:not(.sky-empty) .sky-card {
+            animation: sky-card-rise 520ms cubic-bezier(0.2, 0.9, 0.2, 1) both;
+        }
+
+        @keyframes sky-card-rise {
+            0% {
+                opacity: 0;
+                transform: translateY(14px) scale(0.992);
+            }
+            60% {
+                opacity: 1;
+            }
+            100% {
+                opacity: 1;
+                transform: translateY(0) scale(1);
+            }
+        }
+
+        @media (max-width: 780px) {
+            body.sky-empty .sky-topbar {
+                top: calc(38% + min(190px, 42vw)) !important;
+            }
+
+            body.sky-empty .sky-heading h1 {
+                font-size: clamp(28px, 10vw, 44px) !important;
+                font-weight: 600 !important;
+            }
+
+            body.sky-empty .sky-heading p {
+                margin-top: 10px !important;
+                max-width: 280px;
+                color: rgba(255,255,255,0.42) !important;
+                font-size: 15px !important;
+                line-height: 1.35;
+            }
+
+            body:not(.sky-empty) .sky-topbar {
+                top: max(22px, env(safe-area-inset-top, 22px)) !important;
+            }
+
+            body:not(.sky-empty) .sky-heading h1 {
+                font-size: 28px !important;
+                font-weight: 700 !important;
+            }
+
+            body:not(.sky-empty) .sky-transport-toggle {
+                display: none !important;
+            }
+
+            body:not(.sky-empty) .sky-orb-panel::before {
+                top: 118px !important;
+                left: 47px !important;
+                width: 48px !important;
+                height: 48px !important;
+                transform: translate(-50%, -50%) !important;
+            }
+
+            body:not(.sky-empty) .sky-orb-panel::after {
+                top: 118px !important;
+                left: 12px !important;
+                width: calc(100vw - 24px) !important;
+                height: 66px !important;
+                transform: none !important;
+            }
+
+            body:not(.sky-empty) .sky-listening-copy {
+                top: 85px !important;
+                left: 82px !important;
+                width: calc(100vw - 106px) !important;
+                height: 66px !important;
+                line-height: 66px !important;
+                color: rgba(255,255,255,0.86) !important;
+                font-size: 15px !important;
+            }
+
+            body:not(.sky-empty) .sky-stage {
+                top: 178px !important;
+                bottom: max(18px, env(safe-area-inset-bottom, 18px)) !important;
+                overflow: visible !important;
+            }
+
+            body:not(.sky-empty) .sky-card-stack {
+                max-height: calc(100dvh - 200px) !important;
+                gap: 12px !important;
+                padding-bottom: 12px;
+            }
+
+            body:not(.sky-empty) .sky-card-shell {
+                grid-column: span 12 !important;
+                width: 100% !important;
+            }
+
+            body:not(.sky-empty) .sky-card,
+            body:not(.sky-empty) .sky-card.page-card,
+            body:not(.sky-empty) .sky-card.setting-card,
+            body:not(.sky-empty) .sky-card.list-card,
+            body:not(.sky-empty) .sky-card:first-child {
+                padding: 18px !important;
+                border-radius: 22px !important;
+                min-height: 0 !important;
+                background:
+                    radial-gradient(circle at 14% 0%, rgba(123, 97, 255, 0.18), transparent 42%),
+                    linear-gradient(150deg, rgba(255,255,255,0.135), rgba(255,255,255,0.055)),
+                    rgba(18, 23, 38, 0.84) !important;
+            }
+
+            .sky-card-header {
+                gap: 12px !important;
+                align-items: flex-start !important;
+            }
+
+            .sky-card-title {
+                font-size: 21px !important;
+                line-height: 1.12 !important;
+            }
+
+            .sky-card-body {
+                display: block !important;
+                margin-top: 8px !important;
+                font-size: 15px !important;
+                line-height: 1.45 !important;
+                overflow: visible !important;
+                text-overflow: clip !important;
+                white-space: normal !important;
+                word-break: normal !important;
+            }
+
+            .sky-card-grid {
+                gap: 9px !important;
+                margin-top: 14px !important;
+            }
+
+            .sky-card.list-card .sky-card-grid {
+                max-height: 236px;
+                overflow-y: auto;
+                padding-right: 2px;
+                scrollbar-width: thin;
+            }
+
+            .sky-field {
+                display: grid !important;
+                gap: 5px !important;
+                padding: 10px 12px !important;
+                border-radius: 14px !important;
+            }
+
+            .sky-field span,
+            .sky-field strong {
+                display: block !important;
+                line-height: 1.25 !important;
+                white-space: normal !important;
+                overflow: visible !important;
+                text-overflow: clip !important;
+                word-break: normal !important;
+            }
+
+            .sky-actions {
+                display: flex !important;
+                flex-wrap: wrap !important;
+                gap: 8px !important;
+                margin-top: 14px !important;
+            }
+
+            .sky-actions button {
+                min-height: 42px !important;
+                padding: 0 14px !important;
+                border-radius: 14px !important;
+                font-size: 14px !important;
+            }
+
+            body:not(.sky-empty) .sky-command {
+                opacity: 0.08 !important;
+                pointer-events: auto !important;
+            }
+
+            body:not(.sky-empty) .sky-command:focus-within,
+            body:not(.sky-empty) .sky-command:hover {
+                opacity: 1 !important;
+                pointer-events: auto !important;
+                transform: translateX(-50%) translateY(0) !important;
+            }
+        }
+
+        /* Minimal ambient surface: cards, orb, and one floating voice pill. */
+        html,
+        body {
+            background:
+                radial-gradient(circle at 50% 38%, rgba(123, 97, 255, 0.22), transparent 28%),
+                radial-gradient(circle at 52% 44%, rgba(90, 224, 224, 0.14), transparent 34%),
+                linear-gradient(135deg, #1a1a2e 0%, #16213e 52%, #0f3460 100%) !important;
+        }
+
+        body::before {
+            background:
+                radial-gradient(circle at 50% 40%, rgba(255,255,255,0.08), transparent 17%),
+                radial-gradient(circle at 50% 48%, rgba(90,224,224,0.08), transparent 38%) !important;
+            opacity: 1 !important;
+        }
+
+        .sky-topbar,
+        .sky-status,
+        .sky-transport-toggle,
+        .sky-stage-header,
+        .sky-transcript,
+        .sky-command,
+        .sky-voice-hint {
+            display: none !important;
+        }
+
+        .sky-shell {
+            height: 100dvh !important;
+            min-height: 100dvh !important;
+            padding: 0 !important;
+            overflow: hidden !important;
+        }
+
+        .sky-orb-panel {
+            position: fixed !important;
+            inset: 0 !important;
+            width: 100vw !important;
+            height: 100dvh !important;
+            border: 0 !important;
+            background: transparent !important;
+            box-shadow: none !important;
+            pointer-events: none !important;
+            z-index: 4;
+        }
+
+        #skyOrb {
+            display: none !important;
+        }
+
+        .sky-orb-panel::before {
+            content: "" !important;
+            position: fixed !important;
+            left: 50% !important;
+            top: 42% !important;
+            width: clamp(248px, 28vw, 350px) !important;
+            height: clamp(248px, 28vw, 350px) !important;
+            transform: translate(-50%, -50%) !important;
+            border-radius: 50% !important;
+            background:
+                radial-gradient(circle at 33% 26%, rgba(255,255,255,0.34), transparent 24%),
+                linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%) !important;
+            box-shadow:
+                0 0 62px rgba(123, 97, 255, 0.44),
+                0 0 132px rgba(90, 224, 224, 0.24),
+                inset 0 0 64px rgba(255,255,255,0.12) !important;
+            animation: sky-login-breathe 4s ease-in-out infinite;
+            transition:
+                top 680ms cubic-bezier(0.2, 0.9, 0.18, 1),
+                left 680ms cubic-bezier(0.2, 0.9, 0.18, 1),
+                width 680ms cubic-bezier(0.2, 0.9, 0.18, 1),
+                height 680ms cubic-bezier(0.2, 0.9, 0.18, 1),
+                box-shadow 360ms ease,
+                opacity 240ms ease !important;
+            z-index: 8 !important;
+        }
+
+        .sky-orb-panel::after {
+            content: "" !important;
+            position: fixed !important;
+            left: 50% !important;
+            top: 42% !important;
+            width: clamp(320px, 38vw, 500px) !important;
+            height: clamp(320px, 38vw, 500px) !important;
+            transform: translate(-50%, -50%) !important;
+            border-radius: 50% !important;
+            border: 1px solid transparent;
+            background: radial-gradient(circle, rgba(123, 97, 255, 0.18), rgba(90, 224, 224, 0.09) 35%, transparent 68%) !important;
+            box-shadow: none;
+            animation: sky-login-halo 4s ease-in-out infinite;
+            transition:
+                top 680ms cubic-bezier(0.2, 0.9, 0.18, 1),
+                left 680ms cubic-bezier(0.2, 0.9, 0.18, 1),
+                width 680ms cubic-bezier(0.2, 0.9, 0.18, 1),
+                height 680ms cubic-bezier(0.2, 0.9, 0.18, 1),
+                border-radius 680ms cubic-bezier(0.2, 0.9, 0.18, 1),
+                background 360ms ease,
+                box-shadow 360ms ease !important;
+            z-index: 6 !important;
+        }
+
+        .sky-orb-button {
+            position: fixed !important;
+            left: 50% !important;
+            top: 42% !important;
+            width: clamp(248px, 28vw, 350px) !important;
+            height: clamp(248px, 28vw, 350px) !important;
+            transform: translate(-50%, -50%) !important;
+            border: 0 !important;
+            border-radius: 50% !important;
+            background: transparent !important;
+            color: transparent !important;
+            pointer-events: auto !important;
+            z-index: 12 !important;
+            cursor: pointer;
+            transition:
+                top 680ms cubic-bezier(0.2, 0.9, 0.18, 1),
+                left 680ms cubic-bezier(0.2, 0.9, 0.18, 1),
+                width 680ms cubic-bezier(0.2, 0.9, 0.18, 1),
+                height 680ms cubic-bezier(0.2, 0.9, 0.18, 1) !important;
+        }
+
+        .sky-listening-copy {
+            position: fixed !important;
+            left: 50% !important;
+            top: calc(42% + clamp(158px, 17vw, 222px)) !important;
+            width: min(620px, calc(100vw - 48px)) !important;
+            height: auto !important;
+            transform: translateX(-50%) !important;
+            margin: 0 !important;
+            color: rgba(255,255,255,0.46) !important;
+            font-size: clamp(15px, 1.45vw, 20px) !important;
+            font-weight: 400;
+            line-height: 1.35 !important;
+            text-align: center !important;
+            white-space: normal !important;
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
+            z-index: 13 !important;
+            transition:
+                top 680ms cubic-bezier(0.2, 0.9, 0.18, 1),
+                left 680ms cubic-bezier(0.2, 0.9, 0.18, 1),
+                width 680ms cubic-bezier(0.2, 0.9, 0.18, 1),
+                height 680ms cubic-bezier(0.2, 0.9, 0.18, 1),
+                color 260ms ease,
+                font-size 260ms ease !important;
+        }
+
+        body:not(.sky-empty) .sky-orb-panel::before,
+        body.sky-state-listening .sky-orb-panel::before,
+        body.sky-state-thinking .sky-orb-panel::before,
+        body.sky-state-responding .sky-orb-panel::before {
+            top: auto !important;
+            bottom: max(34px, env(safe-area-inset-bottom, 24px)) !important;
+            left: calc(50% - min(336px, 36vw)) !important;
+            width: 58px !important;
+            height: 58px !important;
+            transform: translate(-50%, 0) !important;
+            box-shadow:
+                0 0 34px rgba(123, 97, 255, 0.52),
+                0 0 70px rgba(90, 224, 224, 0.22),
+                inset 0 0 26px rgba(255,255,255,0.14) !important;
+            animation: sky-pill-orb-pulse 2.4s ease-in-out infinite;
+        }
+
+        body:not(.sky-empty) .sky-orb-panel::after,
+        body.sky-state-listening .sky-orb-panel::after,
+        body.sky-state-thinking .sky-orb-panel::after,
+        body.sky-state-responding .sky-orb-panel::after {
+            top: auto !important;
+            bottom: max(24px, env(safe-area-inset-bottom, 18px)) !important;
+            left: 50% !important;
+            width: min(760px, calc(100vw - 40px)) !important;
+            height: 78px !important;
+            transform: translateX(-50%) !important;
+            border-radius: 999px !important;
+            border-color: rgba(255,255,255,0.14) !important;
+            background:
+                linear-gradient(145deg, rgba(255,255,255,0.16), rgba(255,255,255,0.055)),
+                rgba(9, 13, 27, 0.66) !important;
+            box-shadow:
+                0 24px 90px rgba(0,0,0,0.42),
+                inset 0 1px 0 rgba(255,255,255,0.1) !important;
+            backdrop-filter: blur(28px);
+            -webkit-backdrop-filter: blur(28px);
+            animation: none !important;
+        }
+
+        body:not(.sky-empty) .sky-orb-button,
+        body.sky-state-listening .sky-orb-button,
+        body.sky-state-thinking .sky-orb-button,
+        body.sky-state-responding .sky-orb-button {
+            top: auto !important;
+            bottom: max(34px, env(safe-area-inset-bottom, 24px)) !important;
+            left: calc(50% - min(336px, 36vw)) !important;
+            width: 58px !important;
+            height: 58px !important;
+            transform: translate(-50%, 0) !important;
+        }
+
+        body:not(.sky-empty) .sky-listening-copy,
+        body.sky-state-listening .sky-listening-copy,
+        body.sky-state-thinking .sky-listening-copy,
+        body.sky-state-responding .sky-listening-copy {
+            top: auto !important;
+            bottom: max(24px, env(safe-area-inset-bottom, 18px)) !important;
+            left: calc(50% - min(270px, 29vw)) !important;
+            width: min(600px, calc(100vw - 132px)) !important;
+            height: 78px !important;
+            transform: none !important;
+            color: rgba(255,255,255,0.84) !important;
+            font-size: clamp(16px, 1.35vw, 20px) !important;
+            line-height: 78px !important;
+            text-align: left !important;
+            white-space: nowrap !important;
+        }
+
+        .sky-stage {
+            position: fixed !important;
+            inset: clamp(28px, 5vh, 56px) 0 168px !important;
+            width: min(1120px, calc(100vw - 48px)) !important;
+            margin: 0 auto !important;
+            transform: none !important;
+            border: 0 !important;
+            background: transparent !important;
+            box-shadow: none !important;
+            opacity: 1 !important;
+            z-index: 2 !important;
+        }
+
+        body.sky-empty .sky-stage {
+            opacity: 0 !important;
+            pointer-events: none !important;
+        }
+
+        .sky-card-stack {
+            height: 100% !important;
+            max-height: none !important;
+            padding: 0 0 30px !important;
+            display: grid !important;
+            grid-template-columns: repeat(12, minmax(0, 1fr)) !important;
+            gap: 16px !important;
+            align-content: end !important;
+            overflow: auto !important;
+            scrollbar-width: none;
+        }
+
+        .sky-card-stack::-webkit-scrollbar,
+        .sky-card-stack::before {
+            display: none !important;
+        }
+
+        .sky-card-shell {
+            grid-column: span 12 !important;
+            min-width: 0 !important;
+            width: 100% !important;
+        }
+
+        .sky-card-shell > .sky-card {
+            width: 100% !important;
+            height: 100% !important;
+        }
+
+        .sky-card,
+        .sky-card.page-card,
+        .sky-card.setting-card,
+        .sky-card.list-card,
+        .sky-card:first-child {
+            grid-column: span 6 !important;
+            min-height: 172px !important;
+            padding: 20px !important;
+            border: 1px solid rgba(255,255,255,0.13) !important;
+            border-radius: 24px !important;
+            background:
+                linear-gradient(150deg, rgba(255,255,255,0.16), rgba(255,255,255,0.055)),
+                rgba(18, 23, 38, 0.7) !important;
+            box-shadow:
+                0 24px 72px rgba(0,0,0,0.34),
+                inset 0 1px 0 rgba(255,255,255,0.1) !important;
+            backdrop-filter: blur(28px);
+            -webkit-backdrop-filter: blur(28px);
+        }
+
+        .sky-card:first-child,
+        .sky-card.wide,
+        .sky-card.calendar-card,
+        .sky-card.weather-card {
+            grid-column: span 12 !important;
+        }
+
+        .sky-card-title {
+            font-size: clamp(22px, 2.4vw, 34px) !important;
+            font-weight: 520 !important;
+            letter-spacing: 0 !important;
+        }
+
+        .sky-widget-metric strong {
+            font-size: clamp(42px, 5vw, 70px) !important;
+            font-weight: 520 !important;
+        }
+
+        @keyframes sky-pill-orb-pulse {
+            0%, 100% { filter: brightness(1); }
+            50% { filter: brightness(1.16); }
+        }
+
+
+        /* Weather data cards borrow the animated language of the touch weather page. */
+        .sky-card.weather-card {
+            min-height: 360px !important;
+            padding: 0 !important;
+            border-color: rgba(255,255,255,0.2) !important;
+            background: linear-gradient(160deg, #1e5a87 0%, #2c82bd 48%, #3f6a8b 100%) !important;
+            box-shadow:
+                0 34px 110px rgba(0,0,0,0.42),
+                inset 0 1px 0 rgba(255,255,255,0.22) !important;
+            backdrop-filter: none !important;
+            -webkit-backdrop-filter: none !important;
+        }
+
+
+        .sky-card.weather-card > .sky-widget-top,
+        .sky-card.weather-card > .sky-badge {
+            display: none !important;
+        }
+
+        .sky-card.weather-card.weather-sunny {
+            background: linear-gradient(160deg, #ff8c00 0%, #ffb347 35%, #87ceeb 70%, #1a6ea8 100%) !important;
+        }
+
+        .sky-card.weather-card.weather-clear-night {
+            background: linear-gradient(160deg, #0a0a2e 0%, #141452 42%, #1a1a6e 100%) !important;
+        }
+
+        .sky-card.weather-card.weather-cloudy {
+            background: linear-gradient(160deg, #485563 0%, #29323c 60%, #2c3e50 100%) !important;
+        }
+
+        .sky-card.weather-card.weather-rainy {
+            background: linear-gradient(160deg, #1c3144 0%, #2c4a6e 44%, #374a5a 100%) !important;
+        }
+
+        .sky-card.weather-card.weather-stormy {
+            background: linear-gradient(160deg, #070714 0%, #1a1a2e 42%, #16213e 100%) !important;
+        }
+
+        .sky-card.weather-card.weather-foggy {
+            background: linear-gradient(160deg, #b8c6db 0%, #f5f7fa 52%, #c3cfe2 100%) !important;
+            color: #1c2430;
+        }
+
+        .sky-card.weather-card.weather-snowy {
+            background: linear-gradient(160deg, #2c3e6a 0%, #4a6fa5 42%, #8ba7d4 100%) !important;
+        }
+
+        .sky-card.weather-card::before,
+        .sky-card.weather-card::after {
+            content: "";
+            position: absolute;
+            pointer-events: none;
+        }
+
+        .sky-card.weather-card::before {
+            top: -70px;
+            right: -54px;
+            width: 190px;
+            height: 190px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(255,247,161,0.98) 0%, rgba(255,215,0,0.72) 36%, rgba(255,140,0,0.18) 68%, transparent 72%);
+            box-shadow: 0 0 70px 28px rgba(255,200,0,0.24);
+            animation: sky-weather-pulse 4.5s ease-in-out infinite;
+        }
+
+        .sky-card.weather-card.weather-cloudy::before,
+        .sky-card.weather-card.weather-rainy::before,
+        .sky-card.weather-card.weather-stormy::before,
+        .sky-card.weather-card.weather-foggy::before,
+        .sky-card.weather-card.weather-snowy::before {
+            background: radial-gradient(circle at 42% 42%, rgba(255,255,255,0.54), rgba(255,255,255,0.18) 48%, transparent 70%);
+            box-shadow: -56px 22px 0 rgba(255,255,255,0.14), 38px 36px 0 rgba(255,255,255,0.12);
+            animation: sky-weather-drift 7s ease-in-out infinite;
+        }
+
+        .sky-card.weather-card.weather-clear-night::before {
+            background: radial-gradient(circle at 42% 38%, #f5f0c8 0%, #f5f0c8 38%, transparent 40%);
+            box-shadow: -26px -8px 0 -2px rgba(10,10,46,0.92), 0 0 60px 18px rgba(157,133,255,0.18);
+        }
+
+        .sky-card.weather-card::after {
+            inset: 0;
+            background:
+                linear-gradient(180deg, rgba(255,255,255,0.16), transparent 28%, rgba(0,0,0,0.18)),
+                radial-gradient(circle at 8% 8%, rgba(255,255,255,0.2), transparent 28%);
+            opacity: 0.9;
+        }
+
+        .sky-weather-scene {
+            position: relative;
+            z-index: 1;
+            display: grid;
+            grid-template-columns: minmax(0, 0.95fr) minmax(300px, 0.8fr);
+            gap: 18px;
+            min-height: 360px;
+            padding: 26px;
+            color: #fff;
+            text-shadow: 0 2px 12px rgba(0,0,0,0.34);
+        }
+
+        .sky-weather-main {
+            display: grid;
+            align-content: center;
+            gap: 12px;
+            min-width: 0;
+        }
+
+        .sky-weather-location {
+            justify-self: start;
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            max-width: 100%;
+            padding: 8px 16px;
+            border-radius: 999px;
+            border: 1px solid rgba(255,255,255,0.28);
+            background: rgba(8,20,40,0.42);
+            color: rgba(255,255,255,0.92);
+            font-size: 14px;
+            font-weight: 800;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .sky-weather-hero {
+            display: flex;
+            align-items: flex-end;
+            gap: 18px;
+        }
+
+        .sky-weather-temp {
+            font-size: clamp(82px, 11vw, 132px);
+            font-weight: 260;
+            line-height: 0.88;
+            letter-spacing: 0 !important;
+        }
+
+        .sky-weather-icon {
+            font-size: clamp(48px, 7vw, 76px);
+            line-height: 1;
+            filter: drop-shadow(0 7px 16px rgba(0,0,0,0.36));
+            animation: sky-weather-float 4.8s ease-in-out infinite;
+        }
+
+        .sky-weather-condition {
+            font-size: clamp(22px, 2.6vw, 32px);
+            font-weight: 650;
+            text-transform: capitalize;
+        }
+
+        .sky-weather-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 9px;
+            margin-top: 8px;
+        }
+
+        .sky-weather-pill,
+        .sky-weather-forecast-tile {
+            border: 1px solid rgba(255,255,255,0.22);
+            background: rgba(8,20,40,0.38);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.1);
+        }
+
+        .sky-weather-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 14px;
+            border-radius: 14px;
+            font-size: 14px;
+            font-weight: 800;
+            white-space: nowrap;
+        }
+
+        .sky-weather-forecast {
+            align-self: stretch;
+            display: grid;
+            grid-template-rows: auto 1fr;
+            gap: 12px;
+            min-width: 0;
+        }
+
+        .sky-weather-forecast h4 {
+            margin: 0;
+            font-size: 14px;
+            color: rgba(255,255,255,0.74);
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+
+        .sky-weather-forecast-grid {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: 10px;
+            align-items: stretch;
+        }
+
+        .sky-weather-forecast-tile {
+            display: grid;
+            gap: 7px;
+            min-height: 132px;
+            padding: 14px;
+            border-radius: 18px;
+        }
+
+        .sky-weather-forecast-tile span {
+            color: rgba(255,255,255,0.72);
+            font-size: 12px;
+            font-weight: 850;
+            text-transform: uppercase;
+        }
+
+        .sky-weather-forecast-tile strong {
+            font-size: 20px;
+            color: #fff;
+        }
+
+        .sky-weather-forecast-tile em {
+            color: rgba(255,255,255,0.66);
+            font-size: 13px;
+            font-style: normal;
+            line-height: 1.28;
+        }
+
+        .weather-foggy .sky-weather-scene,
+        .weather-foggy .sky-weather-location,
+        .weather-foggy .sky-weather-pill,
+        .weather-foggy .sky-weather-forecast h4,
+        .weather-foggy .sky-weather-forecast-tile,
+        .weather-foggy .sky-weather-forecast-tile span,
+        .weather-foggy .sky-weather-forecast-tile strong,
+        .weather-foggy .sky-weather-forecast-tile em {
+            color: #1d2733;
+            text-shadow: none;
+        }
+
+        .weather-foggy .sky-weather-location,
+        .weather-foggy .sky-weather-pill,
+        .weather-foggy .sky-weather-forecast-tile {
+            background: rgba(255,255,255,0.32);
+            border-color: rgba(0,0,0,0.12);
+        }
+
+        @keyframes sky-weather-pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.07); }
+        }
+
+        @keyframes sky-weather-drift {
+            0%, 100% { transform: translateX(0); }
+            50% { transform: translateX(-14px); }
+        }
+
+        @keyframes sky-weather-float {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-8px); }
+        }
+
+        @media (max-width: 780px) {
+            .sky-stage {
+                inset: 18px 12px 132px !important;
+                width: auto !important;
+            }
+
+            .sky-card-stack {
+                grid-template-columns: 1fr !important;
+                gap: 12px !important;
+                align-content: end !important;
+            }
+
+            .sky-card,
+            .sky-card.page-card,
+            .sky-card.setting-card,
+            .sky-card.list-card,
+            .sky-card:first-child {
+                grid-column: 1 / -1 !important;
+                border-radius: 22px !important;
+                padding: 18px !important;
+            }
+
+            body:not(.sky-empty) .sky-orb-panel::before,
+            body.sky-state-listening .sky-orb-panel::before,
+            body.sky-state-thinking .sky-orb-panel::before,
+            body.sky-state-responding .sky-orb-panel::before,
+            body:not(.sky-empty) .sky-orb-button,
+            body.sky-state-listening .sky-orb-button,
+            body.sky-state-thinking .sky-orb-button,
+            body.sky-state-responding .sky-orb-button {
+                left: 52px !important;
+                bottom: max(30px, env(safe-area-inset-bottom, 20px)) !important;
+                width: 54px !important;
+                height: 54px !important;
+            }
+
+            body:not(.sky-empty) .sky-orb-panel::after,
+            body.sky-state-listening .sky-orb-panel::after,
+            body.sky-state-thinking .sky-orb-panel::after,
+            body.sky-state-responding .sky-orb-panel::after {
+                width: calc(100vw - 24px) !important;
+                height: 74px !important;
+                bottom: max(20px, env(safe-area-inset-bottom, 14px)) !important;
+            }
+
+            body:not(.sky-empty) .sky-listening-copy,
+            body.sky-state-listening .sky-listening-copy,
+            body.sky-state-thinking .sky-listening-copy,
+            body.sky-state-responding .sky-listening-copy {
+                left: 86px !important;
+                bottom: max(20px, env(safe-area-inset-bottom, 14px)) !important;
+                width: calc(100vw - 112px) !important;
+                height: 74px !important;
+                line-height: 74px !important;
+                font-size: 15px !important;
+            }
+        }
+    </style>
+    <style id="skybridge-minimal-layer">
+        html,
+        body {
+            padding-top: 0 !important;
+            overflow: hidden !important;
+            background:
+                radial-gradient(circle at 50% 38%, rgba(123, 97, 255, 0.24), transparent 28%),
+                radial-gradient(circle at 52% 44%, rgba(90, 224, 224, 0.16), transparent 34%),
+                linear-gradient(135deg, #1a1a2e 0%, #16213e 52%, #0f3460 100%) !important;
+        }
+
+        #ztm-nav,
+        .sky-topbar,
+        .sky-status,
+        .sky-transport-toggle,
+        .sky-stage-header,
+        .sky-transcript,
+        .sky-command,
+        .sky-voice-hint {
+            display: none !important;
+        }
+
+        .sky-shell {
+            display: block !important;
+            height: 100dvh !important;
+            min-height: 100dvh !important;
+            padding: 0 !important;
+            overflow: hidden !important;
+        }
+
+        .sky-orb-panel {
+            position: fixed !important;
+            inset: 0 !important;
+            width: 100vw !important;
+            height: 100dvh !important;
+            border: 0 !important;
+            background: transparent !important;
+            box-shadow: none !important;
+            pointer-events: none !important;
+            z-index: 8;
+        }
+
+        #skyOrb {
+            display: none !important;
+        }
+
+        .sky-orb-panel::before {
+            content: "" !important;
+            position: fixed !important;
+            left: 50% !important;
+            top: 42% !important;
+            width: clamp(248px, 28vw, 350px) !important;
+            height: clamp(248px, 28vw, 350px) !important;
+            transform: translate(-50%, -50%) !important;
+            border-radius: 50% !important;
+            background:
+                radial-gradient(circle at 33% 26%, rgba(255,255,255,0.34), transparent 24%),
+                linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%) !important;
+            box-shadow:
+                0 0 62px rgba(123, 97, 255, 0.44),
+                0 0 132px rgba(90, 224, 224, 0.24),
+                inset 0 0 64px rgba(255,255,255,0.12) !important;
+            animation: sky-login-breathe 4s ease-in-out infinite;
+            transition: all 680ms cubic-bezier(0.2, 0.9, 0.18, 1) !important;
+            z-index: 10 !important;
+        }
+
+        .sky-orb-panel::after {
+            content: "" !important;
+            position: fixed !important;
+            left: 50% !important;
+            top: 42% !important;
+            width: clamp(320px, 38vw, 500px) !important;
+            height: clamp(320px, 38vw, 500px) !important;
+            transform: translate(-50%, -50%) !important;
+            border-radius: 50% !important;
+            border: 1px solid transparent;
+            background: radial-gradient(circle, rgba(123, 97, 255, 0.18), rgba(90, 224, 224, 0.09) 35%, transparent 68%) !important;
+            animation: sky-login-halo 4s ease-in-out infinite;
+            transition: all 680ms cubic-bezier(0.2, 0.9, 0.18, 1) !important;
+            z-index: 9 !important;
+        }
+
+        .sky-orb-button {
+            position: fixed !important;
+            left: 50% !important;
+            top: 42% !important;
+            width: clamp(248px, 28vw, 350px) !important;
+            height: clamp(248px, 28vw, 350px) !important;
+            transform: translate(-50%, -50%) !important;
+            border: 0 !important;
+            border-radius: 50% !important;
+            background: transparent !important;
+            color: transparent !important;
+            pointer-events: auto !important;
+            cursor: pointer;
+            z-index: 12 !important;
+            transition: all 680ms cubic-bezier(0.2, 0.9, 0.18, 1) !important;
+        }
+
+        .sky-listening-copy {
+            position: fixed !important;
+            left: 50% !important;
+            top: calc(42% + clamp(158px, 17vw, 222px)) !important;
+            width: min(620px, calc(100vw - 48px)) !important;
+            transform: translateX(-50%) !important;
+            color: rgba(255,255,255,0.46) !important;
+            font-size: clamp(15px, 1.45vw, 20px) !important;
+            line-height: 1.35 !important;
+            text-align: center !important;
+            z-index: 13 !important;
+            transition: all 680ms cubic-bezier(0.2, 0.9, 0.18, 1) !important;
+        }
+
+        body:not(.sky-empty) .sky-orb-panel::before,
+        body.sky-state-listening .sky-orb-panel::before,
+        body.sky-state-thinking .sky-orb-panel::before,
+        body.sky-state-responding .sky-orb-panel::before,
+        body:not(.sky-empty) .sky-orb-button,
+        body.sky-state-listening .sky-orb-button,
+        body.sky-state-thinking .sky-orb-button,
+        body.sky-state-responding .sky-orb-button {
+            top: auto !important;
+            bottom: max(34px, env(safe-area-inset-bottom, 24px)) !important;
+            left: calc(50% - min(336px, 36vw)) !important;
+            width: 58px !important;
+            height: 58px !important;
+            transform: translate(-50%, 0) !important;
+        }
+
+        body:not(.sky-empty) .sky-orb-panel::after,
+        body.sky-state-listening .sky-orb-panel::after,
+        body.sky-state-thinking .sky-orb-panel::after,
+        body.sky-state-responding .sky-orb-panel::after {
+            top: auto !important;
+            bottom: max(24px, env(safe-area-inset-bottom, 18px)) !important;
+            left: 50% !important;
+            width: min(760px, calc(100vw - 40px)) !important;
+            height: 78px !important;
+            transform: translateX(-50%) !important;
+            border-radius: 999px !important;
+            border-color: rgba(255,255,255,0.14) !important;
+            background:
+                linear-gradient(145deg, rgba(255,255,255,0.16), rgba(255,255,255,0.055)),
+                rgba(9, 13, 27, 0.66) !important;
+            box-shadow: 0 24px 90px rgba(0,0,0,0.42), inset 0 1px 0 rgba(255,255,255,0.1) !important;
+            backdrop-filter: blur(28px);
+            -webkit-backdrop-filter: blur(28px);
+            animation: none !important;
+        }
+
+        body:not(.sky-empty) .sky-listening-copy,
+        body.sky-state-listening .sky-listening-copy,
+        body.sky-state-thinking .sky-listening-copy,
+        body.sky-state-responding .sky-listening-copy {
+            top: auto !important;
+            bottom: max(24px, env(safe-area-inset-bottom, 18px)) !important;
+            left: calc(50% - min(270px, 29vw)) !important;
+            width: min(600px, calc(100vw - 132px)) !important;
+            height: 78px !important;
+            transform: none !important;
+            color: rgba(255,255,255,0.84) !important;
+            font-size: clamp(16px, 1.35vw, 20px) !important;
+            line-height: 78px !important;
+            text-align: left !important;
+            white-space: nowrap !important;
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
+        }
+
+        .sky-stage {
+            position: fixed !important;
+            inset: clamp(28px, 5vh, 56px) 0 168px !important;
+            width: min(1120px, calc(100vw - 48px)) !important;
+            margin: 0 auto !important;
+            transform: none !important;
+            border: 0 !important;
+            background: transparent !important;
+            box-shadow: none !important;
+            opacity: 1 !important;
+            z-index: 2 !important;
+        }
+
+        body.sky-empty .sky-stage {
+            opacity: 0 !important;
+            pointer-events: none !important;
+        }
+
+        .sky-card-stack {
+            height: 100% !important;
+            max-height: none !important;
+            padding: 0 0 30px !important;
+            display: grid !important;
+            grid-template-columns: repeat(12, minmax(0, 1fr)) !important;
+            gap: 16px !important;
+            align-content: end !important;
+            overflow: auto !important;
+            scrollbar-width: none;
+        }
+
+        .sky-card-stack::-webkit-scrollbar,
+        .sky-card-stack::before {
+            display: none !important;
+        }
+
+        .sky-card,
+        .sky-card.page-card,
+        .sky-card.setting-card,
+        .sky-card.list-card,
+        .sky-card:first-child {
+            grid-column: span 6 !important;
+            min-height: 172px !important;
+            padding: 20px !important;
+            border: 1px solid rgba(255,255,255,0.13) !important;
+            border-radius: 24px !important;
+            background:
+                linear-gradient(150deg, rgba(255,255,255,0.16), rgba(255,255,255,0.055)),
+                rgba(18, 23, 38, 0.7) !important;
+            box-shadow: 0 24px 72px rgba(0,0,0,0.34), inset 0 1px 0 rgba(255,255,255,0.1) !important;
+            backdrop-filter: blur(28px);
+            -webkit-backdrop-filter: blur(28px);
+        }
+
+        .sky-card:first-child,
+        .sky-card.wide,
+        .sky-card.calendar-card,
+        .sky-card.weather-card {
+            grid-column: span 12 !important;
+        }
+
+        @media (max-width: 780px) {
+            .sky-stage {
+                inset: 22px 12px 142px !important;
+                width: auto !important;
+            }
+
+            .sky-card-stack {
+                grid-template-columns: 1fr !important;
+                gap: 12px !important;
+                padding-bottom: 22px !important;
+            }
+
+            .sky-weather-scene {
+                grid-template-columns: 1fr;
+                min-height: 0;
+                padding: 22px;
+                gap: 18px;
+            }
+
+            .sky-weather-forecast-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .sky-weather-temp {
+                font-size: clamp(68px, 22vw, 104px);
+            }
+
+            .sky-card,
+            .sky-card.page-card,
+            .sky-card.setting-card,
+            .sky-card.list-card,
+            .sky-card:first-child {
+                grid-column: 1 / -1 !important;
+                border-radius: 22px !important;
+                padding: 18px !important;
+            }
+
+            body:not(.sky-empty) .sky-orb-panel::before,
+            body.sky-state-listening .sky-orb-panel::before,
+            body.sky-state-thinking .sky-orb-panel::before,
+            body.sky-state-responding .sky-orb-panel::before,
+            body:not(.sky-empty) .sky-orb-button,
+            body.sky-state-listening .sky-orb-button,
+            body.sky-state-thinking .sky-orb-button,
+            body.sky-state-responding .sky-orb-button {
+                left: 52px !important;
+                width: 54px !important;
+                height: 54px !important;
+            }
+
+            body:not(.sky-empty) .sky-orb-panel::after,
+            body.sky-state-listening .sky-orb-panel::after,
+            body.sky-state-thinking .sky-orb-panel::after,
+            body.sky-state-responding .sky-orb-panel::after {
+                width: calc(100vw - 24px) !important;
+                height: 74px !important;
+            }
+
+            body:not(.sky-empty) .sky-listening-copy,
+            body.sky-state-listening .sky-listening-copy,
+            body.sky-state-thinking .sky-listening-copy,
+            body.sky-state-responding .sky-listening-copy {
+                left: 86px !important;
+                width: calc(100vw - 112px) !important;
+                height: 74px !important;
+                line-height: 74px !important;
+                font-size: 15px !important;
+            }
+        }
+
+        /* Typed fallback: only appears when voice cannot start or the user focuses it. */
+        body.sky-command-open .sky-command,
+        body.sky-voice-fallback.sky-empty .sky-command {
+            display: grid !important;
+            position: fixed !important;
+            left: 50% !important;
+            bottom: max(24px, env(safe-area-inset-bottom, 18px)) !important;
+            width: min(760px, calc(100vw - 40px)) !important;
+            transform: translateX(-50%) !important;
+            grid-template-columns: minmax(0, 1fr) auto auto !important;
+            gap: 10px !important;
+            padding: 10px !important;
+            border: 1px solid rgba(255,255,255,0.14) !important;
+            border-radius: 999px !important;
+            background: rgba(9, 13, 27, 0.78) !important;
+            box-shadow: 0 24px 90px rgba(0,0,0,0.42), inset 0 1px 0 rgba(255,255,255,0.1) !important;
+            backdrop-filter: blur(28px) !important;
+            -webkit-backdrop-filter: blur(28px) !important;
+            z-index: 20 !important;
+            opacity: 1 !important;
+            pointer-events: auto !important;
+        }
+
+        body.sky-command-open:not(.sky-empty) .sky-stage {
+            inset: clamp(28px, 5vh, 56px) 0 198px !important;
+        }
+
+        body.sky-command-open .sky-orb-panel::after,
+        body.sky-command-open .sky-listening-copy {
+            opacity: 0 !important;
+            pointer-events: none !important;
+        }
+
+        .sky-command #skyHomeBtn {
+            display: none !important;
+        }
+
+        .sky-command input {
+            display: block !important;
+            min-height: 54px !important;
+            border: 0 !important;
+            border-radius: 999px !important;
+            background: rgba(255,255,255,0.08) !important;
+            color: #fff !important;
+            padding: 0 18px !important;
+        }
+
+        .sky-command button {
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            min-height: 54px !important;
+            border-radius: 999px !important;
+            white-space: nowrap !important;
+        }
+
+        @media (max-width: 780px) {
+            body.sky-command-open .sky-command,
+            body.sky-voice-fallback.sky-empty .sky-command {
+                width: calc(100vw - 24px) !important;
+                grid-template-columns: auto minmax(0, 1fr) auto !important;
+                bottom: max(18px, env(safe-area-inset-bottom, 14px)) !important;
+                border-radius: 24px !important;
+            }
+
+            body.sky-command-open:not(.sky-empty) .sky-stage {
+                inset: 18px 12px 150px !important;
+            }
+
+            .sky-command #skyMicBtn {
+                display: none !important;
+            }
+        }
+
+    </style>
+
+    <style id="skybridge-runtime-overrides">
+        /* Final runtime lock: later minimal layers must not blur rendered data cards. */
+        .sky-stage,
+        .sky-orb-panel,
+        .sky-card,
+        .sky-card.weather-card {
+            backdrop-filter: none !important;
+            -webkit-backdrop-filter: none !important;
+        }
+
+        body:not(.sky-empty) .sky-card-stack {
+            align-content: start !important;
+            padding-bottom: 34px !important;
+        }
+
+        body:not(.sky-empty) .sky-stage {
+            inset: clamp(28px, 5vh, 56px) 0 176px !important;
+        }
+
+        body.sky-command-open:not(.sky-empty) .sky-stage {
+            inset: clamp(28px, 5vh, 56px) 0 210px !important;
+        }
+
+        @media (max-width: 780px) {
+            body:not(.sky-empty) .sky-stage {
+                inset: 18px 12px 142px !important;
+            }
+
+            body.sky-command-open:not(.sky-empty) .sky-stage {
+                inset: 18px 12px 158px !important;
+            }
+        }
+    </style>
+
+    <style id="skybridge-premium-pill-overrides">
+        /* Premium command pill: functional fallback without looking like a form bolted on. */
+        body.sky-command-open .sky-command,
+        body.sky-voice-fallback.sky-empty .sky-command {
+            display: grid !important;
+            position: fixed !important;
+            left: 50% !important;
+            bottom: max(26px, env(safe-area-inset-bottom, 20px)) !important;
+            width: min(780px, calc(100vw - 48px)) !important;
+            min-height: 82px !important;
+            transform: translateX(-50%) !important;
+            grid-template-columns: auto minmax(0, 1fr) auto !important;
+            gap: 12px !important;
+            align-items: center !important;
+            padding: 10px 12px 10px 22px !important;
+            border: 1px solid rgba(255,255,255,0.18) !important;
+            border-radius: 999px !important;
+            background:
+                radial-gradient(circle at 7% 28%, rgba(255,255,255,0.18), transparent 28%),
+                linear-gradient(145deg, rgba(255,255,255,0.18), rgba(255,255,255,0.065)),
+                rgba(9, 13, 27, 0.72) !important;
+            box-shadow:
+                0 30px 100px rgba(0,0,0,0.44),
+                0 0 70px rgba(90,224,224,0.12),
+                inset 0 1px 0 rgba(255,255,255,0.14) !important;
+            backdrop-filter: blur(30px) saturate(1.18) !important;
+            -webkit-backdrop-filter: blur(30px) saturate(1.18) !important;
+            z-index: 20 !important;
+            opacity: 1 !important;
+            pointer-events: auto !important;
+        }
+
+        body.sky-command-open .sky-command::before,
+        body.sky-voice-fallback.sky-empty .sky-command::before {
+            content: "";
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            background:
+                radial-gradient(circle at 34% 24%, rgba(255,255,255,0.4), transparent 24%),
+                linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            box-shadow: 0 0 34px rgba(123,97,255,0.38), 0 0 58px rgba(90,224,224,0.18);
+            animation: sky-pill-orb-pulse 2.4s ease-in-out infinite;
+        }
+
+        body.sky-command-open .sky-command input,
+        body.sky-voice-fallback.sky-empty .sky-command input {
+            min-width: 0 !important;
+            min-height: 58px !important;
+            border: 0 !important;
+            border-radius: 999px !important;
+            background: transparent !important;
+            color: rgba(255,255,255,0.94) !important;
+            padding: 0 4px !important;
+            font-size: clamp(16px, 1.25vw, 19px) !important;
+            font-weight: 520 !important;
+            outline: none !important;
+        }
+
+        body.sky-command-open .sky-command input::placeholder,
+        body.sky-voice-fallback.sky-empty .sky-command input::placeholder {
+            color: rgba(255,255,255,0.46) !important;
+        }
+
+        body.sky-command-open .sky-command .primary,
+        body.sky-voice-fallback.sky-empty .sky-command .primary {
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            min-width: 92px !important;
+            min-height: 58px !important;
+            padding: 0 22px !important;
+            border: 0 !important;
+            border-radius: 999px !important;
+            background: linear-gradient(135deg, #7B61FF, #5AE0E0) !important;
+            color: #081016 !important;
+            font-size: 15px !important;
+            font-weight: 850 !important;
+            box-shadow: 0 12px 34px rgba(90,224,224,0.22) !important;
+        }
+
+        body.sky-command-open .sky-command #skyMicBtn,
+        body.sky-command-open .sky-command #skyHomeBtn,
+        body.sky-voice-fallback.sky-empty .sky-command #skyMicBtn,
+        body.sky-voice-fallback.sky-empty .sky-command #skyHomeBtn {
+            display: none !important;
+        }
+
+        body.sky-command-open .sky-orb-panel::after,
+        body.sky-command-open .sky-listening-copy {
+            opacity: 0 !important;
+            pointer-events: none !important;
+        }
+
+        @media (max-width: 780px) {
+            body.sky-command-open .sky-command,
+            body.sky-voice-fallback.sky-empty .sky-command {
+                width: calc(100vw - 24px) !important;
+                min-height: 76px !important;
+                bottom: max(18px, env(safe-area-inset-bottom, 14px)) !important;
+                padding: 9px 10px 9px 18px !important;
+                gap: 8px !important;
+            }
+
+            body.sky-command-open .sky-command::before,
+            body.sky-voice-fallback.sky-empty .sky-command::before {
+                width: 44px;
+                height: 44px;
+            }
+
+            body.sky-command-open .sky-command .primary,
+            body.sky-voice-fallback.sky-empty .sky-command .primary {
+                min-width: 74px !important;
+                min-height: 52px !important;
+                padding: 0 16px !important;
+            }
+        }
+    </style>
+
+
+    <style id="skybridge-premium-card-system">
+        /* Premium widget system: sharp card surface, restrained lighting, clear state. */
+        body:not(.sky-empty) .sky-card.sky-premium-card {
+            position: relative !important;
+            isolation: isolate;
+            overflow: hidden !important;
+            border-radius: 30px !important;
+            border: 1px solid rgba(255,255,255,0.16) !important;
+            background:
+                radial-gradient(circle at 18% 0%, rgba(255,255,255,0.13), transparent 32%),
+                radial-gradient(circle at 92% 8%, rgba(90,224,224,0.10), transparent 34%),
+                linear-gradient(180deg, rgba(31,37,58,0.92), rgba(15,19,33,0.88)) !important;
+            box-shadow:
+                0 1px 0 rgba(255,255,255,0.12) inset,
+                0 -34px 80px rgba(0,0,0,0.16) inset,
+                0 26px 90px rgba(0,0,0,0.36) !important;
+            backdrop-filter: none !important;
+            -webkit-backdrop-filter: none !important;
+            transform: translateZ(0);
+        }
+
+        body:not(.sky-empty) .sky-card.sky-premium-card::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            z-index: -1;
+            background:
+                linear-gradient(120deg, transparent 0%, rgba(255,255,255,0.09) 38%, transparent 64%),
+                radial-gradient(circle at 50% -16%, rgba(255,255,255,0.14), transparent 34%);
+            opacity: 0.68;
+            pointer-events: none;
+        }
+
+        body:not(.sky-empty) .sky-card.sky-premium-card::after {
+            content: "";
+            position: absolute;
+            inset: auto 22px 18px 22px;
+            height: 1px;
+            z-index: 2;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.28), transparent);
+            opacity: 0.55;
+            pointer-events: none;
+        }
+
+        body:not(.sky-empty) .sky-widget-top {
+            position: relative;
+            z-index: 2;
+            margin-bottom: 16px !important;
+        }
+
+        body:not(.sky-empty) .sky-badge {
+            position: relative;
+            z-index: 2;
+            justify-self: start;
+            width: fit-content;
+            border-radius: 999px !important;
+            border-color: rgba(255,255,255,0.16) !important;
+            background: rgba(255,255,255,0.08) !important;
+            color: rgba(255,255,255,0.74) !important;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.1);
+        }
+
+        body:not(.sky-empty) .sky-card-title {
+            font-weight: 650 !important;
+            letter-spacing: 0 !important;
+        }
+
+        body:not(.sky-empty) .sky-widget-glyph {
+            border-radius: 20px !important;
+            background:
+                radial-gradient(circle at 28% 18%, rgba(255,255,255,0.86), transparent 28%),
+                linear-gradient(135deg, #7B61FF, #5AE0E0) !important;
+            box-shadow:
+                0 18px 46px rgba(90,224,224,0.2),
+                inset 0 1px 0 rgba(255,255,255,0.3) !important;
+        }
+
+        body:not(.sky-empty) .sky-field,
+        body:not(.sky-empty) .sky-event-row,
+        body:not(.sky-empty) .sky-empty-data {
+            border-color: rgba(255,255,255,0.12) !important;
+            background:
+                linear-gradient(180deg, rgba(255,255,255,0.09), rgba(255,255,255,0.045)) !important;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.09) !important;
+        }
+
+        body:not(.sky-empty) .calendar-card {
+            background:
+                radial-gradient(circle at 16% -8%, rgba(123,97,255,0.22), transparent 38%),
+                radial-gradient(circle at 96% 14%, rgba(90,224,224,0.13), transparent 34%),
+                linear-gradient(180deg, rgba(30,34,54,0.94), rgba(13,17,29,0.9)) !important;
+        }
+
+        body:not(.sky-empty) .calendar-card .sky-data-list {
+            gap: 12px !important;
+        }
+
+        body:not(.sky-empty) .calendar-card .sky-event-row {
+            position: relative;
+            grid-template-columns: minmax(88px, 0.24fr) minmax(0, 1fr) !important;
+            padding: 16px 18px 16px 20px !important;
+        }
+
+        body:not(.sky-empty) .calendar-card .sky-event-row::before {
+            content: "";
+            position: absolute;
+            left: 9px;
+            top: 18px;
+            bottom: 18px;
+            width: 3px;
+            border-radius: 999px;
+            background: linear-gradient(180deg, #7B61FF, #5AE0E0);
+            box-shadow: 0 0 18px rgba(90,224,224,0.22);
+        }
+
+        body:not(.sky-empty) .weather-card.sky-premium-card,
+        body:not(.sky-empty) .weather-card.sky-premium-card.weather-clear-night,
+        body:not(.sky-empty) .weather-card.sky-premium-card.weather-stormy {
+            min-height: 370px !important;
+            padding: 0 !important;
+            border-color: rgba(255,255,255,0.2) !important;
+            background:
+                radial-gradient(circle at 86% 6%, rgba(245,240,200,0.98) 0 7%, rgba(245,240,200,0.08) 8%, transparent 18%),
+                radial-gradient(circle at 78% 8%, rgba(123,97,255,0.22), transparent 24%),
+                linear-gradient(160deg, #11152d 0%, #171b32 48%, #0b1022 100%) !important;
+            box-shadow:
+                0 1px 0 rgba(255,255,255,0.18) inset,
+                0 40px 120px rgba(0,0,0,0.42) !important;
+            backdrop-filter: none !important;
+            -webkit-backdrop-filter: none !important;
+        }
+
+        body:not(.sky-empty) .weather-card.sky-premium-card.weather-sunny {
+            background:
+                radial-gradient(circle at 84% 6%, rgba(255,247,161,0.98) 0 8%, rgba(255,191,71,0.18) 9%, transparent 22%),
+                linear-gradient(160deg, #ff8c00 0%, #ffb347 34%, #87ceeb 72%, #1a6ea8 100%) !important;
+        }
+
+        body:not(.sky-empty) .weather-card.sky-premium-card.weather-cloudy,
+        body:not(.sky-empty) .weather-card.sky-premium-card.weather-partly-cloudy {
+            background:
+                radial-gradient(circle at 84% 10%, rgba(255,255,255,0.22), transparent 24%),
+                linear-gradient(160deg, #1e5a87 0%, #2c82bd 50%, #3f6a8b 100%) !important;
+        }
+
+        body:not(.sky-empty) .weather-card.sky-premium-card.weather-rainy {
+            background:
+                radial-gradient(circle at 90% 8%, rgba(126,180,222,0.22), transparent 24%),
+                linear-gradient(160deg, #1c3144 0%, #2c4a6e 44%, #374a5a 100%) !important;
+        }
+
+        body:not(.sky-empty) .weather-card > .sky-widget-top,
+        body:not(.sky-empty) .weather-card > .sky-badge {
+            display: none !important;
+        }
+
+        body:not(.sky-empty) .weather-card::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            z-index: 0;
+            background:
+                linear-gradient(180deg, rgba(255,255,255,0.16), transparent 28%, rgba(0,0,0,0.22)),
+                radial-gradient(circle at 8% 6%, rgba(255,255,255,0.18), transparent 30%);
+            opacity: 0.95;
+            pointer-events: none;
+        }
+
+        body:not(.sky-empty) .weather-card::after {
+            content: "";
+            position: absolute;
+            right: -36px;
+            top: -44px;
+            width: 170px;
+            height: 170px;
+            border-radius: 50%;
+            z-index: 1;
+            background: radial-gradient(circle, rgba(255,255,255,0.72), rgba(255,255,255,0.18) 48%, transparent 70%);
+            filter: blur(0.2px);
+            opacity: 0.86;
+            animation: sky-weather-float 5.5s ease-in-out infinite;
+            pointer-events: none;
+        }
+
+        body:not(.sky-empty) .sky-weather-scene {
+            position: relative;
+            z-index: 2;
+            grid-template-columns: minmax(0, 0.92fr) minmax(280px, 0.82fr) !important;
+            gap: 20px !important;
+            padding: 28px !important;
+        }
+
+        body:not(.sky-empty) .sky-weather-location,
+        body:not(.sky-empty) .sky-weather-pill,
+        body:not(.sky-empty) .sky-weather-forecast-tile {
+            background: rgba(10,18,36,0.42) !important;
+            border-color: rgba(255,255,255,0.22) !important;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.12), 0 12px 34px rgba(0,0,0,0.12) !important;
+        }
+
+        body:not(.sky-empty) .sky-weather-temp {
+            font-size: clamp(84px, 11vw, 136px) !important;
+            font-weight: 240 !important;
+            line-height: 0.86 !important;
+        }
+
+        body:not(.sky-empty) .sky-weather-condition {
+            font-weight: 720 !important;
+            color: rgba(255,255,255,0.94) !important;
+        }
+
+        body:not(.sky-empty) .sky-weather-forecast-grid {
+            grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+            gap: 10px !important;
+        }
+
+        body:not(.sky-empty) .sky-weather-forecast-tile {
+            min-height: 138px !important;
+            align-content: space-between;
+            transition: transform 220ms ease, border-color 220ms ease, background 220ms ease;
+        }
+
+        body:not(.sky-empty) .sky-weather-forecast-tile strong {
+            font-size: 22px !important;
+            letter-spacing: 0 !important;
+        }
+
+        @media (hover: hover) {
+            body:not(.sky-empty) .sky-card.sky-premium-card:hover {
+                transform: translateY(-2px) translateZ(0);
+                border-color: rgba(255,255,255,0.22) !important;
+            }
+
+            body:not(.sky-empty) .sky-weather-forecast-tile:hover {
+                transform: translateY(-2px);
+                background: rgba(255,255,255,0.11) !important;
+                border-color: rgba(255,255,255,0.3) !important;
+            }
+        }
+
+        @media (max-width: 780px) {
+            body:not(.sky-empty) .sky-card.sky-premium-card {
+                border-radius: 28px !important;
+            }
+
+            body:not(.sky-empty) .sky-weather-scene {
+                grid-template-columns: 1fr !important;
+                padding: 24px !important;
+            }
+
+            body:not(.sky-empty) .sky-weather-forecast-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+            }
+
+            body:not(.sky-empty) .sky-weather-forecast-tile {
+                min-height: 128px !important;
+            }
+        }
+    </style>
+    <style id="skybridge-forecast-widget-overrides">
+        body:not(.sky-empty) .sky-weather-forecast {
+            min-width: 0;
+        }
+
+        body:not(.sky-empty) .sky-weather-forecast-grid {
+            align-items: stretch !important;
+        }
+
+        body:not(.sky-empty) .sky-weather-forecast-tile {
+            position: relative;
+            isolation: isolate;
+            display: grid !important;
+            grid-template-rows: auto auto auto 1fr;
+            gap: 12px !important;
+            min-height: 172px !important;
+            padding: 16px !important;
+            overflow: hidden;
+            border-radius: 24px !important;
+            background:
+                radial-gradient(circle at 50% -22%, rgba(255,255,255,0.3), transparent 44%),
+                linear-gradient(180deg, rgba(255,255,255,0.17), rgba(255,255,255,0.055)),
+                rgba(12,20,40,0.58) !important;
+            box-shadow:
+                inset 0 1px 0 rgba(255,255,255,0.18),
+                0 16px 44px rgba(0,0,0,0.18) !important;
+        }
+
+        body:not(.sky-empty) .sky-weather-forecast-tile::before {
+            content: "";
+            position: absolute;
+            inset: -40% -30% auto auto;
+            width: 112px;
+            height: 112px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(255,255,255,0.28), rgba(255,255,255,0.08) 48%, transparent 70%);
+            z-index: -1;
+            transition: transform 320ms ease, opacity 320ms ease;
+        }
+
+        body:not(.sky-empty) .sky-weather-tile-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            min-width: 0;
+        }
+
+        body:not(.sky-empty) .sky-weather-tile-top span {
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            color: rgba(255,255,255,0.62) !important;
+            font-size: 11px !important;
+            font-weight: 850 !important;
+            letter-spacing: 0.1em !important;
+            text-transform: uppercase;
+        }
+
+        body:not(.sky-empty) .sky-weather-tile-top b {
+            width: 38px;
+            height: 38px;
+            display: grid;
+            place-items: center;
+            flex: 0 0 auto;
+            border-radius: 14px;
+            background: rgba(255,255,255,0.18);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.2), 0 12px 28px rgba(0,0,0,0.14);
+            font-size: 20px;
+            line-height: 1;
+        }
+
+        body:not(.sky-empty) .sky-weather-tile-temp {
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+            min-width: 0;
+        }
+
+        body:not(.sky-empty) .sky-weather-tile-temp strong {
+            font-size: clamp(30px, 3.4vw, 46px) !important;
+            font-weight: 520 !important;
+            line-height: 0.96 !important;
+            letter-spacing: 0 !important;
+        }
+
+        body:not(.sky-empty) .sky-weather-tile-temp small {
+            color: rgba(255,255,255,0.48);
+            font-size: 18px;
+            font-weight: 650;
+        }
+
+        body:not(.sky-empty) .sky-weather-temp-band {
+            position: relative;
+            height: 8px;
+            overflow: hidden;
+            border-radius: 999px;
+            background: rgba(255,255,255,0.13);
+            box-shadow: inset 0 1px 2px rgba(0,0,0,0.18);
+        }
+
+        body:not(.sky-empty) .sky-weather-temp-band i {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            min-width: 16px;
+            border-radius: inherit;
+            background: linear-gradient(90deg, rgba(90,224,224,0.92), rgba(255,209,102,0.96), rgba(255,122,122,0.9));
+            box-shadow: 0 0 18px rgba(255,209,102,0.28);
+        }
+
+        body:not(.sky-empty) .sky-weather-forecast-tile em {
+            display: -webkit-box !important;
+            overflow: hidden;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            color: rgba(255,255,255,0.64) !important;
+            font-size: 13px !important;
+            font-style: normal;
+            line-height: 1.22 !important;
+        }
+
+        .weather-rainy .sky-weather-temp-band i,
+        .weather-stormy .sky-weather-temp-band i {
+            background: linear-gradient(90deg, rgba(120,180,255,0.96), rgba(90,224,224,0.9));
+        }
+
+        .weather-clear-night .sky-weather-temp-band i {
+            background: linear-gradient(90deg, rgba(140,125,255,0.96), rgba(90,224,224,0.9));
+        }
+
+        @media (hover: hover) {
+            body:not(.sky-empty) .sky-weather-forecast-tile:hover::before {
+                opacity: 1;
+                transform: translate(-8px, 8px) scale(1.08);
+            }
+        }
+
+        @media (max-width: 780px) {
+            body:not(.sky-empty) .sky-weather-forecast-tile {
+                min-height: 156px !important;
+            }
+        }
+    </style>
+    <style id="skybridge-weather-widget-v2">
+        body:not(.sky-empty) .weather-card.sky-premium-card {
+            overflow: hidden;
+        }
+
+        body:not(.sky-empty) .weather-card.sky-premium-card::after {
+            background:
+                linear-gradient(180deg, rgba(255,255,255,0.18), transparent 34%, rgba(0,0,0,0.2)),
+                radial-gradient(circle at 12% 8%, rgba(255,255,255,0.22), transparent 30%),
+                radial-gradient(circle at 86% 88%, rgba(90,224,224,0.18), transparent 36%);
+        }
+
+        body:not(.sky-empty) .sky-weather-scene {
+            grid-template-columns: minmax(0, 0.82fr) minmax(360px, 1fr) !important;
+            gap: 24px !important;
+            min-height: 430px !important;
+        }
+
+        body:not(.sky-empty) .sky-weather-main {
+            align-content: end !important;
+            padding: 10px 0 6px;
+        }
+
+        body:not(.sky-empty) .sky-weather-location {
+            max-width: min(100%, 420px);
+            background: rgba(255,255,255,0.16) !important;
+            border-color: rgba(255,255,255,0.24) !important;
+            color: rgba(255,255,255,0.9) !important;
+        }
+
+        body:not(.sky-empty) .sky-weather-meta {
+            display: grid !important;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 10px !important;
+            max-width: 520px;
+        }
+
+        body:not(.sky-empty) .sky-weather-pill {
+            justify-content: center;
+            min-height: 54px;
+            padding: 10px 12px !important;
+            border-radius: 18px !important;
+            background:
+                linear-gradient(180deg, rgba(255,255,255,0.18), rgba(255,255,255,0.08)),
+                rgba(7,14,28,0.34) !important;
+        }
+
+        body:not(.sky-empty) .sky-weather-forecast {
+            align-self: stretch;
+            display: grid !important;
+            grid-template-rows: auto auto 1fr;
+            gap: 14px !important;
+            min-width: 0;
+            padding: 18px;
+            border: 1px solid rgba(255,255,255,0.16);
+            border-radius: 30px;
+            background:
+                radial-gradient(circle at 18% 0%, rgba(255,255,255,0.18), transparent 34%),
+                linear-gradient(180deg, rgba(8,16,34,0.36), rgba(8,16,34,0.22));
+            box-shadow:
+                inset 0 1px 0 rgba(255,255,255,0.16),
+                0 24px 60px rgba(0,0,0,0.16);
+        }
+
+        body:not(.sky-empty) .sky-weather-forecast-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+        }
+
+        body:not(.sky-empty) .sky-weather-forecast-head h4 {
+            margin: 0;
+            color: rgba(255,255,255,0.86) !important;
+            font-size: 14px !important;
+            font-weight: 850;
+            letter-spacing: 0.08em !important;
+            text-transform: uppercase;
+        }
+
+        body:not(.sky-empty) .sky-weather-forecast-head span {
+            padding: 6px 10px;
+            border: 1px solid rgba(255,255,255,0.16);
+            border-radius: 999px;
+            background: rgba(255,255,255,0.12);
+            color: rgba(255,255,255,0.7);
+            font-size: 12px;
+            font-weight: 800;
+            white-space: nowrap;
+        }
+
+        body:not(.sky-empty) .sky-weather-hour-strip {
+            display: grid;
+            grid-template-columns: repeat(8, minmax(54px, 1fr));
+            gap: 8px;
+            min-width: 0;
+        }
+
+        body:not(.sky-empty) .sky-weather-hour-tile {
+            display: grid;
+            justify-items: center;
+            gap: 7px;
+            min-height: 104px;
+            padding: 10px 8px;
+            border: 1px solid rgba(255,255,255,0.16);
+            border-radius: 22px;
+            background:
+                linear-gradient(180deg, rgba(255,255,255,0.18), rgba(255,255,255,0.06)),
+                rgba(6,13,28,0.22);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.14);
+        }
+
+        body:not(.sky-empty) .sky-weather-hour-tile span,
+        body:not(.sky-empty) .sky-weather-hour-tile strong {
+            overflow: hidden;
+            max-width: 100%;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        body:not(.sky-empty) .sky-weather-hour-tile span {
+            color: rgba(255,255,255,0.62);
+            font-size: 12px;
+            font-weight: 850;
+        }
+
+        body:not(.sky-empty) .sky-weather-hour-tile b {
+            font-size: 26px;
+            line-height: 1;
+            filter: drop-shadow(0 5px 10px rgba(0,0,0,0.2));
+        }
+
+        body:not(.sky-empty) .sky-weather-hour-tile strong {
+            color: #fff;
+            font-size: 17px;
+            font-weight: 850;
+        }
+
+        body:not(.sky-empty) .sky-weather-day-list {
+            display: grid;
+            gap: 9px;
+            min-width: 0;
+            align-content: start;
+        }
+
+        body:not(.sky-empty) .sky-weather-day-row {
+            position: relative;
+            display: grid;
+            grid-template-columns: minmax(88px, 0.32fr) minmax(0, 1fr) auto;
+            align-items: center;
+            gap: 14px;
+            min-height: 68px;
+            padding: 11px 13px;
+            overflow: hidden;
+            border: 1px solid rgba(255,255,255,0.16);
+            border-radius: 22px;
+            background:
+                linear-gradient(135deg, rgba(255,255,255,0.17), rgba(255,255,255,0.055)),
+                rgba(6,13,28,0.24);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.13);
+        }
+
+        body:not(.sky-empty) .sky-weather-day-row.is-primary {
+            background:
+                radial-gradient(circle at 0% 0%, rgba(255,255,255,0.2), transparent 34%),
+                linear-gradient(135deg, rgba(255,255,255,0.22), rgba(255,255,255,0.075)),
+                rgba(6,13,28,0.3);
+        }
+
+        body:not(.sky-empty) .sky-weather-day-label {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 0;
+        }
+
+        body:not(.sky-empty) .sky-weather-day-label span {
+            min-width: 0;
+            overflow: hidden;
+            color: rgba(255,255,255,0.86);
+            font-size: 14px;
+            font-weight: 850;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        body:not(.sky-empty) .sky-weather-day-label b {
+            flex: 0 0 auto;
+            font-size: 24px;
+            line-height: 1;
+        }
+
+        body:not(.sky-empty) .sky-weather-day-main {
+            display: grid;
+            gap: 8px;
+            min-width: 0;
+        }
+
+        body:not(.sky-empty) .sky-weather-day-main strong {
+            overflow: hidden;
+            color: rgba(255,255,255,0.82);
+            font-size: 14px;
+            font-weight: 760;
+            line-height: 1.1;
+            text-transform: capitalize;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        body:not(.sky-empty) .sky-weather-day-temp {
+            display: flex;
+            align-items: baseline;
+            justify-content: flex-end;
+            gap: 7px;
+            min-width: 74px;
+            white-space: nowrap;
+        }
+
+        body:not(.sky-empty) .sky-weather-day-temp strong {
+            color: #fff;
+            font-size: 22px;
+            font-weight: 760;
+        }
+
+        body:not(.sky-empty) .sky-weather-day-temp small {
+            color: rgba(255,255,255,0.54);
+            font-size: 15px;
+            font-weight: 750;
+        }
+
+        body:not(.sky-empty) .weather-foggy .sky-weather-forecast,
+        body:not(.sky-empty) .weather-foggy .sky-weather-hour-tile,
+        body:not(.sky-empty) .weather-foggy .sky-weather-day-row,
+        body:not(.sky-empty) .weather-foggy .sky-weather-forecast-head span {
+            background: rgba(255,255,255,0.36) !important;
+            border-color: rgba(0,0,0,0.1) !important;
+            color: #1d2733 !important;
+        }
+
+        @media (hover: hover) {
+            body:not(.sky-empty) .sky-weather-hour-tile,
+            body:not(.sky-empty) .sky-weather-day-row {
+                transition: transform 220ms ease, background 220ms ease, border-color 220ms ease;
+            }
+
+            body:not(.sky-empty) .sky-weather-hour-tile:hover,
+            body:not(.sky-empty) .sky-weather-day-row:hover {
+                transform: translateY(-2px);
+                background: rgba(255,255,255,0.16);
+                border-color: rgba(255,255,255,0.26);
+            }
+        }
+
+        @media (max-width: 980px) {
+            body:not(.sky-empty) .sky-weather-scene {
+                grid-template-columns: 1fr !important;
+                min-height: 0 !important;
+            }
+
+            body:not(.sky-empty) .sky-weather-hour-strip {
+                grid-template-columns: repeat(4, minmax(0, 1fr));
+            }
+        }
+
+        @media (max-width: 560px) {
+            body:not(.sky-empty) .sky-weather-meta {
+                grid-template-columns: 1fr;
+            }
+
+            body:not(.sky-empty) .sky-weather-hour-strip {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            body:not(.sky-empty) .sky-weather-day-row {
+                grid-template-columns: 1fr auto;
+            }
+
+            body:not(.sky-empty) .sky-weather-day-main {
+                grid-column: 1 / -1;
+                order: 3;
+            }
+        }
+    </style>
+
+    <style id="skybridge-touch-panel-fit">
+        @media (min-width: 900px) and (max-height: 760px) {
+            body:not(.sky-empty) .sky-stage {
+                inset: 24px 0 112px !important;
+                width: min(1120px, calc(100vw - 80px)) !important;
+            }
+
+            body:not(.sky-empty) .sky-card-stack {
+                align-content: start !important;
+                gap: 12px !important;
+                padding-bottom: 10px !important;
+            }
+
+            body:not(.sky-empty) .sky-card,
+            body:not(.sky-empty) .sky-card.page-card,
+            body:not(.sky-empty) .sky-card.setting-card,
+            body:not(.sky-empty) .sky-card.list-card,
+            body:not(.sky-empty) .sky-card:first-child {
+                padding: 18px !important;
+                border-radius: 24px !important;
+            }
+
+            body:not(.sky-empty) .weather-card.sky-premium-card {
+                height: min(472px, calc(100dvh - 154px)) !important;
+                min-height: 0 !important;
+                max-height: 472px !important;
+            }
+
+            body:not(.sky-empty) .sky-weather-scene {
+                height: 100% !important;
+                min-height: 0 !important;
+                grid-template-columns: minmax(0, 0.86fr) minmax(430px, 1fr) !important;
+                gap: 18px !important;
+                padding: 24px !important;
+            }
+
+            body:not(.sky-empty) .sky-weather-main {
+                align-content: end !important;
+                min-height: 0 !important;
+                padding: 0 !important;
+            }
+
+            body:not(.sky-empty) .sky-weather-location {
+                max-width: 260px !important;
+                padding: 8px 13px !important;
+                font-size: 14px !important;
+            }
+
+            body:not(.sky-empty) .sky-weather-temp {
+                font-size: 118px !important;
+                line-height: 0.82 !important;
+            }
+
+            body:not(.sky-empty) .sky-weather-icon {
+                font-size: 70px !important;
+            }
+
+            body:not(.sky-empty) .sky-weather-condition {
+                font-size: 18px !important;
+                line-height: 1.05 !important;
+            }
+
+            body:not(.sky-empty) .sky-weather-meta {
+                grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+                gap: 8px !important;
+                max-width: 420px !important;
+            }
+
+            body:not(.sky-empty) .sky-weather-pill {
+                min-height: 44px !important;
+                padding: 8px 10px !important;
+                border-radius: 16px !important;
+                font-size: 13px !important;
+            }
+
+            body:not(.sky-empty) .sky-weather-forecast {
+                gap: 10px !important;
+                padding: 14px !important;
+                border-radius: 26px !important;
+                overflow: hidden !important;
+            }
+
+            body:not(.sky-empty) .sky-weather-forecast-head h4 {
+                font-size: 13px !important;
+            }
+
+            body:not(.sky-empty) .sky-weather-forecast-head span {
+                padding: 5px 9px !important;
+                font-size: 11px !important;
+            }
+
+            body:not(.sky-empty) .sky-weather-hour-strip {
+                grid-template-columns: repeat(8, minmax(46px, 1fr)) !important;
+                gap: 7px !important;
+            }
+
+            body:not(.sky-empty) .sky-weather-hour-tile {
+                min-height: 78px !important;
+                gap: 4px !important;
+                padding: 7px 5px !important;
+                border-radius: 18px !important;
+            }
+
+            body:not(.sky-empty) .sky-weather-hour-tile span {
+                font-size: 11px !important;
+            }
+
+            body:not(.sky-empty) .sky-weather-hour-tile b {
+                font-size: 20px !important;
+            }
+
+            body:not(.sky-empty) .sky-weather-hour-tile strong {
+                font-size: 15px !important;
+            }
+
+            body:not(.sky-empty) .sky-weather-day-list {
+                gap: 7px !important;
+                overflow: hidden !important;
+            }
+
+            body:not(.sky-empty) .sky-weather-day-row {
+                min-height: 48px !important;
+                grid-template-columns: minmax(82px, 0.3fr) minmax(0, 1fr) auto !important;
+                gap: 10px !important;
+                padding: 8px 11px !important;
+                border-radius: 18px !important;
+            }
+
+            body:not(.sky-empty) .sky-weather-day-label {
+                gap: 8px !important;
+            }
+
+            body:not(.sky-empty) .sky-weather-day-label span,
+            body:not(.sky-empty) .sky-weather-day-main strong {
+                font-size: 13px !important;
+            }
+
+            body:not(.sky-empty) .sky-weather-day-label b {
+                font-size: 20px !important;
+            }
+
+            body:not(.sky-empty) .sky-weather-day-main {
+                gap: 5px !important;
+            }
+
+            body:not(.sky-empty) .sky-weather-temp-band {
+                height: 6px !important;
+            }
+
+            body:not(.sky-empty) .sky-weather-day-temp strong {
+                font-size: 20px !important;
+            }
+
+            body:not(.sky-empty) .sky-weather-day-temp small {
+                font-size: 13px !important;
+            }
+
+            body:not(.sky-empty) .calendar-card.sky-premium-card,
+            body:not(.sky-empty) .zoe-list-card.sky-premium-card,
+            body:not(.sky-empty) .people-card.sky-premium-card,
+            body:not(.sky-empty) .person-card.sky-premium-card {
+                max-height: calc(100dvh - 154px) !important;
+                overflow: hidden !important;
+            }
+
+            body:not(.sky-empty) .sky-command,
+            body.sky-command-open .sky-command,
+            body.sky-voice-fallback.sky-empty .sky-command {
+                bottom: 18px !important;
+                height: 72px !important;
+            }
+
+            body:not(.sky-empty) .sky-orb-panel::after,
+            body.sky-command-open .sky-orb-panel::after,
+            body:not(.sky-empty) .sky-listening-copy,
+            body.sky-command-open .sky-listening-copy {
+                bottom: 18px !important;
+                height: 72px !important;
+                line-height: 72px !important;
+            }
+        }
+    </style>
+    <style id="skybridge-calendar-widget-overrides">
+        body:not(.sky-empty) .calendar-card.sky-premium-card {
+            min-height: 370px !important;
+            padding: 0 !important;
+            border-color: rgba(255,255,255,0.18) !important;
+            background:
+                radial-gradient(circle at 10% 0%, rgba(123,97,255,0.32), transparent 32%),
+                radial-gradient(circle at 94% 12%, rgba(90,224,224,0.18), transparent 34%),
+                linear-gradient(155deg, rgba(25,28,52,0.96), rgba(10,14,28,0.94)) !important;
+            box-shadow:
+                0 28px 90px rgba(0,0,0,0.34),
+                inset 0 1px 0 rgba(255,255,255,0.15) !important;
+        }
+
+        body:not(.sky-empty) .sky-calendar-scene {
+            display: grid;
+            grid-template-columns: minmax(230px, 0.34fr) minmax(0, 1fr);
+            gap: 24px;
+            padding: 28px;
+            position: relative;
+            z-index: 2;
+        }
+
+        body:not(.sky-empty) .sky-calendar-summary {
+            min-width: 0;
+            display: grid;
+            align-content: end;
+            gap: 22px;
+            padding: 18px;
+            border-radius: 28px;
+            border: 1px solid rgba(255,255,255,0.13);
+            background:
+                radial-gradient(circle at 28% 6%, rgba(255,255,255,0.2), transparent 34%),
+                linear-gradient(180deg, rgba(255,255,255,0.1), rgba(255,255,255,0.045));
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.12);
+        }
+
+        body:not(.sky-empty) .sky-calendar-date {
+            display: grid;
+            gap: 8px;
+        }
+
+        body:not(.sky-empty) .sky-calendar-date span {
+            color: rgba(255,255,255,0.55);
+            font-size: 13px;
+            font-weight: 850;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+        }
+
+        body:not(.sky-empty) .sky-calendar-date strong {
+            color: rgba(255,255,255,0.95);
+            font-size: clamp(42px, 5vw, 76px);
+            font-weight: 360;
+            line-height: 0.92;
+            letter-spacing: 0;
+        }
+
+        body:not(.sky-empty) .calendar-card .sky-widget-metric {
+            display: grid !important;
+            gap: 8px !important;
+            margin: 0 !important;
+        }
+
+        body:not(.sky-empty) .calendar-card .sky-widget-metric strong {
+            font-size: clamp(54px, 6vw, 92px) !important;
+            font-weight: 260 !important;
+            line-height: 0.9 !important;
+        }
+
+        body:not(.sky-empty) .calendar-card .sky-widget-metric span {
+            padding: 0 !important;
+            color: rgba(255,255,255,0.58) !important;
+            font-size: 15px !important;
+            font-weight: 760 !important;
+        }
+
+        body:not(.sky-empty) .sky-calendar-agenda {
+            min-width: 0;
+            position: relative;
+            display: grid;
+            grid-template-columns: 18px minmax(0, 1fr);
+            gap: 14px;
+        }
+
+        body:not(.sky-empty) .sky-calendar-rail {
+            width: 3px;
+            justify-self: center;
+            border-radius: 999px;
+            background:
+                linear-gradient(180deg, rgba(123,97,255,0), #7B61FF 12%, #5AE0E0 52%, rgba(90,224,224,0) 100%);
+            box-shadow: 0 0 24px rgba(90,224,224,0.24);
+        }
+
+        body:not(.sky-empty) .calendar-card .sky-data-list {
+            display: grid;
+            gap: 12px !important;
+            align-content: start;
+        }
+
+        body:not(.sky-empty) .calendar-card .sky-event-row {
+            position: relative;
+            display: grid !important;
+            grid-template-columns: minmax(112px, 0.24fr) minmax(0, 1fr) !important;
+            gap: 16px !important;
+            align-items: center;
+            min-height: 76px;
+            padding: 15px 18px 15px 20px !important;
+            overflow: hidden;
+            border-radius: 22px !important;
+            background:
+                linear-gradient(180deg, rgba(255,255,255,0.12), rgba(255,255,255,0.052)),
+                rgba(255,255,255,0.04) !important;
+            border-color: rgba(255,255,255,0.13) !important;
+            box-shadow:
+                inset 0 1px 0 rgba(255,255,255,0.12),
+                0 14px 34px rgba(0,0,0,0.14) !important;
+        }
+
+        body:not(.sky-empty) .calendar-card .sky-event-row::before {
+            content: "";
+            position: absolute;
+            inset: 12px auto 12px 0;
+            width: 4px;
+            border-radius: 0 999px 999px 0;
+            background: var(--sky-cal-accent, #5AE0E0);
+            box-shadow: 0 0 18px rgba(90,224,224,0.24);
+        }
+
+        body:not(.sky-empty) .sky-calendar-time {
+            display: grid;
+            gap: 7px;
+            min-width: 0;
+        }
+
+        body:not(.sky-empty) .sky-calendar-time span {
+            color: rgba(255,255,255,0.74) !important;
+            font-size: 12px !important;
+            font-weight: 850 !important;
+            letter-spacing: 0.04em !important;
+            text-transform: uppercase;
+        }
+
+        body:not(.sky-empty) .sky-calendar-time b {
+            width: fit-content;
+            padding: 5px 8px;
+            border-radius: 999px;
+            background: rgba(90,224,224,0.14);
+            color: rgba(190,255,255,0.92);
+            font-size: 10px;
+            font-weight: 850;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        body:not(.sky-empty) .sky-calendar-event-main {
+            min-width: 0;
+            display: grid;
+            gap: 6px;
+        }
+
+        body:not(.sky-empty) .sky-calendar-event-main strong {
+            color: rgba(255,255,255,0.95) !important;
+            font-size: clamp(17px, 1.65vw, 24px) !important;
+            font-weight: 670;
+            line-height: 1.1 !important;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        body:not(.sky-empty) .sky-calendar-event-main em {
+            grid-column: auto !important;
+            color: rgba(255,255,255,0.54) !important;
+            font-size: 13px !important;
+            font-style: normal;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        body:not(.sky-empty) .sky-calendar-event.work { --sky-cal-accent: #3B82F6; }
+        body:not(.sky-empty) .sky-calendar-event.personal { --sky-cal-accent: #A855F7; }
+        body:not(.sky-empty) .sky-calendar-event.bucket { --sky-cal-accent: #10B981; }
+        body:not(.sky-empty) .sky-calendar-event.shopping { --sky-cal-accent: #FB923C; }
+        body:not(.sky-empty) .sky-calendar-event.health { --sky-cal-accent: #EC4899; }
+        body:not(.sky-empty) .sky-calendar-event.routine { --sky-cal-accent: #9CA3AF; }
+        body:not(.sky-empty) .sky-calendar-event.social { --sky-cal-accent: #22C55E; }
+        body:not(.sky-empty) .sky-calendar-event.family { --sky-cal-accent: #9333EA; }
+        body:not(.sky-empty) .sky-calendar-event.general { --sky-cal-accent: #5AE0E0; }
+
+        body:not(.sky-empty) .sky-calendar-empty {
+            min-height: 210px;
+            display: grid !important;
+            place-items: center;
+            text-align: center;
+            gap: 8px;
+            border-radius: 28px !important;
+        }
+
+        body:not(.sky-empty) .sky-calendar-empty-mark {
+            width: 54px;
+            height: 54px;
+            border-radius: 18px;
+            background:
+                linear-gradient(90deg, rgba(255,255,255,0.2) 1px, transparent 1px),
+                linear-gradient(180deg, rgba(255,255,255,0.2) 1px, transparent 1px),
+                linear-gradient(135deg, rgba(123,97,255,0.86), rgba(90,224,224,0.72));
+            background-size: 18px 18px, 18px 18px, auto;
+            box-shadow: 0 18px 44px rgba(90,224,224,0.2);
+        }
+
+        @media (hover: hover) {
+            body:not(.sky-empty) .calendar-card .sky-event-row:hover {
+                transform: translateY(-2px);
+                border-color: rgba(255,255,255,0.22) !important;
+                background:
+                    linear-gradient(180deg, rgba(255,255,255,0.16), rgba(255,255,255,0.07)),
+                    rgba(255,255,255,0.05) !important;
+            }
+        }
+
+        @media (max-width: 780px) {
+            body:not(.sky-empty) .sky-calendar-scene {
+                grid-template-columns: 1fr;
+                gap: 16px;
+                padding: 20px;
+            }
+
+            body:not(.sky-empty) .sky-calendar-summary {
+                grid-template-columns: 1fr auto;
+                align-items: end;
+            }
+
+            body:not(.sky-empty) .calendar-card .sky-event-row {
+                grid-template-columns: 1fr !important;
+                gap: 8px !important;
+            }
+
+        }
+    </style>
+</head>
+<body>
+    <header class="sky-topbar">
+        <div class="sky-title">
+            <div class="sky-mark" aria-hidden="true"></div>
+            <div class="sky-heading">
+                <h1>Zoe</h1>
+                <p id="skySubtitle">Skybridge is listening.</p>
+            </div>
+        </div>
+        <div class="sky-status" aria-live="polite">
+            <span class="sky-status-dot" id="skyStatusDot"></span>
+            <span class="sky-status-text" id="skyStatusText">Starting</span>
+        </div>
+        <div class="sky-transport-toggle" aria-label="Voice transport">
+            <button type="button" data-mode="local">Local</button>
+            <button type="button" data-mode="livekit">LiveKit</button>
+        </div>
+    </header>
+
+	    <main class="sky-shell">
+	        <section class="sky-orb-panel" aria-label="Voice state">
+	            <canvas id="skyOrb"></canvas>
+	            <button type="button" class="sky-orb-button" id="skyOrbButton" aria-label="Start voice">
+	                <span id="skyOrbButtonText">Tap to talk</span>
+	            </button>
+	            <div class="sky-listening-copy" id="skyListeningCopy">Say what you need. Skybridge will shape the screen around it.</div>
+	            <div class="sky-voice-hint" id="skyVoiceHint" aria-live="polite">
+	                <div class="sky-voice-dot" aria-hidden="true"></div>
+	                <div>
+	                    <strong id="skyVoiceTitle">Touch the orb to speak</strong>
+	                    <span id="skyVoiceDetail">The touch screen will ask for microphone access the first time.</span>
+	                </div>
+	                <button type="button" id="skyVoiceAction">Start mic</button>
+	            </div>
+	            <div class="sky-transcript" id="skyTranscript" aria-live="polite"></div>
+	        </section>
+
+        <section class="sky-stage" aria-label="Skybridge cards">
+            <div class="sky-stage-header">
+                <div class="sky-context">
+                    <h2 id="skyContextTitle">Home surface</h2>
+                    <p id="skyContextDetail">Cards appear here as Zoe understands the request.</p>
+                </div>
+                <div class="sky-mode-toggle" aria-label="Voice transport">
+                    <button type="button" data-mode="local">Local</button>
+                    <button type="button" data-mode="livekit">LiveKit</button>
+                </div>
+            </div>
+            <div class="sky-card-stack" id="skyCards"></div>
+        </section>
+    </main>
+
+    <form class="sky-command" id="skyCommandForm">
+        <button type="button" id="skyHomeBtn" title="Show home cards">Home</button>
+        <input id="skyCommandInput" autocomplete="off" placeholder="Ask Zoe to show or change anything..." aria-label="Ask Zoe">
+	        <button type="button" id="skyMicBtn">Mic</button>
+        <button type="submit" class="primary">Send</button>
+    </form>
+
+    <script src="/js/auth.js?v=skybridge-auth-ready-1"></script>
+    <script src="/js/websocket-sync.js?v=skybridge-auth-ready-1"></script>
+    <script src="/touch/js/gestures.js?v=skybridge-auth-ready-1"></script>
+    <script src="/touch/js/touch-menu.js?v=skybridge-auth-ready-1"></script>
+    <script src="/js/touch-ui-executor.js?v=skybridge-auth-nametiles-1"></script>
+    <script src="/touch/js/skybridge-capabilities.js?v=skybridge-push-ack-1"></script>
+    <script src="/touch/js/skybridge-renderer.js?v=skybridge-auth-nametiles-1"></script>
+    <script src="/touch/js/skybridge-voice.js?v=skybridge-push-ack-1"></script>
+    <script src="/touch/js/skybridge.js?v=skybridge-auth-nametiles-1"></script>
+</body>
+</html>

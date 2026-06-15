@@ -127,8 +127,8 @@ async def list_reminders(
         params.append(1 if is_active else 0)
 
     where = " AND ".join(conditions)
+    sql = f"SELECT * FROM reminders WHERE {where} ORDER BY due_date, created_at LIMIT ?"
     params.append(limit)
-    sql = f"SELECT * FROM reminders WHERE {where} ORDER BY due_date, due_time LIMIT ?"
     cursor = await db.execute(sql, params)
     rows = await cursor.fetchall()
     reminders = [_row_to_dict(r) for r in rows]

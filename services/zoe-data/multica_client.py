@@ -14,13 +14,44 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any
+from typing import Any, Mapping
 
 import httpx
 
 logger = logging.getLogger(__name__)
 
 _TIMEOUT = 10.0
+_DEFAULT_HERMES_MULTICA_AGENT_ID = "019ae0a7-62f1-47fe-9d46-75fd0ae5d570"
+_SELF_IMPROVEMENT_MULTICA_AGENT_ID = "ee8596da-3a08-4e10-98e8-d058e57ea3ff"
+_cached_engineering_agent_id: str | None = None
+_DEFAULT_LABEL_COLOR = "#64748b"
+
+
+def get_engineering_multica_agent_id() -> str:
+    """Return the Multica agent UUID used for board engineering dispatch (Hermes)."""
+    global _cached_engineering_agent_id
+    env_id = os.environ.get("HERMES_MULTICA_AGENT_ID", "").strip()
+    if env_id:
+        return env_id
+    if _cached_engineering_agent_id:
+        return _cached_engineering_agent_id
+    try:
+        from zoe_agent_registry import load_agent_registry
+
+        registry = load_agent_registry()
+        hermes = (registry.get("agents") or {}).get("hermes") or {}
+        reg_id = str(hermes.get("multica_agent_id") or "").strip()
+        if reg_id:
+            _cached_engineering_agent_id = reg_id
+            return reg_id
+    except Exception as exc:
+        logger.debug("get_engineering_multica_agent_id: registry lookup failed: %s", exc)
+    return _DEFAULT_HERMES_MULTICA_AGENT_ID
+
+
+def get_self_improvement_multica_agent_id() -> str:
+    """Legacy Self-Improvement Agent UUID (reassign scripts filter from this)."""
+    return _SELF_IMPROVEMENT_MULTICA_AGENT_ID
 
 
 def _multica_env_key() -> tuple[str, str, str]:
@@ -58,17 +89,31 @@ class MULClient:
         priority: str = "medium",
         assignee_id: str | None = None,
         assignee_type: str | None = None,
+        status: str | None = None,
+        project_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> dict:
         """Create a Multica board issue. Returns the created issue dict."""
         if not self.is_configured():
             logger.debug("Multica not configured — skipping create_issue")
             return {}
+        if metadata:
+            from multica_ticket_contract import normalize_ticket_metadata, parse_ticket_block, write_ticket_block
+
+            ticket_metadata = parse_ticket_block(description)
+            ticket_metadata.update(metadata)
+            ticket_metadata.pop("updated_at", None)
+            description = write_ticket_block(description, normalize_ticket_metadata(ticket_metadata))
         url = f"{self._base}/api/issues"
         payload: dict[str, Any] = {
             "title": title,
             "description": description,
             "priority": priority,
         }
+        if status:
+            payload["status"] = status
+        if project_id:
+            payload["project_id"] = project_id
         if assignee_id:
             payload["assignee_id"] = assignee_id
             payload["assignee_type"] = assignee_type or "agent"
@@ -95,7 +140,37 @@ class MULClient:
             logger.warning("Multica get_issue(%s) failed: %s", issue_id, exc)
             return {}
 
-    async def list_issues(self, status: str | None = None) -> list[dict]:
+    async def resolve_issue(self, reference: str) -> dict:
+        """Resolve a Multica issue by backend id or visible identifier.
+
+        First attempts a direct backend-id lookup; if that returns nothing, falls
+        back to a full list scan capped at 1000 issues and matched on ``id`` or
+        ``identifier``. Workspaces with more than 1000 issues may not resolve
+        identifiers that fall outside the first page.
+        """
+        if not self.is_configured():
+            return {}
+        wanted = str(reference or "").strip()
+        if not wanted:
+            return {}
+        direct = await self.get_issue(wanted)
+        if direct.get("id"):
+            return direct
+        wanted_lower = wanted.lower()
+        for issue in await self.list_issues(limit=1000):
+            if wanted_lower in {
+                str(issue.get("id") or "").lower(),
+                str(issue.get("identifier") or "").lower(),
+            }:
+                return issue
+        return {}
+
+    async def list_issues(
+        self,
+        status: str | None = None,
+        *,
+        limit: int | None = None,
+    ) -> list[dict]:
         """List issues in the workspace, optionally filtered by status."""
         if not self.is_configured():
             return []
@@ -103,6 +178,8 @@ class MULClient:
         params = {}
         if status:
             params["status"] = status
+        if limit is not None:
+            params["limit"] = max(1, int(limit))
         try:
             async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
                 resp = await client.get(url, params=params, headers=self._headers())
@@ -132,6 +209,190 @@ class MULClient:
         except Exception as exc:
             logger.warning("Multica update_issue(%s) failed: %s", issue_id, exc)
             return {}
+
+    async def list_labels(self) -> list[dict]:
+        """List workspace labels."""
+        if not self.is_configured():
+            return []
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+                resp = await client.get(f"{self._base}/api/labels", headers=self._headers())
+                resp.raise_for_status()
+                data = resp.json()
+                return data if isinstance(data, list) else data.get("labels", [])
+        except Exception as exc:
+            logger.warning("Multica list_labels failed: %s", exc)
+            return []
+
+    async def ensure_label(self, name: str, *, existing: list[dict] | None = None) -> dict:
+        """Return a label by name, creating it when possible.
+
+        Pass ``existing`` from a prior ``list_labels`` call when ensuring many
+        labels in a loop.
+        """
+        wanted = name.strip()
+        if not wanted or not self.is_configured():
+            return {}
+        for label in (existing if existing is not None else await self.list_labels()):
+            if str(label.get("name") or "").lower() == wanted.lower():
+                return label
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+                resp = await client.post(
+                    f"{self._base}/api/labels",
+                    json={"name": wanted, "color": _DEFAULT_LABEL_COLOR},
+                    headers=self._headers(),
+                )
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as exc:
+            logger.warning("Multica ensure_label(%s) failed: %s", wanted, exc)
+            return {}
+
+    async def attach_label(self, issue_id: str, label_name: str) -> dict:
+        """Attach a label to an issue by name."""
+        label = await self.ensure_label(label_name)
+        label_id = label.get("id") if isinstance(label, dict) else None
+        if not label_id or not self.is_configured():
+            return {}
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+                resp = await client.post(
+                    f"{self._base}/api/issues/{issue_id}/labels",
+                    json={"label_id": label_id},
+                    headers=self._headers(),
+                )
+                resp.raise_for_status()
+                return resp.json() if resp.content else {"ok": True}
+        except Exception as exc:
+            logger.warning("Multica attach_label(%s, %s) failed: %s", issue_id, label_name, exc)
+            return {}
+
+    async def list_projects(self) -> list[dict]:
+        """List workspace projects."""
+        if not self.is_configured():
+            return []
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+                resp = await client.get(f"{self._base}/api/projects", headers=self._headers())
+                resp.raise_for_status()
+                data = resp.json()
+                return data if isinstance(data, list) else data.get("projects", [])
+        except Exception as exc:
+            logger.warning("Multica list_projects failed: %s", exc)
+            return []
+
+    async def ensure_project(self, title: str) -> dict:
+        """Return a project by title, creating it when possible."""
+        wanted = title.strip()
+        if not wanted or not self.is_configured():
+            return {}
+        for project in await self.list_projects():
+            if str(project.get("title") or project.get("name") or "").lower() == wanted.lower():
+                return project
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+                resp = await client.post(
+                    f"{self._base}/api/projects",
+                    json={"title": wanted},
+                    headers=self._headers(),
+                )
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as exc:
+            logger.warning("Multica ensure_project(%s) failed: %s", wanted, exc)
+            return {}
+
+    async def safe_patch_description(self, issue_id: str, metadata: dict[str, Any]) -> dict:
+        """Patch only the fenced Zoe ticket block in an issue description."""
+        from multica_ticket_contract import write_ticket_block
+
+        issue = await self.resolve_issue(issue_id)
+        if not issue.get("id"):
+            return {}
+        original = issue.get("description") or ""
+        return await self.update_issue(str(issue["id"]), description=write_ticket_block(original, metadata))
+
+    async def append_issue_note(self, issue_id: str, note: str) -> dict:
+        """Append a visible progress note while preserving existing description."""
+        issue = await self.resolve_issue(issue_id)
+        if not issue.get("id"):
+            return {}
+        original = (issue.get("description") or "").rstrip()
+        updated = f"{original}\n\nZoe note: {note.strip()}" if original else f"Zoe note: {note.strip()}"
+        return await self.update_issue(str(issue["id"]), description=updated)
+
+    async def create_child_issue(self, parent: dict, template: dict[str, Any]) -> dict:
+        """Create a child issue linked to a parent via the Zoe ticket block.
+
+        Parent ``child_issue_ids`` updates are caller-owned so multi-child split
+        commands can write one consistent final parent state.
+        """
+        from multica_ticket_contract import describe_ticket, parse_ticket_block
+
+        parent_id = str(parent.get("id") or "")
+        parent_meta = parse_ticket_block(parent.get("description") or "")
+        title = str(template.get("title") or f"{parent.get('identifier') or parent_id}: child task")[:140]
+        human_description = str(template.get("description") or "")
+        child_description = describe_ticket(
+            human_description,
+            zoe_kind="child",
+            evidence_profile=str(template.get("evidence_profile") or parent_meta.get("evidence_profile") or "code"),
+            engineering_mode=str(template.get("engineering_mode") or parent_meta.get("engineering_mode") or "interactive"),
+            acceptance_criteria=list(template.get("acceptance_criteria") or []),
+            evidence_expectations=list(template.get("evidence_expectations") or []),
+            source="scope_split",
+            parent_issue_id=parent_id,
+        )
+        child = await self.create_issue(
+            title=title,
+            description=child_description,
+            priority=str(template.get("priority") or parent.get("priority") or "medium"),
+            status=str(template.get("status") or "backlog"),
+            assignee_id=template.get("assignee_id") or parent.get("assignee_id"),
+            assignee_type=template.get("assignee_type") or parent.get("assignee_type") or "agent",
+            project_id=template.get("project_id") or parent.get("project_id"),
+        )
+        child_id = str(child.get("id") or "")
+        for label in template.get("labels") or []:
+            if child_id:
+                await self.attach_label(child_id, str(label))
+        return child
+
+    async def record_progress(
+        self,
+        issue_id: str,
+        *,
+        phase: str | None = None,
+        evidence: str | None = None,
+        pr_url: str | None = None,
+        blocker: str | None = None,
+        clear_blocker: bool = False,
+        greptile_status: str | None = None,
+        merge_sha: str | None = None,
+        status: str | None = None,
+        dispatch_approved: bool | None = None,
+        completion_reason: str | None = None,
+    ) -> dict:
+        """Record operator-visible Zoe progress on a Multica issue."""
+        from multica_ticket_contract import update_ticket_progress
+
+        issue = await self.resolve_issue(issue_id)
+        if not issue.get("id"):
+            return {}
+        updated_description = update_ticket_progress(
+            issue.get("description") or "",
+            phase=phase,
+            evidence=evidence,
+            pr_url=pr_url,
+            blocker=blocker,
+            clear_blocker=clear_blocker,
+            greptile_status=greptile_status,
+            merge_sha=merge_sha,
+            dispatch_approved=dispatch_approved,
+            completion_reason=completion_reason,
+        )
+        return await self.update_issue(str(issue["id"]), status=status, description=updated_description)
 
 
 # Module-level singleton
@@ -208,6 +469,7 @@ async def sync_evolution_proposal_to_multica(
     evidence: str,
     proposal_type: str,
     label_name: str = "evolution-proposal",
+    contract_snapshot: str | Mapping[str, Any] | None = None,
 ) -> str | None:
     """Create a Multica issue for a new evolution proposal.
 
@@ -220,21 +482,56 @@ async def sync_evolution_proposal_to_multica(
         logger.debug("Multica not configured — skipping sync_evolution_proposal")
         return None
 
-    agent_id, project_id = await _lookup_evolution_resources(client)
+    _agent_id, project_id = await _lookup_evolution_resources(client)
+    hermes_id = get_engineering_multica_agent_id()
 
     full_desc = description
     if evidence:
         full_desc = f"{description}\n\n**Evidence:** {evidence}"
+    try:
+        from multica_ticket_contract import describe_ticket
+        from zoe_evolution_proposal_adapter import load_proposal_contract_snapshot
+
+        contract = load_proposal_contract_snapshot(contract_snapshot)
+        proposal = contract.get("proposal", {}) if contract else {}
+        gate = proposal.get("approval_gate", {}) if isinstance(proposal, dict) else {}
+        contract_metadata = {
+            "evolution_proposal_id": proposal_id,
+            "evolution_contract_schema": contract.get("schema") if contract else None,
+            "evolution_contract_version": contract.get("version") if contract else None,
+            "evolution_contract_proposal_id": proposal.get("proposal_id") if isinstance(proposal, dict) else None,
+            "evolution_contract_autonomy_class": proposal.get("autonomy_class") if isinstance(proposal, dict) else None,
+            "evolution_contract_risk": proposal.get("risk") if isinstance(proposal, dict) else None,
+            "evolution_contract_status": proposal.get("status") if isinstance(proposal, dict) else None,
+            "evolution_contract_allowed_to_prepare": gate.get("allowed_to_prepare") if isinstance(gate, dict) else None,
+            "evolution_contract_approval_required": proposal.get("approval_required") if isinstance(proposal, dict) else None,
+        }
+
+        full_desc = describe_ticket(
+            full_desc,
+            zoe_kind="harness_fix" if proposal_type in {"bug", "fix", "harness"} else "feature",
+            evidence_profile="code",
+            engineering_mode="unattended",
+            acceptance_criteria=["Proposal is triaged into a narrow, reviewable change before dispatch."],
+            evidence_expectations=["Journal evidence", "Tests or validators", "Greptile 5/5 before merge"],
+            source=f"evolution_proposal:{proposal_id}",
+            metadata=contract_metadata,
+        )
+    except Exception as exc:
+        logger.warning(
+            "sync_evolution_proposal_to_multica: failed to build contract metadata for %s: %s",
+            proposal_id,
+            exc,
+        )
 
     payload: dict[str, Any] = {
         "title": title,
         "description": full_desc,
         "status": "backlog",
         "priority": "medium",
+        "assignee_id": hermes_id,
+        "assignee_type": "agent",
     }
-    if agent_id:
-        payload["assignee_id"] = agent_id
-        payload["assignee_type"] = "agent"
     if project_id:
         payload["project_id"] = project_id
 
@@ -273,7 +570,7 @@ async def sync_evolution_proposal_to_multica(
                         try:
                             create_resp = await http.post(
                                 f"{client._base}/api/labels",
-                                json={"name": label_name},
+                                json={"name": label_name, "color": _DEFAULT_LABEL_COLOR},
                                 headers=headers,
                                 params=params,
                             )

@@ -830,7 +830,7 @@
   window.fetch=function(u,o){o=o||{};o.headers=o.headers||{};const sid=getSession();if(sid){o.headers["X-Session-ID"]=sid;} if(typeof u==="string"){u=u.replace(/[?&]user_id=[^&]*/g,"");} return origFetch(u,o);};
 })();
 </script>
-    <script src="/js/auth.js"></script>
+    <script src="/js/auth.js?v=skybridge-auth-ready-1"></script>
 <!-- PWA Meta Tags -->
     <meta name="application-name" content="Zoe AI">
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -1097,14 +1097,19 @@
 
             renderProfiles();
 
-            // If the panel declares a default user and that user is present,
-            // skip the picker and jump straight to PIN entry.
-            if (panelContext.default_user_id) {
-                const defaultProfile = userProfiles.find(p => p.user_id === panelContext.default_user_id);
-                if (defaultProfile) {
-                    const avatar = defaultProfile.avatar
-                        || (defaultProfile.username ? defaultProfile.username.charAt(0).toUpperCase() : '?');
-                    selectProfile(defaultProfile.user_id, defaultProfile.username, avatar);
+            const params = new URLSearchParams(window.location.search);
+            const routeUserId = params.get('user_id') || '';
+            const pending = getPendingPanelChallenge();
+            const preferredUserId = routeUserId
+                || (pending && pending.selected_user_id ? pending.selected_user_id : '')
+                || panelContext.default_user_id;
+            if (preferredUserId) {
+                const preferredProfile = userProfiles.find(p => p.user_id === preferredUserId);
+                if (preferredProfile) {
+                    const avatar = pending && pending.selected_avatar
+                        ? pending.selected_avatar
+                        : (preferredProfile.avatar || (preferredProfile.username ? preferredProfile.username.charAt(0).toUpperCase() : '?'));
+                    selectProfile(preferredProfile.user_id, preferredProfile.username, avatar);
                 }
             }
         }
@@ -1160,7 +1165,7 @@
                 const raw = sessionStorage.getItem('zoe_panel_auth_challenge');
                 if (!raw) return null;
                 const parsed = JSON.parse(raw);
-                return parsed && parsed.challenge_id ? parsed : null;
+                return parsed && (parsed.challenge_id || parsed.selected_user_id) ? parsed : null;
             } catch (_) {
                 return null;
             }
@@ -1168,7 +1173,7 @@
 
         async function resolvePendingPanelChallenge(pinValue) {
             const pending = getPendingPanelChallenge();
-            if (!pending || !pinValue) return true;
+            if (!pending || !pending.challenge_id || !pinValue) return true;
             try {
                 const payload = {
                     challenge_id: pending.challenge_id,
@@ -1491,7 +1496,7 @@
             };
             setTimeout(() => {
                 // Use stored destination if we were redirected here from a touch page
-                let dest = '/touch/dashboard.html';
+                let dest = '/touch/skybridge.html';
                 try {
                     const stored = sessionStorage.getItem('zoe_redirect_after_login');
                     if (stored && stored.startsWith('/touch/')) {
@@ -1622,8 +1627,8 @@
             }
             
             const pendingChallenge = getPendingPanelChallenge();
-            if (pendingChallenge) {
-                // Force auth UI when resuming a voice challenge; do not auto-redirect.
+            if (pendingChallenge || params.get('auth') === 'skybridge' || params.get('user_id')) {
+                // Force auth UI when resuming a voice/Skybridge auth handoff; do not auto-redirect.
                 showProfiles();
                 return;
             }
@@ -1644,7 +1649,7 @@
                                 localStorage.removeItem('redirect_loop_detected');
                             }, 5000); // Clear flag after 5 seconds
                             
-                            window.location.href = '/touch/dashboard.html';
+                            window.location.href = '/touch/skybridge.html';
                             return;
                         } else {
                             // Session expired

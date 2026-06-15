@@ -14,14 +14,15 @@ const TouchMenu = (() => {
     const NAV_H = 64;
 
     const PRIMARY = [
-        { id: 'dashboard', path: '/touch/dashboard.html',  label: 'Home'     },
+        { id: 'skybridge', path: '/touch/skybridge.html',  label: 'Home'     },
         { id: 'calendar',  path: '/touch/calendar.html',   label: 'Calendar' },
         { id: 'lists',     path: '/touch/lists.html',      label: 'Lists'    },
         { id: 'chat',      path: '/touch/chat.html',       label: 'Chat'     },
     ];
 
     const ALL_PAGES = [
-        { id: 'dashboard',  path: '/touch/dashboard.html',  icon: '🏠', label: 'Home'       },
+        { id: 'skybridge',  path: '/touch/skybridge.html',  icon: '◇',  label: 'Home'       },
+        { id: 'dashboard',  path: '/touch/dashboard.html',  icon: '🏠', label: 'Dashboard'  },
         { id: 'calendar',   path: '/touch/calendar.html',   icon: '📅', label: 'Calendar'   },
         { id: 'lists',      path: '/touch/lists.html',      icon: '☰',  label: 'Lists'      },
         { id: 'notes',      path: '/touch/notes.html',      icon: '📝', label: 'Notes'      },
@@ -531,27 +532,27 @@ html.dark-mode .ztm-ctx-item { color: rgba(255,255,255,0.88); border-bottom-colo
         try {
             const u = new URL(String(input || ''), window.location.origin);
             // External targets are never allowed from touch nav.
-            if (u.origin !== window.location.origin) return '/touch/dashboard.html';
+            if (u.origin !== window.location.origin) return '/touch/skybridge.html';
             const p = u.pathname || '/';
             const base = p.split('/').pop() || '';
             const allowed = new Set([
-                'dashboard.html', 'calendar.html', 'lists.html', 'chat.html', 'notes.html',
+                'dashboard.html', 'skybridge.html', 'calendar.html', 'lists.html', 'chat.html', 'notes.html',
                 'journal.html', 'people.html', 'music.html', 'smart-home.html', 'weather.html',
                 'settings.html', 'memories.html', 'cooking.html', 'timers.html', 'updates.html',
                 'index.html'
             ]);
             // Already in touch namespace — allow only known touch pages.
             if (p.startsWith('/touch/')) {
-                return allowed.has(base) ? (p + (u.search || '') + (u.hash || '')) : '/touch/dashboard.html';
+                return allowed.has(base) ? (p + (u.search || '') + (u.hash || '')) : '/touch/skybridge.html';
             }
 
             // Map desktop routes to touch equivalents by basename.
             if (allowed.has(base)) return '/touch/' + base + (u.search || '') + (u.hash || '');
 
             // Default hard guard.
-            return '/touch/dashboard.html';
+            return '/touch/skybridge.html';
         } catch (_) {
-            return '/touch/dashboard.html';
+            return '/touch/skybridge.html';
         }
     }
 

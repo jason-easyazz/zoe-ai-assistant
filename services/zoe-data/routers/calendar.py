@@ -2,7 +2,6 @@
 FastAPI router for calendar events.
 Mounted at prefix="/api/calendar" with tag "calendar".
 """
-import json
 import uuid
 from datetime import date
 from typing import Optional
@@ -10,6 +9,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from auth import get_current_user
+from calendar_utils import row_to_event
 from database import get_db
 from guest_policy import require_feature_access
 from models import EventCreate, EventUpdate
@@ -20,17 +20,7 @@ router = APIRouter(prefix="/api/calendar", tags=["calendar"])
 
 def _row_to_event(row) -> dict:
     """Convert asyncpg Row to dict, parsing metadata JSON."""
-    d = dict(row)
-    if d.get("metadata") is not None and isinstance(d["metadata"], str):
-        try:
-            d["metadata"] = json.loads(d["metadata"]) if d["metadata"] else None
-        except json.JSONDecodeError:
-            d["metadata"] = None
-    if "all_day" in d and d["all_day"] is not None:
-        d["all_day"] = bool(d["all_day"])
-    if "deleted" in d and d["deleted"] is not None:
-        d["deleted"] = bool(d["deleted"])
-    return d
+    return row_to_event(row)
 
 
 def _visibility_filter_sql() -> str:
@@ -84,8 +74,7 @@ async def list_today_events(
     """Get today's events."""
     user_id = await _enforce_calendar_read_access(db, user)
     today = date.today().isoformat()
-    where = f"{_visibility_filter_sql()} AND start_date = ?"
-    sql = f"SELECT * FROM events WHERE {where} ORDER BY start_time"
+    sql = "SELECT * FROM events WHERE (visibility = 'family' OR user_id = ?) AND deleted = 0 AND start_date = ? ORDER BY start_time"
     cursor = await db.execute(sql, [user_id, today])
     events = []
     async for row in cursor:

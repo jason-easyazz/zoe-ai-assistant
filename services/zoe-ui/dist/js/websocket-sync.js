@@ -287,12 +287,21 @@ window.ZoeWebSockets = {
     push: null,
 
     initPush(panelId, sessionId) {
-        // Connect directly to /ws/push?channel=all (query param, not path segment).
+        // Connect directly to /ws/push with the session query expected by the
+        // authenticated push endpoint. Browser WebSockets cannot send the
+        // X-Session-ID header used by fetch(), so the query param is required.
+        // Touch panels use their dedicated panel channel so panel-scoped voice
+        // card actions are delivered without relying on global broadcasts.
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const pushUrl = `${protocol}//${window.location.host}/ws/push?channel=all`;
+        const params = new URLSearchParams();
+        if (panelId) params.set('panel_id', panelId);
+        else params.set('channel', 'all');
+        if (sessionId) params.set('session_id', sessionId);
+        else console.warn('[ZoeWS] initPush called without sessionId; push will be rejected');
+        const pushUrl = `${protocol}//${window.location.host}/ws/push?${params.toString()}`;
         this.push = new ZoeWebSocketSync('/ws/push', 'all');
+        window.zoePushWs = this.push;
         // Override the connect method to use the correct URL with query param.
-        const originalConnect = this.push.connect.bind(this.push);
         this.push.connect = function() {
             if (this.ws && this.ws.readyState === WebSocket.OPEN) return;
             console.log('[ZoeWS] Connecting push channel:', pushUrl);
@@ -403,7 +412,16 @@ window.ZoeWebSockets = {
             }
         });
 
-        // ── Multica board task completion ─────────────────────────────────
+        // ── Multica board task updates ─────────────────────────────────────
+        this.push.on('multica_task_progress', (data) => {
+            const payload = unwrapPayload(data);
+            const title = payload.title || 'Board task';
+            if (payload.status === 'in_review' && payload.pr_url && typeof window._zoeShowNotification === 'function') {
+                window._zoeShowNotification(`Board task in review: ${title}`, 'info');
+            }
+            document.dispatchEvent(new CustomEvent('zoe:multica_task_progress', { detail: payload }));
+        });
+
         this.push.on('multica_task_done', (data) => {
             const payload = unwrapPayload(data);
             const title = payload.title || 'Board task';
@@ -419,9 +437,6 @@ window.ZoeWebSockets = {
         console.log('[ZoeWS] Panel push channel connected, panel_id:', panelId);
     }
 };
-
-
-
 
 
 

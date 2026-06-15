@@ -110,8 +110,8 @@ async def list_transactions(
         params.append(status)
 
     where = " AND ".join(conditions)
-    sql = f"SELECT * FROM transactions WHERE {where} ORDER BY transaction_date DESC, created_at DESC"
-    cursor = await db.execute(sql, params)
+    sql = "SELECT * FROM transactions WHERE ? ORDER BY transaction_date DESC, created_at DESC"
+    cursor = await db.execute(sql, [params])
     rows = await cursor.fetchall()
     transactions = [_row_to_dict(r) for r in rows]
     return {"transactions": transactions}

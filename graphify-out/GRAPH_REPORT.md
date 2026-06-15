@@ -1,15 +1,15 @@
-# Graph Report - .  (2026-05-28)
+# Graph Report - .  (2026-06-11)
 
 ## Corpus Check
 - cluster-only mode — file stats not available
 
 ## Summary
-- 11063 nodes · 16716 edges · 845 communities (544 shown, 301 thin omitted)
-- Extraction: 94% EXTRACTED · 6% INFERRED · 0% AMBIGUOUS · INFERRED: 1012 edges (avg confidence: 0.76)
+- 8786 nodes · 15663 edges · 639 communities (374 shown, 265 thin omitted)
+- Extraction: 87% EXTRACTED · 13% INFERRED · 0% AMBIGUOUS · INFERRED: 2094 edges (avg confidence: 0.8)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `b262ce99`
+- Built from commit: `926c99a1`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -136,7 +136,6 @@
 - [[_COMMUNITY_Community 119|Community 119]]
 - [[_COMMUNITY_Community 120|Community 120]]
 - [[_COMMUNITY_Community 121|Community 121]]
-- [[_COMMUNITY_Community 122|Community 122]]
 - [[_COMMUNITY_Community 123|Community 123]]
 - [[_COMMUNITY_Community 124|Community 124]]
 - [[_COMMUNITY_Community 125|Community 125]]
@@ -223,7 +222,6 @@
 - [[_COMMUNITY_Community 206|Community 206]]
 - [[_COMMUNITY_Community 207|Community 207]]
 - [[_COMMUNITY_Community 208|Community 208]]
-- [[_COMMUNITY_Community 209|Community 209]]
 - [[_COMMUNITY_Community 210|Community 210]]
 - [[_COMMUNITY_Community 211|Community 211]]
 - [[_COMMUNITY_Community 212|Community 212]]
@@ -354,7 +352,6 @@
 - [[_COMMUNITY_Community 337|Community 337]]
 - [[_COMMUNITY_Community 338|Community 338]]
 - [[_COMMUNITY_Community 339|Community 339]]
-- [[_COMMUNITY_Community 340|Community 340]]
 - [[_COMMUNITY_Community 341|Community 341]]
 - [[_COMMUNITY_Community 342|Community 342]]
 - [[_COMMUNITY_Community 343|Community 343]]
@@ -377,9 +374,7 @@
 - [[_COMMUNITY_Community 360|Community 360]]
 - [[_COMMUNITY_Community 361|Community 361]]
 - [[_COMMUNITY_Community 362|Community 362]]
-- [[_COMMUNITY_Community 363|Community 363]]
 - [[_COMMUNITY_Community 364|Community 364]]
-- [[_COMMUNITY_Community 365|Community 365]]
 - [[_COMMUNITY_Community 366|Community 366]]
 - [[_COMMUNITY_Community 367|Community 367]]
 - [[_COMMUNITY_Community 368|Community 368]]
@@ -391,28 +386,20 @@
 - [[_COMMUNITY_Community 374|Community 374]]
 - [[_COMMUNITY_Community 375|Community 375]]
 - [[_COMMUNITY_Community 376|Community 376]]
-- [[_COMMUNITY_Community 377|Community 377]]
 - [[_COMMUNITY_Community 378|Community 378]]
 - [[_COMMUNITY_Community 379|Community 379]]
 - [[_COMMUNITY_Community 380|Community 380]]
 - [[_COMMUNITY_Community 381|Community 381]]
-- [[_COMMUNITY_Community 382|Community 382]]
-- [[_COMMUNITY_Community 383|Community 383]]
-- [[_COMMUNITY_Community 384|Community 384]]
 - [[_COMMUNITY_Community 385|Community 385]]
-- [[_COMMUNITY_Community 386|Community 386]]
 - [[_COMMUNITY_Community 387|Community 387]]
 - [[_COMMUNITY_Community 388|Community 388]]
 - [[_COMMUNITY_Community 389|Community 389]]
 - [[_COMMUNITY_Community 390|Community 390]]
-- [[_COMMUNITY_Community 391|Community 391]]
 - [[_COMMUNITY_Community 392|Community 392]]
 - [[_COMMUNITY_Community 393|Community 393]]
 - [[_COMMUNITY_Community 394|Community 394]]
-- [[_COMMUNITY_Community 395|Community 395]]
 - [[_COMMUNITY_Community 396|Community 396]]
 - [[_COMMUNITY_Community 397|Community 397]]
-- [[_COMMUNITY_Community 398|Community 398]]
 - [[_COMMUNITY_Community 399|Community 399]]
 - [[_COMMUNITY_Community 400|Community 400]]
 - [[_COMMUNITY_Community 401|Community 401]]
@@ -423,6 +410,7 @@
 - [[_COMMUNITY_Community 406|Community 406]]
 - [[_COMMUNITY_Community 407|Community 407]]
 - [[_COMMUNITY_Community 408|Community 408]]
+- [[_COMMUNITY_Community 409|Community 409]]
 - [[_COMMUNITY_Community 410|Community 410]]
 - [[_COMMUNITY_Community 411|Community 411]]
 - [[_COMMUNITY_Community 412|Community 412]]
@@ -454,10 +442,8 @@
 - [[_COMMUNITY_Community 438|Community 438]]
 - [[_COMMUNITY_Community 439|Community 439]]
 - [[_COMMUNITY_Community 440|Community 440]]
-- [[_COMMUNITY_Community 441|Community 441]]
 - [[_COMMUNITY_Community 442|Community 442]]
 - [[_COMMUNITY_Community 443|Community 443]]
-- [[_COMMUNITY_Community 444|Community 444]]
 - [[_COMMUNITY_Community 445|Community 445]]
 - [[_COMMUNITY_Community 446|Community 446]]
 - [[_COMMUNITY_Community 447|Community 447]]
@@ -467,17 +453,6 @@
 - [[_COMMUNITY_Community 451|Community 451]]
 - [[_COMMUNITY_Community 452|Community 452]]
 - [[_COMMUNITY_Community 453|Community 453]]
-- [[_COMMUNITY_Community 454|Community 454]]
-- [[_COMMUNITY_Community 455|Community 455]]
-- [[_COMMUNITY_Community 456|Community 456]]
-- [[_COMMUNITY_Community 457|Community 457]]
-- [[_COMMUNITY_Community 458|Community 458]]
-- [[_COMMUNITY_Community 459|Community 459]]
-- [[_COMMUNITY_Community 460|Community 460]]
-- [[_COMMUNITY_Community 461|Community 461]]
-- [[_COMMUNITY_Community 462|Community 462]]
-- [[_COMMUNITY_Community 463|Community 463]]
-- [[_COMMUNITY_Community 464|Community 464]]
 - [[_COMMUNITY_Community 465|Community 465]]
 - [[_COMMUNITY_Community 466|Community 466]]
 - [[_COMMUNITY_Community 467|Community 467]]
@@ -523,15 +498,13 @@
 - [[_COMMUNITY_Community 507|Community 507]]
 - [[_COMMUNITY_Community 508|Community 508]]
 - [[_COMMUNITY_Community 509|Community 509]]
+- [[_COMMUNITY_Community 510|Community 510]]
 - [[_COMMUNITY_Community 511|Community 511]]
 - [[_COMMUNITY_Community 512|Community 512]]
 - [[_COMMUNITY_Community 513|Community 513]]
 - [[_COMMUNITY_Community 514|Community 514]]
 - [[_COMMUNITY_Community 515|Community 515]]
 - [[_COMMUNITY_Community 516|Community 516]]
-- [[_COMMUNITY_Community 517|Community 517]]
-- [[_COMMUNITY_Community 518|Community 518]]
-- [[_COMMUNITY_Community 519|Community 519]]
 - [[_COMMUNITY_Community 520|Community 520]]
 - [[_COMMUNITY_Community 521|Community 521]]
 - [[_COMMUNITY_Community 522|Community 522]]
@@ -539,6 +512,7 @@
 - [[_COMMUNITY_Community 524|Community 524]]
 - [[_COMMUNITY_Community 525|Community 525]]
 - [[_COMMUNITY_Community 526|Community 526]]
+- [[_COMMUNITY_Community 527|Community 527]]
 - [[_COMMUNITY_Community 528|Community 528]]
 - [[_COMMUNITY_Community 529|Community 529]]
 - [[_COMMUNITY_Community 530|Community 530]]
@@ -559,16 +533,21 @@
 - [[_COMMUNITY_Community 545|Community 545]]
 - [[_COMMUNITY_Community 546|Community 546]]
 - [[_COMMUNITY_Community 547|Community 547]]
+- [[_COMMUNITY_Community 548|Community 548]]
 - [[_COMMUNITY_Community 549|Community 549]]
 - [[_COMMUNITY_Community 550|Community 550]]
 - [[_COMMUNITY_Community 551|Community 551]]
 - [[_COMMUNITY_Community 552|Community 552]]
+- [[_COMMUNITY_Community 553|Community 553]]
+- [[_COMMUNITY_Community 554|Community 554]]
 - [[_COMMUNITY_Community 555|Community 555]]
 - [[_COMMUNITY_Community 556|Community 556]]
 - [[_COMMUNITY_Community 557|Community 557]]
+- [[_COMMUNITY_Community 558|Community 558]]
 - [[_COMMUNITY_Community 559|Community 559]]
 - [[_COMMUNITY_Community 560|Community 560]]
 - [[_COMMUNITY_Community 561|Community 561]]
+- [[_COMMUNITY_Community 562|Community 562]]
 - [[_COMMUNITY_Community 563|Community 563]]
 - [[_COMMUNITY_Community 564|Community 564]]
 - [[_COMMUNITY_Community 565|Community 565]]
@@ -634,8 +613,10 @@
 - [[_COMMUNITY_Community 625|Community 625]]
 - [[_COMMUNITY_Community 626|Community 626]]
 - [[_COMMUNITY_Community 627|Community 627]]
+- [[_COMMUNITY_Community 628|Community 628]]
 - [[_COMMUNITY_Community 629|Community 629]]
 - [[_COMMUNITY_Community 630|Community 630]]
+- [[_COMMUNITY_Community 631|Community 631]]
 - [[_COMMUNITY_Community 632|Community 632]]
 - [[_COMMUNITY_Community 633|Community 633]]
 - [[_COMMUNITY_Community 634|Community 634]]
@@ -643,2334 +624,1432 @@
 - [[_COMMUNITY_Community 636|Community 636]]
 - [[_COMMUNITY_Community 637|Community 637]]
 - [[_COMMUNITY_Community 638|Community 638]]
-- [[_COMMUNITY_Community 639|Community 639]]
-- [[_COMMUNITY_Community 640|Community 640]]
-- [[_COMMUNITY_Community 648|Community 648]]
-- [[_COMMUNITY_Community 649|Community 649]]
-- [[_COMMUNITY_Community 650|Community 650]]
-- [[_COMMUNITY_Community 651|Community 651]]
-- [[_COMMUNITY_Community 652|Community 652]]
-- [[_COMMUNITY_Community 653|Community 653]]
-- [[_COMMUNITY_Community 654|Community 654]]
-- [[_COMMUNITY_Community 655|Community 655]]
-- [[_COMMUNITY_Community 656|Community 656]]
-- [[_COMMUNITY_Community 657|Community 657]]
-- [[_COMMUNITY_Community 658|Community 658]]
-- [[_COMMUNITY_Community 659|Community 659]]
-- [[_COMMUNITY_Community 660|Community 660]]
-- [[_COMMUNITY_Community 661|Community 661]]
-- [[_COMMUNITY_Community 662|Community 662]]
-- [[_COMMUNITY_Community 663|Community 663]]
-- [[_COMMUNITY_Community 664|Community 664]]
-- [[_COMMUNITY_Community 665|Community 665]]
-- [[_COMMUNITY_Community 666|Community 666]]
-- [[_COMMUNITY_Community 667|Community 667]]
-- [[_COMMUNITY_Community 668|Community 668]]
-- [[_COMMUNITY_Community 669|Community 669]]
-- [[_COMMUNITY_Community 670|Community 670]]
-- [[_COMMUNITY_Community 671|Community 671]]
-- [[_COMMUNITY_Community 672|Community 672]]
-- [[_COMMUNITY_Community 673|Community 673]]
-- [[_COMMUNITY_Community 674|Community 674]]
-- [[_COMMUNITY_Community 675|Community 675]]
-- [[_COMMUNITY_Community 676|Community 676]]
-- [[_COMMUNITY_Community 677|Community 677]]
-- [[_COMMUNITY_Community 678|Community 678]]
-- [[_COMMUNITY_Community 679|Community 679]]
-- [[_COMMUNITY_Community 680|Community 680]]
-- [[_COMMUNITY_Community 681|Community 681]]
-- [[_COMMUNITY_Community 682|Community 682]]
-- [[_COMMUNITY_Community 683|Community 683]]
-- [[_COMMUNITY_Community 684|Community 684]]
-- [[_COMMUNITY_Community 686|Community 686]]
-- [[_COMMUNITY_Community 687|Community 687]]
-- [[_COMMUNITY_Community 688|Community 688]]
-- [[_COMMUNITY_Community 689|Community 689]]
-- [[_COMMUNITY_Community 690|Community 690]]
-- [[_COMMUNITY_Community 691|Community 691]]
-- [[_COMMUNITY_Community 692|Community 692]]
-- [[_COMMUNITY_Community 693|Community 693]]
-- [[_COMMUNITY_Community 694|Community 694]]
-- [[_COMMUNITY_Community 695|Community 695]]
-- [[_COMMUNITY_Community 696|Community 696]]
-- [[_COMMUNITY_Community 697|Community 697]]
-- [[_COMMUNITY_Community 698|Community 698]]
-- [[_COMMUNITY_Community 699|Community 699]]
-- [[_COMMUNITY_Community 700|Community 700]]
-- [[_COMMUNITY_Community 705|Community 705]]
-- [[_COMMUNITY_Community 706|Community 706]]
-- [[_COMMUNITY_Community 707|Community 707]]
-- [[_COMMUNITY_Community 708|Community 708]]
-- [[_COMMUNITY_Community 709|Community 709]]
-- [[_COMMUNITY_Community 710|Community 710]]
-- [[_COMMUNITY_Community 711|Community 711]]
-- [[_COMMUNITY_Community 712|Community 712]]
-- [[_COMMUNITY_Community 713|Community 713]]
-- [[_COMMUNITY_Community 714|Community 714]]
-- [[_COMMUNITY_Community 715|Community 715]]
-- [[_COMMUNITY_Community 716|Community 716]]
-- [[_COMMUNITY_Community 717|Community 717]]
-- [[_COMMUNITY_Community 718|Community 718]]
-- [[_COMMUNITY_Community 719|Community 719]]
-- [[_COMMUNITY_Community 720|Community 720]]
-- [[_COMMUNITY_Community 721|Community 721]]
-- [[_COMMUNITY_Community 722|Community 722]]
-- [[_COMMUNITY_Community 723|Community 723]]
-- [[_COMMUNITY_Community 724|Community 724]]
-- [[_COMMUNITY_Community 725|Community 725]]
-- [[_COMMUNITY_Community 726|Community 726]]
-- [[_COMMUNITY_Community 727|Community 727]]
-- [[_COMMUNITY_Community 728|Community 728]]
-- [[_COMMUNITY_Community 729|Community 729]]
-- [[_COMMUNITY_Community 730|Community 730]]
-- [[_COMMUNITY_Community 731|Community 731]]
-- [[_COMMUNITY_Community 732|Community 732]]
-- [[_COMMUNITY_Community 733|Community 733]]
-- [[_COMMUNITY_Community 734|Community 734]]
-- [[_COMMUNITY_Community 735|Community 735]]
-- [[_COMMUNITY_Community 736|Community 736]]
-- [[_COMMUNITY_Community 737|Community 737]]
-- [[_COMMUNITY_Community 738|Community 738]]
-- [[_COMMUNITY_Community 739|Community 739]]
-- [[_COMMUNITY_Community 740|Community 740]]
-- [[_COMMUNITY_Community 741|Community 741]]
-- [[_COMMUNITY_Community 742|Community 742]]
-- [[_COMMUNITY_Community 743|Community 743]]
-- [[_COMMUNITY_Community 744|Community 744]]
-- [[_COMMUNITY_Community 745|Community 745]]
-- [[_COMMUNITY_Community 746|Community 746]]
-- [[_COMMUNITY_Community 747|Community 747]]
-- [[_COMMUNITY_Community 748|Community 748]]
-- [[_COMMUNITY_Community 749|Community 749]]
-- [[_COMMUNITY_Community 750|Community 750]]
-- [[_COMMUNITY_Community 751|Community 751]]
-- [[_COMMUNITY_Community 752|Community 752]]
-- [[_COMMUNITY_Community 753|Community 753]]
-- [[_COMMUNITY_Community 754|Community 754]]
-- [[_COMMUNITY_Community 755|Community 755]]
-- [[_COMMUNITY_Community 756|Community 756]]
-- [[_COMMUNITY_Community 757|Community 757]]
-- [[_COMMUNITY_Community 758|Community 758]]
-- [[_COMMUNITY_Community 759|Community 759]]
-- [[_COMMUNITY_Community 760|Community 760]]
-- [[_COMMUNITY_Community 761|Community 761]]
-- [[_COMMUNITY_Community 762|Community 762]]
-- [[_COMMUNITY_Community 763|Community 763]]
-- [[_COMMUNITY_Community 764|Community 764]]
-- [[_COMMUNITY_Community 765|Community 765]]
-- [[_COMMUNITY_Community 766|Community 766]]
-- [[_COMMUNITY_Community 767|Community 767]]
-- [[_COMMUNITY_Community 768|Community 768]]
-- [[_COMMUNITY_Community 769|Community 769]]
-- [[_COMMUNITY_Community 770|Community 770]]
-- [[_COMMUNITY_Community 771|Community 771]]
-- [[_COMMUNITY_Community 772|Community 772]]
-- [[_COMMUNITY_Community 773|Community 773]]
-- [[_COMMUNITY_Community 774|Community 774]]
-- [[_COMMUNITY_Community 775|Community 775]]
-- [[_COMMUNITY_Community 776|Community 776]]
-- [[_COMMUNITY_Community 777|Community 777]]
-- [[_COMMUNITY_Community 778|Community 778]]
-- [[_COMMUNITY_Community 779|Community 779]]
-- [[_COMMUNITY_Community 780|Community 780]]
-- [[_COMMUNITY_Community 781|Community 781]]
-- [[_COMMUNITY_Community 782|Community 782]]
-- [[_COMMUNITY_Community 783|Community 783]]
-- [[_COMMUNITY_Community 784|Community 784]]
-- [[_COMMUNITY_Community 785|Community 785]]
-- [[_COMMUNITY_Community 786|Community 786]]
-- [[_COMMUNITY_Community 787|Community 787]]
-- [[_COMMUNITY_Community 788|Community 788]]
-- [[_COMMUNITY_Community 789|Community 789]]
-- [[_COMMUNITY_Community 790|Community 790]]
-- [[_COMMUNITY_Community 791|Community 791]]
-- [[_COMMUNITY_Community 792|Community 792]]
-- [[_COMMUNITY_Community 793|Community 793]]
-- [[_COMMUNITY_Community 794|Community 794]]
-- [[_COMMUNITY_Community 795|Community 795]]
-- [[_COMMUNITY_Community 796|Community 796]]
-- [[_COMMUNITY_Community 797|Community 797]]
-- [[_COMMUNITY_Community 798|Community 798]]
-- [[_COMMUNITY_Community 799|Community 799]]
-- [[_COMMUNITY_Community 800|Community 800]]
-- [[_COMMUNITY_Community 801|Community 801]]
-- [[_COMMUNITY_Community 802|Community 802]]
-- [[_COMMUNITY_Community 803|Community 803]]
-- [[_COMMUNITY_Community 804|Community 804]]
-- [[_COMMUNITY_Community 805|Community 805]]
-- [[_COMMUNITY_Community 806|Community 806]]
-- [[_COMMUNITY_Community 807|Community 807]]
-- [[_COMMUNITY_Community 808|Community 808]]
-- [[_COMMUNITY_Community 809|Community 809]]
-- [[_COMMUNITY_Community 810|Community 810]]
-- [[_COMMUNITY_Community 811|Community 811]]
-- [[_COMMUNITY_Community 812|Community 812]]
-- [[_COMMUNITY_Community 813|Community 813]]
-- [[_COMMUNITY_Community 814|Community 814]]
-- [[_COMMUNITY_Community 815|Community 815]]
-- [[_COMMUNITY_Community 816|Community 816]]
-- [[_COMMUNITY_Community 817|Community 817]]
-- [[_COMMUNITY_Community 818|Community 818]]
-- [[_COMMUNITY_Community 819|Community 819]]
-- [[_COMMUNITY_Community 820|Community 820]]
-- [[_COMMUNITY_Community 821|Community 821]]
-- [[_COMMUNITY_Community 822|Community 822]]
-- [[_COMMUNITY_Community 823|Community 823]]
-- [[_COMMUNITY_Community 824|Community 824]]
-- [[_COMMUNITY_Community 825|Community 825]]
-- [[_COMMUNITY_Community 826|Community 826]]
-- [[_COMMUNITY_Community 827|Community 827]]
-- [[_COMMUNITY_Community 828|Community 828]]
-- [[_COMMUNITY_Community 829|Community 829]]
-- [[_COMMUNITY_Community 830|Community 830]]
-- [[_COMMUNITY_Community 831|Community 831]]
-- [[_COMMUNITY_Community 832|Community 832]]
-- [[_COMMUNITY_Community 833|Community 833]]
-- [[_COMMUNITY_Community 834|Community 834]]
-- [[_COMMUNITY_Community 835|Community 835]]
-- [[_COMMUNITY_Community 836|Community 836]]
-- [[_COMMUNITY_Community 837|Community 837]]
-- [[_COMMUNITY_Community 838|Community 838]]
-- [[_COMMUNITY_Community 839|Community 839]]
-- [[_COMMUNITY_Community 840|Community 840]]
-- [[_COMMUNITY_Community 841|Community 841]]
-- [[_COMMUNITY_Community 842|Community 842]]
-- [[_COMMUNITY_Community 843|Community 843]]
-- [[_COMMUNITY_Community 844|Community 844]]
 
 ## God Nodes (most connected - your core abstractions)
-1. `main()` - 312 edges
-2. `init()` - 173 edges
+1. `main()` - 408 edges
+2. `list()` - 112 edges
 3. `require_feature_access()` - 110 edges
-4. `Troubleshooting` - 106 edges
-5. `code:json ({)` - 84 edges
-6. `list()` - 74 edges
-7. `get_db()` - 72 edges
-8. `OpenClaw` - 57 edges
-9. `GameManager` - 54 edges
-10. `chat()` - 53 edges
+4. `chat.py` - 73 edges
+5. `_FakeAdapter` - 71 edges
+6. `evidence_from_handoff()` - 59 edges
+7. `PipelineState` - 57 edges
+8. `_proposal()` - 52 edges
+9. `_load_module()` - 52 edges
+10. `memory_service.py` - 52 edges
 
 ## Surprising Connections (you probably didn't know these)
-- `Get Similar Tracks` --calls--> `get_recommendation_engine()`  [INFERRED]
-  docs/api/MUSIC_API.md → modules/zoe-music/services/music/recommendation_engine.py
-- `home-assistant` --uses--> `OutputType`  [INFERRED]
-  CAPABILITIES.md → modules/zoe-music/services/music/outputs/base.py
-- `home-assistant` --uses--> `OutputState`  [INFERRED]
-  CAPABILITIES.md → modules/zoe-music/services/music/outputs/base.py
-- `memory-consolidation` --calls--> `run_weekly_consolidation()`  [INFERRED]
-  CAPABILITIES.md → services/zoe-data/memory_digest.py
-- `lifespan()` --calls--> `PeopleHealthTrigger`  [INFERRED]
-  services/zoe-data/main.py → docs/guides/people_crm.md
+- `PromptPacketMeasureCase` --uses--> `MemPalace Baseline`  [INFERRED]
+  services/zoe-data/zoe_memory_prompt_packet_measure.py → docs/architecture/zoe-mempalace-baseline.md
+- `test_ingest_passes_first_class_event_metadata_to_writer()` --calls--> `memory_service.py`  [INFERRED]
+  /home/zoe/assistant/services/zoe-data/tests/test_memory_service_metadata.py → docs/guides/people_crm.md
+- `build_capability_profile_promotion_plan()` --calls--> `Zoe Capability Profile`  [INFERRED]
+  /home/zoe/assistant/services/zoe-data/zoe_capability_profile_promotion.py → docs/architecture/zoe-capability-profiles.md
+- `_promotion_blockers()` --calls--> `Zoe Capability Profile`  [INFERRED]
+  /home/zoe/assistant/services/zoe-data/zoe_capability_profile_promotion.py → docs/architecture/zoe-capability-profiles.md
+- `PromptPacketMemoryService` --uses--> `MemPalace Baseline`  [INFERRED]
+  services/zoe-data/zoe_memory_prompt_packet_measure.py → docs/architecture/zoe-mempalace-baseline.md
 
-## Communities (845 total, 301 thin omitted)
+## Communities (639 total, 265 thin omitted)
 
 ### Community 0 - "Community 0"
-Cohesion: 0.02
-Nodes (95): Main optimization function, Analyze a single database and return schema information, Main analysis function, Run comprehensive audit, fix_router_file(), Fix a single router file's database paths, Fix all routers in the routers directory, Main cleanup function. (+87 more)
+Cohesion: 0.01
+Nodes (60): _FakeAdapter, Tests for the Hermes Kanban executor adapter (CLI mocked)., A Kanban list row shaped like the real CLI: body marker, NO idempotency_key., KanbanAdapter with the CLI replaced by a scripted recorder., _row(), test_dispatch_blocks_existing_pr_revision_when_precheckout_fails(), test_dispatch_blocks_on_first_worker_failure(), test_dispatch_blocks_regular_worktree_failures_with_generic_reason() (+52 more)
 
 ### Community 1 - "Community 1"
-Cohesion: 0.04
-Nodes (108): rate_limit(), Create a rate limiting dependency with Redis-based sliding window          Args:, Add to Playlist, Create Playlist, Get Liked Songs, Get Playlist Tracks, Get Similar Tracks, Playlist Endpoints (+100 more)
+Cohesion: 0.02
+Nodes (99): Main optimization function, analyze_database(), Analyze a single database and return schema information, Main analysis function, Run comprehensive audit, _active_memory_files(), _assert_hindsight_policy(), _fail() (+91 more)
 
 ### Community 2 - "Community 2"
-Cohesion: 0.04
-Nodes (72): Add to Queue, Select Output Device, Get session by ID with validation, MCPMusicStateManager, get_event_tracker(), Get the singleton event tracker instance., MediaController, Media Controller ================  Routes playback commands to appropriate devic (+64 more)
+Cohesion: 0.03
+Nodes (99): Override to customise the prompt per-check., Resolve a browser session_id to a user_id via zoe-auth HTTP.      Calls the same, Local voice session WebSocket for voice.html.      Accepts text and binary (audi, Inject request_id into every log record while a request is active., RequestIdFilter, _resolve_ws_user(), websocket_voice(), _bash() (+91 more)
 
 ### Community 3 - "Community 3"
-Cohesion: 0.03
-Nodes (70): browse(), Browser automation endpoint - navigates websites and extracts data.          Use, Log startup information., startup_event(), ha_voice_turn(), ha_voice_wake(), Forward HA wake events to zoe-data HA voice ingress., Forward HA transcript turns to zoe-data -> Hermes voice ingress. (+62 more)
+Cohesion: 0.04
+Nodes (69): chat.py, P0-2: Confidence Formatting, P0-1: Context Validation, P0-3: Dynamic Temperature, P0-4: Grounding Checks, P1-1: Behavioral Memory, _build_hermes_payload(), _build_panel_intent_card() (+61 more)
 
 ### Community 4 - "Community 4"
-Cohesion: 0.06
-Nodes (79): Override to customise the prompt per-check., Local voice session WebSocket for voice.html.      Accepts text and binary (audi, websocket_voice(), _bash(), _build_memory_context(), _build_prompt(), _build_tools(), _chat_capability_shortcut() (+71 more)
+Cohesion: 0.05
+Nodes (45): Get session by ID with validation, MCPMusicStateManager, get_event_tracker(), Get the singleton event tracker instance., MediaController, Media Controller ================  Routes playback commands to appropriate devic, Play a track on the target device.                  Args:             track_id:, Lazy load event tracker. (+37 more)
 
 ### Community 5 - "Community 5"
-Cohesion: 0.03
-Nodes (71): memory-consolidation, a2a_task(), a2a_task_result(), a2a_task_stream(), _A2ATaskRequest, agent_card(), board_cancel(), board_review() (+63 more)
+Cohesion: 0.04
+Nodes (62): browse(), Browser automation endpoint - navigates websites and extracts data.          Use, Log startup information., startup_event(), AutomationTriggerRequest, DeviceControlRequest, ha_voice_turn(), ha_voice_wake() (+54 more)
 
 ### Community 6 - "Community 6"
-Cohesion: 0.04
-Nodes (73): home-assistant, homeassistant-mcp-bridge, Get all discovered AirPlay devices, Get current playback state from an AirPlay device, Get all discovered Chromecast devices, Get a specific device by ID, Get current playback state from a Chromecast, Get device info from database. (+65 more)
+Cohesion: 0.07
+Nodes (64): test_execution_gate_allows_when_required_evidence_refs_exist(), test_execution_gate_fails_closed_without_approval_evidence(), test_missing_approval_required_blocks_execution(), test_missing_proposal_id_blocks_execution(), test_non_execute_proposal_cannot_execute_even_with_evidence(), test_promote_memory_admission_requires_memory_approval_and_pr(), test_unknown_approval_class_blocks_execution(), test_failed_outcome_remains_pending_only_and_never_trusted_durable_memory() (+56 more)
 
 ### Community 7 - "Community 7"
-Cohesion: 0.05
-Nodes (68): get_db(), create_session(), _gen_join_code(), Generate a memorable 4-character uppercase join code., _build_panel_intent_card(), cancel_latest_run(), chat_stream_generator(), _chatgpt_connect_flow() (+60 more)
+Cohesion: 0.03
+Nodes (64): a2a_task_result(), a2a_task_stream(), _A2ATaskRequest, board_cancel(), board_review(), build_engineering_guard_packet(), delegate_to_agent(), _EngineeringGuardRunRequest (+56 more)
 
 ### Community 8 - "Community 8"
 Cohesion: 0.05
-Nodes (69): BaseModel, note_create, note_update, reminder_create, reminder_update, transaction_create, AutomationTriggerRequest, DeviceControlRequest (+61 more)
-
-### Community 9 - "Community 9"
-Cohesion: 0.05
 Nodes (34): CalendarExpert, HomeAssistantExpert, ImprovedBirthdayExpert, JournalExpert, ListExpert, MemoryExpert, PlanningExpert, Comprehensive Expert System Test Suite ====================================== Te (+26 more)
 
+### Community 9 - "Community 9"
+Cohesion: 0.06
+Nodes (60): Get detailed status of Agent Zero service.          Returns:         Status info, status(), test_build_packet_contains_cost_policy_and_required_evidence(), test_unknown_candidate_is_rejected(), test_main_blocks_repo_mode_before_probe(), test_main_returns_1_when_all_models_are_rejected(), test_main_writes_status_json_and_allows_partial(), test_run_model_matrix_rejects_repo_mode_without_explicit_allowance() (+52 more)
+
 ### Community 10 - "Community 10"
-Cohesion: 0.04
-Nodes (65): activate_scene(), analyze_home_assistant(), get_automations(), get_entities(), get_entity(), get_lights(), get_scenes(), get_scripts() (+57 more)
+Cohesion: 0.07
+Nodes (58): FakeMulticaClient, _load_runner(), test_workflow_cli_bad_file_path_fails_cleanly(), test_workflow_cli_blocks_without_greptile_ref(), test_workflow_cli_outputs_allowed_plan(), test_workflow_cli_render_patch_fails_closed_when_blocked(), test_workflow_cli_render_patch_outputs_allowed_patch(), _write_fixture_files() (+50 more)
 
 ### Community 11 - "Community 11"
-Cohesion: 0.04
-Nodes (66): For Production Use, Next Steps, Optional Enhancements, High Priority:, Low Priority:, Medium Priority:, Low Priority (Future Releases), Medium Priority (Next Sprint) (+58 more)
+Cohesion: 0.05
+Nodes (57): FileSystemEventHandler, get_peer_agent_card(), Return a live A2A v1.0 proxy card for a peer agent with dynamic skills[]., Admin-only: force-flush the skill discovery cache for a peer agent., reload_peer_skills(), test_capabilities_snapshot_is_stable(), test_generated_context_mentions_hermes_engineering_loop(), test_graphify_rebuild_is_opt_in_by_default() (+49 more)
 
 ### Community 12 - "Community 12"
-Cohesion: 0.06
-Nodes (56): attachCardActions(), buildActionButtons(), buildMatchCard(), hideSDTimerOverlay(), hideSpeedDatingBanner(), loadMatches(), loadPendingConnections(), metPeople (+48 more)
+Cohesion: 0.05
+Nodes (43): Generate comprehensive audit report, Run comprehensive test suite, Test that API endpoints are accessible, IntelligentSystemTester, Test manual model adaptation, Run comprehensive test of the intelligent system, Test the intelligent model management system, Test the enhanced chat endpoint (+35 more)
 
 ### Community 13 - "Community 13"
 Cohesion: 0.05
-Nodes (59): AuthResponse, get_current_user(), get_passcode_status(), get_user_profile(), guest_login(), InitialPasswordSetupRequest, login(), login_passcode() (+51 more)
+Nodes (58): Test that pattern extraction is fast enough for nightly jobs, fresh_collection(), _install_mempalace_stubs(), Comprehensive MemPalace integration tests.  Tests: user isolation, upsert behavi, Install mempalace module stubs so zoe_agent doesn't require the real package., Reset the in-memory Chroma collection before each test.      Also resets the Mem, Writing for 'jason' must not appear when loading facts for 'family-admin'., Deleting a CRM entity should archive all scoped MemPalace facts for it. (+50 more)
 
 ### Community 14 - "Community 14"
-Cohesion: 0.07
-Nodes (53): boot(), btnJoin, code, codeError, doCheckin(), enterWelcomeScreen(), joinCodeInput, joinNameInput (+45 more)
+Cohesion: 0.06
+Nodes (34): Health check endpoint.          Returns service health and Agent Zero availabili, health(), FakeHindsightClient, test_enabled_status_includes_embedding_config(), test_operation_status_gets_hindsight_operation_endpoint(), test_recall_posts_trace_enabled_request(), test_recall_uses_user_and_scope_isolated_bank_ids(), test_request_wraps_non_json_response() (+26 more)
 
 ### Community 15 - "Community 15"
-Cohesion: 0.07
-Nodes (20): Clear Queue, Delete Playlist, Get Next Track, Get Queue, Queue Endpoints, Remove from Queue, Reorder Queue, Shuffle Queue (+12 more)
+Cohesion: 0.04
+Nodes (58): AuthResponse, get_current_user(), get_passcode_status(), get_user_profile(), guest_login(), InitialPasswordSetupRequest, login(), login_passcode() (+50 more)
 
 ### Community 16 - "Community 16"
 Cohesion: 0.05
-Nodes (37): Check if Agent Zero is available.                  Returns:             True if, Analyze a target (file, system, configuration).                  Args:, analyze(), Analysis endpoint - analyzes files, configurations, systems.          Uses Agent, Analyze all files in root, RootCleaner, AudioAnalyzer, Audio Analyzer ==============  Extracts audio features from music tracks using E (+29 more)
+Nodes (39): demo_action_execution(), demo_complex_queries(), demo_memory_storage(), Demo: Action execution (lists, calendar, etc.), Send a chat message to Zoe, Demo: Complex queries requiring reasoning, Demo: P0-2 Confidence formatting, Verify that a fact was stored in memory (+31 more)
 
 ### Community 17 - "Community 17"
-Cohesion: 0.06
-Nodes (36): list_users(), Get all active sessions for a specific user (admin only)          Args:, List all users (admin only)          Args:         active_only: Filter to active, escalate_session(), get_user_sessions(), Refresh current session expiration          Args:         current_session: Curre, Escalate passcode session to full session with password verification          Ar, Get all active sessions for current user          Args:         current_session: (+28 more)
+Cohesion: 0.05
+Nodes (56): get_plugins(), get_skills(), install_plugin_endpoint(), install_skill_endpoint(), openclaw_health(), preview_skill_endpoint(), routers/openclaw.py — REST API for OpenClaw plugin and skill management.  Endpoi, Return workspace-installed + eligible bundled skills for the skills_manager comp (+48 more)
 
 ### Community 18 - "Community 18"
-Cohesion: 0.06
-Nodes (51): run_music_digest(), Manually trigger the LLM memory digest for a user (or the requesting user)., trigger_memory_digest(), _deep_sleep_pass(), _emotional_memory_pass(), _extract_concept_tags(), _extract_facts_with_gemma(), _extract_open_loops() (+43 more)
+Cohesion: 0.07
+Nodes (57): post_install_component(), build_updates_snapshot(), _check_and_notify_zoe_release(), _check_docker_service(), _check_hermes(), _check_openclaw(), _check_zoe_data(), _docker_inspect() (+49 more)
 
 ### Community 19 - "Community 19"
-Cohesion: 0.07
-Nodes (51): post_install_component(), build_updates_snapshot(), _check_and_notify_zoe_release(), _check_docker_service(), _check_hermes(), _check_zoe_data(), _docker_inspect(), _dockerhub_digest() (+43 more)
+Cohesion: 0.06
+Nodes (54): AnalyzeRequest, BrowseRequest, CompareRequest, PlanRequest, Request model for browser automation endpoint., Request model for planning endpoint., Request model for analysis endpoint., Request model for comparison endpoint. (+46 more)
 
 ### Community 20 - "Community 20"
 Cohesion: 0.06
-Nodes (33): Generate comprehensive audit report, Test that API endpoints are accessible, IntelligentSystemTester, Test manual model adaptation, Run comprehensive test of the intelligent system, Test the intelligent model management system, Test the enhanced chat endpoint, Test the performance monitoring endpoints (+25 more)
+Nodes (51): Engineering Harness Loop, Multica-First Engineering Driver, cleanup_documentation_files(), cleanup_duplicate_files(), cleanup_python_cache(), cleanup_ui_dist_files(), optimize_git(), Remove duplicate or redundant files (+43 more)
 
 ### Community 21 - "Community 21"
-Cohesion: 0.06
-Nodes (50): get_contact(), get_session_by_code(), Look up an active session by its short join code., Recipient retrieves the contact details., Convert asyncpg Row to dict, parsing metadata JSON., create_entry(), delete_entry(), get_entry() (+42 more)
+Cohesion: 0.07
+Nodes (41): MULClient, list_projects(), close_stale_autopilot_wrappers(), _fire_autopilot_job(), get_autopilot_triggers(), get_multica_autopilots(), _headers(), _is_configured() (+33 more)
 
 ### Community 22 - "Community 22"
-Cohesion: 0.06
-Nodes (49): _build_calendar_form_props(), _build_reminder_form_props(), _intent_action_form_payload(), Build a panel_show_action_form payload for intents that show an in-place overlay, HA full-setup shorthand intent and OpenClaw message expansion., test_detect_ha_full_setup(), test_execute_ha_full_setup_returns_none(), test_openclaw_user_message_expands_with_intent() (+41 more)
+Cohesion: 0.07
+Nodes (37): DatabaseValidator, Find all .db files in data directory, Check if file is in a backup/archive location, Validate database structure, Zoe Candidate Scoring, IntentValidator, Validate a single YAML file.                  Returns:             (success, int, Check that handlers are registered for all intents. (+29 more)
 
 ### Community 23 - "Community 23"
 Cohesion: 0.06
-Nodes (46): Get user information (without sensitive data), hash_secret(), OIDC client registration and secret verification., Exact match only — no wildcards., Insert or update a client. Safe to call on every startup., upsert_client(), validate_redirect_uri(), verify_secret() (+38 more)
+Nodes (47): Get current playback state from an AirPlay device, Get current playback state from a Chromecast, Seek to position in current track., Set playback volume (0-100)., Seek to position in a zone, Set volume for a zone, get_connect_info(), QR scan landing — returns scanned person's public profile + compatibility. (+39 more)
 
 ### Community 24 - "Community 24"
-Cohesion: 0.06
-Nodes (32): check_permission(), Check if current user has specific permission          Args:         permission:, AccessContext, PermissionResult, Role-Based Access Control (RBAC) System Advanced permission management with inhe, Role-Based Access Control Manager, Check if user has specific permission                  Args:             user_id, Check multiple permissions at once                  Args:             user_id: U (+24 more)
+Cohesion: 0.07
+Nodes (37): Unit tests for person_extractor.py — pattern matching and process_text() logic., Integration-style tests that mock DB and MemPalace., Create a mock DB that returns person_id on SELECT., test_birthday_pattern_known_person_writes_date(), test_bucket_list_pattern_writes_bucket(), test_empty_text_returns_zero(), test_gift_pattern_known_person_writes_gift(), test_guest_returns_zero() (+29 more)
 
 ### Community 25 - "Community 25"
-Cohesion: 0.13
-Nodes (13): pickWinner(), submitCards(), _cancel_timer(), GameError, GameManager, get_game(), start_game(), ws_console() (+5 more)
+Cohesion: 0.07
+Nodes (46): get_auth_manager(), Get the singleton auth manager instance., Normalize a YouTube Music item to standard format., Make a request to the Home Assistant API., AppleMusicProvider, Get user's Music User Token from database., Make authenticated API request., Check if user is authenticated with Apple Music. (+38 more)
 
 ### Community 26 - "Community 26"
 Cohesion: 0.06
-Nodes (45): fresh_collection(), _install_mempalace_stubs(), Comprehensive MemPalace integration tests.  Tests: user isolation, upsert behavi, Install mempalace module stubs so zoe_agent doesn't require the real package., Reset the in-memory Chroma collection before each test.      Also resets the Mem, Writing for 'jason' must not appear when loading facts for 'family-admin'., Deleting a CRM entity should archive all scoped MemPalace facts for it., Writing for 'family-admin' must not appear when loading facts for 'jason'. (+37 more)
+Nodes (29): test_dispatch_does_not_parent_recovered_phase_to_blocked_prior_row(), test_dispatch_resumed_todo_archives_blocked_current_phase_before_retry(), test_dispatch_resumed_todo_reports_archive_failure_without_create(), test_dispatch_retro_uses_main_repo_workspace(), test_poll_ignores_stale_terminal_row_for_revision_phase(), test_poll_non_v4_pipeline_terminal_block_stays_blocked(), test_poll_v4_partial_clears_stale_prior_phase_blocker(), test_poll_v4_resumed_skip_scout_ignores_stale_scout_blocker() (+21 more)
 
 ### Community 27 - "Community 27"
-Cohesion: 0.07
-Nodes (33): Enum, AirPlay Output Target =====================  Implementation of OutputTarget for, is_initialized(), output_type(), OutputState, OutputType, Output Target Base Class ========================  Abstract base class for all a, Types of output targets. (+25 more)
+Cohesion: 0.1
+Nodes (47): test_dispatch_after_scout_evidence_creates_next_phase(), test_audit_profile_closeout_requires_log_not_greptile(), test_audit_profile_verify_does_not_require_test(), test_block_preserves_phase_and_evidence_until_restarted(), test_build_scope_split_packet_preserves_worker_reason(), test_evidence_metadata_rejects_secret_fields(), test_explicit_scope_split_is_allowed_from_scout(), test_failed_evidence_does_not_satisfy_gate() (+39 more)
 
 ### Community 28 - "Community 28"
-Cohesion: 0.05
-Nodes (48): code:typescript (import * as zoeCalendar from './servers/zoe-calendar';), Example 1: Simple Tool Call, Example 2: Filtering Data, Example 3: Multi-Tool Workflow, code:typescript (import * as zoeLists from './servers/zoe-lists';), Basic Chat Completion, code:bash (curl -X POST http://zoe-litellm:8001/v1/chat/completions \), code:bash (pytest tests/ -v --cov=routers) (+40 more)
+Cohesion: 0.06
+Nodes (38): list_items(), List items of a list. Sorted by sort_order, then created_at., Tests for Zoe card service foundation., Test building a valid card contract., Test domain builder registry functionality., Test global card service instance., Test validating a valid card contract., Test validating an invalid card contract raises error. (+30 more)
 
 ### Community 29 - "Community 29"
 Cohesion: 0.08
-Nodes (47): add_activity(), add_bucket_item(), add_gift_idea(), add_important_date(), add_relationship(), _archive_person_mempalace(), create_person(), delete_person() (+39 more)
+Nodes (48): Attach Hermes log evidence when a silent exit was really a budget stop., _with_recovered_log_budget(), _budget_phase(), _focused_harness_test_path(), implement_code_audit_post_patch_drift_reason_from_log(), implement_code_audit_post_validation_ship_reason_from_log(), implement_edit_safety_reason_from_log(), implement_intent_gap_pre_edit_reason_from_log() (+40 more)
 
 ### Community 30 - "Community 30"
-Cohesion: 0.06
-Nodes (45): _broadcast_calendar_chat_prefill_ui(), _broadcast_calendar_ui(), _broadcast_shopping_chat_ui(), chatgpt_auth_status(), _extract_complete_sentences(), _get_kokoro_instance(), get_livekit_token(), _has_espeak_ng() (+37 more)
+Cohesion: 0.11
+Nodes (44): test_capability_trust_update_skips_trusted_noop_candidate(), _candidate(), _signal(), test_approved_status_requires_approval_gate(), test_build_proposal_collects_signal_and_candidate_evidence(), test_candidate_gate_blocks_unknown_offline_candidate(), test_execute_gate_requires_pr_evidence_even_with_approval(), test_execute_proposal_requires_approval() (+36 more)
 
 ### Community 31 - "Community 31"
-Cohesion: 0.06
-Nodes (37): analyze_login_patterns(), AuditLogger, log_authentication_attempt(), log_security_event(), RateLimiter, RateLimitRule, Security Features and Controls Rate limiting, audit logging, and advanced securi, Clear rate limit for identifier (admin function) (+29 more)
+Cohesion: 0.07
+Nodes (43): Get user information (without sensitive data), hash_secret(), OIDC client registration and secret verification., Exact match only — no wildcards., Insert or update a client. Safe to call on every startup., upsert_client(), validate_redirect_uri(), verify_secret() (+35 more)
 
 ### Community 32 - "Community 32"
 Cohesion: 0.06
-Nodes (29): Execute comprehensive test suite, Test RouteLLM classification, Test Enhanced MemAgent, Test RAG enhancements, Test full chat API endpoint with authentication, Get JWT token from zoe-auth service for authenticated requests, SystemTester, test_conversation() (+21 more)
+Nodes (37): analyze_login_patterns(), AuditLogger, log_authentication_attempt(), log_security_event(), RateLimiter, RateLimitRule, Security Features and Controls Rate limiting, audit logging, and advanced securi, Clear rate limit for identifier (admin function) (+29 more)
 
 ### Community 33 - "Community 33"
-Cohesion: 0.04
-Nodes (44): 1. Fastest Setup (2 minutes), 1. "Talk to Zoe" - Voice Chat Shortcut, 2. "Add to Zoe" - Quick Capture, 2. Complete Setup (5 minutes), 3. "Open Zoe Calendar" - Quick Access, 4. "Show Zoe Dashboard" - Status View, 5. Share from Other Apps, "Add Shopping Item" (+36 more)
+Cohesion: 0.06
+Nodes (44): Manually trigger the weekly consolidation pass.      Admin-only when ``user_id``, Manually trigger the LLM memory digest for a user (or the requesting user)., Manually trigger full nightly dreaming cycle including evolution notice (admin o, trigger_memory_consolidation(), trigger_memory_digest(), trigger_run_digest(), _deep_sleep_pass(), _emotional_memory_pass() (+36 more)
 
 ### Community 34 - "Community 34"
 Cohesion: 0.05
-Nodes (43): 2. Start the Bridge Service, 3. Verify Services, 4. Environment Configuration, code:bash (cd /home/zoe/assistant/modules/agent-zero), code:bash (# Check both containers are running), code:bash (# Agent Zero Configuration), code:bash (git clone https://github.com/jason-easyazz/zoe-ai-assistant.), code:bash (docker compose up -d zoe-auth zoe-ui homeassistant homeassis) (+35 more)
+Nodes (44): create_role(), get_audit_logs(), get_sync_data(), get_system_stats(), invalidate_session_admin(), list_all_sessions(), list_roles(), list_users() (+36 more)
 
 ### Community 35 - "Community 35"
 Cohesion: 0.07
-Nodes (40): print_results(), Scan entire project and categorize all files., Check if path should be ignored., Categorize a file and determine if it's in the right location.          Returns:, scan_project(), should_ignore(), Print validation results.          Returns:         Exit code (0 if all files ex, check_root_md_limit() (+32 more)
+Nodes (38): Hindsight Bake-off, bakeoff_runner(), test_eval_queries_can_be_parameterized_for_multi_user_runs(), test_eval_queries_expand_for_recall_budgets_without_mutating_defaults(), test_eval_queries_keep_default_budgets_when_no_override_is_given(), test_maintenance_runner_imports_real_bakeoff_module(), test_recall_budget_normalization_rejects_blank_values(), test_recall_budgets_normalize_and_dedupe() (+30 more)
 
 ### Community 36 - "Community 36"
-Cohesion: 0.05
-Nodes (44): "Code execution blocked", "Research taking too long", Connection Refused, Slow Responses, code:bash (# Should return 404 or connection error), WebSocket Always Failing, Pi Issues, Pi Issues *(Historical -- Pi retired Apr 2026)* (+36 more)
+Cohesion: 0.09
+Nodes (6): saveZoneEditor(), showToast(), MusicPlaylistsWidget, MusicQueueWidget, MusicSearchWidget, Remove a track from the queue.                  Args:             position: If s
 
 ### Community 37 - "Community 37"
-Cohesion: 0.05
-Nodes (42): code:python (routing = await route_llm_router.route_query("add bread to s), code:python (result = await enhanced_mem_agent.enhanced_search("add bread), Enhanced MemAgent Test, RouteLLM Test, code:bash (# Test fixed GPU model), Verified Working, code:block5 (📡 AG-UI Event: session_start), Expected Console Output (+34 more)
+Cohesion: 0.1
+Nodes (26): memory_service.py, person_extractor.process_text(), routers/people.py, Get a specific provider by type.                  Args:             provider_typ, _get(), Return Atomic semantic hits as normalized records., _build_metadata(), _idempotency_key() (+18 more)
 
 ### Community 38 - "Community 38"
-Cohesion: 0.07
-Nodes (40): _agent_loop(), _build_room_handlers(), _collect_audio_stream(), _cooldown_watchdog(), _get_current_user_soft(), _handle_ptt_stop(), livekit_audio(), livekit_cancel() (+32 more)
+Cohesion: 0.09
+Nodes (43): Tests for Kanban handoff → pipeline evidence parsing., test_audit_no_code_test_exemption_is_verify_only(), test_audit_no_code_verify_tests_count_as_passed(), test_block_substrings_do_not_reject_successful_test_evidence(), test_blocked_validator_does_not_count_as_passed(), test_closeout_audit_only_handoff_accepts_indented_log_lines(), test_closeout_audit_only_handoff_records_log_evidence(), test_closeout_does_not_infer_audit_log_from_generic_summary_without_pr() (+35 more)
 
 ### Community 39 - "Community 39"
-Cohesion: 0.07
-Nodes (33): BaseHTTPMiddleware, How Proactive Nudges Fire, PeopleBirthdayTrigger, PeopleHealthTrigger, person_health.calc_health_score(), check(), What a trigger wants to send., TriggerResult (+25 more)
+Cohesion: 0.09
+Nodes (40): BaseHTTPMiddleware, _audit_no_pr_issue(), _chain_for_issue(), _code_audit_implement_hint(), _engineering_mode(), _escalation_model_hint(), _existing_pr_url(), _goal_mode_args() (+32 more)
 
 ### Community 40 - "Community 40"
-Cohesion: 0.07
-Nodes (27): create_user(), Create new user (admin only)          Args:         request: User creation detai, change_password(), Change current user's password          Args:         request: Current and new p, AuthManager, AuthValidationResult, Verify user password                  Args:             user_id: User identifier, Change user password                  Args:             user_id: User identifier (+19 more)
+Cohesion: 0.08
+Nodes (39): Create a multi-step plan for a task.                  Args:             task: Ta, plan(), Planning endpoint - creates multi-step plans.          Uses Agent Zero to:, Cursor Prompt Templates, Decision Log, Metrics Tracking, Implementation Progress, Memory & Hallucination Reduction - Implementation Directory (+31 more)
 
 ### Community 41 - "Community 41"
-Cohesion: 0.05
-Nodes (38): Health check endpoint.          Returns service health and Agent Zero availabili, Additional Optimizations, After Fix:, Before Fix:, Expected Performance, Console Warnings to Watch, Success Messages, After Consolidation (+30 more)
+Cohesion: 0.1
+Nodes (36): test_outcome_profile_handoff_blocks_unretained_outcome(), test_outcome_profile_handoff_blocks_without_pr_evidence_before_payload(), test_outcome_profile_handoff_blocks_without_trust_review_approval_refs(), test_outcome_profile_handoff_closes_retained_outcome_to_multica_packet_loop(), test_outcome_profile_handoff_serializes_nested_contract_state(), test_profile_patch_writer_blocks_unapplyable_promotion_plan(), test_profile_promotion_handoff_plan_blocks_missing_pr_evidence_without_payload(), test_profile_promotion_handoff_plan_blocks_stale_source_before_handoff_payload() (+28 more)
 
 ### Community 42 - "Community 42"
-Cohesion: 0.09
-Nodes (35): evolution_proposal_action(), Act on an evolution proposal: approve|reject|defer.      On approve: creates a M, _fire_autopilot_job(), get_autopilot_triggers(), get_multica_autopilots(), _headers(), _is_configured(), multica_autopilot_sync.py — Syncs Multica autopilot schedules to APScheduler.  O (+27 more)
+Cohesion: 0.07
+Nodes (28): Refresh current session expiration          Args:         current_session: Curre, refresh_session(), Verify passcode for user                  Args:             user_id: User identi, AuthenticationResult, EnhancedSessionManager, Enhanced session manager with multi-factor support, Authenticate user and create session                  Args:             request:, Refresh session expiration (+20 more)
 
 ### Community 43 - "Community 43"
-Cohesion: 0.08
-Nodes (37): Clean up Python cache, code:bash (find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/nu), cleanup_documentation_files(), cleanup_duplicate_files(), cleanup_ui_dist_files(), optimize_git(), Remove duplicate or redundant files, Remove redundant documentation files (+29 more)
+Cohesion: 0.05
+Nodes (33): check_readme_links(), find_doc_references(), find_hardcoded_paths(), generate_report(), Check if README references are current, Generate audit report, Find all references to documentation files in code, Find hardcoded paths to documentation (+25 more)
 
 ### Community 44 - "Community 44"
-Cohesion: 0.05
-Nodes (29): Initialize Agent Zero client.                  Args:             base_url: Base, Initialize safety guardrails.                  Args:             mode: Safety mo, init(), Initialize the affinity engine.                  Args:             half_life_day, Initialize the AirPlay service, Initialize the audio analyzer with Essentia., Initialize the auth manager.                  Args:             encryption_key:, Initialize the Cast service (+21 more)
+Cohesion: 0.06
+Nodes (32): AirPlayDevice, AirPlayService, AirPlay Integration Service Discovers and controls AirPlay devices for music pla, Start discovering AirPlay devices, Connect to an AirPlay device, Play media on an AirPlay device                  Args:             device_id: Ta, Represents a discovered AirPlay device, Send a control command to an AirPlay device                  Args:             d (+24 more)
 
 ### Community 45 - "Community 45"
-Cohesion: 0.05
-Nodes (38): create_role(), get_audit_logs(), get_sync_data(), get_system_stats(), invalidate_session_admin(), list_all_sessions(), list_roles(), PasscodeSetRequest (+30 more)
+Cohesion: 0.06
+Nodes (26): Clear the stream URL cache., Get cache statistics., CachedSession, CachedUser, Touch Panel Local Caching System Optimized for fast authentication on touch pane, Verify passcode using cached data (offline mode)                  Args:, Cached user information for touch panels, Cache session for offline use                  Args:             session_id: Ses (+18 more)
 
 ### Community 46 - "Community 46"
-Cohesion: 0.05
-Nodes (38): handle_agent_zero_analyze(), handle_agent_zero_compare(), handle_agent_zero_plan(), handle_agent_zero_research(), handle_music_discover(), handle_music_like(), handle_music_mood(), handle_music_now_playing() (+30 more)
+Cohesion: 0.09
+Nodes (42): add_activity(), add_bucket_item(), add_gift_idea(), add_important_date(), add_relationship(), create_person(), delete_relationship(), get_person() (+34 more)
 
 ### Community 47 - "Community 47"
-Cohesion: 0.08
-Nodes (38): _bridge_post(), _ambient_capture_thread(), _api_post(), _barge_in_vad_thread(), _do_single_turn(), _espeak_local(), _follow_up_listen(), _get_silero_vad() (+30 more)
+Cohesion: 0.09
+Nodes (39): Multica Backend, Multica Web, get_memory_router_status(), Read-only status for Zoe's disabled-by-default memory router runtime., test_build_memory_route_trace_requires_user_for_personal_scope(), test_cached_prompt_packet_disabled_path_reports_candidate_count(), test_cached_prompt_packet_preview_builds_compact_cited_packet(), test_cached_prompt_packet_preview_does_not_exceed_budget_when_room_is_tiny() (+31 more)
 
 ### Community 48 - "Community 48"
-Cohesion: 0.09
-Nodes (37): Agent Zero Intent Patterns, Agent Zero Module for Zoe, Comparison to Music Module, Agent Zero Research Skill, Agent Zero Comparison Skill, Agent Zero Planning Skill, Agent Zero Deep Research Skill, Agent Zero + Zoe Integration Summary (+29 more)
+Cohesion: 0.07
+Nodes (40): print_results(), Scan entire project and categorize all files., Check if path should be ignored., Categorize a file and determine if it's in the right location.          Returns:, scan_project(), should_ignore(), Print validation results.          Returns:         Exit code (0 if all files ex, check_root_md_limit() (+32 more)
 
 ### Community 49 - "Community 49"
-Cohesion: 0.05
-Nodes (35): 1. Graceful Degradation, 2. Resource Management, 3. Error Recovery, Enhancement Opportunities:, Fixes Applied for 100% System Reliability, GPU Optimization, Model Warmup Strategy, On Startup: (+27 more)
+Cohesion: 0.07
+Nodes (39): HA full-setup shorthand intent and OpenClaw message expansion., test_detect_ha_full_setup(), test_execute_ha_full_setup_returns_none(), test_openclaw_user_message_expands_with_intent(), test_openclaw_user_message_expands_without_intent(), Open-domain creative intent routing., test_bare_say_exactly_does_not_route_to_open_domain_agent(), test_joke_requests_route_to_open_domain_agent() (+31 more)
 
 ### Community 50 - "Community 50"
 Cohesion: 0.07
-Nodes (26): Create a person, run process_text → verify DB activity row AND MemPalace entry., recalc_and_save updates health_score in DB., Minimal compatibility wrapper so person_extractor works with raw asyncpg., test_health_score_recalc(), test_person_extractor_dual_fanout(), FakeCursor, db_compat.py — asyncpg compatibility shim providing an aiosqlite-style cursor AP, Buffered cursor wrapping a list of asyncpg Records. (+18 more)
+Nodes (39): _broadcast_calendar_chat_prefill_ui(), _broadcast_shopping_chat_ui(), chatgpt_auth_status(), _env_float(), _env_int(), _extract_complete_sentences(), _get_faster_whisper_model(), get_livekit_token() (+31 more)
 
 ### Community 51 - "Community 51"
-Cohesion: 0.06
-Nodes (30): check_readme_links(), find_doc_references(), find_hardcoded_paths(), generate_report(), Check if README references are current, Generate audit report, Find all references to documentation files in code, Find hardcoded paths to documentation (+22 more)
+Cohesion: 0.1
+Nodes (39): _contract(), _load_fixture(), Tests for Zoe card contract validation., test_content_required_fields_are_per_card_type(), test_every_card_type_has_minimal_valid_content(), test_idempotency_key_is_optional_but_not_blank(), test_invalid_card_contract_fixtures_return_actionable_errors(), test_invalid_card_type_is_rejected() (+31 more)
 
 ### Community 52 - "Community 52"
 Cohesion: 0.06
-Nodes (34): Files Modified, Before Implementation, To Update (Future), 📊 Comparison: Before vs After, After Implementation, 📈 Impact Summary, Critical Bug Fix: List Items Appearing on All Lists, Problem Report (+26 more)
+Nodes (34): homeassistant, homeassistant-mcp-bridge, Get all discovered AirPlay devices, Get all discovered Chromecast devices, AirPlayOutput, get_airplay_output(), AirPlay Output Target =====================  Implementation of OutputTarget for, Discover available AirPlay devices. (+26 more)
 
 ### Community 53 - "Community 53"
-Cohesion: 0.05
-Nodes (37): ✅ 4. Widget Persistence - WORKING & ENHANCED, 3. Intelligence WebSocket, 1. Basic Widget Structure, 1. Prepare Widget, 2. Submit via API, 3. Widget Review, AI-Generated Widgets, Browse Marketplace (+29 more)
+Cohesion: 0.07
+Nodes (38): _agent_loop(), _build_room_handlers(), _collect_audio_stream(), _cooldown_watchdog(), _get_current_user_soft(), livekit_audio(), livekit_cancel(), _make_participant_state() (+30 more)
 
 ### Community 54 - "Community 54"
-Cohesion: 0.13
-Nodes (37): $(), addTeamToLobby(), buildTeamStatusRow(), clearSession(), clearTimers(), deckNamesForConfig(), displayRevealedCard(), enterGameOver() (+29 more)
+Cohesion: 0.05
+Nodes (38): handle_agent_zero_analyze(), handle_agent_zero_compare(), handle_agent_zero_plan(), handle_agent_zero_research(), handle_music_discover(), handle_music_like(), handle_music_mood(), handle_music_now_playing() (+30 more)
 
 ### Community 55 - "Community 55"
-Cohesion: 0.07
-Nodes (26): AirPlayDevice, AirPlayService, AirPlay Integration Service Discovers and controls AirPlay devices for music pla, Start discovering AirPlay devices, Connect to an AirPlay device, Play media on an AirPlay device                  Args:             device_id: Ta, Represents a discovered AirPlay device, Send a control command to an AirPlay device                  Args:             d (+18 more)
+Cohesion: 0.08
+Nodes (34): _broadcast_intent_nav(), _build_calendar_form_props(), _build_reminder_form_props(), _intent_action_form_payload(), _intent_card_data(), _normalized_list_items(), Build a panel_show_action_form payload for intents that show an in-place overlay, Broadcast UI actions to the touch panel when an intent is detected.      For act (+26 more)
 
 ### Community 56 - "Community 56"
-Cohesion: 0.09
-Nodes (30): ABC, Get Discover, Get Personal Radio, Recommendations Endpoints, BaseRecommendationEngine, get_mood_match(), get_radio(), get_recommendation_engine() (+22 more)
+Cohesion: 0.08
+Nodes (38): _bridge_post(), _ambient_capture_thread(), _api_post(), _barge_in_vad_thread(), _do_single_turn(), _espeak_local(), _follow_up_listen(), _get_silero_vad() (+30 more)
 
 ### Community 57 - "Community 57"
-Cohesion: 0.05
-Nodes (35): 1. `thinking` ⚠️, 2. `tool_call` ⚠️, 3. `tool_result` ⚠️, 4. `progress` ⚠️, AG-UI Protocol Implementation Status, AG-UI Protocol Overview, Current Capabilities, Frontend Implementation Status (+27 more)
+Cohesion: 0.11
+Nodes (33): _patch_plan(), test_blocked_profile_multica_handoff_cannot_carry_payloads(), test_profile_multica_handoff_blocks_mismatched_patch_capabilities(), test_profile_multica_handoff_blocks_mismatched_target_path(), test_profile_multica_handoff_blocks_missing_source_sha256(), test_profile_multica_handoff_blocks_missing_title(), test_profile_multica_handoff_blocks_unapplyable_plans(), test_profile_multica_handoff_builds_ticket_packet_with_patch_and_manifest() (+25 more)
 
 ### Community 58 - "Community 58"
-Cohesion: 0.06
-Nodes (35): Unit Tests, After Implementation (Current), Target State, code:python (# tests/unit/test_versioning.py), code:block2 (/api/v1/calendar/events), 🏗️ Proposed Approach: URI Path Versioning, 🧪 Testing Strategy, Version Support Policy (+27 more)
+Cohesion: 0.09
+Nodes (36): _classify_proposal(), _db_exec(), _db_name_id_map(), _db_update_one(), _is_noise(), _parse_psql_output(), _patch(), _post() (+28 more)
 
 ### Community 59 - "Community 59"
 Cohesion: 0.09
-Nodes (34): create_event(), delete_event(), _enforce_calendar_read_access(), get_event(), list_events(), list_today_events(), FastAPI router for calendar events. Mounted at prefix="/api/calendar" with tag ", Get a single event by ID. (+26 more)
+Nodes (35): hermes agent, openclaw agent, zoe squad, board_approve(), create_engineering_workflow_task(), evolution_proposal_action(), get_agent_board(), list_engineering_workflow_tasks() (+27 more)
 
 ### Community 60 - "Community 60"
 Cohesion: 0.13
-Nodes (33): _FakeIntent, Unit tests for `voice_scope.classify`.  Covers every branch of the classifier wi, test_empty_string_defaults_public(), test_empty_string_strict_mode(), test_intent_build_widget_is_user_scoped(), test_intent_calendar_show_is_public_household(), test_intent_ha_prefix_public(), test_intent_journal_create_is_user_scoped() (+25 more)
+Nodes (35): _FakeIntent, Unit tests for `voice_scope.classify`.  Covers every branch of the classifier wi, test_empty_string_defaults_public(), test_empty_string_strict_mode(), test_intent_build_widget_is_user_scoped(), test_intent_calendar_show_is_public_household(), test_intent_ha_prefix_public(), test_intent_journal_create_is_user_scoped() (+27 more)
 
 ### Community 61 - "Community 61"
-Cohesion: 0.06
-Nodes (21): Unit Tests for Retry Utility ============================  Tests the retry decor, Test no retry on excluded exception type., Test on_retry callback is called., Tests for the retry_async function., Tests for the RetryContext context manager., Tests for NETWORK_CONFIG preset., Test NETWORK_CONFIG retries on network errors., Tests for RetryConfig. (+13 more)
+Cohesion: 0.08
+Nodes (29): rate_limit(), Create a rate limiting dependency with Redis-based sliding window          Args:, Get or create a YTMusic client for a user.                  Args:             us, Check if user has valid YouTube Music authentication., Get the stream URL for a track.                  Uses caching to avoid repeated, Get video stream URL for a track (for video playback).                  YouTube, YouTube Music integration provider.          Handles:     - Searching tracks, al, Get playlist with tracks. (+21 more)
 
 ### Community 62 - "Community 62"
-Cohesion: 0.06
-Nodes (33): code:bash (open http://192.168.1.218:50001), Phase 1: Research Agent Zero API, Phase 3: Test with Agent Zero UI, Phase 6: Optimization, code:python (# services/zoe-core/main.py), code:python (# services/zoe-core/middleware/deprecation.py), code:python (from middleware.deprecation import DeprecationMiddleware), code:http (HTTP/1.1 200 OK) (+25 more)
+Cohesion: 0.07
+Nodes (22): Music Zone Manager Handles multi-zone playback with device routing and state syn, Create a new music zone, Current playback state for a zone, Delete a zone (only owner can delete), Get all zones accessible by a user, Get current playback state for a zone, Add a device to a zone, Remove a device from a zone (+14 more)
 
 ### Community 63 - "Community 63"
-Cohesion: 0.06
-Nodes (33): 1. Visual States, 2. Chat Interface, API Integration, code:block11 (WS /api/ws/intelligence), code:python (from fastapi import APIRouter), code:block2 (POST /api/chat/?user_id={user_id}&stream=true), code:javascript (// Lazy load only when needed), code:block4 (data: {"type": "token", "content": "token text"}) (+25 more)
+Cohesion: 0.1
+Nodes (29): ABC, BaseRecommendationEngine, get_discover(), get_mood_match(), get_radio(), get_recommendation_engine(), get_similar(), MetadataRecommendationEngine (+21 more)
 
 ### Community 64 - "Community 64"
-Cohesion: 0.08
-Nodes (33): get_plugins(), install_plugin_endpoint(), preview_skill_endpoint(), Update a workspace skill from ClawHub., Remove a workspace skill by deleting its directory., Return all plugins (installed + available) for the openclaw_manager component., Install an OpenClaw plugin., Remove an OpenClaw plugin. (+25 more)
+Cohesion: 0.09
+Nodes (26): Tests for background_runner enqueue, task lifecycle, and Hermes routing., Requests beyond _MAX_REQUEST_DEPTH must raise ValueError immediately., Requests at exactly _MAX_REQUEST_DEPTH must be accepted., enqueue_background_task should INSERT a row and return the new task id., _run_task should set status='done' and store result when Hermes succeeds., _run_task should set status='error' when Hermes raises an exception., Minimal async DB context that records calls., test_enqueue_accepts_max_depth() (+18 more)
 
 ### Community 65 - "Community 65"
-Cohesion: 0.08
-Nodes (23): disable_passcode(), Disable passcode for current user          Args:         current_session: Curren, PasswordPolicy, Password security policy, PasscodeManager, PasscodePolicy, PasscodeValidationResult, Passcode Authentication System Secure handling of 4-8 digit PIN codes with advan (+15 more)
+Cohesion: 0.1
+Nodes (33): INTENT_LABELS, attachCardActions(), buildActionButtons(), buildMatchCard(), hideSDTimerOverlay(), hideSpeedDatingBanner(), loadMatches(), loadPendingConnections() (+25 more)
 
 ### Community 66 - "Community 66"
-Cohesion: 0.06
-Nodes (8): Unit tests for person relationships feature.  Tests: - _REL_RE regex pattern mat, Test the _rel_lookup helper in people.py., Tier normalisation used in both UIs and people.py validation., Test _REL_RE patterns in person_extractor.py., Test RELATIONSHIP_TYPES constant from people.py., TestNormTier, TestRelationshipRegex, TestRelLookup
+Cohesion: 0.11
+Nodes (32): Tests for main.py Multica poll-loop helpers., RecordingClient, test_record_blocked_multica_chain_creates_budget_followup_once(), test_record_blocked_multica_chain_creates_iteration_budget_followup(), test_record_blocked_multica_chain_creates_protocol_followup(), test_record_blocked_multica_chain_does_not_create_recursive_harness_followup(), test_record_blocked_multica_chain_falls_back_to_classification_and_default(), test_record_blocked_multica_chain_records_terminal_block_metadata() (+24 more)
 
 ### Community 67 - "Community 67"
-Cohesion: 0.07
-Nodes (27): Check for overly large router files, Check for hardcoded command detection patterns, Check for duplicate router patterns, Check main.py for excessive imports, Check for TODO/FIXME/HACK comments, Cleanup Philosophy:, Instead of Deleting:, Red Flags: (+19 more)
+Cohesion: 0.1
+Nodes (30): get_capability_matrix(), get_my_capability_matrix(), reset_capability_matrix_defaults(), update_capability_matrix_role(), _validate_matrix_shape(), test_authenticated_allowed_for_mutation(), test_default_matrix_has_fixed_shape(), test_guest_blocked_for_mutation() (+22 more)
 
 ### Community 68 - "Community 68"
 Cohesion: 0.06
-Nodes (33): Test Results After Fixes, API Test, code:sql (-- Each list should have correct type), code:bash (# Should return isolated lists), Database Test, Code Execution Migration Guide, code:python (# services/zoe-code-execution/), code:typescript (// servers/zoe-lists/add_to_list.ts) (+25 more)
+Nodes (21): Unit Tests for Retry Utility ============================  Tests the retry decor, Test no retry on excluded exception type., Test on_retry callback is called., Tests for the retry_async function., Tests for the RetryContext context manager., Tests for NETWORK_CONFIG preset., Test NETWORK_CONFIG retries on network errors., Tests for RetryConfig. (+13 more)
 
 ### Community 69 - "Community 69"
-Cohesion: 0.07
-Nodes (32): _build_hermes_payload(), chat_capabilities(), chat_inject_background(), _hermes_completion(), _hermes_request_headers(), _iter_hermes_stream_events(), _iter_hermes_text_chunks(), Load compact Zoe self-description from file; falls back to empty string. (+24 more)
+Cohesion: 0.08
+Nodes (30): PeopleBirthdayTrigger, PeopleHealthTrigger, person_health.calc_health_score(), ProactiveTrigger, check(), What a trigger wants to send., Abstract trigger.  Two tiers derive from this:       - Tier 1: APScheduler-backe, TriggerResult (+22 more)
 
 ### Community 70 - "Community 70"
-Cohesion: 0.09
-Nodes (31): _classify_proposal(), _db_exec(), _is_noise(), _parse_psql_output(), _patch(), _post(), _post_with_workspace(), Run SQL against the multica DB via docker exec. (+23 more)
+Cohesion: 0.14
+Nodes (33): acquire_lock(), _actionable_greptile_findings(), _append_progress(), assess_merge_readiness(), _ci_status_from_rollup(), _finding_hash(), _gh_mergeable_state(), _gh_unresolved_review_thread_count() (+25 more)
 
 ### Community 71 - "Community 71"
-Cohesion: 0.07
-Nodes (33): briefing, browser, dynamic-widgets, family-data, gh-issues, github, grocery-meal, ha-patterns (+25 more)
+Cohesion: 0.13
+Nodes (33): get_hermes_model_profiles(), _hermes_profile_error(), post_hermes_model_profiles_apply(), post_hermes_model_profiles_rollback(), post_hermes_model_profiles_validate(), put_hermes_model_profiles_draft(), _append_audit_best_effort(), apply_profiles() (+25 more)
 
 ### Community 72 - "Community 72"
-Cohesion: 0.06
-Nodes (32): get_homeassistant_areas(), get_n8n_user_info(), get_service_configurations(), get_user_matrix_rooms(), get_user_n8n_workflows(), handle_password_change_webhook(), handle_user_deactivation_webhook(), homeassistant_auth() (+24 more)
+Cohesion: 0.09
+Nodes (33): create_event(), delete_event(), _enforce_calendar_read_access(), get_event(), list_events(), list_today_events(), FastAPI router for calendar events. Mounted at prefix="/api/calendar" with tag ", Get a single event by ID. (+25 more)
 
 ### Community 73 - "Community 73"
-Cohesion: 0.09
-Nodes (19): Analyze warmth on 1-10 scale, Build a comprehensive Samantha-level system prompt, Analyze overall Samantha-level intelligence, Analyze warmth level on 1-10 scale, Analyze intelligence level on 1-10 scale, Analyze tool usage effectiveness on 1-10 scale, Run final comprehensive Samantha-level intelligence test, Final comprehensive Samantha-level intelligence testing (+11 more)
+Cohesion: 0.11
+Nodes (29): Agent Zero Safety Guardrails ============================  Provides safety contr, Safety modes for Agent Zero., SafetyMode, Enum, OutputState, OutputType, Types of output targets., Playback state of an output. (+21 more)
 
 ### Community 74 - "Community 74"
-Cohesion: 0.07
-Nodes (19): Save detailed report to JSON, Scan a single file for database references, Recursively scan directory for database references, Print formatted audit report, DatabaseValidator, Print validation report, Find all .db files in data directory, Check if file is in a backup/archive location (+11 more)
+Cohesion: 0.06
+Nodes (8): Unit tests for person relationships feature.  Tests: - _REL_RE regex pattern mat, Test the _rel_lookup helper in people.py., Tier normalisation used in both UIs and people.py validation., Test _REL_RE patterns in person_extractor.py., Test RELATIONSHIP_TYPES constant from people.py., TestNormTier, TestRelationshipRegex, TestRelLookup
 
 ### Community 75 - "Community 75"
-Cohesion: 0.07
-Nodes (32): code:bash (# Message 1), Test 1: List Addition (After Fix 1), Test 2: Temporal Memory (After Fix 2), Test 3: Person Creation (After Fix 3), 🧪 Testing Plan, code:bash (# From zoe-core to music module), code:bash (# From zoe-core via MCP server to music), code:block12 (Platform detected: ARM architecture, assuming Pi5) (+24 more)
+Cohesion: 0.06
+Nodes (22): Check a single router file for authentication issues.     Returns list of (line_, check_file(), Check a single file for hardcoded database paths, check_api_endpoints(), check_router_expectations(), check_ui_pages(), Check database table schemas, Check what routers expect vs what database has (+14 more)
 
 ### Community 76 - "Community 76"
-Cohesion: 0.07
-Nodes (32): Code References, Container Paths, ✅ Verification Complete, 🗄️ Database Status, Frontend Files (59 total), What Was Deleted, Critical Files Validation, File Deletion Protection (+24 more)
+Cohesion: 0.09
+Nodes (32): Make HTTP request to Home Assistant API, activate_workflow(), analyze_n8n(), create_credential(), create_workflow(), deactivate_workflow(), delete_workflow(), execute_workflow() (+24 more)
 
 ### Community 77 - "Community 77"
-Cohesion: 0.06
-Nodes (31): 1. ✅ LiteLLM (Universal LLM API), 2. ✅ RouteLLM (Intelligent Model Router), 3. ✅ MemAgent (Memory Agent), 4. ✅ Enhanced MemAgent (Multi-Expert Model), 5. ✅ LightRAG (Lightweight RAG System), 6. ✅ RAG Enhancements (Query Expansion, Reranking, Hybrid Search), Code Integration, code:block2 (Query: "add bread to shopping list") (+23 more)
+Cohesion: 0.07
+Nodes (31): activate_scene(), analyze_home_assistant(), control_device(), get_automations(), get_entities(), get_entity(), get_lights(), get_scenes() (+23 more)
 
 ### Community 78 - "Community 78"
 Cohesion: 0.06
-Nodes (32): 1. Changed Default Model, 2. Added CPU Models to Config, 3. Improved Error Handling, 4. Created Fixed GPU Model, 5. Updated Model Selection, Chat Model Fix - GPU Allocation Error, Current Model Configuration, GPU Models (+24 more)
+Nodes (32): get_homeassistant_areas(), get_n8n_user_info(), get_service_configurations(), get_user_matrix_rooms(), get_user_n8n_workflows(), handle_password_change_webhook(), handle_user_deactivation_webhook(), homeassistant_auth() (+24 more)
 
 ### Community 79 - "Community 79"
-Cohesion: 0.11
-Nodes (28): get_capability_matrix(), get_my_capability_matrix(), reset_capability_matrix_defaults(), update_capability_matrix_role(), _validate_matrix_shape(), test_authenticated_allowed_for_mutation(), test_default_matrix_has_fixed_shape(), test_guest_blocked_for_mutation() (+20 more)
+Cohesion: 0.1
+Nodes (30): More Overlay Modal, Navigation Bar, Notifications Panel, get_pending_notifications(), list_notifications(), mark_read(), FastAPI router for notifications. Mounted at prefix="/api/notifications" with ta, Mark a notification as read/delivered. (+22 more)
 
 ### Community 80 - "Community 80"
-Cohesion: 0.07
-Nodes (32): code:block3 (DELETE /api/proactive/schedule/<scheduled_id>), Create a notification., create_schedule(), delete_schedule(), Schedule a one-shot proactive nudge., Cancel a scheduled nudge., acknowledge_reminder(), create_reminder() (+24 more)
+Cohesion: 0.12
+Nodes (30): test_chat_completions_url_handles_supported_bases(), test_local_model_probe_defaults_to_disabled_without_call(), test_local_model_probe_rejects_ambiguous_proxy_path(), test_local_model_probe_rejects_public_endpoint(), test_local_model_probe_reports_contract_mismatch(), test_local_model_probe_reports_invalid_json(), test_local_model_probe_reports_missing_entity_id(), test_local_model_probe_reports_missing_evidence_ref() (+22 more)
 
 ### Community 81 - "Community 81"
-Cohesion: 0.07
-Nodes (21): AnalyzeRequest, BrowseRequest, CompareRequest, PlanRequest, Request model for browser automation endpoint., Request model for planning endpoint., Request model for analysis endpoint., Request model for comparison endpoint. (+13 more)
+Cohesion: 0.09
+Nodes (19): create_user(), Create new user (admin only)          Args:         request: User creation detai, change_password(), Change current user's password          Args:         request: Current and new p, AuthManager, Change user password                  Args:             user_id: User identifier, Reset user password (admin function)                  Args:             user_id:, Unlock user account (admin function)                  Args:             user_id: (+11 more)
 
 ### Community 82 - "Community 82"
-Cohesion: 0.09
-Nodes (20): create_n8n_auth_config(), N8nIntegration, N8nUser, n8n SSO Integration Replace n8n's basic auth with Zoe's central authentication, Sync Zoe user to n8n                  Args:             user_id: Zoe user ID, Sync user permissions to n8n                  Args:             user_id: User ID, Create workflow-specific permissions in n8n                  Args:             w, n8n user representation (+12 more)
+Cohesion: 0.1
+Nodes (20): Analyze warmth on 1-10 scale, FinalZoeIntelligenceTester, Build a comprehensive Zoe continuity system prompt, Analyze overall Zoe continuity intelligence, Analyze warmth level on 1-10 scale, Analyze intelligence level on 1-10 scale, Analyze tool usage effectiveness on 1-10 scale, Run final comprehensive Zoe continuity intelligence test (+12 more)
 
 ### Community 83 - "Community 83"
-Cohesion: 0.08
-Nodes (32): clear_all_device_caches(), clear_device_cache(), get_cached_users(), get_device_config(), get_device_status(), list_touch_panel_devices(), Touch Panel API Endpoints Optimized endpoints for touch panel quick authenticati, Validate touch panel session (with offline support)          Args:         reque (+24 more)
+Cohesion: 0.14
+Nodes (27): test_create_issue_metadata_preserves_existing_ticket_fields(), test_update_ticket_progress_can_clear_dispatch_approval(), test_block_only_description_does_not_gain_leading_blank_lines(), test_progress_and_children_patch_metadata_only(), test_progress_records_completion_reason_without_touching_prose(), test_replacing_middle_block_preserves_suffix_newline(), test_ticket_block_preserves_human_description(), test_ticket_block_replaces_only_zoe_section() (+19 more)
 
 ### Community 84 - "Community 84"
-Cohesion: 0.15
-Nodes (29): Test P0-3: Temperature Adjustment, Test classification performance., Test that Tier 0 (HassIL) meets <5ms target., Test batch classification performance., 🎉 Success!, Color, failure(), get_docker_logs() (+21 more)
+Cohesion: 0.13
+Nodes (29): test_embedding_probe_accepts_cached_huggingface_model(), test_embedding_probe_accepts_existing_local_model_path(), test_embedding_probe_accepts_huggingface_hub_cache_override(), test_embedding_probe_accepts_local_tei_service(), test_embedding_probe_health_url_for_openai_compatible_base(), test_embedding_probe_rejects_cloud_embedding_provider(), test_embedding_probe_reports_disabled_as_acceptable(), test_embedding_probe_reports_http_error_as_service_unhealthy() (+21 more)
 
 ### Community 85 - "Community 85"
-Cohesion: 0.08
-Nodes (20): check_api_endpoints(), check_router_expectations(), check_ui_pages(), Check database table schemas, Check what routers expect vs what database has, Test critical API endpoints, Audit PROJECT_ROOT root, Audit all service directories (+12 more)
+Cohesion: 0.1
+Nodes (27): MusicProvider, Abstract base class for music streaming providers.          All providers (YouTu, Like/save a track. Override if provider supports it., Add tracks to a playlist. Override if provider supports it., Save a track to user's library., Remove track from user's library., Add tracks to a playlist., Lazy load the underlying provider. (+19 more)
 
 ### Community 86 - "Community 86"
-Cohesion: 0.08
-Nodes (30): _memory_digest_loop(), Wait until 3am, then run LLM digest for all active users daily., Start the nightly memory digest loop (if not disabled)., Manually trigger full nightly dreaming cycle including evolution notice (admin o, start_memory_digest_background(), trigger_run_digest(), Scan for tasks stuck in 'running' state beyond ZOE_TASK_TIMEOUT_S.      Every 60, _watchdog_loop() (+22 more)
+Cohesion: 0.07
+Nodes (30): _broadcast_calendar_ui(), _broadcast_lets_talk_ui(), _broadcast_reminder_ui(), _broadcast_weather_ui(), _contains_decision_keyword(), _get_or_create_voice_session(), _handle_introduce_intent(), _load_voice_history() (+22 more)
 
 ### Community 87 - "Community 87"
-Cohesion: 0.08
-Nodes (29): compose_message(), Message composer for the proactive engine.  Calls llama-server (same endpoint as, Given a trigger_type and a context dict, ask the LLM for a short message.     Re, _cleanup_expired_pending(), fire_notification(), _is_in_quiet_hours(), Proactive Engine — coordinates all trigger tiers.  Tier 1: APScheduler fires _fi, Internal: import push router and call send_push_to_user. (+21 more)
+Cohesion: 0.11
+Nodes (28): test_load_target_patterns_extracts_contract_metadata(), test_measure_phase_treats_contract_target_patterns_as_no_patterns(), test_dump_and_load_contract_snapshot_round_trip(), test_legacy_contract_snapshot_preserves_target_patterns_and_writer(), test_legacy_contract_snapshot_supports_user_issue_report(), test_loader_rejects_legacy_non_contract_payloads(), test_mcp_contract_snapshot_has_source_evidence_when_freeform_evidence_is_empty(), test_mcp_contract_snapshot_is_valid_and_review_only() (+20 more)
 
 ### Community 88 - "Community 88"
-Cohesion: 0.09
-Nodes (25): FileSystemEventHandler, get_peer_agent_card(), Return a live A2A v1.0 proxy card for a peer agent with dynamic skills[]., Admin-only: force-flush the skill discovery cache for a peer agent., reload_peer_skills(), _build_federation_skills_md(), Build FEDERATION_SKILLS.md snapshot from live skill discovery., invalidate_hermes_cache() (+17 more)
+Cohesion: 0.07
+Nodes (23): check_home_directory(), get_category(), Determine where a file should go, Check /home/pi for violations, check_chat_router_intelligence(), Validate chat router uses intelligent systems, check_database(), Send a message to the API and return the response (+15 more)
 
 ### Community 89 - "Community 89"
-Cohesion: 0.08
-Nodes (31): After (v2.0), Before (v1.0), Authentication (NEVER DELETE), 🔧 BACKEND CRITICAL FILES, Backup Files (with date stamps), 📝 CLEANUP CHECKLIST, code:block4 (services/zoe-ui/dist/components/), code:block9 (services/zoe-auth/) (+23 more)
+Cohesion: 0.11
+Nodes (29): Request model for research endpoint., ResearchRequest, _build_research_package(), _capture_research_screenshot(), Capture a screenshot for research evidence using broker-backed browser control., Build research package and attach screenshot evidence when possible., build_package(), classify_query() (+21 more)
 
 ### Community 90 - "Community 90"
-Cohesion: 0.06
-Nodes (29): High Priority (Immediate Action), 1. Architecture Review (COMPLETED), 3. Implementation Plans Created (COMPLETED), 🎯 Architecture Improvements - Implementation Summary, 🔧 Prerequisites for Implementation, Recommended, Required, 📊 Risk Assessment (+21 more)
+Cohesion: 0.13
+Nodes (17): Start AirPlay device discovery., Initialize the output target.                  Override this for setup that need, Start Chromecast discovery., Discover media_player entities., Initialize all available output targets., Initialize all available providers.                  Called on startup to regist, _AcpBridge, _build_env() (+9 more)
 
 ### Community 91 - "Community 91"
-Cohesion: 0.06
-Nodes (29): Chat SSL Certificate Fix, ⚠️ May Fail (Non-Critical), code:block1 (sqlite3.OperationalError: no such table: users), code:block2 (INFO:     172.23.0.1:53104 - "GET /health HTTP/1.1" 401 Unau), zoe-auth (Port 8002), zoe-litellm (Port 8001), Projected (5 Years with memvid), Storage Impact (+21 more)
+Cohesion: 0.07
+Nodes (23): Proactive adapters — thin wrappers that translate external service events into T, Executor adapters for Multica-dispatched work.  Multica is the agnostic source o, _check_memory_headroom(), get_capabilities(), Music Service Module ====================  Platform-aware music system with: - Y, Get music system capabilities for this platform.          Returns:         Dict, Check if enough memory is available for ML components., get_media_controller() (+15 more)
 
 ### Community 92 - "Community 92"
-Cohesion: 0.1
-Nodes (30): Request model for research endpoint., ResearchRequest, _build_research_package(), _capture_research_screenshot(), Capture a screenshot for research evidence using broker-backed browser control., Build research package and attach screenshot evidence when possible., build_package(), classify_query() (+22 more)
+Cohesion: 0.09
+Nodes (20): _board(), _expected_phases(), KanbanCLIError, _protocol_violation_count(), Stop a running worker when its code-enforced phase budget is exhausted., Create/record a PR after the worker pushed but lost the terminal handoff., Report aggregate state of a chain by idempotency-key prefix.          Returns {f, Pull a PR URL from the implement/closeout task summaries or comments. (+12 more)
 
 ### Community 93 - "Community 93"
 Cohesion: 0.09
-Nodes (22): AgentZeroClient, _compute_agent_zero_api_key(), Agent Zero Client =================  Client for communicating with Agent Zero's, Get or create context ID for a user.                  Args:             user_id:, Extract URLs from text as sources.                  Args:             text: Text, Send a message to Agent Zero and get response.                  Uses the /api_me, Execute a research task via Agent Zero.                  Args:             query, Create a multi-step plan for a task.                  Args:             task: Ta (+14 more)
+Nodes (22): bc(), _make_ws(), Unit tests for PushBroadcaster.broadcast() user_id scoping.  Regression test for, Return a mock WebSocket; user_id mapping is tracked in broadcaster state., broadcast() must accept user_id as an optional keyword argument., Without user_id, broadcast reaches every connection on the channel., With user_id set, only connections for that user receive the message., Connections with no user (panels/anonymous) always receive scoped broadcasts. (+14 more)
 
 ### Community 94 - "Community 94"
-Cohesion: 0.07
-Nodes (30): Discoverability, Feedback, Reliability, Before Standardization:, User Experience Improvements, Functionality, Best Practices Enforced, File Organization: (+22 more)
+Cohesion: 0.09
+Nodes (23): Create a person, run process_text → verify DB activity row AND MemPalace entry., recalc_and_save updates health_score in DB., Minimal compatibility wrapper so person_extractor works with raw asyncpg., test_health_score_recalc(), test_person_extractor_dual_fanout(), get_db(), db_compat.py — asyncpg compatibility shim providing an aiosqlite-style cursor AP, Thin wrapper around asyncpg Connection providing aiosqlite-compatible execute AP (+15 more)
 
 ### Community 95 - "Community 95"
-Cohesion: 0.07
-Nodes (28): Via HTTP (Direct), Via Voice/Chat, Test Commands Used, code:bash (# Research), Direct HTTP (for testing), How to Use, 1. Dual FAB System, 2. Better Visual Feedback (+20 more)
+Cohesion: 0.09
+Nodes (22): IntEnum, FakeCursor, Buffered cursor wrapping a list of asyncpg Records., _Cursor, Buffered cursor providing aiosqlite-compatible fetchall/fetchone/iteration., _AudioStream, _ConnState, _DataPacket (+14 more)
 
 ### Community 96 - "Community 96"
-Cohesion: 0.07
-Nodes (26): Code Changes, code:python (# Determine list type and category), code:python (tenacity==8.2.3  # ✅ Added for retry logic), ✅ Fix Applied, 🎉 Impact, Test Score Improvement, What Now Works, Available MCP Tools (Not Communicated to LLM) (+18 more)
+Cohesion: 0.11
+Nodes (17): Sync user to Matrix homeserver          Args:         request: Sync request, sync_user_to_matrix(), MatrixIntegration, Sync Zoe user to Matrix homeserver                  Args:             user_id: Z, Deactivate Matrix user                  Args:             username: Username to, Create Matrix room                  Args:             room_config: Room configur, Join user to Matrix room                  Args:             user_id: Zoe user ID, Get Matrix rooms for user                  Args:             user_id: Zoe user I (+9 more)
 
 ### Community 97 - "Community 97"
 Cohesion: 0.1
-Nodes (29): Lists, Page-Specific Notes, Settings, journal, create_memory_proposal(), export_user_memories(), forget_user(), get_memory_opt_out() (+21 more)
+Nodes (17): Sync password change to Home Assistant                  Args:             user_i, Sync password change to Matrix                  Args:             user_id: User, N8nIntegration, Sync Zoe user to n8n                  Args:             user_id: Zoe user ID, Handle password change for n8n user                  Args:             user_id:, Sync user permissions to n8n                  Args:             user_id: User ID, Create workflow-specific permissions in n8n                  Args:             w, Get workflows accessible to user                  Args:             user_id: Use (+9 more)
 
 ### Community 98 - "Community 98"
-Cohesion: 0.09
-Nodes (23): demo_action_execution(), demo_complex_queries(), demo_memory_storage(), Demo: Action execution (lists, calendar, etc.), Send a chat message to Zoe, Demo: Complex queries requiring reasoning, Demo: P0-2 Confidence formatting, Verify that a fact was stored in memory (+15 more)
+Cohesion: 0.08
+Nodes (27): Create a notification., delete_schedule(), Cancel a scheduled nudge., acknowledge_reminder(), create_reminder(), delete_reminder(), list_pending_notifications(), list_reminders() (+19 more)
 
 ### Community 99 - "Community 99"
-Cohesion: 0.08
-Nodes (18): Clear the stream URL cache., Get cache statistics., CachedSession, CachedUser, Touch Panel Local Caching System Optimized for fast authentication on touch pane, Verify passcode using cached data (offline mode)                  Args:, Cached user information for touch panels, Cache session for offline use                  Args:             session_id: Ses (+10 more)
+Cohesion: 0.11
+Nodes (27): test_block_fingerprint_aborts_after_two_identical(), block_fingerprint(), implement_validator_hash(), Fingerprint a blocked transition so identical failures can abort loops., Track repeated identical block fingerprints; return (state, should_abort)., Latest handoff-recorded validator hash from implement (ignores sync-time harness, Verify handoff validator hash must match implement when both are worker-sourced., record_block_fingerprint() (+19 more)
 
 ### Community 100 - "Community 100"
-Cohesion: 0.07
-Nodes (27): code:block3 (IF all criteria met:), code:bash (# Check containers still running), Migration Verification Report - /home/zoe/zoe → /home/zoe/assistant, Old Location Contents (/home/zoe/zoe), Post-Deletion Verification, ❌ ABSOLUTE PROHIBITIONS, ALWAYS Ask Before Deleting:, 🛡️ CLEANUP SAFETY RULES - MANDATORY FOR ALL AI ASSISTANTS (+19 more)
-
-### Community 101 - "Community 101"
-Cohesion: 0.08
-Nodes (29): zoe-capability-extender, zoe-page-builder, zoe-widget-builder, Trigger Conditions, Prerequisites, 1. Understand and classify the request, 3. Implement minimally, 4. Test (+21 more)
-
-### Community 102 - "Community 102"
-Cohesion: 0.07
-Nodes (28): Code Execution Testing Summary, ⚠️ Issues to Watch For:, 🧪 Manual Testing Instructions, ✅ Success Indicators:, Test 1: Simple List Addition, Test 2: Calendar Event, Test 3: Multi-Step Operation, Test 4: Capability Question (+20 more)
-
-### Community 103 - "Community 103"
-Cohesion: 0.13
-Nodes (13): person_extractor.process_text(), routers/people.py, Get a specific provider by type.                  Args:             provider_typ, _get(), Return Atomic semantic hits as normalized records., _build_metadata(), MemoryRef, MemoryService - the sole read/write surface for Zoe memory.  This module is the (+5 more)
-
-### Community 104 - "Community 104"
-Cohesion: 0.12
-Nodes (27): get_openclaw_info(), post_openclaw_upgrade(), OpenClaw brain info: skills, cron, gateway, versions., Background: daily npm check, notify users, optional auto-upgrade., run_scheduled_openclaw_version_check(), clear_satisfied_update_notifications(), fetch_gateway_status(), fetch_npm_latest_version() (+19 more)
-
-### Community 105 - "Community 105"
-Cohesion: 0.07
-Nodes (28): _broadcast_lets_talk_ui(), _broadcast_list_ui(), _broadcast_reminder_ui(), _broadcast_weather_ui(), _contains_decision_keyword(), _get_or_create_voice_session(), _handle_introduce_intent(), _load_voice_history() (+20 more)
-
-### Community 106 - "Community 106"
-Cohesion: 0.08
-Nodes (26): create_pin_challenge(), get_panel_bindings(), load_device_tokens(), panel_public_info(), panel_status(), _pin_check_locked(), _pin_clear(), _pin_record_failure() (+18 more)
-
-### Community 107 - "Community 107"
-Cohesion: 0.08
-Nodes (27): _cleanup_rate_limit_storage(), get_client_info(), get_current_session(), get_session_id_from_bearer_token(), get_session_id_from_header(), _in_memory_rate_limit(), optional_session(), FastAPI Dependencies for Authentication Reusable dependencies for session valida (+19 more)
-
-### Community 108 - "Community 108"
-Cohesion: 0.07
-Nodes (28): 7:15 PM - 8:00 PM - System Broken, 7:15 PM - Commit `ebfa71c`, 8:00 PM - 8:30 PM - Diagnosis & Fix, This Morning (Before 7:15 PM), Timeline, code:bash (modules/zoe-music-mcp/), code:python (# services/zoe-core/services/music/__init__.py), code:bash (# Test 1: Module disabled (core still works)) (+20 more)
-
-### Community 109 - "Community 109"
-Cohesion: 0.07
-Nodes (26): 1. Enhanced MEM Agent ✅, 2. RAG System ✅, 3. Expert Orchestrator ✅, 4. Temporal Memory ✅, 5. Vector Search ✅, 6. Context Optimization ✅, ✅ Advanced Systems Integration, ✅ All Systems Operational (+18 more)
-
-### Community 110 - "Community 110"
 Cohesion: 0.15
 Nodes (16): BaseHTTPRequestHandler, get_config(), Save OAuth token to database., _HealthHandler, Handle orb-tap activation from the touch UI (POST /activate)., _discover_zoe_server(), _get_local_subnet(), _get_mac() (+8 more)
 
-### Community 111 - "Community 111"
-Cohesion: 0.08
-Nodes (26): Enter Edit Mode, For End Users, Rearrange Widgets, Reset Layout, Resize Widgets, Save & Exit, code:bash (# Quick compliance check), 📊 Compliance Monitoring (+18 more)
+### Community 101 - "Community 101"
+Cohesion: 0.19
+Nodes (27): Test P0-3: Temperature Adjustment, Test classification performance., Color, failure(), get_docker_logs(), log(), Test 1: Baseline with all features OFF, Test 3: P0-2 Confidence Formatting (+19 more)
 
-### Community 112 - "Community 112"
+### Community 102 - "Community 102"
+Cohesion: 0.09
+Nodes (16): Test lists, tasks, and projects with context, Test calendar and event management, Test journal entries and notes, Test Home Assistant integration, Test N8N workflow automation, Test developer tools and system management, Test voice and media capabilities, Test advanced orchestration and intelligence features (+8 more)
+
+### Community 103 - "Community 103"
+Cohesion: 0.14
+Nodes (25): get_display_preferences(), Fetch the display preferences for a specific panel device.      Deliberately una, _row_to_prefs(), _fetch_openmeteo_current(), _fetch_openmeteo_forecast(), _fetch_owm_current(), _fetch_owm_forecast(), _get_current() (+17 more)
+
+### Community 104 - "Community 104"
+Cohesion: 0.11
+Nodes (26): get_contact(), get_session_by_code(), Look up an active session by its short join code., Recipient retrieves the contact details., add_item(), create_list(), delete_item(), delete_list() (+18 more)
+
+### Community 105 - "Community 105"
+Cohesion: 0.11
+Nodes (18): test_dispatch_adjusts_running_scout_journal_when_scout_row_is_done(), test_dispatch_adjusts_stale_scout_journal_for_scope_split_child(), test_dispatch_archives_stale_terminal_revision_phase_row(), test_dispatch_does_not_adjust_running_scout_journal_with_active_row(), test_poll_v4_audit_protocol_recovery_reports_partial_for_next_phase(), test_mark_greptile_passes_only_on_five_of_five(), test_mark_reviewed_requires_zero_critical(), test_mark_tested_records_hashed_evidence() (+10 more)
+
+### Community 106 - "Community 106"
+Cohesion: 0.11
+Nodes (21): test_capability_profile_index_rejects_duplicate_ids(), test_capability_profile_rejects_unknown_owner_surface(), test_default_capability_profiles_validate_and_cover_core_surfaces(), test_metadata_is_read_only(), test_profiles_requiring_approval_includes_install_memory_and_graph_surfaces(), test_trusted_profile_requires_evidence(), test_capability_trust_update_blocks_failed_proposal(), test_capability_trust_update_blocks_unretained_outcome() (+13 more)
+
+### Community 107 - "Community 107"
+Cohesion: 0.13
+Nodes (24): test_extract_model_ids_accepts_openai_and_llama_shapes(), test_models_url_handles_v1_base(), test_runtime_probe_rejects_public_llm_base_url(), test_runtime_probe_reports_backend_offline(), test_runtime_probe_reports_disabled_without_backend_or_llm(), test_runtime_probe_reports_llm_unavailable(), test_runtime_probe_reports_missing_llm_model(), test_runtime_probe_reports_missing_python_dependencies() (+16 more)
+
+### Community 108 - "Community 108"
+Cohesion: 0.12
+Nodes (20): Pi Runtime Probe, test_disabled_probe_is_acceptable_even_when_tools_are_missing(), test_disabled_runtime_does_not_surface_agent_files(), test_empty_env_does_not_fall_through_to_process_environment(), test_enabled_probe_reports_missing_node_before_pi(), test_enabled_runtime_detects_agent_files(), test_execution_can_be_configured_with_explicit_local_model_flag(), test_malformed_boolean_env_reports_misconfigured() (+12 more)
+
+### Community 109 - "Community 109"
+Cohesion: 0.14
+Nodes (24): test_probe_rejects_public_backend_host(), test_probe_rejects_unknown_backend(), test_probe_reports_disabled_without_tcp_check(), test_probe_reports_healthy_falkordb_backend(), test_probe_reports_healthy_neo4j_backend(), test_probe_reports_malformed_port_as_misconfigured(), test_probe_reports_offline_backend(), test_probe_reports_out_of_range_port_as_misconfigured() (+16 more)
+
+### Community 110 - "Community 110"
+Cohesion: 0.09
+Nodes (26): _cleanup_rate_limit_storage(), get_client_info(), get_current_session(), get_session_id_from_bearer_token(), get_session_id_from_header(), _in_memory_rate_limit(), optional_session(), FastAPI Dependencies for Authentication Reusable dependencies for session valida (+18 more)
+
+### Community 111 - "Community 111"
 Cohesion: 0.07
 Nodes (16): Test that database schema is created correctly, Test embedding generation, Test embedding hash generation, Test cosine similarity calculation, Test adding memory with automatic embedding generation, Test entity context generation, Test relationship path generation, Test relationship boost calculation (+8 more)
 
+### Community 112 - "Community 112"
+Cohesion: 0.14
+Nodes (21): addFeedItem(), applyStats(), autoEndSession(), clearHostSession(), confirmEndSession(), connectWS(), endSpeedDating(), fetchStats() (+13 more)
+
 ### Community 113 - "Community 113"
-Cohesion: 0.09
-Nodes (16): Test P0-1: Measure actual latency improvements, Measure latency improvement for Tier 0 intents, Ensure data-fetching intents get context (no regression), Test memory keyword detection accuracy, TestP01ContextValidationImprovements, Tier 0 intents should have 0.0 temperature, Factual queries should have low temperature, Conversational intents should have higher temperature (+8 more)
+Cohesion: 0.08
+Nodes (17): Initialize Agent Zero client.                  Args:             base_url: Base, Initialize safety guardrails.                  Args:             mode: Safety mo, Initialize the affinity engine.                  Args:             half_life_day, Initialize the AirPlay service, Initialize the audio analyzer with Essentia., Initialize the auth manager.                  Args:             encryption_key:, Initialize the Cast service, Initialize the event tracker and ensure tables exist. (+9 more)
 
 ### Community 114 - "Community 114"
-Cohesion: 0.07
-Nodes (26): Architecture Validation ✅, Summary, Tests Passed: 8/8 (100%), What Needs Implementation 🔨, **Add Person Modal** (Basic), Backend API Support, code:javascript (// Current code (lines 1315-1339)), code:javascript (function savePersonChanges(personId) {) (+18 more)
+Cohesion: 0.11
+Nodes (25): test_audit_only_from_handoff_detects_kv_field(), test_block_reason_from_handoff_extracts_iteration_budget_from_run_error(), test_block_reason_from_handoff_ignores_dynamic_log_tail(), test_block_reason_from_handoff_prefers_blocker_field(), test_block_reason_ignores_dynamic_log_tail_without_stable_token(), audit_only_from_handoff(), block_reason_from_handoff(), _greptile_from_closeout() (+17 more)
 
 ### Community 115 - "Community 115"
-Cohesion: 0.08
-Nodes (26): Baseline (Day 7), Combined P1 Metrics, Comparison Summary, Decision Gate Results, Final Status, P0-1: Context Validation, P0-2: Confidence Expression, P0-3: Temperature Adjustment (+18 more)
+Cohesion: 0.09
+Nodes (24): create_pin_challenge(), get_panel_bindings(), panel_public_info(), panel_status(), _pin_check_locked(), _pin_clear(), _pin_record_failure(), Panel device token authentication endpoints.  Pi voice daemons and kiosk softwar (+16 more)
 
 ### Community 116 - "Community 116"
 Cohesion: 0.12
-Nodes (27): Create Household, Delete Household, Get Household Details, Get My Households, Household Endpoints, Update Household, Get Playback State, Pause Playback (+19 more)
+Nodes (25): create_memory_proposal(), export_user_memories(), forget_user(), get_memory_opt_out(), link_preview(), list_memories(), list_review_queue(), _normalise_status() (+17 more)
 
 ### Community 117 - "Community 117"
-Cohesion: 0.07
-Nodes (26): 1. Self-Contained Module Structure ✅, 2. Running Services ✅, 3. Loaded Intents ✅, code:block8 (modules/agent-zero/), Grandma Mode (Default), Module Structure, Agent Zero Safety Guardrails ============================  Provides safety contr, Safety modes for Agent Zero. (+18 more)
+Cohesion: 0.13
+Nodes (22): test_default_chat_route_keeps_hindsight_and_graphiti_off_hot_path(), test_failure_and_fix_queries_route_to_reflective_memory(), test_fast_chat_layers_are_boring_hot_path_only(), test_reflective_route_is_timeout_bounded_candidate_only(), test_sidecar_layers_are_async_enrichment_not_required_for_chat(), test_supersession_queries_route_to_relational_memory(), test_casual_service_language_stays_on_fast_chat_path(), test_code_questions_route_to_graphify() (+14 more)
 
 ### Community 118 - "Community 118"
-Cohesion: 0.07
-Nodes (26): 2. Service Health Fixes (COMPLETED ✅), 3. Health Check Configuration (COMPLETED ✅), 2. Database Schema Created, 3. Models Created, 4. Backend Service Created, 5. API Endpoints Created, ✅ Completed Tasks, Dependencies Added (+18 more)
+Cohesion: 0.09
+Nodes (15): Test P0-1: Measure actual latency improvements, Measure latency improvement for Tier 0 intents, Ensure data-fetching intents get context (no regression), Test memory keyword detection accuracy, TestP01ContextValidationImprovements, Tier 0 intents should have 0.0 temperature, Factual queries should have low temperature, Conversational intents should have higher temperature (+7 more)
 
 ### Community 119 - "Community 119"
-Cohesion: 0.08
-Nodes (25): code:bash (scripts/setup/touchscreen/install_touchscreen.sh \), Current Architecture, Endpoints, Operational Docs, Touchscreen, Touchscreen (Raspberry Pi at `192.168.1.61`), Active Runtime Areas, Archived/Retired Runtime Trees (+17 more)
-
-### Community 120 - "Community 120"
-Cohesion: 0.12
-Nodes (24): create_people_field(), list_people_fields(), update_people_field(), _get_vapid_keys(), get_vapid_public_key(), Web Push Notifications via VAPID. Generates VAPID keys on first run, stores subs, Send a push notification to all of a user's subscriptions.      ``message`` is a, send_push_to_user() (+16 more)
-
-### Community 121 - "Community 121"
-Cohesion: 0.18
-Nodes (25): Record an agent cost event to agent_cost_events table., acquire_lock(), analyze_result(), _append_progress(), _diff_changed_lines(), _diff_files(), _finding_hash(), GuardError (+17 more)
-
-### Community 122 - "Community 122"
-Cohesion: 0.12
-Nodes (19): quick_user_switch(), Quick user switching for touch panels          Args:         request: Quick swit, validateSession(), Background sync loop for HA integration, QuickAuthManager, QuickAuthResult, Quick Authentication for Touch Panels Optimized for fast user switching and offl, Quick user switching for touch panels                  Args:             current (+11 more)
-
-### Community 123 - "Community 123"
 Cohesion: 0.11
 Nodes (13): DatabaseMigrator, Migrate people from zoe.db and memory.db, Create backup of all existing databases, Migrate calendar events from zoe.db, Migrate developer tasks from developer_tasks.db, Migrate lists and list items from zoe.db, Migrate conversations from zoe.db, Create the new unified database schema (+5 more)
 
-### Community 124 - "Community 124"
-Cohesion: 0.08
-Nodes (25): get_affinity_engine(), Get the singleton affinity engine instance., get_auth_manager(), Get the singleton auth manager instance., get_media_controller(), Get the singleton media controller instance., affinity(), youtube() (+17 more)
-
-### Community 125 - "Community 125"
-Cohesion: 0.08
-Nodes (25): Memory & Hallucination Reduction Analysis for Zoe, Gap #1: No Behavioral Memory (Layer 1), Gap #2: No Pre-Response Validation, Gap #3: No Confidence Expression, What's Missing (Strategic Gaps), 10. WHAT YOU'RE MISSING (Summary), 11. CLOSING THOUGHTS, 4. ADVANCED TECHNIQUES (P2 - Future Considerations) (+17 more)
-
-### Community 126 - "Community 126"
-Cohesion: 0.08
-Nodes (22): 1. Code Execution Service (`services/zoe-code-execution/`), 2. Updated Chat Router (`services/zoe-core/routers/chat.py`), 3. Docker Configuration, 1. PWA Manifest (`/dist/manifest.json`), 2. Service Worker (`/dist/sw.js`), 3. Service Worker Registration (`/dist/js/sw-registration.js`), 4. App Icons (14 icons generated), 5. PWA Meta Tags (21 HTML files updated) (+14 more)
-
-### Community 127 - "Community 127"
-Cohesion: 0.08
-Nodes (24): Usage, Voice/Chat Commands, Check Current Networks, code:bash (# List all networks), code:bash (# Connect missing container to zoe-network), Docker Networking Rules - MANDATORY, Fix Mismatched Networks, 📊 Impact on Tests (+16 more)
-
-### Community 128 - "Community 128"
-Cohesion: 0.13
-Nodes (16): delete_user(), Delete user (admin only)          Args:         user_id: User ID to delete, _idempotency_key(), MemoryServiceError, Raised for operational failures., Store a fact. Returns None when silently dropped., Right-to-be-forgotten. Returns number of rows removed., List rows for a user by status, newest first. (+8 more)
-
-### Community 129 - "Community 129"
+### Community 120 - "Community 120"
 Cohesion: 0.1
 Nodes (15): get_vector_index(), Get the vector index (Jetson only).          Returns None on Pi5 or if memory is, Vector Index =============  FAISS-based vector index for fast music similarity s, Load index and ID map from disk., Save index and ID map to disk., Add a track embedding to the index.                  Args:             track_id:, Check if track is in the index., Remove a track from the index.                  Note: FAISS doesn't support true (+7 more)
 
-### Community 130 - "Community 130"
-Cohesion: 0.11
-Nodes (24): graphify_search, _build_capabilities_md(), _build_compact(), _build_zoe_self_md(), _collect_intent_patterns(), _collect_mcp_tools(), _collect_openclaw_skills(), _collect_ui_pages() (+16 more)
-
-### Community 131 - "Community 131"
-Cohesion: 0.14
-Nodes (23): Preferences Endpoints, Update Preferences, get_display_preferences(), Fetch the display preferences for a specific panel device.      Deliberately una, _row_to_prefs(), _fetch_openmeteo_current(), _fetch_openmeteo_forecast(), _fetch_owm_current() (+15 more)
-
-### Community 132 - "Community 132"
-Cohesion: 0.13
-Nodes (15): Sync user to Matrix homeserver          Args:         request: Sync request, sync_user_to_matrix(), MatrixIntegration, Sync Zoe user to Matrix homeserver                  Args:             user_id: Z, Deactivate Matrix user                  Args:             username: Username to, Join user to Matrix room                  Args:             user_id: Zoe user ID, Get Matrix rooms for user                  Args:             user_id: Zoe user I, Matrix homeserver SSO integration (+7 more)
-
-### Community 133 - "Community 133"
-Cohesion: 0.09
-Nodes (24): For Documentation, For Zoe Team, For API Clients, For Operations, Maintainability, code:bash (git commit -m "feat(chat): Add voice command support"), code:bash (# Export updated schema), Conventional Commits (Required) (+16 more)
-
-### Community 134 - "Community 134"
-Cohesion: 0.08
-Nodes (24): Architecture: Four-Tier System, code:yaml (language: "en"), code:python (# This is what you DON'T want to maintain:), Custom ML Model, Evaluated Alternatives, Google Home / Alexa Architecture, HassIL Advantages, HassIL YAML Pattern (+16 more)
-
-### Community 135 - "Community 135"
+### Community 121 - "Community 121"
 Cohesion: 0.1
-Nodes (25): Quick-Start Implementation Guide: P0 Recommendations, code:block1 (Before: [1000 conversation vectors]), code:python (# "add milk to shopping list" → Tier 0 intent), code:block3 (High (0.90): "I've added milk to your shopping list! ✓"), P0-1: Behavioral Memory Extraction, P0-2: Intent-Aware Context Validation, P0-3: Confidence-Aware Uncertainty Expression, The 3 High-Impact Recommendations (P0) (+17 more)
+Nodes (23): get_emotional_moments(), get_my_emotional_moments(), get_my_portrait(), get_portrait(), Portrait API — exposes user portrait management endpoints.  GET  /api/portrait/m, Return recent emotional memories for the current user., Return recent emotional memories (admin or self only)., Raise 403 if the requesting user is neither the target nor an admin. (+15 more)
 
-### Community 136 - "Community 136"
-Cohesion: 0.08
-Nodes (25): Executive Summary: Memory & Hallucination Reduction for Zoe, Closing Thought, Expected Outcomes (After P0), Implementation Timeline, Monday Morning: P0-2 Implementation, Month 2+ (P2 - Future Considerations), Next Actions (Start This Week), Qualitative Improvements (+17 more)
-
-### Community 137 - "Community 137"
-Cohesion: 0.08
-Nodes (24): Auto-Discovery Process, code:mermaid (sequenceDiagram), How It Works, Intent Flow, code:block1 (1. Load ALL 20+ tool definitions into context (~2,000 tokens), Old Pattern (Inefficient):, Manifest Location, 1. Automatic Tagging (+16 more)
-
-### Community 138 - "Community 138"
-Cohesion: 0.13
-Nodes (20): Temporal Memory Integration, add_chat_turn(), close_chat_episode(), enhance_memory_search_with_temporal(), Get context from current and recent episodes, Close current episode, Integrates temporal memory with Zoe's chat system, Get active episode for user (+12 more)
-
-### Community 139 - "Community 139"
-Cohesion: 0.08
-Nodes (24): Phase 2: Expand Coverage (Week 1-4), Phase 3: Voice Integration (Week 5-8), Phase 4: Touch Panel Integration (Week 9-12), Phase 5: Analytics & Optimization (Week 13-16), 1. **Smarter Prompts** (Active Now!), 2. **Feedback System** (Active Now!), 3. **Graph Intelligence** (Active Now!), 4. **Model Management** (Active Now!) (+16 more)
-
-### Community 140 - "Community 140"
+### Community 123 - "Community 123"
 Cohesion: 0.08
 Nodes (8): Unit Tests for Household System ===============================  Tests household, Test creating a household., Tests for DeviceBindingManager., Tests for HouseholdManager., Tests for FamilyMixGenerator., TestDeviceBindingManager, TestFamilyMixGenerator, TestHouseholdManager
 
-### Community 141 - "Community 141"
+### Community 124 - "Community 124"
+Cohesion: 0.11
+Nodes (15): MemPalace Baseline, Search for k most similar tracks.                  Args:             query: 256-, Search with similarity scores.                  Args:             query: 256-dim, Search YouTube Music.                  Search works without authentication using, Return mock results when not authenticated., FakeMemoryService, FakeRef, test_recall_text_from_results_supports_refs_dicts_and_strings() (+7 more)
+
+### Community 125 - "Community 125"
+Cohesion: 0.09
+Nodes (13): Check if file path is within allowed directories.                  Args:, Check if system command is whitelisted.                  Args:             comma, Get user-friendly message when capability is blocked.                  Args:, Safety guardrails for Agent Zero capabilities.          Controls what Agent Zero, Allow research/web search operations., Allow task planning operations., Allow code execution operations., Allow file system operations. (+5 more)
+
+### Community 126 - "Community 126"
+Cohesion: 0.15
+Nodes (23): analyze_result(), _diff_changed_lines(), _diff_files(), _run_git(), _base_ref(), ensure_worktree(), _extract_pr_number(), kanban_db_path() (+15 more)
+
+### Community 127 - "Community 127"
+Cohesion: 0.13
+Nodes (23): get_openclaw_info(), _load_skills_and_cron(), post_openclaw_upgrade(), OpenClaw brain info: skills, cron, gateway, versions., Background: daily npm check, notify users, optional auto-upgrade., run_scheduled_openclaw_version_check(), clear_satisfied_update_notifications(), fetch_gateway_status() (+15 more)
+
+### Community 128 - "Community 128"
+Cohesion: 0.18
+Nodes (22): _trace(), test_collect_observation_traces_accepts_valid_non_persistent_batch(), test_collect_observation_traces_can_require_single_scope_batch(), test_collect_observation_traces_discards_entire_batch_on_rejection(), test_collect_observation_traces_rejects_disallowed_surface(), test_collect_observation_traces_rejects_empty_batch(), test_collect_observation_traces_rejects_invalid_trace_shape(), test_collect_observation_traces_rejects_mixed_user_batch() (+14 more)
+
+### Community 129 - "Community 129"
 Cohesion: 0.11
 Nodes (14): HomeAssistantIntegration, initialize_ha_integration(), Sync user deletion to Home Assistant                  Args:             username, Authenticate user for Home Assistant (called by HA auth provider), Get Home Assistant areas for user assignment, Assign user to specific Home Assistant areas                  Args:, Sync all active Zoe users to Home Assistant                  Returns:, Sync user to HA person entity (+6 more)
 
-### Community 142 - "Community 142"
-Cohesion: 0.09
-Nodes (19): check_home_directory(), get_category(), Determine where a file should go, Check /home/pi for violations, check_chat_router_intelligence(), Validate chat router uses intelligent systems, Colors, Verify chat router has real enhancement system integration (+11 more)
-
-### Community 143 - "Community 143"
-Cohesion: 0.09
-Nodes (20): backup_database(), print_header(), Apply seed data to zoe.db, Backup existing database file, Initialize a database from schema file, Test Light RAG search functionality, add_task(), Initialize the database if it doesn't exist (+12 more)
-
-### Community 144 - "Community 144"
-Cohesion: 0.11
-Nodes (13): Test lists, tasks, and projects with context, Test calendar and event management, Test people management and relationships, Test journal entries and notes, Test N8N workflow automation, Test developer tools and system management, Test voice and media capabilities, Test advanced orchestration and intelligence features (+5 more)
-
-### Community 145 - "Community 145"
+### Community 130 - "Community 130"
 Cohesion: 0.12
-Nodes (23): code:json ("prohibited_patterns": [), Action Items (if FAIL), Action Items (if rollback), Combined Metrics, Context Retention Testing, Day 22: P0 Validation Gate, Day 27: Behavioral Memory LLM Enhancement Decision, Day 38: P1 Validation Gate (+15 more)
+Nodes (20): Graphiti Bake-off, migrate_self_entries(), Create self entries for users in the people table, _compute_compatibility(), Compute compatibility score and shared traits between two check-ins., test_graphiti_episode_payloads_include_evidence(), test_graphiti_supersession_payloads_have_temporal_order(), test_percentile_rejects_out_of_range_values() (+12 more)
 
-### Community 146 - "Community 146"
-Cohesion: 0.08
-Nodes (24): code:block39 (📄 Documentation → Root (if essential) or docs/{category}/), I Want To..., 🎯 Quick Reference, code:python (# Standard pattern for all LLM calls), By Purpose:, Check Graph Stats, Check Training Status, code:bash (curl "http://localhost:8000/api/chat/training-stats?user_id=) (+16 more)
+### Community 131 - "Community 131"
+Cohesion: 0.16
+Nodes (22): Graphify Local Probe, compact_probe_result(), _duration_ms(), _max_rss_kb(), run_model_matrix(), summarize_matrix(), _child_max_rss_kb(), classify_probe_result() (+14 more)
 
-### Community 147 - "Community 147"
-Cohesion: 0.09
-Nodes (24): Change to Developer Mode, Enabled Modules, code:bash (# In .env), Developer Mode, Files Created (9 total), code:yaml (enabled_modules:), code:block11 (zoe-network (bridge)), code:bash (AGENT_ZERO_ENABLED=true) (+16 more)
-
-### Community 148 - "Community 148"
-Cohesion: 0.09
-Nodes (22): AI Capabilities Evolution, code:block11 (Browse modules:), code:block12 (Company builds internal modules:), code:block13 (Today's Zoe:), Community Marketplace, 🎯 Comparison to Other Systems, 🏗️ Complete Architecture, 📚 Documentation Index (+14 more)
-
-### Community 149 - "Community 149"
+### Community 132 - "Community 132"
 Cohesion: 0.13
-Nodes (23): code:block2 (1. Model writes TypeScript code:), New Pattern (Efficient):, Jetson Orin NX (8K Context, GPU), Platform Configuration, Raspberry Pi 5 (4K Context, CPU), After P0, Architecture Diagram: Memory & Hallucination Reduction, Before P0 (+15 more)
+Nodes (18): delete_user(), Delete user (admin only)          Args:         user_id: User ID to delete, Protocol, _append_audit(), MemoryServiceError, Raised for operational failures., Store a fact. Returns None when silently dropped.          When ``scope`` is Non, Fast metadata-filter read for system prompt injection. (+10 more)
 
-### Community 150 - "Community 150"
-Cohesion: 0.16
-Nodes (23): _get_active_player(), _ha_service(), _ma_available(), _ma_cmd(), _ma_play_media(), _ma_player_command(), _ma_players(), Return the first playing or first available player ID. (+15 more)
+### Community 133 - "Community 133"
+Cohesion: 0.12
+Nodes (23): Exception, Intent System Development Rules, _active_agents_list(), _enqueue_panel_tool(), _execute_tool(), _get_weather_default_location(), handle_tool(), _load_agents_registry() (+15 more)
 
-### Community 151 - "Community 151"
-Cohesion: 0.16
-Nodes (7): GameCardPool, get_deck(), list_decks(), BlackCard, Deck, DeckInfo, WhiteCard
+### Community 134 - "Community 134"
+Cohesion: 0.13
+Nodes (20): Tests for Multica poll-loop dispatch helpers., test_chain_is_active_counts_journal_ready_phase_without_terminal_block(), test_chain_is_active_counts_running_and_partial(), test_chain_is_running_excludes_partial_backfill_work(), test_chain_needs_dispatch_does_not_resume_terminal_blocked_pipeline(), test_chain_needs_dispatch_empty_or_missing_status(), test_chain_needs_dispatch_false_when_blocked_protocol_violation(), test_chain_needs_dispatch_for_operator_resumed_blocked_executor_row() (+12 more)
 
-### Community 152 - "Community 152"
-Cohesion: 0.15
-Nodes (9): Connect, AiortcRoom, Drop-in replacement for livekit.rtc.Room using aiortc + WebSocket signalling., Decorator: @room.on("event_name"), Connect to a LiveKit room using WebSocket signalling + aiortc., Handle SDP re-offer from LiveKit server (subscriber PC)., Add an ICE candidate received from the server., Called when aiortc delivers an audio track — map to participant. (+1 more)
+### Community 135 - "Community 135"
+Cohesion: 0.12
+Nodes (17): Save detailed report to JSON, benchmark(), HallucinationBenchmark, pytest_addoption(), Hallucination Benchmark Test Suite  This test suite measures hallucination rates, Calculate performance metrics from results, Save benchmark report to file, Fixture to provide benchmark instance (+9 more)
 
-### Community 153 - "Community 153"
-Cohesion: 0.09
-Nodes (16): Feature Improvement Testing Test each feature individually, measure impact, vali, Ensure we don't add qualifiers to already-qualified responses, Test P0-3: Validate temperature appropriateness, Test that temperature ranges are appropriate for intent types, Test that temperature adjusts based on context availability, Test P0-4: Validate grounding detection, Test P1-1: Validate behavioral pattern extraction, Test that all pattern types can be extracted (+8 more)
-
-### Community 154 - "Community 154"
+### Community 136 - "Community 136"
 Cohesion: 0.21
 Nodes (12): Check if required directories and files exist, ModuleValidator, Check docker-compose.module.yml., Check main.py structure., Validates module structure and safety., Check requirements.txt., Check intents (optional)., Check naming conventions. (+4 more)
 
-### Community 155 - "Community 155"
+### Community 137 - "Community 137"
 Cohesion: 0.09
 Nodes (22): check_no_archive_folders(), check_no_databases_in_git(), check_no_duplicate_configs(), check_no_root_tests(), check_no_temp_files(), check_no_venv_in_git(), check_required_docs(), check_root_md_files() (+14 more)
 
-### Community 156 - "Community 156"
-Cohesion: 0.13
-Nodes (17): Get detailed status of Agent Zero service.          Returns:         Status info, status(), code:bash (# Edit config), Disable Module, cli(), disable(), enable(), info() (+9 more)
-
-### Community 157 - "Community 157"
-Cohesion: 0.09
-Nodes (20): Building Zoe Modules - Developer Guide, Module Intent Auto-Discovery System, Zoe Module Requirements - MANDATORY, code:yaml (module:), Example: Music Module, Getting Help, Module Categories, Module Manifest (Optional) (+12 more)
-
-### Community 158 - "Community 158"
-Cohesion: 0.09
-Nodes (22): 🚨 BREAKING CHANGE POLICY, Breaking Changes Require:, ✅ CHECKLIST BEFORE COMMIT, CI/CD Checks (Automatic):, code:block2 (feat(intent): add ListShare intent for sharing lists), code:block4 ([ ] YAML syntax valid (ran validator)), 📝 COMMIT MESSAGE FORMAT, Every Handler Must Meet: (+14 more)
-
-### Community 159 - "Community 159"
-Cohesion: 0.09
-Nodes (22): Post-Mortem: October 23, 2025 System Failure, 10:00 AM - Nginx Proxy Issues, 10:15 AM - Router 404 Errors, 11:30 AM - System Restored, 1. Hardcoded Database Paths, 2. Module-Level Database Initialization, 3. Orphaned Docker Containers, 4. Dashboard localStorage Corruption (+14 more)
-
-### Community 160 - "Community 160"
-Cohesion: 0.09
-Nodes (23): Future Enhancements, Backend Sync (Planned), code:javascript (// TODO in lists-dashboard.js line 339), Enhanced Validation, Multi-Dashboard Support, 1. Hybrid Research Mode, 2. Proactive Agent Zero Summaries, 3. Multi-Agent Collaboration (+15 more)
-
-### Community 161 - "Community 161"
-Cohesion: 0.09
-Nodes (22): Browser Cache Fix - Clear Old Broken State, Check 1: Are Files Actually Served?, Check 2: Clear Service Worker (If Exists), Check 3: Disable Browser Extensions, Check 4: Try Different Browser, code:block1 (Ctrl + Shift + R), code:block2 (Ctrl + F5), code:block3 (Cmd + Shift + R) (+14 more)
-
-### Community 162 - "Community 162"
-Cohesion: 0.09
-Nodes (23): 5. Restart Zoe Core (to load intents), code:bash (docker logs zoe-core | grep "agent-zero"), code:bash (docker restart zoe-core), "Intent not recognized", 1. Fixed the Database Query, 2. Created Default Lists, 3. Migrated Misplaced Items, 4. Updated Response Format (+15 more)
-
-### Community 163 - "Community 163"
-Cohesion: 0.09
-Nodes (21): Android:, Desktop:, 📱 How to Install Zoe, iOS:, 🎯 Phase 1 Goals - Status, Phase 2: Push Notifications, PWA Phase 1 Implementation - COMPLETE ✅, 🎨 Visual Identity (+13 more)
-
-### Community 164 - "Community 164"
-Cohesion: 0.09
-Nodes (23): All Issues Resolved, Browser Console Output, code:block5 (🔑 Generated device ID: [32-char-hash]), Testing Completed, code:bash (# Root .md count), 1. Service Worker Check, 2. Offline Test, 3. Install Test (+15 more)
-
-### Community 165 - "Community 165"
-Cohesion: 0.17
-Nodes (11): _AcpBridge, _build_env(), openclaw_acp(), openclaw_acp_stream(), ZoeAcpClient — Zoe as a first-class OpenClaw ACP channel.  Uses the Agent Client, Send a JSON-RPC request and return the result, passing through notifications., Create an ACP session (maps to the gateway session key). Returns session UUID., Send a prompt and return the full response text. (+3 more)
-
-### Community 166 - "Community 166"
-Cohesion: 0.13
-Nodes (21): Exception, _active_agents_list(), _enqueue_panel_tool(), _execute_tool(), _get_weather_default_location(), handle_tool(), _load_agents_registry(), _MissingUserId (+13 more)
-
-### Community 167 - "Community 167"
-Cohesion: 0.09
-Nodes (20): Full Integration Test: People System =====================================  Test, Test address extraction, Test adding person with all fields via natural language, Test that Person Expert can extract ALL fields from natural language, Test phone number extraction with different formats, Test email extraction, Test birthday extraction, test_all_capabilities_present() (+12 more)
-
-### Community 168 - "Community 168"
+### Community 138 - "Community 138"
 Cohesion: 0.11
-Nodes (21): code:block1 (I'm implementing [Feature Name] from Day [X] of the plan.), code:block10 (I'm evaluating the P0 Validation decision gate on Day 22.), code:block11 (I'm testing [Feature] integration with [System/Component].), code:block12 (I'm testing Context Validation integration with the chat rou), code:block2 (I'm implementing Context Validation from Day 8-10 of the pla), code:block3 (I'm debugging [Issue] in [Feature].), code:block4 (I'm debugging grounding checks not working in P0-4.), code:block5 (I'm validating [Phase] against the plan.) (+13 more)
+Nodes (19): generate(), Orbit icebreaker engine — rule cascade, strongest signal wins., Generate the best icebreaker line for a match pair., Zoe Modular Architecture Complete, get_enabled_modules(), generate_module_compose.py generator tool, MCP Client, ModuleWidgetLoader (+11 more)
 
-### Community 169 - "Community 169"
+### Community 139 - "Community 139"
 Cohesion: 0.09
-Nodes (21): Streaming Response, code:python (# ❌ FORBIDDEN), Rule 1: Database Path Enforcement, code:python (class SomeService:), code:bash (# Try to commit code with hardcoded path), code:bash (# Check current status), ✅ CORRECT:, Existing Violations (Non-Critical) (+13 more)
+Nodes (20): backup_database(), init_database(), print_header(), Apply seed data to zoe.db, Backup existing database file, Initialize a database from schema file, Test Light RAG search functionality, add_task() (+12 more)
 
-### Community 170 - "Community 170"
-Cohesion: 0.09
-Nodes (20): ✅ All Tests Passed (8/8), Test Results Summary, code:block1 (# MCP TOOLS VIA CODE EXECUTION (Progressive Disclosure Patte), code:block3 ([Errno -2] Name or service not known), 📊 **Implementation Status**, 🧪 **Manual Testing via UI**, ✅ **Test 1: Code Execution Pattern in Context** - PASSED, ✅ **Test 2: Code Block Detection** - PASSED (+12 more)
-
-### Community 171 - "Community 171"
+### Community 140 - "Community 140"
 Cohesion: 0.1
-Nodes (20): Approved Root Files (9):, Architecture Documentation ✅, ✅ Compliance Summary, ✅ Documentation Location Status, Documentation & Rules Audit Report, 📝 Files Created This Session, Governance Documentation ✅, Guides Documentation ✅ (+12 more)
+Nodes (22): Register a Tier 2 slow-loop trigger., register_trigger(), load_device_tokens(), Load all active device tokens from DB into the in-memory cache (call at startup), _blocking_synthesize(), _load_pipeline(), _pcm_to_wav(), Load and return the Kokoro pipeline (blocking; run once in thread pool). (+14 more)
 
-### Community 172 - "Community 172"
+### Community 141 - "Community 141"
 Cohesion: 0.11
 Nodes (20): buildInterestChips(), buildValueChips(), computePersonality(), existing, initQuiz(), INTERESTS, nameInput, nextFromName() (+12 more)
 
-### Community 173 - "Community 173"
-Cohesion: 0.09
-Nodes (22): Action Plan Progress, 2. Chat Integration Diagnostics (PENDING), 3. Router Consolidation (PENDING), 🎯 Action Plan Progress Report, 📝 Additional Issues Discovered, code:bash (# Add database indexes), Commands Executed, 🔄 In Progress Tasks (+14 more)
+### Community 142 - "Community 142"
+Cohesion: 0.12
+Nodes (15): AgentZeroClient, Get or create context ID for a user.                  Args:             user_id:, Extract URLs from text as sources.                  Args:             text: Text, Send a message to Agent Zero and get response.                  Uses the /api_me, Execute a research task via Agent Zero.                  Args:             query, Client for Agent Zero HTTP API.          Handles communication with the Agent Ze, Compare two items.                  Args:             item_a: First item to comp, Use Agent Zero's browser automation to navigate a website,         perform actio (+7 more)
 
-### Community 174 - "Community 174"
+### Community 143 - "Community 143"
+Cohesion: 0.13
+Nodes (12): downgrade(), Initial schema — all tables ported to PostgreSQL DDL  Revision ID: 0001 Revises:, upgrade(), FTS for ambient_memory — tsvector + GIN index  Revision ID: 0002 Revises: 0001 C, Add metadata column to chat_sessions  Revision ID: 0003 Revises: 0002 Create Dat, 0004 — A2A federation tables and column additions.  Adds: - background_tasks: cl, 0005 — Touch panel SSH fields and provisioning codes table.  Adds: - panels: ssh, 0006 — People CRM expansion.  Adds: - people: circle, health_score, notification (+4 more)
+
+### Community 144 - "Community 144"
+Cohesion: 0.1
+Nodes (21): create_entry(), delete_entry(), get_entry(), get_mood_stats(), get_prompts(), get_streak_stats(), list_entries(), list_on_this_day() (+13 more)
+
+### Community 145 - "Community 145"
+Cohesion: 0.2
+Nodes (21): _approved_evolution_issue(), Tests for safe production backlog admission., test_approved_blocked_ticket_halts_single_ticket_lane(), test_blocked_evolution_ticket_without_contract_does_not_halt_lane(), test_blocked_execute_ticket_without_approval_refs_does_not_halt_lane(), test_evolution_proposal_ticket_requires_matching_contract_marker(), test_execute_evolution_ticket_requires_execution_approval_refs(), test_execute_evolution_ticket_with_required_approval_refs_can_dispatch() (+13 more)
+
+### Community 146 - "Community 146"
+Cohesion: 0.26
+Nodes (21): _plain_event(), test_admitted_hindsight_retain_plan_defaults_to_env_config(), test_admitted_hindsight_retain_plan_payload_is_immutable(), test_admitted_hindsight_retain_plan_rejects_mismatched_decision(), test_admitted_hindsight_retain_plan_rejects_pending_decision(), test_admitted_hindsight_retain_plan_rejects_wrong_backend(), test_admitted_hindsight_retain_plan_requires_approved_hindsight_decision(), test_build_hindsight_retain_admission_request_defaults_to_hindsight_target() (+13 more)
+
+### Community 147 - "Community 147"
+Cohesion: 0.12
+Nodes (13): disable_passcode(), Disable passcode for current user          Args:         current_session: Curren, PasscodeManager, Disable passcode for user                  Args:             user_id: User ident, Get passcode information for user (without hash), Reset failed attempts counter (admin function), Validate passcode against policy, Check if passcode is already used by another user (+5 more)
+
+### Community 148 - "Community 148"
+Cohesion: 0.09
+Nodes (20): Full Integration Test: People System =====================================  Test, Test address extraction, Test adding person with all fields via natural language, Test that Person Expert can extract ALL fields from natural language, Test phone number extraction with different formats, Test email extraction, Test birthday extraction, test_all_capabilities_present() (+12 more)
+
+### Community 149 - "Community 149"
+Cohesion: 0.14
+Nodes (16): Print test results summary, print_summary(), Print completion summary, LightRAGBenchmarks, Generate random text for testing, Benchmark system initialization, Benchmark embedding generation performance, Benchmark migration performance (+8 more)
+
+### Community 150 - "Community 150"
+Cohesion: 0.14
+Nodes (6): Unit tests for person_health.py — calc_health_score() determinism and edge cases, Legacy single-dim circle values fall back gracefully., TestCalcHealthScore, TestNextOccurrence, calc_health_score(), Calculate a relationship health score in [0.0, 1.0].      Args:         last_con
+
+### Community 151 - "Community 151"
+Cohesion: 0.13
+Nodes (21): create_background_task(), get_pending_tasks(), Queue a long-running task for background execution.      Body: {"message": "find, Return completed background tasks not yet shown to the user., a2a_task(), A2A task intake endpoint.      Accepts a natural-language task from another agen, _background_profile(), enqueue_background_task() (+13 more)
+
+### Community 152 - "Community 152"
 Cohesion: 0.12
 Nodes (12): MusicEvent, MusicEventTracker, Music Event Tracker ====================  Captures listening behavior events for, Record a listening event.                  Args:             user_id: User ident, Track play start event., Track play end event.                  Automatically determines if this was a sk, Track explicit skip event., Track repeat play event. (+4 more)
 
-### Community 175 - "Community 175"
-Cohesion: 0.15
-Nodes (19): _ensure_db(), _ingest_to_mempalace(), LLM-based person fact extraction — complements regex person_extractor., Extract person facts via local LLM. Silently no-ops on error., _post_write_hooks(), process_text(), person_extractor.py — Extract person facts from conversation text.  Dual fan-out, Return DB UUID if a person with this name exists for user_id, else None. (+11 more)
-
-### Community 176 - "Community 176"
-Cohesion: 0.1
-Nodes (20): Allowed in Root, 🚀 Benefits of This System, code:block43 (✅ Essential docs (max 10)), 💾 Database Management (NEW in v2.4.0), ⚖️ Exceptions & Special Cases, For Maintenance, For New Developers, For Project (+12 more)
-
-### Community 177 - "Community 177"
-Cohesion: 0.1
-Nodes (20): 1. API Versioning - DEFERRED ✅, 2. Focus on Quick Wins ✅, 3. Router Consolidation - PLANNED ✅, 💡 Key Decisions Made, 1. **Navigation Bar Inconsistency**, 1. Unified Navigation, 2. **Edit Mode Location**, 2. Floating Edit Mode (+12 more)
-
-### Community 178 - "Community 178"
-Cohesion: 0.1
-Nodes (20): Safety Tests, Voice Tests, Accessibility, Backup Information, CSS Added (~150 lines), JavaScript Added (~100 lines), Mobile Responsiveness, Navigation Hierarchy (+12 more)
-
-### Community 179 - "Community 179"
-Cohesion: 0.1
-Nodes (20): Files Modified (21 HTML files), New Files Created (11), code:bash (# View current tags), 📁 Files Created/Modified, Modified Files, New Files, code:yaml (zoe-core:), code:python (# Added module intent integration at startup) (+12 more)
-
-### Community 180 - "Community 180"
-Cohesion: 0.1
-Nodes (21): What Was Fixed, What Was Wrong, [0.0.1] - 2025-10-25 "Initial Release", [0.1.0] - 2025-11-16 "Jetson Optimization & Multi-Platform", Added, Changed, Fixed, Removed (+13 more)
-
-### Community 181 - "Community 181"
-Cohesion: 0.1
-Nodes (20): 1. lists.html (5 locations), 2. chat.html (12 locations), 3. dashboard.html (1 location), Defense in Depth, Files Fixed, For existing users (admin):, For Jason (or any new user):, Pages Audited (+12 more)
-
-### Community 182 - "Community 182"
-Cohesion: 0.12
-Nodes (16): IntEnum, _ConnState, _DataPacket, _Frame, _FrameEvent, make_room(), livekit_aiortc.py — LiveKit room participant using pure-Python aiortc.  Replaces, Create a new LiveKit room using the aiortc backend. (+8 more)
-
-### Community 183 - "Community 183"
-Cohesion: 0.18
-Nodes (4): Legacy single-dim circle values fall back gracefully., TestCalcHealthScore, calc_health_score(), Calculate a relationship health score in [0.0, 1.0].      Args:         last_con
-
-### Community 184 - "Community 184"
+### Community 153 - "Community 153"
 Cohesion: 0.14
-Nodes (15): benchmark(), HallucinationBenchmark, pytest_addoption(), Hallucination Benchmark Test Suite  This test suite measures hallucination rates, Calculate performance metrics from results, Fixture to provide benchmark instance, Run baseline hallucination measurement          This test:     1. Loads 100 test, Measure latency by intent tier          This test measures:     - Tier 0 (determ (+7 more)
+Nodes (13): Check if Agent Zero is available.                  Returns:             True if, EmbeddingService, Embedding Service =================  Generates audio and metadata embeddings for, Initialize projection layer for fused embeddings., Generate audio embedding from audio file using CLAP.                  Args:, Generate text embedding from track metadata.                  Args:, Generate fused embedding from audio and metadata embeddings.                  If, Create and cache all embeddings for a track.                  Args: (+5 more)
 
-### Community 185 - "Community 185"
-Cohesion: 0.11
-Nodes (19): Project Governance & Cleanup - Implementation Summary, 🎯 Benefits Realized, code:block10 (Total: ~15MB (not counting .git)), code:bash (# 1. Clone repository), code:block9 (Total: 428MB), Documentation Organization, 📂 Files Moved (35+ files to archive), First-Time Setup (+11 more)
-
-### Community 186 - "Community 186"
-Cohesion: 0.1
-Nodes (20): 1. EXECUTIVE_SUMMARY.md (⭐ Start Here), 2. MEMORY_HALLUCINATION_ANALYSIS.md (📚 Comprehensive Reference), 3. IMPLEMENTATION_GUIDE_P0.md (🛠️ Step-by-Step Code), 4. ARCHITECTURE_DIAGRAM.md (🎨 Visual Guide), code:block1 (Week 1 (Nov 18-22): P0 Implementation), 📄 Document Guide, 📝 Document Maintenance, 📚 Documentation Overview (+12 more)
-
-### Community 187 - "Community 187"
-Cohesion: 0.11
-Nodes (19): 1. Pre-Commit Hook, 2. CI/CD Check, 3. Monthly Audit, code:bash (#!/bin/bash), code:yaml (# .github/workflows/structure-check.yml), code:bash (# Cron job: Run 1st of each month), 🔒 Enforcement Mechanisms, Pre-Commit Hook (+11 more)
-
-### Community 188 - "Community 188"
-Cohesion: 0.11
-Nodes (19): By Platform, code:python (def detect_hardware():), code:python (PRIMARY_MODELS = {), From Jetson to Pi, From Pi to Jetson, Future Platform Support, Hardware Detection, Migration Between Platforms (+11 more)
-
-### Community 189 - "Community 189"
+### Community 154 - "Community 154"
 Cohesion: 0.12
-Nodes (20): 1. `session_start` ✅, 2. `agent_state_delta` ✅, 3. `action` ✅, 4. `action_result` ✅, 5. `message_delta` ✅, 6. `session_end` ✅, 7. `action_cards` ✅ (Custom Extension), 8. `error` ✅ (+12 more)
+Nodes (14): AffinityEngine, AffinityScore, get_affinity_engine(), Music Affinity Engine =====================  Calculates user preferences from li, Get affinity score for an artist.                  Aggregates affinity across al, Get user's top tracks by affinity score.                  Args:             user, Get aggregate listening statistics for a user.                  Returns:, Rank a list of tracks by user affinity.                  Args:             track (+6 more)
 
-### Community 190 - "Community 190"
-Cohesion: 0.11
-Nodes (20): 1. Validation Before Save, 2. Empty Layout Detection, 3. Advanced Protection Layer, 4. Loading with Recovery, code:javascript (// saveLayout() was blindly saving whatever it found:), code:javascript (const widgetType = widget.getAttribute('data-widget-type');), code:javascript (// PROTECTION: Don't save if no valid widgets), code:javascript (let layout = null;) (+12 more)
+### Community 155 - "Community 155"
+Cohesion: 0.37
+Nodes (20): _fact_event(), _success_trace(), test_approved_memory_with_successful_admission_trace_can_write_target_backend(), test_failed_non_admission_trace_does_not_block_clean_admission(), test_failed_or_blocked_trace_blocks_even_with_approval(), test_graphiti_target_requires_relationship_or_supersession(), test_invalid_candidate_errors_are_wrapped_as_memory_admission_error(), test_invalid_trace_errors_are_wrapped_as_memory_admission_error() (+12 more)
 
-### Community 191 - "Community 191"
-Cohesion: 0.1
-Nodes (19): 1. **Reminders API 500 Error** (CRITICAL), 2. **WebSocket Connection Failed** (Non-Critical), code:block1 (GET https://zoe.local/api/reminders/ 500 (Internal Server Er), Issues Reported, code:block16 (WebSocket connection to 'wss://zoe.local/ws/intelligence' fa), code:python (from fastapi import WebSocket), code:javascript (// In initOrbChat() function, comment out:), Current Behavior (+11 more)
+### Community 156 - "Community 156"
+Cohesion: 0.14
+Nodes (18): _issue_sort_key(), Return (sequence_key, phase_number) when title encodes a phased track., True when every lower phase in the same sequence is ``done`` (or missing)., Pick up to ``count`` backlog issues respecting phased ordering.      ``all_issue, select_batch(), _has_matching_evolution_contract(), _metadata_sequence(), parse_phased_title() (+10 more)
 
-### Community 192 - "Community 192"
-Cohesion: 0.11
-Nodes (19): ✅ Configuration Complete, code:bash (./stop-zoe.sh), code:bash (tail -f /tmp/zoe-auth.log), 🔑 Default Credentials, 📁 File Structure, 🆕 First-Time Setup (New Installations), 🚀 How to Start Zoe, 🛑 How to Stop Zoe (+11 more)
+### Community 157 - "Community 157"
+Cohesion: 0.12
+Nodes (7): _packet(), test_analyze_result_accepts_focused_diff(), test_analyze_result_checks_committed_diff_from_pre_run_sha(), test_analyze_result_rejects_files_outside_allowlist(), test_cheap_runner_blocks_before_budget_exceeded(), test_cheap_runner_command_does_not_expand_shell_metacharacters(), test_validate_packet_rejects_broad_missing_context()
 
-### Community 193 - "Community 193"
-Cohesion: 0.11
-Nodes (10): Test getting all user sessions, Test session expiration, Test session statistics, Test session metadata handling, Test concurrent session handling, Test cases for SessionManager class, Test session creation, Test session retrieval (+2 more)
+### Community 158 - "Community 158"
+Cohesion: 0.17
+Nodes (19): Static contract checks for the Skybridge touch surface., read(), test_livekit_voice_router_accepts_text_commands(), test_service_worker_does_not_cache_skybridge_runtime(), test_skybridge_auth_and_voice_bus_contracts_are_wired(), test_skybridge_calendar_renderer_handles_datetime_dates_and_ordering(), test_skybridge_capability_registry_covers_core_touch_pages(), test_skybridge_exposes_voice_transport_without_dashboard_header() (+11 more)
 
-### Community 194 - "Community 194"
-Cohesion: 0.11
-Nodes (19): _mempalace_search(), Semantic search of this user's MemPalace facts via MemoryService.      Returns t, _cloak_search(), _ddg_search_sync(), _google_maps_local_search(), _parse_ddg_result_urls(), Search the web using DuckDuckGo (no API key needed)., Synchronous DuckDuckGo search using the duckduckgo-search library.      Returns (+11 more)
+### Community 159 - "Community 159"
+Cohesion: 0.14
+Nodes (18): GuardedGuestDb, Tests for Skybridge real data card resolution., test_calendar_empty_state_still_returns_data_card(), test_calendar_request_returns_real_event_card(), test_classify_calendar_and_weather_requests(), test_guest_calendar_request_does_not_fetch_family_events(), test_weather_current_request_returns_current_card(), test_weather_forecast_request_returns_forecast_card() (+10 more)
 
-### Community 195 - "Community 195"
+### Community 160 - "Community 160"
+Cohesion: 0.14
+Nodes (13): Test direct action execution, Run comprehensive optimization tests, ZoeOptimizationTester, Test MCP server integration, OptimizationResult, Test memory system optimization, Test MCP integration optimization, Test RouteLLM intelligence optimization (+5 more)
+
+### Community 161 - "Community 161"
+Cohesion: 0.12
+Nodes (19): compose_message(), Message composer for the proactive engine.  Calls llama-server (same endpoint as, Given a trigger_type and a context dict, ask the LLM for a short message.     Re, _cleanup_expired_pending(), fire_notification(), _is_in_quiet_hours(), Proactive Engine — coordinates all trigger tiers.  Tier 1: APScheduler fires _fi, Internal: import push router and call send_push_to_user. Returns subscriber coun (+11 more)
+
+### Community 162 - "Community 162"
+Cohesion: 0.17
+Nodes (18): FakePromptPacketMemoryService, test_maintenance_runner_imports_measurement_module(), test_maintenance_runner_rejects_seed_for_real_user_before_service_load(), test_measure_cached_prompt_packets_uses_memoryservice_prompt_read_and_safe_packets(), test_memory_ref_to_cached_item_parses_json_evidence_refs(), test_seed_prompt_packet_measure_memories_writes_evidence_backed_rows(), test_summary_marks_packets_unsafe_when_rows_are_rejected_or_uncited(), test_summary_reports_cached_packet_budget_status() (+10 more)
+
+### Community 163 - "Community 163"
+Cohesion: 0.2
+Nodes (16): _allowed_pr_edit_plan(), test_profile_edit_outcome_blocks_from_trust_matching_default_to_trust_without_raising(), test_profile_edit_outcome_blocks_unchanged_trust_manifest_without_raising(), test_profile_edit_outcome_blocks_unsupported_target_backend_without_raising(), test_profile_edit_outcome_blocks_when_pr_edit_gate_was_blocked(), test_profile_edit_outcome_rejects_invalid_manifest_before_memory_candidate(), test_profile_edit_outcome_without_memory_approval_stays_pending(), test_verified_profile_edit_outcome_builds_memory_admission_and_trust_records() (+8 more)
+
+### Community 164 - "Community 164"
 Cohesion: 0.15
-Nodes (13): Unit tests for person_extractor.py — pattern matching and process_text() logic., Integration-style tests that mock DB and MemPalace., Create a mock DB that returns person_id on SELECT., test_birthday_pattern_known_person_writes_date(), test_bucket_list_pattern_writes_bucket(), test_empty_text_returns_zero(), test_gift_pattern_known_person_writes_gift(), test_guest_returns_zero() (+5 more)
+Nodes (16): test_event_to_hindsight_item_keeps_evidence_and_scope_tags(), test_event_to_hindsight_item_serializes_structured_context_as_json(), _compact_context(), _embeddings_base_url_from_env(), event_to_hindsight_item(), from_env(), HindsightMemoryError, HindsightOfflineConfigError (+8 more)
 
-### Community 196 - "Community 196"
+### Community 165 - "Community 165"
+Cohesion: 0.18
+Nodes (18): test_failed_outcome_trace_becomes_notice_signal_when_repeated(), test_failed_outcome_trace_respects_existing_signal_ids(), test_failed_outcome_trace_threshold_is_repeat_count_two(), test_memory_route_trace_allows_safe_metadata_without_evidence(), test_metadata_allows_author_attribution_key(), test_metadata_rejects_secret_keys(), test_metadata_rejects_secret_keys_inside_lists(), test_personal_trace_requires_user_id() (+10 more)
+
+### Community 166 - "Community 166"
 Cohesion: 0.11
-Nodes (18): 1. Critical Security Alerts, 2. Best Practices (From Community Guides), 3. Notable Community Forks, 5. Files to Track (Adopt-Patterns Strategy), 6. Decision Triggers (Re-evaluate Strategy), 7. Video Reference, 8. Summary: Updated Recommendations, 9. References (+10 more)
+Nodes (19): clear_all_device_caches(), clear_device_cache(), list_touch_panel_devices(), QuickSwitchRequest, Touch Panel API Endpoints Optimized endpoints for touch panel quick authenticati, Validate touch panel session (with offline support)          Args:         reque, Touch panel authentication request, Quick user switch request (+11 more)
 
-### Community 197 - "Community 197"
+### Community 167 - "Community 167"
+Cohesion: 0.1
+Nodes (13): classifier(), Intent Classification Tests ===========================  Tests for HassIL-based, Test queries that should NOT match any intent., Complex queries should return None (fall back to LLM)., Initialize classifier with test intents., Test list-related intent classification., Test basic 'add to shopping list' pattern., Test shorthand 'add item' pattern (implies shopping list). (+5 more)
+
+### Community 168 - "Community 168"
+Cohesion: 0.1
+Nodes (18): Get current git repository size, check_structure_compliance(), count_databases(), count_markdown_files(), count_services(), count_tracked_files(), get_git_size(), get_last_commit() (+10 more)
+
+### Community 169 - "Community 169"
+Cohesion: 0.18
+Nodes (15): DESIRE_LABELS, getMyCheckinId(), goDiscover(), load(), loadQuiz(), pathParts, renderCompatibility(), renderProfile() (+7 more)
+
+### Community 170 - "Community 170"
+Cohesion: 0.18
+Nodes (18): RuntimeError, get_pr_status(), GreptileAuthError, list_pr_comments(), _load_api_key(), _mcp_call(), normalize_pr_comment(), parse_confidence_score() (+10 more)
+
+### Community 171 - "Community 171"
+Cohesion: 0.15
+Nodes (7): AiortcRoom, Drop-in replacement for livekit.rtc.Room using aiortc + WebSocket signalling., Decorator: @room.on("event_name"), Handle SDP re-offer from LiveKit server (subscriber PC)., Add an ICE candidate received from the server., Called when aiortc delivers an audio track — map to participant., Extract track SID → participant SID from SDP msid attributes.          LiveKit e
+
+### Community 172 - "Community 172"
+Cohesion: 0.2
+Nodes (18): _load_helper(), test_apply_joke_contract_allows_explicit_live_repo_override(), test_apply_joke_contract_appends_to_existing_open_domain_test(), test_apply_joke_contract_fails_cleanly_when_router_missing(), test_apply_joke_contract_is_idempotent_with_current_router_pattern(), test_apply_joke_contract_patches_router_and_adds_test(), test_apply_joke_contract_refuses_live_repo_root(), test_apply_say_exactly_contract_allows_explicit_live_repo_override() (+10 more)
+
+### Community 173 - "Community 173"
+Cohesion: 0.21
+Nodes (19): _get_active_player(), _ha_service(), _ma_available(), _ma_cmd(), _ma_play_media(), _ma_player_command(), _ma_players(), Return the first playing or first available player ID. (+11 more)
+
+### Community 174 - "Community 174"
+Cohesion: 0.17
+Nodes (15): quick_user_switch(), Quick user switching for touch panels          Args:         request: Quick swit, validateSession(), QuickAuthManager, QuickAuthResult, Quick Authentication for Touch Panels Optimized for fast user switching and offl, Quick user switching for touch panels                  Args:             current, Validate existing session (with offline support)                  Args: (+7 more)
+
+### Community 175 - "Community 175"
 Cohesion: 0.16
 Nodes (14): _intent_name(), ir(), _load_intent_router(), Unit tests for intent_router.py — all A2A + Multica + Evolution intents.  These, Verify that intents used in the Multica board routing list exist., _setup_stubs(), _stub_module(), _stub_psycopg2() (+6 more)
 
-### Community 198 - "Community 198"
-Cohesion: 0.15
-Nodes (10): DatabaseConsolidator, Merge sessions from sessions.db and auth.db, Verify that consolidation was successful, Run full consolidation, Check if table exists in database, Merge users from auth.db into zoe.db, DatabaseReferenceUpdater, Run the update process (+2 more)
+### Community 176 - "Community 176"
+Cohesion: 0.11
+Nodes (10): Test getting all user sessions, Test session expiration, Test session statistics, Test session metadata handling, Test concurrent session handling, Test cases for SessionManager class, Test session creation, Test session retrieval (+2 more)
 
-### Community 199 - "Community 199"
+### Community 177 - "Community 177"
 Cohesion: 0.19
 Nodes (11): EnhancementTaskCreator, Create user feedback system task, Create cross-agent orchestration enhancement task, Create performance optimization task, Create enhancement tasks in the developer task system, Create comprehensive testing framework task, Create temporal memory system implementation task, Create architecture documentation task (+3 more)
 
-### Community 200 - "Community 200"
-Cohesion: 0.11
-Nodes (18): 1. `routers/music.py`, 2. `routers/chat.py`, 3. `routers/tool_registry.py`, code:block1 (services/music/), code:python (from services.music.context import get_music_context, format), code:python (from services.music.youtube_provider import YouTubeMusicProv), Core Services (26 files), ✅ Easy (Low Risk) (+10 more)
-
-### Community 201 - "Community 201"
-Cohesion: 0.11
-Nodes (18): 📋 Affected Endpoints:, 📋 Affected Files:, 🔒 AUTHENTICATION & USER ISOLATION RULES - CRITICAL, code:python (def __init__(self, db_path: str = "/home/zoe/assistant/data/), code:python (# Use LiteLLMProvider (default)), code:bash (# Run before every commit), code:python (# WRONG: Hardcoded default user), ✅ CORRECT Pattern: (+10 more)
-
-### Community 202 - "Community 202"
-Cohesion: 0.14
-Nodes (18): Trade-offs, Changes Required, code:block1 ("play Beatles"), code:bash (# 1. Disable music intents (reversible)), code:yaml (# Comment out or remove MusicPlay intent), code:bash (# Backup first), Cons ❌, Decision Helper (+10 more)
-
-### Community 203 - "Community 203"
-Cohesion: 0.19
-Nodes (19): code:block24 (docs/), docs/ Folder, Root Level (Max 10 Files), code:block1 (IF only 1 target fails AND it's non-critical:), code:block2 (IF 3 of 4 individual targets pass AND combined targets pass:), Decision Authority, Decision Tree (if FAIL), Documentation (+11 more)
-
-### Community 204 - "Community 204"
-Cohesion: 0.11
-Nodes (19): What To Remember, What Didn't Work, What Worked, Architecture Insights, What Went Right, What Went Wrong, code:bash (# Now when someone tries to commit bad code:), Prevention System: (+11 more)
-
-### Community 205 - "Community 205"
+### Community 178 - "Community 178"
 Cohesion: 0.12
-Nodes (19): 3. Resource Optimization, 1. homeassistant-mcp (cronus42), 2. hass-mcp (voska), Alternative Approach: Use Community Implementations, code:dockerfile (FROM python:3.11-slim), code:yaml (services:), docker-compose.module.yml Template, Dockerfile Template (+11 more)
+Nodes (18): Shut down APScheduler and the slow loop., stop_proactive_engine(), cancel_job(), get_scheduler(), _jobstore_url(), APScheduler wrapper (Tier 1 — precision scheduling).  Uses PostgreSQL job store, Prefer PostgreSQL jobstore; fall back to SQLite for local dev., Schedule func(**kwargs) at run_at (UTC datetime). Returns job_id. (+10 more)
 
-### Community 206 - "Community 206"
-Cohesion: 0.11
-Nodes (19): 1. Pre-Commit Hook (ACTIVE), 2. Automatic Backup Script, 3. Database Integrity Check, 4. User Count Monitor, 🔧 AUTOMATED SAFEGUARDS, code:block1 (/home/zoe/assistant/data/zoe.db), code:bash (0 2 * * * /home/zoe/assistant/scripts/maintenance/check_db_i), code:block2 (/home/zoe/assistant-clean/data/          # DELETED - DO NOT ) (+11 more)
+### Community 179 - "Community 179"
+Cohesion: 0.15
+Nodes (17): _extract_memory_candidates(), _persist_memory_candidates(), Back-compat shim: legacy dict shape over the unified extractor.      Kept so in-, Single post-turn memory hook.      Runs two passes in parallel:     1. Regex ext, test_extracts_preference_signal(), test_no_signal_returns_empty(), LLM fact extraction on a single conversation exchange.      Runs in the backgrou, run_turn_digest() (+9 more)
 
-### Community 207 - "Community 207"
-Cohesion: 0.11
-Nodes (18): System Restoration Log - October 19, 2025, ✅ Advanced Memory Systems (100% Intact), ✅ Agent & Orchestration (100% Intact), Commit Summary, ✅ Core Intelligence Systems (100% Intact), Developer Dashboard (29 files), Experimental/Broken Routers, Final Status: ✅ SYSTEM RESTORED (+10 more)
+### Community 180 - "Community 180"
+Cohesion: 0.17
+Nodes (18): boot(), btnJoin, code, codeError, doCheckin(), enterWelcomeScreen(), joinCodeInput, joinNameInput (+10 more)
 
-### Community 208 - "Community 208"
-Cohesion: 0.11
-Nodes (18): code:block1 (2026-01-25 08:51:27,321 - main - INFO - 🔍 Research request f), code:block2 (Error: Tool execution failed: 404), code:block3 (2026-01-25 08:51:28,198 - main - INFO - 📋 Planning request f), code:block4 (I'd love to help you plan your home automation setup. What k), code:block5 (2026-01-25 08:51:28,647 - main - INFO - 🔬 Analysis request f), code:block6 (<tool_call>), code:block7 (2026-01-25 08:51:29,409 - main - INFO - ⚖️ Comparison reques), code:block8 (Ah, a great topic! Both Zigbee and Z-Wave are popular wirele) (+10 more)
+### Community 181 - "Community 181"
+Cohesion: 0.12
+Nodes (11): get_provider_registry(), ProviderRegistry, Music Provider Registry =======================  Singleton registry that manages, Get the appropriate provider for a track.                  Uses track ID prefix, Search across all connected providers.                  Args:             query:, Get authentication status for all providers.                  Args:, Central registry for music providers.          Manages provider instances and ha, Get the singleton provider registry instance. (+3 more)
 
-### Community 209 - "Community 209"
-Cohesion: 0.11
-Nodes (18): Automation, code:bash (# Add to cron for monthly evolution), Continuous Evolution, Cross-System Pattern Discovery, Data Archival Strategy, Evolution Cycle, Evolution Timeline, Infinite Learning Corpus (+10 more)
+### Community 182 - "Community 182"
+Cohesion: 0.17
+Nodes (14): PlaybackState, Output Target Base Class ========================  Abstract base class for all a, Current playback state of an output., Apple Music Provider ====================  Integration with Apple Music using th, display_name(), ProviderType, Music Provider Base Class =========================  Abstract base class for all, Supported music provider types. (+6 more)
 
-### Community 210 - "Community 210"
-Cohesion: 0.11
-Nodes (18): Add Member, Add to Shared Playlist, Content Filters, Create Shared Playlist, Family Mix Endpoints, Get Family Mix, Get Shared Playlists, Member Endpoints (+10 more)
+### Community 183 - "Community 183"
+Cohesion: 0.12
+Nodes (16): _hermes_review_proposal(), Ask Hermes to review an evolution proposal before implementation is queued., Use Hermes for foreground voice escalation; OpenClaw is manual-only., _run_hermes_voice_escalation(), test_run_hermes_background_task_uses_worker_cli(), test_zoe_repo_root_is_portable(), hermes_api_key(), hermes_auth_headers() (+8 more)
 
-### Community 211 - "Community 211"
-Cohesion: 0.11
-Nodes (19): Check Task Status, Submit General Task, Submit Research Task, GET `/api/widgets/available`, GET `/api/widgets/{widget_id}/info`, code:json ({"task": "Compare X vs Y", "context": "comparison context"}), Submit Comparison, Archive Management (+11 more)
+### Community 184 - "Community 184"
+Cohesion: 0.14
+Nodes (17): test_admit_hindsight_retain_candidate_requires_event_id(), test_admit_hindsight_retain_candidate_stub_is_pending_and_non_writing(), test_build_hindsight_retain_candidate_is_pending_and_evidence_tagged(), test_create_hindsight_retain_candidate_uses_memory_service_pending_ingest(), admit_hindsight_retain_candidate(), build_hindsight_retain_candidate(), _candidate_text(), create_hindsight_retain_candidate() (+9 more)
 
-### Community 212 - "Community 212"
-Cohesion: 0.11
-Nodes (18): Quality Maintenance Guide for Zoe AI Assistant, 🔍 Before Every Commit (Mandatory), code:bash (# Daily health check (30 seconds)), code:markdown (# Maintenance Log), code:bash (# 1. Run automated pre-commit hooks (already installed)), code:bash (# 1. Comprehensive Audit), 🎯 Daily Quality Checks (5 minutes), First Sunday of Month (+10 more)
+### Community 185 - "Community 185"
+Cohesion: 0.19
+Nodes (16): _Db, Tests for panel_* MCP tool definitions and execution paths., _RecordingDb, test_create_evolution_proposal_keeps_system_scope_without_explicit_user(), test_create_evolution_proposal_stores_runtime_intake_contract_snapshot(), test_panel_announce_exists(), test_panel_check_auth_exists(), test_panel_clear_exists() (+8 more)
 
-### Community 213 - "Community 213"
-Cohesion: 0.11
-Nodes (18): 1. Core Infrastructure ✅, 2. Intent Patterns ✅, 3. Intent Handlers ✅, 6. Tests ✅, Classification Speed, code:block10 (Query: "add bread to shopping list" (100 iterations)), code:block11 ("add bread to shopping list" → Database → Response), code:block2 (User input → Intent Classifier (HassIL/Keywords)) (+10 more)
+### Community 186 - "Community 186"
+Cohesion: 0.15
+Nodes (13): BrowserActionPlan, BrowserBackendCapabilities, BrowserBroker, BrowserEvidence, build_cloak_executor(), build_openclaw_gateway_executor(), create_default_browser_broker(), Browser broker for Zoe multi-surface browser orchestration.  This module is inte (+5 more)
 
-### Community 214 - "Community 214"
-Cohesion: 0.11
-Nodes (18): code:block1 (User: "research smart light bulbs"), code:block1 (External content arrives (email, WhatsApp, webhook)), code:block2 (SECURITY CONTEXT: This content is from an UNTRUSTED source.), LLM Enforcement, Per-User Allowlist, Solution: READ vs ACT, Trust Gate Architecture, Component Structure (+10 more)
+### Community 187 - "Community 187"
+Cohesion: 0.12
+Nodes (18): get_cached_users(), get_device_config(), get_device_status(), Logout from touch panel session          Args:         session_id: Session ID to, Get cached users for touch panel (offline display)          Args:         device, Get touch panel device status          Args:         device_id: Touch panel devi, Manually trigger cache sync for touch panel          Args:         device_id: To, Get touch panel configuration          Args:         device_id: Touch panel devi (+10 more)
 
-### Community 215 - "Community 215"
-Cohesion: 0.11
-Nodes (18): 1. Critical Tests (Must Pass), 2. Important Tests (Should Pass), 3. Optional Tests (Nice to Have), 🔄 CI/CD Integration, code:block1 (tests/), code:yaml (# .github/workflows/test.yml), Console Output, Critical Path (Must Pass for UI to Work) (+10 more)
-
-### Community 216 - "Community 216"
-Cohesion: 0.16
-Nodes (15): DESIRE_LABELS, getMyCheckinId(), goDiscover(), INTENT_LABELS, load(), loadQuiz(), pathParts, renderCompatibility() (+7 more)
-
-### Community 217 - "Community 217"
-Cohesion: 0.11
-Nodes (19): Key Achievements, Developer Experience, ✅ Structure Compliance, Active Users, Database State (Post-Fix), Verification Results, code:block10 ($ python3 tools/reports/repo_health.py), New User Onboarding (+11 more)
-
-### Community 218 - "Community 218"
-Cohesion: 0.11
-Nodes (18): Features Added, More Overlay, Manage Contacts, Plan Gifts, Remember Details, Visualize Relationships, What You Can Do, More Overlay Modal (+10 more)
-
-### Community 219 - "Community 219"
+### Community 188 - "Community 188"
 Cohesion: 0.12
 Nodes (11): test_session(), Test cases for session API endpoints, Test session creation endpoint, Test session retrieval endpoint, Test session extension endpoint, Test session invalidation endpoint, Test get user sessions endpoint, Test retrieval of non-existent session (+3 more)
 
-### Community 220 - "Community 220"
-Cohesion: 0.15
-Nodes (11): AffinityEngine, AffinityScore, Music Affinity Engine =====================  Calculates user preferences from li, Get affinity score for an artist.                  Aggregates affinity across al, Get user's top tracks by affinity score.                  Args:             user, Get aggregate listening statistics for a user.                  Returns:, Rank a list of tracks by user affinity.                  Args:             track, Affinity score with metadata (+3 more)
+### Community 189 - "Community 189"
+Cohesion: 0.17
+Nodes (15): add_chat_turn(), enhance_memory_search_with_temporal(), Get context from current and recent episodes, Integrates temporal memory with Zoe's chat system, Store conversation turn in episode, Start a new conversation episode, Enhance existing memory search with temporal context, Start chat episode for user (+7 more)
 
-### Community 221 - "Community 221"
-Cohesion: 0.15
-Nodes (12): BrowserActionPlan, BrowserBackendCapabilities, BrowserEvidence, build_cloak_executor(), build_openclaw_gateway_executor(), create_default_browser_broker(), Browser broker for Zoe multi-surface browser orchestration.  This module is inte, Provide side-by-side backend summary and current recommendation. (+4 more)
-
-### Community 222 - "Community 222"
+### Community 190 - "Community 190"
 Cohesion: 0.14
-Nodes (17): code structure cleanup, Cursor MCP, Graphify Agent Instructions, Greptile PR loop, Hermes-First Delegation, opensrc, Cursor And AI Assistant Best Practices For Zoe, code:block16 (1. Immediately start coding) (+9 more)
+Nodes (10): Get application log sizes, Get overall disk usage, Storage monitoring and safe optimization, SAFE: Run VACUUM on databases (reversible optimization)                  Args:, SAFE: Archive old application logs                  Args:             days_to_ke, Analyze storage usage - MONITORING ONLY, NO DELETION                  Returns:, Get Docker images usage, Get database file sizes (+2 more)
 
-### Community 223 - "Community 223"
+### Community 191 - "Community 191"
+Cohesion: 0.12
+Nodes (17): Ensure audio features table exists., Initialize music auth table., Ensure embeddings table exists., Ensure music_events table exists., Initialize music playback tables., init_db(), migrate_db(), Module-local SQLite database for Orbit. (+9 more)
+
+### Community 192 - "Community 192"
 Cohesion: 0.13
-Nodes (6): Unit tests for the Pi Agent skills classifier and tool builder.  Tests _select_s, _llm_call must accept tool_choice kwarg defaulting to 'auto'., Verify a selection of the weather cue strings would match typical messages., TestBuildPrompt, TestChatCapabilityShortcutExists, TestLlmCallSignature
+Nodes (16): accept_pending_suggestion(), dismiss_pending_suggestion(), list_pending_suggestions(), list_schedules(), Proactive Engine REST router.  Endpoints:   POST   /api/proactive/schedule, List unresolved save offers for the current chat session., Execute a pending save offer (direct API — no intent re-parse)., List pending scheduled nudges for the calling user. (+8 more)
 
-### Community 224 - "Community 224"
-Cohesion: 0.14
-Nodes (12): get_permission_checker(), Helper class for complex permission checking, Check if session has specific permission, Check if session has any of the listed permissions, Check if can access another user's resource, Get permission checker instance for current session, PermissionCheck, Result of permission verification (+4 more)
+### Community 193 - "Community 193"
+Cohesion: 0.13
+Nodes (16): chat_inject_background(), Optionally mirror an intent summary into OpenClaw for legacy debugging., OpenClaw message context prefix (zoe-auth role → agent)., test_context_prefix_includes_user_role_and_name(), test_context_prefix_unknown_role_when_omitted(), chat_inject(), discover_openclaw_capabilities(), openclaw_cli() (+8 more)
 
-### Community 225 - "Community 225"
-Cohesion: 0.18
-Nodes (11): Generate random text for testing, Benchmark system initialization, Benchmark embedding generation performance, Benchmark migration performance, Benchmark search performance, Benchmark caching performance, Benchmark memory usage, Benchmark concurrent access performance (+3 more)
-
-### Community 226 - "Community 226"
-Cohesion: 0.14
-Nodes (9): Get application log sizes, Get overall disk usage, Storage monitoring and safe optimization, SAFE: Run VACUUM on databases (reversible optimization)                  Args:, SAFE: Archive old application logs                  Args:             days_to_ke, Analyze storage usage - MONITORING ONLY, NO DELETION                  Returns:, Get Docker images usage, Get database file sizes (+1 more)
-
-### Community 227 - "Community 227"
-Cohesion: 0.11
-Nodes (18): Phase 1: Basic Versioning (Week 1), Phase 2: Deprecation (Week 2), Phase 3: Client Migration (Months 1-6), Phase 4: Cleanup (Month 6), Phase 1: Setup (Day 1), Phase 2: Update Routers (Days 2-4), Phase 3: Documentation (Day 5), Phase 4: Testing (Day 6) (+10 more)
-
-### Community 228 - "Community 228"
-Cohesion: 0.11
-Nodes (18): Services Running, Building a New Module, code:bash (# List available modules), code:block8 (✅ zoe-core         (orchestration, intents)), 🎮 How to Use the System, Managing Modules, code:bash (# Check status), code:bash (# 1. Copy template) (+10 more)
-
-### Community 229 - "Community 229"
-Cohesion: 0.11
-Nodes (17): Architecture Overview, MCP-Only Architecture for Zoe Modules, 1. Single Interface, 2. Module Self-Containment, 3. No REST Fallbacks, Automatic: Cache-Busting, Benefits of MCP-Only, Browser Cache Issues (+9 more)
-
-### Community 230 - "Community 230"
-Cohesion: 0.11
-Nodes (17): 7 Layers of Protection:, Allowed Exceptions (2 files):, code:block5 (/home/zoe/assistant/ (16 files - CLEAN!)), Deleted:, Documentation (5 .md files / 10 limit):, Documentation Reference, Files Moved During Organization, Final Root Directory Structure (+9 more)
-
-### Community 231 - "Community 231"
-Cohesion: 0.11
-Nodes (17): Canonical backend decision, Endpoint compatibility matrix (current), Operational rule, Planned additions for provider sync operations, UI-consumed endpoints that remain primary, Calendar Sync Baseline, Canonical Runtime Configuration (Observed), Device Identity (+9 more)
-
-### Community 232 - "Community 232"
-Cohesion: 0.11
-Nodes (17): Deploy & Monitor, Update Documentation, Verify Implementation, When You're Done, Project Governance Implementation - COMPLETE, Developers (Contributing), Existing Users (Already Have Zoe), Implementation Reports (2 new) (+9 more)
-
-### Community 233 - "Community 233"
-Cohesion: 0.12
-Nodes (16): Chat / Voice Commands Reference, Circle Model, code:block1 (score = 0.6 × recency + 0.3 × frequency + birthday_boost), Developer Notes, entity_id consistency, Entity ID strategy, Health dot colours (UI), How Facts Are Extracted from Conversations (+8 more)
-
-### Community 234 - "Community 234"
-Cohesion: 0.21
-Nodes (16): RuntimeError, get_pr_status(), GreptileAuthError, list_pr_comments(), _load_api_key(), _mcp_call(), normalize_pr_comment(), parse_confidence_score() (+8 more)
-
-### Community 235 - "Community 235"
-Cohesion: 0.12
-Nodes (17): Touch Panel Skill, Backend API, Browser visibility architecture, code:block1 (panel_navigate(url, panel_id)          → Load URL full-scree), code:bash (panel_ssh_exec("zoe-touch-pi", "systemctl status zoe-kiosk")), code:block3 (GET  /api/panels                           → list registered), code:python (panel_browser_screenshot(navigate_to="https://example.com", ), code:bash (# From Jetson repo root — deploy scripts/config to panel) (+9 more)
-
-### Community 236 - "Community 236"
-Cohesion: 0.24
-Nodes (17): Hermes Agent, OpenClaw Agent, Zoe's Personal Assistant Squad, Zoe Squad, Zoe Capabilities, Agent Architecture, Core Capabilities, escalate_to_hermes (+9 more)
-
-### Community 237 - "Community 237"
+### Community 195 - "Community 195"
 Cohesion: 0.19
 Nodes (16): _infer_event_category(), _call_with_tool(), _extract_calendar(), _extract_journal(), _extract_list_add(), _extract_note(), _extract_people(), _extract_reminder() (+8 more)
 
-### Community 238 - "Community 238"
-Cohesion: 0.18
-Nodes (11): Run comprehensive optimization tests, Test MCP server integration, OptimizationResult, Test memory system optimization, Test MCP integration optimization, Test RouteLLM intelligence optimization, Comprehensive system optimization for maximum potential, Run comprehensive system optimization (+3 more)
+### Community 196 - "Community 196"
+Cohesion: 0.12
+Nodes (12): escalate_session(), Escalate passcode session to full session with password verification          Ar, AuthValidationResult, Verify user password                  Args:             user_id: User identifier, Result of authentication validation, Parse stored auth timestamp strings., Check if password change is required due to age, Log authentication attempt - non-blocking, errors suppressed (+4 more)
 
-### Community 239 - "Community 239"
+### Community 197 - "Community 197"
+Cohesion: 0.12
+Nodes (12): Feature Improvement Testing Test each feature individually, measure impact, vali, Test P0-3: Validate temperature appropriateness, Test that temperature ranges are appropriate for intent types, Test that temperature adjusts based on context availability, Test P0-4: Validate grounding detection, Test P1-1: Validate behavioral pattern extraction, Test that all pattern types can be extracted, Test that all features can be imported without conflicts (+4 more)
+
+### Community 198 - "Community 198"
+Cohesion: 0.18
+Nodes (11): cli(), disable(), enable(), info(), ModuleManager, Get detailed information about a module., Zoe module management CLI., Show detailed information about a module. (+3 more)
+
+### Community 199 - "Community 199"
 Cohesion: 0.12
 Nodes (15): create_docs_folder(), create_project_status(), move_to_archive(), Create organized docs folder structure, Move old docs to archive, Create docs/README.md index, Create consolidated PROJECT_STATUS.md, create_docs_index() (+7 more)
 
-### Community 240 - "Community 240"
-Cohesion: 0.13
-Nodes (17): code:python (# services/zoe-core/routers/chat.py), Step 4.4: Update chat.py Context (10 minutes), 2. HALLUCINATION REDUCTION TECHNIQUES, code:block11 (User: "Add milk to shopping list"), code:block12 (User: "What's my next Arduino project?"), code:block13 (User: "When did I last talk to Sarah?"), code:block14 (User: "What's my favorite color?"), code:python (# services/zoe-core/grounding_validator.py (NEW)) (+9 more)
+### Community 200 - "Community 200"
+Cohesion: 0.14
+Nodes (7): test_ingest_passes_first_class_event_metadata_to_writer(), test_memory_visible_to_user_matches_user_id_or_wing_or_shared_visibility(), test_metadata_prompt_read_blocks_cross_user_disputed_and_superseded_rows(), test_semantic_search_blocks_cross_user_disputed_and_superseded_rows(), _FakeCollection, _match_where(), Minimal Chroma collection stub backed by a plain dict.
 
-### Community 241 - "Community 241"
-Cohesion: 0.12
-Nodes (17): ✅ ALWAYS DO, code:bash (# 1. Check service started), code:bash (docker logs -f zoe-litellm), 🛡️ CRITICAL RULES, ❌ NEVER DO, code:yaml (# BAD - Different networks will break communication!), code:yaml (# BAD - Docker will add prefix based on directory), ❌ DON'T forget explicit network name (+9 more)
+### Community 201 - "Community 201"
+Cohesion: 0.14
+Nodes (11): AudioAnalyzer, Audio Analyzer ==============  Extracts audio features from music tracks using E, Synchronous audio analysis (runs in thread pool).                  Args:, Estimate valence (sad-happy) from audio features.                  Simple heuris, Estimate arousal (calm-energetic) from audio features.                  Higher B, Fetch audio segment for analysis.                  Downloads 60-second segment (, Get the singleton audio analyzer instance., Extract audio features using Essentia.          Jetson-only component for analyz (+3 more)
 
-### Community 242 - "Community 242"
-Cohesion: 0.12
-Nodes (17): 1. Enhanced Critical Files Protection, 2. Git Branch Protection, 3. Database Backups, Prevention Measures Implemented, 1. **Automated Enforcement Tool** ✅, 2. **Pre-Commit Hook Integration** ✅, 3. **Documentation Updated** ✅, code:bash (python3 tools/audit/check_database_paths.py) (+9 more)
-
-### Community 243 - "Community 243"
-Cohesion: 0.12
-Nodes (17): code:bash (docker stop zoe-core zoe-auth), code:bash (cp /home/zoe/assistant/data/zoe.db /home/zoe/assistant/data/), code:bash (sqlite3 /home/zoe/assistant/data/zoe.db < /home/zoe/assistan), code:bash (docker start zoe-core zoe-auth), If Users Are Lost, 1. Find When Deleted, 2. Restore from Git, 3. Restore Multiple Files (+9 more)
-
-### Community 244 - "Community 244"
-Cohesion: 0.12
-Nodes (17): Root Cause Analysis, The 404 Error, Why LLM Took Over, code:python (# OLD CODE (services/mem-agent/enhanced_mem_agent_service.py), code:python (# Lines 26-38: Temporal memory imported), code:block5 (INFO:__main__:Enhanced search request: Create a person named), code:python (['list', 'calendar', 'memory', 'planning', 'journal', 'remin), Issue 1: API Endpoint Mismatch (CRITICAL) 🔴 (+9 more)
-
-### Community 245 - "Community 245"
-Cohesion: 0.12
-Nodes (16): 1. **Users Table** (CRITICAL), 2. **People Table**, 3. **Sessions Table**, After Migration, Before Migration, code:markdown (## 🗄️ DATABASE MANAGEMENT RULES), 🚨 Critical Duplicate Issues, Critical Service Files (Must Update) (+8 more)
-
-### Community 246 - "Community 246"
-Cohesion: 0.12
-Nodes (16): 400 Validation Error, 401 Authentication Error, 404 Not Found, 500 Server Error, code:python (raise HTTPException(status_code=404, detail="Not found")), code:python (# tests/unit/test_error_handling.py), code:python (return {"error": "Not found", "status": 404}), code:python (return JSONResponse(status_code=404, content={"detail": "Not) (+8 more)
-
-### Community 247 - "Community 247"
-Cohesion: 0.12
-Nodes (16): 1. ✅ CRITICAL: All Files Deleted from Working Tree, 2. ✅ Archive Files Tracked in Git, 3. ✅ Incomplete .gitignore Rules, Added Exclusions:, code:block1 (Working Tree:    36 MB), code:gitignore (# Archive files (tar, zip, etc.) - these bloat the repositor), code:block6 (749c546 - chore: Improve .gitignore and remove archive files), Commit History (+8 more)
-
-### Community 248 - "Community 248"
-Cohesion: 0.12
-Nodes (16): After Modifying chat.py:, Before Modifying chat.py:, code:python (# Hardcoded regex patterns), code:python (# Let EnhancedMemAgent understand intent and execute), code:block8 (Bad:  User message → Regex pattern → Hardcoded action), code:block9 (User Message), ✅ Current Protection Status, If Tests Fail: (+8 more)
-
-### Community 249 - "Community 249"
-Cohesion: 0.13
-Nodes (17): Browser Automation → Moltbot, code:javascript (if (message.includes("remember") || message.includes("said a), code:javascript (if (message.includes("research") || message.includes("invest), code:javascript (if (message.includes("plan") || message.includes("roadmap") ), code:javascript (if (message.includes("analyze") || message.includes("review"), code:javascript (if (message.includes("compare") || message.includes("vs") ||), code:javascript (if (message.includes("book") || message.includes("find fligh), Comparisons → Agent Zero (+9 more)
-
-### Community 250 - "Community 250"
-Cohesion: 0.12
-Nodes (16): 10. Notification Settings UI (30 min), 11. Calendar Integration (20 min), 12. Task Integration (20 min), 6. Database Migration (10 min), 7. Register Router (5 min), 8. Install Dependencies (5 min), 9. Frontend Notification Handler (30 min), code:bash (# 1. Apply database migration) (+8 more)
-
-### Community 251 - "Community 251"
-Cohesion: 0.12
-Nodes (16): Current Limitations:, Test Commands:, Voice/Chat Testing (Manual), ✅ All Systems Active, Backend (chat.py), Backend Not Responding, Chat Page Configuration, Frontend (chat.html) (+8 more)
-
-### Community 252 - "Community 252"
-Cohesion: 0.15
-Nodes (16): create_background_task(), get_pending_tasks(), Queue a long-running task for background execution.      Body: {"message": "find, Return completed background tasks not yet shown to the user., _hermes_headers(), enqueue_background_task(), _ensure_table(), background_runner.py — Background task queue for Zoe.  Enables "fire and forget" (+8 more)
-
-### Community 253 - "Community 253"
-Cohesion: 0.12
-Nodes (15): event_loop(), mock_db(), mock_device(), mock_household(), mock_playlist(), mock_track(), mock_user(), Pytest Configuration ====================  Shared fixtures and configuration for (+7 more)
-
-### Community 254 - "Community 254"
-Cohesion: 0.15
-Nodes (9): MusicAuthManager, Store encrypted authentication credentials.                  Args:             u, Retrieve and decrypt authentication credentials.                  Args:, Get the refresh token for a provider., Manages encrypted authentication credentials for music providers.          Suppo, Delete authentication credentials.                  Args:             user_id: U, Check authentication status for a provider.                  Returns:, Encrypt authentication data.                  Args:             data: Dictionary (+1 more)
-
-### Community 255 - "Community 255"
-Cohesion: 0.13
-Nodes (15): Ensure audio features table exists., Initialize music auth table., Ensure embeddings table exists., Ensure music_events table exists., Initialize music playback tables., init_db(), migrate_db(), Module-local SQLite database for Orbit. (+7 more)
-
-### Community 256 - "Community 256"
-Cohesion: 0.17
-Nodes (15): get_emotional_moments(), get_my_emotional_moments(), get_my_portrait(), get_portrait(), Portrait API — exposes user portrait management endpoints.  GET  /api/portrait/m, Return recent emotional memories for the current user., Return recent emotional memories (admin or self only)., Raise 403 if the requesting user is neither the target nor an admin. (+7 more)
-
-### Community 257 - "Community 257"
-Cohesion: 0.21
-Nodes (6): When only memory is selected, ha_control should not be included., Selecting all skills should produce the full _TOOLS list., A typical single-skill query should load far fewer tools than the full set., TestBuildTools, OpenClaw should be available only when the fallback skill is selected., OpenClaw should not execute unless the operator explicitly enables it.
-
-### Community 258 - "Community 258"
+### Community 202 - "Community 202"
 Cohesion: 0.13
 Nodes (15): close_action_form(), confirm_action_form(), open_action_form(), Called by the touch panel when a full-screen action-form overlay opens.      Reg, Called by the touch panel when the action-form overlay is dismissed (cancel/clos, Handle a Confirm submission from a full-screen action-form overlay.      The tou, _broadcast_action_form_panel(), Broadcast a panel_show_action_form event so the touch overlay opens.      panel_ (+7 more)
 
-### Community 259 - "Community 259"
+### Community 203 - "Community 203"
+Cohesion: 0.12
+Nodes (16): _has_espeak_ng(), Strip markdown and normalise text so TTS sounds natural when spoken aloud., Streaming TTS endpoint: sentence-splits text and streams WAV chunks.      Pi dae, Signal from the Pi daemon that the wake word was detected.     Used to update pa, Synthesize via Kokoro PyTorch sidecar (GPU, natural af_sky voice).      Calls th, Split text into spoken sentences for streaming TTS.      Uses a regex that avoid, speak(), _split_sentences() (+8 more)
+
+### Community 204 - "Community 204"
 Cohesion: 0.17
-Nodes (15): _hash_token(), issue_token(), lookup_device_token(), Issue a new device token for a panel daemon., Check cache for a valid (non-revoked, non-expired) device token., Resolve a device token to a user dict for use in get_current_user().      Return, _resolve_device_token_user(), Validate raw X-Device-Token against panel_auth SHA-256 cache. (+7 more)
+Nodes (15): _hash_token(), issue_token(), lookup_device_token(), Issue a new device token for a panel daemon., Check cache for a valid (non-revoked, non-expired) device token., Resolve a device token to a user dict for use in get_current_user().      Uses p, _resolve_device_token_user(), Validate raw X-Device-Token against panel_auth SHA-256 cache. (+7 more)
 
-### Community 260 - "Community 260"
-Cohesion: 0.18
-Nodes (7): Perform time synchronization, Apply the configured timezone, Start the time synchronization service, Stop the time synchronization service, Load time synchronization settings, Save settings to file, Synchronize system time with NTP server
-
-### Community 261 - "Community 261"
-Cohesion: 0.16
-Nodes (12): Test a natural language prompt, Send a chat message and get response, send_chat_message(), test_prompt(), Execute a single test query and measure performance, test_query(), Comprehensive Test Suite for Zoe Performance Optimization Tests 100+ natural lan, Get or create a test session (+4 more)
-
-### Community 262 - "Community 262"
-Cohesion: 0.15
-Nodes (12): generate(), Orbit icebreaker engine — rule cascade, strongest signal wins., Generate the best icebreaker line for a match pair., get_enabled_modules(), ComposeGenerator, Write the generated compose file., Generate docker-compose.modules.yml from enabled modules., Generate docker-compose.generated-modules.yml from enabled modules. (+4 more)
-
-### Community 263 - "Community 263"
-Cohesion: 0.13
-Nodes (8): Test permission-based access control, Test database security features, Run all security tests, Create a test JWT token, Test that users only see their own data, Test JWT token validation, Test audit logging functionality, SecurityTester
-
-### Community 264 - "Community 264"
+### Community 205 - "Community 205"
 Cohesion: 0.12
-Nodes (6): Comprehensive Natural Language Integration Tests Tests the entire Zoe system wit, Test memory expert with natural language, Test orchestration system status, End-to-end natural language tests for the complete Zoe system, Test calendar expert with natural language, TestNaturalLanguageSystem
+Nodes (15): event_loop(), mock_db(), mock_device(), mock_household(), mock_playlist(), mock_track(), mock_user(), Pytest Configuration ====================  Shared fixtures and configuration for (+7 more)
 
-### Community 265 - "Community 265"
-Cohesion: 0.18
-Nodes (8): ProjectCleaner, Find outdated/redundant documentation, Find Mac OS resource fork files, Find archive folders that can be removed, Find files that are known to be broken, Analyze entire project structure, Find all backup files, Find duplicate router files in archive folder
-
-### Community 266 - "Community 266"
-Cohesion: 0.12
-Nodes (15): Architecture Violations, 🔍 Best Practices Check (OPTIONAL), 🔧 Bypassing Checks (Emergency Only), Checks, code:block4 (⚠️  10 large routers found (>800 lines)), code:bash (git commit --no-verify -m "emergency: fix production issue"), 📊 Enforcement Summary, Enhanced Enforcement System (+7 more)
-
-### Community 267 - "Community 267"
-Cohesion: 0.13
-Nodes (16): Change Tracking, code:bash (# See this week's changes), code:bash (# Initialize databases (new installations)), code:bash (# Structure compliance (12 checks)), 🛠️ Tools Now Available, CHANGELOG Generation, code:bash (# Initialize databases from schemas), code:bash (# Weekly change summary) (+8 more)
-
-### Community 268 - "Community 268"
-Cohesion: 0.12
-Nodes (14): code:block2 (docker compose stop zoe-ui homeassistant-mcp-bridge homeassi), code:bash (docker compose restart zoe-data           # After Python cod), code:bash (curl -s -X POST https://zoe.local/api/panels/register \), code:bash (curl -s -X POST https://zoe.local/api/panels/zoe-touch-pi/to), code:bash (systemctl --user restart zoe-voice), code:bash (curl -s -X DELETE https://zoe.local/api/panels/zoe-touch-pi/), Environment Variables (Key Settings), Issuing a Panel Device Token (+6 more)
-
-### Community 269 - "Community 269"
-Cohesion: 0.12
-Nodes (15): Display Locations, Privacy, Quick Journal Widget Guide, Size Options, Tips, Advanced Features, code:javascript (// Set loading state), code:javascript (getTemplate() {) (+7 more)
-
-### Community 270 - "Community 270"
-Cohesion: 0.12
-Nodes (15): ❌ **AGAINST PersonExpert** (Recommended), Analysis: PersonExpert vs. Full CRM, Better Solution: MCP Tool for People Service, code:block1 (people-service-test running on port 8010), code:python (class PersonExpert:), code:python (# In zoe-mcp-server), Current Situation, Current Test Status (+7 more)
-
-### Community 271 - "Community 271"
-Cohesion: 0.12
-Nodes (15): 10. `tests/e2e/detailed_test_report.json` (15 KB), 1. `FINAL_STATUS_REPORT.md` (7.2 KB), 2. `PERSON_EXPERT_RECOMMENDATION.md` (4.1 KB), 3. `CODEX_HELP_REQUEST.md` (8.5 KB), 4. `tests/e2e/CHANGES_DOCUMENTATION.md` (12 KB), 5. `tests/e2e/PROTECTION_CHECKLIST.md` (5 KB), 6. `tests/e2e/README.md` (6.3 KB), 7. `tests/e2e/ALL_43_TESTS_QA.txt` (23 KB) (+7 more)
-
-### Community 272 - "Community 272"
-Cohesion: 0.12
-Nodes (16): Layer 1: .cursorrules (Prevention), Layer 2: Architecture Tests (Detection), Layer 3: Intelligent Architecture Validator (Detailed Check), Layer 4: Pre-Commit Hook (Enforcement), 🛡️ Protection System (4 Layers), 4. Verify Restoration, code:bash (python3 /home/zoe/assistant/tools/audit/validate_critical_fi), code:bash (bash /home/zoe/assistant/tools/audit/find_file_references.sh) (+8 more)
-
-### Community 273 - "Community 273"
-Cohesion: 0.12
-Nodes (15): code:bash (# Automatic backup with timestamp), code:sql (-- ❌ FORBIDDEN without backup), code:bash (echo "$(date): Migration XYZ applied" >> /home/zoe/assistant), code:bash (chmod 644 /home/zoe/assistant/data/*.db), Rule 2: Automatic Backups Before Changes, Rule 3: User Data Protection, Rule 4: Migration Logging, Rule 5: Database File Permissions (+7 more)
-
-### Community 274 - "Community 274"
-Cohesion: 0.12
-Nodes (16): 1. **Schema Normalization** (Medium Priority), 2. **API Versioning Strategy** (Medium Priority), 2. **Service Standardization** (Medium Priority), 2. **Table Count Optimization** (Low Priority), 3. **API Documentation** (Low Priority), 3. **Data Directory Organization** (Low Priority), 4. **Multi-Database Complexity** (High Priority Review), 🟡 Areas for Improvement (+8 more)
-
-### Community 275 - "Community 275"
-Cohesion: 0.12
-Nodes (16): 1. Fixed Schema (October 9, 2025), code:sql (CREATE TABLE lists (), Tables (from `db/schema/`), Zoe Authentication Service, Adding New Services, Audit Logs, code:python (# sso/new_service.py), code:python (# api/sso.py) (+8 more)
-
-### Community 276 - "Community 276"
-Cohesion: 0.12
-Nodes (14): Complete Audit Results, Update - Final Fix Count (Oct 19, 2025), User Impact, Verification Command, Check Last Backup, Check User Count, code:bash (docker exec zoe-core env | grep DATABASE_PATH), code:bash (sqlite3 /home/zoe/assistant/data/zoe.db "SELECT COUNT(*) FRO) (+6 more)
-
-### Community 277 - "Community 277"
-Cohesion: 0.17
-Nodes (9): downgrade(), Initial schema — all tables ported to PostgreSQL DDL  Revision ID: 0001 Revises:, upgrade(), FTS for ambient_memory — tsvector + GIN index  Revision ID: 0002 Revises: 0001 C, Add metadata column to chat_sessions  Revision ID: 0003 Revises: 0002 Create Dat, 0004 — A2A federation tables and column additions.  Adds: - background_tasks: cl, 0005 — Touch panel SSH fields and provisioning codes table.  Adds: - panels: ssh, 0006 — People CRM expansion.  Adds: - people: circle, health_score, notification (+1 more)
-
-### Community 278 - "Community 278"
+### Community 206 - "Community 206"
 Cohesion: 0.18
 Nodes (9): _decode_agui_events(), _patch_agent_context(), test_force_hermes_approval_rejection_records_hermes_mode(), test_force_hermes_error_records_hermes_mode(), test_force_hermes_surfaces_progress_events(), test_force_hermes_uses_single_chat_run_and_persists_once(), test_run_zoe_agent_returns_hermes_escalation_marker(), test_run_zoe_agent_streaming_yields_hermes_escalation_marker() (+1 more)
 
-### Community 279 - "Community 279"
-Cohesion: 0.13
-Nodes (12): Search, Search for k most similar tracks.                  Args:             query: 256-, Search with similarity scores.                  Args:             query: 256-dim, Search YouTube Music.                  Search works without authentication using, Return mock results when not authenticated., _luhn_valid(), Return (possibly-redacted-text, reject_reason_or_None)., Fast metadata-filter read for system prompt injection. (+4 more)
-
-### Community 280 - "Community 280"
-Cohesion: 0.23
-Nodes (13): _Db, Tests for panel_* MCP tool definitions., test_panel_announce_exists(), test_panel_check_auth_exists(), test_panel_clear_exists(), test_panel_navigate_exists(), test_panel_request_auth_exists(), test_panel_set_mode_exists() (+5 more)
-
-### Community 281 - "Community 281"
+### Community 207 - "Community 207"
 Cohesion: 0.16
-Nodes (14): Shut down APScheduler and the slow loop., stop_proactive_engine(), cancel_job(), get_scheduler(), _jobstore_url(), APScheduler wrapper (Tier 1 — precision scheduling).  Uses PostgreSQL job store, Prefer PostgreSQL jobstore; fall back to SQLite for local dev., Schedule func(**kwargs) at run_at (UTC datetime). Returns job_id. (+6 more)
+Nodes (11): get_permission_checker(), Helper class for complex permission checking, Check if session has specific permission, Check if session has any of the listed permissions, Check if can access another user's resource, Get permission checker instance for current session, PermissionCheck, Result of permission verification (+3 more)
 
-### Community 282 - "Community 282"
-Cohesion: 0.21
-Nodes (13): _extract_memory_candidates(), Back-compat shim: legacy dict shape over the unified extractor.      Kept so in-, test_extracts_preference_signal(), test_no_signal_returns_empty(), _clean(), extract_and_ingest(), extract_candidates(), MemoryCandidate (+5 more)
+### Community 208 - "Community 208"
+Cohesion: 0.17
+Nodes (14): AccessContext, PermissionResult, Role-Based Access Control (RBAC) System Advanced permission management with inhe, Role-Based Access Control Manager, Permission check results, Context for permission checks, Initialize default permission definitions, RBACManager (+6 more)
 
-### Community 283 - "Community 283"
+### Community 210 - "Community 210"
+Cohesion: 0.15
+Nodes (9): MusicAuthManager, Store encrypted authentication credentials.                  Args:             u, Retrieve and decrypt authentication credentials.                  Args:, Get the refresh token for a provider., Manages encrypted authentication credentials for music providers.          Suppo, Delete authentication credentials.                  Args:             user_id: U, Check authentication status for a provider.                  Returns:, Encrypt authentication data.                  Args:             data: Dictionary (+1 more)
+
+### Community 211 - "Community 211"
+Cohesion: 0.12
+Nodes (6): Comprehensive Natural Language Integration Tests Tests the entire Zoe system wit, Test memory expert with natural language, Test orchestration system status, End-to-end natural language tests for the complete Zoe system, Test calendar expert with natural language, TestNaturalLanguageSystem
+
+### Community 212 - "Community 212"
+Cohesion: 0.18
+Nodes (8): ProjectCleaner, Find outdated/redundant documentation, Find Mac OS resource fork files, Find archive folders that can be removed, Find files that are known to be broken, Analyze entire project structure, Find all backup files, Find duplicate router files in archive folder
+
+### Community 213 - "Community 213"
 Cohesion: 0.13
-Nodes (15): Test that pattern extraction is fast enough for nightly jobs, Each extraction pattern must fire on its canonical example., Questions must not be extracted as memory facts., _fire_memory_capture must write facts to the correct user's wing., Writing same fact twice via _background_memory_save should not create duplicates, test_background_dedup(), test_fire_memory_capture_user_scoped(), test_pattern_extraction() (+7 more)
+Nodes (8): Test permission-based access control, Test database security features, Run all security tests, Create a test JWT token, Test that users only see their own data, Test JWT token validation, Test audit logging functionality, SecurityTester
 
-### Community 284 - "Community 284"
+### Community 214 - "Community 214"
+Cohesion: 0.16
+Nodes (12): Test a natural language prompt, Send a chat message and get response, send_chat_message(), test_prompt(), Execute a single test query and measure performance, test_query(), Comprehensive Test Suite for Zoe Performance Optimization Tests 100+ natural lan, Get or create a test session (+4 more)
+
+### Community 215 - "Community 215"
+Cohesion: 0.18
+Nodes (8): Perform time synchronization, Apply the configured timezone, Start the time synchronization service, Stop the time synchronization service, Load time synchronization settings, Save settings to file, Synchronize system time with NTP server, TimeSyncService
+
+### Community 216 - "Community 216"
+Cohesion: 0.13
+Nodes (5): Tests for Multica autopilot board noise controls., When _BOARD_REVIEW_AUTOPILOT_ENABLED is False (default), _run_board_review logs, When _BOARD_REVIEW_AUTOPILOT_ENABLED is True, _run_board_review proceeds past th, test_board_review_autopilot_guard_off_returns_early(), test_board_review_autopilot_guard_on_reaches_client()
+
+### Community 217 - "Community 217"
+Cohesion: 0.41
+Nodes (14): _event(), _issue(), test_blocked_multica_record_blocks_even_when_approval_flag_is_present(), test_blocked_multica_record_without_approval_flag_fails_closed(), test_description_nulls_do_not_clear_raw_metadata_blocker(), test_explicit_multica_memory_approval_builds_success_trace_and_allows_write(), test_explicit_target_backends_override_multica_metadata(), test_graphiti_target_from_multica_metadata_still_requires_relationship() (+6 more)
+
+### Community 218 - "Community 218"
 Cohesion: 0.13
 Nodes (4): Pure conversational query with no skill match → discovery fallback., A complex query can activate multiple skills., FORCE_FULL_CONTEXT=true overrides classifier and returns all skills., TestSelectSkills
 
-### Community 285 - "Community 285"
+### Community 219 - "Community 219"
+Cohesion: 0.17
+Nodes (14): _load_recent_misses(), _load_target_patterns(), _proposal_exists(), evolution_notice.py — Phase 6 of the nightly dreaming cycle.  NOTICE phase of th, Run the NOTICE phase — returns summary dict., Load intent miss texts from the last N days., Cluster texts by shared trigrams. Returns (representative, [members]) tuples., Load target patterns from legacy arrays or proposal contract envelopes. (+6 more)
+
+### Community 220 - "Community 220"
 Cohesion: 0.14
-Nodes (15): _get_faster_whisper_model(), Run whisper.cpp CLI; return transcript text (may be empty)., Lazy-load and cache a faster-whisper WhisperModel instance., Transcribe using faster-whisper Python library (fallback when whisper.cpp unavai, Transcription waterfall:     1. whisper.cpp CLI (if binary + ggml model configur, Transcribe base64 WAV/PCM audio using whisper.cpp on the Jetson (Pi voice daemon, Combined STT + LLM + TTS in a single HTTP call.      Accepts raw audio (base64 W, Receive an ambient audio segment from the Pi daemon, transcribe it, and store in (+7 more)
+Nodes (15): parse_json_fields(), get_connection_icebreaker(), Shorter icebreaker for the QR scan connect page., create_connection(), get_matches(), get_pending_connections(), get_quiz_question(), _make_quiz_question() (+7 more)
 
-### Community 286 - "Community 286"
-Cohesion: 0.13
-Nodes (12): Enhanced Session Management for Multi-Factor Authentication Supports different s, Validate that session has permission with escalation handling                  A, Configuration for different session types, Security policies for session management, Get owner of resource for permission checks, requires_password_escalation(), SessionConfig, Audit and Monitoring (+4 more)
-
-### Community 287 - "Community 287"
-Cohesion: 0.15
-Nodes (15): Setup or update passcode for current user          Args:         request: Passco, setup_passcode(), Core CRUD, Sub-resources, WidgetManager Methods, WidgetModule Methods, WidgetRegistry Methods, API Reference (+7 more)
-
-### Community 288 - "Community 288"
-Cohesion: 0.2
-Nodes (14): get_matches(), intent_score(), intents_compatible(), jaccard(), personality_score(), Orbit matching algorithm — weighted multi-factor scoring., Compute match score between two checkin dicts. Returns None if incompatible., Return up to n best matches for a checkin from the active pool. (+6 more)
-
-### Community 289 - "Community 289"
-Cohesion: 0.13
-Nodes (15): Automated CHANGELOG, code:block45 (feat(chat): Add auto-discovery router system), code:bash (# Generate CHANGELOG for new version), code:bash (# See last week's changes), Conventional Commits (ENFORCED), 🔄 Git Commit Standards (NEW in v2.4.0), Weekly Change Summaries, Authentication Security Check (+7 more)
-
-### Community 290 - "Community 290"
-Cohesion: 0.22
-Nodes (14): available_providers(), _get_info(), _get_players(), _get_queue_items(), _ma_headers(), _ma_url(), music_players(), music_queue() (+6 more)
-
-### Community 291 - "Community 291"
-Cohesion: 0.13
-Nodes (14): code:bash (# Check for large files), Regular Audits, Automated Schedule Summary, Backup Best Practices, Check Current Status, code:bash (# Overall disk usage), code:bash (# Emergency cleanup), Disk Space Protection System (+6 more)
-
-### Community 292 - "Community 292"
-Cohesion: 0.13
-Nodes (13): Key Findings, Overall Assessment: 🟢 **EXCELLENT** (with optimization opportunities), 1. LiteLLM Gateway Service, 3. Integration Points, code:python (# Streaming endpoint (line ~755)), 🔗 External Resources, LiteLLM Gateway Integration - Architecture Document, 1. Widget Manifest (`widget-manifest.json`) (+5 more)
-
-### Community 293 - "Community 293"
-Cohesion: 0.13
-Nodes (14): Home Assistant MCP Server Setup Instructions, code:block1 (ERROR (MainThread) [homeassistant.helpers.config_validation]), code:bash (# Check if MCP is available at standard HA API), code:yaml (# Current (works, automated)), code:bash (# Test MCP server health), Conclusion for Zoe Project, Decision: Hybrid Approach, Discovery: MCP Server Requires UI Configuration (+6 more)
-
-### Community 294 - "Community 294"
-Cohesion: 0.14
-Nodes (15): 1. MEMORY SYSTEM ENHANCEMENTS, code:python (# services/zoe-core/light_rag_memory.py), code:block2 (Instead of: [1000 conversation vectors]), code:python (# services/zoe-core/behavioral_memory.py (NEW)), code:python (# services/zoe-core/temporal_memory_integration.py (UPDATE)), Current Gap in Your System, Current State: Light RAG (L0 Only), Integration Strategy (+7 more)
-
-### Community 295 - "Community 295"
-Cohesion: 0.13
-Nodes (15): code:bash (# Check if service exists), Immediate Actions:, 📞 INCIDENT RESPONSE, Post-Incident:, code:bash (# Rollback specific interface), 🆘 IF YOU BREAK SOMETHING, code:bash (# Stop quarterly archival), Safety Features (+7 more)
-
-### Community 296 - "Community 296"
+### Community 221 - "Community 221"
 Cohesion: 0.17
 Nodes (10): Episode, Create new episode with context-aware timeout, Get or generate episode summary, Extends Light RAG with temporal capabilities, Get episode history for user, Clean up old episodes to prevent database bloat, Initialize temporal memory database schema, Test the temporal memory system (+2 more)
 
-### Community 297 - "Community 297"
-Cohesion: 0.13
-Nodes (14): 📡 API Integration Details, code:javascript (async function searchMemories(query, userId) {), code:javascript (async function createPlan(task, userId) {), 💰 Cost Analysis, Cost Optimization Strategies:, Moltbot → Agent Zero API Calls, Moltbot → Zoe API Calls, Monthly Operating Costs (Moderate Usage) (+6 more)
+### Community 222 - "Community 222"
+Cohesion: 0.31
+Nodes (14): _directive_indent(), ensure_headers(), _find_named_blocks(), _find_server_blocks(), _has_active_add_header(), _has_active_header(), _insert_after_header(), _insert_location_headers() (+6 more)
 
-### Community 299 - "Community 299"
+### Community 223 - "Community 223"
+Cohesion: 0.22
+Nodes (13): intent_score(), intents_compatible(), jaccard(), personality_score(), Orbit matching algorithm — weighted multi-factor scoring., Compute match score between two checkin dicts. Returns None if incompatible., Return up to n best matches for a checkin from the active pool., Jaccard with intensity weighting — shared high-intensity items score higher. (+5 more)
+
+### Community 224 - "Community 224"
+Cohesion: 0.16
+Nodes (11): Lightweight ordering checks for AG-UI chat SSE (no live OpenClaw)., test_run_lifecycle_types(), AgRunRecorder, iter_openclaw_text_chunks(), iter_text_message_chunks(), new_run_ids(), Canonical AG-UI SSE emission for zoe-data chat (ag-ui-protocol EventEncoder).  Z, Returns (run_id, assistant_message_id). (+3 more)
+
+### Community 225 - "Community 225"
+Cohesion: 0.18
+Nodes (13): create_note(), delete_note(), list_notes(), _owner_filter_sql(), patch_note(), FastAPI router for notes. Mounted at prefix="/api/notes" with tag "notes"., Update an existing note., Alias for update_note to support existing note editors using PATCH. (+5 more)
+
+### Community 227 - "Community 227"
+Cohesion: 0.22
+Nodes (13): test_content_hash_is_stable(), _cmd_mark_greptile(), _cmd_mark_reviewed(), _cmd_mark_tested(), _cmd_split_ticket(), _load_state(), Command helpers for marker-backed Zoe engineering evidence., Append a command-written evidence item to a pipeline state. (+5 more)
+
+### Community 228 - "Community 228"
+Cohesion: 0.2
+Nodes (12): _mock_repo_validators(), test_sync_pipeline_auto_validators_on_implement_done(), Tests for harness-run repo validators., test_run_repo_validators_failure(), test_run_repo_validators_success(), test_validator_evidence_item_tags_phase(), Run repo audit validators and return structured pipeline evidence., Run validate_structure + validate_critical_files; return aggregate result. (+4 more)
+
+### Community 229 - "Community 229"
+Cohesion: 0.23
+Nodes (13): test_experience_memory_requires_evidence(), test_mapping_rejects_missing_scope(), test_mapping_rejects_missing_user_id(), test_mapping_supports_supersession_with_evidence(), test_relational_memory_requires_evidence(), test_valid_event_serializes_contract_fields(), MemoryCandidate, memory_event_from_mapping() (+5 more)
+
+### Community 230 - "Community 230"
+Cohesion: 0.2
+Nodes (7): _NoticeDb, test_record_frustration_signal_stores_runtime_intake_contract_snapshot(), test_record_user_issue_stores_runtime_intake_contract_snapshot(), test_run_evolution_notice_stores_contract_snapshots(), _WriterDb, _ExecResult, Dual-mode execute result — supports both await and async with (like aiosqlite).
+
+### Community 231 - "Community 231"
 Cohesion: 0.14
 Nodes (9): Comprehensive Test Suite for Session Management System Tests all session managem, Test cases for session middleware, Test that middleware skips excluded paths, Run all session management tests, run_session_tests(), TestSessionMiddleware, Comprehensive test suite for Light RAG Memory System Tests all functionality inc, temp_db() (+1 more)
 
-### Community 300 - "Community 300"
-Cohesion: 0.14
-Nodes (8): Clean up expired cache entries                  Returns:             Number of e, Manages caches for multiple touch panels, Get or create cache for device, Sync all device caches with server data, Cleanup expired entries from all caches, Get statistics for all caches, Sync data from central auth server                  Args:             server_dat, TouchPanelCacheManager
-
-### Community 301 - "Community 301"
-Cohesion: 0.14
-Nodes (7): code:bash (# Full system test (recommended)), MockMCPServer, Test getting developer tasks, Test calendar event creation, Run a single conversation test, code:bash (# All tests), Run Tests
-
-### Community 302 - "Community 302"
-Cohesion: 0.18
-Nodes (8): Log training run to database, CPU-optimized overnight training for Pi 5, CPU-only LoRA training using Hugging Face Transformers         Optimized for Ras, NightlyTrainer, Main training pipeline, Manages overnight training pipeline, Retrieve today's training examples, Record training run in database
-
-### Community 303 - "Community 303"
-Cohesion: 0.22
-Nodes (6): Organize documentation files, Organize script files, Run full organization, Determine category for a documentation file, Determine category for a test file, SmartOrganizer
-
-### Community 304 - "Community 304"
-Cohesion: 0.14
-Nodes (14): code:block4 ("add bread to shopping list"), For You (System Owner), 🎓 Key Takeaways, Available Core Widgets, code:block1 ("Create a widget showing my daily water intake in liters"), code:block2 ("Show my upcoming bills as a list with due dates"), code:block3 ("Display my daily step count as a circular progress gauge wi), Creating Widgets with AI (+6 more)
-
-### Community 305 - "Community 305"
-Cohesion: 0.14
-Nodes (13): Answer: **YES - COMPLETE! ✅**, code:bash (✅ Module structure valid (6 files present)), code:block3 (Backend:), 📊 Complete System Overview, 📚 Documentation (Start Reading), Module Contains Everything:, 💬 Quick Answers, 🎉 START HERE: Your Zoe Module System is Complete! (+5 more)
-
-### Community 306 - "Community 306"
-Cohesion: 0.15
-Nodes (10): Create a new music zone, Current playback state for a zone, Add a device to a zone, Music zone configuration, Save zone to database, Save zone device to database, Load zones from database, Zone (+2 more)
-
-### Community 307 - "Community 307"
-Cohesion: 0.14
-Nodes (14): Decision Gates, Appendix: Historical Context, Decision Gate Checklist, During Gate, Escalation Process, Gate 1 (Day 5): Architecture Audit, Gate 2 (Day 22): P0 Validation, Gate 3 (Day 38): P1 Validation (+6 more)
-
-### Community 308 - "Community 308"
-Cohesion: 0.14
-Nodes (14): Zoe Documentation, By Date, By Topic, By Type, Current vs Archived, `/docs/api/` (Future), `/docs/archive/`, `/docs/guides/` (Future) (+6 more)
-
-### Community 309 - "Community 309"
-Cohesion: 0.14
-Nodes (13): API Endpoints Returning 404:, Backend Status: ⚠️ NEEDS IMPLEMENTATION, ❌ Doesn't Work (Backend):, Error Breakdown, ✅ Frontend Errors (NOW FIXED):, Next Steps to Fix "Errors", ❌ NOT Frontend Errors (Backend API Missing):, Option 1: Implement Missing API Endpoints (+5 more)
-
-### Community 310 - "Community 310"
-Cohesion: 0.14
-Nodes (13): 1. Fix Response Format (Quick Win), 2. Implement Agent Zero Protocol (Main Task), 3. Test End-to-End, code:block10 (INFO - 🔍 Research request from user test: smart light bulbs), code:python (return {), code:block9 (Bridge received request → Logged request → Called Agent Zero), Evidence from Logs, Integration Status (+5 more)
-
-### Community 311 - "Community 311"
+### Community 232 - "Community 232"
 Cohesion: 0.16
 Nodes (8): Build SQL time filter based on range, Get human-readable temporal context, Search memories with temporal awareness, Integrates temporal memory with existing Light RAG system, Add memory fact with automatic episode association, Search with both semantic and temporal context, Combine and deduplicate search results, TemporalLightRAGIntegration
 
-### Community 312 - "Community 312"
+### Community 233 - "Community 233"
+Cohesion: 0.22
+Nodes (6): Organize documentation files, Organize script files, Run full organization, Determine category for a documentation file, Determine category for a test file, SmartOrganizer
+
+### Community 234 - "Community 234"
+Cohesion: 0.14
+Nodes (8): ModelManager, Set default model for Zoe, Deploy a specific adapter as current, Show current configuration, Manage Ollama models and LoRA adapters, List all available Ollama models, List all LoRA adapters, Pull/download a model from Ollama registry
+
+### Community 235 - "Community 235"
+Cohesion: 0.18
+Nodes (8): Log training run to database, CPU-optimized overnight training for Pi 5, CPU-only LoRA training using Hugging Face Transformers         Optimized for Ras, NightlyTrainer, Main training pipeline, Manages overnight training pipeline, Retrieve today's training examples, Record training run in database
+
+### Community 236 - "Community 236"
+Cohesion: 0.14
+Nodes (14): Cleanup Safety Rules, Critical Files List, Database Path Enforcement System, Pre-Commit Hook for Deletion Validation, Pre-Deletion Validation Script, Disk Space Protection System, Disk Space Protection Summary, Docker Networking Rules (+6 more)
+
+### Community 237 - "Community 237"
+Cohesion: 0.2
+Nodes (12): Refresh session recency and promote weak titles from the saved turn., save_message(), _touch_chat_session(), test_assistant_prefix_stripped(), test_code_block_not_in_title(), test_derive_strips_markdown(), test_derive_truncates_words(), test_weak_titles() (+4 more)
+
+### Community 239 - "Community 239"
 Cohesion: 0.15
-Nodes (14): ✅ Fully Functional, 🔨 Implementation Needed, What's Working Right Now, 1. Module Structure (Self-Contained), 2. UI Components (Dynamic Loading), 4. Documentation (10 Guides), code:block4 (tools/), code:block5 (docs/modules/) (+6 more)
+Nodes (7): get_intelligence_settings(), get_settings(), Stub routers for frontend endpoints that don't have full implementations yet. Re, Persist intelligence/proactive feature settings for the current user., Return general system settings (HA URL, feature flags, etc.)., Return intelligence/proactive feature settings for the current user., save_intelligence_settings()
 
-### Community 313 - "Community 313"
-Cohesion: 0.14
-Nodes (13): 1. **Load Page**, 2. **Add Person (All Fields)**, 3. **Click Person (Sidebar)**, 4. **Click Person (Canvas)**, 5. **Edit Person**, 6. **Verify Changes Persisted**, 7. **Via Chat** (Open chat.html), code:javascript (// Check people loaded) (+5 more)
+### Community 240 - "Community 240"
+Cohesion: 0.17
+Nodes (12): Convert Apple Music playlist data to Playlist., Search for playlists on Apple Music., Playlist, Unified playlist representation., Search for playlists., Create a new playlist. Override if provider supports it., search_playlists(), Convert Spotify playlist data to Playlist. (+4 more)
 
-### Community 314 - "Community 314"
-Cohesion: 0.14
-Nodes (11): Proactive adapters — thin wrappers that translate external service events into T, get_capabilities(), Music Service Module ====================  Platform-aware music system with: - Y, Get music system capabilities for this platform.          Returns:         Dict, Music Output Targets Package ============================  Unified interface for, Zoe Proactive Engine — public surface., create_pending(), Helpers for deferred / lazy session creation for proactive notifications.  When (+3 more)
+### Community 241 - "Community 241"
+Cohesion: 0.29
+Nodes (11): _module(), test_oidc_client_id_requires_explicit_configuration(), test_probe_rejects_client_errors(), test_probe_reports_http_status(), test_upload_check_reads_the_runtime_compose_contract(), _assigned_literal(), Static contract tests for the Zoe Multica bootstrap script., _source() (+3 more)
 
-### Community 315 - "Community 315"
-Cohesion: 0.14
-Nodes (13): claim_pending(), Mark a pending notification as claimed and create a chat session seeded     with, accept_pending_suggestion(), claim_pending_endpoint(), dismiss_pending_suggestion(), list_pending_suggestions(), list_schedules(), Proactive Engine REST router.  Endpoints:   POST   /api/proactive/schedule (+5 more)
+### Community 242 - "Community 242"
+Cohesion: 0.24
+Nodes (5): When only memory is selected, ha_control should not be included., Selecting all skills should produce the full _TOOLS list., A typical single-skill query should load far fewer tools than the full set., OpenClaw should not execute unless explicitly enabled for manual fallback., TestBuildTools
 
-### Community 316 - "Community 316"
-Cohesion: 0.16
-Nodes (11): detect(), detect_and_store(), Detect casual save opportunities and store proactive offers., Background detection — returns suggestions stored by caller., _execute_action(), execute_suggestion(), list_active(), Store and resolve proactive save offers (list, reminder, calendar, etc.). (+3 more)
+### Community 243 - "Community 243"
+Cohesion: 0.15
+Nodes (8): check_permission(), Check if current user has specific permission          Args:         permission:, Check if user has specific permission                  Args:             user_id, Check multiple permissions at once                  Args:             user_id: U, Create a custom role                  Args:             role_id: Unique role ide, Check if any wildcard permissions grant access, Check resource-specific permissions, Validate permission strings, return list of invalid ones
 
-### Community 317 - "Community 317"
-Cohesion: 0.14
-Nodes (13): 10. Development and contributing (Karpathy-aligned), 11. References, 1. North Star, 2. Deployment reality, 3. Identity and scope, 4. Trust envelopes, 5. Surface-agnostic presence, 6. Universality — the "don't limit Zoe" rules (+5 more)
-
-### Community 318 - "Community 318"
+### Community 244 - "Community 244"
 Cohesion: 0.26
-Nodes (9): FakeDB, test_get_event_applies_calendar_read_gate_and_policy(), test_list_today_events_applies_calendar_read_gate_and_policy(), _fake_get_db(), test_save_chat_message_only_touches_existing_strong_title(), test_save_chat_message_updates_weak_session_title(), test_load_todays_messages_uses_postgres_timestamp_cast(), test_run_digest_for_all_active_users_uses_postgres_timestamp_cast() (+1 more)
+Nodes (11): parse_args(), cleanup_probe_workdir(), remove_error_marker(), run_local_refresh(), status_is_syncable(), sync_graphify_out(), write_error_marker(), write_status() (+3 more)
 
-### Community 319 - "Community 319"
-Cohesion: 0.21
-Nodes (7): FileTagger, Load existing tags from file, Update tags based on current file usage, Check if file should be excluded from tagging, Get file access statistics, Tag files that haven't been accessed in the last week, Save tagged files to JSON file
+### Community 245 - "Community 245"
+Cohesion: 0.17
+Nodes (12): generate_changelog_entry(), get_commits_since_tag(), get_git_tags(), parse_conventional_commit(), Generate a changelog entry, Read existing CHANGELOG.md, Write updated CHANGELOG.md, Get all git tags sorted by date (+4 more)
 
-### Community 320 - "Community 320"
+### Community 246 - "Community 246"
 Cohesion: 0.19
 Nodes (12): backup_file(), cleanup_chat_routers(), cleanup_temp_files(), optimize_main_application(), Verify that the system is properly configured, Create a backup of a file before modifying, Clean up duplicate chat router files, Optimize the main application file (+4 more)
 
-### Community 321 - "Community 321"
+### Community 247 - "Community 247"
+Cohesion: 0.21
+Nodes (7): FileTagger, Load existing tags from file, Update tags based on current file usage, Check if file should be excluded from tagging, Get file access statistics, Tag files that haven't been accessed in the last week, Save tagged files to JSON file
+
+### Community 248 - "Community 248"
 Cohesion: 0.22
 Nodes (12): analyze_question_type(), ChatMessage, get_full_ai_response(), hybrid_chat(), integrate_enhancement_systems(), Hybrid Chat Router for Zoe - Solution 3 =======================================, Intelligently integrate enhancement systems based on content, Record interaction for satisfaction tracking and learning (+4 more)
 
-### Community 322 - "Community 322"
-Cohesion: 0.15
-Nodes (12): code:bash (# Run these checks), Home Directory Rules (/home/pi), After Major Work Sessions, ✅ ALLOWED (System Files Only), Before Commit, ❌ FORBIDDEN, 🔄 MAINTENANCE SCHEDULE, Weekly (+4 more)
-
-### Community 323 - "Community 323"
-Cohesion: 0.15
-Nodes (12): Need Help?, 🔧 Advanced: Enable Full Training, Be Specific in Corrections, code:bash (# Install Unsloth (one-time)), Give Quality Feedback, 🎯 How to Use (3 Simple Steps), 🚀 Quick Start: Zoe's New Intelligence Features, Step 1: Chat Normally (+4 more)
-
-### Community 324 - "Community 324"
-Cohesion: 0.15
-Nodes (13): code:yaml (- model_name: claude-opus), code:bash (docker inspect zoe-llamacpp | grep MODEL_NAME), code:yaml (- model_name: new-local-model), Current Local Model, 🔄 Model Management, Adding a New Model, code:block11 (services/zoe-litellm/minimal_config.yaml), code:bash (# 1. Backup current config) (+5 more)
-
-### Community 325 - "Community 325"
-Cohesion: 0.15
-Nodes (12): 📋 Code Review Checklist, code:bash (bash tools/audit/validate_litellm.sh), 🚀 Deployment Checklist, LiteLLM Gateway - Development Rules & Guidelines, 📊 Metrics & Observability, New Developers, 🛡️ Pre-commit Validation, Track These Metrics (+4 more)
-
-### Community 326 - "Community 326"
-Cohesion: 0.15
-Nodes (13): code:bash (cp data/backup/pre-consolidation-20251009_150213/* data/), If Migration Fails, Rollback Time, code:javascript (localStorage.clear();), 🚀 Rollout Plan, Step 1: Create Backup, Step 2: Implement Changes, Step 4: Deploy (+5 more)
-
-### Community 327 - "Community 327"
-Cohesion: 0.15
-Nodes (11): Overview, code:block1 (User speaks (1-3s of speech)), Latency Budget (Target: <4s end-to-end), Latency Targets, Services, Voice Pipeline Architecture, Proactive Agent Skill, Implementation Notes (+3 more)
-
-### Community 328 - "Community 328"
-Cohesion: 0.23
-Nodes (13): code:python (expanded = await query_expander.expand_query("arduino projec), AgentPlanner, Model Config, Chat Router, Warmup Models Script, Zoe Code Execution Service, Context Optimization, Expert Orchestrator (+5 more)
-
-### Community 329 - "Community 329"
+### Community 250 - "Community 250"
 Cohesion: 0.17
-Nodes (13): code:bash (echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpu), code:bash (htop), code:bash (vcgencmd measure_temp), code:bash (sudo /usr/bin/jetson_clocks), code:bash (watch -n 1 nvidia-smi), code:bash (tegrastats), Database Optimization, Memory Usage (+5 more)
+Nodes (12): test_infer_outcome_blocked_verify_loops(), test_infer_outcome_closeout_budget_surfaces_block(), test_infer_outcome_done_ignores_freeform_stable_blocker_text(), test_infer_outcome_done_with_verify_budget_surfaces_block(), test_infer_outcome_done_without_blocker_completes(), test_infer_outcome_freeform_verify_budget_surfaces_block(), test_infer_outcome_pr_review_required_surfaces_block(), test_infer_outcome_review_budget_surfaces_block() (+4 more)
 
-### Community 330 - "Community 330"
-Cohesion: 0.18
-Nodes (13): Adding New Documentation, Adding New Script, Archiving Old Documentation, code:bash (# 1. Determine if essential), code:bash (# 1. Determine category), 📝 Process Workflows, 📊 Adding New Tests, code:python (# tests/integration/test_full_system.py) (+5 more)
+### Community 251 - "Community 251"
+Cohesion: 0.24
+Nodes (9): _config_values(), GraphitiSidecarProbeResult, _matching_lines(), Read-only Graphiti graph-backend readiness probe for Zoe., _scan_containers(), _scan_processes(), _scan_runtime(), HindsightSidecarProbeResult (+1 more)
 
-### Community 332 - "Community 332"
-Cohesion: 0.23
-Nodes (12): create_note(), delete_note(), list_notes(), _owner_filter_sql(), patch_note(), FastAPI router for notes. Mounted at prefix="/api/notes" with tag "notes"., Update an existing note., Alias for update_note to support existing note editors using PATCH. (+4 more)
+### Community 253 - "Community 253"
+Cohesion: 0.2
+Nodes (5): Shared zoe-auth test helpers., Small sqlite-backed stand-in for zoe-auth's connection wrapper., SQLiteCompatConnection, Active zoe-auth smoke tests for default CI gate., test_health_endpoint_ok()
 
-### Community 334 - "Community 334"
+### Community 254 - "Community 254"
 Cohesion: 0.17
 Nodes (11): db_conn(), Integration tests: People CRM — PostgreSQL + MemPalace sync.  Tests the dual fan, All CRM tables must exist., 0007 migration columns must exist on people table., The /api/people/fields route fix: /fields must come before /{person_id} in sourc, Open an asyncpg connection for tests., New people table has circle, health_score, notification_count columns., test_create_person_has_crm_columns() (+3 more)
 
-### Community 335 - "Community 335"
-Cohesion: 0.2
-Nodes (12): Register a Tier 2 slow-loop trigger., register_trigger(), Application lifespan manager, lifespan(), _memory_capture_retry_task(), _probe_runtimes(), Background retry: re-run the startup probe once, 45 s after boot.      Clears fa, Probe agent runtime ports at startup; update _RUNTIME_HEALTH. (+4 more)
-
-### Community 336 - "Community 336"
-Cohesion: 0.17
-Nodes (11): Acknowledgement Phrasing, code:block1 (you got that wrong | you keep getting X wrong), code:block2 (I want to add a "natural issue reporting" feature to Zoe — t), Files to Change, Multica Issue Label, New intent: `user_issue_report`, Prompt to Start a New Chat, The Gap to Fill (+3 more)
-
-### Community 337 - "Community 337"
-Cohesion: 0.18
-Nodes (9): Check a single router file for authentication issues.     Returns list of (line_, check_file(), Check a single file for hardcoded database paths, Check a single file against rules, find_references(), load_critical_files(), Load critical files manifest, Find references to file in codebase (+1 more)
-
-### Community 338 - "Community 338"
-Cohesion: 0.17
-Nodes (11): Example: Direct HTTP Call, HTTP Endpoints (for Direct Integration), Test code execution service directly, Test MCP tool execution via code, Test chat router's code execution integration, test_chat_router_code_execution(), test_code_execution_service(), test_mcp_tool_via_code() (+3 more)
-
-### Community 339 - "Community 339"
+### Community 255 - "Community 255"
 Cohesion: 0.17
 Nodes (11): Phase 1: Security tests for authentication hardening Tests that invalid/missing, Missing token should return 401, not default user, Invalid token should return 401, Expired token should return 401, Valid token should work, Token without user_id should return 401, test_expired_token_raises_401(), test_invalid_token_raises_401() (+3 more)
 
-### Community 340 - "Community 340"
+### Community 256 - "Community 256"
 Cohesion: 0.17
 Nodes (7): Tests for error mapping utility., Test mapping 401 errors to MusicAuthError., Test mapping 429 errors to RateLimitError., Test mapping 404 errors to TrackNotFoundError., Test mapping timeout errors., Test mapping unknown errors., TestErrorMapping
 
-### Community 341 - "Community 341"
+### Community 257 - "Community 257"
 Cohesion: 0.17
 Nodes (7): Test personality summary generation, Tests for user profile creation and management, Test creating profile with minimal data, Test creating profile with comprehensive data, Test completeness calculation, Test extracting top values, TestUserCompatibilityProfile
 
-### Community 342 - "Community 342"
-Cohesion: 0.17
-Nodes (10): test_simple_greeting(), classifier(), Intent Classification Tests ===========================  Tests for HassIL-based, Test greeting intents., Test basic greeting patterns., Test queries that should NOT match any intent., Complex queries should return None (fall back to LLM)., Initialize classifier with test intents. (+2 more)
+### Community 259 - "Community 259"
+Cohesion: 0.24
+Nodes (6): BestPracticesChecker, Check for overly large router files, Check for hardcoded command detection patterns, Check for duplicate router patterns, Check main.py for excessive imports, Check for TODO/FIXME/HACK comments
 
-### Community 343 - "Community 343"
+### Community 260 - "Community 260"
 Cohesion: 0.17
-Nodes (7): Test list-related intent classification., Test basic 'add to shopping list' pattern., Test shorthand 'add item' pattern (implies shopping list)., Test natural language variations for shopping list., Test show/display list patterns., Test remove item patterns., TestListIntents
+Nodes (4): MockMCPServer, Test getting developer tasks, Test calendar event creation, Run a single conversation test
 
-### Community 344 - "Community 344"
+### Community 261 - "Community 261"
+Cohesion: 0.17
+Nodes (11): EvolutionWeeklyDigestTrigger, EvolutionWeeklyDigestTrigger — Friday 6pm weekly evolution summary.  Fires every, Friday 6pm: evolution summary with quick-approve buttons., get_compat_db(), Async context manager yielding AsyncpgCompat wrapping a pooled connection., Run the evening wind-down trigger for all active users., Run the evolution weekly digest trigger for all active users., Run the reminder scan to auto-schedule upcoming reminders into APScheduler. (+3 more)
+
+### Community 262 - "Community 262"
 Cohesion: 0.18
-Nodes (11): After: HassIL-First Architecture, Before: LLM-First Architecture, code:block1 (User: "add bread to shopping list"), The Problem, code:block6 (routers/), code:block7 (/app/data/zoe.db           # Via ./data:/app/data), code:markdown (### BEFORE DELETING ANY FILE:), Emergency Recovery Plan (+3 more)
+Nodes (8): Analyze a target (file, system, configuration).                  Args:, analyze(), Analysis endpoint - analyzes files, configurations, systems.          Uses Agent, Analyze all files in root, RootCleaner, Analyze a track and extract audio features.                  Args:             t, Get cached audio features from database., Save audio features to database.
 
-### Community 345 - "Community 345"
-Cohesion: 0.18
-Nodes (11): Current Focus, Days 39-42: Initial Deployment, Days 43-47: Buffer Period, Implementation Progress, Phase 1: Architecture Audit (Days 1-5), Phase 2: Baseline Measurement (Days 6-7), Phase 7: Production Deployment (Days 39-47), Measurement Targets (+3 more)
-
-### Community 346 - "Community 346"
-Cohesion: 0.17
-Nodes (5): get_intelligence_settings(), Stub routers for frontend endpoints that don't have full implementations yet. Re, Persist intelligence/proactive feature settings for the current user., Return intelligence/proactive feature settings for the current user., save_intelligence_settings()
-
-### Community 347 - "Community 347"
-Cohesion: 0.17
-Nodes (12): 6. ANSWERS TO YOUR SPECIFIC QUESTIONS, code:python (def get_temperature_for_intent(intent: ZoeIntent) -> float:), code:python (intent_task = intent_classifier.classify(message)), Context Assembly Questions, GraphRAG vs Vector RAG Questions, Hallucination Prevention Questions, Intent System Integration Questions, Memory System Enhancement Questions (+4 more)
-
-### Community 348 - "Community 348"
-Cohesion: 0.18
-Nodes (12): code:python (# routers/features/v2/calendar.py), code:python (from routers.features.v2 import calendar as calendar_v2), Phase 3: Version-Specific Routers, After (Standardized), Before (Inconsistent), 📝 Usage in Routers, 1. Calendar Consolidation, 2. Lists Consolidation (+4 more)
-
-### Community 349 - "Community 349"
-Cohesion: 0.17
-Nodes (11): Common Error Codes, Error Responses, Get Available Devices, Get Device State, Library Sync Endpoints, Output Device Endpoints, Search Endpoints, Sync Library (+3 more)
-
-### Community 350 - "Community 350"
-Cohesion: 0.17
-Nodes (11): Agent Zero Integration - COMPLETE, Next Steps (Optional), Status: Integration Successful!, Agent Zero Live Integration Test Report, 📊 Final Statistics, Lines of Code: ~145,000 lines, Time Investment: ~10 hours, code:block1 (✅ scripts/setup/init_databases.sh) (+3 more)
-
-### Community 351 - "Community 351"
-Cohesion: 0.17
-Nodes (12): code:python (# Add static file serving (see Backend section above)), code:javascript (// static/js/your-widget.js), code:bash (mkdir -p static/{js,css,icons}), code:bash (cat > static/manifest.json <<EOF), 🚀 Creating a New Module with Widgets, 💻 Frontend: Widget Implementation, Step 2: Create Static Directory, Step 3: Create Manifest (+4 more)
-
-### Community 352 - "Community 352"
-Cohesion: 0.17
-Nodes (12): code:bash (cd modules/agent-zero), code:bash (# Health check), code:bash (docker compose -f docker-compose.module.yml up --build -d), Run Bridge Standalone, Test Endpoints, Step 1: Copy Template, 1. Build the module, code:bash (docker compose -f modules/zoe-music/docker-compose.module.ym) (+4 more)
-
-### Community 353 - "Community 353"
-Cohesion: 0.17
-Nodes (12): ✅ 3. Drag & Drop - FULLY IMPLEMENTED, code:javascript (// Emit event from widget), code:javascript (// Listen to global widget events), Emitting Events, Global Events, Widget Communication, 🎨 Advanced Widget Features, code:javascript (class StatefulWidget {) (+4 more)
-
-### Community 354 - "Community 354"
-Cohesion: 0.17
-Nodes (11): code:block5 (1. User Opens UI (music.html, dashboard.html)), 🚀 Example: Complete Calendar Module, 🔄 How It Works: Discovery Flow, 📋 manifest.json: Widget Metadata, Self-Contained Modules: Complete Guide, 🎯 What Are Self-Contained Modules?, Widget Fields, 📚 Additional Resources (+3 more)
-
-### Community 355 - "Community 355"
-Cohesion: 0.18
-Nodes (9): Lightweight ordering checks for AG-UI chat SSE (no live OpenClaw)., test_run_lifecycle_types(), iter_openclaw_text_chunks(), iter_text_message_chunks(), new_run_ids(), Canonical AG-UI SSE emission for zoe-data chat (ag-ui-protocol EventEncoder).  Z, Returns (run_id, assistant_message_id)., Batched TEXT_MESSAGE_CHUNK events (assistant role). (+1 more)
-
-### Community 357 - "Community 357"
-Cohesion: 0.22
-Nodes (3): In-memory session state and WebSocket fan-out for Orbit., Send a message to all players in a session., code:javascript (const session = window.zoeAuth?.getCurrentSession();)
-
-### Community 358 - "Community 358"
+### Community 263 - "Community 263"
 Cohesion: 0.22
 Nodes (7): A2AClient, get_a2a_client(), A2A v1.0 client — Zoe calling peer agents.  Provides discover/submit_task/poll_t, Call a specific skill on a peer agent and return the result text., Async A2A v1.0 client., Submit a task to a peer A2A agent.          Returns the peer's response dict (co, Poll the status of a previously submitted A2A task.
 
-### Community 359 - "Community 359"
-Cohesion: 0.22
-Nodes (11): _bridge_get(), list_entities(), Home Assistant direct control endpoint.  Allows the touch panel to control HA en, Accept any authenticated caller (session user or device token)., Return entity list from the HA bridge, optionally filtered by domain/area., Get current state of a single HA entity., Call a HA service directly from the touch panel.      Body:       { "entity_id":, _require_caller() (+3 more)
+### Community 264 - "Community 264"
+Cohesion: 0.24
+Nodes (7): GuardedClient, test_append_issue_note_skips_when_get_issue_fails(), test_record_progress_can_clear_blocker(), test_record_progress_skips_when_get_issue_fails(), test_record_progress_updates_resolved_backend_issue_id(), test_record_progress_writes_completion_reason(), test_safe_patch_description_skips_when_get_issue_fails()
 
-### Community 360 - "Community 360"
+### Community 265 - "Community 265"
 Cohesion: 0.18
-Nodes (11): zoe-ui, cloudflared, multica-backend, multica-web, zoe-auth, zoe-database, zoe-auth requirements.txt, zoe-capability-extender SKILL.md (+3 more)
+Nodes (10): _archive_person_mempalace(), delete_person(), Soft-delete a person and archive their MemPalace facts., analyze_profile(), prometheus_metrics(), Prometheus scrape endpoint.      Exposes counters/gauges from `memory_metrics.RE, Prometheus metrics for Zoe memory + self-learning.  Exposed via `/metrics` on th, Best-effort refresh of per-user MemPalace size gauge.      Called by the `/metri (+2 more)
 
-### Community 361 - "Community 361"
+### Community 266 - "Community 266"
 Cohesion: 0.18
-Nodes (11): 1. **Add Person Modal - Missing Fields**, 2. **Edit Mode - No Backend Save**, 3. **Person Expert Integration**, code:html (<input id="personName">       ✅ Has), code:block3 (User edits fields → savePersonChanges() → Updates local JS o), code:block4 (User edits fields → savePersonChanges() → API PUT request → ), Evolution notice (nightly), Evolution proposals review (intent: `evolution_proposals_review`) (+3 more)
+Nodes (5): Unit tests for the Zoe Agent skills classifier and tool builder.  Tests _select_, _llm_call must accept tool_choice kwarg defaulting to 'auto'., Verify a selection of the weather cue strings would match typical messages., TestChatCapabilityShortcutExists, TestLlmCallSignature
 
-### Community 362 - "Community 362"
+### Community 267 - "Community 267"
 Cohesion: 0.18
-Nodes (11): **1. Context Briefing**, code:markdown (## 🆕 This Week (Oct 14-18)), code:bash (./scripts/utilities/context_briefing.sh), code:bash (# Last week), **Layer 1: RECENT_CHANGES.md (PRIMARY)**, **Layer 2: Context Briefing Script (AUTOMATED)**, **Layer 3: Weekly Summaries (HISTORICAL)**, ✅ The Solution: Multi-Layer Context System (+3 more)
+Nodes (6): Get user's current role, Get all permissions for a role, including inherited ones, Get sorted list of all effective permissions for user, Get user permissions with caching, Get cached permissions for user, Cache permissions for user
 
-### Community 363 - "Community 363"
+### Community 268 - "Community 268"
 Cohesion: 0.18
-Nodes (10): check_module_structure(), Check if a file exists, Check if a module has required classes, Verify all enhancement systems, verify_enhancements(), check_file_exists(), check_for_dangerous_patterns(), Check for dangerous file patterns that indicate backups/duplicates.          Ret (+2 more)
+Nodes (8): Enhanced Session Management for Multi-Factor Authentication Supports different s, Validate that session has permission with escalation handling                  A, Configuration for different session types, Security policies for session management, Get owner of resource for permission checks, requires_password_escalation(), SessionConfig, SessionSecurityPolicy
 
-### Community 364 - "Community 364"
+### Community 269 - "Community 269"
+Cohesion: 0.25
+Nodes (3): In-memory session state and WebSocket fan-out for Orbit., Send a message to all players in a session., SessionManager
+
+### Community 270 - "Community 270"
 Cohesion: 0.18
 Nodes (6): Low confidence (≥0.50) should add clear qualifier, Very low confidence (<0.50) should admit limitation, Tier 0 intents should have high confidence, Test P0-2: Confidence Expression, High confidence (≥0.85) should have no qualifier, Medium confidence (≥0.70) should add soft qualifier
 
-### Community 365 - "Community 365"
+### Community 271 - "Community 271"
+Cohesion: 0.38
+Nodes (10): capture_shard_artifact(), cleanup_kept_probe_workdir(), compact_shard_result(), default_shards(), GraphifyShard, _is_relative_to(), parse_shard(), run_shard_matrix() (+2 more)
+
+### Community 272 - "Community 272"
 Cohesion: 0.24
 Nodes (10): analyze_markdown_files(), analyze_shell_scripts(), analyze_test_files(), display_plan(), execute_cleanup(), Create a cleanup plan, Display the cleanup plan, Analyze all .md files in root (+2 more)
 
-### Community 366 - "Community 366"
-Cohesion: 0.2
-Nodes (11): 1. Network Configuration, 2. Security - NEVER Commit Secrets, 3. Code Execution Safety, 4. Required Files, 5. Health Endpoints, code:yaml (# docker-compose.module.yml), code:python (# ✅ CORRECT), code:python (eval(user_input)      # ❌ NEVER) (+3 more)
-
-### Community 367 - "Community 367"
+### Community 273 - "Community 273"
 Cohesion: 0.18
-Nodes (11): code:block17 (├─ Is it essential documentation?), code:block18 (├─ Is it test_architecture.py?), code:block19 (├─ What's its purpose?), code:block20 (├─ Is it reusable automation?), code:block21 (└─ Delete it. Use .gitignore to prevent commit.), 🔍 Decision Tree: Where Does This File Go?, Is it a Markdown file?, Is it a Python tool? (+3 more)
+Nodes (11): check_module_structure(), Check if a file exists, Check if a module has required classes, Verify all enhancement systems, verify_enhancements(), check_file_exists(), check_for_dangerous_patterns(), Check for dangerous file patterns that indicate backups/duplicates.          Ret (+3 more)
 
-### Community 368 - "Community 368"
+### Community 274 - "Community 274"
 Cohesion: 0.18
-Nodes (11): code:block10 (✅ ALLOWED:), code:block11 (✅ ALLOWED:), code:block12 (✅ ALLOWED in root OR tools/:), code:block13 (❌ NEVER COMMIT:), code:block9 (✅ ALLOWED in root:), Rule 1: Documentation, Rule 2: Test Files, Rule 3: Scripts (+3 more)
+Nodes (11): All Documentation - Complete Index, resetLayout() Function, Widget Persistence System, iOS Shortcuts Integration Guide, Journal Widget Implementation Summary, Journal Widget Visual Example, Zoe PWA Installation & Testing Guide, Quick Start: Zoe's New Intelligence Features (+3 more)
 
-### Community 369 - "Community 369"
-Cohesion: 0.2
-Nodes (11): Agent Zero Implementation Checklist, Current Status: Placeholder Implementation ✅, Resources, Your Files, Cost Considerations, code:block14 (✅ GOOD:), code:block15 (✅ GOOD:), Documentation Files (+3 more)
-
-### Community 370 - "Community 370"
+### Community 275 - "Community 275"
 Cohesion: 0.22
-Nodes (8): get_connect_info(), QR scan landing — returns scanned person's public profile + compatibility., Get or create connection to a device., Simple database wrapper that avoids locking issues, Simple connection without WAL or FK constraints, Context manager support, Skip migration - database already compatible, SimpleAuthDatabase
+Nodes (11): _bridge_get(), get_entity_state(), list_entities(), Home Assistant direct control endpoint.  Allows the touch panel to control HA en, Accept any authenticated caller (session user or device token)., Return entity list from the HA bridge, optionally filtered by domain/area., Get current state of a single HA entity., Call a HA service directly from the touch panel.      Body:       { "entity_id": (+3 more)
 
-### Community 371 - "Community 371"
-Cohesion: 0.18
-Nodes (11): Backup / Rollback, Before `.env` token changes, Before HA config edits (automated by OpenClaw), code:bash (cp assistant/homeassistant/configuration.yaml \), code:bash (cp assistant/.env assistant/.env.bak.$(date +%Y%m%d)), code:bash (cp assistant/.env.bak.YYYYMMDD assistant/.env), code:bash (sqlite3 assistant/services/zoe-data/zoe.db ".backup /tmp/zoe), code:bash (# Stop zoe-data first) (+3 more)
+### Community 276 - "Community 276"
+Cohesion: 0.38
+Nodes (8): test_resume_tolerates_pause_file_disappearing(), test_runtime_dispatch_pause_round_trip(), dispatch_is_paused(), pause_dispatch(), pause_path(), pause_reason(), Runtime controls for the single-ticket Multica engineering lane., resume_dispatch()
 
-### Community 372 - "Community 372"
-Cohesion: 0.18
-Nodes (10): Action Prompts:, Complex Prompts:, Conversation Prompts:, ✅ Highly Effective Systems:, Memory Prompts:, Natural Language Prompt Testing, ⚠️ Needs Attention:, System Effectiveness Analysis (+2 more)
-
-### Community 373 - "Community 373"
-Cohesion: 0.18
-Nodes (11): code:bash (export USE_CONTEXT_VALIDATION=true), Configuration Created, Contact & Support, Core Documents, Day 0: Setup Complete ✓, Feature Flags Status, Memory & Hallucination Reduction - Implementation Directory, Quick Navigation (+3 more)
-
-### Community 374 - "Community 374"
-Cohesion: 0.18
-Nodes (11): 2.1 Connection & Authentication, 2.2 Research Method, 2.3 Planning Method, 2.4 Analysis Method, 2.5 Comparison Method, code:python (async def connect(self) -> bool:), code:python (async def research(self, query: str, depth: str = "thorough"), code:python (async def plan(self, task: str) -> Dict[str, Any]:) (+3 more)
-
-### Community 375 - "Community 375"
-Cohesion: 0.18
-Nodes (11): 1. Always Use LiteLLMProvider, 2. Use Model Aliases, 3. Include Master Key, 4. Handle Streaming Properly, 5. Test Configuration Changes, code:python (# ✅ CORRECT - Validation before deployment), code:python (from llm_provider import get_llm_provider), code:python (# ✅ CORRECT - Semantic aliases from config) (+3 more)
-
-### Community 376 - "Community 376"
-Cohesion: 0.18
-Nodes (11): code:block7 (INFO: ✅ Loaded module: agent-zero (4 intents, 4 handlers)), ✅ TEST 1: Service Health, ✅ TEST 2: Service Status, ✅ TEST 3: Research Endpoint, ✅ TEST 4: Planning Endpoint, ✅ TEST 5: Analysis Endpoint, ✅ TEST 6: Comparison Endpoint, ✅ TEST 7: Intent System Integration (+3 more)
-
-### Community 377 - "Community 377"
-Cohesion: 0.18
-Nodes (11): 2. EnhancedMemAgentClient, 4. AgentPlanner / ExpertOrchestrator, 5. MCP Server, code:python (mem_agent = MemAgentClient()), code:python (enhanced_mem_agent = EnhancedMemAgentClient()), code:python (provider, model = route_llm.classify_query(message, context)), code:python (orchestrator = ExpertOrchestrator()), 🧠 Your Intelligent Architecture (What To Use) (+3 more)
-
-### Community 378 - "Community 378"
-Cohesion: 0.18
-Nodes (11): code:bash (docker logs zoe-code-execution --tail 50), code:bash (docker logs zoe-core --tail 100 | grep -i "code\|tool\|mcp"), code:bash (docker ps | grep -E "(zoe-code-execution|zoe-mcp-server|zoe-), code:bash (curl -X POST http://localhost:8010/execute \), Check MCP Connection, Check Widget Discovery, Check Widget Loading, code:javascript (// Open browser console) (+3 more)
-
-### Community 379 - "Community 379"
-Cohesion: 0.18
-Nodes (11): code:bash (# Check if Agent Zero is responding), Log Files, Useful Commands, code:bash (# Bridge logs), Check Gateway Status, code:bash (# Service health), code:bash (# Test gateway directly), Debug Request Issues (+3 more)
-
-### Community 380 - "Community 380"
-Cohesion: 0.18
-Nodes (10): Backend/UI Changes Applied, Baseline (Collected), Hardening Implemented on Pi, Important Routing Finding (Fixed in Runtime Config), Operational Status, Real Panel Action-Loop Verification, Retry Behavior Verification, Scope Completed (+2 more)
-
-### Community 381 - "Community 381"
-Cohesion: 0.18
-Nodes (11): code:bash (# 1. Verify systems running), code:bash (# Install with one-liner (requires sudo)), code:bash (# 1. Copy skills to Moltbot workspace), code:bash (# WhatsApp), code:bash (# Test 1: Direct Zoe API), 🚀 Deployment Sequence, Phase 1: Pre-Installation (5 min), Phase 2: Install Moltbot (10-15 min) (+3 more)
-
-### Community 382 - "Community 382"
-Cohesion: 0.25
-Nodes (9): test_assistant_prefix_stripped(), test_code_block_not_in_title(), test_derive_strips_markdown(), test_derive_truncates_words(), test_weak_titles(), derive_session_title(), Derive short, human-readable chat session titles from message content., Turn the first line / opening of a message into a sidebar-friendly title.     St (+1 more)
-
-### Community 383 - "Community 383"
-Cohesion: 0.29
-Nodes (7): _packet(), test_analyze_result_accepts_focused_diff(), test_analyze_result_checks_committed_diff_from_pre_run_sha(), test_analyze_result_rejects_files_outside_allowlist(), test_cheap_runner_blocks_before_budget_exceeded(), test_cheap_runner_command_does_not_expand_shell_metacharacters(), test_validate_packet_rejects_broad_missing_context()
-
-### Community 384 - "Community 384"
+### Community 277 - "Community 277"
 Cohesion: 0.2
-Nodes (9): _build_agent_team_prompt(), get_agent_info(), load_agent_registry(), zoe_agent_registry.py — Agent registry loader for zoe_agent.py.  Loads agents_re, Load agents_registry.yml. Returns empty dict on failure (agent still works)., Generate AGENT TEAM routing guidance from registry data.      Returns an empty s, Build a tool description from registry skills, falling back to static text., Return the registry entry for a named agent, or empty dict. (+1 more)
+Nodes (7): api_health_check(), metrics(), Zoe Core Service - Enhanced Main Application with Enhancement Systems ==========, API health check endpoint (for frontend compatibility), Prometheus metrics endpoint, Health check endpoint, health_check()
 
-### Community 385 - "Community 385"
-Cohesion: 0.2
-Nodes (10): get_skills(), install_skill_endpoint(), Install a skill (allowlist-gated). Returns 403 if not in allowlist., Return workspace-installed + eligible bundled skills for the skills_manager comp, install_skill(), list_skills(), Return True if a skill may be installed.      Bundled skills are always allowed, Return workspace-installed skills + eligible bundled skills.      Workspace skil (+2 more)
+### Community 278 - "Community 278"
+Cohesion: 0.27
+Nodes (7): add_widgets(), _fetchone_layout_only(), _fetchone_layout_row(), get_layout(), Dashboard widget layout management API., Add widget(s) to a user's dashboard layout., remove_widget()
 
-### Community 387 - "Community 387"
+### Community 280 - "Community 280"
 Cohesion: 0.2
 Nodes (6): Verify the inputs to the _first_turn_choice expression are correct.      We can', Pure weather query (no 'today' crossover) → should produce 'required'., today' triggers calendar+weather (7 tools > 6) → should produce 'auto'., Discovery fallback → real_skills is empty → should produce 'auto'., When all skills match, tool count exceeds 5 → should produce 'auto'., TestFirstTurnChoiceLogic
 
-### Community 388 - "Community 388"
+### Community 281 - "Community 281"
 Cohesion: 0.27
 Nodes (8): Fail-closed default: no X-Session-ID → guest role.  Old behaviour (promote unaut, Unset env → guest. Fail-closed is the new default., Explicit ZOE_UNAUTHENTICATED_ROLE=guest still resolves to guest., Legacy LAN deployments can flip ZOE_UNAUTHENTICATED_ROLE=family-admin to     res, _reload_auth(), test_family_admin_opt_in_still_possible(), test_no_session_defaults_to_guest(), test_no_session_guest_when_env_set()
 
-### Community 389 - "Community 389"
-Cohesion: 0.22
-Nodes (9): _blocking_synthesize(), _load_pipeline(), _pcm_to_wav(), Convert a torch.FloatTensor of PCM samples to WAV bytes.      Uses struct.pack i, Run Kokoro inference synchronously (called inside run_in_executor).      Calls t, Async wrapper: runs blocking inference in thread pool under the lock., Load and return the Kokoro pipeline (blocking; run once in thread pool)., _run_synthesis() (+1 more)
+### Community 282 - "Community 282"
+Cohesion: 0.24
+Nodes (5): DatabaseConsolidator, Merge sessions from sessions.db and auth.db, Verify that consolidation was successful, Check if table exists in database, Merge users from auth.db into zoe.db
 
-### Community 390 - "Community 390"
-Cohesion: 0.27
-Nodes (5): HTMLSyntaxValidator, Check for unterminated quotes in JavaScript, Check for basic JavaScript syntax errors, Validate a single HTML file, Validate all HTML files in the directory
-
-### Community 391 - "Community 391"
+### Community 283 - "Community 283"
 Cohesion: 0.2
 Nodes (6): P0 Feature Validation Tests Tests all P0 features against targets, Test P0-4: Grounding Checks, Verify all features can be imported, Verify feature flags are properly configured, test_all_features_importable(), test_feature_flags_status()
 
-### Community 392 - "Community 392"
+### Community 284 - "Community 284"
+Cohesion: 0.27
+Nodes (5): HTMLSyntaxValidator, Check for unterminated quotes in JavaScript, Check for basic JavaScript syntax errors, Validate a single HTML file, Validate all HTML files in the directory
+
+### Community 285 - "Community 285"
+Cohesion: 0.24
+Nodes (10): Building Zoe Modules - Developer Guide, MCP-Only Architecture for Zoe Modules, Music Module Migration Guide, Module Intent Auto-Discovery System, Zoe Module Requirements - MANDATORY, Music Module Dependency Audit, Music Module Execution Plan, Music Routing Options (+2 more)
+
+### Community 286 - "Community 286"
 Cohesion: 0.2
-Nodes (10): 1. ✅ Project Structure Validation, 2. ✅ Critical Files Validation, 3. ✅ File Deletion Protection, 4. ✅ Junk File Pattern Detection, 5. ✅ Database Path Enforcement, 6. ✅ Authentication Security Check, 7. ✅ CHANGELOG Validation (NEW!), 8. ✅ Large File Detection (NEW!) (+2 more)
+Nodes (9): _build_agent_team_prompt(), get_agent_info(), load_agent_registry(), zoe_agent_registry.py — Agent registry loader for zoe_agent.py.  Loads agents_re, Load agents_registry.yml. Returns empty dict on failure (agent still works)., Generate AGENT TEAM routing guidance from registry data.      Returns an empty s, Build a tool description from registry skills, falling back to static text., Return the registry entry for a named agent, or empty dict. (+1 more)
 
-### Community 393 - "Community 393"
-Cohesion: 0.2
-Nodes (9): Layer 2: Skills (Lightweight Instructions), Forbidden in Handlers:, Intent Handlers Must:, code:yaml (---), Module-Shipped Skills, Security Rules, Skill Locations, SKILL.md Format (+1 more)
-
-### Community 394 - "Community 394"
-Cohesion: 0.2
-Nodes (10): Before Push, code:bash (# Run full audit), code:bash (# Full cleanup audit), Monthly, Every Handler Must Have:, Every Intent Must Have:, Every Pattern Must Have:, 📊 QUALITY GATES (+2 more)
-
-### Community 395 - "Community 395"
-Cohesion: 0.2
-Nodes (10): Agent Zero Docker Compose Module, code:block2 (🔍 Agent Zero research capability for 'smart light bulbs' is ), code:bash (# Test bridge health), code:bash (# Stop Agent Zero module), Agent Zero Quick Start Guide, Quick Tests, Stop/Start, TL;DR - It's Working! (+2 more)
-
-### Community 396 - "Community 396"
-Cohesion: 0.2
-Nodes (10): code:block10 ([500ms thinking]), code:block11 (❌ No intent match (too complex phrasing)), code:block12 (✅ LLM: "60s song, 'let it be' → Beatles"), code:block13 (Intent: MusicPlay (only handles first part)), code:block14 (LLM: "User wants jazz but with energy preference"), code:block9 ([Instant]), Example 1: "Play some Beatles", Example 2: "Find that song from the 60s, you know, the one that goes 'let it be'" (+2 more)
-
-### Community 397 - "Community 397"
-Cohesion: 0.2
-Nodes (10): 📞 Support & Resources, code:block1 (/home/pi/test_something.py  ❌ WRONG), code:block2 (/home/pi/STATUS_REPORT.md           ❌ WRONG), code:block3 (/home/pi/nginx.conf        ❌ WRONG), code:block4 (/home/pi/fix_something.sh             ❌ WRONG), Config Files, Scripts, Status Reports & Summaries (+2 more)
-
-### Community 398 - "Community 398"
-Cohesion: 0.2
-Nodes (10): All Features Enabled, Day 47: Final Deployment Status, Deployment Complete, Features Deployed, Final Metrics, Success Rate, Future Improvements, Issues Encountered (+2 more)
-
-### Community 399 - "Community 399"
-Cohesion: 0.22
-Nodes (10): Component Architecture, Orb Features, Zoe Orb Implementation, code:html (<!-- At end of body -->), code:bash (# Clear browser cache or add version query), Component Loading, Replication Guide, To Add Orb to Custom Pages (+2 more)
-
-### Community 400 - "Community 400"
-Cohesion: 0.2
-Nodes (10): code:javascript (// OLD), code:bash (# Run client tests against v1 API), code:javascript (fetch('http://localhost:8000/api/v1/calendar/events')), code:bash (# Find all API calls in client code), 🔄 Migration Guide for Clients, Step 1: Identify Current Usage, Step 2: Update to v1, Step 4: Monitor Deprecation Headers (+2 more)
-
-### Community 401 - "Community 401"
-Cohesion: 0.2
-Nodes (9): Audio Ducking, Browser Integration, code:javascript (// Initialize), code:javascript (// Register audio element for ducking), Ducking States, Interrupt Types, VoiceController, Zoe States (+1 more)
-
-### Community 402 - "Community 402"
-Cohesion: 0.2
-Nodes (10): code:json (// Playback state change), code:json (// Request current state), Messages to Server, Ducking Update, Interrupt Event, Messages from Server, Pong, State Update (+2 more)
-
-### Community 403 - "Community 403"
-Cohesion: 0.2
-Nodes (10): Key Optimizations, 1. Async Generator Pattern, 2. Delta Calculation, 3. Server-Sent Events (SSE), 4. Request Tracking, code:block10 (data: {"token": "Hello"}), code:python (self.active_requests[model_name] += 1), code:python (async for token in generate_stream():) (+2 more)
-
-### Community 404 - "Community 404"
-Cohesion: 0.2
-Nodes (10): 🛠️ Automated Quality Tools, Available Validation Tools, code:bash (# Validate database schemas and paths), code:bash (# Validate intelligent routing system), code:bash (# All systems test), code:bash (# Validate project structure against manifest), Comprehensive Tests, Database Health (+2 more)
-
-### Community 405 - "Community 405"
-Cohesion: 0.2
-Nodes (10): 0. Code Execution Pattern (CRITICAL), code:python (# ❌ ISSUE: Loading ALL tool definitions upfront), code:python (# User: "Get all my events and add them to a list"), code:block3 (servers/), code:typescript (// Agent writes code instead of direct tool calls), 🔴 **Critical Action Required**, ❌ **Current Implementation: Direct Tool Calls**, 📈 **Expected Benefits** (+2 more)
-
-### Community 406 - "Community 406"
-Cohesion: 0.2
-Nodes (9): Effects, Visual Design, After Adding a Photo, Color Scheme, Large (8x12), Medium (4x8) - Default, Size Variations, Small (3x5) (+1 more)
-
-### Community 407 - "Community 407"
-Cohesion: 0.2
-Nodes (10): code:python (from routers import push), code:bash (docker exec zoe-core pip install -r /app/requirements.txt), 🎯 Next Steps to Complete Phase 2, Step 1: Run Database Migration (5 min), Step 2: Register Push Router (5 min), Step 3: Install Dependencies (5 min), Step 4: Create Frontend Handler (30 min), Step 5: Add Notification Settings (30 min) (+2 more)
-
-### Community 408 - "Community 408"
+### Community 287 - "Community 287"
 Cohesion: 0.24
 Nodes (9): auto_extract_components(), _geocode(), _parse_md_table(), zoe_ui_components.py — Automatic AG-UI component extraction from agent response, Analyse `text` and return a list of AG-UI component payloads.     Each item is a, Parse a markdown table into a list of dicts keyed by header., Convert parsed table rows into price_table component row format., Geocode an address using Nominatim (free, no API key). (+1 more)
 
-### Community 410 - "Community 410"
+### Community 288 - "Community 288"
 Cohesion: 0.22
-Nodes (3): Real Conversation Quality Tests Tests actual multi-message conversations with co, Test real conversations with context retention and usefulness, Test response quality metrics
+Nodes (8): Convert Apple Music album data to Album., Search for albums on Apple Music., Album, Unified album representation., search_albums(), Convert Spotify album data to Album., Search for albums on Spotify., Convert provider-specific album data to Album dataclass.
 
-### Community 411 - "Community 411"
-Cohesion: 0.25
-Nodes (8): Manually trigger the morning brief for the calling user.     Useful for testing, trigger_morning_brief(), _build_morning_context(), _compose_morning_message(), MorningCheckInTrigger, Morning check-in trigger — greets user with day summary at 7:30am.  Phase 3.4: e, Build a rich morning brief message from context components., Collect open loops, emotional moments, calendar events, and portrait for the bri
-
-### Community 412 - "Community 412"
-Cohesion: 0.36
-Nodes (3): TestParseBirthday, _parse_birthday(), Return (month, day, year) from a birthday string, any values may be None.
-
-### Community 413 - "Community 413"
+### Community 289 - "Community 289"
 Cohesion: 0.22
-Nodes (4): _PI_SOUL_STATIC must not contain any day/time strings (KV cache stability)., Every tool in _TOOLS must appear in either _SKILL_TOOLS or _ALWAYS_ON_TOOLS., TestStablePrompt, _ZOE_SOUL_STATIC must not contain any day/time strings (KV cache stability).
+Nodes (9): ValueError, GraphitiRuntimeConfig, Raised when visible Graphiti runtime probe config is invalid., PiRuntimeConfig, Raised when Pi runtime config would violate Zoe execution policy., MemoryAdmissionError, Raised when a memory admission request is malformed., MemoryContractError (+1 more)
 
-### Community 414 - "Community 414"
-Cohesion: 0.25
-Nodes (9): _compute_resemblyzer_embedding(), _cosine_similarity(), Identify speaker from a WAV audio sample by comparing to enrolled profiles., Compute a 256-dim resemblyzer voice embedding from a WAV file.      Returns raw, Cosine similarity between two float32 byte blobs., Enroll a speaker voice profile using a WAV audio sample.      Request: { "audio_, Identify speaker by comparing to enrolled profiles.      Accepts two request for, voice_enroll() (+1 more)
-
-### Community 415 - "Community 415"
+### Community 290 - "Community 290"
 Cohesion: 0.22
 Nodes (6): User Profile Schema Tests ========================= Tests for the compatibility, Tests for interest categories, Test creating an interest, Test creating a life goal, TestInterestCategory, TestLifeGoal
 
-### Community 416 - "Community 416"
+### Community 291 - "Community 291"
 Cohesion: 0.22
-Nodes (9): code:python (# OLD), code:block6 (modules/zoe-music-mcp/), code:python (# modules/zoe-music-mcp/services/platform.py), code:python (# Already handled via DATABASE_PATH environment variable), code:python (# MCP tools receive user_id in requests), Extraction Strategy, Phase 1: Create Module Structure, Phase 2: Handle Dependencies (+1 more)
+Nodes (4): Real Conversation Quality Tests Tests actual multi-message conversations with co, Test real conversations with context retention and usefulness, Test response quality metrics, TestConversationQuality
 
-### Community 417 - "Community 417"
-Cohesion: 0.22
-Nodes (8): code:bash (./svc.sh install), code:block2 (XDG_RUNTIME_DIR=/run/user/1000), code:bash (loginctl enable-linger zoe), GitHub Secrets, One-time installation (run as the `zoe` user on the Jetson), Required: user session bus access, Self-hosted GitHub Actions Runner — Jetson Orin Setup, Verifying a deployment
-
-### Community 418 - "Community 418"
-Cohesion: 0.22
-Nodes (9): Escalation Path, During Implementation, For Architectural Questions, For "Why" Questions, 📞 Support & Questions, code:bash (# Check for long-running transactions), code:bash (# Clear permission cache), code:bash (# Check rate limit status) (+1 more)
-
-### Community 419 - "Community 419"
-Cohesion: 0.22
-Nodes (9): 1. Automated Docker Monitoring & Cleanup, 2. Disk Space Monitoring, 3. Emergency Cleanup Script, 4. Backup Retention Policy, 5. Docker Prune Services (Fixed), code:bash (systemctl status docker-prune-daily.timer), code:bash (/home/zoe/assistant/scripts/maintenance/emergency_cleanup.sh), code:bash (systemctl list-timers --all | grep docker) (+1 more)
-
-### Community 420 - "Community 420"
-Cohesion: 0.22
-Nodes (9): 2. Hardcoded Model Logic, 3. Multiple Inference Endpoints, 4. Inline Model Configuration, 5. Custom Auth/Retry Logic, code:python (# ❌ WRONG - Hardcoded model routing), code:python (# ❌ WRONG - Multiple endpoints), code:python (# ❌ WRONG - Model config in code), code:python (# ❌ WRONG - Custom retry logic) (+1 more)
-
-### Community 421 - "Community 421"
-Cohesion: 0.22
-Nodes (8): code:block2 (GET /shopping → [List 123, List 60, List 61, ...]), Comprehensive Restoration Analysis, Database Path Clarification, Files Still Missing/Broken, Missing WebSocket/Intelligence Endpoints, Next Steps (Structured Approach), SQL Schema Issues, What Happened
-
-### Community 422 - "Community 422"
-Cohesion: 0.22
-Nodes (9): code:block10 (✅ Intent Auto-Discovery: Scans modules/*/intents/), code:block9 (✅ Backend: 28 Python files), Discovery Systems, Music Module, Current System State, ❌ Failed Routers (Need Analysis), 📊 Frontend Status, ✅ Working Routers (68 registered) (+1 more)
-
-### Community 423 - "Community 423"
-Cohesion: 0.22
-Nodes (9): 7-Layer Prevention System, code:bash (# Check if any critical files are being deleted), code:python (# Before deleting ANY file:), Layer 1: Critical Files Manifest, Layer 3: Enhanced Pre-Commit Hook, Layer 4: File Dependency Map, Layer 5: Automated Testing Before Cleanup, Layer 6: Router Registry (+1 more)
-
-### Community 424 - "Community 424"
-Cohesion: 0.22
-Nodes (9): ✅ 1. Navigation Bar - ALREADY CORRECT, ✅ 2. Edit Mode - MOVED TO FAB BUTTON, ✅ Files Moved to Correct Locations, Issues Fixed, ✅ Root .md File Limit, code:html (<button class="fab-edit-btn" id="fabEditBtn" onclick="toggle), code:css (.fab-edit-btn {), code:javascript (function toggleEditMode() {) (+1 more)
-
-### Community 425 - "Community 425"
-Cohesion: 0.22
-Nodes (9): Immediate (This Session), Medium Term (Future), Short Term (Next Session), Medium Term (Next Month), 🎯 Recommended Implementation Order, Short Term (Next 2 Weeks), Immediate (This Week), 🚦 Next Actions (+1 more)
-
-### Community 426 - "Community 426"
-Cohesion: 0.22
-Nodes (9): 🧪 Browser Console Testing, Check Manifest, Check Service Worker Status, code:javascript (// Run in browser console), code:javascript (// Check notification permission), code:javascript (// Verify manifest loaded), code:javascript (// List what's cached), Test Push Notification Permission (+1 more)
-
-### Community 427 - "Community 427"
-Cohesion: 0.28
-Nodes (8): _call_llm_for_portrait(), User Portrait: synthesized narrative understanding of each person.  A portrait i, Call the local LLM to generate a portrait. Returns the portrait text or ''., Upsert the portrait into the user_portraits table., Run portrait synthesis for all users who have approved memories.      Called as, Synthesize a fresh user portrait from MemPalace memories and journal entries., run_portrait_synthesis(), _save_portrait()
-
-### Community 428 - "Community 428"
-Cohesion: 0.31
-Nodes (7): test_approval_token_parser(), test_high_risk_requires_confirmation(), test_low_risk_read_only(), test_whatsapp_detection(), classify_request(), is_whatsapp_connect_request(), RiskDecision
-
-### Community 429 - "Community 429"
+### Community 292 - "Community 292"
 Cohesion: 0.25
-Nodes (5): PushBroadcaster, Client reconnection catch-up. For now, just send current sequence., WebSocket push broadcaster for real-time UI updates.      Clients subscribe to a, Subscribe a panel WebSocket to both 'all' (global) and its own panel channel., Send an event only to the named panel's dedicated channel.          Falls back t
+Nodes (8): test_acceptance_status_in_free_text_does_not_skip_implementation(), test_acceptance_status_is_not_a_routing_signal(), test_implementation_required_from_structured_scout_handoff(), test_structured_implementation_decision_wins_over_text(), implementation_required_from_handoff(), Extract explicit KEY=value equivalents from Kanban metadata., Return an explicit scout decision about whether code changes are required., _structured_handoff_fields()
 
-### Community 430 - "Community 430"
+### Community 293 - "Community 293"
+Cohesion: 0.39
+Nodes (7): emit_event(), emit_issue_assigned(), emit_issue_status_changed(), Emit Multica-shaped webhook events to Zoe's board webhook receiver.  Zoe impleme, POST one webhook event to the Zoe board receiver., webhook_secret(), webhook_target_url()
+
+### Community 295 - "Community 295"
 Cohesion: 0.25
-Nodes (7): WebSocket push endpoint.      Clients may connect with ?panel_id=<id> to subscri, websocket_push(), Performance Targets, Tier 1: Intent Router (< 1.5s), Tier 2: OpenClaw + GPT-4o-mini (5-30s), Visibility & Security, Zoe Test Plan
+Nodes (8): _compute_resemblyzer_embedding(), _cosine_similarity(), Compute a 256-dim resemblyzer voice embedding from a WAV file.      Returns raw, Cosine similarity between two float32 byte blobs., Enroll a speaker voice profile using a WAV audio sample.      Request: { "audio_, Identify speaker by comparing to enrolled profiles.      Accepts two request for, voice_enroll(), voice_identify()
 
-### Community 431 - "Community 431"
-Cohesion: 0.29
-Nodes (7): format_music_for_prompt(), get_music_context(), Music Context Provider ======================  Provides music context for Zoe's, Format music context for inclusion in system prompt.          Returns a concise, Get comprehensive music context for user.          Returns:         Dict with:, MCP Tool: music.get_context          Get music context for chat prompt (replaces, tool_get_context()
-
-### Community 433 - "Community 433"
+### Community 296 - "Community 296"
 Cohesion: 0.25
-Nodes (8): Audit: Zoe Agent, code:block1 (I want to work on improving Zoe Agent — Zoe's on-device LLM ), Honest Weaknesses, Prioritised Improvements (impact order), Prompt to start improvement plan in a new chat, What was already fixed in this session (May 18 2026), What Zoe Agent Does, Zoe Agent Improvement Brief
+Nodes (8): _get_kokoro_instance(), Convert float32 [-1,1] samples to mono WAV bytes., Yield WAV chunks from Kokoro create_stream() for one sentence., Return cached Kokoro instance, loading lazily on first call., Synthesize using Kokoro ONNX (thewh1teagle/kokoro-onnx).      ~82M param ONNX mo, _stream_kokoro_sentence_wavs(), _synthesize_kokoro(), _wav_bytes_from_float32_samples()
 
-### Community 434 - "Community 434"
-Cohesion: 0.29
-Nodes (6): Proactive trigger: birthday 7-day lookahead.  Fires once daily at 8am for contac, _next_occurrence(), person_health.py — Relationship health scoring.  Health score = weighted combina, Return the next calendar occurrence of (month, day) on or after ref (default: to, Recalculate health_score for one person and persist it to the DB.      Args:, recalc_and_save()
-
-### Community 435 - "Community 435"
-Cohesion: 0.25
-Nodes (8): QuickSwitchRequest, Touch panel authentication request, Quick user switch request, TouchPanelAuthRequest, Configuration for touch panel, TouchPanelConfig, code:bash (POST /api/touch-panel/auth), Touch Panel Endpoints
-
-### Community 436 - "Community 436"
-Cohesion: 0.29
-Nodes (6): Apply Enhanced Lists System migration, check_migration_applied(), create_migration_table(), Check if this migration has already been applied, Create schema_migrations table if it doesn't exist, Apply Project Lists migration
-
-### Community 437 - "Community 437"
+### Community 297 - "Community 297"
 Cohesion: 0.32
-Nodes (7): get_pg_tables(), migrate_table(), _parse_datetime(), migrate_sqlite_to_postgres.py — Phase 5: Copy all data from SQLite → PostgreSQL., Convert a sqlite3.Row to a tuple suitable for asyncpg INSERT., Migrate one table. Returns (rows_read, rows_inserted)., sqlite_row_to_pg()
+Nodes (7): _get_vapid_keys(), get_vapid_public_key(), Web Push Notifications via VAPID. Generates VAPID keys on first run, stores subs, Send a push notification to all of a user's subscriptions.      ``message`` is a, send_push_to_user(), subscribe(), unsubscribe()
 
-### Community 439 - "Community 439"
+### Community 298 - "Community 298"
+Cohesion: 0.39
+Nodes (8): _admission_blockers(), _has_failed_trace(), _has_successful_trace(), MemoryAdmissionDecision, Governed memory admission decisions for Zoe.  This module is intentionally inert, _required_approvals(), _requires_proposal_context(), Zoe Memory Admission
+
+### Community 300 - "Community 300"
+Cohesion: 0.36
+Nodes (7): generate_rsa_key(), Generate a new RSA-2048 key pair and return as dict., _jwks_for(), Tests for OIDC JWT issuance and verification., test_issue_and_verify_access_token(), test_issue_id_token_uses_user_email_verified_claim(), test_verify_access_token_rejects_unknown_key()
+
+### Community 301 - "Community 301"
+Cohesion: 0.29
+Nodes (4): Background sync loop for HA integration, Manually trigger sync with server, Sync cache with server data, Check if server is reachable
+
+### Community 302 - "Community 302"
+Cohesion: 0.29
+Nodes (4): _init_auth_tables(), Current-contract API tests for zoe-auth., sqlite_auth_db(), test_expired_lockout_resets_failed_attempt_window()
+
+### Community 303 - "Community 303"
 Cohesion: 0.25
 Nodes (6): Test MusicStreamError., Test TrackNotFoundError., Test StreamExpiredError., Tests for music-specific errors., Test MusicProviderError., TestMusicErrors
 
-### Community 440 - "Community 440"
+### Community 304 - "Community 304"
 Cohesion: 0.25
 Nodes (5): Tests for base ZoeError., Test basic error creation., Test error with additional details., Test error wrapping another exception., TestZoeError
 
-### Community 441 - "Community 441"
+### Community 305 - "Community 305"
 Cohesion: 0.25
 Nodes (5): Test safeguards and error handling, Verify all features are disabled by default (safety), Test that features fail gracefully when disabled, Test that platform configs are valid, TestFeatureSafeguards
 
-### Community 442 - "Community 442"
+### Community 306 - "Community 306"
 Cohesion: 0.25
-Nodes (8): code:python (import sqlite3), code:sql (-- db/schema/your_feature.sql), Database Access, code:python (from model_config import detect_hardware  # Jetson vs Pi det), code:python (DB_PATH = os.getenv("DATABASE_PATH", "/app/data/zoe.db")), External Dependencies, Standard Library Only, zoe-core Imports
+Nodes (7): _proc_alive(), Set status (+ bump last_seen_at when online) for one provider's row., True if a process whose full command line matches ``pattern`` is running.      `, True if the Zoe host API reports healthy., _update_runtime(), _zoe_alive(), _load_env()
 
-### Community 443 - "Community 443"
-Cohesion: 0.25
-Nodes (8): code:python (# Replace placeholder methods with actual Agent Zero API cal), Next Steps for Full Implementation, Phase 1: Implement Agent Zero Client, Phase 2: Test with Real Agent Zero, Phase 3: Error Handling, Phase 4: UI Integration (Optional), code:python (try:), 3. Handle Stream Errors Gracefully
-
-### Community 444 - "Community 444"
-Cohesion: 0.25
-Nodes (8): 2. Logging, 4. User Isolation, code:python (logger.info(f"✅ your_action: param={request.param}, user_id=), code:python (cursor.execute("SELECT * FROM data WHERE user_id = ?", (user), 7. MCP Tool Naming, code:python (# ✅ CORRECT - User isolated), code:python (import logging), 🟡 STRONGLY RECOMMENDED
-
-### Community 445 - "Community 445"
-Cohesion: 0.25
-Nodes (8): code:yaml (# services/zoe-core/intent_system/intents/en/myintent.yaml), code:python (# services/zoe-core/intent_system/handlers/my_handlers.py), code:python (# In intent_executor.py _register_builtin_handlers()), code:python (intent = classifier.classify("do something with test")), Adding New Intent:, Modifying Existing Intent:, Removing Intent:, ✅ REQUIRED PROCESS FOR CHANGES
-
-### Community 446 - "Community 446"
-Cohesion: 0.25
-Nodes (8): 4.1 Update client.py, 4.2 Test Individual Methods, 4.3 Test via Voice, code:python (import websockets), code:bash (# Test research), Phase 4: Implement & Test, code:block1 ("Zoe, research smart light bulbs"), Try It Now
-
-### Community 447 - "Community 447"
-Cohesion: 0.25
-Nodes (8): 1. ✅ Model Tests (6/7 Passing - 86%), 2. ✅ RouteLLM Classification (3/3 Passing - 100%), 3. ⚠️ Enhanced MemAgent (0/3 Passing - 0%), 4. ✅ RAG Enhancements (3/3 Passing - 100%), 5. ❌ Chat API (0/4 Passing - 0%), Detailed Results, Failed Models:, Working Models:
-
-### Community 448 - "Community 448"
-Cohesion: 0.25
-Nodes (8): code:python (# MCP server discovers music tools), code:bash (# Start full system with module), Phase 4: Integration & Testing (60 minutes), Step 4.1: Test Module Standalone (20 minutes), Step 4.2: Register with zoe-mcp-server (15 minutes), Step 4.3: Test AI Control (15 minutes), code:bash (# Build and start module), Step 7: Test
-
-### Community 449 - "Community 449"
+### Community 307 - "Community 307"
 Cohesion: 0.29
-Nodes (8): ⚙️ Automated Enforcement, Monthly Structure Audit, Pre-Commit Checks (`tools/audit/enforce_structure.py`), Layer 2: Pre-Deletion Validation Script, code:python (#!/usr/bin/env python3), Phase 5: Module Management (45 minutes), Step 5.1: Create Module CLI (30 minutes), Step 5.2: Create Compose Generator (15 minutes)
+Nodes (8): migrate_lists_enhancements(), Apply Enhanced Lists System migration, check_migration_applied(), create_migration_table(), migrate_project_lists(), Check if this migration has already been applied, Create schema_migrations table if it doesn't exist, Apply Project Lists migration
 
-### Community 450 - "Community 450"
-Cohesion: 0.25
-Nodes (8): 📋 Fix Implementation Status, 📊 Progress Tracker, Problem Statement, Chat Integration Diagnosis & Fixes, After: True Token Streaming, Before: Buffered Streaming, code:block1 (User speaks → STT (300ms) → LLM generates full response (2s)), code:block2 (User speaks → STT (300ms) → First token (200ms) → Streaming )
-
-### Community 451 - "Community 451"
-Cohesion: 0.25
-Nodes (8): Database Breakdown, Databases Found: 19 total, Current State Analysis, Question: Does the LLM know what it can do?, ❌ What the LLM DOESN'T KNOW:, ✅ What the LLM KNOWS:, code:block1 (routers/), Total Routers: 64 files (27,247 lines of code)
-
-### Community 452 - "Community 452"
-Cohesion: 0.25
-Nodes (8): code:block14 (1. Kokoro PyTorch sidecar  :10201  af_sky  GPU  ~150–400ms w), code:bash (# Check service state), code:bash (# Restart the sidecar), If the voice sounds wrong (British accent instead of natural), Jetson-specific CUDA fixes (both documented in `kokoro_sidecar.py`), Primary voice: Kokoro PyTorch sidecar, TTS Voice Stack (Jetson Orin NX), Verifying the voice is working
-
-### Community 453 - "Community 453"
-Cohesion: 0.25
-Nodes (7): code:block1 (modules/{module-name}/), code:block3 (User says "Research the best solar panels":), Extensibility Architecture, How They Work Together, Layer 1: Modules (Heavy Infrastructure), self-improvement, Security
-
-### Community 454 - "Community 454"
-Cohesion: 0.25
-Nodes (7): 📊 API Architecture Quality Score, 🔌 API Architecture Review, ✅ Best Practices Being Followed, 🗄️ Database Architecture Review, 📊 Database Schema Quality Score, 📈 Overall Architecture Score, 🏗️ Zoe Architecture Review - Complete Analysis
-
-### Community 455 - "Community 455"
-Cohesion: 0.25
-Nodes (8): Agent Zero Container, Bridge Container, code:block3 (Container ID: d6f0119dbecc), code:block4 (Container ID: 4e4a7f9824d5), code:block6 (✅ Module agent-zero loaded), Zoe Core Integration, code:python (# Current endpoints), 📊 CURRENT STATE
-
-### Community 456 - "Community 456"
-Cohesion: 0.25
-Nodes (8): 1. **Router Proliferation** (High Priority), 1. **Service Communication Patterns** (Medium Priority), 2. **Service Health Issues** (High Priority), code:bash (# Check logs), code:plaintext (routers/), Current Services (11 Containers), 🟡 Improvements, 🏢 Service Architecture Review
-
-### Community 457 - "Community 457"
-Cohesion: 0.25
-Nodes (8): 1. **Service Organization** (Low Priority), code:bash (✅ Required Docs: All present), code:plaintext (zoe/), code:plaintext (services/), code:python (# Excellent separation of concerns), 📊 Folder Structure Quality Score, 📁 Folder Structure Review, ✅ Strengths
-
-### Community 458 - "Community 458"
-Cohesion: 0.25
-Nodes (8): **BEFORE Starting Any New Work**, code:bash (# Step 1: Read recent changes (CRITICAL)), code:bash (# Check if tool/feature already exists), code:bash (# 1. Update RECENT_CHANGES.md), **DURING Work**, 📋 Standard Workflow for Cursor/AI, After Making Changes, code:bash (# 1. Make your changes to AI/LLM code)
-
-### Community 459 - "Community 459"
-Cohesion: 0.25
-Nodes (8): Agent Zero Not Responding, code:bash (# Check Agent Zero container), code:bash (# Check Zoe is running), code:bash (# Check skills directory), Issue: Agent Zero Slow/Timeout, Issue: Moltbot Can't Reach Zoe, Issue: Skills Not Loading in Moltbot, 🐛 Troubleshooting Guide
-
-### Community 460 - "Community 460"
+### Community 308 - "Community 308"
 Cohesion: 0.29
-Nodes (7): **1. Does It Already Exist?**, **2. Will It Conflict?**, **3. Does Documentation Cover It?**, code:bash (# Search codebase), code:bash (# See active work), code:bash (# Search all documentation), 🚨 Critical Checks Before Creating New Features
+Nodes (6): docs/README.md, docs/architecture/LITELLM_INTEGRATION.md, docs/governance/LITELLM_RULES.md, docs/guides/root-reference/QUALITY_MAINTENANCE_GUIDE.md, docs/reviews/SECURITY_FIXES_2025-11-17.md, docs/architecture/SERVICE_HEALTH_FIX.md
 
-### Community 461 - "Community 461"
+### Community 309 - "Community 309"
+Cohesion: 0.29
+Nodes (6): Proactive trigger: birthday 7-day lookahead.  Fires once daily at 8am for contac, _next_occurrence(), person_health.py — Relationship health scoring.  Health score = weighted combina, Recalculate health_score for one person and persist it to the DB.      Args:, Return the next calendar occurrence of (month, day) on or after ref (default: to, recalc_and_save()
+
+### Community 310 - "Community 310"
+Cohesion: 0.25
+Nodes (7): claim_pending(), create_pending(), Helpers for deferred / lazy session creation for proactive notifications.  When, Insert a proactive_pending row and return its id.     The push notification's de, Mark a pending notification as claimed and create a chat session seeded     with, claim_pending_endpoint(), Claim a pending proactive notification (called when user taps push).     Creates
+
+### Community 311 - "Community 311"
+Cohesion: 0.29
+Nodes (7): Manually trigger the morning brief for the calling user.     Useful for testing, trigger_morning_brief(), _build_morning_context(), _compose_morning_message(), Morning check-in trigger — greets user with day summary at 7:30am.  Phase 3.4: e, Build a rich morning brief message from context components., Collect open loops, emotional moments, calendar events, and portrait for the bri
+
+### Community 312 - "Community 312"
+Cohesion: 0.36
+Nodes (6): test_high_risk_requires_confirmation(), test_low_risk_read_only(), test_whatsapp_detection(), classify_request(), is_whatsapp_connect_request(), RiskDecision
+
+### Community 314 - "Community 314"
+Cohesion: 0.29
+Nodes (3): Assign role to user                  Args:             user_id: User to assign r, Log role change for audit, Invalidate cache for specific user
+
+### Community 315 - "Community 315"
 Cohesion: 0.29
 Nodes (6): create_synapse_auth_provider(), MatrixUser, Matrix (Synapse/Dendrite) SSO Integration Authentication provider for Matrix hom, Matrix user representation, Create Synapse authentication provider module, Initialize Matrix integration
 
-### Community 462 - "Community 462"
+### Community 316 - "Community 316"
+Cohesion: 0.29
+Nodes (6): create_n8n_auth_config(), N8nUser, n8n SSO Integration Replace n8n's basic auth with Zoe's central authentication, n8n user representation, Create n8n authentication configuration, Initialize n8n integration
+
+### Community 317 - "Community 317"
 Cohesion: 0.29
 Nodes (6): analyze_query_performance(), optimize_memory_db(), optimize_zoe_db(), Analyze query plans to verify index usage, Add indexes to zoe.db for better performance, Add indexes to memory.db for better temporal memory performance
 
-### Community 463 - "Community 463"
-Cohesion: 0.29
-Nodes (6): convert_params_to_positional(), convert_question_marks(), Convert tuple literal like (a, b, c) to positional args a, b, c., Convert ? in SQL string literals to $1, $2, etc., Convert ? placeholders in SQL string literals., transform_sql_strings()
-
-### Community 464 - "Community 464"
-Cohesion: 0.29
-Nodes (6): Tests for error class hierarchy., Test music errors inherit from ZoeError., Test casting errors inherit from ZoeError., Test household errors inherit from ZoeError., Test catching all ZoeError subclasses., TestErrorInheritance
-
-### Community 465 - "Community 465"
+### Community 318 - "Community 318"
 Cohesion: 0.29
 Nodes (6): Tests for compatibility calculation functions, Test values alignment calculation, Test personality compatibility calculation, Test interest overlap calculation, Test that empty profiles return neutral scores, TestCompatibilityCalculations
 
-### Community 466 - "Community 466"
+### Community 319 - "Community 319"
 Cohesion: 0.29
-Nodes (5): Test Home Assistant integration, Test turn off patterns., Test Home Assistant control intents., Test turn on patterns., TestHomeAssistantIntents
+Nodes (6): Tests for error class hierarchy., Test music errors inherit from ZoeError., Test casting errors inherit from ZoeError., Test household errors inherit from ZoeError., Test catching all ZoeError subclasses., TestErrorInheritance
 
-### Community 467 - "Community 467"
+### Community 320 - "Community 320"
 Cohesion: 0.33
-Nodes (7): code:python (# ❌ WRONG - Lost on restart), code:python (# ❌ WRONG), ❌ Don't Block Event Loop, ❌ Don't Hardcode Paths, ❌ Don't Modify Core, ❌ Don't Share State, 🚫 What NOT to Do
+Nodes (5): close_chat_episode(), Close current episode, Get active episode for user, Get active episode for user, create new one if needed, Close an episode and optionally generate summary
 
-### Community 468 - "Community 468"
-Cohesion: 0.29
-Nodes (7): code:bash (# Move remaining docs), code:bash (# Create tools structure), code:bash (# Run enforcement), 🔄 Migration Path (One-Time), Step 1: Move Remaining Files, Step 2: Install Enforcement, Step 3: Verify
+### Community 321 - "Community 321"
+Cohesion: 0.71
+Nodes (7): Agent Zero Intent Patterns, Agent Zero Module for Zoe, Agent Zero Comparison Skill, Agent Zero Planning Skill, Agent Zero Deep Research Skill, Agent Zero + Zoe Integration Summary, Agent Zero Integration Test Results
 
-### Community 469 - "Community 469"
-Cohesion: 0.29
-Nodes (7): ⚠️ CRITICAL: All LLM Calls MUST Use LiteLLM Gateway, 🚨 Emergency Bypass Protocol:, 🌐 LITELLM GATEWAY RULES - MANDATORY, ❌ WRONG Patterns (FORBIDDEN):, 1. Direct LLM Service Calls, code:python (# ❌ WRONG - Direct llamacpp call), Full Documentation
-
-### Community 470 - "Community 470"
-Cohesion: 0.38
-Nodes (7): code:block25 (tests/), code:block26 (scripts/), 📋 Governance Rules, Script File Rules, Structure, Test File Rules, Tool File Rules
-
-### Community 471 - "Community 471"
-Cohesion: 0.29
-Nodes (6): code:bash (# Enable (default)), Chat Commands, Feature Flags, OpenClaw Terminal Chat Rollout, Smoke Checklist, Staged Enablement
-
-### Community 472 - "Community 472"
-Cohesion: 0.29
-Nodes (7): code:bash (# Disable module), code:bash (# Start module alone), code:bash (# Enable module), Test 1: Module Enabled, Test 2: Module Disabled, Test 3: Standalone Module, Testing Guide
-
-### Community 473 - "Community 473"
-Cohesion: 0.29
-Nodes (7): 🎯 Consolidation Strategy, **TWO-DATABASE ARCHITECTURE** (Recommended), ✅ Builds on Your Solid Foundation, ✅ Focus on User-Facing Impact, ✅ Incremental Implementation, ✅ Respects Your Constraints, Why This Approach Works
-
-### Community 474 - "Community 474"
-Cohesion: 0.29
-Nodes (7): 1. Document the Reason, 2. Add TODO Comments, 3. Create Tracking Task, 4. Time-box the Fix, 🚨 Breaking Changes Protocol, code:python (# TODO: TECH DEBT - Direct LLM call bypassing gateway), code:markdown (## TECH DEBT: Direct LLM Call in module_name.py)
-
-### Community 475 - "Community 475"
-Cohesion: 0.29
-Nodes (7): code:python (# In chat endpoint, add:), code:python (# services/mem-agent/person_expert.py), 🔧 Detailed Fix Plan, Fix 1: API Endpoints (COMPLETED ✅), Fix 2: Integrate Temporal Memory (TO DO), Fix 3: Add Person Creation Expert (TO DO), Fix 4: Optimize Response Times (TO DO)
-
-### Community 476 - "Community 476"
-Cohesion: 0.43
-Nodes (7): Detailed Platform Information, Mac Mini M4 (Planned), Raspberry Pi 5 16GB *(Retired April 2026)*, NVIDIA Jetson Orin NX 16GB, Raspberry Pi 5 16GB, 3. Start the module, code:bash (docker compose -f docker-compose.yml \)
-
-### Community 477 - "Community 477"
-Cohesion: 0.29
-Nodes (7): 📋 Migration Steps, Phase 1: Preparation ✅ COMPLETED, Phase 2: Schema Updates (PENDING), Phase 3: Data Migration (PENDING), Phase 4: Code Updates (PENDING), Phase 5: Protection Mechanisms (PENDING), Phase 6: Testing & Verification (PENDING)
-
-### Community 478 - "Community 478"
-Cohesion: 0.29
-Nodes (6): AG-UI chat protocol for Zoe (zoe-data + `chat.html`), Contract checklist (manual / tests), Decision (Option 1), Persistence (serialization groundwork), Spike: `clawg-ui` (@contextableai/clawg-ui), Wire format: legacy Zoe vs canonical AG-UI
-
-### Community 479 - "Community 479"
-Cohesion: 0.29
-Nodes (6): Disallowed autonomous actions, Mandatory approval gates, OpenClaw Calendar Orchestration Guide, Purpose, Safety workflow, Supported operator commands
-
-### Community 480 - "Community 480"
-Cohesion: 0.29
-Nodes (7): Before Cleanup, Before ANY File Changes, Before Cleanup Operations, Before Committing, code:bash (# 1. Validate current state), code:bash (# 1. Create safety commit), Daily Usage
-
-### Community 481 - "Community 481"
-Cohesion: 0.29
-Nodes (7): After AI/LLM Changes, Before Deployment, Before Major Changes, code:bash (- [ ] Run full system test: `python3 tests/integration/test_), code:bash (- [ ] Test chat API specifically), code:bash (- [ ] Full system test passes ✅), 📋 Test Checklist Template
-
-### Community 482 - "Community 482"
-Cohesion: 0.29
-Nodes (7): Adding Mock Data, code:python (# At top of test_full_system.py), code:python (# tests/fixtures/test_data.json), code:python (import json), 🔧 Customizing Tests, Test Configuration, Using Fixtures
-
-### Community 483 - "Community 483"
+### Community 322 - "Community 322"
 Cohesion: 0.33
-Nodes (3): Create Matrix room                  Args:             room_config: Room configur, Resolve room alias to room ID, Call Matrix Client-Server API
+Nodes (5): format_music_for_prompt(), get_music_context(), Music Context Provider ======================  Provides music context for Zoe's, Format music context for inclusion in system prompt.          Returns a concise, Get comprehensive music context for user.          Returns:         Dict with:
 
-### Community 484 - "Community 484"
-Cohesion: 0.47
-Nodes (4): _init_auth_tables(), Current-contract API tests for zoe-auth., test_login_requires_initial_password_setup_marker(), test_profiles_endpoint_returns_non_system_users()
-
-### Community 485 - "Community 485"
-Cohesion: 0.4
-Nodes (4): add_user_id_extraction(), fix_router(), Fix a single router file, Add user_id = session.user_id after each function with AuthenticatedSession
-
-### Community 486 - "Community 486"
+### Community 323 - "Community 323"
 Cohesion: 0.33
-Nodes (5): Unit Tests for Custom Errors ============================  Tests custom exceptio, Tests for casting-related errors., Test DeviceNotFoundError., Test DeviceOfflineError., TestCastingErrors
+Nodes (6): zoe-auth, zoe-database, zoe-ui, zoe-capability-extender SKILL.md, zoe-page-builder SKILL.md, zoe-widget-builder SKILL.md
 
-### Community 487 - "Community 487"
+### Community 324 - "Community 324"
 Cohesion: 0.33
-Nodes (4): Tests for compatibility analysis, Test creating compatibility analysis, Test compatibility level descriptions, Test dimension breakdown
+Nodes (6): test_split_request_from_handoff_parses_multiline_packet(), test_split_request_from_handoff_parses_packet(), _json_field_value(), Extract a JSON object value from ``KEY=...``, allowing multiline JSON., Return explicit scope-split request and optional machine packet from handoff tex, split_request_from_handoff()
 
-### Community 488 - "Community 488"
+### Community 325 - "Community 325"
+Cohesion: 0.33
+Nodes (5): Convert Apple Music artist data to Artist., Artist, Unified artist representation., Convert Spotify artist data to Artist., Convert provider-specific artist data to Artist dataclass.
+
+### Community 326 - "Community 326"
+Cohesion: 0.33
+Nodes (6): agent_card(), _build_agent_card(), Build an A2A v1.0 compliant agent card for Zoe., A2A v1.0 agent identity card — public capability advertisement., a2a_well_known(), A2A v1.0 agent discovery — served inline to avoid redirect caching issues.
+
+### Community 327 - "Community 327"
+Cohesion: 0.53
+Nodes (5): _enclosing_scope(), _live_python_files(), Regression tests for live self-evolution proposal writer closure., test_live_evolution_proposal_inserts_use_runtime_intake(), test_live_proposal_writers_do_not_use_legacy_contract_dumpers()
+
+### Community 328 - "Community 328"
+Cohesion: 0.33
+Nodes (3): _ZOE_SOUL_STATIC must not contain any day/time strings (KV cache stability)., Every tool in _TOOLS must appear in either _SKILL_TOOLS or _ALWAYS_ON_TOOLS., TestStablePrompt
+
+### Community 329 - "Community 329"
+Cohesion: 0.33
+Nodes (5): get_skybridge_status(), Skybridge surface health and capability metadata., Return the runtime contract for the voice-first Skybridge interface., Resolve a typed Skybridge command into real data cards when supported., resolve_skybridge_command()
+
+### Community 330 - "Community 330"
+Cohesion: 0.33
+Nodes (5): PasscodePolicy, PasscodeValidationResult, Passcode Authentication System Secure handling of 4-8 digit PIN codes with advan, Result of passcode validation, Passcode security policy configuration
+
+### Community 331 - "Community 331"
 Cohesion: 0.33
 Nodes (5): Test converting error to dictionary., Tests for values priority, Test default value priorities, Test conversion to dictionary, TestValuesPriority
 
-### Community 489 - "Community 489"
+### Community 332 - "Community 332"
+Cohesion: 0.33
+Nodes (5): Unit Tests for Custom Errors ============================  Tests custom exceptio, Tests for casting-related errors., Test DeviceNotFoundError., Test DeviceOfflineError., TestCastingErrors
+
+### Community 333 - "Community 333"
 Cohesion: 0.33
 Nodes (4): Tests for personality traits, Test default trait values, Test that traits stay within bounds, TestPersonalityTraits
 
-### Community 490 - "Community 490"
+### Community 334 - "Community 334"
+Cohesion: 0.33
+Nodes (4): Tests for compatibility analysis, Test creating compatibility analysis, Test compatibility level descriptions, Test dimension breakdown
+
+### Community 335 - "Community 335"
+Cohesion: 0.33
+Nodes (4): Ensure we don't add qualifiers to already-qualified responses, Test P0-2: Validate confidence expression quality, Test that confidence qualifiers are appropriate, TestP02ConfidenceImprovements
+
+### Community 336 - "Community 336"
 Cohesion: 0.4
-Nodes (6): Auto-Fix, 📋 CHECKING COMPLIANCE, code:bash (cd /home/pi), Detailed Check, Manual Check, Quick Check
+Nodes (3): DatabaseReferenceUpdater, Update database references in a single file, Update all Python files in services
 
-### Community 491 - "Community 491"
-Cohesion: 0.33
-Nodes (6): General Questions, Issue: Behavioral extraction returns 0 patterns, Issue: Confidence always shows as 0.5, Issue: Context still being fetched for Tier 0 intents, Issue: Patterns not showing in system prompt, 🆘 Troubleshooting Quick Reference
-
-### Community 492 - "Community 492"
-Cohesion: 0.33
-Nodes (6): Bind Device to User, Binding Types, Device Endpoints, Get Active User for Device, Get Household Devices, Register Device
-
-### Community 493 - "Community 493"
-Cohesion: 0.33
-Nodes (6): ✅ AI Assistant Checklist, Current Root .md Files (6/10), Future Prevention, Prevention System Created, ✅ Updated .cursorrules, Documentation Fix Complete
-
-### Community 494 - "Community 494"
-Cohesion: 0.33
-Nodes (6): code:bash (# Test individual checks), Automated Testing, code:bash (# 1. Build module), code:python (# tests/test_widgets.py), Manual Testing, 🧪 Testing Your Module
-
-### Community 495 - "Community 495"
-Cohesion: 0.33
-Nodes (5): Calendar Sync Migration and Rollback Playbook, Incident triage quick map, Phase rollout, Preflight checklist, Rollback strategy
-
-### Community 496 - "Community 496"
-Cohesion: 0.33
-Nodes (6): Android (Chrome, Edge, Firefox), Desktop (Chrome, Edge), 📱 Installing Zoe on Your Device, iOS (Safari), Method 1: Browser Prompt (Automatic), Method 2: Manual Install
-
-### Community 497 - "Community 497"
+### Community 337 - "Community 337"
 Cohesion: 0.4
-Nodes (3): _FakeCollection, _match_where(), Minimal Chroma collection stub backed by a plain dict.
+Nodes (5): detect(), detect_and_store(), Detect casual save opportunities and store proactive offers., Background detection — returns suggestions stored by caller., store_suggestions()
 
-### Community 499 - "Community 499"
+### Community 338 - "Community 338"
+Cohesion: 0.53
+Nodes (6): ADR: Graphiti Bake-Off Second, ADR: Hindsight Bake-Off First, ADR: Zoe Memory Layer Direction, ADR: Zoe North Star Layer, Zoe Memory Read Write Inventory, Zoe Tool And Capability Inventory
+
+### Community 339 - "Community 339"
+Cohesion: 0.6
+Nodes (4): _should_supersede_voice_weather_action(), test_ignores_non_weather_actions(), test_preserves_current_weather_actions(), test_supersedes_old_voice_weather_actions()
+
+### Community 341 - "Community 341"
+Cohesion: 0.6
+Nodes (4): _load_harness(), Tests for the deterministic engineering harness loop helpers., test_parse_pipeline_findings_does_not_double_count_explicit_scope_split(), test_parse_pipeline_findings_does_not_double_count_fingerprint_split()
+
+### Community 343 - "Community 343"
 Cohesion: 0.4
 Nodes (4): Restart llama.cpp container with new model, Test a model through Zoe's chat API with conversation history, switch_model(), test_model_via_api()
 
-### Community 501 - "Community 501"
+### Community 344 - "Community 344"
 Cohesion: 0.4
-Nodes (5): After 3 Months:, First Month:, First Week:, Second Week:, 📈 What to Expect
+Nodes (5): Agent Zero Docker Compose Module, Agent Zero Implementation Checklist, Agent Zero Integration - COMPLETE, Agent Zero Live Integration Test Report, Agent Zero Quick Start Guide
 
-### Community 502 - "Community 502"
-Cohesion: 0.4
-Nodes (5): code:bash (# Edit .env), Safety, Developer Mode (Available):, Grandma Mode (Current):, Safety Guardrails Verification
-
-### Community 503 - "Community 503"
-Cohesion: 0.4
-Nodes (4): Flags, People + Memory Rollout Flags, Rollback, Suggested rollout stages
-
-### Community 504 - "Community 504"
-Cohesion: 0.4
-Nodes (5): code:block1 (I want you to do a deep browser-based QA test of Zoe's inten), code:block2 (Or check the log at: http://localhost/api/system/logs (if th), Intent System Browser Test — New Chat Prompt, Paste this into a new Cursor chat:, Intent System Browser Test Prompt
-
-### Community 505 - "Community 505"
-Cohesion: 0.4
-Nodes (4): Auditability, Data protection policy, Scope governance, Token and secret handling
-
-### Community 506 - "Community 506"
-Cohesion: 0.4
-Nodes (5): Component Files, CSS Files, HTML Files, JavaScript Files, 🔍 VALIDATION RULES
-
-### Community 507 - "Community 507"
-Cohesion: 0.4
-Nodes (5): 1. Clean Git History (Requires Force Push), 2. Consider Git LFS for Future Large Files, code:bash (# WARNING: This rewrites history and requires force push), code:bash (git lfs install), Optional Future Actions
-
-### Community 508 - "Community 508"
-Cohesion: 0.4
-Nodes (5): 1. Always Use Streaming for Voice, code:python (# ✅ GOOD), 📝 Test Development Guidelines, Test Naming Convention, Writing Good Tests
-
-### Community 509 - "Community 509"
-Cohesion: 0.4
-Nodes (5): code:python (def test_chat_api(self):), 🚨 Critical: Chat API Test, What It Tests, When Chat Test Fails, Why It's Most Important
-
-### Community 511 - "Community 511"
+### Community 345 - "Community 345"
 Cohesion: 0.5
-Nodes (4): FastAPI App, ZoeException, global_exception_handler(), Global exception handler for unhandled errors
+Nodes (3): MemoryGateway, Best-effort memory write to Atomic., Gateway for hybrid memory retrieval with optional Atomic sidecar.
 
-### Community 513 - "Community 513"
+### Community 347 - "Community 347"
+Cohesion: 0.5
+Nodes (3): _compute_agent_zero_api_key(), Agent Zero Client =================  Client for communicating with Agent Zero's, Compute the API key that Agent Zero expects, using the same algorithm     as its
+
+### Community 348 - "Community 348"
+Cohesion: 0.5
+Nodes (3): True when a worker pushed HEAD then got interrupted before PR handoff., latest_log_session(), Return only the latest Hermes session from a task log.
+
+### Community 349 - "Community 349"
 Cohesion: 0.5
 Nodes (4): _panel_session_trust_window_s(), Seconds that an active panel session is trusted for voice scope gating., Resolve panel user only when the panel session heartbeat is fresh enough     to, _resolve_recent_panel_session_user()
 
-### Community 515 - "Community 515"
-Cohesion: 0.5
-Nodes (3): Sync password change to Home Assistant                  Args:             user_i, Sync password change to Matrix                  Args:             user_id: User, Handle password change for n8n user                  Args:             user_id:
+### Community 351 - "Community 351"
+Cohesion: 0.83
+Nodes (3): _load_main_with_internal_token(), test_metrics_allows_non_loopback_with_valid_internal_token(), test_metrics_rejects_non_loopback_without_internal_token()
 
-### Community 516 - "Community 516"
+### Community 356 - "Community 356"
 Cohesion: 0.5
 Nodes (3): get_test_people(), Test Memories Endpoint ======================  A simple endpoint to test memorie, Get people from memories without authentication (for testing)
 
-### Community 517 - "Community 517"
+### Community 357 - "Community 357"
+Cohesion: 0.5
+Nodes (4): test_simple_greeting(), Test greeting intents., Test basic greeting patterns., TestGreetings
+
+### Community 358 - "Community 358"
 Cohesion: 0.5
 Nodes (3): Final verification with real-world scenarios, final_verification(), Final verification of all enhancement systems
 
-### Community 518 - "Community 518"
+### Community 359 - "Community 359"
 Cohesion: 0.5
-Nodes (4): Monday-Tuesday: P0-2 Context Validation, Thursday-Saturday: P0-1 Behavioral Memory, Wednesday: P0-3 Confidence Expression, Week 1: P0 Implementation
+Nodes (4): OpenClaw Calendar Orchestration Guide, Creating Skills Guide, OpenClaw Ecosystem Update, Security Policy for Skills
 
-### Community 519 - "Community 519"
+### Community 360 - "Community 360"
 Cohesion: 0.5
-Nodes (4): Data Privacy, Model Switching, 🎓 Understanding the System, What Gets Trained
+Nodes (4): Drag and Drop Implementation, setupDragAndDrop() Function, Zoe Orb Fix - Quick Summary, Zoe Touch Pi Production Rollout Report
 
-### Community 520 - "Community 520"
+### Community 361 - "Community 361"
 Cohesion: 0.5
-Nodes (4): code:bash (# Create file in user widgets directory), code:javascript (class MyWidget extends WidgetModule {), code:html (<!-- In dashboard.html, after other widget imports -->), Quick Widget Creation
+Nodes (4): Allowlist CRUD Operations, Trust Gate Core Engine, Trust Gate API Endpoints, Voice Orchestrator
 
-### Community 521 - "Community 521"
-Cohesion: 0.5
-Nodes (4): code:javascript (// In sendOrbMessage function), code:javascript (// Comment out in initOrbChat()), code:css (.zoe-orb {), Customizing Orb Behavior
-
-### Community 522 - "Community 522"
-Cohesion: 0.5
-Nodes (4): Expected Production Performance, Performance Characteristics, Resource Usage, Response Times (Placeholder)
-
-### Community 523 - "Community 523"
-Cohesion: 0.5
-Nodes (4): 3. **Performance Optimization Opportunities** (Medium Priority), code:sql (-- Add composite indexes for common queries), code:sql (-- Instead of: WHERE json_extract(metadata, '$.priority') = ), code:sql (CREATE TABLE conversations_archive AS SELECT * FROM conversa)
-
-### Community 525 - "Community 525"
+### Community 362 - "Community 362"
 Cohesion: 0.67
-Nodes (3): _hermes_review_proposal(), Ask Hermes to review an evolution proposal before OpenClaw implements it.      R, Ask Hermes to review an evolution proposal before implementation is queued.
+Nodes (3): Get the singleton embedding service instance., get_embedding_service(), Get the embedding service (Jetson only).          Returns None on Pi5 or if memo
 
-### Community 526 - "Community 526"
-Cohesion: 0.67
-Nodes (3): board_approve(), Create a Multica board issue and assign to OpenClaw., Create a Multica board issue for agent execution (Hermes by default).
+### Community 378 - "Community 378"
+Cohesion: 1.0
+Nodes (3): Executive Summary: Memory & Hallucination Reduction for Zoe, Quick-Start Implementation Guide: P0 Recommendations, Memory & Hallucination Reduction Analysis for Zoe
 
-### Community 539 - "Community 539"
+### Community 379 - "Community 379"
 Cohesion: 0.67
-Nodes (3): code:javascript (console.log(document.getElementById('zoeOrb'));), code:bash (curl http://localhost/components/zoe-orb.html), Orb Not Appearing
-
-### Community 540 - "Community 540"
-Cohesion: 0.67
-Nodes (3): "Agent Zero is unavailable", code:bash (docker logs zoe-agent0), code:bash (docker logs agent-zero-bridge)
-
-### Community 541 - "Community 541"
-Cohesion: 0.67
-Nodes (3): code:bash (docker logs zoe-core --tail 50 | grep -i intent), code:block13 (INFO:intent_system.executors.intent_executor:Registered 5 in), Intent System Not Loading
-
-### Community 542 - "Community 542"
-Cohesion: 0.67
-Nodes (3): Chat Not Working, code:bash (curl -X POST http://localhost:8000/api/chat/?stream=true), code:javascript (console.log(window.zoeAuth?.getCurrentSession());)
-
-### Community 543 - "Community 543"
-Cohesion: 0.67
-Nodes (3): code:bash (sudo systemctl status cron), code:bash (/home/zoe/assistant/scripts/train/nightly_training.sh), Cron Not Running
-
-### Community 544 - "Community 544"
-Cohesion: 0.67
-Nodes (3): Jetson Issues, code:bash (# Check NVIDIA runtime), Jetson: GPU not detected
-
-### Community 545 - "Community 545"
-Cohesion: 0.67
-Nodes (3): 4. **Error Handling Consistency** (Medium Priority), code:python (# Some routers), code:python (# Create error handler middleware)
-
-### Community 546 - "Community 546"
-Cohesion: 0.67
-Nodes (3): Journal Widget JavaScript, MyCustomWidget JavaScript Widget, MyWidget JavaScript Widget
-
-### Community 547 - "Community 547"
-Cohesion: 0.67
-Nodes (3): HassIL Classifier, Intent Executor, Lists Handlers
+Nodes (3): Repository Layout, Chat Router, Zoe Data API
 
 ## Knowledge Gaps
-- **5059 isolated node(s):** `Orbit matching algorithm — weighted multi-factor scoring.`, `Jaccard with intensity weighting — shared high-intensity items score higher.`, `Score personality compatibility using per-trait similarity/complementarity.`, `Compute match score between two checkin dicts. Returns None if incompatible.`, `Return up to n best matches for a checkin from the active pool.` (+5054 more)
+- **3043 isolated node(s):** `Orbit matching algorithm — weighted multi-factor scoring.`, `Jaccard with intensity weighting — shared high-intensity items score higher.`, `Score personality compatibility using per-trait similarity/complementarity.`, `Compute match score between two checkin dicts. Returns None if incompatible.`, `Return up to n best matches for a checkin from the active pool.` (+3038 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **301 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **265 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `init()` connect `Community 44` to `Community 512`, `Community 1`, `Community 2`, `Community 0`, `Community 6`, `Community 10`, `Community 14`, `Community 15`, `Community 16`, `Community 17`, `Community 20`, `Community 24`, `Community 25`, `Community 27`, `Community 31`, `Community 32`, `Community 38`, `Community 39`, `Community 40`, `Community 42`, `Community 50`, `Community 51`, `Community 55`, `Community 56`, `Community 65`, `Community 67`, `Community 73`, `Community 74`, `Community 81`, `Community 82`, `Community 85`, `Community 88`, `Community 93`, `Community 98`, `Community 99`, `Community 103`, `Community 113`, `Community 117`, `Community 122`, `Community 123`, `Community 129`, `Community 132`, `Community 138`, `Community 141`, `Community 144`, `Community 151`, `Community 152`, `Community 154`, `Community 156`, `Community 165`, `Community 174`, `Community 182`, `Community 184`, `Community 198`, `Community 199`, `Community 220`, `Community 221`, `Community 224`, `Community 225`, `Community 226`, `Community 238`, `Community 254`, `Community 255`, `Community 260`, `Community 261`, `Community 262`, `Community 263`, `Community 265`, `Community 280`, `Community 296`, `Community 298`, `Community 300`, `Community 301`, `Community 302`, `Community 303`, `Community 306`, `Community 311`, `Community 318`, `Community 319`, `Community 331`, `Community 357`, `Community 358`, `Community 370`, `Community 390`, `Community 429`, `Community 497`?**
-  _High betweenness centrality (0.311) - this node is a cross-community bridge._
-- **Why does `main()` connect `Community 0` to `Community 2`, `Community 260`, `Community 261`, `Community 262`, `Community 390`, `Community 263`, `Community 139`, `Community 142`, `Community 143`, `Community 144`, `Community 18`, `Community 20`, `Community 148`, `Community 154`, `Community 156`, `Community 32`, `Community 35`, `Community 43`, `Community 301`, `Community 302`, `Community 47`, `Community 50`, `Community 51`, `Community 436`, `Community 437`, `Community 319`, `Community 320`, `Community 70`, `Community 199`, `Community 73`, `Community 74`, `Community 463`, `Community 337`, `Community 338`, `Community 84`, `Community 85`, `Community 86`, `Community 225`, `Community 98`, `Community 485`, `Community 105`, `Community 363`, `Community 110`, `Community 238`, `Community 499`, `Community 121`, `Community 255`?**
-  _High betweenness centrality (0.139) - this node is a cross-community bridge._
-- **Why does `list()` connect `Community 85` to `Community 0`, `Community 130`, `Community 5`, `Community 262`, `Community 6`, `Community 7`, `Community 265`, `Community 20`, `Community 279`, `Community 408`, `Community 25`, `Community 24`, `Community 154`, `Community 156`, `Community 155`, `Community 288`, `Community 166`, `Community 38`, `Community 43`, `Community 44`, `Community 45`, `Community 175`, `Community 47`, `Community 303`, `Community 50`, `Community 51`, `Community 318`, `Community 64`, `Community 194`, `Community 67`, `Community 198`, `Community 74`, `Community 79`, `Community 82`, `Community 92`, `Community 357`, `Community 485`, `Community 103`, `Community 105`, `Community 365`?**
-  _High betweenness centrality (0.065) - this node is a cross-community bridge._
-- **Are the 6 inferred relationships involving `main()` (e.g. with `init_pool()` and `close_pool()`) actually correct?**
-  _`main()` has 6 INFERRED edges - model-reasoned connections that need verification._
-- **Are the 104 inferred relationships involving `require_feature_access()` (e.g. with `create_reminder()` and `list_reminders()`) actually correct?**
+- **Why does `main()` connect `Community 1` to `Community 130`, `Community 131`, `Community 4`, `Community 260`, `Community 135`, `Community 136`, `Community 9`, `Community 138`, `Community 265`, `Community 10`, `Community 139`, `Community 14`, `Community 12`, `Community 16`, `Community 271`, `Community 273`, `Community 20`, `Community 21`, `Community 22`, `Community 151`, `Community 149`, `Community 156`, `Community 284`, `Community 30`, `Community 160`, `Community 162`, `Community 35`, `Community 293`, `Community 168`, `Community 43`, `Community 48`, `Community 177`, `Community 306`, `Community 307`, `Community 56`, `Community 58`, `Community 59`, `Community 191`, `Community 70`, `Community 75`, `Community 80`, `Community 82`, `Community 84`, `Community 213`, `Community 86`, `Community 215`, `Community 214`, `Community 88`, `Community 343`, `Community 92`, `Community 94`, `Community 222`, `Community 227`, `Community 100`, `Community 101`, `Community 102`, `Community 234`, `Community 107`, `Community 108`, `Community 109`, `Community 235`, `Community 244`, `Community 245`, `Community 246`, `Community 247`, `Community 251`, `Community 124`?**
+  _High betweenness centrality (0.250) - this node is a cross-community bridge._
+- **Why does `list()` connect `Community 130` to `Community 1`, `Community 2`, `Community 3`, `Community 132`, `Community 133`, `Community 6`, `Community 7`, `Community 131`, `Community 136`, `Community 138`, `Community 10`, `Community 267`, `Community 269`, `Community 14`, `Community 271`, `Community 12`, `Community 17`, `Community 137`, `Community 272`, `Community 20`, `Community 21`, `Community 22`, `Community 24`, `Community 259`, `Community 282`, `Community 27`, `Community 29`, `Community 30`, `Community 287`, `Community 162`, `Community 163`, `Community 35`, `Community 37`, `Community 164`, `Community 34`, `Community 40`, `Community 41`, `Community 170`, `Community 298`, `Community 168`, `Community 43`, `Community 47`, `Community 52`, `Community 181`, `Community 53`, `Community 184`, `Community 57`, `Community 56`, `Community 59`, `Community 67`, `Community 198`, `Community 75`, `Community 83`, `Community 212`, `Community 86`, `Community 87`, `Community 89`, `Community 220`, `Community 93`, `Community 94`, `Community 92`, `Community 97`, `Community 229`, `Community 233`, `Community 234`?**
+  _High betweenness centrality (0.157) - this node is a cross-community bridge._
+- **Why does `voice_command()` connect `Community 86` to `Community 1`, `Community 130`, `Community 202`, `Community 203`, `Community 50`, `Community 115`, `Community 55`, `Community 56`, `Community 59`, `Community 349`?**
+  _High betweenness centrality (0.044) - this node is a cross-community bridge._
+- **Are the 34 inferred relationships involving `main()` (e.g. with `get_memory_service()` and `read_guard_state()`) actually correct?**
+  _`main()` has 34 INFERRED edges - model-reasoned connections that need verification._
+- **Are the 107 inferred relationships involving `list()` (e.g. with `get_matches()` and `_compute_compatibility()`) actually correct?**
+  _`list()` has 107 INFERRED edges - model-reasoned connections that need verification._
+- **Are the 104 inferred relationships involving `require_feature_access()` (e.g. with `create_schedule()` and `list_schedules()`) actually correct?**
   _`require_feature_access()` has 104 INFERRED edges - model-reasoned connections that need verification._
 - **What connects `Orbit matching algorithm — weighted multi-factor scoring.`, `Jaccard with intensity weighting — shared high-intensity items score higher.`, `Score personality compatibility using per-trait similarity/complementarity.` to the rest of the system?**
-  _5059 weakly-connected nodes found - possible documentation gaps or missing edges._
-- **Should `Community 0` be split into smaller, more focused modules?**
-  _Cohesion score 0.02 - nodes in this community are weakly interconnected._
+  _3043 weakly-connected nodes found - possible documentation gaps or missing edges._

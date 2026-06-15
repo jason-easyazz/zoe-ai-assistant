@@ -106,6 +106,8 @@ SAMPLE_RATE=16000
 CHUNK_SIZE=1280
 RECORD_SECONDS_MAX=8
 SILENCE_TIMEOUT_S=1.5
+RECORD_SILENCE_AMPLITUDE=300
+ZOE_VOICE_LOG=/home/zoe/.zoe-voice/voice.log
 WAKEWORD_THRESHOLD=0.35
 # Set to 1 to log max wakeword score every 5s (verify mic + model sensitivity)
 WAKEWORD_DEBUG=0

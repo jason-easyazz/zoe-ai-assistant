@@ -22,7 +22,9 @@ phases as ready-to-run prompts.
 - Hourly engineering loop = Hermes built-in cron `hourly-zoe-issue-fix-greptile-merge`
   in `~/.hermes/cron/jobs.json` (every 60m).
 - Zoe integrates via `services/zoe-data/routers/chat.py` (`escalate_to_hermes`),
-  `background_runner.py`, and `engineering_workflow.py`.
+  `background_runner.py` (background tasks via `hermes -p zoe-coder -z`, not the
+  Codex gateway API), and the executor seam (`executor_registry.py` →
+  `executors/kanban_adapter.py`) that dispatches Multica issues to Hermes Kanban.
 
 ## The bigger why — the411 / Nudge
 
@@ -47,20 +49,14 @@ dead fallback chain plus unauthenticated health probes. Five fixes, all applied:
 ### 0.1 Rebuilt the fallback chain with healthy providers
 
 `~/.hermes/config.yaml` now uses an ordered chain of providers that have working
-creds and real models (dropped `openrouter/free` and exhausted Anthropic):
+creds and real models. The original outage fix used Sonnet/Gemini/OpenAI API
+fallbacks, but the Phase 0.7 cost-control refresh superseded that chain. The
+live fallback chain is now intentionally:
 
 ```yaml
 fallback_providers:
-# Codex (primary) emits encrypted reasoning blobs in history; OpenAI Chat
-# Completions rejects them ("Encrypted content is not supported"), so the
-# proven-compatible OpenRouter/Sonnet hop goes first. gemini next (cheap),
-# openai-api last (only succeeds when history did not originate from Codex).
 - provider: openrouter
-  model: anthropic/claude-sonnet-4.6
-- provider: gemini
-  model: gemini-2.5-flash
-- provider: openai-api
-  model: gpt-4.1
+  model: openrouter/free
 ```
 
 `model.default` stays `openai-codex / gpt-5.4` (strongest; resets ~daily) — the
@@ -117,6 +113,28 @@ and whether it can run the engineering loop. Output any remaining config diff an
 ```
 
 Restart after edits: `systemctl --user restart hermes-agent.service`.
+
+### 0.7 Cost-control routing refresh (2026-06-01)
+
+Routing was tightened to match the board-cost policy:
+
+- Main Hermes (`~/.hermes/config.yaml`) now uses `openai-codex / gpt-5.4` as primary.
+- Main fallback is now a single controlled path: `openrouter / openrouter/free`.
+- Main fallback entries for direct `gemini` and `openai-api` were removed from the fallback chain.
+- Planner profile now uses `openrouter` directly (`minimax/minimax-m3`) instead of `provider: auto`.
+- Kanban worker profiles (`zoe-planner`, `zoe-coder`, `zoe-reviewer`) now keep fallback chains OpenRouter-only:
+  - `minimax/minimax-m3` (planner/reviewer primary; first fallback for coder)
+  - `google/gemini-2.5-flash`
+  - `openrouter/free`
+- Root background auxiliaries were moved away from direct Gemini/OpenAI and `provider: auto` to `provider: openrouter` with `openrouter/free` where they are text-only (`web_extract`, `compression`, title/session/search/triage/curator/approval/MCP helpers, etc.) to avoid background calls silently routing to Codex or paid direct APIs.
+- `auxiliary.vision` was the last remaining `provider: auto` slot; it now uses `openrouter / openrouter/free` (2026-06-01 verification pass).
+- Specialized non-engineering slots such as TTS remain separate and are not part of the Kanban cost-control route.
+
+Verification run after apply:
+
+- `systemctl --user restart hermes-agent.service`
+- `hermes doctor` (profiles + connectivity)
+- `curl -sf http://127.0.0.1:8642/health`
 
 ---
 
@@ -384,7 +402,7 @@ Masterclass", and the DigitalOcean deploy guide — mapped to Zoe:
 - `hermes doctor` clean; `systemctl --user status hermes-agent.service` active.
 - Auth'd probe: `curl -s -H "Authorization: Bearer $HERMES_API_KEY" 127.0.0.1:8642/v1/models` → 200.
 - **Failover proof**: with Codex exhausted, a `/v1/chat/completions` call
-  completes on a healthy fallback (Sonnet 4.6 via OpenRouter), not `openrouter/free`.
+  completes on the controlled fallback (`openrouter/free`).
 - `zoe-watchdog.sh` reports hermes-agent UP (no false "not responding" push);
   `hermes-keepwarm.sh` returns HTTP 200.
 - Hourly cron tick completes on a healthy provider (no `HTTP 400 credit balance too low`).

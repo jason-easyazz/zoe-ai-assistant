@@ -33,6 +33,10 @@ ALLOWED_ACTION_TYPES = {
     "panel_open_form",
     "panel_stream_text",
     "panel_dismiss_ambient",
+    "panel_close_action_form",
+    "panel_list_update",
+    "panel_show_action_form",
+    "panel_update_field",
     "show_card",
 }
 DANGEROUS_ACTION_TYPES = {"delete_record"}
@@ -75,6 +79,8 @@ async def enqueue_ui_action(
     chat_session_id: Optional[str] = None,
     idempotency_key: Optional[str] = None,
     confirmation_token: Optional[str] = None,
+    commit: bool = True,
+    broadcast: bool = True,
 ) -> Dict[str, Any]:
     if action_type not in ALLOWED_ACTION_TYPES:
         raise ValueError(f"Unsupported action type: {action_type}")
@@ -107,7 +113,8 @@ async def enqueue_ui_action(
 
     if idempotency_key:
         cursor = await db.execute(
-            """SELECT id, status
+            """SELECT id, status, action_type, payload, panel_id, chat_session_id,
+                      requires_confirmation, confirmation_token
                FROM ui_actions
                WHERE user_id = ? AND idempotency_key = ?
                LIMIT 1""",
@@ -115,11 +122,26 @@ async def enqueue_ui_action(
         )
         existing = await cursor.fetchone()
         if existing:
+            existing_payload = existing["payload"]
+            if isinstance(existing_payload, str):
+                try:
+                    existing_payload = json.loads(existing_payload)
+                except json.JSONDecodeError:
+                    existing_payload = {}
             return {
                 "id": existing["id"],
+                "action_id": existing["id"],
+                "user_id": user_id,
+                "panel_id": existing["panel_id"] or panel_id,
+                "chat_session_id": existing["chat_session_id"],
+                "action_type": existing["action_type"],
+                "payload": existing_payload or {},
                 "status": existing["status"],
+                "requires_confirmation": bool(existing["requires_confirmation"]),
+                "confirmation_token": existing["confirmation_token"]
+                if existing["requires_confirmation"]
+                else None,
                 "deduped": True,
-                "panel_id": panel_id,
             }
 
     action_id = uuid.uuid4().hex[:16]
@@ -157,7 +179,8 @@ async def enqueue_ui_action(
             "requires_confirmation": bool(requires_confirmation),
         },
     )
-    await db.commit()
+    if commit:
+        await db.commit()
 
     message = {
         "action_id": action_id,
@@ -170,8 +193,9 @@ async def enqueue_ui_action(
         "requires_confirmation": bool(requires_confirmation),
         "confirmation_token": confirmation_token if requires_confirmation else None,
     }
-    if panel_id:
-        await broadcaster.broadcast_to_panel(panel_id, "ui_action", message)
-    else:
-        await broadcaster.broadcast("all", "ui_action", message)
+    if broadcast:
+        if panel_id:
+            await broadcaster.broadcast_to_panel(panel_id, "ui_action", message)
+        else:
+            await broadcaster.broadcast("all", "ui_action", message)
     return message

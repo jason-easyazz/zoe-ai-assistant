@@ -48,6 +48,8 @@ data/time_location_settings.json
 data/learning-archives/
 data/memvid/
 data/archives/
+data/autoresearch/
+**/results.tsv
 
 # Database backup files
 data/*.db.backup*
@@ -176,6 +178,9 @@ mcp_test_env/
 logs/
 *.log
 
+# Generated utility reports
+docs/reports/
+
 # Archive files (tar, zip, etc.) - these bloat the repository
 *.tar.gz
 *.tar
@@ -259,5 +264,6 @@ data/touch_cache/
 graphify-out/manifest.json
 graphify-out/cost.json
 graphify-out/cache/
+graphify-out/.last_refresh_error
 !.cursor/mcp.json
 .cursor/tmp/

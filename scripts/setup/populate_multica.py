@@ -91,6 +91,12 @@ def _patch(path: str, payload: dict) -> dict | None:
     return None
 
 
+def _sql_literal(value: Any) -> str:
+    if value is None:
+        return "NULL"
+    return "'" + str(value).replace("'", "''") + "'"
+
+
 def _post_with_workspace(path: str, payload: dict) -> dict | None:
     """POST with workspace_id as query param (used for sub-resource endpoints)."""
     params = {"workspace_id": WORKSPACE_ID}
@@ -116,6 +122,55 @@ def _db_exec(sql: str) -> tuple[bool, str]:
         return False, result.stderr
     except Exception as e:
         return False, str(e)
+
+
+def _db_update_one(sql: str) -> tuple[bool, str]:
+    ok, msg = _db_exec(sql)
+    if not ok:
+        return False, msg
+    command_tags = [line.strip() for line in msg.splitlines() if line.strip().startswith("UPDATE ")]
+    if command_tags != ["UPDATE 1"]:
+        return False, (msg.strip() or "update did not report row count")
+    return True, msg
+
+
+def _db_name_id_map(table: str, names: list[str]) -> dict[str, str]:
+    if not names:
+        return {}
+    allowed_tables = {"agent", "squad"}
+    if table not in allowed_tables:
+        print(f"  ⚠ Refusing to inspect unsupported table {table!r}")
+        return {}
+    names_sql = ", ".join(_sql_literal(name) for name in names)
+    sql = (
+        "select name, id from "
+        f"{table} where workspace_id={_sql_literal(WORKSPACE_ID)} "
+        f"and name in ({names_sql}) "
+        "order by name, archived_at nulls first, updated_at desc;"
+    )
+    cmd = [
+        "docker", "exec", _DB_CONTAINER,
+        "psql", "-U", _DB_USER, "-d", _DB_NAME,
+        "-t", "-A", "-F", "\t", "-c", sql,
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+    except Exception as exc:
+        print(f"  ⚠ Failed to inspect existing {table} rows: {exc}")
+        return {}
+    if result.returncode != 0:
+        print(f"  ⚠ Failed to inspect existing {table} rows: {(result.stderr or result.stdout)[:100]}")
+        return {}
+    found: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        if "\t" not in line:
+            continue
+        name, row_id = line.split("\t", 1)
+        name = name.strip()
+        row_id = row_id.strip()
+        if name and row_id and name not in found:
+            found[name] = row_id
+    return found
 
 
 # ── Step A — Update workspace context ─────────────────────────────────────────
@@ -164,6 +219,7 @@ _LABELS = [
     ("feature", "#059669"),
     ("infrastructure", "#374151"),
     ("self-improvement", "#6D28D9"),
+    ("autoresearch", "#14B8A6"),
 ]
 
 
@@ -213,6 +269,8 @@ _PROJECTS = [
      "Evolution proposals, capability extension, self-improvement skill, NOTICE/PROPOSE/EXECUTE/MEASURE loop"),
     ("Infrastructure & Platform", "in_progress",
      "Auth, nginx, PostgreSQL, Docker services, OIDC provider, security"),
+    ("Autoresearch Lab", "planned",
+     "Karpathy-style fixed-budget asset optimization runs: one locked program, one editable asset, one objective score"),
     ("Agent Orchestration", "in_progress",
      "OpenClaw, Hermes, Agent Zero, A2A federation, task routing, board status"),
     ("Voice & Presence", "in_progress",
@@ -331,6 +389,7 @@ _SKILL_DEFS = [
     ("skills/shopping-list/SKILL.md", "Shopping List"),
     ("skills/smart-home/SKILL.md", "Smart Home"),
     ("skills/openclaw/zoe-capability-extender/SKILL.md", "Zoe Capability Extender"),
+    ("skills/autoresearch-engineer/SKILL.md", "Auto Research Engineer"),
     ("skills/openclaw/zoe-page-builder/SKILL.md", "Zoe Page Builder"),
     ("skills/openclaw/zoe-widget-builder/SKILL.md", "Zoe Widget Builder"),
 ]
@@ -393,33 +452,42 @@ _AGENT_DEFS = [
             "skill. Always be concise, helpful, and personal. Your wake word is 'Hey Zoe'."
         ),
         "model": "Llama-3.2-3B-Instruct-Q4_K_M",
+        "runtime_provider": "zoe",
     },
     {
         "name": "OpenClaw",
         "description": (
-            "Autonomous task execution agent. Receives approved Multica issues, implements "
-            "code changes, tests, and commits. Primary capability-building agent."
+            "Agentic execution runtime. Handles browser automation, code execution, and skill "
+            "building. In Multica issue capture, route simple-English ticket creation through "
+            "the Hermes runtime until OpenClaw's Codex-backed harness has non-rate-limited capacity."
         ),
         "instructions": (
-            "You are OpenClaw, Zoe's execution agent. You receive approved tasks from the "
-            "Multica board and implement them: writing code, adding intents, building skills, "
-            "fixing bugs, running tests, committing changes. Always read files before editing. "
-            "Work in small, testable increments."
+            "You are OpenClaw, Zoe's native agentic execution runtime. For Multica simple-English "
+            "issue capture, use the Hermes runtime path so ticket creation remains reliable and cost-controlled; "
+            "run browser/tool tasks only when explicitly assigned, and report blockers clearly. "
+            "Do not decide Zoe engineering phase advancement; Zoe/Hermes harness owns that workflow."
         ),
-        "model": "Llama-3.2-3B-Instruct-Q4_K_M",
+        "model": "gpt-5.4",
+        "fallback_model": "main",
+        "runtime_provider": "hermes",
     },
     {
         "name": "Hermes",
         "description": (
-            "OpenAI-compatible relay agent. Routes requests from external tools (Open WebUI, "
-            "voice clients) to OpenClaw. Entry point: port 8642."
+            "Zoe engineering and reasoning runtime. Handles Multica issue execution, architecture "
+            "review, code review, Greptile/PR loops, and deterministic harness repair through "
+            "the native Multica daemon."
         ),
         "instructions": (
-            "You are Hermes, an OpenAI-compatible API relay for the Zoe ecosystem. You accept "
-            "requests in OpenAI format and route them to the appropriate Zoe agent. You handle "
-            "voice client connections and external tool integrations."
+            "You are Hermes, Zoe's default engineering and reasoning agent. For Multica work, "
+            "follow the issue context, use available CLI/tools, keep changes scoped, provide "
+            "evidence, and surface blockers. Zoe driver owns phase advancement; do not create "
+            "unmanaged Kanban chains or bypass dispatch gates."
         ),
-        "model": "Llama-3.2-3B-Instruct-Q4_K_M",
+        # Multica daemon selector for the Hermes CLI profile, not a public OpenAI model id.
+        "model": "gpt-5.4",
+        "fallback_model": "main",
+        "runtime_provider": "hermes",
     },
     {
         "name": "Agent Zero",
@@ -434,6 +502,29 @@ _AGENT_DEFS = [
             "Be thorough and cite your sources."
         ),
         "model": "Llama-3.2-3B-Instruct-Q4_K_M",
+        "runtime_provider": "zoe",
+    },
+    {
+        "name": "Auto Research Engineer",
+        "description": (
+            "Karpathy-style autonomous optimizer for approved assets. It turns one business "
+            "question into one objective metric, changes only the declared asset, scores via "
+            "the locked evaluator, keeps improvements, reverts losses, and logs each round."
+        ),
+        "instructions": (
+            "You are Zoe's Auto Research Engineer. Before any run, perform the fit check: "
+            "the target must have one objective numeric score, feedback in minutes or hours, "
+            "and approved write access to exactly the asset files. Create or verify the three-file "
+            "setup: a human-owned instructions/program file, one or more agent-editable asset files, "
+            "and a locked scoring file. During a run, follow the Karpathy autoresearch loop: establish "
+            "baseline, make one hypothesis and one asset change, run the scorer, keep only better "
+            "results, revert worse or crashed changes, and append every round to an untracked results "
+            "log. Never edit the instructions/program file, scoring file, evaluators, dependencies, "
+            "or undeclared assets. Zoe/Hermes approval gates and branch/PR processes still apply."
+        ),
+        "model": "gpt-5.4",
+        "fallback_model": "main",
+        "runtime_provider": "hermes",
     },
     {
         "name": "Self-Improvement Agent",
@@ -449,29 +540,92 @@ _AGENT_DEFS = [
             "test it, commit it, and report back."
         ),
         "model": "Llama-3.2-3B-Instruct-Q4_K_M",
+        "runtime_provider": "zoe",
     },
 ]
+
+
+def _runtime_ids_by_provider(default_runtime_id: str) -> dict[str, str]:
+    """Return provider -> online runtime id, falling back to the Zoe host runtime."""
+    runtime_ids = {"zoe": default_runtime_id}
+    sql = (
+        "select provider, id from agent_runtime "
+        f"where workspace_id={_sql_literal(WORKSPACE_ID)} "
+        "and status='online' "
+        "and provider in ('hermes') "
+        "order by provider, daemon_id is null, updated_at desc;"
+    )
+    cmd = [
+        "docker", "exec", _DB_CONTAINER,
+        "psql", "-U", _DB_USER, "-d", _DB_NAME,
+        "-t", "-A", "-F", "\t", "-c", sql,
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+    except Exception as exc:
+        print(f"  ⚠ Runtime provider lookup failed: {exc}")
+        return runtime_ids
+    if result.returncode != 0:
+        print(f"  ⚠ Runtime provider lookup failed: {(result.stderr or result.stdout)[:100]}")
+        return runtime_ids
+    for line in result.stdout.splitlines():
+        if "\t" not in line:
+            continue
+        provider, row_id = [part.strip() for part in line.split("\t", 1)]
+        if provider and row_id and provider not in runtime_ids:
+            runtime_ids[provider] = row_id
+    return runtime_ids
 
 
 def step_f_create_agents(runtime_id: str) -> dict[str, str]:
     """Returns name → agent_id mapping."""
     print("\n[F] Creating agents...")
+    runtime_ids = _runtime_ids_by_provider(runtime_id)
     existing_raw = _get("/api/agents") or []
     existing: list[dict] = existing_raw if isinstance(existing_raw, list) else existing_raw.get("agents", [])
-    existing_names = {a["name"]: a["id"] for a in existing}
+    managed_names = [str(defn["name"]) for defn in _AGENT_DEFS]
+    existing_names = _db_name_id_map("agent", managed_names)
+    for agent in existing:
+        name = agent.get("name")
+        if name in managed_names and name not in existing_names:
+            existing_names[name] = agent["id"]
 
     agent_ids: dict[str, str] = dict(existing_names)
     for defn in _AGENT_DEFS:
         name = defn["name"]
+        runtime_provider = str(defn.get("runtime_provider") or "zoe")
+        target_runtime_id = runtime_ids.get(runtime_provider, runtime_id)
+        target_model = defn["model"]
+        if runtime_provider != "zoe" and runtime_provider not in runtime_ids:
+            target_model = str(defn.get("fallback_model") or target_model)
+            print(
+                f"  ⚠ Provider '{runtime_provider}' not online — using Zoe runtime for '{name}' "
+                f"with fallback model '{target_model}'"
+            )
         if name in existing_names:
-            print(f"  ↩ Agent '{name}' exists ({existing_names[name]}) — skipping")
+            agent_id = existing_names[name]
+            sql = (
+                "update agent set "
+                f"description={_sql_literal(defn['description'])}, "
+                f"instructions={_sql_literal(defn['instructions'])}, "
+                f"model={_sql_literal(target_model)}, "
+                f"runtime_id={_sql_literal(target_runtime_id)}, "
+                "runtime_mode='local', visibility='workspace', "
+                "archived_at=NULL, archived_by=NULL, updated_at=now() "
+                f"where id={_sql_literal(agent_id)};"
+            )
+            ok, msg = _db_update_one(sql)
+            if ok:
+                print(f"  ↻ Agent '{name}' exists ({agent_id}) — refreshed managed fields")
+            else:
+                print(f"  ⚠ Agent '{name}' exists ({agent_id}) — refresh failed: {msg[:100]}")
             continue
         result = _post("/api/agents", {
             "name": name,
             "description": defn["description"],
             "instructions": defn["instructions"],
-            "model": defn["model"],
-            "runtime_id": runtime_id,
+            "model": target_model,
+            "runtime_id": target_runtime_id,
             "runtime_mode": "local",
             "visibility": "workspace",
         })
@@ -491,9 +645,10 @@ _SKILL_ASSIGNMENTS: dict[str, list[str]] = {
     "Zoe Core": ["Calendar Events", "Personal Facts", "Shopping List", "Smart Home",
                  "Proactive Agent", "Self-Improvement"],
     "OpenClaw": ["Zoe Capability Extender", "Zoe Page Builder", "Zoe Widget Builder"],
-    "Hermes": [],
+    "Hermes": ["Auto Research Engineer"],
     "Agent Zero": ["Agent Zero Research"],
     "Self-Improvement Agent": ["Self-Improvement", "Zoe Capability Extender"],
+    "Auto Research Engineer": ["Auto Research Engineer"],
 }
 
 
@@ -542,21 +697,19 @@ def step_h_create_squads(agent_ids: dict[str, str]) -> dict[str, str]:
     print("\n[H] Creating squads...")
     existing_raw = _get("/api/squads") or []
     existing: list[dict] = existing_raw if isinstance(existing_raw, list) else existing_raw.get("squads", [])
-    existing_names = {s["name"]: s["id"] for s in existing}
-
-    squad_ids: dict[str, str] = dict(existing_names)
 
     squads_to_create = [
         {
             "name": "Zoe Operations Squad",
-            "leader": "OpenClaw",
+            "leader": "Hermes",
             "description": (
-                "Core operations team. Handles infrastructure, capability-building, and "
-                "self-improvement tasks. OpenClaw leads execution."
+                "Core operations team. Hermes leads engineering and harness work; OpenClaw "
+                "is available for browser/tool-heavy execution; Zoe Core provides user context."
             ),
             "instructions": (
-                "Handle all infrastructure, capability-building, and self-improvement tasks. "
-                "OpenClaw leads execution. Zoe Core provides context on user needs."
+                "Use Hermes as the default engineering lead for Multica source-of-truth tickets. "
+                "Delegate browser/tool-heavy execution to OpenClaw only when required. Keep work "
+                "cost-controlled and report blockers on the ticket."
             ),
             "members": ["Zoe Core", "Hermes", "Self-Improvement Agent"],
         },
@@ -571,9 +724,31 @@ def step_h_create_squads(agent_ids: dict[str, str]) -> dict[str, str]:
                 "Handle deep research, competitive analysis, and strategic planning tasks. "
                 "Agent Zero leads investigation. Zoe Core frames questions from user intent."
             ),
-            "members": ["Zoe Core"],
+            "members": ["Zoe Core", "Auto Research Engineer"],
+        },
+        {
+            "name": "Autoresearch Lab",
+            "leader": "Auto Research Engineer",
+            "description": (
+                "Bounded asset optimization squad for approved Karpathy-style autoresearch runs."
+            ),
+            "instructions": (
+                "Run only after a fit check passes and the human has approved the exact asset and "
+                "scoring file. Keep the evaluator locked, change only declared assets, record every "
+                "round, and preserve Zoe's branch, evidence, and rollback rules."
+            ),
+            "members": ["Hermes", "Self-Improvement Agent"],
         },
     ]
+
+    managed_squad_names = [str(sq["name"]) for sq in squads_to_create]
+    existing_names = _db_name_id_map("squad", managed_squad_names)
+    for squad in existing:
+        name = squad.get("name")
+        if name in managed_squad_names and name not in existing_names:
+            existing_names[name] = squad["id"]
+
+    squad_ids: dict[str, str] = dict(existing_names)
 
     for sq in squads_to_create:
         name = sq["name"]
@@ -584,7 +759,19 @@ def step_h_create_squads(agent_ids: dict[str, str]) -> dict[str, str]:
 
         if name in existing_names:
             squad_id = existing_names[name]
-            print(f"  ↩ Squad '{name}' exists ({squad_id})")
+            sql = (
+                "update squad set "
+                f"description={_sql_literal(sq['description'])}, "
+                f"instructions={_sql_literal(sq['instructions'])}, "
+                f"leader_id={_sql_literal(leader_id)}, "
+                "archived_at=NULL, archived_by=NULL, updated_at=now() "
+                f"where id={_sql_literal(squad_id)};"
+            )
+            ok, msg = _db_update_one(sql)
+            if ok:
+                print(f"  ↻ Squad '{name}' exists ({squad_id}) — refreshed leader/context")
+            else:
+                print(f"  ⚠ Squad '{name}' exists ({squad_id}) — refresh failed: {msg[:100]}")
         else:
             result = _post("/api/squads", {
                 "name": name,
@@ -625,16 +812,18 @@ _AUTOPILOTS = [
     {
         "title": "Morning Checkin",
         "agent": "Zoe Core",
-        "execution_mode": "create_issue",
+        "status": "paused",
+        "execution_mode": "run_only",
         "cron": "30 7 * * *",
-        "issue_title_template": "Morning Brief — {date}",
+        "issue_title_template": "",
     },
     {
         "title": "Evening Wind Down",
         "agent": "Zoe Core",
+        "status": "paused",
         "execution_mode": "run_only",
         "cron": "0 21 * * *",
-        "issue_title_template": "Evening Check-In — {date}",
+        "issue_title_template": "",
     },
     {
         "title": "Evolution Nightly Notice",
@@ -653,6 +842,7 @@ _AUTOPILOTS = [
     {
         "title": "Reminder Scan",
         "agent": "Zoe Core",
+        "status": "paused",
         "execution_mode": "run_only",
         "cron": "*/5 * * * *",
         "issue_title_template": "Reminder Scan",
@@ -682,10 +872,29 @@ def step_i_create_autopilots(agent_ids: dict[str, str]):
 
         if title in existing_titles:
             ap_id = existing_titles[title]
-            print(f"  ↩ Autopilot '{title}' exists ({ap_id})")
+            status_sql = (
+                f"status={_sql_literal(apdef['status'])}, "
+                if "status" in apdef else ""
+            )
+            sql = (
+                "update autopilot set "
+                f"assignee_id={_sql_literal(agent_id)}, "
+                f"{status_sql}"
+                f"execution_mode={_sql_literal(apdef['execution_mode'])}, "
+                f"issue_title_template={_sql_literal(apdef.get('issue_title_template', ''))}, "
+                "updated_at=now() "
+                f"where id={_sql_literal(ap_id)};"
+            )
+            ok, msg = _db_update_one(sql)
+            if ok:
+                print(f"  ↻ Autopilot '{title}' exists ({ap_id}) — refreshed settings")
+            else:
+                print(f"  ⚠ Autopilot '{title}' refresh failed: {msg[:100]}")
+                continue
         else:
             payload = {
                 "title": title,
+                "status": apdef.get("status", "active"),
                 "execution_mode": apdef["execution_mode"],
                 "issue_title_template": apdef.get("issue_title_template", ""),
                 "assignee_id": agent_id,
@@ -700,24 +909,44 @@ def step_i_create_autopilots(agent_ids: dict[str, str]):
             _counts["autopilots"] += 1
             print(f"  ✓ Created autopilot '{title}' ({ap_id})")
 
-        # Ensure cron trigger exists
+        # Ensure cron trigger matches the managed schedule.
         ap_detail = _get(f"/api/autopilots/{ap_id}")
         existing_triggers = ap_detail.get("triggers", []) if ap_detail else []
-        has_schedule_trigger = any(t.get("kind") == "schedule" for t in existing_triggers)
-        if has_schedule_trigger:
-            print(f"    ↩ Trigger already set: {apdef['cron']}")
+        schedule_triggers = [t for t in existing_triggers if t.get("kind") == "schedule"]
+        desired_cron = apdef["cron"]
+        desired_timezone = "Australia/Perth"
+        has_matching_schedule = any(
+            t.get("cron_expression") == desired_cron
+            and t.get("timezone") == desired_timezone
+            for t in schedule_triggers
+        )
+        if has_matching_schedule:
+            print(f"    ↩ Trigger already set: {desired_cron}")
             continue
-
+        replacing_schedule = bool(schedule_triggers)
         trig = _post(
             f"/api/autopilots/{ap_id}/triggers",
             {
                 "kind": "schedule",
-                "cron_expression": apdef["cron"],
-                "timezone": "Australia/Perth",
+                "cron_expression": desired_cron,
+                "timezone": desired_timezone,
             },
         )
         if trig and "id" in trig:
-            print(f"    ✓ Trigger set: {apdef['cron']}")
+            if replacing_schedule:
+                delete_sql = (
+                    "delete from autopilot_trigger "
+                    f"where autopilot_id={_sql_literal(ap_id)} "
+                    "and kind='schedule' "
+                    f"and id <> {_sql_literal(trig['id'])};"
+                )
+                ok, msg = _db_exec(delete_sql)
+                if ok:
+                    print(f"    ↻ Replaced schedule trigger with: {desired_cron}")
+                else:
+                    print(f"    ⚠ New trigger created but old trigger cleanup failed for '{title}': {msg[:100]}")
+            else:
+                print(f"    ✓ Trigger set: {desired_cron}")
         else:
             print(f"    ⚠ Trigger creation returned: {trig}")
 

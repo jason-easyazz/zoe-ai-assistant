@@ -12,6 +12,10 @@ import httpx
 from datetime import date, datetime, timedelta
 import os
 
+from runtime_env import bootstrap_runtime_env
+
+bootstrap_runtime_env()
+
 OPENWEATHERMAP_API_KEY = os.environ.get("OPENWEATHERMAP_API_KEY", "")
 _BROADCAST_URL = "http://127.0.0.1:8000/api/internal/broadcast"
 _OPENCLAW_GW = os.environ.get("ZOE_OPENCLAW_GW", "http://127.0.0.1:18789")
@@ -2988,33 +2992,49 @@ async def _execute_tool(db, name: str, args: dict):
     elif name == "create_evolution_proposal":
         try:
             from multica_client import sync_evolution_proposal_to_multica  # type: ignore[import]
+            from zoe_evolution_runtime_intake import build_mcp_runtime_evolution_proposal_intake  # type: ignore[import]
             import time as _time
             title = (args.get("title") or "").strip()
             description = (args.get("description") or "").strip()
             if not title or not description:
                 return {"error": "title and description required"}
             evidence = (args.get("evidence") or "").strip()
-            proposal_type = args.get("proposal_type", "intent_pattern")
             prop_id = str(uuid.uuid4()).replace("-", "")
-            await db.execute(
-                """INSERT INTO evolution_proposals
-                   (id, title, description, evidence, type, status, proposed_at)
-                   VALUES ($1,$2,$3,$4,$5,'pending',$6)""",
-                prop_id, title, description, evidence, proposal_type, _time.time(),
-            )
-            multica_id = await sync_evolution_proposal_to_multica(
+            proposal_user_id = str(_uid_raw).strip() if _uid_raw else None
+            intake = build_mcp_runtime_evolution_proposal_intake(
                 proposal_id=prop_id,
                 title=title,
                 description=description,
                 evidence=evidence,
-                proposal_type=proposal_type,
+                proposal_type=args.get("proposal_type", "intent_pattern"),
+                user_id=proposal_user_id,
             )
+            row_payload = intake.to_legacy_row()
+            await db.execute(
+                """INSERT INTO evolution_proposals
+                   (id, title, description, evidence, target_patterns, type, status, proposed_at)
+                   VALUES ($1,$2,$3,$4,$5,$6,'pending',$7)""",
+                row_payload["id"],
+                row_payload["title"],
+                row_payload["description"],
+                row_payload["evidence"],
+                row_payload["target_patterns"],
+                row_payload["type"],
+                _time.time(),
+            )
+            multica_payload = dict(intake.multica_payload)
+            multica_id = await sync_evolution_proposal_to_multica(**multica_payload)
             if multica_id:
                 await db.execute(
                     "UPDATE evolution_proposals SET multica_issue_id=$1 WHERE id=$2",
-                    multica_id, prop_id,
+                    multica_id, row_payload["id"],
                 )
-            return {"ok": True, "proposal_id": prop_id, "multica_issue_id": multica_id}
+            return {
+                "ok": True,
+                "proposal_id": row_payload["id"],
+                "multica_issue_id": multica_id,
+                "contract_schema": "zoe_evolution_proposal",
+            }
         except Exception as exc:
             return {"error": f"create_evolution_proposal failed: {exc}"}
 

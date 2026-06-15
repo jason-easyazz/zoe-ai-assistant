@@ -29,6 +29,8 @@ from routers import (
     panel_provision_router,
     capability_matrix_router,
     music_router,
+    skybridge_router,
+    autoresearch_router,
 )
 from routers.dashboard import router as dashboard_router
 from routers.stubs import router as stubs_router
@@ -82,6 +84,378 @@ logging.root.addFilter(RequestIdFilter())
 for _handler in logging.getLogger().handlers:
     _handler.addFilter(RequestIdFilter())
 
+
+# Rotating cursor for the blocked-resume scan (see _bounded_blocked_resume_window).
+_BLOCKED_RESUME_CURSOR: dict[str, int] = {"offset": 0}
+
+
+def _bounded_blocked_resume_window(
+    blocked: list[dict], offset: int, budget: int
+) -> tuple[list[dict], int]:
+    """Return a rotating slice of at most ``budget`` blocked issues, plus the next offset.
+
+    Resuming a blocked chain requires an expensive (and memory-heavy) executor
+    poll, so polling *every* blocked chain each 30s cycle can starve admission and
+    dispatch — and on constrained hardware it can OOM. Bound the work per cycle to
+    ``budget`` chains and rotate the starting offset so, across consecutive cycles,
+    every blocked chain is still eventually polled (no chain is permanently
+    skipped). Returns the whole list when ``budget`` covers it.
+    """
+    count = len(blocked)
+    if count == 0 or budget <= 0:
+        return [], 0
+    if budget >= count:
+        # Whole list covered this cycle; preserve the caller's place so a list
+        # that briefly shrinks below budget and grows back keeps rotating.
+        return list(blocked), offset % count
+    start = offset % count
+    window = [blocked[(start + step) % count] for step in range(budget)]
+    return window, (start + budget) % count
+
+
+async def _poll_chain_guarded(ref: str, *, issue: dict | None, timeout: float) -> dict:
+    """Poll a chain without letting one dead ref wedge the whole poll loop.
+
+    ``poll_ref`` has no internal timeout, so a died executor reference can hang
+    indefinitely and freeze the entire Multica poll loop (observed: a single
+    stale ``in_progress`` chain stalled all admission/dispatch for days). Bound
+    the call and, on timeout/error, return a safe not-found sentinel so callers
+    treat the chain as inactive and simply skip it this cycle.
+    """
+    from executor_registry import poll_ref  # type: ignore[import]
+
+    try:
+        return await asyncio.wait_for(poll_ref(ref, issue=issue), timeout=timeout)
+    except asyncio.TimeoutError:
+        logger.warning("multica_poll: poll_ref timed out for %s after %ss", ref, timeout)
+        return {"found": False, "status": "poll_timeout", "timed_out": True}
+    except Exception as exc:
+        logger.warning("multica_poll: poll_ref error for %s: %s", ref, exc)
+        return {"found": False, "status": "poll_error", "error": str(exc)}
+
+
+async def _recover_stale_in_progress_issues(
+    client,
+    in_progress_issues: list[dict],
+    *,
+    hermes_id: str,
+    poll_chain,
+    now,
+    max_age_hours: float,
+) -> list[dict]:
+    """Reset dead ``in_progress`` chains to ``blocked`` so a zombie can't hold the lane.
+
+    The single-ticket lane is guarded by the presence of an ``in_progress``
+    issue. If a chain dies mid-run, its ticket sits ``in_progress`` forever and
+    the guard correctly — but unhelpfully — refuses to admit anything else. This
+    mirrors the existing stale ``Autopilot:`` todo cleanup: detect Hermes-owned
+    ``in_progress`` chains that are no longer active and untouched for
+    ``max_age_hours``, reset them to ``blocked`` (operator-visible), and return
+    the issues that are still legitimately in progress.
+    """
+    from multica_poll_dispatch import is_stale_in_progress  # type: ignore[import]
+
+    live: list[dict] = []
+    for issue in in_progress_issues or []:
+        if str(issue.get("assignee_id") or "") != hermes_id:
+            live.append(issue)
+            continue
+        if (issue.get("title") or "").lower().startswith("autopilot:"):
+            live.append(issue)
+            continue
+        chain = await poll_chain(issue)
+        if not is_stale_in_progress(issue, chain, now=now, max_age_hours=max_age_hours):
+            live.append(issue)
+            continue
+        try:
+            await client.record_progress(
+                str(issue.get("id")),
+                status="blocked",
+                blocker=(
+                    "stale in_progress reset: chain inactive and no metadata update "
+                    f"for >= {max_age_hours}h; freed the single ticket lane"
+                ),
+            )
+            logger.info(
+                "multica_poll: recovered stale in_progress %s -> blocked",
+                issue.get("identifier") or issue.get("id"),
+            )
+        except Exception as exc:
+            logger.warning(
+                "multica_poll: stale in_progress recovery failed for %s: %s",
+                issue.get("id"),
+                exc,
+            )
+            live.append(issue)
+    return live
+
+
+async def _record_running_multica_chain_progress(
+    client,
+    issue_id: str,
+    chain: dict,
+    *,
+    issue: dict | None = None,
+) -> bool:
+    """Persist operator-visible PR/phase progress for a non-terminal chain."""
+    pipeline = chain.get("pipeline") if isinstance(chain.get("pipeline"), dict) else {}
+    phase = pipeline.get("phase") or None
+    pr_url = chain.get("pr_url") or None
+    if not phase and not pr_url:
+        return False
+
+    target_status = "in_review" if pr_url else None
+    try:
+        from multica_ticket_contract import parse_ticket_block
+
+        current_issue = issue if isinstance(issue, dict) else {}
+        if not current_issue.get("description"):
+            current_issue = await client.get_issue(issue_id)
+        metadata = parse_ticket_block(current_issue.get("description") or "")
+        if (
+            metadata.get("phase") == phase
+            and metadata.get("pr_url") == pr_url
+            and not metadata.get("blocked_reason")
+            and (not target_status or current_issue.get("status") == target_status)
+        ):
+            return False
+    except Exception:
+        pass
+
+    progress_kwargs = {
+        key: value
+        for key, value in {
+            "phase": phase,
+            "evidence": "Engineering PR opened; validation/review in progress" if pr_url else "Engineering run in progress",
+            "pr_url": pr_url,
+            "clear_blocker": True,
+        }.items()
+        if value is not None
+    }
+    if target_status:
+        progress_kwargs["status"] = target_status
+
+    await client.record_progress(issue_id, **progress_kwargs)
+    return True
+
+
+async def _record_completed_multica_chain(client, issue_id: str, chain: dict) -> None:
+    """Persist operator-visible completion metadata for a finished Multica chain."""
+    pipeline = chain.get("pipeline") or {}
+    phase = pipeline.get("phase") or "closeout"
+    progress_kwargs = {
+        key: value
+        for key, value in {
+            "phase": phase,
+            "evidence": "Engineering run done after retro" if phase == "retro" else "Engineering run done",
+            "pr_url": chain.get("pr_url"),
+            "clear_blocker": True,
+            "status": "done",
+        }.items()
+        if value is not None
+    }
+    await client.record_progress(issue_id, **progress_kwargs)
+    follow_up = pipeline.get("retro_followup") if isinstance(pipeline, dict) else None
+    if phase != "retro" or not isinstance(follow_up, dict) or not follow_up.get("title"):
+        return
+    try:
+        from multica_ticket_contract import describe_ticket
+
+        parent = await client.get_issue(issue_id)
+        parent_ident = parent.get("identifier") or issue_id
+        description = describe_ticket(
+            str(follow_up.get("description") or follow_up.get("title")),
+            zoe_kind="harness_fix",
+            evidence_profile="code",
+            engineering_mode="interactive",
+            acceptance_criteria=["Address the retro-identified harness improvement in a small, reviewable change."],
+            evidence_expectations=["Focused tests or validators", "PR URL when code changes are made"],
+            source="retro_followup",
+            parent_issue_id=issue_id,
+        )
+        issue = await client.create_issue(
+            title=str(follow_up.get("title"))[:140],
+            description=description,
+            priority="medium",
+            status="backlog",
+            assignee_id=parent.get("assignee_id"),
+            assignee_type=parent.get("assignee_type") or "agent",
+            project_id=parent.get("project_id"),
+        )
+        child_id = str(issue.get("id") or "")
+        if child_id:
+            await client.attach_label(child_id, "harness-fix")
+            await client.append_issue_note(
+                issue_id,
+                f"Retro follow-up created: {issue.get('identifier') or child_id} from {parent_ident}",
+            )
+    except Exception as exc:
+        logger.warning("multica_poll: retro follow-up creation failed for %s: %s", issue_id, exc)
+
+
+def _tracked_multica_engineering_issues(*groups: list[dict]) -> list[dict]:
+    """Return unique active/review issues whose engineering chain needs reconciliation."""
+    tracked: list[dict] = []
+    seen: set[str] = set()
+    for group in groups:
+        for issue in group or []:
+            issue_id = str(issue.get("id") or "")
+            if not issue_id or issue_id in seen:
+                continue
+            seen.add(issue_id)
+            tracked.append(issue)
+    return tracked
+
+
+def _blocked_multica_chain_reason(chain: dict) -> str:
+    """Return the operator-visible reason for a blocked engineering chain."""
+    pipeline = chain.get("pipeline") or {}
+    phase = pipeline.get("phase") or "implement"
+    blocker = (
+        chain.get("blocker")
+        or pipeline.get("block_reason")
+        or pipeline.get("block_classification")
+        or f"pipeline blocked at {phase}"
+    )
+    if pipeline.get("terminal_block") and "terminal" not in str(blocker).lower():
+        blocker = f"terminal block: {blocker}"
+    return str(blocker)
+
+
+def _blocker_followup_marker(phase: str, blocker: str) -> str | None:
+    """Return the harness blocker class that should create a follow-up ticket."""
+    if phase != "implement":
+        return None
+    upper = blocker.upper()
+    for marker in ("IMPLEMENT_BUDGET", "ITERATION_BUDGET", "PROTOCOL_VIOLATION"):
+        if marker in upper:
+            return marker
+    return None
+
+
+async def _ensure_blocker_followup_ticket(client, issue_id: str, chain: dict, blocker: str) -> dict:
+    """Create or reuse one harness-fix follow-up for implement budget/protocol blocks."""
+    pipeline = chain.get("pipeline") or {}
+    phase = str(pipeline.get("phase") or "implement")
+    marker = _blocker_followup_marker(phase, blocker)
+    if marker is None:
+        return {}
+
+    try:
+        from multica_ticket_contract import (
+            append_child_id,
+            describe_ticket,
+            parse_ticket_block,
+        )
+
+        parent = await client.get_issue(issue_id)
+        if not parent.get("id"):
+            return {}
+        parent_metadata = parse_ticket_block(parent.get("description") or "")
+        if parent_metadata.get("source") == "engineering_blocker_followup":
+            logger.info(
+                "multica_poll: not creating recursive harness follow-up for %s (%s)",
+                parent.get("identifier") or issue_id,
+                marker,
+            )
+            return {}
+        parent_ident = parent.get("identifier") or issue_id
+        # Dedup across the whole ticket system, not just active columns. A done/no-op
+        # follow-up for the same parent and blocker is still the canonical audit trail;
+        # creating another ticket hides the recurring harness failure in backlog noise.
+        seen_candidates: set[str] = set()
+
+        def matching_followup(candidate: dict) -> dict | None:
+            candidate_id = str(candidate.get("id") or "")
+            if candidate_id and candidate_id in seen_candidates:
+                return None
+            if candidate_id:
+                seen_candidates.add(candidate_id)
+            metadata = parse_ticket_block(candidate.get("description") or "")
+            if (
+                metadata.get("source") == "engineering_blocker_followup"
+                and str(metadata.get("parent_issue_id") or "") == str(issue_id)
+                and metadata.get("source_blocker") == marker
+            ):
+                return candidate
+            return None
+
+        for status in ("backlog", "todo", "in_progress", "blocked", "in_review", "done", "canceled"):
+            for candidate in await client.list_issues(status=status, limit=1000) or []:
+                if match := matching_followup(candidate):
+                    return match
+        for candidate in await client.list_issues(limit=5000) or []:
+            if match := matching_followup(candidate):
+                return match
+
+        description = describe_ticket(
+            (
+                f"Follow up from {parent_ident}: the engineering driver blocked in "
+                f"implement with {marker}. Fix the harness so this class of block "
+                "is surfaced or prevented without manual product-ticket rescue."
+            ),
+            zoe_kind="harness_fix",
+            evidence_profile="code",
+            engineering_mode="interactive",
+            acceptance_criteria=[
+                f"{marker} implement blockers create or surface exactly one harness follow-up",
+                "Blocked source ticket remains dispatch_approved=false",
+                "Repeated poll cycles do not create duplicate follow-ups",
+                "Focused tests cover the blocker path",
+                "PR URL is recorded for code changes",
+            ],
+            evidence_expectations=["Focused tests", "Greptile 5/5", "PR URL"],
+            source="engineering_blocker_followup",
+            parent_issue_id=issue_id,
+        )
+        metadata = parse_ticket_block(description)
+        metadata["source_blocker"] = marker
+        metadata["source_block_reason"] = blocker
+        from multica_ticket_contract import write_ticket_block
+
+        issue = await client.create_issue(
+            title=f"Harness: follow up {marker} for {parent_ident}"[:140],
+            description=write_ticket_block(description, metadata),
+            priority="medium",
+            status="backlog",
+            assignee_id=parent.get("assignee_id"),
+            assignee_type=parent.get("assignee_type") or "agent",
+            project_id=parent.get("project_id"),
+        )
+        child_id = str(issue.get("id") or "")
+        if child_id:
+            await client.attach_label(child_id, "harness-fix")
+            await client.attach_label(child_id, marker.lower().replace("_", "-"))
+            await client.update_issue(
+                issue_id,
+                description=append_child_id(parent.get("description") or "", child_id),
+            )
+            await client.append_issue_note(
+                issue_id,
+                f"Harness follow-up created for {marker}: {issue.get('identifier') or child_id}",
+            )
+        return issue
+    except Exception as exc:
+        logger.warning("multica_poll: blocker follow-up creation failed for %s: %s", issue_id, exc)
+        return {}
+
+
+async def _record_blocked_multica_chain(client, issue_id: str, chain: dict) -> str:
+    """Persist operator-visible block metadata for a stopped Multica chain."""
+    pipeline = chain.get("pipeline") or {}
+    phase = pipeline.get("phase") or "implement"
+    blocker = _blocked_multica_chain_reason(chain)
+    await client.record_progress(
+        issue_id,
+        phase=phase,
+        evidence="Engineering run blocked",
+        pr_url=chain.get("pr_url"),
+        blocker=blocker,
+        status="blocked",
+        dispatch_approved=False,
+    )
+    await _ensure_blocker_followup_ticket(client, issue_id, chain, blocker)
+    return blocker
 
 async def _run_memory_capture_startup_probe() -> None:
     """Validate memory capture plumbing at startup.
@@ -222,6 +596,19 @@ async def _run_mempalace_migration_gate(get_db_ctx=None, migrate=None, flag_path
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _openclaw_bg_task, _digest_bg_task, _zoe_update_bg_task, _consolidation_bg_task, _runtime_health_task
+    try:
+        from runtime_env import bootstrap_runtime_env  # type: ignore[import]
+        from hermes_http import hermes_api_key  # type: ignore[import]
+
+        bootstrap_runtime_env()
+        if not hermes_api_key():
+            logger.error(
+                "HERMES_API_KEY/API_SERVER_KEY missing after bootstrap — "
+                "engineering/Hermes background tasks may fail with 401"
+            )
+    except Exception as _env_exc:
+        logger.warning("runtime_env bootstrap (non-fatal): %s", _env_exc)
+
     logger.info("Initializing zoe-data database...")
     await init_db()
     logger.info("Database initialized. zoe-data is ready.")
@@ -245,6 +632,13 @@ async def lifespan(app: FastAPI):
     _digest_bg_task = start_memory_digest_background()
     _consolidation_bg_task = start_memory_consolidation_background()
     _zoe_update_bg_task = start_zoe_update_background_tasks()
+
+    try:
+        from routers.voice_tts import warm_faster_whisper_worker
+        asyncio.create_task(warm_faster_whisper_worker(), name="faster_whisper_warmup")
+        logger.info("Voice STT worker warmup scheduled")
+    except Exception as _voice_warmup_exc:
+        logger.warning("Voice STT worker warmup scheduling failed (non-fatal): %s", _voice_warmup_exc)
 
     # Runtime health probe — run once immediately, then refresh every 5 min
     await _probe_runtimes()
@@ -322,6 +716,15 @@ async def lifespan(app: FastAPI):
     # Multica board polling loop (30s interval, no-op if ZOE_MULTICA=false)
     async def _multica_poll_loop():
         import time as _t
+        _last_worktree_prune = 0.0
+        try:
+            _prune_interval_s = float(os.environ.get("ZOE_WORKTREE_PRUNE_INTERVAL_S", "86400") or "86400")
+        except ValueError:
+            logger.warning(
+                "multica_poll: invalid ZOE_WORKTREE_PRUNE_INTERVAL_S=%r; using 86400",
+                os.environ.get("ZOE_WORKTREE_PRUNE_INTERVAL_S"),
+            )
+            _prune_interval_s = 86400.0
         while True:
             try:
                 await asyncio.sleep(30)
@@ -337,9 +740,25 @@ async def lifespan(app: FastAPI):
                         logger.info("multica_poll: close_stale_autopilot_wrappers closed %d", _n_stale)
                 except Exception as _stale_exc:
                     logger.debug("multica_poll: stale wrapper cleanup failed: %s", _stale_exc)
+                # Daily safety-net: reclaim merged/squash-merged task worktrees that
+                # crashed or lost their terminal handoff and never self-cleaned.
+                if _t.time() - _last_worktree_prune >= _prune_interval_s:
+                    _last_worktree_prune = _t.time()
+                    try:
+                        from worktree_bootstrap import prune_merged_worktrees
+
+                        _pruned = await asyncio.to_thread(prune_merged_worktrees)
+                        _removed = [r for r in _pruned if r.get("decision") == "removed"]
+                        if _removed:
+                            logger.info(
+                                "multica_poll: pruned %d stale merged worktree(s)", len(_removed)
+                            )
+                    except Exception as _prune_exc:
+                        logger.warning("multica_poll: worktree prune sweep failed: %s", _prune_exc)
                 # Fast-path: auto-close stale autopilot tracker todos (no agent needed)
                 stale_todos = await client.list_issues(status="todo")
                 _now_ts = _t.time()
+                _closed_stale_ids: set[str] = set()
                 for _stale in stale_todos or []:
                     _stale_title = _stale.get("title", "")
                     _stale_id = _stale.get("id")
@@ -353,18 +772,248 @@ async def lifespan(app: FastAPI):
                         )).total_seconds() / 3600
                         if _age_h >= 2:
                             await client.update_issue(_stale_id, status="done")
+                            _closed_stale_ids.add(str(_stale_id))
                             logger.info("multica_poll: auto-closed stale todo '%s'", _stale_title[:50])
                     except Exception as _se:
                         logger.debug("multica_poll: stale-todo close error: %s", _se)
+                if _closed_stale_ids:
+                    stale_todos = [
+                        issue
+                        for issue in stale_todos
+                        if str(issue.get("id") or "") not in _closed_stale_ids
+                    ]
 
-                issues = await client.list_issues(status="in_progress")
-                for issue in issues or []:
+                in_progress_issues = await client.list_issues(status="in_progress") or []
+                in_review_issues = await client.list_issues(status="in_review") or []
+                blocked_issues = await client.list_issues(status="blocked") or []
+
+                # Webhook bridge: Hermes-assigned todos / in_progress (no chain) → issue.assigned.
+                try:
+                    from multica_webhook_emitter import emit_issue_assigned, is_configured as _wh_ok
+                    from multica_client import get_engineering_multica_agent_id  # type: ignore[import]
+                    from multica_poll_dispatch import chain_is_running, chain_needs_dispatch  # type: ignore[import]
+                    from multica_dispatch_control import dispatch_is_paused, pause_reason
+
+                    _dispatch_paused = dispatch_is_paused()
+                    if _wh_ok() and not _dispatch_paused:
+                        _hermes = str(get_engineering_multica_agent_id())
+
+                        # Bound every chain poll and reclaim zombie in_progress
+                        # chains, so one dead executor ref can neither wedge the
+                        # loop nor jam the single lane indefinitely.
+                        try:
+                            _poll_timeout = float(
+                                os.environ.get("ZOE_MULTICA_POLL_REF_TIMEOUT_S", "20") or "20"
+                            )
+                        except ValueError:
+                            _poll_timeout = 20.0
+                        try:
+                            _stale_ip_hours = float(
+                                os.environ.get("ZOE_MULTICA_STALE_IN_PROGRESS_HOURS", "6") or "6"
+                            )
+                        except ValueError:
+                            _stale_ip_hours = 6.0
+                        _chain_cache: dict[str, dict] = {}
+
+                        async def _poll_chain(_issue: dict) -> dict:
+                            _tid = str(_issue.get("id") or "")
+                            if _tid not in _chain_cache:
+                                _chain_cache[_tid] = await _poll_chain_guarded(
+                                    f"multica:{_tid}", issue=_issue, timeout=_poll_timeout
+                                )
+                            return _chain_cache[_tid]
+
+                        # Recover dead in_progress chains before the idle check so a
+                        # freed lane can admit new work this same cycle.
+                        if _stale_ip_hours > 0 and in_progress_issues:
+                            import datetime as _dt
+
+                            in_progress_issues = await _recover_stale_in_progress_issues(
+                                client,
+                                in_progress_issues,
+                                hermes_id=_hermes,
+                                poll_chain=_poll_chain,
+                                now=_dt.datetime.now(_dt.timezone.utc),
+                                max_age_hours=_stale_ip_hours,
+                            )
+
+                        # Throttle first-dispatch: cap new chains per cycle so a
+                        # wave of assigned todos can't spawn N concurrent chains
+                        # (mirrors the compatibility sync limit / kanban.max_in_progress).
+                        try:
+                            _wh_limit = int(os.environ.get("ZOE_MULTICA_POLL_DISPATCH_LIMIT", "1") or "1")
+                        except ValueError:
+                            _wh_limit = 1
+                        if (
+                            _wh_limit > 0
+                            and os.environ.get("ZOE_MULTICA_AUTO_ADMIT", "false").lower() == "true"
+                            and not stale_todos
+                            and not in_progress_issues
+                            and not in_review_issues
+                        ):
+                            from multica_admission import select_next_approved_issue
+
+                            _backlog = await client.list_issues(status="backlog") or []
+                            _all_issues = await client.list_issues() or []
+                            _admitted, _held = select_next_approved_issue(
+                                _backlog,
+                                _all_issues,
+                                hermes_agent_id=_hermes,
+                            )
+                            for _reason in _held:
+                                logger.info("multica_poll: admission held %s", _reason)
+                            if _admitted and _admitted.get("id"):
+                                _admitted = await client.update_issue(
+                                    str(_admitted["id"]),
+                                    status="todo",
+                                )
+                                if _admitted.get("id"):
+                                    stale_todos.append(_admitted)
+                                    logger.info(
+                                        "multica_poll: admitted %s from backlog into the single ticket lane",
+                                        _admitted.get("identifier") or _admitted.get("id"),
+                                    )
+
+                        _running_chains = 0
+                        for _ip_issue in in_progress_issues:
+                            if str(_ip_issue.get("assignee_id") or "") != _hermes:
+                                continue
+                            if (_ip_issue.get("title") or "").lower().startswith("autopilot:"):
+                                continue
+                            _ip_tid = str(_ip_issue.get("id") or "")
+                            if _ip_tid and chain_is_running(await _poll_chain(_ip_issue)):
+                                _running_chains += 1
+
+                        _wh_dispatched = min(_running_chains, _wh_limit)
+                        _wh_dispatched_ids: set[str] = set()
+                        if _running_chains >= _wh_limit:
+                            logger.info(
+                                "multica_poll: dispatch paused; %d running Hermes chain(s) already at limit %d",
+                                _running_chains,
+                                _wh_limit,
+                            )
+
+                        async def _maybe_dispatch_hermes_issue(_candidate: dict, *, from_todo: bool) -> None:
+                            nonlocal _wh_dispatched
+                            if _wh_dispatched >= _wh_limit:
+                                return
+                            if str(_candidate.get("assignee_id") or "") != _hermes:
+                                return
+                            if (_candidate.get("title") or "").lower().startswith("autopilot:"):
+                                return
+                            _tid = str(_candidate.get("id") or "")
+                            if not _tid:
+                                return
+                            _chain = await _poll_chain(_candidate)
+                            if not chain_needs_dispatch(_chain):
+                                return
+                            _emit = await emit_issue_assigned(_candidate)
+                            _body = _emit.get("body") or {}
+                            if _emit.get("ok") and isinstance(_body, dict) and _body.get("dispatched"):
+                                if from_todo:
+                                    try:
+                                        await client.update_issue(_tid, status="in_progress")
+                                    except Exception as _ip_exc:
+                                        logger.debug(
+                                            "multica_poll: set in_progress failed for %s: %s",
+                                            _tid,
+                                            _ip_exc,
+                                        )
+                                elif (_candidate.get("status") or "") == "blocked":
+                                    try:
+                                        _phase = (_chain.get("pipeline") or {}).get("phase")
+                                        await client.record_progress(
+                                            _tid,
+                                            phase=_phase,
+                                            evidence="Engineering run resumed",
+                                            status="in_progress",
+                                            clear_blocker=True,
+                                        )
+                                    except Exception as _resume_exc:
+                                        logger.debug(
+                                            "multica_poll: clear stale blocked status failed for %s: %s",
+                                            _tid,
+                                            _resume_exc,
+                                        )
+                                _wh_dispatched += 1
+                                _wh_dispatched_ids.add(_tid)
+                                logger.info(
+                                    "multica_poll: webhook dispatched %s (%s)",
+                                    _candidate.get("identifier") or _tid,
+                                    "todo" if from_todo else "in_progress-backfill",
+                                )
+
+                        # Backfill existing in-progress runs before starting fresh todo work.
+                        # A partial chain owns the one active ticket lane but still needs this
+                        # dispatch path to create its next ready phase.
+                        if _wh_dispatched < _wh_limit:
+                            for _ip_issue in in_progress_issues:
+                                if str(_ip_issue.get("id") or "") in _wh_dispatched_ids:
+                                    continue
+                                await _maybe_dispatch_hermes_issue(_ip_issue, from_todo=False)
+                                if _wh_dispatched >= _wh_limit:
+                                    break
+                        # Resume blocked issues only when the journal says a non-terminal next
+                        # phase is ready; terminal/fingerprint blocks remain operator-visible.
+                        # Each resume check is an expensive executor poll, so bound how many
+                        # blocked chains we probe per cycle (rotating across cycles) — probing
+                        # all of them every cycle can starve admission and OOM the host.
+                        if _wh_dispatched < _wh_limit:
+                            try:
+                                _blk_budget = int(
+                                    os.environ.get("ZOE_MULTICA_BLOCKED_RESUME_BUDGET", "4") or "4"
+                                )
+                            except ValueError:
+                                _blk_budget = 4
+                            if _blk_budget <= 0:
+                                logger.warning(
+                                    "multica_poll: ZOE_MULTICA_BLOCKED_RESUME_BUDGET=%s is not "
+                                    "positive; blocked-resume polling disabled this cycle",
+                                    _blk_budget,
+                                )
+                            _blk_window, _BLOCKED_RESUME_CURSOR["offset"] = _bounded_blocked_resume_window(
+                                list(blocked_issues or []),
+                                _BLOCKED_RESUME_CURSOR["offset"],
+                                _blk_budget,
+                            )
+                            for _blocked in _blk_window:
+                                if str(_blocked.get("id") or "") in _wh_dispatched_ids:
+                                    continue
+                                await _maybe_dispatch_hermes_issue(_blocked, from_todo=False)
+                                if _wh_dispatched >= _wh_limit:
+                                    break
+                        # Reuse the todo list already fetched above for the stale autopilot pass.
+                        if _wh_dispatched < _wh_limit:
+                            for _todo in stale_todos or []:
+                                await _maybe_dispatch_hermes_issue(_todo, from_todo=True)
+                                if _wh_dispatched >= _wh_limit:
+                                    break
+                    elif _dispatch_paused:
+                        logger.info(
+                            "multica_poll: runtime dispatch pause active (%s)",
+                            pause_reason(),
+                        )
+                except Exception as _wh_exc:
+                    logger.debug("multica_poll: webhook dispatch failed: %s", _wh_exc)
+
+                issues = _tracked_multica_engineering_issues(
+                    in_progress_issues,
+                    in_review_issues,
+                )
+                in_review_ids = {
+                    str(issue.get("id") or "")
+                    for issue in in_review_issues
+                    if issue.get("id")
+                }
+                for issue in issues:
                     # Check whether a linked engineering workflow has reached a terminal state.
                     issue_id = issue.get("id")
                     title = issue.get("title", "")
                     if not issue_id:
                         continue
                     if title.startswith("Autopilot:"):
+                        if str(issue_id) in in_review_ids:
+                            continue
                         try:
                             import datetime as _dt
 
@@ -380,30 +1029,25 @@ async def lifespan(app: FastAPI):
                             if _age_h >= 2:
                                 await client.update_issue(issue_id, status="done")
                                 logger.info(
-                                    "multica_poll: closed stale in_progress autopilot '%s'",
+                                    "multica_poll: closed stale autopilot '%s' (was %s)",
                                     title[:50],
+                                    issue.get("status", "in_progress"),
                                 )
                         except Exception as _ap_exc:
                             logger.debug("multica_poll: autopilot in_progress close: %s", _ap_exc)
                         continue
                     try:
-                        from db_pool import get_db_ctx  # type: ignore[import]
-                        async with get_db_ctx() as _db:
-                            rows = await _db.fetch(
-                                """SELECT id, phase, status, user_id FROM engineering_tasks
-                                   WHERE multica_issue_id=$1
-                                   ORDER BY updated_at DESC LIMIT 1""",
-                                str(issue_id),
-                            )
-                        if rows and rows[0]["phase"] == "blocked" and title.startswith("Autopilot:"):
-                            await client.update_issue(issue_id, status="done")
-                            continue
-                        if rows and rows[0]["phase"] in ("done", "ready_for_human"):
-                            new_status = "done" if rows[0]["phase"] == "done" else "in_review"
-                            await client.update_issue(issue_id, status=new_status)
+                        from executor_registry import poll_ref  # type: ignore[import]
+
+                        chain = await poll_ref(f"multica:{issue_id}", issue=issue)
+                        if chain.get("found") and chain.get("status") == "done":
+                            pr_url = chain.get("pr_url")
+                            await _record_completed_multica_chain(client, str(issue_id), chain)
                             logger.info(
-                                "multica_poll: advanced issue %s ('%s') — engineering phase=%s",
-                                issue_id, title[:40], rows[0]["phase"],
+                                "multica_poll: advanced issue %s (%s) - engineering run done%s",
+                                issue_id,
+                                title[:40],
+                                f" PR={pr_url}" if pr_url else "",
                             )
                             # Push WebSocket notification to all connected clients
                             try:
@@ -413,15 +1057,62 @@ async def lifespan(app: FastAPI):
                                     {
                                         "multica_issue_id": str(issue_id),
                                         "title": title,
-                                        "phase": rows[0]["phase"],
+                                        "pr_url": chain.get("pr_url"),
                                     },
                                 )
                             except Exception as _push_exc:
                                 logger.debug("multica_poll: ws push failed: %s", _push_exc)
+                        elif chain.get("found") and chain.get("status") == "blocked":
+                            blocker = await _record_blocked_multica_chain(client, str(issue_id), chain)
+                            logger.info(
+                                "multica_poll: blocked issue %s (%s) - %s",
+                                issue_id,
+                                title[:40],
+                                blocker,
+                            )
+                            try:
+                                await broadcaster.broadcast(
+                                    "all",
+                                    "multica_task_blocked",
+                                    {
+                                        "multica_issue_id": str(issue_id),
+                                        "title": title,
+                                        "blocker": blocker,
+                                    },
+                                )
+                            except Exception as _push_exc:
+                                logger.debug("multica_poll: ws block push failed: %s", _push_exc)
+                        elif chain.get("found") and chain.get("status") == "running":
+                            if await _record_running_multica_chain_progress(
+                                client,
+                                str(issue_id),
+                                chain,
+                                issue=issue,
+                            ):
+                                logger.info(
+                                    "multica_poll: synced running issue %s (%s) progress%s",
+                                    issue_id,
+                                    title[:40],
+                                    f" PR={chain.get('pr_url')}" if chain.get("pr_url") else "",
+                                )
+                                try:
+                                    await broadcaster.broadcast(
+                                        "all",
+                                        "multica_task_progress",
+                                        {
+                                            "multica_issue_id": str(issue_id),
+                                            "title": title,
+                                            "phase": (chain.get("pipeline") if isinstance(chain.get("pipeline"), dict) else {}).get("phase"),
+                                            "pr_url": chain.get("pr_url"),
+                                            **({"status": "in_review"} if chain.get("pr_url") else {}),
+                                        },
+                                    )
+                                except Exception as _push_exc:
+                                    logger.debug("multica_poll: ws progress push failed: %s", _push_exc)
                     except Exception as _inner_exc:
                         logger.debug("multica_poll: inner error for issue %s: %s", issue_id, _inner_exc)
 
-                for _review in await client.list_issues(status="in_review") or []:
+                for _review in in_review_issues:
                     _rt = _review.get("title", "")
                     _rid = _review.get("id")
                     if _rid and _rt.startswith("Autopilot:"):
@@ -554,6 +1245,8 @@ app.include_router(panel_auth_router)
 app.include_router(panel_provision_router)
 app.include_router(capability_matrix_router)
 app.include_router(music_router)
+app.include_router(skybridge_router)
+app.include_router(autoresearch_router)
 
 from routers.portrait import router as portrait_router
 app.include_router(portrait_router)
@@ -599,7 +1292,7 @@ async def app_settings():
 
 
 @app.get("/metrics")
-async def prometheus_metrics():
+async def prometheus_metrics(_: None = Depends(require_internal_token)):
     """Prometheus scrape endpoint.
 
     Exposes counters/gauges from `memory_metrics.REGISTRY` (MemPalace ingest,
@@ -629,6 +1322,52 @@ async def internal_broadcast(payload: dict, _: None = Depends(require_internal_t
     return {"ok": True}
 
 
+async def _session_can_subscribe_panel(panel_id: str, session_id: str | None) -> bool:
+    """Allow browser panel sockets only for sessions bound to that panel."""
+    user = await _resolve_ws_session(session_id)
+    if user is None:
+        return await _panel_allows_guest_push(panel_id)
+    user_id = str(user.get("user_id") or "")
+    role = str(user.get("role") or "").lower()
+    if not user_id:
+        return False
+    if role in {"admin", "agent"}:
+        return True
+    try:
+        from database import get_db
+
+        async for db in get_db():
+            cursor = await db.execute(
+                "SELECT user_id FROM ui_panel_sessions WHERE panel_id = ? ORDER BY last_seen_at DESC LIMIT 1",
+                (panel_id,),
+            )
+            row = await cursor.fetchone()
+            return bool(row and str(row["user_id"]) == user_id)
+    except Exception as exc:
+        logger.debug("push websocket panel session validation failed: %s", exc)
+        return False
+
+
+async def _panel_allows_guest_push(panel_id: str) -> bool:
+    """Return true when a registered active panel explicitly allows guest use."""
+    try:
+        from database import get_db
+
+        async for db in get_db():
+            cursor = await db.execute(
+                "SELECT allow_guest, is_active FROM panels WHERE panel_id = ? LIMIT 1",
+                (panel_id,),
+            )
+            row = await cursor.fetchone()
+            if not row:
+                return False
+            return bool(row["allow_guest"]) and bool(row["is_active"])
+    except Exception as exc:
+        logger.debug("push websocket guest panel validation failed: %s", exc)
+        return False
+    return False
+
+
 @app.websocket("/ws/push")
 async def websocket_push(
     websocket: WebSocket,
@@ -651,12 +1390,13 @@ async def websocket_push(
         if token_header:
             from routers.panel_auth import lookup_device_token
             device_info = lookup_device_token(token_header)
-        # If token missing or invalid, close immediately.
-        # lookup_device_token already returns None for revoked tokens; no need to re-check.
-        if not device_info:
+        session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")
+        # Browser WebSockets cannot send X-Device-Token. Accept a panel channel
+        # subscription when the browser session is already bound to this panel.
+        if not device_info and not await _session_can_subscribe_panel(panel_id, session_id):
             await websocket.close(1008, "Invalid device token")
             return
-        # Panel token verified – proceed with panel subscription
+        # Panel token or bound browser session verified; subscribe to panel push.
         await broadcaster.connect_panel(websocket, panel_id)
     else:
         # Non-panel: perform lightweight session validation via zoe-auth HTTP.
@@ -884,10 +1624,10 @@ async def _resolve_ws_user(session_id: str) -> str:
     """Resolve a browser session_id to a user_id via zoe-auth HTTP.
 
     Calls the same /api/auth/user endpoint that get_current_user uses in auth.py.
-    Falls back to 'family-admin' on any auth failure or timeout.
+    Falls back to 'voice-guest' on any auth failure or timeout.
     """
     if not session_id:
-        return "family-admin"
+        return "voice-guest"
     try:
         import httpx
         auth_url = os.getenv("ZOE_AUTH_URL", "http://localhost:8002").rstrip("/")
@@ -899,10 +1639,21 @@ async def _resolve_ws_user(session_id: str) -> str:
         if r.status_code == 200:
             data = r.json()
             uid = data.get("user_id") or data.get("id") or ""
-            return uid or "family-admin"
+            return uid or "voice-guest"
     except Exception:
         pass
-    return "family-admin"
+    return "voice-guest"
+
+
+async def _resolve_voice_cards(message_text: str, user_id: str, context: dict | None = None) -> dict:
+    """Resolve voice text to real Skybridge data cards when a supported domain exists."""
+    try:
+        from skybridge_service import resolve_skybridge_request
+
+        return await resolve_skybridge_request(message_text, user_id, context=context)
+    except Exception as exc:
+        logger.warning("Voice WS Skybridge resolve failed: %s", exc)
+        return {"handled": False, "cards": [], "spoken_summary": ""}
 
 
 @app.websocket("/ws/voice/")
@@ -924,6 +1675,7 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
     # Mutable cancel flag — text handler sets it; streaming pipeline checks it
     # between sentence boundaries. True mid-stream cancel requires task refactor (future).
     _ws_cancelled: list[bool] = [False]
+    skybridge_context: dict = {}
 
     try:
         while True:
@@ -986,6 +1738,18 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
             _ws_cancelled[0] = False
 
             await websocket.send_json({"type": "state", "state": "thinking"})
+            skybridge_result = await _resolve_voice_cards(message_text, user_id, context=skybridge_context)
+            if skybridge_result.get("handled"):
+                skybridge_context = skybridge_result.get("skybridge_context") or skybridge_context
+                await websocket.send_json({"type": "cards", "result": skybridge_result})
+                await websocket.send_json({"type": "skybridge_context", "context": skybridge_context})
+                spoken_summary = str(skybridge_result.get("spoken_summary") or "").strip()
+                if spoken_summary:
+                    await websocket.send_json({"type": "transcript", "role": "assistant", "text": spoken_summary})
+                await websocket.send_json({"type": "state", "state": "ambient"})
+                await websocket.send_json({"type": "done"})
+                continue
+            skybridge_context = {}
 
             # ── Streaming LLM + per-sentence TTS ────────────────────────────────
             # Track LLM output and TTS output separately so fallback only re-runs
