@@ -208,15 +208,17 @@ async def _run_pi(case: PiIntentEvalCase, *, transport: str, enable_execution: b
     with _temporary_env(updates):
         from pi_intent_classifier import classify_with_pi_intent_governor
 
+        timeout_seconds = float(os.environ.get("ZOE_PI_INTENT_TIMEOUT_SECONDS") or 4.0)
         start = time.perf_counter()
         result = await classify_with_pi_intent_governor(case.text)
         latency_ms = (time.perf_counter() - start) * 1000
+    timed_out = result is None and latency_ms >= (timeout_seconds * 1000 * 0.95)
     return {
         "intent": result.intent if result else None,
         "confidence": result.confidence if result else 0.0,
         "latency_ms": latency_ms,
         "correct": (result.intent if result else None) == case.expected_intent,
-        "timed_out": result is None,
+        "timed_out": timed_out,
     }
 
 

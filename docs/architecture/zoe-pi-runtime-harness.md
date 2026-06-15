@@ -164,6 +164,11 @@ frame before accepting idless session events, resets on timeout or task
 cancellation, and ignores response events whose request id does not match the
 current prompt. Pi intent classification launches in a stripped classifier mode
 with no tools, extensions, skills, prompt templates, themes, or context files.
+A local low-risk task prefilter is enabled by default through
+`ZOE_PI_INTENT_PREFILTER_ENABLED=true`; it allows weather, reminder, list,
+timer, calculation, and daily-briefing signals through to Pi while skipping
+casual fallback misses before runtime probing. Operators can disable it for
+experiments with `ZOE_PI_INTENT_PREFILTER_ENABLED=false`.
 The evaluator treats fallback and extraction-failed router misses as
 `router_only_not_comparable` unless an operator supplies measured comparable
 latency with `--fallback-baseline-latency-ms` and/or
@@ -202,6 +207,16 @@ Gemma, RPC transport, `--measure-zoe-agent-baseline`, 20s timeout, and 128-token
 Zoe Agent cap: Zoe Agent fallback returned in about 6.75s with 260 response
 characters; Pi RPC classified `weather` in about 4.09s. This is useful evidence,
 but not enough sample volume for promotion.
+
+Low-risk prefilter benchmark on 2026-06-15 with three repeated RPC runs over the
+same seed set: positive low-risk cases stayed at 100% seed accuracy, with average
+positive latency effectively unchanged (about 2788ms without prefilter vs about
+2785ms with prefilter). Negative casual fallback examples dropped from about
+2303ms average latency without prefilter to about 0.06ms with prefilter, with no
+timeouts reported. End-to-end seed pass time dropped from about 31-32s to about
+26-28s. This protects normal chat from paying a model/RPC cost when there is no
+low-risk task signal, but does not solve the remaining 2.5-4.0s positive Pi
+classification cost.
 
 Sanitized JSONL evidence can be exported into the same eval-case format. For Pi
 shadow records this uses `text_preview` plus a trusted `outcome_label`; unlabeled,
