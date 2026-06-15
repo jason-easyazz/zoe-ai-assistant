@@ -450,6 +450,7 @@ def test_skybridge_auth_challenge_card_contract():
     assert "PIN / Password" not in app
     assert 'aria-label="Sign in as ' in app
     assert '<span class="sky-auth-avatar">' not in app
+    assert "data-user-avatar" in app
     assert "data-route=\"" in app
     assert "buildLoginRoute(panelId, profile.user_id)" in app
     assert "btn.dataset.skyAction === 'auth'" in app
