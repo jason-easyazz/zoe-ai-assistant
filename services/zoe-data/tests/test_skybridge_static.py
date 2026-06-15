@@ -587,4 +587,5 @@ def test_skybridge_has_touch_panel_fit_overrides():
     assert 'grid-template-columns: repeat(8, minmax(46px, 1fr))' in html
     assert 'body:not(.sky-empty) .sky-command' in html
     assert '.sky-orb-button span' in html
+    assert '.sky-orb-button::before' in html
     assert 'display: none !important' in html
