@@ -81,6 +81,16 @@ accuracy evidence. Pi live execution remains separately gated by
 all Pi classifications into executable Zoe routes. The report includes a read-only
 `promotion_actions.env.ZOE_PI_INTENT_PROMOTED_GROUPS` recommendation for operator
 review; Zoe does not rewrite env or auto-promote groups from shadow evidence.
+Operators can inspect or explicitly apply that single env update with:
+
+```bash
+scripts/maintenance/pi_promotion_eval.py --demo --min-samples 10 \
+  | scripts/maintenance/pi_promotion_apply.py --env-file /path/to/.env
+scripts/maintenance/pi_promotion_eval.py --demo --min-samples 10 \
+  | scripts/maintenance/pi_promotion_apply.py --env-file /path/to/.env --apply --confirm APPLY_PI_PROMOTION
+```
+
+The apply helper only writes `ZOE_PI_INTENT_PROMOTED_GROUPS`; it rejects any other env key in the report.
 
 
 ## Review-Only Runtime Proposal
