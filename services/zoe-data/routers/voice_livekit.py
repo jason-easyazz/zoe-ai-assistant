@@ -224,6 +224,19 @@ async def _run_pipeline(local_participant, frames: list[bytes], user_id: str, se
 
     await _send_data(local_participant, {"type": "transcript", "role": "user", "text": transcript})
 
+    try:
+        from voice_presence import processing_ack_event
+
+        ack_event = processing_ack_event()
+        if ack_event:
+            ack_text = str(ack_event.get("text") or "").strip()
+            if ack_text:
+                await _send_data(local_participant, {"type": "transcript", "role": "zoe", "text": ack_text})
+            if ack_event.get("audio_base64"):
+                await _send_data(local_participant, ack_event)
+    except Exception as exc:
+        logger.debug("LiveKit processing acknowledgement failed: %s", exc)
+
     # ── LLM ──────────────────────────────────────────────────────────────────
     response = "Sorry, I had trouble with that."
     llm_ok = True

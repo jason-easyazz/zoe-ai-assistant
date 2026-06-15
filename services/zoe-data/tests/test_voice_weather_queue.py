@@ -665,3 +665,64 @@ async def test_voice_identity_challenge_survives_tts_failure(monkeypatch) -> Non
     assert calls["challenge"]["panel_id"] == "panel-auth"
     assert calls["request_auth"]["challenge_id"] == "challenge-1"
     assert voice_tts._PENDING_VOICE_IDENT["panel-auth"]["transcript"] == "show my calendar"
+
+
+@pytest.mark.asyncio
+async def test_voice_command_stream_emits_processing_ack_before_slow_response(monkeypatch) -> None:
+    calls: dict[str, object] = {"broadcast": []}
+
+    async def no_user(*_args, **_kwargs):
+        return None
+
+    async def resolve_skybridge_request(*_args, **_kwargs):
+        return None
+
+    class Broadcaster:
+        async def broadcast(self, channel, event, payload):
+            calls["broadcast"].append((channel, event, payload))
+
+    async def load_voice_history(*_args, **_kwargs):
+        return []
+
+    async def run_zoe_agent_streaming(*_args, **_kwargs):
+        yield "The answer is ready."
+
+    async def synthesize_sentence(*_args, **_kwargs):
+        return b"RIFF-final"
+
+    monkeypatch.setenv("ZOE_PROCESSING_ACK_PHRASE", "Let me check.")
+    monkeypatch.setattr(voice_tts, "_resolve_recent_panel_session_user", no_user)
+    monkeypatch.setattr(voice_tts, "_resolve_panel_default_user", no_user)
+    monkeypatch.setattr(voice_tts, "_load_voice_history", load_voice_history)
+    monkeypatch.setattr(voice_tts, "_synthesize_kokoro_sidecar", synthesize_sentence)
+    monkeypatch.setattr(voice_tts, "_VOICE_SESSIONS", {})
+    monkeypatch.setitem(sys.modules, "push", types.SimpleNamespace(broadcaster=Broadcaster()))
+    monkeypatch.setitem(
+        sys.modules,
+        "skybridge_service",
+        types.SimpleNamespace(resolve_skybridge_request=resolve_skybridge_request),
+    )
+    monkeypatch.setitem(sys.modules, "zoe_agent", types.SimpleNamespace(run_zoe_agent_streaming=run_zoe_agent_streaming))
+    monkeypatch.setattr(skybridge_service, "resolve_skybridge_request", resolve_skybridge_request)
+
+    response = await voice_command(
+        {"text": "could you think about this for me", "panel_id": "panel-stream", "session_id": "session-stream"},
+        caller={"user_id": "guest", "panel_id": "panel-stream"},
+        stream=True,
+        db=object(),
+    )
+
+    chunks = [chunk async for chunk in response.body_iterator]
+    first_line = json.loads(chunks[0].decode())
+    final_header = json.loads(chunks[1].decode())
+    done = json.loads(chunks[-1].decode())
+
+    assert first_line == {"processing_ack": True, "text": "Let me check.", "panel_id": "panel-stream"}
+    assert (
+        "all",
+        "voice:responding",
+        {"panel_id": "panel-stream", "text": "Let me check.", "processing_ack": True},
+    ) in calls["broadcast"]
+    assert final_header["text"] == "The answer is ready."
+    assert done["done"] is True
+    assert done["reply"] == "The answer is ready."

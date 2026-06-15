@@ -12,6 +12,10 @@ import voice_presence
 from voice_presence import (
     is_wake_payload,
     is_wake_text,
+    processing_ack_audio_payload,
+    processing_ack_event,
+    processing_ack_phrases,
+    processing_ack_variant,
     wake_ack_audio_payload,
     wake_ack_events,
     wake_ack_phrase,
@@ -228,6 +232,44 @@ def test_presence_event_builder_is_sub_millisecond_for_hot_path():
     elapsed_ms = (time.perf_counter() - started) * 1000
 
     assert elapsed_ms < 5.0
+
+
+def test_processing_ack_phrases_default_and_override():
+    assert processing_ack_phrases({}) == ["Let me check.", "One moment.", "I will check that."]
+    assert processing_ack_phrases({"ZOE_PROCESSING_ACK_DEFAULT_ENABLED": "false"}) == []
+    assert processing_ack_phrases({"ZOE_PROCESSING_ACK_PHRASE": "  Checking now. "}) == ["Checking now."]
+    assert processing_ack_phrases({"ZOE_PROCESSING_ACK_PHRASES": "Checking.|On it."}) == [
+        "Checking.",
+        "On it.",
+    ]
+
+
+def test_processing_ack_variant_rotates_without_reasoning():
+    env = {"ZOE_PROCESSING_ACK_PHRASES": "Checking.|On it."}
+
+    assert processing_ack_variant(env)["phrase"] == "Checking."
+    assert processing_ack_variant(env)["phrase"] == "On it."
+    assert processing_ack_variant(env)["phrase"] == "Checking."
+
+
+def test_processing_ack_event_can_include_cached_audio(tmp_path):
+    audio_path = tmp_path / "processing.wav"
+    audio_path.write_bytes(b"RIFFprocessing")
+
+    event = processing_ack_event(
+        {
+            "ZOE_PROCESSING_ACK_PHRASE": "Let me check.",
+            "ZOE_PROCESSING_ACK_AUDIO_PATH": str(audio_path),
+        }
+    )
+
+    assert event is not None
+    assert event["type"] == "voice:processing_ack"
+    assert event["text"] == "Let me check."
+    assert event["source"] == "intent_buffer"
+    assert event["audio_base64"] == "UklGRnByb2Nlc3Npbmc="
+    assert event["audio_source"] == "cached_processing_ack"
+    assert processing_ack_audio_payload(audio_path=str(audio_path))["source"] == "cached_processing_ack"
 
 
 def test_websocket_wake_returns_presence_events_without_reasoning(monkeypatch):
