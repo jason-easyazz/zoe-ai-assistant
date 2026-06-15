@@ -6,26 +6,29 @@ Pi is a candidate external runtime for Zoe capability reuse. Zoe should use Pi
 where it provides proven agent/runtime/package leverage, but Pi execution must
 enter through Zoe governance rather than bypass it.
 
-This first slice is intentionally read-only:
+The harness is gated by default:
 
 - detect whether `node`, `npm`, and `pi` are present;
 - discover project-local `.pi/agents/*.md` files;
 - expose execution policy config;
 - fail closed when execution is requested without a local/offline model path;
-- avoid installing Pi, installing packages, or running Pi agent tasks.
+- avoid installing Pi, installing packages, or running privileged Pi agent tasks;
+- allow explicitly gated local/offline intent probes for shadow and bake-off evidence.
 
 ## Current Zoe Host Result
 
-Date: 2026-06-09
+Date: 2026-06-15
 
-On the clean Zoe worktree:
+On the Zoe host, Pi is installed under `nvm` rather than the default non-login service PATH:
 
-- `node`: not found;
-- `npm`: not found;
-- `pi`: not found;
-- `.pi/agents`: not present in the Zoe repo;
-- execution status: disabled and acceptable;
-- enabled execution status: blocked until runtime prerequisites and local model config exist.
+- `node`: `/home/zoe/.nvm/versions/node/v22.22.0/bin/node`;
+- `npm`: `/home/zoe/.nvm/versions/node/v22.22.0/bin/npm`;
+- `pi`: `/home/zoe/.nvm/versions/node/v22.22.0/bin/pi`;
+- Pi version: `0.79.3`;
+- model config: `/home/zoe/.pi/agent/models.json` points at local `http://127.0.0.1:11434/v1`;
+- default policy: `ZOE_PI_ENABLED=false`, `ZOE_PI_INTENT_AUTO_PROMOTE=false`, and no promoted intent groups.
+
+The readiness probe checks `PATH` plus `~/.nvm/versions/node/*/bin`, so it can report this install truthfully without requiring service PATH changes. Pi remains disabled by default and any live execution still requires the explicit local/offline execution gates.
 
 Current Pi install/readiness facts from upstream docs:
 
@@ -150,11 +153,30 @@ scripts/maintenance/pi_promotion_eval.py \
 ```
 
 Add `--run-pi --transport rpc` only when the local/offline Pi intent runtime is
-configured. The RPC path keeps a warm worker but resets it on timeout or task
+configured. The RPC path keeps a warm worker, waits for Pi's prompt `response`
+frame before accepting idless session events, resets on timeout or task
 cancellation, and ignores response events whose request id does not match the
-current prompt. The report still remains evidence-only;
-`ZOE_PI_INTENT_PROMOTED_GROUPS` changes must pass the promotion actions and
-guarded apply helper described above.
+current prompt. Pi intent classification launches in a stripped classifier mode
+with no tools, extensions, skills, prompt templates, themes, or context files.
+The report still remains evidence-only; `ZOE_PI_INTENT_PROMOTED_GROUPS` changes
+must pass the promotion actions and guarded apply helper described above.
+
+### Latest Local Pi/Gemma Intent Eval
+
+Measured on 2026-06-15 with the built-in eval cases, local Gemma, and RPC
+transport after the stripped classifier launch and RPC protocol fix:
+
+- eligible samples: 9;
+- Pi accuracy: 100%;
+- Zoe baseline accuracy on the same eligible samples: 33.3%;
+- Pi timeout rate on eligible samples: 0%;
+- Pi RPC p95 latency: about 3.59s;
+- Zoe comparable p95 latency: about 1.09s;
+- promotable groups: none, because Pi still fails the latency gate.
+
+Decision: keep Pi intent routing in shadow/evidence mode. Pi is now accurate
+enough on the seed eval to justify more measurement, but it is not fast enough
+to promote into live Zoe routing.
 
 Sanitized JSONL evidence can be exported into the same eval-case format. For Pi
 shadow records this uses `text_preview` plus a trusted `outcome_label`; unlabeled,
@@ -200,9 +222,11 @@ Pi remains experimental until all of these are true:
 - execution evidence includes tests, rollback, and PR/Grep loop evidence for
   code-producing changes.
 
-## Why Not Execute Yet
+## Why Not Promote Yet
 
 Pi's official docs support CLI, SDK, RPC, project-local agents, and packages,
-but the Zoe host does not currently have the Node/Pi runtime needed to run it.
-Installing that runtime is a privileged environment change. The correct next
-step is a scored, approved install/runtime proposal, not silent installation.
+and the Zoe host now has a local Pi runtime available under `nvm`. The current
+blocker is not installation; it is promotion evidence. Pi intent RPC must beat
+Zoe's comparable route latency as well as its accuracy before any low-risk group
+is promoted. Current evidence shows strong seed accuracy but slower latency, so
+Pi remains shadow-only.

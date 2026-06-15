@@ -83,6 +83,23 @@ _TASK_LANES = {
 }
 
 _SECRET_ENV_MARKERS = ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENROUTER_API_KEY")
+_PI_CLASSIFIER_BASE_FLAGS = (
+    "--no-tools",
+    "--no-extensions",
+    "--no-skills",
+    "--no-prompt-templates",
+    "--no-themes",
+    "--no-context-files",
+    "--thinking",
+    "off",
+)
+_PI_CLASSIFIER_SYSTEM_PROMPT = (
+    "You are Zoe's offline intent classifier. Classify only; do not answer the user. "
+    "Return exactly one compact JSON object with keys intent, slots, confidence, task_lane, reason. "
+    "Use intent null and task_lane chat for casual chat, advice, research, or uncertain requests. "
+    "Use governed_agent only for self-extension, complaints, or missing capability requests. "
+    "Never create memory-write intents from ambiguous phrasing."
+)
 
 
 @dataclass(frozen=True)
@@ -294,17 +311,12 @@ async def _classify_with_pi_rpc(
 def _classification_prompt(text: str, *, context_turns: str = "") -> str:
     lanes = {lane: sorted(intents) for lane, intents in _TASK_LANES.items() if intents}
     return (
-        "You are Zoe's fast ambiguous-intent governor. Classify only; do not answer the user.\n"
-        "Return exactly one compact JSON object and no markdown.\n"
-        "Schema: {\"intent\": string|null, \"slots\": object, \"confidence\": number, \"task_lane\": \"fast_tool\"|\"governed_agent\"|\"chat\", \"reason\": string}.\n"
-        f"Executable intents: {sorted(_ALLOWED_EXECUTABLE_INTENTS)}\n"
+        "Schema: {\"intent\": string|null, \"slots\": object, \"confidence\": number, "
+        "\"task_lane\": \"fast_tool\"|\"governed_agent\"|\"chat\", \"reason\": string}.\n"
+        f"Allowed intents: {sorted(_ALLOWED_EXECUTABLE_INTENTS)}\n"
         f"Task lanes: {json.dumps(lanes, sort_keys=True)}\n"
-        "Use chat/null when this is normal conversation, advice, research, or the request needs more context.\n"
-        "Use governed_agent for self-extension, complaints, or missing capability requests.\n"
-        "Never create memory-write intents from ambiguous phrasing; only deterministic Zoe rules may write memory.\n"
-        "Short weather examples: 'rain later', 'umbrella later', and 'need a jacket tonight' are weather with task_lane fast_tool.\n"
-        "Short reminder examples: 'anything due today' and 'what do I need to do' are reminder_list if no other domain is named.\n"
-        "Keep confidence below 0.78 unless the route is obvious.\n"
+        "Hints: rain/umbrella/jacket=>weather; due/todo=>reminder_list; timer/alarm=>timer_create. "
+        "Keep confidence below 0.78 unless obvious.\n"
         f"Recent context: {_sanitize_prompt_value(context_turns) or '(none)'}\n"
         f"User message: {_sanitize_prompt_value(text)}\n"
         "JSON:"
@@ -316,6 +328,9 @@ def _pi_command(config: PiIntentClassifierConfig, prompt: str) -> list[str]:
         config.command,
         "-p",
         "--no-session",
+        *_PI_CLASSIFIER_BASE_FLAGS,
+        "--system-prompt",
+        _PI_CLASSIFIER_SYSTEM_PROMPT,
         "--provider",
         config.provider,
         "--model",
@@ -333,6 +348,9 @@ def _pi_rpc_command(config: PiIntentClassifierConfig) -> list[str]:
         "--mode",
         "rpc",
         "--no-session",
+        *_PI_CLASSIFIER_BASE_FLAGS,
+        "--system-prompt",
+        _PI_CLASSIFIER_SYSTEM_PROMPT,
         "--provider",
         config.provider,
         "--model",
@@ -406,6 +424,7 @@ class _PiRpcIntentWorker:
     async def _read_turn(self, request_id: str) -> str:
         assert self.proc is not None and self.proc.stdout is not None
         latest_text = ""
+        prompt_accepted = False
         while True:
             line = await self.proc.stdout.readline()
             if not line:
@@ -413,6 +432,13 @@ class _PiRpcIntentWorker:
             try:
                 event = json.loads(line.decode(errors="replace"))
             except json.JSONDecodeError:
+                continue
+            if _rpc_response_matches_request(event, request_id):
+                if not event.get("success"):
+                    raise RuntimeError(str(event.get("error") or "Pi RPC prompt failed"))
+                prompt_accepted = True
+                continue
+            if not prompt_accepted:
                 continue
             if not _rpc_event_matches_request(event, request_id):
                 continue
@@ -441,9 +467,15 @@ def _rpc_event_matches_request(event: Mapping[str, Any], request_id: str) -> boo
     if isinstance(turn, Mapping):
         event_ids.extend([turn.get("id"), turn.get("request_id"), turn.get("requestId")])
     present_ids = [str(value) for value in event_ids if value is not None]
-    if event.get("type") == "agent_end" and not present_ids:
-        return False
     return not present_ids or request_id in present_ids
+
+
+def _rpc_response_matches_request(event: Mapping[str, Any], request_id: str) -> bool:
+    return (
+        event.get("type") == "response"
+        and event.get("command") == "prompt"
+        and str(event.get("id") or "") == request_id
+    )
 
 
 def _assistant_text_from_rpc_event(event: Mapping[str, Any]) -> str:
