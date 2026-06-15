@@ -128,7 +128,7 @@ def test_pi_intent_status_endpoint_reports_available_with_explicit_gates(tmp_pat
     assert data["ok"] is True
     assert data["status"] == "available"
     assert data["config"]["transport"] == "rpc"
-    assert data["promotion"]["auto_promote_enabled"] is True
+    assert data["promotion"]["auto_promote_requested"] is True
     assert data["promotion"]["auto_promote_status"] == "requires_explicit_apply_path"
     assert data["promotion"]["active_groups"] == ["weather"]
     assert data["promotion"]["ignored_groups"] == ["device_control"]
