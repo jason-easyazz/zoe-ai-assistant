@@ -122,6 +122,7 @@ def test_shadow_summary_empty_is_explicitly_not_accuracy_ready():
     assert report["no_result_rate"] == 0.0
     assert report["accuracy_available"] is False
     assert report["labeled_sample_count_by_group"]["weather"] == 0
+    assert report["unmapped_labeled_sample_count"] == 0
     assert report["sample_deficit_by_group"]["weather"] == PiPromotionPolicy().min_samples
     assert report["promotion_ready_groups"] == []
 
@@ -363,6 +364,21 @@ def test_shadow_summary_requires_min_samples_in_one_group_for_promotion_ready():
     assert report["sample_deficit_by_group"]["timers"] == 15
     assert report["promotion_ready"] is False
     assert report["promotion_ready_groups"] == []
+    assert report["promotion_ready_reason"] == (
+        "labeled outcome evidence exists, but no intent group has enough labels for promotion scoring"
+    )
+
+
+def test_shadow_summary_reports_unmapped_labeled_evidence_separately():
+    report = summarize_pi_intent_shadow([{"outcome_label": "extend_capability"}])
+
+    assert report["accuracy_available"] is False
+    assert report["labeled_sample_count"] == 0
+    assert report["unmapped_labeled_sample_count"] == 1
+    assert report["promotion_ready"] is False
+    assert report["promotion_ready_reason"] == (
+        "labeled outcome evidence exists, but no labels map to a low-risk intent group"
+    )
 
 
 def test_shadow_summary_names_groups_with_enough_labeled_evidence():
@@ -370,6 +386,7 @@ def test_shadow_summary_names_groups_with_enough_labeled_evidence():
 
     assert report["promotion_ready"] is True
     assert report["promotion_ready_groups"] == ["weather"]
+    assert report["unmapped_labeled_sample_count"] == 0
     assert report["sample_deficit_by_group"]["weather"] == 0
 
 
