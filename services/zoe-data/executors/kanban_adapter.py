@@ -1358,13 +1358,15 @@ class KanbanAdapter:
         """
         if phase != "implement" or (row.get("status") or "").lower() != "blocked":
             return None
-        # A pushed branch is the other recovery's job; a handed-off PR needs nothing.
-        log = latest_log_session(task_id, max_lines=120)
-        if "PR_URL=" in log:
-            return None
         try:
             from worktree_bootstrap import worktree_branch, worktree_path
 
+            # A pushed branch is the other recovery's job; a handed-off PR needs
+            # nothing. Kept inside the try so a latest_log_session failure can
+            # never escape into poll() (recovery is best-effort).
+            log = latest_log_session(task_id, max_lines=120)
+            if "PR_URL=" in log:
+                return None
             task = detail.get("task") if isinstance((detail or {}).get("task"), dict) else {}
             wt_path = Path(
                 row.get("workspace_path")
