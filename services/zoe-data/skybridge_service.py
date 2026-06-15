@@ -26,6 +26,7 @@ class SkybridgeIntent:
     context: str = ""
     circle: str = ""
     item_text: str = ""
+    list_name: str = ""
     target_time: str = ""
     title: str = ""
     target_text: str = ""
@@ -62,6 +63,11 @@ MONTHS = {
 }
 MONTH_PATTERN = "|".join(sorted(MONTHS, key=len, reverse=True))
 LIST_TYPES = ("shopping", "personal", "work", "bucket", "tasks")
+DEFAULT_USER_LISTS = (
+    ("shopping", "Shopping", "Shared groceries and household shopping.", "family"),
+    ("work", "Work", "Work tasks and follow-ups.", "personal"),
+    ("personal", "Personal", "Personal todos and errands.", "personal"),
+)
 LIST_TYPE_ALIASES = {
     "shopping": "shopping",
     "groceries": "shopping",
@@ -164,11 +170,70 @@ def _list_type_from_text(text: str) -> str:
     return ""
 
 
+def _default_list_name(list_type: str) -> str:
+    for default_type, name, _description, _visibility in DEFAULT_USER_LISTS:
+        if default_type == list_type:
+            return name
+    return (list_type or "List").replace("_", " ").title()
+
+
+def _list_type_for_name(name: str, explicit_type: str = "") -> str:
+    if explicit_type:
+        return explicit_type
+    text = f" {name.lower()} "
+    detected = _list_type_from_text(text)
+    if detected:
+        return detected
+    return "personal"
+
+
+def _list_create_from_text(message: str, context: dict[str, Any] | None = None) -> tuple[str, str] | None:
+    if _context_domain(context) == "lists" and _context_action(context) == "create_list":
+        candidate = _clean_action_text(message)
+        if re.fullmatch(r"[a-z0-9][a-z0-9 '&-]{1,48}", candidate, flags=re.IGNORECASE):
+            return candidate[:48].strip(), _list_type_for_name(candidate, _context_list_type(context))
+    if not re.search(r"\b(?:new|create|make|add)\s+(?:a\s+|my\s+)?(?:new\s+)?(?:shopping|grocery|groceries|personal|work|task|todo|tasks|todos)?\s*list\b", message, re.IGNORECASE):
+        if _context_domain(context) != "lists" or not re.search(r"\b(?:call|name)\s+(?:it\s+)?", message, re.IGNORECASE):
+            return None
+    list_type = _list_type_from_text(f" {message.lower()} ")
+    name = ""
+    patterns = (
+        r"\b(?:called|named|name it|call it)\s+(?P<name>[a-z0-9][a-z0-9 '&-]{1,48})\b",
+        r"\b(?:new|create|make|add)\s+(?:a\s+|my\s+)?(?:new\s+)?(?P<name>[a-z0-9][a-z0-9 '&-]{1,48})\s+list\b",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, message, re.IGNORECASE)
+        if match:
+            name = _clean_action_text(match.group("name"))
+            break
+    if name.lower() in {"shopping", "grocery", "groceries", "personal", "work", "task", "tasks", "todo", "todos", "new"}:
+        name = _default_list_name(_list_type_for_name(name, list_type))
+    if not name and re.search(r"\b(?:new|create|make|add)\b", message, re.IGNORECASE):
+        return "", list_type or "personal"
+    if not name:
+        return None
+    return name[:48].strip(), _list_type_for_name(name, list_type)
+
+
 def _context_domain(context: dict[str, Any] | None) -> str:
     if not isinstance(context, dict):
         return ""
     intent = context.get("intent") if isinstance(context.get("intent"), dict) else {}
     return str(intent.get("domain") or context.get("domain") or "").strip().lower()
+
+
+def _context_action(context: dict[str, Any] | None) -> str:
+    if not isinstance(context, dict):
+        return ""
+    intent = context.get("intent") if isinstance(context.get("intent"), dict) else {}
+    return str(intent.get("action") or "").strip().lower()
+
+
+def _context_list_type(context: dict[str, Any] | None) -> str:
+    if not isinstance(context, dict):
+        return ""
+    intent = context.get("intent") if isinstance(context.get("intent"), dict) else {}
+    return str(intent.get("list_type") or "").strip().lower()
 
 
 def _context_cards(context: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -393,6 +458,10 @@ def classify_skybridge_intent(message: str, context: dict[str, Any] | None = Non
     if list_add:
         item, list_type = list_add
         return SkybridgeIntent(domain="lists", action="add_item", item_text=item, list_type=list_type)
+    list_create = _list_create_from_text(raw_message, context)
+    if list_create:
+        list_name, list_type = list_create
+        return SkybridgeIntent(domain="lists", action="create_list", list_name=list_name, list_type=list_type)
     calendar_create = _calendar_create_from_text(raw_message, context)
     if calendar_create:
         title, target_time = calendar_create
@@ -404,7 +473,8 @@ def classify_skybridge_intent(message: str, context: dict[str, Any] | None = Non
         return SkybridgeIntent(domain="weather", action=action)
     if any(term in text for term in (" list", " lists", " shopping", " groceries", " grocery", " tasks", " todos")):
         list_type = _list_type_from_text(text)
-        return SkybridgeIntent(domain="lists", action="show", list_type=list_type)
+        action = "overview" if re.search(r"\blists\b", text) else "show"
+        return SkybridgeIntent(domain="lists", action=action, list_type=list_type)
     if any(
         term in text
         for term in (
@@ -496,6 +566,8 @@ async def _resolve_with_db(intent: SkybridgeIntent, user_id: str, db: Any, *, co
     if intent.domain == "lists":
         if intent.action == "add_item":
             return await _resolve_list_add_item(intent, user_id, db, context)
+        if intent.action == "create_list":
+            return await _resolve_list_create(intent, user_id, db)
         return await _resolve_lists(intent, user_id, db)
     if intent.domain == "people":
         if intent.action == "remember_fact":
@@ -537,6 +609,7 @@ def _intent_dict(intent: SkybridgeIntent) -> dict[str, Any]:
         "domain": intent.domain,
         "action": intent.action,
         "list_type": intent.list_type,
+        "list_name": intent.list_name,
         "target_time": intent.target_time,
     }
 
@@ -786,33 +859,8 @@ async def _resolve_lists(intent: SkybridgeIntent, user_id: str, db: Any) -> dict
             "cards": [card_service.convert_emit(card, target_major=1)],
         }
 
-    list_type = intent.list_type
-    if list_type:
-        rows = await db.fetch(
-            """
-            SELECT id, user_id, name, list_type, description, visibility, created_at, updated_at
-            FROM lists
-            WHERE list_type = $2 AND deleted = 0
-              AND (visibility = 'family' OR user_id = $1)
-            ORDER BY updated_at DESC
-            LIMIT 8
-            """,
-            user_id,
-            list_type,
-        )
-    else:
-        rows = await db.fetch(
-            """
-            SELECT id, user_id, name, list_type, description, visibility, created_at, updated_at
-            FROM lists
-            WHERE deleted = 0
-              AND (visibility = 'family' OR user_id = $1)
-            ORDER BY updated_at DESC
-            LIMIT 8
-            """,
-            user_id,
-        )
-    lists = [dict(row) for row in rows]
+    await _ensure_default_lists(user_id, db)
+    lists = await _fetch_list_catalog(user_id, db)
     list_ids = [list_row["id"] for list_row in lists]
     items_by_list: dict[Any, list[dict[str, Any]]] = {list_id: [] for list_id in list_ids}
     if list_ids:
@@ -829,20 +877,22 @@ async def _resolve_lists(intent: SkybridgeIntent, user_id: str, db: Any) -> dict
         for item_row in item_rows:
             item = dict(item_row)
             bucket = items_by_list.setdefault(item.get("list_id"), [])
-            if len(bucket) < 24:
-                bucket.append(item)
+            bucket.append(item)
 
-    selected = lists[0] if len(lists) == 1 else None
     for list_row in lists:
         items = items_by_list.get(list_row["id"], [])
-        list_row["items"] = items if selected else []
+        list_row["items"] = items[:24]
         list_row["item_count"] = len(items)
         list_row["open_count"] = sum(1 for item in items if not item.get("completed"))
         list_row["completed_count"] = len(items) - list_row["open_count"]
 
+    list_type = intent.list_type
+    selected = None if intent.action == "overview" else _select_list(lists, list_type, intent.list_name)
     items = selected.get("items", []) if selected else []
     list_name = selected.get("name") if selected else (list_type.title() if list_type else "Lists")
     summary_count = len(items) if selected else sum(item.get("item_count", 0) for item in lists)
+    open_count = selected.get("open_count", 0) if selected else sum(item.get("open_count", 0) for item in lists)
+    completed_count = selected.get("completed_count", 0) if selected else sum(item.get("completed_count", 0) for item in lists)
     spoken = f"{list_name} has {summary_count} item{'s' if summary_count != 1 else ''}."
     card = card_service.build_shopping_list_card(
         {
@@ -851,7 +901,11 @@ async def _resolve_lists(intent: SkybridgeIntent, user_id: str, db: Any) -> dict
             "list_type": selected.get("list_type") if selected else (list_type or "all"),
             "lists": lists,
             "items": items,
+            "item_count": summary_count,
+            "open_count": open_count,
+            "completed_count": completed_count,
             "summary": spoken,
+            "actions": _list_card_actions(lists, selected),
         }
     )
     return {
@@ -860,6 +914,152 @@ async def _resolve_lists(intent: SkybridgeIntent, user_id: str, db: Any) -> dict
         "spoken_summary": spoken,
         "cards": [card_service.convert_emit(card, target_major=1)],
     }
+
+
+async def _ensure_default_lists(user_id: str, db: Any) -> None:
+    rows = await db.fetch(
+        """
+        SELECT list_type, name
+        FROM lists
+        WHERE user_id = $1 AND deleted = 0
+        """,
+        user_id,
+    )
+    existing_rows = [dict(row) for row in rows]
+    existing = {(str(row.get("list_type") or ""), str(row.get("name") or "").strip().lower()) for row in existing_rows}
+    for list_type, name, description, visibility in DEFAULT_USER_LISTS:
+        if (list_type, name.lower()) in existing:
+            continue
+        await db.execute(
+            """
+            INSERT INTO lists (id, user_id, name, list_type, description, visibility)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (user_id, lower(name)) WHERE deleted = 0 DO NOTHING
+            """,
+            str(uuid.uuid4()),
+            user_id,
+            name,
+            list_type,
+            description,
+            visibility,
+        )
+    await _maybe_commit(db)
+
+
+async def _fetch_list_catalog(user_id: str, db: Any) -> list[dict[str, Any]]:
+    rows = await db.fetch(
+        """
+        SELECT id, user_id, name, list_type, description, visibility, created_at, updated_at
+        FROM lists
+        WHERE deleted = 0
+          AND (user_id = $1 OR visibility = 'family')
+        ORDER BY
+          CASE WHEN user_id = $1 THEN 0 ELSE 1 END,
+          CASE list_type WHEN 'shopping' THEN 0 WHEN 'work' THEN 1 WHEN 'personal' THEN 2 WHEN 'tasks' THEN 3 ELSE 4 END,
+          updated_at DESC
+        LIMIT 18
+        """,
+        user_id,
+    )
+    catalog: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for row in rows:
+        item = dict(row)
+        if item.get("user_id") != user_id and item.get("list_type") != "shopping":
+            continue
+        key = (str(item.get("list_type") or ""), str(item.get("name") or "").strip().lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        catalog.append(item)
+    return catalog
+
+
+def _select_list(lists: list[dict[str, Any]], list_type: str = "", list_name: str = "") -> dict[str, Any] | None:
+    if list_name:
+        wanted = list_name.strip().lower()
+        for item in lists:
+            if str(item.get("name") or "").strip().lower() == wanted:
+                return item
+    if list_type:
+        for item in lists:
+            if item.get("list_type") == list_type:
+                return item
+    if len(lists) == 1:
+        return lists[0]
+    return None
+
+
+def _list_card_actions(lists: list[dict[str, Any]], selected: dict[str, Any] | None) -> list[dict[str, str]]:
+    actions = []
+    for item in lists[:5]:
+        name = str(item.get("name") or _default_list_name(str(item.get("list_type") or "list")))
+        actions.append({"type": "query", "label": name, "query": f"show my {name} list"})
+    actions.append({"type": "query", "label": "New list", "query": "new list"})
+    return actions
+
+
+def _new_list_prompt_card(list_type: str) -> dict[str, Any]:
+    label = _default_list_name(list_type or "personal")
+    return {
+        "component": "action_form",
+        "props": {
+            "title": "New list",
+            "summary": "What should I name it?",
+            "source": "list_create",
+            "form_id": "list_create",
+            "fields": [
+                {"label": "List type", "name": "list_type", "value": label},
+                {"label": "Name", "name": "name", "value": "Say or type the list name"},
+            ],
+            "actions": [],
+        },
+    }
+
+
+async def _resolve_list_create(intent: SkybridgeIntent, user_id: str, db: Any) -> dict[str, Any]:
+    if not intent.list_name:
+        return {
+            "handled": True,
+            "intent": _intent_dict(intent),
+            "spoken_summary": "What should I name the new list?",
+            "cards": [_new_list_prompt_card(intent.list_type or "personal")],
+            "actions": [],
+        }
+    await _ensure_default_lists(user_id, db)
+    list_type = intent.list_type or _list_type_for_name(intent.list_name)
+    existing = await db.fetch(
+        """
+        SELECT id, name, list_type
+        FROM lists
+        WHERE user_id = $1 AND deleted = 0 AND lower(name) = lower($2)
+        LIMIT 1
+        """,
+        user_id,
+        intent.list_name,
+    )
+    created = False
+    if not existing:
+        status = await db.execute(
+            """
+            INSERT INTO lists (id, user_id, name, list_type, description, visibility)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (user_id, lower(name)) WHERE deleted = 0 DO NOTHING
+            """,
+            str(uuid.uuid4()),
+            user_id,
+            intent.list_name,
+            list_type,
+            "",
+            "personal" if list_type in {"work", "personal", "tasks"} else "family",
+        )
+        created = str(status).endswith(" 1")
+        await _maybe_commit(db)
+    result = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type, list_name=intent.list_name), user_id, db)
+    result["intent"] = {"domain": "lists", "action": "create_list", "list_type": list_type, "list_name": intent.list_name}
+    result["spoken_summary"] = f"Created {intent.list_name}." if created else f"You already have a {intent.list_name} list."
+    result["actions"] = [{"type": "created" if created else "existing", "domain": "lists", "list_name": intent.list_name, "list_type": list_type}]
+    return result
 
 
 async def _find_or_create_list(intent: SkybridgeIntent, user_id: str, db: Any, context: dict[str, Any] | None) -> tuple[str, str] | None:
@@ -902,6 +1102,7 @@ async def _find_or_create_list(intent: SkybridgeIntent, user_id: str, db: Any, c
         """
         INSERT INTO lists (id, user_id, name, list_type, description, visibility)
         VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (user_id, lower(name)) WHERE deleted = 0 DO NOTHING
         """,
         list_id,
         user_id,
@@ -911,6 +1112,19 @@ async def _find_or_create_list(intent: SkybridgeIntent, user_id: str, db: Any, c
         "family",
     )
     await _maybe_commit(db)
+    rows = await db.fetch(
+        """
+        SELECT id, name, list_type
+        FROM lists
+        WHERE user_id = $1 AND deleted = 0 AND lower(name) = lower($2)
+        LIMIT 1
+        """,
+        user_id,
+        list_name,
+    )
+    if rows:
+        row = dict(rows[0])
+        return str(row["id"]), str(row.get("list_type") or list_type)
     return list_id, list_type
 
 
