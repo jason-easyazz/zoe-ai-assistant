@@ -10,6 +10,7 @@ from pi_intent_classifier import (
     PiIntentClassifierConfig,
     _classification_prompt,
     _parse_pi_classification,
+    _rpc_response_matches_request,
     classify_with_pi_intent_governor,
     pi_intent_is_promoted,
     pi_intent_promotion_status,
@@ -77,9 +78,10 @@ def _fake_rpc_runtime(tmp_path, *, response=None):
         "            fh.write(json.dumps({'event': 'request', 'body': request}) + '\\n')\n"
         "    text = json.dumps(payload)\n"
         "    event_id = request.get('id')\n"
-        "    print(json.dumps({'id': event_id, 'type': 'message_end', 'message': {'role': 'assistant', 'content': [{'type': 'text', 'text': text}]}}), flush=True)\n"
-        "    print(json.dumps({'id': event_id, 'type': 'turn_end', 'message': {'role': 'assistant', 'content': [{'type': 'text', 'text': text}]}}), flush=True)\n"
-        "    print(json.dumps({'id': event_id, 'type': 'agent_end', 'messages': [{'role': 'assistant', 'content': [{'type': 'text', 'text': text}]}]}), flush=True)\n",
+        "    print(json.dumps({'id': event_id, 'type': 'response', 'command': 'prompt', 'success': True}), flush=True)\n"
+        "    print(json.dumps({'type': 'message_end', 'message': {'role': 'assistant', 'content': [{'type': 'text', 'text': text}]}}), flush=True)\n"
+        "    print(json.dumps({'type': 'turn_end', 'message': {'role': 'assistant', 'content': [{'type': 'text', 'text': text}]}}), flush=True)\n"
+        "    print(json.dumps({'type': 'agent_end', 'messages': [{'role': 'assistant', 'content': [{'type': 'text', 'text': text}]}]}), flush=True)\n",
     )
     return bindir, payload
 
@@ -183,6 +185,12 @@ def test_pi_intent_config_rejects_unknown_transport():
         config.validate()
 
 
+def test_pi_rpc_response_match_requires_prompt_command():
+    assert _rpc_response_matches_request({"id": "abc", "type": "response", "command": "prompt"}, "abc") is True
+    assert _rpc_response_matches_request({"id": "abc", "type": "response", "command": "get_state"}, "abc") is False
+    assert _rpc_response_matches_request({"id": "other", "type": "response", "command": "prompt"}, "abc") is False
+
+
 @pytest.mark.asyncio
 async def test_pi_intent_governor_rpc_reuses_warm_process_and_strips_cloud_keys(tmp_path, monkeypatch):
     workers = {}
@@ -227,9 +235,61 @@ async def test_pi_intent_governor_rpc_reuses_warm_process_and_strips_cloud_keys(
     assert "--mode" in starts[0]["argv"]
     assert "rpc" in starts[0]["argv"]
     assert "--offline" in starts[0]["argv"]
+    assert "--no-tools" in starts[0]["argv"]
+    assert "--no-context-files" in starts[0]["argv"]
+    assert "--no-extensions" in starts[0]["argv"]
+    assert "--no-skills" in starts[0]["argv"]
+    assert "--no-prompt-templates" in starts[0]["argv"]
+    assert "--no-themes" in starts[0]["argv"]
+    assert "--system-prompt" in starts[0]["argv"]
+    assert "--thinking" in starts[0]["argv"]
+    assert "off" in starts[0]["argv"]
     assert "-p" not in starts[0]["argv"]
     assert requests[0]["body"]["type"] == "prompt"
     assert "rain later" in requests[0]["body"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_pi_rpc_failed_response_resets_process_under_worker_lock(tmp_path, monkeypatch):
+    bindir = tmp_path / "rpc-failed-response-bin"
+    bindir.mkdir()
+    _write_exe(bindir / "node", "#!/bin/sh\nexit 0\n")
+    _write_exe(bindir / "npm", "#!/bin/sh\nexit 0\n")
+    record = tmp_path / "rpc-failed-response-record.jsonl"
+    _write_exe(
+        bindir / "pi",
+        "#!/usr/bin/python3\n"
+        "import json, os, sys, time\n"
+        "record = os.environ['PI_TEST_RECORD']\n"
+        "for line in sys.stdin:\n"
+        "    request = json.loads(line)\n"
+        "    with open(record, 'a') as fh:\n"
+        "        fh.write(json.dumps({'event': 'request', 'body': request}) + '\\n')\n"
+        "    print(json.dumps({'id': request['id'], 'type': 'response', 'command': 'prompt', 'success': False, 'error': 'model unavailable'}), flush=True)\n"
+        "    time.sleep(10)\n",
+    )
+    workers = {}
+    monkeypatch.setattr(pi_intent_classifier, "_RPC_WORKERS", workers)
+    env = {
+        "PATH": str(bindir),
+        "ZOE_PI_INTENT_ENABLED": "true",
+        "ZOE_PI_INTENT_TRANSPORT": "rpc",
+        "ZOE_PI_COMMAND": "pi",
+        "ZOE_PI_CWD": str(tmp_path),
+        "ZOE_PI_ALLOW_EXECUTION": "true",
+        "ZOE_PI_LOCAL_MODEL_CONFIGURED": "true",
+        "ZOE_PI_INTENT_TIMEOUT_SECONDS": "2",
+        "PI_TEST_RECORD": str(record),
+    }
+
+    result = await classify_with_pi_intent_governor("rain later", env=env)
+
+    assert result is None
+    assert len(workers) == 1
+    worker = next(iter(workers.values()))
+    assert worker.proc is None
+    events = [json.loads(line) for line in record.read_text().splitlines()]
+    assert events[0]["body"]["type"] == "prompt"
 
 
 @pytest.mark.asyncio
@@ -340,6 +400,7 @@ async def test_pi_rpc_ignores_stale_response_with_mismatched_request_id(tmp_path
         "    stale = {'id': 'stale-request', 'type': 'agent_end', 'messages': [{'role': 'assistant', 'content': [{'type': 'text', 'text': stale_payload}]}]}\n"
         "    fresh = {'id': request['id'], 'type': 'agent_end', 'messages': [{'role': 'assistant', 'content': [{'type': 'text', 'text': fresh_payload}]}]}\n"
         "    print(json.dumps(idless), flush=True)\n"
+        "    print(json.dumps({'id': request['id'], 'type': 'response', 'command': 'prompt', 'success': True}), flush=True)\n"
         "    print(json.dumps(stale), flush=True)\n"
         "    print(json.dumps(fresh), flush=True)\n",
     )
@@ -418,6 +479,15 @@ async def test_pi_intent_governor_classifies_with_fake_pi_and_strips_cloud_keys(
     assert "-p" in called["argv"]
     assert "--no-session" in called["argv"]
     assert "--no-approve" in called["argv"]
+    assert "--no-tools" in called["argv"]
+    assert "--no-context-files" in called["argv"]
+    assert "--no-extensions" in called["argv"]
+    assert "--no-skills" in called["argv"]
+    assert "--no-prompt-templates" in called["argv"]
+    assert "--no-themes" in called["argv"]
+    assert "--system-prompt" in called["argv"]
+    assert "--thinking" in called["argv"]
+    assert "off" in called["argv"]
     assert "--provider" in called["argv"]
     assert "ollama" in called["argv"]
     assert "gemma-4-E2B-it-Q4_K_M.gguf" in called["argv"]
