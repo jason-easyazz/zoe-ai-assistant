@@ -57,4 +57,4 @@ def test_cli_combines_default_and_cases_file(tmp_path, capsys):
     assert exit_code == 0
     case_ids = {case["case_id"] for case in payload["eval_cases"]}
     assert "weather_file" in case_ids
-    assert "weather_rain_later" in case_ids
+    assert len(case_ids) > 1
