@@ -1,6 +1,9 @@
 [Unit]
 Description=Zoe Data Service (primary backend API, port 8000)
 After=network.target
+# A user unit cannot order itself after the Docker-managed PostgreSQL container,
+# so on boot zoe-data may fail its first connection attempts until the DB is up.
+# Restart=always below recovers automatically (expect a short burst of restarts).
 
 [Service]
 Type=simple

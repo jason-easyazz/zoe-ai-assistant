@@ -13,9 +13,12 @@ Type=simple
 LimitMEMLOCK=infinity
 # Point LD_LIBRARY_PATH at the directory of your llama.cpp build.
 Environment=LD_LIBRARY_PATH=%h/llama.cpp/build/bin
+# Binds to loopback only -- zoe-data reaches it on 127.0.0.1:11434. The endpoint
+# is unauthenticated, so do NOT change --host to 0.0.0.0 unless you front it with
+# auth/firewalling; that would expose the LLM to every host on your LAN.
 ExecStart=%h/llama.cpp/build/bin/llama-server \
   --model %h/models/gemma4-e2b/gemma-4-E2B-it-Q4_K_M.gguf \
-  --host 0.0.0.0 \
+  --host 127.0.0.1 \
   --port 11434 \
   --ctx-size 16384 \
   --n-gpu-layers 99 \
