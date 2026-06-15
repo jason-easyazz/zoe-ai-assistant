@@ -357,6 +357,7 @@ def test_websocket_wake_can_emit_cached_audio_without_reasoning(monkeypatch, tmp
         raise AssertionError("wake audio must not enter Skybridge/card resolution")
 
     monkeypatch.setattr(main, "_resolve_voice_cards", _unexpected_resolve)
+    monkeypatch.delenv("ZOE_WAKE_ACK_PHRASES", raising=False)
     monkeypatch.setenv("ZOE_WAKE_ACK_PHRASE", "Yes Jason?")
     monkeypatch.setenv("ZOE_WAKE_ACK_AUDIO_PATH", str(audio_path))
 
@@ -408,6 +409,7 @@ def test_voice_wake_endpoint_uses_cached_audio_before_live_tts(monkeypatch, tmp_
     async def _unexpected_synthesize(*_args, **_kwargs):
         raise AssertionError("cached wake audio should avoid live TTS")
 
+    monkeypatch.delenv("ZOE_WAKE_ACK_PHRASES", raising=False)
     monkeypatch.setenv("ZOE_WAKE_ACK_PHRASE", "Yes Jason?")
     monkeypatch.setenv("ZOE_WAKE_ACK_AUDIO_PATH", str(audio_path))
     monkeypatch.setattr(voice_tts, "synthesize", _unexpected_synthesize)
@@ -423,5 +425,45 @@ def test_voice_wake_endpoint_uses_cached_audio_before_live_tts(monkeypatch, tmp_
     payload = response.json()
     assert payload["ok"] is True
     assert payload["panel_id"] == "panel-1"
+    assert payload["ack_text"] == "Yes Jason?"
     assert payload["ack_audio_base64"] == "UklGRg=="
     assert payload["content_type"].startswith("audio/")
+
+
+def test_voice_wake_endpoint_reports_ack_text_when_using_live_tts_fallback(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from routers import voice_tts
+
+    class Audio:
+        body = b"RIFF-tts"
+        media_type = "audio/wav"
+
+    def _fake_auth():
+        return {"source": "test", "panel_id": "test-panel", "user_id": "u1"}
+
+    async def _fake_synthesize(payload, caller=None):
+        assert payload == {"text": "Yes Jason?"}
+        assert caller["source"] == "test"
+        return Audio()
+
+    monkeypatch.delenv("ZOE_WAKE_ACK_PHRASES", raising=False)
+    monkeypatch.delenv("ZOE_WAKE_ACK_AUDIO_PATH", raising=False)
+    monkeypatch.delenv("ZOE_WAKE_ACK_AUDIO_PATHS", raising=False)
+    monkeypatch.setenv("ZOE_WAKE_ACK_PHRASE", "Yes Jason?")
+    monkeypatch.setattr(voice_tts, "synthesize", _fake_synthesize)
+
+    app = FastAPI()
+    app.include_router(voice_tts.router)
+    app.dependency_overrides[voice_tts._require_voice_auth] = _fake_auth
+
+    with TestClient(app) as client:
+        response = client.post("/api/voice/wake", json={"panel_id": "panel-1"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["panel_id"] == "panel-1"
+    assert payload["ack_text"] == "Yes Jason?"
+    assert payload["ack_audio_base64"] == "UklGRi10dHM="
+    assert payload["content_type"] == "audio/wav"
