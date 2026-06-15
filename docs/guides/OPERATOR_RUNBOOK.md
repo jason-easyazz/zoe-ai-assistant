@@ -47,6 +47,7 @@ systemctl --user restart openclaw-gateway # After openclaw.json changes
 | `ZOE_WAKE_ACK_PHRASE` | zoe-data + Pi daemon | — | Instant websocket wake transcript and optional TTS phrase after wake word |
 | `ZOE_WAKE_ACK_AUDIO_PATH` | zoe-data + Pi daemon | — | Pre-generated wake ack audio file served from cache before live TTS |
 | `ZOE_WAKE_ACK_PHRASES` / `ZOE_WAKE_ACK_AUDIO_PATHS` | zoe-data + Pi daemon | — | Pipe-separated cached wake response bank; phrase/audio entries are index-aligned |
+| `ZOE_WAKE_ACK_VARIANT_LABELS` | zoe-data + Pi daemon | — | Optional pipe-aligned labels (`default`, `morning`, `afternoon`, `evening`, `night`) for deterministic time-aware wake acks |
 | `ZOE_DEVICE_TOKEN_SECRET` | zoe-data | — | Secret for device token HMAC (optional extra layer) |
 | `ZOE_PIN_MAX_ATTEMPTS` | zoe-data | 5 | PIN lockout attempts |
 | `ZOE_PIN_CHALLENGE_TTL_S` | zoe-data | 120 | PIN challenge expiry in seconds |

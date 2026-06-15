@@ -1,3 +1,4 @@
+from datetime import datetime
 import sys
 from pathlib import Path
 
@@ -14,7 +15,9 @@ from voice_presence import (
     wake_ack_audio_payload,
     wake_ack_events,
     wake_ack_phrase,
+    wake_ack_time_period,
     wake_ack_variant,
+    wake_ack_variant_labels,
     wake_presence_events,
 )
 
@@ -116,7 +119,83 @@ def test_wake_ack_variant_selects_index_aligned_phrase_and_audio(tmp_path):
         index=1,
     )
 
-    assert variant == {"phrase": "Good morning Jason.", "audio_path": str(second), "index": 1}
+    assert variant == {"phrase": "Good morning Jason.", "audio_path": str(second), "index": 1, "label": ""}
+
+
+def test_wake_ack_variant_labels_are_pipe_aligned():
+    assert wake_ack_variant_labels({}) == []
+    assert wake_ack_variant_labels({"ZOE_WAKE_ACK_VARIANT_LABELS": " default | Morning | evening,night "}) == [
+        "default",
+        "morning",
+        "evening,night",
+    ]
+
+
+def test_wake_ack_time_period_uses_local_hour_buckets():
+    assert wake_ack_time_period(datetime(2026, 1, 1, 8, 0)) == "morning"
+    assert wake_ack_time_period(datetime(2026, 1, 1, 13, 0)) == "afternoon"
+    assert wake_ack_time_period(datetime(2026, 1, 1, 20, 0)) == "evening"
+    assert wake_ack_time_period(datetime(2026, 1, 1, 23, 0)) == "evening"
+    assert wake_ack_time_period(datetime(2026, 1, 1, 2, 0)) == "night"
+
+
+def test_wake_ack_variant_prefers_matching_time_label():
+    env = {
+        "ZOE_WAKE_ACK_PHRASES": "Yes Jason?|Good morning Jason.|Good evening Jason.",
+        "ZOE_WAKE_ACK_VARIANT_LABELS": "default|morning|evening",
+    }
+
+    assert wake_ack_variant(env, now=datetime(2026, 1, 1, 8, 0))["phrase"] == "Good morning Jason."
+    assert wake_ack_variant(env, now=datetime(2026, 1, 1, 19, 0))["phrase"] == "Good evening Jason."
+
+
+def test_wake_ack_variant_selects_comma_combined_label_for_period():
+    env = {
+        "ZOE_WAKE_ACK_PHRASES": "Yes Jason?|Good night, Jason.",
+        "ZOE_WAKE_ACK_VARIANT_LABELS": "default|evening,night",
+    }
+
+    assert wake_ack_variant(env, now=datetime(2026, 1, 1, 23, 0))["phrase"] == "Good night, Jason."
+    assert wake_ack_variant(env, now=datetime(2026, 1, 1, 2, 0))["phrase"] == "Good night, Jason."
+
+
+def test_wake_ack_variant_ignores_extra_labels_without_content_slots():
+    env = {
+        "ZOE_WAKE_ACK_PHRASES": "Yes Jason?",
+        "ZOE_WAKE_ACK_VARIANT_LABELS": "default|morning",
+    }
+
+    variant = wake_ack_variant(env, now=datetime(2026, 1, 1, 8, 0))
+
+    assert variant == {"phrase": "Yes Jason?", "audio_path": "", "index": 0, "label": "default"}
+
+
+def test_wake_ack_variant_falls_back_to_default_label_when_period_missing():
+    env = {
+        "ZOE_WAKE_ACK_PHRASES": "Yes Jason?|Good morning Jason.",
+        "ZOE_WAKE_ACK_VARIANT_LABELS": "default|morning",
+    }
+
+    variant = wake_ack_variant(env, now=datetime(2026, 1, 1, 14, 0))
+
+    assert variant == {"phrase": "Yes Jason?", "audio_path": "", "index": 0, "label": "default"}
+
+
+def test_wake_ack_events_can_use_time_aware_variant():
+    events = wake_ack_events(
+        {
+            "ZOE_WAKE_ACK_PHRASES": "Yes Jason?|Good morning Jason.",
+            "ZOE_WAKE_ACK_VARIANT_LABELS": "default|morning",
+        },
+        now=datetime(2026, 1, 1, 7, 0),
+    )
+
+    assert events == [
+        {"type": "state", "state": "wake"},
+        {"type": "transcript", "role": "zoe", "text": "Good morning Jason."},
+        {"type": "state", "state": "listening"},
+        {"type": "done"},
+    ]
 
 
 def test_wake_ack_events_uses_selected_cached_variant(tmp_path):
