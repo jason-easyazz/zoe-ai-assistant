@@ -123,3 +123,33 @@ async def test_modifier_day_reminder_still_uses_existing_extractor(monkeypatch, 
     assert intent is not None
     assert intent.name == "reminder_create"
     assert intent.slots == {"title": "modifier day reminder", "date": "2026-06-23"}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "remind me to call mum at noon",
+        "remind me to stretch in the morning",
+        "remind me to lock the door at bedtime",
+    ],
+)
+@pytest.mark.asyncio
+async def test_named_time_reminder_still_uses_existing_extractor(monkeypatch, text):
+    calls = []
+    module = types.ModuleType("nlu_extractor")
+
+    async def fake_extract(intent_name, raw):
+        calls.append((intent_name, raw))
+        return {"title": "named time reminder", "date": "2026-06-15", "time": "12:00"}
+
+    module.extract_slots_for_intent = fake_extract
+    monkeypatch.setitem(sys.modules, "nlu_extractor", module)
+
+    from intent_router import detect_and_extract_intent
+
+    intent = await detect_and_extract_intent(text, user_id="guest")
+
+    assert calls == [("reminder_create", text)]
+    assert intent is not None
+    assert intent.name == "reminder_create"
+    assert intent.slots == {"title": "named time reminder", "date": "2026-06-15", "time": "12:00"}
