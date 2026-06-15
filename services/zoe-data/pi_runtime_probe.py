@@ -273,11 +273,43 @@ def _float_snapshot(value: str | None, *, default: float) -> float | str:
 def _tool_snapshot(pi_command: str, env: Mapping[str, str] | None = None) -> dict[str, str | None]:
     values = env if env is not None else os.environ
     path = values.get("PATH")
+    if env is None:
+        path = _path_with_nvm_node_bin(path or "")
     return {
         "node": shutil.which("node", path=path),
         "npm": shutil.which("npm", path=path),
         "pi": shutil.which(pi_command, path=path),
     }
+
+
+def _path_with_nvm_node_bin(path: str) -> str:
+    parts = [part for part in path.split(os.pathsep) if part]
+    joined = os.pathsep.join(parts)
+    if shutil.which("node", path=joined) and shutil.which("npm", path=joined) and shutil.which("pi", path=joined):
+        return joined
+    node_bin = _discover_nvm_node_bin()
+    if node_bin and node_bin not in parts:
+        parts.append(node_bin)
+    return os.pathsep.join(parts)
+
+
+def _discover_nvm_node_bin() -> str | None:
+    nvm_versions = Path.home() / ".nvm" / "versions" / "node"
+    if not nvm_versions.is_dir():
+        return None
+    candidates = [path / "bin" for path in nvm_versions.iterdir() if (path / "bin").is_dir()]
+    candidates = [path for path in candidates if (path / "node").exists() and (path / "npm").exists()]
+    if not candidates:
+        return None
+
+    def version_key(path: Path) -> tuple[int, ...]:
+        version = path.parent.name.lstrip("v")
+        try:
+            return tuple(int(part) for part in version.split("."))
+        except ValueError:
+            return (0,)
+
+    return str(sorted(candidates, key=version_key)[-1])
 
 
 def _tool_version_snapshot(
@@ -302,6 +334,10 @@ def _command_version(
     if not command_path:
         return None
     values = dict(os.environ if env is None else env)
+    command_dir = str(Path(command_path).parent)
+    path_parts = [part for part in values.get("PATH", "").split(os.pathsep) if part]
+    if command_dir not in path_parts:
+        values["PATH"] = os.pathsep.join([command_dir, *path_parts])
     try:
         completed = subprocess.run(
             [command_path, "--version"],

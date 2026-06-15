@@ -175,6 +175,31 @@ def test_probe_accepts_enabled_pi_with_supported_node_version(tmp_path):
     assert result.to_dict()["requirements"]["node"]["status"] == "ok"
 
 
+def test_default_probe_discovers_nvm_pi_install(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    bindir = home / ".nvm" / "versions" / "node" / "v22.22.0" / "bin"
+    bindir.mkdir(parents=True)
+    versions = {"node": "v22.22.0", "npm": "10.9.4"}
+    for command in ("node", "npm"):
+        path = bindir / command
+        path.write_text(f"#!/bin/sh\necho {versions[command]}\n", encoding="utf-8")
+        path.chmod(0o755)
+    pi = bindir / "pi"
+    pi.write_text("#!/bin/sh\necho 0.79.3\n", encoding="utf-8")
+    pi.chmod(0o755)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("PATH", "")
+    monkeypatch.setenv("ZOE_PI_ENABLED", "true")
+
+    result = probe_pi_runtime()
+
+    assert result.status == "available_execution_disabled"
+    assert result.tools == {"node": str(bindir / "node"), "npm": str(bindir / "npm"), "pi": str(pi)}
+    assert result.tool_versions["node"] == "v22.22.0"
+    assert result.tool_versions["npm"] == "10.9.4"
+    assert result.to_dict()["requirements"]["node"]["status"] == "ok"
+
+
 def test_probe_reports_unknown_when_node_version_is_unreadable(tmp_path):
     bindir = tmp_path / "bin"
     bindir.mkdir()
