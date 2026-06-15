@@ -7,7 +7,7 @@ GRAPHIFY_PYTHON="${GRAPHIFY_PYTHON:-/home/zoe/.local/share/uv/tools/graphifyy/bi
 MODE="${1:-}"
 LOCK_FILE="${TMPDIR:-/tmp}/zoe-graphify-refresh.lock"
 ERROR_MARKER="graphify-out/.last_refresh_error"
-REF="origin/main"
+REF="${GRAPHIFY_REF:-origin/main}"
 
 log() { printf '[graphify-refresh] %s\n' "$*"; }
 
@@ -57,8 +57,10 @@ fi
 [[ -x "$GRAPHIFY_PYTHON" ]] || fail "graphify python not found: $GRAPHIFY_PYTHON"
 [[ -f graphify-out/GRAPH_REPORT.md ]] || fail "missing graphify-out/GRAPH_REPORT.md"
 
-if ! git fetch --quiet origin main; then
-  fail "git fetch origin main failed; refusing to build the graph from unfetched state"
+if [[ "$REF" == origin/* ]]; then
+  if ! git fetch --quiet origin "${REF#origin/}"; then
+    fail "git fetch ${REF} failed; refusing to build the graph from unfetched state"
+  fi
 fi
 current_head="$(git rev-parse --short=8 "$REF")"
 built_head="$(python3 - <<'PY'
