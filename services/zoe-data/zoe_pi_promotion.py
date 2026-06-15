@@ -362,12 +362,13 @@ def build_pi_route_class_breakdown(samples: Sequence[PiRouteSample]) -> dict[str
             sample.validate()
         zoe_p95 = _percentile([sample.zoe_latency_ms for sample in route_samples], 95)
         pi_p95 = _percentile([sample.pi_latency_ms for sample in route_samples], 95)
+        zoe_accuracy = _rate(sample.zoe_correct for sample in route_samples)
+        pi_accuracy = _rate(sample.pi_correct for sample in route_samples)
         breakdown[route_class] = {
             "sample_count": len(route_samples),
-            "zoe_accuracy": _rate(sample.zoe_correct for sample in route_samples),
-            "pi_accuracy": _rate(sample.pi_correct for sample in route_samples),
-            "accuracy_delta": _rate(sample.pi_correct for sample in route_samples)
-            - _rate(sample.zoe_correct for sample in route_samples),
+            "zoe_accuracy": zoe_accuracy,
+            "pi_accuracy": pi_accuracy,
+            "accuracy_delta": pi_accuracy - zoe_accuracy,
             "zoe_p95_latency_ms": zoe_p95,
             "pi_p95_latency_ms": pi_p95,
             "latency_delta_ms": None if zoe_p95 is None or pi_p95 is None else zoe_p95 - pi_p95,
