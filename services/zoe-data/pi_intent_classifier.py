@@ -31,6 +31,7 @@ PI_INTENT_HINT_THRESHOLD = 0.55
 PI_INTENT_DEFAULT_TIMEOUT_S = 4.0
 PI_INTENT_MAX_WORDS = 32
 PI_RUNTIME_PROBE_CACHE_TTL_S = 5.0
+PI_INTENT_PREFILTER_ENABLED = True
 _RUNTIME_PROBE_CACHE_MAX_ENTRIES = 32
 
 _ALLOWED_EXECUTABLE_INTENTS = {
@@ -103,6 +104,30 @@ _PI_CLASSIFIER_SYSTEM_PROMPT = (
     "Never create memory-write intents from ambiguous phrasing."
 )
 
+_LOW_RISK_TASK_SIGNAL_RE = re.compile(
+    r"\b("
+    r"rain|umbrella|forecast|weather|jacket|temperature|temp|storm|windy|humid|"
+    r"remember|remind|reminder|due|todo|"
+    r"list|shopping|groceries|"
+    r"timer|alarm|minute|minutes|hour|hours|"
+    r"calculate|math|multiplied|divided|percent|"
+    r"briefing|agenda"
+    r")\b",
+    re.I,
+)
+_LOW_RISK_TASK_PHRASE_RE = re.compile(
+    r"("
+    r"\bwhat(?:'s| is) my day\b|"
+    r"\bmy day looking\b|"
+    r"\bwhat(?:'s| is) on (?:my |the )?(?:shopping )?list\b|"
+    r"\b(?:add|remove)\b.+\b(?:list|shopping|grocer(?:y|ies)|reminder|todo)\b|"
+    r"\b(?:is it|will it be)\s+(?:hot|cold)\b|"
+    r"\b(?:hot|cold)\s+(?:today|tonight|tomorrow|outside)\b|"
+    r"\b\d+\s*(?:\+|-|x|×|\*|/|÷|plus|minus|times)\s*\d+\b"
+    r")",
+    re.I,
+)
+
 
 @dataclass(frozen=True)
 class PiIntentClassifierConfig:
@@ -116,6 +141,7 @@ class PiIntentClassifierConfig:
     offline_only: bool = True
     no_approve: bool = True
     transport: str = "print"
+    prefilter_enabled: bool = PI_INTENT_PREFILTER_ENABLED
     runtime_probe_cache_ttl_seconds: float = PI_RUNTIME_PROBE_CACHE_TTL_S
 
     @classmethod
@@ -133,6 +159,7 @@ class PiIntentClassifierConfig:
             offline_only=_env_bool(values.get("ZOE_PI_OFFLINE_ONLY"), default=True),
             no_approve=_env_bool(values.get("ZOE_PI_INTENT_NO_APPROVE"), default=True),
             transport=(values.get("ZOE_PI_INTENT_TRANSPORT") or "print").strip().lower() or "print",
+            prefilter_enabled=_env_bool(values.get("ZOE_PI_INTENT_PREFILTER_ENABLED"), default=PI_INTENT_PREFILTER_ENABLED),
             runtime_probe_cache_ttl_seconds=float(
                 values.get("ZOE_PI_INTENT_RUNTIME_PROBE_CACHE_TTL_SECONDS")
                 or values.get("ZOE_PI_RUNTIME_PROBE_CACHE_TTL_SECONDS")
@@ -165,6 +192,7 @@ class PiIntentClassifierConfig:
             "offline_only": self.offline_only,
             "no_approve": self.no_approve,
             "transport": self.transport,
+            "prefilter_enabled": self.prefilter_enabled,
             "runtime_probe_cache_ttl_seconds": self.runtime_probe_cache_ttl_seconds,
         }
 
@@ -256,6 +284,9 @@ async def classify_with_pi_intent_governor(
     if not active_config.enabled:
         return None
     if len((text or "").split()) > active_config.max_words:
+        return None
+    if active_config.prefilter_enabled and not pi_intent_prefilter_allows(text):
+        logger.debug("Pi intent governor skipped: no low-risk task signal")
         return None
 
     runtime_env = _runtime_probe_env(env, active_config)
@@ -717,6 +748,11 @@ def _env_bool(value: str | None, *, default: bool) -> bool:
     raise ValueError(f"Unrecognized boolean env var value: {value!r}")
 
 
+def pi_intent_prefilter_allows(text: str) -> bool:
+    normalized = str(text or "")
+    return bool(_LOW_RISK_TASK_SIGNAL_RE.search(normalized) or _LOW_RISK_TASK_PHRASE_RE.search(normalized))
+
+
 __all__ = [
     "PI_INTENT_EXECUTE_THRESHOLD",
     "PI_INTENT_HINT_THRESHOLD",
@@ -726,4 +762,5 @@ __all__ = [
     "pi_intent_promotion_status",
     "classify_with_pi_intent_governor",
     "pi_intent_status",
+    "pi_intent_prefilter_allows",
 ]

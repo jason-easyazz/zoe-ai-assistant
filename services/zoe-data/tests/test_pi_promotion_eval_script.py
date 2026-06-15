@@ -46,6 +46,18 @@ def _install_fake_zoe_agent(monkeypatch, calls, *, response="agent answer", slee
     monkeypatch.setitem(sys.modules, "zoe_agent", module)
 
 
+def _install_fake_pi_classifier(monkeypatch, *, result=None, sleep_seconds=0):
+    module = types.ModuleType("pi_intent_classifier")
+
+    async def classify_with_pi_intent_governor(_text):
+        if sleep_seconds:
+            await asyncio.sleep(sleep_seconds)
+        return result
+
+    module.classify_with_pi_intent_governor = classify_with_pi_intent_governor
+    monkeypatch.setitem(sys.modules, "pi_intent_classifier", module)
+
+
 def test_cli_loads_cases_file_without_default_cases(tmp_path, capsys):
     module = _load_module()
     cases_path = tmp_path / "cases.jsonl"
@@ -180,6 +192,21 @@ def test_zoe_baseline_timeout_is_not_comparable(monkeypatch):
 
     assert result["baseline_timed_out"] is True
     assert result["baseline_response_chars"] == 0
+
+def test_run_pi_fast_no_result_is_not_timeout(monkeypatch):
+    _install_fake_pi_classifier(monkeypatch, result=None)
+    module = _load_module()
+    case = module.PiIntentEvalCase("casual", "that movie was good", None, "chat", "fallback", negative=True)
+
+    result = asyncio.run(
+        module._run_pi(case, transport="rpc", enable_execution=True, local_model_configured=True)
+    )
+
+    assert result["intent"] is None
+    assert result["timed_out"] is False
+    assert result["correct"] is True
+
+
 
 def test_cli_combines_default_and_cases_file(tmp_path, capsys):
     module = _load_module()
