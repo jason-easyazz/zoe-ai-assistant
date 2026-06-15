@@ -1,4 +1,5 @@
 import pytest
+from fastapi import HTTPException
 
 from intent_router import Intent, _load_direct_execution_user, execute_intent
 from models import ReminderCreate
@@ -135,3 +136,20 @@ async def test_execute_reminder_create_falls_back_to_mcporter_when_direct_unavai
         ("build", "reminder_create", "family-admin"),
         ("mcporter", "mcporter-safe call zoe-data.reminder_create"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_execute_reminder_create_policy_denial_does_not_fall_back_to_mcporter(monkeypatch):
+    async def fake_direct(_intent, _user_id):
+        raise HTTPException(status_code=403, detail="Authentication required for this action.")
+
+    async def fail_mcporter(_cmd):
+        raise AssertionError("policy denial must not fall back to mcporter")
+
+    monkeypatch.setattr("intent_router._execute_reminder_create_direct", fake_direct)
+    monkeypatch.setattr("intent_router._run_mcporter", fail_mcporter)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await execute_intent(Intent("reminder_create", {"title": "check the oven"}), "guest")
+
+    assert exc_info.value.status_code == 403
