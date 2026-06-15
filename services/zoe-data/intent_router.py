@@ -1332,7 +1332,7 @@ def _parse_relative_reminder_duration(raw: str):
 
     qty_text = m.group("qty").lower()
     quantity = int(qty_text) if qty_text.isdigit() else quantity_words.get(qty_text)
-    if not quantity or quantity < 1:
+    if not quantity or quantity < 1 or quantity > 999:
         return None
 
     unit = m.group("unit").lower()
@@ -1391,7 +1391,10 @@ def _extract_relative_reminder_slots(text: str) -> Optional[dict]:
 
 
 def _extract_simple_reminder_slots(text: str) -> Optional[dict]:
-    """Fast slots for common reminder phrases; complex relative phrasing still uses NLU."""
+    """Fast slots for common reminder phrases, including bounded relative durations.
+
+    Recurring, modified-weekday, named-time, and other complex phrases fall back to NLU.
+    """
 
     raw = re.sub(r"\s+", " ", str(text or "")).strip()
     if not raw:

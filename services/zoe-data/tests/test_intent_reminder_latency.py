@@ -128,6 +128,35 @@ async def test_word_relative_reminder_skips_llm_extractor(monkeypatch, text, exp
     assert intent.slots["title"]
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "remind me in 1000 weeks to rotate credentials",
+        "remind me to rotate credentials in 99999 days",
+    ],
+)
+@pytest.mark.asyncio
+async def test_absurd_relative_reminder_still_uses_existing_extractor(monkeypatch, text):
+    calls = []
+    module = types.ModuleType("nlu_extractor")
+
+    async def fake_extract(intent_name, raw):
+        calls.append((intent_name, raw))
+        return {"title": "rotate credentials", "date": "2026-06-22"}
+
+    module.extract_slots_for_intent = fake_extract
+    monkeypatch.setitem(sys.modules, "nlu_extractor", module)
+
+    from intent_router import detect_and_extract_intent
+
+    intent = await detect_and_extract_intent(text, user_id="guest")
+
+    assert calls == [("reminder_create", text)]
+    assert intent is not None
+    assert intent.name == "reminder_create"
+    assert intent.slots == {"title": "rotate credentials", "date": "2026-06-22"}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "text",
