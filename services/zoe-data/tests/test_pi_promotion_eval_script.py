@@ -76,23 +76,27 @@ def test_cli_loads_cases_file_without_default_cases(tmp_path, capsys):
     assert payload["promotion_report"]["sample_count"] == 0
 
 
-def test_zoe_baseline_marks_fallback_router_only_as_not_comparable(monkeypatch):
+def test_zoe_baseline_uses_current_router_hit_for_stale_fallback_fixture(monkeypatch):
     _install_fake_intent_router(monkeypatch)
+    calls = []
+    _install_fake_zoe_agent(monkeypatch, calls)
     module = _load_module()
     case = module.PiIntentEvalCase("weather", "rain later", "weather", "weather", "fallback")
 
-    result = asyncio.run(module._run_zoe_baseline(case))
+    result = asyncio.run(module._run_zoe_baseline(case, measure_zoe_agent_baseline=True))
 
-    assert result["baseline_kind"] == "router_only_not_comparable"
-    assert result["baseline_comparable"] is False
+    assert result["baseline_kind"] == "router"
+    assert result["baseline_comparable"] is True
     assert result["latency_ms"] == result["router_latency_ms"]
+    assert result["correct"] is True
     assert result["baseline_timed_out"] is False
     assert result["baseline_response_chars"] is None
     assert result["baseline_error"] is None
+    assert calls == []
 
 
 def test_zoe_baseline_uses_operator_fallback_latency_override(monkeypatch):
-    _install_fake_intent_router(monkeypatch)
+    _install_fake_intent_router(monkeypatch, intent_name=None)
     module = _load_module()
     case = module.PiIntentEvalCase("weather", "rain later", "weather", "weather", "fallback")
 
@@ -108,7 +112,7 @@ def test_zoe_baseline_uses_operator_fallback_latency_override(monkeypatch):
 
 
 def test_zoe_baseline_operator_override_wins_over_agent_measurement(monkeypatch):
-    _install_fake_intent_router(monkeypatch)
+    _install_fake_intent_router(monkeypatch, intent_name=None)
     calls = []
     _install_fake_zoe_agent(monkeypatch, calls)
     module = _load_module()
@@ -144,6 +148,25 @@ def test_zoe_baseline_uses_operator_extraction_failed_latency_override(monkeypat
     assert result["baseline_timed_out"] is False
     assert result["baseline_response_chars"] is None
     assert result["baseline_error"] is None
+
+
+def test_zoe_baseline_current_router_hit_skips_agent_for_stale_extraction_fixture(monkeypatch):
+    _install_fake_intent_router(monkeypatch, intent_name="reminder_create", confidence=0.91)
+    calls = []
+    _install_fake_zoe_agent(monkeypatch, calls)
+    module = _load_module()
+    case = module.PiIntentEvalCase(
+        "reminder", "remind me to call mum", "reminder_create", "reminders", "extraction_failed"
+    )
+
+    result = asyncio.run(module._run_zoe_baseline(case, measure_zoe_agent_baseline=True))
+
+    assert result["baseline_kind"] == "router"
+    assert result["baseline_comparable"] is True
+    assert result["latency_ms"] == result["router_latency_ms"]
+    assert result["intent"] == "reminder_create"
+    assert result["correct"] is True
+    assert calls == []
 
 
 def test_zoe_baseline_can_measure_comparable_zoe_agent_fallback(monkeypatch):
