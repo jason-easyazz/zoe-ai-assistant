@@ -10,9 +10,15 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
+
+
+PI_MIN_NODE_VERSION = (22, 19, 0)
+PI_INSTALL_PACKAGE = "@earendil-works/pi-coding-agent"
+PI_INSTALL_COMMAND = "npm install -g --ignore-scripts @earendil-works/pi-coding-agent"
 
 
 class PiRuntimeConfigError(ValueError):
@@ -82,6 +88,9 @@ class PiRuntimeProbeResult:
     tools: dict[str, str | None]
     agent_files: tuple[dict[str, str | None], ...]
     reason: str | None = None
+    tool_versions: dict[str, str | None] | None = None
+    requirements: dict[str, Any] | None = None
+    install_plan: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -90,6 +99,9 @@ class PiRuntimeProbeResult:
             "status": self.status,
             "config": self.config,
             "tools": self.tools,
+            "tool_versions": self.tool_versions or {},
+            "requirements": self.requirements or _pi_requirements_snapshot(),
+            "install_plan": self.install_plan or _pi_install_plan_snapshot(),
             "agent_files": list(self.agent_files),
             "reason": self.reason,
         }
@@ -107,11 +119,16 @@ def probe_pi_runtime(env: Mapping[str, str] | None = None) -> PiRuntimeProbeResu
             status="misconfigured",
             config=snapshot,
             tools=_tool_snapshot(snapshot.get("command") or "pi", env),
+            requirements=_pi_requirements_snapshot(),
+            install_plan=_pi_install_plan_snapshot(),
             agent_files=(),
             reason=str(exc),
         )
 
     tools = _tool_snapshot(config.command, env)
+    tool_versions = _tool_version_snapshot(tools, env, timeout_seconds=config.timeout_seconds)
+    requirements = _pi_requirements_snapshot(node_version=tool_versions.get("node"), node_found=bool(tools.get("node")))
+    install_plan = _pi_install_plan_snapshot()
 
     if not config.enabled:
         return PiRuntimeProbeResult(
@@ -120,6 +137,9 @@ def probe_pi_runtime(env: Mapping[str, str] | None = None) -> PiRuntimeProbeResu
             status="disabled",
             config=config.to_dict(),
             tools=tools,
+            tool_versions=tool_versions,
+            requirements=requirements,
+            install_plan=install_plan,
             agent_files=(),
             reason="ZOE_PI_ENABLED is false",
         )
@@ -133,8 +153,25 @@ def probe_pi_runtime(env: Mapping[str, str] | None = None) -> PiRuntimeProbeResu
             status="missing_node",
             config=config.to_dict(),
             tools=tools,
+            tool_versions=tool_versions,
+            requirements=requirements,
+            install_plan=install_plan,
             agent_files=agent_files,
             reason="node is required before Pi can run",
+        )
+
+    if requirements["node"].get("status") == "too_old":
+        return PiRuntimeProbeResult(
+            ok=False,
+            acceptable=False,
+            status="node_version_too_old",
+            config=config.to_dict(),
+            tools=tools,
+            tool_versions=tool_versions,
+            requirements=requirements,
+            install_plan=install_plan,
+            agent_files=agent_files,
+            reason=f"node >= {requirements['node']['minimum']} is required for current Pi",
         )
 
     if not tools.get("npm"):
@@ -144,6 +181,9 @@ def probe_pi_runtime(env: Mapping[str, str] | None = None) -> PiRuntimeProbeResu
             status="missing_npm",
             config=config.to_dict(),
             tools=tools,
+            tool_versions=tool_versions,
+            requirements=requirements,
+            install_plan=install_plan,
             agent_files=agent_files,
             reason="npm is required before Pi can be installed or updated",
         )
@@ -155,6 +195,9 @@ def probe_pi_runtime(env: Mapping[str, str] | None = None) -> PiRuntimeProbeResu
             status="missing_pi",
             config=config.to_dict(),
             tools=tools,
+            tool_versions=tool_versions,
+            requirements=requirements,
+            install_plan=install_plan,
             agent_files=agent_files,
             reason="pi command not found",
         )
@@ -173,6 +216,9 @@ def probe_pi_runtime(env: Mapping[str, str] | None = None) -> PiRuntimeProbeResu
         status=status,
         config=config.to_dict(),
         tools=tools,
+        tool_versions=tool_versions,
+        requirements=requirements,
+        install_plan=install_plan,
         agent_files=agent_files,
         reason=reason,
     )
@@ -234,6 +280,86 @@ def _tool_snapshot(pi_command: str, env: Mapping[str, str] | None = None) -> dic
     }
 
 
+def _tool_version_snapshot(
+    tools: Mapping[str, str | None],
+    env: Mapping[str, str] | None = None,
+    *,
+    timeout_seconds: float = 1.0,
+) -> dict[str, str | None]:
+    return {
+        "node": _command_version(tools.get("node"), env, timeout_seconds=timeout_seconds),
+        "npm": _command_version(tools.get("npm"), env, timeout_seconds=timeout_seconds),
+        "pi": None,
+    }
+
+
+def _command_version(
+    command_path: str | None,
+    env: Mapping[str, str] | None = None,
+    *,
+    timeout_seconds: float = 1.0,
+) -> str | None:
+    if not command_path:
+        return None
+    values = dict(os.environ if env is None else env)
+    try:
+        completed = subprocess.run(
+            [command_path, "--version"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            env=values,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    output = (completed.stdout or completed.stderr or "").strip().splitlines()
+    return output[0].strip() if output else None
+
+
+def _pi_requirements_snapshot(*, node_version: str | None = None, node_found: bool = False) -> dict[str, Any]:
+    node_status = "unknown" if node_found else "missing"
+    parsed = _parse_semver(node_version)
+    if parsed is not None:
+        node_status = "ok" if parsed >= PI_MIN_NODE_VERSION else "too_old"
+    return {
+        "node": {
+            "minimum": _format_semver(PI_MIN_NODE_VERSION),
+            "detected": node_version,
+            "status": node_status,
+        },
+        "npm": {"required": True},
+        "pi": {"required": True, "package": PI_INSTALL_PACKAGE},
+        "local_model": {"required_for_execution": True},
+        "offline_only": {"required_for_execution": True},
+    }
+
+
+def _pi_install_plan_snapshot() -> dict[str, Any]:
+    return {
+        "source": "https://pi.dev/docs/latest/quickstart",
+        "node_minimum_source": "https://pi.dev/news",
+        "install_command": PI_INSTALL_COMMAND,
+        "uninstall_command": f"npm uninstall -g {PI_INSTALL_PACKAGE}",
+        "requires_multica_approval": True,
+        "probe_executes_pi": False,
+    }
+
+
+def _parse_semver(value: str | None) -> tuple[int, int, int] | None:
+    if not value:
+        return None
+    match = re.search(r"(\d+)\.(\d+)\.(\d+)", value)
+    if not match:
+        return None
+    major, minor, patch = match.groups()
+    return (int(major), int(minor), int(patch))
+
+
+def _format_semver(version: tuple[int, int, int]) -> str:
+    return ".".join(str(part) for part in version)
+
+
 def _discover_agent_files(config: PiRuntimeConfig) -> list[dict[str, str | None]]:
     agent_dir = Path(config.agent_dir) if config.agent_dir else Path(config.cwd) / ".pi" / "agents"
     if not agent_dir.is_dir():
@@ -266,6 +392,9 @@ def _frontmatter_value(text: str, key: str) -> str | None:
 
 
 __all__ = [
+    "PI_INSTALL_COMMAND",
+    "PI_INSTALL_PACKAGE",
+    "PI_MIN_NODE_VERSION",
     "PiRuntimeConfig",
     "PiRuntimeConfigError",
     "PiRuntimeProbeResult",

@@ -27,6 +27,17 @@ On the clean Zoe worktree:
 - execution status: disabled and acceptable;
 - enabled execution status: blocked until runtime prerequisites and local model config exist.
 
+Current Pi install/readiness facts from upstream docs:
+
+- Pi is distributed as `@earendil-works/pi-coding-agent` and the safe npm install command is
+  `npm install -g --ignore-scripts @earendil-works/pi-coding-agent`.
+- Current Pi requires Node.js `>=22.19.0` based on the Pi 0.75.0 release notes.
+- Zoe's probe may execute `node --version` and `npm --version` for readiness, but it does not
+  execute `pi`, install packages, or run agent/model tasks.
+- Installing Node/Pi remains a Multica-governed runtime change, not an automatic probe action.
+
+Sources checked 2026-06-15: https://pi.dev/docs/latest/quickstart and https://pi.dev/news.
+
 ## Configuration
 
 Environment variables:
@@ -52,6 +63,14 @@ Environment variables:
 | `ZOE_PI_INTENT_AUTO_PROMOTE` | `false` | Report whether automatic Pi promotion was requested. Current runtime remains evidence-only and requires the guarded apply helper. |
 | `ZOE_PI_INTENT_PROMOTED_GROUPS` | unset | Comma-separated low-risk intent groups promoted through Pi for live fallback execution and rollback reporting. Unknown or privileged groups are ignored. |
 
+Readiness report fields:
+
+- `tool_versions.node` / `tool_versions.npm`: read-only version snapshots from `--version`.
+- `requirements.node.minimum`: current Pi Node minimum, currently `22.19.0`.
+- `requirements.node.status`: `missing`, `unknown`, `too_old`, or `ok`.
+- `install_plan.install_command`: the operator-reviewed npm install command.
+- `install_plan.requires_multica_approval`: always `true` for runtime installation.
+
 ## Probe
 
 ```bash
@@ -59,7 +78,8 @@ PYTHONPATH=services/zoe-data python3 scripts/maintenance/pi_runtime_probe.py --j
 ```
 
 The probe is safe to run in production-adjacent environments because it only
-uses filesystem and `PATH` checks. It does not execute `pi`.
+uses filesystem and `PATH` checks plus `node --version` and `npm --version`.
+It does not execute `pi`, install packages, or run agent/model tasks.
 
 ## Intent Shadow Evidence
 
