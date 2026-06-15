@@ -254,7 +254,7 @@ def _percentile(ordered_values: Sequence[float], percentile: int) -> float | Non
 
 def _demo_env(base_env: Mapping[str, str]) -> dict[str, str]:
     values = dict(base_env)
-    values.setdefault("ZOE_WAKE_ACK_PHRASES", "Yes Jason.|Hi Jason.|Good morning Jason.")
+    values.setdefault("ZOE_WAKE_ACK_PHRASES", "Understood.|On it.|Good morning.")
     values.setdefault("ZOE_PROCESSING_ACK_PHRASES", "Let me check.|One moment.|I will check that.")
     return values
 

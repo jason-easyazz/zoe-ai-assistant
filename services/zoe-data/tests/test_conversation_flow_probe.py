@@ -9,6 +9,8 @@ def _load_module():
     spec = importlib.util.spec_from_file_location("conversation_flow_probe_test", path)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
+    for name in ("voice_presence", "pi_intent_fleet_benchmark", "zoe_pi_promotion"):
+        sys.modules.pop(name, None)
     old_path = list(sys.path)
     old_modules = set(sys.modules)
     try:
@@ -40,7 +42,7 @@ def test_demo_defaults_make_full_wake_to_processing_flow_ready():
     assert report["presence"]["wake_ack"]["configured"] is True
     assert report["presence"]["processing_ack"]["configured"] is True
     assert report["presence"]["gate"]["full_wake_to_processing_ready"] is True
-    assert report["presence"]["wake_ack"]["first_payload"]["events"][1]["text"] == "Yes Jason."
+    assert report["presence"]["wake_ack"]["first_payload"]["events"][1]["text"] == "Understood."
     assert report["presence"]["processing_ack"]["first_payload"]["event"]["text"] == "Let me check."
 
 
