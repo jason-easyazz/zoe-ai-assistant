@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 import pytest
@@ -82,6 +83,7 @@ def test_shadow_status_summarizes_records(tmp_path):
                     {
                         "agreement": False,
                         "timed_out": True,
+                        "pi_no_result": True,
                         "pi_intent_group": "reminders",
                         "pi_latency_ms": 250,
                         "zoe_latency_ms": 6,
@@ -103,7 +105,7 @@ def test_shadow_status_summarizes_records(tmp_path):
     assert status["record_count_window"] == 2
     assert status["report"]["agreement_rate"] == 0.5
     assert status["report"]["timeout_rate"] == 0.5
-    assert status["report"]["no_result_rate"] == 0.0
+    assert status["report"]["no_result_rate"] == 0.5
     assert status["report"]["accuracy_available"] is False
     assert status["report"]["promotion_ready"] is False
 
@@ -130,6 +132,7 @@ async def test_intent_router_shadow_does_not_change_live_route(monkeypatch):
     from intent_router import detect_and_extract_intent
 
     intent = await detect_and_extract_intent("what is the weather", user_id="jason")
+    await asyncio.sleep(0)
 
     assert intent is not None
     assert intent.name == "weather"
@@ -137,3 +140,39 @@ async def test_intent_router_shadow_does_not_change_live_route(monkeypatch):
     assert calls[0]["zoe_intent"] == "weather"
     assert calls[0]["route_class"] == "deterministic"
     assert calls[0]["user_id"] == "jason"
+
+
+@pytest.mark.asyncio
+async def test_intent_router_reuses_live_pi_result_for_shadow_fallback(tmp_path, monkeypatch):
+    path = tmp_path / "shadow.jsonl"
+    calls = 0
+
+    async def fake_classify(text, *, context_turns="", env=None, config=None):
+        nonlocal calls
+        calls += 1
+        return PiIntentClassification(
+            intent="reminder_list",
+            slots={},
+            confidence=0.86,
+            task_lane="fast_tool",
+            source="pi_test",
+            latency_ms=42.0,
+        )
+
+    monkeypatch.setenv("ZOE_PI_INTENT_ENABLED", "true")
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_ENABLED", "true")
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_PATH", str(path))
+    monkeypatch.setattr("pi_intent_classifier.classify_with_pi_intent_governor", fake_classify)
+
+    from intent_router import detect_and_extract_intent
+
+    intent = await detect_and_extract_intent("anything I should remember right now", user_id="jason")
+    await asyncio.sleep(0)
+
+    assert intent is not None
+    assert intent.name == "reminder_list"
+    assert calls == 1
+    record = json.loads(path.read_text().strip())
+    assert record["route_class"] == "fallback"
+    assert record["pi_intent"] == "reminder_list"
+    assert record["pi_no_result"] is False

@@ -43,7 +43,7 @@ Environment variables:
 | `ZOE_PI_AGENT_DIR` | unset | Optional explicit `.pi/agents` directory. |
 | `ZOE_PI_TIMEOUT_SECONDS` | `2.0` | Future runtime command timeout. |
 | `ZOE_PI_INTENT_SHADOW_ENABLED` | `false` | Collect Pi-vs-Zoe intent comparison records without executing Pi output. |
-| `ZOE_PI_INTENT_SHADOW_PATH` | `/home/zoe/training/data/pi-intent-shadow.jsonl` | JSONL evidence path for shadow records. |
+| `ZOE_PI_INTENT_SHADOW_PATH` | `~/.zoe/data/pi-intent-shadow.jsonl` | JSONL evidence path for shadow records. |
 | `ZOE_PI_INTENT_SHADOW_MAX_WORDS` | `32` | Maximum utterance length eligible for shadow comparison. |
 | `ZOE_PI_INTENT_SHADOW_INCLUDE_PREVIEW` | `true` | Store a short sanitized text preview alongside the text hash. |
 | `ZOE_PI_INTENT_SHADOW_FORCE_ENABLED` | `true` | Force the classifier on inside shadow mode while keeping live routing unchanged. |

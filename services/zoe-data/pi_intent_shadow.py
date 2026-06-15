@@ -19,7 +19,8 @@ from typing import Any, Mapping, Sequence
 
 from zoe_pi_promotion import intent_group_for_intent
 
-_DEFAULT_SHADOW_PATH = "/home/zoe/training/data/pi-intent-shadow.jsonl"
+_DEFAULT_SHADOW_PATH = "~/.zoe/data/pi-intent-shadow.jsonl"
+_UNSET = object()
 _DEFAULT_MAX_REPORT_RECORDS = 500
 _SECRET_KEY_RE = re.compile(r"(?i)(api[_-]?key|token|secret|password|authorization|bearer)")
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.\w+")
@@ -72,10 +73,11 @@ async def maybe_record_pi_intent_shadow(
     zoe_confidence: float | None = None,
     zoe_latency_ms: float | None = None,
     route_class: str,
-    user_id: str = "family-admin",
+    user_id: str = "unknown",
     context_turns: str = "",
     env: Mapping[str, str] | None = None,
     config: PiIntentShadowConfig | None = None,
+    pi_result: Any = _UNSET,
 ) -> dict[str, Any] | None:
     active_config = config or PiIntentShadowConfig.from_env(env)
     active_config.validate()
@@ -89,14 +91,15 @@ async def maybe_record_pi_intent_shadow(
         runtime_env["ZOE_PI_INTENT_ENABLED"] = "true"
 
     started = time.perf_counter()
-    pi_result = None
     error: str | None = None
-    try:
-        from pi_intent_classifier import classify_with_pi_intent_governor
+    if pi_result is _UNSET:
+        pi_result = None
+        try:
+            from pi_intent_classifier import classify_with_pi_intent_governor
 
-        pi_result = await classify_with_pi_intent_governor(text, context_turns=context_turns, env=runtime_env)
-    except Exception as exc:  # pragma: no cover - defensive: shadow must never break routing
-        error = type(exc).__name__
+            pi_result = await classify_with_pi_intent_governor(text, context_turns=context_turns, env=runtime_env)
+        except Exception as exc:  # pragma: no cover - defensive: shadow must never break routing
+            error = type(exc).__name__
     elapsed_ms = (time.perf_counter() - started) * 1000
 
     pi_intent = pi_result.intent if pi_result else None
@@ -140,7 +143,7 @@ def pi_intent_shadow_status(env: Mapping[str, str] | None = None, *, limit: int 
 
 
 def load_pi_intent_shadow_records(path: str, *, limit: int = _DEFAULT_MAX_REPORT_RECORDS) -> list[dict[str, Any]]:
-    target = Path(path)
+    target = Path(path).expanduser()
     if not target.exists():
         return []
     rows = target.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -206,7 +209,7 @@ def summarize_pi_intent_shadow(records: Sequence[Mapping[str, Any]]) -> dict[str
 
 def _append_jsonl(path: str, record: Mapping[str, Any]) -> None:
     _reject_secret_keys(record)
-    target = Path(path)
+    target = Path(path).expanduser()
     target.parent.mkdir(parents=True, exist_ok=True)
     with target.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
