@@ -1410,8 +1410,6 @@ async def test_poll_recovers_pr_after_push_then_api_interruption(tmp_path, monke
             self.worktree_commands.append(args)
             if args[:3] == ["git", "branch", "--show-current"]:
                 return "wt/t_implement"
-            if args[:3] == ["git", "rev-parse", "--abbrev-ref"]:
-                return "origin/release"
             if args[:3] == ["gh", "pr", "view"]:
                 raise ka.KanbanCLIError("no pull request found")
             if args[:3] == ["gh", "pr", "create"]:
@@ -1435,7 +1433,10 @@ async def test_poll_recovers_pr_after_push_then_api_interruption(tmp_path, monke
     complete = next(call for call in a.calls if call[0] == "complete")
     assert "PR_URL=https://github.com/jason-easyazz/zoe-ai-assistant/pull/999" in "\n".join(complete)
     create_cmd = next(cmd for cmd in a.worktree_commands if cmd[:3] == ["gh", "pr", "create"])
-    assert create_cmd[create_cmd.index("--base") + 1] == "release"
+    # No --base is passed: gh defaults to the repo's default branch. Deriving the
+    # base from HEAD@{upstream} is wrong after `git push -u` (upstream == the task
+    # branch itself), which would make head == base and fail.
+    assert "--base" not in create_cmd
 
 
 @pytest.mark.asyncio
@@ -1672,8 +1673,6 @@ async def test_poll_creates_pr_when_pr_view_returns_no_url(tmp_path, monkeypatch
             self.worktree_commands.append(args)
             if args[:3] == ["git", "branch", "--show-current"]:
                 return "wt/t_implement"
-            if args[:3] == ["git", "rev-parse", "--abbrev-ref"]:
-                return "origin/main"
             if args[:3] == ["gh", "pr", "view"]:
                 return "null"
             if args[:3] == ["gh", "pr", "create"]:
@@ -5534,3 +5533,134 @@ def test_audit_no_pr_phases_do_not_preload_broad_skills():
     assert _phase_plan_entry("verify", code_clause_issue)[2] == ("zoe-engineering",)
     assert _phase_plan_entry("closeout", code_smoke_issue)[2] == ("github-greptile-loop",)
     assert _phase_plan_entry("closeout", code_clause_issue)[2] == ("github-greptile-loop",)
+
+
+# ---------------------------------------------------------------------------
+# Capture-on-exit: salvage a finished implement diff the worker never shipped
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_recover_unshipped_diff_commits_pushes_and_opens_pr(tmp_path, monkeypatch):
+    """Worker left a dirty worktree (no commit/push): salvage -> commit+push+PR+done."""
+    monkeypatch.setattr(ka, "latest_log_session", lambda *a, **k: "no PR handed off here")
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    row = {
+        "id": "t_implement",
+        "status": "blocked",
+        "title": "ZOE-9 fix thing",
+        "workspace_path": str(wt),
+    }
+
+    class _A(_FakeAdapter):
+        def __init__(self):
+            super().__init__()
+            self.wt_cmds = []
+
+        async def _run_worktree_command(self, args, *, cwd, timeout=45.0):
+            self.wt_cmds.append(args)
+            if args[:3] == ["git", "branch", "--show-current"]:
+                return "wt/t_implement"
+            if args[:3] == ["git", "status", "--porcelain"]:
+                return " M services/zoe-data/routers/voice_tts.py"
+            if args[:2] == ["git", "add"]:
+                return ""
+            if args[:2] == ["git", "commit"]:
+                return ""
+            if args[:3] == ["git", "rev-list", "--count"]:
+                return "1"
+            if args[:2] == ["git", "push"]:
+                return ""
+            if args[:3] == ["gh", "pr", "view"]:
+                raise ka.KanbanCLIError("no pull request found")
+            if args[:3] == ["gh", "pr", "create"]:
+                return "https://github.com/jason-easyazz/zoe-ai-assistant/pull/777"
+            raise AssertionError(args)
+
+    a = _A()
+    pr = await a._maybe_recover_unshipped_diff(
+        "t_implement", "implement", row, issue={"identifier": "ZOE-9", "title": "fix thing"}
+    )
+
+    assert pr == "https://github.com/jason-easyazz/zoe-ai-assistant/pull/777"
+    assert row["status"] == "done"
+    assert any(c[:2] == ["git", "commit"] for c in a.wt_cmds)
+    push = next(c for c in a.wt_cmds if c[:2] == ["git", "push"])
+    assert "--force" not in push and push == ["git", "push", "-u", "origin", "wt/t_implement"]
+    complete = next(c for c in a.calls if c[0] == "complete")
+    assert "PR_URL=https://github.com/jason-easyazz/zoe-ai-assistant/pull/777" in "\n".join(complete)
+
+
+@pytest.mark.asyncio
+async def test_recover_unshipped_diff_refuses_non_task_branch(tmp_path, monkeypatch):
+    """Hard safety gate: never commit/push when not on the task's own wt/ branch."""
+    monkeypatch.setattr(ka, "latest_log_session", lambda *a, **k: "no pr")
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    row = {"id": "t_implement", "status": "blocked", "workspace_path": str(wt)}
+
+    class _A(_FakeAdapter):
+        def __init__(self):
+            super().__init__()
+            self.wt_cmds = []
+
+        async def _run_worktree_command(self, args, *, cwd, timeout=45.0):
+            self.wt_cmds.append(args)
+            if args[:3] == ["git", "branch", "--show-current"]:
+                return "main"  # not wt/t_implement -> must bail before any mutation
+            raise AssertionError(f"must not mutate on non-task branch: {args!r}")
+
+    a = _A()
+    pr = await a._maybe_recover_unshipped_diff("t_implement", "implement", row)
+
+    assert pr is None
+    assert row["status"] == "blocked"
+    assert not any(c[:2] in (["git", "add"], ["git", "commit"], ["git", "push"]) for c in a.wt_cmds)
+
+
+@pytest.mark.asyncio
+async def test_recover_unshipped_diff_skips_when_nothing_to_ship(tmp_path, monkeypatch):
+    """Clean worktree with no unpushed commits must not open an empty PR."""
+    monkeypatch.setattr(ka, "latest_log_session", lambda *a, **k: "no pr")
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    row = {"id": "t_implement", "status": "blocked", "workspace_path": str(wt)}
+
+    class _A(_FakeAdapter):
+        def __init__(self):
+            super().__init__()
+            self.wt_cmds = []
+
+        async def _run_worktree_command(self, args, *, cwd, timeout=45.0):
+            self.wt_cmds.append(args)
+            if args[:3] == ["git", "branch", "--show-current"]:
+                return "wt/t_implement"
+            if args[:3] == ["git", "status", "--porcelain"]:
+                return ""  # clean
+            if args[:3] == ["git", "rev-list", "--count"]:
+                return "0"  # nothing unpushed
+            raise AssertionError(f"must not push/PR with nothing to ship: {args!r}")
+
+    a = _A()
+    pr = await a._maybe_recover_unshipped_diff("t_implement", "implement", row)
+
+    assert pr is None
+    assert not any(c[:2] == ["git", "push"] for c in a.wt_cmds)
+    assert not any(c[:3] == ["gh", "pr", "create"] for c in a.wt_cmds)
+
+
+@pytest.mark.asyncio
+async def test_recover_unshipped_diff_skips_when_pr_already_handed_off(monkeypatch):
+    """If the worker already reported a PR_URL, leave it to the normal flow."""
+    monkeypatch.setattr(
+        ka, "latest_log_session", lambda *a, **k: "PR_URL=https://github.com/o/r/pull/5\n"
+    )
+    row = {"id": "t_implement", "status": "blocked"}
+
+    class _A(_FakeAdapter):
+        async def _run_worktree_command(self, args, *, cwd, timeout=45.0):
+            raise AssertionError(f"must not touch the worktree when a PR exists: {args!r}")
+
+    a = _A()
+    assert await a._maybe_recover_unshipped_diff("t_implement", "implement", row) is None

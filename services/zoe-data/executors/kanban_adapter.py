@@ -1178,16 +1178,18 @@ class KanbanAdapter:
         pr_url: str,
         *,
         branch: str | None = None,
+        recovery: str = "pushed_branch_without_pr_handoff",
+        summary_note: str = "Recovered PR handoff after worker interruption following git push",
     ) -> str:
         summary = (
             f"PR_URL={pr_url}\n"
             "BLOCKER=\n"
-            "TESTS=recovered after pushed branch; downstream verify/review must validate\n"
-            "SUMMARY=Recovered PR handoff after worker interruption following git push"
+            "TESTS=recovered; downstream verify/review must validate\n"
+            f"SUMMARY={summary_note}"
         )
         metadata = {
             "pr_url": pr_url,
-            "recovery": "pushed_branch_without_pr_handoff",
+            "recovery": recovery,
         }
         if branch:
             metadata["branch"] = branch
@@ -1262,59 +1264,194 @@ class KanbanAdapter:
             if not branch:
                 return None
 
-            try:
-                pr_url = (
-                    await self._run_worktree_command(
-                        ["gh", "pr", "view", "--json", "url", "--jq", ".url"],
-                        cwd=wt_path,
-                        timeout=20,
-                    )
-                ).strip()
-            except KanbanCLIError:
-                pr_url = ""
-            if pr_url and not _GITHUB_PR_URL_RE.search(pr_url):
-                logger.warning(
-                    "kanban_adapter: gh pr view returned no PR URL for recovered task %s: %s",
-                    task_id,
-                    pr_url,
-                )
-                pr_url = ""
+            body = (
+                "Recovered by Zoe after Hermes pushed the branch but was interrupted "
+                "before `gh pr create`/`kanban_complete`.\n\n"
+                f"Kanban task: `{task_id}`\n"
+                f"Branch: `{branch}`"
+            )
+            pr_url = await self._pr_url_from_worktree(
+                task_id, wt_path, issue=issue, row=row, body=body
+            )
             if not pr_url:
-                try:
-                    upstream = (
-                        await self._run_worktree_command(
-                            ["git", "rev-parse", "--abbrev-ref", "HEAD@{upstream}"],
-                            cwd=wt_path,
-                            timeout=10,
-                        )
-                    ).strip()
-                    base_branch = upstream.split("/", 1)[-1].strip() or "main"
-                except KanbanCLIError:
-                    base_branch = "main"
-                identifier = (issue or {}).get("identifier") or row.get("title") or task_id
-                title = str(row.get("title") or (issue or {}).get("title") or identifier)
-                if not title.startswith(str(identifier)):
-                    title = f"{identifier}: {title}"
-                body = (
-                    "Recovered by Zoe after Hermes pushed the branch but was interrupted "
-                    "before `gh pr create`/`kanban_complete`.\n\n"
-                    f"Kanban task: `{task_id}`\n"
-                    f"Branch: `{branch}`"
-                )
-                pr_url = (
-                    await self._run_worktree_command(
-                        ["gh", "pr", "create", "--base", base_branch, "--title", title[:240], "--body", body],
-                        cwd=wt_path,
-                        timeout=45,
-                    )
-                ).strip()
-            match = _GITHUB_PR_URL_RE.search(pr_url)
-            if not match:
                 return None
-            pr_url = match.group(0)
             return await self._complete_recovered_pr_handoff(task_id, row, pr_url, branch=branch)
         except Exception as exc:  # noqa: BLE001 - recovery must not break normal poll.
             logger.warning("kanban_adapter: pushed PR recovery failed for %s: %s", task_id, exc)
+            return None
+
+    async def _pr_url_from_worktree(
+        self,
+        task_id: str,
+        wt_path: Path,
+        *,
+        issue: dict | None,
+        row: dict[str, Any],
+        body: str,
+    ) -> str | None:
+        """Return the worktree branch's existing PR URL, or open one. None on failure.
+
+        Tries ``gh pr view`` first (a PR may already exist for the branch), then
+        falls back to ``gh pr create`` against the repo's default base branch.
+        Shared by the pushed-branch and unshipped-diff recovery paths.
+        """
+        try:
+            pr_url = (
+                await self._run_worktree_command(
+                    ["gh", "pr", "view", "--json", "url", "--jq", ".url"],
+                    cwd=wt_path,
+                    timeout=20,
+                )
+            ).strip()
+        except KanbanCLIError:
+            pr_url = ""
+        if pr_url and not _GITHUB_PR_URL_RE.search(pr_url):
+            logger.warning(
+                "kanban_adapter: gh pr view returned no PR URL for recovered task %s: %s",
+                task_id,
+                pr_url,
+            )
+            pr_url = ""
+        if not pr_url:
+            identifier = (issue or {}).get("identifier") or row.get("title") or task_id
+            title = str(row.get("title") or (issue or {}).get("title") or identifier)
+            if not title.startswith(str(identifier)):
+                title = f"{identifier}: {title}"
+            # No --base: gh defaults to the repo's default branch (main), which is
+            # what task worktrees branch off. Do NOT derive the base from
+            # HEAD@{upstream}: `git push -u origin <branch>` sets the upstream to
+            # the task branch itself, so that would yield `gh pr create --base
+            # wt/<task_id>` (head == base) and fail.
+            pr_url = (
+                await self._run_worktree_command(
+                    ["gh", "pr", "create", "--title", title[:240], "--body", body],
+                    cwd=wt_path,
+                    timeout=45,
+                )
+            ).strip()
+        match = _GITHUB_PR_URL_RE.search(pr_url)
+        if not match:
+            return None
+        return match.group(0)
+
+    async def _maybe_recover_unshipped_diff(
+        self,
+        task_id: str,
+        phase: str,
+        row: dict[str, Any],
+        *,
+        issue: dict | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> str | None:
+        """Salvage a finished implement diff the worker never committed/pushed.
+
+        ``_maybe_recover_pushed_pr`` handles a worker that pushed then lost the PR
+        handoff. This handles the other interruption: the worker edited (and often
+        wrote tests) but exited — e.g. turn budget — before ``git add/commit/push``
+        or ``gh pr create``, leaving a complete diff in the isolated task worktree.
+        Rather than block (and let a fresh-worktree resume discard the work and
+        re-spend), commit + push it and open a PR so the chain advances to verify.
+
+        Safety: operates ONLY inside the task's own isolated worktree branch
+        (``wt/<task_id>``); never main/master, never the live checkout, never
+        ``--force``; and never opens an empty PR (requires real unpushed content).
+        """
+        if phase != "implement" or (row.get("status") or "").lower() != "blocked":
+            return None
+        try:
+            from worktree_bootstrap import worktree_branch, worktree_path
+
+            # A pushed branch is the other recovery's job; a handed-off PR needs
+            # nothing. Kept inside the try so a latest_log_session failure can
+            # never escape into poll() (recovery is best-effort).
+            log = latest_log_session(task_id, max_lines=120)
+            if "PR_URL=" in log:
+                return None
+            task = detail.get("task") if isinstance((detail or {}).get("task"), dict) else {}
+            wt_path = Path(
+                row.get("workspace_path")
+                or task.get("workspace_path")
+                or worktree_path(task_id)
+            ).expanduser()
+            if not wt_path.exists():
+                return None
+            branch = (
+                await self._run_worktree_command(
+                    ["git", "branch", "--show-current"],
+                    cwd=wt_path,
+                    timeout=10,
+                )
+            ).strip()
+            # Hard safety gate: only the task's own worktree branch. The live
+            # checkout and shared branches are never named wt/<task_id>, so this
+            # fails closed if workspace_path is ever wrong.
+            if not branch or branch in {"main", "master"} or branch != worktree_branch(task_id):
+                return None
+
+            dirty = bool(
+                (
+                    await self._run_worktree_command(
+                        ["git", "status", "--porcelain"], cwd=wt_path, timeout=20
+                    )
+                ).strip()
+            )
+            if dirty:
+                await self._run_worktree_command(["git", "add", "-A"], cwd=wt_path, timeout=30)
+                commit_msg = (
+                    f"harness: salvage unshipped implement diff for {task_id}\n\n"
+                    "Auto-committed by the Multica->Hermes harness because the implement "
+                    "worker left a complete diff but exited before committing/pushing."
+                )
+                await self._run_worktree_command(
+                    ["git", "commit", "-m", commit_msg], cwd=wt_path, timeout=30
+                )
+
+            # Require real content not already on a remote, or we'd open an empty PR.
+            try:
+                unpushed = (
+                    await self._run_worktree_command(
+                        ["git", "rev-list", "--count", "HEAD", "--not", "--remotes"],
+                        cwd=wt_path,
+                        timeout=15,
+                    )
+                ).strip()
+            except KanbanCLIError:
+                unpushed = "0"
+            if unpushed in {"", "0"}:
+                return None
+
+            await self._run_worktree_command(
+                ["git", "push", "-u", "origin", branch], cwd=wt_path, timeout=120
+            )
+            body = (
+                "Recovered by Zoe after the Hermes implement worker left a complete diff "
+                "but exited before committing/pushing or opening a PR (e.g. turn budget).\n\n"
+                f"Kanban task: `{task_id}`\n"
+                f"Branch: `{branch}`\n\n"
+                "Downstream verify/review must validate."
+            )
+            pr_url = await self._pr_url_from_worktree(
+                task_id, wt_path, issue=issue, row=row, body=body
+            )
+            if not pr_url:
+                return None
+            logger.info(
+                "kanban_adapter: salvaged unshipped implement diff for %s -> %s",
+                task_id,
+                pr_url,
+            )
+            return await self._complete_recovered_pr_handoff(
+                task_id,
+                row,
+                pr_url,
+                branch=branch,
+                recovery="unshipped_diff_salvage",
+                summary_note="Recovered PR after worker left an unshipped implement diff",
+            )
+        except Exception as exc:  # noqa: BLE001 - recovery must not break normal poll.
+            logger.warning(
+                "kanban_adapter: unshipped-diff recovery failed for %s: %s", task_id, exc
+            )
             return None
 
     async def dispatch(self, issue: dict) -> dict:
@@ -1732,12 +1869,23 @@ class KanbanAdapter:
                 issue=issue,
                 detail=detail,
             )
+            if not pr_url:
+                # Worker left a finished diff but never committed/pushed (e.g. ran
+                # out of turns before shipping): commit + push it and open a PR so
+                # the work is salvaged instead of discarded by a fresh resume.
+                pr_url = await self._maybe_recover_unshipped_diff(
+                    task_id,
+                    phase,
+                    row,
+                    issue=issue,
+                    detail=detail,
+                )
             if pr_url:
                 detail["latest_summary"] = (
                     f"PR_URL={pr_url}\n"
                     "BLOCKER=\n"
-                    "TESTS=recovered after pushed branch; downstream verify/review must validate\n"
-                    "SUMMARY=Recovered PR handoff after worker interruption following git push"
+                    "TESTS=recovered; downstream verify/review must validate\n"
+                    "SUMMARY=Recovered PR handoff after worker interruption"
                 )
                 phases[phase] = row
 
