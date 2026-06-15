@@ -1781,7 +1781,7 @@ async def _execute_reminder_create_direct(intent: Intent, user_id: str) -> Optio
             reminder = await create_reminder_record(payload, user=user, db=db)
         return _format_response(intent, json.dumps(reminder, default=str))
     except Exception as exc:
-        logger.debug("reminder_create direct execution unavailable: %s", exc)
+        logger.warning("reminder_create direct execution unavailable; falling back to mcporter: %s", exc)
         return None
 
 

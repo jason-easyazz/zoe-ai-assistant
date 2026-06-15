@@ -75,6 +75,6 @@ async def create_reminder_record(payload: ReminderCreate, *, user: Mapping[str, 
 
     cursor = await db.execute("SELECT * FROM reminders WHERE id = ?", [reminder_id])
     row = await cursor.fetchone()
-    reminder = row_to_dict(row)
+    reminder = row_to_dict(row) or {}
     await broadcaster.broadcast("reminders", "reminder_created", reminder, user_id=user_id)
-    return reminder or {}
+    return reminder

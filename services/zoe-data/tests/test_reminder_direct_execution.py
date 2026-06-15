@@ -44,8 +44,9 @@ async def test_create_reminder_record_preserves_policy_write_notification_and_br
     policy_calls = []
     broadcasts = []
 
-    async def fake_require_feature_access(db_arg, user, *, feature, action, surface="api"):
-        policy_calls.append((db_arg, user, feature, action, surface))
+    async def fake_require_feature_access(db_arg, user, *, feature, action, **kwargs):
+        assert "surface" not in kwargs
+        policy_calls.append((db_arg, user, feature, action))
 
     async def fake_broadcast(channel, event, payload, *, user_id=None):
         broadcasts.append((channel, event, payload, user_id))
@@ -59,7 +60,7 @@ async def test_create_reminder_record_preserves_policy_write_notification_and_br
         db=db,
     )
 
-    assert policy_calls == [(db, {"user_id": "family-admin", "role": "admin"}, "reminders", "create", "api")]
+    assert policy_calls == [(db, {"user_id": "family-admin", "role": "admin"}, "reminders", "create")]
     assert db.committed is True
     assert any("INSERT INTO reminders" in sql for sql, _ in db.calls)
     assert any("INSERT INTO notifications" in sql for sql, _ in db.calls)
