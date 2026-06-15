@@ -199,11 +199,13 @@ async def _run_zoe_agent_baseline(
         }
 
 async def _run_pi(case: PiIntentEvalCase, *, transport: str, enable_execution: bool, local_model_configured: bool) -> dict[str, Any]:
+    prefilter_enabled = os.environ.get("ZOE_PI_INTENT_PREFILTER_ENABLED", "true")
     updates = {
         "ZOE_PI_INTENT_ENABLED": "true",
         "ZOE_PI_INTENT_TRANSPORT": transport,
         "ZOE_PI_ALLOW_EXECUTION": "true" if enable_execution else "false",
         "ZOE_PI_LOCAL_MODEL_CONFIGURED": "true" if local_model_configured else "false",
+        "ZOE_PI_INTENT_PREFILTER_ENABLED": prefilter_enabled,
     }
     with _temporary_env(updates):
         from pi_intent_classifier import classify_with_pi_intent_governor
@@ -218,6 +220,7 @@ async def _run_pi(case: PiIntentEvalCase, *, transport: str, enable_execution: b
         "confidence": result.confidence if result else 0.0,
         "latency_ms": latency_ms,
         "correct": (result.intent if result else None) == case.expected_intent,
+        "prefilter_enabled": prefilter_enabled,
         "timed_out": timed_out,
     }
 
