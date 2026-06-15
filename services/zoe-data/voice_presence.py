@@ -8,6 +8,7 @@ or the Zoe Agent path.
 from __future__ import annotations
 
 import base64
+from datetime import datetime
 import mimetypes
 import os
 import re
@@ -62,31 +63,74 @@ def wake_ack_audio_paths(env: Mapping[str, str] | None = None) -> list[str]:
     return [audio_path] if audio_path else []
 
 
+def wake_ack_variant_labels(env: Mapping[str, str] | None = None) -> list[str]:
+    """Resolve optional pipe-aligned labels for time-aware wake variants."""
+    values = env if env is not None else os.environ
+    return [label.lower() for label in _split_variants(values.get("ZOE_WAKE_ACK_VARIANT_LABELS"))]
+
+
+def wake_ack_time_period(now: datetime | None = None) -> str:
+    """Return the coarse local period used for deterministic wake acks."""
+    current = now if now is not None else datetime.now().astimezone()
+    hour = current.hour
+    if 5 <= hour < 12:
+        return "morning"
+    if 12 <= hour < 17:
+        return "afternoon"
+    if 17 <= hour < 23:
+        return "evening"
+    return "night"
+
+
+def _label_matches(label: str, period: str) -> bool:
+    return period in {part.strip() for part in label.split(",") if part.strip()}
+
+
+def _select_wake_ack_index(labels: list[str], variant_count: int, now: datetime | None = None) -> int:
+    global _VARIANT_CURSOR
+    period = wake_ack_time_period(now)
+    candidates = [idx for idx, label in enumerate(labels[:variant_count]) if _label_matches(label, period)]
+    if not candidates:
+        candidates = [idx for idx, label in enumerate(labels[:variant_count]) if _label_matches(label, "default")]
+    with _VARIANT_LOCK:
+        if candidates:
+            selected = candidates[_VARIANT_CURSOR % len(candidates)]
+        else:
+            selected = _VARIANT_CURSOR % variant_count
+        _VARIANT_CURSOR += 1
+    return selected
+
+
 def wake_ack_phrase(env: Mapping[str, str] | None = None) -> str:
     """Resolve the optional short phrase Zoe can display/speak on wake."""
     phrases = wake_ack_phrases(env)
     return phrases[0] if phrases else ""
 
 
-def wake_ack_variant(env: Mapping[str, str] | None = None, *, index: int | None = None) -> dict[str, Any]:
+def wake_ack_variant(
+    env: Mapping[str, str] | None = None,
+    *,
+    index: int | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
     """Pick one configured wake acknowledgement variant.
 
     Multiple variants are index-aligned across ZOE_WAKE_ACK_PHRASES and
-    ZOE_WAKE_ACK_AUDIO_PATHS. The default hot path cycles through variants.
+    ZOE_WAKE_ACK_AUDIO_PATHS. Optional ZOE_WAKE_ACK_VARIANT_LABELS entries can
+    prefer local-time variants such as morning, afternoon, evening, or default.
     """
-    global _VARIANT_CURSOR
     phrases = wake_ack_phrases(env)
     audio_paths = wake_ack_audio_paths(env)
-    variant_count = max(len(phrases), len(audio_paths), 1)
+    labels = wake_ack_variant_labels(env)
+    variant_count = max(len(phrases), len(audio_paths), len(labels), 1)
     if index is None:
-        with _VARIANT_LOCK:
-            selected = _VARIANT_CURSOR % variant_count
-            _VARIANT_CURSOR += 1
+        selected = _select_wake_ack_index(labels, variant_count, now)
     else:
         selected = index % variant_count
     phrase = phrases[selected] if selected < len(phrases) else ""
     audio_path = audio_paths[selected] if selected < len(audio_paths) else ""
-    return {"phrase": phrase, "audio_path": audio_path, "index": selected}
+    label = labels[selected] if selected < len(labels) else ""
+    return {"phrase": phrase, "audio_path": audio_path, "index": selected, "label": label}
 
 
 def wake_ack_audio_payload(env: Mapping[str, str] | None = None, *, audio_path: str | None = None) -> dict[str, Any] | None:
@@ -161,8 +205,8 @@ def wake_presence_events(*, ack_phrase: str = "", ack_audio: Mapping[str, Any] |
     return events
 
 
-def wake_ack_events(env: Mapping[str, str] | None = None) -> list[dict[str, Any]]:
+def wake_ack_events(env: Mapping[str, str] | None = None, *, now: datetime | None = None) -> list[dict[str, Any]]:
     """Build wake presence events from the selected configured variant."""
-    variant = wake_ack_variant(env)
+    variant = wake_ack_variant(env, now=now)
     audio = wake_ack_audio_payload(env, audio_path=variant.get("audio_path"))
     return wake_presence_events(ack_phrase=str(variant.get("phrase") or ""), ack_audio=audio)
