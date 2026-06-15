@@ -1172,3 +1172,127 @@ body:not(.sky-empty) .sky-auth-people-only .sky-auth-person small {
         font-size: 1.18rem;
     }
 }
+
+/* Skybridge name-only auth tiles */
+body:not(.sky-empty) .sky-card.auth-challenge {
+    width: min(780px, calc(100vw - 48px));
+    margin-inline: auto;
+    padding: 0 !important;
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+}
+
+body:not(.sky-empty) .sky-card.auth-challenge::before {
+    content: none !important;
+}
+
+body:not(.sky-empty) .sky-auth-people-only .sky-auth-profile-grid {
+    grid-template-columns: repeat(auto-fit, minmax(218px, 1fr));
+    gap: 14px;
+}
+
+body:not(.sky-empty) .sky-auth-people-only .sky-auth-profile {
+    min-height: 118px;
+    border-radius: 28px;
+    padding: 18px 22px;
+    display: grid;
+    place-items: center;
+    text-align: center;
+    background:
+        linear-gradient(145deg, rgba(255,255,255,0.19), rgba(255,255,255,0.065) 52%, rgba(255,255,255,0.11)),
+        linear-gradient(165deg, rgba(123,245,238,0.13), rgba(156,136,255,0.12));
+    border: 1px solid rgba(255,255,255,0.18);
+    box-shadow:
+        0 18px 44px rgba(0,0,0,0.25),
+        inset 0 1px 0 rgba(255,255,255,0.20),
+        inset 0 -1px 0 rgba(255,255,255,0.06);
+}
+
+body:not(.sky-empty) .sky-auth-people-only .sky-auth-profile::before {
+    content: '';
+    position: absolute;
+    inset: 1px;
+    border-radius: 27px;
+    border: 1px solid rgba(255,255,255,0.08);
+    background: linear-gradient(110deg, rgba(255,255,255,0.16), transparent 42%, rgba(122,245,238,0.08));
+    pointer-events: none;
+}
+
+body:not(.sky-empty) .sky-auth-people-only .sky-auth-profile::after {
+    content: '';
+    position: absolute;
+    left: 22px;
+    right: 22px;
+    bottom: 16px;
+    height: 2px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, transparent, rgba(133,246,239,0.76), rgba(166,146,255,0.72), transparent);
+    opacity: 0.48;
+}
+
+body:not(.sky-empty) .sky-auth-people-only .sky-auth-profile:hover,
+body:not(.sky-empty) .sky-auth-people-only .sky-auth-profile:focus-visible {
+    transform: translateY(-3px);
+    border-color: rgba(139,248,242,0.58);
+    background:
+        linear-gradient(145deg, rgba(255,255,255,0.23), rgba(255,255,255,0.08) 52%, rgba(255,255,255,0.13)),
+        linear-gradient(165deg, rgba(123,245,238,0.18), rgba(156,136,255,0.16));
+    box-shadow:
+        0 24px 62px rgba(73,214,226,0.15),
+        0 18px 44px rgba(0,0,0,0.27),
+        inset 0 1px 0 rgba(255,255,255,0.24);
+}
+
+body:not(.sky-empty) .sky-auth-people-only .sky-auth-profile.is-default {
+    border-color: rgba(143,248,242,0.34);
+}
+
+body:not(.sky-empty) .sky-auth-people-only .sky-auth-avatar {
+    display: none !important;
+}
+
+body:not(.sky-empty) .sky-auth-people-only .sky-auth-person {
+    display: block;
+    width: 100%;
+}
+
+body:not(.sky-empty) .sky-auth-people-only .sky-auth-person strong {
+    display: block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: rgba(255,255,255,0.96);
+    font-size: 2rem;
+    line-height: 1;
+    font-weight: 850;
+    letter-spacing: 0;
+    text-shadow: 0 1px 18px rgba(0,0,0,0.24);
+}
+
+@media (max-width: 620px) {
+    body:not(.sky-empty) .sky-card.auth-challenge {
+        width: min(440px, calc(100vw - 28px));
+    }
+    body:not(.sky-empty) .sky-auth-people-only .sky-auth-profile-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+    }
+    body:not(.sky-empty) .sky-auth-people-only .sky-auth-profile {
+        min-height: 104px;
+        border-radius: 24px;
+        padding: 16px 14px;
+    }
+    body:not(.sky-empty) .sky-auth-people-only .sky-auth-profile::before {
+        border-radius: 23px;
+    }
+    body:not(.sky-empty) .sky-auth-people-only .sky-auth-profile::after {
+        left: 16px;
+        right: 16px;
+        bottom: 13px;
+    }
+    body:not(.sky-empty) .sky-auth-people-only .sky-auth-person strong {
+        font-size: 1.35rem;
+    }
+}
