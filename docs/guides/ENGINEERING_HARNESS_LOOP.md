@@ -58,6 +58,31 @@ Individual `gate_blocked` rows are counted in `gate_blocked_count` for triage bu
 a machine-readable `split_packet`; create a smaller child ticket or escalate to an
 operator instead of redispatching the same broad implement phase.
 
+### Worker block fingerprints (kanban_adapter guards)
+
+Phase workers fail closed by calling `kanban_block` with a `BLOCKER=` fingerprint
+rather than drifting. Watch for these in pipeline JSONL / Kanban rows:
+
+- `IMPLEMENT_HANDOFF_DRIFT` — implement burned its pre-edit explore budget instead
+  of using the scout handoff (classified with `IMPLEMENT_BUDGET`).
+- `WORKTREE_PATH_VIOLATION` — a command touched the live checkout
+  (`/home/zoe/assistant`) instead of the task `workspace_path` (`~/.worktrees/<id>`).
+  Every phase runs in an isolated worktree; only `retro` runs in the live checkout
+  (read-only, `workspace_kind=dir`).
+- `IMPLEMENT_EDIT_SAFETY` — a malformed/unsafe edit; the worker blocks instead of
+  committing.
+- `ITERATION_BUDGET` — per-phase turn/iteration budget exceeded.
+
+**Evidence gate:** implement must record a `pr` evidence item (`PR_URL=` on a pushed
+branch) before verify/review advance; audit-only tickets use `AUDIT_ONLY=1` /
+`evidence_profile: audit`.
+
+**Capture-on-exit:** if implement finishes a diff but exits before pushing, the
+adapter's `_maybe_recover_unshipped_diff` commits + pushes the `wt/<task_id>` branch
+and opens a PR (only inside the task's own worktree branch; never main, never the
+live checkout, never `--force`, never an empty PR). See
+[MULTICA_HERMES_PR_LOOP.md](./MULTICA_HERMES_PR_LOOP.md).
+
 ## Usage
 
 ```bash
@@ -93,6 +118,7 @@ when pipeline JSONL shows repeated blocks.
 - 2026-06-01: Stuck Multica issue `6dfb0e14` repeats scout `gate_blocked` (missing tool evidence) and implement `fingerprint_abort` — use `skip_scout` on audit-only issues or clear the chain before re-dispatch.
 - 2026-06-01: `pipeline_store.sync_pipeline_from_chain` now passes `block_reason` into `transition()` history; older JSONL rows may still fail `block_reason_null` until archived.
 - 2026-06-01: Pytest fixture refs (`multica:u`, `multica:uuid-*`) in operator JSONL are ignored by the harness scanner; isolate tests with `ZOE_PIPELINE_STORE_PATH`.
+- 2026-06-15: The Hermes gateway has no Multica integration — it only executes ready+assigned Kanban tasks the Zoe adapter (`created_by=zoe-bridge`) creates. `kanban.dispatch_in_gateway` must stay `true` (it is the executor) but `kanban.auto_decompose` is kept `false` so the gateway never auto-creates/fans-out tickets out of band. Engineering tasks are worktree-isolated; only `retro` runs in the live checkout (read-only).
 
 ## Operator pause (stop Multica spend during manual work)
 
