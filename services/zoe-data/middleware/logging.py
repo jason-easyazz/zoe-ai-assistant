@@ -4,13 +4,12 @@ This module provides JSON-formatted logging with structured fields for better
 integration with log aggregation systems like Loki, CloudWatch, and Datadog.
 """
 
-import json
 import logging
 import time
+import uuid
 from typing import Any, Dict, Optional
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import Response
 from contextvars import ContextVar
 
 logger = logging.getLogger(__name__)
@@ -113,26 +112,24 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
     """Middleware that adds structured logging with request context."""
     
     async def dispatch(self, request: Request, call_next):
-        # Extract request ID from headers or generate
+        # Use the inbound correlation header when present, otherwise mint a unique
+        # ID so every request is independently traceable (a shared sentinel would
+        # collapse all unannotated requests onto one request_id).
         request_id = (
             request.headers.get("X-Request-ID") or
             request.headers.get("X-Correlation-ID") or
-            "background"
+            uuid.uuid4().hex
         )
-        
-        # Extract user ID from auth context (simplified)
-        user_id = "anonymous"
-        auth_header = request.headers.get("authorization", "")
-        if auth_header.startswith("Bearer "):
-            # In a real implementation, we'd decode the JWT here
-            user_id = "authenticated-user"
-        
+
         metadata = {
             "request_id": request_id,
             "method": request.method,
             "path": request.url.path,
             "user_agent": request.headers.get("user-agent", ""),
-            "user_id": user_id,
+            # Whether the caller presented a bearer credential. Resolving the
+            # actual subject requires auth wiring not available here, so we record
+            # a truthful boolean rather than a misleading fake user id.
+            "authenticated": request.headers.get("authorization", "").startswith("Bearer "),
         }
         
         # Set request metadata context
@@ -146,9 +143,10 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
             # Add response headers
             response.headers["X-Request-ID"] = request_id
             
-            # Add response metadata
+            # Add response metadata. Keep duration numeric so log aggregators
+            # (Loki/Datadog) can run range queries on it.
             metadata["status_code"] = response.status_code
-            metadata["duration_ms"] = str(elapsed_ms)
+            metadata["duration_ms"] = elapsed_ms
             
             # Log the request completion
             logger = logging.getLogger(__name__)
@@ -176,15 +174,11 @@ def log_with_context(level: str, message: str, **extra_fields) -> None:
     
     # Merge with additional fields
     log_fields = {**metadata, **extra_fields}
-    
-    # Log with appropriate level
-    if level == "debug":
-        logger.debug(message, extra=log_fields)
-    elif level == "info":
-        logger.info(message, extra=log_fields)
-    elif level == "warning":
-        logger.warning(message, extra=log_fields)
-    elif level == "error":
-        logger.error(message, extra=log_fields)
-    elif level == "critical":
-        logger.critical(message, extra=log_fields)
+
+    # Resolve the level; fall back to INFO for anything unrecognised so a typo
+    # ("warn", "WARNING") never silently drops the log line.
+    level_value = logging.getLevelName(level.upper())
+    if not isinstance(level_value, int):
+        logger.warning("log_with_context: unknown level %r; defaulting to info", level)
+        level_value = logging.INFO
+    logger.log(level_value, message, extra=log_fields)
