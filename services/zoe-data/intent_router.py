@@ -1312,6 +1312,12 @@ def _extract_simple_reminder_slots(text: str) -> Optional[dict]:
         return None
     if re.search(r"\bin\s+\d+\s+(?:min(?:ute)?s?|hours?|days?|weeks?)\b", body, flags=re.IGNORECASE):
         return None
+    if re.search(
+        r"\b(?:next|this|coming|last)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
+        body,
+        flags=re.IGNORECASE,
+    ):
+        return None
 
     def _pop_time(value: str) -> tuple[str, str]:
         value = value.strip()
