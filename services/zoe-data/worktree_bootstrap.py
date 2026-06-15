@@ -212,6 +212,222 @@ def prepare_kanban_worktree(task_id: str, *, base_branch: str = "main") -> Path:
     return wt_path
 
 
+def _is_ancestor(repo: Path, ref: str, base_ref: str) -> bool:
+    """True when ``ref`` is reachable from ``base_ref`` (a real, non-squash merge)."""
+    result = _run_git(
+        ["git", "merge-base", "--is-ancestor", ref, base_ref],
+        cwd=str(repo),
+        timeout=30,
+    )
+    return result.returncode == 0
+
+
+def _pr_is_merged(branch: str, *, cwd: str) -> bool:
+    """Best-effort: True when ``branch`` has a merged GitHub PR (squash-merge case).
+
+    Squash-merged branches are not git ancestors of ``main``, so the ancestor
+    check alone never reclaims them — that is what let hundreds of stale task
+    worktrees accumulate. ``gh`` is optional; any failure (gh absent, no PR,
+    network) is treated as "not known-merged" so we fail safe and keep the tree.
+    """
+    try:
+        result = subprocess.run(
+            ["gh", "pr", "view", branch, "--json", "state,mergedAt"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if result.returncode != 0:
+        return False
+    try:
+        import json
+
+        data = json.loads(result.stdout or "{}")
+    except ValueError:
+        return False
+    return (data.get("state") or "").upper() == "MERGED" and bool(data.get("mergedAt"))
+
+
+def _branch_merged(repo: Path, branch: str, base_ref: str, *, consult_pr: bool) -> bool:
+    """True when ``branch`` is merged into ``base_ref`` (ancestor or squash-merged PR)."""
+    tip = _run_git(["git", "rev-parse", "--verify", branch], cwd=str(repo), timeout=30)
+    if tip.returncode != 0:
+        # No local branch ref (e.g. detached worktree); treat as not-merged here.
+        return False
+    if _is_ancestor(repo, branch, base_ref):
+        return True
+    return consult_pr and _pr_is_merged(branch, cwd=str(repo))
+
+
+def _worktree_is_dirty(wt_path: Path) -> bool:
+    status = _run_git(["git", "status", "--porcelain"], cwd=str(wt_path), timeout=30)
+    # On any error, be conservative and treat as dirty so we never discard work.
+    return status.returncode != 0 or bool(status.stdout.strip())
+
+
+def remove_task_worktree(
+    task_id: str,
+    *,
+    base_branch: str = "main",
+    require_merged: bool = True,
+    consult_pr: bool = True,
+) -> bool:
+    """Remove a task's worktree and its ``wt/<task_id>`` branch once merged.
+
+    Self-guarding and idempotent: safe to call from the poll loop on any task
+    that reached terminal ``done``. It only removes when the worktree is
+    registered, has no uncommitted changes, and (when ``require_merged``) the
+    branch is merged into ``origin/<base_branch>`` — a true ancestor merge or a
+    squash-merged PR. Otherwise it is a no-op and returns ``False``.
+
+    Returns ``True`` only when the worktree was actually removed.
+    """
+    task_id = _validate_task_id(task_id)
+    repo = Path(zoe_repo_root())
+    wt_path = worktree_path(task_id)
+    branch = worktree_branch(task_id)
+
+    if not _worktree_registered(repo, wt_path):
+        return False
+
+    if _worktree_is_dirty(wt_path):
+        logger.info("worktree_bootstrap: keeping %s — uncommitted changes", wt_path)
+        return False
+
+    if require_merged:
+        base_ref = _base_ref(repo, base_branch)
+        if not _branch_merged(repo, branch, base_ref, consult_pr=consult_pr):
+            logger.info(
+                "worktree_bootstrap: keeping %s — %s not merged into %s",
+                wt_path,
+                branch,
+                base_ref,
+            )
+            return False
+
+    removed = _run_git(
+        ["git", "worktree", "remove", "--force", str(wt_path)],
+        cwd=str(repo),
+        timeout=60,
+    )
+    if removed.returncode != 0:
+        logger.warning(
+            "worktree_bootstrap: could not remove worktree %s: %s",
+            wt_path,
+            (removed.stderr or removed.stdout or "").strip() or "unknown error",
+        )
+        return False
+
+    deleted = _run_git(["git", "branch", "-D", branch], cwd=str(repo), timeout=30)
+    if deleted.returncode != 0:
+        logger.warning(
+            "worktree_bootstrap: removed worktree %s but could not delete branch %s: %s",
+            wt_path,
+            branch,
+            (deleted.stderr or deleted.stdout or "").strip() or "unknown error",
+        )
+    logger.info("worktree_bootstrap: pruned task worktree %s (%s)", wt_path, branch)
+    return True
+
+
+def prune_merged_worktrees(
+    *,
+    base_branch: str = "main",
+    min_age_days: int = 7,
+    execute: bool = True,
+    consult_pr: bool = True,
+) -> list[dict[str, str]]:
+    """Sweep stale worktrees whose branches are merged into ``origin/<base>``.
+
+    Orphan safety net for tasks that crashed or lost their terminal handoff and
+    never self-cleaned. Mirrors ``scripts/maintenance/prune_worktrees.sh`` but in
+    process so the Multica harness can run it on its maintenance tick. Skips the
+    live checkout, locked worktrees, dirty worktrees, branches not merged into
+    ``origin/<base>`` (ancestor or squash-merged PR), and worktrees with activity
+    newer than ``min_age_days``.
+
+    Returns one record per worktree acted on or considered, with a ``decision``
+    of ``removed`` / ``would-remove`` / ``skip:<reason>``.
+    """
+    repo = Path(zoe_repo_root())
+    base_ref = _base_ref(repo, base_branch)
+    live_root = _run_git(["git", "rev-parse", "--show-toplevel"], cwd=str(repo), timeout=30)
+    live_path = (live_root.stdout or "").strip()
+    min_age_seconds = max(0, min_age_days) * 86400
+
+    import time
+
+    now = time.time()
+    listed = _run_git(["git", "worktree", "list", "--porcelain"], cwd=str(repo), timeout=60)
+    if listed.returncode != 0:
+        raise RuntimeError(
+            f"git worktree list failed: {(listed.stderr or '').strip() or 'unknown error'}"
+        )
+
+    results: list[dict[str, str]] = []
+    path = ""
+    branch = ""
+    locked = False
+
+    def _flush() -> None:
+        nonlocal path, branch, locked
+        if not path:
+            return
+        record = {"worktree": path, "branch": branch}
+        reason = ""
+        if path == live_path:
+            reason = "live checkout"
+        elif locked:
+            reason = "locked"
+        elif _worktree_is_dirty(Path(path)):
+            reason = "dirty"
+        elif not branch:
+            reason = "detached HEAD"
+        else:
+            age_src = _run_git(["git", "log", "-1", "--format=%ct"], cwd=path, timeout=30)
+            try:
+                activity = float((age_src.stdout or "0").strip() or 0)
+            except ValueError:
+                activity = 0.0
+            if now - activity < min_age_seconds:
+                reason = f"too recent (<{min_age_days}d idle)"
+            elif not _branch_merged(repo, branch, base_ref, consult_pr=consult_pr):
+                reason = "branch not merged"
+        if reason:
+            record["decision"] = f"skip:{reason}"
+        elif not execute:
+            record["decision"] = "would-remove"
+        else:
+            rm = _run_git(
+                ["git", "worktree", "remove", "--force", path], cwd=str(repo), timeout=60
+            )
+            if rm.returncode != 0:
+                record["decision"] = "skip:remove-failed"
+            else:
+                _run_git(["git", "branch", "-D", branch], cwd=str(repo), timeout=30)
+                record["decision"] = "removed"
+        results.append(record)
+        path, branch, locked = "", "", False
+
+    for line in listed.stdout.splitlines():
+        if line.startswith("worktree "):
+            _flush()
+            path = line.removeprefix("worktree ").strip()
+        elif line.startswith("branch refs/heads/"):
+            branch = line.removeprefix("branch refs/heads/").strip()
+        elif line.startswith("locked"):
+            locked = True
+    _flush()
+
+    if execute:
+        _run_git(["git", "worktree", "prune"], cwd=str(repo), timeout=60)
+    return results
+
+
 def _extract_pr_number(pr_url: str) -> str:
     match = _GITHUB_PR_RE.search((pr_url or "").strip())
     if not match:
