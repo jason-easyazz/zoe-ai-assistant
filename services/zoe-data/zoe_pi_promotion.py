@@ -35,6 +35,7 @@ PRIVILEGED_INTENTS = {
 
 EVAL_SOURCES = {"synthetic", "intent_miss", "chat_log", "voice_log", "known_failure"}
 ROUTE_CLASSES = {"deterministic", "fallback", "extraction_failed"}
+PI_TRANSPORTS = {"print", "rpc"}
 DECISION_STATES = {"promote", "keep_shadow", "rollback", "blocked"}
 
 
@@ -132,7 +133,7 @@ class PiRouteSample:
             raise ValueError(f"{self.case_id}: pi_confidence must be between 0 and 1")
         if self.route_class not in ROUTE_CLASSES:
             raise ValueError(f"{self.case_id}: unknown route_class {self.route_class!r}")
-        if self.pi_transport not in {"print", "rpc"}:
+        if self.pi_transport not in PI_TRANSPORTS:
             raise ValueError(f"{self.case_id}: unknown pi_transport {self.pi_transport!r}")
         _reject_secret_keys(self.metadata, sample_id=self.case_id)
 
@@ -345,6 +346,7 @@ def summarize_pi_promotion(
         "promotable_groups": promotable_groups,
         "rollback_groups": rollback_groups,
         "route_class_breakdown": build_pi_route_class_breakdown(samples),
+        "transport_breakdown": build_pi_transport_breakdown(samples),
         "failure_examples": build_pi_failure_examples(samples),
         "promotion_actions": build_pi_promotion_actions(
             current_promoted_groups=sorted(active_promoted_groups),
@@ -374,6 +376,35 @@ def build_pi_route_class_breakdown(samples: Sequence[PiRouteSample]) -> dict[str
             "latency_delta_ms": None if zoe_p95 is None or pi_p95 is None else zoe_p95 - pi_p95,
             "timeout_rate": _rate(sample.timed_out for sample in route_samples),
             "correction_rate": _rate(sample.user_corrected for sample in route_samples),
+        }
+    return breakdown
+
+
+def build_pi_transport_breakdown(samples: Sequence[PiRouteSample]) -> dict[str, dict[str, Any]]:
+    """Summarize Pi print and RPC evidence separately.
+
+    Empty buckets retain the existing promotion-report convention: rates and
+    accuracy fields are 0.0, while sample_count=0 is the no-evidence signal.
+    """
+    breakdown: dict[str, dict[str, Any]] = {}
+    for transport in sorted(PI_TRANSPORTS):
+        transport_samples = [sample for sample in samples if sample.pi_transport == transport]
+        for sample in transport_samples:
+            sample.validate()
+        zoe_p95 = _percentile([sample.zoe_latency_ms for sample in transport_samples], 95)
+        pi_p95 = _percentile([sample.pi_latency_ms for sample in transport_samples], 95)
+        zoe_accuracy = _rate(sample.zoe_correct for sample in transport_samples)
+        pi_accuracy = _rate(sample.pi_correct for sample in transport_samples)
+        breakdown[transport] = {
+            "sample_count": len(transport_samples),
+            "zoe_accuracy": zoe_accuracy,
+            "pi_accuracy": pi_accuracy,
+            "accuracy_delta": pi_accuracy - zoe_accuracy,
+            "zoe_p95_latency_ms": zoe_p95,
+            "pi_p95_latency_ms": pi_p95,
+            "latency_delta_ms": None if zoe_p95 is None or pi_p95 is None else zoe_p95 - pi_p95,
+            "timeout_rate": _rate(sample.timed_out for sample in transport_samples),
+            "correction_rate": _rate(sample.user_corrected for sample in transport_samples),
         }
     return breakdown
 
@@ -594,12 +625,14 @@ __all__ = [
     "DEFAULT_PI_INTENT_EVAL_CASES",
     "LOW_RISK_PI_INTENT_GROUPS",
     "PRIVILEGED_INTENTS",
+    "PI_TRANSPORTS",
     "PiIntentEvalCase",
     "PiPromotionDecision",
     "PiPromotionPolicy",
     "PiRouteSample",
     "build_pi_failure_examples",
     "build_pi_route_class_breakdown",
+    "build_pi_transport_breakdown",
     "build_pi_promotion_actions",
     "eval_cases_to_dict",
     "evaluate_pi_promotion",

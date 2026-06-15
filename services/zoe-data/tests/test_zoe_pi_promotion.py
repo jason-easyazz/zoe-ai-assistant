@@ -7,6 +7,7 @@ from zoe_pi_promotion import (
     PiRouteSample,
     build_pi_failure_examples,
     build_pi_route_class_breakdown,
+    build_pi_transport_breakdown,
     build_pi_promotion_actions,
     eval_cases_to_dict,
     evaluate_pi_promotion,
@@ -317,6 +318,47 @@ def test_route_class_breakdown_compares_baselines_independently():
     assert breakdown["extraction_failed"]["zoe_p95_latency_ms"] is None
 
 
+def test_transport_breakdown_separates_print_and_rpc_latency():
+    samples = [
+        _sample(1, pi_transport="print", zoe_ms=900, pi_ms=700),
+        _sample(2, pi_transport="rpc", zoe_ms=900, pi_ms=300),
+        _sample(
+            3,
+            pi_transport="rpc",
+            zoe="weather",
+            pi="weather",
+            zoe_ms=50,
+            pi_ms=1200,
+            timed_out=True,
+            user_corrected=True,
+        ),
+    ]
+
+    breakdown = build_pi_transport_breakdown(samples)
+
+    assert sorted(breakdown) == ["print", "rpc"]
+    assert breakdown["print"] == {
+        "sample_count": 1,
+        "zoe_accuracy": 0.0,
+        "pi_accuracy": 1.0,
+        "accuracy_delta": 1.0,
+        "zoe_p95_latency_ms": 900.0,
+        "pi_p95_latency_ms": 700.0,
+        "latency_delta_ms": 200.0,
+        "timeout_rate": 0.0,
+        "correction_rate": 0.0,
+    }
+    assert breakdown["rpc"]["sample_count"] == 2
+    assert breakdown["rpc"]["zoe_accuracy"] == 0.5
+    assert breakdown["rpc"]["pi_accuracy"] == 0.5
+    assert breakdown["rpc"]["accuracy_delta"] == 0.0
+    assert breakdown["rpc"]["zoe_p95_latency_ms"] == 857.5
+    assert breakdown["rpc"]["pi_p95_latency_ms"] == 1155.0
+    assert breakdown["rpc"]["latency_delta_ms"] == -297.5
+    assert breakdown["rpc"]["timeout_rate"] == 0.5
+    assert breakdown["rpc"]["correction_rate"] == 0.5
+
+
 def test_summary_lists_promotable_groups():
     samples = [_sample(i) for i in range(10)]
     report = summarize_pi_promotion(samples, policy=PiPromotionPolicy(min_samples=10))
@@ -327,6 +369,8 @@ def test_summary_lists_promotable_groups():
     assert report["policy"]["accuracy_win_margin"] == 0.05
     assert report["route_class_breakdown"]["fallback"]["sample_count"] == 10
     assert report["route_class_breakdown"]["fallback"]["latency_delta_ms"] > 0
+    assert report["transport_breakdown"]["rpc"]["sample_count"] == 10
+    assert report["transport_breakdown"]["rpc"]["latency_delta_ms"] > 0
 
 
 def test_summary_lists_rollback_groups_for_active_promotions():
