@@ -19,6 +19,15 @@ from zoe_pi_promotion import LOW_RISK_PI_INTENT_GROUPS, intent_group_for_intent
 
 
 _ENV_LOCK = asyncio.Lock()
+SAFE_FULFILLMENT_INTENTS = frozenset(
+    {
+        "daily_briefing",
+        "date_query",
+        "list_show",
+        "time_query",
+        "weather",
+    }
+)
 
 
 @contextmanager
@@ -52,6 +61,8 @@ async def compare_pi_intent_lab(
     zoe_agent_timeout_seconds: float = 12.0,
     zoe_agent_max_tokens: int = 64,
     include_hybrid_status: bool = True,
+    include_safe_fulfillment: bool = False,
+    safe_fulfillment_timeout_seconds: float = 8.0,
     env: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Return an apples-to-apples intent comparison without side effects."""
@@ -62,6 +73,8 @@ async def compare_pi_intent_lab(
         raise ValueError("zoe_agent_timeout_seconds must be positive")
     if zoe_agent_max_tokens <= 0:
         raise ValueError("zoe_agent_max_tokens must be positive")
+    if safe_fulfillment_timeout_seconds <= 0:
+        raise ValueError("safe_fulfillment_timeout_seconds must be positive")
 
     zoe_router = await _run_zoe_router(stripped, user_id=user_id)
     processing_cue = _processing_cue(env)
@@ -81,6 +94,12 @@ async def compare_pi_intent_lab(
             timeout_seconds=zoe_agent_timeout_seconds,
             max_tokens=zoe_agent_max_tokens,
         )
+    safe_fulfillment = await _safe_fulfill_pi_intent(
+        pi,
+        user_id=user_id,
+        enabled=include_safe_fulfillment,
+        timeout_seconds=safe_fulfillment_timeout_seconds,
+    )
 
     hybrid = None
     if include_hybrid_status:
@@ -93,7 +112,10 @@ async def compare_pi_intent_lab(
         "contract": {
             "admin_only": True,
             "side_effects": "none",
-            "intent_dispatch_enabled": False,
+            "intent_dispatch_enabled": bool(include_safe_fulfillment),
+            "intent_dispatch_scope": "read_only_allowlist_only" if include_safe_fulfillment else "none",
+            "safe_read_only_fulfillment_enabled": bool(include_safe_fulfillment),
+            "safe_read_only_fulfillment_intents": sorted(SAFE_FULFILLMENT_INTENTS),
             "memory_writes_enabled": False,
             "shadow_writes_enabled": False,
             "promotion_enabled": False,
@@ -107,8 +129,9 @@ async def compare_pi_intent_lab(
         "zoe_router": zoe_router,
         "pi": pi,
         "zoe_agent_baseline": zoe_agent,
+        "safe_fulfillment": safe_fulfillment,
         "hybrid_buffer": _compact_hybrid(hybrid),
-        "simulated_hybrid_flow": _simulated_hybrid_flow(processing_cue, pi, zoe_agent),
+        "simulated_hybrid_flow": _simulated_hybrid_flow(processing_cue, pi, zoe_agent, safe_fulfillment),
         "comparison": _comparison(zoe_router, pi, zoe_agent),
     }
 
@@ -286,6 +309,115 @@ async def _run_zoe_agent_baseline(text: str, *, timeout_seconds: float, max_toke
         }
 
 
+async def _safe_fulfill_pi_intent(
+    pi: Mapping[str, Any],
+    *,
+    user_id: str,
+    enabled: bool,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    if not enabled:
+        return {
+            "requested": False,
+            "attempted": False,
+            "allowed": False,
+            "blocked_reason": "not_requested",
+            "would_execute": False,
+        }
+
+    intent_name = str(pi.get("intent") or "")
+    if not pi.get("ran"):
+        return _blocked_fulfillment("pi_not_run")
+    if not intent_name:
+        return _blocked_fulfillment("pi_no_intent")
+    if pi.get("timed_out"):
+        return _blocked_fulfillment("pi_timed_out", intent=intent_name)
+    if pi.get("error"):
+        return _blocked_fulfillment("pi_error", intent=intent_name, error=pi.get("error"))
+    if intent_name not in SAFE_FULFILLMENT_INTENTS:
+        return _blocked_fulfillment("side_effect_or_unsupported_intent", intent=intent_name)
+    if not pi.get("low_risk_group"):
+        return _blocked_fulfillment("not_low_risk_group", intent=intent_name)
+
+    from pi_intent_classifier import PI_INTENT_EXECUTE_THRESHOLD
+
+    confidence = float(pi.get("confidence") or 0.0)
+    if confidence < PI_INTENT_EXECUTE_THRESHOLD:
+        return _blocked_fulfillment("below_execute_threshold", intent=intent_name)
+
+    from intent_router import Intent, execute_intent
+
+    intent = Intent(intent_name, dict(pi.get("slots") or {}), confidence)
+    started = time.perf_counter()
+    try:
+        response = await asyncio.wait_for(execute_intent(intent, user_id=user_id), timeout=timeout_seconds)
+        latency_ms = (time.perf_counter() - started) * 1000
+        return {
+            "requested": True,
+            "attempted": True,
+            "allowed": True,
+            "intent": intent_name,
+            "latency_ms": latency_ms,
+            "timed_out": False,
+            "error": None,
+            "response_chars": len(response or ""),
+            "response_preview": _preview_response(response),
+            "would_execute": True,
+            "execution_scope": "read_only_allowlist",
+        }
+    except asyncio.TimeoutError:
+        latency_ms = (time.perf_counter() - started) * 1000
+        return {
+            "requested": True,
+            "attempted": True,
+            "allowed": True,
+            "intent": intent_name,
+            "latency_ms": latency_ms,
+            "timed_out": True,
+            "error": None,
+            "response_chars": 0,
+            "response_preview": "",
+            "would_execute": False,
+            "execution_scope": "read_only_allowlist",
+        }
+    except Exception as exc:  # pragma: no cover - defensive operator surface
+        latency_ms = (time.perf_counter() - started) * 1000
+        return {
+            "requested": True,
+            "attempted": True,
+            "allowed": True,
+            "intent": intent_name,
+            "latency_ms": latency_ms,
+            "timed_out": False,
+            "error": exc.__class__.__name__,
+            "response_chars": 0,
+            "response_preview": "",
+            "would_execute": False,
+            "execution_scope": "read_only_allowlist",
+        }
+
+
+def _blocked_fulfillment(reason: str, *, intent: str | None = None, error: Any = None) -> dict[str, Any]:
+    result = {
+        "requested": True,
+        "attempted": False,
+        "allowed": False,
+        "blocked_reason": reason,
+        "intent": intent,
+        "would_execute": False,
+    }
+    if error is not None:
+        result["error"] = error
+    return result
+
+
+def _preview_response(response: str | None, *, limit: int = 240) -> str:
+    text = " ".join(str(response or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "..."
+
+
 
 def _processing_cue(env: Mapping[str, str] | None) -> dict[str, Any]:
     from voice_presence import processing_ack_event
@@ -306,10 +438,20 @@ def _simulated_hybrid_flow(
     processing_cue: Mapping[str, Any],
     pi: Mapping[str, Any],
     zoe_agent: Mapping[str, Any] | None,
+    safe_fulfillment: Mapping[str, Any],
 ) -> dict[str, Any]:
     pi_latency = _float_or_none(pi.get("latency_ms"))
     agent_latency = _float_or_none((zoe_agent or {}).get("latency_ms"))
-    final_latency = pi_latency if pi.get("ran") else agent_latency
+    fulfillment_latency = _float_or_none(safe_fulfillment.get("latency_ms"))
+    fulfilled = bool(
+        safe_fulfillment.get("attempted")
+        and not safe_fulfillment.get("timed_out")
+        and not safe_fulfillment.get("error")
+    )
+    if fulfilled and pi_latency is not None:
+        final_latency = pi_latency + (fulfillment_latency or 0.0)
+    else:
+        final_latency = pi_latency if pi.get("ran") else agent_latency
     return {
         "strategy": "processing_ack_then_pi_or_fallback",
         "cue_available": bool(processing_cue.get("available")),
@@ -318,6 +460,9 @@ def _simulated_hybrid_flow(
         "cue_event": processing_cue.get("event"),
         "pi_completion_latency_ms": pi_latency,
         "fallback_completion_latency_ms": agent_latency,
+        "safe_fulfillment_latency_ms": fulfillment_latency,
+        "safe_fulfillment_completion_latency_ms": final_latency if fulfilled else None,
+        "safe_fulfillment_response_preview": safe_fulfillment.get("response_preview") or "",
         "final_completion_latency_ms": final_latency,
         "natural_flow_candidate": bool(processing_cue.get("available") and final_latency is not None),
         "production_route_change": False,

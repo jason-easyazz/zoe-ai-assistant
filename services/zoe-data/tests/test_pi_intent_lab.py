@@ -18,8 +18,14 @@ class _Intent:
         self.confidence = confidence
 
 
-def _install_fake_intent_router(monkeypatch, *, raw=None, extracted=None):
+def _install_fake_intent_router(monkeypatch, *, raw=None, extracted=None, execute_response=None, execute_calls=None):
     module = types.ModuleType("intent_router")
+
+    class Intent:
+        def __init__(self, name, slots=None, confidence=0.9):
+            self.name = name
+            self.slots = slots or {}
+            self.confidence = confidence
 
     def detect_intent(text, user_id="family-admin", context=None):
         return raw(text) if callable(raw) else raw
@@ -27,8 +33,15 @@ def _install_fake_intent_router(monkeypatch, *, raw=None, extracted=None):
     async def detect_and_extract_intent(text, user_id="family-admin", context=None):
         return extracted(text) if callable(extracted) else extracted
 
+    async def execute_intent(intent, user_id="family-admin"):
+        if execute_calls is not None:
+            execute_calls.append({"intent": intent, "user_id": user_id})
+        return execute_response(intent) if callable(execute_response) else execute_response
+
+    module.Intent = Intent
     module.detect_intent = detect_intent
     module.detect_and_extract_intent = detect_and_extract_intent
+    module.execute_intent = execute_intent
     monkeypatch.setitem(sys.modules, "intent_router", module)
 
 
@@ -113,15 +126,16 @@ async def test_lab_compares_router_pi_and_never_dispatches(monkeypatch):
         local_model_configured=True,
     )
 
-    assert result["contract"] == {
-        "admin_only": True,
-        "side_effects": "none",
-        "intent_dispatch_enabled": False,
-        "memory_writes_enabled": False,
-        "shadow_writes_enabled": False,
-        "promotion_enabled": False,
-        "pi_runtime": "standalone",
-    }
+    assert result["contract"]["admin_only"] is True
+    assert result["contract"]["side_effects"] == "none"
+    assert result["contract"]["intent_dispatch_enabled"] is False
+    assert result["contract"]["intent_dispatch_scope"] == "none"
+    assert result["contract"]["safe_read_only_fulfillment_enabled"] is False
+    assert "weather" in result["contract"]["safe_read_only_fulfillment_intents"]
+    assert result["contract"]["memory_writes_enabled"] is False
+    assert result["contract"]["shadow_writes_enabled"] is False
+    assert result["contract"]["promotion_enabled"] is False
+    assert result["contract"]["pi_runtime"] == "standalone"
     assert result["zoe_router"]["intent"] == "weather"
     assert result["zoe_router"]["baseline_lane"] == "deterministic:router"
     assert result["zoe_router"]["would_execute"] is True
@@ -133,6 +147,8 @@ async def test_lab_compares_router_pi_and_never_dispatches(monkeypatch):
     assert result["simulated_hybrid_flow"]["cue_available"] is True
     assert result["simulated_hybrid_flow"]["cue_event"]["type"] == "voice:processing_ack"
     assert result["simulated_hybrid_flow"]["pi_completion_latency_ms"] is not None
+    assert result["safe_fulfillment"]["blocked_reason"] == "not_requested"
+    assert result["safe_fulfillment"]["attempted"] is False
     assert result["simulated_hybrid_flow"]["production_route_change"] is False
     assert result["hybrid_buffer"]["mode"] == "shadow_buffer"
     assert seen_env[0]["env"]["ZOE_PI_INTENT_ENABLED"] == "true"
@@ -205,6 +221,82 @@ async def test_lab_enforces_pi_timeout(monkeypatch):
     assert result["pi"]["timed_out"] is True
     assert result["pi"]["intent"] is None
     assert result["comparison"]["pi_candidate_for_lane"] is False
+
+
+@pytest.mark.asyncio
+async def test_lab_can_fulfill_safe_read_only_pi_result(monkeypatch):
+    calls = []
+    _install_fake_intent_router(
+        monkeypatch,
+        raw=None,
+        extracted=None,
+        execute_response="It's 18.5 C in Perth, light jacket weather.",
+        execute_calls=calls,
+    )
+    _install_fake_pi_classifier(
+        monkeypatch,
+        result=types.SimpleNamespace(
+            intent="weather",
+            slots={"forecast": False},
+            confidence=0.93,
+            task_lane="fast_tool",
+            source="fake_pi",
+            latency_ms=123.0,
+            reason="weather signal",
+        ),
+    )
+    _install_fake_voice_presence(monkeypatch)
+
+    result = await compare_pi_intent_lab(
+        "need a jacket tonight",
+        include_hybrid_status=False,
+        include_safe_fulfillment=True,
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["intent"].name == "weather"
+    assert calls[0]["intent"].slots == {"forecast": False}
+    assert calls[0]["user_id"] == "pi-intent-lab"
+    assert result["contract"]["intent_dispatch_enabled"] is True
+    assert result["contract"]["intent_dispatch_scope"] == "read_only_allowlist_only"
+    assert result["safe_fulfillment"]["attempted"] is True
+    assert result["safe_fulfillment"]["allowed"] is True
+    assert result["safe_fulfillment"]["would_execute"] is True
+    assert result["safe_fulfillment"]["response_preview"] == "It's 18.5 C in Perth, light jacket weather."
+    assert result["simulated_hybrid_flow"]["safe_fulfillment_completion_latency_ms"] is not None
+    assert "18.5 C" in result["simulated_hybrid_flow"]["safe_fulfillment_response_preview"]
+    assert result["simulated_hybrid_flow"]["production_route_change"] is False
+
+
+@pytest.mark.asyncio
+async def test_lab_blocks_side_effect_pi_fulfillment(monkeypatch):
+    calls = []
+    _install_fake_intent_router(monkeypatch, raw=None, extracted=None, execute_response="timer started", execute_calls=calls)
+    _install_fake_pi_classifier(
+        monkeypatch,
+        result=types.SimpleNamespace(
+            intent="timer_create",
+            slots={"minutes": 10},
+            confidence=0.95,
+            task_lane="fast_tool",
+            source="fake_pi",
+            latency_ms=90.0,
+            reason="timer signal",
+        ),
+    )
+
+    result = await compare_pi_intent_lab(
+        "timer for ten minutes",
+        include_hybrid_status=False,
+        include_safe_fulfillment=True,
+    )
+
+    assert calls == []
+    assert result["safe_fulfillment"]["attempted"] is False
+    assert result["safe_fulfillment"]["allowed"] is False
+    assert result["safe_fulfillment"]["blocked_reason"] == "side_effect_or_unsupported_intent"
+    assert result["safe_fulfillment"]["intent"] == "timer_create"
+    assert result["safe_fulfillment"]["would_execute"] is False
 
 def _admin_app():
     app = FastAPI()

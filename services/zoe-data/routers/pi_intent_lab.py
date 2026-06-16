@@ -24,6 +24,8 @@ class PiIntentLabCompareRequest(BaseModel):
     zoe_agent_timeout_seconds: float = Field(default=12.0, gt=0, le=60)
     zoe_agent_max_tokens: int = Field(default=64, gt=0, le=512)
     include_hybrid_status: bool = True
+    include_safe_fulfillment: bool = False
+    safe_fulfillment_timeout_seconds: float = Field(default=8.0, gt=0, le=30)
 
 
 @router.post("/compare")
@@ -42,6 +44,8 @@ async def compare_pi_intent(payload: PiIntentLabCompareRequest, user: dict = Dep
             zoe_agent_timeout_seconds=payload.zoe_agent_timeout_seconds,
             zoe_agent_max_tokens=payload.zoe_agent_max_tokens,
             include_hybrid_status=payload.include_hybrid_status,
+            include_safe_fulfillment=payload.include_safe_fulfillment,
+            safe_fulfillment_timeout_seconds=payload.safe_fulfillment_timeout_seconds,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
