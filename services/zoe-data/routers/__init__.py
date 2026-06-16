@@ -19,6 +19,7 @@ from .capability_matrix import router as capability_matrix_router
 from .music import router as music_router
 from .skybridge import router as skybridge_router
 from .autoresearch import router as autoresearch_router
+from .pi_intent_lab import router as pi_intent_lab_router
 
 __all__ = [
     "people_router",
@@ -42,4 +43,5 @@ __all__ = [
     "music_router",
     "skybridge_router",
     "autoresearch_router",
+    "pi_intent_lab_router",
 ]
