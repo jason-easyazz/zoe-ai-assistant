@@ -318,6 +318,43 @@ def test_write_json_redacts_state(tmp_path, monkeypatch):
     assert "abc123" not in (tmp_path / "pr-66" / "status.json").read_text()
 
 
+def test_write_json_uses_atomic_replace(tmp_path, monkeypatch):
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    real_replace = greploop_guard.os.replace
+    calls = []
+
+    def tracked_replace(src, dst):
+        calls.append((Path(src), Path(dst)))
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(greploop_guard.os, "replace", tracked_replace)
+
+    greploop_guard._write_json(66, "status.json", {"terminal_state": "READY_TO_MERGE"})
+
+    status_path = tmp_path / "pr-66" / "status.json"
+    assert calls
+    tmp_path_used, final_path = calls[0]
+    assert tmp_path_used.parent == status_path.parent
+    assert tmp_path_used.name.startswith(".status.json.")
+    assert final_path == status_path
+    assert not tmp_path_used.exists()
+    assert json.loads(status_path.read_text())["terminal_state"] == "READY_TO_MERGE"
+
+
+def test_read_guard_state_returns_retry_for_partial_json(tmp_path, monkeypatch):
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    state_dir = tmp_path / "pr-66"
+    state_dir.mkdir()
+    (state_dir / "status.json").write_text('{"terminal_state": "WAITING_GREPTILE"')
+
+    state = greploop_guard.read_guard_state(66)
+
+    assert state["pr"] == 66
+    assert state["state"] == "STALE_READ_RETRY"
+    assert state["terminal_state"] == "STALE_READ_RETRY"
+    assert state["error"] == "invalid_json_state"
+
+
 @pytest.mark.asyncio
 async def test_cheap_runner_blocks_before_budget_exceeded(monkeypatch):
     monkeypatch.setenv("ZOE_CHEAP_PR_AGENT_CMD", "false")

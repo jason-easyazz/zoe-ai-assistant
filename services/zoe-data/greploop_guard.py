@@ -118,14 +118,55 @@ def _json_path(pr_number: int, name: str) -> Path:
 def _write_json(pr_number: int, name: str, payload: dict[str, Any]) -> None:
     path = _json_path(pr_number, name)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(redact(payload), indent=2, sort_keys=True) + "\n")
+    data = json.dumps(redact(payload), indent=2, sort_keys=True) + "\n"
+    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    try:
+        with tmp_path.open("w", encoding="utf-8") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+        _fsync_dir(path.parent)
+    finally:
+        try:
+            tmp_path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _fsync_dir(path: Path) -> None:
+    try:
+        dir_fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(dir_fd)
+    except OSError:
+        pass
+    finally:
+        os.close(dir_fd)
 
 
 def read_guard_state(pr_number: int) -> dict[str, Any]:
     path = _json_path(pr_number, "status.json")
     if not path.exists():
         return {"pr": int(pr_number), "state": "MISSING"}
-    return json.loads(path.read_text())
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {
+            "pr": int(pr_number),
+            "state": "STALE_READ_RETRY",
+            "terminal_state": "STALE_READ_RETRY",
+            "error": "invalid_json_state",
+        }
+    except OSError as exc:
+        return {
+            "pr": int(pr_number),
+            "state": "STALE_READ_RETRY",
+            "terminal_state": "STALE_READ_RETRY",
+            "error": exc.__class__.__name__,
+        }
 
 
 def read_observed_guard_state(pr_number: int, *, repo: str = DEFAULT_REPO) -> dict[str, Any]:
