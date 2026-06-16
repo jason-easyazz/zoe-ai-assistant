@@ -7,6 +7,7 @@ import re
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -85,11 +86,39 @@ LIST_TYPE_ALIASES = {
 }
 PEOPLE_CONTEXTS = ("personal", "work")
 PEOPLE_CIRCLES = ("inner", "circle", "public")
-DEFAULT_CLOCK_TIMEZONE = "Australia/Perth"
+
+
+def _host_clock_timezone() -> str | None:
+    tz_env = (os.environ.get("TZ") or "").strip()
+    if tz_env and not tz_env.startswith(":"):
+        return tz_env
+
+    try:
+        timezone_file = Path("/etc/timezone")
+        if timezone_file.exists():
+            timezone_name = timezone_file.read_text(encoding="utf-8").strip()
+            if timezone_name:
+                return timezone_name
+    except OSError:
+        pass
+
+    try:
+        localtime = Path("/etc/localtime")
+        if localtime.is_symlink():
+            target = str(localtime.resolve())
+            marker = "/zoneinfo/"
+            if marker in target:
+                timezone_name = target.split(marker, 1)[1]
+                if timezone_name:
+                    return timezone_name
+    except OSError:
+        pass
+
+    return None
 
 
 def _default_clock_timezone() -> str:
-    return os.environ.get("ZOE_SKYBRIDGE_TIMEZONE") or DEFAULT_CLOCK_TIMEZONE
+    return os.environ.get("ZOE_SKYBRIDGE_TIMEZONE") or _host_clock_timezone() or "UTC"
 
 
 def _today() -> date:

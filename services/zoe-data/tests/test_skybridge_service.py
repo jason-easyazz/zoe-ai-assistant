@@ -201,6 +201,27 @@ def test_classify_calendar_and_weather_requests():
     assert classify_skybridge_intent("open settings") is None
 
 
+def test_clock_timezone_prefers_env(monkeypatch):
+    monkeypatch.setenv("ZOE_SKYBRIDGE_TIMEZONE", "Australia/Melbourne")
+    monkeypatch.setenv("TZ", "UTC")
+
+    assert skybridge_service._default_clock_timezone() == "Australia/Melbourne"
+
+
+def test_clock_timezone_uses_host_timezone_before_utc(monkeypatch):
+    monkeypatch.delenv("ZOE_SKYBRIDGE_TIMEZONE", raising=False)
+    monkeypatch.setenv("TZ", "Europe/London")
+
+    assert skybridge_service._default_clock_timezone() == "Europe/London"
+
+
+def test_clock_timezone_falls_back_to_utc(monkeypatch):
+    monkeypatch.delenv("ZOE_SKYBRIDGE_TIMEZONE", raising=False)
+    monkeypatch.setattr(skybridge_service, "_host_clock_timezone", lambda: None)
+
+    assert skybridge_service._default_clock_timezone() == "UTC"
+
+
 @pytest.mark.asyncio
 async def test_clock_request_returns_public_live_clock_card():
     result = await resolve_skybridge_request("show me the clock", "guest", db=GuardedGuestDb())
