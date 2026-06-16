@@ -364,6 +364,185 @@ async def test_run_guard_once_ignores_pathless_greptile_summary_when_confident(t
 
 
 @pytest.mark.asyncio
+async def test_trigger_review_safely_skips_recent_same_head(tmp_path, monkeypatch):
+    async def fail_trigger(**_kwargs):
+        raise AssertionError("same-head trigger should be deduped")
+
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(greploop_guard, "TRIGGER_COOLDOWN_SECONDS", 900)
+    monkeypatch.setattr(greploop_guard.time, "time", lambda: 1_000.0)
+    monkeypatch.setattr("greptile_client.trigger_review", fail_trigger)
+    state = {
+        "pr": 66,
+        "last_triggered_head_sha": "abc",
+        "last_triggered_at": 500.0,
+    }
+
+    out = await greploop_guard.trigger_review_safely(
+        pr_number=66,
+        status={"headSha": "abc", "reviewIsRunning": False},
+        state=state,
+        source="test",
+    )
+
+    assert out["triggered"] is False
+    assert out["skipped"] is True
+    assert out["reason"] == "recently_triggered_for_head"
+    assert out["retry_after_seconds"] == 400
+    saved = greploop_guard.read_guard_state(66)
+    assert saved["last_trigger_decision"]["reason"] == "recently_triggered_for_head"
+
+
+@pytest.mark.asyncio
+async def test_trigger_review_safely_force_bypasses_same_head_cooldown(tmp_path, monkeypatch):
+    triggered = {}
+
+    async def fake_trigger(**kwargs):
+        triggered.update(kwargs)
+        return {"triggered": True, "ok": True}
+
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(greploop_guard.time, "time", lambda: 1_000.0)
+    monkeypatch.setattr("greptile_client.trigger_review", fake_trigger)
+    state = {
+        "pr": 66,
+        "last_triggered_head_sha": "abc",
+        "last_triggered_at": 999.0,
+    }
+
+    out = await greploop_guard.trigger_review_safely(
+        pr_number=66,
+        status={"headSha": "abc", "reviewIsRunning": False},
+        state=state,
+        force=True,
+        source="test-force",
+    )
+
+    assert out == {"triggered": True, "ok": True}
+    assert triggered["pr_number"] == 66
+    assert state["last_triggered_head_sha"] == "abc"
+    assert state["last_trigger_source"] == "test-force"
+
+
+@pytest.mark.asyncio
+async def test_trigger_review_safely_does_not_cooldown_failed_trigger(tmp_path, monkeypatch):
+    async def fake_trigger(**_kwargs):
+        return {"success": False, "error": "provider busy"}
+
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(greploop_guard.time, "time", lambda: 1_000.0)
+    monkeypatch.setattr("greptile_client.trigger_review", fake_trigger)
+    state = {"pr": 66}
+
+    out = await greploop_guard.trigger_review_safely(
+        pr_number=66,
+        status={"headSha": "abc", "reviewIsRunning": False},
+        state=state,
+        source="test-failed-trigger",
+    )
+
+    assert out == {"success": False, "error": "provider busy"}
+    assert "last_triggered_head_sha" not in state
+    assert "last_triggered_at" not in state
+    assert state["last_trigger_decision"]["success"] is False
+    assert state["last_trigger_decision"]["triggered"] is False
+    assert state["last_trigger_decision"]["response"] == out
+
+
+@pytest.mark.asyncio
+async def test_trigger_review_safely_skips_running_review(tmp_path, monkeypatch):
+    async def fail_trigger(**_kwargs):
+        raise AssertionError("running review should not be retriggered")
+
+    def fail_observation(*_args, **_kwargs):
+        raise AssertionError("running review should skip before gh pr view")
+
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr("greptile_client.trigger_review", fail_trigger)
+    monkeypatch.setattr(greploop_guard, "_gh_pr_observation", fail_observation)
+
+    out = await greploop_guard.trigger_review_safely(
+        pr_number=66,
+        status={"headSha": "abc", "reviewIsRunning": True},
+        state={"pr": 66},
+        source="test-running",
+    )
+
+    assert out["triggered"] is False
+    assert out["reason"] == "greptile_review_running"
+
+
+@pytest.mark.asyncio
+async def test_trigger_review_with_guard_lock_reports_lock_contention(tmp_path, monkeypatch):
+    async def fail_trigger(**_kwargs):
+        raise AssertionError("locked trigger path should not call Greptile")
+
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr("greptile_client.trigger_review", fail_trigger)
+
+    with greploop_guard.acquire_lock(66):
+        out = await greploop_guard.trigger_review_with_guard_lock(pr_number=66, source="test-lock")
+
+    assert out["success"] is False
+    assert out["triggered"] is False
+    assert out["skipped"] is True
+    assert out["reason"] == "guard_already_running"
+    assert out["source"] == "test-lock"
+
+
+@pytest.mark.asyncio
+async def test_run_guard_once_skips_recent_same_head_trigger(tmp_path, monkeypatch):
+    async def fake_status(**_kwargs):
+        return {
+            "confidenceScore": 4,
+            "reviewIsRunning": False,
+            "headSha": "abc",
+            "reviewCompleteness": "No Greptile review comments",
+        }
+
+    async def fake_comments(**_kwargs):
+        return {"findings": []}
+
+    async def fail_trigger(**_kwargs):
+        raise AssertionError("same-head trigger should be deduped")
+
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(greploop_guard, "TRIGGER_COOLDOWN_SECONDS", 900)
+    monkeypatch.setattr(greploop_guard.time, "time", lambda: 1_000.0)
+    monkeypatch.setattr("greptile_client.get_pr_status", fake_status)
+    monkeypatch.setattr("greptile_client.list_pr_comments", fake_comments)
+    monkeypatch.setattr("greptile_client.trigger_review", fail_trigger)
+    greploop_guard._write_json(
+        66,
+        "status.json",
+        {"pr": 66, "last_triggered_head_sha": "abc", "last_triggered_at": 500.0},
+    )
+    real_write_json = greploop_guard._write_json
+    status_writes = []
+
+    def tracked_write_json(pr_number, name, payload):
+        if name == "status.json":
+            status_writes.append(dict(payload))
+        return real_write_json(pr_number, name, payload)
+
+    monkeypatch.setattr(greploop_guard, "_write_json", tracked_write_json)
+
+    out = await greploop_guard.run_guard_once(66)
+
+    assert out["ok"] is True
+    assert out["state"] == "WAITING_GREPTILE"
+    assert out["triggered_review"]["triggered"] is False
+    assert out["triggered_review"]["reason"] == "recently_triggered_for_head"
+    state = greploop_guard.read_guard_state(66)
+    assert state["terminal_state"] == "WAITING_GREPTILE"
+    assert state["last_trigger_decision"]["reason"] == "recently_triggered_for_head"
+    trigger_decision_writes = [item for item in status_writes if "last_trigger_decision" in item]
+    assert len(trigger_decision_writes) == 1
+    assert trigger_decision_writes[0]["terminal_state"] == "WAITING_GREPTILE"
+    assert trigger_decision_writes[0]["triggered_review"]["reason"] == "recently_triggered_for_head"
+
+
+@pytest.mark.asyncio
 async def test_run_guard_once_retriggers_low_confidence_pathless_summary(tmp_path, monkeypatch):
     async def fake_status(**_kwargs):
         return {
