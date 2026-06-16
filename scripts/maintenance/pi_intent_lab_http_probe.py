@@ -68,7 +68,7 @@ def run_probe(
             result: Mapping[str, Any] | None = None
             try:
                 result = sender(endpoint, payload, timeout_seconds)
-            except Exception as exc:  # pragma: no cover - defensive CLI surface
+            except Exception as exc:
                 error = f"{type(exc).__name__}: {exc}"
             http_latency_ms = (time.perf_counter() - started) * 1000
             observations.append(
@@ -210,11 +210,13 @@ def _stats(observations: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             "unique_case_count": 0,
             "request_error_rate": None,
             "pi_accuracy": None,
+            "pi_timeout_rate": None,
             "natural_flow_rate": None,
             "safe_fulfillment_success_rate": None,
             "http_latency_ms": _latency_stats([]),
             "cue_latency_ms": _latency_stats([]),
             "pi_latency_ms": _latency_stats([]),
+            "safe_fulfillment_latency_ms": _latency_stats([]),
             "final_completion_latency_ms": _latency_stats([]),
         }
     return {

@@ -157,6 +157,33 @@ def test_http_errors_are_reported():
     assert report["summary"]["overall"]["request_error_rate"] == 1.0
 
 
+def test_empty_report_keeps_stats_schema():
+    module = _load_module()
+
+    report = module.build_report(
+        [],
+        [],
+        base_url="http://127.0.0.1:8000",
+        repeat=1,
+        run_pi=False,
+        include_safe_fulfillment=False,
+    )
+    overall = report["summary"]["overall"]
+
+    assert overall["observation_count"] == 0
+    assert overall["request_error_rate"] is None
+    assert overall["pi_accuracy"] is None
+    assert overall["pi_timeout_rate"] is None
+    assert overall["safe_fulfillment_success_rate"] is None
+    assert overall["safe_fulfillment_latency_ms"] == {
+        "avg": None,
+        "p50": None,
+        "p95": None,
+        "min": None,
+        "max": None,
+    }
+
+
 def test_cli_runs_cases_file(tmp_path, capsys, monkeypatch):
     module = _load_module()
     cases = tmp_path / "cases.json"
