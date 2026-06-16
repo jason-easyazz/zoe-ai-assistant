@@ -32,7 +32,8 @@ if [[ "${repair_mode}" == "1" && -n "${pr_number}" && "${ZOE_GREPLOOP_SKIP_WORKT
     if [[ -n "${head_branch}" && "${current_branch}" != "${head_branch}" ]]; then
         worktree_path="$(git -C "${ROOT}" worktree list --porcelain 2>/dev/null | awk -v branch="branch refs/heads/${head_branch}" '
             /^worktree / { path = substr($0, 10) }
-            $0 == branch { print path; exit }
+            $0 == branch && found == "" { found = path }
+            END { if (found != "") print found }
         ')"
         if [[ -n "${worktree_path}" && -x "${worktree_path}/scripts/maintenance/run_greploop_guard.sh" ]]; then
             exec "${worktree_path}/scripts/maintenance/run_greploop_guard.sh" "$@"

@@ -74,8 +74,13 @@ def test_run_greploop_wrapper_switches_to_matching_pr_worktree(tmp_path):
     _write_executable(
         bin_dir / "git",
         f"#!/usr/bin/env bash\n"
+        f"set -euo pipefail\n"
         f"if [[ \"$*\" == *'branch --show-current'* ]]; then printf 'main\\n'; exit 0; fi\n"
-        f"if [[ \"$*\" == *'worktree list --porcelain'* ]]; then printf 'worktree {fake_worktree}\\nbranch refs/heads/codex/pr-branch\\n'; exit 0; fi\n"
+        f"if [[ \"$*\" == *'worktree list --porcelain'* ]]; then\n"
+        f"  printf 'worktree {fake_worktree}\\nbranch refs/heads/codex/pr-branch\\n'\n"
+        f"  for i in $(seq 1 500); do printf 'worktree /tmp/other-%s\\nbranch refs/heads/other-%s\\n' \"$i\" \"$i\"; done\n"
+        f"  exit 0\n"
+        f"fi\n"
         f"exit 1\n",
     )
     env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"}
