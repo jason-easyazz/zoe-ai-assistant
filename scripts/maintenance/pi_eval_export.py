@@ -56,7 +56,9 @@ def export_eval_cases(
     if source not in _ALLOWED_SOURCES:
         raise ValueError(f"unsupported source {source!r}")
     cases: list[PiIntentEvalCase] = []
+    implicit_cases: dict[str, dict[str, Any]] = {}
     for index, row in enumerate(rows, start=1):
+        explicit_case_id = bool(_optional_str(row.get("case_id")))
         case = _case_from_row(
             row,
             index=index,
@@ -65,8 +67,17 @@ def export_eval_cases(
             default_route_class=default_route_class,
             max_words=max_words,
         )
-        if case is not None:
-            cases.append(case)
+        if case is None:
+            continue
+        if not explicit_case_id:
+            payload = case.to_dict()
+            previous = implicit_cases.get(case.case_id)
+            if previous is not None:
+                if previous == payload:
+                    continue
+                raise ValueError(f"conflicting duplicate implicit eval case_id: {case.case_id}")
+            implicit_cases[case.case_id] = payload
+        cases.append(case)
     return merge_pi_intent_eval_cases(cases)
 
 
