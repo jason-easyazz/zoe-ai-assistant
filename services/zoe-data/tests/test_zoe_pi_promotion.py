@@ -225,6 +225,25 @@ def test_promotion_counts_unique_cases_not_repeated_observations():
     assert "insufficient_samples" in decision.blockers
 
 
+def test_promotion_accuracy_uses_unique_case_evidence_not_duplicate_observations():
+    samples = []
+    for index in range(30):
+        pi_intent = "weather" if index < 15 else "reminder_list"
+        zoe_intent = "weather" if index < 14 else "reminder_list"
+        samples.append(_sample(index, pi=pi_intent, zoe=zoe_intent))
+    samples.extend([_sample(14), _sample(14)])
+    policy = PiPromotionPolicy(min_samples=30, accuracy_win_margin=0.05)
+
+    decision = evaluate_pi_promotion(samples, intent_group="weather", policy=policy)
+
+    assert decision.state == "keep_shadow"
+    assert decision.sample_count == 30
+    assert decision.pi_accuracy == 0.5
+    assert decision.zoe_accuracy == 14 / 30
+    assert decision.accuracy_delta == pytest.approx(1 / 30)
+    assert "accuracy_delta_below_threshold" in decision.blockers
+
+
 def test_candidate_wins_separate_speed_accuracy_evidence_from_promotion_readiness():
     samples = [_sample(1) for _ in range(10)]
     policy = PiPromotionPolicy(min_samples=2, accuracy_win_margin=0.05)
@@ -238,6 +257,7 @@ def test_candidate_wins_separate_speed_accuracy_evidence_from_promotion_readines
     assert detail["status"] == "needs_more_evidence"
     assert detail["observation_count"] == 10
     assert detail["unique_case_count"] == 1
+    assert "sample_count" not in detail
     assert detail["sample_deficit"] == 1
     assert detail["unique_case_deficit"] == 1
     assert detail["promotion_blockers"] == ["insufficient_samples"]

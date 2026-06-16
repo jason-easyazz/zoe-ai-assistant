@@ -262,19 +262,20 @@ def evaluate_pi_promotion(
     group_samples = [sample for sample in samples if sample.intent_group == intent_group]
     for sample in group_samples:
         sample.validate()
-    sample_count = _unique_case_count(group_samples)
+    decision_samples = _collapse_samples_by_case(group_samples)
+    sample_count = len(decision_samples)
     if sample_count == 0:
         state = "rollback" if promoted else "keep_shadow"
         return _empty_decision(intent_group, state=state, blockers=("insufficient_samples",))
 
-    zoe_accuracy = _rate(sample.zoe_correct for sample in group_samples)
-    pi_accuracy = _rate(sample.pi_correct for sample in group_samples)
+    zoe_accuracy = _rate(sample.zoe_correct for sample in decision_samples)
+    pi_accuracy = _rate(sample.pi_correct for sample in decision_samples)
     accuracy_delta = pi_accuracy - zoe_accuracy
-    zoe_p95 = _percentile([sample.zoe_latency_ms for sample in group_samples], 95)
-    pi_p95 = _percentile([sample.pi_latency_ms for sample in group_samples], 95)
+    zoe_p95 = _percentile([sample.zoe_latency_ms for sample in decision_samples], 95)
+    pi_p95 = _percentile([sample.pi_latency_ms for sample in decision_samples], 95)
     latency_delta = None if zoe_p95 is None or pi_p95 is None else zoe_p95 - pi_p95
-    timeout_rate = _rate(sample.timed_out for sample in group_samples)
-    correction_rate = _rate(sample.user_corrected for sample in group_samples)
+    timeout_rate = _rate(sample.timed_out for sample in decision_samples)
+    correction_rate = _rate(sample.user_corrected for sample in decision_samples)
     blockers: list[str] = []
     if sample_count < active_policy.min_samples:
         blockers.append("insufficient_samples")
@@ -408,7 +409,6 @@ def build_pi_candidate_wins(
             {
                 "intent_group": intent_group,
                 "status": status,
-                "sample_count": decision.get("sample_count", 0),
                 "observation_count": len(group_samples),
                 "unique_case_count": unique_case_count,
                 "promotion_blockers": blockers,
@@ -659,6 +659,66 @@ def eval_cases_to_dict(cases: Sequence[PiIntentEvalCase] = DEFAULT_PI_INTENT_EVA
 
 def _unique_case_count(samples: Sequence[PiRouteSample]) -> int:
     return len({sample.case_id for sample in samples})
+
+
+def _collapse_samples_by_case(samples: Sequence[PiRouteSample]) -> list[PiRouteSample]:
+    by_case: dict[str, list[PiRouteSample]] = {}
+    for sample in samples:
+        by_case.setdefault(sample.case_id, []).append(sample)
+    return [_collapse_case_samples(case_samples) for _, case_samples in sorted(by_case.items())]
+
+
+def _collapse_case_samples(samples: Sequence[PiRouteSample]) -> PiRouteSample:
+    first = samples[0]
+    pi_intent = (
+        first.expected_intent
+        if all(sample.pi_correct for sample in samples)
+        else _first_non_expected_pi_intent(samples)
+    )
+    zoe_intent = (
+        first.expected_intent
+        if all(sample.zoe_correct for sample in samples)
+        else _first_non_expected_zoe_intent(samples)
+    )
+    return PiRouteSample(
+        case_id=first.case_id,
+        intent_group=first.intent_group,
+        expected_intent=first.expected_intent,
+        zoe_intent=zoe_intent,
+        pi_intent=pi_intent,
+        zoe_latency_ms=max(sample.zoe_latency_ms for sample in samples),
+        pi_latency_ms=max(sample.pi_latency_ms for sample in samples),
+        pi_confidence=min(sample.pi_confidence for sample in samples),
+        pi_transport=first.pi_transport,
+        route_class=first.route_class,
+        user_corrected=any(sample.user_corrected for sample in samples),
+        timed_out=any(sample.timed_out for sample in samples),
+        rollback_blocked=any(sample.rollback_blocked for sample in samples),
+        metadata=_collapse_sample_metadata(samples),
+    )
+
+
+def _first_non_expected_pi_intent(samples: Sequence[PiRouteSample]) -> str | None:
+    expected = samples[0].expected_intent
+    for sample in samples:
+        if sample.pi_intent != expected or sample.timed_out:
+            return sample.pi_intent
+    return samples[0].pi_intent
+
+
+def _first_non_expected_zoe_intent(samples: Sequence[PiRouteSample]) -> str | None:
+    expected = samples[0].expected_intent
+    for sample in samples:
+        if sample.zoe_intent != expected:
+            return sample.zoe_intent
+    return samples[0].zoe_intent
+
+
+def _collapse_sample_metadata(samples: Sequence[PiRouteSample]) -> dict[str, Any]:
+    merged = dict(samples[0].metadata)
+    if any(sample.metadata.get("baseline_comparable") is False for sample in samples):
+        merged["baseline_comparable"] = False
+    return merged
 
 
 def _sample_source(sample: PiRouteSample) -> str:
