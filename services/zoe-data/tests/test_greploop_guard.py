@@ -1,4 +1,7 @@
 import json
+import os
+import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -49,6 +52,75 @@ def _packet(**overrides):
     }
     data.update(overrides)
     return greploop_guard.GuardPacket(**data)
+
+
+def _write_executable(path: Path, body: str) -> None:
+    path.write_text(body)
+    path.chmod(0o755)
+
+
+def test_run_greploop_wrapper_switches_to_matching_pr_worktree(tmp_path):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_worktree = tmp_path / "pr-worktree"
+    fake_worktree.mkdir()
+    target_script = fake_worktree / "scripts" / "maintenance" / "run_greploop_guard.sh"
+    target_script.parent.mkdir(parents=True)
+    _write_executable(target_script, "#!/usr/bin/env bash\necho switched-to-pr-worktree \"$@\"\nexit 43\n")
+    _write_executable(
+        bin_dir / "gh",
+        "#!/usr/bin/env bash\nprintf 'codex/pr-branch\n'\n",
+    )
+    _write_executable(
+        bin_dir / "git",
+        f"#!/usr/bin/env bash\n"
+        f"if [[ \"$*\" == *'branch --show-current'* ]]; then printf 'main\\n'; exit 0; fi\n"
+        f"if [[ \"$*\" == *'worktree list --porcelain'* ]]; then printf 'worktree {fake_worktree}\\nbranch refs/heads/codex/pr-branch\\n'; exit 0; fi\n"
+        f"exit 1\n",
+    )
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+
+    proc = subprocess.run(
+        [str(greploop_guard.REPO_ROOT / "scripts/maintenance/run_greploop_guard.sh"), "--pr", "66", "--once"],
+        cwd=greploop_guard.REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert proc.returncode == 43
+    assert "switched-to-pr-worktree --pr 66 --once" in proc.stdout
+
+
+def test_run_greploop_wrapper_blocks_repair_without_pr_worktree(tmp_path):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _write_executable(
+        bin_dir / "gh",
+        "#!/usr/bin/env bash\nprintf 'codex/pr-branch\n'\n",
+    )
+    _write_executable(
+        bin_dir / "git",
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$*\" == *'branch --show-current'* ]]; then printf 'main\\n'; exit 0; fi\n"
+        "if [[ \"$*\" == *'worktree list --porcelain'* ]]; then printf 'worktree /tmp/other\\nbranch refs/heads/other\\n'; exit 0; fi\n"
+        "exit 1\n",
+    )
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+
+    proc = subprocess.run(
+        [str(greploop_guard.REPO_ROOT / "scripts/maintenance/run_greploop_guard.sh"), "--pr=66", "--packet-only"],
+        cwd=greploop_guard.REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert proc.returncode == 2
+    assert "Greploop repair mode must run from the PR branch worktree." in proc.stderr
+    assert "PR #66 head branch: codex/pr-branch" in proc.stderr
 
 
 def test_validate_packet_rejects_broad_missing_context():

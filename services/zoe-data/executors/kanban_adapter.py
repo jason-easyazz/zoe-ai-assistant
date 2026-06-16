@@ -1137,6 +1137,8 @@ class KanbanAdapter:
             "- Drive the Greptile grep loop with the pinned github-greptile-loop skill (guard REQUIRES --pr N;"
             " <=5 rounds, target confidence 5). Each round:\n"
             "    scripts/maintenance/run_greploop_guard.sh --pr N --once\n"
+            "  Repair-capable modes auto-switch to the matching PR branch worktree when it exists; if"
+            " no matching worktree is found, create/check out that PR worktree before rerunning.\n"
             "  Apply fixes yourself when the guard returns ESCALATE_HERMES or PACKET_READY; use --packet-only"
             " only to hand off to a cheap Cursor runner.\n"
             "  Re-trigger review when needed via"
