@@ -61,6 +61,8 @@ def _install_fake_pi_classifier(monkeypatch, *, result=None, sleep_seconds=0):
 
 def test_load_zoe_env_loads_env_files_and_shell_env_wins(tmp_path, monkeypatch):
     module = _load_module()
+    monkeypatch.setattr(module, "DEFAULT_ENV_FILES", ())
+    monkeypatch.delenv("ZOE_PI_INTENT_TIMEOUT_SECONDS", raising=False)
     env_file = tmp_path / "zoe.env"
     env_file.write_text(
         "export ZOE_PI_INTENT_TIMEOUT_SECONDS=8\n"
