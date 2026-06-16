@@ -149,11 +149,11 @@ def _breakdown(
     return {key: _stats(values) for key, values in sorted(grouped.items())}
 
 
-
 def _baseline_lane_key(item: Mapping[str, Any]) -> str:
     route_class = str(item.get("route_class") or "unknown")
     baseline_kind = str(item.get("zoe_baseline_kind") or "unknown")
     return f"{route_class}:{baseline_kind}"
+
 
 def _stats(observations: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     if not observations:

@@ -317,6 +317,7 @@ def evaluate_pi_promotion(
         "timeout_rate_too_high",
         "correction_rate_too_high",
         "latency_not_faster_than_zoe",
+        "baseline_lane_not_faster_than_zoe",
         "pi_accuracy_below_threshold",
     }
     # Non-comparable baseline evidence blocks promotion, but does not prove a promoted route regressed.
