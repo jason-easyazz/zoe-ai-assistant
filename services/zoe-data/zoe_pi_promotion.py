@@ -176,6 +176,7 @@ class PiRouteSample:
 class PiPromotionPolicy:
     min_samples: int = 30
     accuracy_win_margin: float = 0.05
+    min_pi_accuracy: float = 0.90
     max_timeout_rate: float = 0.05
     max_correction_rate: float = 0.03
     require_latency_win: bool = True
@@ -184,7 +185,7 @@ class PiPromotionPolicy:
     def validate(self) -> None:
         if self.min_samples <= 0:
             raise ValueError("min_samples must be positive")
-        for field_name in ("accuracy_win_margin", "max_timeout_rate", "max_correction_rate"):
+        for field_name in ("accuracy_win_margin", "min_pi_accuracy", "max_timeout_rate", "max_correction_rate"):
             value = getattr(self, field_name)
             if not 0 <= value <= 1:
                 raise ValueError(f"{field_name} must be between 0 and 1")
@@ -281,6 +282,8 @@ def evaluate_pi_promotion(
         blockers.append("insufficient_samples")
     if accuracy_delta < active_policy.accuracy_win_margin:
         blockers.append("accuracy_delta_below_threshold")
+    if pi_accuracy < active_policy.min_pi_accuracy:
+        blockers.append("pi_accuracy_below_threshold")
     if active_policy.require_latency_win and (latency_delta is None or latency_delta <= 0):
         blockers.append("latency_not_faster_than_zoe")
     if timeout_rate > active_policy.max_timeout_rate:
@@ -301,6 +304,7 @@ def evaluate_pi_promotion(
         "timeout_rate_too_high",
         "correction_rate_too_high",
         "latency_not_faster_than_zoe",
+        "pi_accuracy_below_threshold",
     }
     # Non-comparable baseline evidence blocks promotion, but does not prove a promoted route regressed.
     if promoted and rollback_blockers.intersection(blockers):
@@ -349,6 +353,7 @@ def summarize_pi_promotion(
         "policy": {
             "min_samples": active_policy.min_samples,
             "accuracy_win_margin": active_policy.accuracy_win_margin,
+            "min_pi_accuracy": active_policy.min_pi_accuracy,
             "max_timeout_rate": active_policy.max_timeout_rate,
             "max_correction_rate": active_policy.max_correction_rate,
             "require_latency_win": active_policy.require_latency_win,
