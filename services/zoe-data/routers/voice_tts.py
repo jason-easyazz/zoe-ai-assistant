@@ -437,6 +437,36 @@ def _should_supersede_voice_weather_action(row, nav_key: str, card_key: str) -> 
     )
 
 
+def _should_supersede_voice_skybridge_action(row, nav_key: str, card_key: str) -> bool:
+    if row["idempotency_key"] in {nav_key, card_key}:
+        return False
+    try:
+        payload = json.loads(row["payload"] or "{}")
+    except Exception:
+        payload = {}
+    action_type = row["action_type"]
+    source = str(payload.get("source") or "").lower()
+    if source == "voice:skybridge":
+        return True
+    if action_type == "panel_navigate":
+        url = str(payload.get("url") or "").split("?", 1)[0]
+        return url in {
+            "/touch/calendar.html",
+            "/touch/weather.html",
+            "/touch/lists.html",
+            "/touch/chat.html",
+        }
+    if action_type == "show_card":
+        return str(payload.get("type") or "").lower() in {
+            "calendar",
+            "weather",
+            "list",
+            "lists",
+            "skybridge",
+        }
+    return False
+
+
 def _split_sentences(text: str) -> list[str]:
     """Split text into spoken sentences for streaming TTS.
 
@@ -699,23 +729,34 @@ async def _broadcast_skybridge_ui(
                 broadcast=False,
                 commit=False,
             )
-            current_card_id = card_message.get("action_id") or card_message.get("id")
-            if current_card_id:
-                await _db.execute(
-                    """UPDATE ui_actions
-                       SET status = 'skipped',
-                           error_code = 'superseded',
-                           error_message = 'Superseded by newer Skybridge voice card',
-                           updated_at = NOW()
-                       WHERE user_id = ?
-                         AND panel_id = ?
+            nav_key = f"voice_skybridge_nav_{panel_id}_{delivery_key}"
+            card_key = f"voice_skybridge_card_{panel_id}_{delivery_key}"
+            try:
+                _cur = await _db.execute(
+                    """SELECT id, action_type, payload, idempotency_key
+                       FROM ui_actions
+                       WHERE panel_id = ?
+                         AND user_id = ?
                          AND requested_by = 'voice'
-                         AND action_type = 'show_card'
-                         AND status IN ('queued', 'running')
-                         AND id != ?
-                         AND payload::jsonb->>'source' = 'voice:skybridge'""",
-                    (_panel_user_id, panel_id, current_card_id),
+                         AND status IN ('queued', 'running')""",
+                    (panel_id, _panel_user_id),
                 )
+                _rows = await _cur.fetchall()
+                _superseded_at = datetime.now(timezone.utc).isoformat()
+                for _row in _rows:
+                    if not _should_supersede_voice_skybridge_action(_row, nav_key, card_key):
+                        continue
+                    await _db.execute(
+                        """UPDATE ui_actions
+                           SET status = 'skipped',
+                               error_code = 'superseded',
+                               error_message = 'Superseded by newer Skybridge voice request',
+                               updated_at = ?
+                           WHERE id = ?""",
+                        (_superseded_at, _row["id"]),
+                    )
+            except Exception as _sup_exc:
+                logger.debug("voice skybridge stale-action cleanup failed (non-fatal): %s", _sup_exc)
             await _db.commit()
             nav_delivered = await broadcaster.broadcast_to_panel(
                 panel_id,

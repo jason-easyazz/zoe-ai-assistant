@@ -315,9 +315,11 @@ def test_skybridge_renderer_supports_real_data_cards():
     assert "props.source === 'list_show'" in renderer
     assert "props.source === 'people_directory'" in renderer
     assert "props.source === 'person_profile'" in renderer
+    assert "props.source === 'clock_show'" in renderer
     assert "renderZoeList(props)" in renderer
     assert "renderPeopleDirectory(props)" in renderer
     assert "renderPersonProfile(props)" in renderer
+    assert "renderClock(props)" in renderer
     assert "sky-list-scene" in renderer
     assert "sky-people-scene" in renderer
     assert "sky-profile-scene" in renderer
@@ -334,6 +336,10 @@ def test_skybridge_renderer_supports_real_data_cards():
     assert "sky-profile-health" in data_widgets_css
     assert "--sky-accent-work: 37, 99, 235" in data_widgets_css
     assert "--sky-accent-personal: 147, 51, 234" in data_widgets_css
+    assert "sky-clock-scene" in data_widgets_css
+    assert "sky-live-clock" in renderer
+    assert "skyAmbientClock" in html
+    assert "sky-ambient-clock" in html
     assert "sky-weather-scene" in html
     assert "weather-sunny" in html
     assert "skybridge-runtime-overrides" in html
@@ -344,6 +350,24 @@ def test_skybridge_renderer_supports_real_data_cards():
     assert "skybridge-push-ack-1" in html
     assert "backdrop-filter: none !important" in html
     assert "No events " in renderer
+
+
+def test_skybridge_returns_to_ambient_clock_after_card_idle():
+    app = read(UI / "js" / "skybridge.js")
+    html = read(UI / "skybridge.html")
+
+    assert "CARD_IDLE_MS" in app
+    assert "skybridge_idle_return_ms" in app
+    assert "function scheduleIdleReturn()" in app
+    assert "function returnToAmbientClock()" in app
+    assert "renderHome({ idle: true })" in app
+    assert "function updateAllClocks()" in app
+    assert "document.querySelectorAll('.sky-live-clock')" in app
+    assert "id=\"skyAmbientClock\"" in html
+    ambient_start = html.index("id=\"skyAmbientClock\"")
+    ambient_tag = html[html.rfind("<div", 0, ambient_start):html.find(">", ambient_start) + 1]
+    assert "aria-live" not in ambient_tag
+    assert "body.sky-empty.sky-ambient-clock .sky-ambient-clock" in html
 
 
 def test_skybridge_weather_renderer_uses_widget_forecast_structure():

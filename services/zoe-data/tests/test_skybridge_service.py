@@ -171,6 +171,8 @@ class GuardedGuestDb(FakeDb):
 def test_classify_calendar_and_weather_requests():
     assert classify_skybridge_intent("show my calendar").domain == "calendar"
     assert classify_skybridge_intent("show me the weather").domain == "weather"
+    assert classify_skybridge_intent("show me the clock").domain == "clock"
+    assert classify_skybridge_intent("what time is it").domain == "clock"
     assert classify_skybridge_intent("what is happening this week").domain == "calendar"
     assert classify_skybridge_intent("show my shopping list").domain == "lists"
     assert classify_skybridge_intent("what's on my shopping list").domain == "lists"
@@ -197,6 +199,21 @@ def test_classify_calendar_and_weather_requests():
     assert classify_skybridge_intent("find Sarah").domain == "people"
     assert classify_skybridge_intent("what is there to do this week") is None
     assert classify_skybridge_intent("open settings") is None
+
+
+@pytest.mark.asyncio
+async def test_clock_request_returns_public_live_clock_card():
+    result = await resolve_skybridge_request("show me the clock", "guest", db=GuardedGuestDb())
+
+    assert result["handled"] is True
+    assert result["intent"]["domain"] == "clock"
+    assert result["intent"]["action"] == "show"
+    assert result["cards"][0]["component"] == "status"
+    props = result["cards"][0]["props"]
+    assert props["source"] == "clock_show"
+    assert props["timezone"]
+    assert props["iso"]
+    assert "auth_required" not in result
 
 
 def test_classify_skybridge_action_requests():
