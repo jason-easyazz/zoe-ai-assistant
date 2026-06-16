@@ -216,6 +216,42 @@ def test_pi_hybrid_buffer_status_blocks_execution_without_promoted_groups(tmp_pa
     assert "pi_execution_enabled_without_promoted_groups" in data["contract"]["blockers"]
 
 
+def test_pi_readiness_report_endpoint_is_admin_scoped(tmp_path, monkeypatch):
+    path = tmp_path / "shadow.jsonl"
+    labels_path = tmp_path / "labels.jsonl"
+    path.write_text("", encoding="utf-8")
+    labels_path.write_text("", encoding="utf-8")
+    monkeypatch.setenv("ZOE_WAKE_ACK_PHRASES", "Yes Jason.")
+    monkeypatch.setenv("ZOE_PROCESSING_ACK_PHRASES", "Let me check.")
+    monkeypatch.setenv("ZOE_PI_INTENT_ENABLED", "false")
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_ENABLED", "true")
+    monkeypatch.setenv("ZOE_PI_INTENT_TRANSPORT", "rpc")
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_PATH", str(path))
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_LABELS_PATH", str(labels_path))
+    app = _admin_app()
+
+    resp = TestClient(app).get("/api/system/pi-intent/readiness-report")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["report_kind"] == "zoe_pi_readiness_report"
+    assert data["hybrid"]["ready"] is True
+
+
+def test_pi_readiness_report_endpoint_rejects_non_admin():
+    app = FastAPI()
+    app.include_router(system_router)
+
+    async def fake_non_admin():
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    app.dependency_overrides[require_admin] = fake_non_admin
+
+    resp = TestClient(app).get("/api/system/pi-intent/readiness-report")
+
+    assert resp.status_code == 403
+
+
 def test_pi_intent_shadow_label_endpoint_appends_trusted_label(tmp_path, monkeypatch):
     shadow_path = tmp_path / "shadow.jsonl"
     labels_path = tmp_path / "labels.jsonl"
