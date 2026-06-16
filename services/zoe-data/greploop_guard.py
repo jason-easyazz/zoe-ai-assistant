@@ -34,6 +34,13 @@ MAX_OUTPUT_CHARS = int(os.environ.get("ZOE_PR_GUARD_MAX_OUTPUT_CHARS", "12000"))
 TRIGGER_COOLDOWN_SECONDS = int(os.environ.get("ZOE_PR_GUARD_TRIGGER_COOLDOWN_SECONDS", "900"))
 GREPTILE_WAIT_TIMEOUT_SECONDS = int(os.environ.get("ZOE_PR_GUARD_GREPTILE_WAIT_TIMEOUT_SECONDS", "1800"))
 GREPTILE_WAIT_POLL_SECONDS = int(os.environ.get("ZOE_PR_GUARD_GREPTILE_WAIT_POLL_SECONDS", "120"))
+GREPTILE_REPO_ACTIVE_REVIEW_LIMIT = int(os.environ.get("ZOE_PR_GUARD_MAX_ACTIVE_GREPTILE_REVIEWS", "1"))
+GREPTILE_REPO_ACTIVE_REVIEW_STALE_SECONDS = int(
+    os.environ.get(
+        "ZOE_PR_GUARD_ACTIVE_GREPTILE_STALE_SECONDS",
+        str(max(GREPTILE_WAIT_TIMEOUT_SECONDS, GREPTILE_WAIT_POLL_SECONDS * 2)),
+    )
+)
 
 # Cheap-model repair packets must never merge or bypass hooks; use merge_pr_when_ready().
 FORBIDDEN_ACTIONS = [
@@ -566,11 +573,14 @@ def _update_greptile_wait_state(
         poll_due = True
     else:
         poll_due = now >= _float_state(state.get("greptile_next_poll_after"))
+    next_poll_after = _float_state(state.get("greptile_next_poll_after"))
     wait_count = int(state.get("waiting_greptile_count") or 0)
     if poll_due:
         wait_count += 1
-        state["greptile_next_poll_after"] = now + max(1, GREPTILE_WAIT_POLL_SECONDS)
+        next_poll_after = now + max(1, GREPTILE_WAIT_POLL_SECONDS)
+        state["greptile_next_poll_after"] = next_poll_after
     elapsed_seconds = max(0.0, now - started_at)
+    retry_after_seconds = max(1, int(next_poll_after - now)) if next_poll_after > now else 1
     state["greptile_wait_started_at"] = started_at
     state["greptile_wait_last_seen_at"] = now
     state["greptile_wait_elapsed_seconds"] = int(elapsed_seconds)
@@ -582,13 +592,15 @@ def _update_greptile_wait_state(
         "summary_count": summary_count,
         "wait_count": wait_count,
         "wait_elapsed_seconds": int(elapsed_seconds),
-        "next_poll_after": int(_float_state(state.get("greptile_next_poll_after"))),
+        "next_poll_after": int(next_poll_after),
+        "retry_after_seconds": retry_after_seconds,
     }
     return {
         "wait_count": wait_count,
         "elapsed_seconds": int(elapsed_seconds),
         "poll_due": poll_due,
         "stuck": elapsed_seconds >= GREPTILE_WAIT_TIMEOUT_SECONDS,
+        "retry_after_seconds": retry_after_seconds,
     }
 
 
@@ -602,6 +614,55 @@ def _clear_greptile_wait_state(state: dict[str, Any]) -> None:
     ):
         state.pop(key, None)
     state.pop("greptile", None)
+
+
+def _repo_waiting_greptile_prs(*, exclude_pr_number: int, now: float) -> list[dict[str, Any]]:
+    if not STATE_ROOT.exists():
+        return []
+    active: list[dict[str, Any]] = []
+    for status_path in STATE_ROOT.glob("pr-*/status.json"):
+        try:
+            pr_number = int(status_path.parent.name.removeprefix("pr-"))
+        except ValueError:
+            continue
+        if pr_number == int(exclude_pr_number):
+            continue
+        try:
+            state = json.loads(status_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if state.get("terminal_state") != "WAITING_GREPTILE":
+            continue
+        last_seen = _float_state(state.get("greptile_wait_last_seen_at") or state.get("last_triggered_at"))
+        if last_seen <= 0 or (now - last_seen) > GREPTILE_REPO_ACTIVE_REVIEW_STALE_SECONDS:
+            continue
+        active.append(
+            {
+                "pr": pr_number,
+                "last_seen_at": int(last_seen),
+                "elapsed_seconds": int(max(0.0, now - _float_state(state.get("greptile_wait_started_at"), last_seen))),
+                "next_poll_after": int(_float_state(state.get("greptile_next_poll_after"))),
+            }
+        )
+    return sorted(active, key=lambda item: int(item["pr"]))
+
+
+def _repo_greptile_capacity_skip(*, pr_number: int, now: float) -> dict[str, Any] | None:
+    if GREPTILE_REPO_ACTIVE_REVIEW_LIMIT <= 0:
+        return None
+    active = _repo_waiting_greptile_prs(exclude_pr_number=pr_number, now=now)
+    if len(active) < GREPTILE_REPO_ACTIVE_REVIEW_LIMIT:
+        return None
+    future_polls = [int(item["next_poll_after"]) for item in active if int(item.get("next_poll_after") or 0) > now]
+    retry_after = min(future_polls) - int(now) if future_polls else GREPTILE_WAIT_POLL_SECONDS
+    return {
+        "skipped": True,
+        "reason": "repo_greptile_review_capacity",
+        "active_review_count": len(active),
+        "active_review_limit": GREPTILE_REPO_ACTIVE_REVIEW_LIMIT,
+        "active_prs": [int(item["pr"]) for item in active],
+        "retry_after_seconds": max(1, int(retry_after)),
+    }
 
 
 def _run_gh(args: list[str], *, repo: str = DEFAULT_REPO, check: bool = False) -> subprocess.CompletedProcess[str]:
@@ -1018,6 +1079,9 @@ async def trigger_review_safely(
             now=now,
             force=force,
         )
+    if not skipped and not force:
+        skipped = _repo_greptile_capacity_skip(pr_number=pr_number, now=now)
+
     if skipped:
         decision = {
             "success": True,
@@ -1246,14 +1310,43 @@ async def merge_pr_when_ready(
 ) -> dict[str, Any]:
     """Squash-merge via `gh pr merge` when Greptile + CI are clear. Never uses admin or force."""
     pr_number = int(pr_number)
+    from greptile_client import get_pr_status
+
     with acquire_lock(pr_number):
+        state = _load_status(pr_number)
+        status = await get_pr_status(repo=repo, pr_number=pr_number, default_branch=default_branch)
+        gh_observation = _gh_pr_observation(pr_number, repo=repo)
+        if status.get("reviewIsRunning") and _gh_greptile_check_running(gh_observation):
+            wait = _update_greptile_wait_state(
+                state,
+                now=time.time(),
+                status=status,
+                confidence=int(status.get("confidenceScore") or 0),
+                actionable_count=0,
+                summary_count=0,
+            )
+            state["terminal_state"] = "WAITING_GREPTILE"
+            state["merge_blockers"] = ["GREPTILE_REVIEW_RUNNING"]
+            _write_json(pr_number, "status.json", state)
+            return {
+                "ok": False,
+                "state": "WAITING_GREPTILE",
+                "blockers": ["GREPTILE_REVIEW_RUNNING"],
+                "retry_after_seconds": wait["retry_after_seconds"],
+                "wait": wait,
+                "assessment": {
+                    "ready": False,
+                    "blockers": ["GREPTILE_REVIEW_RUNNING"],
+                    "greptile": status,
+                    "gh": gh_observation,
+                },
+            }
         assessment = await assess_merge_readiness(
             pr_number,
             target_confidence=target_confidence,
             repo=repo,
             default_branch=default_branch,
         )
-        state = _load_status(pr_number)
         if not assessment["ready"]:
             state["terminal_state"] = "BLOCKED_NOT_READY"
             state["merge_blockers"] = assessment["blockers"]
