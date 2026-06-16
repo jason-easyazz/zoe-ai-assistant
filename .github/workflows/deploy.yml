@@ -54,7 +54,7 @@ jobs:
       - name: Install / refresh Python deps
         run: |
           pip3 install --quiet --user \
-            "apscheduler==3.10.4" "sqlalchemy>=2.0,<3.0" \
+            "apscheduler==3.10.4" "tzlocal>=2,<3" "sqlalchemy>=2.0,<3.0" \
             alembic asyncpg psycopg2-binary pywebpush py-vapid
 
       - name: Apply database migrations
