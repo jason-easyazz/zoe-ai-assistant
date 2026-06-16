@@ -111,7 +111,7 @@ _PI_CLASSIFIER_SYSTEM_PROMPT = (
 _LOW_RISK_TASK_SIGNAL_RE = re.compile(
     r"\b("
     r"rain|umbrella|forecast|weather|jacket|temperature|temp|storm|windy|humid|"
-    r"remember|remind|reminder|due|todo|"
+    r"remember|remind|reminders?|due|todo|"
     r"list|shopping|groceries|"
     r"timer|alarm|minute|minutes|hour|hours|"
     r"calculate|math|multiplied|divided|percent|"
@@ -123,11 +123,14 @@ _LOW_RISK_TASK_PHRASE_RE = re.compile(
     r"("
     r"\bwhat(?:'s| is) my day\b|"
     r"\bmy day looking\b|"
+    r"\bleft on my day\b|"
+    r"\bwhat(?:'s| is) coming up today\b|"
     r"\bwhat(?:'s| is) on (?:my |the )?(?:shopping )?list\b|"
     r"\b(?:add|remove)\b.+\b(?:list|shopping|grocer(?:y|ies)|reminder|todo)\b|"
     r"\b(?:is it|will it be)\s+(?:hot|cold)\b|"
     r"\b(?:hot|cold)\s+(?:today|tonight|tomorrow|outside)\b|"
-    r"\b\d+\s*(?:\+|-|x|×|\*|/|÷|plus|minus|times)\s*\d+\b"
+    r"\b\d+\s*(?:\+|-|x|×|\*|/|÷|plus|minus|times)\s*\d+\b|"
+    r"\badd\s+\d+\s+and\s+\d+\b"
     r")",
     re.I,
 )
@@ -366,7 +369,9 @@ def _classification_prompt(text: str, *, context_turns: str = "") -> str:
         "\"task_lane\": \"fast_tool\"|\"chat\", \"reason\": string}.\n"
         f"Low-risk candidate intents: {sorted(_LOW_RISK_PI_INTENT_CANDIDATES)}\n"
         f"Task lanes: {json.dumps(_PI_PROMPT_TASK_LANES, sort_keys=True)}\n"
-        "Hints: rain/umbrella/jacket=>weather; due/todo=>reminder_list; timer/alarm=>timer_create. "
+        "Hints: rain/umbrella/jacket=>weather; reminders/due/todo=>reminder_list; "
+        "add numbers/percent/divided/times=>calculate; day/agenda/coming up=>daily_briefing; "
+        "timer/alarm=>timer_create. "
         "Keep confidence below 0.78 unless obvious.\n"
         f"Recent context: {_sanitize_prompt_value(context_turns) or '(none)'}\n"
         f"User message: {_sanitize_prompt_value(text)}\n"
