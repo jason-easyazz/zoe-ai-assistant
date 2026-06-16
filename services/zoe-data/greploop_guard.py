@@ -727,6 +727,60 @@ def _gh_greptile_check_success(observation: dict[str, Any]) -> bool:
     return False
 
 
+def _gh_greptile_check_running(observation: dict[str, Any]) -> bool:
+    for check in observation.get("statusCheckRollup") or []:
+        if not isinstance(check, dict):
+            continue
+        if str(check.get("name") or "") != "Greptile Review":
+            continue
+        status = str(check.get("status") or "").upper()
+        conclusion = str(check.get("conclusion") or "").upper()
+        if status in {"IN_PROGRESS", "QUEUED", "PENDING", "REQUESTED"} and not conclusion:
+            return True
+    return False
+
+
+def _github_greptile_trigger_skip(
+    *,
+    pr_number: int,
+    repo: str,
+    observation: dict[str, Any] | None,
+    status: dict[str, Any] | None,
+    head_sha: str | None,
+    target_confidence: int = 5,
+) -> dict[str, Any] | None:
+    if not observation or not observation.get("ok"):
+        return None
+    observed_head = _head_sha_for_trigger(None, observation)
+    if head_sha and observed_head and head_sha != observed_head:
+        return None
+    effective_head = head_sha or observed_head
+    if _gh_greptile_check_running(observation):
+        return {
+            "skipped": True,
+            "reason": "github_greptile_check_running",
+            "github_head_sha": observed_head,
+        }
+    if not _gh_greptile_check_success(observation):
+        return None
+    thread_counts = _gh_thread_counts(pr_number, repo=repo)
+    if not thread_counts.get("ok") or int(thread_counts.get("unresolved") or 0) != 0:
+        return None
+    confidence = int((status or {}).get("confidenceScore") or 0)
+    gh_confidence = _greptile_confidence_from_github_comments(pr_number, repo=repo)
+    if gh_confidence is not None:
+        confidence = max(confidence, gh_confidence)
+    if confidence < int(target_confidence):
+        return None
+    return {
+        "skipped": True,
+        "reason": "github_greptile_review_already_clear",
+        "confidence": confidence,
+        "github_head_sha": effective_head,
+        "unresolved_review_threads": int(thread_counts.get("unresolved") or 0),
+    }
+
+
 def _head_sha_for_trigger(status: dict[str, Any] | None, observation: dict[str, Any] | None) -> str | None:
     if status:
         value = status.get("headSha") or status.get("headRefOid")
@@ -790,19 +844,25 @@ async def trigger_review_safely(
     )
     head_sha = _head_sha_for_trigger(active_status, None)
     now = time.time()
-    skipped = None
-    if not force and active_status and active_status.get("reviewIsRunning"):
-        skipped = _should_skip_greptile_trigger(
-            state=active_state,
+    skipped = _should_skip_greptile_trigger(
+        state=active_state,
+        status=active_status,
+        head_sha=head_sha,
+        now=now,
+        force=force,
+    )
+    observation = None
+    if not skipped and not force:
+        observation = _gh_pr_observation(pr_number, repo=repo)
+        head_sha = _head_sha_for_trigger(active_status, observation)
+        skipped = _github_greptile_trigger_skip(
+            pr_number=pr_number,
+            repo=repo,
+            observation=observation,
             status=active_status,
             head_sha=head_sha,
-            now=now,
-            force=force,
         )
     if not skipped:
-        if not head_sha:
-            observation = _gh_pr_observation(pr_number, repo=repo)
-            head_sha = _head_sha_for_trigger(active_status, observation)
         skipped = _should_skip_greptile_trigger(
             state=active_state,
             status=active_status,
