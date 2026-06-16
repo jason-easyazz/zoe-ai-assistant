@@ -316,6 +316,48 @@ async def test_run_guard_once_active_review_does_not_trip_no_progress(tmp_path, 
 
 
 @pytest.mark.asyncio
+async def test_run_guard_once_active_review_uses_elapsed_poll_windows(tmp_path, monkeypatch):
+    async def fake_status(**_kwargs):
+        return {
+            "confidenceScore": None,
+            "reviewIsRunning": True,
+            "headSha": None,
+            "reviewCompleteness": "No Greptile review comments",
+            "codeReviews": [{"status": "REVIEWING_FILES"}],
+        }
+
+    async def fake_comments(**_kwargs):
+        return {"findings": []}
+
+    now = {"value": 1_000.0}
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(greploop_guard, "GREPTILE_WAIT_TIMEOUT_SECONDS", 600)
+    monkeypatch.setattr(greploop_guard, "GREPTILE_WAIT_POLL_SECONDS", 120)
+    monkeypatch.setattr(greploop_guard.time, "time", lambda: now["value"])
+    monkeypatch.setattr("greptile_client.get_pr_status", fake_status)
+    monkeypatch.setattr("greptile_client.list_pr_comments", fake_comments)
+
+    for timestamp in (1_000.0, 1_001.0, 1_050.0):
+        now["value"] = timestamp
+        out = await greploop_guard.run_guard_once(66)
+        assert out["ok"] is True
+        assert out["state"] == "WAITING_GREPTILE"
+
+    state = greploop_guard.read_guard_state(66)
+    assert state["waiting_greptile_count"] == 1
+    assert state["greptile_wait_started_at"] == 1_000.0
+    assert state["greptile"]["wait_elapsed_seconds"] == 50
+
+    now["value"] = 1_121.0
+    out = await greploop_guard.run_guard_once(66)
+
+    assert out["ok"] is True
+    assert out["wait"]["poll_due"] is True
+    state = greploop_guard.read_guard_state(66)
+    assert state["waiting_greptile_count"] == 2
+
+
+@pytest.mark.asyncio
 async def test_run_guard_once_ignores_pathless_greptile_summary_when_confident(tmp_path, monkeypatch):
     async def fake_status(**_kwargs):
         return {
@@ -1184,16 +1226,24 @@ async def test_run_guard_once_blocks_permanently_active_review(tmp_path, monkeyp
     async def fake_comments(**_kwargs):
         return {"findings": []}
 
+    now = {"value": 1_000.0}
     monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(greploop_guard, "GREPTILE_WAIT_TIMEOUT_SECONDS", 60)
+    monkeypatch.setattr(greploop_guard, "GREPTILE_WAIT_POLL_SECONDS", 10)
+    monkeypatch.setattr(greploop_guard.time, "time", lambda: now["value"])
     monkeypatch.setattr("greptile_client.get_pr_status", fake_status)
     monkeypatch.setattr("greptile_client.list_pr_comments", fake_comments)
 
-    out = {}
-    for _ in range(greploop_guard.MAX_ITERATIONS + 1):
-        out = await greploop_guard.run_guard_once(66)
+    first = await greploop_guard.run_guard_once(66)
+    assert first["ok"] is True
+    assert first["state"] == "WAITING_GREPTILE"
+
+    now["value"] = 1_061.0
+    out = await greploop_guard.run_guard_once(66)
 
     assert out["ok"] is False
     assert out["state"] == "BLOCKED_GREPTILE_STUCK"
+    assert out["wait"]["elapsed_seconds"] == 61
     state = greploop_guard.read_guard_state(66)
     assert state["terminal_state"] == "BLOCKED_GREPTILE_STUCK"
     assert state["no_progress_count"] == 0
