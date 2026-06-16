@@ -1338,7 +1338,6 @@ async def run_guard_once(
             pr_number=pr_number,
             repo=DEFAULT_REPO,
             default_branch=DEFAULT_BASE_BRANCH,
-            status=status,
             state=state,
             source="greploop_guard:cheap_agent_applied",
             write_state=False,
