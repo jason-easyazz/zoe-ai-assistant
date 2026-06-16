@@ -655,6 +655,18 @@ def test_skybridge_has_touch_panel_fit_overrides():
     assert '.sky-orb-button span' in html
     assert '.sky-orb-button::before' in html
     assert 'display: none !important' in html
+    assert 'skybridge-native-panel-fit-final' in html
+    assert 'inset: 24px 24px 112px !important' in html
+    assert 'Native Zoe touch panel: 1280x720 rotated DSI display' in html
+
+
+def test_skybridge_weather_renderer_accepts_temperature_aliases():
+    renderer = read(UI / "js" / "skybridge-renderer.js")
+
+    assert "function weatherValue(source, keys)" in renderer
+    assert "['temp', 'temperature', 'temperature_c', 'temp_c', 'current_temp']" in renderer
+    assert "['feels_like', 'feels_like_c', 'apparent_temperature']" in renderer
+    assert "['temp', 'temperature', 'temperature_c', 'temp_c', 'high']" in renderer
 
 
 def test_skybridge_list_create_has_database_conflict_guard():

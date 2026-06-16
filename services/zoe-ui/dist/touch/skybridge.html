@@ -4913,6 +4913,98 @@
             }
         }
     </style>
+
+    <style id="skybridge-native-panel-fit-final">
+        /* Native Zoe touch panel: 1280x720 rotated DSI display. Keep cards above the voice layer. */
+        @media (min-width: 900px) and (max-height: 760px) {
+            body:not(.sky-empty) .sky-stage,
+            body.sky-command-open:not(.sky-empty) .sky-stage {
+                inset: 24px 24px 112px !important;
+                width: auto !important;
+                overflow: visible !important;
+            }
+
+            body:not(.sky-empty) .sky-card-stack {
+                height: 100% !important;
+                max-height: 100% !important;
+                align-content: stretch !important;
+                padding-bottom: 0 !important;
+                overflow: visible !important;
+            }
+
+            body:not(.sky-empty) .sky-card-stack > .sky-card:first-child,
+            body:not(.sky-empty) .weather-card.sky-premium-card,
+            body:not(.sky-empty) .calendar-card.sky-premium-card,
+            body:not(.sky-empty) .clock-card.sky-premium-card,
+            body:not(.sky-empty) .zoe-list-card.sky-premium-card,
+            body:not(.sky-empty) .sky-card.list-card.sky-premium-card,
+            body:not(.sky-empty) .people-card.sky-premium-card,
+            body:not(.sky-empty) .person-profile-card.sky-premium-card,
+            body:not(.sky-empty) .sky-card.auth-challenge {
+                height: 100% !important;
+                max-height: 100% !important;
+                min-height: 0 !important;
+                overflow: hidden !important;
+            }
+
+            body:not(.sky-empty) .sky-card.auth-challenge {
+                width: min(980px, calc(100vw - 96px)) !important;
+                margin-inline: auto !important;
+            }
+
+            body:not(.sky-empty) .weather-card .sky-weather-scene {
+                height: 100% !important;
+                grid-template-columns: minmax(0, 0.78fr) minmax(520px, 1fr) !important;
+                gap: 18px !important;
+                padding: 24px !important;
+            }
+
+            body:not(.sky-empty) .weather-card .sky-weather-main {
+                gap: 14px !important;
+            }
+
+            body:not(.sky-empty) .weather-card .sky-weather-temp {
+                font-size: 142px !important;
+            }
+
+            body:not(.sky-empty) .weather-card .sky-weather-icon {
+                font-size: 82px !important;
+            }
+
+            body:not(.sky-empty) .weather-card .sky-weather-forecast {
+                gap: 9px !important;
+                padding: 14px !important;
+            }
+
+            body:not(.sky-empty) .weather-card .sky-weather-hour-tile {
+                min-height: 86px !important;
+                padding: 8px 7px !important;
+            }
+
+            body:not(.sky-empty) .weather-card .sky-weather-day-list {
+                gap: 7px !important;
+            }
+
+            body:not(.sky-empty) .weather-card .sky-weather-day-row {
+                min-height: 52px !important;
+                padding: 8px 13px !important;
+            }
+
+            body:not(.sky-empty) .weather-card .sky-weather-day-temp strong {
+                font-size: 26px !important;
+            }
+
+            body:not(.sky-empty) .calendar-card .sky-calendar-scene,
+            body:not(.sky-empty) .zoe-list-card .sky-list-scene,
+            body:not(.sky-empty) .people-card .sky-people-scene,
+            body:not(.sky-empty) .person-profile-card .sky-profile-scene,
+            body:not(.sky-empty) .clock-card .sky-clock-scene {
+                height: 100% !important;
+                min-height: 0 !important;
+            }
+        }
+    </style>
+
 </head>
 <body>
     <header class="sky-topbar">

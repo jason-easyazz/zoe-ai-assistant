@@ -290,6 +290,13 @@
         };
     }
 
+    function weatherValue(source, keys) {
+        for (const key of keys) {
+            if (source && source[key] != null && source[key] !== '') return source[key];
+        }
+        return null;
+    }
+
     function renderWeather(props) {
         const current = props.current || {};
         const forecast = props.forecast || {};
@@ -318,13 +325,13 @@
                 '<div class="sky-weather-hour-tile">',
                 '<span>' + escapeHtml(label) + '</span>',
                 '<b aria-hidden="true">' + escapeHtml(weatherEmoji(item)) + '</b>',
-                '<strong>' + escapeHtml(formatTemp(item.temp != null ? item.temp : item.high)) + '</strong>',
+                '<strong>' + escapeHtml(formatTemp(weatherValue(item, ['temp', 'temperature', 'temperature_c', 'temp_c', 'high']))) + '</strong>',
                 '</div>'
             ].join('');
         }).join('');
         const dayList = dailyRows;
         const meta = [
-            ['🌡', 'Feels ' + formatTemp(current.feels_like)],
+            ['🌡', 'Feels ' + formatTemp(weatherValue(current, ['feels_like', 'feels_like_c', 'apparent_temperature']))],
             ['💧', current.humidity == null ? 'Humidity --' : current.humidity + '% humidity'],
             ['💨', formatWind(current.wind_speed)]
         ].map(pair => '<div class="sky-weather-pill"><span>' + escapeHtml(pair[0]) + '</span>' + escapeHtml(pair[1]) + '</div>').join('');
@@ -332,7 +339,7 @@
             '<div class="sky-weather-scene">',
             '<div class="sky-weather-main">',
             '<div class="sky-weather-location">📍 ' + escapeHtml(place) + '</div>',
-            '<div class="sky-weather-hero"><div class="sky-weather-temp">' + escapeHtml(formatTemp(current.temp)) + '</div><div class="sky-weather-icon" aria-hidden="true">' + escapeHtml(weatherEmoji(current)) + '</div></div>',
+            '<div class="sky-weather-hero"><div class="sky-weather-temp">' + escapeHtml(formatTemp(weatherValue(current, ['temp', 'temperature', 'temperature_c', 'temp_c', 'current_temp']))) + '</div><div class="sky-weather-icon" aria-hidden="true">' + escapeHtml(weatherEmoji(current)) + '</div></div>',
             '<div class="sky-weather-condition">' + escapeHtml(description) + '</div>',
             '<div class="sky-weather-meta">' + meta + '</div>',
             '</div>',
