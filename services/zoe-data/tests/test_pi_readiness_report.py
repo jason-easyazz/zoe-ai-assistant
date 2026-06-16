@@ -97,7 +97,7 @@ def test_readiness_report_surfaces_operator_apply_when_promotion_ready(tmp_path)
     }
 
 
-def test_readiness_report_prioritizes_configuration_blockers_over_promotable_evidence(tmp_path):
+def test_readiness_report_treats_enabled_pi_without_promotions_as_shadow_mode(tmp_path):
     shadow_path = tmp_path / "shadow.jsonl"
     shadow_path.write_text(
         "".join(json.dumps(_winning_weather_row(index)) + "\n" for index in range(30)),
@@ -109,9 +109,12 @@ def test_readiness_report_prioritizes_configuration_blockers_over_promotable_evi
 
     report = pi_readiness_report(env)
 
-    assert report["state"] == "configuration_blocked"
-    assert "pi_execution_enabled_without_promoted_groups" in report["hybrid"]["blockers"]
-    assert report["next_actions"][0]["kind"] == "fix_configuration"
+    assert report["state"] == "promotion_apply_ready"
+    assert report["hybrid"]["mode"] == "shadow_buffer"
+    assert report["hybrid"]["ready"] is True
+    assert "pi_execution_enabled_without_promoted_groups" not in report["hybrid"]["blockers"]
+    assert "pi_classifier_enabled_without_promoted_groups_runs_shadow_only" in report["hybrid"]["warnings"]
+    assert report["promotion_actions"]["promote_groups"] == ["weather"]
 
 
 def test_readiness_report_requests_comparable_baseline_for_router_only_shadow_data(tmp_path):

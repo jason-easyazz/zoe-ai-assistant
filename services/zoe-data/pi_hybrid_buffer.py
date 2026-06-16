@@ -85,6 +85,7 @@ def _hybrid_contract(
     ignored_groups = list(promotion.get("ignored_groups") or [])
     pi_enabled = bool(pi_config.get("enabled"))
     shadow_enabled = bool(shadow_config.get("enabled"))
+    foreground_pi_execution_enabled = pi_enabled and bool(active_groups)
     processing_ready = bool(presence_gate.get("processing_ack_ready"))
     wake_ready = bool(presence_gate.get("wake_ack_ready"))
 
@@ -94,8 +95,10 @@ def _hybrid_contract(
     warnings.extend(str(item) for item in presence_gate.get("warnings") or [])
     if ignored_groups:
         blockers.append("non_allowlisted_pi_groups_requested")
-    if pi_enabled and not active_groups:
-        blockers.append("pi_execution_enabled_without_promoted_groups")
+    if active_groups and not pi_enabled:
+        blockers.append("promoted_groups_without_pi_classifier_enabled")
+    if pi_enabled and shadow_enabled and not active_groups:
+        warnings.append("pi_classifier_enabled_without_promoted_groups_runs_shadow_only")
     if not shadow_enabled and not active_groups:
         blockers.append("pi_shadow_disabled_without_promoted_groups")
     if str(pi_config.get("transport") or "print") != "rpc":
@@ -107,12 +110,10 @@ def _hybrid_contract(
         if label_count == 0:
             warnings.append("pi_shadow_has_no_outcome_labels_yet")
 
-    if pi_enabled and active_groups:
+    if foreground_pi_execution_enabled:
         mode = "promoted_buffer"
-    elif shadow_enabled and not pi_enabled:
-        mode = "shadow_buffer"
     elif shadow_enabled:
-        mode = "shadow_with_execution_misconfigured"
+        mode = "shadow_buffer"
     else:
         mode = "buffer_only"
 
@@ -123,7 +124,9 @@ def _hybrid_contract(
         "wake_ack_ready": wake_ready,
         "processing_ack_ready": processing_ready,
         "pi_shadow_enabled": shadow_enabled,
+        "pi_classifier_enabled": pi_enabled,
         "pi_execution_enabled": pi_enabled,
+        "foreground_pi_execution_enabled": foreground_pi_execution_enabled,
         "promoted_groups": active_groups,
         "blockers": _dedupe(blockers),
         "warnings": _dedupe(warnings),

@@ -193,7 +193,7 @@ def test_pi_hybrid_buffer_status_endpoint_reports_shadow_buffer_ready(tmp_path, 
     assert data["pi"]["shadow"]["record_count_window"] == 1
 
 
-def test_pi_hybrid_buffer_status_blocks_execution_without_promoted_groups(tmp_path, monkeypatch):
+def test_pi_hybrid_buffer_status_reports_enabled_pi_without_promotions_as_nonblocking_shadow(tmp_path, monkeypatch):
     path = tmp_path / "shadow.jsonl"
     labels_path = tmp_path / "labels.jsonl"
     path.write_text("", encoding="utf-8")
@@ -211,9 +211,39 @@ def test_pi_hybrid_buffer_status_blocks_execution_without_promoted_groups(tmp_pa
 
     assert resp.status_code == 200
     data = resp.json()
-    assert data["contract"]["mode"] == "shadow_with_execution_misconfigured"
+    assert data["contract"]["mode"] == "shadow_buffer"
+    assert data["contract"]["ready"] is True
+    assert data["contract"]["pi_classifier_enabled"] is True
+    assert data["contract"]["pi_execution_enabled"] is True
+    assert data["contract"]["foreground_pi_execution_enabled"] is False
+    assert "pi_execution_enabled_without_promoted_groups" not in data["contract"]["blockers"]
+    assert "pi_classifier_enabled_without_promoted_groups_runs_shadow_only" in data["contract"]["warnings"]
+
+
+def test_pi_hybrid_buffer_status_blocks_promoted_groups_when_classifier_disabled(tmp_path, monkeypatch):
+    path = tmp_path / "shadow.jsonl"
+    labels_path = tmp_path / "labels.jsonl"
+    path.write_text("", encoding="utf-8")
+    labels_path.write_text("", encoding="utf-8")
+    monkeypatch.setenv("ZOE_WAKE_ACK_PHRASES", "Yes Jason.")
+    monkeypatch.setenv("ZOE_PROCESSING_ACK_PHRASES", "Let me check.")
+    monkeypatch.setenv("ZOE_PI_INTENT_ENABLED", "false")
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_ENABLED", "true")
+    monkeypatch.setenv("ZOE_PI_INTENT_PROMOTED_GROUPS", "weather")
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_PATH", str(path))
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_LABELS_PATH", str(labels_path))
+    app = _admin_app()
+
+    resp = TestClient(app).get("/api/system/pi-intent/hybrid-buffer-status")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["contract"]["mode"] == "shadow_buffer"
     assert data["contract"]["ready"] is False
-    assert "pi_execution_enabled_without_promoted_groups" in data["contract"]["blockers"]
+    assert data["contract"]["pi_classifier_enabled"] is False
+    assert data["contract"]["foreground_pi_execution_enabled"] is False
+    assert data["contract"]["promoted_groups"] == ["weather"]
+    assert "promoted_groups_without_pi_classifier_enabled" in data["contract"]["blockers"]
 
 
 def test_pi_readiness_report_endpoint_is_admin_scoped(tmp_path, monkeypatch):
