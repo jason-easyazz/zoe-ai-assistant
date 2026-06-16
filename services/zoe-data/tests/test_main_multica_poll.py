@@ -93,10 +93,13 @@ def test_poll_loop_keeps_blocked_broadcast_out_of_running_branch():
     source = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
     blocked_branch = source.index('elif chain.get("found") and chain.get("status") == "blocked"')
     running_branch = source.index('elif chain.get("found") and chain.get("status") == "running"')
-    inner_except = source.index("except Exception as _inner_exc", running_branch)
+    # The running branch proper ends where the partial-divergence reconcile
+    # branch begins (which legitimately uses clear_blocker), so bound the segment
+    # there rather than at the inner except.
+    partial_branch = source.index("chain_needs_reconcile(chain)", running_branch)
 
     blocked_segment = source[blocked_branch:running_branch]
-    running_segment = source[running_branch:inner_except]
+    running_segment = source[running_branch:partial_branch]
 
     assert "blocker = await _record_blocked_multica_chain" in blocked_segment
     assert '"multica_task_blocked"' in blocked_segment
@@ -804,6 +807,19 @@ async def test_reconcile_branch_skips_on_poll_timeout_sentinel(monkeypatch):
     assert not (chain.get("found") and chain.get("status") == "done")
     assert not (chain.get("found") and chain.get("status") == "blocked")
     assert not (chain.get("found") and chain.get("status") == "running")
+
+
+def test_reconcile_loop_has_partial_divergence_branch():
+    """The reconciliation pass must include a chain_needs_reconcile (partial)
+    branch that converges a diverged board status back to in_progress, AFTER the
+    running branch and BEFORE the inner except, so a partial chain stuck in
+    in_review (board/journal divergence) does not freeze the single lane."""
+    source = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
+    running_branch = source.index('chain.get("found") and chain.get("status") == "running"')
+    partial_branch = source.index("chain_needs_reconcile(chain)", running_branch)
+    rec_call = source.index('status="in_progress"', partial_branch)
+    inner_except = source.index("except Exception as _inner_exc", running_branch)
+    assert running_branch < partial_branch < rec_call < inner_except
 
 
 @pytest.mark.asyncio

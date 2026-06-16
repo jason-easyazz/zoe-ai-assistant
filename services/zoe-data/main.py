@@ -1099,6 +1099,8 @@ async def lifespan(app: FastAPI):
                     )
                 except ValueError:
                     _reconcile_timeout = 20.0
+                from multica_poll_dispatch import chain_needs_reconcile  # type: ignore[import]
+
                 for issue in issues:
                     # Check whether a linked engineering workflow has reached a terminal state.
                     issue_id = issue.get("id")
@@ -1210,6 +1212,40 @@ async def lifespan(app: FastAPI):
                                     )
                                 except Exception as _push_exc:
                                     logger.debug("multica_poll: ws progress push failed: %s", _push_exc)
+                        elif (
+                            chain.get("found")
+                            and chain_needs_reconcile(chain)
+                            and str(issue.get("status") or "") != "in_progress"
+                        ):
+                            # Board/journal divergence guard: the journal regressed
+                            # to a ready next phase (partial) while the board still
+                            # shows a later status (e.g. in_review from an earlier
+                            # PR). Such an issue is not a dispatch candidate and is
+                            # not advanced by the done/blocked/running branches, so
+                            # it freezes the single lane (and blocks auto-admission
+                            # while it sits in_review). Converge the board back to
+                            # in_progress so the next cycle's backfill re-dispatches
+                            # the ready phase.
+                            try:
+                                await client.record_progress(
+                                    str(issue_id),
+                                    evidence="Engineering run reconciled (board/journal divergence)",
+                                    status="in_progress",
+                                    clear_blocker=True,
+                                )
+                                logger.warning(
+                                    "multica_poll: reconciled diverged issue %s (%s) %s->in_progress "
+                                    "(partial chain needs re-dispatch)",
+                                    issue_id,
+                                    title[:40],
+                                    issue.get("status"),
+                                )
+                            except Exception as _rec_exc:
+                                logger.debug(
+                                    "multica_poll: divergence reconcile failed for %s: %s",
+                                    issue_id,
+                                    _rec_exc,
+                                )
                     except Exception as _inner_exc:
                         logger.debug("multica_poll: inner error for issue %s: %s", issue_id, _inner_exc)
 

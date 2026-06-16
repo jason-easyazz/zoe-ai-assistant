@@ -39,6 +39,23 @@ def _pipeline_suppressed(chain: dict) -> bool:
     return bool(pipeline.get("terminal_block") or pipeline.get("fingerprint_abort"))
 
 
+def chain_needs_reconcile(chain: dict) -> bool:
+    """True when a chain has regressed to a non-terminal ``partial`` state.
+
+    A ``partial`` chain has a ready next phase needing dispatch. If the Multica
+    board still shows the issue as ``in_review`` (set earlier when a PR appeared)
+    while the journal bounced back to an earlier phase, the issue is neither a
+    dispatch candidate (in_review issues are not polled for backfill) nor moved
+    on by the done/blocked/running reconcile branches — so it freezes the single
+    lane. This predicate flags exactly that case so the poll loop can converge
+    the board back to ``in_progress`` and let the next cycle re-dispatch it.
+    Terminal pipeline flags suppress reconciliation (those belong in ``blocked``).
+    """
+    if not chain or _pipeline_suppressed(chain):
+        return False
+    return chain.get("status") == "partial"
+
+
 def chain_is_active(chain: dict) -> bool:
     """Return True when a chain belongs to the one-ticket-at-a-time lane.
 
