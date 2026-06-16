@@ -1252,6 +1252,31 @@ def test_filter_actionable_findings_matches_resolved_comment_url():
     assert out == []
 
 
+def test_filter_actionable_findings_matches_resolved_comment_id():
+    findings = [
+        {
+            "id": "PRRC_abc123",
+            "url": "https://github.example/review/comment/2",
+            "file_path": "services/zoe-data/example.py",
+            "line": 99,
+            "body": "Resolved via exact ID",
+            "addressed": False,
+        }
+    ]
+
+    out = greploop_guard._filter_actionable_findings(
+        findings,
+        pr_number=66,
+        thread_counts={
+            "ok": True,
+            "unresolved": 1,
+            "resolved_greptile_keys": [("id", "PRRC_abc123")],
+        },
+    )
+
+    assert out == []
+
+
 @pytest.mark.asyncio
 async def test_run_guard_once_uses_github_summary_confidence_without_retrigger(tmp_path, monkeypatch):
     async def fake_status(**_kwargs):
