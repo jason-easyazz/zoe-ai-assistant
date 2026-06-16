@@ -32,6 +32,8 @@ SAME_ERROR_LIMIT = int(os.environ.get("ZOE_PR_GUARD_SAME_ERROR_LIMIT", "3"))
 MAX_COST_USD = float(os.environ.get("ZOE_PR_GUARD_MAX_COST_USD", "0.25"))
 MAX_OUTPUT_CHARS = int(os.environ.get("ZOE_PR_GUARD_MAX_OUTPUT_CHARS", "12000"))
 TRIGGER_COOLDOWN_SECONDS = int(os.environ.get("ZOE_PR_GUARD_TRIGGER_COOLDOWN_SECONDS", "900"))
+GREPTILE_WAIT_TIMEOUT_SECONDS = int(os.environ.get("ZOE_PR_GUARD_GREPTILE_WAIT_TIMEOUT_SECONDS", "1800"))
+GREPTILE_WAIT_POLL_SECONDS = int(os.environ.get("ZOE_PR_GUARD_GREPTILE_WAIT_POLL_SECONDS", "120"))
 
 # Cheap-model repair packets must never merge or bypass hooks; use merge_pr_when_ready().
 FORBIDDEN_ACTIONS = [
@@ -499,6 +501,66 @@ async def _run_cheap_agent(packet: GuardPacket, *, task_id: str | None = None) -
     elapsed = time.time() - start
     await _record_cost_event(task_id, estimated_cost)
     return status, f"elapsed={elapsed:.1f}s estimated_cost_usd={estimated_cost}\n{output}"
+
+
+def _float_state(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _update_greptile_wait_state(
+    state: dict[str, Any],
+    *,
+    now: float,
+    status: dict[str, Any],
+    confidence: int,
+    actionable_count: int,
+    summary_count: int,
+) -> dict[str, Any]:
+    started_at = _float_state(state.get("greptile_wait_started_at"))
+    if started_at <= 0:
+        started_at = now
+        poll_due = True
+    else:
+        poll_due = now >= _float_state(state.get("greptile_next_poll_after"))
+    wait_count = int(state.get("waiting_greptile_count") or 0)
+    if poll_due:
+        wait_count += 1
+        state["greptile_next_poll_after"] = now + max(1, GREPTILE_WAIT_POLL_SECONDS)
+    elapsed_seconds = max(0.0, now - started_at)
+    state["greptile_wait_started_at"] = started_at
+    state["greptile_wait_last_seen_at"] = now
+    state["greptile_wait_elapsed_seconds"] = int(elapsed_seconds)
+    state["waiting_greptile_count"] = wait_count
+    state["greptile"] = {
+        "status": status.get("reviewCompleteness") or "review_running",
+        "confidence": confidence,
+        "unaddressed_count": actionable_count,
+        "summary_count": summary_count,
+        "wait_count": wait_count,
+        "wait_elapsed_seconds": int(elapsed_seconds),
+        "next_poll_after": int(_float_state(state.get("greptile_next_poll_after"))),
+    }
+    return {
+        "wait_count": wait_count,
+        "elapsed_seconds": int(elapsed_seconds),
+        "poll_due": poll_due,
+        "stuck": elapsed_seconds >= GREPTILE_WAIT_TIMEOUT_SECONDS,
+    }
+
+
+def _clear_greptile_wait_state(state: dict[str, Any]) -> None:
+    state["waiting_greptile_count"] = 0
+    for key in (
+        "greptile_wait_started_at",
+        "greptile_wait_last_seen_at",
+        "greptile_wait_elapsed_seconds",
+        "greptile_next_poll_after",
+    ):
+        state.pop(key, None)
+    state.pop("greptile", None)
 
 
 def _run_gh(args: list[str], *, repo: str = DEFAULT_REPO, check: bool = False) -> subprocess.CompletedProcess[str]:
@@ -1200,23 +1262,26 @@ async def run_guard_once(
             and confidence >= int(task.get("target_confidence") or 5)
         )
         if status.get("reviewIsRunning") and not stale_running_review:
-            wait_count = int(state.get("waiting_greptile_count") or 0) + 1
-            state["waiting_greptile_count"] = wait_count
-            state["greptile"] = {
-                "status": status.get("reviewCompleteness") or "review_running",
-                "confidence": confidence,
-                "unaddressed_count": len(actionable_findings),
-                "summary_count": max(0, len(findings) - len(actionable_findings)),
-            }
-            if wait_count > MAX_ITERATIONS:
+            wait = _update_greptile_wait_state(
+                state,
+                now=time.time(),
+                status=status,
+                confidence=confidence,
+                actionable_count=len(actionable_findings),
+                summary_count=max(0, len(findings) - len(actionable_findings)),
+            )
+            if wait["stuck"]:
                 state["terminal_state"] = "BLOCKED_GREPTILE_STUCK"
                 _write_json(pr_number, "status.json", state)
-                _record_guardrail(pr_number, "Greptile review stayed active past wait limit")
-                return {"ok": False, "state": "BLOCKED_GREPTILE_STUCK", "greptile": status}
+                _record_guardrail(
+                    pr_number,
+                    f"Greptile review stayed active for {wait['elapsed_seconds']}s past wait limit",
+                )
+                return {"ok": False, "state": "BLOCKED_GREPTILE_STUCK", "greptile": status, "wait": wait}
             state["terminal_state"] = "WAITING_GREPTILE"
             _write_json(pr_number, "status.json", state)
-            return {"ok": True, "state": "WAITING_GREPTILE", "greptile": status}
-        state["waiting_greptile_count"] = 0
+            return {"ok": True, "state": "WAITING_GREPTILE", "greptile": status, "wait": wait}
+        _clear_greptile_wait_state(state)
         progress_key = f"{pr_head_sha}:{confidence}:{len(actionable_findings)}:{len(findings)}"
         blocked = _update_circuit_breakers(pr_number, state, progress_key)
         if blocked:
