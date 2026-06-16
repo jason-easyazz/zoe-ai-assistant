@@ -5,13 +5,26 @@ from __future__ import annotations
 import asyncio
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from auth import require_admin
+import auth
 from pi_intent_lab import compare_pi_intent_lab
 
 router = APIRouter(prefix="/api/pi-intent-lab", tags=["pi-intent-lab"])
+
+
+async def require_lab_operator(request: Request) -> dict:
+    """Allow admin users or Zoe internal loopback/token callers to use the lab."""
+    try:
+        await auth.require_internal_token(request)
+        return {"user_id": "internal-pi-intent-lab", "role": "admin", "auth_path": "internal"}
+    except HTTPException as internal_exc:
+        if request.headers.get("X-Internal-Token") and getattr(auth, "_ZOE_INTERNAL_TOKEN", ""):
+            raise internal_exc
+
+    user = await auth.get_current_user(request)
+    return await auth.require_admin(user)
 
 
 class PiIntentLabCompareRequest(BaseModel):
@@ -31,7 +44,7 @@ class PiIntentLabCompareRequest(BaseModel):
 
 
 @router.post("/compare")
-async def compare_pi_intent(payload: PiIntentLabCompareRequest, user: dict = Depends(require_admin)):
+async def compare_pi_intent(payload: PiIntentLabCompareRequest, user: dict = Depends(require_lab_operator)):
     """Compare Zoe router, optional Zoe Agent fallback, and standalone Pi without dispatching."""
     try:
         return await asyncio.wait_for(
