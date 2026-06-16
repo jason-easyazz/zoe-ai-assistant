@@ -143,6 +143,53 @@ def test_run_greploop_wrapper_loads_env_before_pr_head_lookup(tmp_path):
     assert "env-loaded" in proc.stdout
 
 
+def test_run_greploop_wrapper_preserves_caller_repo_over_env_file(tmp_path):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    fake_worktree = tmp_path / "pr-worktree"
+    fake_worktree.mkdir()
+    target_script = fake_worktree / "scripts" / "maintenance" / "run_greploop_guard.sh"
+    target_script.parent.mkdir(parents=True)
+    _write_executable(target_script, "#!/usr/bin/env bash\necho caller-repo-kept\nexit 0\n")
+    hermes_env = fake_home / ".hermes" / ".env"
+    hermes_env.parent.mkdir()
+    hermes_env.write_text("ZOE_GITHUB_REPO=example/env-repo\n")
+    _write_executable(
+        bin_dir / "gh",
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$*\" != *'--repo example/caller-repo'* ]]; then echo \"$*\" >&2; exit 9; fi\n"
+        "printf 'main\\n'\n",
+    )
+    _write_executable(
+        bin_dir / "git",
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$*\" == *'branch --show-current'* ]]; then printf 'other\\n'; exit 0; fi\n"
+        f"if [[ \"$*\" == *'worktree list --porcelain'* ]]; then printf 'worktree {fake_worktree}\\nbranch refs/heads/main\\n'; exit 0; fi\n"
+        "exit 1\n",
+    )
+    env = {
+        **os.environ,
+        "HOME": str(fake_home),
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "ZOE_GITHUB_REPO": "example/caller-repo",
+    }
+    env.pop("ZOE_GREPLOOP_SKIP_WORKTREE_SWITCH", None)
+
+    proc = subprocess.run(
+        [str(greploop_guard.REPO_ROOT / "scripts/maintenance/run_greploop_guard.sh"), "--pr", "66", "--packet-only"],
+        cwd=greploop_guard.REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert proc.returncode == 0
+    assert "caller-repo-kept" in proc.stdout
+
+
 def test_run_greploop_wrapper_blocks_repair_without_pr_worktree(tmp_path):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()

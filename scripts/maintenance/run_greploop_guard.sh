@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 REPO="${ZOE_GITHUB_REPO:-jason-easyazz/zoe-ai-assistant}"
+CALLER_ZOE_GITHUB_REPO="${ZOE_GITHUB_REPO:-}"
 
 for env_file in "${ROOT}/services/zoe-data/.env" "${ROOT}/.env" "${HOME}/.hermes/.env"; do
     if [[ -f "${env_file}" ]]; then
@@ -13,8 +14,7 @@ for env_file in "${ROOT}/services/zoe-data/.env" "${ROOT}/.env" "${HOME}/.hermes
     fi
 done
 
-# Use caller's ZOE_GITHUB_REPO if set, otherwise fall back to env file or default
-REPO="${ZOE_GITHUB_REPO:-${REPO}}"
+REPO="${CALLER_ZOE_GITHUB_REPO:-${ZOE_GITHUB_REPO:-${REPO}}}"
 
 pr_number=""
 repair_mode=0
@@ -50,7 +50,7 @@ EOF
         exit 2
     fi
     current_branch="$(git -C "${ROOT}" branch --show-current 2>/dev/null || true)"
-    if [[ -n "${head_branch}" && "${current_branch}" != "${head_branch}" ]]; then
+    if [[ "${current_branch}" != "${head_branch}" ]]; then
         worktree_path="$(git -C "${ROOT}" worktree list --porcelain 2>/dev/null | awk -v branch="branch refs/heads/${head_branch}" '
             /^worktree / { path = substr($0, 10) }
             $0 == branch && found == "" { found = path }
