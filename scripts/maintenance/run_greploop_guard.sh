@@ -13,6 +13,7 @@ for env_file in "${ROOT}/services/zoe-data/.env" "${ROOT}/.env" "${HOME}/.hermes
     fi
 done
 
+# Use caller's ZOE_GITHUB_REPO if set, otherwise fall back to env file or default
 REPO="${ZOE_GITHUB_REPO:-${REPO}}"
 
 pr_number=""
