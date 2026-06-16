@@ -2462,10 +2462,13 @@ async def _execute_daily_briefing(user_id: str) -> Optional[str]:
 
     results = {}
     task_keys = list(cmds)
-    task_results = await asyncio.gather(*(_run_mcporter(cmds[key]) for key in task_keys))
+    task_results = await asyncio.gather(
+        *(_run_mcporter(cmds[key]) for key in task_keys),
+        return_exceptions=True,
+    )
 
     for key, raw in zip(task_keys, task_results):
-        if raw:
+        if raw and not isinstance(raw, BaseException):
             try:
                 results[key] = json.loads(raw)
             except json.JSONDecodeError:
