@@ -128,6 +128,7 @@ async def test_cheap_runner_blocks_before_budget_exceeded(monkeypatch):
     monkeypatch.setenv("ZOE_CHEAP_PR_AGENT_CMD", "false")
     monkeypatch.setenv("ZOE_CHEAP_PR_AGENT_ESTIMATED_COST_USD", "99")
     monkeypatch.setattr(greploop_guard, "MAX_COST_USD", 1.0)
+    monkeypatch.setattr(greploop_guard, "verify_pr_checkout_for_repair", lambda packet: {"ok": True})
 
     status, output = await greploop_guard._run_cheap_agent(_packet())
 
@@ -1125,10 +1126,186 @@ async def test_merge_pr_when_ready_merges_when_assessment_passes(tmp_path, monke
     assert ["pr", "merge", "66", "--squash"] in calls
 
 
+def test_verify_pr_checkout_for_repair_accepts_matching_branch_and_head(monkeypatch):
+    packet = _packet(pr=66, head_sha="head-sha")
+
+    monkeypatch.setattr(greploop_guard, "_current_branch", lambda: "codex/example")
+    monkeypatch.setattr(greploop_guard, "_local_head_sha", lambda: "head-sha")
+    monkeypatch.setattr(greploop_guard, "_remote_tracking_branch", lambda: "origin/codex/example")
+    monkeypatch.setattr(
+        greploop_guard,
+        "_pr_checkout_observation",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: {
+            "ok": True,
+            "state": "OPEN",
+            "headRefName": "codex/example",
+            "headRefOid": "head-sha",
+        },
+    )
+
+    out = greploop_guard.verify_pr_checkout_for_repair(packet)
+
+    assert out["ok"] is True
+    assert out["branch"] == "codex/example"
+    assert out["expected_head"] == "head-sha"
+
+
+def test_verify_pr_checkout_for_repair_blocks_branch_mismatch(monkeypatch):
+    packet = _packet(pr=66, head_sha="head-sha")
+
+    monkeypatch.setattr(greploop_guard, "_current_branch", lambda: "codex/other")
+    monkeypatch.setattr(greploop_guard, "_local_head_sha", lambda: "head-sha")
+    monkeypatch.setattr(greploop_guard, "_remote_tracking_branch", lambda: "origin/codex/other")
+    monkeypatch.setattr(
+        greploop_guard,
+        "_pr_checkout_observation",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: {
+            "ok": True,
+            "state": "OPEN",
+            "headRefName": "codex/example",
+            "headRefOid": "head-sha",
+        },
+    )
+
+    out = greploop_guard.verify_pr_checkout_for_repair(packet)
+
+    assert out["ok"] is False
+    assert out["reason"] == "BRANCH_MISMATCH"
+    assert out["branch"] == "codex/other"
+    assert out["expected_branch"] == "codex/example"
+
+
+@pytest.mark.parametrize(
+    "case,branch,local_head,upstream,observation,packet_head,expected",
+    [
+        (
+            "closed_pr",
+            "codex/example",
+            "head-sha",
+            "origin/codex/example",
+            {"ok": True, "state": "MERGED", "headRefName": "codex/example", "headRefOid": "head-sha"},
+            "head-sha",
+            "PR_NOT_OPEN",
+        ),
+        (
+            "unsafe_main",
+            "main",
+            "head-sha",
+            "origin/main",
+            {"ok": True, "state": "OPEN", "headRefName": "codex/example", "headRefOid": "head-sha"},
+            "head-sha",
+            "UNSAFE_BRANCH",
+        ),
+        (
+            "upstream_mismatch",
+            "codex/example",
+            "head-sha",
+            "origin/codex/other",
+            {"ok": True, "state": "OPEN", "headRefName": "codex/example", "headRefOid": "head-sha"},
+            "head-sha",
+            "UPSTREAM_MISMATCH",
+        ),
+        (
+            "gh_lookup_failed",
+            "codex/example",
+            "head-sha",
+            "origin/codex/example",
+            {"ok": False, "reason": "GH_PR_VIEW_FAILED", "detail": "network"},
+            "head-sha",
+            "GH_PR_VIEW_FAILED",
+        ),
+        (
+            "gh_incomplete",
+            "codex/example",
+            "head-sha",
+            "origin/codex/example",
+            {"ok": True, "state": "OPEN", "headRefName": "", "headRefOid": ""},
+            "head-sha",
+            "GH_PR_VIEW_INCOMPLETE",
+        ),
+        (
+            "packet_head_mismatch",
+            "codex/example",
+            "head-sha",
+            "origin/codex/example",
+            {"ok": True, "state": "OPEN", "headRefName": "codex/example", "headRefOid": "head-sha"},
+            "other-packet-sha",
+            "PACKET_HEAD_MISMATCH",
+        ),
+    ],
+)
+def test_verify_pr_checkout_for_repair_blocks_failure_modes(
+    monkeypatch,
+    case,
+    branch,
+    local_head,
+    upstream,
+    observation,
+    packet_head,
+    expected,
+):
+    packet = _packet(pr=66, head_sha=packet_head)
+
+    monkeypatch.setattr(greploop_guard, "_current_branch", lambda: branch)
+    monkeypatch.setattr(greploop_guard, "_local_head_sha", lambda: local_head)
+    monkeypatch.setattr(greploop_guard, "_remote_tracking_branch", lambda: upstream)
+    monkeypatch.setattr(
+        greploop_guard,
+        "_pr_checkout_observation",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: observation,
+    )
+
+    out = greploop_guard.verify_pr_checkout_for_repair(packet)
+
+    assert out["ok"] is False, case
+    assert out["reason"] == expected
+
+
+def test_verify_pr_checkout_for_repair_blocks_head_mismatch(monkeypatch):
+    packet = _packet(pr=66, head_sha="head-sha")
+
+    monkeypatch.setattr(greploop_guard, "_current_branch", lambda: "codex/example")
+    monkeypatch.setattr(greploop_guard, "_local_head_sha", lambda: "local-old-sha")
+    monkeypatch.setattr(greploop_guard, "_remote_tracking_branch", lambda: "origin/codex/example")
+    monkeypatch.setattr(
+        greploop_guard,
+        "_pr_checkout_observation",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: {
+            "ok": True,
+            "state": "OPEN",
+            "headRefName": "codex/example",
+            "headRefOid": "head-sha",
+        },
+    )
+
+    out = greploop_guard.verify_pr_checkout_for_repair(packet)
+
+    assert out["ok"] is False
+    assert out["reason"] == "HEAD_MISMATCH"
+    assert out["local_head"] == "local-old-sha"
+    assert out["expected_head"] == "head-sha"
+
+
+@pytest.mark.asyncio
+async def test_cheap_runner_blocks_wrong_worktree_before_command(monkeypatch):
+    monkeypatch.setenv("ZOE_CHEAP_PR_AGENT_CMD", "python3 -c 'raise SystemExit(99)'")
+    monkeypatch.setattr(
+        greploop_guard,
+        "verify_pr_checkout_for_repair",
+        lambda packet: {"ok": False, "reason": "BRANCH_MISMATCH", "branch": "codex/other"},
+    )
+
+    status, output = await greploop_guard._run_cheap_agent(_packet())
+
+    assert status == "BLOCKED_WRONG_WORKTREE"
+    assert "BRANCH_MISMATCH" in output
+
+
 @pytest.mark.asyncio
 async def test_cheap_runner_command_does_not_expand_shell_metacharacters(monkeypatch):
     monkeypatch.setenv("ZOE_CHEAP_PR_AGENT_CMD", "python3 -c 'import sys; sys.stdin.read(); print(\"$HOME\")'")
     monkeypatch.setenv("ZOE_CHEAP_PR_AGENT_ESTIMATED_COST_USD", "0")
+    monkeypatch.setattr(greploop_guard, "verify_pr_checkout_for_repair", lambda packet: {"ok": True})
 
     status, output = await greploop_guard._run_cheap_agent(_packet())
 
