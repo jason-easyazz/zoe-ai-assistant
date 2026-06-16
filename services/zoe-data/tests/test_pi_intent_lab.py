@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 import auth
 from routers.pi_intent_lab import require_lab_operator
-from pi_intent_lab import compare_pi_intent_lab
+from pi_intent_lab import _await_speculative_safe_fulfillment, compare_pi_intent_lab
 from routers.pi_intent_lab import router as pi_intent_lab_router
 
 
@@ -620,6 +620,29 @@ async def test_lab_cancels_speculative_safe_fulfillment_when_comparison_is_cance
     ]
     assert pending_fulfillment_tasks == []
     assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_lab_await_speculative_timeout_cancels_shielded_task():
+    cancelled = asyncio.Event()
+
+    async def slow_fulfillment():
+        try:
+            await asyncio.sleep(10.0)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    task = asyncio.create_task(slow_fulfillment())
+    result = await _await_speculative_safe_fulfillment(
+        {"intent": "weather", "task": task},
+        timeout_seconds=0.01,
+    )
+
+    assert result["timed_out"] is True
+    assert result["speculative_safe_fulfillment"] == "timed_out"
+    await asyncio.wait_for(cancelled.wait(), timeout=1.0)
+    assert task.cancelled()
 
 def _admin_app():
     app = FastAPI()

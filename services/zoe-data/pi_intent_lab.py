@@ -506,6 +506,13 @@ async def _await_speculative_safe_fulfillment(speculative: Mapping[str, Any], *,
     try:
         result = await asyncio.wait_for(asyncio.shield(task), timeout=timeout_seconds)
     except asyncio.TimeoutError:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            pass
         return {
             "requested": True,
             "attempted": True,
