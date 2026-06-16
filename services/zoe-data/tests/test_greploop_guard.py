@@ -798,6 +798,86 @@ async def test_run_guard_once_skips_recent_same_head_trigger(tmp_path, monkeypat
 
 
 @pytest.mark.asyncio
+async def test_run_guard_once_refreshes_head_after_repair_before_trigger(tmp_path, monkeypatch):
+    statuses = [
+        {
+            "confidenceScore": 4,
+            "reviewIsRunning": False,
+            "headSha": "old-sha",
+            "reviewCompleteness": "0/1 Greptile comments addressed",
+        },
+        {
+            "confidenceScore": 4,
+            "reviewIsRunning": False,
+            "headSha": "new-sha",
+            "reviewCompleteness": "0/1 Greptile comments addressed",
+        },
+    ]
+
+    async def fake_status(**_kwargs):
+        return statuses.pop(0)
+
+    async def fake_comments(**_kwargs):
+        return {
+            "findings": [
+                {
+                    "id": "comment-1",
+                    "file_path": "services/zoe-data/example.py",
+                    "line": 42,
+                    "body": "Fix the narrow issue",
+                    "addressed": False,
+                }
+            ]
+        }
+
+    async def fake_runner(*_args, **_kwargs):
+        return "OK", "applied focused fix"
+
+    triggered = {}
+
+    async def fake_trigger(**kwargs):
+        triggered.update(kwargs)
+        return {"success": True, "triggered": True}
+
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(greploop_guard, "TRIGGER_COOLDOWN_SECONDS", 900)
+    monkeypatch.setattr(greploop_guard.time, "time", lambda: 1_000.0)
+    monkeypatch.setattr("greptile_client.get_pr_status", fake_status)
+    monkeypatch.setattr("greptile_client.list_pr_comments", fake_comments)
+    monkeypatch.setattr("greptile_client.trigger_review", fake_trigger)
+    monkeypatch.setattr(greploop_guard, "_run_cheap_agent", fake_runner)
+    monkeypatch.setattr(greploop_guard, "_local_head_sha", lambda: "local-repaired-sha")
+    monkeypatch.setattr(greploop_guard, "_diff_files", lambda base_sha=None: ["services/zoe-data/example.py"])
+    monkeypatch.setattr(greploop_guard, "_diff_changed_lines", lambda base_sha=None: 2)
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_pr_observation",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: {
+            "ok": True,
+            "headRefOid": "new-sha",
+            "state": "OPEN",
+            "statusCheckRollup": [],
+        },
+    )
+    greploop_guard._write_json(
+        66,
+        "status.json",
+        {"pr": 66, "last_triggered_head_sha": "old-sha", "last_triggered_at": 500.0},
+    )
+
+    out = await greploop_guard.run_guard_once(66)
+
+    assert out["ok"] is True
+    assert out["state"] == "WAITING_GREPTILE"
+    assert out["triggered_review"]["triggered"] is True
+    assert triggered["pr_number"] == 66
+    state = greploop_guard.read_guard_state(66)
+    assert state["last_triggered_head_sha"] == "new-sha"
+    assert state["last_trigger_decision"]["headSha"] == "new-sha"
+    assert not statuses
+
+
+@pytest.mark.asyncio
 async def test_run_guard_once_retriggers_low_confidence_pathless_summary(tmp_path, monkeypatch):
     async def fake_status(**_kwargs):
         return {
