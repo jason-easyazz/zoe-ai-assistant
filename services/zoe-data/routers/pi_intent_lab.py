@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -26,26 +27,32 @@ class PiIntentLabCompareRequest(BaseModel):
     include_hybrid_status: bool = True
     include_safe_fulfillment: bool = False
     safe_fulfillment_timeout_seconds: float = Field(default=8.0, gt=0, le=30)
+    request_timeout_seconds: float = Field(default=20.0, gt=0, le=90)
 
 
 @router.post("/compare")
 async def compare_pi_intent(payload: PiIntentLabCompareRequest, user: dict = Depends(require_admin)):
     """Compare Zoe router, optional Zoe Agent fallback, and standalone Pi without dispatching."""
     try:
-        return await compare_pi_intent_lab(
-            payload.text,
-            user_id=str(user.get("user_id") or "admin"),
-            context_turns=payload.context_turns,
-            run_pi=payload.run_pi,
-            pi_transport=payload.pi_transport,
-            allow_pi_execution=payload.allow_pi_execution,
-            local_model_configured=payload.local_model_configured,
-            measure_zoe_agent_baseline=payload.measure_zoe_agent_baseline,
-            zoe_agent_timeout_seconds=payload.zoe_agent_timeout_seconds,
-            zoe_agent_max_tokens=payload.zoe_agent_max_tokens,
-            include_hybrid_status=payload.include_hybrid_status,
-            include_safe_fulfillment=payload.include_safe_fulfillment,
-            safe_fulfillment_timeout_seconds=payload.safe_fulfillment_timeout_seconds,
+        return await asyncio.wait_for(
+            compare_pi_intent_lab(
+                payload.text,
+                user_id=str(user.get("user_id") or "admin"),
+                context_turns=payload.context_turns,
+                run_pi=payload.run_pi,
+                pi_transport=payload.pi_transport,
+                allow_pi_execution=payload.allow_pi_execution,
+                local_model_configured=payload.local_model_configured,
+                measure_zoe_agent_baseline=payload.measure_zoe_agent_baseline,
+                zoe_agent_timeout_seconds=payload.zoe_agent_timeout_seconds,
+                zoe_agent_max_tokens=payload.zoe_agent_max_tokens,
+                include_hybrid_status=payload.include_hybrid_status,
+                include_safe_fulfillment=payload.include_safe_fulfillment,
+                safe_fulfillment_timeout_seconds=payload.safe_fulfillment_timeout_seconds,
+            ),
+            timeout=payload.request_timeout_seconds,
         )
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(status_code=504, detail="Pi intent lab comparison timed out") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

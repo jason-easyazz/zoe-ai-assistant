@@ -46,12 +46,25 @@ def run_probe(
     allow_pi_execution: bool,
     local_model_configured: bool,
     timeout_seconds: float,
+    request_timeout_seconds: float | None = None,
+    session_id: str | None = None,
+    device_token: str | None = None,
     post_json: Callable[[str, Mapping[str, Any], float], Mapping[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     observations: list[dict[str, Any]] = []
     active_repeat = max(1, repeat)
     endpoint = _endpoint_url(base_url)
-    sender = post_json or _post_json
+    auth_headers = _auth_headers(session_id=session_id, device_token=device_token)
+    if post_json is not None and auth_headers:
+        raise ValueError("session_id/device_token require the default HTTP sender")
+    if request_timeout_seconds is not None and request_timeout_seconds >= timeout_seconds:
+        raise ValueError("request_timeout_seconds must be less than timeout_seconds")
+
+    def send(url: str, payload: Mapping[str, Any], timeout: float) -> Mapping[str, Any]:
+        if post_json is not None:
+            return post_json(url, payload, timeout)
+        return _post_json(url, payload, timeout, headers=auth_headers)
+
     for repeat_index in range(1, active_repeat + 1):
         for raw_case in cases:
             case = _normalise_case(raw_case)
@@ -63,11 +76,13 @@ def run_probe(
                 "include_hybrid_status": False,
                 "include_safe_fulfillment": include_safe_fulfillment,
             }
+            if request_timeout_seconds is not None:
+                payload["request_timeout_seconds"] = request_timeout_seconds
             started = time.perf_counter()
             error = None
             result: Mapping[str, Any] | None = None
             try:
-                result = sender(endpoint, payload, timeout_seconds)
+                result = send(endpoint, payload, timeout_seconds)
             except Exception as exc:
                 error = f"{type(exc).__name__}: {exc}"
             http_latency_ms = (time.perf_counter() - started) * 1000
@@ -117,12 +132,20 @@ def build_report(
     return payload
 
 
-def _post_json(url: str, payload: Mapping[str, Any], timeout_seconds: float) -> Mapping[str, Any]:
+def _post_json(
+    url: str,
+    payload: Mapping[str, Any],
+    timeout_seconds: float,
+    *,
+    headers: Mapping[str, str] | None = None,
+) -> Mapping[str, Any]:
     data = json.dumps(payload).encode("utf-8")
+    request_headers = {"Content-Type": "application/json"}
+    request_headers.update(headers or {})
     request = urllib.request.Request(
         url,
         data=data,
-        headers={"Content-Type": "application/json"},
+        headers=request_headers,
         method="POST",
     )
     try:
@@ -132,6 +155,15 @@ def _post_json(url: str, payload: Mapping[str, Any], timeout_seconds: float) -> 
         body = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"HTTP {exc.code}: {body[:300]}") from exc
     return json.loads(raw)
+
+
+def _auth_headers(*, session_id: str | None, device_token: str | None) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    if session_id:
+        headers["X-Session-ID"] = session_id
+    if device_token:
+        headers["X-Device-Token"] = device_token
+    return headers
 
 
 def _observation(
@@ -312,6 +344,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--local-model-configured", action="store_true")
     parser.add_argument("--include-safe-fulfillment", action="store_true")
     parser.add_argument("--timeout-seconds", type=float, default=12.0)
+    parser.add_argument(
+        "--request-timeout-seconds",
+        type=float,
+        default=10.0,
+        help="Server-side lab timeout; must be lower than --timeout-seconds so 504s are observable.",
+    )
+    parser.add_argument("--session-id")
+    parser.add_argument("--device-token")
     parser.add_argument("--include-observations", action="store_true")
     args = parser.parse_args(argv)
 
@@ -325,6 +365,9 @@ def main(argv: list[str] | None = None) -> int:
         allow_pi_execution=args.allow_pi_execution,
         local_model_configured=args.local_model_configured,
         timeout_seconds=args.timeout_seconds,
+        request_timeout_seconds=args.request_timeout_seconds,
+        session_id=args.session_id,
+        device_token=args.device_token,
     )
     print(
         json.dumps(

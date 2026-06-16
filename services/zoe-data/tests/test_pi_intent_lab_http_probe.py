@@ -74,6 +74,7 @@ def test_http_probe_summarises_endpoint_results():
         allow_pi_execution=True,
         local_model_configured=True,
         timeout_seconds=12.0,
+        request_timeout_seconds=9.0,
         post_json=fake_post,
     )
     report = module.build_report(
@@ -90,6 +91,7 @@ def test_http_probe_summarises_endpoint_results():
     assert calls[0]["url"] == "http://127.0.0.1:8013/api/pi-intent-lab/compare"
     assert calls[0]["payload"]["include_safe_fulfillment"] is True
     assert calls[0]["payload"]["include_hybrid_status"] is False
+    assert calls[0]["payload"]["request_timeout_seconds"] == 9.0
     assert report["safe_fulfillment_side_effects"] == "read_only_external_only"
     assert report["summary"]["overall"]["pi_accuracy"] == 1.0
     assert report["summary"]["overall"]["natural_flow_rate"] == 1.0
@@ -125,6 +127,86 @@ def test_empty_endpoint_response_is_not_success():
 
     assert observations[0]["safe_fulfillment_success"] is False
     assert report["summary"]["overall"]["safe_fulfillment_success_rate"] == 0.0
+
+
+def test_auth_headers_are_attached_to_real_http_sender(monkeypatch):
+    module = _load_module()
+    seen = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return json.dumps(_endpoint_result()).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        seen["timeout"] = timeout
+        seen["headers"] = dict(request.header_items())
+        return FakeResponse()
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", fake_urlopen)
+
+    result = module._post_json(
+        "http://127.0.0.1:8013/api/pi-intent-lab/compare",
+        {"text": "rain later"},
+        12.0,
+        headers=module._auth_headers(session_id="session-secret", device_token="device-secret"),
+    )
+
+    assert result["pi"]["intent"] == "weather"
+    assert seen["timeout"] == 12.0
+    assert seen["headers"]["X-session-id"] == "session-secret"
+    assert seen["headers"]["X-device-token"] == "device-secret"
+
+
+def test_custom_transport_rejects_auth_headers():
+    module = _load_module()
+
+    def fake_post(url, payload, timeout_seconds):
+        return _endpoint_result()
+
+    try:
+        module.run_probe(
+            [{"case_id": "weather", "text": "rain later", "expected_intent": "weather"}],
+            base_url="http://127.0.0.1:8013",
+            repeat=1,
+            run_pi=True,
+            include_safe_fulfillment=False,
+            allow_pi_execution=True,
+            local_model_configured=True,
+            timeout_seconds=12.0,
+            session_id="session-secret",
+            post_json=fake_post,
+        )
+    except ValueError as exc:
+        assert "default HTTP sender" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+
+
+def test_request_timeout_must_be_below_http_timeout():
+    module = _load_module()
+
+    try:
+        module.run_probe(
+            [{"case_id": "weather", "text": "rain later", "expected_intent": "weather"}],
+            base_url="http://127.0.0.1:8013",
+            repeat=1,
+            run_pi=True,
+            include_safe_fulfillment=False,
+            allow_pi_execution=True,
+            local_model_configured=True,
+            timeout_seconds=12.0,
+            request_timeout_seconds=12.0,
+        )
+    except ValueError as exc:
+        assert "less than timeout_seconds" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
 
 
 def test_http_errors_are_reported():
@@ -204,6 +286,9 @@ def test_cli_runs_cases_file(tmp_path, capsys, monkeypatch):
     def fake_run_probe(cases_arg, **kwargs):
         assert len(cases_arg) == 1
         assert kwargs["base_url"] == "http://testserver"
+        assert kwargs["request_timeout_seconds"] == 9.0
+        assert kwargs["session_id"] == "session-secret"
+        assert kwargs["device_token"] == "device-secret"
         return [
             {
                 "case_id": "weather",
@@ -228,6 +313,12 @@ def test_cli_runs_cases_file(tmp_path, capsys, monkeypatch):
             "--no-default-cases",
             "--run-pi",
             "--include-safe-fulfillment",
+            "--request-timeout-seconds",
+            "9",
+            "--session-id",
+            "session-secret",
+            "--device-token",
+            "device-secret",
         ]
     )
 

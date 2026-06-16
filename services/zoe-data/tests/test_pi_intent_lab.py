@@ -483,3 +483,22 @@ def test_pi_intent_lab_endpoint_returns_comparison(monkeypatch):
     assert data["pi"]["intent"] == "weather"
     assert data["contract"]["intent_dispatch_enabled"] is False
     assert data["simulated_hybrid_flow"]["cue_available"] is True
+
+
+def test_pi_intent_lab_endpoint_times_out_stuck_comparison(monkeypatch):
+    import routers.pi_intent_lab as route_module
+
+    async def stuck_comparison(*args, **kwargs):
+        await asyncio.sleep(1)
+        return {"unexpected": True}
+
+    monkeypatch.setattr(route_module, "compare_pi_intent_lab", stuck_comparison)
+    app = _admin_app()
+
+    resp = TestClient(app).post(
+        "/api/pi-intent-lab/compare",
+        json={"text": "rain later", "request_timeout_seconds": 0.01},
+    )
+
+    assert resp.status_code == 504
+    assert resp.json()["detail"] == "Pi intent lab comparison timed out"
