@@ -1134,7 +1134,10 @@ async def lifespan(app: FastAPI):
                         # Use the timeout-guarded poller (not raw poll_ref): a died
                         # executor reference must not hang the whole poll iteration.
                         # On timeout/error this returns a sentinel with found=False,
-                        # so every branch below is safely skipped this cycle.
+                        # so every branch below is safely skipped this cycle. See
+                        # test_reconcile_branch_skips_on_poll_timeout_sentinel
+                        # (tests/test_main_multica_poll.py) for the skip-on-sentinel
+                        # regression coverage of this call site.
                         chain = await _poll_chain_guarded(
                             f"multica:{issue_id}", issue=issue, timeout=_reconcile_timeout
                         )
