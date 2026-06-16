@@ -341,6 +341,22 @@ def test_write_json_uses_atomic_replace(tmp_path, monkeypatch):
     assert json.loads(status_path.read_text())["terminal_state"] == "READY_TO_MERGE"
 
 
+def test_fsync_dir_uses_directory_open_flag(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_open(path, flags):
+        calls.append((Path(path), flags))
+        return 123
+
+    monkeypatch.setattr(greploop_guard.os, "open", fake_open)
+    monkeypatch.setattr(greploop_guard.os, "fsync", lambda fd: None)
+    monkeypatch.setattr(greploop_guard.os, "close", lambda fd: None)
+
+    greploop_guard._fsync_dir(tmp_path)
+
+    assert calls == [(tmp_path, greploop_guard.os.O_RDONLY | getattr(greploop_guard.os, "O_DIRECTORY", 0))]
+
+
 def test_read_guard_state_returns_retry_for_partial_json(tmp_path, monkeypatch):
     monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
     state_dir = tmp_path / "pr-66"

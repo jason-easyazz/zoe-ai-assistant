@@ -136,7 +136,7 @@ def _write_json(pr_number: int, name: str, payload: dict[str, Any]) -> None:
 
 def _fsync_dir(path: Path) -> None:
     try:
-        dir_fd = os.open(path, os.O_RDONLY)
+        dir_fd = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
     except OSError:
         return
     try:
