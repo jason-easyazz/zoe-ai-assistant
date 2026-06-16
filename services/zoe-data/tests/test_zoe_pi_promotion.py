@@ -139,6 +139,7 @@ def test_committed_pi_intent_eval_cases_validate_requested_coverage():
         "daily_briefing",
     } <= {case.expected_intent for case in cases if case.expected_intent}
     assert by_id["eval_negative_timer_story"].negative is True
+    assert by_id["eval_negative_timer_story"].intent_group == "chat"
     assert by_id["eval_negative_shopping_memory"].negative is True
     assert by_id["eval_negative_shopping_memory"].intent_group == "chat"
 
