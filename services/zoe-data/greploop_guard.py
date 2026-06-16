@@ -272,14 +272,24 @@ def _finding_hash(finding: dict[str, Any]) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
-def _packet_for_finding(pr_number: int, status: dict[str, Any], finding: dict[str, Any]) -> GuardPacket:
+def _effective_pr_head_sha(status: dict[str, Any] | None, observation: dict[str, Any] | None = None) -> str | None:
+    return _head_sha_for_trigger(status, observation) or _local_head_sha()
+
+
+def _packet_for_finding(
+    pr_number: int,
+    status: dict[str, Any],
+    finding: dict[str, Any],
+    *,
+    head_sha: str | None = None,
+) -> GuardPacket:
     allowed_file = finding.get("file_path") or ""
     if not allowed_file:
         raise GuardError("BLOCKED_MISSING_CONTEXT: finding has no file path")
     packet = GuardPacket(
         task_type="FIX_GREPTILE_FINDING",
         pr=int(pr_number),
-        head_sha=status.get("headSha") or _local_head_sha(),
+        head_sha=head_sha or _effective_pr_head_sha(status),
         base_branch=DEFAULT_BASE_BRANCH,
         allowed_files=[allowed_file],
         max_files=1,
@@ -1038,6 +1048,7 @@ async def run_guard_once(
         thread_counts = _gh_thread_counts(pr_number, repo=DEFAULT_REPO)
         confidence = _effective_greptile_confidence(pr_number, status, findings, repo=DEFAULT_REPO)
         gh_observation = _gh_pr_observation(pr_number, repo=DEFAULT_REPO)
+        pr_head_sha = _effective_pr_head_sha(status, gh_observation)
         greptile_check_success = _gh_greptile_check_success(gh_observation)
         actionable_findings = _filter_actionable_findings(
             findings,
@@ -1071,7 +1082,7 @@ async def run_guard_once(
             _write_json(pr_number, "status.json", state)
             return {"ok": True, "state": "WAITING_GREPTILE", "greptile": status}
         state["waiting_greptile_count"] = 0
-        progress_key = f"{status.get('headSha')}:{confidence}:{len(actionable_findings)}:{len(findings)}"
+        progress_key = f"{pr_head_sha}:{confidence}:{len(actionable_findings)}:{len(findings)}"
         blocked = _update_circuit_breakers(pr_number, state, progress_key)
         if blocked:
             state["terminal_state"] = blocked
@@ -1107,7 +1118,7 @@ async def run_guard_once(
             state["terminal_state"] = "ESCALATE_HERMES"
             _write_json(pr_number, "status.json", state)
             return {"ok": False, "state": "ESCALATE_HERMES", "finding": finding}
-        packet = _packet_for_finding(pr_number, status, finding)
+        packet = _packet_for_finding(pr_number, status, finding, head_sha=pr_head_sha)
         _write_json(pr_number, "last_packet.json", packet.to_dict())
         _append_progress(pr_number, f"packet {_finding_hash(finding)} for {finding.get('file_path')}")
         if packet_only:
