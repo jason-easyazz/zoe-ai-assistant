@@ -502,7 +502,12 @@ def test_labeled_shadow_fallback_without_comparable_baseline_blocks_promotion(tm
         )
     path.write_text("\n".join(rows) + "\n")
 
-    status = pi_intent_shadow_status({"ZOE_PI_INTENT_SHADOW_PATH": str(path)})
+    status = pi_intent_shadow_status(
+        {
+            "ZOE_PI_INTENT_SHADOW_PATH": str(path),
+            "ZOE_PI_INTENT_SHADOW_LABELS_PATH": str(tmp_path / "no-labels.jsonl"),
+        }
+    )
 
     weather = next(
         decision for decision in status["promotion_report"]["decisions"] if decision["intent_group"] == "weather"
@@ -543,6 +548,7 @@ def test_shadow_status_includes_promotion_report_for_labeled_records(tmp_path):
         {
             "ZOE_PI_INTENT_SHADOW_PATH": str(path),
             "ZOE_PI_INTENT_PROMOTED_GROUPS": "weather",
+            "ZOE_PI_INTENT_SHADOW_LABELS_PATH": str(tmp_path / "no-labels.jsonl"),
         }
     )
 
@@ -564,6 +570,7 @@ def test_shadow_status_ignores_unknown_promoted_groups(tmp_path):
         {
             "ZOE_PI_INTENT_SHADOW_PATH": str(path),
             "ZOE_PI_INTENT_PROMOTED_GROUPS": "weather,device_control",
+            "ZOE_PI_INTENT_SHADOW_LABELS_PATH": str(tmp_path / "no-labels.jsonl"),
         }
     )
 
@@ -599,6 +606,7 @@ def test_shadow_status_lists_rollback_groups_for_labeled_promoted_regression(tmp
         {
             "ZOE_PI_INTENT_SHADOW_PATH": str(path),
             "ZOE_PI_INTENT_PROMOTED_GROUPS": "weather",
+            "ZOE_PI_INTENT_SHADOW_LABELS_PATH": str(tmp_path / "no-labels.jsonl"),
         }
     )
 
@@ -637,6 +645,7 @@ def test_shadow_status_rolls_back_promoted_group_on_reviewed_corrections(tmp_pat
         {
             "ZOE_PI_INTENT_SHADOW_PATH": str(path),
             "ZOE_PI_INTENT_PROMOTED_GROUPS": "weather",
+            "ZOE_PI_INTENT_SHADOW_LABELS_PATH": str(tmp_path / "no-labels.jsonl"),
         }
     )
 
@@ -677,6 +686,7 @@ def test_shadow_status_blocks_promoted_group_on_reviewed_rollback_block(tmp_path
         {
             "ZOE_PI_INTENT_SHADOW_PATH": str(path),
             "ZOE_PI_INTENT_PROMOTED_GROUPS": "weather",
+            "ZOE_PI_INTENT_SHADOW_LABELS_PATH": str(tmp_path / "no-labels.jsonl"),
         }
     )
 
@@ -718,7 +728,12 @@ def test_shadow_status_includes_failure_examples_without_text(tmp_path):
         + "\n"
     )
 
-    status = pi_intent_shadow_status({"ZOE_PI_INTENT_SHADOW_PATH": str(path)})
+    status = pi_intent_shadow_status(
+        {
+            "ZOE_PI_INTENT_SHADOW_PATH": str(path),
+            "ZOE_PI_INTENT_SHADOW_LABELS_PATH": str(tmp_path / "no-labels.jsonl"),
+        }
+    )
 
     examples = status["promotion_report"]["failure_examples"]
     assert len(examples) == 1
