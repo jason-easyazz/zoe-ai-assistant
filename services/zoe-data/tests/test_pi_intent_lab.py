@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import types
@@ -594,3 +595,97 @@ def test_pi_intent_lab_endpoint_times_out_stuck_comparison(monkeypatch):
 
     assert resp.status_code == 504
     assert resp.json()["detail"] == "Pi intent lab comparison timed out"
+
+
+def test_pi_intent_lab_hybrid_stream_emits_cue_then_final(monkeypatch):
+    import routers.pi_intent_lab as route_module
+
+    async def fake_compare(text, **kwargs):
+        await asyncio.sleep(0.01)
+        return {
+            "report_kind": "zoe_pi_intent_lab_comparison",
+            "input": {"user_id": kwargs["user_id"]},
+            "contract": {"production_route_change": False},
+            "pi": {"intent": "weather", "confidence": 0.95},
+            "safe_fulfillment": {"response_preview": "It is 18.5 C."},
+            "simulated_hybrid_flow": {
+                "cue_available": True,
+                "final_completion_latency_ms": 2600.0,
+                "production_route_change": False,
+            },
+        }
+
+    monkeypatch.setattr(route_module, "compare_pi_intent_lab", fake_compare)
+    monkeypatch.setattr(
+        route_module,
+        "_processing_cue",
+        lambda: {
+            "available": True,
+            "latency_ms": 0.05,
+            "event": {"type": "voice:processing_ack", "text": "Let me check."},
+            "text": "Let me check.",
+        },
+    )
+    app = _admin_app()
+
+    with TestClient(app).stream(
+        "POST",
+        "/api/pi-intent-lab/hybrid-stream",
+        json={"text": "rain later", "include_safe_fulfillment": True},
+    ) as resp:
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("application/x-ndjson")
+        events = [json.loads(line) for line in resp.iter_lines() if line]
+
+    assert [event["event"] for event in events] == ["processing_cue", "final"]
+    assert events[0]["phase"] == "cue"
+    assert events[0]["cue"]["text"] == "Let me check."
+    assert events[0]["contract"]["production_route_change"] is False
+    assert events[1]["phase"] == "final"
+    assert events[1]["result"]["input"]["user_id"] == "admin"
+    assert events[1]["result"]["pi"]["intent"] == "weather"
+    assert events[1]["production_route_change"] is False
+    assert events[1]["elapsed_ms"] >= events[0]["elapsed_ms"]
+
+
+def test_pi_intent_lab_hybrid_stream_times_out_as_final_error(monkeypatch):
+    import routers.pi_intent_lab as route_module
+
+    async def stuck_compare(*args, **kwargs):
+        await asyncio.sleep(1)
+        return {"unexpected": True}
+
+    monkeypatch.setattr(route_module, "compare_pi_intent_lab", stuck_compare)
+    monkeypatch.setattr(
+        route_module,
+        "_processing_cue",
+        lambda: {"available": True, "latency_ms": 0.05, "event": None, "text": "Let me check."},
+    )
+    app = _admin_app()
+
+    with TestClient(app).stream(
+        "POST",
+        "/api/pi-intent-lab/hybrid-stream",
+        json={"text": "rain later", "request_timeout_seconds": 0.01},
+    ) as resp:
+        assert resp.status_code == 200
+        events = [json.loads(line) for line in resp.iter_lines() if line]
+
+    assert [event["event"] for event in events] == ["processing_cue", "error"]
+    assert events[1]["error_type"] == "timeout"
+    assert events[1]["phase"] == "final"
+    assert events[1]["production_route_change"] is False
+
+
+def test_pi_intent_lab_hybrid_stream_is_admin_scoped(monkeypatch):
+    app = FastAPI()
+    app.include_router(pi_intent_lab_router)
+
+    async def fake_non_admin():
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    app.dependency_overrides[require_lab_operator] = fake_non_admin
+
+    resp = TestClient(app).post("/api/pi-intent-lab/hybrid-stream", json={"text": "rain later"})
+
+    assert resp.status_code == 403
