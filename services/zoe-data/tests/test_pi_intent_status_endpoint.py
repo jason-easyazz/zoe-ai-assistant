@@ -95,6 +95,7 @@ def test_pi_intent_status_endpoint_reports_available_execution_disabled_when_too
 
 def test_pi_intent_status_endpoint_reports_missing_pi_when_tools_absent(tmp_path, monkeypatch):
     bindir = _fake_node_runtime(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("PATH", str(bindir))
     monkeypatch.setenv("ZOE_PI_INTENT_ENABLED", "true")
     monkeypatch.setenv("ZOE_PI_CWD", str(tmp_path))
