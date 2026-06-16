@@ -335,6 +335,13 @@ async def test_broadcast_skybridge_ui_opens_skybridge_with_card_payload(monkeypa
     assert [call["action_type"] for call in enqueue_calls] == ["panel_navigate", "show_card"]
     assert enqueue_calls[0]["payload"]["url"] == "/touch/skybridge.html?q=show+weather"
     assert enqueue_calls[0]["broadcast"] is False
+    assert {call["user_id"] for call in enqueue_calls} == {"panel-user"}
+    cleanup_selects = [
+        params
+        for sql, params in db.executed
+        if "FROM ui_actions" in sql and "user_id = ?" in sql
+    ]
+    assert cleanup_selects == [("panel-1", "panel-user")]
     assert enqueue_calls[1]["payload"]["type"] == "skybridge"
     assert enqueue_calls[1]["payload"]["card"] == card
     assert enqueue_calls[1]["payload"]["result"] == result

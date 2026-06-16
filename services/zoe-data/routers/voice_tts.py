@@ -736,9 +736,10 @@ async def _broadcast_skybridge_ui(
                     """SELECT id, action_type, payload, idempotency_key
                        FROM ui_actions
                        WHERE panel_id = ?
+                         AND user_id = ?
                          AND requested_by = 'voice'
                          AND status IN ('queued', 'running')""",
-                    (panel_id,),
+                    (panel_id, _panel_user_id),
                 )
                 _rows = await _cur.fetchall()
                 _superseded_at = datetime.now(timezone.utc).isoformat()
