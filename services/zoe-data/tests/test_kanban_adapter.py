@@ -509,6 +509,9 @@ async def test_dispatch_after_implement_evidence_creates_verify():
         creates[0][creates[0].index("--idempotency-key") + 1]
         == "multica:uuid-impl-verify:verify"
     )
+    # verify must be parented to the completed implement row for chain ordering.
+    assert "--parent" in creates[0]
+    assert creates[0][creates[0].index("--parent") + 1] == "t_implement"
 
 
 @pytest.mark.asyncio
