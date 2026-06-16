@@ -689,3 +689,65 @@ def test_pi_intent_lab_hybrid_stream_is_admin_scoped(monkeypatch):
     resp = TestClient(app).post("/api/pi-intent-lab/hybrid-stream", json={"text": "rain later"})
 
     assert resp.status_code == 403
+
+
+def test_pi_intent_lab_hybrid_stream_emits_packet_when_cue_builder_fails(monkeypatch):
+    import routers.pi_intent_lab as route_module
+
+    async def fake_compare(text, **kwargs):
+        return {
+            "report_kind": "zoe_pi_intent_lab_comparison",
+            "input": {"user_id": kwargs["user_id"]},
+            "pi": {"intent": "weather"},
+        }
+
+    def broken_cue():
+        raise RuntimeError("cue builder exploded with a long but non-sensitive lab message")
+
+    monkeypatch.setattr(route_module, "compare_pi_intent_lab", fake_compare)
+    monkeypatch.setattr(route_module, "_processing_cue", broken_cue)
+    app = _admin_app()
+
+    with TestClient(app).stream(
+        "POST",
+        "/api/pi-intent-lab/hybrid-stream",
+        json={"text": "rain later"},
+    ) as resp:
+        assert resp.status_code == 200
+        events = [json.loads(line) for line in resp.iter_lines() if line]
+
+    assert [event["event"] for event in events] == ["processing_cue", "final"]
+    assert events[0]["cue"]["available"] is False
+    assert events[0]["cue"]["error_type"] == "RuntimeError"
+    assert "cue builder exploded" in events[0]["cue"]["error"]
+    assert events[1]["result"]["pi"]["intent"] == "weather"
+
+
+def test_pi_intent_lab_hybrid_stream_unexpected_compare_error_terminates_cleanly(monkeypatch):
+    import routers.pi_intent_lab as route_module
+
+    async def broken_compare(*args, **kwargs):
+        raise RuntimeError("backend vanished " + "x" * 300)
+
+    monkeypatch.setattr(route_module, "compare_pi_intent_lab", broken_compare)
+    monkeypatch.setattr(
+        route_module,
+        "_processing_cue",
+        lambda: {"available": True, "latency_ms": 0.05, "event": None, "text": "Let me check."},
+    )
+    app = _admin_app()
+
+    with TestClient(app).stream(
+        "POST",
+        "/api/pi-intent-lab/hybrid-stream",
+        json={"text": "rain later"},
+    ) as resp:
+        assert resp.status_code == 200
+        events = [json.loads(line) for line in resp.iter_lines() if line]
+
+    assert [event["event"] for event in events] == ["processing_cue", "error"]
+    assert events[1]["error_type"] == "exception"
+    assert events[1]["exception_class"] == "RuntimeError"
+    assert events[1]["phase"] == "final"
+    assert len(events[1]["error"]) == 200
+    assert events[1]["production_route_change"] is False
