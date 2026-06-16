@@ -274,6 +274,7 @@ async def test_lab_can_fulfill_safe_read_only_pi_result(monkeypatch):
     assert calls[0]["intent"].slots == {"forecast": False}
     assert calls[0]["user_id"] == "pi-intent-lab"
     assert result["contract"]["intent_dispatch_enabled"] is True
+    assert result["contract"]["side_effects"] == "read_only_external_only"
     assert result["contract"]["intent_dispatch_scope"] == "read_only_allowlist_only"
     assert result["safe_fulfillment"]["attempted"] is True
     assert result["safe_fulfillment"]["allowed"] is True

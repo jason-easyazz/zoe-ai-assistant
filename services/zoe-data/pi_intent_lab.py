@@ -111,7 +111,7 @@ async def compare_pi_intent_lab(
         "report_kind": "zoe_pi_intent_lab_comparison",
         "contract": {
             "admin_only": True,
-            "side_effects": "none",
+            "side_effects": "read_only_external_only" if include_safe_fulfillment else "none",
             "intent_dispatch_enabled": bool(include_safe_fulfillment),
             "intent_dispatch_scope": "read_only_allowlist_only" if include_safe_fulfillment else "none",
             "safe_read_only_fulfillment_enabled": bool(include_safe_fulfillment),
