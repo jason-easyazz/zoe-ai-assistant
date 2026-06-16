@@ -273,6 +273,28 @@ def test_promotion_blocks_when_accuracy_delta_is_too_small():
     assert "accuracy_delta_below_threshold" in decision.blockers
 
 
+def test_promotion_blocks_when_pi_absolute_accuracy_is_too_low():
+    samples = []
+    for index in range(30):
+        pi_intent = "weather" if index < 18 else "reminder_list"
+        zoe_intent = "weather" if index < 3 else "reminder_list"
+        samples.append(_sample(index, pi=pi_intent, zoe=zoe_intent))
+    policy = PiPromotionPolicy(min_samples=30, accuracy_win_margin=0.05, min_pi_accuracy=0.90)
+
+    decision = evaluate_pi_promotion(samples, intent_group="weather", policy=policy)
+
+    assert decision.state == "keep_shadow"
+    assert decision.pi_accuracy == 0.6
+    assert decision.zoe_accuracy == 0.1
+    assert decision.accuracy_delta == 0.5
+    assert "pi_accuracy_below_threshold" in decision.blockers
+    assert "accuracy_delta_below_threshold" not in decision.blockers
+
+    summary = build_pi_candidate_wins(samples, policy=policy)
+    assert summary["groups"] == []
+    assert summary["promotion_ready_groups"] == []
+
+
 def test_promotion_blocks_when_pi_is_not_faster_than_zoe():
     samples = [_sample(i, zoe_ms=250, pi_ms=450) for i in range(10)]
     policy = PiPromotionPolicy(min_samples=10, accuracy_win_margin=0.05)
@@ -298,6 +320,20 @@ def test_promoted_group_rolls_back_on_accuracy_regression():
 
     assert decision.state == "rollback"
     assert "accuracy_delta_below_threshold" in decision.blockers
+
+
+def test_promoted_group_rolls_back_when_pi_absolute_accuracy_regresses():
+    samples = []
+    for index in range(30):
+        pi_intent = "weather" if index < 18 else "reminder_list"
+        zoe_intent = "weather" if index < 3 else "reminder_list"
+        samples.append(_sample(index, pi=pi_intent, zoe=zoe_intent))
+    policy = PiPromotionPolicy(min_samples=30, accuracy_win_margin=0.05, min_pi_accuracy=0.90)
+
+    decision = evaluate_pi_promotion(samples, intent_group="weather", policy=policy, promoted=True)
+
+    assert decision.state == "rollback"
+    assert "pi_accuracy_below_threshold" in decision.blockers
 
 
 def test_promoted_group_rolls_back_when_evidence_stops():
@@ -488,6 +524,7 @@ def test_summary_lists_promotable_groups():
     assert report["unique_case_count"] == 10
     assert report["candidate_wins"]["promotion_ready_groups"] == ["weather"]
     assert report["policy"]["accuracy_win_margin"] == 0.05
+    assert report["policy"]["min_pi_accuracy"] == 0.90
     assert report["route_class_breakdown"]["fallback"]["sample_count"] == 10
     assert report["route_class_breakdown"]["fallback"]["latency_delta_ms"] > 0
     assert report["transport_breakdown"]["rpc"]["sample_count"] == 10
