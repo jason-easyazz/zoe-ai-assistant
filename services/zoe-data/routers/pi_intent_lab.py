@@ -139,7 +139,7 @@ async def _hybrid_stream_events(payload: PiIntentLabCompareRequest, user: Mappin
                 "event": "error",
                 "phase": "final",
                 "elapsed_ms": _elapsed_ms(started),
-                "error": str(exc),
+                "error": str(exc)[:200],
                 "error_type": "validation",
                 "production_route_change": False,
             }
