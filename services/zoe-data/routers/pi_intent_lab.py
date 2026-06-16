@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
+from pathlib import Path
 from typing import Any, AsyncIterator, Literal, Mapping
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -49,6 +51,9 @@ class PiIntentLabCompareRequest(BaseModel):
 @router.post("/compare")
 async def compare_pi_intent(payload: PiIntentLabCompareRequest, user: dict = Depends(require_lab_operator)):
     """Compare Zoe router, optional Zoe Agent fallback, and standalone Pi without dispatching."""
+    pressure = _pi_lab_resource_pressure_blocker(payload)
+    if pressure:
+        raise HTTPException(status_code=503, detail=pressure)
     try:
         return await asyncio.wait_for(
             _run_compare(payload, user_id=str(user.get("user_id") or "admin")),
@@ -106,6 +111,15 @@ async def _hybrid_stream_events(payload: PiIntentLabCompareRequest, user: Mappin
             },
         }
     )
+    pressure = _pi_lab_resource_pressure_blocker(payload)
+    if pressure:
+        yield _stream_error(
+            started,
+            error=str(pressure.get("detail") or "Pi intent lab blocked by resource pressure"),
+            error_type="resource_pressure",
+            resource=pressure,
+        )
+        return
     try:
         result = await asyncio.wait_for(
             _run_compare(payload, user_id=str(user.get("user_id") or "admin")),
@@ -180,6 +194,7 @@ def _stream_error(
     error: str,
     error_type: str,
     exception_class: str | None = None,
+    resource: Mapping[str, Any] | None = None,
 ) -> str:
     payload: dict[str, Any] = {
         "event": "error",
@@ -191,7 +206,75 @@ def _stream_error(
     }
     if exception_class:
         payload["exception_class"] = exception_class
+    if resource:
+        payload["resource"] = dict(resource)
     return _json_line(payload)
+
+
+def _pi_lab_resource_pressure_blocker(payload: PiIntentLabCompareRequest) -> dict[str, Any] | None:
+    if not _env_bool("ZOE_PI_LAB_RESOURCE_GUARD_ENABLED", default=True):
+        return None
+    if not (payload.run_pi or payload.include_safe_fulfillment or payload.measure_zoe_agent_baseline):
+        return None
+    min_available_mb = _env_float("ZOE_PI_LAB_MIN_AVAILABLE_MB", 2048.0)
+    min_swap_free_mb = _env_float("ZOE_PI_LAB_MIN_SWAP_FREE_MB", 256.0)
+    if min_available_mb <= 0 and min_swap_free_mb <= 0:
+        return None
+    mem = _read_meminfo_mb()
+    if not mem:
+        return None
+    available_mb = mem.get("MemAvailable")
+    swap_free_mb = mem.get("SwapFree")
+    blockers: list[str] = []
+    if min_available_mb > 0 and available_mb is not None and available_mb < min_available_mb:
+        blockers.append("available_memory_below_threshold")
+    if min_swap_free_mb > 0 and swap_free_mb is not None and swap_free_mb < min_swap_free_mb:
+        blockers.append("swap_free_below_threshold")
+    if not blockers:
+        return None
+    return {
+        "error_type": "resource_pressure",
+        "detail": "Pi intent lab blocked to avoid zoe-data OOM restart",
+        "blockers": blockers,
+        "available_mb": available_mb,
+        "swap_free_mb": swap_free_mb,
+        "min_available_mb": int(min_available_mb),
+        "min_swap_free_mb": int(min_swap_free_mb),
+        "production_route_change": False,
+    }
+
+
+def _read_meminfo_mb(path: str = "/proc/meminfo") -> dict[str, int] | None:
+    try:
+        target = Path(path)
+        if not target.is_file():
+            return None
+        values: dict[str, int] = {}
+        for raw in target.read_text(encoding="utf-8", errors="ignore").splitlines():
+            parts = raw.split()
+            if len(parts) >= 2:
+                key = parts[0].rstrip(":")
+                if key in {"MemAvailable", "MemFree", "Buffers", "Cached", "SwapFree"}:
+                    values[key] = int(parts[1]) // 1024
+        if "MemAvailable" not in values and "MemFree" in values:
+            values["MemAvailable"] = values["MemFree"] + values.get("Buffers", 0) + values.get("Cached", 0)
+        return values
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _env_bool(name: str, *, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name) or default)
+    except (TypeError, ValueError):
+        return default
 
 
 def _safe_error_message(exc: Exception, *, limit: int = 200) -> str:

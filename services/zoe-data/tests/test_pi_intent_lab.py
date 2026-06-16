@@ -956,6 +956,70 @@ def test_pi_intent_lab_endpoint_returns_comparison(monkeypatch):
     assert data["simulated_hybrid_flow"]["cue_available"] is True
 
 
+
+def test_pi_intent_lab_compare_blocks_under_resource_pressure(monkeypatch):
+    import routers.pi_intent_lab as route_module
+
+    monkeypatch.setattr(
+        route_module,
+        "_pi_lab_resource_pressure_blocker",
+        lambda payload: {
+            "error_type": "resource_pressure",
+            "detail": "Pi intent lab blocked to avoid zoe-data OOM restart",
+            "available_mb": 512,
+            "min_available_mb": 2048,
+            "production_route_change": False,
+        },
+    )
+    app = _admin_app()
+
+    resp = TestClient(app).post(
+        "/api/pi-intent-lab/compare",
+        json={"text": "rain later", "run_pi": True},
+    )
+
+    assert resp.status_code == 503
+    detail = resp.json()["detail"]
+    assert detail["error_type"] == "resource_pressure"
+    assert detail["production_route_change"] is False
+    assert detail["available_mb"] == 512
+
+
+def test_pi_intent_lab_hybrid_stream_emits_resource_pressure_after_cue(monkeypatch):
+    import routers.pi_intent_lab as route_module
+
+    monkeypatch.setattr(
+        route_module,
+        "_pi_lab_resource_pressure_blocker",
+        lambda payload: {
+            "error_type": "resource_pressure",
+            "detail": "Pi intent lab blocked to avoid zoe-data OOM restart",
+            "available_mb": 512,
+            "min_available_mb": 2048,
+            "production_route_change": False,
+        },
+    )
+    monkeypatch.setattr(
+        route_module,
+        "_processing_cue",
+        lambda: {"available": True, "latency_ms": 0.05, "event": None, "text": "Let me check."},
+    )
+    app = _admin_app()
+
+    with TestClient(app).stream(
+        "POST",
+        "/api/pi-intent-lab/hybrid-stream",
+        json={"text": "rain later", "run_pi": True},
+    ) as resp:
+        assert resp.status_code == 200
+        events = [json.loads(line) for line in resp.iter_lines() if line]
+
+    assert [event["event"] for event in events] == ["processing_cue", "error"]
+    assert events[1]["error_type"] == "resource_pressure"
+    assert events[1]["phase"] == "final"
+    assert events[1]["resource"]["available_mb"] == 512
+    assert events[1]["production_route_change"] is False
+
 def test_pi_intent_lab_endpoint_times_out_stuck_comparison(monkeypatch):
     import routers.pi_intent_lab as route_module
 
