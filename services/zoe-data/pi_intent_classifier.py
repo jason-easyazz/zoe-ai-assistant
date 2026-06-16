@@ -124,7 +124,7 @@ _LOW_RISK_TASK_PHRASE_RE = re.compile(
     r"\bwhat(?:'s| is) my day\b|"
     r"\bmy day looking\b|"
     r"\bleft on my day\b|"
-    r"\bwhat(?:\'s| is) coming up today\b|"
+    r"\bwhat(?:'s| is) coming up today\b|"
     r"\bwhat(?:'s| is) on (?:my |the )?(?:shopping )?list\b|"
     r"\b(?:add|remove)\b.+\b(?:list|shopping|grocer(?:y|ies)|reminder|todo)\b|"
     r"\b(?:is it|will it be)\s+(?:hot|cold)\b|"
