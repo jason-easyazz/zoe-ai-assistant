@@ -123,6 +123,56 @@ async def test_list_show_direct_ignores_completed_items(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_list_show_direct_escapes_list_name_like_wildcards(monkeypatch):
+    db = _FakeDB([])
+    _install_fake_db(monkeypatch, db)
+
+    result = await _execute_list_show_direct(
+        Intent("list_show", {"list_type": "shopping", "list_name": "50%_off\\sale"}),
+        "pi-intent-lab",
+    )
+
+    assert result == "Your shopping list is empty."
+    sql, params = db.calls[0]
+    assert "ESCAPE" in sql
+    assert params == ("pi-intent-lab", "shopping", "%50\\%\\_off\\\\sale%")
+
+
+@pytest.mark.asyncio
+async def test_list_show_direct_renders_multiple_lists(monkeypatch):
+    db = _FakeDB(
+        [
+            {
+                "id": "pantry",
+                "name": "Pantry",
+                "item_id": "item-1",
+                "text": "rice",
+                "completed": False,
+                "quantity": None,
+                "category": None,
+            },
+            {
+                "id": "shopping",
+                "name": "Shopping",
+                "item_id": "item-2",
+                "text": "milk",
+                "completed": False,
+                "quantity": None,
+                "category": None,
+            },
+        ]
+    )
+    _install_fake_db(monkeypatch, db)
+
+    result = await _execute_list_show_direct(
+        Intent("list_show", {"list_type": "shopping"}),
+        "pi-intent-lab",
+    )
+
+    assert result == "Your shopping lists:\nPantry:\n  - rice\nShopping:\n  - milk"
+
+
+@pytest.mark.asyncio
 async def test_mutating_list_intents_still_use_mcporter(monkeypatch):
     calls = []
 

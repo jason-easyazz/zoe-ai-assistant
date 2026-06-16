@@ -1804,6 +1804,10 @@ async def _execute_reminder_create_direct(intent: Intent, user_id: str) -> Optio
         return None
 
 
+def _escape_like_pattern(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 async def _execute_list_show_direct(intent: Intent, user_id: str) -> Optional[str]:
     slots = intent.slots or {}
     list_type = str(slots.get("list_type") or "shopping").strip() or "shopping"
@@ -1816,9 +1820,10 @@ async def _execute_list_show_direct(intent: Intent, user_id: str) -> Optional[st
                 cursor = await db.execute(
                     "SELECT l.id, l.name, li.id as item_id, li.text, li.completed, li.quantity, li.category"
                     " FROM lists l LEFT JOIN list_items li ON l.id = li.list_id AND li.deleted=0"
-                    " WHERE (l.user_id=? OR l.visibility='family') AND l.list_type=? AND l.name LIKE ? AND l.deleted=0"
+                    " WHERE (l.user_id=? OR l.visibility='family') AND l.list_type=?"
+                    " AND l.name LIKE ? ESCAPE '\\' AND l.deleted=0"
                     " ORDER BY li.sort_order",
-                    (user_id, list_type, f"%{list_name}%"),
+                    (user_id, list_type, f"%{_escape_like_pattern(list_name)}%"),
                 )
             else:
                 cursor = await db.execute(
@@ -3033,16 +3038,26 @@ def _format_response(intent: Intent, raw_output: str) -> str:
         lt = s.get("list_type", "shopping")
         friendly = "shopping list" if lt == "shopping" else f"{lt.replace('_', ' ')} list"
         lists = data.get("lists", [])
-        if not lists or not lists[0].get("items"):
+        active_lists = []
+        for list_data in lists:
+            items = list_data.get("items") or []
+            active = [i["text"] for i in items if i.get("text") and not i.get("completed")]
+            if active:
+                active_lists.append((list_data.get("name") or friendly, active))
+        if not active_lists:
             return f"Your {friendly} is empty."
-        items = lists[0]["items"]
-        active = [i["text"] for i in items if not i.get("completed")]
-        if not active:
-            return f"Your {friendly} is empty."
-        lines = [f"Your {friendly}:"]
-        for item in active:
-            lines.append(f"  - {item}")
+        if len(active_lists) == 1:
+            lines = [f"Your {friendly}:"]
+            for item in active_lists[0][1]:
+                lines.append(f"  - {item}")
+            return "\n".join(lines)
+        lines = [f"Your {friendly}s:"]
+        for list_name, active in active_lists:
+            lines.append(f"{list_name}:")
+            for item in active:
+                lines.append(f"  - {item}")
         return "\n".join(lines)
+
 
     if intent.name == "list_remove":
         item = s.get("item", "item")
