@@ -58,7 +58,7 @@ def run_probe(
     active_repeat = max(1, repeat)
     auth_headers = _auth_headers(session_id=session_id, device_token=device_token)
     if stream_post is not None and auth_headers:
-        raise ValueError("session_id/device_token require the default HTTP sender")
+        raise ValueError("session_id/device_token cannot be used with a custom stream_post")
     if request_timeout_seconds is not None and request_timeout_seconds >= timeout_seconds:
         raise ValueError("request_timeout_seconds must be less than timeout_seconds")
 
@@ -93,6 +93,7 @@ def run_probe(
                 _observation(
                     case,
                     repeat_index=repeat_index,
+                    run_pi=run_pi,
                     events=events,
                     http_latency_ms=http_latency_ms,
                     error=error,
@@ -188,6 +189,7 @@ def _observation(
     case: PiIntentEvalCase,
     *,
     repeat_index: int,
+    run_pi: bool,
     events: Sequence[Mapping[str, Any]],
     http_latency_ms: float,
     error: str | None,
@@ -242,7 +244,7 @@ def _observation(
         "final_server_elapsed_ms": _float_or_none(final_event.get("elapsed_ms")),
         "terminal_client_latency_ms": terminal_client_ms,
         "pi_intent": pi_intent,
-        "pi_correct": pi_intent == expected,
+        "pi_correct": pi_intent == expected if run_pi else None,
         "pi_confidence": _float_or_none(pi.get("confidence")),
         "pi_latency_ms": _float_or_none(pi.get("latency_ms")),
         "pi_timed_out": bool(pi.get("timed_out")),
@@ -453,6 +455,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--natural-cue-max-ms", type=float, default=DEFAULT_NATURAL_CUE_MAX_MS)
     parser.add_argument("--natural-final-max-ms", type=float, default=DEFAULT_NATURAL_FINAL_MAX_MS)
     args = parser.parse_args(argv)
+    if args.request_timeout_seconds >= args.timeout_seconds:
+        parser.error("--request-timeout-seconds must be less than --timeout-seconds")
 
     cases = _select_cases(
         _load_cases(args.cases_file, no_default_cases=args.no_default_cases),

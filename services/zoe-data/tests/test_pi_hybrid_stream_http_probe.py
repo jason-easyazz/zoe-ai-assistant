@@ -335,3 +335,66 @@ def test_select_cases_supports_group_and_case_filters():
     )
 
     assert [case.case_id for case in selected] == ["weather_rain_later"]
+
+
+def test_custom_stream_post_rejects_auth_headers():
+    module = _load_module()
+
+    try:
+        module.run_probe(
+            [_case(module)],
+            base_url="http://127.0.0.1:8000",
+            repeat=1,
+            run_pi=True,
+            include_safe_fulfillment=False,
+            allow_pi_execution=False,
+            local_model_configured=True,
+            timeout_seconds=20.0,
+            session_id="session-secret",
+            stream_post=lambda url, payload, timeout: _events(),
+        )
+    except ValueError as exc:
+        assert "cannot be used with a custom stream_post" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+
+
+def test_observation_pi_correct_is_none_when_pi_did_not_run():
+    module = _load_module()
+
+    observations = module.run_probe(
+        [_case(module)],
+        base_url="http://127.0.0.1:8000",
+        repeat=1,
+        run_pi=False,
+        include_safe_fulfillment=False,
+        allow_pi_execution=False,
+        local_model_configured=False,
+        timeout_seconds=20.0,
+        stream_post=lambda url, payload, timeout: _events(intent=None, response_preview=""),
+    )
+    report = module.build_report(
+        [_case(module)],
+        observations,
+        base_url="http://127.0.0.1:8000",
+        repeat=1,
+        run_pi=False,
+        include_safe_fulfillment=False,
+    )
+
+    assert observations[0]["pi_correct"] is None
+    assert report["summary"]["overall"]["pi_accuracy"] is None
+
+
+def test_cli_reports_timeout_argument_error(capsys):
+    module = _load_module()
+
+    try:
+        module.main(["--timeout-seconds", "5"])
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("expected SystemExit")
+
+    captured = capsys.readouterr()
+    assert "--request-timeout-seconds must be less than --timeout-seconds" in captured.err
