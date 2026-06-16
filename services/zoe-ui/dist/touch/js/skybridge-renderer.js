@@ -146,7 +146,8 @@
     }
 
     function calendarCategoryClass(value) {
-        return accentClass(value, 'general');
+        const category = accentClass(value, 'general');
+        return ['tasks', 'all'].indexOf(category) >= 0 ? 'general' : category;
     }
 
     function renderCalendar(props) {
@@ -484,7 +485,8 @@
     function renderPeopleDirectory(props) {
         const people = Array.isArray(props.people) ? props.people : [];
         const workCount = people.filter(person => personAccentClass(person) === 'work').length;
-        const personalCount = people.filter(person => personAccentClass(person) !== 'work').length;
+        const personalCount = people.filter(person => personAccentClass(person) === 'personal').length;
+        const otherCount = Math.max(0, people.length - workCount - personalCount);
         const rows = people.slice(0, 12).map(person => {
             const health = healthPercent(person.health_score);
             const accent = personAccentClass(person);
@@ -504,6 +506,7 @@
             '<div class="sky-people-chips">',
             '<span class="sky-accent-personal">' + escapeHtml(personalCount) + ' personal</span>',
             '<span class="sky-accent-work">' + escapeHtml(workCount) + ' work</span>',
+            otherCount ? '<span>' + escapeHtml(otherCount) + ' other</span>' : '',
             '<span>' + escapeHtml(props.count == null ? people.length : props.count) + ' found</span>',
             '</div>',
             '</div>',

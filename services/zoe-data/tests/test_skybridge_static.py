@@ -441,9 +441,13 @@ def test_skybridge_calendar_renderer_handles_datetime_dates_and_ordering():
     assert "const detail = [item.location, calendarAccentLabel(item.category)]" not in renderer
     assert "calendarAccentLabel" not in renderer
     assert "function accentClass(value, fallback)" in renderer
-    assert "return accentClass(value, 'general');" in renderer
+    assert "const category = accentClass(value, 'general');" in renderer
+    assert "return ['tasks', 'all'].indexOf(category) >= 0 ? 'general' : category;" in renderer
     assert "'medical'" in renderer
     assert "'household'" in renderer
+    assert "personAccentClass(person) === 'personal'" in renderer
+    assert "const otherCount = Math.max(0, people.length - workCount - personalCount);" in renderer
+    assert " + ' other</span>'" in renderer
 
 
 def test_skybridge_is_registered_in_touch_menu():
