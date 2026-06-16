@@ -7,7 +7,8 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
-from auth import require_admin
+import auth
+from routers.pi_intent_lab import require_lab_operator
 from pi_intent_lab import compare_pi_intent_lab
 from routers.pi_intent_lab import router as pi_intent_lab_router
 
@@ -435,7 +436,7 @@ def _admin_app():
     async def fake_admin():
         return {"user_id": "admin", "role": "family-admin"}
 
-    app.dependency_overrides[require_admin] = fake_admin
+    app.dependency_overrides[require_lab_operator] = fake_admin
     return app
 
 
@@ -446,11 +447,102 @@ def test_pi_intent_lab_endpoint_is_admin_scoped(monkeypatch):
     async def fake_non_admin():
         raise HTTPException(status_code=403, detail="Admin access required")
 
-    app.dependency_overrides[require_admin] = fake_non_admin
+    app.dependency_overrides[require_lab_operator] = fake_non_admin
 
     resp = TestClient(app).post("/api/pi-intent-lab/compare", json={"text": "rain later"})
 
     assert resp.status_code == 403
+
+
+def test_pi_intent_lab_endpoint_allows_internal_token(monkeypatch):
+    _install_fake_intent_router(monkeypatch, raw=_Intent("weather"), extracted=_Intent("weather"))
+    _install_fake_pi_classifier(
+        monkeypatch,
+        result=types.SimpleNamespace(
+            intent="weather",
+            slots={},
+            confidence=0.9,
+            task_lane="fast_tool",
+            source="fake_pi",
+            latency_ms=100.0,
+            reason=None,
+        ),
+    )
+    _install_fake_hybrid(monkeypatch)
+    _install_fake_voice_presence(monkeypatch)
+    monkeypatch.setattr(auth, "_ZOE_INTERNAL_TOKEN", "pi-lab-token")
+    app = FastAPI()
+    app.include_router(pi_intent_lab_router)
+
+    resp = TestClient(app).post(
+        "/api/pi-intent-lab/compare",
+        json={"text": "rain later", "run_pi": True},
+        headers={"X-Internal-Token": "pi-lab-token"},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["input"]["user_id"] == "internal-pi-intent-lab"
+    assert data["pi"]["intent"] == "weather"
+
+
+def test_pi_intent_lab_endpoint_rejects_wrong_internal_token(monkeypatch):
+    monkeypatch.setattr(auth, "_ZOE_INTERNAL_TOKEN", "pi-lab-token")
+    app = FastAPI()
+    app.include_router(pi_intent_lab_router)
+
+    resp = TestClient(app).post(
+        "/api/pi-intent-lab/compare",
+        json={"text": "rain later", "run_pi": False},
+        headers={"X-Internal-Token": "wrong-token"},
+    )
+
+    assert resp.status_code == 403
+    assert "X-Internal-Token" in resp.json()["detail"]
+
+
+def test_pi_intent_lab_endpoint_falls_back_to_admin_session_when_internal_token_unconfigured(monkeypatch):
+    _install_fake_intent_router(monkeypatch, raw=_Intent("weather"), extracted=_Intent("weather"))
+    _install_fake_pi_classifier(
+        monkeypatch,
+        result=types.SimpleNamespace(
+            intent="weather",
+            slots={},
+            confidence=0.9,
+            task_lane="fast_tool",
+            source="fake_pi",
+            latency_ms=100.0,
+            reason=None,
+        ),
+    )
+    _install_fake_hybrid(monkeypatch)
+    _install_fake_voice_presence(monkeypatch)
+    monkeypatch.setattr(auth, "_ZOE_INTERNAL_TOKEN", "")
+    calls = []
+
+    async def fake_current_user(request):
+        calls.append("get_current_user")
+        return {"user_id": "session-admin", "role": "family-admin"}
+
+    async def fake_require_admin(user):
+        calls.append(("require_admin", user["user_id"]))
+        return user
+
+    monkeypatch.setattr(auth, "get_current_user", fake_current_user)
+    monkeypatch.setattr(auth, "require_admin", fake_require_admin)
+    app = FastAPI()
+    app.include_router(pi_intent_lab_router)
+
+    resp = TestClient(app).post(
+        "/api/pi-intent-lab/compare",
+        json={"text": "rain later", "run_pi": True},
+        headers={"X-Internal-Token": "proxy-added-but-feature-disabled"},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["input"]["user_id"] == "session-admin"
+    assert calls == ["get_current_user", ("require_admin", "session-admin")]
 
 
 def test_pi_intent_lab_endpoint_returns_comparison(monkeypatch):
