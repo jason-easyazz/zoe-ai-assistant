@@ -31,6 +31,7 @@ NO_PROGRESS_LIMIT = int(os.environ.get("ZOE_PR_GUARD_NO_PROGRESS_LIMIT", "3"))
 SAME_ERROR_LIMIT = int(os.environ.get("ZOE_PR_GUARD_SAME_ERROR_LIMIT", "3"))
 MAX_COST_USD = float(os.environ.get("ZOE_PR_GUARD_MAX_COST_USD", "0.25"))
 MAX_OUTPUT_CHARS = int(os.environ.get("ZOE_PR_GUARD_MAX_OUTPUT_CHARS", "12000"))
+TRIGGER_COOLDOWN_SECONDS = int(os.environ.get("ZOE_PR_GUARD_TRIGGER_COOLDOWN_SECONDS", "900"))
 
 # Cheap-model repair packets must never merge or bypass hooks; use merge_pr_when_ready().
 FORBIDDEN_ACTIONS = [
@@ -615,7 +616,7 @@ def _gh_pr_observation(pr_number: int, *, repo: str = DEFAULT_REPO) -> dict[str,
             "view",
             str(int(pr_number)),
             "--json",
-            "mergeable,mergeStateStatus,state,statusCheckRollup,mergedAt,mergeCommit,url",
+            "headRefOid,mergeable,mergeStateStatus,state,statusCheckRollup,mergedAt,mergeCommit,url",
         ],
         repo=repo,
     )
@@ -639,6 +640,161 @@ def _gh_greptile_check_success(observation: dict[str, Any]) -> bool:
         if status in {"COMPLETED", "SUCCESS"} and conclusion == "SUCCESS":
             return True
     return False
+
+
+def _head_sha_for_trigger(status: dict[str, Any] | None, observation: dict[str, Any] | None) -> str | None:
+    if status:
+        value = status.get("headSha") or status.get("headRefOid")
+        if value:
+            return str(value)
+    if observation:
+        value = observation.get("headRefOid") or observation.get("headSha")
+        if value:
+            return str(value)
+    return None
+
+
+def _should_skip_greptile_trigger(
+    *,
+    state: dict[str, Any],
+    status: dict[str, Any] | None,
+    head_sha: str | None,
+    now: float,
+    force: bool = False,
+) -> dict[str, Any] | None:
+    if force:
+        return None
+    if status and status.get("reviewIsRunning"):
+        return {"skipped": True, "reason": "greptile_review_running"}
+    last_head = str(state.get("last_triggered_head_sha") or "")
+    try:
+        last_at = float(state.get("last_triggered_at") or 0)
+    except (TypeError, ValueError):
+        last_at = 0.0
+    if head_sha and last_head == head_sha and last_at and (now - last_at) < TRIGGER_COOLDOWN_SECONDS:
+        return {
+            "skipped": True,
+            "reason": "recently_triggered_for_head",
+            "cooldown_seconds": TRIGGER_COOLDOWN_SECONDS,
+            "retry_after_seconds": max(0, int(TRIGGER_COOLDOWN_SECONDS - (now - last_at))),
+        }
+    return None
+
+
+async def trigger_review_safely(
+    *,
+    pr_number: int,
+    repo: str = DEFAULT_REPO,
+    default_branch: str = DEFAULT_BASE_BRANCH,
+    branch: str | None = None,
+    status: dict[str, Any] | None = None,
+    state: dict[str, Any] | None = None,
+    force: bool = False,
+    source: str = "greploop_guard",
+    write_state: bool = True,
+) -> dict[str, Any]:
+    """Trigger Greptile once per PR/head within the cooldown window."""
+    from greptile_client import get_pr_status, trigger_review
+
+    pr_number = int(pr_number)
+    active_state = state if state is not None else _load_status(pr_number)
+    active_status = status if status is not None else await get_pr_status(
+        repo=repo,
+        pr_number=pr_number,
+        default_branch=default_branch,
+    )
+    head_sha = _head_sha_for_trigger(active_status, None)
+    now = time.time()
+    skipped = None
+    if not force and active_status and active_status.get("reviewIsRunning"):
+        skipped = _should_skip_greptile_trigger(
+            state=active_state,
+            status=active_status,
+            head_sha=head_sha,
+            now=now,
+            force=force,
+        )
+    if not skipped:
+        if not head_sha:
+            observation = _gh_pr_observation(pr_number, repo=repo)
+            head_sha = _head_sha_for_trigger(active_status, observation)
+        skipped = _should_skip_greptile_trigger(
+            state=active_state,
+            status=active_status,
+            head_sha=head_sha,
+            now=now,
+            force=force,
+        )
+    if skipped:
+        decision = {
+            "success": True,
+            "triggered": False,
+            "prNumber": pr_number,
+            "repo": repo,
+            "headSha": head_sha,
+            "source": source,
+            **skipped,
+        }
+        active_state["last_trigger_decision"] = decision
+        if write_state:
+            _write_json(pr_number, "status.json", active_state)
+        return decision
+
+    result = await trigger_review(
+        repo=repo,
+        pr_number=pr_number,
+        default_branch=default_branch,
+        branch=branch,
+    )
+    trigger_success = bool(result.get("success", True)) if isinstance(result, dict) else True
+    if trigger_success:
+        active_state["last_triggered_head_sha"] = head_sha
+        active_state["last_triggered_at"] = now
+        active_state["last_trigger_source"] = source
+    active_state["last_trigger_decision"] = {
+        "success": trigger_success,
+        "triggered": trigger_success,
+        "prNumber": pr_number,
+        "repo": repo,
+        "headSha": head_sha,
+        "source": source,
+        "response": result,
+    }
+    if write_state:
+        _write_json(pr_number, "status.json", active_state)
+    return result
+
+
+async def trigger_review_with_guard_lock(
+    *,
+    pr_number: int,
+    repo: str = DEFAULT_REPO,
+    default_branch: str = DEFAULT_BASE_BRANCH,
+    branch: str | None = None,
+    force: bool = False,
+    source: str = "mcp:greptile_trigger_review",
+) -> dict[str, Any]:
+    try:
+        with acquire_lock(int(pr_number)):
+            return await trigger_review_safely(
+                pr_number=int(pr_number),
+                repo=repo,
+                default_branch=default_branch,
+                branch=branch,
+                force=force,
+                source=source,
+            )
+    except GuardError as exc:
+        return {
+            "success": False,
+            "triggered": False,
+            "skipped": True,
+            "reason": "guard_already_running",
+            "detail": str(exc),
+            "prNumber": int(pr_number),
+            "repo": repo,
+            "source": source,
+        }
 
 
 def _greptile_confidence_from_github_comments(
@@ -866,7 +1022,7 @@ async def merge_pr_when_ready(
 async def run_guard_once(
     pr_number: int, *, packet_only: bool = False, target_confidence: int = 5
 ) -> dict[str, Any]:
-    from greptile_client import DEFAULT_REPO, get_pr_status, list_pr_comments, trigger_review
+    from greptile_client import DEFAULT_REPO, get_pr_status, list_pr_comments
 
     try:
         pr_number = int(pr_number)
@@ -934,7 +1090,15 @@ async def run_guard_once(
             _write_json(pr_number, "status.json", state)
             return {"ok": True, "state": "READY_TO_MERGE", "greptile": {**status, "confidenceScore": confidence}}
         if not actionable_findings:
-            triggered = await trigger_review(repo=DEFAULT_REPO, pr_number=pr_number, default_branch=DEFAULT_BASE_BRANCH)
+            triggered = await trigger_review_safely(
+                pr_number=pr_number,
+                repo=DEFAULT_REPO,
+                default_branch=DEFAULT_BASE_BRANCH,
+                status=status,
+                state=state,
+                source="greploop_guard:no_actionable_findings",
+                write_state=False,
+            )
             state["terminal_state"] = "WAITING_GREPTILE"
             _write_json(pr_number, "status.json", {**state, "triggered_review": triggered})
             return {"ok": True, "state": "WAITING_GREPTILE", "triggered_review": triggered}
@@ -959,7 +1123,15 @@ async def run_guard_once(
             state["terminal_state"] = analysis.get("classification") if runner_status == "OK" else runner_status
             _write_json(pr_number, "status.json", state)
             return {"ok": False, "state": state["terminal_state"], "result": result}
-        triggered = await trigger_review(repo=DEFAULT_REPO, pr_number=pr_number, default_branch=DEFAULT_BASE_BRANCH)
+        triggered = await trigger_review_safely(
+            pr_number=pr_number,
+            repo=DEFAULT_REPO,
+            default_branch=DEFAULT_BASE_BRANCH,
+            status=status,
+            state=state,
+            source="greploop_guard:cheap_agent_applied",
+            write_state=False,
+        )
         state["terminal_state"] = "WAITING_GREPTILE"
         _write_json(pr_number, "status.json", {**state, "triggered_review": triggered})
         return {"ok": True, "state": "WAITING_GREPTILE", "result": result, "triggered_review": triggered}
