@@ -775,6 +775,11 @@ def _first_non_expected_zoe_intent(samples: Sequence[PiRouteSample]) -> str | No
 
 def _collapse_sample_metadata(samples: Sequence[PiRouteSample]) -> dict[str, Any]:
     merged = dict(samples[0].metadata)
+    sources = [_sample_source(sample) for sample in samples]
+    merged["sources"] = sorted(set(sources))
+    real_sources = [source for source in sources if source in REAL_PROMOTION_EVIDENCE_SOURCES]
+    if real_sources:
+        merged["source"] = sorted(set(real_sources))[0]
     if any(sample.metadata.get("baseline_comparable") is False for sample in samples):
         merged["baseline_comparable"] = False
     return merged

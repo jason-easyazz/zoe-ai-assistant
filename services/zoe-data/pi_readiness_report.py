@@ -228,12 +228,24 @@ def _evidence_collection_actions(promotion: Mapping[str, Any]) -> list[dict[str,
         real_source_deficit = int(item.get("real_source_sample_deficit") or 0)
         if unique_deficit <= 0 and real_source_deficit <= 0:
             continue
+        if unique_deficit > 0 and real_source_deficit > 0:
+            detail = (
+                f"Collect and label {unique_deficit} more unique {group} cases "
+                f"({real_source_deficit} must be real/log-derived) before promotion."
+            )
+        elif real_source_deficit > 0:
+            detail = (
+                f"Collect {real_source_deficit} real/log-derived {group} samples "
+                f"(pi_intent_shadow, intent_miss, chat_log, etc.) before promotion."
+            )
+        else:
+            detail = f"Collect and label {unique_deficit} more unique {group} cases before promotion."
         action = {
             "kind": "collect_labeled_evidence",
             "priority": "p1",
             "intent_group": group,
             "needed_unique_cases": unique_deficit,
-            "detail": f"Collect and label {unique_deficit} more unique {group} cases before promotion.",
+            "detail": detail,
         }
         if real_source_deficit > 0:
             action["needed_real_source_cases"] = real_source_deficit

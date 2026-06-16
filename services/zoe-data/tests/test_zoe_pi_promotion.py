@@ -258,6 +258,21 @@ def test_promotion_requires_five_percent_accuracy_win_and_latency_win():
     assert decision.blockers == ()
 
 
+def test_collapsed_mixed_source_case_counts_real_evidence():
+    samples = [
+        _sample(1, metadata={"source": "synthetic"}),
+        _sample(1, metadata={"source": "intent_miss"}),
+    ]
+    policy = PiPromotionPolicy(min_samples=1, accuracy_win_margin=0.05)
+
+    decision = evaluate_pi_promotion(samples, intent_group="weather", policy=policy)
+    summary = build_pi_candidate_wins(samples, policy=policy)
+
+    assert decision.state == "promote"
+    assert "insufficient_real_source_samples" not in decision.blockers
+    assert summary["details"][0]["real_source_sample_deficit"] == 0
+
+
 def test_synthetic_only_evidence_blocks_promotion_until_real_sources_exist():
     samples = [_sample(i, metadata={"source": "synthetic"}) for i in range(10)]
     policy = PiPromotionPolicy(min_samples=10, accuracy_win_margin=0.05)

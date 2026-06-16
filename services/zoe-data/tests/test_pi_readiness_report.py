@@ -72,7 +72,7 @@ def test_readiness_report_collects_more_evidence_for_candidate_wins(tmp_path):
         "intent_group": "weather",
         "needed_unique_cases": 27,
         "needed_real_source_cases": 27,
-        "detail": "Collect and label 27 more unique weather cases before promotion.",
+        "detail": "Collect and label 27 more unique weather cases (27 must be real/log-derived) before promotion.",
     } in report["next_actions"]
 
 
@@ -117,6 +117,38 @@ def test_readiness_report_treats_enabled_pi_without_promotions_as_shadow_mode(tm
     assert "pi_execution_enabled_without_promoted_groups" not in report["hybrid"]["blockers"]
     assert "pi_classifier_enabled_without_promoted_groups_runs_shadow_only" in report["hybrid"]["warnings"]
     assert report["promotion_actions"]["promote_groups"] == ["weather"]
+
+
+def test_readiness_real_source_only_deficit_has_clear_detail():
+    from pi_readiness_report import _evidence_collection_actions
+
+    actions = _evidence_collection_actions(
+        {
+            "candidate_wins": {
+                "details": [
+                    {
+                        "intent_group": "weather",
+                        "status": "needs_more_evidence",
+                        "unique_case_deficit": 0,
+                        "sample_deficit": 0,
+                        "real_source_sample_deficit": 5,
+                        "promotion_blockers": ["insufficient_real_source_samples"],
+                    }
+                ]
+            }
+        }
+    )
+
+    assert actions == [
+        {
+            "kind": "collect_labeled_evidence",
+            "priority": "p1",
+            "intent_group": "weather",
+            "needed_unique_cases": 0,
+            "detail": "Collect 5 real/log-derived weather samples (pi_intent_shadow, intent_miss, chat_log, etc.) before promotion.",
+            "needed_real_source_cases": 5,
+        }
+    ]
 
 
 def test_readiness_report_requests_comparable_baseline_for_router_only_shadow_data(tmp_path):
