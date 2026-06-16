@@ -423,8 +423,9 @@ def summarize_pi_intent_shadow(records: Sequence[Mapping[str, Any]]) -> dict[str
         if isinstance(record.get("pi_latency_ms"), (int, float)):
             pi_latencies.append(float(record["pi_latency_ms"]))
     policy = PiPromotionPolicy()
-    labeled_counts = _labeled_counts_by_group(records)
-    raw_labeled_sample_count = sum(1 for record in records if record.get("outcome_label"))
+    unique_labeled_records = _unique_labeled_records(records)
+    labeled_counts = _labeled_counts_by_group(unique_labeled_records)
+    raw_labeled_sample_count = sum(1 for record in unique_labeled_records if record.get("outcome_label"))
     labeled_sample_count = sum(labeled_counts.values())
     unmapped_labeled_sample_count = max(0, raw_labeled_sample_count - labeled_sample_count)
     sample_deficits = {
@@ -455,6 +456,24 @@ def summarize_pi_intent_shadow(records: Sequence[Mapping[str, Any]]) -> dict[str
             raw_labeled_sample_count=raw_labeled_sample_count,
         ),
     }
+
+
+def _unique_labeled_records(records: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    unique_by_hash: dict[str, Mapping[str, Any]] = {}
+    ordered_keys: list[str] = []
+    output: list[Mapping[str, Any]] = []
+    for record in records:
+        if not record.get("outcome_label"):
+            continue
+        text_hash = _optional_str(record.get("text_hash"))
+        if not text_hash:
+            output.append(record)
+            continue
+        if text_hash not in unique_by_hash:
+            ordered_keys.append(text_hash)
+        unique_by_hash[text_hash] = record
+    output.extend(unique_by_hash[text_hash] for text_hash in ordered_keys)
+    return output
 
 
 def _labeled_counts_by_group(records: Sequence[Mapping[str, Any]]) -> dict[str, int]:

@@ -500,6 +500,37 @@ def test_labeled_shadow_records_skip_missing_latency():
     assert samples == []
 
 
+def test_shadow_summary_counts_duplicate_text_hash_labels_once():
+    records = [
+        {"text_hash": "same", "outcome_label": "weather"},
+        {"text_hash": "same", "outcome_label": "weather"},
+        {"text_hash": "other", "outcome_label": "weather"},
+        {"outcome_label": "weather"},
+        {"outcome_label": "weather"},
+    ]
+
+    report = summarize_pi_intent_shadow(records)
+
+    assert report["sample_count"] == 5
+    assert report["labeled_sample_count"] == 4
+    assert report["labeled_sample_count_by_group"]["weather"] == 4
+    assert report["sample_deficit_by_group"]["weather"] == PiPromotionPolicy().min_samples - 4
+
+
+def test_shadow_summary_uses_last_label_for_duplicate_text_hash():
+    records = [
+        {"text_hash": "same", "outcome_label": "weather"},
+        {"text_hash": "same", "outcome_label": "timer_create"},
+    ]
+
+    report = summarize_pi_intent_shadow(records)
+
+    assert report["sample_count"] == 2
+    assert report["labeled_sample_count"] == 1
+    assert report["labeled_sample_count_by_group"]["weather"] == 0
+    assert report["labeled_sample_count_by_group"]["timers"] == 1
+
+
 def test_shadow_summary_needs_min_samples_for_promotion_ready():
     report = summarize_pi_intent_shadow([{"outcome_label": "weather"} for _ in range(29)])
 
