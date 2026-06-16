@@ -1000,6 +1000,7 @@ async def test_sync_pipeline_keeps_normal_implementation_route(isolated_store):
 @pytest.mark.asyncio
 async def test_sync_pipeline_gate_blocks_verify_without_test(isolated_store, monkeypatch):
     monkeypatch.setenv("ZOE_PIPELINE_VERIFY_EVIDENCE_RETRY_LIMIT", "1")
+    monkeypatch.setenv("ZOE_PIPELINE_HARNESS_VERIFY_TESTS", "false")  # isolate retry behavior
     await store.bootstrap_state("multica:verify-gate")
 
     async def fetch_detail(task_id: str):
@@ -1028,6 +1029,7 @@ async def test_sync_pipeline_gate_blocks_verify_without_test(isolated_store, mon
 @pytest.mark.asyncio
 async def test_sync_pipeline_gate_blocks_verify_after_retry_budget(isolated_store, monkeypatch):
     monkeypatch.setenv("ZOE_PIPELINE_VERIFY_EVIDENCE_RETRY_LIMIT", "1")
+    monkeypatch.setenv("ZOE_PIPELINE_HARNESS_VERIFY_TESTS", "false")  # isolate gate behavior
     # Once verify has been re-armed past the retry budget, a still-missing `test`
     # gate becomes a terminal block (no infinite retry loop).
     seeded = PipelineState(
@@ -1055,6 +1057,97 @@ async def test_sync_pipeline_gate_blocks_verify_after_retry_budget(isolated_stor
     assert state.status == "blocked"
     lines = isolated_store.read_text(encoding="utf-8").splitlines()
     assert any("gate_blocked" in line for line in lines)
+
+
+def _patch_focused_runner(monkeypatch, *, ran: bool, passed: bool):
+    import pipeline_focused_tests as pft
+
+    def _fake(pr_url, *, repo_root=None):
+        return pft.FocusedTestResult(
+            ran=ran,
+            passed=passed,
+            summary=f"focused pytest: {'pass' if passed else 'fail'}",
+            content_hash="hh" if ran else "",
+            test_paths=("services/zoe-data/tests/test_x.py",) if ran else (),
+        )
+
+    monkeypatch.setattr(pft, "run_focused_pr_tests", _fake)
+
+
+@pytest.mark.asyncio
+async def test_harness_verify_completes_done_row_missing_agent_test(isolated_store, monkeypatch):
+    # Verify worker completed without `test` evidence, but the harness runs the
+    # PR's focused tests itself and they pass -> verify completes -> review.
+    _patch_focused_runner(monkeypatch, ran=True, passed=True)
+    await store.bootstrap_state("multica:hv-done")
+
+    async def fetch_detail(task_id: str):
+        if task_id == "t_impl":
+            return {
+                "latest_summary": "TOOLS_USED=graphify\nPR_URL=https://github.com/o/r/pull/9",
+                "comments": [],
+            }
+        return {"latest_summary": "VALIDATORS=pass", "comments": []}
+
+    phases = {
+        "implement": {"id": "t_impl", "status": "done"},
+        "verify": {"id": "t_verify", "status": "done"},
+    }
+    state = await store.sync_pipeline_from_chain("multica:hv-done", phases, fetch_detail)
+    assert state.phase == "review"
+    assert any(e.kind == "test" and e.passed and e.metadata.get("source") == "harness" for e in state.evidence)
+
+
+@pytest.mark.asyncio
+async def test_harness_verify_overrides_spurious_block(isolated_store, monkeypatch):
+    # Verify worker spuriously BLOCKED ("no PR to test"), but the harness focused
+    # tests pass -> the objective run overrides the block -> verify -> review.
+    _patch_focused_runner(monkeypatch, ran=True, passed=True)
+    await store.bootstrap_state("multica:hv-block")
+
+    async def fetch_detail(task_id: str):
+        if task_id == "t_impl":
+            return {
+                "latest_summary": "TOOLS_USED=graphify\nPR_URL=https://github.com/o/r/pull/10",
+                "comments": [],
+            }
+        return {
+            "latest_summary": "BLOCKER=verification requires the actual PR",
+            "comments": [],
+        }
+
+    phases = {
+        "implement": {"id": "t_impl", "status": "done"},
+        "verify": {"id": "t_verify", "status": "blocked"},
+    }
+    state = await store.sync_pipeline_from_chain("multica:hv-block", phases, fetch_detail)
+    assert state.phase == "review"
+
+
+@pytest.mark.asyncio
+async def test_harness_verify_failing_tests_do_not_complete(isolated_store, monkeypatch):
+    # Harness ran the PR's tests and they FAILED -> verify must not complete.
+    _patch_focused_runner(monkeypatch, ran=True, passed=False)
+    monkeypatch.setenv("ZOE_PIPELINE_VERIFY_EVIDENCE_RETRY_LIMIT", "0")
+    await store.bootstrap_state("multica:hv-fail")
+
+    async def fetch_detail(task_id: str):
+        if task_id == "t_impl":
+            return {
+                "latest_summary": "TOOLS_USED=graphify\nPR_URL=https://github.com/o/r/pull/11",
+                "comments": [],
+            }
+        return {"latest_summary": "VALIDATORS=pass", "comments": []}
+
+    phases = {
+        "implement": {"id": "t_impl", "status": "done"},
+        "verify": {"id": "t_verify", "status": "done"},
+    }
+    state = await store.sync_pipeline_from_chain("multica:hv-fail", phases, fetch_detail)
+    assert state.phase == "verify"
+    assert state.status != "review"
+    # A failing test evidence item was recorded (passed False) for diagnosis.
+    assert any(e.kind == "test" and e.passed is False for e in state.evidence)
 
 
 @pytest.mark.asyncio

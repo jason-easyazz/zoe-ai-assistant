@@ -451,6 +451,46 @@ async def _append_harness_validators(state: PipelineState, phase: PipelinePhase)
     return with_evidence(state, validator_evidence_item(result, phase=phase))
 
 
+def _harness_verify_tests_enabled() -> bool:
+    return (
+        os.environ.get("ZOE_PIPELINE_HARNESS_VERIFY_TESTS", "true") or "true"
+    ).strip().lower() not in {"0", "false", "no"}
+
+
+def _pr_url_from_state(state: PipelineState) -> str:
+    for item in reversed(state.evidence):
+        if item.kind == "pr" and getattr(item, "artifact", None):
+            return str(item.artifact).strip()
+    return ""
+
+
+async def _append_harness_focused_tests(state: PipelineState, phase: PipelinePhase) -> PipelineState:
+    """Run the PR's focused tests harness-side and append `test` evidence.
+
+    Makes verify deterministic: the harness runs the PR's changed test files
+    itself instead of trusting the verify worker to do it. No-ops (returns state
+    unchanged) when disabled, when passing test evidence already exists, when
+    there is no PR to test, or when the runner cannot find/run focused tests
+    (fail-open: the existing agent-driven flow then applies).
+    """
+    if not _harness_verify_tests_enabled():
+        return state
+    if any(
+        item.kind == "test" and item.passed is True and item.metadata.get("phase") == phase
+        for item in state.evidence
+    ):
+        return state
+    pr_url = _pr_url_from_state(state)
+    if not pr_url:
+        return state
+    from pipeline_focused_tests import focused_test_evidence_item, run_focused_pr_tests
+
+    result = await _run_io(partial(run_focused_pr_tests, pr_url))
+    if not result.ran:
+        return state
+    return with_evidence(state, focused_test_evidence_item(result, phase=phase))
+
+
 def _protocol_only_block(detail: dict[str, Any]) -> bool:
     """True when Hermes only failed the terminal protocol for a no-op phase."""
     protocol_seen = False
@@ -713,10 +753,25 @@ async def _sync_pipeline_from_chain_once(
 
         if phase == "implement" and row_status in {"done", "archived"}:
             state = await _append_harness_validators(state, "implement")
-        if phase == "verify" and row_status in {"done", "archived"}:
-            state = await _append_harness_validators(state, "verify")
 
-        outcome = infer_outcome(phase, row_status, detail)  # type: ignore[arg-type]
+        verify_harness_complete = False
+        if phase == "verify" and row_status in _TERMINAL:
+            # Deterministic verify: run the PR's validators + focused tests
+            # harness-side so a verify worker that skipped the tests (completed
+            # without `test` evidence) or spuriously blocked ("no PR to test")
+            # cannot strand the chain. When the objective harness run satisfies
+            # the evidence gate, complete verify regardless of the agent's
+            # terminal signal; otherwise fall through to the agent-derived outcome.
+            state = await _append_harness_validators(state, "verify")
+            state = await _append_harness_focused_tests(state, "verify")
+            if can_complete_phase(state):
+                verify_harness_complete = True
+
+        outcome = (
+            "complete"
+            if verify_harness_complete
+            else infer_outcome(phase, row_status, detail)  # type: ignore[arg-type]
+        )
         if not outcome:
             continue
         if (
