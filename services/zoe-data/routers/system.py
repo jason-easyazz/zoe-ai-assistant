@@ -197,6 +197,14 @@ async def get_pi_hybrid_buffer_status(user: dict = Depends(require_admin)):
     return pi_hybrid_buffer_status()
 
 
+@router.get("/pi-intent/readiness-report")
+async def get_pi_readiness_report(user: dict = Depends(require_admin)):
+    """Read-only operator report for Pi hybrid promotion readiness."""
+    from pi_readiness_report import pi_readiness_report
+
+    return pi_readiness_report()
+
+
 class PiIntentShadowLabelRequest(BaseModel):
     text_hash: str
     outcome_label: Optional[str] = None
