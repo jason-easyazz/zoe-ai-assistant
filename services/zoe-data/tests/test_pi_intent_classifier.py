@@ -12,6 +12,7 @@ from pi_intent_classifier import (
     _probe_pi_runtime_cached,
     _parse_pi_classification,
     _rpc_response_matches_request,
+    _runtime_probe_env,
     classify_with_pi_intent_governor,
     pi_intent_is_promoted,
     pi_intent_prefilter_allows,
@@ -199,6 +200,31 @@ def test_pi_intent_config_exposes_prefilter_default():
     assert config.to_dict()["prefilter_enabled"] is True
 
 
+
+def test_pi_intent_runtime_env_uses_standalone_nvm_pi_only(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    nvm_bin = home / ".nvm" / "versions" / "node" / "v22.22.0" / "bin"
+    openclaw_bin = home / ".openclaw" / "npm" / "node_modules" / ".bin"
+    nvm_bin.mkdir(parents=True)
+    openclaw_bin.mkdir(parents=True)
+    for command in ("node", "npm", "pi"):
+        path = nvm_bin / command
+        path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        path.chmod(0o755)
+    bundled_pi = openclaw_bin / "pi"
+    bundled_pi.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    bundled_pi.chmod(0o755)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("PATH", "")
+    config = PiIntentClassifierConfig.from_env({"ZOE_PI_INTENT_ENABLED": "true"})
+
+    runtime_env = _runtime_probe_env(None, config)
+
+    path_parts = runtime_env["PATH"].split(os.pathsep)
+    assert str(nvm_bin) in path_parts
+    assert str(openclaw_bin) not in path_parts
+
+
 def test_pi_intent_prefilter_allows_low_risk_tasks_and_rejects_casual_chat():
     assert pi_intent_prefilter_allows("rain later") is True
     assert pi_intent_prefilter_allows("what is 18 times 7") is True
@@ -357,6 +383,87 @@ for line in sys.stdin:
 
     assert result is not None
     assert result.intent == "weather"
+
+
+@pytest.mark.asyncio
+async def test_pi_rpc_unparsable_output_resets_process(tmp_path, monkeypatch):
+    bindir = tmp_path / "rpc-empty-output-bin"
+    bindir.mkdir()
+    _write_exe(bindir / "node", "#!/bin/sh\nexit 0\n")
+    _write_exe(bindir / "npm", "#!/bin/sh\nexit 0\n")
+    _write_exe(
+        bindir / "pi",
+        "#!/usr/bin/python3\n"
+        "import json, sys, time\n"
+        "for line in sys.stdin:\n"
+        "    request = json.loads(line)\n"
+        "    print(json.dumps({'id': request['id'], 'type': 'response', 'command': 'prompt', 'success': True}), flush=True)\n"
+        "    print(json.dumps({'id': request['id'], 'type': 'agent_end', 'messages': []}), flush=True)\n"
+        "    time.sleep(10)\n",
+    )
+    workers = {}
+    monkeypatch.setattr(pi_intent_classifier, "_RPC_WORKERS", workers)
+    env = {
+        "PATH": str(bindir),
+        "ZOE_PI_INTENT_ENABLED": "true",
+        "ZOE_PI_INTENT_TRANSPORT": "rpc",
+        "ZOE_PI_COMMAND": "pi",
+        "ZOE_PI_CWD": str(tmp_path),
+        "ZOE_PI_ALLOW_EXECUTION": "true",
+        "ZOE_PI_LOCAL_MODEL_CONFIGURED": "true",
+        "ZOE_PI_INTENT_TIMEOUT_SECONDS": "2",
+    }
+
+    result = await classify_with_pi_intent_governor("rain later", env=env)
+
+    assert result is None
+    assert len(workers) == 1
+    worker = next(iter(workers.values()))
+    assert worker.proc is None
+
+
+@pytest.mark.asyncio
+async def test_pi_rpc_valid_json_unknown_intent_keeps_warm_process(tmp_path, monkeypatch):
+    bindir = tmp_path / "rpc-unknown-intent-bin"
+    bindir.mkdir()
+    _write_exe(bindir / "node", "#!/bin/sh\nexit 0\n")
+    _write_exe(bindir / "npm", "#!/bin/sh\nexit 0\n")
+    payload = json.dumps({"intent": "delete_everything", "slots": {}, "confidence": 0.99, "task_lane": "fast_tool"})
+    _write_exe(
+        bindir / "pi",
+        "#!/usr/bin/python3\n"
+        "import json, sys, time\n"
+        f"payload = {payload!r}\n"
+        "for line in sys.stdin:\n"
+        "    request = json.loads(line)\n"
+        "    print(json.dumps({'id': request['id'], 'type': 'response', 'command': 'prompt', 'success': True}), flush=True)\n"
+        "    print(json.dumps({'id': request['id'], 'type': 'agent_end', 'messages': [{'role': 'assistant', 'content': [{'type': 'text', 'text': payload}]}]}), flush=True)\n"
+        "    time.sleep(10)\n",
+    )
+    workers = {}
+    monkeypatch.setattr(pi_intent_classifier, "_RPC_WORKERS", workers)
+    env = {
+        "PATH": str(bindir),
+        "ZOE_PI_INTENT_ENABLED": "true",
+        "ZOE_PI_INTENT_TRANSPORT": "rpc",
+        "ZOE_PI_COMMAND": "pi",
+        "ZOE_PI_CWD": str(tmp_path),
+        "ZOE_PI_ALLOW_EXECUTION": "true",
+        "ZOE_PI_LOCAL_MODEL_CONFIGURED": "true",
+        "ZOE_PI_INTENT_TIMEOUT_SECONDS": "2",
+        "ZOE_PI_INTENT_PREFILTER_ENABLED": "false",
+    }
+
+    try:
+        result = await classify_with_pi_intent_governor("please do something weird", env=env)
+        assert result is None
+        assert len(workers) == 1
+        worker = next(iter(workers.values()))
+        assert worker.proc is not None
+        assert worker.proc.returncode is None
+    finally:
+        for worker in list(workers.values()):
+            await worker.reset()
 
 
 @pytest.mark.asyncio
@@ -712,19 +819,52 @@ async def test_detect_and_extract_intent_does_not_execute_unpromoted_pi_result(t
             "reason": "reminder query phrased unusually",
         },
     )
+    record = tmp_path / "pi-record.json"
     monkeypatch.setenv("PATH", str(bindir))
     monkeypatch.setenv("ZOE_PI_INTENT_ENABLED", "true")
     monkeypatch.setenv("ZOE_PI_CWD", str(tmp_path))
     monkeypatch.setenv("ZOE_PI_ALLOW_EXECUTION", "true")
     monkeypatch.setenv("ZOE_PI_LOCAL_MODEL_CONFIGURED", "true")
     monkeypatch.setenv("ZOE_PI_INTENT_MODEL", "gemma-4-E2B-it-Q4_K_M.gguf")
+    monkeypatch.setenv("PI_TEST_RECORD", str(record))
     monkeypatch.delenv("ZOE_PI_INTENT_PROMOTED_GROUPS", raising=False)
+    monkeypatch.delenv("ZOE_PI_INTENT_SHADOW_ENABLED", raising=False)
 
     from intent_router import detect_and_extract_intent
 
     intent = await detect_and_extract_intent("anything I should remember right now")
 
     assert intent is None
+    assert not record.exists()
+
+
+@pytest.mark.asyncio
+async def test_detect_and_extract_intent_runs_unpromoted_pi_only_in_shadow(tmp_path, monkeypatch):
+    calls = 0
+    recorded = asyncio.Event()
+
+    async def fake_record(text, **kwargs):
+        nonlocal calls
+        await asyncio.sleep(0)
+        calls += 1
+        assert text == "anything I should remember right now"
+        assert "pi_result" not in kwargs
+        assert kwargs["route_class"] == "fallback"
+        recorded.set()
+        return {"recorded": True}
+
+    monkeypatch.setenv("ZOE_PI_INTENT_ENABLED", "true")
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_ENABLED", "true")
+    monkeypatch.delenv("ZOE_PI_INTENT_PROMOTED_GROUPS", raising=False)
+    monkeypatch.setattr("pi_intent_shadow.maybe_record_pi_intent_shadow", fake_record)
+
+    from intent_router import detect_and_extract_intent
+
+    intent = await detect_and_extract_intent("anything I should remember right now")
+    await asyncio.wait_for(recorded.wait(), timeout=1.0)
+
+    assert intent is None
+    assert calls == 1
 
 
 @pytest.mark.asyncio
@@ -789,7 +929,7 @@ async def test_detect_and_extract_intent_uses_pi_when_slot_extraction_fails(tmp_
 
     from intent_router import detect_and_extract_intent
 
-    intent = await detect_and_extract_intent("remind me to call mum")
+    intent = await detect_and_extract_intent("remind me to call mum every Monday")
 
     assert intent is not None
     assert intent.name == "reminder_create"

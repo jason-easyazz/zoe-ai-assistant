@@ -3592,6 +3592,8 @@ async def voice_command(
                 from push import broadcaster as _bc_stream
                 import json as _json
 
+                nonlocal _t_first_token
+
                 chunk_index = 0
                 token_buf = ""
                 full_reply_parts: list[str] = []
@@ -3671,6 +3673,34 @@ async def voice_command(
 
                     async def _emit_line(line: dict):
                         yield (_json.dumps(line) + "\n").encode()
+
+                    try:
+                        from voice_presence import processing_ack_event
+
+                        ack_event = processing_ack_event()
+                        if ack_event:
+                            ack_text = str(ack_event.get("text") or "").strip()
+                            if ack_text:
+                                await _bc_stream.broadcast("all", "voice:responding", {
+                                    "panel_id": panel_id,
+                                    "text": ack_text,
+                                    "processing_ack": True,
+                                })
+                            if ack_event.get("audio_base64"):
+                                header = _json.dumps({
+                                    "chunk": chunk_index,
+                                    "text": ack_text[:80],
+                                    "provider": str(ack_event.get("audio_source") or "cached-processing-ack"),
+                                    "processing_ack": True,
+                                })
+                                yield (header + "\n").encode()
+                                yield str(ack_event["audio_base64"]).encode() + b"\n"
+                                chunk_index += 1
+                            else:
+                                async for out_line in _emit_line({"processing_ack": True, "text": ack_text, "panel_id": panel_id}):
+                                    yield out_line
+                    except Exception as ack_exc:
+                        logger.debug("voice/command stream processing acknowledgement failed: %s", ack_exc)
 
                     _voice_history = await _load_voice_history(session_id, limit=3)
                     async for delta in run_zoe_agent_streaming(
@@ -4206,6 +4236,7 @@ async def voice_wake(payload: dict, caller: dict = Depends(_require_voice_auth))
         "ok": True,
         "panel_id": panel_id,
         "state": "listening",
+        "ack_text": ack_phrase or None,
         "ack_audio_base64": audio_b64,
         "content_type": content_type,
     }

@@ -6,6 +6,9 @@ import pytest
 from pi_intent_classifier import PiIntentClassification
 from pi_intent_shadow import (
     PiIntentShadowConfig,
+    append_pi_intent_shadow_label,
+    apply_pi_intent_shadow_labels,
+    load_pi_intent_shadow_labels,
     load_pi_intent_shadow_records,
     maybe_record_pi_intent_shadow,
     pi_intent_shadow_status,
@@ -103,6 +106,7 @@ def test_shadow_status_summarizes_records(tmp_path):
         {
             "ZOE_PI_INTENT_SHADOW_ENABLED": "true",
             "ZOE_PI_INTENT_SHADOW_PATH": str(path),
+            "ZOE_PI_INTENT_SHADOW_LABELS_PATH": str(tmp_path / "no-labels.jsonl"),
         }
     )
 
@@ -115,12 +119,173 @@ def test_shadow_status_summarizes_records(tmp_path):
     assert status["report"]["promotion_ready"] is False
 
 
+
+def test_shadow_status_applies_trusted_sidecar_labels(tmp_path):
+    shadow_path = tmp_path / "shadow.jsonl"
+    labels_path = tmp_path / "labels.jsonl"
+    text_hash = "weatherhash"
+    shadow_path.write_text(
+        json.dumps(
+            {
+                "text_hash": text_hash,
+                "text_preview": "rain later",
+                "route_class": "fallback",
+                "zoe_intent": None,
+                "zoe_latency_ms": 500,
+                "pi_intent": "weather",
+                "pi_latency_ms": 120,
+                "pi_confidence": 0.91,
+                "pi_transport": "rpc",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    labels_path.write_text(
+        json.dumps(
+            {
+                "text_hash": text_hash,
+                "outcome_label": "weather",
+                "baseline_kind": "operator_fallback_override",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    status = pi_intent_shadow_status(
+        {
+            "ZOE_PI_INTENT_SHADOW_ENABLED": "true",
+            "ZOE_PI_INTENT_SHADOW_PATH": str(shadow_path),
+            "ZOE_PI_INTENT_SHADOW_LABELS_PATH": str(labels_path),
+        }
+    )
+
+    assert status["label_count"] == 1
+    assert status["record_count_window"] == 1
+    assert status["report"]["accuracy_available"] is True
+    assert status["report"]["labeled_sample_count_by_group"]["weather"] == 1
+    decision = [
+        item for item in status["promotion_report"]["decisions"] if item["intent_group"] == "weather"
+    ][0]
+    assert decision["sample_count"] == 1
+    assert decision["pi_accuracy"] == 1.0
+    assert decision["zoe_accuracy"] == 0.0
+    assert "insufficient_samples" in decision["blockers"]
+
+
+def test_append_shadow_label_requires_existing_record_and_persists_sidecar(tmp_path):
+    shadow_path = tmp_path / "shadow.jsonl"
+    labels_path = tmp_path / "labels.jsonl"
+    shadow_path.write_text(
+        json.dumps(
+            {
+                "text_hash": "weatherhash",
+                "text_preview": "rain later",
+                "route_class": "fallback",
+                "zoe_intent": None,
+                "zoe_latency_ms": 500,
+                "pi_intent": "weather",
+                "pi_latency_ms": 120,
+                "pi_confidence": 0.91,
+                "pi_transport": "rpc",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = append_pi_intent_shadow_label(
+        text_hash="weatherhash",
+        outcome_label="weather",
+        reviewed_by="admin@example.test",
+        config=PiIntentShadowConfig(enabled=True, path=str(shadow_path), labels_path=str(labels_path)),
+    )
+
+    saved = json.loads(labels_path.read_text(encoding="utf-8"))
+    assert result["ok"] is True
+    assert result["label"]["outcome_label"] == "weather"
+    assert result["matched_record"]["text_preview"] == "rain later"
+    assert result["labels_store"] == "shadow_labels_sidecar"
+    assert "labels_path" not in result
+    assert saved["text_hash"] == "weatherhash"
+    assert saved["outcome_label"] == "weather"
+    assert len(saved["reviewed_by_hash"]) == 64
+    assert "admin@example.test" not in labels_path.read_text(encoding="utf-8")
+
+    status = pi_intent_shadow_status(
+        {
+            "ZOE_PI_INTENT_SHADOW_ENABLED": "true",
+            "ZOE_PI_INTENT_SHADOW_PATH": str(shadow_path),
+            "ZOE_PI_INTENT_SHADOW_LABELS_PATH": str(labels_path),
+        }
+    )
+    assert status["label_count"] == 1
+    assert status["report"]["labeled_sample_count_by_group"]["weather"] == 1
+
+
+def test_append_shadow_label_rejects_unknown_or_privileged_labels(tmp_path):
+    shadow_path = tmp_path / "shadow.jsonl"
+    labels_path = tmp_path / "labels.jsonl"
+    shadow_path.write_text(json.dumps({"text_hash": "known", "text_preview": "upgrade yourself"}) + "\n")
+    config = PiIntentShadowConfig(enabled=True, path=str(shadow_path), labels_path=str(labels_path))
+
+    with pytest.raises(ValueError, match="most-recent"):
+        append_pi_intent_shadow_label(text_hash="missing", outcome_label="weather", config=config)
+    with pytest.raises(ValueError, match="source must be one of"):
+        append_pi_intent_shadow_label(
+            text_hash="known",
+            outcome_label="weather",
+            source="freeform",
+            config=config,
+        )
+    with pytest.raises(ValueError, match="low-risk"):
+        append_pi_intent_shadow_label(text_hash="known", outcome_label="extend_capability", config=config)
+    with pytest.raises(ValueError, match="low-risk"):
+        append_pi_intent_shadow_label(text_hash="known", outcome_label="weather", negative=True, config=config)
+    assert not labels_path.exists()
+
+
+def test_shadow_label_loader_ignores_unmapped_and_applies_negative_labels(tmp_path):
+    labels_path = tmp_path / "labels.jsonl"
+    labels_path.write_text(
+        "\n".join(
+            [
+                json.dumps({"text_hash": "weather", "expected_intent": "weather"}),
+                json.dumps({"text_hash": "casual", "negative": True}),
+                json.dumps({"text_hash": "bad", "expected_intent": "extend_capability"}),
+                json.dumps({"text_hash": "conflict", "negative": True, "outcome_label": "weather"}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    labels = load_pi_intent_shadow_labels(str(labels_path))
+    records = apply_pi_intent_shadow_labels(
+        [{"text_hash": "weather"}, {"text_hash": "casual"}, {"text_hash": "bad"}, {"text_hash": "conflict"}],
+        labels,
+    )
+
+    assert sorted(labels) == ["casual", "weather"]
+    assert records[0]["outcome_label"] == "weather"
+    assert records[0]["outcome_label_source"] == "shadow_label_sidecar"
+    assert records[1]["negative"] is True
+    assert records[1]["outcome_label"] is None
+    assert "outcome_label" not in records[2]
+    assert "outcome_label" not in records[3]
+
+
 def test_shadow_summary_empty_is_explicitly_not_accuracy_ready():
     report = summarize_pi_intent_shadow([])
 
     assert report["sample_count"] == 0
     assert report["no_result_rate"] == 0.0
     assert report["accuracy_available"] is False
+    assert report["labeled_sample_count_by_group"]["weather"] == 0
+    assert report["unmapped_labeled_sample_count"] == 0
+    assert report["sample_deficit_by_group"]["weather"] == PiPromotionPolicy().min_samples
+    assert report["promotion_ready_groups"] == []
 
 
 @pytest.mark.asyncio
@@ -183,7 +348,7 @@ async def test_intent_router_shadow_extraction_failed_records_pre_pi_latency_and
     monkeypatch.setattr("pi_intent_classifier.classify_with_pi_intent_governor", fake_classify)
     monkeypatch.setattr("pi_intent_shadow.maybe_record_pi_intent_shadow", fake_shadow)
 
-    intent = await detect_and_extract_intent("remind me to call mum", user_id="jason")
+    intent = await detect_and_extract_intent("remind me to call mum every Monday", user_id="jason")
     await asyncio.sleep(0)
 
     assert intent is not None
@@ -335,12 +500,86 @@ def test_labeled_shadow_records_skip_missing_latency():
     assert samples == []
 
 
+def test_shadow_summary_counts_duplicate_text_hash_labels_once():
+    records = [
+        {"text_hash": "same", "outcome_label": "weather"},
+        {"text_hash": "same", "outcome_label": "weather"},
+        {"text_hash": "other", "outcome_label": "weather"},
+        {"outcome_label": "weather"},
+        {"outcome_label": "weather"},
+    ]
+
+    report = summarize_pi_intent_shadow(records)
+
+    assert report["sample_count"] == 5
+    assert report["labeled_sample_count"] == 4
+    assert report["labeled_sample_count_by_group"]["weather"] == 4
+    assert report["sample_deficit_by_group"]["weather"] == PiPromotionPolicy().min_samples - 4
+
+
+def test_shadow_summary_uses_last_label_for_duplicate_text_hash():
+    records = [
+        {"text_hash": "same", "outcome_label": "weather"},
+        {"text_hash": "same", "outcome_label": "timer_create"},
+    ]
+
+    report = summarize_pi_intent_shadow(records)
+
+    assert report["sample_count"] == 2
+    assert report["labeled_sample_count"] == 1
+    assert report["labeled_sample_count_by_group"]["weather"] == 0
+    assert report["labeled_sample_count_by_group"]["timers"] == 1
+
+
 def test_shadow_summary_needs_min_samples_for_promotion_ready():
     report = summarize_pi_intent_shadow([{"outcome_label": "weather"} for _ in range(29)])
 
     assert report["accuracy_available"] is True
     assert report["labeled_sample_count"] == 29
+    assert report["labeled_sample_count_by_group"]["weather"] == 29
+    assert report["sample_deficit_by_group"]["weather"] == 1
     assert report["promotion_ready"] is False
+    assert report["promotion_ready_groups"] == []
+
+
+def test_shadow_summary_requires_min_samples_in_one_group_for_promotion_ready():
+    records = [{"outcome_label": "weather"} for _ in range(15)]
+    records.extend({"outcome_label": "timer_create"} for _ in range(15))
+
+    report = summarize_pi_intent_shadow(records)
+
+    assert report["accuracy_available"] is True
+    assert report["labeled_sample_count"] == 30
+    assert report["labeled_sample_count_by_group"]["weather"] == 15
+    assert report["labeled_sample_count_by_group"]["timers"] == 15
+    assert report["sample_deficit_by_group"]["weather"] == 15
+    assert report["sample_deficit_by_group"]["timers"] == 15
+    assert report["promotion_ready"] is False
+    assert report["promotion_ready_groups"] == []
+    assert report["promotion_ready_reason"] == (
+        "labeled outcome evidence exists, but no intent group has enough labels for promotion scoring"
+    )
+
+
+def test_shadow_summary_reports_unmapped_labeled_evidence_separately():
+    report = summarize_pi_intent_shadow([{"outcome_label": "extend_capability"}])
+
+    assert report["accuracy_available"] is False
+    assert report["labeled_sample_count"] == 0
+    assert report["unmapped_labeled_sample_count"] == 1
+    assert report["promotion_ready"] is False
+    assert report["promotion_ready_reason"] == (
+        "labeled outcome evidence exists, but no labels map to a low-risk intent group"
+    )
+
+
+def test_shadow_summary_names_groups_with_enough_labeled_evidence():
+    report = summarize_pi_intent_shadow([{"outcome_label": "weather"} for _ in range(PiPromotionPolicy().min_samples)])
+
+    assert report["promotion_ready"] is True
+    assert report["promotion_ready_groups"] == ["weather"]
+    assert report["unmapped_labeled_sample_count"] == 0
+    assert report["sample_deficit_by_group"]["weather"] == 0
 
 
 def test_labeled_shadow_fallback_without_comparable_baseline_blocks_promotion(tmp_path):
@@ -367,7 +606,12 @@ def test_labeled_shadow_fallback_without_comparable_baseline_blocks_promotion(tm
         )
     path.write_text("\n".join(rows) + "\n")
 
-    status = pi_intent_shadow_status({"ZOE_PI_INTENT_SHADOW_PATH": str(path)})
+    status = pi_intent_shadow_status(
+        {
+            "ZOE_PI_INTENT_SHADOW_PATH": str(path),
+            "ZOE_PI_INTENT_SHADOW_LABELS_PATH": str(tmp_path / "no-labels.jsonl"),
+        }
+    )
 
     weather = next(
         decision for decision in status["promotion_report"]["decisions"] if decision["intent_group"] == "weather"
@@ -408,12 +652,15 @@ def test_shadow_status_includes_promotion_report_for_labeled_records(tmp_path):
         {
             "ZOE_PI_INTENT_SHADOW_PATH": str(path),
             "ZOE_PI_INTENT_PROMOTED_GROUPS": "weather",
+            "ZOE_PI_INTENT_SHADOW_LABELS_PATH": str(tmp_path / "no-labels.jsonl"),
         }
     )
 
     assert status["report"]["accuracy_available"] is True
     assert status["report"]["labeled_sample_count"] == 30
     assert status["report"]["promotion_ready"] is True
+    assert status["report"]["promotion_ready_groups"] == ["weather"]
+    assert status["report"]["sample_deficit_by_group"]["weather"] == 0
     assert "weather" in status["promotion_report"]["promotable_groups"]
     assert status["promotion_report"]["promoted_groups"] == ["weather"]
     assert status["promotion_report"]["promotion_actions"]["next_promoted_groups"] == ["weather"]
@@ -427,6 +674,7 @@ def test_shadow_status_ignores_unknown_promoted_groups(tmp_path):
         {
             "ZOE_PI_INTENT_SHADOW_PATH": str(path),
             "ZOE_PI_INTENT_PROMOTED_GROUPS": "weather,device_control",
+            "ZOE_PI_INTENT_SHADOW_LABELS_PATH": str(tmp_path / "no-labels.jsonl"),
         }
     )
 
@@ -462,6 +710,7 @@ def test_shadow_status_lists_rollback_groups_for_labeled_promoted_regression(tmp
         {
             "ZOE_PI_INTENT_SHADOW_PATH": str(path),
             "ZOE_PI_INTENT_PROMOTED_GROUPS": "weather",
+            "ZOE_PI_INTENT_SHADOW_LABELS_PATH": str(tmp_path / "no-labels.jsonl"),
         }
     )
 
@@ -500,6 +749,7 @@ def test_shadow_status_rolls_back_promoted_group_on_reviewed_corrections(tmp_pat
         {
             "ZOE_PI_INTENT_SHADOW_PATH": str(path),
             "ZOE_PI_INTENT_PROMOTED_GROUPS": "weather",
+            "ZOE_PI_INTENT_SHADOW_LABELS_PATH": str(tmp_path / "no-labels.jsonl"),
         }
     )
 
@@ -540,6 +790,7 @@ def test_shadow_status_blocks_promoted_group_on_reviewed_rollback_block(tmp_path
         {
             "ZOE_PI_INTENT_SHADOW_PATH": str(path),
             "ZOE_PI_INTENT_PROMOTED_GROUPS": "weather",
+            "ZOE_PI_INTENT_SHADOW_LABELS_PATH": str(tmp_path / "no-labels.jsonl"),
         }
     )
 
@@ -581,7 +832,12 @@ def test_shadow_status_includes_failure_examples_without_text(tmp_path):
         + "\n"
     )
 
-    status = pi_intent_shadow_status({"ZOE_PI_INTENT_SHADOW_PATH": str(path)})
+    status = pi_intent_shadow_status(
+        {
+            "ZOE_PI_INTENT_SHADOW_PATH": str(path),
+            "ZOE_PI_INTENT_SHADOW_LABELS_PATH": str(tmp_path / "no-labels.jsonl"),
+        }
+    )
 
     examples = status["promotion_report"]["failure_examples"]
     assert len(examples) == 1

@@ -1380,6 +1380,12 @@ async def _mempalace_load_user_facts(user_id: str, limit: int = 20) -> str:
     cache so freshness returns on the next turn.
     """
     now = time.monotonic()
+    try:
+        from memory_service import is_guest_memory_user
+        if is_guest_memory_user(user_id):
+            return ""
+    except Exception:
+        return ""
     cached = _USER_FACTS_CACHE.get(user_id)
     if cached is not None and cached[0] > now:
         return cached[1]
@@ -1491,6 +1497,12 @@ async def _build_memory_context(message: str, user_id: str = "family-admin") -> 
     entity-type-filtered search to pull person-specific facts.
     """
     if not _message_needs_memory(message):
+        return ""
+    try:
+        from memory_service import is_guest_memory_user
+        if is_guest_memory_user(user_id):
+            return ""
+    except Exception:
         return ""
     _mp_timeout = 5.0 if _JETSON_MODE else 3.0
 

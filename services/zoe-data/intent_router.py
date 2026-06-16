@@ -21,6 +21,10 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
+from fastapi import HTTPException
+
+from zoe_pi_promotion import LOW_RISK_PI_INTENT_GROUPS
+
 if TYPE_CHECKING:
     from conversation_context import ConversationContext
 
@@ -1288,6 +1292,247 @@ def detect_intent(
     return None
 
 
+def _relative_reminder_now():
+    from datetime import datetime
+
+    return datetime.now().replace(second=0, microsecond=0)
+
+
+def _parse_relative_reminder_duration(raw: str):
+    from datetime import timedelta
+
+    value = re.sub(r"\s+", " ", str(raw or "").strip().lower())
+    if not value:
+        return None
+
+    if value == "half an hour":
+        return timedelta(minutes=30)
+
+    quantity_words = {
+        "a": 1,
+        "an": 1,
+        "one": 1,
+        "two": 2,
+        "three": 3,
+        "four": 4,
+        "five": 5,
+        "six": 6,
+        "seven": 7,
+        "eight": 8,
+        "nine": 9,
+        "ten": 10,
+        "a few": 3,
+        "a couple": 2,
+        "a couple of": 2,
+    }
+    m = re.match(
+        r"^(?P<qty>\d+|a\s+few|a\s+couple(?:\s+of)?|an?|one|two|three|four|five|six|seven|eight|nine|ten)\s+"
+        r"(?P<unit>min(?:ute)?s?|hours?|days?|weeks?)$",
+        value,
+        flags=re.IGNORECASE,
+    )
+    if not m:
+        return None
+
+    qty_text = m.group("qty").lower()
+    quantity = int(qty_text) if qty_text.isdigit() else quantity_words.get(qty_text)
+    if not quantity or quantity < 1 or quantity > 999:
+        return None
+
+    unit = m.group("unit").lower()
+    if unit.startswith("min"):
+        return timedelta(minutes=quantity)
+    if unit.startswith("hour"):
+        return timedelta(hours=quantity)
+    if unit.startswith("day"):
+        return timedelta(days=quantity)
+    if unit.startswith("week"):
+        return timedelta(weeks=quantity)
+    return None
+
+
+def _extract_relative_reminder_slots(text: str) -> Optional[dict]:
+    raw = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not raw:
+        return None
+
+    duration_pattern = (
+        r"(?P<duration>"
+        r"\d+\s+(?:min(?:ute)?s?|hours?|days?|weeks?)|"
+        r"half\s+an\s+hour|"
+        r"(?:a\s+few|a\s+couple(?:\s+of)?|an?|one|two|three|four|five|six|seven|eight|nine|ten)\s+"
+        r"(?:min(?:ute)?s?|hours?|days?|weeks?)"
+        r")"
+    )
+    patterns = [
+        rf"^remind me in {duration_pattern}\s+(?:to|about)\s+(?P<title>.+)$",
+        rf"^remind me (?:to|about)\s+(?P<title>.+?)\s+in {duration_pattern}$",
+        rf"^remember to\s+(?P<title>.+?)\s+in {duration_pattern}$",
+        rf"^set a reminder in {duration_pattern}\s+(?:to|for|about)\s+(?P<title>.+)$",
+        rf"^set a reminder (?:to|for|about)\s+(?P<title>.+?)\s+in {duration_pattern}$",
+    ]
+    title = ""
+    duration_text = ""
+    for pattern in patterns:
+        match = re.match(pattern, raw, flags=re.IGNORECASE)
+        if match:
+            title = match.group("title").strip(" ,.-")
+            duration_text = match.group("duration")
+            break
+    if not title or not duration_text:
+        return None
+
+    if re.search(r"\bevery\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|day|week|month|year)\b", title, flags=re.IGNORECASE):
+        return None
+    if re.search(r"\b(?:next|this|coming|last)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", title, flags=re.IGNORECASE):
+        return None
+
+    delta = _parse_relative_reminder_duration(duration_text)
+    if not delta:
+        return None
+    due = _relative_reminder_now() + delta
+    return {"title": title, "date": due.date().isoformat(), "time": due.strftime("%H:%M")}
+
+
+def _extract_simple_reminder_slots(text: str) -> Optional[dict]:
+    """Fast slots for common reminder phrases, including bounded relative durations.
+
+    Recurring, modified-weekday, named-time, and other complex phrases fall back to NLU.
+    """
+
+    raw = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not raw:
+        return None
+    relative_slots = _extract_relative_reminder_slots(raw)
+    if relative_slots:
+        return relative_slots
+
+    patterns = [
+        r"^remind me (?:to|about)\s+(.+)$",
+        r"^remember to\s+(.+)$",
+        r"^set a reminder (?:to|for|about)\s+(.+)$",
+        r"^reminder (?:to|for|about)\s+(.+)$",
+        r"^(?:add|create|make|schedule)\s+(?:a |an )?reminder\s+(?:to|for|about)?\s*(.+)$",
+    ]
+    body = ""
+    for pattern in patterns:
+        m = re.match(pattern, raw, flags=re.IGNORECASE)
+        if m:
+            body = m.group(1).strip()
+            break
+    if not body:
+        return None
+    if re.search(r"\bin\s+\d+\s+(?:min(?:ute)?s?|hours?|days?|weeks?)\b", body, flags=re.IGNORECASE):
+        return None
+    if re.search(
+        r"\bin\s+(?:(?:a\s+few|a\s+couple(?:\s+of)?|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:min(?:ute)?s?|hours?|days?|weeks?)|an?\s+(?:min(?:ute)?|hour|day|week)|half\s+an\s+hour)\b",
+        body,
+        flags=re.IGNORECASE,
+    ):
+        return None
+    if re.search(
+        r"\b(?:next|this|coming|last)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
+        body,
+        flags=re.IGNORECASE,
+    ):
+        return None
+    if re.search(
+        r"\bevery\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|day|week|month|year)\b",
+        body,
+        flags=re.IGNORECASE,
+    ):
+        return None
+    if re.search(
+        r"\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)$",
+        body,
+        flags=re.IGNORECASE,
+    ) and not re.search(
+        r"\son\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)$",
+        body,
+        flags=re.IGNORECASE,
+    ):
+        return None
+    if re.search(
+        r"\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(?:at\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm)\b",
+        body,
+        flags=re.IGNORECASE,
+    ):
+        return None
+    if re.search(
+        r"\b(?:noon|midnight|morning|afternoon|evening|(?:to)?night|bedtime|lunchtime|dinnertime)\b",
+        body,
+        flags=re.IGNORECASE,
+    ):
+        return None
+    if re.search(r"\bat\s+\d{1,4}(?::\d{2})?\b(?!\s*(?:am|pm))", body, flags=re.IGNORECASE):
+        return None
+    if re.match(
+        r"^(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
+        body,
+        flags=re.IGNORECASE,
+    ):
+        return None
+    if re.search(
+        r"\bon\s+(?:the\s+)?(?:\d{1,2}(?:st|nd|rd|th)?|(?:my|your|his|her|their)\s+birthday|new\s+year'?s?|christmas|easter|thanksgiving)$",
+        body,
+        flags=re.IGNORECASE,
+    ):
+        return None
+
+    def _pop_time(value: str) -> tuple[str, str]:
+        value = value.strip()
+        time_patterns = [
+            r"\s+at\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm))$",
+            r"\s+(\d{1,2}(?::\d{2})\s*(?:am|pm)|\d{1,2}\s*(?:am|pm))$",
+        ]
+        for pattern in time_patterns:
+            m = re.search(pattern, value, flags=re.IGNORECASE)
+            if not m:
+                continue
+            parsed = _parse_time(m.group(1))
+            if parsed:
+                return value[:m.start()].strip(), parsed
+        return value, ""
+
+    def _pop_date(value: str) -> tuple[str, str]:
+        value = value.strip()
+        day_names = "monday|tuesday|wednesday|thursday|friday|saturday|sunday"
+        month_names = (
+            "january|february|march|april|may|june|july|august|september|october|november|december|"
+            "jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec"
+        )
+        date_patterns = [
+            rf"\s+on\s+(today|tomorrow|{day_names})$",
+            r"\s+(today|tomorrow)$",
+            rf"\s+on\s+((?:{month_names})\s+\d{{1,2}}(?:st|nd|rd|th)?(?:\s+\d{{4}})?)$",
+            rf"\s+on\s+(\d{{1,2}}(?:st|nd|rd|th)?\s+(?:of\s+)?(?:{month_names})(?:\s+\d{{4}})?)$",
+            r"\s+on\s+(\d{4}-\d{2}-\d{2})$",
+        ]
+        for pattern in date_patterns:
+            m = re.search(pattern, value, flags=re.IGNORECASE)
+            if not m:
+                continue
+            parsed = _parse_date(m.group(1))
+            if parsed:
+                return value[:m.start()].strip(), parsed
+        return value, ""
+
+    body, date = _pop_date(body)
+    body, time_value = _pop_time(body)
+    if not date:
+        body, date = _pop_date(body)
+
+    title = re.sub(r"\s+", " ", body).strip(" ,.-")
+    title = re.sub(r"^(?:to|for|about)\s+", "", title, flags=re.IGNORECASE).strip()
+    if not title:
+        return None
+
+    slots = {"title": title, "date": date or _parse_date("today") or ""}
+    if time_value:
+        slots["time"] = time_value
+    return slots
+
+
 async def detect_and_extract_intent(
     text: str,
     user_id: str = "family-admin",
@@ -1357,7 +1602,19 @@ async def detect_and_extract_intent(
         task = asyncio.create_task(_runner())
         task.add_done_callback(lambda done: done.exception() if not done.cancelled() else None)
 
+    def _pi_execution_has_promoted_groups() -> bool:
+        if not _env_enabled("ZOE_PI_INTENT_ENABLED"):
+            return False
+        requested = {
+            group.strip()
+            for group in str(os.environ.get("ZOE_PI_INTENT_PROMOTED_GROUPS") or "").split(",")
+            if group.strip()
+        }
+        return bool(requested.intersection(LOW_RISK_PI_INTENT_GROUPS))
+
     async def _try_pi_governor() -> tuple[Optional["Intent"], object | None]:
+        if not _pi_execution_has_promoted_groups():
+            return None, shadow_unset
         pi_classified = None
         try:
             from pi_intent_classifier import PI_INTENT_EXECUTE_THRESHOLD, classify_with_pi_intent_governor, pi_intent_is_promoted
@@ -1390,6 +1647,19 @@ async def detect_and_extract_intent(
         )
         return routed_intent
     if intent.slots and "raw" in intent.slots:
+        if intent.name == "reminder_create":
+            structured = _extract_simple_reminder_slots(intent.slots["raw"])
+            if structured:
+                intent.slots = structured
+                _schedule_pi_shadow(
+                    intent,
+                    route_class="deterministic",
+                    zoe_latency_ms=(time.perf_counter() - started) * 1000,
+                    baseline_kind="router",
+                    baseline_comparable=True,
+                    router_latency_ms=detect_latency_ms,
+                )
+                return intent
         try:
             from nlu_extractor import extract_slots_for_intent  # lazy — avoids circular at load
             structured = await extract_slots_for_intent(intent.name, intent.slots["raw"])
@@ -1489,6 +1759,48 @@ async def _run_mcporter(cmd: str) -> Optional[str]:
         return None
     except Exception as e:
         logger.error(f"mcporter error: {e}")
+        return None
+
+
+async def _load_direct_execution_user(db, user_id: str) -> Optional[dict]:
+    cursor = await db.execute("SELECT id, role, name FROM users WHERE id = ?", (user_id,))
+    row = await cursor.fetchone()
+    if not row:
+        return None
+    raw_role = row.get("role") if hasattr(row, "get") else row["role"]
+    return {
+        "user_id": row["id"],
+        "role": raw_role or "user",
+        "username": row.get("name", "") if hasattr(row, "get") else "",
+    }
+
+
+async def _execute_reminder_create_direct(intent: Intent, user_id: str) -> Optional[str]:
+    slots = intent.slots or {}
+    title = str(slots.get("title") or "").strip()
+    if not title:
+        return None
+    try:
+        from database import get_db_ctx
+        from models import ReminderCreate
+        from reminder_service import create_reminder_record
+
+        async with get_db_ctx() as db:
+            user = await _load_direct_execution_user(db, user_id)
+            if not user:
+                return None
+            payload = ReminderCreate(
+                title=title,
+                due_date=slots.get("date") or None,
+                due_time=slots.get("time") or None,
+                category=slots.get("category") or "general",
+            )
+            reminder = await create_reminder_record(payload, user=user, db=db)
+        return _format_response(intent, json.dumps(reminder, default=str))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("reminder_create direct execution unavailable; falling back to mcporter: %s", exc)
         return None
 
 
@@ -2055,6 +2367,11 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
     # Route directly to the weather backend helpers for deterministic voice UX.
     if intent.name == "weather":
         return await _execute_weather_direct(user_id=user_id, forecast=bool(intent.slots.get("forecast")))
+
+    if intent.name == "reminder_create":
+        direct_result = await _execute_reminder_create_direct(intent, user_id)
+        if direct_result:
+            return direct_result
 
     try:
         cmd = _build_command(intent, user_id)

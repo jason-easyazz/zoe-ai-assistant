@@ -189,6 +189,46 @@ async def get_pi_intent_shadow_status(user: dict = Depends(require_admin)):
     return pi_intent_shadow_status()
 
 
+@router.get("/pi-intent/hybrid-buffer-status")
+async def get_pi_hybrid_buffer_status(user: dict = Depends(require_admin)):
+    """Read-only readiness for Zoe's instant-buffer + Pi evidence mode."""
+    from pi_hybrid_buffer import pi_hybrid_buffer_status
+
+    return pi_hybrid_buffer_status()
+
+
+@router.get("/pi-intent/readiness-report")
+async def get_pi_readiness_report(user: dict = Depends(require_admin)):
+    """Read-only operator report for Pi hybrid promotion readiness."""
+    from pi_readiness_report import pi_readiness_report
+
+    return pi_readiness_report()
+
+
+class PiIntentShadowLabelRequest(BaseModel):
+    text_hash: str
+    outcome_label: Optional[str] = None
+    negative: bool = False
+    source: Literal["admin_review", "operator_override"] = "admin_review"
+
+
+@router.post("/pi-intent/shadow-labels")
+async def post_pi_intent_shadow_label(payload: PiIntentShadowLabelRequest, user: dict = Depends(require_admin)):
+    """Append one trusted admin label for an existing Pi shadow record."""
+    from pi_intent_shadow import append_pi_intent_shadow_label
+
+    try:
+        return append_pi_intent_shadow_label(
+            text_hash=payload.text_hash,
+            outcome_label=payload.outcome_label,
+            negative=payload.negative,
+            source=payload.source,
+            reviewed_by=str(user.get("user_id") or "admin"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 def _load_skills_and_cron():
     skills = []
     skills_dir = os.path.expanduser("~/.openclaw/workspace/skills")

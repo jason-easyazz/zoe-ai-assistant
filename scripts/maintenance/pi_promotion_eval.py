@@ -68,6 +68,7 @@ def _demo_samples() -> list[PiRouteSample]:
                 pi_latency_ms=320,
                 pi_confidence=0.9,
                 pi_transport="rpc",
+                metadata={"source": "synthetic"},
             )
         )
     return samples
@@ -82,7 +83,7 @@ async def _run_zoe_baseline(
     zoe_agent_baseline_timeout_seconds: float = 30.0,
     zoe_agent_baseline_max_tokens: int = 256,
 ) -> dict[str, Any]:
-    with _temporary_env({"ZOE_PI_INTENT_ENABLED": "false"}):
+    with _temporary_env({"ZOE_PI_INTENT_ENABLED": "false", "ZOE_PI_INTENT_SHADOW_ENABLED": "false"}):
         from intent_router import detect_and_extract_intent
 
         start = time.perf_counter()
@@ -96,7 +97,11 @@ async def _run_zoe_baseline(
     baseline_response_chars: int | None = None
     baseline_error: str | None = None
     agent_baseline: dict[str, Any] | None = None
-    if case.route_class == "fallback":
+    if intent is not None:
+        # A current router hit is Zoe's comparable baseline, even when the
+        # fixture came from an older fallback/extraction-failure trace.
+        pass
+    elif case.route_class == "fallback":
         if fallback_baseline_latency_ms is not None:
             latency_ms = fallback_baseline_latency_ms
             baseline_kind = "operator_fallback_override"
@@ -156,18 +161,19 @@ async def _run_zoe_agent_baseline(
     session_id = f"pi-eval-baseline-{case.case_id}-{uuid.uuid4().hex[:8]}"
     start = time.perf_counter()
     try:
-        response = await asyncio.wait_for(
-            run_zoe_agent(
-                case.text,
-                session_id,
-                "pi-eval",
-                history=[],
-                db_memory_context="",
-                portrait="",
-                max_tokens_override=max_tokens,
-            ),
-            timeout=timeout_seconds,
-        )
+        with _temporary_env({"ZOE_PI_INTENT_ENABLED": "false", "ZOE_PI_INTENT_SHADOW_ENABLED": "false"}):
+            response = await asyncio.wait_for(
+                run_zoe_agent(
+                    case.text,
+                    session_id,
+                    "pi-eval",
+                    history=[],
+                    db_memory_context="",
+                    portrait="",
+                    max_tokens_override=max_tokens,
+                ),
+                timeout=timeout_seconds,
+            )
         latency_ms = (time.perf_counter() - start) * 1000
         return {
             "latency_ms": latency_ms,
@@ -206,6 +212,7 @@ async def _run_pi(case: PiIntentEvalCase, *, transport: str, enable_execution: b
         "ZOE_PI_ALLOW_EXECUTION": "true" if enable_execution else "false",
         "ZOE_PI_LOCAL_MODEL_CONFIGURED": "true" if local_model_configured else "false",
         "ZOE_PI_INTENT_PREFILTER_ENABLED": prefilter_enabled,
+        "ZOE_PI_INTENT_SHADOW_ENABLED": "false",
     }
     with _temporary_env(updates):
         from pi_intent_classifier import classify_with_pi_intent_governor
@@ -271,6 +278,7 @@ async def _run_cases(
                     route_class=case.route_class,
                     timed_out=bool(pi["timed_out"]),
                     metadata={
+                        "source": case.source,
                         "baseline_kind": zoe["baseline_kind"],
                         "baseline_comparable": zoe["baseline_comparable"],
                         "baseline_timed_out": zoe["baseline_timed_out"],
@@ -281,6 +289,86 @@ async def _run_cases(
                 )
             )
     return comparisons, samples
+
+
+def build_eval_readiness(promotion_report: dict[str, Any]) -> dict[str, Any]:
+    """Condense a promotion report into the operator decision for this eval run."""
+    raw_actions = promotion_report.get("promotion_actions")
+    actions = raw_actions if isinstance(raw_actions, dict) else {}
+    raw_candidates = promotion_report.get("candidate_wins")
+    candidate_wins = raw_candidates if isinstance(raw_candidates, dict) else {}
+    promote_groups = list(actions.get("promote_groups") or promotion_report.get("promotable_groups") or [])
+    rollback_groups = list(actions.get("rollback_groups") or promotion_report.get("rollback_groups") or [])
+    candidate_groups = list(candidate_wins.get("groups") or [])
+    if rollback_groups:
+        state = "rollback_required"
+    elif promote_groups:
+        state = "promotion_apply_ready"
+    elif candidate_groups:
+        state = "collect_more_evidence"
+    else:
+        state = "keep_shadow"
+    return {
+        "state": state,
+        "summary": {
+            "candidate_win_groups": candidate_groups,
+            "promotion_ready_groups": list(candidate_wins.get("promotion_ready_groups") or []),
+            "blocked_candidate_groups": list(candidate_wins.get("blocked_groups") or []),
+            "promote_groups": promote_groups,
+            "rollback_groups": rollback_groups,
+            "requires_operator_apply": bool(actions.get("requires_operator_apply")),
+        },
+        "next_actions": _eval_next_actions(
+            state, actions, candidate_wins, promote_groups=promote_groups, rollback_groups=rollback_groups
+        ),
+    }
+
+
+def _eval_next_actions(
+    state: str,
+    actions: dict[str, Any],
+    candidate_wins: dict[str, Any],
+    *,
+    promote_groups: list[Any],
+    rollback_groups: list[Any],
+) -> list[dict[str, Any]]:
+    next_actions: list[dict[str, Any]] = []
+    if rollback_groups:
+        next_actions.append(
+            {"kind": "rollback", "priority": "p0", "groups": rollback_groups, "env": dict(actions.get("env") or {})}
+        )
+    if promote_groups:
+        next_actions.append(
+            {"kind": "apply_promotion", "priority": "p1", "groups": promote_groups, "env": dict(actions.get("env") or {})}
+        )
+    for item in candidate_wins.get("details") or []:
+        if not isinstance(item, dict) or item.get("status") != "needs_more_evidence":
+            continue
+        blockers = set(str(blocker) for blocker in item.get("promotion_blockers") or [])
+        if blockers and blockers != {"insufficient_samples"}:
+            continue
+        deficit = int(item.get("unique_case_deficit") or item.get("sample_deficit") or 0)
+        if deficit <= 0:
+            continue
+        next_actions.append(
+            {
+                "kind": "collect_labeled_evidence",
+                "priority": "p1",
+                "intent_group": item.get("intent_group"),
+                "needed_unique_cases": deficit,
+            }
+        )
+    if not next_actions and state == "collect_more_evidence":
+        next_actions.append(
+            {
+                "kind": "review_candidate_evidence",
+                "priority": "p1",
+                "groups": list(candidate_wins.get("groups") or []),
+            }
+        )
+    if not next_actions and state == "keep_shadow":
+        next_actions.append({"kind": "continue_shadow_mode", "priority": "p2"})
+    return next_actions
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -359,12 +447,14 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         samples.extend(measured_samples)
+    promotion_report = summarize_pi_promotion(samples, policy=policy, promoted_groups=args.promoted_group)
     payload = {
         "eval_case_files": args.cases_file,
         "eval_cases": eval_cases_to_dict(eval_cases),
         "eval_case_source_counts": summarize_eval_case_sources(eval_cases),
         "comparisons": comparisons,
-        "promotion_report": summarize_pi_promotion(samples, policy=policy, promoted_groups=args.promoted_group),
+        "promotion_report": promotion_report,
+        "readiness": build_eval_readiness(promotion_report),
     }
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0

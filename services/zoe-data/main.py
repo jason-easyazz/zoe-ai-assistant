@@ -31,6 +31,7 @@ from routers import (
     music_router,
     skybridge_router,
     autoresearch_router,
+    pi_intent_lab_router,
 )
 from routers.dashboard import router as dashboard_router
 from routers.stubs import router as stubs_router
@@ -782,7 +783,7 @@ async def lifespan(app: FastAPI):
 
                 # Webhook bridge: Hermes-assigned todos / in_progress (no chain) → issue.assigned.
                 try:
-                    from multica_webhook_emitter import emit_issue_assigned, is_configured as _wh_ok
+                    from multica_webhook_emitter import is_configured as _wh_ok
                     from multica_client import get_engineering_multica_agent_id  # type: ignore[import]
                     from multica_poll_dispatch import chain_is_running, chain_needs_dispatch  # type: ignore[import]
                     from multica_dispatch_control import dispatch_is_paused, pause_reason
@@ -900,41 +901,68 @@ async def lifespan(app: FastAPI):
                             _chain = await _poll_chain(_candidate)
                             if not chain_needs_dispatch(_chain):
                                 return
-                            _emit = await emit_issue_assigned(_candidate)
-                            _body = _emit.get("body") or {}
-                            if _emit.get("ok") and isinstance(_body, dict) and _body.get("dispatched"):
-                                if from_todo:
-                                    try:
-                                        await client.update_issue(_tid, status="in_progress")
-                                    except Exception as _ip_exc:
-                                        logger.debug(
-                                            "multica_poll: set in_progress failed for %s: %s",
-                                            _tid,
-                                            _ip_exc,
-                                        )
-                                elif (_candidate.get("status") or "") == "blocked":
-                                    try:
-                                        _phase = (_chain.get("pipeline") or {}).get("phase")
-                                        await client.record_progress(
-                                            _tid,
-                                            phase=_phase,
-                                            evidence="Engineering run resumed",
-                                            status="in_progress",
-                                            clear_blocker=True,
-                                        )
-                                    except Exception as _resume_exc:
-                                        logger.debug(
-                                            "multica_poll: clear stale blocked status failed for %s: %s",
-                                            _tid,
-                                            _resume_exc,
-                                        )
-                                _wh_dispatched += 1
-                                _wh_dispatched_ids.add(_tid)
-                                logger.info(
-                                    "multica_poll: webhook dispatched %s (%s)",
+                            _phase = (_chain.get("pipeline") or {}).get("phase")
+                            # Dispatch the next ready phase IN-PROCESS. The poll loop runs
+                            # inside zoe-data, so it calls dispatch_issue() directly rather
+                            # than POSTing issue.assigned to its own :8000 webhook receiver.
+                            # That loopback hop (a self-HTTP call with a 10s timeout against a
+                            # busy event loop) could silently no-op and strand a chain at its
+                            # next phase — e.g. implement done but verify never dispatched,
+                            # which blocked autonomous verify→review→closeout advancement.
+                            try:
+                                from executor_registry import dispatch_issue  # type: ignore[import]
+
+                                _result = await dispatch_issue(_candidate)
+                            except Exception as _disp_exc:
+                                logger.warning(
+                                    "multica_poll: dispatch_issue failed for %s (phase=%s): %s",
                                     _candidate.get("identifier") or _tid,
-                                    "todo" if from_todo else "in_progress-backfill",
+                                    _phase,
+                                    _disp_exc,
                                 )
+                                return
+                            if not (isinstance(_result, dict) and _result.get("ok")):
+                                logger.info(
+                                    "multica_poll: dispatch_issue(%s) phase=%s not dispatched: %s",
+                                    _candidate.get("identifier") or _tid,
+                                    _phase,
+                                    (_result or {}).get("reason")
+                                    if isinstance(_result, dict)
+                                    else _result,
+                                )
+                                return
+                            if from_todo:
+                                try:
+                                    await client.update_issue(_tid, status="in_progress")
+                                except Exception as _ip_exc:
+                                    logger.debug(
+                                        "multica_poll: set in_progress failed for %s: %s",
+                                        _tid,
+                                        _ip_exc,
+                                    )
+                            elif (_candidate.get("status") or "") == "blocked":
+                                try:
+                                    await client.record_progress(
+                                        _tid,
+                                        phase=_phase,
+                                        evidence="Engineering run resumed",
+                                        status="in_progress",
+                                        clear_blocker=True,
+                                    )
+                                except Exception as _resume_exc:
+                                    logger.debug(
+                                        "multica_poll: clear stale blocked status failed for %s: %s",
+                                        _tid,
+                                        _resume_exc,
+                                    )
+                            _wh_dispatched += 1
+                            _wh_dispatched_ids.add(_tid)
+                            logger.info(
+                                "multica_poll: dispatched %s phase=%s (%s)",
+                                _candidate.get("identifier") or _tid,
+                                _phase,
+                                "todo" if from_todo else "in_progress-backfill",
+                            )
 
                         # Backfill existing in-progress runs before starting fresh todo work.
                         # A partial chain owns the one active ticket lane but still needs this
@@ -1215,6 +1243,7 @@ app.include_router(capability_matrix_router)
 app.include_router(music_router)
 app.include_router(skybridge_router)
 app.include_router(autoresearch_router)
+app.include_router(pi_intent_lab_router)
 
 from routers.portrait import router as portrait_router
 app.include_router(portrait_router)

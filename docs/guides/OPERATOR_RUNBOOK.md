@@ -46,8 +46,9 @@ systemctl --user restart openclaw-gateway # After openclaw.json changes
 | `HA_ACCESS_TOKEN` | .env | — | Home Assistant long-lived token (named `zoe-data`) |
 | `ZOE_WAKE_ACK_PHRASE` | zoe-data + Pi daemon | — | Instant websocket wake transcript and optional TTS phrase after wake word |
 | `ZOE_WAKE_ACK_AUDIO_PATH` | zoe-data + Pi daemon | — | Pre-generated wake ack audio file served from cache before live TTS |
-| `ZOE_WAKE_ACK_PHRASES` / `ZOE_WAKE_ACK_AUDIO_PATHS` | zoe-data + Pi daemon | — | Pipe-separated cached wake response bank; phrase/audio entries are index-aligned |
-| `ZOE_WAKE_ACK_VARIANT_LABELS` | zoe-data + Pi daemon | — | Optional pipe-aligned labels (`default`, `morning`, `afternoon`, `evening`, `night`) for deterministic time-aware wake acks |
+| `ZOE_WAKE_ACK_PHRASES` / `ZOE_WAKE_ACK_AUDIO_PATHS` | zoe-data + Pi daemon | — | Pipe-separated cached wake response bank; phrase/audio entries are index-aligned. Quote pipe-separated values in `.env`, e.g. `ZOE_WAKE_ACK_PHRASES="Yes Jason.|Hi Jason."` |
+| `ZOE_WAKE_ACK_VARIANT_LABELS` | zoe-data + Pi daemon | — | Optional pipe-aligned labels (`default`, `morning`, `afternoon`, `evening`, `night`) for deterministic time-aware wake acks; quote when using pipes, e.g. `"default|morning|evening"` |
+| `ZOE_PROCESSING_ACK_PHRASES` | zoe-data | `"Let me check.|One moment.|I will check that."` | Pipe-separated transition phrases for slow voice turns; quote in `.env` so maintenance probes can shell-source the file safely |
 | `ZOE_DEVICE_TOKEN_SECRET` | zoe-data | — | Secret for device token HMAC (optional extra layer) |
 | `ZOE_PIN_MAX_ATTEMPTS` | zoe-data | 5 | PIN lockout attempts |
 | `ZOE_PIN_CHALLENGE_TTL_S` | zoe-data | 120 | PIN challenge expiry in seconds |

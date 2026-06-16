@@ -12,6 +12,10 @@ import voice_presence
 from voice_presence import (
     is_wake_payload,
     is_wake_text,
+    processing_ack_audio_payload,
+    processing_ack_event,
+    processing_ack_phrases,
+    processing_ack_variant,
     wake_ack_audio_payload,
     wake_ack_events,
     wake_ack_phrase,
@@ -25,6 +29,7 @@ from voice_presence import (
 def _reset_voice_presence_state(monkeypatch):
     monkeypatch.setattr(voice_presence, "_AUDIO_CACHE", {})
     monkeypatch.setattr(voice_presence, "_VARIANT_CURSOR", 0)
+    monkeypatch.setattr(voice_presence, "_PROCESSING_ACK_CURSOR", 0)
 
 
 def test_is_wake_text_matches_only_wake_phrase():
@@ -230,6 +235,55 @@ def test_presence_event_builder_is_sub_millisecond_for_hot_path():
     assert elapsed_ms < 5.0
 
 
+def test_processing_ack_phrases_default_and_override():
+    assert processing_ack_phrases({}) == ["Let me check.", "One moment.", "I will check that."]
+    assert processing_ack_phrases({"ZOE_PROCESSING_ACK_DEFAULT_ENABLED": "false"}) == []
+    assert processing_ack_phrases({"ZOE_PROCESSING_ACK_PHRASE": "  Checking now. "}) == ["Checking now."]
+    assert processing_ack_phrases({"ZOE_PROCESSING_ACK_PHRASES": "Checking.|On it."}) == [
+        "Checking.",
+        "On it.",
+    ]
+
+
+def test_processing_ack_variant_rotates_without_reasoning():
+    env = {"ZOE_PROCESSING_ACK_PHRASES": "Checking.|On it."}
+
+    assert processing_ack_variant(env)["phrase"] == "Checking."
+    assert processing_ack_variant(env)["phrase"] == "On it."
+    assert processing_ack_variant(env)["phrase"] == "Checking."
+
+
+def test_processing_ack_rotation_is_independent_from_wake_rotation():
+    wake_env = {"ZOE_WAKE_ACK_PHRASES": "Yes.|Morning.|Evening."}
+    processing_env = {"ZOE_PROCESSING_ACK_PHRASES": "Let me check.|One moment."}
+
+    assert wake_ack_variant(wake_env)["phrase"] == "Yes."
+    assert wake_ack_variant(wake_env)["phrase"] == "Morning."
+    assert wake_ack_variant(wake_env)["phrase"] == "Evening."
+
+    assert processing_ack_variant(processing_env)["phrase"] == "Let me check."
+
+
+def test_processing_ack_event_can_include_cached_audio(tmp_path):
+    audio_path = tmp_path / "processing.wav"
+    audio_path.write_bytes(b"RIFFprocessing")
+
+    event = processing_ack_event(
+        {
+            "ZOE_PROCESSING_ACK_PHRASE": "Let me check.",
+            "ZOE_PROCESSING_ACK_AUDIO_PATH": str(audio_path),
+        }
+    )
+
+    assert event is not None
+    assert event["type"] == "voice:processing_ack"
+    assert event["text"] == "Let me check."
+    assert event["source"] == "intent_buffer"
+    assert event["audio_base64"] == "UklGRnByb2Nlc3Npbmc="
+    assert event["audio_source"] == "cached_processing_ack"
+    assert processing_ack_audio_payload(audio_path=str(audio_path))["source"] == "cached_processing_ack"
+
+
 def test_websocket_wake_returns_presence_events_without_reasoning(monkeypatch):
     from fastapi.testclient import TestClient
     import main
@@ -303,6 +357,7 @@ def test_websocket_wake_can_emit_cached_audio_without_reasoning(monkeypatch, tmp
         raise AssertionError("wake audio must not enter Skybridge/card resolution")
 
     monkeypatch.setattr(main, "_resolve_voice_cards", _unexpected_resolve)
+    monkeypatch.delenv("ZOE_WAKE_ACK_PHRASES", raising=False)
     monkeypatch.setenv("ZOE_WAKE_ACK_PHRASE", "Yes Jason?")
     monkeypatch.setenv("ZOE_WAKE_ACK_AUDIO_PATH", str(audio_path))
 
@@ -354,6 +409,7 @@ def test_voice_wake_endpoint_uses_cached_audio_before_live_tts(monkeypatch, tmp_
     async def _unexpected_synthesize(*_args, **_kwargs):
         raise AssertionError("cached wake audio should avoid live TTS")
 
+    monkeypatch.delenv("ZOE_WAKE_ACK_PHRASES", raising=False)
     monkeypatch.setenv("ZOE_WAKE_ACK_PHRASE", "Yes Jason?")
     monkeypatch.setenv("ZOE_WAKE_ACK_AUDIO_PATH", str(audio_path))
     monkeypatch.setattr(voice_tts, "synthesize", _unexpected_synthesize)
@@ -369,5 +425,47 @@ def test_voice_wake_endpoint_uses_cached_audio_before_live_tts(monkeypatch, tmp_
     payload = response.json()
     assert payload["ok"] is True
     assert payload["panel_id"] == "panel-1"
+    assert payload["ack_text"] == "Yes Jason?"
     assert payload["ack_audio_base64"] == "UklGRg=="
     assert payload["content_type"].startswith("audio/")
+
+
+def test_voice_wake_endpoint_reports_ack_text_when_using_live_tts_fallback(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from routers import voice_tts
+
+    class Audio:
+        body = b"RIFF-tts"
+        media_type = "audio/wav"
+
+    def _fake_auth():
+        return {"source": "test", "panel_id": "test-panel", "user_id": "u1"}
+
+    async def _fake_synthesize(payload, caller=None):
+        assert payload == {"text": "Yes Jason?"}
+        assert caller["source"] == "test"
+        return Audio()
+
+    monkeypatch.setattr(voice_presence, "_AUDIO_CACHE", {})
+    monkeypatch.setattr(voice_presence, "_VARIANT_CURSOR", 0)
+    monkeypatch.delenv("ZOE_WAKE_ACK_PHRASES", raising=False)
+    monkeypatch.delenv("ZOE_WAKE_ACK_AUDIO_PATH", raising=False)
+    monkeypatch.delenv("ZOE_WAKE_ACK_AUDIO_PATHS", raising=False)
+    monkeypatch.setenv("ZOE_WAKE_ACK_PHRASE", "Yes Jason?")
+    monkeypatch.setattr(voice_tts, "synthesize", _fake_synthesize)
+
+    app = FastAPI()
+    app.include_router(voice_tts.router)
+    app.dependency_overrides[voice_tts._require_voice_auth] = _fake_auth
+
+    with TestClient(app) as client:
+        response = client.post("/api/voice/wake", json={"panel_id": "panel-1"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["panel_id"] == "panel-1"
+    assert payload["ack_text"] == "Yes Jason?"
+    assert payload["ack_audio_base64"] == "UklGRi10dHM="
+    assert payload["content_type"] == "audio/wav"

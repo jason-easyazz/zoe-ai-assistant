@@ -1,3 +1,4 @@
+import json
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
@@ -94,6 +95,7 @@ def test_pi_intent_status_endpoint_reports_available_execution_disabled_when_too
 
 def test_pi_intent_status_endpoint_reports_missing_pi_when_tools_absent(tmp_path, monkeypatch):
     bindir = _fake_node_runtime(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("PATH", str(bindir))
     monkeypatch.setenv("ZOE_PI_INTENT_ENABLED", "true")
     monkeypatch.setenv("ZOE_PI_CWD", str(tmp_path))
@@ -166,6 +168,209 @@ def test_pi_intent_shadow_status_endpoint_is_admin_scoped(tmp_path, monkeypatch)
     assert data["report"]["agreement_rate"] == 1.0
 
 
+def test_pi_hybrid_buffer_status_endpoint_reports_shadow_buffer_ready(tmp_path, monkeypatch):
+    path = tmp_path / "shadow.jsonl"
+    labels_path = tmp_path / "labels.jsonl"
+    path.write_text('{"agreement":true,"timed_out":false,"zoe_intent_group":"weather","pi_latency_ms":100,"zoe_latency_ms":5}\n')
+    monkeypatch.setenv("ZOE_WAKE_ACK_PHRASES", "Yes Jason.")
+    monkeypatch.setenv("ZOE_PROCESSING_ACK_PHRASES", "Let me check.")
+    monkeypatch.setenv("ZOE_PI_INTENT_ENABLED", "false")
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_ENABLED", "true")
+    monkeypatch.setenv("ZOE_PI_INTENT_TRANSPORT", "rpc")
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_PATH", str(path))
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_LABELS_PATH", str(labels_path))
+    monkeypatch.delenv("ZOE_PI_INTENT_PROMOTED_GROUPS", raising=False)
+    app = _admin_app()
+
+    resp = TestClient(app).get("/api/system/pi-intent/hybrid-buffer-status")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["contract"]["mode"] == "shadow_buffer"
+    assert data["contract"]["ready"] is True
+    assert data["contract"]["processing_ack_ready"] is True
+    assert data["contract"]["pi_shadow_enabled"] is True
+    assert data["contract"]["pi_execution_enabled"] is False
+    assert data["pi"]["shadow"]["record_count_window"] == 1
+
+
+def test_pi_hybrid_buffer_status_reports_enabled_pi_without_promotions_as_nonblocking_shadow(tmp_path, monkeypatch):
+    path = tmp_path / "shadow.jsonl"
+    labels_path = tmp_path / "labels.jsonl"
+    path.write_text("", encoding="utf-8")
+    labels_path.write_text("", encoding="utf-8")
+    monkeypatch.setenv("ZOE_WAKE_ACK_PHRASES", "Yes Jason.")
+    monkeypatch.setenv("ZOE_PROCESSING_ACK_PHRASES", "Let me check.")
+    monkeypatch.setenv("ZOE_PI_INTENT_ENABLED", "true")
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_ENABLED", "true")
+    monkeypatch.setenv("ZOE_PI_INTENT_PROMOTED_GROUPS", "")
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_PATH", str(path))
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_LABELS_PATH", str(labels_path))
+    app = _admin_app()
+
+    resp = TestClient(app).get("/api/system/pi-intent/hybrid-buffer-status")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["contract"]["mode"] == "shadow_buffer"
+    assert data["contract"]["ready"] is True
+    assert data["contract"]["pi_classifier_enabled"] is True
+    assert data["contract"]["pi_execution_enabled"] is True
+    assert data["contract"]["foreground_pi_execution_enabled"] is False
+    assert "pi_execution_enabled_without_promoted_groups" not in data["contract"]["blockers"]
+    assert "pi_classifier_enabled_without_promoted_groups_runs_shadow_only" in data["contract"]["warnings"]
+
+
+def test_pi_hybrid_buffer_status_blocks_promoted_groups_when_classifier_disabled(tmp_path, monkeypatch):
+    path = tmp_path / "shadow.jsonl"
+    labels_path = tmp_path / "labels.jsonl"
+    path.write_text("", encoding="utf-8")
+    labels_path.write_text("", encoding="utf-8")
+    monkeypatch.setenv("ZOE_WAKE_ACK_PHRASES", "Yes Jason.")
+    monkeypatch.setenv("ZOE_PROCESSING_ACK_PHRASES", "Let me check.")
+    monkeypatch.setenv("ZOE_PI_INTENT_ENABLED", "false")
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_ENABLED", "true")
+    monkeypatch.setenv("ZOE_PI_INTENT_PROMOTED_GROUPS", "weather")
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_PATH", str(path))
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_LABELS_PATH", str(labels_path))
+    app = _admin_app()
+
+    resp = TestClient(app).get("/api/system/pi-intent/hybrid-buffer-status")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["contract"]["mode"] == "shadow_buffer"
+    assert data["contract"]["ready"] is False
+    assert data["contract"]["pi_classifier_enabled"] is False
+    assert data["contract"]["foreground_pi_execution_enabled"] is False
+    assert data["contract"]["promoted_groups"] == ["weather"]
+    assert "promoted_groups_without_pi_classifier_enabled" in data["contract"]["blockers"]
+
+
+def test_pi_readiness_report_endpoint_is_admin_scoped(tmp_path, monkeypatch):
+    path = tmp_path / "shadow.jsonl"
+    labels_path = tmp_path / "labels.jsonl"
+    path.write_text("", encoding="utf-8")
+    labels_path.write_text("", encoding="utf-8")
+    monkeypatch.setenv("ZOE_WAKE_ACK_PHRASES", "Yes Jason.")
+    monkeypatch.setenv("ZOE_PROCESSING_ACK_PHRASES", "Let me check.")
+    monkeypatch.setenv("ZOE_PI_INTENT_ENABLED", "false")
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_ENABLED", "true")
+    monkeypatch.setenv("ZOE_PI_INTENT_TRANSPORT", "rpc")
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_PATH", str(path))
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_LABELS_PATH", str(labels_path))
+    app = _admin_app()
+
+    resp = TestClient(app).get("/api/system/pi-intent/readiness-report")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["report_kind"] == "zoe_pi_readiness_report"
+    assert data["hybrid"]["ready"] is True
+
+
+def test_pi_readiness_report_endpoint_rejects_non_admin():
+    app = FastAPI()
+    app.include_router(system_router)
+
+    async def fake_non_admin():
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    app.dependency_overrides[require_admin] = fake_non_admin
+
+    resp = TestClient(app).get("/api/system/pi-intent/readiness-report")
+
+    assert resp.status_code == 403
+
+
+def test_pi_intent_shadow_label_endpoint_appends_trusted_label(tmp_path, monkeypatch):
+    shadow_path = tmp_path / "shadow.jsonl"
+    labels_path = tmp_path / "labels.jsonl"
+    shadow_path.write_text(
+        '{"text_hash":"weatherhash","text_preview":"rain later","route_class":"fallback","zoe_latency_ms":500,"pi_intent":"weather","pi_latency_ms":120,"pi_confidence":0.91}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_ENABLED", "true")
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_PATH", str(shadow_path))
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_LABELS_PATH", str(labels_path))
+    app = _admin_app()
+
+    resp = TestClient(app).post(
+        "/api/system/pi-intent/shadow-labels",
+        json={"text_hash": "weatherhash", "outcome_label": "weather"},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["label"]["outcome_label"] == "weather"
+    assert data["matched_record"]["text_preview"] == "rain later"
+    saved = json.loads(labels_path.read_text(encoding="utf-8"))
+    assert saved["text_hash"] == "weatherhash"
+    assert saved["outcome_label"] == "weather"
+    assert len(saved["reviewed_by_hash"]) == 64
+    assert "labels_path" not in data
+    assert data["labels_store"] == "shadow_labels_sidecar"
+
+    status = TestClient(app).get("/api/system/pi-intent/shadow-status").json()
+    assert status["label_count"] == 1
+    assert status["report"]["accuracy_available"] is True
+
+
+def test_pi_intent_shadow_label_endpoint_rejects_unlisted_source(tmp_path, monkeypatch):
+    shadow_path = tmp_path / "shadow.jsonl"
+    labels_path = tmp_path / "labels.jsonl"
+    shadow_path.write_text('{"text_hash":"known","text_preview":"rain later"}\n', encoding="utf-8")
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_ENABLED", "true")
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_PATH", str(shadow_path))
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_LABELS_PATH", str(labels_path))
+    app = _admin_app()
+
+    resp = TestClient(app).post(
+        "/api/system/pi-intent/shadow-labels",
+        json={"text_hash": "known", "outcome_label": "weather", "source": "freeform"},
+    )
+
+    assert resp.status_code == 422
+    assert not labels_path.exists()
+
+
+def test_pi_intent_shadow_label_endpoint_rejects_bad_label(tmp_path, monkeypatch):
+    shadow_path = tmp_path / "shadow.jsonl"
+    labels_path = tmp_path / "labels.jsonl"
+    shadow_path.write_text('{"text_hash":"known","text_preview":"upgrade yourself"}\n', encoding="utf-8")
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_ENABLED", "true")
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_PATH", str(shadow_path))
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_LABELS_PATH", str(labels_path))
+    app = _admin_app()
+
+    resp = TestClient(app).post(
+        "/api/system/pi-intent/shadow-labels",
+        json={"text_hash": "known", "outcome_label": "extend_capability"},
+    )
+
+    assert resp.status_code == 400
+    assert "low-risk" in resp.json()["detail"]
+    assert not labels_path.exists()
+
+
+def test_pi_intent_shadow_label_endpoint_rejects_non_admin():
+    app = FastAPI()
+    app.include_router(system_router)
+
+    async def fake_non_admin():
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    app.dependency_overrides[require_admin] = fake_non_admin
+
+    resp = TestClient(app).post(
+        "/api/system/pi-intent/shadow-labels",
+        json={"text_hash": "known", "outcome_label": "weather"},
+    )
+
+    assert resp.status_code == 403
+
+
 def test_pi_intent_shadow_status_endpoint_rejects_non_admin():
     app = FastAPI()
     app.include_router(system_router)
@@ -176,5 +381,19 @@ def test_pi_intent_shadow_status_endpoint_rejects_non_admin():
     app.dependency_overrides[require_admin] = fake_non_admin
 
     resp = TestClient(app).get("/api/system/pi-intent/shadow-status")
+
+    assert resp.status_code == 403
+
+
+def test_pi_hybrid_buffer_status_endpoint_rejects_non_admin():
+    app = FastAPI()
+    app.include_router(system_router)
+
+    async def fake_non_admin():
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    app.dependency_overrides[require_admin] = fake_non_admin
+
+    resp = TestClient(app).get("/api/system/pi-intent/hybrid-buffer-status")
 
     assert resp.status_code == 403

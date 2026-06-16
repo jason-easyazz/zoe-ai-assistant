@@ -71,6 +71,7 @@ def test_build_shard_sync_plan_accepts_clean_current_shards():
     assert plan.summary["artifact_sync_ready"] is False
     assert plan.summary["shards"] == ["data-core", "operators"]
     assert "--artifact-dir" in plan.required_next_steps[0]
+    assert any("graphify_shard_merge_validate.py" in step for step in plan.required_next_steps)
 
 
 def test_build_shard_sync_plan_reports_artifact_capture_and_sync_readiness():

@@ -27,8 +27,10 @@ from zoe_pi_promotion import (
 )
 
 _DEFAULT_SHADOW_PATH = "~/.zoe/data/pi-intent-shadow.jsonl"
+_DEFAULT_LABELS_PATH = "~/.zoe/data/pi-intent-shadow-labels.jsonl"
 _UNSET = object()
 _DEFAULT_MAX_REPORT_RECORDS = 500
+_ALLOWED_LABEL_SOURCES = {"admin_review", "operator_override"}
 _SECRET_KEY_RE = re.compile(r"(?i)(api[_-]?key|\btoken\b|\bsecret\b|password|authorization|\bbearer\b)")
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.\w+")
 _URL_RE = re.compile(r"https?://\S+")
@@ -44,6 +46,7 @@ class PiIntentShadowConfig:
     max_words: int = 32
     include_preview: bool = True
     force_classifier_enabled: bool = True
+    labels_path: str = _DEFAULT_LABELS_PATH
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "PiIntentShadowConfig":
@@ -54,6 +57,9 @@ class PiIntentShadowConfig:
             max_words=_int_env(values.get("ZOE_PI_INTENT_SHADOW_MAX_WORDS"), default=32),
             include_preview=_env_bool(values.get("ZOE_PI_INTENT_SHADOW_INCLUDE_PREVIEW"), default=True),
             force_classifier_enabled=_env_bool(values.get("ZOE_PI_INTENT_SHADOW_FORCE_ENABLED"), default=True),
+            labels_path=(
+                values.get("ZOE_PI_INTENT_SHADOW_LABELS_PATH") or _DEFAULT_LABELS_PATH
+            ).strip() or _DEFAULT_LABELS_PATH,
         )
 
     def validate(self) -> None:
@@ -70,6 +76,7 @@ class PiIntentShadowConfig:
             "max_words": self.max_words,
             "include_preview": self.include_preview,
             "force_classifier_enabled": self.force_classifier_enabled,
+            "labels_path": self.labels_path,
         }
 
 
@@ -151,7 +158,9 @@ async def maybe_record_pi_intent_shadow(
 def pi_intent_shadow_status(env: Mapping[str, str] | None = None, *, limit: int = _DEFAULT_MAX_REPORT_RECORDS) -> dict[str, Any]:
     values = env if env is not None else os.environ
     config = PiIntentShadowConfig.from_env(values)
-    records = load_pi_intent_shadow_records(config.path, limit=limit)
+    raw_records = load_pi_intent_shadow_records(config.path, limit=limit)
+    labels = load_pi_intent_shadow_labels(config.labels_path)
+    records = apply_pi_intent_shadow_labels(raw_records, labels)
     samples = shadow_records_to_route_samples(records)
     requested_promoted_groups = _csv_env(values.get("ZOE_PI_INTENT_PROMOTED_GROUPS"))
     promoted_groups = [group for group in requested_promoted_groups if group in LOW_RISK_PI_INTENT_GROUPS]
@@ -159,6 +168,8 @@ def pi_intent_shadow_status(env: Mapping[str, str] | None = None, *, limit: int 
     return {
         "config": config.to_dict(),
         "record_count_window": len(records),
+        "raw_record_count_window": len(raw_records),
+        "label_count": len(labels),
         "report": summarize_pi_intent_shadow(records),
         "promotion_report": summarize_pi_route_promotion(samples, promoted_groups=promoted_groups),
         "ignored_promoted_groups": ignored_promoted_groups,
@@ -180,6 +191,140 @@ def load_pi_intent_shadow_records(path: str, *, limit: int = _DEFAULT_MAX_REPORT
         if isinstance(item, dict):
             records.append(item)
     return records
+
+
+def load_pi_intent_shadow_labels(path: str) -> dict[str, dict[str, Any]]:
+    target = Path(path).expanduser()
+    if not target.exists():
+        return {}
+    labels: dict[str, dict[str, Any]] = {}
+    with target.open("r", encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            try:
+                row = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(row, Mapping):
+                continue
+            text_hash = _optional_str(row.get("text_hash"))
+            if not text_hash:
+                continue
+            label = _shadow_label_from_row(row)
+            if label:
+                labels[text_hash] = label
+    return labels
+
+
+def apply_pi_intent_shadow_labels(
+    records: Sequence[Mapping[str, Any]], labels: Mapping[str, Mapping[str, Any]]
+) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    for record in records:
+        item = dict(record)
+        text_hash = _optional_str(item.get("text_hash"))
+        label = labels.get(text_hash or "")
+        if label:
+            item.update(label)
+            item["outcome_label_source"] = "shadow_label_sidecar"
+        output.append(item)
+    return output
+
+
+def append_pi_intent_shadow_label(
+    *,
+    text_hash: str,
+    outcome_label: str | None = None,
+    negative: bool = False,
+    source: str = "admin_review",
+    reviewed_by: str | None = None,
+    env: Mapping[str, str] | None = None,
+    config: PiIntentShadowConfig | None = None,
+    shadow_limit: int = _DEFAULT_MAX_REPORT_RECORDS,
+) -> dict[str, Any]:
+    """Append one trusted label for an existing Pi shadow record.
+
+    The sidecar is append-only. If a record is re-labeled later, normal label
+    loading keeps the newest valid row for the same text_hash.
+    """
+    active_config = config or PiIntentShadowConfig.from_env(env)
+    active_config.validate()
+    normalized_hash = str(text_hash or "").strip()
+    if not normalized_hash:
+        raise ValueError("text_hash is required")
+
+    records = load_pi_intent_shadow_records(active_config.path, limit=shadow_limit)
+    matching_record = next(
+        (record for record in records if str(record.get("text_hash") or "").strip() == normalized_hash),
+        None,
+    )
+    if matching_record is None:
+        raise ValueError(f"text_hash not found in the most-recent {shadow_limit} Pi shadow records")
+
+    source_value = str(source or "admin_review").strip() or "admin_review"
+    if source_value not in _ALLOWED_LABEL_SOURCES:
+        raise ValueError("source must be one of: admin_review, operator_override")
+
+    row: dict[str, Any] = {
+        "text_hash": normalized_hash,
+        "source": source_value,
+        "labeled_at": time.time(),
+    }
+    if outcome_label is not None:
+        row["outcome_label"] = str(outcome_label).strip()
+    if negative:
+        row["negative"] = True
+    if reviewed_by:
+        row["reviewed_by_hash"] = _hash_text(reviewed_by)
+
+    label = _shadow_label_from_row(row)
+    if not label:
+        raise ValueError("label must be a low-risk Pi intent or a negative chat/none label")
+
+    _append_jsonl(active_config.labels_path, row)
+    return {
+        "ok": True,
+        "text_hash": normalized_hash,
+        "labels_store": "shadow_labels_sidecar",
+        "label": label,
+        "matched_record": _compact_shadow_record_for_label_response(matching_record),
+    }
+
+
+def _compact_shadow_record_for_label_response(record: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "text_hash": _optional_str(record.get("text_hash")),
+        "text_preview": _optional_str(record.get("text_preview")),
+        "route_class": _optional_str(record.get("route_class")),
+        "zoe_intent": _optional_str(record.get("zoe_intent")),
+        "pi_intent": _optional_str(record.get("pi_intent")),
+        "agreement": _bool_record_value(record.get("agreement")),
+    }
+
+
+def _shadow_label_from_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    label: dict[str, Any] = {}
+    negative = _bool_record_value(row.get("negative"))
+    outcome_label = _optional_str(row.get("outcome_label") or row.get("expected_intent") or row.get("label"))
+    if negative and outcome_label and outcome_label not in {"chat", "none", "no_intent"}:
+        return {}
+    if negative or outcome_label in {"chat", "none", "no_intent"}:
+        label["negative"] = True
+        label["outcome_label"] = None
+    elif outcome_label and intent_group_for_intent(outcome_label):
+        label["outcome_label"] = outcome_label
+    else:
+        return {}
+    for key in ("route_class", "baseline_kind", "source"):
+        value = _optional_str(row.get(key))
+        if value:
+            label[key] = value
+    for key in ("baseline_comparable", "user_corrected", "rollback_blocked"):
+        if row.get(key) is not None:
+            label[key] = _bool_record_value(row.get(key))
+    return label
 
 
 def shadow_records_to_route_samples(records: Sequence[Mapping[str, Any]]) -> list[PiRouteSample]:
@@ -235,6 +380,9 @@ def shadow_records_to_route_samples(records: Sequence[Mapping[str, Any]]) -> lis
 def summarize_pi_intent_shadow(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     total = len(records)
     if total == 0:
+        policy = PiPromotionPolicy()
+        labeled_counts = _labeled_counts_by_group(())
+        sample_deficits = {group: policy.min_samples for group in labeled_counts}
         return {
             "sample_count": 0,
             "agreement_rate": 0.0,
@@ -245,7 +393,11 @@ def summarize_pi_intent_shadow(records: Sequence[Mapping[str, Any]]) -> dict[str
             "intent_groups": {},
             "accuracy_available": False,
             "labeled_sample_count": 0,
+            "labeled_sample_count_by_group": labeled_counts,
+            "unmapped_labeled_sample_count": 0,
+            "sample_deficit_by_group": sample_deficits,
             "promotion_ready": False,
+            "promotion_ready_groups": [],
             "promotion_ready_reason": "runtime shadow records are unlabeled agreement evidence, not accuracy labels",
         }
     groups: dict[str, dict[str, int]] = {}
@@ -270,7 +422,19 @@ def summarize_pi_intent_shadow(records: Sequence[Mapping[str, Any]]) -> dict[str
             zoe_latencies.append(float(record["zoe_latency_ms"]))
         if isinstance(record.get("pi_latency_ms"), (int, float)):
             pi_latencies.append(float(record["pi_latency_ms"]))
-    labeled_sample_count = sum(1 for record in records if record.get("outcome_label"))
+    policy = PiPromotionPolicy()
+    unique_labeled_records = _unique_labeled_records(records)
+    labeled_counts = _labeled_counts_by_group(unique_labeled_records)
+    raw_labeled_sample_count = sum(1 for record in unique_labeled_records if record.get("outcome_label"))
+    labeled_sample_count = sum(labeled_counts.values())
+    unmapped_labeled_sample_count = max(0, raw_labeled_sample_count - labeled_sample_count)
+    sample_deficits = {
+        group: max(0, policy.min_samples - labeled_counts.get(group, 0))
+        for group in sorted(LOW_RISK_PI_INTENT_GROUPS)
+    }
+    promotion_ready_groups = [
+        group for group in sorted(LOW_RISK_PI_INTENT_GROUPS) if sample_deficits[group] == 0
+    ]
     return {
         "sample_count": total,
         "agreement_rate": agreements / total,
@@ -281,13 +445,61 @@ def summarize_pi_intent_shadow(records: Sequence[Mapping[str, Any]]) -> dict[str
         "intent_groups": groups,
         "accuracy_available": labeled_sample_count > 0,
         "labeled_sample_count": labeled_sample_count,
-        "promotion_ready": labeled_sample_count >= PiPromotionPolicy().min_samples,
-        "promotion_ready_reason": (
-            "labeled outcome evidence is available for promotion scoring"
-            if labeled_sample_count
-            else "runtime shadow records are unlabeled agreement evidence, not accuracy labels"
+        "labeled_sample_count_by_group": labeled_counts,
+        "unmapped_labeled_sample_count": unmapped_labeled_sample_count,
+        "sample_deficit_by_group": sample_deficits,
+        "promotion_ready": bool(promotion_ready_groups),
+        "promotion_ready_groups": promotion_ready_groups,
+        "promotion_ready_reason": _promotion_ready_reason(
+            labeled_sample_count,
+            promotion_ready_groups,
+            raw_labeled_sample_count=raw_labeled_sample_count,
         ),
     }
+
+
+def _unique_labeled_records(records: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    unique_by_hash: dict[str, Mapping[str, Any]] = {}
+    ordered_keys: list[str] = []
+    output: list[Mapping[str, Any]] = []
+    for record in records:
+        if not record.get("outcome_label"):
+            continue
+        text_hash = _optional_str(record.get("text_hash"))
+        if not text_hash:
+            output.append(record)
+            continue
+        if text_hash not in unique_by_hash:
+            ordered_keys.append(text_hash)
+        unique_by_hash[text_hash] = record
+    output.extend(unique_by_hash[text_hash] for text_hash in ordered_keys)
+    return output
+
+
+def _labeled_counts_by_group(records: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    counts = {group: 0 for group in sorted(LOW_RISK_PI_INTENT_GROUPS)}
+    for record in records:
+        intent = _optional_str(record.get("outcome_label"))
+        group = intent_group_for_intent(intent)
+        if group in counts:
+            counts[group] += 1
+    return counts
+
+
+def _promotion_ready_reason(
+    labeled_sample_count: int,
+    ready_groups: Sequence[str],
+    *,
+    raw_labeled_sample_count: int | None = None,
+) -> str:
+    raw_count = labeled_sample_count if raw_labeled_sample_count is None else raw_labeled_sample_count
+    if ready_groups:
+        return "one or more intent groups have enough labeled outcome evidence for promotion scoring"
+    if labeled_sample_count:
+        return "labeled outcome evidence exists, but no intent group has enough labels for promotion scoring"
+    if raw_count:
+        return "labeled outcome evidence exists, but no labels map to a low-risk intent group"
+    return "runtime shadow records are unlabeled agreement evidence, not accuracy labels"
 
 
 def _resolve_baseline_metadata(
@@ -427,6 +639,9 @@ def _env_bool(value: str | None, *, default: bool = False) -> bool:
 
 __all__ = [
     "PiIntentShadowConfig",
+    "append_pi_intent_shadow_label",
+    "apply_pi_intent_shadow_labels",
+    "load_pi_intent_shadow_labels",
     "load_pi_intent_shadow_records",
     "maybe_record_pi_intent_shadow",
     "pi_intent_shadow_status",
