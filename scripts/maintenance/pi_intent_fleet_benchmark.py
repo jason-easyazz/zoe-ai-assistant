@@ -22,7 +22,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "services" / "zoe-data"))
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from pi_promotion_eval import _run_pi, _run_zoe_baseline  # noqa: E402
+from pi_promotion_eval import _run_pi, _run_zoe_baseline, _temporary_env, load_zoe_env  # noqa: E402
 from zoe_pi_promotion import (  # noqa: E402
     DEFAULT_PI_INTENT_EVAL_CASES,
     LOW_RISK_PI_INTENT_GROUPS,
@@ -226,6 +226,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repeat", type=int, default=3, help="Repeat each case this many times for latency stability")
     parser.add_argument("--cases-file", action="append", default=[], help="JSON or JSONL eval cases file. Repeat to combine datasets.")
     parser.add_argument("--no-default-cases", action="store_true", help="Use only --cases-file datasets")
+    parser.add_argument("--env-file", action="append", default=[], help="Additional Zoe env file to load before measuring; shell env wins")
     parser.add_argument("--include-observations", action="store_true", help="Include every observation row in JSON output")
     parser.add_argument("--fallback-baseline-latency-ms", type=float, default=None)
     parser.add_argument("--extraction-failed-baseline-latency-ms", type=float, default=None)
@@ -237,21 +238,22 @@ def main(argv: list[str] | None = None) -> int:
     loaded_case_groups = [load_pi_intent_eval_cases(path) for path in args.cases_file]
     base_cases = [] if args.no_default_cases else list(DEFAULT_PI_INTENT_EVAL_CASES)
     cases = merge_pi_intent_eval_cases(base_cases, *loaded_case_groups)
-    observations = asyncio.run(
-        run_benchmark(
-            cases,
-            repeat=args.repeat,
-            run_pi=args.run_pi,
-            transport=args.transport,
-            enable_execution=args.allow_execution,
-            local_model_configured=args.local_model_configured,
-            fallback_baseline_latency_ms=args.fallback_baseline_latency_ms,
-            extraction_failed_baseline_latency_ms=args.extraction_failed_baseline_latency_ms,
-            measure_zoe_agent_baseline=args.measure_zoe_agent_baseline,
-            zoe_agent_baseline_timeout_seconds=args.zoe_agent_baseline_timeout_seconds,
-            zoe_agent_baseline_max_tokens=args.zoe_agent_baseline_max_tokens,
+    with _temporary_env(load_zoe_env(args.env_file)):
+        observations = asyncio.run(
+            run_benchmark(
+                cases,
+                repeat=args.repeat,
+                run_pi=args.run_pi,
+                transport=args.transport,
+                enable_execution=args.allow_execution,
+                local_model_configured=args.local_model_configured,
+                fallback_baseline_latency_ms=args.fallback_baseline_latency_ms,
+                extraction_failed_baseline_latency_ms=args.extraction_failed_baseline_latency_ms,
+                measure_zoe_agent_baseline=args.measure_zoe_agent_baseline,
+                zoe_agent_baseline_timeout_seconds=args.zoe_agent_baseline_timeout_seconds,
+                zoe_agent_baseline_max_tokens=args.zoe_agent_baseline_max_tokens,
+            )
         )
-    )
     print(
         json.dumps(
             build_report(

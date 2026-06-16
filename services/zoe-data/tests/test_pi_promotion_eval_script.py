@@ -59,6 +59,24 @@ def _install_fake_pi_classifier(monkeypatch, *, result=None, sleep_seconds=0):
     monkeypatch.setitem(sys.modules, "pi_intent_classifier", module)
 
 
+def test_load_zoe_env_loads_env_files_and_shell_env_wins(tmp_path, monkeypatch):
+    module = _load_module()
+    monkeypatch.setattr(module, "DEFAULT_ENV_FILES", ())
+    monkeypatch.delenv("ZOE_PI_INTENT_TIMEOUT_SECONDS", raising=False)
+    env_file = tmp_path / "zoe.env"
+    env_file.write_text(
+        "export ZOE_PI_INTENT_TIMEOUT_SECONDS=8\n"
+        "ZOE_PI_LOCAL_MODEL_CONFIGURED=from-file\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ZOE_PI_LOCAL_MODEL_CONFIGURED", "from-shell")
+
+    env = module.load_zoe_env([str(env_file)])
+
+    assert env["ZOE_PI_INTENT_TIMEOUT_SECONDS"] == "8"
+    assert env["ZOE_PI_LOCAL_MODEL_CONFIGURED"] == "from-shell"
+
+
 def test_cli_loads_cases_file_without_default_cases(tmp_path, capsys):
     module = _load_module()
     cases_path = tmp_path / "cases.jsonl"
@@ -297,6 +315,19 @@ def test_run_cases_preserves_eval_case_source_in_sample_metadata(monkeypatch):
     assert len(samples) == 1
     assert samples[0].metadata["source"] == "intent_miss"
     assert samples[0].metadata["baseline_kind"] == "zoe_agent_fallback_baseline"
+
+
+def test_run_pi_uses_loaded_timeout_env(monkeypatch):
+    _install_fake_pi_classifier(monkeypatch, result=None, sleep_seconds=0.02)
+    monkeypatch.setenv("ZOE_PI_INTENT_TIMEOUT_SECONDS", "1")
+    module = _load_module()
+    case = module.PiIntentEvalCase("casual", "that movie was good", None, "chat", "fallback", negative=True)
+
+    result = asyncio.run(
+        module._run_pi(case, transport="rpc", enable_execution=True, local_model_configured=True)
+    )
+
+    assert result["timed_out"] is False
 
 
 def test_run_pi_fast_no_result_is_not_timeout(monkeypatch):

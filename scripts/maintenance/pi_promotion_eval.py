@@ -12,6 +12,7 @@ import argparse
 import asyncio
 import json
 import os
+import shlex
 import sys
 import time
 import uuid
@@ -21,6 +22,13 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "services" / "zoe-data"))
+
+DEFAULT_ENV_FILES = (
+    ROOT / ".env",
+    ROOT / "services" / "zoe-data" / ".env",
+    Path("/home/zoe/assistant/.env"),
+    Path("/home/zoe/assistant/services/zoe-data/.env"),
+)
 
 from zoe_pi_promotion import (  # noqa: E402
     DEFAULT_PI_INTENT_EVAL_CASES,
@@ -52,6 +60,36 @@ def _temporary_env(updates: dict[str, str | None]):
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = value
+
+
+def load_zoe_env(env_files: list[str] | None = None) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for env_file in [*DEFAULT_ENV_FILES, *(env_files or [])]:
+        path = Path(env_file).expanduser()
+        if path.exists():
+            values.update(_parse_env_file(path))
+    values.update(os.environ)
+    return values
+
+
+def _parse_env_file(path: Path) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, raw_value = line.split("=", 1)
+        key = key.strip()
+        if key.startswith("export "):
+            key = key[len("export ") :].strip()
+        if not key or key.startswith("#"):
+            continue
+        try:
+            parts = shlex.split(raw_value, comments=True, posix=True)
+        except ValueError:
+            parts = [raw_value.strip().strip('"').strip("'")]
+        parsed[key] = parts[0] if parts else ""
+    return parsed
 
 
 def _demo_samples() -> list[PiRouteSample]:
@@ -418,6 +456,7 @@ def main(argv: list[str] | None = None) -> int:
         help="JSON or JSONL eval cases file. Repeat to combine datasets.",
     )
     parser.add_argument("--no-default-cases", action="store_true", help="Use only --cases-file datasets")
+    parser.add_argument("--env-file", action="append", default=[], help="Additional Zoe env file to load before measuring; shell env wins")
     parser.add_argument(
         "--promoted-group",
         action="append",
@@ -436,19 +475,20 @@ def main(argv: list[str] | None = None) -> int:
     if args.demo:
         samples.extend(_demo_samples())
     if args.run_pi:
-        comparisons, measured_samples = asyncio.run(
-            _run_cases(
-                eval_cases,
-                transport=args.transport,
-                enable_execution=args.allow_execution,
-                local_model_configured=args.local_model_configured,
-                fallback_baseline_latency_ms=args.fallback_baseline_latency_ms,
-                extraction_failed_baseline_latency_ms=args.extraction_failed_baseline_latency_ms,
-                measure_zoe_agent_baseline=args.measure_zoe_agent_baseline,
-                zoe_agent_baseline_timeout_seconds=args.zoe_agent_baseline_timeout_seconds,
-                zoe_agent_baseline_max_tokens=args.zoe_agent_baseline_max_tokens,
+        with _temporary_env(load_zoe_env(args.env_file)):
+            comparisons, measured_samples = asyncio.run(
+                _run_cases(
+                    eval_cases,
+                    transport=args.transport,
+                    enable_execution=args.allow_execution,
+                    local_model_configured=args.local_model_configured,
+                    fallback_baseline_latency_ms=args.fallback_baseline_latency_ms,
+                    extraction_failed_baseline_latency_ms=args.extraction_failed_baseline_latency_ms,
+                    measure_zoe_agent_baseline=args.measure_zoe_agent_baseline,
+                    zoe_agent_baseline_timeout_seconds=args.zoe_agent_baseline_timeout_seconds,
+                    zoe_agent_baseline_max_tokens=args.zoe_agent_baseline_max_tokens,
+                )
             )
-        )
         samples.extend(measured_samples)
     promotion_report = summarize_pi_promotion(samples, policy=policy, promoted_groups=args.promoted_group)
     payload = {
