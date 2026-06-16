@@ -726,6 +726,9 @@ async def test_voice_command_stream_emits_processing_ack_before_slow_response(mo
     async def no_user(*_args, **_kwargs):
         return None
 
+    async def panel_user(*_args, **_kwargs):
+        return "panel-user"
+
     async def resolve_skybridge_request(*_args, **_kwargs):
         return None
 
@@ -743,7 +746,7 @@ async def test_voice_command_stream_emits_processing_ack_before_slow_response(mo
         return b"RIFF-final"
 
     monkeypatch.setenv("ZOE_PROCESSING_ACK_PHRASE", "Let me check.")
-    monkeypatch.setattr(voice_tts, "_resolve_recent_panel_session_user", no_user)
+    monkeypatch.setattr(voice_tts, "_resolve_recent_panel_session_user", panel_user)
     monkeypatch.setattr(voice_tts, "_resolve_panel_default_user", no_user)
     monkeypatch.setattr(voice_tts, "_load_voice_history", load_voice_history)
     monkeypatch.setattr(voice_tts, "_synthesize_kokoro_sidecar", synthesize_sentence)
