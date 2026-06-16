@@ -364,6 +364,78 @@ def _update_circuit_breakers(pr_number: int, state: dict[str, Any], progress_key
     return None
 
 
+def _current_branch() -> str | None:
+    proc = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], check=False)
+    branch = (proc.stdout or "").strip()
+    return branch or None
+
+
+def _remote_tracking_branch() -> str | None:
+    proc = _run_git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], check=False)
+    branch = (proc.stdout or "").strip()
+    return branch or None
+
+
+def _pr_checkout_observation(pr_number: int, *, repo: str = DEFAULT_REPO) -> dict[str, Any]:
+    proc = _run_gh(
+        [
+            "pr",
+            "view",
+            str(int(pr_number)),
+            "--json",
+            "headRefName,headRefOid,state",
+        ],
+        repo=repo,
+    )
+    if proc.returncode != 0:
+        return {"ok": False, "reason": "GH_PR_VIEW_FAILED", "detail": (proc.stderr or proc.stdout or "").strip()}
+    try:
+        data = _parse_gh_json(proc)
+    except GuardError as exc:
+        return {"ok": False, "reason": "GH_PR_VIEW_INVALID", "detail": str(exc)}
+    return {"ok": True, **data}
+
+
+def verify_pr_checkout_for_repair(packet: GuardPacket, *, repo: str = DEFAULT_REPO) -> dict[str, Any]:
+    branch = _current_branch()
+    local_head = _local_head_sha()
+    upstream = _remote_tracking_branch()
+    observation = _pr_checkout_observation(packet.pr, repo=repo)
+    if not observation.get("ok"):
+        return {**observation, "ok": False, "branch": branch, "local_head": local_head, "upstream": upstream}
+    expected_branch = str(observation.get("headRefName") or "")
+    expected_head = str(observation.get("headRefOid") or "")
+    state = str(observation.get("state") or "").upper()
+    if not expected_branch or not expected_head:
+        return {
+            "ok": False,
+            "reason": "GH_PR_VIEW_INCOMPLETE",
+            "detail": "headRefName or headRefOid missing from GitHub response",
+            "branch": branch,
+            "local_head": local_head,
+        }
+    if state != "OPEN":
+        return {"ok": False, "reason": "PR_NOT_OPEN", "state": state, "branch": branch, "local_head": local_head}
+    if not branch or branch in {"HEAD", DEFAULT_BASE_BRANCH, "main", "master"}:
+        return {"ok": False, "reason": "UNSAFE_BRANCH", "branch": branch, "expected_branch": expected_branch}
+    if expected_branch and branch != expected_branch:
+        return {"ok": False, "reason": "BRANCH_MISMATCH", "branch": branch, "expected_branch": expected_branch}
+    if upstream and expected_branch and upstream != f"origin/{expected_branch}":
+        return {"ok": False, "reason": "UPSTREAM_MISMATCH", "upstream": upstream, "expected_upstream": f"origin/{expected_branch}"}
+    if expected_head and local_head != expected_head:
+        return {"ok": False, "reason": "HEAD_MISMATCH", "local_head": local_head, "expected_head": expected_head}
+    if packet.head_sha and expected_head and packet.head_sha != expected_head:
+        return {"ok": False, "reason": "PACKET_HEAD_MISMATCH", "packet_head": packet.head_sha, "expected_head": expected_head}
+    return {
+        "ok": True,
+        "branch": branch,
+        "local_head": local_head,
+        "expected_branch": expected_branch,
+        "expected_head": expected_head,
+        "upstream": upstream,
+    }
+
+
 async def _record_cost_event(task_id: str | None, estimated_cost_usd: float) -> None:
     if estimated_cost_usd <= 0:
         return
@@ -391,6 +463,9 @@ async def _record_cost_event(task_id: str | None, estimated_cost_usd: float) -> 
 
 
 async def _run_cheap_agent(packet: GuardPacket, *, task_id: str | None = None) -> tuple[str, str]:
+    checkout = verify_pr_checkout_for_repair(packet)
+    if not checkout.get("ok"):
+        return "BLOCKED_WRONG_WORKTREE", json.dumps(redact(checkout), sort_keys=True)
     cmd = os.environ.get("ZOE_CHEAP_PR_AGENT_CMD")
     url = os.environ.get("ZOE_CHEAP_PR_AGENT_URL")
     if not cmd and not url:
