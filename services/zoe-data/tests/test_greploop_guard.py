@@ -255,6 +255,21 @@ async def test_assess_merge_readiness_blocks_low_confidence(monkeypatch):
     assert any("GREPTILE_CONFIDENCE" in b for b in out["blockers"])
 
 
+def test_clear_greptile_wait_state_removes_wait_diagnostics():
+    state = {
+        "waiting_greptile_count": 3,
+        "greptile_wait_started_at": 1_000.0,
+        "greptile_wait_last_seen_at": 1_050.0,
+        "greptile_wait_elapsed_seconds": 50,
+        "greptile_next_poll_after": 1_120.0,
+        "greptile": {"wait_count": 3, "wait_elapsed_seconds": 50},
+    }
+
+    greploop_guard._clear_greptile_wait_state(state)
+
+    assert state == {"waiting_greptile_count": 0}
+
+
 @pytest.mark.asyncio
 async def test_run_guard_once_does_not_retrigger_active_reviewing_files(tmp_path, monkeypatch):
     async def fake_status(**_kwargs):

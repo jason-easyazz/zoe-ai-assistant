@@ -529,8 +529,6 @@ def _update_greptile_wait_state(
     if poll_due:
         wait_count += 1
         state["greptile_next_poll_after"] = now + max(1, GREPTILE_WAIT_POLL_SECONDS)
-    elif not state.get("greptile_next_poll_after"):
-        state["greptile_next_poll_after"] = now + max(1, GREPTILE_WAIT_POLL_SECONDS)
     elapsed_seconds = max(0.0, now - started_at)
     state["greptile_wait_started_at"] = started_at
     state["greptile_wait_last_seen_at"] = now
@@ -562,6 +560,7 @@ def _clear_greptile_wait_state(state: dict[str, Any]) -> None:
         "greptile_next_poll_after",
     ):
         state.pop(key, None)
+    state.pop("greptile", None)
 
 
 def _run_gh(args: list[str], *, repo: str = DEFAULT_REPO, check: bool = False) -> subprocess.CompletedProcess[str]:
