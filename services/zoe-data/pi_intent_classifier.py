@@ -346,7 +346,13 @@ async def _classify_with_pi_rpc(
         logger.debug("Pi RPC intent governor failed: %s", exc)
         return None
     latency_ms = (time.perf_counter() - start) * 1000
-    return _parse_pi_classification(raw, latency_ms=latency_ms)
+    parsed = _parse_pi_classification(raw, latency_ms=latency_ms)
+    if parsed is None:
+        text = raw.strip().lstrip("` \n").rstrip("` \n")
+        if _extract_first_json_object(text) is None:
+            await worker.reset()
+            logger.debug("Pi RPC intent governor returned unparsable output; worker reset")
+    return parsed
 
 
 def _classification_prompt(text: str, *, context_turns: str = "") -> str:

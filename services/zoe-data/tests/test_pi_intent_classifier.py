@@ -386,6 +386,87 @@ for line in sys.stdin:
 
 
 @pytest.mark.asyncio
+async def test_pi_rpc_unparsable_output_resets_process(tmp_path, monkeypatch):
+    bindir = tmp_path / "rpc-empty-output-bin"
+    bindir.mkdir()
+    _write_exe(bindir / "node", "#!/bin/sh\nexit 0\n")
+    _write_exe(bindir / "npm", "#!/bin/sh\nexit 0\n")
+    _write_exe(
+        bindir / "pi",
+        "#!/usr/bin/python3\n"
+        "import json, sys, time\n"
+        "for line in sys.stdin:\n"
+        "    request = json.loads(line)\n"
+        "    print(json.dumps({'id': request['id'], 'type': 'response', 'command': 'prompt', 'success': True}), flush=True)\n"
+        "    print(json.dumps({'id': request['id'], 'type': 'agent_end', 'messages': []}), flush=True)\n"
+        "    time.sleep(10)\n",
+    )
+    workers = {}
+    monkeypatch.setattr(pi_intent_classifier, "_RPC_WORKERS", workers)
+    env = {
+        "PATH": str(bindir),
+        "ZOE_PI_INTENT_ENABLED": "true",
+        "ZOE_PI_INTENT_TRANSPORT": "rpc",
+        "ZOE_PI_COMMAND": "pi",
+        "ZOE_PI_CWD": str(tmp_path),
+        "ZOE_PI_ALLOW_EXECUTION": "true",
+        "ZOE_PI_LOCAL_MODEL_CONFIGURED": "true",
+        "ZOE_PI_INTENT_TIMEOUT_SECONDS": "2",
+    }
+
+    result = await classify_with_pi_intent_governor("rain later", env=env)
+
+    assert result is None
+    assert len(workers) == 1
+    worker = next(iter(workers.values()))
+    assert worker.proc is None
+
+
+@pytest.mark.asyncio
+async def test_pi_rpc_valid_json_unknown_intent_keeps_warm_process(tmp_path, monkeypatch):
+    bindir = tmp_path / "rpc-unknown-intent-bin"
+    bindir.mkdir()
+    _write_exe(bindir / "node", "#!/bin/sh\nexit 0\n")
+    _write_exe(bindir / "npm", "#!/bin/sh\nexit 0\n")
+    payload = json.dumps({"intent": "delete_everything", "slots": {}, "confidence": 0.99, "task_lane": "fast_tool"})
+    _write_exe(
+        bindir / "pi",
+        "#!/usr/bin/python3\n"
+        "import json, sys, time\n"
+        f"payload = {payload!r}\n"
+        "for line in sys.stdin:\n"
+        "    request = json.loads(line)\n"
+        "    print(json.dumps({'id': request['id'], 'type': 'response', 'command': 'prompt', 'success': True}), flush=True)\n"
+        "    print(json.dumps({'id': request['id'], 'type': 'agent_end', 'messages': [{'role': 'assistant', 'content': [{'type': 'text', 'text': payload}]}]}), flush=True)\n"
+        "    time.sleep(10)\n",
+    )
+    workers = {}
+    monkeypatch.setattr(pi_intent_classifier, "_RPC_WORKERS", workers)
+    env = {
+        "PATH": str(bindir),
+        "ZOE_PI_INTENT_ENABLED": "true",
+        "ZOE_PI_INTENT_TRANSPORT": "rpc",
+        "ZOE_PI_COMMAND": "pi",
+        "ZOE_PI_CWD": str(tmp_path),
+        "ZOE_PI_ALLOW_EXECUTION": "true",
+        "ZOE_PI_LOCAL_MODEL_CONFIGURED": "true",
+        "ZOE_PI_INTENT_TIMEOUT_SECONDS": "2",
+        "ZOE_PI_INTENT_PREFILTER_ENABLED": "false",
+    }
+
+    try:
+        result = await classify_with_pi_intent_governor("please do something weird", env=env)
+        assert result is None
+        assert len(workers) == 1
+        worker = next(iter(workers.values()))
+        assert worker.proc is not None
+        assert worker.proc.returncode is None
+    finally:
+        for worker in list(workers.values()):
+            await worker.reset()
+
+
+@pytest.mark.asyncio
 async def test_pi_rpc_timeout_resets_process_under_worker_lock(tmp_path, monkeypatch):
     bindir = tmp_path / "rpc-timeout-bin"
     bindir.mkdir()
