@@ -42,6 +42,7 @@ def _endpoint_result(*, intent="weather", response_chars=12, response_preview="I
         },
         "simulated_hybrid_flow": {
             "cue_latency_ms": 0.05,
+            "cue_text": "Let me check.",
             "final_completion_latency_ms": 2600.0,
             "natural_flow_candidate": True,
         },
@@ -75,6 +76,7 @@ def test_http_probe_summarises_endpoint_results():
         local_model_configured=True,
         timeout_seconds=12.0,
         request_timeout_seconds=9.0,
+        wake_ack_text="Yes Jason.",
         post_json=fake_post,
     )
     report = module.build_report(
@@ -85,6 +87,7 @@ def test_http_probe_summarises_endpoint_results():
         run_pi=True,
         include_safe_fulfillment=True,
         include_observations=True,
+        wake_ack_text="Yes Jason.",
     )
 
     assert len(calls) == 2
@@ -95,7 +98,18 @@ def test_http_probe_summarises_endpoint_results():
     assert report["safe_fulfillment_side_effects"] == "read_only_external_only"
     assert report["summary"]["overall"]["pi_accuracy"] == 1.0
     assert report["summary"]["overall"]["natural_flow_rate"] == 1.0
+    assert report["summary"]["overall"]["conversation_final_available_rate"] == 1.0
+    assert report["summary"]["overall"]["cue_within_budget_rate"] == 1.0
+    assert report["summary"]["overall"]["final_within_budget_rate"] == 1.0
     assert report["summary"]["overall"]["safe_fulfillment_success_rate"] == 1.0
+    assert report["conversation_contract"]["strategy"] == "wake_ack_then_processing_cue_then_pi_final"
+    assert report["conversation_contract"]["wake_ack_configured"] is True
+    assert report["conversation_contract"]["production_route_change"] is False
+    assert report["observations"][0]["conversation_flow"]["events"] == [
+        {"offset_ms": 0.0, "role": "zoe", "phase": "wake_ack", "text": "Yes Jason."},
+        {"offset_ms": 0.05, "role": "zoe", "phase": "processing_cue", "text": "Let me check."},
+        {"offset_ms": 2600.0, "role": "zoe", "phase": "final_answer", "text": "It is 18.5 C."},
+    ]
     assert report["observations"][0]["response_preview"] == "It is 18.5 C."
 
 
@@ -126,7 +140,88 @@ def test_empty_endpoint_response_is_not_success():
     )
 
     assert observations[0]["safe_fulfillment_success"] is False
+    assert observations[0]["natural_flow_candidate"] is False
+    assert observations[0]["conversation_flow"]["final_response_available"] is False
+    assert observations[0]["conversation_flow"]["final_within_budget"] is False
     assert report["summary"]["overall"]["safe_fulfillment_success_rate"] == 0.0
+    assert report["summary"]["overall"]["conversation_final_available_rate"] == 0.0
+    assert report["summary"]["overall"]["final_within_budget_rate"] == 0.0
+
+
+def test_slow_final_answer_fails_natural_flow_budget():
+    module = _load_module()
+
+    def fake_post(url, payload, timeout_seconds):
+        return {
+            **_endpoint_result(),
+            "simulated_hybrid_flow": {
+                "cue_latency_ms": 0.05,
+                "cue_text": "Let me check.",
+                "final_completion_latency_ms": 6000.0,
+                "natural_flow_candidate": True,
+            },
+        }
+
+    observations = module.run_probe(
+        [{"case_id": "weather", "text": "rain later", "expected_intent": "weather"}],
+        base_url="http://127.0.0.1:8013",
+        repeat=1,
+        run_pi=True,
+        include_safe_fulfillment=True,
+        allow_pi_execution=True,
+        local_model_configured=True,
+        timeout_seconds=12.0,
+        natural_final_max_ms=4500.0,
+        post_json=fake_post,
+    )
+    report = module.build_report(
+        [{"case_id": "weather", "text": "rain later", "expected_intent": "weather"}],
+        observations,
+        base_url="http://127.0.0.1:8013",
+        repeat=1,
+        run_pi=True,
+        include_safe_fulfillment=True,
+        natural_final_max_ms=4500.0,
+    )
+
+    assert observations[0]["conversation_flow"]["final_within_budget"] is False
+    assert observations[0]["natural_flow_candidate"] is False
+    assert report["summary"]["overall"]["final_within_budget_rate"] == 0.0
+    assert report["summary"]["overall"]["natural_flow_rate"] == 0.0
+
+
+def test_missing_cue_text_is_not_fabricated():
+    module = _load_module()
+
+    def fake_post(url, payload, timeout_seconds):
+        return {
+            **_endpoint_result(),
+            "simulated_hybrid_flow": {
+                "cue_latency_ms": 0.05,
+                "final_completion_latency_ms": 2600.0,
+                "natural_flow_candidate": True,
+            },
+        }
+
+    observations = module.run_probe(
+        [{"case_id": "weather", "text": "rain later", "expected_intent": "weather"}],
+        base_url="http://127.0.0.1:8013",
+        repeat=1,
+        run_pi=True,
+        include_safe_fulfillment=True,
+        allow_pi_execution=True,
+        local_model_configured=True,
+        timeout_seconds=12.0,
+        wake_ack_text="Yes Jason.",
+        post_json=fake_post,
+    )
+
+    flow = observations[0]["conversation_flow"]
+    assert flow["processing_cue_available"] is False
+    assert flow["cue_within_budget"] is False
+    assert flow["natural_flow_candidate"] is False
+    assert [event["phase"] for event in flow["events"]] == ["wake_ack", "final_answer"]
+    assert all(event["text"] != "Let me check." for event in flow["events"])
 
 
 def test_auth_headers_are_attached_to_real_http_sender(monkeypatch):
@@ -257,6 +352,9 @@ def test_empty_report_keeps_stats_schema():
     assert overall["pi_accuracy"] is None
     assert overall["pi_timeout_rate"] is None
     assert overall["safe_fulfillment_success_rate"] is None
+    assert overall["conversation_final_available_rate"] is None
+    assert overall["cue_within_budget_rate"] is None
+    assert overall["final_within_budget_rate"] is None
     assert overall["safe_fulfillment_latency_ms"] == {
         "avg": None,
         "p50": None,
@@ -289,6 +387,8 @@ def test_cli_runs_cases_file(tmp_path, capsys, monkeypatch):
         assert kwargs["request_timeout_seconds"] == 9.0
         assert kwargs["session_id"] == "session-secret"
         assert kwargs["device_token"] == "device-secret"
+        assert kwargs["wake_ack_text"] == "Yes Jason."
+        assert kwargs["natural_final_max_ms"] == 4200.0
         return [
             {
                 "case_id": "weather",
@@ -298,6 +398,7 @@ def test_cli_runs_cases_file(tmp_path, capsys, monkeypatch):
                 "http_latency_ms": 10.0,
                 "pi_intent": "weather",
                 "pi_correct": True,
+                "conversation_flow": {"final_response_available": True, "cue_within_budget": True, "final_within_budget": True},
                 "natural_flow_candidate": True,
                 "safe_fulfillment_success": True,
             }
@@ -319,6 +420,10 @@ def test_cli_runs_cases_file(tmp_path, capsys, monkeypatch):
             "session-secret",
             "--device-token",
             "device-secret",
+            "--wake-ack-text",
+            "Yes Jason.",
+            "--natural-final-max-ms",
+            "4200",
         ]
     )
 
@@ -326,4 +431,5 @@ def test_cli_runs_cases_file(tmp_path, capsys, monkeypatch):
     assert exit_code == 0
     assert payload["base_url"] == "http://testserver"
     assert payload["observation_count"] == 1
+    assert payload["conversation_contract"]["wake_ack_text_preview"] == "Yes Jason."
     assert payload["summary"]["overall"]["pi_accuracy"] == 1.0

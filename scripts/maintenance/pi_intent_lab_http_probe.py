@@ -35,6 +35,9 @@ DEFAULT_CASES = (
     },
 )
 
+DEFAULT_NATURAL_CUE_MAX_MS = 250.0
+DEFAULT_NATURAL_FINAL_MAX_MS = 4500.0
+
 
 def run_probe(
     cases: Sequence[Mapping[str, Any]],
@@ -49,6 +52,9 @@ def run_probe(
     request_timeout_seconds: float | None = None,
     session_id: str | None = None,
     device_token: str | None = None,
+    wake_ack_text: str = "",
+    natural_cue_max_ms: float = DEFAULT_NATURAL_CUE_MAX_MS,
+    natural_final_max_ms: float = DEFAULT_NATURAL_FINAL_MAX_MS,
     post_json: Callable[[str, Mapping[str, Any], float], Mapping[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     observations: list[dict[str, Any]] = []
@@ -93,6 +99,9 @@ def run_probe(
                     result=result,
                     http_latency_ms=http_latency_ms,
                     error=error,
+                    wake_ack_text=wake_ack_text,
+                    natural_cue_max_ms=natural_cue_max_ms,
+                    natural_final_max_ms=natural_final_max_ms,
                 )
             )
     return observations
@@ -107,6 +116,9 @@ def build_report(
     run_pi: bool,
     include_safe_fulfillment: bool,
     include_observations: bool = False,
+    wake_ack_text: str = "",
+    natural_cue_max_ms: float = DEFAULT_NATURAL_CUE_MAX_MS,
+    natural_final_max_ms: float = DEFAULT_NATURAL_FINAL_MAX_MS,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "report_kind": "pi_intent_lab_http_probe",
@@ -121,6 +133,15 @@ def build_report(
         "pi_ran": run_pi,
         "safe_fulfillment_enabled": include_safe_fulfillment,
         "safe_fulfillment_side_effects": "read_only_external_only" if include_safe_fulfillment else "none",
+        "conversation_contract": {
+            "strategy": "wake_ack_then_processing_cue_then_pi_final",
+            "wake_ack_configured": bool(str(wake_ack_text or "").strip()),
+            "wake_ack_text_preview": _preview(str(wake_ack_text or "").strip(), limit=80),
+            "processing_cue_source": "pi_intent_lab_simulated_hybrid_flow",
+            "natural_cue_max_ms": natural_cue_max_ms,
+            "natural_final_max_ms": natural_final_max_ms,
+            "production_route_change": False,
+        },
         "summary": {
             "overall": _stats(observations),
             "by_intent_group": _breakdown(observations, lambda item: str(item.get("intent_group") or "unknown")),
@@ -173,8 +194,21 @@ def _observation(
     result: Mapping[str, Any] | None,
     http_latency_ms: float,
     error: str | None,
+    wake_ack_text: str = "",
+    natural_cue_max_ms: float = DEFAULT_NATURAL_CUE_MAX_MS,
+    natural_final_max_ms: float = DEFAULT_NATURAL_FINAL_MAX_MS,
 ) -> dict[str, Any]:
     if result is None:
+        conversation_flow = _conversation_flow(
+            wake_ack_text=wake_ack_text,
+            processing_cue_text="",
+            final_response_preview="",
+            cue_latency_ms=None,
+            final_completion_latency_ms=None,
+            request_error=error,
+            natural_cue_max_ms=natural_cue_max_ms,
+            natural_final_max_ms=natural_final_max_ms,
+        )
         return {
             "case_id": case["case_id"],
             "repeat_index": repeat_index,
@@ -184,6 +218,7 @@ def _observation(
             "http_latency_ms": http_latency_ms,
             "request_error": error,
             "natural_flow_candidate": False,
+            "conversation_flow": conversation_flow,
         }
     pi = result.get("pi") or {}
     safe = result.get("safe_fulfillment") or {}
@@ -195,6 +230,19 @@ def _observation(
         and not safe.get("timed_out")
         and not safe.get("error")
         and int(safe.get("response_chars") or 0) > 0
+    )
+    cue_latency_ms = _float_or_none(flow.get("cue_latency_ms"))
+    final_completion_latency_ms = _float_or_none(flow.get("final_completion_latency_ms"))
+    response_preview = safe.get("response_preview") or ""
+    conversation_flow = _conversation_flow(
+        wake_ack_text=wake_ack_text,
+        processing_cue_text=str(flow.get("cue_text") or ""),
+        final_response_preview=response_preview,
+        cue_latency_ms=cue_latency_ms,
+        final_completion_latency_ms=final_completion_latency_ms,
+        request_error=error,
+        natural_cue_max_ms=natural_cue_max_ms,
+        natural_final_max_ms=natural_final_max_ms,
     )
     return {
         "case_id": case["case_id"],
@@ -212,16 +260,66 @@ def _observation(
         "pi_latency_ms": _float_or_none(pi.get("latency_ms")),
         "pi_timed_out": bool(pi.get("timed_out")),
         "pi_error": pi.get("error"),
-        "cue_latency_ms": _float_or_none(flow.get("cue_latency_ms")),
+        "cue_latency_ms": cue_latency_ms,
         "safe_fulfillment_attempted": bool(safe.get("attempted")),
         "safe_fulfillment_allowed": bool(safe.get("allowed")),
         "safe_fulfillment_success": safe_success,
         "safe_fulfillment_latency_ms": _float_or_none(safe.get("latency_ms")),
         "safe_fulfillment_error": safe.get("error"),
         "safe_fulfillment_timed_out": bool(safe.get("timed_out")),
-        "final_completion_latency_ms": _float_or_none(flow.get("final_completion_latency_ms")),
-        "natural_flow_candidate": bool(flow.get("natural_flow_candidate")),
-        "response_preview": safe.get("response_preview") or "",
+        "final_completion_latency_ms": final_completion_latency_ms,
+        "natural_flow_candidate": bool(conversation_flow["natural_flow_candidate"]),
+        "conversation_flow": conversation_flow,
+        "response_preview": response_preview,
+    }
+
+
+def _conversation_flow(
+    *,
+    wake_ack_text: str,
+    processing_cue_text: str,
+    final_response_preview: str,
+    cue_latency_ms: float | None,
+    final_completion_latency_ms: float | None,
+    request_error: str | None,
+    natural_cue_max_ms: float,
+    natural_final_max_ms: float,
+) -> dict[str, Any]:
+    wake_text = str(wake_ack_text or "").strip()
+    cue_text = str(processing_cue_text or "").strip()
+    final_text = str(final_response_preview or "").strip()
+    events: list[dict[str, Any]] = []
+    if wake_text:
+        events.append({"offset_ms": 0.0, "role": "zoe", "phase": "wake_ack", "text": wake_text})
+    if cue_text and cue_latency_ms is not None:
+        events.append({"offset_ms": cue_latency_ms, "role": "zoe", "phase": "processing_cue", "text": cue_text})
+    if final_text and final_completion_latency_ms is not None:
+        events.append(
+            {
+                "offset_ms": final_completion_latency_ms,
+                "role": "zoe",
+                "phase": "final_answer",
+                "text": final_text,
+            }
+        )
+    cue_within_budget = bool(cue_text) and cue_latency_ms is not None and cue_latency_ms <= natural_cue_max_ms
+    final_within_budget = (
+        bool(final_text) and final_completion_latency_ms is not None and final_completion_latency_ms <= natural_final_max_ms
+    )
+    processing_cue_available = bool(cue_text)
+    return {
+        "strategy": "wake_ack_then_processing_cue_then_pi_final",
+        "events": events,
+        "wake_ack_available": bool(wake_text),
+        "processing_cue_available": processing_cue_available,
+        "final_response_available": bool(final_text),
+        "cue_within_budget": cue_within_budget,
+        "final_within_budget": final_within_budget,
+        "perceived_final_gap_ms": final_completion_latency_ms,
+        "natural_flow_candidate": bool(
+            not request_error and processing_cue_available and cue_within_budget and final_within_budget and final_text
+        ),
+        "production_route_change": False,
     }
 
 
@@ -245,6 +343,9 @@ def _stats(observations: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             "pi_timeout_rate": None,
             "natural_flow_rate": None,
             "safe_fulfillment_success_rate": None,
+            "conversation_final_available_rate": None,
+            "cue_within_budget_rate": None,
+            "final_within_budget_rate": None,
             "http_latency_ms": _latency_stats([]),
             "cue_latency_ms": _latency_stats([]),
             "pi_latency_ms": _latency_stats([]),
@@ -252,6 +353,7 @@ def _stats(observations: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             "final_completion_latency_ms": _latency_stats([]),
         }
     return {
+        "conversation_final_available_rate": _rate(_flow_bool(item, "final_response_available") for item in observations),
         "observation_count": len(observations),
         "unique_case_count": len({str(item.get("case_id")) for item in observations}),
         "request_error_rate": _rate(bool(item.get("request_error")) for item in observations),
@@ -259,6 +361,8 @@ def _stats(observations: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "pi_timeout_rate": _rate(bool(item.get("pi_timed_out")) for item in observations if item.get("pi_intent") is not None),
         "natural_flow_rate": _rate(bool(item.get("natural_flow_candidate")) for item in observations),
         "safe_fulfillment_success_rate": _rate(bool(item.get("safe_fulfillment_success")) for item in observations),
+        "cue_within_budget_rate": _rate(_flow_bool(item, "cue_within_budget") for item in observations),
+        "final_within_budget_rate": _rate(_flow_bool(item, "final_within_budget") for item in observations),
         "http_latency_ms": _latency_stats(_floats(item.get("http_latency_ms") for item in observations)),
         "cue_latency_ms": _latency_stats(_floats(item.get("cue_latency_ms") for item in observations)),
         "pi_latency_ms": _latency_stats(_floats(item.get("pi_latency_ms") for item in observations)),
@@ -269,6 +373,13 @@ def _stats(observations: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             _floats(item.get("final_completion_latency_ms") for item in observations)
         ),
     }
+
+
+def _flow_bool(item: Mapping[str, Any], key: str) -> bool:
+    flow = item.get("conversation_flow")
+    if not isinstance(flow, Mapping):
+        return False
+    return bool(flow.get(key))
 
 
 def _latency_stats(values: Sequence[float]) -> dict[str, float | None]:
@@ -308,6 +419,11 @@ def _floats(values: Iterable[Any]) -> list[float]:
 
 def _float_or_none(value: Any) -> float | None:
     return float(value) if isinstance(value, (int, float)) else None
+
+
+def _preview(text: str, *, limit: int) -> str:
+    clean = " ".join(str(text or "").split())
+    return clean if len(clean) <= limit else clean[: limit - 1].rstrip() + "..."
 
 
 def _endpoint_url(base_url: str) -> str:
@@ -353,6 +469,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--session-id")
     parser.add_argument("--device-token")
     parser.add_argument("--include-observations", action="store_true")
+    parser.add_argument("--wake-ack-text", default="")
+    parser.add_argument("--natural-cue-max-ms", type=float, default=DEFAULT_NATURAL_CUE_MAX_MS)
+    parser.add_argument("--natural-final-max-ms", type=float, default=DEFAULT_NATURAL_FINAL_MAX_MS)
     args = parser.parse_args(argv)
 
     cases = _load_cases(args.cases_file, no_default_cases=args.no_default_cases)
@@ -368,6 +487,9 @@ def main(argv: list[str] | None = None) -> int:
         request_timeout_seconds=args.request_timeout_seconds,
         session_id=args.session_id,
         device_token=args.device_token,
+        wake_ack_text=args.wake_ack_text,
+        natural_cue_max_ms=args.natural_cue_max_ms,
+        natural_final_max_ms=args.natural_final_max_ms,
     )
     print(
         json.dumps(
@@ -379,6 +501,9 @@ def main(argv: list[str] | None = None) -> int:
                 run_pi=args.run_pi,
                 include_safe_fulfillment=args.include_safe_fulfillment,
                 include_observations=args.include_observations,
+                wake_ack_text=args.wake_ack_text,
+                natural_cue_max_ms=args.natural_cue_max_ms,
+                natural_final_max_ms=args.natural_final_max_ms,
             ),
             indent=2,
             sort_keys=True,
