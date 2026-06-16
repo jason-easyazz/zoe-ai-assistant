@@ -79,6 +79,7 @@ def test_run_greploop_wrapper_switches_to_matching_pr_worktree(tmp_path):
         f"exit 1\n",
     )
     env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+    env.pop("ZOE_GREPLOOP_SKIP_WORKTREE_SWITCH", None)
 
     proc = subprocess.run(
         [str(greploop_guard.REPO_ROOT / "scripts/maintenance/run_greploop_guard.sh"), "--pr", "66", "--once"],
@@ -108,6 +109,7 @@ def test_run_greploop_wrapper_blocks_repair_without_pr_worktree(tmp_path):
         "exit 1\n",
     )
     env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+    env.pop("ZOE_GREPLOOP_SKIP_WORKTREE_SWITCH", None)
 
     proc = subprocess.run(
         [str(greploop_guard.REPO_ROOT / "scripts/maintenance/run_greploop_guard.sh"), "--pr=66", "--packet-only"],
