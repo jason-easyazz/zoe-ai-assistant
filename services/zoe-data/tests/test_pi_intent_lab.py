@@ -607,6 +607,51 @@ async def test_lab_does_not_speculate_casual_fallback_text(monkeypatch):
     assert "speculative_safe_fulfillment" not in result["safe_fulfillment"]
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "that cold case documentary was great",
+        "can you open the temp file",
+        "I had a hot dog for lunch",
+        "jacket potato sounds good",
+        "that umbrella clause is confusing",
+    ],
+)
+@pytest.mark.asyncio
+async def test_lab_does_not_speculate_ambiguous_weather_words(monkeypatch, text):
+    calls = []
+    _install_fake_intent_router(
+        monkeypatch,
+        raw=None,
+        extracted=None,
+        execute_response="should not run",
+        execute_calls=calls,
+    )
+    _install_fake_pi_classifier(
+        monkeypatch,
+        result=types.SimpleNamespace(
+            intent=None,
+            slots={},
+            confidence=0.0,
+            task_lane="chat",
+            source="fake_pi",
+            latency_ms=10.0,
+            reason="casual chat",
+        ),
+    )
+
+    result = await compare_pi_intent_lab(
+        text,
+        include_hybrid_status=False,
+        include_safe_fulfillment=True,
+    )
+
+    assert result["zoe_router"]["route_class"] == "fallback"
+    assert calls == []
+    assert result["safe_fulfillment"]["blocked_reason"] == "pi_no_intent"
+    assert "speculative_safe_fulfillment" not in result["safe_fulfillment"]
+
+
 @pytest.mark.asyncio
 async def test_lab_discards_speculative_safe_fulfillment_when_pi_slots_differ(monkeypatch):
     calls = []

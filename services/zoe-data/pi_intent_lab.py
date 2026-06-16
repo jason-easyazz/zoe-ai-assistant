@@ -29,8 +29,13 @@ SAFE_FULFILLMENT_INTENTS = frozenset(
         "weather",
     }
 )
-_SPECULATIVE_WEATHER_RE = re.compile(
-    r"\b(rain|umbrella|forecast|weather|jacket|temperature|temp|storm|windy|humid|hot|cold)\b",
+_SPECULATIVE_WEATHER_STRONG_RE = re.compile(
+    r"\b(rain|forecast|weather|temperature|storm|windy|humid)\b",
+    re.I,
+)
+_SPECULATIVE_WEATHER_CONTEXT_RE = re.compile(
+    r"\b(umbrella|jacket|temp|hot|cold)\b.*\b(today|tonight|tomorrow|later|outside|forecast|weather|rain|degrees|celsius)\b"
+    r"|\b(today|tonight|tomorrow|later|outside|forecast|weather|rain|degrees|celsius)\b.*\b(umbrella|jacket|temp|hot|cold)\b",
     re.I,
 )
 _SPECULATIVE_DAILY_BRIEFING_RE = re.compile(
@@ -463,7 +468,7 @@ def _speculative_safe_fulfillment_candidate(zoe_router: Mapping[str, Any], *, te
             "confidence": _SPECULATIVE_HINT_CONFIDENCE,
             "source": "intent_buffer_hint",
         }
-    if _SPECULATIVE_WEATHER_RE.search(stripped):
+    if _has_speculative_weather_signal(stripped):
         return {
             "intent": "weather",
             "slots": {},
@@ -471,6 +476,10 @@ def _speculative_safe_fulfillment_candidate(zoe_router: Mapping[str, Any], *, te
             "source": "intent_buffer_hint",
         }
     return None
+
+
+def _has_speculative_weather_signal(text: str) -> bool:
+    return bool(_SPECULATIVE_WEATHER_STRONG_RE.search(text) or _SPECULATIVE_WEATHER_CONTEXT_RE.search(text))
 
 
 async def _execute_safe_fulfillment_intent(
