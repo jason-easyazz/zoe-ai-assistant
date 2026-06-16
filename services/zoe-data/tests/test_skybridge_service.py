@@ -493,7 +493,11 @@ async def test_calendar_explicit_date_queries_requested_day(monkeypatch):
     assert result["intent"]["range"] == "17 June 2026"
     assert db.fetch_args[2] == "2026-06-17"
     assert db.fetch_args[3] == "2026-06-17"
-    assert result["cards"][0]["content"]["qualifier"] == "17 June 2026"
+    content = result["cards"][0]["content"]
+    assert content["qualifier"] == "17 June 2026"
+    assert content["date"] == "2026-06-17"
+    assert content["start_date"] == "2026-06-17"
+    assert content["end_date"] == "2026-06-17"
 
 
 @pytest.mark.asyncio
@@ -512,6 +516,9 @@ async def test_calendar_happening_this_week_queries_range(monkeypatch):
     assert result["intent"]["range"] == "this week"
     assert db.fetch_args[2] == "2026-06-11"
     assert db.fetch_args[3] == (date(2026, 6, 11) + timedelta(days=7)).isoformat()
+    content = result["cards"][0]["content"]
+    assert content["start_date"] == "2026-06-11"
+    assert content["end_date"] == "2026-06-18"
 
 
 @pytest.mark.asyncio

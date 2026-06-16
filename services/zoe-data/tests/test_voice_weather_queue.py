@@ -575,6 +575,9 @@ async def test_voice_skybridge_private_request_challenges_guest_before_cards(mon
     async def no_user(*_args, **_kwargs):
         return None
 
+    async def default_user(*_args, **_kwargs):
+        return "panel-default-user"
+
     skybridge_module = types.SimpleNamespace(resolve_skybridge_request=resolve_skybridge_request)
     monkeypatch.setitem(sys.modules, "skybridge_service", skybridge_module)
     monkeypatch.setattr(skybridge_service, "resolve_skybridge_request", resolve_skybridge_request)
@@ -582,7 +585,7 @@ async def test_voice_skybridge_private_request_challenges_guest_before_cards(mon
     monkeypatch.setattr(voice_tts, "_broadcast_skybridge_ui", broadcast_skybridge_ui)
     monkeypatch.setattr(voice_tts, "_request_voice_identity_challenge", request_voice_identity_challenge)
     monkeypatch.setattr(voice_tts, "_resolve_recent_panel_session_user", no_user)
-    monkeypatch.setattr(voice_tts, "_resolve_panel_default_user", no_user)
+    monkeypatch.setattr(voice_tts, "_resolve_panel_default_user", default_user)
     monkeypatch.setattr(voice_tts, "_VOICE_SESSIONS", {})
 
     response = await voice_command(

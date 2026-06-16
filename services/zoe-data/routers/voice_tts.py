@@ -3005,9 +3005,10 @@ async def voice_command(
 
         _voice_entry = _VOICE_SESSIONS.get(panel_id, {})
         _skybridge_context = _voice_entry.get("skybridge_context") or {}
+        _skybridge_user = _scope_identity_user or "guest"
         _skybridge_result = await resolve_skybridge_request(
             text,
-            effective_user,
+            _skybridge_user,
             context=_skybridge_context,
             db=db,
         )
@@ -3067,8 +3068,8 @@ async def voice_command(
                 await _bc_sky.broadcast("all", "voice:done", {"panel_id": panel_id})
             except Exception:
                 pass
-            await _schedule_voice_chat_save(session_id, text, _skybridge_reply, effective_user)
-            asyncio.ensure_future(_run_voice_memory_passes(text, _skybridge_reply, effective_user, session_id))
+            await _schedule_voice_chat_save(session_id, text, _skybridge_reply, _skybridge_user)
+            asyncio.ensure_future(_run_voice_memory_passes(text, _skybridge_reply, _skybridge_user, session_id))
             return {
                 "ok": True,
                 "panel_id": panel_id,
