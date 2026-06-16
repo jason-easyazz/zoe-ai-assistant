@@ -80,9 +80,17 @@ def build_report(
         "eval_case_source_counts": summarize_eval_case_sources(cases),
         "eval_cases": eval_cases_to_dict(cases),
         "summary": {
-            "overall": _stats(observations),
-            "by_intent_group": _breakdown(observations, lambda item: str(item.get("intent_group") or "unknown")),
-            "by_source": _breakdown(observations, lambda item: str(item.get("source") or "unknown")),
+            "overall": _stats(observations, pi_ran=run_pi),
+            "by_intent_group": _breakdown(
+                observations,
+                lambda item: str(item.get("intent_group") or "unknown"),
+                pi_ran=run_pi,
+            ),
+            "by_source": _breakdown(
+                observations,
+                lambda item: str(item.get("source") or "unknown"),
+                pi_ran=run_pi,
+            ),
         },
     }
     if include_observations:
@@ -147,14 +155,16 @@ def _report_note(include_safe_fulfillment: bool) -> str:
 def _breakdown(
     observations: Sequence[Mapping[str, Any]],
     key_fn: Callable[[Mapping[str, Any]], str],
+    *,
+    pi_ran: bool,
 ) -> dict[str, dict[str, Any]]:
     grouped: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
     for item in observations:
         grouped[key_fn(item)].append(item)
-    return {key: _stats(values) for key, values in sorted(grouped.items())}
+    return {key: _stats(values, pi_ran=pi_ran) for key, values in sorted(grouped.items())}
 
 
-def _stats(observations: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+def _stats(observations: Sequence[Mapping[str, Any]], *, pi_ran: bool = True) -> dict[str, Any]:
     if not observations:
         return {
             "observation_count": 0,
@@ -173,9 +183,9 @@ def _stats(observations: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     return {
         "observation_count": len(observations),
         "unique_case_count": len({str(item.get("case_id")) for item in observations}),
-        "pi_accuracy": _rate(pi_correct),
-        "pi_timeout_rate": _rate(bool(item.get("pi_timed_out")) for item in observations),
-        "natural_flow_rate": _rate(bool(item.get("natural_flow_candidate")) for item in observations),
+        "pi_accuracy": _rate(pi_correct) if pi_ran else None,
+        "pi_timeout_rate": _rate(bool(item.get("pi_timed_out")) for item in observations) if pi_ran else None,
+        "natural_flow_rate": _rate(bool(item.get("natural_flow_candidate")) for item in observations) if pi_ran else None,
         "safe_fulfillment_success_rate": (
             _rate(bool(item.get("safe_fulfillment_success")) for item in safe_requested) if safe_requested else None
         ),

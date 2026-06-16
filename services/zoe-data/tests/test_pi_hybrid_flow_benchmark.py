@@ -160,6 +160,40 @@ def test_empty_report_keeps_stats_schema(monkeypatch):
     assert overall["safe_fulfillment_success_rate"] is None
 
 
+def test_pi_disabled_report_uses_null_pi_metrics(monkeypatch):
+    _install_fake_lab(monkeypatch, result_by_text={})
+    module = _load_module()
+    case = module.PiIntentEvalCase("weather", "rain later", "weather", "weather", "fallback")
+    observations = [
+        {
+            "case_id": "weather",
+            "intent_group": "weather",
+            "source": "intent_miss",
+            "pi_correct": False,
+            "pi_timed_out": False,
+            "natural_flow_candidate": False,
+        }
+    ]
+
+    report = module.build_report(
+        [case],
+        observations,
+        repeat=1,
+        run_pi=False,
+        transport="rpc",
+        include_safe_fulfillment=False,
+    )
+
+    for stats in (
+        report["summary"]["overall"],
+        report["summary"]["by_intent_group"]["weather"],
+        report["summary"]["by_source"]["intent_miss"],
+    ):
+        assert stats["pi_accuracy"] is None
+        assert stats["pi_timeout_rate"] is None
+        assert stats["natural_flow_rate"] is None
+
+
 def test_cli_runs_cases_file(monkeypatch, tmp_path, capsys):
     _install_fake_lab(monkeypatch, result_by_text={"rain later": _lab_result(intent="weather")})
     module = _load_module()
