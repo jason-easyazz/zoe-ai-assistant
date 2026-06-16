@@ -781,6 +781,32 @@ async def test_poll_chain_guarded_returns_sentinel_on_error(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_reconcile_branch_skips_on_poll_timeout_sentinel(monkeypatch):
+    """The status-reconciliation pass in _multica_poll_loop now polls via
+    _poll_chain_guarded instead of raw poll_ref. A hung executor yields a
+    found=False sentinel, so none of the reconcile terminal handlers (done /
+    blocked / running) fire and the loop continues to the next issue rather than
+    hanging. This mirrors the exact guard expressions used at that call site."""
+    import asyncio
+
+    import executor_registry
+    from main import _poll_chain_guarded
+
+    async def _hang(*_args, **_kwargs):
+        await asyncio.sleep(10)
+
+    monkeypatch.setattr(executor_registry, "poll_ref", _hang)
+    chain = await _poll_chain_guarded("multica:dead", issue={"id": "dead"}, timeout=0.01)
+
+    # The reconcile branch only acts when chain["found"] is truthy; the sentinel
+    # must therefore fall through every terminal handler.
+    assert chain.get("found") is False
+    assert not (chain.get("found") and chain.get("status") == "done")
+    assert not (chain.get("found") and chain.get("status") == "blocked")
+    assert not (chain.get("found") and chain.get("status") == "running")
+
+
+@pytest.mark.asyncio
 async def test_poll_chain_guarded_passes_through_live_result(monkeypatch):
     import executor_registry
     from main import _poll_chain_guarded

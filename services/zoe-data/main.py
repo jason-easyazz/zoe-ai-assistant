@@ -1090,6 +1090,15 @@ async def lifespan(app: FastAPI):
                     for issue in in_review_issues
                     if issue.get("id")
                 }
+                # Read the poll timeout once per cycle (not per tracked issue). The
+                # dispatch path resolves the same env var separately; this branch may
+                # run when that block was skipped, so it keeps its own local.
+                try:
+                    _reconcile_timeout = float(
+                        os.environ.get("ZOE_MULTICA_POLL_REF_TIMEOUT_S", "20") or "20"
+                    )
+                except ValueError:
+                    _reconcile_timeout = 20.0
                 for issue in issues:
                     # Check whether a linked engineering workflow has reached a terminal state.
                     issue_id = issue.get("id")
@@ -1122,9 +1131,16 @@ async def lifespan(app: FastAPI):
                             logger.debug("multica_poll: autopilot in_progress close: %s", _ap_exc)
                         continue
                     try:
-                        from executor_registry import poll_ref  # type: ignore[import]
-
-                        chain = await poll_ref(f"multica:{issue_id}", issue=issue)
+                        # Use the timeout-guarded poller (not raw poll_ref): a died
+                        # executor reference must not hang the whole poll iteration.
+                        # On timeout/error this returns a sentinel with found=False,
+                        # so every branch below is safely skipped this cycle. See
+                        # test_reconcile_branch_skips_on_poll_timeout_sentinel
+                        # (tests/test_main_multica_poll.py) for the skip-on-sentinel
+                        # regression coverage of this call site.
+                        chain = await _poll_chain_guarded(
+                            f"multica:{issue_id}", issue=issue, timeout=_reconcile_timeout
+                        )
                         if chain.get("found") and chain.get("status") == "done":
                             pr_url = chain.get("pr_url")
                             await _record_completed_multica_chain(client, str(issue_id), chain)
