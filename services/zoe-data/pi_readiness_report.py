@@ -204,8 +204,16 @@ def _next_actions(
                 "env": dict(actions.get("env") or {}),
             }
         )
-    next_actions.extend(_evidence_collection_actions(promotion))
-    next_actions.extend(_evidence_collection_actions(benchmark_promotion or {}, source="benchmark"))
+    shadow_evidence_actions = _evidence_collection_actions(promotion)
+    next_actions.extend(shadow_evidence_actions)
+    shadow_action_groups = {
+        str(action.get("intent_group")) for action in shadow_evidence_actions if action.get("intent_group")
+    }
+    next_actions.extend(
+        action
+        for action in _evidence_collection_actions(benchmark_promotion or {}, source="benchmark")
+        if str(action.get("intent_group")) not in shadow_action_groups
+    )
     baseline_groups = _groups_with_blocker(promotion, "baseline_not_comparable")
     benchmark_groups = _benchmark_candidate_groups(benchmark_promotion)
     if baseline_groups and benchmark_groups:
