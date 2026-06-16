@@ -447,6 +447,8 @@ def test_voice_wake_endpoint_reports_ack_text_when_using_live_tts_fallback(monke
         assert caller["source"] == "test"
         return Audio()
 
+    monkeypatch.setattr(voice_presence, "_AUDIO_CACHE", {})
+    monkeypatch.setattr(voice_presence, "_VARIANT_CURSOR", 0)
     monkeypatch.delenv("ZOE_WAKE_ACK_PHRASES", raising=False)
     monkeypatch.delenv("ZOE_WAKE_ACK_AUDIO_PATH", raising=False)
     monkeypatch.delenv("ZOE_WAKE_ACK_AUDIO_PATHS", raising=False)
