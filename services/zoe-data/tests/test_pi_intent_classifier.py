@@ -663,21 +663,14 @@ def test_pi_prompt_uses_only_low_risk_promotion_candidates():
     assert "Low-risk candidate intents" in prompt
     for intent in sorted(pi_intent_classifier._LOW_RISK_PI_INTENT_CANDIDATES):
         assert intent in pi_prompt_surface
-    for omitted in (
-        "calendar_show",
-        "calendar_create",
-        "music_play",
-        "music_control",
-        "music_volume",
-        "note_create",
-        "note_search",
-        "people_search",
-        "user_issue_report",
-        "extend_capability",
-        "governed_agent",
-        "governed-agent",
-    ):
+    excluded_intents = (
+        pi_intent_classifier._ALLOWED_EXECUTABLE_INTENTS
+        - pi_intent_classifier._LOW_RISK_PI_INTENT_CANDIDATES
+    )
+    for omitted in excluded_intents:
         assert omitted not in pi_prompt_surface
+    assert "governed_agent" not in pi_prompt_surface
+    assert "governed-agent" not in pi_prompt_surface
 
 
 def test_pi_prompt_low_risk_candidates_match_promotion_groups():
