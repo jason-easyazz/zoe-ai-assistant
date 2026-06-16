@@ -84,6 +84,11 @@ _TASK_LANES = {
     "chat": set(),
 }
 
+_LOW_RISK_PI_INTENT_CANDIDATES = frozenset(
+    intent for intents in LOW_RISK_PI_INTENT_GROUPS.values() for intent in intents
+)
+_PI_PROMPT_TASK_LANES = {"fast_tool": sorted(_LOW_RISK_PI_INTENT_CANDIDATES), "chat": []}
+
 _SECRET_ENV_MARKERS = ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENROUTER_API_KEY")
 _PI_CLASSIFIER_BASE_FLAGS = (
     "--no-tools",
@@ -99,8 +104,8 @@ _PI_CLASSIFIER_SYSTEM_PROMPT = (
     "You are Zoe's offline intent classifier. Classify only; do not answer the user. "
     "Return exactly one compact JSON object with keys intent, slots, confidence, task_lane, reason. "
     "Use intent null and task_lane chat for casual chat, advice, research, or uncertain requests. "
-    "Use governed_agent only for self-extension, complaints, or missing capability requests. "
-    "Never create memory-write intents from ambiguous phrasing."
+    "Only choose from the low-risk candidate intents in the user prompt. "
+    "Never create intents outside that candidate set."
 )
 
 _LOW_RISK_TASK_SIGNAL_RE = re.compile(
@@ -356,12 +361,11 @@ async def _classify_with_pi_rpc(
 
 
 def _classification_prompt(text: str, *, context_turns: str = "") -> str:
-    lanes = {lane: sorted(intents) for lane, intents in _TASK_LANES.items() if intents}
     return (
         "Schema: {\"intent\": string|null, \"slots\": object, \"confidence\": number, "
-        "\"task_lane\": \"fast_tool\"|\"governed_agent\"|\"chat\", \"reason\": string}.\n"
-        f"Allowed intents: {sorted(_ALLOWED_EXECUTABLE_INTENTS)}\n"
-        f"Task lanes: {json.dumps(lanes, sort_keys=True)}\n"
+        "\"task_lane\": \"fast_tool\"|\"chat\", \"reason\": string}.\n"
+        f"Low-risk candidate intents: {sorted(_LOW_RISK_PI_INTENT_CANDIDATES)}\n"
+        f"Task lanes: {json.dumps(_PI_PROMPT_TASK_LANES, sort_keys=True)}\n"
         "Hints: rain/umbrella/jacket=>weather; due/todo=>reminder_list; timer/alarm=>timer_create. "
         "Keep confidence below 0.78 unless obvious.\n"
         f"Recent context: {_sanitize_prompt_value(context_turns) or '(none)'}\n"
