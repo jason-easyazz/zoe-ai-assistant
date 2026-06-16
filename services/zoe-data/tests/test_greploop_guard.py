@@ -1556,7 +1556,7 @@ async def test_run_guard_once_suppresses_stale_resolved_github_thread(tmp_path, 
         lambda pr, repo=greploop_guard.DEFAULT_REPO: {
             "ok": True,
             "unresolved": 0,
-            "resolved_greptile_keys": [("services/zoe-data/example.py", body)],
+            "resolved_greptile_keys": [("path_title", f"services/zoe-data/example.py:{body}")],
         },
     )
     monkeypatch.setattr(
@@ -1612,7 +1612,7 @@ async def test_assess_merge_readiness_ignores_mcp_comment_when_thread_resolved(m
         lambda pr, repo=greploop_guard.DEFAULT_REPO: {
             "ok": True,
             "unresolved": 0,
-            "resolved_greptile_keys": [("services/zoe-data/example.py", body)],
+            "resolved_greptile_keys": [("path_title", f"services/zoe-data/example.py:{body}")],
         },
     )
     monkeypatch.setattr(
