@@ -228,6 +228,22 @@ def test_warm_faster_whisper_worker_respects_opt_out(monkeypatch):
     assert asyncio.run(voice_tts.warm_faster_whisper_worker()) is False
 
 
+def test_warm_faster_whisper_worker_skips_when_memory_headroom_low(monkeypatch):
+    from routers import voice_tts
+
+    async def _unexpected_worker(path: str) -> str:
+        raise AssertionError("worker should not be called")
+
+    monkeypatch.delenv("ZOE_WHISPER_WARMUP", raising=False)
+    monkeypatch.delenv("ZOE_WHISPER_IN_PROCESS", raising=False)
+    monkeypatch.delenv("ZOE_WHISPER_PERSISTENT_WORKER", raising=False)
+    monkeypatch.setenv("ZOE_WHISPER_WARMUP_MIN_AVAILABLE_MB", "1536")
+    monkeypatch.setattr(voice_tts, "_available_system_memory_bytes", lambda: 256 * 1024 * 1024)
+    monkeypatch.setattr(voice_tts, "_run_faster_whisper_worker", _unexpected_worker)
+
+    assert asyncio.run(voice_tts.warm_faster_whisper_worker()) is False
+
+
 def test_warm_faster_whisper_worker_resets_worker_after_timeout(monkeypatch):
     from routers import voice_tts
 
