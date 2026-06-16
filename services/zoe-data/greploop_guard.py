@@ -417,6 +417,203 @@ def _actionable_greptile_findings(findings: list[dict[str, Any]]) -> list[dict[s
     return [f for f in findings if (f.get("file_path") or "").strip()]
 
 
+def _github_review_key(row: dict[str, Any]) -> tuple[str, int | None] | None:
+    path = str(row.get("file_path") or row.get("path") or row.get("filePath") or "").strip()
+    if not path:
+        return None
+    line_value = row.get("line") or row.get("originalLine") or row.get("startLine")
+    try:
+        line = int(line_value) if line_value is not None else None
+    except (TypeError, ValueError):
+        line = None
+    return (path, line)
+
+
+def _effective_greptile_confidence(
+    pr_number: int,
+    status: dict[str, Any],
+    findings: list[dict[str, Any]],
+    *,
+    repo: str = DEFAULT_REPO,
+) -> int:
+    """Use all known Greptile confidence sources, including GitHub summary comments."""
+    from greptile_client import parse_confidence_score
+
+    confidence = int(status.get("confidenceScore") or 0)
+    for row in findings:
+        score = parse_confidence_score(row.get("body"), row.get("raw"))
+        if score is not None:
+            confidence = max(confidence, score)
+    gh_confidence = _greptile_confidence_from_github_comments(pr_number, repo=repo)
+    if gh_confidence is not None:
+        confidence = max(confidence, gh_confidence)
+    return confidence
+
+
+def _finding_review_id(finding: dict[str, Any]) -> str | None:
+    raw = finding.get("raw") if isinstance(finding.get("raw"), dict) else {}
+    direct = raw.get("reviewId") or raw.get("codeReviewId") or finding.get("reviewId")
+    if direct:
+        return str(direct)
+    comment_id = str(raw.get("commentId") or finding.get("commentId") or "")
+    match = re.search(r"(?:^|:)(\d{4,})(?::|$)", comment_id)
+    return match.group(1) if match else None
+
+
+def _latest_completed_greptile_review_id(status: dict[str, Any]) -> str | None:
+    latest: tuple[str, str] | None = None
+    for review in status.get("codeReviews") or []:
+        if not isinstance(review, dict):
+            continue
+        if str(review.get("status") or "").upper() != "COMPLETED" or not review.get("id"):
+            continue
+        timestamp = str(review.get("completedAt") or review.get("createdAt") or "")
+        candidate = (timestamp, str(review.get("id")))
+        if latest is None or candidate > latest:
+            latest = candidate
+    return latest[1] if latest else None
+
+
+def _findings_for_current_greptile_review(
+    findings: list[dict[str, Any]], status: dict[str, Any]
+) -> list[dict[str, Any]]:
+    latest_review_id = _latest_completed_greptile_review_id(status)
+    if not latest_review_id:
+        return findings
+    current: list[dict[str, Any]] = []
+    for finding in findings:
+        review_id = _finding_review_id(finding)
+        if review_id and review_id != latest_review_id:
+            continue
+        current.append(finding)
+    return current
+
+
+def _gh_review_thread_keys(
+    pr_number: int, *, repo: str = DEFAULT_REPO
+) -> dict[str, set[Any]] | None:
+    """Return resolved/unresolved GitHub review thread identifiers, or None on API failure."""
+    try:
+        owner, name = repo.split("/", 1)
+    except ValueError:
+        return None
+    query_first = (
+        "query($owner:String!,$repo:String!,$pr:Int!){"
+        "repository(owner:$owner,name:$repo){pullRequest(number:$pr){"
+        "reviewThreads(first:100){"
+        "pageInfo{hasNextPage endCursor}"
+        "nodes{isResolved comments(first:20){nodes{id databaseId path line originalLine}}}}}}}"
+    )
+    query_next = (
+        "query($owner:String!,$repo:String!,$pr:Int!,$after:String!){"
+        "repository(owner:$owner,name:$repo){pullRequest(number:$pr){"
+        "reviewThreads(first:100,after:$after){"
+        "pageInfo{hasNextPage endCursor}"
+        "nodes{isResolved comments(first:20){nodes{id databaseId path line originalLine}}}}}}}"
+    )
+    keys: dict[str, set[Any]] = {
+        "resolved": set(),
+        "unresolved": set(),
+        "resolved_comment_ids": set(),
+        "unresolved_comment_ids": set(),
+    }
+    after: str | None = None
+    for _ in range(50):  # up to 5000 threads
+        cmd = [
+            "gh",
+            "api",
+            "graphql",
+            "-f",
+            f"query={query_next if after else query_first}",
+            "-f",
+            f"owner={owner}",
+            "-f",
+            f"repo={name}",
+            "-F",
+            f"pr={int(pr_number)}",
+        ]
+        if after:
+            cmd.extend(["-f", f"after={after}"])
+        proc = subprocess.run(cmd, cwd=REPO_ROOT, text=True, capture_output=True)
+        if proc.returncode != 0:
+            return None
+        try:
+            threads = (
+                json.loads(proc.stdout or "{}")
+                .get("data", {})
+                .get("repository", {})
+                .get("pullRequest", {})
+                .get("reviewThreads", {})
+            )
+        except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
+            return None
+        nodes = threads.get("nodes") or []
+        for thread in nodes if isinstance(nodes, list) else []:
+            if not isinstance(thread, dict):
+                continue
+            bucket = "resolved" if thread.get("isResolved") else "unresolved"
+            comments = ((thread.get("comments") or {}).get("nodes") or [])
+            for comment in comments:
+                if not isinstance(comment, dict):
+                    continue
+                if key := _github_review_key(comment):
+                    keys[bucket].add(key)
+                comment_ids = keys[f"{bucket}_comment_ids"]
+                if comment.get("id"):
+                    comment_ids.add(str(comment.get("id")))
+                if comment.get("databaseId"):
+                    comment_ids.add(str(comment.get("databaseId")))
+        page_info = threads.get("pageInfo") or {}
+        if not page_info.get("hasNextPage"):
+            break
+        after = page_info.get("endCursor")
+        if not after:
+            break
+    return keys
+
+
+def _github_review_comment_ids(finding: dict[str, Any]) -> set[str]:
+    raw = finding.get("raw") if isinstance(finding.get("raw"), dict) else {}
+    ids = {
+        str(value)
+        for value in (
+            finding.get("id"),
+            finding.get("commentId"),
+            finding.get("nodeId"),
+            raw.get("id"),
+            raw.get("commentId"),
+            raw.get("nodeId"),
+            raw.get("databaseId"),
+        )
+        if value
+    }
+    return ids
+
+
+def _unresolved_actionable_greptile_findings(
+    pr_number: int, findings: list[dict[str, Any]], *, repo: str = DEFAULT_REPO
+) -> list[dict[str, Any]]:
+    """Filter MCP findings through GitHub's review-thread truth when available."""
+    actionable = _actionable_greptile_findings(findings)
+    thread_keys = _gh_review_thread_keys(pr_number, repo=repo)
+    if thread_keys is None:
+        return actionable
+    resolved = thread_keys.get("resolved") or set()
+    unresolved = thread_keys.get("unresolved") or set()
+    resolved_comment_ids = thread_keys.get("resolved_comment_ids") or set()
+    unresolved_comment_ids = thread_keys.get("unresolved_comment_ids") or set()
+    filtered: list[dict[str, Any]] = []
+    for finding in actionable:
+        key = _github_review_key(finding)
+        comment_ids = _github_review_comment_ids(finding)
+        if key and key in resolved and key not in unresolved:
+            continue
+        if comment_ids & resolved_comment_ids and not comment_ids & unresolved_comment_ids:
+            continue
+        filtered.append(finding)
+    return filtered
+
+
 def _greptile_confidence_from_github_comments(
     pr_number: int, *, repo: str = DEFAULT_REPO
 ) -> int | None:
@@ -555,7 +752,7 @@ async def assess_merge_readiness(
     default_branch: str = DEFAULT_BASE_BRANCH,
 ) -> dict[str, Any]:
     """Return whether a PR is safe to squash-merge via normal gh (no admin/force)."""
-    from greptile_client import get_pr_status, list_pr_comments, parse_confidence_score
+    from greptile_client import get_pr_status, list_pr_comments
 
     pr_number = int(pr_number)
     status = await get_pr_status(repo=repo, pr_number=pr_number, default_branch=default_branch)
@@ -579,14 +776,7 @@ async def assess_merge_readiness(
         blockers.append("GREPTILE_THREAD_CHECK_FAILED")
     elif unresolved_threads:
         blockers.append(f"GREPTILE_UNRESOLVED_THREADS:{unresolved_threads}")
-    confidence = int(status.get("confidenceScore") or 0)
-    for row in findings:
-        score = parse_confidence_score(row.get("body"))
-        if score is not None:
-            confidence = max(confidence, score)
-    gh_confidence = _greptile_confidence_from_github_comments(pr_number, repo=repo)
-    if gh_confidence is not None:
-        confidence = max(confidence, gh_confidence)
+    confidence = _effective_greptile_confidence(pr_number, status, findings, repo=repo)
     if confidence < int(target_confidence):
         blockers.append(f"GREPTILE_CONFIDENCE:{confidence}<{target_confidence}")
     gh_state = _gh_mergeable_state(pr_number, repo=repo)
@@ -600,6 +790,7 @@ async def assess_merge_readiness(
         "unresolved_review_threads": unresolved_threads if unresolved_threads is not None else -1,
         "gh": gh_state,
         "target_confidence": int(target_confidence),
+        "confidence": confidence,
     }
 
 
@@ -695,7 +886,7 @@ async def run_guard_once(
         state = _load_status(pr_number)
         status = await get_pr_status(repo=DEFAULT_REPO, pr_number=pr_number, default_branch=DEFAULT_BASE_BRANCH)
         comments = await list_pr_comments(repo=DEFAULT_REPO, pr_number=pr_number, default_branch=DEFAULT_BASE_BRANCH)
-        findings = comments.get("findings") or []
+        findings = _findings_for_current_greptile_review(comments.get("findings") or [], status)
         actionable_findings = _actionable_greptile_findings(findings)
         if status.get("reviewIsRunning"):
             wait_count = int(state.get("waiting_greptile_count") or 0) + 1
@@ -715,7 +906,9 @@ async def run_guard_once(
             _write_json(pr_number, "status.json", state)
             return {"ok": True, "state": "WAITING_GREPTILE", "greptile": status}
         state["waiting_greptile_count"] = 0
-        progress_key = f"{status.get('headSha')}:{status.get('confidenceScore')}:{len(actionable_findings)}:{len(findings)}"
+        actionable_findings = _unresolved_actionable_greptile_findings(pr_number, findings, repo=DEFAULT_REPO)
+        confidence = _effective_greptile_confidence(pr_number, status, findings, repo=DEFAULT_REPO)
+        progress_key = f"{status.get('headSha')}:{confidence}:{len(actionable_findings)}:{len(findings)}"
         blocked = _update_circuit_breakers(pr_number, state, progress_key)
         if blocked:
             state["terminal_state"] = blocked
@@ -724,12 +917,12 @@ async def run_guard_once(
             return {"ok": False, "state": blocked, "status": state}
         state["greptile"] = {
             "status": status.get("reviewCompleteness") or "reviewed",
-            "confidence": status.get("confidenceScore"),
+            "confidence": confidence,
             "unaddressed_count": len(actionable_findings),
             "summary_count": max(0, len(findings) - len(actionable_findings)),
         }
         _write_json(pr_number, "status.json", state)
-        if (status.get("confidenceScore") or 0) >= int(task.get("target_confidence") or 5) and not actionable_findings:
+        if confidence >= int(task.get("target_confidence") or 5) and not actionable_findings:
             state["terminal_state"] = "READY_TO_MERGE"
             _write_json(pr_number, "status.json", state)
             return {"ok": True, "state": "READY_TO_MERGE", "greptile": status}

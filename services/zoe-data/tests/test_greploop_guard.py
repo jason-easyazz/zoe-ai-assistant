@@ -130,6 +130,152 @@ def test_ci_status_from_rollup_accepts_success():
     assert greploop_guard._ci_status_from_rollup(rollup)["ok"] is True
 
 
+def test_unresolved_actionable_greptile_findings_drops_resolved_comment_ids(monkeypatch):
+    findings = [
+        {
+            "id": "stale",
+            "file_path": "services/zoe-data/a.py",
+            "raw": {"commentId": "PRRC_resolved"},
+        },
+        {
+            "id": "live",
+            "file_path": "services/zoe-data/b.py",
+            "raw": {"commentId": "PRRC_unresolved"},
+        },
+    ]
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_review_thread_keys",
+        lambda *_args, **_kwargs: {
+            "resolved": set(),
+            "unresolved": set(),
+            "resolved_comment_ids": {"PRRC_resolved"},
+            "unresolved_comment_ids": {"PRRC_unresolved"},
+        },
+    )
+
+    actionable = greploop_guard._unresolved_actionable_greptile_findings(66, findings)
+
+    assert [finding["id"] for finding in actionable] == ["live"]
+
+
+def test_latest_completed_greptile_review_id_uses_newest_timestamp():
+    status = {
+        "codeReviews": [
+            {"id": "111111", "status": "COMPLETED", "completedAt": "2026-06-16T14:18:00Z"},
+            {"id": "333333", "status": "REVIEWING_FILES", "createdAt": "2026-06-16T14:30:00Z"},
+            {"id": "222222", "status": "COMPLETED", "completedAt": "2026-06-16T14:28:00Z"},
+        ]
+    }
+
+    assert greploop_guard._latest_completed_greptile_review_id(status) == "222222"
+
+
+def test_findings_for_current_greptile_review_drops_older_review_comments():
+    status = {
+        "codeReviews": [
+            {"id": "111111", "status": "COMPLETED", "completedAt": "2026-06-16T14:18:00Z"},
+            {"id": "222222", "status": "COMPLETED", "completedAt": "2026-06-16T14:28:00Z"},
+        ]
+    }
+    findings = [
+        {"id": "summary", "file_path": "", "raw": {}},
+        {
+            "id": "old",
+            "file_path": "services/zoe-data/a.py",
+            "raw": {"commentId": "outside-diff:111111:0"},
+        },
+        {
+            "id": "new",
+            "file_path": "services/zoe-data/b.py",
+            "raw": {"commentId": "outside-diff:222222:0"},
+        },
+    ]
+
+    current = greploop_guard._findings_for_current_greptile_review(findings, status)
+
+    assert [finding["id"] for finding in current] == ["summary", "new"]
+
+
+def test_gh_review_thread_keys_paginates(monkeypatch):
+    calls = []
+    pages = [
+        {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {
+                            "pageInfo": {"hasNextPage": True, "endCursor": "cursor-1"},
+                            "nodes": [
+                                {
+                                    "isResolved": True,
+                                    "comments": {
+                                        "nodes": [
+                                            {
+                                                "id": "PRRC_resolved",
+                                                "databaseId": 101,
+                                                "path": "services/zoe-data/a.py",
+                                                "line": 10,
+                                            }
+                                        ]
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            "nodes": [
+                                {
+                                    "isResolved": False,
+                                    "comments": {
+                                        "nodes": [
+                                            {
+                                                "id": "PRRC_unresolved",
+                                                "databaseId": 202,
+                                                "path": "services/zoe-data/b.py",
+                                                "line": 20,
+                                            }
+                                        ]
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                }
+            }
+        },
+    ]
+
+    def fake_run(cmd, **_kwargs):
+        calls.append(cmd)
+        return type(
+            "P",
+            (),
+            {"returncode": 0, "stdout": json.dumps(pages[len(calls) - 1]), "stderr": ""},
+        )()
+
+    monkeypatch.setattr(greploop_guard.subprocess, "run", fake_run)
+
+    keys = greploop_guard._gh_review_thread_keys(66)
+
+    assert keys == {
+        "resolved": {("services/zoe-data/a.py", 10)},
+        "unresolved": {("services/zoe-data/b.py", 20)},
+        "resolved_comment_ids": {"PRRC_resolved", "101"},
+        "unresolved_comment_ids": {"PRRC_unresolved", "202"},
+    }
+    assert len(calls) == 2
+    assert "after=cursor-1" in calls[1]
+
+
 def test_ci_status_from_rollup_rejects_empty_rollup():
     out = greploop_guard._ci_status_from_rollup([])
 
@@ -203,6 +349,11 @@ async def test_assess_merge_readiness_blocks_low_confidence(monkeypatch):
 
     monkeypatch.setattr("greptile_client.get_pr_status", fake_status)
     monkeypatch.setattr("greptile_client.list_pr_comments", fake_comments)
+    monkeypatch.setattr(
+        greploop_guard,
+        "_greptile_confidence_from_github_comments",
+        lambda *_args, **_kwargs: None,
+    )
     monkeypatch.setattr(
         greploop_guard,
         "_gh_mergeable_state",
@@ -308,6 +459,16 @@ async def test_run_guard_once_ignores_pathless_greptile_summary_when_confident(t
     monkeypatch.setattr("greptile_client.list_pr_comments", fake_comments)
     monkeypatch.setattr("greptile_client.trigger_review", fail_trigger)
     monkeypatch.setattr(greploop_guard, "_run_cheap_agent", fail_runner)
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_review_thread_keys",
+        lambda *_args, **_kwargs: {"resolved": set(), "unresolved": set()},
+    )
+    monkeypatch.setattr(
+        greploop_guard,
+        "_greptile_confidence_from_github_comments",
+        lambda *_args, **_kwargs: None,
+    )
 
     out = await greploop_guard.run_guard_once(66)
 
@@ -317,6 +478,150 @@ async def test_run_guard_once_ignores_pathless_greptile_summary_when_confident(t
     assert state["terminal_state"] == "READY_TO_MERGE"
     assert state["greptile"]["unaddressed_count"] == 0
     assert state["greptile"]["summary_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_run_guard_once_uses_github_summary_confidence_without_retriggering(tmp_path, monkeypatch):
+    async def fake_status(**_kwargs):
+        return {
+            "confidenceScore": None,
+            "reviewIsRunning": False,
+            "headSha": "abc",
+            "reviewCompleteness": "No Greptile review comments",
+        }
+
+    async def fake_comments(**_kwargs):
+        return {"findings": []}
+
+    async def fail_trigger(**_kwargs):
+        raise AssertionError("GitHub summary confidence must prevent redundant review trigger")
+
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr("greptile_client.get_pr_status", fake_status)
+    monkeypatch.setattr("greptile_client.list_pr_comments", fake_comments)
+    monkeypatch.setattr("greptile_client.trigger_review", fail_trigger)
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_review_thread_keys",
+        lambda *_args, **_kwargs: {"resolved": set(), "unresolved": set()},
+    )
+    monkeypatch.setattr(
+        greploop_guard,
+        "_greptile_confidence_from_github_comments",
+        lambda *_args, **_kwargs: 5,
+    )
+
+    out = await greploop_guard.run_guard_once(66)
+
+    assert out["ok"] is True
+    assert out["state"] == "READY_TO_MERGE"
+    state = greploop_guard.read_guard_state(66)
+    assert state["terminal_state"] == "READY_TO_MERGE"
+    assert state["greptile"]["confidence"] == 5
+
+
+@pytest.mark.asyncio
+async def test_run_guard_once_ignores_resolved_github_review_thread_findings(tmp_path, monkeypatch):
+    async def fake_status(**_kwargs):
+        return {
+            "confidenceScore": 5,
+            "reviewIsRunning": False,
+            "headSha": "abc",
+            "reviewCompleteness": "Reviewed",
+        }
+
+    async def fake_comments(**_kwargs):
+        return {
+            "findings": [
+                {
+                    "id": "stale-1",
+                    "file_path": "services/zoe-data/example.py",
+                    "line": 42,
+                    "body": "Already fixed in a resolved GitHub review thread.",
+                    "addressed": False,
+                }
+            ]
+        }
+
+    async def fail_trigger(**_kwargs):
+        raise AssertionError("resolved review thread finding must not retrigger Greptile")
+
+    async def fail_runner(*_args, **_kwargs):
+        raise AssertionError("resolved review thread finding must not become a packet")
+
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr("greptile_client.get_pr_status", fake_status)
+    monkeypatch.setattr("greptile_client.list_pr_comments", fake_comments)
+    monkeypatch.setattr("greptile_client.trigger_review", fail_trigger)
+    monkeypatch.setattr(greploop_guard, "_run_cheap_agent", fail_runner)
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_review_thread_keys",
+        lambda *_args, **_kwargs: {
+            "resolved": {("services/zoe-data/example.py", 42)},
+            "unresolved": set(),
+        },
+    )
+    monkeypatch.setattr(
+        greploop_guard,
+        "_greptile_confidence_from_github_comments",
+        lambda *_args, **_kwargs: None,
+    )
+
+    out = await greploop_guard.run_guard_once(66)
+
+    assert out["ok"] is True
+    assert out["state"] == "READY_TO_MERGE"
+    state = greploop_guard.read_guard_state(66)
+    assert state["terminal_state"] == "READY_TO_MERGE"
+    assert state["greptile"]["unaddressed_count"] == 0
+    assert state["greptile"]["summary_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_run_guard_once_keeps_unresolved_github_thread_findings_actionable(tmp_path, monkeypatch):
+    async def fake_status(**_kwargs):
+        return {
+            "confidenceScore": 5,
+            "reviewIsRunning": False,
+            "headSha": "abc",
+            "reviewCompleteness": "Reviewed",
+        }
+
+    async def fake_comments(**_kwargs):
+        return {
+            "findings": [
+                {
+                    "id": "live-1",
+                    "file_path": "services/zoe-data/example.py",
+                    "line": 42,
+                    "body": "Fix this.",
+                }
+            ]
+        }
+
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr("greptile_client.get_pr_status", fake_status)
+    monkeypatch.setattr("greptile_client.list_pr_comments", fake_comments)
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_review_thread_keys",
+        lambda *_args, **_kwargs: {
+            "resolved": set(),
+            "unresolved": {("services/zoe-data/example.py", 42)},
+        },
+    )
+    monkeypatch.setattr(
+        greploop_guard,
+        "_greptile_confidence_from_github_comments",
+        lambda *_args, **_kwargs: None,
+    )
+
+    out = await greploop_guard.run_guard_once(66, packet_only=True)
+
+    assert out["ok"] is True
+    assert out["state"] == "PACKET_READY"
+    assert out["packet"]["allowed_files"] == ["services/zoe-data/example.py"]
 
 
 @pytest.mark.asyncio
@@ -355,6 +660,16 @@ async def test_run_guard_once_retriggers_low_confidence_pathless_summary(tmp_pat
     monkeypatch.setattr("greptile_client.list_pr_comments", fake_comments)
     monkeypatch.setattr("greptile_client.trigger_review", fake_trigger)
     monkeypatch.setattr(greploop_guard, "_run_cheap_agent", fail_runner)
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_review_thread_keys",
+        lambda *_args, **_kwargs: {"resolved": set(), "unresolved": set()},
+    )
+    monkeypatch.setattr(
+        greploop_guard,
+        "_greptile_confidence_from_github_comments",
+        lambda *_args, **_kwargs: None,
+    )
 
     out = await greploop_guard.run_guard_once(66)
 
