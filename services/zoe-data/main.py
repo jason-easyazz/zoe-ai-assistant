@@ -128,6 +128,23 @@ async def _poll_chain_guarded(ref: str, *, issue: dict | None, timeout: float) -
         return {"found": False, "status": "poll_error", "error": str(exc)}
 
 
+async def _resolve_chain_for_dispatch(chain, *, ref, issue, poll_guarded, poll_timeout):
+    """Re-poll once with a longer timeout when the first poll failed.
+
+    ``_poll_chain_guarded`` returns a timeout/error sentinel on a slow/failed
+    poll. An *existing* multi-row chain's poll (worktree + git ops) is expensive
+    and can time out under event-loop load, while a fresh todo's poll is cheap —
+    so without a retry the sentinel made the backfill skip the chain forever
+    (stranding it past implement). If the chain isn't a sentinel, return it
+    unchanged (no extra poll).
+    """
+    from multica_poll_dispatch import chain_poll_failed  # type: ignore[import]
+
+    if not chain_poll_failed(chain):
+        return chain
+    return await poll_guarded(ref, issue=issue, timeout=max(float(poll_timeout) * 2, 60.0))
+
+
 async def _recover_stale_in_progress_issues(
     client,
     in_progress_issues: list[dict],
@@ -710,6 +727,24 @@ async def lifespan(app: FastAPI):
     # Multica board polling loop (30s interval, no-op if ZOE_MULTICA=false)
     async def _multica_poll_loop():
         import time as _t
+        # Observability: the systemd unit doesn't capture app stdout (journalctl
+        # shows nothing for zoe-data), so persist poll-loop diagnostics to a
+        # dedicated rotating file. Isolated to this module logger — does not touch
+        # uvicorn's logging config. Without this, dispatch stalls are invisible.
+        try:
+            from logging.handlers import RotatingFileHandler
+
+            if not any(getattr(_h, "_zoe_poll_log", False) for _h in logger.handlers):
+                _poll_log_path = os.path.expanduser("~/.zoe/zoe-data-poll.log")
+                os.makedirs(os.path.dirname(_poll_log_path), exist_ok=True)
+                _fh = RotatingFileHandler(_poll_log_path, maxBytes=2_000_000, backupCount=3)
+                _fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+                _fh.setLevel(logging.INFO)  # handler-scoped; do NOT mutate the shared logger level
+                _fh._zoe_poll_log = True  # type: ignore[attr-defined]
+                logger.addHandler(_fh)
+                logger.info("multica_poll: diagnostics logging to %s", _poll_log_path)
+        except Exception as _log_exc:  # pragma: no cover - logging setup must never break the loop
+            logger.warning("multica_poll: could not attach poll-loop file log: %s", _log_exc)
         _last_worktree_prune = 0.0
         try:
             _prune_interval_s = float(os.environ.get("ZOE_WORKTREE_PRUNE_INTERVAL_S", "86400") or "86400")
@@ -785,7 +820,7 @@ async def lifespan(app: FastAPI):
                 try:
                     from multica_webhook_emitter import is_configured as _wh_ok
                     from multica_client import get_engineering_multica_agent_id  # type: ignore[import]
-                    from multica_poll_dispatch import chain_is_running, chain_needs_dispatch  # type: ignore[import]
+                    from multica_poll_dispatch import chain_is_running, chain_needs_dispatch, chain_poll_failed  # type: ignore[import]
                     from multica_dispatch_control import dispatch_is_paused, pause_reason
 
                     _dispatch_paused = dispatch_is_paused()
@@ -899,7 +934,36 @@ async def lifespan(app: FastAPI):
                             if not _tid:
                                 return
                             _chain = await _poll_chain(_candidate)
-                            if not chain_needs_dispatch(_chain):
+                            # A failed poll (timeout/error sentinel) on a known in-progress
+                            # chain must NOT silently skip it — that stranded chains past
+                            # implement forever (an existing multi-row chain's poll can time
+                            # out under load). Re-poll once fresh with a generous timeout; if
+                            # it still can't resolve, fall through to dispatch_issue anyway —
+                            # dispatch is idempotent + re-derives state from the journal, so it
+                            # safely creates the next ready phase or no-ops if a row exists.
+                            if chain_poll_failed(_chain) and not from_todo:
+                                logger.info(
+                                    "multica_poll: chain poll failed for %s (%s); re-polling before skip",
+                                    _candidate.get("identifier") or _tid,
+                                    _chain.get("status"),
+                                )
+                                _chain = await _resolve_chain_for_dispatch(
+                                    _chain,
+                                    ref=f"multica:{_tid}",
+                                    issue=_candidate,
+                                    poll_guarded=_poll_chain_guarded,
+                                    poll_timeout=_poll_timeout,
+                                )
+                                # Keep the per-cycle cache consistent with the re-poll so the
+                                # later todo loop sees the resolved state, not the stale sentinel.
+                                _chain_cache[_tid] = _chain
+                                # If the re-poll revealed an active worker, the single lane is
+                                # genuinely occupied (the earlier running-count missed it via the
+                                # sentinel). Mark the lane full so the todo loop can't over-dispatch.
+                                if chain_is_running(_chain):
+                                    _wh_dispatched = _wh_limit
+                                    return
+                            if not chain_needs_dispatch(_chain) and not chain_poll_failed(_chain):
                                 return
                             _phase = (_chain.get("pipeline") or {}).get("phase")
                             # Dispatch the next ready phase IN-PROCESS. The poll loop runs

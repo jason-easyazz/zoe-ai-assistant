@@ -794,6 +794,36 @@ async def test_poll_chain_guarded_passes_through_live_result(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_resolve_chain_for_dispatch_repolls_only_on_sentinel():
+    """A poll sentinel triggers ONE fresh re-poll (longer timeout); a real chain
+    is returned unchanged with no extra poll. This is the recovery that stops a
+    transient poll timeout/error from stranding an in-progress chain past implement."""
+    from main import _resolve_chain_for_dispatch
+
+    calls = []
+
+    async def _repoll(ref, *, issue=None, timeout=None):
+        calls.append({"ref": ref, "timeout": timeout})
+        return {"found": True, "status": "partial", "phases": {"implement": "done"}}
+
+    # Sentinel -> re-polls with a longer (>= 60s) timeout and returns the fresh result.
+    sentinel = {"found": False, "status": "poll_timeout", "timed_out": True}
+    out = await _resolve_chain_for_dispatch(
+        sentinel, ref="multica:x", issue={"id": "x"}, poll_guarded=_repoll, poll_timeout=20.0
+    )
+    assert out["status"] == "partial"
+    assert len(calls) == 1 and calls[0]["timeout"] >= 60.0
+
+    # Real (non-sentinel) chain -> returned as-is, no extra poll.
+    real = {"found": True, "status": "partial", "phases": {"implement": "done"}}
+    out2 = await _resolve_chain_for_dispatch(
+        real, ref="multica:y", issue={"id": "y"}, poll_guarded=_repoll, poll_timeout=20.0
+    )
+    assert out2 is real
+    assert len(calls) == 1  # not called again
+
+
+@pytest.mark.asyncio
 async def test_recover_stale_in_progress_resets_dead_chain_and_frees_lane():
     import datetime as dt
 
