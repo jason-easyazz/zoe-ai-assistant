@@ -207,8 +207,9 @@ def _next_actions(
     next_actions.extend(_evidence_collection_actions(promotion))
     next_actions.extend(_evidence_collection_actions(benchmark_promotion or {}, source="benchmark"))
     baseline_groups = _groups_with_blocker(promotion, "baseline_not_comparable")
-    if baseline_groups and _benchmark_candidate_groups(benchmark_promotion):
-        baseline_groups = []
+    benchmark_groups = _benchmark_candidate_groups(benchmark_promotion)
+    if baseline_groups and benchmark_groups:
+        baseline_groups = [g for g in baseline_groups if g in benchmark_groups]
     if baseline_groups:
         next_actions.append(
             {
