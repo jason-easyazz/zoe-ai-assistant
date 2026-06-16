@@ -372,6 +372,43 @@ def test_cli_combines_default_and_cases_file(tmp_path, capsys):
     assert len(case_ids) > 1
 
 
+def test_build_eval_readiness_collects_real_source_evidence_for_candidate_wins():
+    module = _load_module()
+    report = {
+        "promotable_groups": [],
+        "rollback_groups": [],
+        "promotion_actions": {"requires_operator_apply": False, "promote_groups": [], "rollback_groups": []},
+        "candidate_wins": {
+            "groups": ["weather"],
+            "blocked_groups": ["weather"],
+            "promotion_ready_groups": [],
+            "details": [
+                {
+                    "intent_group": "weather",
+                    "status": "needs_more_evidence",
+                    "unique_case_deficit": 0,
+                    "sample_deficit": 0,
+                    "real_source_sample_deficit": 30,
+                    "promotion_blockers": ["insufficient_real_source_samples"],
+                }
+            ],
+        },
+    }
+
+    readiness = module.build_eval_readiness(report)
+
+    assert readiness["state"] == "collect_more_evidence"
+    assert readiness["next_actions"] == [
+        {
+            "kind": "collect_labeled_evidence",
+            "priority": "p1",
+            "intent_group": "weather",
+            "needed_unique_cases": 0,
+            "needed_real_source_cases": 30,
+        }
+    ]
+
+
 def test_build_eval_readiness_collects_more_evidence_for_candidate_wins():
     module = _load_module()
     report = {

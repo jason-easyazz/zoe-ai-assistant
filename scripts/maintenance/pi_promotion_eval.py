@@ -345,19 +345,22 @@ def _eval_next_actions(
         if not isinstance(item, dict) or item.get("status") != "needs_more_evidence":
             continue
         blockers = set(str(blocker) for blocker in item.get("promotion_blockers") or [])
-        if blockers and blockers != {"insufficient_samples"}:
+        evidence_blockers = {"insufficient_samples", "insufficient_real_source_samples"}
+        if blockers and not blockers <= evidence_blockers:
             continue
-        deficit = int(item.get("unique_case_deficit") or item.get("sample_deficit") or 0)
-        if deficit <= 0:
+        unique_deficit = int(item.get("unique_case_deficit") or item.get("sample_deficit") or 0)
+        real_source_deficit = int(item.get("real_source_sample_deficit") or 0)
+        if unique_deficit <= 0 and real_source_deficit <= 0:
             continue
-        next_actions.append(
-            {
-                "kind": "collect_labeled_evidence",
-                "priority": "p1",
-                "intent_group": item.get("intent_group"),
-                "needed_unique_cases": deficit,
-            }
-        )
+        action = {
+            "kind": "collect_labeled_evidence",
+            "priority": "p1",
+            "intent_group": item.get("intent_group"),
+            "needed_unique_cases": unique_deficit,
+        }
+        if real_source_deficit > 0:
+            action["needed_real_source_cases"] = real_source_deficit
+        next_actions.append(action)
     if not next_actions and state == "collect_more_evidence":
         next_actions.append(
             {
