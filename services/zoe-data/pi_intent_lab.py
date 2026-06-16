@@ -78,6 +78,12 @@ async def compare_pi_intent_lab(
 
     zoe_router = await _run_zoe_router(stripped, user_id=user_id)
     processing_cue = _processing_cue(env)
+    speculative_safe_fulfillment = _start_speculative_safe_fulfillment(
+        zoe_router,
+        user_id=user_id,
+        enabled=include_safe_fulfillment,
+        timeout_seconds=safe_fulfillment_timeout_seconds,
+    )
     pi = await _run_pi(
         stripped,
         context_turns=context_turns,
@@ -99,6 +105,7 @@ async def compare_pi_intent_lab(
         user_id=user_id,
         enabled=include_safe_fulfillment,
         timeout_seconds=safe_fulfillment_timeout_seconds,
+        speculative=speculative_safe_fulfillment,
     )
 
     hybrid = None
@@ -315,6 +322,7 @@ async def _safe_fulfill_pi_intent(
     user_id: str,
     enabled: bool,
     timeout_seconds: float,
+    speculative: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not enabled:
         return {
@@ -327,29 +335,110 @@ async def _safe_fulfill_pi_intent(
             "would_execute": False,
         }
 
+    async def block(reason: str, *, intent: str | None = None, error: Any = None) -> dict[str, Any]:
+        return await _discard_speculative_safe_fulfillment(
+            speculative,
+            _blocked_fulfillment(reason, intent=intent, error=error),
+        )
+
     intent_name = str(pi.get("intent") or "")
     if not pi.get("ran"):
-        return _blocked_fulfillment("pi_not_run")
+        return await block("pi_not_run")
     if not intent_name:
-        return _blocked_fulfillment("pi_no_intent")
+        return await block("pi_no_intent")
     if pi.get("timed_out"):
-        return _blocked_fulfillment("pi_timed_out", intent=intent_name)
+        return await block("pi_timed_out", intent=intent_name)
     if pi.get("error"):
-        return _blocked_fulfillment("pi_error", intent=intent_name, error=pi.get("error"))
+        return await block("pi_error", intent=intent_name, error=pi.get("error"))
     if intent_name not in SAFE_FULFILLMENT_INTENTS:
-        return _blocked_fulfillment("side_effect_or_unsupported_intent", intent=intent_name)
+        return await block("side_effect_or_unsupported_intent", intent=intent_name)
     if not pi.get("low_risk_group"):
-        return _blocked_fulfillment("not_low_risk_group", intent=intent_name)
+        return await block("not_low_risk_group", intent=intent_name)
 
     from pi_intent_classifier import PI_INTENT_EXECUTE_THRESHOLD
 
     confidence = float(pi.get("confidence") or 0.0)
     if confidence < PI_INTENT_EXECUTE_THRESHOLD:
-        return _blocked_fulfillment("below_execute_threshold", intent=intent_name)
+        return await block("below_execute_threshold", intent=intent_name)
 
-    from intent_router import Intent, execute_intent
+    pi_slots = dict(pi.get("slots") or {})
+    discarded_speculative = None
+    if speculative is not None:
+        speculative_intent = str(speculative.get("intent") or "")
+        speculative_slots = dict(speculative.get("slots") or {})
+        speculative_task = speculative.get("task")
+        if (
+            speculative_intent == intent_name
+            and speculative_slots == pi_slots
+            and isinstance(speculative_task, asyncio.Task)
+        ):
+            return await _await_speculative_safe_fulfillment(speculative, timeout_seconds=timeout_seconds)
+        reason = "speculative_slots_mismatch" if speculative_intent == intent_name else "speculative_pi_disagreed"
+        discarded_speculative = await _discard_speculative_safe_fulfillment(
+            speculative,
+            _blocked_fulfillment(reason, intent=speculative_intent),
+        )
 
-    intent = Intent(intent_name, dict(pi.get("slots") or {}), confidence)
+    from intent_router import Intent
+
+    intent = Intent(intent_name, pi_slots, confidence)
+    result = await _execute_safe_fulfillment_intent(
+        intent,
+        user_id=user_id,
+        timeout_seconds=timeout_seconds,
+        started_before_pi=False,
+    )
+    if discarded_speculative is not None:
+        result["speculative_safe_fulfillment"] = "discarded"
+        result["speculative_intent"] = discarded_speculative.get("speculative_intent")
+        result["speculative_discard_reason"] = discarded_speculative.get("blocked_reason")
+    return result
+
+def _start_speculative_safe_fulfillment(
+    zoe_router: Mapping[str, Any],
+    *,
+    user_id: str,
+    enabled: bool,
+    timeout_seconds: float,
+) -> dict[str, Any] | None:
+    if not enabled:
+        return None
+    intent_name = str(zoe_router.get("intent") or "")
+    if not intent_name or intent_name not in SAFE_FULFILLMENT_INTENTS:
+        return None
+    if not zoe_router.get("baseline_comparable"):
+        return None
+
+    from intent_router import Intent
+
+    confidence = float(zoe_router.get("confidence") or 0.0)
+    intent = Intent(intent_name, dict(zoe_router.get("slots") or {}), confidence)
+    task = asyncio.create_task(
+        _execute_safe_fulfillment_intent(
+            intent,
+            user_id=user_id,
+            timeout_seconds=timeout_seconds,
+            started_before_pi=True,
+        )
+    )
+    return {
+        "intent": intent_name,
+        "slots": dict(zoe_router.get("slots") or {}),
+        "task": task,
+        "source": "zoe_router",
+    }
+
+
+async def _execute_safe_fulfillment_intent(
+    intent: Any,
+    *,
+    user_id: str,
+    timeout_seconds: float,
+    started_before_pi: bool,
+) -> dict[str, Any]:
+    from intent_router import execute_intent
+
+    intent_name = str(getattr(intent, "name", "") or "")
     started = time.perf_counter()
     try:
         response = await asyncio.wait_for(execute_intent(intent, user_id=user_id), timeout=timeout_seconds)
@@ -367,6 +456,8 @@ async def _safe_fulfill_pi_intent(
             "response_preview": _preview_response(response_text),
             "would_execute": True,
             "execution_scope": "read_only_allowlist",
+            "started_before_pi": started_before_pi,
+            "validated_by_pi": False,
         }
     except asyncio.TimeoutError:
         latency_ms = (time.perf_counter() - started) * 1000
@@ -382,6 +473,8 @@ async def _safe_fulfill_pi_intent(
             "response_preview": "",
             "would_execute": False,
             "execution_scope": "read_only_allowlist",
+            "started_before_pi": started_before_pi,
+            "validated_by_pi": False,
         }
     except Exception as exc:  # pragma: no cover - defensive operator surface
         latency_ms = (time.perf_counter() - started) * 1000
@@ -397,7 +490,59 @@ async def _safe_fulfill_pi_intent(
             "response_preview": "",
             "would_execute": False,
             "execution_scope": "read_only_allowlist",
+            "started_before_pi": started_before_pi,
+            "validated_by_pi": False,
         }
+
+
+async def _await_speculative_safe_fulfillment(speculative: Mapping[str, Any], *, timeout_seconds: float) -> dict[str, Any]:
+    task = speculative.get("task")
+    if not isinstance(task, asyncio.Task):
+        return _blocked_fulfillment("speculative_task_missing", intent=str(speculative.get("intent") or ""))
+    try:
+        result = await asyncio.wait_for(asyncio.shield(task), timeout=timeout_seconds)
+    except asyncio.TimeoutError:
+        return {
+            "requested": True,
+            "attempted": True,
+            "allowed": True,
+            "intent": str(speculative.get("intent") or ""),
+            "latency_ms": None,
+            "timed_out": True,
+            "error": None,
+            "response_chars": 0,
+            "response_preview": "",
+            "would_execute": False,
+            "execution_scope": "read_only_allowlist",
+            "started_before_pi": True,
+            "validated_by_pi": True,
+            "speculative_safe_fulfillment": "timed_out",
+        }
+    result = dict(result)
+    result["validated_by_pi"] = True
+    result["speculative_safe_fulfillment"] = "used"
+    return result
+
+
+async def _discard_speculative_safe_fulfillment(
+    speculative: Mapping[str, Any] | None,
+    fallback: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if speculative is None:
+        return fallback or _blocked_fulfillment("speculative_not_available")
+    task = speculative.get("task")
+    if isinstance(task, asyncio.Task):
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            pass
+    result = fallback or _blocked_fulfillment("speculative_pi_disagreed", intent=str(speculative.get("intent") or ""))
+    result["speculative_safe_fulfillment"] = "discarded"
+    result["speculative_intent"] = str(speculative.get("intent") or "")
+    return result
 
 
 def _blocked_fulfillment(reason: str, *, intent: str | None = None, error: Any = None) -> dict[str, Any]:
@@ -458,7 +603,10 @@ def _simulated_hybrid_flow(
         and not safe_fulfillment.get("error")
     )
     if fulfilled and pi_latency is not None:
-        final_latency = pi_latency + (fulfillment_latency or 0.0)
+        if safe_fulfillment.get("started_before_pi"):
+            final_latency = max(pi_latency, fulfillment_latency or 0.0)
+        else:
+            final_latency = pi_latency + (fulfillment_latency or 0.0)
     else:
         final_latency = pi_latency if pi.get("ran") else agent_latency
     return {

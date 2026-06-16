@@ -430,6 +430,132 @@ async def test_lab_safe_fulfillment_error_is_reported(monkeypatch):
     assert result["safe_fulfillment"]["response_preview"] == ""
     assert result["simulated_hybrid_flow"]["safe_fulfillment_completion_latency_ms"] is None
 
+
+@pytest.mark.asyncio
+async def test_lab_reuses_speculative_safe_fulfillment_when_pi_agrees(monkeypatch):
+    calls = []
+    _install_fake_intent_router(
+        monkeypatch,
+        raw=_Intent("weather"),
+        extracted=_Intent("weather", {"forecast": False}),
+        execute_response="It's 18.5 C in Perth, light jacket weather.",
+        execute_calls=calls,
+        execute_delay_seconds=0.01,
+    )
+    _install_fake_pi_classifier(
+        monkeypatch,
+        result=types.SimpleNamespace(
+            intent="weather",
+            slots={"forecast": False},
+            confidence=0.93,
+            task_lane="fast_tool",
+            source="fake_pi",
+            latency_ms=123.0,
+            reason="weather signal",
+        ),
+    )
+    _install_fake_voice_presence(monkeypatch)
+
+    result = await compare_pi_intent_lab(
+        "need a jacket tonight",
+        include_hybrid_status=False,
+        include_safe_fulfillment=True,
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["intent"].name == "weather"
+    assert calls[0]["intent"].slots == {"forecast": False}
+    assert result["safe_fulfillment"]["started_before_pi"] is True
+    assert result["safe_fulfillment"]["validated_by_pi"] is True
+    assert result["safe_fulfillment"]["speculative_safe_fulfillment"] == "used"
+    assert result["safe_fulfillment"]["response_preview"] == "It's 18.5 C in Perth, light jacket weather."
+    pi_latency = result["simulated_hybrid_flow"]["pi_completion_latency_ms"]
+    fulfillment_latency = result["simulated_hybrid_flow"]["safe_fulfillment_latency_ms"]
+    assert result["simulated_hybrid_flow"]["safe_fulfillment_completion_latency_ms"] == max(
+        pi_latency,
+        fulfillment_latency,
+    )
+
+
+@pytest.mark.asyncio
+async def test_lab_discards_speculative_safe_fulfillment_when_pi_slots_differ(monkeypatch):
+    calls = []
+
+    def response_for(intent):
+        return f"forecast={intent.slots.get('forecast')}"
+
+    _install_fake_intent_router(
+        monkeypatch,
+        raw=_Intent("weather"),
+        extracted=_Intent("weather", {"forecast": False}),
+        execute_response=response_for,
+        execute_calls=calls,
+    )
+    _install_fake_pi_classifier(
+        monkeypatch,
+        result=types.SimpleNamespace(
+            intent="weather",
+            slots={"forecast": True},
+            confidence=0.93,
+            task_lane="fast_tool",
+            source="fake_pi",
+            latency_ms=123.0,
+            reason="weather signal",
+        ),
+    )
+
+    result = await compare_pi_intent_lab(
+        "weather tomorrow",
+        include_hybrid_status=False,
+        include_safe_fulfillment=True,
+    )
+
+    assert [call["intent"].slots for call in calls] == [{"forecast": False}, {"forecast": True}]
+    assert result["safe_fulfillment"]["started_before_pi"] is False
+    assert result["safe_fulfillment"]["validated_by_pi"] is False
+    assert result["safe_fulfillment"]["speculative_safe_fulfillment"] == "discarded"
+    assert result["safe_fulfillment"]["speculative_intent"] == "weather"
+    assert result["safe_fulfillment"]["speculative_discard_reason"] == "speculative_slots_mismatch"
+    assert result["safe_fulfillment"]["response_preview"] == "forecast=True"
+
+
+@pytest.mark.asyncio
+async def test_lab_discards_speculative_safe_fulfillment_below_pi_threshold(monkeypatch):
+    calls = []
+    _install_fake_intent_router(
+        monkeypatch,
+        raw=_Intent("weather"),
+        extracted=_Intent("weather", {"forecast": False}),
+        execute_response="should not be exposed",
+        execute_calls=calls,
+        execute_delay_seconds=0.05,
+    )
+    _install_fake_pi_classifier(
+        monkeypatch,
+        result=types.SimpleNamespace(
+            intent="weather",
+            slots={"forecast": False},
+            confidence=0.2,
+            task_lane="fast_tool",
+            source="fake_pi",
+            latency_ms=123.0,
+            reason="weak weather signal",
+        ),
+    )
+
+    result = await compare_pi_intent_lab(
+        "weather maybe",
+        include_hybrid_status=False,
+        include_safe_fulfillment=True,
+    )
+
+    assert len(calls) == 1
+    assert result["safe_fulfillment"]["attempted"] is False
+    assert result["safe_fulfillment"]["blocked_reason"] == "below_execute_threshold"
+    assert result["safe_fulfillment"]["speculative_safe_fulfillment"] == "discarded"
+    assert result["safe_fulfillment"]["speculative_intent"] == "weather"
+    assert result["safe_fulfillment"]["response_preview"] == ""
+
 def _admin_app():
     app = FastAPI()
     app.include_router(pi_intent_lab_router)
