@@ -274,7 +274,7 @@ def _tool_snapshot(pi_command: str, env: Mapping[str, str] | None = None) -> dic
     values = env if env is not None else os.environ
     path = values.get("PATH")
     if env is None:
-        path = _path_with_nvm_node_bin(path or "", pi_command=pi_command)
+        path = _path_with_runtime_bins(path or "", pi_command=pi_command)
     return {
         "node": shutil.which("node", path=path),
         "npm": shutil.which("npm", path=path),
@@ -282,7 +282,7 @@ def _tool_snapshot(pi_command: str, env: Mapping[str, str] | None = None) -> dic
     }
 
 
-def _path_with_nvm_node_bin(path: str, *, pi_command: str) -> str:
+def _path_with_runtime_bins(path: str, *, pi_command: str) -> str:
     parts = [part for part in path.split(os.pathsep) if part]
     node_bin = _discover_nvm_node_bin(pi_command=pi_command)
     if node_bin:
@@ -295,11 +295,10 @@ def _discover_nvm_node_bin(*, pi_command: str) -> str | None:
     nvm_versions = Path.home() / ".nvm" / "versions" / "node"
     if not nvm_versions.is_dir():
         return None
-    candidates = [path / "bin" for path in nvm_versions.iterdir() if (path / "bin").is_dir()]
     candidates = [
-        path
-        for path in candidates
-        if (path / "node").exists() and (path / "npm").exists() and (path / pi_command).exists()
+        path / "bin"
+        for path in nvm_versions.iterdir()
+        if (path / "bin" / "node").exists() and (path / "bin" / "npm").exists()
     ]
     if not candidates:
         return None
@@ -311,7 +310,8 @@ def _discover_nvm_node_bin(*, pi_command: str) -> str | None:
         except ValueError:
             return (0,)
 
-    return str(sorted(candidates, key=version_key)[-1])
+    standalone_candidates = [path for path in candidates if (path / pi_command).exists()]
+    return str(sorted(standalone_candidates or candidates, key=version_key)[-1])
 
 
 def _tool_version_snapshot(

@@ -12,6 +12,7 @@ from pi_intent_classifier import (
     _probe_pi_runtime_cached,
     _parse_pi_classification,
     _rpc_response_matches_request,
+    _runtime_probe_env,
     classify_with_pi_intent_governor,
     pi_intent_is_promoted,
     pi_intent_prefilter_allows,
@@ -198,6 +199,30 @@ def test_pi_intent_config_exposes_prefilter_default():
     assert config.prefilter_enabled is True
     assert config.to_dict()["prefilter_enabled"] is True
 
+
+
+def test_pi_intent_runtime_env_uses_standalone_nvm_pi_only(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    nvm_bin = home / ".nvm" / "versions" / "node" / "v22.22.0" / "bin"
+    openclaw_bin = home / ".openclaw" / "npm" / "node_modules" / ".bin"
+    nvm_bin.mkdir(parents=True)
+    openclaw_bin.mkdir(parents=True)
+    for command in ("node", "npm", "pi"):
+        path = nvm_bin / command
+        path.write_text("#!/bin/sh" + chr(10) + "exit 0" + chr(10), encoding="utf-8")
+        path.chmod(0o755)
+    bundled_pi = openclaw_bin / "pi"
+    bundled_pi.write_text("#!/bin/sh" + chr(10) + "exit 0" + chr(10), encoding="utf-8")
+    bundled_pi.chmod(0o755)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("PATH", "")
+    config = PiIntentClassifierConfig.from_env({"ZOE_PI_INTENT_ENABLED": "true"})
+
+    runtime_env = _runtime_probe_env(None, config)
+
+    path_parts = runtime_env["PATH"].split(os.pathsep)
+    assert str(nvm_bin) in path_parts
+    assert str(openclaw_bin) not in path_parts
 
 def test_pi_intent_prefilter_allows_low_risk_tasks_and_rejects_casual_chat():
     assert pi_intent_prefilter_allows("rain later") is True

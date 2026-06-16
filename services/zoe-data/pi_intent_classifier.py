@@ -14,7 +14,6 @@ import logging
 import glob
 import os
 import re
-import shutil
 import time
 import uuid
 from dataclasses import dataclass
@@ -665,7 +664,9 @@ def _runtime_probe_env(env: Mapping[str, str] | None, config: PiIntentClassifier
     )
     values["ZOE_PI_ALLOW_EXECUTION"] = values.get("ZOE_PI_ALLOW_EXECUTION", "false")
     values["ZOE_PI_LOCAL_MODEL_CONFIGURED"] = values.get("ZOE_PI_LOCAL_MODEL_CONFIGURED", "false")
-    values["PATH"] = _path_with_node(values.get("PATH", ""))
+    values["PATH"] = _path_with_node(
+        values.get("PATH", ""), pi_command=config.command, discover_runtime_bins=env is None
+    )
     return values
 
 
@@ -678,19 +679,24 @@ def _pi_subprocess_env(env: Mapping[str, str]) -> dict[str, str]:
     return values
 
 
-def _path_with_node(path: str) -> str:
+def _path_with_node(path: str, *, pi_command: str, discover_runtime_bins: bool) -> str:
     parts = [part for part in path.split(os.pathsep) if part]
-    joined = os.pathsep.join(parts)
-    if shutil.which("node", path=joined) and shutil.which("npm", path=joined):
-        return joined
-    node_bin = os.environ.get("ZOE_NVM_NODE_BIN") or _discover_nvm_node_bin()
+    if not discover_runtime_bins:
+        return os.pathsep.join(parts)
+    configured_node_bin = os.environ.get("ZOE_NVM_NODE_BIN")
+    node_bin = configured_node_bin if _nvm_bin_has_runtime(configured_node_bin, pi_command=pi_command) else None
+    node_bin = node_bin or _discover_nvm_node_bin(pi_command=pi_command)
     if node_bin and node_bin not in parts:
         parts.append(node_bin)
     return os.pathsep.join(parts)
 
 
-def _discover_nvm_node_bin() -> str | None:
-    candidates = [path for path in glob.glob(os.path.expanduser("~/.nvm/versions/node/*/bin")) if os.path.isdir(path)]
+def _discover_nvm_node_bin(*, pi_command: str) -> str | None:
+    candidates = [
+        path
+        for path in glob.glob(os.path.expanduser("~/.nvm/versions/node/*/bin"))
+        if _nvm_bin_has_runtime(path, pi_command=pi_command)
+    ]
     if not candidates:
         return None
 
@@ -702,6 +708,16 @@ def _discover_nvm_node_bin() -> str | None:
             return (0,)
 
     return sorted(candidates, key=version_key)[-1]
+
+
+def _nvm_bin_has_runtime(path: str | None, *, pi_command: str) -> bool:
+    return bool(
+        path
+        and os.path.isdir(path)
+        and os.path.exists(os.path.join(path, "node"))
+        and os.path.exists(os.path.join(path, "npm"))
+        and os.path.exists(os.path.join(path, pi_command))
+    )
 
 
 def _sanitize_prompt_value(value: str) -> str:
