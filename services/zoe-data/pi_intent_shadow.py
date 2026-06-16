@@ -30,6 +30,7 @@ _DEFAULT_SHADOW_PATH = "~/.zoe/data/pi-intent-shadow.jsonl"
 _DEFAULT_LABELS_PATH = "~/.zoe/data/pi-intent-shadow-labels.jsonl"
 _UNSET = object()
 _DEFAULT_MAX_REPORT_RECORDS = 500
+_ALLOWED_LABEL_SOURCES = {"admin_review", "operator_override"}
 _SECRET_KEY_RE = re.compile(r"(?i)(api[_-]?key|\btoken\b|\bsecret\b|password|authorization|\bbearer\b)")
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.\w+")
 _URL_RE = re.compile(r"https?://\S+")
@@ -230,6 +231,77 @@ def apply_pi_intent_shadow_labels(
             item["outcome_label_source"] = "shadow_label_sidecar"
         output.append(item)
     return output
+
+
+def append_pi_intent_shadow_label(
+    *,
+    text_hash: str,
+    outcome_label: str | None = None,
+    negative: bool = False,
+    source: str = "admin_review",
+    reviewed_by: str | None = None,
+    env: Mapping[str, str] | None = None,
+    config: PiIntentShadowConfig | None = None,
+    shadow_limit: int = _DEFAULT_MAX_REPORT_RECORDS,
+) -> dict[str, Any]:
+    """Append one trusted label for an existing Pi shadow record.
+
+    The sidecar is append-only. If a record is re-labeled later, normal label
+    loading keeps the newest valid row for the same text_hash.
+    """
+    active_config = config or PiIntentShadowConfig.from_env(env)
+    active_config.validate()
+    normalized_hash = str(text_hash or "").strip()
+    if not normalized_hash:
+        raise ValueError("text_hash is required")
+
+    records = load_pi_intent_shadow_records(active_config.path, limit=shadow_limit)
+    matching_record = next(
+        (record for record in records if str(record.get("text_hash") or "").strip() == normalized_hash),
+        None,
+    )
+    if matching_record is None:
+        raise ValueError(f"text_hash not found in the most-recent {shadow_limit} Pi shadow records")
+
+    source_value = str(source or "admin_review").strip() or "admin_review"
+    if source_value not in _ALLOWED_LABEL_SOURCES:
+        raise ValueError("source must be one of: admin_review, operator_override")
+
+    row: dict[str, Any] = {
+        "text_hash": normalized_hash,
+        "source": source_value,
+        "labeled_at": time.time(),
+    }
+    if outcome_label is not None:
+        row["outcome_label"] = str(outcome_label).strip()
+    if negative:
+        row["negative"] = True
+    if reviewed_by:
+        row["reviewed_by_hash"] = _hash_text(reviewed_by)
+
+    label = _shadow_label_from_row(row)
+    if not label:
+        raise ValueError("label must be a low-risk Pi intent or a negative chat/none label")
+
+    _append_jsonl(active_config.labels_path, row)
+    return {
+        "ok": True,
+        "text_hash": normalized_hash,
+        "labels_store": "shadow_labels_sidecar",
+        "label": label,
+        "matched_record": _compact_shadow_record_for_label_response(matching_record),
+    }
+
+
+def _compact_shadow_record_for_label_response(record: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "text_hash": _optional_str(record.get("text_hash")),
+        "text_preview": _optional_str(record.get("text_preview")),
+        "route_class": _optional_str(record.get("route_class")),
+        "zoe_intent": _optional_str(record.get("zoe_intent")),
+        "pi_intent": _optional_str(record.get("pi_intent")),
+        "agreement": _bool_record_value(record.get("agreement")),
+    }
 
 
 def _shadow_label_from_row(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -548,6 +620,7 @@ def _env_bool(value: str | None, *, default: bool = False) -> bool:
 
 __all__ = [
     "PiIntentShadowConfig",
+    "append_pi_intent_shadow_label",
     "apply_pi_intent_shadow_labels",
     "load_pi_intent_shadow_labels",
     "load_pi_intent_shadow_records",

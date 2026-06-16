@@ -1,3 +1,4 @@
+import json
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
@@ -213,6 +214,94 @@ def test_pi_hybrid_buffer_status_blocks_execution_without_promoted_groups(tmp_pa
     assert data["contract"]["mode"] == "shadow_with_execution_misconfigured"
     assert data["contract"]["ready"] is False
     assert "pi_execution_enabled_without_promoted_groups" in data["contract"]["blockers"]
+
+
+def test_pi_intent_shadow_label_endpoint_appends_trusted_label(tmp_path, monkeypatch):
+    shadow_path = tmp_path / "shadow.jsonl"
+    labels_path = tmp_path / "labels.jsonl"
+    shadow_path.write_text(
+        '{"text_hash":"weatherhash","text_preview":"rain later","route_class":"fallback","zoe_latency_ms":500,"pi_intent":"weather","pi_latency_ms":120,"pi_confidence":0.91}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_ENABLED", "true")
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_PATH", str(shadow_path))
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_LABELS_PATH", str(labels_path))
+    app = _admin_app()
+
+    resp = TestClient(app).post(
+        "/api/system/pi-intent/shadow-labels",
+        json={"text_hash": "weatherhash", "outcome_label": "weather"},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["label"]["outcome_label"] == "weather"
+    assert data["matched_record"]["text_preview"] == "rain later"
+    saved = json.loads(labels_path.read_text(encoding="utf-8"))
+    assert saved["text_hash"] == "weatherhash"
+    assert saved["outcome_label"] == "weather"
+    assert len(saved["reviewed_by_hash"]) == 64
+    assert "labels_path" not in data
+    assert data["labels_store"] == "shadow_labels_sidecar"
+
+    status = TestClient(app).get("/api/system/pi-intent/shadow-status").json()
+    assert status["label_count"] == 1
+    assert status["report"]["accuracy_available"] is True
+
+
+def test_pi_intent_shadow_label_endpoint_rejects_unlisted_source(tmp_path, monkeypatch):
+    shadow_path = tmp_path / "shadow.jsonl"
+    labels_path = tmp_path / "labels.jsonl"
+    shadow_path.write_text('{"text_hash":"known","text_preview":"rain later"}\n', encoding="utf-8")
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_ENABLED", "true")
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_PATH", str(shadow_path))
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_LABELS_PATH", str(labels_path))
+    app = _admin_app()
+
+    resp = TestClient(app).post(
+        "/api/system/pi-intent/shadow-labels",
+        json={"text_hash": "known", "outcome_label": "weather", "source": "freeform"},
+    )
+
+    assert resp.status_code == 422
+    assert not labels_path.exists()
+
+
+def test_pi_intent_shadow_label_endpoint_rejects_bad_label(tmp_path, monkeypatch):
+    shadow_path = tmp_path / "shadow.jsonl"
+    labels_path = tmp_path / "labels.jsonl"
+    shadow_path.write_text('{"text_hash":"known","text_preview":"upgrade yourself"}\n', encoding="utf-8")
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_ENABLED", "true")
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_PATH", str(shadow_path))
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_LABELS_PATH", str(labels_path))
+    app = _admin_app()
+
+    resp = TestClient(app).post(
+        "/api/system/pi-intent/shadow-labels",
+        json={"text_hash": "known", "outcome_label": "extend_capability"},
+    )
+
+    assert resp.status_code == 400
+    assert "low-risk" in resp.json()["detail"]
+    assert not labels_path.exists()
+
+
+def test_pi_intent_shadow_label_endpoint_rejects_non_admin():
+    app = FastAPI()
+    app.include_router(system_router)
+
+    async def fake_non_admin():
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    app.dependency_overrides[require_admin] = fake_non_admin
+
+    resp = TestClient(app).post(
+        "/api/system/pi-intent/shadow-labels",
+        json={"text_hash": "known", "outcome_label": "weather"},
+    )
+
+    assert resp.status_code == 403
 
 
 def test_pi_intent_shadow_status_endpoint_rejects_non_admin():

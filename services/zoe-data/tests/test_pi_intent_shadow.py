@@ -6,6 +6,7 @@ import pytest
 from pi_intent_classifier import PiIntentClassification
 from pi_intent_shadow import (
     PiIntentShadowConfig,
+    append_pi_intent_shadow_label,
     apply_pi_intent_shadow_labels,
     load_pi_intent_shadow_labels,
     load_pi_intent_shadow_records,
@@ -171,6 +172,78 @@ def test_shadow_status_applies_trusted_sidecar_labels(tmp_path):
     assert decision["pi_accuracy"] == 1.0
     assert decision["zoe_accuracy"] == 0.0
     assert "insufficient_samples" in decision["blockers"]
+
+
+def test_append_shadow_label_requires_existing_record_and_persists_sidecar(tmp_path):
+    shadow_path = tmp_path / "shadow.jsonl"
+    labels_path = tmp_path / "labels.jsonl"
+    shadow_path.write_text(
+        json.dumps(
+            {
+                "text_hash": "weatherhash",
+                "text_preview": "rain later",
+                "route_class": "fallback",
+                "zoe_intent": None,
+                "zoe_latency_ms": 500,
+                "pi_intent": "weather",
+                "pi_latency_ms": 120,
+                "pi_confidence": 0.91,
+                "pi_transport": "rpc",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = append_pi_intent_shadow_label(
+        text_hash="weatherhash",
+        outcome_label="weather",
+        reviewed_by="admin@example.test",
+        config=PiIntentShadowConfig(enabled=True, path=str(shadow_path), labels_path=str(labels_path)),
+    )
+
+    saved = json.loads(labels_path.read_text(encoding="utf-8"))
+    assert result["ok"] is True
+    assert result["label"]["outcome_label"] == "weather"
+    assert result["matched_record"]["text_preview"] == "rain later"
+    assert result["labels_store"] == "shadow_labels_sidecar"
+    assert "labels_path" not in result
+    assert saved["text_hash"] == "weatherhash"
+    assert saved["outcome_label"] == "weather"
+    assert len(saved["reviewed_by_hash"]) == 64
+    assert "admin@example.test" not in labels_path.read_text(encoding="utf-8")
+
+    status = pi_intent_shadow_status(
+        {
+            "ZOE_PI_INTENT_SHADOW_ENABLED": "true",
+            "ZOE_PI_INTENT_SHADOW_PATH": str(shadow_path),
+            "ZOE_PI_INTENT_SHADOW_LABELS_PATH": str(labels_path),
+        }
+    )
+    assert status["label_count"] == 1
+    assert status["report"]["labeled_sample_count_by_group"]["weather"] == 1
+
+
+def test_append_shadow_label_rejects_unknown_or_privileged_labels(tmp_path):
+    shadow_path = tmp_path / "shadow.jsonl"
+    labels_path = tmp_path / "labels.jsonl"
+    shadow_path.write_text(json.dumps({"text_hash": "known", "text_preview": "upgrade yourself"}) + "\n")
+    config = PiIntentShadowConfig(enabled=True, path=str(shadow_path), labels_path=str(labels_path))
+
+    with pytest.raises(ValueError, match="most-recent"):
+        append_pi_intent_shadow_label(text_hash="missing", outcome_label="weather", config=config)
+    with pytest.raises(ValueError, match="source must be one of"):
+        append_pi_intent_shadow_label(
+            text_hash="known",
+            outcome_label="weather",
+            source="freeform",
+            config=config,
+        )
+    with pytest.raises(ValueError, match="low-risk"):
+        append_pi_intent_shadow_label(text_hash="known", outcome_label="extend_capability", config=config)
+    with pytest.raises(ValueError, match="low-risk"):
+        append_pi_intent_shadow_label(text_hash="known", outcome_label="weather", negative=True, config=config)
+    assert not labels_path.exists()
 
 
 def test_shadow_label_loader_ignores_unmapped_and_applies_negative_labels(tmp_path):
