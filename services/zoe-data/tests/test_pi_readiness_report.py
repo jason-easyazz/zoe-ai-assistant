@@ -182,3 +182,169 @@ def test_readiness_report_requests_comparable_baseline_for_router_only_shadow_da
         "detail": "Measure Pi against Zoe Agent or operator fallback latency before judging promotion.",
         "groups": ["weather"],
     } in report["next_actions"]
+
+
+def test_readiness_report_uses_persisted_eval_benchmark_for_candidate_wins(tmp_path):
+    shadow_path = tmp_path / "shadow.jsonl"
+    shadow_path.write_text("", encoding="utf-8")
+    eval_report_path = tmp_path / "pi-eval.json"
+    eval_report_path.write_text(
+        json.dumps(
+            {
+                "promotion_report": {
+                    "candidate_wins": {
+                        "groups": ["weather"],
+                        "details": [
+                            {
+                                "intent_group": "weather",
+                                "status": "needs_more_evidence",
+                                "unique_case_count": 3,
+                                "unique_case_deficit": 27,
+                                "sample_deficit": 27,
+                                "real_source_sample_deficit": 27,
+                                "accuracy_delta": 1.0,
+                                "latency_delta_ms": 5000.0,
+                                "pi_p95_latency_ms": 3000.0,
+                                "zoe_p95_latency_ms": 8000.0,
+                                "promotion_blockers": ["insufficient_samples", "insufficient_real_source_samples"],
+                            }
+                        ],
+                    },
+                    "decisions": [],
+                    "promotion_actions": {},
+                },
+                "readiness": {"state": "collect_more_evidence"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    env = _env(tmp_path, shadow_path)
+    env["ZOE_PI_PROMOTION_EVAL_REPORT_PATH"] = str(eval_report_path)
+
+    report = pi_readiness_report(env)
+
+    assert report["state"] == "collect_more_evidence"
+    assert report["benchmark"]["loaded"] is True
+    assert report["summary"]["benchmark_candidate_win_groups"] == ["weather"]
+    assert report["evidence"]["benchmark_loaded"] is True
+    assert report["candidates"][0]["intent_group"] == "weather"
+    assert {
+        "kind": "collect_labeled_evidence",
+        "priority": "p1",
+        "intent_group": "weather",
+        "needed_unique_cases": 27,
+        "needed_real_source_cases": 27,
+        "detail": "Collect and label 27 more unique weather cases (27 must be real/log-derived) before promotion.",
+        "evidence_source": "benchmark",
+    } in report["next_actions"]
+
+
+
+
+def test_readiness_report_deduplicates_shadow_and_benchmark_collection_actions(tmp_path):
+    shadow_path = tmp_path / "shadow.jsonl"
+    shadow_path.write_text(json.dumps(_winning_weather_row(1)) + "\n", encoding="utf-8")
+    eval_report_path = tmp_path / "pi-eval.json"
+    eval_report_path.write_text(
+        json.dumps(
+            {
+                "promotion_report": {
+                    "candidate_wins": {
+                        "groups": ["weather"],
+                        "details": [
+                            {
+                                "intent_group": "weather",
+                                "status": "needs_more_evidence",
+                                "unique_case_deficit": 28,
+                                "sample_deficit": 28,
+                                "real_source_sample_deficit": 30,
+                                "accuracy_delta": 1.0,
+                                "latency_delta_ms": 2500.0,
+                                "pi_p95_latency_ms": 3000.0,
+                                "zoe_p95_latency_ms": 5500.0,
+                                "promotion_blockers": ["insufficient_samples", "insufficient_real_source_samples"],
+                            }
+                        ],
+                    },
+                    "decisions": [],
+                    "promotion_actions": {},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    env = _env(tmp_path, shadow_path)
+    env["ZOE_PI_PROMOTION_EVAL_REPORT_PATH"] = str(eval_report_path)
+
+    report = pi_readiness_report(env)
+
+    weather_actions = [
+        action
+        for action in report["next_actions"]
+        if action.get("kind") == "collect_labeled_evidence" and action.get("intent_group") == "weather"
+    ]
+    assert len(weather_actions) == 1
+    assert "evidence_source" not in weather_actions[0]
+
+
+def test_readiness_report_keeps_baseline_action_for_groups_not_covered_by_benchmark(tmp_path):
+    shadow_path = tmp_path / "shadow.jsonl"
+    row = _winning_weather_row(1)
+    row["zoe_latency_ms"] = 10
+    row["baseline_kind"] = "router_only_not_comparable"
+    row["baseline_comparable"] = False
+    shadow_path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    eval_report_path = tmp_path / "pi-eval.json"
+    eval_report_path.write_text(
+        json.dumps(
+            {
+                "promotion_report": {
+                    "candidate_wins": {
+                        "groups": ["timers"],
+                        "details": [
+                            {
+                                "intent_group": "timers",
+                                "status": "needs_more_evidence",
+                                "unique_case_deficit": 29,
+                                "sample_deficit": 29,
+                                "real_source_sample_deficit": 30,
+                                "accuracy_delta": 1.0,
+                                "latency_delta_ms": 1800.0,
+                                "pi_p95_latency_ms": 2400.0,
+                                "zoe_p95_latency_ms": 4200.0,
+                                "promotion_blockers": ["insufficient_samples", "insufficient_real_source_samples"],
+                            }
+                        ],
+                    },
+                    "decisions": [],
+                    "promotion_actions": {},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    env = _env(tmp_path, shadow_path)
+    env["ZOE_PI_PROMOTION_EVAL_REPORT_PATH"] = str(eval_report_path)
+
+    report = pi_readiness_report(env)
+
+    assert report["state"] == "collect_more_evidence"
+    assert {
+        "kind": "measure_comparable_baseline",
+        "priority": "p1",
+        "detail": "Measure Pi against Zoe Agent or operator fallback latency before judging promotion.",
+        "groups": ["weather"],
+    } in report["next_actions"]
+
+
+def test_readiness_report_missing_eval_benchmark_is_nonblocking(tmp_path):
+    shadow_path = tmp_path / "shadow.jsonl"
+    shadow_path.write_text("", encoding="utf-8")
+    env = _env(tmp_path, shadow_path)
+    env["ZOE_PI_PROMOTION_EVAL_REPORT_PATH"] = str(tmp_path / "missing.json")
+
+    report = pi_readiness_report(env)
+
+    assert report["benchmark"]["loaded"] is False
+    assert report["evidence"]["benchmark_loaded"] is False
+    assert report["state"] == "shadow_collecting"
