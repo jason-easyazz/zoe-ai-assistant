@@ -277,7 +277,7 @@ async def test_lab_can_fulfill_safe_read_only_pi_result(monkeypatch):
     _install_fake_voice_presence(monkeypatch)
 
     result = await compare_pi_intent_lab(
-        "need a jacket tonight",
+        "conditions outside",
         include_hybrid_status=False,
         include_safe_fulfillment=True,
     )
@@ -486,6 +486,125 @@ async def test_lab_reuses_speculative_safe_fulfillment_when_pi_agrees(monkeypatc
         pi_latency,
         fulfillment_latency,
     )
+
+
+@pytest.mark.asyncio
+async def test_lab_reuses_fallback_hint_speculative_weather_when_pi_agrees(monkeypatch):
+    calls = []
+    _install_fake_intent_router(
+        monkeypatch,
+        raw=None,
+        extracted=None,
+        execute_response="It's 18.5 C in Perth, light jacket weather.",
+        execute_calls=calls,
+        execute_delay_seconds=0.01,
+    )
+    _install_fake_pi_classifier(
+        monkeypatch,
+        result=types.SimpleNamespace(
+            intent="weather",
+            slots={},
+            confidence=0.93,
+            task_lane="fast_tool",
+            source="fake_pi",
+            latency_ms=123.0,
+            reason="weather signal",
+        ),
+        delay_seconds=0.03,
+    )
+    _install_fake_voice_presence(monkeypatch)
+
+    result = await compare_pi_intent_lab(
+        "need a jacket tonight",
+        include_hybrid_status=False,
+        include_safe_fulfillment=True,
+    )
+
+    assert result["zoe_router"]["route_class"] == "fallback"
+    assert len(calls) == 1
+    assert calls[0]["intent"].name == "weather"
+    assert calls[0]["intent"].slots == {}
+    assert result["safe_fulfillment"]["started_before_pi"] is True
+    assert result["safe_fulfillment"]["validated_by_pi"] is True
+    assert result["safe_fulfillment"]["speculative_safe_fulfillment"] == "used"
+    assert result["safe_fulfillment"]["response_preview"] == "It's 18.5 C in Perth, light jacket weather."
+
+
+@pytest.mark.asyncio
+async def test_lab_reuses_fallback_hint_speculative_daily_briefing_when_pi_agrees(monkeypatch):
+    calls = []
+    _install_fake_intent_router(
+        monkeypatch,
+        raw=None,
+        extracted=None,
+        execute_response="Here's your day: No events on the calendar today.",
+        execute_calls=calls,
+        execute_delay_seconds=0.01,
+    )
+    _install_fake_pi_classifier(
+        monkeypatch,
+        result=types.SimpleNamespace(
+            intent="daily_briefing",
+            slots={},
+            confidence=0.93,
+            task_lane="fast_tool",
+            source="fake_pi",
+            latency_ms=123.0,
+            reason="daily briefing signal",
+        ),
+        delay_seconds=0.03,
+    )
+    _install_fake_voice_presence(monkeypatch)
+
+    result = await compare_pi_intent_lab(
+        "what is my day looking like",
+        include_hybrid_status=False,
+        include_safe_fulfillment=True,
+    )
+
+    assert result["zoe_router"]["route_class"] == "fallback"
+    assert len(calls) == 1
+    assert calls[0]["intent"].name == "daily_briefing"
+    assert calls[0]["intent"].slots == {}
+    assert result["safe_fulfillment"]["started_before_pi"] is True
+    assert result["safe_fulfillment"]["validated_by_pi"] is True
+    assert result["safe_fulfillment"]["speculative_safe_fulfillment"] == "used"
+    assert result["safe_fulfillment"]["response_preview"] == "Here's your day: No events on the calendar today."
+
+
+@pytest.mark.asyncio
+async def test_lab_does_not_speculate_casual_fallback_text(monkeypatch):
+    calls = []
+    _install_fake_intent_router(
+        monkeypatch,
+        raw=None,
+        extracted=None,
+        execute_response="should not run",
+        execute_calls=calls,
+    )
+    _install_fake_pi_classifier(
+        monkeypatch,
+        result=types.SimpleNamespace(
+            intent=None,
+            slots={},
+            confidence=0.0,
+            task_lane="chat",
+            source="fake_pi",
+            latency_ms=10.0,
+            reason="casual chat",
+        ),
+    )
+
+    result = await compare_pi_intent_lab(
+        "I like the breakfast service",
+        include_hybrid_status=False,
+        include_safe_fulfillment=True,
+    )
+
+    assert result["zoe_router"]["route_class"] == "fallback"
+    assert calls == []
+    assert result["safe_fulfillment"]["blocked_reason"] == "pi_no_intent"
+    assert "speculative_safe_fulfillment" not in result["safe_fulfillment"]
 
 
 @pytest.mark.asyncio

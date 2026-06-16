@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import time
 import uuid
 from contextlib import contextmanager
@@ -28,6 +29,15 @@ SAFE_FULFILLMENT_INTENTS = frozenset(
         "weather",
     }
 )
+_SPECULATIVE_WEATHER_RE = re.compile(
+    r"\b(rain|umbrella|forecast|weather|jacket|temperature|temp|storm|windy|humid|hot|cold)\b",
+    re.I,
+)
+_SPECULATIVE_DAILY_BRIEFING_RE = re.compile(
+    r"(\bwhat(?:'s| is) my day\b|\bmy day looking\b|\bleft on my day\b|\bcoming up today\b|\bbriefing\b|\bagenda\b)",
+    re.I,
+)
+_SPECULATIVE_HINT_CONFIDENCE = 0.8
 
 
 @contextmanager
@@ -80,6 +90,7 @@ async def compare_pi_intent_lab(
     processing_cue = _processing_cue(env)
     speculative_safe_fulfillment = _start_speculative_safe_fulfillment(
         zoe_router,
+        text=stripped,
         user_id=user_id,
         enabled=include_safe_fulfillment,
         timeout_seconds=safe_fulfillment_timeout_seconds,
@@ -401,22 +412,20 @@ async def _safe_fulfill_pi_intent(
 def _start_speculative_safe_fulfillment(
     zoe_router: Mapping[str, Any],
     *,
+    text: str,
     user_id: str,
     enabled: bool,
     timeout_seconds: float,
 ) -> dict[str, Any] | None:
     if not enabled:
         return None
-    intent_name = str(zoe_router.get("intent") or "")
-    if not intent_name or intent_name not in SAFE_FULFILLMENT_INTENTS:
-        return None
-    if not zoe_router.get("baseline_comparable"):
+    candidate = _speculative_safe_fulfillment_candidate(zoe_router, text=text)
+    if candidate is None:
         return None
 
     from intent_router import Intent
 
-    confidence = float(zoe_router.get("confidence") or 0.0)
-    intent = Intent(intent_name, dict(zoe_router.get("slots") or {}), confidence)
+    intent = Intent(candidate["intent"], dict(candidate.get("slots") or {}), float(candidate["confidence"]))
     task = asyncio.create_task(
         _execute_safe_fulfillment_intent(
             intent,
@@ -426,11 +435,42 @@ def _start_speculative_safe_fulfillment(
         )
     )
     return {
-        "intent": intent_name,
-        "slots": dict(zoe_router.get("slots") or {}),
+        "intent": candidate["intent"],
+        "slots": dict(candidate.get("slots") or {}),
         "task": task,
-        "source": "zoe_router",
+        "source": candidate["source"],
     }
+
+
+def _speculative_safe_fulfillment_candidate(zoe_router: Mapping[str, Any], *, text: str) -> dict[str, Any] | None:
+    intent_name = str(zoe_router.get("intent") or "")
+    if intent_name and intent_name in SAFE_FULFILLMENT_INTENTS and zoe_router.get("baseline_comparable"):
+        return {
+            "intent": intent_name,
+            "slots": dict(zoe_router.get("slots") or {}),
+            "confidence": float(zoe_router.get("confidence") or 0.0),
+            "source": "zoe_router",
+        }
+    if str(zoe_router.get("route_class") or "") != "fallback":
+        return None
+    stripped = (text or "").strip()
+    if not stripped:
+        return None
+    if _SPECULATIVE_DAILY_BRIEFING_RE.search(stripped):
+        return {
+            "intent": "daily_briefing",
+            "slots": {},
+            "confidence": _SPECULATIVE_HINT_CONFIDENCE,
+            "source": "intent_buffer_hint",
+        }
+    if _SPECULATIVE_WEATHER_RE.search(stripped):
+        return {
+            "intent": "weather",
+            "slots": {},
+            "confidence": _SPECULATIVE_HINT_CONFIDENCE,
+            "source": "intent_buffer_hint",
+        }
+    return None
 
 
 async def _execute_safe_fulfillment_intent(
