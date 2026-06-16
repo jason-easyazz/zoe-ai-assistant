@@ -1244,7 +1244,12 @@ async def run_guard_once(
         status, comments = await asyncio.gather(
             get_pr_status(repo=DEFAULT_REPO, pr_number=pr_number, default_branch=DEFAULT_BASE_BRANCH),
             list_pr_comments(repo=DEFAULT_REPO, pr_number=pr_number, default_branch=DEFAULT_BASE_BRANCH),
+            return_exceptions=True,
         )
+        if isinstance(status, BaseException):
+            raise status
+        if isinstance(comments, BaseException):
+            raise comments
         findings = comments.get("findings") or []
         thread_counts = _gh_thread_counts(pr_number, repo=DEFAULT_REPO)
         confidence = _effective_greptile_confidence(pr_number, status, findings, repo=DEFAULT_REPO)
