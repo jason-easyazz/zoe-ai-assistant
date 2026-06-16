@@ -473,6 +473,48 @@ async def test_dispatch_after_scout_evidence_creates_next_phase():
 
 
 @pytest.mark.asyncio
+async def test_dispatch_after_implement_evidence_creates_verify():
+    """Regression: when implement is done the chain must auto-advance — dispatch
+    creates the verify phase. This is the autonomous implement→verify→…→closeout
+    path; if it regresses, chains strand at implement and never self-close-out.
+    """
+    from pipeline_store import bootstrap_state, save_state
+    from pipeline_evidence import EvidenceItem, transition, with_evidence
+
+    state = await bootstrap_state("multica:uuid-impl-verify", start_phase="implement")
+    state = with_evidence(state, EvidenceItem(kind="tool", summary="graphify", passed=True))
+    state = with_evidence(
+        state,
+        EvidenceItem(
+            kind="pr",
+            summary="https://github.com/o/r/pull/1",
+            artifact="https://github.com/o/r/pull/1",
+            passed=True,
+        ),
+    )
+    state = with_evidence(state, EvidenceItem(kind="test", summary="pytest passed", passed=True))
+    state = transition(state, "complete")
+    assert state.phase == "verify"
+    save_state(state, event="transition", extra={"row_phase": "implement"})
+
+    rows = [_row("implement", "done", chain_version="v4", issue_id="uuid-impl-verify")]
+    a = _FakeAdapter(list_rows=rows)
+    result = await a.dispatch({"id": "uuid-impl-verify", "identifier": "ZOE-IV", "title": "Fix thing"})
+
+    creates = [c for c in a.calls if c[0] == "create"]
+    assert result["phase"] == "verify"
+    assert set(result["chain"]) == {"verify"}
+    assert len(creates) == 1
+    assert (
+        creates[0][creates[0].index("--idempotency-key") + 1]
+        == "multica:uuid-impl-verify:verify"
+    )
+    # verify must be parented to the completed implement row for chain ordering.
+    assert "--parent" in creates[0]
+    assert creates[0][creates[0].index("--parent") + 1] == "t_implement"
+
+
+@pytest.mark.asyncio
 async def test_dispatch_overnight_mode_extends_runtime(monkeypatch):
     monkeypatch.setenv("ZOE_KANBAN_OVERNIGHT_MAX_RUNTIME", "8h")
     a = _FakeAdapter()
