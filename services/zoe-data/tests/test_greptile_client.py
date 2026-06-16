@@ -18,9 +18,11 @@ def test_normalize_pr_comment_maps_common_fields():
     comment = {
         "id": 123,
         "filePath": "services/zoe-data/example.py",
-        "line": 42,
+        "lineStart": 42,
+        "lineEnd": 43,
         "body": "Fix this",
         "suggestedCode": "pass",
+        "url": "https://github.example/comment",
     }
 
     normalized = greptile_client.normalize_pr_comment(comment)
@@ -28,6 +30,8 @@ def test_normalize_pr_comment_maps_common_fields():
     assert normalized["id"] == "123"
     assert normalized["file_path"] == "services/zoe-data/example.py"
     assert normalized["line"] == 42
+    assert normalized["line_end"] == 43
+    assert normalized["url"] == "https://github.example/comment"
     assert normalized["has_suggestion"] is True
 
 
