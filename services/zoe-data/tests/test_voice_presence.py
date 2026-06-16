@@ -293,6 +293,9 @@ def test_websocket_wake_returns_presence_events_without_reasoning(monkeypatch):
 
     monkeypatch.setattr(main, "_resolve_voice_cards", _unexpected_resolve)
     monkeypatch.delenv("ZOE_WAKE_ACK_PHRASE", raising=False)
+    monkeypatch.delenv("ZOE_WAKE_ACK_PHRASES", raising=False)
+    monkeypatch.delenv("ZOE_WAKE_ACK_AUDIO_PATH", raising=False)
+    monkeypatch.delenv("ZOE_WAKE_ACK_AUDIO_PATHS", raising=False)
 
     with TestClient(main.app) as client:
         with client.websocket_connect("/ws/voice/") as ws:
@@ -312,6 +315,9 @@ def test_websocket_hey_zoe_can_emit_configured_ack_phrase(monkeypatch):
         raise AssertionError("wake phrase must not enter Skybridge/card resolution")
 
     monkeypatch.setattr(main, "_resolve_voice_cards", _unexpected_resolve)
+    monkeypatch.delenv("ZOE_WAKE_ACK_PHRASES", raising=False)
+    monkeypatch.delenv("ZOE_WAKE_ACK_AUDIO_PATH", raising=False)
+    monkeypatch.delenv("ZOE_WAKE_ACK_AUDIO_PATHS", raising=False)
     monkeypatch.setenv("ZOE_WAKE_ACK_PHRASE", "Yes Jason?")
 
     with TestClient(main.app) as client:
@@ -333,6 +339,9 @@ def test_websocket_raw_text_hey_zoe_can_emit_configured_ack_phrase(monkeypatch):
         raise AssertionError("raw wake phrase must not enter Skybridge/card resolution")
 
     monkeypatch.setattr(main, "_resolve_voice_cards", _unexpected_resolve)
+    monkeypatch.delenv("ZOE_WAKE_ACK_PHRASES", raising=False)
+    monkeypatch.delenv("ZOE_WAKE_ACK_AUDIO_PATH", raising=False)
+    monkeypatch.delenv("ZOE_WAKE_ACK_AUDIO_PATHS", raising=False)
     monkeypatch.setenv("ZOE_WAKE_ACK_PHRASE", "Yes Jason?")
 
     with TestClient(main.app) as client:

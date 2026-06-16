@@ -24,14 +24,18 @@ def build_calendar_timeline_content(slots: dict[str, Any] | None = None) -> dict
     events = slots.get("events") or []
     if not isinstance(events, list):
         events = [events]
-    return {
+    content = {
         "title": f"Calendar for {qualifier}",
-        "summary": "Showing calendar",
+        "summary": _text(slots.get("summary"), "Showing calendar"),
         "qualifier": qualifier,
         "events": events,
         "view": "timeline",
         "source": "calendar_show",
     }
+    for key in ("date", "start_date", "end_date"):
+        if slots.get(key):
+            content[key] = slots[key]
+    return content
 
 
 def build_weather_current_content(slots: dict[str, Any] | None = None) -> dict[str, Any]:

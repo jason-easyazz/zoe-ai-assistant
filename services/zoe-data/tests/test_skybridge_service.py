@@ -171,6 +171,8 @@ class GuardedGuestDb(FakeDb):
 def test_classify_calendar_and_weather_requests():
     assert classify_skybridge_intent("show my calendar").domain == "calendar"
     assert classify_skybridge_intent("show me the weather").domain == "weather"
+    assert classify_skybridge_intent("show me the clock").domain == "clock"
+    assert classify_skybridge_intent("what time is it").domain == "clock"
     assert classify_skybridge_intent("what is happening this week").domain == "calendar"
     assert classify_skybridge_intent("show my shopping list").domain == "lists"
     assert classify_skybridge_intent("what's on my shopping list").domain == "lists"
@@ -197,6 +199,42 @@ def test_classify_calendar_and_weather_requests():
     assert classify_skybridge_intent("find Sarah").domain == "people"
     assert classify_skybridge_intent("what is there to do this week") is None
     assert classify_skybridge_intent("open settings") is None
+
+
+def test_clock_timezone_prefers_env(monkeypatch):
+    monkeypatch.setenv("ZOE_SKYBRIDGE_TIMEZONE", "Australia/Melbourne")
+    monkeypatch.setenv("TZ", "UTC")
+
+    assert skybridge_service._default_clock_timezone() == "Australia/Melbourne"
+
+
+def test_clock_timezone_uses_host_timezone_before_utc(monkeypatch):
+    monkeypatch.delenv("ZOE_SKYBRIDGE_TIMEZONE", raising=False)
+    monkeypatch.setenv("TZ", "Europe/London")
+
+    assert skybridge_service._default_clock_timezone() == "Europe/London"
+
+
+def test_clock_timezone_falls_back_to_utc(monkeypatch):
+    monkeypatch.delenv("ZOE_SKYBRIDGE_TIMEZONE", raising=False)
+    monkeypatch.setattr(skybridge_service, "_host_clock_timezone", lambda: None)
+
+    assert skybridge_service._default_clock_timezone() == "UTC"
+
+
+@pytest.mark.asyncio
+async def test_clock_request_returns_public_live_clock_card():
+    result = await resolve_skybridge_request("show me the clock", "guest", db=GuardedGuestDb())
+
+    assert result["handled"] is True
+    assert result["intent"]["domain"] == "clock"
+    assert result["intent"]["action"] == "show"
+    assert result["cards"][0]["component"] == "status"
+    props = result["cards"][0]["props"]
+    assert props["source"] == "clock_show"
+    assert props["timezone"]
+    assert props["iso"]
+    assert "auth_required" not in result
 
 
 def test_classify_skybridge_action_requests():
@@ -476,7 +514,11 @@ async def test_calendar_explicit_date_queries_requested_day(monkeypatch):
     assert result["intent"]["range"] == "17 June 2026"
     assert db.fetch_args[2] == "2026-06-17"
     assert db.fetch_args[3] == "2026-06-17"
-    assert result["cards"][0]["content"]["qualifier"] == "17 June 2026"
+    content = result["cards"][0]["content"]
+    assert content["qualifier"] == "17 June 2026"
+    assert content["date"] == "2026-06-17"
+    assert content["start_date"] == "2026-06-17"
+    assert content["end_date"] == "2026-06-17"
 
 
 @pytest.mark.asyncio
@@ -495,6 +537,9 @@ async def test_calendar_happening_this_week_queries_range(monkeypatch):
     assert result["intent"]["range"] == "this week"
     assert db.fetch_args[2] == "2026-06-11"
     assert db.fetch_args[3] == (date(2026, 6, 11) + timedelta(days=7)).isoformat()
+    content = result["cards"][0]["content"]
+    assert content["start_date"] == "2026-06-11"
+    assert content["end_date"] == "2026-06-18"
 
 
 @pytest.mark.asyncio
