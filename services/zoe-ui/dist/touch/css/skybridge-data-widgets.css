@@ -101,26 +101,6 @@ body:not(.sky-empty) .sky-clock-date {
     line-height: 1;
 }
 
-body:not(.sky-empty) .sky-clock-footer {
-    display: flex;
-    justify-content: center;
-    position: absolute;
-    left: clamp(26px, 3vw, 42px);
-    right: clamp(26px, 3vw, 42px);
-    bottom: clamp(24px, 3vh, 36px);
-}
-
-body:not(.sky-empty) .sky-clock-zone {
-    display: inline-flex;
-    width: fit-content;
-    border-radius: 999px;
-    padding: 10px 16px;
-    color: rgba(255,255,255,0.54);
-    background: rgba(255,255,255,0.065);
-    border: 1px solid rgba(255,255,255,0.095);
-    font-size: clamp(0.98rem, 1.5vw, 1.28rem);
-    font-weight: 800;
-}
 
 body:not(.sky-empty) .zoe-list-card {
     --sky-card-accent: var(--sky-accent-shopping);
