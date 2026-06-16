@@ -542,3 +542,16 @@ def test_build_eval_readiness_reviews_sparse_candidate_evidence():
     assert readiness["next_actions"] == [
         {"kind": "review_candidate_evidence", "priority": "p1", "groups": ["weather"]}
     ]
+
+
+def test_cli_writes_output_file(tmp_path, capsys):
+    module = _load_module()
+    output_path = tmp_path / "report.json"
+
+    exit_code = module.main(["--no-default-cases", "--output", str(output_path)])
+
+    assert exit_code == 0
+    assert capsys.readouterr().out == ""
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["eval_cases"] == []
+    assert payload["promotion_report"]["sample_count"] == 0

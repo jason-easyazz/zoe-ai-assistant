@@ -457,6 +457,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--no-default-cases", action="store_true", help="Use only --cases-file datasets")
     parser.add_argument("--env-file", action="append", default=[], help="Additional Zoe env file to load before measuring; shell env wins")
+    parser.add_argument("--output", "-o", help="Optional JSON output path; defaults to stdout")
     parser.add_argument(
         "--promoted-group",
         action="append",
@@ -499,7 +500,13 @@ def main(argv: list[str] | None = None) -> int:
         "promotion_report": promotion_report,
         "readiness": build_eval_readiness(promotion_report),
     }
-    print(json.dumps(payload, indent=2, sort_keys=True))
+    text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    if args.output:
+        target = Path(args.output).expanduser()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+    else:
+        print(text, end="")
     return 0
 
 

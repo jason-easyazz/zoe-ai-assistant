@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 from typing import Any, Mapping
 
 from pi_hybrid_buffer import pi_hybrid_buffer_status
 from pi_intent_shadow import pi_intent_shadow_status
 from zoe_pi_promotion import LOW_RISK_PI_INTENT_GROUPS
+
+DEFAULT_EVAL_REPORT_PATH = "~/.zoe/data/pi-promotion-eval-report.json"
 
 
 def pi_readiness_report(env: Mapping[str, str] | None = None) -> dict[str, Any]:
@@ -16,14 +20,17 @@ def pi_readiness_report(env: Mapping[str, str] | None = None) -> dict[str, Any]:
     hybrid = pi_hybrid_buffer_status(values)
     shadow = pi_intent_shadow_status(values)
     promotion = shadow.get("promotion_report") or {}
+    eval_report = _load_eval_report(values)
+    benchmark = _benchmark_from_eval_report(eval_report)
+    benchmark_promotion = benchmark.get("promotion_report") or {}
     contract = hybrid.get("contract") or {}
     actions = promotion.get("promotion_actions") or {}
-    candidate_wins = promotion.get("candidate_wins") or {}
-    state = _readiness_state(contract, promotion, actions)
+    candidate_wins = _combined_candidate_wins(promotion, benchmark_promotion)
+    state = _readiness_state(contract, promotion, actions, benchmark_promotion=benchmark_promotion)
     return {
         "report_kind": "zoe_pi_readiness_report",
         "state": state,
-        "summary": _summary(state, contract, shadow, promotion, actions),
+        "summary": _summary(state, contract, shadow, promotion, actions, benchmark),
         "hybrid": {
             "mode": contract.get("mode"),
             "ready": bool(contract.get("ready")),
@@ -31,11 +38,12 @@ def pi_readiness_report(env: Mapping[str, str] | None = None) -> dict[str, Any]:
             "warnings": list(contract.get("warnings") or []),
             "promoted_groups": list(contract.get("promoted_groups") or []),
         },
-        "evidence": _evidence(shadow, promotion),
+        "evidence": _evidence(shadow, promotion, benchmark),
+        "benchmark": benchmark,
         "candidates": _candidate_details(candidate_wins),
         "blocked_decisions": _blocked_decisions(promotion),
         "promotion_actions": actions,
-        "next_actions": _next_actions(state, contract, shadow, promotion, actions),
+        "next_actions": _next_actions(state, contract, shadow, promotion, actions, benchmark_promotion=benchmark_promotion),
     }
 
 
@@ -43,6 +51,8 @@ def _readiness_state(
     contract: Mapping[str, Any],
     promotion: Mapping[str, Any],
     actions: Mapping[str, Any],
+    *,
+    benchmark_promotion: Mapping[str, Any] | None = None,
 ) -> str:
     rollback_groups = list(actions.get("rollback_groups") or promotion.get("rollback_groups") or [])
     promote_groups = list(actions.get("promote_groups") or promotion.get("promotable_groups") or [])
@@ -53,7 +63,8 @@ def _readiness_state(
     if promote_groups:
         return "promotion_apply_ready"
     candidate_groups = list(((promotion.get("candidate_wins") or {}).get("groups")) or [])
-    if candidate_groups:
+    benchmark_candidate_groups = list((((benchmark_promotion or {}).get("candidate_wins") or {}).get("groups")) or [])
+    if candidate_groups or benchmark_candidate_groups:
         return "collect_more_evidence"
     if _groups_with_blocker(promotion, "baseline_not_comparable"):
         return "measure_comparable_baseline"
@@ -68,8 +79,10 @@ def _summary(
     shadow: Mapping[str, Any],
     promotion: Mapping[str, Any],
     actions: Mapping[str, Any],
+    benchmark: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     evidence = shadow.get("report") or {}
+    benchmark = benchmark or {}
     return {
         "state": state,
         "mode": contract.get("mode"),
@@ -77,15 +90,19 @@ def _summary(
         "label_count": int(shadow.get("label_count") or 0),
         "labeled_sample_count": int(evidence.get("labeled_sample_count") or 0),
         "candidate_win_groups": list(((promotion.get("candidate_wins") or {}).get("groups")) or []),
+        "benchmark_candidate_win_groups": list(((benchmark.get("candidate_wins") or {}).get("groups")) or []),
         "promotion_ready_groups": list(promotion.get("promotable_groups") or []),
         "rollback_groups": list(actions.get("rollback_groups") or promotion.get("rollback_groups") or []),
         "requires_operator_apply": bool(actions.get("requires_operator_apply")),
     }
 
 
-def _evidence(shadow: Mapping[str, Any], promotion: Mapping[str, Any]) -> dict[str, Any]:
+def _evidence(
+    shadow: Mapping[str, Any], promotion: Mapping[str, Any], benchmark: Mapping[str, Any] | None = None
+) -> dict[str, Any]:
     report = shadow.get("report") or {}
     source = promotion.get("source_breakdown") or {}
+    benchmark = benchmark or {}
     return {
         "record_count_window": shadow.get("record_count_window"),
         "raw_record_count_window": shadow.get("raw_record_count_window"),
@@ -96,6 +113,9 @@ def _evidence(shadow: Mapping[str, Any], promotion: Mapping[str, Any]) -> dict[s
         "sample_deficit_by_group": dict(report.get("sample_deficit_by_group") or {}),
         "real_source_sample_count_by_group": dict(source.get("real_source_sample_count_by_group") or {}),
         "real_source_sample_deficit_by_group": dict(source.get("real_source_sample_deficit_by_group") or {}),
+        "benchmark_report_path": benchmark.get("path"),
+        "benchmark_loaded": bool(benchmark.get("loaded")),
+        "benchmark_candidate_win_groups": list((benchmark.get("candidate_wins") or {}).get("groups") or []),
     }
 
 
@@ -148,6 +168,8 @@ def _next_actions(
     shadow: Mapping[str, Any],
     promotion: Mapping[str, Any],
     actions: Mapping[str, Any],
+    *,
+    benchmark_promotion: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     next_actions: list[dict[str, Any]] = []
     blockers = list(contract.get("blockers") or [])
@@ -183,7 +205,10 @@ def _next_actions(
             }
         )
     next_actions.extend(_evidence_collection_actions(promotion))
+    next_actions.extend(_evidence_collection_actions(benchmark_promotion or {}, source="benchmark"))
     baseline_groups = _groups_with_blocker(promotion, "baseline_not_comparable")
+    if baseline_groups and _benchmark_candidate_groups(benchmark_promotion):
+        baseline_groups = []
     if baseline_groups:
         next_actions.append(
             {
@@ -212,7 +237,7 @@ def _next_actions(
     return next_actions
 
 
-def _evidence_collection_actions(promotion: Mapping[str, Any]) -> list[dict[str, Any]]:
+def _evidence_collection_actions(promotion: Mapping[str, Any], *, source: str = "shadow") -> list[dict[str, Any]]:
     actions: list[dict[str, Any]] = []
     for item in ((promotion.get("candidate_wins") or {}).get("details") or []):
         if not isinstance(item, Mapping):
@@ -247,10 +272,65 @@ def _evidence_collection_actions(promotion: Mapping[str, Any]) -> list[dict[str,
             "needed_unique_cases": unique_deficit,
             "detail": detail,
         }
+        if source != "shadow":
+            action["evidence_source"] = source
         if real_source_deficit > 0:
             action["needed_real_source_cases"] = real_source_deficit
         actions.append(action)
     return actions
+
+
+def _load_eval_report(env: Mapping[str, str]) -> dict[str, Any]:
+    raw_path = (env.get("ZOE_PI_PROMOTION_EVAL_REPORT_PATH") or DEFAULT_EVAL_REPORT_PATH).strip()
+    if not raw_path:
+        return {"loaded": False, "path": None}
+    path = Path(raw_path).expanduser()
+    if not path.exists():
+        return {"loaded": False, "path": str(path)}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {"loaded": False, "path": str(path), "error": exc.__class__.__name__}
+    if not isinstance(payload, Mapping):
+        return {"loaded": False, "path": str(path), "error": "invalid_report"}
+    return {"loaded": True, "path": str(path), "payload": payload}
+
+
+def _benchmark_from_eval_report(eval_report: Mapping[str, Any]) -> dict[str, Any]:
+    payload = eval_report.get("payload") if isinstance(eval_report, Mapping) else None
+    if not isinstance(payload, Mapping):
+        return {"loaded": bool(eval_report.get("loaded")), "path": eval_report.get("path"), "error": eval_report.get("error")}
+    promotion = payload.get("promotion_report") if isinstance(payload.get("promotion_report"), Mapping) else {}
+    return {
+        "loaded": True,
+        "path": eval_report.get("path"),
+        "readiness": payload.get("readiness") if isinstance(payload.get("readiness"), Mapping) else {},
+        "promotion_report": promotion,
+        "candidate_wins": promotion.get("candidate_wins") or {},
+        "source_breakdown": promotion.get("source_breakdown") or {},
+    }
+
+
+def _combined_candidate_wins(
+    promotion: Mapping[str, Any], benchmark_promotion: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    primary = promotion.get("candidate_wins") if isinstance(promotion.get("candidate_wins"), Mapping) else {}
+    benchmark = (benchmark_promotion or {}).get("candidate_wins")
+    if not isinstance(benchmark, Mapping) or not benchmark.get("details"):
+        return dict(primary)
+    if not primary.get("details"):
+        return {**benchmark, "source": "benchmark"}
+    details = list(primary.get("details") or [])
+    seen = {str(item.get("intent_group")) for item in details if isinstance(item, Mapping)}
+    for item in benchmark.get("details") or []:
+        if isinstance(item, Mapping) and str(item.get("intent_group")) not in seen:
+            details.append({**item, "source": "benchmark"})
+    groups = sorted({str(item.get("intent_group")) for item in details if isinstance(item, Mapping) and item.get("intent_group")})
+    return {**primary, "details": details, "groups": groups}
+
+
+def _benchmark_candidate_groups(benchmark_promotion: Mapping[str, Any] | None) -> list[str]:
+    return list((((benchmark_promotion or {}).get("candidate_wins") or {}).get("groups")) or [])
 
 
 def _groups_with_blocker(promotion: Mapping[str, Any], blocker: str) -> list[str]:
@@ -266,4 +346,4 @@ def _groups_with_blocker(promotion: Mapping[str, Any], blocker: str) -> list[str
     return sorted(set(groups))
 
 
-__all__ = ["pi_readiness_report"]
+__all__ = ["pi_readiness_report", "DEFAULT_EVAL_REPORT_PATH"]
