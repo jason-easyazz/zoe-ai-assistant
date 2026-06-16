@@ -129,8 +129,6 @@ def test_stream_probe_summarises_cue_final_and_fulfillment():
     assert report["observations"][0]["response_preview"] == "It is 18.5 C."
 
 
-
-
 def test_stream_probe_summarises_speculative_discard_and_timeout():
     module = _load_module()
     cases = [
@@ -179,6 +177,8 @@ def test_stream_probe_summarises_speculative_discard_and_timeout():
     assert report["observations"][0]["speculative_intent"] == "weather"
     assert report["observations"][0]["speculative_discard_reason"] == "speculative_pi_disagreed"
     assert report["observations"][1]["speculative_safe_fulfillment"] == "timed_out"
+
+
 def test_stream_error_packet_is_reported_without_final_packet():
     module = _load_module()
 
