@@ -229,9 +229,13 @@ def test_pi_intent_prefilter_allows_low_risk_tasks_and_rejects_casual_chat():
     assert pi_intent_prefilter_allows("rain later") is True
     assert pi_intent_prefilter_allows("what is 18 times 7") is True
     assert pi_intent_prefilter_allows("18 plus 7") is True
+    assert pi_intent_prefilter_allows("add 38 and 47") is True
     assert pi_intent_prefilter_allows("is it cold outside") is True
     assert pi_intent_prefilter_allows("add bread to shopping") is True
     assert pi_intent_prefilter_allows("anything I should remember right now") is True
+    assert pi_intent_prefilter_allows("what reminders do I have today") is True
+    assert pi_intent_prefilter_allows("what is left on my day") is True
+    assert pi_intent_prefilter_allows("tell me what is coming up today") is True
     assert pi_intent_prefilter_allows("I like the breakfast service") is False
     assert pi_intent_prefilter_allows("that is a hot take") is False
     assert pi_intent_prefilter_allows("add to that point") is False
