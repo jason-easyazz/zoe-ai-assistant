@@ -23,6 +23,8 @@ from typing import TYPE_CHECKING, Optional
 
 from fastapi import HTTPException
 
+from zoe_pi_promotion import LOW_RISK_PI_INTENT_GROUPS
+
 if TYPE_CHECKING:
     from conversation_context import ConversationContext
 
@@ -1600,7 +1602,19 @@ async def detect_and_extract_intent(
         task = asyncio.create_task(_runner())
         task.add_done_callback(lambda done: done.exception() if not done.cancelled() else None)
 
+    def _pi_execution_has_promoted_groups() -> bool:
+        if not _env_enabled("ZOE_PI_INTENT_ENABLED"):
+            return False
+        requested = {
+            group.strip()
+            for group in str(os.environ.get("ZOE_PI_INTENT_PROMOTED_GROUPS") or "").split(",")
+            if group.strip()
+        }
+        return bool(requested.intersection(LOW_RISK_PI_INTENT_GROUPS))
+
     async def _try_pi_governor() -> tuple[Optional["Intent"], object | None]:
+        if not _pi_execution_has_promoted_groups():
+            return None, shadow_unset
         pi_classified = None
         try:
             from pi_intent_classifier import PI_INTENT_EXECUTE_THRESHOLD, classify_with_pi_intent_governor, pi_intent_is_promoted

@@ -712,19 +712,52 @@ async def test_detect_and_extract_intent_does_not_execute_unpromoted_pi_result(t
             "reason": "reminder query phrased unusually",
         },
     )
+    record = tmp_path / "pi-record.json"
     monkeypatch.setenv("PATH", str(bindir))
     monkeypatch.setenv("ZOE_PI_INTENT_ENABLED", "true")
     monkeypatch.setenv("ZOE_PI_CWD", str(tmp_path))
     monkeypatch.setenv("ZOE_PI_ALLOW_EXECUTION", "true")
     monkeypatch.setenv("ZOE_PI_LOCAL_MODEL_CONFIGURED", "true")
     monkeypatch.setenv("ZOE_PI_INTENT_MODEL", "gemma-4-E2B-it-Q4_K_M.gguf")
+    monkeypatch.setenv("PI_TEST_RECORD", str(record))
     monkeypatch.delenv("ZOE_PI_INTENT_PROMOTED_GROUPS", raising=False)
+    monkeypatch.delenv("ZOE_PI_INTENT_SHADOW_ENABLED", raising=False)
 
     from intent_router import detect_and_extract_intent
 
     intent = await detect_and_extract_intent("anything I should remember right now")
 
     assert intent is None
+    assert not record.exists()
+
+
+@pytest.mark.asyncio
+async def test_detect_and_extract_intent_runs_unpromoted_pi_only_in_shadow(tmp_path, monkeypatch):
+    calls = 0
+    recorded = asyncio.Event()
+
+    async def fake_record(text, **kwargs):
+        nonlocal calls
+        await asyncio.sleep(0)
+        calls += 1
+        assert text == "anything I should remember right now"
+        assert "pi_result" not in kwargs
+        assert kwargs["route_class"] == "fallback"
+        recorded.set()
+        return {"recorded": True}
+
+    monkeypatch.setenv("ZOE_PI_INTENT_ENABLED", "true")
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_ENABLED", "true")
+    monkeypatch.delenv("ZOE_PI_INTENT_PROMOTED_GROUPS", raising=False)
+    monkeypatch.setattr("pi_intent_shadow.maybe_record_pi_intent_shadow", fake_record)
+
+    from intent_router import detect_and_extract_intent
+
+    intent = await detect_and_extract_intent("anything I should remember right now")
+    await asyncio.wait_for(recorded.wait(), timeout=1.0)
+
+    assert intent is None
+    assert calls == 1
 
 
 @pytest.mark.asyncio
