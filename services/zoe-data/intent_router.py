@@ -1804,6 +1804,62 @@ async def _execute_reminder_create_direct(intent: Intent, user_id: str) -> Optio
         return None
 
 
+def _escape_like_pattern(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+async def _execute_list_show_direct(intent: Intent, user_id: str) -> Optional[str]:
+    slots = intent.slots or {}
+    list_type = str(slots.get("list_type") or "shopping").strip() or "shopping"
+    list_name = str(slots.get("list_name") or "").strip()
+    try:
+        from database import get_db_ctx
+
+        async with get_db_ctx() as db:
+            if list_name:
+                cursor = await db.execute(
+                    "SELECT l.id, l.name, li.id as item_id, li.text, li.completed, li.quantity, li.category"
+                    " FROM lists l LEFT JOIN list_items li ON l.id = li.list_id AND li.deleted=0"
+                    " WHERE (l.user_id=? OR l.visibility='family') AND l.list_type=?"
+                    " AND l.name LIKE ? ESCAPE '\\' AND l.deleted=0"
+                    " ORDER BY li.sort_order",
+                    (user_id, list_type, f"%{_escape_like_pattern(list_name)}%"),
+                )
+            else:
+                cursor = await db.execute(
+                    "SELECT l.id, l.name, li.id as item_id, li.text, li.completed, li.quantity, li.category"
+                    " FROM lists l LEFT JOIN list_items li ON l.id = li.list_id AND li.deleted=0"
+                    " WHERE (l.user_id=? OR l.visibility='family') AND l.list_type=? AND l.deleted=0"
+                    " ORDER BY l.name, li.sort_order",
+                    (user_id, list_type),
+                )
+            rows = await cursor.fetchall()
+
+        lists_map: dict[str, dict] = {}
+        for row in rows:
+            data = dict(row)
+            list_id = data.get("id")
+            if not list_id:
+                continue
+            if list_id not in lists_map:
+                lists_map[list_id] = {"id": list_id, "name": data.get("name"), "items": []}
+            if data.get("item_id") and data.get("text"):
+                lists_map[list_id]["items"].append(
+                    {
+                        "id": data.get("item_id"),
+                        "text": data.get("text"),
+                        "completed": bool(data.get("completed")),
+                        "quantity": data.get("quantity"),
+                        "category": data.get("category"),
+                    }
+                )
+
+        return _format_response(intent, json.dumps({"lists": list(lists_map.values())}))
+    except Exception as exc:
+        logger.warning("list_show direct execution unavailable; falling back to mcporter: %s", exc)
+        return None
+
+
 async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optional[str]:
     if intent.name == "lets_talk":
         # Navigation is handled by _broadcast_intent_nav via _INTENT_PANEL_NAV in chat.py.
@@ -2367,6 +2423,11 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
     # Route directly to the weather backend helpers for deterministic voice UX.
     if intent.name == "weather":
         return await _execute_weather_direct(user_id=user_id, forecast=bool(intent.slots.get("forecast")))
+
+    if intent.name == "list_show":
+        direct_result = await _execute_list_show_direct(intent, user_id)
+        if direct_result:
+            return direct_result
 
     if intent.name == "reminder_create":
         direct_result = await _execute_reminder_create_direct(intent, user_id)
@@ -2977,16 +3038,26 @@ def _format_response(intent: Intent, raw_output: str) -> str:
         lt = s.get("list_type", "shopping")
         friendly = "shopping list" if lt == "shopping" else f"{lt.replace('_', ' ')} list"
         lists = data.get("lists", [])
-        if not lists or not lists[0].get("items"):
+        active_lists = []
+        for list_data in lists:
+            items = list_data.get("items") or []
+            active = [i["text"] for i in items if i.get("text") and not i.get("completed")]
+            if active:
+                active_lists.append((list_data.get("name") or friendly, active))
+        if not active_lists:
             return f"Your {friendly} is empty."
-        items = lists[0]["items"]
-        active = [i["text"] for i in items if not i.get("completed")]
-        if not active:
-            return f"Your {friendly} is empty."
-        lines = [f"Your {friendly}:"]
-        for item in active:
-            lines.append(f"  - {item}")
+        if len(active_lists) == 1:
+            lines = [f"Your {friendly}:"]
+            for item in active_lists[0][1]:
+                lines.append(f"  - {item}")
+            return "\n".join(lines)
+        lines = [f"Your {friendly}s:"]
+        for list_name, active in active_lists:
+            lines.append(f"{list_name}:")
+            for item in active:
+                lines.append(f"  - {item}")
         return "\n".join(lines)
+
 
     if intent.name == "list_remove":
         item = s.get("item", "item")
