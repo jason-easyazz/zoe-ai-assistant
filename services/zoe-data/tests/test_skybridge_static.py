@@ -364,6 +364,9 @@ def test_skybridge_returns_to_ambient_clock_after_card_idle():
     assert "function updateAllClocks()" in app
     assert "document.querySelectorAll('.sky-live-clock')" in app
     assert "id=\"skyAmbientClock\"" in html
+    ambient_start = html.index("id=\"skyAmbientClock\"")
+    ambient_tag = html[html.rfind("<div", 0, ambient_start):html.find(">", ambient_start) + 1]
+    assert "aria-live" not in ambient_tag
     assert "body.sky-empty.sky-ambient-clock .sky-ambient-clock" in html
 
 

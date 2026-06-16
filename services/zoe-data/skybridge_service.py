@@ -85,7 +85,11 @@ LIST_TYPE_ALIASES = {
 }
 PEOPLE_CONTEXTS = ("personal", "work")
 PEOPLE_CIRCLES = ("inner", "circle", "public")
-DEFAULT_CLOCK_TIMEZONE = os.environ.get("ZOE_SKYBRIDGE_TIMEZONE", "Australia/Perth")
+DEFAULT_CLOCK_TIMEZONE = "Australia/Perth"
+
+
+def _default_clock_timezone() -> str:
+    return os.environ.get("ZOE_SKYBRIDGE_TIMEZONE") or DEFAULT_CLOCK_TIMEZONE
 
 
 def _today() -> date:
@@ -93,7 +97,7 @@ def _today() -> date:
 
 
 def _clock_now(timezone_name: str | None = None) -> tuple[datetime, str]:
-    name = timezone_name or DEFAULT_CLOCK_TIMEZONE
+    name = timezone_name or _default_clock_timezone()
     try:
         tz = ZoneInfo(name)
     except ZoneInfoNotFoundError:
