@@ -1092,6 +1092,41 @@ async def test_trigger_review_with_guard_lock_reports_lock_contention(tmp_path, 
 
 
 @pytest.mark.asyncio
+async def test_trigger_review_safely_skips_repo_capacity_for_other_waiting_pr(tmp_path, monkeypatch):
+    async def fail_trigger(**_kwargs):
+        raise AssertionError("repo-level Greptile capacity should defer new triggers")
+
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(greploop_guard, "GREPTILE_REPO_ACTIVE_REVIEW_LIMIT", 1)
+    monkeypatch.setattr(greploop_guard, "GREPTILE_REPO_ACTIVE_REVIEW_STALE_SECONDS", 600)
+    monkeypatch.setattr(greploop_guard.time, "time", lambda: 1_000.0)
+    monkeypatch.setattr("greptile_client.trigger_review", fail_trigger)
+    greploop_guard._write_json(
+        67,
+        "status.json",
+        {
+            "pr": 67,
+            "terminal_state": "WAITING_GREPTILE",
+            "greptile_wait_started_at": 900.0,
+            "greptile_wait_last_seen_at": 990.0,
+            "greptile_next_poll_after": 1_100.0,
+        },
+    )
+
+    out = await greploop_guard.trigger_review_safely(
+        pr_number=66,
+        status={"headSha": "abc", "reviewIsRunning": False, "confidenceScore": 0},
+        state={"pr": 66},
+        source="test-repo-capacity",
+    )
+
+    assert out["triggered"] is False
+    assert out["reason"] == "repo_greptile_review_capacity"
+    assert out["active_prs"] == [67]
+    assert out["retry_after_seconds"] == 100
+
+
+@pytest.mark.asyncio
 async def test_run_guard_once_skips_recent_same_head_trigger(tmp_path, monkeypatch):
     async def fake_status(**_kwargs):
         return {
@@ -1879,6 +1914,9 @@ async def test_merge_pr_when_ready_merges_when_assessment_passes(tmp_path, monke
     async def fake_assess(_pr_number, **_kwargs):
         return {"ready": True, "blockers": [], "greptile": {}, "gh": {"ok": True}}
 
+    async def fake_status(**_kwargs):
+        return {"confidenceScore": 5, "reviewIsRunning": False, "headSha": "abc"}
+
     calls: list[list[str]] = []
 
     def fake_run_gh(args, *, repo=greploop_guard.DEFAULT_REPO, check=False):
@@ -1902,6 +1940,7 @@ async def test_merge_pr_when_ready_merges_when_assessment_passes(tmp_path, monke
         )()
 
     monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr("greptile_client.get_pr_status", fake_status)
     monkeypatch.setattr(greploop_guard, "assess_merge_readiness", fake_assess)
     monkeypatch.setattr(greploop_guard, "_run_gh", fake_run_gh)
 
@@ -1911,6 +1950,52 @@ async def test_merge_pr_when_ready_merges_when_assessment_passes(tmp_path, monke
     assert out["state"] == "MERGED"
     assert out["merge_commit"] == "deadbeef"
     assert ["pr", "merge", "66", "--squash"] in calls
+
+
+@pytest.mark.asyncio
+async def test_merge_pr_when_ready_returns_waiting_retry_for_running_greptile(tmp_path, monkeypatch):
+    async def fake_status(**_kwargs):
+        return {
+            "confidenceScore": None,
+            "reviewIsRunning": True,
+            "headSha": "abc",
+            "reviewCompleteness": "No Greptile review comments",
+            "codeReviews": [{"status": "REVIEWING_FILES"}],
+        }
+
+    async def fail_assess(*_args, **_kwargs):
+        raise AssertionError("merge-ready fast path should not run full readiness while GitHub check is active")
+
+    def fail_run_gh(*_args, **_kwargs):
+        raise AssertionError("merge should not run while Greptile is active")
+
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(greploop_guard, "GREPTILE_WAIT_POLL_SECONDS", 120)
+    monkeypatch.setattr(greploop_guard.time, "time", lambda: 1_000.0)
+    monkeypatch.setattr("greptile_client.get_pr_status", fake_status)
+    monkeypatch.setattr(greploop_guard, "assess_merge_readiness", fail_assess)
+    monkeypatch.setattr(greploop_guard, "_run_gh", fail_run_gh)
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_pr_observation",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: {
+            "ok": True,
+            "state": "OPEN",
+            "statusCheckRollup": [
+                {"name": "Greptile Review", "status": "IN_PROGRESS", "conclusion": ""},
+            ],
+        },
+    )
+
+    out = await greploop_guard.merge_pr_when_ready(66)
+
+    assert out["ok"] is False
+    assert out["state"] == "WAITING_GREPTILE"
+    assert out["blockers"] == ["GREPTILE_REVIEW_RUNNING"]
+    assert out["retry_after_seconds"] == 120
+    state = greploop_guard.read_guard_state(66)
+    assert state["terminal_state"] == "WAITING_GREPTILE"
+    assert state["merge_blockers"] == ["GREPTILE_REVIEW_RUNNING"]
 
 
 def test_verify_pr_checkout_for_repair_accepts_matching_branch_and_head(monkeypatch):
