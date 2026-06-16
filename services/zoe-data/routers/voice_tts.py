@@ -4195,6 +4195,7 @@ async def voice_wake(payload: dict, caller: dict = Depends(_require_voice_auth))
         "ok": True,
         "panel_id": panel_id,
         "state": "listening",
+        "ack_text": ack_phrase or None,
         "ack_audio_base64": audio_b64,
         "content_type": content_type,
     }
