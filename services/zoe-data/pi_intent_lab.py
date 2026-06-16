@@ -322,6 +322,8 @@ async def _safe_fulfill_pi_intent(
             "attempted": False,
             "allowed": False,
             "blocked_reason": "not_requested",
+            "response_chars": 0,
+            "response_preview": "",
             "would_execute": False,
         }
 
@@ -351,6 +353,7 @@ async def _safe_fulfill_pi_intent(
     started = time.perf_counter()
     try:
         response = await asyncio.wait_for(execute_intent(intent, user_id=user_id), timeout=timeout_seconds)
+        response_text = _response_text(response)
         latency_ms = (time.perf_counter() - started) * 1000
         return {
             "requested": True,
@@ -360,8 +363,8 @@ async def _safe_fulfill_pi_intent(
             "latency_ms": latency_ms,
             "timed_out": False,
             "error": None,
-            "response_chars": len(response or ""),
-            "response_preview": _preview_response(response),
+            "response_chars": len(response_text),
+            "response_preview": _preview_response(response_text),
             "would_execute": True,
             "execution_scope": "read_only_allowlist",
         }
@@ -404,6 +407,8 @@ def _blocked_fulfillment(reason: str, *, intent: str | None = None, error: Any =
         "allowed": False,
         "blocked_reason": reason,
         "intent": intent,
+        "response_chars": 0,
+        "response_preview": "",
         "would_execute": False,
     }
     if error is not None:
@@ -411,8 +416,12 @@ def _blocked_fulfillment(reason: str, *, intent: str | None = None, error: Any =
     return result
 
 
-def _preview_response(response: str | None, *, limit: int = 240) -> str:
-    text = " ".join(str(response or "").split())
+def _response_text(response: Any) -> str:
+    return "" if response is None else str(response)
+
+
+def _preview_response(response: Any, *, limit: int = 240) -> str:
+    text = " ".join(_response_text(response).split())
     if len(text) <= limit:
         return text
     return text[: limit - 1].rstrip() + "..."

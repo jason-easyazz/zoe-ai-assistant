@@ -1,6 +1,7 @@
 import os
 import sys
 import types
+import asyncio
 
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -18,7 +19,16 @@ class _Intent:
         self.confidence = confidence
 
 
-def _install_fake_intent_router(monkeypatch, *, raw=None, extracted=None, execute_response=None, execute_calls=None):
+def _install_fake_intent_router(
+    monkeypatch,
+    *,
+    raw=None,
+    extracted=None,
+    execute_response=None,
+    execute_calls=None,
+    execute_delay_seconds=0.0,
+    execute_exception=None,
+):
     module = types.ModuleType("intent_router")
 
     class Intent:
@@ -36,6 +46,10 @@ def _install_fake_intent_router(monkeypatch, *, raw=None, extracted=None, execut
     async def execute_intent(intent, user_id="family-admin"):
         if execute_calls is not None:
             execute_calls.append({"intent": intent, "user_id": user_id})
+        if execute_delay_seconds:
+            await asyncio.sleep(execute_delay_seconds)
+        if execute_exception is not None:
+            raise execute_exception
         return execute_response(intent) if callable(execute_response) else execute_response
 
     module.Intent = Intent
@@ -149,6 +163,8 @@ async def test_lab_compares_router_pi_and_never_dispatches(monkeypatch):
     assert result["simulated_hybrid_flow"]["pi_completion_latency_ms"] is not None
     assert result["safe_fulfillment"]["blocked_reason"] == "not_requested"
     assert result["safe_fulfillment"]["attempted"] is False
+    assert result["safe_fulfillment"]["response_chars"] == 0
+    assert result["safe_fulfillment"]["response_preview"] == ""
     assert result["simulated_hybrid_flow"]["production_route_change"] is False
     assert result["hybrid_buffer"]["mode"] == "shadow_buffer"
     assert seen_env[0]["env"]["ZOE_PI_INTENT_ENABLED"] == "true"
@@ -269,6 +285,37 @@ async def test_lab_can_fulfill_safe_read_only_pi_result(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_lab_counts_non_string_safe_fulfillment_response_chars(monkeypatch):
+    _install_fake_intent_router(
+        monkeypatch,
+        raw=None,
+        extracted=None,
+        execute_response={"answer": "18.5 C"},
+    )
+    _install_fake_pi_classifier(
+        monkeypatch,
+        result=types.SimpleNamespace(
+            intent="weather",
+            slots={},
+            confidence=0.93,
+            task_lane="fast_tool",
+            source="fake_pi",
+            latency_ms=123.0,
+            reason="weather signal",
+        ),
+    )
+
+    result = await compare_pi_intent_lab(
+        "need a jacket tonight",
+        include_hybrid_status=False,
+        include_safe_fulfillment=True,
+    )
+
+    assert result["safe_fulfillment"]["response_preview"] == "{'answer': '18.5 C'}"
+    assert result["safe_fulfillment"]["response_chars"] == len("{'answer': '18.5 C'}")
+
+
+@pytest.mark.asyncio
 async def test_lab_blocks_side_effect_pi_fulfillment(monkeypatch):
     calls = []
     _install_fake_intent_router(monkeypatch, raw=None, extracted=None, execute_response="timer started", execute_calls=calls)
@@ -296,7 +343,89 @@ async def test_lab_blocks_side_effect_pi_fulfillment(monkeypatch):
     assert result["safe_fulfillment"]["allowed"] is False
     assert result["safe_fulfillment"]["blocked_reason"] == "side_effect_or_unsupported_intent"
     assert result["safe_fulfillment"]["intent"] == "timer_create"
+    assert result["safe_fulfillment"]["response_chars"] == 0
+    assert result["safe_fulfillment"]["response_preview"] == ""
     assert result["safe_fulfillment"]["would_execute"] is False
+
+
+@pytest.mark.asyncio
+async def test_lab_safe_fulfillment_timeout_is_reported(monkeypatch):
+    calls = []
+    _install_fake_intent_router(
+        monkeypatch,
+        raw=None,
+        extracted=None,
+        execute_response="too late",
+        execute_calls=calls,
+        execute_delay_seconds=0.05,
+    )
+    _install_fake_pi_classifier(
+        monkeypatch,
+        result=types.SimpleNamespace(
+            intent="weather",
+            slots={},
+            confidence=0.95,
+            task_lane="fast_tool",
+            source="fake_pi",
+            latency_ms=90.0,
+            reason="weather signal",
+        ),
+    )
+
+    result = await compare_pi_intent_lab(
+        "rain later",
+        include_hybrid_status=False,
+        include_safe_fulfillment=True,
+        safe_fulfillment_timeout_seconds=0.01,
+    )
+
+    assert len(calls) == 1
+    assert result["safe_fulfillment"]["attempted"] is True
+    assert result["safe_fulfillment"]["allowed"] is True
+    assert result["safe_fulfillment"]["timed_out"] is True
+    assert result["safe_fulfillment"]["would_execute"] is False
+    assert result["safe_fulfillment"]["response_chars"] == 0
+    assert result["safe_fulfillment"]["response_preview"] == ""
+    assert result["simulated_hybrid_flow"]["safe_fulfillment_completion_latency_ms"] is None
+
+
+@pytest.mark.asyncio
+async def test_lab_safe_fulfillment_error_is_reported(monkeypatch):
+    calls = []
+    _install_fake_intent_router(
+        monkeypatch,
+        raw=None,
+        extracted=None,
+        execute_calls=calls,
+        execute_exception=RuntimeError("weather backend failed"),
+    )
+    _install_fake_pi_classifier(
+        monkeypatch,
+        result=types.SimpleNamespace(
+            intent="weather",
+            slots={},
+            confidence=0.95,
+            task_lane="fast_tool",
+            source="fake_pi",
+            latency_ms=90.0,
+            reason="weather signal",
+        ),
+    )
+
+    result = await compare_pi_intent_lab(
+        "rain later",
+        include_hybrid_status=False,
+        include_safe_fulfillment=True,
+    )
+
+    assert len(calls) == 1
+    assert result["safe_fulfillment"]["attempted"] is True
+    assert result["safe_fulfillment"]["allowed"] is True
+    assert result["safe_fulfillment"]["error"] == "RuntimeError"
+    assert result["safe_fulfillment"]["would_execute"] is False
+    assert result["safe_fulfillment"]["response_chars"] == 0
+    assert result["safe_fulfillment"]["response_preview"] == ""
+    assert result["simulated_hybrid_flow"]["safe_fulfillment_completion_latency_ms"] is None
 
 def _admin_app():
     app = FastAPI()
