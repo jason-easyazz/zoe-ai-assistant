@@ -189,6 +189,14 @@ async def get_pi_intent_shadow_status(user: dict = Depends(require_admin)):
     return pi_intent_shadow_status()
 
 
+@router.get("/pi-intent/hybrid-buffer-status")
+async def get_pi_hybrid_buffer_status(user: dict = Depends(require_admin)):
+    """Read-only readiness for Zoe's instant-buffer + Pi evidence mode."""
+    from pi_hybrid_buffer import pi_hybrid_buffer_status
+
+    return pi_hybrid_buffer_status()
+
+
 def _load_skills_and_cron():
     skills = []
     skills_dir = os.path.expanduser("~/.openclaw/workspace/skills")
