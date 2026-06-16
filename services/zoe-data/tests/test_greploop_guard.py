@@ -100,6 +100,49 @@ def test_run_greploop_wrapper_switches_to_matching_pr_worktree(tmp_path):
     assert "switched-to-pr-worktree --pr 66 --once" in proc.stdout
 
 
+def test_run_greploop_wrapper_loads_env_before_pr_head_lookup(tmp_path):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    fake_worktree = tmp_path / "pr-worktree"
+    fake_worktree.mkdir()
+    target_script = fake_worktree / "scripts" / "maintenance" / "run_greploop_guard.sh"
+    target_script.parent.mkdir(parents=True)
+    _write_executable(target_script, "#!/usr/bin/env bash\necho env-loaded\nexit 0\n")
+    hermes_env = fake_home / ".hermes" / ".env"
+    hermes_env.parent.mkdir()
+    hermes_env.write_text("ZOE_GITHUB_REPO=example/env-repo\n")
+    _write_executable(
+        bin_dir / "gh",
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$*\" != *'--repo example/env-repo'* ]]; then echo \"$*\" >&2; exit 9; fi\n"
+        "printf 'main\\n'\n",
+    )
+    _write_executable(
+        bin_dir / "git",
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$*\" == *'branch --show-current'* ]]; then printf 'other\\n'; exit 0; fi\n"
+        f"if [[ \"$*\" == *'worktree list --porcelain'* ]]; then printf 'worktree {fake_worktree}\\nbranch refs/heads/main\\n'; exit 0; fi\n"
+        "exit 1\n",
+    )
+    env = {**os.environ, "HOME": str(fake_home), "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+    env.pop("ZOE_GREPLOOP_SKIP_WORKTREE_SWITCH", None)
+    env.pop("ZOE_GITHUB_REPO", None)
+
+    proc = subprocess.run(
+        [str(greploop_guard.REPO_ROOT / "scripts/maintenance/run_greploop_guard.sh"), "--pr", "66", "--packet-only"],
+        cwd=greploop_guard.REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert proc.returncode == 0
+    assert "env-loaded" in proc.stdout
+
+
 def test_run_greploop_wrapper_blocks_repair_without_pr_worktree(tmp_path):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -129,6 +172,29 @@ def test_run_greploop_wrapper_blocks_repair_without_pr_worktree(tmp_path):
     assert proc.returncode == 2
     assert "Greploop repair mode must run from the PR branch worktree." in proc.stderr
     assert "PR #66 head branch: codex/pr-branch" in proc.stderr
+
+
+def test_run_greploop_wrapper_blocks_repair_when_pr_head_unknown(tmp_path):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _write_executable(
+        bin_dir / "gh",
+        "#!/usr/bin/env bash\nexit 1\n",
+    )
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+    env.pop("ZOE_GREPLOOP_SKIP_WORKTREE_SWITCH", None)
+
+    proc = subprocess.run(
+        [str(greploop_guard.REPO_ROOT / "scripts/maintenance/run_greploop_guard.sh"), "--pr", "66", "--once"],
+        cwd=greploop_guard.REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert proc.returncode == 2
+    assert "could not determine the PR head branch" in proc.stderr
 
 
 def test_validate_packet_rejects_broad_missing_context():
