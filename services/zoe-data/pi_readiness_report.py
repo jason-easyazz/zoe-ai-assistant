@@ -209,7 +209,7 @@ def _next_actions(
     baseline_groups = _groups_with_blocker(promotion, "baseline_not_comparable")
     benchmark_groups = _benchmark_candidate_groups(benchmark_promotion)
     if baseline_groups and benchmark_groups:
-        baseline_groups = [g for g in baseline_groups if g in benchmark_groups]
+        baseline_groups = [g for g in baseline_groups if g not in benchmark_groups]
     if baseline_groups:
         next_actions.append(
             {

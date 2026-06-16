@@ -239,6 +239,57 @@ def test_readiness_report_uses_persisted_eval_benchmark_for_candidate_wins(tmp_p
     } in report["next_actions"]
 
 
+
+def test_readiness_report_keeps_baseline_action_for_groups_not_covered_by_benchmark(tmp_path):
+    shadow_path = tmp_path / "shadow.jsonl"
+    row = _winning_weather_row(1)
+    row["zoe_latency_ms"] = 10
+    row["baseline_kind"] = "router_only_not_comparable"
+    row["baseline_comparable"] = False
+    shadow_path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    eval_report_path = tmp_path / "pi-eval.json"
+    eval_report_path.write_text(
+        json.dumps(
+            {
+                "promotion_report": {
+                    "candidate_wins": {
+                        "groups": ["timers"],
+                        "details": [
+                            {
+                                "intent_group": "timers",
+                                "status": "needs_more_evidence",
+                                "unique_case_deficit": 29,
+                                "sample_deficit": 29,
+                                "real_source_sample_deficit": 30,
+                                "accuracy_delta": 1.0,
+                                "latency_delta_ms": 1800.0,
+                                "pi_p95_latency_ms": 2400.0,
+                                "zoe_p95_latency_ms": 4200.0,
+                                "promotion_blockers": ["insufficient_samples", "insufficient_real_source_samples"],
+                            }
+                        ],
+                    },
+                    "decisions": [],
+                    "promotion_actions": {},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    env = _env(tmp_path, shadow_path)
+    env["ZOE_PI_PROMOTION_EVAL_REPORT_PATH"] = str(eval_report_path)
+
+    report = pi_readiness_report(env)
+
+    assert report["state"] == "collect_more_evidence"
+    assert {
+        "kind": "measure_comparable_baseline",
+        "priority": "p1",
+        "detail": "Measure Pi against Zoe Agent or operator fallback latency before judging promotion.",
+        "groups": ["weather"],
+    } in report["next_actions"]
+
+
 def test_readiness_report_missing_eval_benchmark_is_nonblocking(tmp_path):
     shadow_path = tmp_path / "shadow.jsonl"
     shadow_path.write_text("", encoding="utf-8")
