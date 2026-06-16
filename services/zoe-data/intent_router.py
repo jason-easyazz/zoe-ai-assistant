@@ -2461,12 +2461,10 @@ async def _execute_daily_briefing(user_id: str) -> Optional[str]:
     }
 
     results = {}
-    tasks = []
-    for key, cmd in cmds.items():
-        tasks.append((key, _run_mcporter(cmd)))
+    task_keys = list(cmds)
+    task_results = await asyncio.gather(*(_run_mcporter(cmds[key]) for key in task_keys))
 
-    for key, coro in tasks:
-        raw = await coro
+    for key, raw in zip(task_keys, task_results):
         if raw:
             try:
                 results[key] = json.loads(raw)
