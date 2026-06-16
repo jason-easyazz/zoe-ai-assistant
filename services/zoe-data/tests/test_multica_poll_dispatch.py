@@ -30,6 +30,40 @@ def test_chain_poll_failed_detects_sentinels_but_not_real_status():
     assert chain_poll_failed({"found": False, "status": "not_found"}) is False
 
 
+def test_resolve_chain_for_dispatch_repolls_only_on_sentinel():
+    """The re-poll recovery (main._resolve_chain_for_dispatch) that stops a poll
+    timeout/error sentinel from stranding an in-progress chain: a sentinel triggers
+    ONE fresh re-poll with a longer (>=60s) timeout, then the backfill decides on
+    the resolved chain; a real chain is returned unchanged with no extra poll."""
+    import asyncio
+
+    from main import _resolve_chain_for_dispatch
+
+    calls = []
+
+    async def _repoll(ref, *, issue=None, timeout=None):
+        calls.append(timeout)
+        return {"found": True, "status": "partial", "phases": {"implement": "done"}}
+
+    sentinel = {"found": False, "status": "poll_timeout", "timed_out": True}
+    out = asyncio.run(
+        _resolve_chain_for_dispatch(
+            sentinel, ref="multica:x", issue={"id": "x"}, poll_guarded=_repoll, poll_timeout=20.0
+        )
+    )
+    assert out["status"] == "partial"
+    assert len(calls) == 1 and calls[0] >= 60.0
+
+    real = {"found": True, "status": "partial", "phases": {"implement": "done"}}
+    out2 = asyncio.run(
+        _resolve_chain_for_dispatch(
+            real, ref="multica:y", issue={"id": "y"}, poll_guarded=_repoll, poll_timeout=20.0
+        )
+    )
+    assert out2 is real
+    assert len(calls) == 1  # no second poll for a real chain
+
+
 def test_chain_needs_dispatch_not_found():
     assert chain_needs_dispatch({"found": False, "status": "not_found"}) is True
 
