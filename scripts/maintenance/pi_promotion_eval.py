@@ -83,7 +83,7 @@ async def _run_zoe_baseline(
     zoe_agent_baseline_timeout_seconds: float = 30.0,
     zoe_agent_baseline_max_tokens: int = 256,
 ) -> dict[str, Any]:
-    with _temporary_env({"ZOE_PI_INTENT_ENABLED": "false"}):
+    with _temporary_env({"ZOE_PI_INTENT_ENABLED": "false", "ZOE_PI_INTENT_SHADOW_ENABLED": "false"}):
         from intent_router import detect_and_extract_intent
 
         start = time.perf_counter()
@@ -161,18 +161,19 @@ async def _run_zoe_agent_baseline(
     session_id = f"pi-eval-baseline-{case.case_id}-{uuid.uuid4().hex[:8]}"
     start = time.perf_counter()
     try:
-        response = await asyncio.wait_for(
-            run_zoe_agent(
-                case.text,
-                session_id,
-                "pi-eval",
-                history=[],
-                db_memory_context="",
-                portrait="",
-                max_tokens_override=max_tokens,
-            ),
-            timeout=timeout_seconds,
-        )
+        with _temporary_env({"ZOE_PI_INTENT_ENABLED": "false", "ZOE_PI_INTENT_SHADOW_ENABLED": "false"}):
+            response = await asyncio.wait_for(
+                run_zoe_agent(
+                    case.text,
+                    session_id,
+                    "pi-eval",
+                    history=[],
+                    db_memory_context="",
+                    portrait="",
+                    max_tokens_override=max_tokens,
+                ),
+                timeout=timeout_seconds,
+            )
         latency_ms = (time.perf_counter() - start) * 1000
         return {
             "latency_ms": latency_ms,
@@ -211,6 +212,7 @@ async def _run_pi(case: PiIntentEvalCase, *, transport: str, enable_execution: b
         "ZOE_PI_ALLOW_EXECUTION": "true" if enable_execution else "false",
         "ZOE_PI_LOCAL_MODEL_CONFIGURED": "true" if local_model_configured else "false",
         "ZOE_PI_INTENT_PREFILTER_ENABLED": prefilter_enabled,
+        "ZOE_PI_INTENT_SHADOW_ENABLED": "false",
     }
     with _temporary_env(updates):
         from pi_intent_classifier import classify_with_pi_intent_governor

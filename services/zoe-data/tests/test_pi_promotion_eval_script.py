@@ -1,6 +1,7 @@
 import asyncio
 import importlib.util
 import json
+import os
 import sys
 import types
 from pathlib import Path
@@ -93,6 +94,32 @@ def test_zoe_baseline_uses_current_router_hit_for_stale_fallback_fixture(monkeyp
     assert result["baseline_response_chars"] is None
     assert result["baseline_error"] is None
     assert calls == []
+
+
+def test_zoe_baseline_disables_shadow_evidence_while_measuring(monkeypatch):
+    seen_env = []
+    router = types.ModuleType("intent_router")
+
+    async def detect_and_extract_intent(_text):
+        seen_env.append({
+            "enabled": os.environ.get("ZOE_PI_INTENT_ENABLED"),
+            "shadow": os.environ.get("ZOE_PI_INTENT_SHADOW_ENABLED"),
+        })
+        return types.SimpleNamespace(name="weather", confidence=0.75)
+
+    router.detect_and_extract_intent = detect_and_extract_intent
+    monkeypatch.setitem(sys.modules, "intent_router", router)
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_ENABLED", "true")
+    monkeypatch.setenv("ZOE_PI_INTENT_ENABLED", "true")
+    module = _load_module()
+    case = module.PiIntentEvalCase("weather", "rain later", "weather", "weather", "fallback")
+
+    result = asyncio.run(module._run_zoe_baseline(case))
+
+    assert result["intent"] == "weather"
+    assert seen_env == [{"enabled": "false", "shadow": "false"}]
+    assert os.environ["ZOE_PI_INTENT_SHADOW_ENABLED"] == "true"
+    assert os.environ["ZOE_PI_INTENT_ENABLED"] == "true"
 
 
 def test_zoe_baseline_uses_operator_fallback_latency_override(monkeypatch):
@@ -193,6 +220,33 @@ def test_zoe_baseline_can_measure_comparable_zoe_agent_fallback(monkeypatch):
     assert calls[0]["kwargs"]["max_tokens_override"] == 256
 
 
+def test_zoe_agent_baseline_disables_pi_shadow_evidence(monkeypatch):
+    _install_fake_intent_router(monkeypatch, intent_name=None)
+    seen_env = []
+    agent = types.ModuleType("zoe_agent")
+
+    async def run_zoe_agent(message, session_id, user_id="family-admin", **kwargs):
+        seen_env.append({
+            "enabled": os.environ.get("ZOE_PI_INTENT_ENABLED"),
+            "shadow": os.environ.get("ZOE_PI_INTENT_SHADOW_ENABLED"),
+        })
+        return "fallback answer"
+
+    agent.run_zoe_agent = run_zoe_agent
+    monkeypatch.setitem(sys.modules, "zoe_agent", agent)
+    monkeypatch.setenv("ZOE_PI_INTENT_ENABLED", "true")
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_ENABLED", "true")
+    module = _load_module()
+    case = module.PiIntentEvalCase("weather", "rain later", "weather", "weather", "fallback")
+
+    result = asyncio.run(module._run_zoe_baseline(case, measure_zoe_agent_baseline=True))
+
+    assert result["baseline_kind"] == "zoe_agent_fallback_baseline"
+    assert seen_env == [{"enabled": "false", "shadow": "false"}]
+    assert os.environ["ZOE_PI_INTENT_ENABLED"] == "true"
+    assert os.environ["ZOE_PI_INTENT_SHADOW_ENABLED"] == "true"
+
+
 def test_zoe_baseline_timeout_is_not_comparable(monkeypatch):
     _install_fake_intent_router(monkeypatch, intent_name=None)
     calls = []
@@ -259,6 +313,32 @@ def test_run_pi_fast_no_result_is_not_timeout(monkeypatch):
     assert result["timed_out"] is False
     assert result["prefilter_enabled"] == "false"
     assert result["correct"] is True
+
+
+def test_run_pi_disables_shadow_evidence_while_measuring(monkeypatch):
+    seen_env = []
+    classifier = types.ModuleType("pi_intent_classifier")
+
+    async def classify_with_pi_intent_governor(_text):
+        seen_env.append({
+            "enabled": os.environ.get("ZOE_PI_INTENT_ENABLED"),
+            "shadow": os.environ.get("ZOE_PI_INTENT_SHADOW_ENABLED"),
+        })
+        return types.SimpleNamespace(intent="weather", confidence=0.9)
+
+    classifier.classify_with_pi_intent_governor = classify_with_pi_intent_governor
+    monkeypatch.setitem(sys.modules, "pi_intent_classifier", classifier)
+    monkeypatch.setenv("ZOE_PI_INTENT_SHADOW_ENABLED", "true")
+    module = _load_module()
+    case = module.PiIntentEvalCase("weather", "rain later", "weather", "weather", "fallback")
+
+    result = asyncio.run(
+        module._run_pi(case, transport="rpc", enable_execution=True, local_model_configured=True)
+    )
+
+    assert result["intent"] == "weather"
+    assert seen_env == [{"enabled": "true", "shadow": "false"}]
+    assert os.environ["ZOE_PI_INTENT_SHADOW_ENABLED"] == "true"
 
 
 
