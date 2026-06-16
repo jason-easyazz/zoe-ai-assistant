@@ -4869,7 +4869,10 @@ def test_closeout_body_uses_supported_greploop_launcher():
     )
 
     assert "scripts/maintenance/run_greploop_guard.sh --pr N --merge-when-ready" in body
+    assert "scripts/maintenance/run_greploop_guard.sh --pr N --once" in body
+    assert "Do not call Greptile trigger-review directly" in body
     assert "python3 scripts/maintenance/greploop_guard.py" not in body
+    assert "trigger-review jason-easyazz/zoe-ai-assistant" not in body
 
 
 def test_audit_no_pr_phases_have_bounded_completion_path():
