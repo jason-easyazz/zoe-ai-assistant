@@ -22,6 +22,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "services" / "zoe-data"))
 
+from pi_intent_lab import SAFE_FULFILLMENT_INTENTS  # noqa: E402
 from zoe_pi_promotion import (  # noqa: E402
     DEFAULT_PI_INTENT_EVAL_CASES,
     PiIntentEvalCase,
@@ -358,6 +359,31 @@ def _load_cases(paths: Sequence[str], *, no_default_cases: bool) -> list[PiInten
     return merge_pi_intent_eval_cases(base_cases, *loaded_case_groups)
 
 
+def _select_cases(
+    cases: Sequence[PiIntentEvalCase],
+    *,
+    case_ids: Sequence[str] = (),
+    intent_groups: Sequence[str] = (),
+    safe_fulfillment_eligible_only: bool = False,
+) -> list[PiIntentEvalCase]:
+    wanted_ids = {item for item in case_ids if item}
+    wanted_groups = {item for item in intent_groups if item}
+    selected: list[PiIntentEvalCase] = []
+    for case in cases:
+        case.validate()
+        if wanted_ids and case.case_id not in wanted_ids:
+            continue
+        if wanted_groups and case.intent_group not in wanted_groups:
+            continue
+        if safe_fulfillment_eligible_only and case.expected_intent not in SAFE_FULFILLMENT_INTENTS:
+            continue
+        selected.append(case)
+    missing_ids = sorted(wanted_ids - {case.case_id for case in selected})
+    if missing_ids:
+        raise ValueError(f"unknown or filtered case_id values: {', '.join(missing_ids)}")
+    return selected
+
+
 def _latency_stats(values: Sequence[float]) -> dict[str, float | None]:
     if not values:
         return {"avg": None, "p50": None, "p95": None, "min": None, "max": None}
@@ -403,6 +429,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cases-file", action="append", default=[])
     parser.add_argument("--no-default-cases", action="store_true")
     parser.add_argument("--repeat", type=int, default=1)
+    parser.add_argument("--case-id", action="append", default=[], help="Limit the run to one or more case IDs.")
+    parser.add_argument("--intent-group", action="append", default=[], help="Limit the run to one or more intent groups.")
+    parser.add_argument(
+        "--safe-fulfillment-eligible-only",
+        action="store_true",
+        help="Keep only cases whose expected intent is in the lab read-only safe-fulfillment allowlist.",
+    )
     parser.add_argument("--run-pi", action="store_true")
     parser.add_argument("--allow-pi-execution", action="store_true")
     parser.add_argument("--local-model-configured", action="store_true")
@@ -421,7 +454,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--natural-final-max-ms", type=float, default=DEFAULT_NATURAL_FINAL_MAX_MS)
     args = parser.parse_args(argv)
 
-    cases = _load_cases(args.cases_file, no_default_cases=args.no_default_cases)
+    cases = _select_cases(
+        _load_cases(args.cases_file, no_default_cases=args.no_default_cases),
+        case_ids=args.case_id,
+        intent_groups=args.intent_group,
+        safe_fulfillment_eligible_only=args.safe_fulfillment_eligible_only,
+    )
     observations = run_probe(
         cases,
         base_url=args.base_url,

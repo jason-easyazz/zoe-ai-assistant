@@ -306,3 +306,32 @@ def test_cli_runs_cases_file(tmp_path, capsys, monkeypatch):
     assert payload["base_url"] == "http://testserver"
     assert payload["observation_count"] == 1
     assert payload["summary"]["overall"]["pi_accuracy"] == 1.0
+
+
+def test_select_cases_can_keep_safe_fulfillment_eligible_defaults_only():
+    module = _load_module()
+
+    selected = module._select_cases(
+        module.DEFAULT_PI_INTENT_EVAL_CASES,
+        safe_fulfillment_eligible_only=True,
+    )
+
+    assert [case.case_id for case in selected] == [
+        "weather_rain_later",
+        "weather_jacket",
+        "list_show",
+        "briefing",
+    ]
+    assert all(case.expected_intent in module.SAFE_FULFILLMENT_INTENTS for case in selected)
+
+
+def test_select_cases_supports_group_and_case_filters():
+    module = _load_module()
+
+    selected = module._select_cases(
+        module.DEFAULT_PI_INTENT_EVAL_CASES,
+        intent_groups=["weather", "chat"],
+        case_ids=["weather_rain_later"],
+    )
+
+    assert [case.case_id for case in selected] == ["weather_rain_later"]
