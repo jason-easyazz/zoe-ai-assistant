@@ -210,10 +210,10 @@ def test_default_probe_ignores_openclaw_pi_without_standalone_install(tmp_path, 
     versions = {"node": "v22.22.0", "npm": "10.9.4"}
     for command in ("node", "npm"):
         runtime = nvm_bin / command
-        runtime.write_text("#!/bin/sh" + chr(10) + f"echo {versions[command]}" + chr(10), encoding="utf-8")
+        runtime.write_text(f"#!/bin/sh\necho {versions[command]}\n", encoding="utf-8")
         runtime.chmod(0o755)
     bundled_pi = openclaw_bin / "pi"
-    bundled_pi.write_text("#!/bin/sh" + chr(10) + "echo 0.74.0" + chr(10), encoding="utf-8")
+    bundled_pi.write_text("#!/bin/sh\necho 0.74.0\n", encoding="utf-8")
     bundled_pi.chmod(0o755)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("PATH", "")
@@ -226,6 +226,7 @@ def test_default_probe_ignores_openclaw_pi_without_standalone_install(tmp_path, 
     assert result.tool_versions["node"] == "v22.22.0"
     assert result.to_dict()["requirements"]["node"]["status"] == "ok"
 
+
 def test_default_probe_prefers_standalone_nvm_pi_over_openclaw_bundle(tmp_path, monkeypatch):
     home = tmp_path / "home"
     nvm_bin = home / ".nvm" / "versions" / "node" / "v22.22.0" / "bin"
@@ -235,13 +236,13 @@ def test_default_probe_prefers_standalone_nvm_pi_over_openclaw_bundle(tmp_path, 
     versions = {"node": "v22.22.0", "npm": "10.9.4"}
     for command in ("node", "npm"):
         runtime = nvm_bin / command
-        runtime.write_text("#!/bin/sh" + chr(10) + f"echo {versions[command]}" + chr(10), encoding="utf-8")
+        runtime.write_text(f"#!/bin/sh\necho {versions[command]}\n", encoding="utf-8")
         runtime.chmod(0o755)
     standalone_pi = nvm_bin / "pi"
-    standalone_pi.write_text("#!/bin/sh" + chr(10) + "echo 0.79.3" + chr(10), encoding="utf-8")
+    standalone_pi.write_text("#!/bin/sh\necho 0.79.3\n", encoding="utf-8")
     standalone_pi.chmod(0o755)
     bundled_pi = openclaw_bin / "pi"
-    bundled_pi.write_text("#!/bin/sh" + chr(10) + "echo 0.74.0" + chr(10), encoding="utf-8")
+    bundled_pi.write_text("#!/bin/sh\necho 0.74.0\n", encoding="utf-8")
     bundled_pi.chmod(0o755)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("PATH", "")
@@ -254,6 +255,7 @@ def test_default_probe_prefers_standalone_nvm_pi_over_openclaw_bundle(tmp_path, 
     assert result.tools["npm"] == str(nvm_bin / "npm")
     assert result.tools["pi"] == str(standalone_pi)
     assert result.tool_versions["node"] == "v22.22.0"
+
 
 def test_default_probe_prefers_nvm_node_when_system_node_lacks_pi(tmp_path, monkeypatch):
     home = tmp_path / "home"

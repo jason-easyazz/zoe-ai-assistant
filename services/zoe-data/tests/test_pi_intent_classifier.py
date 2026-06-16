@@ -209,10 +209,10 @@ def test_pi_intent_runtime_env_uses_standalone_nvm_pi_only(tmp_path, monkeypatch
     openclaw_bin.mkdir(parents=True)
     for command in ("node", "npm", "pi"):
         path = nvm_bin / command
-        path.write_text("#!/bin/sh" + chr(10) + "exit 0" + chr(10), encoding="utf-8")
+        path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         path.chmod(0o755)
     bundled_pi = openclaw_bin / "pi"
-    bundled_pi.write_text("#!/bin/sh" + chr(10) + "exit 0" + chr(10), encoding="utf-8")
+    bundled_pi.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     bundled_pi.chmod(0o755)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("PATH", "")
@@ -223,6 +223,7 @@ def test_pi_intent_runtime_env_uses_standalone_nvm_pi_only(tmp_path, monkeypatch
     path_parts = runtime_env["PATH"].split(os.pathsep)
     assert str(nvm_bin) in path_parts
     assert str(openclaw_bin) not in path_parts
+
 
 def test_pi_intent_prefilter_allows_low_risk_tasks_and_rejects_casual_chat():
     assert pi_intent_prefilter_allows("rain later") is True
