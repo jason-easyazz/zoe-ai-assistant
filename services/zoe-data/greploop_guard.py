@@ -722,6 +722,7 @@ def _gh_thread_counts(pr_number: int, *, repo: str = DEFAULT_REPO) -> dict[str, 
         return {"ok": False, "unresolved": -1, "resolved_greptile_keys": []}
     resolved_greptile_keys: list[tuple[str, str]] = []
     unresolved = 0
+    unresolved_greptile_threads = 0
     greptile_thread_count = 0
     for thread in threads:
         comments = ((thread.get("comments") or {}).get("nodes") or [])
@@ -734,12 +735,15 @@ def _gh_thread_counts(pr_number: int, *, repo: str = DEFAULT_REPO) -> dict[str, 
             greptile_thread_count += 1
         if not thread.get("isResolved"):
             unresolved += 1
+            if greptile_comments:
+                unresolved_greptile_threads += 1
             continue
         for comment in greptile_comments:
             resolved_greptile_keys.extend(_comment_identity_keys(comment, file_path_key="path"))
     return {
         "ok": True,
         "unresolved": unresolved,
+        "unresolved_greptile_threads": unresolved_greptile_threads,
         "thread_count": len(threads),
         "greptile_thread_count": greptile_thread_count,
         "resolved_greptile_keys": resolved_greptile_keys,
@@ -763,7 +767,8 @@ def _filter_actionable_findings(
     resolved_keys = set(counts.get("resolved_greptile_keys") or [])
     if not resolved_keys:
         return actionable
-    allow_legacy_match = int(counts.get("unresolved") or 0) == 0
+    unresolved_greptile_threads = counts.get("unresolved_greptile_threads", counts.get("unresolved"))
+    allow_legacy_match = int(unresolved_greptile_threads or 0) == 0
     filtered: list[dict[str, Any]] = []
     for finding in actionable:
         keys = _finding_thread_keys(finding)

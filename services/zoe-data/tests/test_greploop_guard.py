@@ -8,6 +8,8 @@ import pytest
 
 import greploop_guard
 
+_ORIGINAL_GH_THREAD_COUNTS = greploop_guard._gh_thread_counts
+
 
 @pytest.fixture(autouse=True)
 def _default_github_helpers(monkeypatch):
@@ -418,6 +420,54 @@ def test_gh_mergeable_state_blocks_conflicting_mergeable(monkeypatch):
 
     assert out["ok"] is False
     assert out["reason"] == "GH_NOT_MERGEABLE"
+
+
+def test_gh_thread_counts_tracks_unresolved_greptile_threads_separately(monkeypatch):
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_pr_review_threads",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: [
+            {
+                "isResolved": False,
+                "comments": {
+                    "nodes": [
+                        {"author": {"login": "human-reviewer"}, "path": "a.py", "body": "human thread"}
+                    ]
+                },
+            },
+            {
+                "isResolved": False,
+                "comments": {
+                    "nodes": [
+                        {"author": {"login": "greptile-apps"}, "path": "b.py", "body": "greptile thread"}
+                    ]
+                },
+            },
+            {
+                "isResolved": True,
+                "comments": {
+                    "nodes": [
+                        {
+                            "id": "PRRC_resolved",
+                            "author": {"login": "greptile-apps"},
+                            "path": "c.py",
+                            "line": 12,
+                            "body": "resolved greptile thread",
+                            "url": "https://github.example/comment/3",
+                        }
+                    ]
+                },
+            },
+        ],
+    )
+
+    out = _ORIGINAL_GH_THREAD_COUNTS(66)
+
+    assert out["unresolved"] == 2
+    assert out["unresolved_greptile_threads"] == 1
+    assert out["greptile_thread_count"] == 2
+    assert ("id", "PRRC_resolved") in out["resolved_greptile_keys"]
+    assert ("url", "https://github.example/comment/3") in out["resolved_greptile_keys"]
 
 
 @pytest.mark.asyncio
@@ -1199,6 +1249,32 @@ def test_filter_actionable_findings_allows_legacy_match_when_no_unresolved_threa
     assert out == []
 
 
+def test_filter_actionable_findings_allows_legacy_match_with_only_human_threads_open():
+    body = "Resolved Greptile body while human thread remains open"
+    findings = [
+        {
+            "id": "comment-1",
+            "file_path": "services/zoe-data/example.py",
+            "line": 10,
+            "body": body,
+            "addressed": False,
+        }
+    ]
+
+    out = greploop_guard._filter_actionable_findings(
+        findings,
+        pr_number=66,
+        thread_counts={
+            "ok": True,
+            "unresolved": 1,
+            "unresolved_greptile_threads": 0,
+            "resolved_greptile_keys": [("path_title", f"services/zoe-data/example.py:{body}")],
+        },
+    )
+
+    assert out == []
+
+
 def test_filter_actionable_findings_keeps_new_line_when_unresolved_threads_exist():
     body = "Resolved multi-line Greptile body"
     findings = [
@@ -1217,6 +1293,7 @@ def test_filter_actionable_findings_keeps_new_line_when_unresolved_threads_exist
         thread_counts={
             "ok": True,
             "unresolved": 1,
+            "unresolved_greptile_threads": 1,
             "resolved_greptile_keys": [
                 ("path_line_title", f"services/zoe-data/example.py:10:{body}"),
                 ("path_title", f"services/zoe-data/example.py:{body}"),
