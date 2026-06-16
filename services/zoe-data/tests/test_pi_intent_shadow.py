@@ -105,6 +105,7 @@ def test_shadow_status_summarizes_records(tmp_path):
         {
             "ZOE_PI_INTENT_SHADOW_ENABLED": "true",
             "ZOE_PI_INTENT_SHADOW_PATH": str(path),
+            "ZOE_PI_INTENT_SHADOW_LABELS_PATH": str(tmp_path / "no-labels.jsonl"),
         }
     )
 
@@ -180,6 +181,7 @@ def test_shadow_label_loader_ignores_unmapped_and_applies_negative_labels(tmp_pa
                 json.dumps({"text_hash": "weather", "expected_intent": "weather"}),
                 json.dumps({"text_hash": "casual", "negative": True}),
                 json.dumps({"text_hash": "bad", "expected_intent": "extend_capability"}),
+                json.dumps({"text_hash": "conflict", "negative": True, "outcome_label": "weather"}),
             ]
         )
         + "\n",
@@ -188,7 +190,8 @@ def test_shadow_label_loader_ignores_unmapped_and_applies_negative_labels(tmp_pa
 
     labels = load_pi_intent_shadow_labels(str(labels_path))
     records = apply_pi_intent_shadow_labels(
-        [{"text_hash": "weather"}, {"text_hash": "casual"}, {"text_hash": "bad"}], labels
+        [{"text_hash": "weather"}, {"text_hash": "casual"}, {"text_hash": "bad"}, {"text_hash": "conflict"}],
+        labels,
     )
 
     assert sorted(labels) == ["casual", "weather"]
@@ -197,6 +200,8 @@ def test_shadow_label_loader_ignores_unmapped_and_applies_negative_labels(tmp_pa
     assert records[1]["negative"] is True
     assert records[1]["outcome_label"] is None
     assert "outcome_label" not in records[2]
+    assert "outcome_label" not in records[3]
+
 
 def test_shadow_summary_empty_is_explicitly_not_accuracy_ready():
     report = summarize_pi_intent_shadow([])

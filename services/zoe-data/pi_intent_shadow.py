@@ -236,6 +236,8 @@ def _shadow_label_from_row(row: Mapping[str, Any]) -> dict[str, Any]:
     label: dict[str, Any] = {}
     negative = _bool_record_value(row.get("negative"))
     outcome_label = _optional_str(row.get("outcome_label") or row.get("expected_intent") or row.get("label"))
+    if negative and outcome_label and outcome_label not in {"chat", "none", "no_intent"}:
+        return {}
     if negative or outcome_label in {"chat", "none", "no_intent"}:
         label["negative"] = True
         label["outcome_label"] = None
@@ -251,6 +253,7 @@ def _shadow_label_from_row(row: Mapping[str, Any]) -> dict[str, Any]:
         if row.get(key) is not None:
             label[key] = _bool_record_value(row.get(key))
     return label
+
 
 def shadow_records_to_route_samples(records: Sequence[Mapping[str, Any]]) -> list[PiRouteSample]:
     samples: list[PiRouteSample] = []
