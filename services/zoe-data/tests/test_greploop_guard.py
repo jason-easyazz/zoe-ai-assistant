@@ -135,6 +135,12 @@ async def test_cheap_runner_blocks_before_budget_exceeded(monkeypatch):
     assert "max_cost_usd=1.0" in output
 
 
+def test_effective_pr_head_sha_returns_none_when_all_sources_missing(monkeypatch):
+    monkeypatch.setattr(greploop_guard, "_local_head_sha", lambda: None)
+
+    assert greploop_guard._effective_pr_head_sha({"headSha": None}, {"ok": False}) is None
+
+
 def test_ci_status_from_rollup_flags_pending_and_failed():
     rollup = [
         {"name": "validate", "status": "IN_PROGRESS", "conclusion": ""},
@@ -747,6 +753,58 @@ async def test_run_guard_once_waits_when_historical_confidence_has_no_completed_
     assert out["state"] == "WAITING_GREPTILE"
     assert out["triggered_review"] == {"triggered": True}
     assert triggered["pr_number"] == 66
+
+@pytest.mark.asyncio
+async def test_run_guard_once_uses_github_head_ref_for_progress_and_packet(tmp_path, monkeypatch):
+    async def fake_status(**_kwargs):
+        return {
+            "confidenceScore": 4,
+            "reviewIsRunning": False,
+            "headSha": None,
+            "reviewCompleteness": "0/1 Greptile comments addressed",
+        }
+
+    async def fake_comments(**_kwargs):
+        return {
+            "findings": [
+                {
+                    "id": "comment-1",
+                    "file_path": "services/zoe-data/example.py",
+                    "line": 42,
+                    "body": "Fix the narrow issue",
+                    "addressed": False,
+                }
+            ]
+        }
+
+    def fail_local_head():
+        raise AssertionError("GitHub headRefOid should be used before local HEAD")
+
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr("greptile_client.get_pr_status", fake_status)
+    monkeypatch.setattr("greptile_client.list_pr_comments", fake_comments)
+    monkeypatch.setattr(greploop_guard, "_local_head_sha", fail_local_head)
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_pr_observation",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: {
+            "ok": True,
+            "headRefOid": "github-head-sha",
+            "state": "OPEN",
+            "statusCheckRollup": [],
+        },
+    )
+
+    out = await greploop_guard.run_guard_once(66, packet_only=True)
+
+    assert out["ok"] is True
+    assert out["state"] == "PACKET_READY"
+    assert out["packet"]["head_sha"] == "github-head-sha"
+    state = greploop_guard.read_guard_state(66)
+    assert state["last_progress_key"] == "github-head-sha:4:1:1"
+    packet = json.loads((tmp_path / "pr-66" / "last_packet.json").read_text())
+    assert packet["head_sha"] == "github-head-sha"
+
 
 @pytest.mark.asyncio
 async def test_run_guard_once_suppresses_stale_resolved_github_thread(tmp_path, monkeypatch):
