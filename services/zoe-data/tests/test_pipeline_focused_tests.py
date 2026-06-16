@@ -15,7 +15,7 @@ def test_run_focused_pr_tests_no_changed_test_files_does_not_run(monkeypatch):
     monkeypatch.setattr(
         pft, "_changed_test_files", lambda pr_url, *, root: ([], "feature", "deadbeef")
     )
-    result = pft.run_focused_pr_tests("https://github.com/o/r/pull/1")
+    result = pft.run_focused_pr_tests("https://github.com/o/r/pull/1", repo_root="/tmp")
     assert result.ran is False
     assert "no changed test files" in result.summary
 

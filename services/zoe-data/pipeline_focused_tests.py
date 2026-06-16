@@ -104,7 +104,8 @@ def run_focused_pr_tests(pr_url: str, *, repo_root: str | None = None) -> Focuse
 
     # Fetch the PR head so the sha is available locally, then run the focused
     # tests in a detached throwaway worktree (never the live checkout).
-    fetch_ref = f"pull/{pr_url.rstrip('/').rsplit('/', 1)[-1]}/head" if pr_url[-1:].isdigit() else head_ref
+    _pr_tail = pr_url.rstrip("/").rsplit("/", 1)[-1]
+    fetch_ref = f"pull/{_pr_tail}/head" if _pr_tail.isdigit() else head_ref
     code, out = _run(["git", "fetch", "origin", fetch_ref], cwd=root, timeout=_GH_TIMEOUT_S)
     if code != 0:
         # Fall back to fetching by branch name before giving up.
