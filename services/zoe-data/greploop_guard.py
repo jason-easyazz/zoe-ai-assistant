@@ -1097,12 +1097,14 @@ async def assess_merge_readiness(
     from greptile_client import get_pr_status, list_pr_comments
 
     pr_number = int(pr_number)
-    status = await get_pr_status(repo=repo, pr_number=pr_number, default_branch=default_branch)
-    comments = await list_pr_comments(
-        repo=repo,
-        pr_number=pr_number,
-        default_branch=default_branch,
-        unaddressed_only=False,
+    status, comments = await asyncio.gather(
+        get_pr_status(repo=repo, pr_number=pr_number, default_branch=default_branch),
+        list_pr_comments(
+            repo=repo,
+            pr_number=pr_number,
+            default_branch=default_branch,
+            unaddressed_only=False,
+        ),
     )
     findings = comments.get("findings") or []
     thread_counts = _gh_thread_counts(pr_number, repo=repo)
@@ -1239,8 +1241,10 @@ async def run_guard_once(
     task_id = f"pr-{pr_number}"
     with acquire_lock(pr_number):
         state = _load_status(pr_number)
-        status = await get_pr_status(repo=DEFAULT_REPO, pr_number=pr_number, default_branch=DEFAULT_BASE_BRANCH)
-        comments = await list_pr_comments(repo=DEFAULT_REPO, pr_number=pr_number, default_branch=DEFAULT_BASE_BRANCH)
+        status, comments = await asyncio.gather(
+            get_pr_status(repo=DEFAULT_REPO, pr_number=pr_number, default_branch=DEFAULT_BASE_BRANCH),
+            list_pr_comments(repo=DEFAULT_REPO, pr_number=pr_number, default_branch=DEFAULT_BASE_BRANCH),
+        )
         findings = comments.get("findings") or []
         thread_counts = _gh_thread_counts(pr_number, repo=DEFAULT_REPO)
         confidence = _effective_greptile_confidence(pr_number, status, findings, repo=DEFAULT_REPO)

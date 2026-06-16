@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import subprocess
@@ -334,6 +335,53 @@ async def test_assess_merge_readiness_blocks_low_confidence(monkeypatch):
     assert any("GREPTILE_CONFIDENCE" in b for b in out["blockers"])
 
 
+@pytest.mark.asyncio
+async def test_assess_merge_readiness_fetches_greptile_status_and_comments_concurrently(monkeypatch):
+    comments_started = asyncio.Event()
+
+    async def fake_status(**_kwargs):
+        await asyncio.wait_for(comments_started.wait(), timeout=0.5)
+        return {
+            "confidenceScore": 5,
+            "reviewIsRunning": False,
+            "headSha": "abc",
+            "reviewCompleteness": "No Greptile review comments",
+        }
+
+    async def fake_comments(**_kwargs):
+        comments_started.set()
+        await asyncio.sleep(0)
+        return {"findings": []}
+
+    monkeypatch.setattr("greptile_client.get_pr_status", fake_status)
+    monkeypatch.setattr("greptile_client.list_pr_comments", fake_comments)
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_pr_observation",
+        lambda *args, **kwargs: {
+            "ok": True,
+            "state": "OPEN",
+            "statusCheckRollup": [
+                {"name": "Greptile Review", "status": "COMPLETED", "conclusion": "SUCCESS"}
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_mergeable_state",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO, observation=None: {
+            "ok": True,
+            "mergeStateStatus": "CLEAN",
+            "ci": {"ok": True, "pending": [], "failures": []},
+        },
+    )
+
+    out = await greploop_guard.assess_merge_readiness(66, target_confidence=5)
+
+    assert out["ready"] is True
+    assert out["blockers"] == []
+
+
 def test_clear_greptile_wait_state_removes_wait_diagnostics():
     state = {
         "waiting_greptile_count": 3,
@@ -378,6 +426,46 @@ async def test_run_guard_once_does_not_retrigger_active_reviewing_files(tmp_path
     state = greploop_guard.read_guard_state(66)
     assert state["terminal_state"] == "WAITING_GREPTILE"
     assert state["iteration"] == 0
+
+
+@pytest.mark.asyncio
+async def test_run_guard_once_fetches_greptile_status_and_comments_concurrently(tmp_path, monkeypatch):
+    comments_started = asyncio.Event()
+
+    async def fake_status(**_kwargs):
+        await asyncio.wait_for(comments_started.wait(), timeout=0.5)
+        return {
+            "confidenceScore": 5,
+            "reviewIsRunning": False,
+            "headSha": "abc",
+            "reviewCompleteness": "No Greptile review comments",
+        }
+
+    async def fake_comments(**_kwargs):
+        comments_started.set()
+        await asyncio.sleep(0)
+        return {"findings": []}
+
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr("greptile_client.get_pr_status", fake_status)
+    monkeypatch.setattr("greptile_client.list_pr_comments", fake_comments)
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_pr_observation",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: {
+            "ok": True,
+            "state": "OPEN",
+            "headRefOid": "abc",
+            "statusCheckRollup": [
+                {"name": "Greptile Review", "status": "COMPLETED", "conclusion": "SUCCESS"}
+            ],
+        },
+    )
+
+    out = await greploop_guard.run_guard_once(66)
+
+    assert out["ok"] is True
+    assert out["state"] == "READY_TO_MERGE"
 
 
 @pytest.mark.asyncio
