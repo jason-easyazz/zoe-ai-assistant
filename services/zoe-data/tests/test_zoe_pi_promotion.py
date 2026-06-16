@@ -305,6 +305,95 @@ def test_promotion_blocks_when_pi_is_not_faster_than_zoe():
     assert "latency_not_faster_than_zoe" in decision.blockers
 
 
+def test_promotion_blocks_when_pi_loses_a_fast_baseline_lane():
+    samples = [
+        _sample(
+            index,
+            zoe_ms=6000,
+            pi_ms=2500,
+            metadata={"baseline_comparable": True, "baseline_kind": "zoe_agent_fallback_baseline"},
+        )
+        for index in range(15)
+    ]
+    samples.extend(
+        _sample(
+            index + 100,
+            zoe_ms=10,
+            pi_ms=2500,
+            metadata={"baseline_comparable": True, "baseline_kind": "router"},
+        )
+        for index in range(15)
+    )
+    policy = PiPromotionPolicy(min_samples=30, accuracy_win_margin=0.05)
+
+    decision = evaluate_pi_promotion(samples, intent_group="weather", policy=policy)
+
+    assert decision.state == "keep_shadow"
+    assert decision.latency_delta_ms and decision.latency_delta_ms > 0
+    assert "latency_not_faster_than_zoe" not in decision.blockers
+    assert "baseline_lane_not_faster_than_zoe" in decision.blockers
+    assert decision.baseline_lane_latency["fallback:zoe_agent_fallback_baseline"]["latency_delta_ms"] > 0
+    assert decision.baseline_lane_latency["fallback:router"]["latency_delta_ms"] < 0
+
+
+def test_promoted_group_rolls_back_when_pi_loses_a_fast_baseline_lane():
+    samples = [
+        _sample(
+            index,
+            zoe_ms=6000,
+            pi_ms=2500,
+            metadata={"baseline_comparable": True, "baseline_kind": "zoe_agent_fallback_baseline"},
+        )
+        for index in range(15)
+    ]
+    samples.extend(
+        _sample(
+            index + 100,
+            zoe_ms=10,
+            pi_ms=2500,
+            metadata={"baseline_comparable": True, "baseline_kind": "router"},
+        )
+        for index in range(15)
+    )
+    policy = PiPromotionPolicy(min_samples=30, accuracy_win_margin=0.05)
+
+    decision = evaluate_pi_promotion(samples, intent_group="weather", policy=policy, promoted=True)
+
+    assert decision.state == "rollback"
+    assert "baseline_lane_not_faster_than_zoe" in decision.blockers
+
+
+def test_policy_can_disable_baseline_lane_gate_for_smoke_data():
+    samples = [
+        _sample(
+            index,
+            zoe_ms=6000,
+            pi_ms=2500,
+            metadata={"baseline_comparable": True, "baseline_kind": "zoe_agent_fallback_baseline"},
+        )
+        for index in range(15)
+    ]
+    samples.extend(
+        _sample(
+            index + 100,
+            zoe_ms=10,
+            pi_ms=2500,
+            metadata={"baseline_comparable": True, "baseline_kind": "router"},
+        )
+        for index in range(15)
+    )
+    policy = PiPromotionPolicy(
+        min_samples=30,
+        accuracy_win_margin=0.05,
+        require_baseline_lane_latency_win=False,
+    )
+
+    decision = evaluate_pi_promotion(samples, intent_group="weather", policy=policy)
+
+    assert decision.state == "promote"
+    assert "baseline_lane_not_faster_than_zoe" not in decision.blockers
+
+
 def test_promotion_blocks_non_allowlisted_groups():
     decision = evaluate_pi_promotion([], intent_group="device_control", policy=PiPromotionPolicy(min_samples=1))
 
