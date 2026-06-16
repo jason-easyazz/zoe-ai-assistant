@@ -28,6 +28,11 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from pi_intent_fleet_benchmark import build_report as build_pi_fleet_report  # noqa: E402
 from pi_intent_fleet_benchmark import run_benchmark as run_pi_fleet_benchmark  # noqa: E402
+from pi_intent_lab_http_probe import (  # noqa: E402
+    DEFAULT_CASES as DEFAULT_PI_HTTP_FLOW_CASES,
+    build_report as build_pi_http_flow_report,
+    run_probe as run_pi_http_flow_probe,
+)
 from zoe_pi_promotion import (  # noqa: E402
     DEFAULT_PI_INTENT_EVAL_CASES,
     PiIntentEvalCase,
@@ -43,6 +48,7 @@ from voice_presence import (  # noqa: E402
 
 DEFAULT_PERCEIVED_BUDGET_MS = 150.0
 DEFAULT_REPEAT = 25
+PRESENCE_ENV_PREFIXES = ("ZOE_WAKE_ACK_", "ZOE_PROCESSING_ACK_")
 
 
 def build_conversation_flow_report(
@@ -51,6 +57,7 @@ def build_conversation_flow_report(
     repeat: int = DEFAULT_REPEAT,
     perceived_budget_ms: float = DEFAULT_PERCEIVED_BUDGET_MS,
     pi_benchmark: Mapping[str, Any] | None = None,
+    pi_http_flow: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a compact report for Zoe's perceived conversation latency."""
     values = env if env is not None else os.environ
@@ -76,7 +83,8 @@ def build_conversation_flow_report(
             "gate": gate,
         },
         "pi_benchmark": dict(pi_benchmark) if pi_benchmark else None,
-        "decision": _decision(gate, pi_benchmark),
+        "pi_http_flow": dict(pi_http_flow) if pi_http_flow else None,
+        "decision": _decision(gate, pi_benchmark, pi_http_flow),
     }
 
 
@@ -156,8 +164,13 @@ def _gate_blockers(
     return blockers
 
 
-def _decision(gate: Mapping[str, Any], pi_benchmark: Mapping[str, Any] | None) -> dict[str, Any]:
+def _decision(
+    gate: Mapping[str, Any],
+    pi_benchmark: Mapping[str, Any] | None,
+    pi_http_flow: Mapping[str, Any] | None,
+) -> dict[str, Any]:
     pi_state = _pi_state(pi_benchmark)
+    pi_flow_state = _pi_http_flow_state(pi_http_flow)
     recommendations: list[str] = []
     if gate.get("natural_flow_buffer_ready"):
         recommendations.append("Use the intent buffer for slow voice turns; first acknowledgement is inside budget.")
@@ -171,9 +184,16 @@ def _decision(gate: Mapping[str, Any], pi_benchmark: Mapping[str, Any] | None) -
         recommendations.append("Run with --run-pi to attach Pi speed/accuracy evidence.")
     else:
         recommendations.append("Keep Pi in shadow/evidence mode until it beats Zoe on comparable speed and accuracy.")
+    if pi_flow_state["state"] == "natural_flow_observed":
+        recommendations.append("Run human voice trials for the observed Pi hybrid groups; lab flow is natural but not promoted.")
+    elif pi_flow_state["state"] == "not_measured":
+        recommendations.append("Run with --run-pi-http-flow to attach live cue-to-final Pi fulfillment evidence.")
+    else:
+        recommendations.append("Do not judge Pi voice flow yet; the live cue-to-final probe did not meet the natural-flow gate.")
     return {
         "state": "buffer_ready_pi_shadow" if gate.get("natural_flow_buffer_ready") else "buffer_not_ready",
         "pi_candidate": pi_state,
+        "pi_http_flow": pi_flow_state,
         "recommendations": recommendations,
     }
 
@@ -204,6 +224,35 @@ def _pi_state(pi_benchmark: Mapping[str, Any] | None) -> dict[str, Any]:
         "benchmark_kind": pi_benchmark.get("benchmark_kind"),
         "observation_count": pi_benchmark.get("observation_count"),
         "unique_case_count": pi_benchmark.get("unique_case_count"),
+    }
+
+
+def _pi_http_flow_state(pi_http_flow: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not pi_http_flow:
+        return {"state": "not_measured"}
+    overall = ((pi_http_flow.get("summary") or {}).get("overall")) or {}
+    natural_rate = overall.get("natural_flow_rate")
+    request_error_rate = overall.get("request_error_rate")
+    safe_rate = overall.get("safe_fulfillment_success_rate")
+    p95_final = ((overall.get("final_completion_latency_ms") or {}).get("p95"))
+    ok = (
+        isinstance(natural_rate, (int, float))
+        and natural_rate >= 1.0
+        and isinstance(request_error_rate, (int, float))
+        and request_error_rate <= 0.0
+        and (safe_rate is None or (isinstance(safe_rate, (int, float)) and safe_rate >= 1.0))
+    )
+    groups = sorted((((pi_http_flow.get("summary") or {}).get("by_intent_group")) or {}).keys())
+    return {
+        "state": "natural_flow_observed" if ok else "keep_lab_only",
+        "observation_count": pi_http_flow.get("observation_count"),
+        "unique_case_count": pi_http_flow.get("unique_case_count"),
+        "intent_groups": groups,
+        "natural_flow_rate": natural_rate,
+        "request_error_rate": request_error_rate,
+        "safe_fulfillment_success_rate": safe_rate,
+        "final_completion_p95_ms": p95_final,
+        "production_route_change": ((pi_http_flow.get("conversation_contract") or {}).get("production_route_change")),
     }
 
 
@@ -259,6 +308,54 @@ def _demo_env(base_env: Mapping[str, str]) -> dict[str, str]:
     return values
 
 
+def _presence_env_from_files(
+    base_env: Mapping[str, str],
+    *,
+    env_files: Sequence[Path] | None = None,
+) -> dict[str, str]:
+    """Load only presence-related env keys; never import secrets into the report."""
+    values = dict(base_env)
+    paths = list(env_files) if env_files is not None else [ROOT / ".env", ROOT / "services" / "zoe-data" / ".env"]
+    for path in paths:
+        try:
+            rows = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for row in rows:
+            parsed = _parse_env_row(row)
+            if not parsed:
+                continue
+            key, value = parsed
+            if key.startswith(PRESENCE_ENV_PREFIXES) and key not in values:
+                values[key] = value
+    return values
+
+
+def _parse_env_row(row: str) -> tuple[str, str] | None:
+    stripped = row.strip()
+    if not stripped or stripped.startswith("#") or "=" not in stripped:
+        return None
+    key, raw_value = stripped.split("=", 1)
+    key = key.strip()
+    if not key:
+        return None
+    value = raw_value.strip()
+    if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+        value = value[1:-1]
+    return key, value
+
+
+def _first_wake_text(report: Mapping[str, Any]) -> str:
+    events = (((report.get("presence") or {}).get("wake_ack") or {}).get("first_payload") or {}).get("events") or []
+    if isinstance(events, list):
+        for event in events:
+            if isinstance(event, Mapping) and str(event.get("role") or "") == "zoe":
+                text = str(event.get("text") or "").strip()
+                if text:
+                    return text
+    return ""
+
+
 def _load_cases(paths: Sequence[str], *, no_default_cases: bool) -> list[PiIntentEvalCase]:
     loaded_case_groups = [load_pi_intent_eval_cases(path) for path in paths]
     base_cases = [] if no_default_cases else list(DEFAULT_PI_INTENT_EVAL_CASES)
@@ -292,11 +389,59 @@ async def _optional_pi_benchmark(args: argparse.Namespace) -> Mapping[str, Any] 
     )
 
 
+def _load_http_flow_cases(paths: Sequence[str], *, no_default_cases: bool) -> list[dict[str, Any]]:
+    cases: list[dict[str, Any]] = [] if no_default_cases else [dict(item) for item in DEFAULT_PI_HTTP_FLOW_CASES]
+    for path in paths:
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+        rows = raw if isinstance(raw, list) else [raw]
+        cases.extend(dict(item) for item in rows)
+    return cases
+
+
+def _optional_pi_http_flow(args: argparse.Namespace, *, wake_ack_text: str) -> Mapping[str, Any] | None:
+    if not args.run_pi_http_flow:
+        return None
+    cases = _load_http_flow_cases(args.pi_http_cases_file, no_default_cases=args.no_default_http_cases)
+    observations = run_pi_http_flow_probe(
+        cases,
+        base_url=args.pi_http_base_url,
+        repeat=args.pi_http_repeat,
+        run_pi=True,
+        include_safe_fulfillment=args.include_safe_fulfillment,
+        allow_pi_execution=args.allow_execution,
+        local_model_configured=args.local_model_configured,
+        timeout_seconds=args.pi_http_timeout_seconds,
+        request_timeout_seconds=args.pi_http_request_timeout_seconds,
+        session_id=args.session_id,
+        device_token=args.device_token,
+        wake_ack_text=wake_ack_text,
+        natural_cue_max_ms=args.perceived_budget_ms,
+        natural_final_max_ms=args.natural_final_max_ms,
+    )
+    return build_pi_http_flow_report(
+        cases,
+        observations,
+        base_url=args.pi_http_base_url,
+        repeat=args.pi_http_repeat,
+        run_pi=True,
+        include_safe_fulfillment=args.include_safe_fulfillment,
+        wake_ack_text=wake_ack_text,
+        natural_cue_max_ms=args.perceived_budget_ms,
+        natural_final_max_ms=args.natural_final_max_ms,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Probe Zoe perceived conversation latency and optional Pi evidence")
     parser.add_argument("--repeat", type=int, default=DEFAULT_REPEAT, help="Presence-path samples to collect")
     parser.add_argument("--perceived-budget-ms", type=float, default=DEFAULT_PERCEIVED_BUDGET_MS)
     parser.add_argument("--demo-defaults", action="store_true", help="Use demo wake/processing phrases when env is unset")
+    parser.add_argument(
+        "--presence-env-file",
+        action="append",
+        default=[],
+        help="Load wake/processing ack keys from an env file; only ZOE_WAKE_ACK_* and ZOE_PROCESSING_ACK_* are read.",
+    )
     parser.add_argument("--run-pi", action="store_true", help="Attach Pi fleet benchmark evidence")
     parser.add_argument("--transport", choices=["print", "rpc"], default="rpc")
     parser.add_argument("--allow-execution", action="store_true")
@@ -310,10 +455,29 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--measure-zoe-agent-baseline", action="store_true")
     parser.add_argument("--zoe-agent-baseline-timeout-seconds", type=float, default=30.0)
     parser.add_argument("--zoe-agent-baseline-max-tokens", type=int, default=256)
+    parser.add_argument("--run-pi-http-flow", action="store_true", help="Attach live Pi lab HTTP cue-to-final evidence")
+    parser.add_argument("--pi-http-base-url", default="http://127.0.0.1:8000")
+    parser.add_argument("--pi-http-repeat", type=int, default=1)
+    parser.add_argument("--pi-http-cases-file", action="append", default=[])
+    parser.add_argument("--no-default-http-cases", action="store_true")
+    parser.add_argument("--include-safe-fulfillment", action="store_true")
+    parser.add_argument("--pi-http-timeout-seconds", type=float, default=12.0)
+    parser.add_argument("--pi-http-request-timeout-seconds", type=float, default=10.0)
+    parser.add_argument("--natural-final-max-ms", type=float, default=4500.0)
+    parser.add_argument("--session-id")
+    parser.add_argument("--device-token")
     args = parser.parse_args(argv)
 
-    values = _demo_env(os.environ) if args.demo_defaults else os.environ
+    env_files = [Path(path) for path in args.presence_env_file] if args.presence_env_file else None
+    values = _demo_env(os.environ) if args.demo_defaults else _presence_env_from_files(os.environ, env_files=env_files)
     pi_benchmark = asyncio.run(_optional_pi_benchmark(args))
+    base_report = build_conversation_flow_report(
+        env=values,
+        repeat=args.repeat,
+        perceived_budget_ms=args.perceived_budget_ms,
+        pi_benchmark=pi_benchmark,
+    )
+    pi_http_flow = _optional_pi_http_flow(args, wake_ack_text=_first_wake_text(base_report))
     print(
         json.dumps(
             build_conversation_flow_report(
@@ -321,6 +485,7 @@ def main(argv: list[str] | None = None) -> int:
                 repeat=args.repeat,
                 perceived_budget_ms=args.perceived_budget_ms,
                 pi_benchmark=pi_benchmark,
+                pi_http_flow=pi_http_flow,
             ),
             indent=2,
             sort_keys=True,
