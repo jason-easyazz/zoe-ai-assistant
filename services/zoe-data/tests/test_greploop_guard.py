@@ -371,6 +371,30 @@ def test_read_guard_state_returns_retry_for_partial_json(tmp_path, monkeypatch):
     assert state["error"] == "invalid_json_state"
 
 
+def test_load_status_resets_stale_retry_state(monkeypatch):
+    monkeypatch.setattr(
+        greploop_guard,
+        "read_guard_state",
+        lambda pr: {
+            "pr": int(pr),
+            "state": "STALE_READ_RETRY",
+            "terminal_state": "STALE_READ_RETRY",
+            "error": "invalid_json_state",
+        },
+    )
+
+    state = greploop_guard._load_status(66)
+
+    assert state == {
+        "pr": 66,
+        "iteration": 0,
+        "no_progress_count": 0,
+        "same_error_count": 0,
+        "last_progress_key": "",
+        "last_error_hash": "",
+    }
+
+
 @pytest.mark.asyncio
 async def test_cheap_runner_blocks_before_budget_exceeded(monkeypatch):
     monkeypatch.setenv("ZOE_CHEAP_PR_AGENT_CMD", "false")
