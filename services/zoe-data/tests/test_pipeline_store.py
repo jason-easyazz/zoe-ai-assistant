@@ -1014,8 +1014,44 @@ async def test_sync_pipeline_gate_blocks_verify_without_test(isolated_store):
         "verify": {"id": "t_verify", "status": "done"},
     }
     state = await store.sync_pipeline_from_chain("multica:verify-gate", phases, fetch_detail)
+    # First time verify completes with validator+pr but no `test` evidence, the
+    # gate re-arms verify to todo (bounded retry) rather than terminally stranding,
+    # so the re-dispatched worker can supply the missing focused-pytest evidence.
     assert state.phase == "verify"
-    assert any("gate_blocked" in line for line in isolated_store.read_text(encoding="utf-8").splitlines())
+    assert state.status == "todo"
+    lines = isolated_store.read_text(encoding="utf-8").splitlines()
+    assert any("verify_evidence_retry" in line for line in lines)
+    assert not any("gate_blocked" in line for line in lines)
+
+
+@pytest.mark.asyncio
+async def test_sync_pipeline_gate_blocks_verify_after_retry_budget(isolated_store):
+    # Once verify has been re-armed past the retry budget, a still-missing `test`
+    # gate becomes a terminal block (no infinite retry loop).
+    seeded = PipelineState(
+        task_ref="multica:verify-budget",
+        phase="verify",
+        status="running",
+        attempts={"implement": 1, "verify": 2},  # already beyond the default limit (1)
+    )
+    store.save_state(seeded, event="seed")
+
+    async def fetch_detail(task_id: str):
+        if task_id == "t_impl":
+            return {
+                "latest_summary": "TOOLS_USED=graphify\nPR_URL=https://github.com/o/r/pull/2",
+                "comments": [],
+            }
+        return {"latest_summary": "VALIDATORS=pass", "comments": []}
+
+    phases = {
+        "implement": {"id": "t_impl", "status": "done"},
+        "verify": {"id": "t_verify", "status": "done"},
+    }
+    state = await store.sync_pipeline_from_chain("multica:verify-budget", phases, fetch_detail)
+    assert state.phase == "verify"
+    lines = isolated_store.read_text(encoding="utf-8").splitlines()
+    assert any("gate_blocked" in line for line in lines)
 
 
 @pytest.mark.asyncio

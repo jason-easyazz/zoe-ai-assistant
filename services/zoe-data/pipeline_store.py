@@ -880,6 +880,40 @@ async def _sync_pipeline_from_chain_once(
                     "can_complete_phase returned False with no diagnosable gate reason "
                     f"(phase={state.phase!r}, evidence={[item.kind for item in state.evidence]!r})"
                 )
+            # Bounded auto-retry for the verify quality gate: a verify worker that
+            # produced validator (+pr) evidence but skipped the focused pytest
+            # leaves `test` evidence missing. Rather than terminally stranding the
+            # chain (which strands the whole ticket on a single under-compliant
+            # run), re-arm verify to todo — keeping the evidence already gathered —
+            # so it re-dispatches under the hardened "you MUST run the PR's focused
+            # tests" prompt. Bounded by verify attempts so it cannot loop.
+            try:
+                _verify_evidence_retry_limit = int(
+                    os.environ.get("ZOE_PIPELINE_VERIFY_EVIDENCE_RETRY_LIMIT", "1") or "1"
+                )
+            except ValueError:
+                _verify_evidence_retry_limit = 1
+            if (
+                state.phase == "verify"
+                and not validator_hash_mismatch
+                and extra["missing"] == ["test"]
+                and state.attempts.get("verify", 0) <= _verify_evidence_retry_limit
+            ):
+                retry_reason = (
+                    "VERIFY_EVIDENCE_RETRY: verify completed without `test` evidence "
+                    "(focused pytest not run); re-arming verify to require it"
+                )
+                state = transition(state, "retry_evidence", reason=retry_reason)
+                state = await _run_io(
+                    partial(
+                        save_state,
+                        state,
+                        event="verify_evidence_retry",
+                        extra=extra,
+                        allow_stale_evidence_merge=True,
+                    )
+                )
+                return state
             state, _should_abort = record_block_fingerprint(
                 state,
                 block_fingerprint(phase, block_reason),  # type: ignore[arg-type]
