@@ -156,6 +156,7 @@ def test_empty_report_keeps_stats_schema(monkeypatch):
     assert overall["observation_count"] == 0
     assert overall["pi_accuracy"] is None
     assert overall["pi_timeout_rate"] is None
+    assert overall["natural_flow_rate"] is None
     assert overall["safe_fulfillment_success_rate"] is None
 
 
