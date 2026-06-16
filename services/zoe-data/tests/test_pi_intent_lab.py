@@ -957,20 +957,83 @@ def test_pi_intent_lab_endpoint_returns_comparison(monkeypatch):
 
 
 
+
+@pytest.mark.asyncio
+async def test_pi_lab_resource_pressure_guard_thresholds(monkeypatch):
+    import routers.pi_intent_lab as route_module
+
+    payload = route_module.PiIntentLabCompareRequest(text="rain later", run_pi=True)
+    monkeypatch.setenv("ZOE_PI_LAB_MIN_AVAILABLE_MB", "2048")
+    monkeypatch.setenv("ZOE_PI_LAB_MIN_SWAP_FREE_MB", "256")
+    monkeypatch.setattr(
+        route_module,
+        "_read_meminfo_mb",
+        lambda: {"MemAvailable": 1024, "SwapFree": 128},
+    )
+
+    pressure = await route_module._pi_lab_resource_pressure_blocker(payload)
+
+    assert pressure is not None
+    assert pressure["error_type"] == "resource_pressure"
+    assert pressure["blockers"] == ["available_memory_below_threshold", "swap_free_below_threshold"]
+    assert pressure["available_mb"] == 1024
+    assert pressure["swap_free_mb"] == 128
+
+
+@pytest.mark.asyncio
+async def test_pi_lab_resource_pressure_guard_passes_when_healthy(monkeypatch):
+    import routers.pi_intent_lab as route_module
+
+    payload = route_module.PiIntentLabCompareRequest(text="rain later", run_pi=True)
+    monkeypatch.setenv("ZOE_PI_LAB_MIN_AVAILABLE_MB", "2048")
+    monkeypatch.setenv("ZOE_PI_LAB_MIN_SWAP_FREE_MB", "256")
+    monkeypatch.setattr(
+        route_module,
+        "_read_meminfo_mb",
+        lambda: {"MemAvailable": 4096, "SwapFree": 1024},
+    )
+
+    assert await route_module._pi_lab_resource_pressure_blocker(payload) is None
+
+
+@pytest.mark.asyncio
+async def test_pi_lab_resource_pressure_guard_can_be_disabled(monkeypatch):
+    import routers.pi_intent_lab as route_module
+
+    payload = route_module.PiIntentLabCompareRequest(text="rain later", run_pi=True)
+    monkeypatch.setenv("ZOE_PI_LAB_RESOURCE_GUARD_ENABLED", "0")
+    monkeypatch.setattr(route_module, "_read_meminfo_mb", lambda: {"MemAvailable": 1, "SwapFree": 1})
+
+    assert await route_module._pi_lab_resource_pressure_blocker(payload) is None
+
+
+def test_pi_lab_resource_pressure_meminfo_fallback(tmp_path):
+    import routers.pi_intent_lab as route_module
+
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text(
+        "MemFree:        1048576 kB\nBuffers:         262144 kB\nCached:          524288 kB\nSwapFree:        131072 kB\n",
+        encoding="utf-8",
+    )
+
+    values = route_module._read_meminfo_mb(str(meminfo))
+
+    assert values["MemAvailable"] == 1792
+    assert values["SwapFree"] == 128
+
 def test_pi_intent_lab_compare_blocks_under_resource_pressure(monkeypatch):
     import routers.pi_intent_lab as route_module
 
-    monkeypatch.setattr(
-        route_module,
-        "_pi_lab_resource_pressure_blocker",
-        lambda payload: {
+    async def fake_pressure(payload):
+        return {
             "error_type": "resource_pressure",
             "detail": "Pi intent lab blocked to avoid zoe-data OOM restart",
             "available_mb": 512,
             "min_available_mb": 2048,
             "production_route_change": False,
-        },
-    )
+        }
+
+    monkeypatch.setattr(route_module, "_pi_lab_resource_pressure_blocker", fake_pressure)
     app = _admin_app()
 
     resp = TestClient(app).post(
@@ -988,17 +1051,16 @@ def test_pi_intent_lab_compare_blocks_under_resource_pressure(monkeypatch):
 def test_pi_intent_lab_hybrid_stream_emits_resource_pressure_after_cue(monkeypatch):
     import routers.pi_intent_lab as route_module
 
-    monkeypatch.setattr(
-        route_module,
-        "_pi_lab_resource_pressure_blocker",
-        lambda payload: {
+    async def fake_pressure(payload):
+        return {
             "error_type": "resource_pressure",
             "detail": "Pi intent lab blocked to avoid zoe-data OOM restart",
             "available_mb": 512,
             "min_available_mb": 2048,
             "production_route_change": False,
-        },
-    )
+        }
+
+    monkeypatch.setattr(route_module, "_pi_lab_resource_pressure_blocker", fake_pressure)
     monkeypatch.setattr(
         route_module,
         "_processing_cue",

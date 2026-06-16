@@ -51,7 +51,7 @@ class PiIntentLabCompareRequest(BaseModel):
 @router.post("/compare")
 async def compare_pi_intent(payload: PiIntentLabCompareRequest, user: dict = Depends(require_lab_operator)):
     """Compare Zoe router, optional Zoe Agent fallback, and standalone Pi without dispatching."""
-    pressure = _pi_lab_resource_pressure_blocker(payload)
+    pressure = await _pi_lab_resource_pressure_blocker(payload)
     if pressure:
         raise HTTPException(status_code=503, detail=pressure)
     try:
@@ -111,7 +111,7 @@ async def _hybrid_stream_events(payload: PiIntentLabCompareRequest, user: Mappin
             },
         }
     )
-    pressure = _pi_lab_resource_pressure_blocker(payload)
+    pressure = await _pi_lab_resource_pressure_blocker(payload)
     if pressure:
         yield _stream_error(
             started,
@@ -211,7 +211,7 @@ def _stream_error(
     return _json_line(payload)
 
 
-def _pi_lab_resource_pressure_blocker(payload: PiIntentLabCompareRequest) -> dict[str, Any] | None:
+async def _pi_lab_resource_pressure_blocker(payload: PiIntentLabCompareRequest) -> dict[str, Any] | None:
     if not _env_bool("ZOE_PI_LAB_RESOURCE_GUARD_ENABLED", default=True):
         return None
     if not (payload.run_pi or payload.include_safe_fulfillment or payload.measure_zoe_agent_baseline):
@@ -220,7 +220,7 @@ def _pi_lab_resource_pressure_blocker(payload: PiIntentLabCompareRequest) -> dic
     min_swap_free_mb = _env_float("ZOE_PI_LAB_MIN_SWAP_FREE_MB", 256.0)
     if min_available_mb <= 0 and min_swap_free_mb <= 0:
         return None
-    mem = _read_meminfo_mb()
+    mem = await asyncio.to_thread(_read_meminfo_mb)
     if not mem:
         return None
     available_mb = mem.get("MemAvailable")
