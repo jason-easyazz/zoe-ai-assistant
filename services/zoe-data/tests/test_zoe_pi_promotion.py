@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from zoe_pi_promotion import (
@@ -99,6 +101,47 @@ def test_load_pi_intent_eval_cases_from_json_object(tmp_path):
     assert len(cases) == 1
     assert cases[0].case_id == "timer_file"
     assert cases[0].source == "intent_miss"
+
+
+def test_committed_pi_intent_eval_cases_validate_requested_coverage():
+    repo_root = Path(__file__).resolve().parents[3]
+    path = repo_root / "data" / "eval" / "pi_intent_eval_cases.jsonl"
+
+    cases = load_pi_intent_eval_cases(path)
+    by_id = {case.case_id: case for case in cases}
+    new_synthetic_case_ids = {
+        "eval_reminder_stretch",
+        "eval_reminder_today",
+        "eval_list_show_packing",
+        "eval_list_add_tomatoes",
+        "eval_list_remove_milk",
+        "eval_list_remove_done",
+        "eval_timer_tea",
+        "eval_timer_laundry",
+        "eval_calc_percent",
+        "eval_calc_addition",
+        "eval_briefing_evening",
+        "eval_briefing_schedule",
+        "eval_negative_timer_story",
+        "eval_negative_shopping_memory",
+    }
+
+    assert new_synthetic_case_ids <= set(by_id)
+    assert all(by_id[case_id].source == "synthetic" for case_id in new_synthetic_case_ids)
+    assert {
+        "reminder_create",
+        "reminder_list",
+        "list_add",
+        "list_show",
+        "list_remove",
+        "timer_create",
+        "calculate",
+        "daily_briefing",
+    } <= {case.expected_intent for case in cases if case.expected_intent}
+    assert by_id["eval_negative_timer_story"].negative is True
+    assert by_id["eval_negative_timer_story"].intent_group == "chat"
+    assert by_id["eval_negative_shopping_memory"].negative is True
+    assert by_id["eval_negative_shopping_memory"].intent_group == "chat"
 
 
 def test_load_pi_intent_eval_cases_rejects_duplicate_case_ids(tmp_path):
