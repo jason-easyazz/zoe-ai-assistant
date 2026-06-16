@@ -6,7 +6,7 @@ import greploop_guard
 
 
 @pytest.fixture(autouse=True)
-def _default_gh_pr_observation(monkeypatch):
+def _default_github_helpers(monkeypatch):
     monkeypatch.setattr(
         greploop_guard,
         "_gh_pr_observation",
@@ -15,6 +15,20 @@ def _default_gh_pr_observation(monkeypatch):
             "state": "OPEN",
             "statusCheckRollup": [],
         },
+    )
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_thread_counts",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: {
+            "ok": True,
+            "unresolved": 0,
+            "resolved_greptile_keys": [],
+        },
+    )
+    monkeypatch.setattr(
+        greploop_guard,
+        "_greptile_confidence_from_github_comments",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: None,
     )
 
 
