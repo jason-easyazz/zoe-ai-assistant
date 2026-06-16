@@ -27,6 +27,7 @@ from zoe_pi_promotion import (
 )
 
 _DEFAULT_SHADOW_PATH = "~/.zoe/data/pi-intent-shadow.jsonl"
+_DEFAULT_LABELS_PATH = "~/.zoe/data/pi-intent-shadow-labels.jsonl"
 _UNSET = object()
 _DEFAULT_MAX_REPORT_RECORDS = 500
 _SECRET_KEY_RE = re.compile(r"(?i)(api[_-]?key|\btoken\b|\bsecret\b|password|authorization|\bbearer\b)")
@@ -44,6 +45,7 @@ class PiIntentShadowConfig:
     max_words: int = 32
     include_preview: bool = True
     force_classifier_enabled: bool = True
+    labels_path: str = _DEFAULT_LABELS_PATH
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "PiIntentShadowConfig":
@@ -54,6 +56,9 @@ class PiIntentShadowConfig:
             max_words=_int_env(values.get("ZOE_PI_INTENT_SHADOW_MAX_WORDS"), default=32),
             include_preview=_env_bool(values.get("ZOE_PI_INTENT_SHADOW_INCLUDE_PREVIEW"), default=True),
             force_classifier_enabled=_env_bool(values.get("ZOE_PI_INTENT_SHADOW_FORCE_ENABLED"), default=True),
+            labels_path=(
+                values.get("ZOE_PI_INTENT_SHADOW_LABELS_PATH") or _DEFAULT_LABELS_PATH
+            ).strip() or _DEFAULT_LABELS_PATH,
         )
 
     def validate(self) -> None:
@@ -70,6 +75,7 @@ class PiIntentShadowConfig:
             "max_words": self.max_words,
             "include_preview": self.include_preview,
             "force_classifier_enabled": self.force_classifier_enabled,
+            "labels_path": self.labels_path,
         }
 
 
@@ -151,7 +157,9 @@ async def maybe_record_pi_intent_shadow(
 def pi_intent_shadow_status(env: Mapping[str, str] | None = None, *, limit: int = _DEFAULT_MAX_REPORT_RECORDS) -> dict[str, Any]:
     values = env if env is not None else os.environ
     config = PiIntentShadowConfig.from_env(values)
-    records = load_pi_intent_shadow_records(config.path, limit=limit)
+    raw_records = load_pi_intent_shadow_records(config.path, limit=limit)
+    labels = load_pi_intent_shadow_labels(config.labels_path)
+    records = apply_pi_intent_shadow_labels(raw_records, labels)
     samples = shadow_records_to_route_samples(records)
     requested_promoted_groups = _csv_env(values.get("ZOE_PI_INTENT_PROMOTED_GROUPS"))
     promoted_groups = [group for group in requested_promoted_groups if group in LOW_RISK_PI_INTENT_GROUPS]
@@ -159,6 +167,8 @@ def pi_intent_shadow_status(env: Mapping[str, str] | None = None, *, limit: int 
     return {
         "config": config.to_dict(),
         "record_count_window": len(records),
+        "raw_record_count_window": len(raw_records),
+        "label_count": len(labels),
         "report": summarize_pi_intent_shadow(records),
         "promotion_report": summarize_pi_route_promotion(samples, promoted_groups=promoted_groups),
         "ignored_promoted_groups": ignored_promoted_groups,
@@ -181,6 +191,66 @@ def load_pi_intent_shadow_records(path: str, *, limit: int = _DEFAULT_MAX_REPORT
             records.append(item)
     return records
 
+
+def load_pi_intent_shadow_labels(path: str) -> dict[str, dict[str, Any]]:
+    target = Path(path).expanduser()
+    if not target.exists():
+        return {}
+    labels: dict[str, dict[str, Any]] = {}
+    with target.open("r", encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            try:
+                row = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(row, Mapping):
+                continue
+            text_hash = _optional_str(row.get("text_hash"))
+            if not text_hash:
+                continue
+            label = _shadow_label_from_row(row)
+            if label:
+                labels[text_hash] = label
+    return labels
+
+
+def apply_pi_intent_shadow_labels(
+    records: Sequence[Mapping[str, Any]], labels: Mapping[str, Mapping[str, Any]]
+) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    for record in records:
+        item = dict(record)
+        text_hash = _optional_str(item.get("text_hash"))
+        label = labels.get(text_hash or "")
+        if label:
+            item.update(label)
+            item["outcome_label_source"] = "shadow_label_sidecar"
+        output.append(item)
+    return output
+
+
+def _shadow_label_from_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    label: dict[str, Any] = {}
+    negative = _bool_record_value(row.get("negative"))
+    outcome_label = _optional_str(row.get("outcome_label") or row.get("expected_intent") or row.get("label"))
+    if negative or outcome_label in {"chat", "none", "no_intent"}:
+        label["negative"] = True
+        label["outcome_label"] = None
+    elif outcome_label and intent_group_for_intent(outcome_label):
+        label["outcome_label"] = outcome_label
+    else:
+        return {}
+    for key in ("route_class", "baseline_kind", "source"):
+        value = _optional_str(row.get(key))
+        if value:
+            label[key] = value
+    for key in ("baseline_comparable", "user_corrected", "rollback_blocked"):
+        if row.get(key) is not None:
+            label[key] = _bool_record_value(row.get(key))
+    return label
 
 def shadow_records_to_route_samples(records: Sequence[Mapping[str, Any]]) -> list[PiRouteSample]:
     samples: list[PiRouteSample] = []
@@ -475,6 +545,8 @@ def _env_bool(value: str | None, *, default: bool = False) -> bool:
 
 __all__ = [
     "PiIntentShadowConfig",
+    "apply_pi_intent_shadow_labels",
+    "load_pi_intent_shadow_labels",
     "load_pi_intent_shadow_records",
     "maybe_record_pi_intent_shadow",
     "pi_intent_shadow_status",
