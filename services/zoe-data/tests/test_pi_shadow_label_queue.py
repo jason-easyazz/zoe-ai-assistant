@@ -6,33 +6,20 @@ from pathlib import Path
 import pytest
 
 
-def _load_module():
+def _load_module(monkeypatch):
     path = Path(__file__).resolve().parents[3] / "scripts" / "maintenance" / "pi_shadow_label_queue.py"
     spec = importlib.util.spec_from_file_location("pi_shadow_label_queue_test", path)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
-    old_path = list(sys.path)
-    try:
-        spec.loader.exec_module(module)
-    finally:
-        sys.path[:] = old_path
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    spec.loader.exec_module(module)
     return module
 
 
-def test_build_label_queue_prioritizes_unlabeled_real_pi_candidates():
-    module = _load_module()
+def test_build_label_queue_prioritizes_unlabeled_real_pi_candidates(monkeypatch):
+    module = _load_module(monkeypatch)
     payload = module.build_label_queue(
         [
-            {
-                "text_hash": "weather-old",
-                "text_preview": "old rain",
-                "ts": 1,
-                "pi_intent": "weather",
-                "pi_intent_group": "weather",
-                "pi_confidence": 0.5,
-                "pi_latency_ms": 300,
-                "zoe_latency_ms": 900,
-            },
             {
                 "text_hash": "weather-old",
                 "text_preview": "new rain",
@@ -42,6 +29,16 @@ def test_build_label_queue_prioritizes_unlabeled_real_pi_candidates():
                 "pi_confidence": 0.95,
                 "pi_latency_ms": 100,
                 "zoe_latency_ms": 800,
+            },
+            {
+                "text_hash": "weather-old",
+                "text_preview": "old rain",
+                "ts": 1,
+                "pi_intent": "weather",
+                "pi_intent_group": "weather",
+                "pi_confidence": 0.5,
+                "pi_latency_ms": 300,
+                "zoe_latency_ms": 900,
             },
             {
                 "text_hash": "timer",
@@ -74,8 +71,8 @@ def test_build_label_queue_prioritizes_unlabeled_real_pi_candidates():
     assert row["label_example"]["outcome_label"] == "weather"
 
 
-def test_build_label_queue_can_include_no_result_as_negative_chat():
-    module = _load_module()
+def test_build_label_queue_can_include_no_result_as_negative_chat(monkeypatch):
+    module = _load_module(monkeypatch)
 
     payload = module.build_label_queue(
         [
@@ -97,8 +94,8 @@ def test_build_label_queue_can_include_no_result_as_negative_chat():
     assert row["label_example"]["negative"] is True
 
 
-def test_build_label_queue_filters_groups_and_rejects_privileged_groups():
-    module = _load_module()
+def test_build_label_queue_filters_groups_and_rejects_privileged_groups(monkeypatch):
+    module = _load_module(monkeypatch)
     records = [
         {"text_hash": "weather", "text_preview": "rain", "pi_intent": "weather", "pi_intent_group": "weather"},
         {"text_hash": "timer", "text_preview": "timer", "pi_intent": "timer_create", "pi_intent_group": "timers"},
@@ -112,8 +109,8 @@ def test_build_label_queue_filters_groups_and_rejects_privileged_groups():
         module.build_label_queue(records, groups=["self_evolution"])
 
 
-def test_cli_reads_shadow_and_label_sidecar(tmp_path, capsys):
-    module = _load_module()
+def test_cli_reads_shadow_and_label_sidecar(tmp_path, capsys, monkeypatch):
+    module = _load_module(monkeypatch)
     shadow_path = tmp_path / "shadow.jsonl"
     labels_path = tmp_path / "labels.jsonl"
     shadow_path.write_text(

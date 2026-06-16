@@ -134,10 +134,19 @@ def _latest_by_text_hash(records: Sequence[Mapping[str, Any]]) -> list[Mapping[s
         if not text_hash:
             anonymous.append(record)
             continue
-        by_hash[text_hash] = record
-    keyed = sorted(by_hash.values(), key=lambda item: float(item.get("ts") or 0), reverse=True)
-    anonymous.sort(key=lambda item: float(item.get("ts") or 0), reverse=True)
+        existing = by_hash.get(text_hash)
+        if existing is None or _record_ts(record) >= _record_ts(existing):
+            by_hash[text_hash] = record
+    keyed = sorted(by_hash.values(), key=_record_ts, reverse=True)
+    anonymous.sort(key=_record_ts, reverse=True)
     return [*keyed, *anonymous]
+
+
+def _record_ts(record: Mapping[str, Any]) -> float:
+    try:
+        return float(record.get("ts") or 0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _queue_row(record: Mapping[str, Any], *, labeled: bool) -> dict[str, Any]:
