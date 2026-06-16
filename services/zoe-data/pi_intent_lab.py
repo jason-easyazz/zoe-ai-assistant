@@ -18,6 +18,9 @@ from typing import Any, Mapping
 from zoe_pi_promotion import LOW_RISK_PI_INTENT_GROUPS, intent_group_for_intent
 
 
+_ENV_LOCK = asyncio.Lock()
+
+
 @contextmanager
 def _temporary_env(updates: Mapping[str, str | None]):
     old_values = {key: os.environ.get(key) for key in updates}
@@ -113,13 +116,14 @@ async def compare_pi_intent_lab(
 async def _run_zoe_router(text: str, *, user_id: str) -> dict[str, Any]:
     from intent_router import detect_and_extract_intent, detect_intent
 
-    with _temporary_env({"ZOE_PI_INTENT_ENABLED": "false", "ZOE_PI_INTENT_SHADOW_ENABLED": "false"}):
-        raw_started = time.perf_counter()
-        raw_intent = detect_intent(text, user_id=user_id)
-        raw_latency_ms = (time.perf_counter() - raw_started) * 1000
-        started = time.perf_counter()
-        extracted_intent = await detect_and_extract_intent(text, user_id=user_id)
-        latency_ms = (time.perf_counter() - started) * 1000
+    async with _ENV_LOCK:
+        with _temporary_env({"ZOE_PI_INTENT_ENABLED": "false", "ZOE_PI_INTENT_SHADOW_ENABLED": "false"}):
+            raw_started = time.perf_counter()
+            raw_intent = detect_intent(text, user_id=user_id)
+            raw_latency_ms = (time.perf_counter() - raw_started) * 1000
+            started = time.perf_counter()
+            extracted_intent = await detect_and_extract_intent(text, user_id=user_id)
+            latency_ms = (time.perf_counter() - started) * 1000
 
     if extracted_intent is not None:
         route_class = "deterministic"
@@ -182,13 +186,24 @@ async def _run_pi(
     started = time.perf_counter()
     error = None
     result = None
+    timed_out_by_guard = False
     try:
         if env is None:
             # Let the classifier perform standalone Pi runtime discovery, including NVM node/bin lookup.
-            with _temporary_env(updates):
-                result = await classify_with_pi_intent_governor(text, context_turns=context_turns)
+            # The env lock prevents concurrent lab requests from interleaving temporary os.environ changes.
+            async with _ENV_LOCK:
+                with _temporary_env(updates):
+                    result = await asyncio.wait_for(
+                        classify_with_pi_intent_governor(text, context_turns=context_turns),
+                        timeout=timeout_seconds,
+                    )
         else:
-            result = await classify_with_pi_intent_governor(text, context_turns=context_turns, env=runtime_env)
+            result = await asyncio.wait_for(
+                classify_with_pi_intent_governor(text, context_turns=context_turns, env=runtime_env),
+                timeout=timeout_seconds,
+            )
+    except asyncio.TimeoutError:
+        timed_out_by_guard = True
     except Exception as exc:  # pragma: no cover - defensive operator surface
         error = exc.__class__.__name__
     latency_ms = (time.perf_counter() - started) * 1000
@@ -196,7 +211,7 @@ async def _run_pi(
     confidence = float(result.confidence) if result else 0.0
     group = intent_group_for_intent(intent)
     executable = bool(intent) and confidence >= PI_INTENT_EXECUTE_THRESHOLD and group in LOW_RISK_PI_INTENT_GROUPS
-    timed_out = result is None and error is None and latency_ms >= (timeout_seconds * 1000 * 0.95)
+    timed_out = timed_out_by_guard or (result is None and error is None and latency_ms >= (timeout_seconds * 1000 * 0.95))
     return {
         "ran": True,
         "intent": intent,

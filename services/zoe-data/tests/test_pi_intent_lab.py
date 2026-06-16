@@ -64,6 +64,16 @@ def _install_fake_hybrid(monkeypatch):
     monkeypatch.setitem(sys.modules, "pi_hybrid_buffer", module)
 
 
+
+def _install_fake_voice_presence(monkeypatch):
+    module = types.ModuleType("voice_presence")
+
+    def processing_ack_event(env=None, index=None):
+        return {"type": "voice:processing_ack", "text": "Let me check.", "source": "intent_buffer"}
+
+    module.processing_ack_event = processing_ack_event
+    monkeypatch.setitem(sys.modules, "voice_presence", module)
+
 def _install_fake_zoe_agent(monkeypatch, calls):
     module = types.ModuleType("zoe_agent")
 
@@ -93,6 +103,7 @@ async def test_lab_compares_router_pi_and_never_dispatches(monkeypatch):
         seen_env=seen_env,
     )
     _install_fake_hybrid(monkeypatch)
+    _install_fake_voice_presence(monkeypatch)
 
     result = await compare_pi_intent_lab(
         "rain later",
@@ -172,6 +183,29 @@ async def test_lab_skips_pi_when_requested(monkeypatch):
     assert result["comparison"]["pi_vs_comparable_latency_delta_ms"] is None
 
 
+
+@pytest.mark.asyncio
+async def test_lab_enforces_pi_timeout(monkeypatch):
+    _install_fake_intent_router(monkeypatch, raw=None, extracted=None)
+    module = types.ModuleType("pi_intent_classifier")
+    module.PI_INTENT_EXECUTE_THRESHOLD = 0.78
+
+    async def classify_with_pi_intent_governor(text, *, context_turns="", env=None, config=None):
+        import asyncio
+
+        await asyncio.sleep(1)
+        return None
+
+    module.classify_with_pi_intent_governor = classify_with_pi_intent_governor
+    monkeypatch.setitem(sys.modules, "pi_intent_classifier", module)
+    monkeypatch.setenv("ZOE_PI_INTENT_TIMEOUT_SECONDS", "0.01")
+
+    result = await compare_pi_intent_lab("rain later", include_hybrid_status=False)
+
+    assert result["pi"]["timed_out"] is True
+    assert result["pi"]["intent"] is None
+    assert result["comparison"]["pi_candidate_for_lane"] is False
+
 def _admin_app():
     app = FastAPI()
     app.include_router(pi_intent_lab_router)
@@ -212,6 +246,7 @@ def test_pi_intent_lab_endpoint_returns_comparison(monkeypatch):
         ),
     )
     _install_fake_hybrid(monkeypatch)
+    _install_fake_voice_presence(monkeypatch)
     app = _admin_app()
 
     resp = TestClient(app).post(
