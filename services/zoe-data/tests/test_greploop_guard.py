@@ -398,6 +398,24 @@ def test_clear_greptile_wait_state_removes_wait_diagnostics():
 
 
 @pytest.mark.asyncio
+async def test_gather_or_raise_waits_for_all_tasks_before_raising():
+    completed = asyncio.Event()
+
+    async def fail():
+        raise RuntimeError("status failed")
+
+    async def finish():
+        await asyncio.sleep(0)
+        completed.set()
+        return {"findings": []}
+
+    with pytest.raises(RuntimeError, match="status failed"):
+        await greploop_guard._gather_or_raise(fail(), finish())
+
+    assert completed.is_set()
+
+
+@pytest.mark.asyncio
 async def test_run_guard_once_does_not_retrigger_active_reviewing_files(tmp_path, monkeypatch):
     async def fake_status(**_kwargs):
         return {

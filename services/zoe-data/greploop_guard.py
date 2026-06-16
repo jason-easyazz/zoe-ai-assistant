@@ -582,6 +582,14 @@ def _parse_gh_json(proc: subprocess.CompletedProcess[str]) -> dict[str, Any]:
         raise GuardError(f"gh returned non-JSON: {exc}") from exc
 
 
+async def _gather_or_raise(*aws: Any) -> list[Any]:
+    results = await asyncio.gather(*aws, return_exceptions=True)
+    for result in results:
+        if isinstance(result, BaseException):
+            raise result
+    return results
+
+
 _BLOCKED_MERGE_STATE_STATUSES = frozenset({"DIRTY", "UNSTABLE", "BEHIND", "BLOCKED", "UNKNOWN"})
 
 
@@ -1097,7 +1105,7 @@ async def assess_merge_readiness(
     from greptile_client import get_pr_status, list_pr_comments
 
     pr_number = int(pr_number)
-    status, comments = await asyncio.gather(
+    status, comments = await _gather_or_raise(
         get_pr_status(repo=repo, pr_number=pr_number, default_branch=default_branch),
         list_pr_comments(
             repo=repo,
@@ -1241,15 +1249,10 @@ async def run_guard_once(
     task_id = f"pr-{pr_number}"
     with acquire_lock(pr_number):
         state = _load_status(pr_number)
-        status, comments = await asyncio.gather(
+        status, comments = await _gather_or_raise(
             get_pr_status(repo=DEFAULT_REPO, pr_number=pr_number, default_branch=DEFAULT_BASE_BRANCH),
             list_pr_comments(repo=DEFAULT_REPO, pr_number=pr_number, default_branch=DEFAULT_BASE_BRANCH),
-            return_exceptions=True,
         )
-        if isinstance(status, BaseException):
-            raise status
-        if isinstance(comments, BaseException):
-            raise comments
         findings = comments.get("findings") or []
         thread_counts = _gh_thread_counts(pr_number, repo=DEFAULT_REPO)
         confidence = _effective_greptile_confidence(pr_number, status, findings, repo=DEFAULT_REPO)
