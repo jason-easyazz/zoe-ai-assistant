@@ -109,11 +109,14 @@ Pi promotion scoring contract used by `pi_promotion_eval.py`, including
 `promotable_groups` and `rollback_groups`; non-comparable fallback evidence blocks
 promotion instead of being treated as a speed win. Reviewed records may also set
 `user_corrected=true` or `rollback_blocked=true`; those fields feed the same
-rollback gates as synthetic promotion samples. The promotion report includes
-`route_class_breakdown` for deterministic, fallback, and extraction_failed
-baselines, `transport_breakdown` for print vs RPC latency and accuracy, plus
-compact `failure_examples` with IDs, intents, latency, transport, and reason
-flags, but not raw text or text previews. Unlabeled
+rollback gates as promotion samples. Synthetic cases remain useful smoke and
+latency evidence, but cannot promote a group by themselves: promotion also
+requires enough real/log-derived or `pi_intent_shadow` labeled evidence. The
+promotion report includes `route_class_breakdown` for deterministic, fallback,
+and extraction_failed baselines, `transport_breakdown` for print vs RPC latency
+and accuracy, `source_breakdown` for real vs synthetic evidence, plus compact
+`failure_examples` with IDs, intents, latency, transport, and reason flags, but
+not raw text or text previews. Unlabeled
 records are never treated as accuracy evidence. Pi live execution remains
 separately gated by
 `ZOE_PI_INTENT_PROMOTED_GROUPS`, so enabling the classifier alone does not

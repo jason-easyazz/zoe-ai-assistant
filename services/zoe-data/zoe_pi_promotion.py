@@ -182,6 +182,7 @@ class PiPromotionPolicy:
     require_latency_win: bool = True
     require_comparable_baseline: bool = True
     require_baseline_lane_latency_win: bool = True
+    require_real_source_evidence: bool = True
 
     def validate(self) -> None:
         if self.min_samples <= 0:
@@ -307,6 +308,12 @@ def evaluate_pi_promotion(
         sample.metadata.get("baseline_comparable") is False for sample in group_samples
     ):
         blockers.append("baseline_not_comparable")
+    if active_policy.require_real_source_evidence:
+        real_source_sample_count = sum(
+            1 for sample in decision_samples if _sample_source(sample) in REAL_PROMOTION_EVIDENCE_SOURCES
+        )
+        if real_source_sample_count < active_policy.min_samples:
+            blockers.append("insufficient_real_source_samples")
     if any(sample.rollback_blocked for sample in group_samples):
         blockers.append("rollback_blocked")
 
@@ -374,6 +381,7 @@ def summarize_pi_promotion(
             "require_latency_win": active_policy.require_latency_win,
             "require_comparable_baseline": active_policy.require_comparable_baseline,
             "require_baseline_lane_latency_win": active_policy.require_baseline_lane_latency_win,
+            "require_real_source_evidence": active_policy.require_real_source_evidence,
         },
         "sample_count": len(samples),
         "unique_case_count": _unique_case_count(samples),
@@ -421,7 +429,7 @@ def build_pi_candidate_wins(
         for sample in group_samples:
             sample.validate()
         blockers = list(decision.get("blockers") or [])
-        non_evidence_blockers = sorted(set(blockers) - {"insufficient_samples"})
+        non_evidence_blockers = sorted(set(blockers) - {"insufficient_samples", "insufficient_real_source_samples"})
         if decision.get("sample_count", 0) <= 0 or non_evidence_blockers:
             continue
         unique_case_count = _unique_case_count(group_samples)
@@ -435,6 +443,15 @@ def build_pi_candidate_wins(
                 "promotion_blockers": blockers,
                 "sample_deficit": max(0, active_policy.min_samples - int(decision.get("sample_count", 0) or 0)),
                 "unique_case_deficit": max(0, active_policy.min_samples - unique_case_count),
+                "real_source_sample_deficit": max(
+                    0,
+                    active_policy.min_samples
+                    - sum(
+                        1
+                        for sample in _collapse_samples_by_case(group_samples)
+                        if _sample_source(sample) in REAL_PROMOTION_EVIDENCE_SOURCES
+                    ),
+                ),
                 "zoe_accuracy": decision.get("zoe_accuracy"),
                 "pi_accuracy": decision.get("pi_accuracy"),
                 "accuracy_delta": decision.get("accuracy_delta"),
@@ -758,6 +775,11 @@ def _first_non_expected_zoe_intent(samples: Sequence[PiRouteSample]) -> str | No
 
 def _collapse_sample_metadata(samples: Sequence[PiRouteSample]) -> dict[str, Any]:
     merged = dict(samples[0].metadata)
+    sources = [_sample_source(sample) for sample in samples]
+    merged["sources"] = sorted(set(sources))
+    real_sources = [source for source in sources if source in REAL_PROMOTION_EVIDENCE_SOURCES]
+    if real_sources:
+        merged["source"] = sorted(set(real_sources))[0]
     if any(sample.metadata.get("baseline_comparable") is False for sample in samples):
         merged["baseline_comparable"] = False
     return merged

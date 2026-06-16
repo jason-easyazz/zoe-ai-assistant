@@ -111,6 +111,7 @@ def _candidate_details(candidate_wins: Mapping[str, Any]) -> list[dict[str, Any]
                 "unique_case_count": item.get("unique_case_count"),
                 "unique_case_deficit": item.get("unique_case_deficit"),
                 "sample_deficit": item.get("sample_deficit"),
+                "real_source_sample_deficit": item.get("real_source_sample_deficit"),
                 "accuracy_delta": item.get("accuracy_delta"),
                 "latency_delta_ms": item.get("latency_delta_ms"),
                 "pi_p95_latency_ms": item.get("pi_p95_latency_ms"),
@@ -220,20 +221,35 @@ def _evidence_collection_actions(promotion: Mapping[str, Any]) -> list[dict[str,
         if group not in LOW_RISK_PI_INTENT_GROUPS:
             continue
         blockers = set(str(blocker) for blocker in item.get("promotion_blockers") or [])
-        if blockers and blockers != {"insufficient_samples"}:
+        evidence_blockers = {"insufficient_samples", "insufficient_real_source_samples"}
+        if blockers and not blockers <= evidence_blockers:
             continue
-        deficit = int(item.get("unique_case_deficit") or item.get("sample_deficit") or 0)
-        if deficit <= 0:
+        unique_deficit = int(item.get("unique_case_deficit") or item.get("sample_deficit") or 0)
+        real_source_deficit = int(item.get("real_source_sample_deficit") or 0)
+        if unique_deficit <= 0 and real_source_deficit <= 0:
             continue
-        actions.append(
-            {
-                "kind": "collect_labeled_evidence",
-                "priority": "p1",
-                "intent_group": group,
-                "needed_unique_cases": deficit,
-                "detail": f"Collect and label {deficit} more unique {group} cases before promotion.",
-            }
-        )
+        if unique_deficit > 0 and real_source_deficit > 0:
+            detail = (
+                f"Collect and label {unique_deficit} more unique {group} cases "
+                f"({real_source_deficit} must be real/log-derived) before promotion."
+            )
+        elif real_source_deficit > 0:
+            detail = (
+                f"Collect {real_source_deficit} real/log-derived {group} samples "
+                f"(pi_intent_shadow, intent_miss, chat_log, etc.) before promotion."
+            )
+        else:
+            detail = f"Collect and label {unique_deficit} more unique {group} cases before promotion."
+        action = {
+            "kind": "collect_labeled_evidence",
+            "priority": "p1",
+            "intent_group": group,
+            "needed_unique_cases": unique_deficit,
+            "detail": detail,
+        }
+        if real_source_deficit > 0:
+            action["needed_real_source_cases"] = real_source_deficit
+        actions.append(action)
     return actions
 
 
