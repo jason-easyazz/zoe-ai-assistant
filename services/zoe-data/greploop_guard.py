@@ -624,11 +624,35 @@ def _actionable_greptile_findings(findings: list[dict[str, Any]]) -> list[dict[s
     return [f for f in findings if (f.get("file_path") or "").strip()]
 
 
+def _comment_title(body: Any) -> str:
+    return " ".join(str(body or "").split())[:120]
+
+
+def _comment_identity_keys(comment: dict[str, Any], *, file_path_key: str = "path") -> list[tuple[str, str]]:
+    path = str(comment.get(file_path_key) or "")
+    title = _comment_title(comment.get("body"))
+    keys: list[tuple[str, str]] = []
+    for key_name in ("url", "id"):
+        value = str(comment.get(key_name) or "")
+        if value:
+            keys.append((key_name, value))
+    line = comment.get("line")
+    if path and line not in (None, ""):
+        keys.append(("path_line_title", f"{path}:{line}:{title}"))
+    if path:
+        keys.append(("path_title", f"{path}:{title}"))
+    return keys
+
+
+def _finding_thread_keys(finding: dict[str, Any]) -> list[tuple[str, str]]:
+    return _comment_identity_keys(finding, file_path_key="file_path")
+
+
 def _finding_thread_key(finding: dict[str, Any]) -> tuple[str, str]:
+    """Compatibility key for older tests/callers; prefer _finding_thread_keys()."""
     path = str(finding.get("file_path") or "")
-    body = str(finding.get("body") or "")
-    title = " ".join(body.split())[:120]
-    return (path, title)
+    title = _comment_title(finding.get("body"))
+    return ("path_title", f"{path}:{title}")
 
 
 def _gh_pr_review_threads(pr_number: int, *, repo: str = DEFAULT_REPO) -> list[dict[str, Any]] | None:
@@ -641,14 +665,14 @@ def _gh_pr_review_threads(pr_number: int, *, repo: str = DEFAULT_REPO) -> list[d
         "repository(owner:$owner,name:$repo){pullRequest(number:$pr){"
         "reviewThreads(first:100){"
         "pageInfo{hasNextPage endCursor}"
-        "nodes{isResolved comments(first:20){nodes{author{login} path line body url}}}}}}}"
+        "nodes{isResolved comments(first:20){nodes{id author{login} path line body url}}}}}}}"
     )
     query_next = (
         "query($owner:String!,$repo:String!,$pr:Int!,$after:String!){"
         "repository(owner:$owner,name:$repo){pullRequest(number:$pr){"
         "reviewThreads(first:100,after:$after){"
         "pageInfo{hasNextPage endCursor}"
-        "nodes{isResolved comments(first:20){nodes{author{login} path line body url}}}}}}}"
+        "nodes{isResolved comments(first:20){nodes{id author{login} path line body url}}}}}}}"
     )
     threads: list[dict[str, Any]] = []
     after: str | None = None
@@ -712,9 +736,7 @@ def _gh_thread_counts(pr_number: int, *, repo: str = DEFAULT_REPO) -> dict[str, 
             unresolved += 1
             continue
         for comment in greptile_comments:
-            body = str(comment.get("body") or "")
-            title = " ".join(body.split())[:120]
-            resolved_greptile_keys.append((str(comment.get("path") or ""), title))
+            resolved_greptile_keys.extend(_comment_identity_keys(comment, file_path_key="path"))
     return {
         "ok": True,
         "unresolved": unresolved,
@@ -741,7 +763,17 @@ def _filter_actionable_findings(
     resolved_keys = set(counts.get("resolved_greptile_keys") or [])
     if not resolved_keys:
         return actionable
-    return [finding for finding in actionable if _finding_thread_key(finding) not in resolved_keys]
+    allow_legacy_match = int(counts.get("unresolved") or 0) == 0
+    filtered: list[dict[str, Any]] = []
+    for finding in actionable:
+        keys = _finding_thread_keys(finding)
+        strong_keys = [key for key in keys if key[0] != "path_title"]
+        if any(key in resolved_keys for key in strong_keys):
+            continue
+        if allow_legacy_match and any(key in resolved_keys for key in keys):
+            continue
+        filtered.append(finding)
+    return filtered
 
 
 def _effective_greptile_confidence(

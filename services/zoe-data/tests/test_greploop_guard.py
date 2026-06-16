@@ -1174,7 +1174,7 @@ def test_filter_actionable_findings_requires_completed_check_for_zero_unresolved
     assert cleared == []
 
 
-def test_filter_actionable_findings_ignores_line_for_resolved_thread_match():
+def test_filter_actionable_findings_allows_legacy_match_when_no_unresolved_threads():
     body = "Resolved multi-line Greptile body"
     findings = [
         {
@@ -1191,8 +1191,61 @@ def test_filter_actionable_findings_ignores_line_for_resolved_thread_match():
         pr_number=66,
         thread_counts={
             "ok": True,
+            "unresolved": 0,
+            "resolved_greptile_keys": [("path_title", f"services/zoe-data/example.py:{body}")],
+        },
+    )
+
+    assert out == []
+
+
+def test_filter_actionable_findings_keeps_new_line_when_unresolved_threads_exist():
+    body = "Resolved multi-line Greptile body"
+    findings = [
+        {
+            "id": "comment-new",
+            "file_path": "services/zoe-data/example.py",
+            "line": 99,
+            "body": body,
+            "addressed": False,
+        }
+    ]
+
+    out = greploop_guard._filter_actionable_findings(
+        findings,
+        pr_number=66,
+        thread_counts={
+            "ok": True,
             "unresolved": 1,
-            "resolved_greptile_keys": [("services/zoe-data/example.py", body)],
+            "resolved_greptile_keys": [
+                ("path_line_title", f"services/zoe-data/example.py:10:{body}"),
+                ("path_title", f"services/zoe-data/example.py:{body}"),
+            ],
+        },
+    )
+
+    assert out == findings
+
+
+def test_filter_actionable_findings_matches_resolved_comment_url():
+    findings = [
+        {
+            "id": "comment-new",
+            "url": "https://github.example/review/comment/1",
+            "file_path": "services/zoe-data/example.py",
+            "line": 99,
+            "body": "Resolved via exact URL",
+            "addressed": False,
+        }
+    ]
+
+    out = greploop_guard._filter_actionable_findings(
+        findings,
+        pr_number=66,
+        thread_counts={
+            "ok": True,
+            "unresolved": 1,
+            "resolved_greptile_keys": [("url", "https://github.example/review/comment/1")],
         },
     )
 
