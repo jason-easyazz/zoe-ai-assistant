@@ -370,3 +370,107 @@ def test_cli_combines_default_and_cases_file(tmp_path, capsys):
     case_ids = {case["case_id"] for case in payload["eval_cases"]}
     assert "weather_file" in case_ids
     assert len(case_ids) > 1
+
+
+def test_build_eval_readiness_collects_more_evidence_for_candidate_wins():
+    module = _load_module()
+    report = {
+        "promotable_groups": [],
+        "rollback_groups": [],
+        "promotion_actions": {"requires_operator_apply": False, "promote_groups": [], "rollback_groups": []},
+        "candidate_wins": {
+            "groups": ["weather"],
+            "blocked_groups": ["weather"],
+            "promotion_ready_groups": [],
+            "details": [
+                {
+                    "intent_group": "weather",
+                    "status": "needs_more_evidence",
+                    "unique_case_deficit": 27,
+                    "sample_deficit": 27,
+                    "promotion_blockers": ["insufficient_samples"],
+                }
+            ],
+        },
+    }
+
+    readiness = module.build_eval_readiness(report)
+
+    assert readiness["state"] == "collect_more_evidence"
+    assert readiness["summary"]["candidate_win_groups"] == ["weather"]
+    assert readiness["summary"]["blocked_candidate_groups"] == ["weather"]
+    assert readiness["next_actions"] == [
+        {
+            "kind": "collect_labeled_evidence",
+            "priority": "p1",
+            "intent_group": "weather",
+            "needed_unique_cases": 27,
+        }
+    ]
+
+
+def test_build_eval_readiness_reports_apply_and_rollback_actions():
+    module = _load_module()
+    promote = module.build_eval_readiness(
+        {
+            "promotable_groups": ["weather"],
+            "promotion_actions": {
+                "promote_groups": ["weather"],
+                "rollback_groups": [],
+                "requires_operator_apply": True,
+                "env": {"ZOE_PI_INTENT_PROMOTED_GROUPS": "weather"},
+            },
+            "candidate_wins": {"groups": ["weather"], "promotion_ready_groups": ["weather"]},
+        }
+    )
+    rollback = module.build_eval_readiness(
+        {
+            "rollback_groups": ["weather"],
+            "promotion_actions": {
+                "promote_groups": [],
+                "rollback_groups": ["weather"],
+                "requires_operator_apply": True,
+                "env": {"ZOE_PI_INTENT_PROMOTED_GROUPS": ""},
+            },
+            "candidate_wins": {},
+        }
+    )
+
+    assert promote["state"] == "promotion_apply_ready"
+    assert promote["next_actions"][0]["kind"] == "apply_promotion"
+    assert promote["next_actions"][0]["groups"] == ["weather"]
+    assert rollback["state"] == "rollback_required"
+    assert rollback["next_actions"][0]["kind"] == "rollback"
+    assert rollback["next_actions"][0]["groups"] == ["weather"]
+
+
+def test_cli_output_includes_readiness_summary(tmp_path, capsys):
+    module = _load_module()
+    cases_path = tmp_path / "cases.jsonl"
+    cases_path.write_text(
+        '{"case_id":"weather_file","text":"rain later","expected_intent":"weather","intent_group":"weather","route_class":"fallback","source":"intent_miss"}\n',
+        encoding="utf-8",
+    )
+
+    exit_code = module.main(["--cases-file", str(cases_path), "--no-default-cases"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert payload["readiness"]["state"] == "keep_shadow"
+    assert payload["readiness"]["summary"]["candidate_win_groups"] == []
+    assert payload["readiness"]["next_actions"] == [{"kind": "continue_shadow_mode", "priority": "p2"}]
+
+
+def test_build_eval_readiness_reviews_sparse_candidate_evidence():
+    module = _load_module()
+    report = {
+        "promotion_actions": {"promote_groups": [], "rollback_groups": []},
+        "candidate_wins": {"groups": ["weather"]},
+    }
+
+    readiness = module.build_eval_readiness(report)
+
+    assert readiness["state"] == "collect_more_evidence"
+    assert readiness["next_actions"] == [
+        {"kind": "review_candidate_evidence", "priority": "p1", "groups": ["weather"]}
+    ]

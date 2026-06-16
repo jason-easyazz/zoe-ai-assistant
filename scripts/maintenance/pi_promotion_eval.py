@@ -291,6 +291,86 @@ async def _run_cases(
     return comparisons, samples
 
 
+def build_eval_readiness(promotion_report: dict[str, Any]) -> dict[str, Any]:
+    """Condense a promotion report into the operator decision for this eval run."""
+    raw_actions = promotion_report.get("promotion_actions")
+    actions = raw_actions if isinstance(raw_actions, dict) else {}
+    raw_candidates = promotion_report.get("candidate_wins")
+    candidate_wins = raw_candidates if isinstance(raw_candidates, dict) else {}
+    promote_groups = list(actions.get("promote_groups") or promotion_report.get("promotable_groups") or [])
+    rollback_groups = list(actions.get("rollback_groups") or promotion_report.get("rollback_groups") or [])
+    candidate_groups = list(candidate_wins.get("groups") or [])
+    if rollback_groups:
+        state = "rollback_required"
+    elif promote_groups:
+        state = "promotion_apply_ready"
+    elif candidate_groups:
+        state = "collect_more_evidence"
+    else:
+        state = "keep_shadow"
+    return {
+        "state": state,
+        "summary": {
+            "candidate_win_groups": candidate_groups,
+            "promotion_ready_groups": list(candidate_wins.get("promotion_ready_groups") or []),
+            "blocked_candidate_groups": list(candidate_wins.get("blocked_groups") or []),
+            "promote_groups": promote_groups,
+            "rollback_groups": rollback_groups,
+            "requires_operator_apply": bool(actions.get("requires_operator_apply")),
+        },
+        "next_actions": _eval_next_actions(
+            state, actions, candidate_wins, promote_groups=promote_groups, rollback_groups=rollback_groups
+        ),
+    }
+
+
+def _eval_next_actions(
+    state: str,
+    actions: dict[str, Any],
+    candidate_wins: dict[str, Any],
+    *,
+    promote_groups: list[Any],
+    rollback_groups: list[Any],
+) -> list[dict[str, Any]]:
+    next_actions: list[dict[str, Any]] = []
+    if rollback_groups:
+        next_actions.append(
+            {"kind": "rollback", "priority": "p0", "groups": rollback_groups, "env": dict(actions.get("env") or {})}
+        )
+    if promote_groups:
+        next_actions.append(
+            {"kind": "apply_promotion", "priority": "p1", "groups": promote_groups, "env": dict(actions.get("env") or {})}
+        )
+    for item in candidate_wins.get("details") or []:
+        if not isinstance(item, dict) or item.get("status") != "needs_more_evidence":
+            continue
+        blockers = set(str(blocker) for blocker in item.get("promotion_blockers") or [])
+        if blockers and blockers != {"insufficient_samples"}:
+            continue
+        deficit = int(item.get("unique_case_deficit") or item.get("sample_deficit") or 0)
+        if deficit <= 0:
+            continue
+        next_actions.append(
+            {
+                "kind": "collect_labeled_evidence",
+                "priority": "p1",
+                "intent_group": item.get("intent_group"),
+                "needed_unique_cases": deficit,
+            }
+        )
+    if not next_actions and state == "collect_more_evidence":
+        next_actions.append(
+            {
+                "kind": "review_candidate_evidence",
+                "priority": "p1",
+                "groups": list(candidate_wins.get("groups") or []),
+            }
+        )
+    if not next_actions and state == "keep_shadow":
+        next_actions.append({"kind": "continue_shadow_mode", "priority": "p2"})
+    return next_actions
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Report Pi intent promotion gates")
     parser.add_argument("--demo", action="store_true", help="Include deterministic demo samples for policy smoke testing")
@@ -367,12 +447,14 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         samples.extend(measured_samples)
+    promotion_report = summarize_pi_promotion(samples, policy=policy, promoted_groups=args.promoted_group)
     payload = {
         "eval_case_files": args.cases_file,
         "eval_cases": eval_cases_to_dict(eval_cases),
         "eval_case_source_counts": summarize_eval_case_sources(eval_cases),
         "comparisons": comparisons,
-        "promotion_report": summarize_pi_promotion(samples, policy=policy, promoted_groups=args.promoted_group),
+        "promotion_report": promotion_report,
+        "readiness": build_eval_readiness(promotion_report),
     }
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0
