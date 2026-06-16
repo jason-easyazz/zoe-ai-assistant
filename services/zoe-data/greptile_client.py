@@ -51,15 +51,22 @@ def normalize_pr_comment(comment: dict[str, Any]) -> dict[str, Any]:
     """Normalize Greptile/GitHub comment fields for guard packets."""
     body = comment.get("body") or comment.get("text") or comment.get("content") or ""
     path = comment.get("filePath") or comment.get("path") or comment.get("file") or ""
-    line = comment.get("line") or comment.get("startLine") or comment.get("originalLine")
+    line = (
+        comment.get("line")
+        or comment.get("lineStart")
+        or comment.get("startLine")
+        or comment.get("originalLine")
+    )
     return {
         "id": str(comment.get("id") or comment.get("commentId") or comment.get("nodeId") or ""),
         "file_path": path,
         "line": line,
+        "line_end": comment.get("lineEnd") or comment.get("endLine") or comment.get("originalEndLine"),
         "body": body,
         "suggested_code": comment.get("suggestedCode") or comment.get("suggestion"),
         "has_suggestion": bool(comment.get("hasSuggestion") or comment.get("suggestedCode")),
         "addressed": bool(comment.get("addressed", False)),
+        "url": comment.get("url") or comment.get("htmlUrl") or comment.get("html_url"),
         "raw": comment,
     }
 

@@ -5,6 +5,19 @@ import pytest
 import greploop_guard
 
 
+@pytest.fixture(autouse=True)
+def _default_gh_pr_observation(monkeypatch):
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_pr_observation",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: {
+            "ok": True,
+            "state": "OPEN",
+            "statusCheckRollup": [],
+        },
+    )
+
+
 def _packet(**overrides):
     data = {
         "task_type": "FIX_GREPTILE_FINDING",
@@ -206,7 +219,7 @@ async def test_assess_merge_readiness_blocks_low_confidence(monkeypatch):
     monkeypatch.setattr(
         greploop_guard,
         "_gh_mergeable_state",
-        lambda pr, repo=greploop_guard.DEFAULT_REPO: {"ok": True},
+        lambda pr, repo=greploop_guard.DEFAULT_REPO, observation=None: {"ok": True},
     )
 
     out = await greploop_guard.assess_merge_readiness(66, target_confidence=5)
@@ -308,6 +321,17 @@ async def test_run_guard_once_ignores_pathless_greptile_summary_when_confident(t
     monkeypatch.setattr("greptile_client.list_pr_comments", fake_comments)
     monkeypatch.setattr("greptile_client.trigger_review", fail_trigger)
     monkeypatch.setattr(greploop_guard, "_run_cheap_agent", fail_runner)
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_pr_observation",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: {
+            "ok": True,
+            "state": "OPEN",
+            "statusCheckRollup": [
+                {"name": "Greptile Review", "status": "COMPLETED", "conclusion": "SUCCESS"},
+            ],
+        },
+    )
 
     out = await greploop_guard.run_guard_once(66)
 
@@ -366,6 +390,414 @@ async def test_run_guard_once_retriggers_low_confidence_pathless_summary(tmp_pat
     assert state["terminal_state"] == "WAITING_GREPTILE"
     assert state["greptile"]["unaddressed_count"] == 0
     assert state["greptile"]["summary_count"] == 1
+
+
+def test_filter_actionable_findings_requires_completed_check_for_zero_unresolved_shortcut():
+    findings = [
+        {
+            "id": "comment-1",
+            "file_path": "services/zoe-data/example.py",
+            "line": 99,
+            "body": "MCP stale body that no longer matches GitHub exactly",
+            "addressed": False,
+        }
+    ]
+    thread_counts = {"ok": True, "unresolved": 0, "resolved_greptile_keys": []}
+
+    blocked = greploop_guard._filter_actionable_findings(
+        findings,
+        pr_number=66,
+        thread_counts=thread_counts,
+        clear_when_no_unresolved=False,
+    )
+    cleared = greploop_guard._filter_actionable_findings(
+        findings,
+        pr_number=66,
+        thread_counts=thread_counts,
+        clear_when_no_unresolved=True,
+    )
+
+    assert blocked == findings
+    assert cleared == []
+
+
+def test_filter_actionable_findings_ignores_line_for_resolved_thread_match():
+    body = "Resolved multi-line Greptile body"
+    findings = [
+        {
+            "id": "comment-1",
+            "file_path": "services/zoe-data/example.py",
+            "line": 10,
+            "body": body,
+            "addressed": False,
+        }
+    ]
+
+    out = greploop_guard._filter_actionable_findings(
+        findings,
+        pr_number=66,
+        thread_counts={
+            "ok": True,
+            "unresolved": 1,
+            "resolved_greptile_keys": [("services/zoe-data/example.py", body)],
+        },
+    )
+
+    assert out == []
+
+
+@pytest.mark.asyncio
+async def test_run_guard_once_uses_github_summary_confidence_without_retrigger(tmp_path, monkeypatch):
+    async def fake_status(**_kwargs):
+        return {
+            "confidenceScore": None,
+            "reviewIsRunning": False,
+            "headSha": "abc",
+            "reviewCompleteness": "No Greptile review comments",
+        }
+
+    async def fake_comments(**_kwargs):
+        return {"findings": []}
+
+    async def fail_trigger(**_kwargs):
+        raise AssertionError("GitHub 5/5 summary should prevent Greptile retrigger")
+
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr("greptile_client.get_pr_status", fake_status)
+    monkeypatch.setattr("greptile_client.list_pr_comments", fake_comments)
+    monkeypatch.setattr("greptile_client.trigger_review", fail_trigger)
+    monkeypatch.setattr(
+        greploop_guard,
+        "_greptile_confidence_from_github_comments",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: 5,
+    )
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_thread_counts",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: {
+            "ok": True,
+            "unresolved": 0,
+            "resolved_greptile_keys": [],
+        },
+    )
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_pr_observation",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: {
+            "ok": True,
+            "state": "OPEN",
+            "statusCheckRollup": [
+                {"name": "Greptile Review", "status": "COMPLETED", "conclusion": "SUCCESS"},
+            ],
+        },
+    )
+
+    out = await greploop_guard.run_guard_once(66)
+
+    assert out["ok"] is True
+    assert out["state"] == "READY_TO_MERGE"
+    assert out["greptile"]["confidenceScore"] == 5
+
+
+@pytest.mark.asyncio
+async def test_run_guard_once_waits_when_historical_confidence_has_no_completed_check(tmp_path, monkeypatch):
+    async def fake_status(**_kwargs):
+        return {
+            "confidenceScore": None,
+            "reviewIsRunning": False,
+            "headSha": "abc",
+            "reviewCompleteness": "No Greptile review comments",
+        }
+
+    async def fake_comments(**_kwargs):
+        return {"findings": []}
+
+    triggered = {}
+
+    async def fake_trigger(**kwargs):
+        triggered.update(kwargs)
+        return {"triggered": True}
+
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr("greptile_client.get_pr_status", fake_status)
+    monkeypatch.setattr("greptile_client.list_pr_comments", fake_comments)
+    monkeypatch.setattr("greptile_client.trigger_review", fake_trigger)
+    monkeypatch.setattr(
+        greploop_guard,
+        "_greptile_confidence_from_github_comments",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: 5,
+    )
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_thread_counts",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: {
+            "ok": True,
+            "unresolved": 0,
+            "resolved_greptile_keys": [],
+        },
+    )
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_pr_observation",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: {"ok": True, "state": "OPEN", "statusCheckRollup": []},
+    )
+
+    out = await greploop_guard.run_guard_once(66)
+
+    assert out["ok"] is True
+    assert out["state"] == "WAITING_GREPTILE"
+    assert out["triggered_review"] == {"triggered": True}
+    assert triggered["pr_number"] == 66
+
+@pytest.mark.asyncio
+async def test_run_guard_once_suppresses_stale_resolved_github_thread(tmp_path, monkeypatch):
+    body = "P2 stale comment body"
+
+    async def fake_status(**_kwargs):
+        return {
+            "confidenceScore": None,
+            "reviewIsRunning": False,
+            "headSha": "abc",
+            "reviewCompleteness": "0/1 Greptile comments addressed",
+        }
+
+    async def fake_comments(**_kwargs):
+        return {
+            "findings": [
+                {
+                    "id": "comment-1",
+                    "file_path": "services/zoe-data/example.py",
+                    "line": 42,
+                    "body": body,
+                    "addressed": False,
+                }
+            ]
+        }
+
+    async def fail_trigger(**_kwargs):
+        raise AssertionError("resolved GitHub thread should not retrigger Greptile")
+
+    async def fail_runner(*_args, **_kwargs):
+        raise AssertionError("resolved GitHub thread should not become a repair packet")
+
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr("greptile_client.get_pr_status", fake_status)
+    monkeypatch.setattr("greptile_client.list_pr_comments", fake_comments)
+    monkeypatch.setattr("greptile_client.trigger_review", fail_trigger)
+    monkeypatch.setattr(greploop_guard, "_run_cheap_agent", fail_runner)
+    monkeypatch.setattr(
+        greploop_guard,
+        "_greptile_confidence_from_github_comments",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: 5,
+    )
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_thread_counts",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: {
+            "ok": True,
+            "unresolved": 0,
+            "resolved_greptile_keys": [("services/zoe-data/example.py", body)],
+        },
+    )
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_pr_observation",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: {
+            "ok": True,
+            "state": "OPEN",
+            "statusCheckRollup": [
+                {"name": "Greptile Review", "status": "COMPLETED", "conclusion": "SUCCESS"},
+            ],
+        },
+    )
+
+    out = await greploop_guard.run_guard_once(66)
+
+    assert out["ok"] is True
+    assert out["state"] == "READY_TO_MERGE"
+    state = greploop_guard.read_guard_state(66)
+    assert state["greptile"]["unaddressed_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_assess_merge_readiness_ignores_mcp_comment_when_thread_resolved(monkeypatch):
+    body = "Resolved stale Greptile body"
+
+    async def fake_status(**_kwargs):
+        return {"confidenceScore": None, "reviewIsRunning": False, "headSha": "abc"}
+
+    async def fake_comments(**_kwargs):
+        return {
+            "findings": [
+                {
+                    "id": "comment-1",
+                    "file_path": "services/zoe-data/example.py",
+                    "line": 7,
+                    "body": body,
+                    "addressed": False,
+                }
+            ]
+        }
+
+    monkeypatch.setattr("greptile_client.get_pr_status", fake_status)
+    monkeypatch.setattr("greptile_client.list_pr_comments", fake_comments)
+    monkeypatch.setattr(
+        greploop_guard,
+        "_greptile_confidence_from_github_comments",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: 5,
+    )
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_thread_counts",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: {
+            "ok": True,
+            "unresolved": 0,
+            "resolved_greptile_keys": [("services/zoe-data/example.py", body)],
+        },
+    )
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_pr_observation",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: {
+            "ok": True,
+            "state": "OPEN",
+            "statusCheckRollup": [
+                {"name": "Greptile Review", "status": "COMPLETED", "conclusion": "SUCCESS"},
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_mergeable_state",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO, observation=None: {"ok": True},
+    )
+
+    out = await greploop_guard.assess_merge_readiness(66)
+
+    assert out["ready"] is True
+    assert out["unaddressed_count"] == 0
+    assert out["unresolved_review_threads"] == 0
+
+
+@pytest.mark.asyncio
+async def test_assess_merge_readiness_treats_completed_github_check_as_not_running(monkeypatch):
+    async def fake_status(**_kwargs):
+        return {"confidenceScore": None, "reviewIsRunning": True, "headSha": "abc"}
+
+    async def fake_comments(**_kwargs):
+        return {"findings": []}
+
+    monkeypatch.setattr("greptile_client.get_pr_status", fake_status)
+    monkeypatch.setattr("greptile_client.list_pr_comments", fake_comments)
+    monkeypatch.setattr(
+        greploop_guard,
+        "_greptile_confidence_from_github_comments",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: 5,
+    )
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_thread_counts",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: {
+            "ok": True,
+            "unresolved": 0,
+            "resolved_greptile_keys": [],
+        },
+    )
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_pr_observation",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: {
+            "ok": True,
+            "state": "OPEN",
+            "statusCheckRollup": [
+                {"name": "Greptile Review", "status": "COMPLETED", "conclusion": "SUCCESS"},
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_mergeable_state",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO, observation=None: {"ok": True},
+    )
+
+    out = await greploop_guard.assess_merge_readiness(66)
+
+    assert out["ready"] is True
+    assert "GREPTILE_REVIEW_RUNNING" not in out["blockers"]
+
+def test_read_observed_guard_state_marks_stale_waiting_as_merged(tmp_path, monkeypatch):
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    greploop_guard._write_json(
+        66,
+        "status.json",
+        {"pr": 66, "terminal_state": "WAITING_GREPTILE", "waiting_greptile_count": 3},
+    )
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_pr_observation",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: {
+            "ok": True,
+            "state": "MERGED",
+            "url": "https://github.com/o/r/pull/66",
+            "statusCheckRollup": [],
+        },
+    )
+
+    state = greploop_guard.read_observed_guard_state(66)
+
+    assert state["terminal_state"] == "MERGED"
+    assert state["historical_terminal_state"] == "WAITING_GREPTILE"
+    assert state["observed"]["state"] == "MERGED"
+
+
+@pytest.mark.asyncio
+async def test_run_guard_once_treats_completed_github_check_as_not_running(tmp_path, monkeypatch):
+    async def fake_status(**_kwargs):
+        return {
+            "confidenceScore": None,
+            "reviewIsRunning": True,
+            "headSha": "abc",
+            "reviewCompleteness": "REVIEWING_FILES",
+            "codeReviews": [{"status": "REVIEWING_FILES"}],
+        }
+
+    async def fake_comments(**_kwargs):
+        return {"findings": []}
+
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr("greptile_client.get_pr_status", fake_status)
+    monkeypatch.setattr("greptile_client.list_pr_comments", fake_comments)
+    monkeypatch.setattr(
+        greploop_guard,
+        "_greptile_confidence_from_github_comments",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: 5,
+    )
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_thread_counts",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: {
+            "ok": True,
+            "unresolved": 0,
+            "resolved_greptile_keys": [],
+        },
+    )
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_pr_observation",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: {
+            "ok": True,
+            "state": "OPEN",
+            "statusCheckRollup": [
+                {"name": "Greptile Review", "status": "COMPLETED", "conclusion": "SUCCESS"},
+            ],
+        },
+    )
+
+    out = await greploop_guard.run_guard_once(66)
+
+    assert out["ok"] is True
+    assert out["state"] == "READY_TO_MERGE"
+    assert greploop_guard.read_guard_state(66)["waiting_greptile_count"] == 0
 
 
 @pytest.mark.asyncio

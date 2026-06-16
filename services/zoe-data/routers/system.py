@@ -1087,9 +1087,9 @@ async def list_engineering_workflow_tasks(
 @_agent_card_router.get("/engineering/guard/{pr_number}")
 async def get_engineering_guard(pr_number: int, user: dict = Depends(require_admin)):
     """PR-keyed Greptile grep-loop guard state."""
-    from greploop_guard import read_guard_state
+    from greploop_guard import read_observed_guard_state
 
-    return {"ok": True, "pr_number": pr_number, "state": read_guard_state(pr_number)}
+    return {"ok": True, "pr_number": pr_number, "state": read_observed_guard_state(pr_number)}
 
 
 @_agent_card_router.post("/engineering/guard/{pr_number}/once")

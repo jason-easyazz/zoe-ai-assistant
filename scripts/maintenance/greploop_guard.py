@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT / "services" / "zoe-data"))
 from greploop_guard import (  # noqa: E402
     GuardError,
     merge_pr_when_ready,
-    read_guard_state,
+    read_observed_guard_state,
     run_guard_once,
 )
 
@@ -53,7 +53,7 @@ def main() -> int:
         if not args.pr:
             parser.error("--pr is required")
         if args.state:
-            print(json.dumps(read_guard_state(args.pr), indent=2, sort_keys=True))
+            print(json.dumps(read_observed_guard_state(args.pr), indent=2, sort_keys=True))
             return 0
         if args.packet_only and args.merge_when_ready:
             parser.error("--merge-when-ready is incompatible with --packet-only")
