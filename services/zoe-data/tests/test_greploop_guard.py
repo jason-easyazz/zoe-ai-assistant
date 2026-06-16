@@ -480,6 +480,118 @@ async def test_trigger_review_safely_skips_running_review(tmp_path, monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_trigger_review_safely_skips_github_running_same_head(tmp_path, monkeypatch):
+    async def fail_trigger(**_kwargs):
+        raise AssertionError("same-head GitHub running check should not retrigger Greptile")
+
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr("greptile_client.trigger_review", fail_trigger)
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_pr_observation",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: {
+            "ok": True,
+            "headRefOid": "abc",
+            "statusCheckRollup": [
+                {"name": "Greptile Review", "status": "IN_PROGRESS", "conclusion": ""},
+            ],
+        },
+    )
+
+    out = await greploop_guard.trigger_review_safely(
+        pr_number=66,
+        status={"headSha": "abc", "reviewIsRunning": False},
+        state={"pr": 66},
+        source="test-gh-running",
+    )
+
+    assert out["triggered"] is False
+    assert out["reason"] == "github_greptile_check_running"
+    saved = greploop_guard.read_guard_state(66)
+    assert saved["last_trigger_decision"]["reason"] == "github_greptile_check_running"
+
+
+@pytest.mark.asyncio
+async def test_trigger_review_safely_triggers_on_github_head_mismatch(tmp_path, monkeypatch):
+    triggered = {}
+
+    async def fake_trigger(**kwargs):
+        triggered.update(kwargs)
+        return {"success": True, "triggered": True}
+
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(greploop_guard.time, "time", lambda: 1_000.0)
+    monkeypatch.setattr("greptile_client.trigger_review", fake_trigger)
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_pr_observation",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: {
+            "ok": True,
+            "headRefOid": "old-sha",
+            "statusCheckRollup": [
+                {"name": "Greptile Review", "status": "IN_PROGRESS", "conclusion": ""},
+            ],
+        },
+    )
+
+    out = await greploop_guard.trigger_review_safely(
+        pr_number=66,
+        status={"headSha": "new-sha", "reviewIsRunning": False},
+        state={"pr": 66},
+        source="test-gh-head-mismatch",
+    )
+
+    assert out == {"success": True, "triggered": True}
+    assert triggered["pr_number"] == 66
+    saved = greploop_guard.read_guard_state(66)
+    assert saved["last_triggered_head_sha"] == "new-sha"
+    assert saved["last_trigger_decision"]["triggered"] is True
+
+
+@pytest.mark.asyncio
+async def test_trigger_review_safely_skips_github_clear_same_head(tmp_path, monkeypatch):
+    async def fail_trigger(**_kwargs):
+        raise AssertionError("same-head clear GitHub review should not retrigger Greptile")
+
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr("greptile_client.trigger_review", fail_trigger)
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_pr_observation",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: {
+            "ok": True,
+            "headRefOid": "abc",
+            "statusCheckRollup": [
+                {"name": "Greptile Review", "status": "COMPLETED", "conclusion": "SUCCESS"},
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_thread_counts",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: {"ok": True, "unresolved": 0},
+    )
+    monkeypatch.setattr(
+        greploop_guard,
+        "_greptile_confidence_from_github_comments",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: 5,
+    )
+
+    out = await greploop_guard.trigger_review_safely(
+        pr_number=66,
+        status={"headSha": "abc", "reviewIsRunning": False, "confidenceScore": 0},
+        state={"pr": 66},
+        source="test-gh-clear",
+    )
+
+    assert out["triggered"] is False
+    assert out["reason"] == "github_greptile_review_already_clear"
+    assert out["confidence"] == 5
+    saved = greploop_guard.read_guard_state(66)
+    assert saved["last_trigger_decision"]["reason"] == "github_greptile_review_already_clear"
+
+
+@pytest.mark.asyncio
 async def test_trigger_review_with_guard_lock_reports_lock_contention(tmp_path, monkeypatch):
     async def fail_trigger(**_kwargs):
         raise AssertionError("locked trigger path should not call Greptile")
