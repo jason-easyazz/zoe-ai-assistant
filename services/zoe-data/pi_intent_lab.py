@@ -84,29 +84,33 @@ async def compare_pi_intent_lab(
         enabled=include_safe_fulfillment,
         timeout_seconds=safe_fulfillment_timeout_seconds,
     )
-    pi = await _run_pi(
-        stripped,
-        context_turns=context_turns,
-        run_pi=run_pi,
-        transport=pi_transport,
-        allow_pi_execution=allow_pi_execution,
-        local_model_configured=local_model_configured,
-        env=env,
-    )
-    zoe_agent = None
-    if measure_zoe_agent_baseline and zoe_router["intent"] is None:
-        zoe_agent = await _run_zoe_agent_baseline(
+    try:
+        pi = await _run_pi(
             stripped,
-            timeout_seconds=zoe_agent_timeout_seconds,
-            max_tokens=zoe_agent_max_tokens,
+            context_turns=context_turns,
+            run_pi=run_pi,
+            transport=pi_transport,
+            allow_pi_execution=allow_pi_execution,
+            local_model_configured=local_model_configured,
+            env=env,
         )
-    safe_fulfillment = await _safe_fulfill_pi_intent(
-        pi,
-        user_id=user_id,
-        enabled=include_safe_fulfillment,
-        timeout_seconds=safe_fulfillment_timeout_seconds,
-        speculative=speculative_safe_fulfillment,
-    )
+        zoe_agent = None
+        if measure_zoe_agent_baseline and zoe_router["intent"] is None:
+            zoe_agent = await _run_zoe_agent_baseline(
+                stripped,
+                timeout_seconds=zoe_agent_timeout_seconds,
+                max_tokens=zoe_agent_max_tokens,
+            )
+        safe_fulfillment = await _safe_fulfill_pi_intent(
+            pi,
+            user_id=user_id,
+            enabled=include_safe_fulfillment,
+            timeout_seconds=safe_fulfillment_timeout_seconds,
+            speculative=speculative_safe_fulfillment,
+        )
+    except BaseException:
+        await _discard_speculative_safe_fulfillment(speculative_safe_fulfillment, None)
+        raise
 
     hybrid = None
     if include_hybrid_status:
