@@ -297,6 +297,53 @@ async def test_dispatch_review_includes_audit_pipeline_handoff():
 
 
 @pytest.mark.asyncio
+async def test_dispatch_verify_injects_pr_url_from_implement_evidence():
+    """Normal (real-PR) verify handoff must carry the implement phase's PR_URL
+    from the authoritative pipeline evidence, so the verify worker does not race
+    the async Multica pr_url write, block 'awaiting PR evidence', and bounce the
+    chain back to implement."""
+    from pipeline_evidence import EvidenceItem, PipelineState
+    from pipeline_store import save_state
+
+    pr = "https://github.com/jason-easyazz/zoe-ai-assistant/pull/600"
+    state = PipelineState(
+        task_ref="multica:uuid-normal-verify",
+        phase="verify",
+        status="todo",
+        attempts={"implement": 1},
+        evidence=[
+            EvidenceItem(
+                kind="pr",
+                summary=pr,
+                artifact=pr,
+                passed=True,
+                metadata={"source": "handoff", "phase": "implement"},
+            )
+        ],
+    )
+    save_state(state, event="transition")
+    a = _FakeAdapter()
+
+    result = await a.dispatch(
+        {
+            "id": "uuid-normal-verify",
+            "identifier": "ZOE-NORMAL",
+            "title": "Add focused tests",
+            "description": "Original ticket body.",
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["phase"] == "verify"
+    create = [c for c in a.calls if c[0] == "create"][0]
+    body = create[create.index("--body") + 1]
+    assert "Zoe pipeline handoff (authoritative):" in body
+    assert f"PR_URL={pr}" in body
+    assert "AUDIT_ONLY" not in body  # normal path, not the audit handoff
+    assert body.index(f"PR_URL={pr}") < body.index("Original ticket body")
+
+
+@pytest.mark.asyncio
 async def test_dispatch_does_not_parent_recovered_phase_to_blocked_prior_row():
     from pipeline_evidence import EvidenceItem, PipelineState
     from pipeline_store import save_state

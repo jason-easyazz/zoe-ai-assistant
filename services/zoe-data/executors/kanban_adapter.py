@@ -457,11 +457,42 @@ def _issue_with_phase_handoff(issue: dict, phase: str, state: Any | None) -> dic
         for item in evidence
     )
     audit_profile = getattr(state, "evidence_profile", "") == "audit"
-    if not already_covered and not audit_profile:
-        return issue
     description = str(issue.get("description") or "")
     if "Zoe pipeline handoff (authoritative):" in description:
         return issue
+
+    # Authoritative PR URL from the implement phase's recorded evidence. This is
+    # written synchronously when implement completes, so it is available even
+    # before the poll loop's async write of pr_url onto the Multica ticket. The
+    # downstream verify/review/closeout worker must not have to race that write
+    # or hunt for the PR — without it, verify blocks "awaiting PR evidence" and
+    # the chain bounces back to implement.
+    pr_url = next(
+        (
+            str(getattr(item, "artifact", "") or "").strip()
+            for item in reversed(evidence)
+            if getattr(item, "kind", "") == "pr" and getattr(item, "artifact", None)
+        ),
+        "",
+    ) or _existing_pr_url(issue)
+
+    if not already_covered and not audit_profile:
+        # Normal (real-PR) path: inject only the authoritative PR_URL so the
+        # worker can act on the implement output directly. If there is no PR URL
+        # yet there is nothing to hand off, so preserve the prior behavior.
+        if not pr_url:
+            return issue
+        handoff = (
+            "Zoe pipeline handoff (authoritative):\n"
+            f"PR_URL={pr_url}\n"
+            "SUMMARY=Use this PR_URL as the implementation under review; it is the authoritative "
+            "PR for this ticket. Do not wait for, re-derive, or hunt for a different PR. Check out "
+            "the PR head from your workspace_path, run the focused checks/validators, then call "
+            "kanban_complete; call kanban_block only on a concrete failure (not for missing evidence).\n\n"
+        )
+        updated = dict(issue)
+        updated["description"] = handoff + description
+        return updated
 
     validator_summary = next(
         (getattr(item, "summary", "") for item in reversed(evidence) if getattr(item, "kind", "") == "validator"),
