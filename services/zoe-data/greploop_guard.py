@@ -371,7 +371,7 @@ def analyze_result(packet: GuardPacket, result_text: str, *, pre_run_sha: str | 
 
 def _load_status(pr_number: int) -> dict[str, Any]:
     state = read_guard_state(pr_number)
-    if state.get("state") == "MISSING":
+    if state.get("state") in ("MISSING", "STALE_READ_RETRY"):
         return {
             "pr": int(pr_number),
             "iteration": 0,
