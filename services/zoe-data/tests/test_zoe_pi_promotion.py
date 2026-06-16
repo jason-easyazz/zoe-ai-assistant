@@ -5,6 +5,7 @@ from zoe_pi_promotion import (
     PiIntentEvalCase,
     PiPromotionPolicy,
     PiRouteSample,
+    build_pi_candidate_wins,
     build_pi_failure_examples,
     build_pi_route_class_breakdown,
     build_pi_source_breakdown,
@@ -209,6 +210,57 @@ def test_promotion_requires_five_percent_accuracy_win_and_latency_win():
     assert decision.zoe_accuracy == 0.0
     assert decision.latency_delta_ms and decision.latency_delta_ms > 0
     assert decision.blockers == ()
+
+
+def test_promotion_counts_unique_cases_not_repeated_observations():
+    samples = [_sample(1) for _ in range(10)]
+    policy = PiPromotionPolicy(min_samples=2, accuracy_win_margin=0.05)
+
+    decision = evaluate_pi_promotion(samples, intent_group="weather", policy=policy)
+
+    assert decision.state == "keep_shadow"
+    assert decision.sample_count == 1
+    assert decision.pi_accuracy == 1.0
+    assert decision.zoe_accuracy == 0.0
+    assert "insufficient_samples" in decision.blockers
+
+
+def test_promotion_accuracy_uses_unique_case_evidence_not_duplicate_observations():
+    samples = []
+    for index in range(30):
+        pi_intent = "weather" if index < 15 else "reminder_list"
+        zoe_intent = "weather" if index < 14 else "reminder_list"
+        samples.append(_sample(index, pi=pi_intent, zoe=zoe_intent))
+    samples.extend([_sample(14), _sample(14)])
+    policy = PiPromotionPolicy(min_samples=30, accuracy_win_margin=0.05)
+
+    decision = evaluate_pi_promotion(samples, intent_group="weather", policy=policy)
+
+    assert decision.state == "keep_shadow"
+    assert decision.sample_count == 30
+    assert decision.pi_accuracy == 0.5
+    assert decision.zoe_accuracy == 14 / 30
+    assert decision.accuracy_delta == pytest.approx(1 / 30)
+    assert "accuracy_delta_below_threshold" in decision.blockers
+
+
+def test_candidate_wins_separate_speed_accuracy_evidence_from_promotion_readiness():
+    samples = [_sample(1) for _ in range(10)]
+    policy = PiPromotionPolicy(min_samples=2, accuracy_win_margin=0.05)
+
+    summary = build_pi_candidate_wins(samples, policy=policy)
+
+    assert summary["groups"] == ["weather"]
+    assert summary["blocked_groups"] == ["weather"]
+    assert summary["promotion_ready_groups"] == []
+    detail = summary["details"][0]
+    assert detail["status"] == "needs_more_evidence"
+    assert detail["observation_count"] == 10
+    assert detail["unique_case_count"] == 1
+    assert "sample_count" not in detail
+    assert detail["sample_deficit"] == 1
+    assert detail["unique_case_deficit"] == 1
+    assert detail["promotion_blockers"] == ["insufficient_samples"]
 
 
 def test_promotion_blocks_when_accuracy_delta_is_too_small():
@@ -433,6 +485,8 @@ def test_summary_lists_promotable_groups():
     assert "weather" in report["promotable_groups"]
     assert report["promoted_groups"] == []
     assert report["sample_count"] == 10
+    assert report["unique_case_count"] == 10
+    assert report["candidate_wins"]["promotion_ready_groups"] == ["weather"]
     assert report["policy"]["accuracy_win_margin"] == 0.05
     assert report["route_class_breakdown"]["fallback"]["sample_count"] == 10
     assert report["route_class_breakdown"]["fallback"]["latency_delta_ms"] > 0

@@ -262,19 +262,20 @@ def evaluate_pi_promotion(
     group_samples = [sample for sample in samples if sample.intent_group == intent_group]
     for sample in group_samples:
         sample.validate()
-    sample_count = len(group_samples)
+    decision_samples = _collapse_samples_by_case(group_samples)
+    sample_count = len(decision_samples)
     if sample_count == 0:
         state = "rollback" if promoted else "keep_shadow"
         return _empty_decision(intent_group, state=state, blockers=("insufficient_samples",))
 
-    zoe_accuracy = _rate(sample.zoe_correct for sample in group_samples)
-    pi_accuracy = _rate(sample.pi_correct for sample in group_samples)
+    zoe_accuracy = _rate(sample.zoe_correct for sample in decision_samples)
+    pi_accuracy = _rate(sample.pi_correct for sample in decision_samples)
     accuracy_delta = pi_accuracy - zoe_accuracy
-    zoe_p95 = _percentile([sample.zoe_latency_ms for sample in group_samples], 95)
-    pi_p95 = _percentile([sample.pi_latency_ms for sample in group_samples], 95)
+    zoe_p95 = _percentile([sample.zoe_latency_ms for sample in decision_samples], 95)
+    pi_p95 = _percentile([sample.pi_latency_ms for sample in decision_samples], 95)
     latency_delta = None if zoe_p95 is None or pi_p95 is None else zoe_p95 - pi_p95
-    timeout_rate = _rate(sample.timed_out for sample in group_samples)
-    correction_rate = _rate(sample.user_corrected for sample in group_samples)
+    timeout_rate = _rate(sample.timed_out for sample in decision_samples)
+    correction_rate = _rate(sample.user_corrected for sample in decision_samples)
     blockers: list[str] = []
     if sample_count < active_policy.min_samples:
         blockers.append("insufficient_samples")
@@ -354,6 +355,7 @@ def summarize_pi_promotion(
             "require_comparable_baseline": active_policy.require_comparable_baseline,
         },
         "sample_count": len(samples),
+        "unique_case_count": _unique_case_count(samples),
         "promoted_groups": sorted(active_promoted_groups),
         "decisions": decisions,
         "promotable_groups": promotable_groups,
@@ -361,6 +363,7 @@ def summarize_pi_promotion(
         "route_class_breakdown": build_pi_route_class_breakdown(samples),
         "transport_breakdown": build_pi_transport_breakdown(samples),
         "source_breakdown": build_pi_source_breakdown(samples, policy=active_policy),
+        "candidate_wins": build_pi_candidate_wins(samples, decisions=decisions, policy=active_policy),
         "failure_examples": build_pi_failure_examples(samples),
         "promotion_actions": build_pi_promotion_actions(
             current_promoted_groups=sorted(active_promoted_groups),
@@ -369,6 +372,67 @@ def summarize_pi_promotion(
         ),
     }
 
+
+def build_pi_candidate_wins(
+    samples: Sequence[PiRouteSample],
+    *,
+    decisions: Sequence[Mapping[str, Any]] | None = None,
+    policy: PiPromotionPolicy | None = None,
+) -> dict[str, Any]:
+    """Report available speed/accuracy wins separately from promotion readiness.
+
+    Candidate wins are useful operator evidence, not permission to route live
+    traffic. A group can be a candidate while still blocked by the promotion
+    policy, most commonly because it lacks enough unique, labeled samples.
+    """
+    active_policy = policy or PiPromotionPolicy()
+    active_policy.validate()
+    active_decisions = list(decisions) if decisions is not None else [
+        evaluate_pi_promotion(samples, intent_group=group, policy=active_policy).to_dict()
+        for group in sorted(LOW_RISK_PI_INTENT_GROUPS)
+    ]
+    details: list[dict[str, Any]] = []
+    for decision in active_decisions:
+        intent_group = str(decision.get("intent_group") or "")
+        if intent_group not in LOW_RISK_PI_INTENT_GROUPS:
+            continue
+        group_samples = [sample for sample in samples if sample.intent_group == intent_group]
+        for sample in group_samples:
+            sample.validate()
+        blockers = list(decision.get("blockers") or [])
+        non_evidence_blockers = sorted(set(blockers) - {"insufficient_samples"})
+        if decision.get("sample_count", 0) <= 0 or non_evidence_blockers:
+            continue
+        unique_case_count = _unique_case_count(group_samples)
+        status = "promotion_ready" if decision.get("state") == "promote" else "needs_more_evidence"
+        details.append(
+            {
+                "intent_group": intent_group,
+                "status": status,
+                "observation_count": len(group_samples),
+                "unique_case_count": unique_case_count,
+                "promotion_blockers": blockers,
+                "sample_deficit": max(0, active_policy.min_samples - int(decision.get("sample_count", 0) or 0)),
+                "unique_case_deficit": max(0, active_policy.min_samples - unique_case_count),
+                "zoe_accuracy": decision.get("zoe_accuracy"),
+                "pi_accuracy": decision.get("pi_accuracy"),
+                "accuracy_delta": decision.get("accuracy_delta"),
+                "zoe_p95_latency_ms": decision.get("zoe_p95_latency_ms"),
+                "pi_p95_latency_ms": decision.get("pi_p95_latency_ms"),
+                "latency_delta_ms": decision.get("latency_delta_ms"),
+            }
+        )
+    details.sort(key=lambda item: (item["status"] != "promotion_ready", item["intent_group"]))
+    return {
+        "note": (
+            "Candidate wins clear the speed/accuracy gates on available evidence only. "
+            "Promotion still requires policy blockers to clear and enough unique labeled samples."
+        ),
+        "groups": [item["intent_group"] for item in details],
+        "blocked_groups": [item["intent_group"] for item in details if item["status"] != "promotion_ready"],
+        "promotion_ready_groups": [item["intent_group"] for item in details if item["status"] == "promotion_ready"],
+        "details": details,
+    }
 
 def build_pi_route_class_breakdown(samples: Sequence[PiRouteSample]) -> dict[str, dict[str, Any]]:
     breakdown: dict[str, dict[str, Any]] = {}
@@ -593,6 +657,70 @@ def eval_cases_to_dict(cases: Sequence[PiIntentEvalCase] = DEFAULT_PI_INTENT_EVA
     return [case.to_dict() for case in cases]
 
 
+def _unique_case_count(samples: Sequence[PiRouteSample]) -> int:
+    return len({sample.case_id for sample in samples})
+
+
+def _collapse_samples_by_case(samples: Sequence[PiRouteSample]) -> list[PiRouteSample]:
+    by_case: dict[str, list[PiRouteSample]] = {}
+    for sample in samples:
+        by_case.setdefault(sample.case_id, []).append(sample)
+    return [_collapse_case_samples(case_samples) for _, case_samples in sorted(by_case.items())]
+
+
+def _collapse_case_samples(samples: Sequence[PiRouteSample]) -> PiRouteSample:
+    first = samples[0]
+    pi_intent = (
+        first.expected_intent
+        if all(sample.pi_correct for sample in samples)
+        else _first_non_expected_pi_intent(samples)
+    )
+    zoe_intent = (
+        first.expected_intent
+        if all(sample.zoe_correct for sample in samples)
+        else _first_non_expected_zoe_intent(samples)
+    )
+    return PiRouteSample(
+        case_id=first.case_id,
+        intent_group=first.intent_group,
+        expected_intent=first.expected_intent,
+        zoe_intent=zoe_intent,
+        pi_intent=pi_intent,
+        zoe_latency_ms=max(sample.zoe_latency_ms for sample in samples),
+        pi_latency_ms=max(sample.pi_latency_ms for sample in samples),
+        pi_confidence=min(sample.pi_confidence for sample in samples),
+        pi_transport=first.pi_transport,
+        route_class=first.route_class,
+        user_corrected=any(sample.user_corrected for sample in samples),
+        timed_out=any(sample.timed_out for sample in samples),
+        rollback_blocked=any(sample.rollback_blocked for sample in samples),
+        metadata=_collapse_sample_metadata(samples),
+    )
+
+
+def _first_non_expected_pi_intent(samples: Sequence[PiRouteSample]) -> str | None:
+    expected = samples[0].expected_intent
+    for sample in samples:
+        if sample.pi_intent != expected or sample.timed_out:
+            return sample.pi_intent
+    return samples[0].pi_intent
+
+
+def _first_non_expected_zoe_intent(samples: Sequence[PiRouteSample]) -> str | None:
+    expected = samples[0].expected_intent
+    for sample in samples:
+        if sample.zoe_intent != expected:
+            return sample.zoe_intent
+    return samples[0].zoe_intent
+
+
+def _collapse_sample_metadata(samples: Sequence[PiRouteSample]) -> dict[str, Any]:
+    merged = dict(samples[0].metadata)
+    if any(sample.metadata.get("baseline_comparable") is False for sample in samples):
+        merged["baseline_comparable"] = False
+    return merged
+
+
 def _sample_source(sample: PiRouteSample) -> str:
     if isinstance(sample.metadata, Mapping):
         source = _optional_str(sample.metadata.get("source"))
@@ -698,6 +826,7 @@ __all__ = [
     "PiPromotionDecision",
     "PiPromotionPolicy",
     "PiRouteSample",
+    "build_pi_candidate_wins",
     "build_pi_failure_examples",
     "build_pi_route_class_breakdown",
     "build_pi_source_breakdown",
