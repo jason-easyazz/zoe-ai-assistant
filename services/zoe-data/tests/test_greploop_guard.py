@@ -230,6 +230,12 @@ async def test_assess_merge_readiness_blocks_low_confidence(monkeypatch):
 
     monkeypatch.setattr("greptile_client.get_pr_status", fake_status)
     monkeypatch.setattr("greptile_client.list_pr_comments", fake_comments)
+    monkeypatch.setattr(greploop_guard, "_gh_pr_observation", lambda *args, **kwargs: {"ok": False})
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_thread_counts",
+        lambda *args, **kwargs: {"ok": False, "unresolved": -1, "resolved_greptile_keys": []},
+    )
     monkeypatch.setattr(
         greploop_guard,
         "_gh_mergeable_state",
@@ -891,3 +897,80 @@ async def test_cheap_runner_command_does_not_expand_shell_metacharacters(monkeyp
 
     assert status == "OK"
     assert "$HOME" in output
+
+
+def test_lock_release_leaves_released_lock_metadata(tmp_path, monkeypatch):
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(greploop_guard, "_HELD_LOCKS", set())
+    lock_path = tmp_path / "pr-66" / "lock"
+
+    with greploop_guard.acquire_lock(66):
+        active = json.loads(lock_path.read_text(encoding="utf-8"))
+        assert active["lock_id"]
+        assert "released_at" not in active
+
+    released = json.loads(lock_path.read_text(encoding="utf-8"))
+    assert released["lock_id"] == active["lock_id"]
+    assert released["released_at"] >= released["created_at"]
+
+
+def test_lock_registration_cleans_up_when_metadata_write_fails(tmp_path, monkeypatch):
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(greploop_guard, "_HELD_LOCKS", set())
+    real_fsync = greploop_guard.os.fsync
+    calls = {"count": 0}
+
+    def flaky_fsync(fd):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise OSError("simulated fsync failure")
+        return real_fsync(fd)
+
+    monkeypatch.setattr(greploop_guard.os, "fsync", flaky_fsync)
+
+    with pytest.raises(OSError, match="simulated fsync failure"):
+        with greploop_guard.acquire_lock(66):
+            pass
+
+    assert 66 not in greploop_guard._HELD_LOCKS
+    with greploop_guard.acquire_lock(66):
+        assert 66 in greploop_guard._HELD_LOCKS
+
+
+@pytest.mark.asyncio
+async def test_assess_merge_readiness_blocks_actionable_findings(monkeypatch):
+    async def fake_status(**_kwargs):
+        return {"confidenceScore": 5, "reviewIsRunning": False, "headSha": "abc"}
+
+    async def fake_comments(**_kwargs):
+        return {
+            "findings": [
+                {
+                    "id": "comment-1",
+                    "file_path": "services/zoe-data/example.py",
+                    "line": 12,
+                    "body": "Fix this narrow bug",
+                    "addressed": False,
+                }
+            ]
+        }
+
+    monkeypatch.setattr("greptile_client.get_pr_status", fake_status)
+    monkeypatch.setattr("greptile_client.list_pr_comments", fake_comments)
+    monkeypatch.setattr(greploop_guard, "_gh_pr_observation", lambda *args, **kwargs: {"ok": False})
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_thread_counts",
+        lambda *args, **kwargs: {"ok": False, "unresolved": -1, "resolved_greptile_keys": []},
+    )
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_mergeable_state",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO, observation=None: {"ok": True},
+    )
+
+    out = await greploop_guard.assess_merge_readiness(66, target_confidence=5)
+
+    assert out["ready"] is False
+    assert out["unaddressed_count"] == 1
+    assert "GREPTILE_ACTIONABLE_FINDINGS:1" in out["blockers"]
