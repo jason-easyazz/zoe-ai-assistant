@@ -1090,6 +1090,15 @@ async def lifespan(app: FastAPI):
                     for issue in in_review_issues
                     if issue.get("id")
                 }
+                # Read the poll timeout once per cycle (not per tracked issue). The
+                # dispatch path resolves the same env var separately; this branch may
+                # run when that block was skipped, so it keeps its own local.
+                try:
+                    _reconcile_timeout = float(
+                        os.environ.get("ZOE_MULTICA_POLL_REF_TIMEOUT_S", "20") or "20"
+                    )
+                except ValueError:
+                    _reconcile_timeout = 20.0
                 for issue in issues:
                     # Check whether a linked engineering workflow has reached a terminal state.
                     issue_id = issue.get("id")
@@ -1126,12 +1135,6 @@ async def lifespan(app: FastAPI):
                         # executor reference must not hang the whole poll iteration.
                         # On timeout/error this returns a sentinel with found=False,
                         # so every branch below is safely skipped this cycle.
-                        try:
-                            _reconcile_timeout = float(
-                                os.environ.get("ZOE_MULTICA_POLL_REF_TIMEOUT_S", "20") or "20"
-                            )
-                        except ValueError:
-                            _reconcile_timeout = 20.0
                         chain = await _poll_chain_guarded(
                             f"multica:{issue_id}", issue=issue, timeout=_reconcile_timeout
                         )
