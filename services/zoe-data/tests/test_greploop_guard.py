@@ -1101,6 +1101,11 @@ async def test_trigger_review_safely_skips_repo_capacity_for_other_waiting_pr(tm
     monkeypatch.setattr(greploop_guard, "GREPTILE_REPO_ACTIVE_REVIEW_STALE_SECONDS", 600)
     monkeypatch.setattr(greploop_guard.time, "time", lambda: 1_000.0)
     monkeypatch.setattr("greptile_client.trigger_review", fail_trigger)
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_pr_observation",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: {"ok": False},
+    )
     greploop_guard._write_json(
         67,
         "status.json",
