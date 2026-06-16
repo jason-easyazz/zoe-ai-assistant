@@ -110,6 +110,7 @@ def test_build_report_keeps_repeats_separate_from_unique_cases():
     assert report["summary"]["overall"]["unique_case_count"] == 2
     assert report["summary"]["overall"]["observation_count"] == 3
     assert report["summary"]["by_source"]["intent_miss"]["unique_case_count"] == 1
+    assert report["summary"]["by_baseline_lane"]["fallback:unknown"]["unique_case_count"] == 2
 
 
 def test_run_benchmark_repeats_without_pi(monkeypatch):

@@ -97,6 +97,7 @@ def build_report(
         "summary": {
             "overall": _stats(observations),
             "by_route_class": _breakdown(observations, lambda item: str(item.get("route_class") or "unknown")),
+            "by_baseline_lane": _breakdown(observations, _baseline_lane_key),
             "by_intent_group": _breakdown(observations, lambda item: str(item.get("intent_group") or "unknown")),
             "by_source": _breakdown(observations, lambda item: str(item.get("source") or "unknown")),
         },
@@ -147,6 +148,12 @@ def _breakdown(
         grouped[key_fn(item)].append(item)
     return {key: _stats(values) for key, values in sorted(grouped.items())}
 
+
+
+def _baseline_lane_key(item: Mapping[str, Any]) -> str:
+    route_class = str(item.get("route_class") or "unknown")
+    baseline_kind = str(item.get("zoe_baseline_kind") or "unknown")
+    return f"{route_class}:{baseline_kind}"
 
 def _stats(observations: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     if not observations:

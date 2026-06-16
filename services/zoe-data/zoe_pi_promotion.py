@@ -181,6 +181,7 @@ class PiPromotionPolicy:
     max_correction_rate: float = 0.03
     require_latency_win: bool = True
     require_comparable_baseline: bool = True
+    require_baseline_lane_latency_win: bool = True
 
     def validate(self) -> None:
         if self.min_samples <= 0:
@@ -205,6 +206,7 @@ class PiPromotionDecision:
     latency_delta_ms: float | None
     timeout_rate: float
     correction_rate: float
+    baseline_lane_latency: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         if self.state not in DECISION_STATES:
@@ -222,6 +224,9 @@ class PiPromotionDecision:
             "latency_delta_ms": self.latency_delta_ms,
             "timeout_rate": self.timeout_rate,
             "correction_rate": self.correction_rate,
+            "baseline_lane_latency": {
+                lane: dict(values) for lane, values in sorted(self.baseline_lane_latency.items())
+            },
         }
 
 
@@ -277,6 +282,7 @@ def evaluate_pi_promotion(
     latency_delta = None if zoe_p95 is None or pi_p95 is None else zoe_p95 - pi_p95
     timeout_rate = _rate(sample.timed_out for sample in decision_samples)
     correction_rate = _rate(sample.user_corrected for sample in decision_samples)
+    baseline_lane_latency = _baseline_lane_latency(decision_samples)
     blockers: list[str] = []
     if sample_count < active_policy.min_samples:
         blockers.append("insufficient_samples")
@@ -286,6 +292,13 @@ def evaluate_pi_promotion(
         blockers.append("pi_accuracy_below_threshold")
     if active_policy.require_latency_win and (latency_delta is None or latency_delta <= 0):
         blockers.append("latency_not_faster_than_zoe")
+    if active_policy.require_baseline_lane_latency_win and any(
+        lane.get("sample_count", 0) > 0
+        and lane.get("latency_delta_ms") is not None
+        and lane["latency_delta_ms"] <= 0
+        for lane in baseline_lane_latency.values()
+    ):
+        blockers.append("baseline_lane_not_faster_than_zoe")
     if timeout_rate > active_policy.max_timeout_rate:
         blockers.append("timeout_rate_too_high")
     if correction_rate > active_policy.max_correction_rate:
@@ -324,6 +337,7 @@ def evaluate_pi_promotion(
         latency_delta_ms=latency_delta,
         timeout_rate=timeout_rate,
         correction_rate=correction_rate,
+        baseline_lane_latency=baseline_lane_latency,
     )
 
 
@@ -358,6 +372,7 @@ def summarize_pi_promotion(
             "max_correction_rate": active_policy.max_correction_rate,
             "require_latency_win": active_policy.require_latency_win,
             "require_comparable_baseline": active_policy.require_comparable_baseline,
+            "require_baseline_lane_latency_win": active_policy.require_baseline_lane_latency_win,
         },
         "sample_count": len(samples),
         "unique_case_count": _unique_case_count(samples),
@@ -462,6 +477,27 @@ def build_pi_route_class_breakdown(samples: Sequence[PiRouteSample]) -> dict[str
         }
     return breakdown
 
+
+def _baseline_lane_latency(samples: Sequence[PiRouteSample]) -> dict[str, dict[str, Any]]:
+    lanes: dict[str, list[PiRouteSample]] = {}
+    for sample in samples:
+        if sample.metadata.get("baseline_comparable") is False:
+            continue
+        baseline_kind = _optional_str(sample.metadata.get("baseline_kind")) or "unknown"
+        lane = f"{sample.route_class}:{baseline_kind}"
+        lanes.setdefault(lane, []).append(sample)
+
+    breakdown: dict[str, dict[str, Any]] = {}
+    for lane, lane_samples in sorted(lanes.items()):
+        zoe_p95 = _percentile([sample.zoe_latency_ms for sample in lane_samples], 95)
+        pi_p95 = _percentile([sample.pi_latency_ms for sample in lane_samples], 95)
+        breakdown[lane] = {
+            "sample_count": len(lane_samples),
+            "zoe_p95_latency_ms": zoe_p95,
+            "pi_p95_latency_ms": pi_p95,
+            "latency_delta_ms": None if zoe_p95 is None or pi_p95 is None else zoe_p95 - pi_p95,
+        }
+    return breakdown
 
 def build_pi_transport_breakdown(samples: Sequence[PiRouteSample]) -> dict[str, dict[str, Any]]:
     """Summarize Pi print and RPC evidence separately.
