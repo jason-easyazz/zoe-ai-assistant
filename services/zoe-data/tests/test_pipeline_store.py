@@ -998,7 +998,8 @@ async def test_sync_pipeline_keeps_normal_implementation_route(isolated_store):
 
 
 @pytest.mark.asyncio
-async def test_sync_pipeline_gate_blocks_verify_without_test(isolated_store):
+async def test_sync_pipeline_gate_blocks_verify_without_test(isolated_store, monkeypatch):
+    monkeypatch.setenv("ZOE_PIPELINE_VERIFY_EVIDENCE_RETRY_LIMIT", "1")
     await store.bootstrap_state("multica:verify-gate")
 
     async def fetch_detail(task_id: str):
@@ -1025,7 +1026,8 @@ async def test_sync_pipeline_gate_blocks_verify_without_test(isolated_store):
 
 
 @pytest.mark.asyncio
-async def test_sync_pipeline_gate_blocks_verify_after_retry_budget(isolated_store):
+async def test_sync_pipeline_gate_blocks_verify_after_retry_budget(isolated_store, monkeypatch):
+    monkeypatch.setenv("ZOE_PIPELINE_VERIFY_EVIDENCE_RETRY_LIMIT", "1")
     # Once verify has been re-armed past the retry budget, a still-missing `test`
     # gate becomes a terminal block (no infinite retry loop).
     seeded = PipelineState(
@@ -1050,6 +1052,7 @@ async def test_sync_pipeline_gate_blocks_verify_after_retry_budget(isolated_stor
     }
     state = await store.sync_pipeline_from_chain("multica:verify-budget", phases, fetch_detail)
     assert state.phase == "verify"
+    assert state.status == "blocked"
     lines = isolated_store.read_text(encoding="utf-8").splitlines()
     assert any("gate_blocked" in line for line in lines)
 
