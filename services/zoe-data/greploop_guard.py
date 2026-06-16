@@ -8,6 +8,7 @@ work.
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import hashlib
 import json
 import os
@@ -15,6 +16,7 @@ import re
 import shlex
 import subprocess
 import time
+import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,7 +26,6 @@ DEFAULT_REPO = os.environ.get("ZOE_GITHUB_REPO", "jason-easyazz/zoe-ai-assistant
 DEFAULT_BASE_BRANCH = os.environ.get("ZOE_GITHUB_DEFAULT_BRANCH", "main")
 REPO_ROOT = Path(os.environ.get("ZOE_ASSISTANT_ROOT", Path(__file__).resolve().parents[2]))
 STATE_ROOT = Path(os.environ.get("ZOE_PR_GUARD_STATE_DIR", "/home/zoe/assistant/.cursor/tmp/pr_guard"))
-LOCK_TTL_SECONDS = int(os.environ.get("ZOE_PR_GUARD_LOCK_TTL_SECONDS", "1800"))
 MAX_ITERATIONS = int(os.environ.get("ZOE_PR_GUARD_MAX_ITERATIONS", "5"))
 NO_PROGRESS_LIMIT = int(os.environ.get("ZOE_PR_GUARD_NO_PROGRESS_LIMIT", "3"))
 SAME_ERROR_LIMIT = int(os.environ.get("ZOE_PR_GUARD_SAME_ERROR_LIMIT", "3"))
@@ -156,26 +157,58 @@ def _record_guardrail(pr_number: int, line: str) -> None:
         handle.write(f"- {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} {redact(line)}\n")
 
 
+
+_HELD_LOCKS: set[int] = set()
+
+
 @contextmanager
 def acquire_lock(pr_number: int):
+    pr_number = int(pr_number)
+    if pr_number in _HELD_LOCKS:
+        raise GuardError(f"guard already running for PR #{pr_number}")
     path = _json_path(pr_number, "lock")
     path.parent.mkdir(parents=True, exist_ok=True)
-    now = time.time()
-    if path.exists():
-        try:
-            existing = json.loads(path.read_text())
-        except Exception:
-            existing = {}
-        created = float(existing.get("created_at") or 0)
-        if now - created < LOCK_TTL_SECONDS:
-            raise GuardError(f"guard already running for PR #{pr_number}")
-        path.unlink(missing_ok=True)
-    payload = {"pid": os.getpid(), "created_at": now, "owner": "zoe-greploop-guard"}
-    path.write_text(json.dumps(payload, indent=2) + "\n")
+    lock_id = uuid.uuid4().hex
+    payload = {
+        "pid": os.getpid(),
+        "created_at": time.time(),
+        "owner": "zoe-greploop-guard",
+        "lock_id": lock_id,
+    }
+    handle = path.open("a+", encoding="utf-8")
+    locked = False
+    registered = False
     try:
-        yield
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise GuardError(f"guard already running for PR #{pr_number}") from exc
+        locked = True
+        _HELD_LOCKS.add(pr_number)
+        registered = True
+        handle.seek(0)
+        handle.truncate()
+        handle.write(json.dumps(payload, indent=2) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+        try:
+            yield
+        finally:
+            released = {**payload, "released_at": time.time()}
+            handle.seek(0)
+            handle.truncate()
+            handle.write(json.dumps(released, indent=2) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
     finally:
-        path.unlink(missing_ok=True)
+        if registered:
+            _HELD_LOCKS.discard(pr_number)
+        if locked:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+        handle.close()
 
 
 def _run_git(args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -737,6 +770,8 @@ async def assess_merge_readiness(
         blockers.append(f"GREPTILE_UNRESOLVED_THREADS:{unresolved_threads}")
     if confidence < int(target_confidence):
         blockers.append(f"GREPTILE_CONFIDENCE:{confidence}<{target_confidence}")
+    if actionable:
+        blockers.append(f"GREPTILE_ACTIONABLE_FINDINGS:{len(actionable)}")
     gh_state = _gh_mergeable_state(pr_number, repo=repo, observation=gh_observation)
     if not gh_state.get("ok"):
         blockers.append(str(gh_state.get("reason") or "GH_NOT_READY"))
