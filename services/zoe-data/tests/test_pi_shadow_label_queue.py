@@ -140,3 +140,12 @@ def test_cli_reads_shadow_and_label_sidecar(tmp_path, capsys):
     )
 
     rows = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+
+    assert exit_code == 0
+    assert [row["text_hash"] for row in rows] == ["weather"]
+    assert rows[0]["suggested_outcome_label"] == "weather"
+    assert rows[0]["label_example"] == {
+        "outcome_label": "weather",
+        "source": "admin_review",
+        "text_hash": "weather",
+    }
