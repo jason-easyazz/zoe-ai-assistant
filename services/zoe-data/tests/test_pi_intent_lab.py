@@ -119,6 +119,10 @@ async def test_lab_compares_router_pi_and_never_dispatches(monkeypatch):
     assert result["pi"]["would_execute_reason"] == "lab_never_dispatches_intents"
     assert result["comparison"]["agreement"] is True
     assert result["comparison"]["production_route_change"] is False
+    assert result["simulated_hybrid_flow"]["cue_available"] is True
+    assert result["simulated_hybrid_flow"]["cue_event"]["type"] == "voice:processing_ack"
+    assert result["simulated_hybrid_flow"]["pi_completion_latency_ms"] is not None
+    assert result["simulated_hybrid_flow"]["production_route_change"] is False
     assert result["hybrid_buffer"]["mode"] == "shadow_buffer"
     assert seen_env[0]["env"]["ZOE_PI_INTENT_ENABLED"] == "true"
     assert seen_env[0]["env"]["ZOE_PI_INTENT_SHADOW_ENABLED"] == "false"
@@ -221,3 +225,4 @@ def test_pi_intent_lab_endpoint_returns_comparison(monkeypatch):
     assert data["zoe_router"]["baseline_lane"] == "deterministic:router"
     assert data["pi"]["intent"] == "weather"
     assert data["contract"]["intent_dispatch_enabled"] is False
+    assert data["simulated_hybrid_flow"]["cue_available"] is True

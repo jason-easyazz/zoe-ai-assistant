@@ -61,6 +61,7 @@ async def compare_pi_intent_lab(
         raise ValueError("zoe_agent_max_tokens must be positive")
 
     zoe_router = await _run_zoe_router(stripped, user_id=user_id)
+    processing_cue = _processing_cue(env)
     pi = await _run_pi(
         stripped,
         context_turns=context_turns,
@@ -104,6 +105,7 @@ async def compare_pi_intent_lab(
         "pi": pi,
         "zoe_agent_baseline": zoe_agent,
         "hybrid_buffer": _compact_hybrid(hybrid),
+        "simulated_hybrid_flow": _simulated_hybrid_flow(processing_cue, pi, zoe_agent),
         "comparison": _comparison(zoe_router, pi, zoe_agent),
     }
 
@@ -268,6 +270,53 @@ async def _run_zoe_agent_baseline(text: str, *, timeout_seconds: float, max_toke
             "would_execute": False,
         }
 
+
+
+def _processing_cue(env: Mapping[str, str] | None) -> dict[str, Any]:
+    from voice_presence import processing_ack_event
+
+    started = time.perf_counter()
+    event = processing_ack_event(env, index=0)
+    latency_ms = (time.perf_counter() - started) * 1000
+    safe_event = _safe_voice_event(event) if event else None
+    return {
+        "available": safe_event is not None,
+        "latency_ms": latency_ms,
+        "event": safe_event,
+        "text": str((safe_event or {}).get("text") or ""),
+    }
+
+
+def _simulated_hybrid_flow(
+    processing_cue: Mapping[str, Any],
+    pi: Mapping[str, Any],
+    zoe_agent: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    pi_latency = _float_or_none(pi.get("latency_ms"))
+    agent_latency = _float_or_none((zoe_agent or {}).get("latency_ms"))
+    final_latency = pi_latency if pi.get("ran") else agent_latency
+    return {
+        "strategy": "processing_ack_then_pi_or_fallback",
+        "cue_available": bool(processing_cue.get("available")),
+        "cue_text": processing_cue.get("text") or "",
+        "cue_latency_ms": processing_cue.get("latency_ms"),
+        "cue_event": processing_cue.get("event"),
+        "pi_completion_latency_ms": pi_latency,
+        "fallback_completion_latency_ms": agent_latency,
+        "final_completion_latency_ms": final_latency,
+        "natural_flow_candidate": bool(processing_cue.get("available") and final_latency is not None),
+        "production_route_change": False,
+    }
+
+
+def _safe_voice_event(event: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if event is None:
+        return None
+    safe = dict(event)
+    audio = safe.pop("audio_base64", None)
+    if audio:
+        safe["audio_base64_chars"] = len(str(audio))
+    return safe
 
 def _comparison(
     zoe_router: Mapping[str, Any],
