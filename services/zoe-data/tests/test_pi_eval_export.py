@@ -108,6 +108,30 @@ def test_invalid_route_class_falls_back_to_default():
     assert cases[0].route_class == "fallback"
 
 
+def test_skips_duplicate_implicit_shadow_case_ids():
+    module = _load_module()
+    rows = [
+        {"text_hash": "samehash", "text_preview": "rain later", "outcome_label": "weather"},
+        {"text_hash": "samehash", "text_preview": "rain later", "outcome_label": "weather"},
+    ]
+
+    cases = module.export_eval_cases(rows, source="intent_miss", case_prefix="shadow")
+
+    assert len(cases) == 1
+    assert cases[0].case_id == "shadow_samehash"
+
+
+def test_rejects_conflicting_duplicate_implicit_case_ids():
+    module = _load_module()
+    rows = [
+        {"text_hash": "samehash", "text_preview": "rain later", "outcome_label": "weather"},
+        {"text_hash": "samehash", "text_preview": "will it snow", "outcome_label": "weather"},
+    ]
+
+    with pytest.raises(ValueError, match="conflicting duplicate implicit"):
+        module.export_eval_cases(rows, source="intent_miss", case_prefix="shadow")
+
+
 def test_rejects_duplicate_exported_case_ids():
     module = _load_module()
     rows = [
