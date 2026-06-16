@@ -46,6 +46,27 @@ def test_demo_defaults_make_full_wake_to_processing_flow_ready():
     assert report["presence"]["processing_ack"]["first_payload"]["event"]["text"] == "Let me check."
 
 
+def test_presence_env_loader_reads_only_presence_keys(tmp_path):
+    module = _load_module()
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "\n".join(
+            [
+                "OPENAI_API_KEY=do-not-load",
+                'ZOE_WAKE_ACK_PHRASES="Yes Jason.|Hi Jason."',
+                "ZOE_PROCESSING_ACK_PHRASES='Let me check.|One moment.'",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    env = module._presence_env_from_files({}, env_files=[env_path])
+
+    assert env["ZOE_WAKE_ACK_PHRASES"] == "Yes Jason.|Hi Jason."
+    assert env["ZOE_PROCESSING_ACK_PHRASES"] == "Let me check.|One moment."
+    assert "OPENAI_API_KEY" not in env
+
+
 def test_pi_benchmark_winner_is_reported_without_promotion_claim():
     module = _load_module()
     pi_benchmark = {
@@ -69,6 +90,59 @@ def test_pi_benchmark_winner_is_reported_without_promotion_claim():
     assert report["decision"]["pi_candidate"]["state"] == "candidate_speed_accuracy_win"
     assert report["decision"]["pi_candidate"]["winning_groups"] == ["weather"]
     assert "unique labeled evidence" in " ".join(report["decision"]["recommendations"])
+
+
+def test_pi_http_flow_natural_observation_is_reported_without_promotion_claim():
+    module = _load_module()
+    pi_http_flow = {
+        "report_kind": "pi_intent_lab_http_probe",
+        "observation_count": 2,
+        "unique_case_count": 2,
+        "conversation_contract": {"production_route_change": False},
+        "summary": {
+            "overall": {
+                "natural_flow_rate": 1.0,
+                "request_error_rate": 0.0,
+                "safe_fulfillment_success_rate": 1.0,
+                "final_completion_latency_ms": {"p95": 3900.0},
+            },
+            "by_intent_group": {"weather": {}},
+        },
+    }
+
+    report = module.build_conversation_flow_report(
+        env=module._demo_env({}),
+        repeat=1,
+        pi_http_flow=pi_http_flow,
+    )
+
+    assert report["pi_http_flow"]["report_kind"] == "pi_intent_lab_http_probe"
+    assert report["decision"]["pi_http_flow"]["state"] == "natural_flow_observed"
+    assert report["decision"]["pi_http_flow"]["intent_groups"] == ["weather"]
+    assert report["decision"]["pi_http_flow"]["production_route_change"] is False
+    assert "human voice trials" in " ".join(report["decision"]["recommendations"])
+
+
+def test_pi_http_flow_failure_stays_lab_only():
+    module = _load_module()
+    pi_http_flow = {
+        "observation_count": 1,
+        "unique_case_count": 1,
+        "conversation_contract": {"production_route_change": False},
+        "summary": {
+            "overall": {
+                "natural_flow_rate": 0.0,
+                "request_error_rate": 0.0,
+                "safe_fulfillment_success_rate": 1.0,
+            },
+            "by_intent_group": {"weather": {}},
+        },
+    }
+
+    report = module.build_conversation_flow_report(env=module._demo_env({}), repeat=1, pi_http_flow=pi_http_flow)
+
+    assert report["decision"]["pi_http_flow"]["state"] == "keep_lab_only"
+    assert "did not meet the natural-flow gate" in " ".join(report["decision"]["recommendations"])
 
 
 def test_cli_can_attach_stubbed_pi_benchmark(monkeypatch, capsys):
@@ -105,3 +179,69 @@ def test_cli_can_attach_stubbed_pi_benchmark(monkeypatch, capsys):
     assert exit_code == 0
     assert payload["pi_benchmark"]["observation_count"] == 1
     assert payload["decision"]["pi_candidate"]["state"] == "candidate_speed_accuracy_win"
+
+
+def test_cli_can_attach_stubbed_pi_http_flow(monkeypatch, capsys):
+    module = _load_module()
+    calls = {}
+
+    def fake_run_probe(cases, **kwargs):
+        calls["cases"] = cases
+        calls["kwargs"] = kwargs
+        return [
+            {
+                "case_id": "weather",
+                "intent_group": "weather",
+                "source": "synthetic",
+                "pi_correct": True,
+                "request_error": None,
+                "natural_flow_candidate": True,
+                "safe_fulfillment_success": True,
+                "conversation_flow": {
+                    "final_response_available": True,
+                    "cue_within_budget": True,
+                    "final_within_budget": True,
+                },
+                "final_completion_latency_ms": 3000.0,
+            }
+        ]
+
+    monkeypatch.setattr(module, "run_pi_http_flow_probe", fake_run_probe)
+
+    exit_code = module.main(
+        [
+            "--demo-defaults",
+            "--run-pi-http-flow",
+            "--include-safe-fulfillment",
+            "--local-model-configured",
+            "--allow-execution",
+            "--pi-http-repeat",
+            "1",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert calls["kwargs"]["wake_ack_text"] == "Understood."
+    assert calls["kwargs"]["include_safe_fulfillment"] is True
+    assert calls["kwargs"]["natural_cue_max_ms"] == 150.0
+    assert payload["pi_http_flow"]["observation_count"] == 1
+    assert payload["decision"]["pi_http_flow"]["state"] == "natural_flow_observed"
+
+
+def test_cli_loads_presence_env_file_without_demo_defaults(tmp_path, capsys):
+    module = _load_module()
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        'ZOE_WAKE_ACK_PHRASES="Yes Jason.|Hi Jason."\n'
+        'ZOE_PROCESSING_ACK_PHRASES="Let me check.|One moment."\n',
+        encoding="utf-8",
+    )
+
+    exit_code = module.main(["--presence-env-file", str(env_path), "--repeat", "1"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert payload["presence"]["gate"]["full_wake_to_processing_ready"] is True
+    assert payload["presence"]["wake_ack"]["first_payload"]["events"][1]["text"] == "Yes Jason."
+    assert payload["presence"]["processing_ack"]["first_payload"]["event"]["text"] == "Let me check."
