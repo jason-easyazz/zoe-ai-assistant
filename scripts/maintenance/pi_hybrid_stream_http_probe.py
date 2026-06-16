@@ -256,6 +256,11 @@ def _observation(
         "safe_fulfillment_latency_ms": _float_or_none(safe.get("latency_ms")),
         "safe_fulfillment_error": safe.get("error"),
         "safe_fulfillment_timed_out": bool(safe.get("timed_out")),
+        "safe_fulfillment_started_before_pi": bool(safe.get("started_before_pi")),
+        "safe_fulfillment_validated_by_pi": bool(safe.get("validated_by_pi")),
+        "speculative_safe_fulfillment": safe.get("speculative_safe_fulfillment"),
+        "speculative_intent": safe.get("speculative_intent"),
+        "speculative_discard_reason": safe.get("speculative_discard_reason"),
         "simulated_final_completion_latency_ms": _float_or_none(flow.get("final_completion_latency_ms")),
         "response_preview": response_preview,
         "cue_within_budget": cue_within_budget,
@@ -284,8 +289,14 @@ def _stats(observations: Sequence[Mapping[str, Any]], *, pi_ran: bool) -> dict[s
             "stream_natural_rate": None,
             "conversation_natural_rate": None,
             "safe_fulfillment_success_rate": None,
+            "speculative_used_rate": None,
+            "speculative_discard_rate": None,
+            "speculative_timeout_rate": None,
+            "started_before_pi_rate": None,
+            "validated_by_pi_rate": None,
             "cue_client_latency_ms": _latency_stats([]),
             "final_client_latency_ms": _latency_stats([]),
+            "simulated_final_completion_latency_ms": _latency_stats([]),
             "pi_latency_ms": _latency_stats([]),
             "safe_fulfillment_latency_ms": _latency_stats([]),
         }
@@ -308,8 +319,26 @@ def _stats(observations: Sequence[Mapping[str, Any]], *, pi_ran: bool) -> dict[s
         "safe_fulfillment_success_rate": (
             _rate(bool(item.get("safe_fulfillment_success")) for item in safe_requested) if safe_requested else None
         ),
+        "speculative_used_rate": (
+            _rate(item.get("speculative_safe_fulfillment") == "used" for item in safe_requested) if safe_requested else None
+        ),
+        "speculative_discard_rate": (
+            _rate(item.get("speculative_safe_fulfillment") == "discarded" for item in safe_requested) if safe_requested else None
+        ),
+        "speculative_timeout_rate": (
+            _rate(item.get("speculative_safe_fulfillment") == "timed_out" for item in safe_requested) if safe_requested else None
+        ),
+        "started_before_pi_rate": (
+            _rate(bool(item.get("safe_fulfillment_started_before_pi")) for item in safe_requested) if safe_requested else None
+        ),
+        "validated_by_pi_rate": (
+            _rate(bool(item.get("safe_fulfillment_validated_by_pi")) for item in safe_requested) if safe_requested else None
+        ),
         "cue_client_latency_ms": _latency_stats(_floats(item.get("cue_client_latency_ms") for item in observations)),
         "final_client_latency_ms": _latency_stats(_floats(item.get("final_client_latency_ms") for item in observations)),
+        "simulated_final_completion_latency_ms": _latency_stats(
+            _floats(item.get("simulated_final_completion_latency_ms") for item in observations)
+        ),
         "pi_latency_ms": _latency_stats(_floats(item.get("pi_latency_ms") for item in observations)),
         "safe_fulfillment_latency_ms": _latency_stats(
             _floats(item.get("safe_fulfillment_latency_ms") for item in observations)

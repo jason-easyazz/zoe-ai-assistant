@@ -62,6 +62,9 @@ def _events(*, intent="weather", response_preview="It is 18.5 C."):
                     "latency_ms": 300.0,
                     "response_chars": len(response_preview),
                     "response_preview": response_preview,
+                    "started_before_pi": True,
+                    "validated_by_pi": True,
+                    "speculative_safe_fulfillment": "used",
                 },
                 "simulated_hybrid_flow": {"final_completion_latency_ms": 2800.0},
             },
@@ -112,11 +115,70 @@ def test_stream_probe_summarises_cue_final_and_fulfillment():
     assert report["summary"]["overall"]["stream_natural_rate"] == 1.0
     assert report["summary"]["overall"]["conversation_natural_rate"] == 1.0
     assert report["summary"]["overall"]["safe_fulfillment_success_rate"] == 1.0
+    assert report["summary"]["overall"]["speculative_used_rate"] == 1.0
+    assert report["summary"]["overall"]["speculative_discard_rate"] == 0.0
+    assert report["summary"]["overall"]["speculative_timeout_rate"] == 0.0
+    assert report["summary"]["overall"]["started_before_pi_rate"] == 1.0
+    assert report["summary"]["overall"]["validated_by_pi_rate"] == 1.0
+    assert report["summary"]["overall"]["simulated_final_completion_latency_ms"]["p95"] == 2800.0
     assert report["observations"][0]["cue_client_latency_ms"] == 4.0
     assert report["observations"][0]["final_client_latency_ms"] == 2810.0
+    assert report["observations"][0]["safe_fulfillment_started_before_pi"] is True
+    assert report["observations"][0]["safe_fulfillment_validated_by_pi"] is True
+    assert report["observations"][0]["speculative_safe_fulfillment"] == "used"
     assert report["observations"][0]["response_preview"] == "It is 18.5 C."
 
 
+
+
+def test_stream_probe_summarises_speculative_discard_and_timeout():
+    module = _load_module()
+    cases = [
+        _case(module, case_id="discard", text="show list", expected="list_show", group="lists"),
+        _case(module, case_id="timeout", text="rain later", expected="weather", group="weather"),
+    ]
+    events = []
+    for state in ("discarded", "timed_out"):
+        item = _events(intent="list_show" if state == "discarded" else "weather", response_preview="ok")
+        safe = item[1]["result"]["safe_fulfillment"]
+        safe["speculative_safe_fulfillment"] = state
+        safe["started_before_pi"] = state == "timed_out"
+        safe["validated_by_pi"] = state == "timed_out"
+        if state == "discarded":
+            safe["speculative_intent"] = "weather"
+            safe["speculative_discard_reason"] = "speculative_pi_disagreed"
+        events.append(item)
+
+    observations = module.run_probe(
+        cases,
+        base_url="http://127.0.0.1:8000",
+        repeat=1,
+        run_pi=True,
+        include_safe_fulfillment=True,
+        allow_pi_execution=True,
+        local_model_configured=True,
+        timeout_seconds=20.0,
+        stream_post=lambda url, payload, timeout: events.pop(0),
+    )
+    report = module.build_report(
+        cases,
+        observations,
+        base_url="http://127.0.0.1:8000",
+        repeat=1,
+        run_pi=True,
+        include_safe_fulfillment=True,
+        include_observations=True,
+    )
+
+    assert report["summary"]["overall"]["speculative_used_rate"] == 0.0
+    assert report["summary"]["overall"]["speculative_discard_rate"] == 0.5
+    assert report["summary"]["overall"]["speculative_timeout_rate"] == 0.5
+    assert report["summary"]["overall"]["started_before_pi_rate"] == 0.5
+    assert report["summary"]["overall"]["validated_by_pi_rate"] == 0.5
+    assert report["observations"][0]["speculative_safe_fulfillment"] == "discarded"
+    assert report["observations"][0]["speculative_intent"] == "weather"
+    assert report["observations"][0]["speculative_discard_reason"] == "speculative_pi_disagreed"
+    assert report["observations"][1]["speculative_safe_fulfillment"] == "timed_out"
 def test_stream_error_packet_is_reported_without_final_packet():
     module = _load_module()
 
