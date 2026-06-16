@@ -160,6 +160,7 @@ def _stats(observations: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             "observation_count": 0,
             "unique_case_count": 0,
             "pi_accuracy": None,
+            "pi_timeout_rate": None,
             "natural_flow_rate": None,
             "safe_fulfillment_success_rate": None,
             "cue_latency_ms": _latency_stats([]),

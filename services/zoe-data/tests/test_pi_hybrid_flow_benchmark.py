@@ -139,6 +139,26 @@ def test_empty_safe_fulfillment_response_is_not_success(monkeypatch):
     assert report["summary"]["overall"]["safe_fulfillment_success_rate"] == 0.0
 
 
+def test_empty_report_keeps_stats_schema(monkeypatch):
+    _install_fake_lab(monkeypatch, result_by_text={})
+    module = _load_module()
+
+    report = module.build_report(
+        [],
+        [],
+        repeat=1,
+        run_pi=False,
+        transport="rpc",
+        include_safe_fulfillment=False,
+    )
+    overall = report["summary"]["overall"]
+
+    assert overall["observation_count"] == 0
+    assert overall["pi_accuracy"] is None
+    assert overall["pi_timeout_rate"] is None
+    assert overall["safe_fulfillment_success_rate"] is None
+
+
 def test_cli_runs_cases_file(monkeypatch, tmp_path, capsys):
     _install_fake_lab(monkeypatch, result_by_text={"rain later": _lab_result(intent="weather")})
     module = _load_module()
