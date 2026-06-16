@@ -65,6 +65,23 @@ def chain_is_running(chain: dict) -> bool:
     return pipeline.get("status") == "running"
 
 
+def chain_poll_failed(chain: dict) -> bool:
+    """True when the chain poll could not determine state (timeout/error sentinel).
+
+    ``_poll_chain_guarded`` returns ``{"found": False, "status": "poll_timeout"|
+    "poll_error"}`` when ``poll_ref`` times out or raises. That sentinel makes
+    ``chain_needs_dispatch`` return False — which previously caused the poll loop
+    to silently SKIP an in-progress chain forever (it stranded past implement,
+    because an existing multi-row chain's poll is expensive and can time out under
+    event-loop load, while a fresh todo's poll is cheap). Callers should treat a
+    failed poll on a known in-progress chain as "state unknown — let the
+    idempotent dispatch re-derive it", not as "inactive, skip".
+    """
+    if not chain:
+        return True
+    return bool(chain.get("timed_out")) or chain.get("status") in ("poll_timeout", "poll_error")
+
+
 def _issue_age_hours(issue: dict, *, now: _dt.datetime) -> float | None:
     """Hours since the issue's last metadata update (falls back to created_at)."""
     raw = (issue or {}).get("updated_at") or (issue or {}).get("created_at") or ""

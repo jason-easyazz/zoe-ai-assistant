@@ -5,6 +5,7 @@ from multica_poll_dispatch import (
     chain_is_active,
     chain_is_running,
     chain_needs_dispatch,
+    chain_poll_failed,
     is_stale_in_progress,
 )
 import executors.kanban_adapter as ka
@@ -15,6 +16,18 @@ _NOW = dt.datetime(2026, 6, 14, 12, 0, tzinfo=dt.timezone.utc)
 
 def _aged(hours):
     return (_NOW - dt.timedelta(hours=hours)).isoformat()
+
+
+def test_chain_poll_failed_detects_sentinels_but_not_real_status():
+    # The timeout/error sentinels from _poll_chain_guarded — a failed poll, NOT a
+    # real "inactive" state. Previously these silently stranded in-progress chains.
+    assert chain_poll_failed({"found": False, "status": "poll_timeout", "timed_out": True}) is True
+    assert chain_poll_failed({"found": False, "status": "poll_error", "error": "boom"}) is True
+    assert chain_poll_failed({}) is True
+    # Real statuses are NOT poll failures.
+    assert chain_poll_failed({"status": "partial", "phases": {"implement": "done"}}) is False
+    assert chain_poll_failed({"status": "running"}) is False
+    assert chain_poll_failed({"found": False, "status": "not_found"}) is False
 
 
 def test_chain_needs_dispatch_not_found():
