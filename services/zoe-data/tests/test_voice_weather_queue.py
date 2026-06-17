@@ -841,7 +841,7 @@ async def test_voice_command_uses_pi_hybrid_production_with_processing_cue(
             "response_text": response_text,
         }
 
-    async def fake_processing_cue():
+    async def fake_processing_cue(**_kwargs):
         return {"available": True, "text": "Let me check.", "event": {"type": "voice:processing_ack", "text": "Let me check."}}
 
     monkeypatch.setattr(voice_tts, "_resolve_recent_panel_session_user", panel_user)
@@ -929,7 +929,7 @@ async def test_voice_command_caps_pi_hybrid_list_show_response(monkeypatch) -> N
             "response_text": long_reply,
         }
 
-    async def fake_processing_cue():
+    async def fake_processing_cue(**_kwargs):
         return {"available": True, "text": "Let me check."}
 
     monkeypatch.setattr(voice_tts, "_resolve_recent_panel_session_user", panel_user)

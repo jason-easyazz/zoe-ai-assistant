@@ -503,11 +503,26 @@ def _compact_lab_result(result: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-async def processing_cue_packet(env: Mapping[str, str] | None = None) -> dict[str, Any]:
+def processing_cue_index_for_text(text: str) -> int:
+    """Choose a natural processing cue variant for the utterance."""
+    normalized = re.sub(r"\s+", " ", str(text or "").strip().lower()).strip(" .!?\t\n")
+    if not normalized:
+        return 0
+    social_or_identity = {
+        "thank you", "thanks", "cheers", "who are you", "what are you",
+        "what can you do", "what can you help with", "how can you help",
+        "tell me about yourself", "introduce yourself",
+    }
+    if normalized in social_or_identity or _GREETING_SIGNAL_RE.match(normalized):
+        return 1
+    return 0
+
+
+async def processing_cue_packet(env: Mapping[str, str] | None = None, *, text: str = "") -> dict[str, Any]:
     try:
         from voice_presence import processing_ack_event
 
-        event = processing_ack_event(env, index=0)
+        event = processing_ack_event(env, index=processing_cue_index_for_text(text))
     except Exception as exc:  # pragma: no cover - cue must never break chat
         return {"available": False, "text": "", "event": None, "error": exc.__class__.__name__}
     if not event:
@@ -616,6 +631,7 @@ def _record_production_evidence(
 __all__ = [
     "PiHybridProductionConfig",
     "pi_hybrid_production_eligible",
+    "processing_cue_index_for_text",
     "processing_cue_packet",
     "try_pi_hybrid_production",
 ]

@@ -3040,7 +3040,7 @@ async def voice_command(
             _pi_hybrid_config = PiHybridProductionConfig.from_env()
             _pi_hybrid_eligible, _pi_hybrid_reason = pi_hybrid_production_eligible(text, config=_pi_hybrid_config)
             if _pi_hybrid_eligible:
-                _pi_cue = await processing_cue_packet()
+                _pi_cue = await processing_cue_packet(text=text)
                 _ack_text = str(_pi_cue.get("text") or "").strip()
                 if _ack_text:
                     try:

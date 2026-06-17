@@ -511,7 +511,7 @@ async def _run_chat_pi_hybrid_lane(
                 logger.debug("Pi hybrid production skipped: %s", reason)
             return {"attempted": False, "reason": reason, "config_enabled": config.enabled}
 
-        cue = await processing_cue_packet()
+        cue = await processing_cue_packet(text=message_for_processing)
         decision = await try_pi_hybrid_production(
             message_for_processing,
             user_id=user_id,
