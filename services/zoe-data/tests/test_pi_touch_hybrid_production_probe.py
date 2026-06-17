@@ -106,6 +106,17 @@ def test_probe_observes_panel_processing_cue_and_final_pi_response():
     assert report["summary"]["overall"]["processing_ack_rate"] == 1.0
 
 
+def test_default_probe_cases_cover_low_risk_production_groups():
+    module = _load_module()
+
+    cases = {case["case_id"]: case for case in module.DEFAULT_CASES}
+
+    assert cases["weather_rain_later"]["expected_intent"] == "weather"
+    assert cases["daily_briefing"]["expected_intent"] == "daily_briefing"
+    assert cases["list_show_shopping"]["expected_intent"] == "list_show"
+    assert cases["list_show_shopping"]["intent_group"] == "lists"
+
+
 def test_probe_marks_missing_panel_cue_as_not_ready():
     module = _load_module()
 

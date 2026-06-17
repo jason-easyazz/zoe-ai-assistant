@@ -44,6 +44,13 @@ DEFAULT_CASES = (
         "intent_group": "daily_briefing",
         "source": "production_smoke",
     },
+    {
+        "case_id": "list_show_shopping",
+        "text": "what is on my shopping list",
+        "expected_intent": "list_show",
+        "intent_group": "lists",
+        "source": "production_smoke",
+    },
 )
 DEFAULT_CUE_MAX_MS = 250.0
 DEFAULT_FINAL_MAX_MS = 8000.0
