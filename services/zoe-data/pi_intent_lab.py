@@ -22,6 +22,7 @@ from zoe_pi_promotion import LOW_RISK_PI_INTENT_GROUPS, intent_group_for_intent
 _ENV_LOCK = asyncio.Lock()
 SAFE_FULFILLMENT_INTENTS = frozenset(
     {
+        "calculate",
         "daily_briefing",
         "date_query",
         "greeting",

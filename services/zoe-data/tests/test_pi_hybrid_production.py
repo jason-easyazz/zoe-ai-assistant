@@ -67,6 +67,19 @@ def test_production_eligibility_is_disabled_and_tightly_prefiltered(monkeypatch)
         True,
         "eligible",
     )
+    assert pi_hybrid_production_eligible(
+        "what is the date", config=PiHybridProductionConfig(enabled=True, groups=("clock",))
+    ) == (True, "eligible")
+    assert pi_hybrid_production_eligible(
+        "what is the best time to leave", config=PiHybridProductionConfig(enabled=True, groups=("clock",))
+    ) == (False, "production_prefilter_rejected")
+    assert pi_hybrid_production_eligible(
+        "what is 12 times 8", config=PiHybridProductionConfig(enabled=True, groups=("calculations",))
+    ) == (True, "eligible")
+    assert pi_hybrid_production_eligible(
+        "what is the meeting time plus travel time",
+        config=PiHybridProductionConfig(enabled=True, groups=("calculations",)),
+    ) == (False, "production_prefilter_rejected")
 
 
 
@@ -301,6 +314,53 @@ async def test_try_pi_hybrid_fast_accepts_deterministic_greeting(monkeypatch):
     assert decision["reason"] == "router_confirmed_fast_accept"
     assert decision["agreement_kind"] == "zoe_router_fast"
     assert decision["response_text"] == "Hi, Jason! How can I help?"
+    assert len(calls) == 2
+    assert calls[0]["run_pi"] is False
+    assert calls[1]["run_pi"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("utterance", "intent", "group", "response"),
+    [
+        ("what time is it", "time_query", "clock", "It's 4:05 PM."),
+        ("what is the date", "date_query", "clock", "Today is Wednesday, June seventeenth."),
+        ("what is 12 times 8", "calculate", "calculations", "12 times 8 = 96"),
+    ],
+)
+async def test_try_pi_hybrid_fast_accepts_deterministic_clock_and_calculation(
+    monkeypatch, utterance, intent, group, response
+):
+    _install_prefilter(monkeypatch)
+    calls = []
+
+    async def fake_compare(text, **kwargs):
+        calls.append(dict(kwargs))
+        if kwargs.get("run_pi") is False:
+            return _router_fast_lab_result(intent=intent, response=response)
+        return _accepted_lab_result(intent=intent, response=response, router_intent=intent)
+
+    monkeypatch.setattr(pi_hybrid_production, "compare_pi_intent_lab", fake_compare)
+    monkeypatch.setattr(pi_hybrid_production, "_read_meminfo_mb", lambda: {"MemAvailable": 99999, "SwapFree": 99999})
+
+    decision = await try_pi_hybrid_production(
+        utterance,
+        user_id="jason",
+        config=PiHybridProductionConfig(
+            enabled=True,
+            groups=(group,),
+            resource_guard_enabled=True,
+            router_fast_accept_enabled=True,
+        ),
+    )
+    await asyncio.sleep(0.01)
+
+    assert decision["accepted"] is True
+    assert decision["intent"] == intent
+    assert decision["intent_group"] == group
+    assert decision["reason"] == "router_confirmed_fast_accept"
+    assert decision["agreement_kind"] == "zoe_router_fast"
+    assert decision["response_text"] == response
     assert len(calls) == 2
     assert calls[0]["run_pi"] is False
     assert calls[1]["run_pi"] is True
