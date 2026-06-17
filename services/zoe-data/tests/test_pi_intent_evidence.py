@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 
 from intent_router import detect_intent
-from pi_intent_evidence import record_intent_miss_evidence, sanitize_evidence_text
+from pi_intent_evidence import record_intent_miss_evidence, record_pi_hybrid_production_evidence, sanitize_evidence_text
 
 
 def test_record_intent_miss_evidence_disabled_does_not_write(tmp_path):
@@ -52,6 +52,104 @@ def test_record_intent_miss_evidence_skips_secret_like_text(tmp_path):
         env={
             "ZOE_PI_INTENT_MISS_EVIDENCE_ENABLED": "true",
             "ZOE_PI_INTENT_MISS_EVIDENCE_PATH": str(path),
+        },
+    )
+
+    assert result is None
+    assert not path.exists()
+
+
+def _production_decision():
+    return {
+        "config": {"groups": ["weather"], "transport": "rpc"},
+        "accepted": True,
+        "reason": "accepted",
+        "production_route_change": True,
+        "intent": "weather",
+        "intent_group": "weather",
+        "agreement_kind": "zoe_router",
+        "lab_result": {
+            "zoe_router": {
+                "intent": "weather",
+                "route_class": "deterministic",
+                "baseline_kind": "router",
+                "latency_ms": 12.0,
+            },
+            "pi": {
+                "intent": "weather",
+                "intent_group": "weather",
+                "confidence": 0.94,
+                "latency_ms": 123.0,
+                "transport": "rpc",
+            },
+            "safe_fulfillment": {
+                "intent": "weather",
+                "latency_ms": 45.0,
+                "timed_out": False,
+                "error": None,
+                "response_chars": 25,
+            },
+        },
+    }
+
+
+def test_record_pi_hybrid_production_evidence_disabled_does_not_write(tmp_path):
+    path = tmp_path / "production.jsonl"
+
+    result = record_pi_hybrid_production_evidence(
+        "will it rain later",
+        user_id="jason",
+        decision=_production_decision(),
+        env={"ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_PATH": str(path)},
+    )
+
+    assert result is None
+    assert not path.exists()
+
+
+def test_record_pi_hybrid_production_evidence_writes_compact_sanitized_jsonl(tmp_path):
+    path = tmp_path / "production.jsonl"
+
+    result = record_pi_hybrid_production_evidence(
+        "will it rain later for Jason Smith",
+        user_id="jason",
+        decision=_production_decision(),
+        env={
+            "ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_ENABLED": "true",
+            "ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_PATH": str(path),
+        },
+    )
+
+    assert result is not None
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    expected_user_hash = hashlib.sha256(b"jason").hexdigest()[:16]
+    assert saved["source"] == "pi_hybrid_production"
+    assert saved["user_hash"] == expected_user_hash
+    assert saved["text_preview"] == "will it rain later for [NAME]"
+    assert saved["accepted"] is True
+    assert saved["reason"] == "accepted"
+    assert saved["intent"] == "weather"
+    assert saved["pi_intent"] == "weather"
+    assert saved["pi_confidence"] == 0.94
+    assert saved["pi_latency_ms"] == 123.0
+    assert saved["zoe_latency_ms"] == 12.0
+    assert saved["safe_fulfillment_latency_ms"] == 45.0
+    assert saved["response_chars"] == 25
+    assert saved["enabled_groups"] == ["weather"]
+    assert saved["outcome_label"] is None
+    assert "Jason Smith" not in path.read_text(encoding="utf-8")
+
+
+def test_record_pi_hybrid_production_evidence_skips_secret_like_text(tmp_path):
+    path = tmp_path / "production.jsonl"
+
+    result = record_pi_hybrid_production_evidence(
+        "my bearer token is abc123",
+        user_id="jason",
+        decision=_production_decision(),
+        env={
+            "ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_ENABLED": "true",
+            "ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_PATH": str(path),
         },
     )
 

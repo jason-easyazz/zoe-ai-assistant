@@ -1,3 +1,4 @@
+import json
 import sys
 import types
 
@@ -87,6 +88,36 @@ async def test_try_pi_hybrid_accepts_safe_agreed_weather(monkeypatch):
     assert decision["agreement_kind"] == "zoe_router"
     assert decision["response_text"] == "It is 18.5 C."
     assert decision["production_route_change"] is True
+
+
+@pytest.mark.asyncio
+async def test_try_pi_hybrid_records_production_evidence_when_enabled(tmp_path, monkeypatch):
+    _install_prefilter(monkeypatch)
+    evidence_path = tmp_path / "production.jsonl"
+
+    async def fake_compare(text, **kwargs):
+        return _accepted_lab_result()
+
+    monkeypatch.setattr(pi_hybrid_production, "compare_pi_intent_lab", fake_compare)
+    monkeypatch.setattr(pi_hybrid_production, "_read_meminfo_mb", lambda: {"MemAvailable": 99999, "SwapFree": 99999})
+
+    decision = await try_pi_hybrid_production(
+        "will it rain later",
+        user_id="jason",
+        config=PiHybridProductionConfig(enabled=True, resource_guard_enabled=True),
+        env={
+            "ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_ENABLED": "true",
+            "ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_PATH": str(evidence_path),
+        },
+    )
+
+    assert decision["accepted"] is True
+    saved = json.loads(evidence_path.read_text(encoding="utf-8"))
+    assert saved["source"] == "pi_hybrid_production"
+    assert saved["accepted"] is True
+    assert saved["intent"] == "weather"
+    assert saved["pi_intent"] == "weather"
+    assert saved["production_route_change"] is True
 
 
 @pytest.mark.asyncio
