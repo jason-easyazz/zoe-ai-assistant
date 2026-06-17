@@ -213,6 +213,7 @@ def _production_group_metric(production: Mapping[str, Any], metric: str) -> dict
             values[str(group)] = _float_or_none(stats.get(metric))
     return values
 
+
 def _candidate_details(candidate_wins: Mapping[str, Any]) -> list[dict[str, Any]]:
     details: list[dict[str, Any]] = []
     for item in candidate_wins.get("details") or []:
