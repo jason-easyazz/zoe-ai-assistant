@@ -77,6 +77,9 @@ def test_production_eligibility_is_disabled_and_tightly_prefiltered(monkeypatch)
         "what is 12 times 8", config=PiHybridProductionConfig(enabled=True, groups=("calculations",))
     ) == (True, "eligible")
     assert pi_hybrid_production_eligible(
+        "what is 12 plus", config=PiHybridProductionConfig(enabled=True, groups=("calculations",))
+    ) == (False, "production_prefilter_rejected")
+    assert pi_hybrid_production_eligible(
         "what is the meeting time plus travel time",
         config=PiHybridProductionConfig(enabled=True, groups=("calculations",)),
     ) == (False, "production_prefilter_rejected")

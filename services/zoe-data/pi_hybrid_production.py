@@ -41,7 +41,7 @@ _CLOCK_SIGNAL_RE = re.compile(
 )
 _CALCULATION_SIGNAL_RE = re.compile(
     r"(?:\b(?:calculate|compute|what(?:'s| is)|how much is)\s+"
-    r"(?:\d+(?:\.\d+)?\s*(?:plus|minus|times|multiplied by|divided by|percent|%)\s*\d*(?:\.\d+)?|"
+    r"(?:\d+(?:\.\d+)?\s*(?:plus|minus|times|multiplied by|divided by|percent|%)\s*\d+(?:\.\d+)?|"
     r"\d+(?:\.\d+)?\s*(?:\+|-|x|×|\*|/|÷)\s*\d+(?:\.\d+)?)\b|"
     r"\b\d+(?:\.\d+)?\s*(?:\+|-|x|×|\*|/|÷)\s*\d+(?:\.\d+)?\b)",
     re.I,
