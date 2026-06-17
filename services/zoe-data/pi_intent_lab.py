@@ -24,6 +24,7 @@ SAFE_FULFILLMENT_INTENTS = frozenset(
     {
         "daily_briefing",
         "date_query",
+        "greeting",
         "list_show",
         "time_query",
         "weather",
