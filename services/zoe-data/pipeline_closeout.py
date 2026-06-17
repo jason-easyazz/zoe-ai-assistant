@@ -52,14 +52,27 @@ def _run(cmd: list[str], *, cwd: str, timeout: int) -> tuple[int, str]:
 
 
 def _merge_state(pr_url: str, *, cwd: str) -> tuple[str, str | None]:
-    """Return (state, merge_commit_oid) for the PR via gh."""
-    code, out = _run(
-        ["gh", "pr", "view", pr_url, "--json", "state,mergeCommit"], cwd=cwd, timeout=_GH_TIMEOUT_S
-    )
-    if code != 0 or not out:
+    """Return (state, merge_commit_oid) for the PR via gh.
+
+    Parses gh's STDOUT only — `gh pr view --json` writes JSON to stdout, and any
+    stderr notice (login/deprecation warnings) must not corrupt the JSON parse,
+    which would otherwise make the harness wrongly report the PR as not-merged.
+    """
+    try:
+        proc = subprocess.run(
+            ["gh", "pr", "view", pr_url, "--json", "state,mergeCommit"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=_GH_TIMEOUT_S,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return "", None
+    if proc.returncode != 0 or not (proc.stdout or "").strip():
         return "", None
     try:
-        data = json.loads(out)
+        data = json.loads(proc.stdout)
     except (ValueError, TypeError):
         return "", None
     state = str(data.get("state") or "").upper()

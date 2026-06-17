@@ -580,7 +580,7 @@ async def _append_harness_closeout_merge(state: PipelineState, phase: PipelinePh
             passed=True,
             metadata={
                 "source": "harness",
-                "phase": "closeout",
+                "phase": phase,
                 "merge_sha": result.merge_sha,
             },
         ),
