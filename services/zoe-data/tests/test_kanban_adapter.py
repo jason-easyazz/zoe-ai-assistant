@@ -1,4 +1,5 @@
 """Tests for the Hermes Kanban executor adapter (CLI mocked)."""
+import asyncio
 import json
 from pathlib import Path
 
@@ -5763,3 +5764,90 @@ async def test_recover_unshipped_diff_skips_when_pr_already_handed_off(monkeypat
 
     a = _A()
     assert await a._maybe_recover_unshipped_diff("t_implement", "implement", row) is None
+
+
+# ---------------------------------------------------------------------------
+# _maybe_auto_block_dead_worker — adapter glue that reaps zombie running tasks
+# ---------------------------------------------------------------------------
+
+
+def _dead_detail():
+    # past-grace running run; liveness is decided by the mocked _is_expected_worker
+    return {"runs": [{"status": "running", "worker_pid": 987654, "started_at": "2000-01-01T00:00:00+00:00"}]}
+
+
+def test_auto_block_dead_worker_blocks_zombie(monkeypatch):
+    monkeypatch.setattr(ka, "_REAP_DEAD_WORKERS", True)
+    monkeypatch.setattr(kb, "_is_expected_worker", lambda pid: False)  # worker dead
+    adapter = ka.KanbanAdapter()
+    calls: list[list[str]] = []
+
+    async def fake_run(args, *, expect_json=False):
+        calls.append(args)
+        return ""
+
+    adapter._run = fake_run  # type: ignore[assignment]
+    row = {"status": "running"}
+    out = asyncio.run(adapter._maybe_auto_block_dead_worker("t_verify", "verify", row, _dead_detail()))
+
+    assert out is True
+    assert calls and calls[0][0] == "block" and calls[0][1] == "t_verify"
+    assert calls[0][2].startswith("BLOCKER=WORKER_DIED")
+    assert row["status"] == "blocked"
+    assert row["block_reason"].startswith("BLOCKER=WORKER_DIED")
+
+
+def test_auto_block_dead_worker_noop_when_worker_alive(monkeypatch):
+    monkeypatch.setattr(ka, "_REAP_DEAD_WORKERS", True)
+    monkeypatch.setattr(kb, "_is_expected_worker", lambda pid: True)  # worker alive
+    adapter = ka.KanbanAdapter()
+
+    async def fake_run(args, *, expect_json=False):  # pragma: no cover - must not run
+        raise AssertionError("must not block a live worker")
+
+    adapter._run = fake_run  # type: ignore[assignment]
+    row = {"status": "running"}
+    assert asyncio.run(adapter._maybe_auto_block_dead_worker("t", "verify", row, _dead_detail())) is False
+    assert row["status"] == "running"
+
+
+def test_auto_block_dead_worker_noop_when_row_not_running(monkeypatch):
+    monkeypatch.setattr(ka, "_REAP_DEAD_WORKERS", True)
+    monkeypatch.setattr(kb, "_is_expected_worker", lambda pid: False)
+    adapter = ka.KanbanAdapter()
+
+    async def fake_run(args, *, expect_json=False):  # pragma: no cover
+        raise AssertionError("row not running -> no block")
+
+    adapter._run = fake_run  # type: ignore[assignment]
+    row = {"status": "todo"}
+    assert asyncio.run(adapter._maybe_auto_block_dead_worker("t", "verify", row, _dead_detail())) is False
+
+
+def test_auto_block_dead_worker_respects_kill_switch(monkeypatch):
+    monkeypatch.setattr(ka, "_REAP_DEAD_WORKERS", False)  # disabled
+    monkeypatch.setattr(kb, "_is_expected_worker", lambda pid: False)
+    adapter = ka.KanbanAdapter()
+
+    async def fake_run(args, *, expect_json=False):  # pragma: no cover
+        raise AssertionError("reaper disabled -> no block")
+
+    adapter._run = fake_run  # type: ignore[assignment]
+    row = {"status": "running"}
+    assert asyncio.run(adapter._maybe_auto_block_dead_worker("t", "verify", row, _dead_detail())) is False
+    assert row["status"] == "running"
+
+
+def test_auto_block_dead_worker_swallows_cli_error(monkeypatch):
+    monkeypatch.setattr(ka, "_REAP_DEAD_WORKERS", True)
+    monkeypatch.setattr(kb, "_is_expected_worker", lambda pid: False)
+    adapter = ka.KanbanAdapter()
+
+    async def fake_run(args, *, expect_json=False):
+        raise ka.KanbanCLIError("block failed")
+
+    adapter._run = fake_run  # type: ignore[assignment]
+    row = {"status": "running"}
+    # CLI failure -> returns False, row left untouched (next poll retries)
+    assert asyncio.run(adapter._maybe_auto_block_dead_worker("t", "verify", row, _dead_detail())) is False
+    assert row["status"] == "running"
