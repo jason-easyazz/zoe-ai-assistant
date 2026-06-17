@@ -336,6 +336,30 @@ def test_readiness_report_flags_unsupported_operator_hybrid_group(tmp_path):
     }
 
 
+def test_readiness_report_ignores_stale_operator_groups_when_hybrid_disabled(tmp_path):
+    shadow_path = tmp_path / "shadow.jsonl"
+    shadow_path.write_text(
+        "".join(json.dumps(_winning_weather_row(index)) + "\n" for index in range(3)),
+        encoding="utf-8",
+    )
+    env = _env(tmp_path, shadow_path)
+    env["ZOE_PI_HYBRID_PRODUCTION_ENABLED"] = "false"
+    env["ZOE_PI_HYBRID_PRODUCTION_GROUPS"] = "weather,device_control"
+
+    report = pi_readiness_report(env)
+
+    assert report["state"] == "collect_more_evidence"
+    assert report["production_hybrid"]["enabled"] is False
+    assert report["production_hybrid"]["ignored_groups"] == ["device_control"]
+    assert all(
+        not (
+            action.get("kind") == "fix_configuration"
+            and action.get("groups") == ["device_control"]
+        )
+        for action in report["next_actions"]
+    )
+
+
 def test_readiness_report_deduplicates_shadow_and_benchmark_collection_actions(tmp_path):
     shadow_path = tmp_path / "shadow.jsonl"
     shadow_path.write_text(json.dumps(_winning_weather_row(1)) + "\n", encoding="utf-8")
