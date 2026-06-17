@@ -3032,6 +3032,7 @@ async def voice_command(
                 )
                 if _pi_hybrid.get("accepted") and _pi_hybrid.get("response_text"):
                     reply_text = str(_pi_hybrid.get("response_text") or "")
+                    _pi_audio = await synthesize({"text": reply_text}, caller=caller)
                     try:
                         from push import broadcaster as _bc_pi_done
 
@@ -3045,7 +3046,6 @@ async def voice_command(
                         await _bc_pi_done.broadcast("all", "voice:done", {"panel_id": panel_id})
                     except Exception:
                         pass
-                    _pi_audio = await synthesize({"text": reply_text}, caller=caller)
                     await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
                     asyncio.ensure_future(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
                     return {
