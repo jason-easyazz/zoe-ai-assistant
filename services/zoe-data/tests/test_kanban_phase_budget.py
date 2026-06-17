@@ -366,3 +366,44 @@ def test_edit_safety_covers_implement_revision_phase(monkeypatch):
         "BLOCKER=IMPLEMENT_EDIT_SAFETY: Python patch was followed by more "
         "exploration before py_compile/focused tests"
     )
+
+
+# ---------------------------------------------------------------------------
+# dead_worker_reason — zombie 'running' task reaper detector
+# ---------------------------------------------------------------------------
+
+
+def _running_run(pid, started_at="2000-01-01T00:00:00+00:00"):
+    return {"runs": [{"status": "running", "worker_pid": pid, "started_at": started_at}]}
+
+
+def test_dead_worker_reason_flags_dead_pid_past_grace(monkeypatch):
+    monkeypatch.setattr(kb, "_is_expected_worker", lambda pid: False)  # process gone
+    reason = kb.dead_worker_reason(_running_run(987654), grace_s=0)
+    assert reason and "WORKER_DIED" in reason and "987654" in reason
+
+
+def test_dead_worker_reason_none_when_worker_alive(monkeypatch):
+    monkeypatch.setattr(kb, "_is_expected_worker", lambda pid: True)  # still running
+    assert kb.dead_worker_reason(_running_run(987654), grace_s=0) is None
+
+
+def test_dead_worker_reason_respects_grace(monkeypatch):
+    import time as _t
+
+    monkeypatch.setattr(kb, "_is_expected_worker", lambda pid: False)
+    # started 'now' -> within a long grace -> not yet reaped
+    now_iso = kb.datetime.fromtimestamp(_t.time(), tz=kb.timezone.utc).isoformat()
+    assert kb.dead_worker_reason({"runs": [{"status": "running", "worker_pid": 987654, "started_at": now_iso}]}, grace_s=3600) is None
+
+
+def test_dead_worker_reason_ignores_low_or_missing_pid(monkeypatch):
+    monkeypatch.setattr(kb, "_is_expected_worker", lambda pid: False)
+    assert kb.dead_worker_reason({"runs": [{"status": "running", "worker_pid": 0}]}, grace_s=0) is None
+    assert kb.dead_worker_reason({"runs": [{"status": "running"}]}, grace_s=0) is None
+
+
+def test_dead_worker_reason_none_when_not_running(monkeypatch):
+    monkeypatch.setattr(kb, "_is_expected_worker", lambda pid: False)
+    assert kb.dead_worker_reason({"runs": [{"status": "done", "worker_pid": 987654}]}, grace_s=0) is None
+    assert kb.dead_worker_reason({"runs": []}, grace_s=0) is None

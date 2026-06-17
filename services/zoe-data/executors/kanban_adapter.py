@@ -30,12 +30,17 @@ from typing import Any
 
 from hermes_http import hermes_bin, zoe_repo_root
 from kanban_phase_budget import (
+    dead_worker_reason,
     latest_log_session,
     phase_budget_reason,
     phase_budget_reason_from_log,
     task_log_tail,
     terminate_running_workers,
 )
+
+_REAP_DEAD_WORKERS = (
+    os.environ.get("ZOE_KANBAN_REAP_DEAD_WORKERS", "true") or "true"
+).strip().lower() not in {"0", "false", "no"}
 
 logger = logging.getLogger(__name__)
 
@@ -1197,6 +1202,41 @@ class KanbanAdapter:
         )
         return True
 
+    async def _maybe_auto_block_dead_worker(
+        self,
+        task_id: str,
+        phase: str,
+        row: dict[str, Any],
+        detail: dict[str, Any],
+    ) -> bool:
+        """Reap a zombie 'running' task whose worker process has died.
+
+        A crashed/killed worker (e.g. out-of-context HTTP error, OOM) can leave its
+        run 'running' forever, holding the single lane. Block it so the row becomes
+        terminal — which both frees the lane and lets the deterministic verify/
+        review/closeout overrides engage (they fire on a terminal row)."""
+        if not _REAP_DEAD_WORKERS:
+            return False
+        if (row.get("status") or "").lower() != "running":
+            return False
+        reason = dead_worker_reason(detail)
+        if not reason:
+            return False
+        reason = f"BLOCKER={reason}"
+        try:
+            await self._run(["block", task_id, reason])
+        except KanbanCLIError as exc:
+            logger.warning(
+                "kanban_adapter: dead-worker reap failed for %s (%s): %s", task_id, phase, exc
+            )
+            return False
+        row["status"] = "blocked"
+        row["block_reason"] = reason
+        logger.warning(
+            "kanban_adapter: reaped zombie running task %s (%s): %s", task_id, phase, reason
+        )
+        return True
+
     async def _maybe_auto_block_phase_budget(
         self,
         task_id: str,
@@ -1922,6 +1962,9 @@ class KanbanAdapter:
                 phases[phase] = row
                 continue
             if await self._maybe_auto_block_protocol_violation(task_id, phase, row, detail):
+                phases[phase] = row
+                continue
+            if await self._maybe_auto_block_dead_worker(task_id, phase, row, detail):
                 phases[phase] = row
 
         for phase, row in list(phases.items()):
