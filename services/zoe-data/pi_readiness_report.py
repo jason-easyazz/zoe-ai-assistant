@@ -458,11 +458,14 @@ def _append_number(values: list[float], value: Any) -> None:
         values.append(number)
 
 
+import math
+
+
 def _p95(values: list[float]) -> float | None:
     if not values:
         return None
     ordered = sorted(values)
-    index = max(0, min(len(ordered) - 1, int((len(ordered) * 0.95) + 0.999999) - 1))
+    index = max(0, min(len(ordered) - 1, math.ceil(len(ordered) * 0.95) - 1))
     return ordered[index]
 
 
