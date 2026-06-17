@@ -31,6 +31,7 @@ def pi_readiness_report(env: Mapping[str, str] | None = None) -> dict[str, Any]:
     eval_report = _load_eval_report(values)
     benchmark = _benchmark_from_eval_report(eval_report)
     production = _load_production_evidence(values)
+    production_config = _production_hybrid_config(values)
     benchmark_promotion = benchmark.get("promotion_report") or {}
     contract = hybrid.get("contract") or {}
     actions = promotion.get("promotion_actions") or {}
@@ -45,11 +46,21 @@ def pi_readiness_report(env: Mapping[str, str] | None = None) -> dict[str, Any]:
         actions,
         benchmark_promotion=benchmark_promotion,
         production_promotion=production_promotion,
+        production_config=production_config,
     )
     return {
         "report_kind": "zoe_pi_readiness_report",
         "state": state,
-        "summary": _summary(state, contract, shadow, promotion, actions, benchmark, production),
+        "summary": _summary(
+            state,
+            contract,
+            shadow,
+            promotion,
+            actions,
+            benchmark,
+            production,
+            production_config,
+        ),
         "hybrid": {
             "mode": contract.get("mode"),
             "ready": bool(contract.get("ready")),
@@ -59,6 +70,7 @@ def pi_readiness_report(env: Mapping[str, str] | None = None) -> dict[str, Any]:
         },
         "evidence": _evidence(shadow, promotion, benchmark, production),
         "benchmark": benchmark,
+        "production_hybrid": production_config,
         "production_evidence": production,
         "candidates": _candidate_details(candidate_wins),
         "blocked_decisions": _blocked_decisions(promotion),
@@ -71,6 +83,7 @@ def pi_readiness_report(env: Mapping[str, str] | None = None) -> dict[str, Any]:
             actions,
             benchmark_promotion=benchmark_promotion,
             production=production,
+            production_config=production_config,
         ),
     }
 
@@ -82,10 +95,13 @@ def _readiness_state(
     *,
     benchmark_promotion: Mapping[str, Any] | None = None,
     production_promotion: Mapping[str, Any] | None = None,
+    production_config: Mapping[str, Any] | None = None,
 ) -> str:
     rollback_groups = list(actions.get("rollback_groups") or promotion.get("rollback_groups") or [])
     promote_groups = list(actions.get("promote_groups") or promotion.get("promotable_groups") or [])
     if contract.get("blockers"):
+        return "configuration_blocked"
+    if (production_config or {}).get("enabled") and (production_config or {}).get("ignored_groups"):
         return "configuration_blocked"
     if rollback_groups:
         return "rollback_required"
@@ -94,6 +110,8 @@ def _readiness_state(
     candidate_groups = list(((promotion.get("candidate_wins") or {}).get("groups")) or [])
     benchmark_candidate_groups = list((((benchmark_promotion or {}).get("candidate_wins") or {}).get("groups")) or [])
     production_candidate_groups = list((((production_promotion or {}).get("candidate_wins") or {}).get("groups")) or [])
+    if _production_hybrid_operational(production_config or {}):
+        return "production_hybrid_operational"
     if candidate_groups or benchmark_candidate_groups or production_candidate_groups:
         return "collect_more_evidence"
     if _groups_with_blocker(promotion, "baseline_not_comparable"):
@@ -111,10 +129,12 @@ def _summary(
     actions: Mapping[str, Any],
     benchmark: Mapping[str, Any] | None = None,
     production: Mapping[str, Any] | None = None,
+    production_config: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     evidence = shadow.get("report") or {}
     benchmark = benchmark or {}
     production = production or {}
+    production_config = production_config or {}
     production_promotion = production.get("promotion_report") if isinstance(production.get("promotion_report"), Mapping) else {}
     return {
         "state": state,
@@ -128,6 +148,8 @@ def _summary(
         "promotion_ready_groups": list(promotion.get("promotable_groups") or []),
         "rollback_groups": list(actions.get("rollback_groups") or promotion.get("rollback_groups") or []),
         "requires_operator_apply": bool(actions.get("requires_operator_apply")),
+        "production_hybrid_operational": _production_hybrid_operational(production_config),
+        "production_hybrid_groups": list(production_config.get("groups") or []),
         "production_record_count": int(production.get("record_count") or 0),
         "production_accepted_count": int(production.get("accepted_count") or 0),
         "production_label_count": int(production.get("label_count") or 0),
@@ -228,8 +250,11 @@ def _next_actions(
     *,
     benchmark_promotion: Mapping[str, Any] | None = None,
     production: Mapping[str, Any] | None = None,
+    production_config: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     next_actions: list[dict[str, Any]] = []
+    production_config = production_config or {}
+    ignored_production_groups = list(production_config.get("ignored_groups") or [])
     blockers = list(contract.get("blockers") or [])
     if blockers:
         next_actions.append(
@@ -238,6 +263,18 @@ def _next_actions(
                 "priority": "p0",
                 "detail": "Resolve hybrid buffer blockers before promoting Pi routes.",
                 "blockers": blockers,
+            }
+        )
+    if production_config.get("enabled") and ignored_production_groups:
+        next_actions.append(
+            {
+                "kind": "fix_configuration",
+                "priority": "p0",
+                "detail": "Remove unsupported Pi hybrid production groups from ZOE_PI_HYBRID_PRODUCTION_GROUPS.",
+                "groups": ignored_production_groups,
+                "env": {
+                    "ZOE_PI_HYBRID_PRODUCTION_GROUPS": ",".join(production_config.get("groups") or []),
+                },
             }
         )
     rollback_groups = list(actions.get("rollback_groups") or promotion.get("rollback_groups") or [])
@@ -251,6 +288,15 @@ def _next_actions(
                 "env": dict(actions.get("env") or {}),
             }
         )
+    if state == "production_hybrid_operational":
+        next_actions.append(
+            {
+                "kind": "monitor_production_hybrid",
+                "priority": "p1",
+                "detail": "Production Pi hybrid is live for operator-approved groups; keep formal default-route promotion evidence separate.",
+                "groups": list(production_config.get("groups") or []),
+            }
+        )
     promote_groups = list(actions.get("promote_groups") or promotion.get("promotable_groups") or [])
     if promote_groups:
         next_actions.append(
@@ -262,14 +308,20 @@ def _next_actions(
                 "env": dict(actions.get("env") or {}),
             }
         )
-    shadow_evidence_actions = _evidence_collection_actions(promotion)
+    shadow_evidence_actions = _formal_promotion_actions(
+        _evidence_collection_actions(promotion),
+        operational=state == "production_hybrid_operational",
+    )
     next_actions.extend(shadow_evidence_actions)
     shadow_action_groups = {
         str(action.get("intent_group")) for action in shadow_evidence_actions if action.get("intent_group")
     }
     benchmark_evidence_actions = [
         action
-        for action in _evidence_collection_actions(benchmark_promotion or {}, source="benchmark")
+        for action in _formal_promotion_actions(
+            _evidence_collection_actions(benchmark_promotion or {}, source="benchmark"),
+            operational=state == "production_hybrid_operational",
+        )
         if str(action.get("intent_group")) not in shadow_action_groups
     ]
     next_actions.extend(benchmark_evidence_actions)
@@ -279,7 +331,10 @@ def _next_actions(
     production_promotion = (production or {}).get("promotion_report") if isinstance((production or {}).get("promotion_report"), Mapping) else {}
     next_actions.extend(
         action
-        for action in _evidence_collection_actions(production_promotion or {}, source="production")
+        for action in _formal_promotion_actions(
+            _evidence_collection_actions(production_promotion or {}, source="production"),
+            operational=state == "production_hybrid_operational",
+        )
         if str(action.get("intent_group")) not in evidence_action_groups
     )
     baseline_groups = _groups_with_blocker(promotion, "baseline_not_comparable")
@@ -377,6 +432,50 @@ def _production_evidence_actions(production: Mapping[str, Any]) -> list[dict[str
             "groups": groups,
         }
     ]
+
+
+def _production_hybrid_config(env: Mapping[str, str]) -> dict[str, Any]:
+    requested_groups = _csv_groups(env.get("ZOE_PI_HYBRID_PRODUCTION_GROUPS") or "")
+    groups = [group for group in requested_groups if group in LOW_RISK_PI_INTENT_GROUPS]
+    ignored_groups = [group for group in requested_groups if group not in LOW_RISK_PI_INTENT_GROUPS]
+    enabled = _env_bool(env.get("ZOE_PI_HYBRID_PRODUCTION_ENABLED"), default=False)
+    return {
+        "enabled": enabled,
+        "groups": groups,
+        "ignored_groups": ignored_groups,
+        "operational": bool(enabled and groups and not ignored_groups),
+        "route": "pi_intent_buffer_plus_zoe_safe_fulfillment",
+    }
+
+
+def _production_hybrid_operational(config: Mapping[str, Any]) -> bool:
+    return bool(config.get("operational"))
+
+
+def _csv_groups(value: str) -> list[str]:
+    seen: set[str] = set()
+    groups: list[str] = []
+    for item in str(value or "").split(","):
+        group = item.strip()
+        if not group or group in seen:
+            continue
+        seen.add(group)
+        groups.append(group)
+    return groups
+
+
+def _formal_promotion_actions(actions: list[dict[str, Any]], *, operational: bool) -> list[dict[str, Any]]:
+    if not operational:
+        return actions
+    adjusted: list[dict[str, Any]] = []
+    for action in actions:
+        item = dict(action)
+        if item.get("kind") == "collect_labeled_evidence":
+            item["priority"] = "p2"
+            detail = str(item.get("detail") or "")
+            item["detail"] = detail.replace(" before promotion.", " before formal default-route promotion.")
+        adjusted.append(item)
+    return adjusted
 
 
 def _load_production_evidence(env: Mapping[str, str]) -> dict[str, Any]:
