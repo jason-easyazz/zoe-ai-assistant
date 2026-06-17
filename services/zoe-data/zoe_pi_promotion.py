@@ -38,7 +38,7 @@ PRIVILEGED_INTENTS = {
 EVAL_SOURCES = {"synthetic", "intent_miss", "chat_log", "voice_log", "known_failure"}
 # Sources counted as real/log-derived promotion evidence. Synthetic cases remain
 # useful smoke tests, but should be visible separately in promotion reports.
-REAL_PROMOTION_EVIDENCE_SOURCES = {"intent_miss", "chat_log", "voice_log", "known_failure", "pi_intent_shadow"}
+REAL_PROMOTION_EVIDENCE_SOURCES = {"intent_miss", "chat_log", "voice_log", "known_failure", "pi_intent_shadow", "pi_hybrid_production"}
 ROUTE_CLASSES = {"deterministic", "fallback", "extraction_failed"}
 PI_TRANSPORTS = {"print", "rpc"}
 DECISION_STATES = {"promote", "keep_shadow", "rollback", "blocked"}

@@ -15,7 +15,7 @@ from collections import deque
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from zoe_pi_promotion import intent_group_for_intent
+from zoe_pi_promotion import PiRouteSample, intent_group_for_intent
 
 _DEFAULT_MISS_PATH = "~/.zoe/data/pi-intent-miss-evidence.jsonl"
 _DEFAULT_PRODUCTION_PATH = "~/.zoe/data/pi-hybrid-production-evidence.jsonl"
@@ -233,6 +233,72 @@ def append_pi_hybrid_production_label(
     }
 
 
+def production_records_to_route_samples(records: Sequence[Mapping[str, Any]]) -> list[PiRouteSample]:
+    """Convert reviewed production Pi hybrid evidence into promotion samples.
+
+    Only positive reviewed labels can become promotion samples. Negative labels
+    are useful review evidence, but PiRouteSample is scoped to allowlisted intent
+    groups rather than open chat/no-intent cases.
+    """
+    samples: list[PiRouteSample] = []
+    for index, record in enumerate(records):
+        expected_intent = _optional_str(record.get("outcome_label"))
+        intent_group = intent_group_for_intent(expected_intent)
+        if not expected_intent or not intent_group:
+            continue
+        zoe_latency_ms = _float_or_none(record.get("zoe_latency_ms"))
+        pi_latency_ms = _float_or_none(record.get("pi_latency_ms"))
+        if zoe_latency_ms is None or pi_latency_ms is None:
+            continue
+        route_class = _optional_str(record.get("route_class")) or "fallback"
+        baseline_kind, baseline_comparable = _production_baseline_metadata(record, route_class=route_class)
+        try:
+            samples.append(
+                PiRouteSample(
+                    case_id=_optional_str(record.get("text_hash")) or f"pi_hybrid_production_{index}",
+                    intent_group=intent_group,
+                    expected_intent=expected_intent,
+                    zoe_intent=_optional_str(record.get("zoe_intent")),
+                    pi_intent=_optional_str(record.get("pi_intent")),
+                    zoe_latency_ms=zoe_latency_ms,
+                    pi_latency_ms=pi_latency_ms,
+                    pi_confidence=_float_or_none(record.get("pi_confidence")) or 0.0,
+                    pi_transport=_optional_str(record.get("pi_transport")) or "rpc",
+                    route_class=route_class,
+                    timed_out=_bool_record_value(record.get("safe_fulfillment_timed_out"))
+                    or _optional_str(record.get("reason")) == "timeout",
+                    user_corrected=_bool_record_value(record.get("user_corrected")),
+                    rollback_blocked=_bool_record_value(record.get("rollback_blocked")),
+                    metadata={
+                        "source": "pi_hybrid_production",
+                        "text_hash": _optional_str(record.get("text_hash")) or "",
+                        "baseline_kind": baseline_kind,
+                        "baseline_comparable": baseline_comparable,
+                        "safe_fulfillment_latency_ms": _float_or_none(record.get("safe_fulfillment_latency_ms")),
+                        "production_route_change": _bool_record_value(record.get("production_route_change")),
+                        "accepted": _bool_record_value(record.get("accepted")),
+                        "outcome_label_source": _optional_str(record.get("outcome_label_source")),
+                    },
+                )
+            )
+        except (TypeError, ValueError):
+            continue
+    return samples
+
+
+def _production_baseline_metadata(record: Mapping[str, Any], *, route_class: str) -> tuple[str, bool]:
+    baseline_kind = _optional_str(record.get("baseline_kind"))
+    if not baseline_kind:
+        baseline_kind = "router" if route_class == "deterministic" else "router_only_not_comparable"
+    if record.get("baseline_comparable") is not None:
+        baseline_comparable = _bool_record_value(record.get("baseline_comparable"))
+    else:
+        baseline_comparable = baseline_kind not in {
+            "router_only_not_comparable",
+            "router_extraction_failed_not_comparable",
+        }
+    return baseline_kind, baseline_comparable
+
 def _production_label_from_row(row: Mapping[str, Any]) -> dict[str, Any]:
     label: dict[str, Any] = {}
     negative = _bool_record_value(row.get("negative"))
@@ -345,6 +411,7 @@ __all__ = [
     "has_secret_evidence_text",
     "load_pi_hybrid_production_labels",
     "load_pi_hybrid_production_records",
+    "production_records_to_route_samples",
     "record_intent_miss_evidence",
     "record_pi_hybrid_production_evidence",
     "sanitize_evidence_text",

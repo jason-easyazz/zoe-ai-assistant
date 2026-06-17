@@ -419,7 +419,11 @@ def test_readiness_report_surfaces_production_evidence_summary(tmp_path):
     assert report["summary"]["production_unlabeled_count"] == 2
     assert report["summary"]["production_groups"] == ["daily_briefing", "weather"]
     assert report["evidence"]["production_record_count_by_group"] == {"daily_briefing": 1, "weather": 2}
-    assert report["production_evidence"] == {
+    assert report["evidence"]["production_sample_count"] == 0
+    assert report["production_evidence"]["promotion_report"]["sample_count"] == 0
+    production_evidence = dict(report["production_evidence"])
+    production_evidence.pop("promotion_report")
+    assert production_evidence == {
         "enabled": True,
         "loaded": True,
         "path": str(production_path),
@@ -596,6 +600,93 @@ def test_readiness_report_applies_production_label_sidecar(tmp_path):
         "production_label_sidecar"
     }
     assert not [action for action in report["next_actions"] if action.get("kind") == "label_production_evidence"]
+
+
+def test_readiness_report_scores_labeled_production_evidence_conservatively(tmp_path):
+    shadow_path = tmp_path / "shadow.jsonl"
+    shadow_path.write_text("", encoding="utf-8")
+    production_path = tmp_path / "production.jsonl"
+    labels_path = tmp_path / "production-labels.jsonl"
+    production_path.write_text(
+        "".join(
+            json.dumps(row) + "\n"
+            for row in [
+                {
+                    "ts": 1.0,
+                    "source": "pi_hybrid_production",
+                    "text_hash": "weather-hash",
+                    "accepted": True,
+                    "reason": "accepted",
+                    "intent": "weather",
+                    "intent_group": "weather",
+                    "pi_intent": "weather",
+                    "zoe_intent": "weather",
+                    "route_class": "deterministic",
+                    "baseline_kind": "router",
+                    "zoe_latency_ms": 1.0,
+                    "pi_latency_ms": 4100.0,
+                    "safe_fulfillment_latency_ms": 900.0,
+                    "production_route_change": True,
+                    "text_preview": "will it rain later",
+                    "outcome_label": None,
+                },
+                {
+                    "ts": 2.0,
+                    "source": "pi_hybrid_production",
+                    "text_hash": "briefing-hash",
+                    "accepted": True,
+                    "reason": "accepted",
+                    "intent": "daily_briefing",
+                    "intent_group": "daily_briefing",
+                    "pi_intent": "daily_briefing",
+                    "route_class": "fallback",
+                    "baseline_kind": "router_only_not_comparable",
+                    "zoe_latency_ms": 1.0,
+                    "pi_latency_ms": 2200.0,
+                    "safe_fulfillment_latency_ms": 1100.0,
+                    "production_route_change": True,
+                    "text_preview": "give me my daily briefing",
+                    "outcome_label": None,
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+    labels_path.write_text(
+        "".join(
+            json.dumps(row) + "\n"
+            for row in [
+                {"text_hash": "weather-hash", "outcome_label": "weather", "source": "admin_review"},
+                {"text_hash": "briefing-hash", "outcome_label": "daily_briefing", "source": "admin_review"},
+            ]
+        ),
+        encoding="utf-8",
+    )
+    env = _env(tmp_path, shadow_path)
+    env["ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_ENABLED"] = "true"
+    env["ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_PATH"] = str(production_path)
+    env["ZOE_PI_HYBRID_PRODUCTION_LABELS_PATH"] = str(labels_path)
+
+    report = pi_readiness_report(env)
+
+    production_report = report["production_evidence"]["promotion_report"]
+    assert production_report["sample_count"] == 2
+    assert report["evidence"]["production_sample_count"] == 2
+    assert report["evidence"]["production_real_source_sample_count_by_group"]["weather"] == 1
+    assert report["evidence"]["production_real_source_sample_count_by_group"]["daily_briefing"] == 1
+    weather_decision = [
+        item for item in production_report["decisions"] if item["intent_group"] == "weather"
+    ][0]
+    assert weather_decision["sample_count"] == 1
+    assert weather_decision["zoe_accuracy"] == 1.0
+    assert weather_decision["pi_accuracy"] == 1.0
+    assert "latency_not_faster_than_zoe" in weather_decision["blockers"]
+    briefing_decision = [
+        item for item in production_report["decisions"] if item["intent_group"] == "daily_briefing"
+    ][0]
+    assert "baseline_not_comparable" in briefing_decision["blockers"]
+    assert report["summary"]["production_candidate_win_groups"] == []
+
 
 
 def test_readiness_report_surfaces_production_label_file_error(tmp_path):

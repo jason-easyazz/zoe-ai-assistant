@@ -9,9 +9,13 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from pi_hybrid_buffer import pi_hybrid_buffer_status
-from pi_intent_evidence import apply_pi_hybrid_production_labels, load_pi_hybrid_production_labels
+from pi_intent_evidence import (
+    apply_pi_hybrid_production_labels,
+    load_pi_hybrid_production_labels,
+    production_records_to_route_samples,
+)
 from pi_intent_shadow import pi_intent_shadow_status
-from zoe_pi_promotion import LOW_RISK_PI_INTENT_GROUPS
+from zoe_pi_promotion import LOW_RISK_PI_INTENT_GROUPS, summarize_pi_promotion
 
 DEFAULT_EVAL_REPORT_PATH = "~/.zoe/data/pi-promotion-eval-report.json"
 DEFAULT_PRODUCTION_EVIDENCE_PATH = "~/.zoe/data/pi-hybrid-production-evidence.jsonl"
@@ -30,8 +34,18 @@ def pi_readiness_report(env: Mapping[str, str] | None = None) -> dict[str, Any]:
     benchmark_promotion = benchmark.get("promotion_report") or {}
     contract = hybrid.get("contract") or {}
     actions = promotion.get("promotion_actions") or {}
-    candidate_wins = _combined_candidate_wins(promotion, benchmark_promotion)
-    state = _readiness_state(contract, promotion, actions, benchmark_promotion=benchmark_promotion)
+    production_promotion = production.get("promotion_report") if isinstance(production.get("promotion_report"), Mapping) else {}
+    candidate_wins = _combined_candidate_wins(
+        promotion,
+        _combined_promotion_reports(benchmark_promotion, production_promotion),
+    )
+    state = _readiness_state(
+        contract,
+        promotion,
+        actions,
+        benchmark_promotion=benchmark_promotion,
+        production_promotion=production_promotion,
+    )
     return {
         "report_kind": "zoe_pi_readiness_report",
         "state": state,
@@ -67,6 +81,7 @@ def _readiness_state(
     actions: Mapping[str, Any],
     *,
     benchmark_promotion: Mapping[str, Any] | None = None,
+    production_promotion: Mapping[str, Any] | None = None,
 ) -> str:
     rollback_groups = list(actions.get("rollback_groups") or promotion.get("rollback_groups") or [])
     promote_groups = list(actions.get("promote_groups") or promotion.get("promotable_groups") or [])
@@ -78,7 +93,8 @@ def _readiness_state(
         return "promotion_apply_ready"
     candidate_groups = list(((promotion.get("candidate_wins") or {}).get("groups")) or [])
     benchmark_candidate_groups = list((((benchmark_promotion or {}).get("candidate_wins") or {}).get("groups")) or [])
-    if candidate_groups or benchmark_candidate_groups:
+    production_candidate_groups = list((((production_promotion or {}).get("candidate_wins") or {}).get("groups")) or [])
+    if candidate_groups or benchmark_candidate_groups or production_candidate_groups:
         return "collect_more_evidence"
     if _groups_with_blocker(promotion, "baseline_not_comparable"):
         return "measure_comparable_baseline"
@@ -99,6 +115,7 @@ def _summary(
     evidence = shadow.get("report") or {}
     benchmark = benchmark or {}
     production = production or {}
+    production_promotion = production.get("promotion_report") if isinstance(production.get("promotion_report"), Mapping) else {}
     return {
         "state": state,
         "mode": contract.get("mode"),
@@ -107,6 +124,7 @@ def _summary(
         "labeled_sample_count": int(evidence.get("labeled_sample_count") or 0),
         "candidate_win_groups": list(((promotion.get("candidate_wins") or {}).get("groups")) or []),
         "benchmark_candidate_win_groups": list(((benchmark.get("candidate_wins") or {}).get("groups")) or []),
+        "production_candidate_win_groups": list(((production_promotion.get("candidate_wins") or {}).get("groups")) or []),
         "promotion_ready_groups": list(promotion.get("promotable_groups") or []),
         "rollback_groups": list(actions.get("rollback_groups") or promotion.get("rollback_groups") or []),
         "requires_operator_apply": bool(actions.get("requires_operator_apply")),
@@ -128,6 +146,7 @@ def _evidence(
     source = promotion.get("source_breakdown") or {}
     benchmark = benchmark or {}
     production = production or {}
+    production_promotion = production.get("promotion_report") if isinstance(production.get("promotion_report"), Mapping) else {}
     return {
         "record_count_window": shadow.get("record_count_window"),
         "raw_record_count_window": shadow.get("raw_record_count_window"),
@@ -145,6 +164,10 @@ def _evidence(
         "production_accepted_count": int(production.get("accepted_count") or 0),
         "production_label_count": int(production.get("label_count") or 0),
         "production_unlabeled_count": int(production.get("unlabeled_count") or 0),
+        "production_sample_count": int((production_promotion or {}).get("sample_count") or 0),
+        "production_real_source_sample_count_by_group": dict(
+            ((production_promotion.get("source_breakdown") or {}).get("real_source_sample_count_by_group") or {})
+        ),
         "production_record_count_by_group": {
             group: int(stats.get("record_count") or 0)
             for group, stats in (production.get("by_group") or {}).items()
@@ -244,10 +267,20 @@ def _next_actions(
     shadow_action_groups = {
         str(action.get("intent_group")) for action in shadow_evidence_actions if action.get("intent_group")
     }
-    next_actions.extend(
+    benchmark_evidence_actions = [
         action
         for action in _evidence_collection_actions(benchmark_promotion or {}, source="benchmark")
         if str(action.get("intent_group")) not in shadow_action_groups
+    ]
+    next_actions.extend(benchmark_evidence_actions)
+    evidence_action_groups = shadow_action_groups | {
+        str(action.get("intent_group")) for action in benchmark_evidence_actions if action.get("intent_group")
+    }
+    production_promotion = (production or {}).get("promotion_report") if isinstance((production or {}).get("promotion_report"), Mapping) else {}
+    next_actions.extend(
+        action
+        for action in _evidence_collection_actions(production_promotion or {}, source="production")
+        if str(action.get("intent_group")) not in evidence_action_groups
     )
     baseline_groups = _groups_with_blocker(promotion, "baseline_not_comparable")
     benchmark_groups = _benchmark_candidate_groups(benchmark_promotion)
@@ -404,7 +437,9 @@ def _load_production_evidence(env: Mapping[str, str]) -> dict[str, Any]:
         labels = {}
         label_error = exc.__class__.__name__
     labeled_records = apply_pi_hybrid_production_labels(records, labels)
+    samples = production_records_to_route_samples(labeled_records)
     summary = _summarize_production_records(labeled_records)
+    promotion_report = summarize_pi_promotion(samples)
     result = {
         "enabled": enabled,
         "loaded": True,
@@ -412,6 +447,7 @@ def _load_production_evidence(env: Mapping[str, str]) -> dict[str, Any]:
         "labels_path": str(labels_path) if labels_path else None,
         "label_count": len(labels),
         "invalid_lines": invalid_lines,
+        "promotion_report": promotion_report,
         **summary,
     }
     if label_error:
@@ -579,6 +615,25 @@ def _combined_candidate_wins(
     groups = sorted({str(item.get("intent_group")) for item in details if isinstance(item, Mapping) and item.get("intent_group")})
     return {**primary, "details": details, "groups": groups}
 
+
+def _combined_promotion_reports(
+    primary: Mapping[str, Any] | None, secondary: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    primary = primary or {}
+    secondary = secondary or {}
+    if not primary:
+        return dict(secondary)
+    if not secondary:
+        return dict(primary)
+    primary_candidate = primary.get("candidate_wins") if isinstance(primary.get("candidate_wins"), Mapping) else {}
+    secondary_candidate = secondary.get("candidate_wins") if isinstance(secondary.get("candidate_wins"), Mapping) else {}
+    return {
+        **primary,
+        "candidate_wins": _combined_candidate_wins(
+            {"candidate_wins": primary_candidate},
+            {"candidate_wins": secondary_candidate},
+        ),
+    }
 
 def _benchmark_candidate_groups(benchmark_promotion: Mapping[str, Any] | None) -> list[str]:
     return list((((benchmark_promotion or {}).get("candidate_wins") or {}).get("groups")) or [])
