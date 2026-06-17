@@ -8,6 +8,7 @@ from intent_router import detect_intent
 from pi_intent_evidence import (
     append_pi_hybrid_production_label,
     apply_pi_hybrid_production_labels,
+    build_pi_hybrid_production_label_queue,
     load_pi_hybrid_production_labels,
     production_records_to_route_samples,
     record_intent_miss_evidence,
@@ -148,6 +149,98 @@ def test_record_pi_hybrid_production_evidence_writes_compact_sanitized_jsonl(tmp
     assert saved["enabled_groups"] == ["weather"]
     assert saved["outcome_label"] is None
     assert "Jason Smith" not in path.read_text(encoding="utf-8")
+
+
+
+
+def test_build_pi_hybrid_production_label_queue_prioritizes_unlabeled_accepted_records():
+    payload = build_pi_hybrid_production_label_queue(
+        [
+            {
+                "ts": 1,
+                "text_hash": "weather-old",
+                "text_preview": "old rain",
+                "accepted": True,
+                "intent": "weather",
+                "intent_group": "weather",
+                "pi_intent": "weather",
+                "pi_latency_ms": 500.0,
+                "safe_fulfillment_latency_ms": 50.0,
+                "outcome_label": None,
+            },
+            {
+                "ts": 2,
+                "text_hash": "weather-old",
+                "text_preview": "new rain",
+                "accepted": True,
+                "intent": "weather",
+                "intent_group": "weather",
+                "pi_intent": "weather",
+                "route_class": "deterministic",
+                "baseline_kind": "router",
+                "baseline_comparable": True,
+                "zoe_latency_ms": 10.0,
+                "pi_latency_ms": 120.0,
+                "safe_fulfillment_latency_ms": 45.0,
+                "production_route_change": True,
+                "outcome_label": None,
+            },
+            {
+                "ts": 3,
+                "text_hash": "briefing",
+                "text_preview": "daily briefing",
+                "accepted": True,
+                "intent": "daily_briefing",
+                "intent_group": "daily_briefing",
+                "pi_intent": "daily_briefing",
+                "outcome_label": "daily_briefing",
+            },
+            {
+                "ts": 4,
+                "text_hash": "timeout",
+                "text_preview": "weather tomorrow",
+                "accepted": False,
+                "reason": "timeout",
+                "intent_group": "weather",
+            },
+        ],
+        limit=10,
+    )
+
+    assert payload["summary"]["raw_record_count"] == 4
+    assert payload["summary"]["unique_text_count"] == 3
+    assert payload["summary"]["skipped_labeled_count"] == 1
+    assert payload["summary"]["skipped_rejected_count"] == 1
+    assert payload["summary"]["queue_count_by_group"] == {"weather": 1}
+    assert len(payload["queue"]) == 1
+    row = payload["queue"][0]
+    assert row["text_hash"] == "weather-old"
+    assert row["text_preview"] == "new rain"
+    assert row["suggested_outcome_label"] == "weather"
+    assert row["label_example"] == {
+        "text_hash": "weather-old",
+        "source": "admin_review",
+        "outcome_label": "weather",
+        "route_class": "deterministic",
+        "baseline_kind": "router",
+        "baseline_comparable": True,
+        "zoe_latency_ms": 10.0,
+    }
+
+
+def test_build_pi_hybrid_production_label_queue_filters_groups_and_rejected():
+    records = [
+        {"text_hash": "weather", "accepted": True, "intent": "weather", "intent_group": "weather"},
+        {"text_hash": "briefing", "accepted": True, "intent": "daily_briefing", "intent_group": "daily_briefing"},
+        {"text_hash": "chat", "accepted": False, "reason": "pi_disagreed", "intent_group": "weather"},
+    ]
+
+    payload = build_pi_hybrid_production_label_queue(records, groups=["daily_briefing"], include_rejected=True)
+
+    assert [row["text_hash"] for row in payload["queue"]] == ["briefing"]
+    assert payload["summary"]["skipped_group_count"] == 2
+    with pytest.raises(ValueError, match="unsupported production label group"):
+        build_pi_hybrid_production_label_queue(records, groups=["self_evolution"])
 
 
 def test_pi_hybrid_production_label_sidecar_applies_latest_valid_label(tmp_path):
