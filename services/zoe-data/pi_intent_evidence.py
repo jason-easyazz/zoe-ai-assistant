@@ -66,7 +66,8 @@ def record_pi_hybrid_production_evidence(
     values = env if env is not None else os.environ
     if not _env_bool(values.get("ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_ENABLED"), default=False):
         return None
-    if has_secret_evidence_text(text):
+    preview = sanitize_evidence_text(text)
+    if not preview or has_secret_evidence_text(text) or _SECRET_TEXT_RE.search(preview):
         return None
 
     lab = decision.get("lab_result") if isinstance(decision.get("lab_result"), Mapping) else {}
