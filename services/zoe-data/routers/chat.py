@@ -475,6 +475,90 @@ _FRUSTRATION_WINDOW_S = 1800  # 30 minute session window
 _FRUSTRATION_THRESHOLD = 3    # same message N times = frustration signal
 
 
+def _chat_pi_context_turns(context: object | None) -> str:
+    if context is None:
+        return ""
+    last_text = str(getattr(context, "last_text", "") or "").strip()
+    last_intent = str(getattr(context, "last_intent", "") or "").strip()
+    if not last_text:
+        return ""
+    return f"previous={last_text!r}; previous_intent={last_intent}"
+
+
+async def _run_chat_pi_hybrid_lane(
+    message_for_processing: str,
+    *,
+    user_id: str,
+    session_id: str,
+    context: object | None = None,
+    request_text: str | None = None,
+    run_id: str | None = None,
+    record_run_state: bool = False,
+) -> dict:
+    """Run the production Pi hybrid lane once and persist accepted chat output."""
+    try:
+        from pi_hybrid_production import (
+            PiHybridProductionConfig,
+            pi_hybrid_production_eligible,
+            processing_cue_packet,
+            try_pi_hybrid_production,
+        )
+
+        config = PiHybridProductionConfig.from_env()
+        eligible, reason = pi_hybrid_production_eligible(message_for_processing, config=config)
+        if not eligible:
+            if config.enabled:
+                logger.debug("Pi hybrid production skipped: %s", reason)
+            return {"attempted": False, "reason": reason, "config_enabled": config.enabled}
+
+        cue = await processing_cue_packet()
+        decision = await try_pi_hybrid_production(
+            message_for_processing,
+            user_id=user_id,
+            context_turns=_chat_pi_context_turns(context),
+            config=config,
+        )
+        response_text = str(decision.get("response_text") or "")
+        accepted = bool(decision.get("accepted") and response_text)
+        payload = {"attempted": True, "cue": cue, "decision": decision, "accepted": accepted, "response_text": response_text}
+        if not accepted:
+            return payload
+
+        asyncio.ensure_future(chat_inject_background(
+            message_for_processing,
+            response_text,
+            str(decision.get("intent") or "pi_hybrid"),
+            user_id,
+            session_id,
+        ))
+        asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, response_text))
+        await _save_chat_message(session_id, "assistant", response_text)
+        if record_run_state:
+            active_run_id = run_id or new_run_ids()[0]
+            await _record_run_state(
+                active_run_id,
+                session_id,
+                user_id,
+                mode="chat",
+                status="completed",
+                request_text=request_text or message_for_processing,
+                response_text=response_text,
+                metadata={
+                    "pi_hybrid": {
+                        "accepted": True,
+                        "reason": decision.get("reason"),
+                        "intent": decision.get("intent"),
+                        "intent_group": decision.get("intent_group"),
+                        "agreement_kind": decision.get("agreement_kind"),
+                    }
+                },
+            )
+        return payload
+    except Exception as exc:
+        logger.debug("Pi hybrid production path failed open to Zoe route: %s", exc)
+        return {"attempted": False, "reason": "exception", "error": exc.__class__.__name__}
+
+
 def _normalize_for_frustration(text: str) -> str:
     """Strip punctuation and lowercase for cosine similarity comparison."""
     return re.sub(r'[^\w\s]', '', text.lower().strip())
@@ -1764,6 +1848,55 @@ async def chat_stream_generator(
             use_intent_fast_path = False
 
         _chat_ctx = _CHAT_CONTEXTS.get(session_id) or _CC()
+        if use_intent_fast_path:
+            _pi_hybrid = await _run_chat_pi_hybrid_lane(
+                message_for_processing,
+                user_id=user_id,
+                session_id=session_id,
+                context=_chat_ctx,
+                request_text=message,
+                run_id=run_id,
+                record_run_state=True,
+            )
+            if _pi_hybrid.get("attempted"):
+                _pi_cue = _pi_hybrid.get("cue") or {}
+                if _pi_cue.get("available"):
+                    yield emit(CustomEvent(name="zoe.pi_hybrid_cue", value={
+                        "text": _pi_cue.get("text") or "",
+                        "event": _pi_cue.get("event"),
+                        "source": "pi_hybrid_production",
+                    }))
+                yield emit(StateSnapshotEvent(
+                    type=EventType.STATE_SNAPSHOT,
+                    snapshot={
+                        "status": "generating",
+                        "phase": "pi_hybrid",
+                        "model": "Zoe Pi Hybrid",
+                        "detail": _pi_cue.get("text") or "Checking...",
+                    },
+                ))
+                _pi_decision = _pi_hybrid.get("decision") or {}
+                yield emit(CustomEvent(name="zoe.pi_hybrid_decision", value={
+                    "accepted": _pi_decision.get("accepted"),
+                    "reason": _pi_decision.get("reason"),
+                    "intent": _pi_decision.get("intent"),
+                    "intent_group": _pi_decision.get("intent_group"),
+                    "agreement_kind": _pi_decision.get("agreement_kind"),
+                    "production_route_change": _pi_decision.get("production_route_change"),
+                    "lab_result": _pi_decision.get("lab_result"),
+                }))
+                if _pi_hybrid.get("accepted"):
+                    response_text = str(_pi_hybrid.get("response_text") or "")
+                    yield emit(TextMessageStartEvent(
+                        type=EventType.TEXT_MESSAGE_START,
+                        message_id=assistant_message_id,
+                        role="assistant",
+                    ))
+                    async for line in iter_text_message_chunks(enc, recorder, assistant_message_id, response_text):
+                        yield line
+                    yield emit(TextMessageEndEvent(type=EventType.TEXT_MESSAGE_END, message_id=assistant_message_id))
+                    yield emit(RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id=session_id, run_id=run_id))
+                    return
         intent = await detect_and_extract_intent(
             message_for_processing, user_id, context=_chat_ctx
         ) if use_intent_fast_path else None
@@ -2950,6 +3083,35 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
             message_for_processing = message_for_processing[len("/openclaw ") :].strip()
             force_openclaw = True
             use_intent_fast_path = False
+
+        if use_intent_fast_path:
+            _pi_hybrid = await _run_chat_pi_hybrid_lane(
+                message_for_processing,
+                user_id=user_id,
+                session_id=session_id,
+                context=_CHAT_CONTEXTS.get(session_id),
+                request_text=message,
+                record_run_state=True,
+            )
+            if _pi_hybrid.get("accepted"):
+                _pi_cue = _pi_hybrid.get("cue") or {}
+                _pi_decision = _pi_hybrid.get("decision") or {}
+                return {
+                    "response": _pi_hybrid.get("response_text") or "",
+                    "session_id": session_id,
+                    "processing_cue": {
+                        "available": bool(_pi_cue.get("available")),
+                        "text": _pi_cue.get("text") or "",
+                        "event": _pi_cue.get("event"),
+                    },
+                    "pi_hybrid": {
+                        "accepted": True,
+                        "reason": _pi_decision.get("reason"),
+                        "intent": _pi_decision.get("intent"),
+                        "intent_group": _pi_decision.get("intent_group"),
+                        "agreement_kind": _pi_decision.get("agreement_kind"),
+                    },
+                }
 
         intent = await detect_and_extract_intent(message_for_processing, user_id) if use_intent_fast_path else None
         # Save original message before appending voice suffix; run_zoe_agent needs the

@@ -2998,6 +2998,76 @@ async def voice_command(
     except Exception:
         pass
 
+    if not stream:
+        try:
+            from pi_hybrid_production import (
+                PiHybridProductionConfig,
+                pi_hybrid_production_eligible,
+                processing_cue_packet,
+                try_pi_hybrid_production,
+            )
+
+            _pi_hybrid_config = PiHybridProductionConfig.from_env()
+            _pi_hybrid_eligible, _pi_hybrid_reason = pi_hybrid_production_eligible(text, config=_pi_hybrid_config)
+            if _pi_hybrid_eligible:
+                _pi_cue = await processing_cue_packet()
+                _ack_text = str(_pi_cue.get("text") or "").strip()
+                if _ack_text:
+                    try:
+                        from push import broadcaster as _bc_pi_hybrid
+
+                        await _bc_pi_hybrid.broadcast("all", "voice:responding", {
+                            "panel_id": panel_id,
+                            "text": _ack_text,
+                            "processing_ack": True,
+                            "source": "pi_hybrid_production",
+                        })
+                    except Exception:
+                        pass
+                _pi_hybrid = await try_pi_hybrid_production(
+                    text,
+                    user_id=effective_user,
+                    context_turns="",
+                    config=_pi_hybrid_config,
+                )
+                if _pi_hybrid.get("accepted") and _pi_hybrid.get("response_text"):
+                    reply_text = str(_pi_hybrid.get("response_text") or "")
+                    _pi_audio = await synthesize({"text": reply_text}, caller=caller)
+                    try:
+                        from push import broadcaster as _bc_pi_done
+
+                        await _bc_pi_done.broadcast("all", "voice:responding", {
+                            "panel_id": panel_id,
+                            "text": reply_text[:200],
+                            "pi_hybrid": True,
+                        })
+                        if str(_pi_hybrid.get("intent") or "") == "weather":
+                            await _broadcast_weather_ui(panel_id, reply_text, turn_key=_turn_key)
+                        await _bc_pi_done.broadcast("all", "voice:done", {"panel_id": panel_id})
+                    except Exception:
+                        pass
+                    await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
+                    asyncio.ensure_future(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
+                    return {
+                        "ok": True,
+                        "panel_id": panel_id,
+                        "reply": reply_text,
+                        "audio_base64": base64.b64encode(_pi_audio.body).decode("ascii"),
+                        "content_type": _pi_audio.media_type,
+                        "intent": str(_pi_hybrid.get("intent") or "pi_hybrid"),
+                        "pi_hybrid": {
+                            "accepted": True,
+                            "reason": _pi_hybrid.get("reason"),
+                            "intent_group": _pi_hybrid.get("intent_group"),
+                            "agreement_kind": _pi_hybrid.get("agreement_kind"),
+                            "processing_cue": {"available": bool(_pi_cue.get("available")), "text": _ack_text},
+                        },
+                    }
+            elif _pi_hybrid_config.enabled:
+                logger.debug("voice/command Pi hybrid production skipped: %s", _pi_hybrid_reason)
+        except Exception as _pi_hybrid_exc:
+            logger.debug("voice/command Pi hybrid failed open to existing voice route: %s", _pi_hybrid_exc)
+
     # Skybridge-first touch prototype: supported visual domains render as cards
     # on the single Skybridge surface instead of navigating to domain pages.
     try:
@@ -3137,6 +3207,8 @@ async def voice_command(
                     _quick_intent = None
             except Exception:
                 pass
+
+
         if _quick_intent and _quick_intent.name == "people_introduce":
             try:
                 intro_name = (_quick_intent.slots or {}).get("name", "").strip()
