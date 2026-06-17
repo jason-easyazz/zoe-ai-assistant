@@ -22,6 +22,7 @@ from memory_metrics import REGISTRY
 PUBLIC_HOUSEHOLD_INTENTS: frozenset[str] = frozenset({
     "time_query",
     "date_query",
+    "time_planning_clarification",
     "weather",
     "recipe_search",
     "timer_create",
