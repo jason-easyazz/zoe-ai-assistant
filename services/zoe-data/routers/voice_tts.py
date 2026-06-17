@@ -1501,6 +1501,36 @@ def _contains_decision_keyword(text: str, keywords: frozenset[str]) -> bool:
     return False
 
 
+def _cap_voice_list_show_reply(text: str, *, max_items: int = 5) -> str:
+    """Keep voice list reads short while leaving non-voice list responses untouched."""
+    if max_items <= 0:
+        return text
+    lines = (text or "").splitlines()
+    if not lines:
+        return text
+    capped: list[str] = []
+    item_count = 0
+    omitted = 0
+    def flush_omitted() -> None:
+        nonlocal omitted
+        if omitted:
+            capped.append(f"And {omitted} more.")
+            omitted = 0
+
+    for line in lines:
+        if line.lstrip().startswith("- "):
+            item_count += 1
+            if item_count > max_items:
+                omitted += 1
+                continue
+        elif item_count:
+            flush_omitted()
+            item_count = 0
+        capped.append(line)
+    flush_omitted()
+    return "\n".join(capped)
+
+
 def _should_handoff_calendar(user_text: str, reply_text: str, intent_name: Optional[str] = None) -> bool:
     if intent_name in {"calendar_show", "daily_briefing", "calendar_create"}:
         return True
@@ -3032,6 +3062,8 @@ async def voice_command(
                 )
                 if _pi_hybrid.get("accepted") and _pi_hybrid.get("response_text"):
                     reply_text = str(_pi_hybrid.get("response_text") or "")
+                    if str(_pi_hybrid.get("intent") or "") == "list_show":
+                        reply_text = _cap_voice_list_show_reply(reply_text)
                     _pi_audio = await synthesize({"text": reply_text}, caller=caller)
                     try:
                         from push import broadcaster as _bc_pi_done
