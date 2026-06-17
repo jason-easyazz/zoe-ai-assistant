@@ -19,17 +19,30 @@ import type { AbilityContext, CapabilityEntry, Permission } from "../abilities/t
 const _here = dirname(fileURLToPath(import.meta.url));
 const ABILITIES_DIR = join(_here, "..", "abilities");
 
-// NOTE: userId is resolved once per process — correct for the current
-// CLI-per-session model (each `pi` run serves one user). BEFORE promoting Pi to
-// a long-running/multi-session server, CTX.userId MUST become per-turn/
-// per-session, or every caller would act on family-admin's data (a privacy bug).
-// Same cutover prerequisite tracked in memory.ts. zoeDataUrl/internalToken are
-// process-stable and fine as constants.
-const CTX: AbilityContext = {
-  zoeDataUrl: process.env.ZOE_DATA_URL ?? "http://127.0.0.1:8000",
-  internalToken: process.env.ZOE_INTERNAL_TOKEN ?? "",
-  userId: process.env.ZOE_CORE_USER_ID ?? "family-admin",
-};
+// The acting user is resolved PER TURN (not baked at module load), so a single
+// Pi process is never pinned to one identity. zoe-data drives one Pi session per
+// user-conversation and sets ZOE_CORE_USER_ID for that session; we read it fresh
+// each call. There is NO default user — if the identity is unknown, user-scoped
+// tools fail closed (below) rather than silently acting as someone else.
+function abilityContext(): AbilityContext {
+  return {
+    zoeDataUrl: process.env.ZOE_DATA_URL ?? "http://127.0.0.1:8000",
+    internalToken: process.env.ZOE_INTERNAL_TOKEN ?? "",
+    userId: (process.env.ZOE_CORE_USER_ID ?? "").trim(),
+  };
+}
+
+// A tool touches the user's data/devices if it needs anything beyond read-only/
+// network — those MUST have a known user. Pure-info tools (e.g. time/weather) do not.
+const USER_SCOPED_PERMS: Permission[] = [
+  "user-data:read",
+  "user-data:write",
+  "home-device:action",
+  "credential:access",
+];
+function needsUser(entry: CapabilityEntry): boolean {
+  return entry.permissions.some((p) => USER_SCOPED_PERMS.includes(p));
+}
 
 // Lab permission policy: reads are free; writes/device/credential/code need an
 // explicit allow (stand-in for per-action human approval — see harness kernel).
@@ -82,13 +95,23 @@ export default async function (pi: ExtensionAPI) {
       description: entry.description,
       parameters: entry.parameters,
       async execute(_toolCallId: string, params: Record<string, unknown>) {
+        const ctx = abilityContext();
+        // Fail closed: a user-scoped tool with no known acting user must NOT run
+        // (never silently act as a default identity).
+        if (needsUser(entry) && !ctx.userId) {
+          return {
+            content: [
+              { type: "text", text: "I'm not sure whose account I'd be acting on, so I can't do that safely right now." },
+            ],
+          };
+        }
         const denied = permissionDenial(entry);
         if (denied) return { content: [{ type: "text", text: denied }] };
-        if (entry.gate && !entry.gate(CTX)) {
+        if (entry.gate && !entry.gate(ctx)) {
           return { content: [{ type: "text", text: `${entry.name} is unavailable right now.` }] };
         }
         try {
-          const out = await entry.execute(params, CTX);
+          const out = await entry.execute(params, ctx);
           return { content: [{ type: "text", text: String(out) }] };
         } catch (err) {
           return { content: [{ type: "text", text: `${entry.name} failed: ${(err as Error)?.message ?? err}` }] };
