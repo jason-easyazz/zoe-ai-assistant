@@ -2453,26 +2453,19 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
 
 async def _execute_daily_briefing(user_id: str) -> Optional[str]:
     """Composite intent: weather + calendar + reminders."""
-    base = f"{MCPORTER} call"
-    cmds = {
-        "weather": f"{base} zoe-data.weather_current",
-        "calendar": f"{base} zoe-data.calendar_today",
-        "reminders": f"{base} zoe-data.reminder_list today_only=true",
-    }
-
-    results = {}
-    task_keys = list(cmds)
+    task_keys = ["weather", "calendar", "reminders"]
     task_results = await asyncio.gather(
-        *(_run_mcporter(cmds[key]) for key in task_keys),
+        _daily_briefing_weather(user_id),
+        _daily_briefing_calendar(user_id),
+        _daily_briefing_reminders(user_id),
         return_exceptions=True,
     )
 
-    for key, raw in zip(task_keys, task_results):
-        if raw and not isinstance(raw, BaseException):
-            try:
-                results[key] = json.loads(raw)
-            except json.JSONDecodeError:
-                pass
+    results = {
+        key: raw
+        for key, raw in zip(task_keys, task_results)
+        if raw and not isinstance(raw, BaseException)
+    }
 
     lines = ["Here's your day:"]
 
@@ -2498,6 +2491,69 @@ async def _execute_daily_briefing(user_id: str) -> Optional[str]:
             lines.append(f"  - {r.get('title', '?')}{suffix}")
 
     return "\n".join(lines)
+
+
+async def _daily_briefing_weather(user_id: str) -> Optional[dict]:
+    try:
+        from database import get_db
+        from routers.weather import _get_current, _resolve_location, _row_to_prefs
+
+        async for db in get_db():
+            cursor = await db.execute(
+                "SELECT * FROM weather_preferences WHERE user_id = ?",
+                [user_id],
+            )
+            prefs = _row_to_prefs(await cursor.fetchone())
+            lat, lon, city, country = _resolve_location(prefs)
+            current = await _get_current(lat, lon, city, country)
+            return {
+                "temp": current.get("temp"),
+                "city": current.get("city") or city or "your area",
+                "description": current.get("description", ""),
+            }
+    except Exception as exc:
+        logger.warning("daily briefing weather direct execution unavailable: %s", exc)
+    return None
+
+
+async def _daily_briefing_calendar(user_id: str) -> Optional[dict]:
+    try:
+        from datetime import date
+        from database import get_db_ctx
+
+        today = date.today().isoformat()
+        async with get_db_ctx() as db:
+            cursor = await db.execute(
+                "SELECT id, title, start_time, end_time, category, location FROM events"
+                " WHERE start_date = ? AND (visibility = 'family' OR user_id = ?) AND deleted = 0"
+                " ORDER BY start_time",
+                (today, user_id),
+            )
+            rows = await cursor.fetchall()
+        return {"date": today, "events": [dict(r) for r in rows]}
+    except Exception as exc:
+        logger.warning("daily briefing calendar direct execution unavailable: %s", exc)
+    return None
+
+
+async def _daily_briefing_reminders(user_id: str) -> Optional[dict]:
+    try:
+        from datetime import date
+        from database import get_db_ctx
+
+        today = date.today().isoformat()
+        async with get_db_ctx() as db:
+            cursor = await db.execute(
+                "SELECT id, title, due_date, due_time, priority, category FROM reminders"
+                " WHERE due_date = ? AND (visibility = 'family' OR user_id = ?)"
+                " AND is_active = 1 AND deleted = 0 ORDER BY due_time",
+                (today, user_id),
+            )
+            rows = await cursor.fetchall()
+        return {"reminders": [dict(r) for r in rows]}
+    except Exception as exc:
+        logger.warning("daily briefing reminder direct execution unavailable: %s", exc)
+    return None
 
 
 async def _execute_weather_direct(user_id: str, forecast: bool = False) -> Optional[str]:
