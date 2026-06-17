@@ -109,6 +109,11 @@ async def try_pi_hybrid_production(
     active_config = config or PiHybridProductionConfig.from_env(env)
     active_config.validate()
     stripped = (text or "").strip()
+
+    def _with_evidence(decision: dict[str, Any]) -> dict[str, Any]:
+        _record_production_evidence(stripped, user_id=user_id, decision=decision, env=env)
+        return decision
+
     base = {
         "report_kind": "zoe_pi_hybrid_production_decision",
         "config": active_config.to_dict(),
@@ -122,13 +127,13 @@ async def try_pi_hybrid_production(
     eligible, reason = pi_hybrid_production_eligible(stripped, config=active_config)
     if not eligible:
         base["reason"] = reason
-        return base
+        return _with_evidence(base)
 
     pressure = await _resource_pressure(active_config)
     if pressure:
         base["reason"] = "resource_pressure"
         base["resource"] = pressure
-        return base
+        return _with_evidence(base)
 
     try:
         result = await asyncio.wait_for(
@@ -150,25 +155,25 @@ async def try_pi_hybrid_production(
         )
     except asyncio.TimeoutError:
         base["reason"] = "timeout"
-        return base
+        return _with_evidence(base)
     except ValueError as exc:
         base["reason"] = "validation_error"
         base["error"] = str(exc)
-        return base
+        return _with_evidence(base)
     except Exception as exc:  # pragma: no cover - production guard must fall back closed
         base["reason"] = "exception"
         base["error"] = exc.__class__.__name__
-        return base
+        return _with_evidence(base)
 
     decision = _acceptance_decision(result, active_config)
     response_text = str(decision.get("response_text") or "")
-    return {
+    return _with_evidence({
         **base,
         **decision,
         "response_text": response_text,
         "production_route_change": bool(decision.get("accepted")),
         "lab_result": _compact_lab_result(result),
-    }
+    })
 
 
 def pi_hybrid_production_eligible(text: str, *, config: PiHybridProductionConfig | None = None) -> tuple[bool, str]:
@@ -389,6 +394,21 @@ def _optional_str(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _record_production_evidence(
+    text: str,
+    *,
+    user_id: str,
+    decision: Mapping[str, Any],
+    env: Mapping[str, str] | None,
+) -> None:
+    try:
+        from pi_intent_evidence import record_pi_hybrid_production_evidence
+
+        record_pi_hybrid_production_evidence(text, user_id=user_id, decision=decision, env=env)
+    except Exception:
+        return
 
 
 __all__ = [
