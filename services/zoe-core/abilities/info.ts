@@ -5,7 +5,7 @@
  * time/date answer locally; weather calls zoe-data. Copy this shape for
  * calendar, lists, notes, people, media, home, etc.
  */
-import { Type } from "typebox";
+import { Type } from "@sinclair/typebox";
 import type { CapabilityEntry } from "./types";
 
 const info: CapabilityEntry = {

@@ -19,6 +19,12 @@ import type { AbilityContext, CapabilityEntry, Permission } from "../abilities/t
 const _here = dirname(fileURLToPath(import.meta.url));
 const ABILITIES_DIR = join(_here, "..", "abilities");
 
+// NOTE: userId is resolved once per process — correct for the current
+// CLI-per-session model (each `pi` run serves one user). BEFORE promoting Pi to
+// a long-running/multi-session server, CTX.userId MUST become per-turn/
+// per-session, or every caller would act on family-admin's data (a privacy bug).
+// Same cutover prerequisite tracked in memory.ts. zoeDataUrl/internalToken are
+// process-stable and fine as constants.
 const CTX: AbilityContext = {
   zoeDataUrl: process.env.ZOE_DATA_URL ?? "http://127.0.0.1:8000",
   internalToken: process.env.ZOE_INTERNAL_TOKEN ?? "",
@@ -95,10 +101,25 @@ export default async function (pi: ExtensionAPI) {
   pi.on("before_agent_start", async (event) => {
     const msg = String((event as { prompt?: unknown })?.prompt ?? "").toLowerCase();
     const active = abilities.filter((a) => isRelevant(a, msg)).map((a) => a.name);
+    const setActiveTools = (pi as { setActiveTools?: (names: string[]) => void }).setActiveTools;
+    if (typeof setActiveTools !== "function") {
+      // Observability: if the Pi build lacks setActiveTools, progressive
+      // disclosure is a no-op (ALL tools stay active) — surface it once so a
+      // 2B model getting drowned in tools is diagnosable, not silent.
+      if (!(globalThis as Record<string, unknown>).__zoeAbilitiesDisclosureWarned) {
+        (globalThis as Record<string, unknown>).__zoeAbilitiesDisclosureWarned = true;
+        console.warn(
+          "[zoe-core/abilities] setActiveTools unavailable — progressive disclosure disabled; all tools stay active.",
+        );
+      }
+      return;
+    }
     try {
-      (pi as { setActiveTools?: (names: string[]) => void }).setActiveTools?.(active);
-    } catch {
-      /* setActiveTools is best-effort; if unavailable, all registered tools stay active */
+      setActiveTools(active);
+    } catch (err) {
+      console.warn(
+        `[zoe-core/abilities] setActiveTools failed (${active.length} tools intended): ${(err as Error)?.message ?? err}`,
+      );
     }
   });
 }
