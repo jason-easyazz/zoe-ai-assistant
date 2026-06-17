@@ -463,6 +463,8 @@ def _acceptance_decision(result: Mapping[str, Any], config: PiHybridProductionCo
         agreement_kind = "zoe_router"
     elif speculative_state == "used" and safe.get("validated_by_pi"):
         agreement_kind = "intent_buffer_hint"
+    elif intent in SAFE_ACTION_FORM_INTENTS and safe.get("validated_by_pi"):
+        agreement_kind = "pi_validated_action_form"
     elif not config.require_agreement:
         agreement_kind = "pi_only"
     else:

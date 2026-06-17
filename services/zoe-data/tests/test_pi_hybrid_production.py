@@ -579,6 +579,37 @@ async def test_try_pi_hybrid_records_rejected_production_evidence_when_enabled(t
 
 
 @pytest.mark.asyncio
+async def test_try_pi_hybrid_accepts_pi_validated_timer_action_form_when_router_misses(monkeypatch):
+    _install_prefilter(monkeypatch)
+
+    async def fake_compare(text, **kwargs):
+        result = _accepted_lab_result(intent="timer_create", response="Timer is ready to confirm.", router_intent=None)
+        result["zoe_router"] = {"intent": None, "route_class": "fallback", "baseline_kind": "router_only_not_comparable"}
+        result["safe_fulfillment"]["validated_by_pi"] = True
+        result["safe_fulfillment"]["execution_scope"] = "action_form_prefill"
+        result["safe_fulfillment"]["would_execute"] = False
+        result["safe_fulfillment"]["action_form"] = {
+            "component": "timer_create_form",
+            "prefill": {"duration": "ten minute"},
+        }
+        return result
+
+    monkeypatch.setattr(pi_hybrid_production, "compare_pi_intent_lab", fake_compare)
+    monkeypatch.setattr(pi_hybrid_production, "_read_meminfo_mb", lambda: {"MemAvailable": 99999, "SwapFree": 99999})
+
+    decision = await try_pi_hybrid_production(
+        "set a ten minute timer",
+        user_id="jason",
+        config=PiHybridProductionConfig(enabled=True, groups=("timers",), require_agreement=True),
+    )
+
+    assert decision["accepted"] is True
+    assert decision["agreement_kind"] == "pi_validated_action_form"
+    assert decision["execution_scope"] == "action_form_prefill"
+    assert decision["action_form"] == {"component": "timer_create_form", "prefill": {"duration": "ten minute"}}
+
+
+@pytest.mark.asyncio
 async def test_try_pi_hybrid_accepts_timer_as_action_form_prefill(monkeypatch):
     _install_prefilter(monkeypatch)
 

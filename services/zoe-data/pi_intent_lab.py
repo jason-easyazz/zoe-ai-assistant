@@ -488,7 +488,9 @@ async def _safe_fulfill_pi_intent(
             and speculative_slots == pi_slots
             and isinstance(speculative_task, asyncio.Task)
         ):
-            return await _await_speculative_safe_fulfillment(speculative, timeout_seconds=timeout_seconds)
+            result = await _await_speculative_safe_fulfillment(speculative, timeout_seconds=timeout_seconds)
+            result["validated_by_pi"] = bool(result.get("allowed") and not result.get("timed_out") and not result.get("error"))
+            return result
         reason = "speculative_slots_mismatch" if speculative_intent == intent_name else "speculative_pi_disagreed"
         discarded_speculative = await _discard_speculative_safe_fulfillment(
             speculative,
@@ -504,6 +506,7 @@ async def _safe_fulfill_pi_intent(
         timeout_seconds=timeout_seconds,
         started_before_pi=False,
     )
+    result["validated_by_pi"] = bool(result.get("allowed") and not result.get("timed_out") and not result.get("error"))
     if discarded_speculative is not None:
         result["speculative_safe_fulfillment"] = "discarded"
         result["speculative_intent"] = discarded_speculative.get("speculative_intent")

@@ -752,7 +752,7 @@ async def test_lab_discards_speculative_safe_fulfillment_when_pi_slots_differ(mo
 
     assert [call["intent"].slots for call in calls] == [{"forecast": False}, {"forecast": True}]
     assert result["safe_fulfillment"]["started_before_pi"] is False
-    assert result["safe_fulfillment"]["validated_by_pi"] is False
+    assert result["safe_fulfillment"]["validated_by_pi"] is True
     assert result["safe_fulfillment"]["speculative_safe_fulfillment"] == "discarded"
     assert result["safe_fulfillment"]["speculative_intent"] == "weather"
     assert result["safe_fulfillment"]["speculative_discard_reason"] == "speculative_slots_mismatch"
