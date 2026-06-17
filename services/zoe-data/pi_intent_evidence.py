@@ -28,6 +28,7 @@ _SPACE_RE = re.compile(r"\s+")
 _SECRET_KEY_RE = re.compile(r"(?i)(api[_-]?key|\btoken\b|\bsecret\b|password|authorization|\bbearer\b)")
 _SECRET_TEXT_RE = re.compile(r"(?i)(api[\s_-]?key|authorization|bearer\s+[a-z0-9._\-]+|password\s*(is|=)|secret\s*(is|=)|token\s*(is|=))")
 _ALLOWED_ROUTE_CLASSES = {"deterministic", "fallback", "extraction_failed"}
+_ALLOWED_BASELINE_KINDS = {"router", "router_only_not_comparable", "router_extraction_failed_not_comparable", "zoe_agent_fallback_baseline"}
 _ALLOWED_LABEL_SOURCES = {"admin_review", "operator_override"}
 _DEFAULT_PRODUCTION_RECORD_LIMIT = 1000
 
@@ -328,6 +329,8 @@ def _production_label_from_row(row: Mapping[str, Any]) -> dict[str, Any]:
         value = _optional_str(row.get(key))
         if value:
             if key == "route_class" and value not in _ALLOWED_ROUTE_CLASSES:
+                return {}
+            if key == "baseline_kind" and value not in _ALLOWED_BASELINE_KINDS:
                 return {}
             label[key] = value
     for key in ("baseline_comparable", "user_corrected", "rollback_blocked"):
