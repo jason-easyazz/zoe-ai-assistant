@@ -155,6 +155,10 @@ def _summary(
         "production_label_count": int(production.get("label_count") or 0),
         "production_unlabeled_count": int(production.get("unlabeled_count") or 0),
         "production_groups": list((production.get("by_group") or {}).keys()),
+        "production_pi_p95_latency_ms_by_group": _production_group_metric(production, "pi_p95_latency_ms"),
+        "production_safe_fulfillment_p95_latency_ms_by_group": _production_group_metric(
+            production, "safe_fulfillment_p95_latency_ms"
+        ),
     }
 
 
@@ -195,8 +199,19 @@ def _evidence(
             for group, stats in (production.get("by_group") or {}).items()
             if isinstance(stats, Mapping)
         },
+        "production_pi_p95_latency_ms_by_group": _production_group_metric(production, "pi_p95_latency_ms"),
+        "production_safe_fulfillment_p95_latency_ms_by_group": _production_group_metric(
+            production, "safe_fulfillment_p95_latency_ms"
+        ),
     }
 
+
+def _production_group_metric(production: Mapping[str, Any], metric: str) -> dict[str, float | None]:
+    values: dict[str, float | None] = {}
+    for group, stats in (production.get("by_group") or {}).items():
+        if isinstance(stats, Mapping):
+            values[str(group)] = _float_or_none(stats.get(metric))
+    return values
 
 def _candidate_details(candidate_wins: Mapping[str, Any]) -> list[dict[str, Any]]:
     details: list[dict[str, Any]] = []
