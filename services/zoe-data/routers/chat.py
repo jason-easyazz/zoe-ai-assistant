@@ -51,6 +51,7 @@ _ACTION_FORM_INTENTS: frozenset[str] = frozenset({
     "calendar_create",
     "list_add",
     "list_show",
+    "timer_create",
 })
 
 
@@ -213,13 +214,24 @@ def _intent_action_form_payload(intent, panel_id: str | None = None) -> dict | N
             **({"panel_id": panel_id} if panel_id else {}),
         }
 
+    if name == "timer_create":
+        return {
+            "panel_type": "timer",
+            "title": "New Timer",
+            "data": {
+                "minutes": slots.get("minutes") or slots.get("duration") or 5,
+                "label": slots.get("label") or "Timer",
+            },
+            **({"panel_id": panel_id} if panel_id else {}),
+        }
+
     return None
 
 
 async def _broadcast_intent_nav(intent, panel_id: str | None = None) -> None:
     """Broadcast UI actions to the touch panel when an intent is detected.
 
-    For action-form intents (calendar_create, list_add/show), a full-screen
+    For action-form intents (calendar_create, list_add/show, timer_create), a full-screen
     interactive form overlay is shown instead of navigating to a detail page.
     For all other intents, the classic panel_navigate + panel_open_form flow runs.
     A show_card is always emitted so the dashboard overlay shows intent-specific info.
@@ -494,6 +506,7 @@ async def _run_chat_pi_hybrid_lane(
     request_text: str | None = None,
     run_id: str | None = None,
     record_run_state: bool = False,
+    panel_id: str | None = None,
 ) -> dict:
     """Run the production Pi hybrid lane once and persist accepted chat output."""
     try:
@@ -519,20 +532,41 @@ async def _run_chat_pi_hybrid_lane(
             config=config,
         )
         response_text = str(decision.get("response_text") or "")
-        accepted = bool(decision.get("accepted") and response_text)
-        payload = {"attempted": True, "cue": cue, "decision": decision, "accepted": accepted, "response_text": response_text}
+        action_form = decision.get("action_form") if isinstance(decision.get("action_form"), dict) else None
+        accepted = bool(decision.get("accepted") and (response_text or action_form))
+        payload = {
+            "attempted": True,
+            "cue": cue,
+            "decision": decision,
+            "accepted": accepted,
+            "response_text": response_text,
+            "action_form": action_form,
+        }
         if not accepted:
             return payload
 
-        asyncio.ensure_future(chat_inject_background(
-            message_for_processing,
-            response_text,
-            str(decision.get("intent") or "pi_hybrid"),
-            user_id,
-            session_id,
-        ))
-        asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, response_text))
-        await _save_chat_message(session_id, "assistant", response_text)
+        intent_name = str(decision.get("intent") or "pi_hybrid")
+        if action_form and panel_id and intent_name in _INTENT_PANEL_NAV:
+            try:
+                from intent_router import Intent
+
+                asyncio.ensure_future(_broadcast_intent_nav(
+                    Intent(intent_name, dict(action_form.get("prefill") or {}), 1.0),
+                    panel_id=panel_id,
+                ))
+            except Exception as exc:
+                logger.debug("Pi hybrid action form broadcast skipped: %s", exc)
+        if not action_form:
+            asyncio.ensure_future(chat_inject_background(
+                message_for_processing,
+                response_text,
+                intent_name,
+                user_id,
+                session_id,
+            ))
+            asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, response_text))
+        if response_text:
+            await _save_chat_message(session_id, "assistant", response_text)
         if record_run_state:
             active_run_id = run_id or new_run_ids()[0]
             await _record_run_state(
@@ -550,6 +584,8 @@ async def _run_chat_pi_hybrid_lane(
                         "intent": decision.get("intent"),
                         "intent_group": decision.get("intent_group"),
                         "agreement_kind": decision.get("agreement_kind"),
+                        "execution_scope": decision.get("execution_scope"),
+                        "action_form": bool(action_form),
                     }
                 },
             )
@@ -1857,6 +1893,7 @@ async def chat_stream_generator(
                 request_text=message,
                 run_id=run_id,
                 record_run_state=True,
+                panel_id=req_panel_id,
             )
             if _pi_hybrid.get("attempted"):
                 _pi_cue = _pi_hybrid.get("cue") or {}
@@ -1884,8 +1921,19 @@ async def chat_stream_generator(
                     "agreement_kind": _pi_decision.get("agreement_kind"),
                     "production_route_change": _pi_decision.get("production_route_change"),
                     "lab_result": _pi_decision.get("lab_result"),
+                    "execution_scope": _pi_decision.get("execution_scope"),
+                    "action_form": _pi_hybrid.get("action_form"),
                 }))
                 if _pi_hybrid.get("accepted"):
+                    action_form = _pi_hybrid.get("action_form") or {}
+                    if action_form:
+                        component = action_form.get("component")
+                        prefill = action_form.get("prefill") or {}
+                        if component:
+                            yield emit(CustomEvent(
+                                name="zoe.ui_component",
+                                value={"component": component, "props": prefill},
+                            ))
                     response_text = str(_pi_hybrid.get("response_text") or "")
                     yield emit(TextMessageStartEvent(
                         type=EventType.TEXT_MESSAGE_START,
@@ -3092,6 +3140,7 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
                 context=_CHAT_CONTEXTS.get(session_id),
                 request_text=message,
                 record_run_state=True,
+                panel_id=req_panel_id,
             )
             if _pi_hybrid.get("accepted"):
                 _pi_cue = _pi_hybrid.get("cue") or {}
@@ -3110,6 +3159,8 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
                         "intent": _pi_decision.get("intent"),
                         "intent_group": _pi_decision.get("intent_group"),
                         "agreement_kind": _pi_decision.get("agreement_kind"),
+                        "execution_scope": _pi_decision.get("execution_scope"),
+                        "action_form": _pi_hybrid.get("action_form"),
                     },
                 }
 

@@ -15,13 +15,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from pi_intent_lab import SAFE_FULFILLMENT_INTENTS, compare_pi_intent_lab
+from pi_intent_lab import SAFE_ACTION_FORM_INTENTS, SAFE_FULFILLMENT_INTENTS, compare_pi_intent_lab
 from zoe_pi_promotion import LOW_RISK_PI_INTENT_GROUPS, intent_group_for_intent
 
 _SAFE_PRODUCTION_INTENTS = frozenset(
     {"weather", "daily_briefing", "list_show", "greeting", "time_query", "date_query", "calculate"}
 )
-_DEFAULT_GROUPS = ("weather", "daily_briefing", "lists", "greetings", "clock", "calculations")
+_SAFE_PRODUCTION_ACTION_FORM_INTENTS = frozenset({"timer_create"})
+_DEFAULT_GROUPS = ("weather", "daily_briefing", "lists", "timers", "greetings", "clock", "calculations")
 _WEATHER_SIGNAL_RE = re.compile(
     r"\b(weather|rain|forecast|temperature|storm|windy|humid|umbrella|jacket|hot|cold|degrees|celsius)\b",
     re.I,
@@ -50,6 +51,13 @@ _CALCULATION_SIGNAL_RE = re.compile(
 _SECRET_TEXT_RE = re.compile(
     r"(api[\s_-]?key|authorization\s*(?:[:=]\s*\S+|bearer\s+[a-z0-9._\-]+|token\s+\S+)|"
     r"bearer\s+[a-z0-9._\-]+|password\s*(?:is|=)|secret\s*(?:is|=)|token\s*(?:is|=))",
+    re.I,
+)
+_TIMER_SIGNAL_RE = re.compile(
+    r"\b(?:set|start|create)\s+(?:a\s+)?(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|fifteen|twenty|thirty)"
+    r"\s*(?:second|seconds|minute|minutes|hour|hours|min|mins|hr|hrs)\s+(?:timer|alarm)\b"
+    r"|\b(?:timer|alarm)\s+(?:for\s+)?(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|fifteen|twenty|thirty)"
+    r"\s*(?:second|seconds|minute|minutes|hour|hours|min|mins|hr|hrs)\b",
     re.I,
 )
 
@@ -287,7 +295,10 @@ def _router_fast_acceptance_decision(result: Mapping[str, Any], config: PiHybrid
         return {**base, "reason": "router_not_deterministic"}
     if group not in set(config.groups):
         return {**base, "reason": "group_not_enabled"}
-    if intent not in _SAFE_PRODUCTION_INTENTS or intent not in SAFE_FULFILLMENT_INTENTS:
+    if (
+        intent not in _SAFE_PRODUCTION_INTENTS
+        and intent not in _SAFE_PRODUCTION_ACTION_FORM_INTENTS
+    ) or (intent not in SAFE_FULFILLMENT_INTENTS and intent not in SAFE_ACTION_FORM_INTENTS):
         return {**base, "reason": "intent_not_safe_for_production"}
     if not safe.get("attempted") or not safe.get("allowed"):
         return {**base, "reason": safe.get("blocked_reason") or "safe_fulfillment_blocked"}
@@ -308,6 +319,8 @@ def _router_fast_acceptance_decision(result: Mapping[str, Any], config: PiHybrid
         "pi_audit_scheduled": True,
         "safe_fulfillment_latency_ms": safe.get("latency_ms"),
         "speculative_safe_fulfillment": safe.get("speculative_safe_fulfillment"),
+        "execution_scope": safe.get("execution_scope"),
+        "action_form": safe.get("action_form"),
     }
 
 
@@ -407,6 +420,8 @@ def _production_prefilter_allows(text: str, groups: tuple[str, ...]) -> bool:
         return True
     if "calculations" in selected and _CALCULATION_SIGNAL_RE.search(text):
         return True
+    if "timers" in selected and _TIMER_SIGNAL_RE.search(text):
+        return True
     return False
 
 
@@ -428,7 +443,10 @@ def _acceptance_decision(result: Mapping[str, Any], config: PiHybridProductionCo
         return {**base, "reason": "pi_error", "error": pi.get("error")}
     if group not in set(config.groups):
         return {**base, "reason": "group_not_enabled"}
-    if intent not in _SAFE_PRODUCTION_INTENTS or intent not in SAFE_FULFILLMENT_INTENTS:
+    if (
+        intent not in _SAFE_PRODUCTION_INTENTS
+        and intent not in _SAFE_PRODUCTION_ACTION_FORM_INTENTS
+    ) or (intent not in SAFE_FULFILLMENT_INTENTS and intent not in SAFE_ACTION_FORM_INTENTS):
         return {**base, "reason": "intent_not_safe_for_production"}
     if not safe.get("attempted") or not safe.get("allowed"):
         return {**base, "reason": safe.get("blocked_reason") or "safe_fulfillment_blocked"}
@@ -459,6 +477,8 @@ def _acceptance_decision(result: Mapping[str, Any], config: PiHybridProductionCo
         "pi_latency_ms": pi.get("latency_ms"),
         "safe_fulfillment_latency_ms": safe.get("latency_ms"),
         "speculative_safe_fulfillment": speculative_state,
+        "execution_scope": safe.get("execution_scope"),
+        "action_form": safe.get("action_form"),
     }
 
 
@@ -487,6 +507,8 @@ def _compact_lab_result(result: Mapping[str, Any]) -> dict[str, Any]:
             "attempted": safe.get("attempted"),
             "allowed": safe.get("allowed"),
             "intent": safe.get("intent"),
+            "execution_scope": safe.get("execution_scope"),
+            "action_form": safe.get("action_form"),
             "latency_ms": safe.get("latency_ms"),
             "timed_out": safe.get("timed_out"),
             "error": safe.get("error"),

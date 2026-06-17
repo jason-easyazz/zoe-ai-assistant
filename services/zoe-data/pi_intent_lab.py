@@ -31,6 +31,13 @@ SAFE_FULFILLMENT_INTENTS = frozenset(
         "weather",
     }
 )
+SAFE_ACTION_FORM_INTENTS = frozenset({"timer_create"})
+_ACTION_FORM_COMPONENTS = {
+    "timer_create": "timer_create_form",
+}
+_ACTION_FORM_RESPONSES = {
+    "timer_create": "Timer is ready to confirm.",
+}
 _SPECULATIVE_WEATHER_STRONG_RE = re.compile(
     r"\b(rain|forecast|weather|temperature|storm|windy|humid)\b",
     re.I,
@@ -150,11 +157,12 @@ async def compare_pi_intent_lab(
         "report_kind": "zoe_pi_intent_lab_comparison",
         "contract": {
             "admin_only": True,
-            "side_effects": "read_only_external_only" if include_safe_fulfillment else "none",
+            "side_effects": "read_only_external_or_action_form_prefill" if include_safe_fulfillment else "none",
             "intent_dispatch_enabled": bool(include_safe_fulfillment),
-            "intent_dispatch_scope": "read_only_allowlist_only" if include_safe_fulfillment else "none",
+            "intent_dispatch_scope": "read_only_or_action_form_prefill" if include_safe_fulfillment else "none",
             "safe_read_only_fulfillment_enabled": bool(include_safe_fulfillment),
             "safe_read_only_fulfillment_intents": sorted(SAFE_FULFILLMENT_INTENTS),
+            "safe_action_form_intents": sorted(SAFE_ACTION_FORM_INTENTS),
             "memory_writes_enabled": False,
             "shadow_writes_enabled": False,
             "promotion_enabled": False,
@@ -379,7 +387,7 @@ async def _safe_fulfill_router_intent(
         return await block("router_no_intent")
     if str(router.get("route_class") or "") != "deterministic" or not router.get("baseline_comparable"):
         return await block("router_not_deterministic", intent=intent_name)
-    if intent_name not in SAFE_FULFILLMENT_INTENTS:
+    if intent_name not in SAFE_FULFILLMENT_INTENTS and intent_name not in SAFE_ACTION_FORM_INTENTS:
         return await block("side_effect_or_unsupported_intent", intent=intent_name)
     if intent_group_for_intent(intent_name) not in LOW_RISK_PI_INTENT_GROUPS:
         return await block("not_low_risk_group", intent=intent_name)
@@ -458,7 +466,7 @@ async def _safe_fulfill_pi_intent(
         return await block("pi_timed_out", intent=intent_name)
     if pi.get("error"):
         return await block("pi_error", intent=intent_name, error=pi.get("error"))
-    if intent_name not in SAFE_FULFILLMENT_INTENTS:
+    if intent_name not in SAFE_FULFILLMENT_INTENTS and intent_name not in SAFE_ACTION_FORM_INTENTS:
         return await block("side_effect_or_unsupported_intent", intent=intent_name)
     if not pi.get("low_risk_group"):
         return await block("not_low_risk_group", intent=intent_name)
@@ -537,7 +545,11 @@ def _start_speculative_safe_fulfillment(
 
 def _speculative_safe_fulfillment_candidate(zoe_router: Mapping[str, Any], *, text: str) -> dict[str, Any] | None:
     intent_name = str(zoe_router.get("intent") or "")
-    if intent_name and intent_name in SAFE_FULFILLMENT_INTENTS and zoe_router.get("baseline_comparable"):
+    if (
+        intent_name
+        and (intent_name in SAFE_FULFILLMENT_INTENTS or intent_name in SAFE_ACTION_FORM_INTENTS)
+        and zoe_router.get("baseline_comparable")
+    ):
         return {
             "intent": intent_name,
             "slots": dict(zoe_router.get("slots") or {}),
@@ -580,6 +592,30 @@ async def _execute_safe_fulfillment_intent(
     from intent_router import execute_intent
 
     intent_name = str(getattr(intent, "name", "") or "")
+    slots = dict(getattr(intent, "slots", {}) or {})
+    if intent_name in SAFE_ACTION_FORM_INTENTS:
+        response_text = _ACTION_FORM_RESPONSES.get(intent_name, "Prepared for confirmation.")
+        return {
+            "requested": True,
+            "attempted": True,
+            "allowed": True,
+            "intent": intent_name,
+            "latency_ms": 0.0,
+            "timed_out": False,
+            "error": None,
+            "response_chars": len(response_text),
+            "response_preview": response_text,
+            "response_text": response_text,
+            "would_execute": False,
+            "execution_scope": "action_form_prefill",
+            "action_form": {
+                "component": _ACTION_FORM_COMPONENTS.get(intent_name),
+                "prefill": slots,
+            },
+            "started_before_pi": started_before_pi,
+            "validated_by_pi": False,
+        }
+
     started = time.perf_counter()
     try:
         response = await asyncio.wait_for(execute_intent(intent, user_id=user_id), timeout=timeout_seconds)
