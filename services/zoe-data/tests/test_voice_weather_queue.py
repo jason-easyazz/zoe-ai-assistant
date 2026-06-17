@@ -890,3 +890,112 @@ async def test_voice_command_uses_pi_hybrid_production_with_processing_cue(
         event == "voice:responding" and payload.get("pi_hybrid") is True
         for _, event, payload in calls["broadcast"]
     )
+
+
+@pytest.mark.asyncio
+async def test_voice_command_caps_pi_hybrid_list_show_response(monkeypatch) -> None:
+    import pi_hybrid_production
+
+    long_reply = "Your shopping list:\n" + "\n".join(f"  - item {idx}" for idx in range(1, 8))
+    capped_reply = "Your shopping list:\n  - item 1\n  - item 2\n  - item 3\n  - item 4\n  - item 5\nAnd 2 more."
+    calls: dict[str, object] = {"broadcast": [], "tts": []}
+
+    async def no_user(*_args, **_kwargs):
+        return None
+
+    async def panel_user(*_args, **_kwargs):
+        return "panel-user"
+
+    async def resolve_skybridge_request(*_args, **_kwargs):
+        return None
+
+    class Broadcaster:
+        async def broadcast(self, channel, event, payload):
+            calls["broadcast"].append((channel, event, payload))
+
+    async def fake_synthesize(payload, caller=None):
+        calls["tts"].append(payload)
+        return types.SimpleNamespace(body=b"RIFF-pi-hybrid-list", media_type="audio/wav")
+
+    async def fake_try_pi(text, **kwargs):
+        assert text == "what is on my shopping list"
+        assert kwargs["user_id"] == "panel-user"
+        return {
+            "accepted": True,
+            "reason": "router_confirmed_fast_accept",
+            "intent": "list_show",
+            "intent_group": "lists",
+            "agreement_kind": "zoe_router_fast",
+            "response_text": long_reply,
+        }
+
+    async def fake_processing_cue():
+        return {"available": True, "text": "Let me check."}
+
+    monkeypatch.setattr(voice_tts, "_resolve_recent_panel_session_user", panel_user)
+    monkeypatch.setattr(voice_tts, "_resolve_panel_default_user", no_user)
+    monkeypatch.setattr(voice_tts, "_VOICE_SESSIONS", {})
+    monkeypatch.setattr(voice_tts, "synthesize", fake_synthesize)
+    monkeypatch.setattr(
+        pi_hybrid_production.PiHybridProductionConfig,
+        "from_env",
+        classmethod(lambda cls: cls(enabled=True, resource_guard_enabled=False)),
+    )
+    monkeypatch.setattr(pi_hybrid_production, "pi_hybrid_production_eligible", lambda text, config=None: (True, "eligible"))
+    monkeypatch.setattr(pi_hybrid_production, "processing_cue_packet", fake_processing_cue)
+    monkeypatch.setattr(pi_hybrid_production, "try_pi_hybrid_production", fake_try_pi)
+    monkeypatch.setitem(sys.modules, "push", types.SimpleNamespace(broadcaster=Broadcaster()))
+    monkeypatch.setitem(
+        sys.modules,
+        "skybridge_service",
+        types.SimpleNamespace(resolve_skybridge_request=resolve_skybridge_request),
+    )
+    monkeypatch.setattr(skybridge_service, "resolve_skybridge_request", resolve_skybridge_request)
+
+    response = await voice_command(
+        {"text": "what is on my shopping list", "panel_id": "panel-pi", "session_id": "session-pi"},
+        caller={"user_id": "guest", "panel_id": "panel-pi"},
+        stream=False,
+        db=object(),
+    )
+
+    assert response["ok"] is True
+    assert response["reply"] == capped_reply
+    assert response["intent"] == "list_show"
+    assert response["pi_hybrid"]["accepted"] is True
+    assert calls["tts"] == [{"text": capped_reply}]
+
+
+def test_cap_voice_list_show_reply_resets_per_list_section() -> None:
+    text = "\n".join(
+        [
+            "Your shopping lists:",
+            "Pantry:",
+            "  - pantry 1",
+            "  - pantry 2",
+            "Shopping:",
+            "  - item 1",
+            "  - item 2",
+            "  - item 3",
+            "  - item 4",
+            "  - item 5",
+            "  - item 6",
+            "  - item 7",
+        ]
+    )
+
+    assert voice_tts._cap_voice_list_show_reply(text) == "\n".join(
+        [
+            "Your shopping lists:",
+            "Pantry:",
+            "  - pantry 1",
+            "  - pantry 2",
+            "Shopping:",
+            "  - item 1",
+            "  - item 2",
+            "  - item 3",
+            "  - item 4",
+            "  - item 5",
+            "And 2 more.",
+        ]
+    )
