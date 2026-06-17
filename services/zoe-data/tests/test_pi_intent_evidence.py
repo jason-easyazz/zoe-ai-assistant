@@ -202,6 +202,7 @@ def test_build_pi_hybrid_production_label_queue_prioritizes_unlabeled_accepted_r
                 "accepted": False,
                 "reason": "timeout",
                 "intent_group": "weather",
+                "outcome_label": "weather",
             },
         ],
         limit=10,
@@ -209,7 +210,7 @@ def test_build_pi_hybrid_production_label_queue_prioritizes_unlabeled_accepted_r
 
     assert payload["summary"]["raw_record_count"] == 4
     assert payload["summary"]["unique_text_count"] == 3
-    assert payload["summary"]["skipped_labeled_count"] == 1
+    assert payload["summary"]["skipped_labeled_count"] == 2
     assert payload["summary"]["skipped_rejected_count"] == 1
     assert payload["summary"]["queue_count_by_group"] == {"weather": 1}
     assert len(payload["queue"]) == 1

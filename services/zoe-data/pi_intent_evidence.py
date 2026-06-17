@@ -214,12 +214,14 @@ def build_pi_hybrid_production_label_queue(
     skipped_group = 0
     for record in latest:
         labeled = bool(record.get("outcome_label") is not None or record.get("negative"))
-        if labeled and not include_labeled:
-            skipped_labeled += 1
-            continue
         accepted = bool(record.get("accepted"))
-        if not accepted and not include_rejected:
+        skip_labeled = labeled and not include_labeled
+        skip_rejected = not accepted and not include_rejected
+        if skip_labeled:
+            skipped_labeled += 1
+        if skip_rejected:
             skipped_rejected += 1
+        if skip_labeled or skip_rejected:
             continue
         row = _production_queue_row(record, labeled=labeled)
         if selected_groups and row["intent_group"] not in selected_groups:

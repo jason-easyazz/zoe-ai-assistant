@@ -81,6 +81,7 @@ def test_cli_json_includes_paths_and_group_filter(tmp_path, capsys, monkeypatch)
         + json.dumps({"text_hash": "briefing", "accepted": True, "intent": "daily_briefing", "intent_group": "daily_briefing"}) + "\n",
         encoding="utf-8",
     )
+    labels_path.write_text("", encoding="utf-8")
 
     exit_code = module.main(
         [
