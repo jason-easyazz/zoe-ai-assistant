@@ -1,3 +1,4 @@
+import asyncio
 import json
 import sys
 import types
@@ -14,6 +15,7 @@ def _install_prefilter(monkeypatch, *, allowed=True):
     def pi_intent_prefilter_allows(_text):
         return allowed
 
+    module.PI_INTENT_EXECUTE_THRESHOLD = 0.78
     module.pi_intent_prefilter_allows = pi_intent_prefilter_allows
     monkeypatch.setitem(sys.modules, "pi_intent_classifier", module)
 
@@ -60,6 +62,67 @@ def test_production_eligibility_is_disabled_and_tightly_prefiltered(monkeypatch)
         True,
         "eligible",
     )
+
+
+def _router_fast_lab_result(*, intent="weather", response="It is 18.5 C."):
+    return {
+        "zoe_router": {
+            "intent": intent,
+            "confidence": 0.9,
+            "slots": {"forecast": False} if intent == "weather" else {},
+            "route_class": "deterministic",
+            "baseline_kind": "router",
+            "baseline_comparable": True,
+            "latency_ms": 1.0,
+        },
+        "pi": {"ran": False, "intent": None, "reason": "run_pi_false", "would_execute": False},
+        "safe_fulfillment": {
+            "attempted": True,
+            "allowed": True,
+            "intent": intent,
+            "timed_out": False,
+            "error": None,
+            "response_text": response,
+            "response_preview": response,
+            "response_chars": len(response),
+            "validated_by_pi": False,
+            "validated_by_router": True,
+            "latency_ms": 950.0,
+            "speculative_safe_fulfillment": "router_used",
+        },
+        "simulated_hybrid_flow": {"cue_available": True, "final_completion_latency_ms": 950.0},
+    }
+
+
+@pytest.mark.asyncio
+async def test_try_pi_hybrid_fast_accepts_deterministic_router_weather(monkeypatch):
+    _install_prefilter(monkeypatch)
+    calls = []
+
+    async def fake_compare(text, **kwargs):
+        calls.append(dict(kwargs))
+        if kwargs.get("run_pi") is False:
+            return _router_fast_lab_result()
+        return _accepted_lab_result()
+
+    monkeypatch.setattr(pi_hybrid_production, "compare_pi_intent_lab", fake_compare)
+    monkeypatch.setattr(pi_hybrid_production, "_read_meminfo_mb", lambda: {"MemAvailable": 99999, "SwapFree": 99999})
+
+    decision = await try_pi_hybrid_production(
+        "will it rain later",
+        user_id="jason",
+        config=PiHybridProductionConfig(enabled=True, resource_guard_enabled=True),
+    )
+    await asyncio.sleep(0)
+
+    assert decision["accepted"] is True
+    assert decision["reason"] == "router_confirmed_fast_accept"
+    assert decision["agreement_kind"] == "zoe_router_fast"
+    assert decision["pi_audit_scheduled"] is True
+    assert decision["safe_fulfillment_latency_ms"] == 950.0
+    assert decision["response_text"] == "It is 18.5 C."
+    assert calls[0]["run_pi"] is False
+    assert calls[1]["run_pi"] is True
 
 
 @pytest.mark.asyncio

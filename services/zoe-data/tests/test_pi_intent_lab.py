@@ -443,6 +443,37 @@ async def test_lab_safe_fulfillment_error_is_reported(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_lab_can_fulfill_deterministic_router_intent_without_pi(monkeypatch):
+    calls = []
+    _install_fake_intent_router(
+        monkeypatch,
+        raw=_Intent("weather"),
+        extracted=_Intent("weather", {"forecast": False}),
+        execute_response="It's 18.5 C in Perth, light jacket weather.",
+        execute_calls=calls,
+    )
+    _install_fake_pi_classifier(monkeypatch, result=None)
+    _install_fake_voice_presence(monkeypatch)
+
+    result = await compare_pi_intent_lab(
+        "will it rain later",
+        run_pi=False,
+        include_hybrid_status=False,
+        include_safe_fulfillment=True,
+        allow_router_safe_fulfillment=True,
+    )
+
+    assert result["pi"]["ran"] is False
+    assert result["zoe_router"]["route_class"] == "deterministic"
+    assert len(calls) == 1
+    assert calls[0]["intent"].name == "weather"
+    assert result["safe_fulfillment"]["validated_by_router"] is True
+    assert result["safe_fulfillment"]["validated_by_pi"] is False
+    assert result["safe_fulfillment"]["speculative_safe_fulfillment"] == "router_used"
+    assert result["safe_fulfillment"]["response_preview"] == "It's 18.5 C in Perth, light jacket weather."
+
+
+@pytest.mark.asyncio
 async def test_lab_reuses_speculative_safe_fulfillment_when_pi_agrees(monkeypatch):
     calls = []
     _install_fake_intent_router(

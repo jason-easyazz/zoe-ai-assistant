@@ -45,6 +45,7 @@ class PiHybridProductionConfig:
     min_available_mb: int = 2048
     min_swap_free_mb: int = 256
     resource_guard_enabled: bool = True
+    router_fast_accept_enabled: bool = True
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "PiHybridProductionConfig":
@@ -64,6 +65,9 @@ class PiHybridProductionConfig:
             min_available_mb=_int_env(values.get("ZOE_PI_HYBRID_MIN_AVAILABLE_MB"), default=2048),
             min_swap_free_mb=_int_env(values.get("ZOE_PI_HYBRID_MIN_SWAP_FREE_MB"), default=256),
             resource_guard_enabled=_env_bool(values.get("ZOE_PI_HYBRID_RESOURCE_GUARD_ENABLED"), default=True),
+            router_fast_accept_enabled=_env_bool(
+                values.get("ZOE_PI_HYBRID_ROUTER_FAST_ACCEPT_ENABLED"), default=True
+            ),
         )
 
     def validate(self) -> None:
@@ -94,6 +98,7 @@ class PiHybridProductionConfig:
             "resource_guard_enabled": self.resource_guard_enabled,
             "min_available_mb": self.min_available_mb,
             "min_swap_free_mb": self.min_swap_free_mb,
+            "router_fast_accept_enabled": self.router_fast_accept_enabled,
         }
 
 
@@ -135,6 +140,29 @@ async def try_pi_hybrid_production(
         base["resource"] = pressure
         return _with_evidence(base)
 
+    if active_config.router_fast_accept_enabled:
+        fast = await _try_router_confirmed_fast_accept(
+            stripped,
+            user_id=user_id,
+            active_config=active_config,
+            env=env,
+        )
+        if fast.get("accepted"):
+            _schedule_pi_audit_after_fast_accept(
+                stripped,
+                user_id=user_id,
+                context_turns=context_turns,
+                active_config=active_config,
+                env=env,
+                fast_decision=fast,
+            )
+            return _with_evidence({
+                **base,
+                **fast,
+                "response_text": str(fast.get("response_text") or ""),
+                "production_route_change": True,
+            })
+
     try:
         result = await asyncio.wait_for(
             compare_pi_intent_lab(
@@ -174,6 +202,127 @@ async def try_pi_hybrid_production(
         "production_route_change": bool(decision.get("accepted")),
         "lab_result": _compact_lab_result(result),
     })
+
+
+async def _try_router_confirmed_fast_accept(
+    text: str,
+    *,
+    user_id: str,
+    active_config: PiHybridProductionConfig,
+    env: Mapping[str, str] | None,
+) -> dict[str, Any]:
+    try:
+        result = await asyncio.wait_for(
+            compare_pi_intent_lab(
+                text,
+                user_id=user_id,
+                context_turns="",
+                run_pi=False,
+                pi_transport=active_config.transport,
+                allow_pi_execution=active_config.allow_pi_execution,
+                local_model_configured=active_config.local_model_configured,
+                measure_zoe_agent_baseline=False,
+                include_hybrid_status=False,
+                include_safe_fulfillment=True,
+                safe_fulfillment_timeout_seconds=active_config.safe_fulfillment_timeout_seconds,
+                allow_router_safe_fulfillment=True,
+                env=env,
+            ),
+            timeout=active_config.safe_fulfillment_timeout_seconds,
+        )
+    except Exception as exc:
+        return {"accepted": False, "reason": "router_fast_accept_error", "error": exc.__class__.__name__}
+
+    decision = _router_fast_acceptance_decision(result, active_config)
+    response_text = str(decision.get("response_text") or "")
+    return {
+        **decision,
+        "response_text": response_text,
+        "lab_result": _compact_lab_result(result),
+    }
+
+
+def _router_fast_acceptance_decision(result: Mapping[str, Any], config: PiHybridProductionConfig) -> dict[str, Any]:
+    router = result.get("zoe_router") or {}
+    safe = result.get("safe_fulfillment") or {}
+    intent = _optional_str(router.get("intent"))
+    group = intent_group_for_intent(intent)
+    response_text = _optional_str(safe.get("response_text")) or _optional_str(safe.get("response_preview")) or ""
+    base = {
+        "accepted": False,
+        "intent": intent,
+        "intent_group": group,
+        "response_text": "",
+        "agreement_kind": None,
+    }
+    if str(router.get("route_class") or "") != "deterministic" or not router.get("baseline_comparable"):
+        return {**base, "reason": "router_not_deterministic"}
+    if group not in set(config.groups):
+        return {**base, "reason": "group_not_enabled"}
+    if intent not in _SAFE_PRODUCTION_INTENTS or intent not in SAFE_FULFILLMENT_INTENTS:
+        return {**base, "reason": "intent_not_safe_for_production"}
+    if not safe.get("attempted") or not safe.get("allowed"):
+        return {**base, "reason": safe.get("blocked_reason") or "safe_fulfillment_blocked"}
+    if safe.get("timed_out"):
+        return {**base, "reason": "safe_fulfillment_timed_out"}
+    if safe.get("error"):
+        return {**base, "reason": "safe_fulfillment_error", "error": safe.get("error")}
+    if not response_text:
+        return {**base, "reason": "empty_fulfillment_response"}
+    if not safe.get("validated_by_router"):
+        return {**base, "reason": "router_validation_missing"}
+    return {
+        **base,
+        "accepted": True,
+        "response_text": response_text,
+        "agreement_kind": "zoe_router_fast",
+        "reason": "router_confirmed_fast_accept",
+        "pi_audit_scheduled": True,
+        "safe_fulfillment_latency_ms": safe.get("latency_ms"),
+        "speculative_safe_fulfillment": safe.get("speculative_safe_fulfillment"),
+    }
+
+
+def _schedule_pi_audit_after_fast_accept(
+    text: str,
+    *,
+    user_id: str,
+    context_turns: str,
+    active_config: PiHybridProductionConfig,
+    env: Mapping[str, str] | None,
+    fast_decision: Mapping[str, Any],
+) -> None:
+    async def _runner() -> None:
+        try:
+            result = await compare_pi_intent_lab(
+                text,
+                user_id=user_id,
+                context_turns=context_turns,
+                run_pi=True,
+                pi_transport=active_config.transport,
+                allow_pi_execution=active_config.allow_pi_execution,
+                local_model_configured=active_config.local_model_configured,
+                measure_zoe_agent_baseline=False,
+                include_hybrid_status=False,
+                include_safe_fulfillment=False,
+                env=env,
+            )
+            pi = result.get("pi") or {}
+            if _optional_str(pi.get("intent")) != _optional_str(fast_decision.get("intent")):
+                try:
+                    import logging
+
+                    logging.getLogger(__name__).warning(
+                        "Pi audit disagreed after router fast accept: router=%s pi=%s",
+                        fast_decision.get("intent"),
+                        pi.get("intent"),
+                    )
+                except Exception:
+                    return
+        except Exception:
+            return
+
+    asyncio.create_task(_runner())
 
 
 def pi_hybrid_production_eligible(text: str, *, config: PiHybridProductionConfig | None = None) -> tuple[bool, str]:

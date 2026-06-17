@@ -78,6 +78,7 @@ async def compare_pi_intent_lab(
     include_hybrid_status: bool = True,
     include_safe_fulfillment: bool = False,
     safe_fulfillment_timeout_seconds: float = 8.0,
+    allow_router_safe_fulfillment: bool = False,
     env: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Return an apples-to-apples intent comparison without side effects."""
@@ -117,13 +118,22 @@ async def compare_pi_intent_lab(
                 timeout_seconds=zoe_agent_timeout_seconds,
                 max_tokens=zoe_agent_max_tokens,
             )
-        safe_fulfillment = await _safe_fulfill_pi_intent(
-            pi,
-            user_id=user_id,
-            enabled=include_safe_fulfillment,
-            timeout_seconds=safe_fulfillment_timeout_seconds,
-            speculative=speculative_safe_fulfillment,
-        )
+        if allow_router_safe_fulfillment and not pi.get("ran"):
+            safe_fulfillment = await _safe_fulfill_router_intent(
+                zoe_router,
+                user_id=user_id,
+                enabled=include_safe_fulfillment,
+                timeout_seconds=safe_fulfillment_timeout_seconds,
+                speculative=speculative_safe_fulfillment,
+            )
+        else:
+            safe_fulfillment = await _safe_fulfill_pi_intent(
+                pi,
+                user_id=user_id,
+                enabled=include_safe_fulfillment,
+                timeout_seconds=safe_fulfillment_timeout_seconds,
+                speculative=speculative_safe_fulfillment,
+            )
     except BaseException:
         await _discard_speculative_safe_fulfillment(speculative_safe_fulfillment, None)
         raise
@@ -334,6 +344,81 @@ async def _run_zoe_agent_baseline(text: str, *, timeout_seconds: float, max_toke
             "error": exc.__class__.__name__,
             "would_execute": False,
         }
+
+
+async def _safe_fulfill_router_intent(
+    router: Mapping[str, Any],
+    *,
+    user_id: str,
+    enabled: bool,
+    timeout_seconds: float,
+    speculative: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if not enabled:
+        return {
+            "requested": False,
+            "attempted": False,
+            "allowed": False,
+            "blocked_reason": "not_requested",
+            "response_chars": 0,
+            "response_preview": "",
+            "response_text": "",
+            "would_execute": False,
+        }
+
+    async def block(reason: str, *, intent: str | None = None, error: Any = None) -> dict[str, Any]:
+        return await _discard_speculative_safe_fulfillment(
+            speculative,
+            _blocked_fulfillment(reason, intent=intent, error=error),
+        )
+
+    intent_name = str(router.get("intent") or "")
+    if not intent_name:
+        return await block("router_no_intent")
+    if str(router.get("route_class") or "") != "deterministic" or not router.get("baseline_comparable"):
+        return await block("router_not_deterministic", intent=intent_name)
+    if intent_name not in SAFE_FULFILLMENT_INTENTS:
+        return await block("side_effect_or_unsupported_intent", intent=intent_name)
+    if intent_group_for_intent(intent_name) not in LOW_RISK_PI_INTENT_GROUPS:
+        return await block("not_low_risk_group", intent=intent_name)
+
+    from pi_intent_classifier import PI_INTENT_EXECUTE_THRESHOLD
+
+    confidence = float(router.get("confidence") or 0.0)
+    if confidence < PI_INTENT_EXECUTE_THRESHOLD:
+        return await block("below_execute_threshold", intent=intent_name)
+
+    router_slots = dict(router.get("slots") or {})
+    if speculative is not None:
+        speculative_intent = str(speculative.get("intent") or "")
+        speculative_slots = dict(speculative.get("slots") or {})
+        speculative_task = speculative.get("task")
+        if (
+            speculative_intent == intent_name
+            and speculative_slots == router_slots
+            and isinstance(speculative_task, asyncio.Task)
+        ):
+            result = await _await_speculative_safe_fulfillment(speculative, timeout_seconds=timeout_seconds)
+            result["validated_by_pi"] = False
+            result["validated_by_router"] = True
+            result["speculative_safe_fulfillment"] = "router_used"
+            return result
+        await _discard_speculative_safe_fulfillment(
+            speculative,
+            _blocked_fulfillment("speculative_router_mismatch", intent=speculative_intent),
+        )
+
+    from intent_router import Intent
+
+    intent = Intent(intent_name, router_slots, confidence)
+    result = await _execute_safe_fulfillment_intent(
+        intent,
+        user_id=user_id,
+        timeout_seconds=timeout_seconds,
+        started_before_pi=True,
+    )
+    result["validated_by_router"] = True
+    return result
 
 
 async def _safe_fulfill_pi_intent(
