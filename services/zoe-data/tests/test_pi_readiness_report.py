@@ -534,7 +534,17 @@ def test_readiness_report_surfaces_production_evidence_summary(tmp_path):
     assert report["summary"]["production_accepted_count"] == 2
     assert report["summary"]["production_unlabeled_count"] == 2
     assert report["summary"]["production_groups"] == ["daily_briefing", "weather"]
+    assert report["summary"]["production_pi_p95_latency_ms_by_group"] == {"daily_briefing": 2200.0, "weather": 8000.0}
+    assert report["summary"]["production_safe_fulfillment_p95_latency_ms_by_group"] == {
+        "daily_briefing": 1100.0,
+        "weather": 900.0,
+    }
     assert report["evidence"]["production_record_count_by_group"] == {"daily_briefing": 1, "weather": 2}
+    assert report["evidence"]["production_pi_p95_latency_ms_by_group"] == {"daily_briefing": 2200.0, "weather": 8000.0}
+    assert report["evidence"]["production_safe_fulfillment_p95_latency_ms_by_group"] == {
+        "daily_briefing": 1100.0,
+        "weather": 900.0,
+    }
     assert report["evidence"]["production_sample_count"] == 0
     assert report["production_evidence"]["promotion_report"]["sample_count"] == 0
     production_evidence = dict(report["production_evidence"])
