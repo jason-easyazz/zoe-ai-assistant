@@ -382,6 +382,7 @@ def test_select_cases_can_keep_safe_fulfillment_eligible_defaults_only():
         "weather_rain_later",
         "weather_jacket",
         "list_show",
+        "calc",
         "briefing",
     ]
     assert all(case.expected_intent in module.SAFE_FULFILLMENT_INTENTS for case in selected)
