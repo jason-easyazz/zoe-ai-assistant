@@ -511,3 +511,35 @@ def test_readiness_report_missing_production_evidence_is_nonblocking(tmp_path):
         "record_count": 0,
     }
     assert report["state"] == "shadow_collecting"
+
+
+def test_readiness_report_disabled_production_evidence_does_not_load_existing_file(tmp_path):
+    shadow_path = tmp_path / "shadow.jsonl"
+    shadow_path.write_text("", encoding="utf-8")
+    production_path = tmp_path / "production.jsonl"
+    production_path.write_text(
+        json.dumps(
+            {
+                "source": "pi_hybrid_production",
+                "accepted": True,
+                "intent_group": "weather",
+                "outcome_label": None,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    env = _env(tmp_path, shadow_path)
+    env["ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_ENABLED"] = "false"
+    env["ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_PATH"] = str(production_path)
+
+    report = pi_readiness_report(env)
+
+    assert report["production_evidence"] == {
+        "enabled": False,
+        "loaded": False,
+        "path": str(production_path),
+        "record_count": 0,
+        "disabled": True,
+    }
+    assert not [action for action in report["next_actions"] if action.get("kind") == "label_production_evidence"]

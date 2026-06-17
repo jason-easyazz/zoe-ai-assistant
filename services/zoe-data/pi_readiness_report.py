@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from pathlib import Path
 from typing import Any, Mapping
@@ -346,6 +347,8 @@ def _load_production_evidence(env: Mapping[str, str]) -> dict[str, Any]:
     if not raw_path:
         return {"enabled": enabled, "loaded": False, "path": None, "record_count": 0}
     path = Path(raw_path).expanduser()
+    if not enabled:
+        return {"enabled": False, "loaded": False, "path": str(path), "record_count": 0, "disabled": True}
     if not path.exists():
         return {"enabled": enabled, "loaded": False, "path": str(path), "record_count": 0}
     records: list[dict[str, Any]] = []
@@ -456,9 +459,6 @@ def _append_number(values: list[float], value: Any) -> None:
     number = _float_or_none(value)
     if number is not None:
         values.append(number)
-
-
-import math
 
 
 def _p95(values: list[float]) -> float | None:
