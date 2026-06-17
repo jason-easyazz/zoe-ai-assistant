@@ -577,12 +577,17 @@ async def test_voice_command_emits_processing_cue_for_non_pi_fallback(monkeypatc
     async def memory_passes(*_args, **_kwargs):
         return None
 
+    ineligible_config = types.SimpleNamespace(enabled=True)
     monkeypatch.setattr(
         pi_hybrid_production.PiHybridProductionConfig,
         "from_env",
-        classmethod(lambda cls: cls(enabled=True, resource_guard_enabled=False)),
+        classmethod(lambda cls: ineligible_config),
     )
-    monkeypatch.setattr(pi_hybrid_production, "pi_hybrid_production_eligible", lambda text, config=None: (False, "not_low_risk"))
+    def fake_pi_eligible(text, config=None):
+        assert config is ineligible_config
+        return False, "not_low_risk"
+
+    monkeypatch.setattr(pi_hybrid_production, "pi_hybrid_production_eligible", fake_pi_eligible)
     monkeypatch.setattr(pi_hybrid_production, "processing_cue_packet", fake_processing_cue)
     skybridge_module = types.SimpleNamespace(resolve_skybridge_request=resolve_skybridge_request)
     monkeypatch.setitem(sys.modules, "skybridge_service", skybridge_module)

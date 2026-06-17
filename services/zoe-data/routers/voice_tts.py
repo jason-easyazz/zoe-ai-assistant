@@ -3116,7 +3116,6 @@ async def voice_command(
                     "processing_ack": True,
                     "source": "voice_command_fallback",
                 })
-                _voice_processing_ack_sent = True
         except Exception as _fallback_ack_exc:
             logger.debug("voice/command fallback processing acknowledgement failed: %s", _fallback_ack_exc)
 
