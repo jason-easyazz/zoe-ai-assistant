@@ -1150,6 +1150,74 @@ async def test_harness_verify_failing_tests_do_not_complete(isolated_store, monk
     assert any(e.kind == "test" and e.passed is False for e in state.evidence)
 
 
+def _patch_review_ready(monkeypatch, *, ready: bool):
+    import pipeline_review as prv
+    from pipeline_review import ReviewReadiness
+
+    monkeypatch.setattr(
+        prv,
+        "assess_pr_review_ready",
+        lambda pr_url, *, repo_root=None: ReviewReadiness(ready, "test", 0 if ready else 1),
+    )
+
+
+def _review_chain_fetch_detail():
+    async def fetch_detail(task_id: str):
+        if task_id == "t_impl":
+            return {
+                "latest_summary": "TOOLS_USED=graphify\nPR_URL=https://github.com/o/r/pull/20",
+                "comments": [],
+            }
+        if task_id == "t_verify":
+            return {
+                "latest_summary": "TESTS=pytest 5 passed\nVALIDATORS=validate_structure pass",
+                "comments": [],
+            }
+        return {"latest_summary": "", "comments": []}  # review row
+
+    return fetch_detail
+
+
+@pytest.mark.asyncio
+async def test_harness_review_approves_when_pr_objectively_ready(isolated_store, monkeypatch):
+    # Deterministic review: PR objectively ready (CI green + 0 unresolved) -> the
+    # harness writes human evidence and review completes -> closeout, regardless
+    # of the (here, no-op) review agent signal.
+    monkeypatch.setenv("ZOE_PIPELINE_HARNESS_VERIFY_TESTS", "false")  # isolate the review path
+    _patch_review_ready(monkeypatch, ready=True)
+    await store.bootstrap_state("multica:hr-ok")
+
+    phases = {
+        "implement": {"id": "t_impl", "status": "done"},
+        "verify": {"id": "t_verify", "status": "done"},
+        "review": {"id": "t_review", "status": "done"},
+    }
+    state = await store.sync_pipeline_from_chain("multica:hr-ok", phases, _review_chain_fetch_detail())
+    assert state.phase == "closeout"
+    assert any(
+        e.kind == "human" and e.passed and e.metadata.get("source") == "harness"
+        for e in state.evidence
+    )
+
+
+@pytest.mark.asyncio
+async def test_harness_review_does_not_approve_when_not_ready(isolated_store, monkeypatch):
+    # PR not objectively ready (e.g. unresolved threads) -> no harness approval;
+    # review does not advance to closeout.
+    monkeypatch.setenv("ZOE_PIPELINE_HARNESS_VERIFY_TESTS", "false")
+    _patch_review_ready(monkeypatch, ready=False)
+    await store.bootstrap_state("multica:hr-no")
+
+    phases = {
+        "implement": {"id": "t_impl", "status": "done"},
+        "verify": {"id": "t_verify", "status": "done"},
+        "review": {"id": "t_review", "status": "done"},
+    }
+    state = await store.sync_pipeline_from_chain("multica:hr-no", phases, _review_chain_fetch_detail())
+    assert state.phase == "review"
+    assert not any(e.kind == "human" and e.metadata.get("source") == "harness" for e in state.evidence)
+
+
 @pytest.mark.asyncio
 async def test_sync_pipeline_audit_only_verify_skips_test_gate(isolated_store):
     await store.bootstrap_state("multica:audit-gate")
