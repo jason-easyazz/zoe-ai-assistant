@@ -210,11 +210,11 @@ def _observe_panel_events(
                 stop.set()
                 return
 
+    start_ref["value"] = time.perf_counter()
     thread = threading.Thread(target=recv_loop, daemon=True)
     thread.start()
     response = None
     try:
-        start_ref["value"] = time.perf_counter()
         response = action()
         deadline = time.monotonic() + timeout_seconds
         while time.monotonic() < deadline and not stop.is_set():
