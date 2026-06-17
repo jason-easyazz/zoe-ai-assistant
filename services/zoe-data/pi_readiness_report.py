@@ -101,6 +101,8 @@ def _readiness_state(
     promote_groups = list(actions.get("promote_groups") or promotion.get("promotable_groups") or [])
     if contract.get("blockers"):
         return "configuration_blocked"
+    if (production_config or {}).get("ignored_groups"):
+        return "configuration_blocked"
     if rollback_groups:
         return "rollback_required"
     if promote_groups:
@@ -251,6 +253,8 @@ def _next_actions(
     production_config: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     next_actions: list[dict[str, Any]] = []
+    production_config = production_config or {}
+    ignored_production_groups = list(production_config.get("ignored_groups") or [])
     blockers = list(contract.get("blockers") or [])
     if blockers:
         next_actions.append(
@@ -259,6 +263,18 @@ def _next_actions(
                 "priority": "p0",
                 "detail": "Resolve hybrid buffer blockers before promoting Pi routes.",
                 "blockers": blockers,
+            }
+        )
+    if ignored_production_groups:
+        next_actions.append(
+            {
+                "kind": "fix_configuration",
+                "priority": "p0",
+                "detail": "Remove unsupported Pi hybrid production groups from ZOE_PI_HYBRID_PRODUCTION_GROUPS.",
+                "groups": ignored_production_groups,
+                "env": {
+                    "ZOE_PI_HYBRID_PRODUCTION_GROUPS": ",".join(production_config.get("groups") or []),
+                },
             }
         )
     rollback_groups = list(actions.get("rollback_groups") or promotion.get("rollback_groups") or [])
@@ -272,8 +288,7 @@ def _next_actions(
                 "env": dict(actions.get("env") or {}),
             }
         )
-    production_config = production_config or {}
-    if state == "production_hybrid_operational" and _production_hybrid_operational(production_config):
+    if state == "production_hybrid_operational":
         next_actions.append(
             {
                 "kind": "monitor_production_hybrid",
@@ -461,6 +476,7 @@ def _formal_promotion_actions(actions: list[dict[str, Any]], *, operational: boo
             item["detail"] = detail.replace(" before promotion.", " before formal default-route promotion.")
         adjusted.append(item)
     return adjusted
+
 
 def _load_production_evidence(env: Mapping[str, str]) -> dict[str, Any]:
     raw_path = (env.get("ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_PATH") or DEFAULT_PRODUCTION_EVIDENCE_PATH).strip()

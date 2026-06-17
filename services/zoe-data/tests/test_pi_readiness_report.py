@@ -310,6 +310,32 @@ def test_readiness_report_reports_operator_hybrid_as_operational(tmp_path):
     } in report["next_actions"]
 
 
+def test_readiness_report_flags_unsupported_operator_hybrid_group(tmp_path):
+    shadow_path = tmp_path / "shadow.jsonl"
+    shadow_path.write_text("", encoding="utf-8")
+    env = _env(tmp_path, shadow_path)
+    env["ZOE_PI_HYBRID_PRODUCTION_ENABLED"] = "true"
+    env["ZOE_PI_HYBRID_PRODUCTION_GROUPS"] = "weather,device_control"
+
+    report = pi_readiness_report(env)
+
+    assert report["state"] == "configuration_blocked"
+    assert report["production_hybrid"] == {
+        "enabled": True,
+        "groups": ["weather"],
+        "ignored_groups": ["device_control"],
+        "operational": False,
+        "route": "pi_intent_buffer_plus_zoe_safe_fulfillment",
+    }
+    assert report["next_actions"][0] == {
+        "kind": "fix_configuration",
+        "priority": "p0",
+        "detail": "Remove unsupported Pi hybrid production groups from ZOE_PI_HYBRID_PRODUCTION_GROUPS.",
+        "groups": ["device_control"],
+        "env": {"ZOE_PI_HYBRID_PRODUCTION_GROUPS": "weather"},
+    }
+
+
 def test_readiness_report_deduplicates_shadow_and_benchmark_collection_actions(tmp_path):
     shadow_path = tmp_path / "shadow.jsonl"
     shadow_path.write_text(json.dumps(_winning_weather_row(1)) + "\n", encoding="utf-8")
