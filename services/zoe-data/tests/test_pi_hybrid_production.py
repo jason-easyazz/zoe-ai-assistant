@@ -560,3 +560,26 @@ async def test_try_pi_hybrid_rejects_side_effect_intent(monkeypatch):
     assert decision["accepted"] is False
     assert decision["reason"] == "intent_not_safe_for_production"
     assert decision["production_route_change"] is False
+
+
+def test_processing_cue_index_uses_softer_variant_for_social_identity_text():
+    assert pi_hybrid_production.processing_cue_index_for_text("hi there how are you") == 1
+    assert pi_hybrid_production.processing_cue_index_for_text("what can you do") == 1
+    assert pi_hybrid_production.processing_cue_index_for_text("who are you") == 1
+    assert pi_hybrid_production.processing_cue_index_for_text("who are you?") == 1
+
+
+def test_processing_cue_index_keeps_checking_variant_for_lookup_text():
+    assert pi_hybrid_production.processing_cue_index_for_text("will it rain later") == 0
+    assert pi_hybrid_production.processing_cue_index_for_text("what is 12 times 8") == 0
+
+
+@pytest.mark.asyncio
+async def test_processing_cue_packet_uses_selected_variant_text():
+    env = {"ZOE_PROCESSING_ACK_PHRASES": "Let me check.|One moment."}
+
+    social = await pi_hybrid_production.processing_cue_packet(env, text="who are you")
+    lookup = await pi_hybrid_production.processing_cue_packet(env, text="will it rain later")
+
+    assert social["text"] == "One moment."
+    assert lookup["text"] == "Let me check."
