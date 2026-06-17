@@ -2,11 +2,18 @@
 
 The review phase normally depends on the zoe-reviewer agent grading the diff and
 self-approving. That agent is unreliable (it can block claiming "no code/evidence"
-even with the PR_URL in its handoff). This module lets the harness make the
-review decision from objective signals instead: the PR is OPEN, every required CI
-check is green, and Greptile left zero unresolved review threads (i.e. Greptile
-reviewed and is satisfied). Combined with the verify phase having already run the
-PR's focused tests, that is a strong, deterministic proxy for "review approved".
+even with the PR_URL in its handoff, or complete with an empty verdict). This
+module lets the harness make the review decision from objective signals instead:
+the PR is OPEN and every required CI check is green. Combined with the verify
+phase having already run the PR's focused tests, that is a deterministic proxy
+for "review approved".
+
+Greptile review threads / confidence are intentionally NOT gated here. A fresh
+implement PR almost always has open Greptile threads AT REVIEW TIME (Greptile
+auto-reviews every PR); those are resolved in CLOSEOUT by the greploop merge
+guard, which already gates the merge on confidence + zero unresolved threads.
+Gating them at review too is a chicken-and-egg deadlock (review would never
+approve a normal PR), so the thread/confidence gate lives only at closeout.
 
 Mirrors pipeline_validators / pipeline_focused_tests: bounded subprocess gh calls,
 fails OPEN (ready=False) on any error so the agent-driven flow still applies.
@@ -22,14 +29,12 @@ from hermes_http import zoe_repo_root
 
 _GH_TIMEOUT_S = 60
 _GREEN = {"SUCCESS", "NEUTRAL", "SKIPPED", "COMPLETED"}
-_OWNER_REPO = "jason-easyazz/zoe-ai-assistant"
 
 
 @dataclass(frozen=True)
 class ReviewReadiness:
     ready: bool
     reason: str
-    unresolved_threads: int | None = None
 
 
 def _run(cmd: list[str], *, cwd: str, timeout: int = _GH_TIMEOUT_S) -> tuple[int, str]:
@@ -40,11 +45,6 @@ def _run(cmd: list[str], *, cwd: str, timeout: int = _GH_TIMEOUT_S) -> tuple[int
     except (OSError, subprocess.TimeoutExpired) as exc:
         return 1, str(exc)
     return proc.returncode, ((proc.stdout or "") + (proc.stderr or "")).strip()
-
-
-def _pr_number(pr_url: str) -> str:
-    tail = pr_url.rstrip("/").rsplit("/", 1)[-1]
-    return tail if tail.isdigit() else ""
 
 
 def _checks_all_green(rollup: list) -> bool:
@@ -59,37 +59,16 @@ def _checks_all_green(rollup: list) -> bool:
     return saw_one  # empty rollup is not trusted as green
 
 
-def _unresolved_thread_count(pr_number: str, *, cwd: str) -> int | None:
-    query = (
-        "{ repository(owner:\"jason-easyazz\", name:\"zoe-ai-assistant\") { pullRequest(number:"
-        + pr_number
-        + ") { reviewThreads(first:100) { nodes { isResolved } pageInfo { hasNextPage } } } } }"
-    )
-    code, out = _run(["gh", "api", "graphql", "-f", f"query={query}"], cwd=cwd)
-    if code != 0 or not out:
-        return None
-    try:
-        threads = json.loads(out)["data"]["repository"]["pullRequest"]["reviewThreads"]
-        nodes = threads["nodes"]
-    except (ValueError, TypeError, KeyError):
-        return None
-    # Fail open (treat as unknown) when there are more thread pages than we
-    # fetched, so a PR with >100 threads can't be silently approved on a partial
-    # page that happens to show all-resolved.
-    if (threads.get("pageInfo") or {}).get("hasNextPage"):
-        return None
-    return sum(1 for t in nodes if not t.get("isResolved"))
-
-
 def assess_pr_review_ready(pr_url: str, *, repo_root: str | None = None) -> ReviewReadiness:
-    """Objective review gate: PR OPEN + all required checks green + 0 unresolved
-    Greptile review threads. Fails open (ready=False) on any error."""
+    """Objective review gate: PR OPEN + all required CI checks green.
+
+    Greptile threads/confidence are owned by the closeout greploop merge gate,
+    NOT review (see module docstring). Fails open (ready=False) on any error so
+    the agent-driven review flow still applies.
+    """
     pr_url = (pr_url or "").strip()
     if not pr_url:
         return ReviewReadiness(False, "no PR_URL")
-    pr_number = _pr_number(pr_url)
-    if not pr_number:
-        return ReviewReadiness(False, "could not parse PR number")
     root = repo_root or zoe_repo_root()
 
     code, out = _run(
@@ -107,14 +86,4 @@ def assess_pr_review_ready(pr_url: str, *, repo_root: str | None = None) -> Revi
     if not _checks_all_green(data.get("statusCheckRollup") or []):
         return ReviewReadiness(False, "CI checks not all green")
 
-    unresolved = _unresolved_thread_count(pr_number, cwd=root)
-    if unresolved is None:
-        return ReviewReadiness(False, "could not read review threads")
-    if unresolved > 0:
-        return ReviewReadiness(False, f"{unresolved} unresolved review threads", unresolved)
-
-    return ReviewReadiness(
-        True,
-        "CI green + 0 unresolved Greptile threads + verify passed",
-        unresolved,
-    )
+    return ReviewReadiness(True, "CI green + verify passed (Greptile threads owned by closeout)")
