@@ -126,6 +126,39 @@ async def test_try_pi_hybrid_fast_accepts_deterministic_router_weather(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_try_pi_hybrid_fast_accept_records_audit_disagreement(tmp_path, monkeypatch):
+    _install_prefilter(monkeypatch)
+    evidence_path = tmp_path / "production-audit-disagreement.jsonl"
+
+    async def fake_compare(text, **kwargs):
+        if kwargs.get("run_pi") is False:
+            return _router_fast_lab_result()
+        return _accepted_lab_result(intent="daily_briefing", response="Here is your day.", router_intent="weather")
+
+    monkeypatch.setattr(pi_hybrid_production, "compare_pi_intent_lab", fake_compare)
+    monkeypatch.setattr(pi_hybrid_production, "_read_meminfo_mb", lambda: {"MemAvailable": 99999, "SwapFree": 99999})
+
+    decision = await try_pi_hybrid_production(
+        "will it rain later",
+        user_id="jason",
+        config=PiHybridProductionConfig(enabled=True, resource_guard_enabled=True),
+        env={
+            "ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_ENABLED": "true",
+            "ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_PATH": str(evidence_path),
+        },
+    )
+    await asyncio.sleep(0)
+
+    assert decision["accepted"] is True
+    records = [json.loads(line) for line in evidence_path.read_text(encoding="utf-8").splitlines()]
+    assert records[0]["accepted"] is True
+    assert records[1]["accepted"] is False
+    assert records[1]["reason"] == "audit_disagreement"
+    assert records[1]["intent"] == "weather"
+    assert records[1]["pi_intent"] == "daily_briefing"
+
+
+@pytest.mark.asyncio
 async def test_try_pi_hybrid_accepts_safe_agreed_weather(monkeypatch):
     _install_prefilter(monkeypatch)
 
