@@ -403,6 +403,14 @@ def test_dead_worker_reason_ignores_low_or_missing_pid(monkeypatch):
     assert kb.dead_worker_reason({"runs": [{"status": "running"}]}, grace_s=0) is None
 
 
+def test_dead_worker_reason_missing_started_at_not_reaped(monkeypatch):
+    # No started_at -> cannot prove the run is past grace; treat as brand-new and
+    # do NOT reap (conservative: avoids a false-positive block in a write race
+    # where worker_pid lands before started_at). grace_s=0 would otherwise reap.
+    monkeypatch.setattr(kb, "_is_expected_worker", lambda pid: False)
+    assert kb.dead_worker_reason({"runs": [{"status": "running", "worker_pid": 987654}]}, grace_s=0) is None
+
+
 def test_dead_worker_reason_none_when_not_running(monkeypatch):
     monkeypatch.setattr(kb, "_is_expected_worker", lambda pid: False)
     assert kb.dead_worker_reason({"runs": [{"status": "done", "worker_pid": 987654}]}, grace_s=0) is None

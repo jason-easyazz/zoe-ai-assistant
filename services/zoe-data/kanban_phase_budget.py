@@ -851,7 +851,9 @@ def dead_worker_reason(detail: dict[str, Any], *, grace_s: float | None = None) 
         if _is_expected_worker(pid):
             continue  # worker still alive
         started = _timestamp(run.get("started_at"))
-        if started is not None and (now - started) < grace:
+        if started is None:
+            continue  # no usable start time — treat as brand-new, don't reap yet
+        if (now - started) < grace:
             continue  # within grace; pid may simply not be published yet
         return f"WORKER_DIED: running worker pid {pid} is no longer alive (zombie running task)"
     return None
