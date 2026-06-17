@@ -287,8 +287,8 @@ async def test_lab_can_fulfill_safe_read_only_pi_result(monkeypatch):
     assert calls[0]["intent"].slots == {"forecast": False}
     assert calls[0]["user_id"] == "pi-intent-lab"
     assert result["contract"]["intent_dispatch_enabled"] is True
-    assert result["contract"]["side_effects"] == "read_only_external_only"
-    assert result["contract"]["intent_dispatch_scope"] == "read_only_allowlist_only"
+    assert result["contract"]["side_effects"] == "read_only_external_or_action_form_prefill"
+    assert result["contract"]["intent_dispatch_scope"] == "read_only_or_action_form_prefill"
     assert result["safe_fulfillment"]["attempted"] is True
     assert result["safe_fulfillment"]["allowed"] is True
     assert result["safe_fulfillment"]["would_execute"] is True
@@ -330,7 +330,7 @@ async def test_lab_counts_non_string_safe_fulfillment_response_chars(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_lab_blocks_side_effect_pi_fulfillment(monkeypatch):
+async def test_lab_prefills_timer_action_form_without_dispatching(monkeypatch):
     calls = []
     _install_fake_intent_router(monkeypatch, raw=None, extracted=None, execute_response="timer started", execute_calls=calls)
     _install_fake_pi_classifier(
@@ -353,12 +353,15 @@ async def test_lab_blocks_side_effect_pi_fulfillment(monkeypatch):
     )
 
     assert calls == []
-    assert result["safe_fulfillment"]["attempted"] is False
-    assert result["safe_fulfillment"]["allowed"] is False
-    assert result["safe_fulfillment"]["blocked_reason"] == "side_effect_or_unsupported_intent"
+    assert result["safe_fulfillment"]["attempted"] is True
+    assert result["safe_fulfillment"]["allowed"] is True
     assert result["safe_fulfillment"]["intent"] == "timer_create"
-    assert result["safe_fulfillment"]["response_chars"] == 0
-    assert result["safe_fulfillment"]["response_preview"] == ""
+    assert result["safe_fulfillment"]["execution_scope"] == "action_form_prefill"
+    assert result["safe_fulfillment"]["action_form"] == {
+        "component": "timer_create_form",
+        "prefill": {"minutes": 10},
+    }
+    assert result["safe_fulfillment"]["response_preview"] == "Timer is ready to confirm."
     assert result["safe_fulfillment"]["would_execute"] is False
 
 

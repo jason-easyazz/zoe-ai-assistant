@@ -83,6 +83,14 @@ def test_production_eligibility_is_disabled_and_tightly_prefiltered(monkeypatch)
         "what is the meeting time plus travel time",
         config=PiHybridProductionConfig(enabled=True, groups=("calculations",)),
     ) == (False, "production_prefilter_rejected")
+    assert pi_hybrid_production_eligible(
+        "set a ten minute timer",
+        config=PiHybridProductionConfig(enabled=True, groups=("timers",)),
+    ) == (True, "eligible")
+    assert pi_hybrid_production_eligible(
+        "timer ideas for cooking",
+        config=PiHybridProductionConfig(enabled=True, groups=("timers",)),
+    ) == (False, "production_prefilter_rejected")
 
 
 
@@ -537,6 +545,39 @@ async def test_try_pi_hybrid_records_rejected_production_evidence_when_enabled(t
     assert saved["accepted"] is False
     assert saved["reason"] == "disabled"
     assert saved["production_route_change"] is False
+
+
+@pytest.mark.asyncio
+async def test_try_pi_hybrid_accepts_timer_as_action_form_prefill(monkeypatch):
+    _install_prefilter(monkeypatch)
+
+    async def fake_compare(text, **kwargs):
+        result = _accepted_lab_result(intent="timer_create", response="Timer is ready to confirm.", router_intent="timer_create")
+        result["safe_fulfillment"]["execution_scope"] = "action_form_prefill"
+        result["safe_fulfillment"]["would_execute"] = False
+        result["safe_fulfillment"]["action_form"] = {
+            "component": "timer_create_form",
+            "prefill": {"minutes": 10},
+        }
+        return result
+
+    monkeypatch.setattr(pi_hybrid_production, "compare_pi_intent_lab", fake_compare)
+    monkeypatch.setattr(pi_hybrid_production, "_read_meminfo_mb", lambda: {"MemAvailable": 99999, "SwapFree": 99999})
+
+    decision = await try_pi_hybrid_production(
+        "set a ten minute timer",
+        user_id="jason",
+        config=PiHybridProductionConfig(enabled=True, groups=("timers",)),
+    )
+
+    assert decision["accepted"] is True
+    assert decision["intent"] == "timer_create"
+    assert decision["execution_scope"] == "action_form_prefill"
+    assert decision["action_form"] == {
+        "component": "timer_create_form",
+        "prefill": {"minutes": 10},
+    }
+    assert decision["production_route_change"] is True
 
 
 @pytest.mark.asyncio
