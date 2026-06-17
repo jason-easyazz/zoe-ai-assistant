@@ -34,6 +34,54 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/system", tags=["system"])
 
 
+def _pi_hybrid_production_public_status() -> dict[str, Any]:
+    """Minimal non-admin summary for the live Pi hybrid production lane."""
+    status = _pi_hybrid_production_status()
+    return {
+        "report_kind": "zoe_pi_hybrid_production_summary",
+        "ok": bool(status.get("ok")),
+        "status": status.get("status") or "unknown",
+        "details_endpoint": "/api/system/pi-intent/production-status",
+    }
+
+
+def _pi_hybrid_production_status() -> dict[str, Any]:
+    """Read-only status for the live Pi hybrid production lane."""
+    try:
+        from pi_hybrid_production import PiHybridProductionConfig
+
+        config = PiHybridProductionConfig.from_env()
+        config_dict = config.to_dict()
+    except ValueError as exc:
+        return {
+            "report_kind": "zoe_pi_hybrid_production_status",
+            "ok": False,
+            "status": "invalid_config",
+            "error": str(exc),
+        }
+    except Exception as exc:
+        return {
+            "report_kind": "zoe_pi_hybrid_production_status",
+            "ok": False,
+            "status": "unavailable",
+            "error": exc.__class__.__name__,
+        }
+
+    enabled_groups = config_dict.get("groups") or []
+    return {
+        "report_kind": "zoe_pi_hybrid_production_status",
+        "ok": bool(config.enabled and enabled_groups),
+        "status": "enabled_no_groups" if config.enabled and not enabled_groups else "enabled" if config.enabled else "disabled",
+        "route": "pi_intent_buffer_plus_zoe_safe_fulfillment",
+        "surfaces": ["chat_non_stream", "chat_stream", "voice_non_stream"],
+        "config": config_dict,
+        "notes": [
+            "Production Pi hybrid is separate from shadow/promotion evidence status.",
+            "Only allowlisted low-risk groups can be enabled here.",
+        ],
+    }
+
+
 @router.get("/platform")
 async def get_platform():
     return {
@@ -162,6 +210,7 @@ async def get_system_status(
             "pending_actions": ui_actions_pending,
             "online_panels_30s": panels_online,
         },
+        "pi_hybrid_production": _pi_hybrid_production_public_status(),
     }
 
 
@@ -195,6 +244,13 @@ async def get_pi_hybrid_buffer_status(user: dict = Depends(require_admin)):
     from pi_hybrid_buffer import pi_hybrid_buffer_status
 
     return pi_hybrid_buffer_status()
+
+
+@router.get("/pi-intent/production-status")
+async def get_pi_hybrid_production_status(user: dict = Depends(require_admin)):
+    """Read-only status for Zoe's live Pi hybrid production lane."""
+
+    return _pi_hybrid_production_status()
 
 
 @router.get("/pi-intent/readiness-report")

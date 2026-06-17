@@ -3,7 +3,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from auth import require_admin
-from routers.system import router as system_router
+from routers.system import _pi_hybrid_production_public_status, router as system_router
 
 
 def _write_exe(path, body):
@@ -245,6 +245,76 @@ def test_pi_hybrid_buffer_status_blocks_promoted_groups_when_classifier_disabled
     assert data["contract"]["foreground_pi_execution_enabled"] is False
     assert data["contract"]["promoted_groups"] == ["weather"]
     assert "promoted_groups_without_pi_classifier_enabled" in data["contract"]["blockers"]
+
+
+def test_pi_hybrid_production_status_endpoint_reports_live_config(monkeypatch):
+    monkeypatch.setenv("ZOE_PI_HYBRID_PRODUCTION_ENABLED", "true")
+    monkeypatch.setenv("ZOE_PI_HYBRID_PRODUCTION_GROUPS", "weather,daily_briefing")
+    monkeypatch.setenv("ZOE_PI_HYBRID_PRODUCTION_TRANSPORT", "rpc")
+    monkeypatch.setenv("ZOE_PI_HYBRID_RESOURCE_GUARD_ENABLED", "true")
+    monkeypatch.setenv("ZOE_PI_HYBRID_MIN_AVAILABLE_MB", "1024")
+    monkeypatch.setenv("ZOE_PI_HYBRID_MIN_SWAP_FREE_MB", "128")
+    app = _admin_app()
+
+    resp = TestClient(app).get("/api/system/pi-intent/production-status")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["report_kind"] == "zoe_pi_hybrid_production_status"
+    assert data["ok"] is True
+    assert data["status"] == "enabled"
+    assert data["route"] == "pi_intent_buffer_plus_zoe_safe_fulfillment"
+    assert "voice_non_stream" in data["surfaces"]
+    assert data["config"]["enabled"] is True
+    assert set(data["config"]["groups"]) == {"weather", "daily_briefing"}
+    assert data["config"]["transport"] == "rpc"
+    assert data["config"]["resource_guard_enabled"] is True
+    assert data["config"]["min_available_mb"] == 1024
+    assert data["config"]["min_swap_free_mb"] == 128
+
+
+def test_pi_hybrid_production_status_endpoint_reports_invalid_config(monkeypatch):
+    monkeypatch.setenv("ZOE_PI_HYBRID_PRODUCTION_ENABLED", "true")
+    monkeypatch.setenv("ZOE_PI_HYBRID_PRODUCTION_GROUPS", "weather,device_control")
+    app = _admin_app()
+
+    resp = TestClient(app).get("/api/system/pi-intent/production-status")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is False
+    assert data["status"] == "invalid_config"
+    assert "device_control" in data["error"]
+
+
+def test_pi_hybrid_production_public_status_hides_admin_details(monkeypatch):
+    monkeypatch.setenv("ZOE_PI_HYBRID_PRODUCTION_ENABLED", "true")
+    monkeypatch.setenv("ZOE_PI_HYBRID_PRODUCTION_GROUPS", "weather,device_control")
+
+    data = _pi_hybrid_production_public_status()
+
+    assert data == {
+        "report_kind": "zoe_pi_hybrid_production_summary",
+        "ok": False,
+        "status": "invalid_config",
+        "details_endpoint": "/api/system/pi-intent/production-status",
+    }
+    assert "config" not in data
+    assert "error" not in data
+
+
+def test_pi_hybrid_production_status_endpoint_rejects_non_admin():
+    app = FastAPI()
+    app.include_router(system_router)
+
+    async def fake_non_admin():
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    app.dependency_overrides[require_admin] = fake_non_admin
+
+    resp = TestClient(app).get("/api/system/pi-intent/production-status")
+
+    assert resp.status_code == 403
 
 
 def test_pi_readiness_report_endpoint_is_admin_scoped(tmp_path, monkeypatch):
