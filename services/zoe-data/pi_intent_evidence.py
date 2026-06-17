@@ -28,7 +28,19 @@ _SPACE_RE = re.compile(r"\s+")
 _SECRET_KEY_RE = re.compile(r"(?i)(api[_-]?key|\btoken\b|\bsecret\b|password|authorization|\bbearer\b)")
 _SECRET_TEXT_RE = re.compile(r"(?i)(api[\s_-]?key|authorization|bearer\s+[a-z0-9._\-]+|password\s*(is|=)|secret\s*(is|=)|token\s*(is|=))")
 _ALLOWED_ROUTE_CLASSES = {"deterministic", "fallback", "extraction_failed"}
-_ALLOWED_BASELINE_KINDS = {"router", "router_only_not_comparable", "router_extraction_failed_not_comparable", "zoe_agent_fallback_baseline"}
+_ALLOWED_BASELINE_KINDS = {
+    "operator_extraction_failed_override",
+    "operator_fallback_override",
+    "router",
+    "router_extraction_failed_not_comparable",
+    "router_only_not_comparable",
+    "zoe_agent_extraction_failed_baseline",
+    "zoe_agent_extraction_failed_error",
+    "zoe_agent_extraction_failed_timeout",
+    "zoe_agent_fallback_baseline",
+    "zoe_agent_fallback_error",
+    "zoe_agent_fallback_timeout",
+}
 _ALLOWED_LABEL_SOURCES = {"admin_review", "operator_override"}
 _DEFAULT_PRODUCTION_RECORD_LIMIT = 1000
 

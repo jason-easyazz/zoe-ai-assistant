@@ -226,6 +226,33 @@ def test_pi_hybrid_production_label_can_override_comparable_baseline(tmp_path):
     assert samples[0].metadata["baseline_comparable"] is True
 
 
+def test_pi_hybrid_production_label_rejects_unknown_route_class_and_baseline_kind(tmp_path):
+    evidence_path = tmp_path / "production.jsonl"
+    labels_path = tmp_path / "production-labels.jsonl"
+    evidence_path.write_text(
+        json.dumps({"text_hash": "briefing-hash", "source": "pi_hybrid_production"}) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="low-risk"):
+        append_pi_hybrid_production_label(
+            text_hash="briefing-hash",
+            outcome_label="daily_briefing",
+            route_class="unknown_class",
+            evidence_path=str(evidence_path),
+            labels_path=str(labels_path),
+        )
+    with pytest.raises(ValueError, match="low-risk"):
+        append_pi_hybrid_production_label(
+            text_hash="briefing-hash",
+            outcome_label="daily_briefing",
+            baseline_kind="made_up_baseline",
+            evidence_path=str(evidence_path),
+            labels_path=str(labels_path),
+        )
+    assert not labels_path.exists()
+
+
 def test_pi_hybrid_production_label_rejects_missing_or_privileged_label(tmp_path):
     evidence_path = tmp_path / "production.jsonl"
     labels_path = tmp_path / "production-labels.jsonl"

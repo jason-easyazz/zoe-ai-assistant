@@ -291,7 +291,21 @@ class PiHybridProductionLabelRequest(BaseModel):
     negative: bool = False
     source: Literal["admin_review", "operator_override"] = "admin_review"
     route_class: Optional[Literal["deterministic", "fallback", "extraction_failed"]] = None
-    baseline_kind: Optional[str] = None
+    baseline_kind: Optional[
+        Literal[
+            "operator_extraction_failed_override",
+            "operator_fallback_override",
+            "router",
+            "router_extraction_failed_not_comparable",
+            "router_only_not_comparable",
+            "zoe_agent_extraction_failed_baseline",
+            "zoe_agent_extraction_failed_error",
+            "zoe_agent_extraction_failed_timeout",
+            "zoe_agent_fallback_baseline",
+            "zoe_agent_fallback_error",
+            "zoe_agent_fallback_timeout",
+        ]
+    ] = None
     baseline_comparable: Optional[bool] = None
     zoe_latency_ms: Optional[float] = None
 
