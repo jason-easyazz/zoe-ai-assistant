@@ -317,6 +317,21 @@ def _schedule_pi_audit_after_fast_accept(
                         fast_decision.get("intent"),
                         pi.get("intent"),
                     )
+                    _record_production_evidence(
+                        text,
+                        user_id=user_id,
+                        decision={
+                            "report_kind": "zoe_pi_hybrid_production_decision",
+                            "accepted": False,
+                            "intent": _optional_str(fast_decision.get("intent")),
+                            "intent_group": fast_decision.get("intent_group"),
+                            "reason": "audit_disagreement",
+                            "pi_intent": _optional_str(pi.get("intent")),
+                            "pi_intent_group": pi.get("intent_group"),
+                            "production_route_change": False,
+                        },
+                        env=env,
+                    )
                 except Exception:
                     return
         except Exception:
