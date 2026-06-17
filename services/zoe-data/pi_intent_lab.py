@@ -706,7 +706,7 @@ async def _await_speculative_safe_fulfillment(speculative: Mapping[str, Any], *,
             "would_execute": False,
             "execution_scope": "read_only_allowlist",
             "started_before_pi": True,
-            "validated_by_pi": True,
+            "validated_by_pi": False,
             "speculative_safe_fulfillment": "timed_out",
         }
     result = dict(result)

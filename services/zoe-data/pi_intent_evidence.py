@@ -43,6 +43,7 @@ _ALLOWED_BASELINE_KINDS = {
 }
 _ALLOWED_LABEL_SOURCES = {"admin_review", "operator_override"}
 _DEFAULT_PRODUCTION_RECORD_LIMIT = 1000
+_DEFAULT_PRODUCTION_EVIDENCE_MAX_RECORDS = 10000
 
 
 def record_intent_miss_evidence(
@@ -125,7 +126,14 @@ def record_pi_hybrid_production_evidence(
         "enabled_groups": list(config.get("groups") or ()),
         "outcome_label": None,
     }
-    _append_jsonl(values.get("ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_PATH") or _DEFAULT_PRODUCTION_PATH, record)
+    _append_jsonl(
+        values.get("ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_PATH") or _DEFAULT_PRODUCTION_PATH,
+        record,
+        max_records=_positive_int_env(
+            values.get("ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_MAX_RECORDS"),
+            default=_DEFAULT_PRODUCTION_EVIDENCE_MAX_RECORDS,
+        ),
+    )
     return record
 
 
@@ -584,12 +592,32 @@ def _int_or_none(value: Any) -> int | None:
         return None
 
 
-def _append_jsonl(path: str, record: Mapping[str, Any]) -> None:
+def _append_jsonl(path: str, record: Mapping[str, Any], *, max_records: int | None = None) -> None:
     _reject_secret_keys(record)
     target = Path(path).expanduser()
     target.parent.mkdir(parents=True, exist_ok=True)
     with target.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
+    if max_records is not None and max_records > 0:
+        _prune_jsonl(target, max_records=max_records)
+
+
+def _prune_jsonl(target: Path, *, max_records: int) -> None:
+    try:
+        with target.open("r", encoding="utf-8", errors="replace") as handle:
+            rows = deque(handle, maxlen=max_records)
+        with target.open("w", encoding="utf-8") as handle:
+            handle.writelines(rows)
+    except FileNotFoundError:
+        return
+
+
+def _positive_int_env(value: Any, *, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
 
 
 def _reject_secret_keys(value: Mapping[str, Any], path: str = "") -> None:

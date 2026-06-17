@@ -874,6 +874,7 @@ async def test_lab_await_speculative_timeout_cancels_shielded_task():
     )
 
     assert result["timed_out"] is True
+    assert result["validated_by_pi"] is False
     assert result["speculative_safe_fulfillment"] == "timed_out"
     await asyncio.wait_for(cancelled.wait(), timeout=1.0)
     assert task.cancelled()
