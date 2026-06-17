@@ -468,6 +468,35 @@ async def _record_blocked_multica_chain(client, issue_id: str, chain: dict) -> s
     await _ensure_blocker_followup_ticket(client, issue_id, chain, blocker)
     return blocker
 
+
+async def _reconcile_diverged_board_status(client, issue_id: str, issue: dict, chain: dict) -> bool:
+    """Converge a board status that diverged from a regressed (partial) chain.
+
+    When a found, non-terminal ``partial`` chain (ready next phase) is paired with
+    a board status that is not ``in_progress`` — e.g. stuck ``in_review`` after a
+    verify bounce — the issue is neither a dispatch candidate nor advanced by the
+    done/blocked/running reconcile branches, so it freezes the single lane (and
+    blocks auto-admission while it sits ``in_review``). Move the board back to
+    ``in_progress`` so the next cycle's backfill re-dispatches the ready phase.
+
+    Returns True iff a reconcile write was made. No-ops (returns False) when the
+    chain is not a reconcilable partial or the board is already ``in_progress``.
+    """
+    from multica_poll_dispatch import chain_needs_reconcile  # type: ignore[import]
+
+    if not (chain.get("found") and chain_needs_reconcile(chain)):
+        return False
+    if str(issue.get("status") or "") == "in_progress":
+        return False
+    await client.record_progress(
+        str(issue_id),
+        evidence="Engineering run reconciled (board/journal divergence)",
+        status="in_progress",
+        clear_blocker=True,
+    )
+    return True
+
+
 async def _run_memory_capture_startup_probe() -> None:
     """Validate memory capture plumbing at startup.
 
@@ -1099,6 +1128,8 @@ async def lifespan(app: FastAPI):
                     )
                 except ValueError:
                     _reconcile_timeout = 20.0
+                from multica_poll_dispatch import chain_needs_reconcile  # type: ignore[import]
+
                 for issue in issues:
                     # Check whether a linked engineering workflow has reached a terminal state.
                     issue_id = issue.get("id")
@@ -1210,6 +1241,24 @@ async def lifespan(app: FastAPI):
                                     )
                                 except Exception as _push_exc:
                                     logger.debug("multica_poll: ws progress push failed: %s", _push_exc)
+                        elif chain.get("found") and chain_needs_reconcile(chain):
+                            try:
+                                if await _reconcile_diverged_board_status(
+                                    client, str(issue_id), issue, chain
+                                ):
+                                    logger.warning(
+                                        "multica_poll: reconciled diverged issue %s (%s) %s->in_progress "
+                                        "(partial chain needs re-dispatch)",
+                                        issue_id,
+                                        title[:40],
+                                        issue.get("status"),
+                                    )
+                            except Exception as _rec_exc:
+                                logger.debug(
+                                    "multica_poll: divergence reconcile failed for %s: %s",
+                                    issue_id,
+                                    _rec_exc,
+                                )
                     except Exception as _inner_exc:
                         logger.debug("multica_poll: inner error for issue %s: %s", issue_id, _inner_exc)
 

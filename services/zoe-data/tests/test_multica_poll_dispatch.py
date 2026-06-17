@@ -5,6 +5,7 @@ from multica_poll_dispatch import (
     chain_is_active,
     chain_is_running,
     chain_needs_dispatch,
+    chain_needs_reconcile,
     chain_poll_failed,
     is_stale_in_progress,
 )
@@ -76,6 +77,35 @@ def test_chain_needs_dispatch_running_blocked_done():
     assert chain_needs_dispatch({"found": True, "status": "running"}) is False
     assert chain_needs_dispatch({"found": True, "status": "blocked"}) is False
     assert chain_needs_dispatch({"found": True, "status": "done"}) is False
+
+
+def test_chain_needs_reconcile_partial_non_terminal():
+    # A partial (regressed, ready-to-dispatch) chain needs board reconciliation.
+    assert chain_needs_reconcile({"found": True, "status": "partial"}) is True
+
+
+def test_chain_needs_reconcile_suppressed_by_terminal_flags():
+    assert (
+        chain_needs_reconcile(
+            {"found": True, "status": "partial", "pipeline": {"terminal_block": True}}
+        )
+        is False
+    )
+    assert (
+        chain_needs_reconcile(
+            {"found": True, "status": "partial", "pipeline": {"fingerprint_abort": True}}
+        )
+        is False
+    )
+
+
+def test_chain_needs_reconcile_non_partial_statuses():
+    # running/blocked/done/not_found are handled by their own branches.
+    assert chain_needs_reconcile({"found": True, "status": "running"}) is False
+    assert chain_needs_reconcile({"found": True, "status": "blocked"}) is False
+    assert chain_needs_reconcile({"found": True, "status": "done"}) is False
+    assert chain_needs_reconcile({"found": False, "status": "not_found"}) is False
+    assert chain_needs_reconcile({}) is False
 
 
 def test_chain_needs_dispatch_for_operator_resumed_blocked_executor_row():

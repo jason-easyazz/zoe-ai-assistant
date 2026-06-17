@@ -93,10 +93,13 @@ def test_poll_loop_keeps_blocked_broadcast_out_of_running_branch():
     source = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
     blocked_branch = source.index('elif chain.get("found") and chain.get("status") == "blocked"')
     running_branch = source.index('elif chain.get("found") and chain.get("status") == "running"')
-    inner_except = source.index("except Exception as _inner_exc", running_branch)
+    # The running branch proper ends where the partial-divergence reconcile
+    # branch begins (which legitimately uses clear_blocker), so bound the segment
+    # there rather than at the inner except.
+    partial_branch = source.index("chain_needs_reconcile(chain)", running_branch)
 
     blocked_segment = source[blocked_branch:running_branch]
-    running_segment = source[running_branch:inner_except]
+    running_segment = source[running_branch:partial_branch]
 
     assert "blocker = await _record_blocked_multica_chain" in blocked_segment
     assert '"multica_task_blocked"' in blocked_segment
@@ -804,6 +807,62 @@ async def test_reconcile_branch_skips_on_poll_timeout_sentinel(monkeypatch):
     assert not (chain.get("found") and chain.get("status") == "done")
     assert not (chain.get("found") and chain.get("status") == "blocked")
     assert not (chain.get("found") and chain.get("status") == "running")
+
+
+class _RecordingClient:
+    def __init__(self):
+        self.calls = []
+
+    async def record_progress(self, issue_id, **kwargs):
+        self.calls.append((issue_id, kwargs))
+
+
+@pytest.mark.asyncio
+async def test_reconcile_diverged_board_status_converges_in_review_partial():
+    """A found, non-terminal partial chain whose board is in_review is converged
+    back to in_progress (status + clear_blocker) so it re-dispatches next cycle."""
+    from main import _reconcile_diverged_board_status
+
+    client = _RecordingClient()
+    issue = {"id": "x", "status": "in_review"}
+    chain = {"found": True, "status": "partial", "pipeline": {}}
+
+    did = await _reconcile_diverged_board_status(client, "x", issue, chain)
+
+    assert did is True
+    assert len(client.calls) == 1
+    _id, kwargs = client.calls[0]
+    assert _id == "x"
+    assert kwargs.get("status") == "in_progress"
+    assert kwargs.get("clear_blocker") is True
+
+
+@pytest.mark.asyncio
+async def test_reconcile_diverged_board_status_noop_when_already_in_progress():
+    from main import _reconcile_diverged_board_status
+
+    client = _RecordingClient()
+    issue = {"id": "x", "status": "in_progress"}
+    chain = {"found": True, "status": "partial"}
+
+    did = await _reconcile_diverged_board_status(client, "x", issue, chain)
+
+    assert did is False
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_reconcile_diverged_board_status_noop_for_terminal_or_nonpartial():
+    from main import _reconcile_diverged_board_status
+
+    client = _RecordingClient()
+    # terminal-flagged partial -> belongs to the blocked branch, not reconcile
+    terminal = {"found": True, "status": "partial", "pipeline": {"terminal_block": True}}
+    assert await _reconcile_diverged_board_status(client, "x", {"id": "x", "status": "in_review"}, terminal) is False
+    # running chain is not a reconcile candidate
+    running = {"found": True, "status": "running"}
+    assert await _reconcile_diverged_board_status(client, "x", {"id": "x", "status": "in_review"}, running) is False
+    assert client.calls == []
 
 
 @pytest.mark.asyncio
