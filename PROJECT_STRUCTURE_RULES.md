@@ -6,9 +6,14 @@
 
 > Runtime note (May 2026): Zoe now runs `zoe-data` host-native on port 8000,
 > `zoe-auth`/UI/PostgreSQL in Docker Compose, and OpenClaw/llama/Hermes/Kokoro
-> as host-native user services. Older `zoe-core`, LiteLLM, and Dockerized
-> llama.cpp references below are historical guardrails only; do not use them
-> for current operations.
+> as host-native user services. The older Docker `zoe-core` monolith, LiteLLM,
+> and Dockerized llama.cpp references below are historical guardrails only; do not
+> use them for current operations.
+>
+> Naming note (June 2026): `services/zoe-core/` has been REVIVED as Zoe's Pi-agent
+> core — the reasoning/orchestration brain on Gemma 4 that binds the services and
+> calls abilities. It is the center of Zoe, not a monolith. The retired Docker
+> monolith of the same name is archived at `docs/archive/retired-services/zoe-core/`.
 
 This document defines the **mandatory** structure and rules for the Zoe project. All files must follow these rules. Automated checks enforce compliance.
 
