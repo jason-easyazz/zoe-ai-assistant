@@ -459,7 +459,7 @@ def _summarize_production_records(records: list[Mapping[str, Any]]) -> dict[str,
         if record.get("production_route_change"):
             route_change_count += 1
             stats["route_change_count"] += 1
-        if not record.get("outcome_label"):
+        if not record.get("outcome_label") and not record.get("negative"):
             unlabeled_count += 1
             stats["unlabeled_count"] += 1
         _append_number(stats["pi_latency_ms"], record.get("pi_latency_ms"))
