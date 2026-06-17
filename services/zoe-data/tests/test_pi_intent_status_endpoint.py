@@ -441,6 +441,75 @@ def test_pi_intent_shadow_label_endpoint_rejects_non_admin():
     assert resp.status_code == 403
 
 
+
+
+def test_pi_hybrid_production_label_queue_endpoint_returns_sanitized_rows(tmp_path, monkeypatch):
+    production_path = tmp_path / "production.jsonl"
+    labels_path = tmp_path / "production-labels.jsonl"
+    production_path.write_text(
+        json.dumps(
+            {
+                "text_hash": "weatherhash",
+                "text_preview": "rain later",
+                "accepted": True,
+                "intent": "weather",
+                "intent_group": "weather",
+                "pi_intent": "weather",
+                "outcome_label": None,
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "text_hash": "briefinghash",
+                "text_preview": "daily briefing",
+                "accepted": True,
+                "intent": "daily_briefing",
+                "intent_group": "daily_briefing",
+                "pi_intent": "daily_briefing",
+                "outcome_label": None,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    labels_path.write_text(
+        json.dumps({"text_hash": "briefinghash", "outcome_label": "daily_briefing", "source": "admin_review"}) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_PATH", str(production_path))
+    monkeypatch.setenv("ZOE_PI_HYBRID_PRODUCTION_LABELS_PATH", str(labels_path))
+    app = _admin_app()
+
+    resp = TestClient(app).get("/api/system/pi-intent/production-label-queue")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["summary"]["path"] == str(production_path)
+    assert data["summary"]["labels_path"] == str(labels_path)
+    assert data["summary"]["skipped_labeled_count"] == 1
+    assert [row["text_hash"] for row in data["queue"]] == ["weatherhash"]
+    assert data["queue"][0]["label_example"] == {
+        "text_hash": "weatherhash",
+        "source": "admin_review",
+        "outcome_label": "weather",
+    }
+
+
+def test_pi_hybrid_production_label_queue_endpoint_rejects_non_admin():
+    app = FastAPI()
+    app.include_router(system_router)
+
+    async def fake_non_admin():
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    app.dependency_overrides[require_admin] = fake_non_admin
+
+    resp = TestClient(app).get("/api/system/pi-intent/production-label-queue")
+
+    assert resp.status_code == 403
+
+
 def test_pi_hybrid_production_label_endpoint_appends_trusted_label(tmp_path, monkeypatch):
     production_path = tmp_path / "production.jsonl"
     labels_path = tmp_path / "production-labels.jsonl"

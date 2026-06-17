@@ -193,6 +193,178 @@ def apply_pi_hybrid_production_labels(
     return output
 
 
+def build_pi_hybrid_production_label_queue(
+    records: Sequence[Mapping[str, Any]],
+    *,
+    groups: Sequence[str] | None = None,
+    include_labeled: bool = False,
+    include_rejected: bool = False,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """Build a sanitized review queue from production Pi hybrid evidence.
+
+    The queue is read-only. Rows include label examples suitable for the
+    existing production-label sidecar, but do not write labels or promote routes.
+    """
+    selected_groups = _selected_label_groups(groups)
+    latest = _latest_production_by_text_hash(records)
+    rows: list[dict[str, Any]] = []
+    skipped_labeled = 0
+    skipped_rejected = 0
+    skipped_group = 0
+    for record in latest:
+        labeled = bool(record.get("outcome_label") is not None or record.get("negative"))
+        accepted = bool(record.get("accepted"))
+        skip_labeled = labeled and not include_labeled
+        skip_rejected = not accepted and not include_rejected
+        if skip_labeled:
+            skipped_labeled += 1
+        if skip_rejected:
+            skipped_rejected += 1
+        if skip_labeled or skip_rejected:
+            continue
+        row = _production_queue_row(record, labeled=labeled)
+        if selected_groups and row["intent_group"] not in selected_groups:
+            skipped_group += 1
+            continue
+        rows.append(row)
+    rows.sort(key=_production_queue_sort_key)
+    limited = rows[: max(0, int(limit))]
+    return {
+        "summary": {
+            "raw_record_count": len(records),
+            "unique_text_count": len(latest),
+            "queue_count": len(limited),
+            "available_queue_count": len(rows),
+            "skipped_labeled_count": skipped_labeled,
+            "skipped_rejected_count": skipped_rejected,
+            "skipped_group_count": skipped_group,
+            "selected_groups": selected_groups,
+            "queue_count_by_group": _count_production_queue_by_group(rows),
+        },
+        "queue": limited,
+    }
+
+
+def _selected_label_groups(groups: Sequence[str] | None) -> list[str]:
+    if not groups:
+        return []
+    allowed = {"chat"}
+    for intent in ("weather", "daily_briefing", "list_show", "greeting", "time_query", "date_query", "calculate", "timer_create"):
+        group = intent_group_for_intent(intent)
+        if group:
+            allowed.add(group)
+    selected: list[str] = []
+    for raw in groups:
+        for part in str(raw).split(","):
+            group = part.strip()
+            if not group:
+                continue
+            if group not in allowed:
+                raise ValueError(f"unsupported production label group: {group}")
+            selected.append(group)
+    return sorted(set(selected))
+
+
+def _latest_production_by_text_hash(records: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    by_hash: dict[str, Mapping[str, Any]] = {}
+    anonymous: list[Mapping[str, Any]] = []
+    for record in records:
+        text_hash = _optional_str(record.get("text_hash"))
+        if not text_hash:
+            anonymous.append(record)
+            continue
+        existing = by_hash.get(text_hash)
+        if existing is None or _record_ts(record) >= _record_ts(existing):
+            by_hash[text_hash] = record
+    keyed = sorted(by_hash.values(), key=_record_ts, reverse=True)
+    anonymous.sort(key=_record_ts, reverse=True)
+    return [*keyed, *anonymous]
+
+
+def _record_ts(record: Mapping[str, Any]) -> float:
+    try:
+        return float(record.get("ts") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _production_queue_row(record: Mapping[str, Any], *, labeled: bool) -> dict[str, Any]:
+    suggested = _suggested_production_label(record)
+    group = intent_group_for_intent(suggested) or _optional_str(record.get("intent_group"))
+    if not group:
+        group = intent_group_for_intent(_optional_str(record.get("pi_intent"))) or "chat"
+    return {
+        "text_hash": _optional_str(record.get("text_hash")),
+        "text_preview": _optional_str(record.get("text_preview")),
+        "intent_group": group,
+        "suggested_outcome_label": suggested,
+        "suggested_negative": suggested is None,
+        "already_labeled": labeled,
+        "accepted": bool(record.get("accepted")),
+        "reason": _optional_str(record.get("reason")),
+        "intent": _optional_str(record.get("intent")),
+        "pi_intent": _optional_str(record.get("pi_intent")),
+        "agreement_kind": _optional_str(record.get("agreement_kind")),
+        "route_class": _optional_str(record.get("route_class")) or "fallback",
+        "baseline_kind": _optional_str(record.get("baseline_kind")),
+        "baseline_comparable": _bool_or_none(record.get("baseline_comparable")),
+        "zoe_latency_ms": _float_or_none(record.get("zoe_latency_ms")),
+        "pi_latency_ms": _float_or_none(record.get("pi_latency_ms")),
+        "safe_fulfillment_latency_ms": _float_or_none(record.get("safe_fulfillment_latency_ms")),
+        "production_route_change": _bool_record_value(record.get("production_route_change")),
+        "label_example": _production_label_example(record, suggested),
+    }
+
+
+def _suggested_production_label(record: Mapping[str, Any]) -> str | None:
+    for key in ("outcome_label", "intent", "pi_intent", "safe_fulfillment_intent"):
+        value = _optional_str(record.get(key))
+        if value and intent_group_for_intent(value):
+            return value
+    return None
+
+
+def _production_label_example(record: Mapping[str, Any], suggested: str | None) -> dict[str, Any]:
+    row: dict[str, Any] = {"text_hash": _optional_str(record.get("text_hash")), "source": "admin_review"}
+    if suggested:
+        row["outcome_label"] = suggested
+    else:
+        row["negative"] = True
+    route_class = _optional_str(record.get("route_class"))
+    if route_class:
+        row["route_class"] = route_class
+    baseline_kind = _optional_str(record.get("baseline_kind"))
+    if baseline_kind:
+        row["baseline_kind"] = baseline_kind
+    if record.get("baseline_comparable") is not None:
+        row["baseline_comparable"] = _bool_record_value(record.get("baseline_comparable"))
+    if record.get("zoe_latency_ms") is not None:
+        row["zoe_latency_ms"] = _float_or_none(record.get("zoe_latency_ms"))
+    return row
+
+
+def _production_queue_sort_key(row: Mapping[str, Any]) -> tuple[int, float, str]:
+    low_risk = bool(intent_group_for_intent(_optional_str(row.get("suggested_outcome_label"))))
+    accepted = bool(row.get("accepted"))
+    latency = row.get("pi_latency_ms") if isinstance(row.get("pi_latency_ms"), (int, float)) else 999999.0
+    return (0 if accepted and low_risk else 1, float(latency), str(row.get("text_hash") or ""))
+
+
+def _count_production_queue_by_group(rows: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        group = str(row.get("intent_group") or "unmapped")
+        counts[group] = counts.get(group, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _bool_or_none(value: Any) -> bool | None:
+    if value is None:
+        return None
+    return _bool_record_value(value)
+
+
 def append_pi_hybrid_production_label(
     *,
     text_hash: str,
@@ -441,6 +613,7 @@ def _env_bool(value: str | None, *, default: bool = False) -> bool:
 
 __all__ = [
     "append_pi_hybrid_production_label",
+    "build_pi_hybrid_production_label_queue",
     "apply_pi_hybrid_production_labels",
     "has_secret_evidence_text",
     "load_pi_hybrid_production_labels",

@@ -310,6 +310,42 @@ class PiHybridProductionLabelRequest(BaseModel):
     zoe_latency_ms: Optional[float] = None
 
 
+@router.get("/pi-intent/production-label-queue")
+async def get_pi_hybrid_production_label_queue(
+    group: list[str] | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    include_labeled: bool = Query(default=False),
+    include_rejected: bool = Query(default=False),
+    user: dict = Depends(require_admin),
+):
+    """Read-only queue of sanitized production Pi records awaiting labels."""
+    from pi_intent_evidence import (
+        apply_pi_hybrid_production_labels,
+        build_pi_hybrid_production_label_queue,
+        load_pi_hybrid_production_labels,
+        load_pi_hybrid_production_records,
+    )
+
+    evidence_path = os.environ.get("ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_PATH") or "~/.zoe/data/pi-hybrid-production-evidence.jsonl"
+    labels_path = os.environ.get("ZOE_PI_HYBRID_PRODUCTION_LABELS_PATH") or "~/.zoe/data/pi-hybrid-production-labels.jsonl"
+    try:
+        records = load_pi_hybrid_production_records(evidence_path, limit=max(limit * 10, 500))
+        labels = load_pi_hybrid_production_labels(labels_path)
+        labeled_records = apply_pi_hybrid_production_labels(records, labels)
+        payload = build_pi_hybrid_production_label_queue(
+            labeled_records,
+            groups=group,
+            include_labeled=include_labeled,
+            include_rejected=include_rejected,
+            limit=limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    payload["summary"]["path"] = os.path.expanduser(evidence_path)
+    payload["summary"]["labels_path"] = os.path.expanduser(labels_path)
+    return payload
+
+
 @router.post("/pi-intent/production-labels")
 async def post_pi_hybrid_production_label(
     payload: PiHybridProductionLabelRequest,
