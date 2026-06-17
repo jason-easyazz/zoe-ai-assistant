@@ -1229,6 +1229,21 @@ def _check_fast_response(message: str) -> str | None:
         spoken_day = _spoken_day_ordinal(now.day)
         return f"Today is {now.strftime('%A')}, {now.strftime('%B')} {spoken_day}."
 
+    # Identity/capability prompts - fast and Zoe-specific, avoiding model identity drift.
+    _identity_triggers = {
+        "who are you", "what are you", "who is zoe", "what is zoe",
+        "tell me about yourself", "introduce yourself",
+    }
+    if msg in _identity_triggers:
+        return "I'm Zoe, your local assistant. I can help with quick answers, household tasks, reminders, lists, weather, and deeper work when you need it."
+
+    _capability_triggers = {
+        "what can you do", "what can you help with", "how can you help",
+        "what do you do", "what are your capabilities",
+    }
+    if msg in _capability_triggers:
+        return "I can answer questions, manage reminders and lists, check weather and daily plans, help with smart-home tasks, and work with your local tools when you ask."
+
     # Lightweight curiosity prompts - keep this tiny and factual. Unknown topics fall through to the model.
     _interesting_match = re.match(
         r"^(?:tell me|give me|say) (?:something interesting|an interesting fact|a fun fact)(?: about (?P<topic>[a-z0-9 _-]+))?$",

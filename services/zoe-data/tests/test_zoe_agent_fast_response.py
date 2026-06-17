@@ -27,3 +27,24 @@ def test_fast_response_answers_singular_ocean_topic() -> None:
 
     assert response is not None
     assert "oxygen" in response.lower()
+
+
+
+def test_fast_response_answers_zoe_identity_prompt() -> None:
+    response = zoe_agent._check_fast_response("who are you")
+
+    assert response is not None
+    assert response.startswith("I'm Zoe")
+    assert "local assistant" in response
+
+
+def test_fast_response_answers_capability_prompt() -> None:
+    response = zoe_agent._check_fast_response("what can you do")
+
+    assert response is not None
+    assert "reminders" in response.lower()
+    assert "weather" in response.lower()
+
+
+def test_fast_response_leaves_open_howto_to_model() -> None:
+    assert zoe_agent._check_fast_response("how do i boil an egg") is None
