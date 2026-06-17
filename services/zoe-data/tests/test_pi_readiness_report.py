@@ -548,6 +548,19 @@ def test_readiness_report_applies_production_label_sidecar(tmp_path):
                     "text_preview": "give me my daily briefing",
                     "outcome_label": None,
                 },
+                {
+                    "ts": 3.0,
+                    "source": "pi_hybrid_production",
+                    "text_hash": "chat-hash",
+                    "accepted": False,
+                    "reason": "pi_disagreed",
+                    "intent_group": "weather",
+                    "pi_latency_ms": 1800.0,
+                    "safe_fulfillment_latency_ms": None,
+                    "production_route_change": False,
+                    "text_preview": "just chatting",
+                    "outcome_label": None,
+                },
             ]
         ),
         encoding="utf-8",
@@ -558,6 +571,7 @@ def test_readiness_report_applies_production_label_sidecar(tmp_path):
             for row in [
                 {"text_hash": "weather-hash", "outcome_label": "weather", "source": "admin_review"},
                 {"text_hash": "briefing-hash", "outcome_label": "daily_briefing", "source": "admin_review"},
+                {"text_hash": "chat-hash", "outcome_label": "chat", "source": "admin_review"},
             ]
         ),
         encoding="utf-8",
@@ -569,15 +583,50 @@ def test_readiness_report_applies_production_label_sidecar(tmp_path):
 
     report = pi_readiness_report(env)
 
-    assert report["summary"]["production_label_count"] == 2
+    assert report["summary"]["production_label_count"] == 3
     assert report["summary"]["production_unlabeled_count"] == 0
-    assert report["production_evidence"]["label_count"] == 2
+    assert report["production_evidence"]["label_count"] == 3
     assert report["production_evidence"]["unlabeled_count"] == 0
-    assert {row["outcome_label"] for row in report["production_evidence"]["recent"]} == {"weather", "daily_briefing"}
+    assert {row["outcome_label"] for row in report["production_evidence"]["recent"]} == {
+        None,
+        "weather",
+        "daily_briefing",
+    }
     assert {row["outcome_label_source"] for row in report["production_evidence"]["recent"]} == {
         "production_label_sidecar"
     }
     assert not [action for action in report["next_actions"] if action.get("kind") == "label_production_evidence"]
+
+
+def test_readiness_report_surfaces_production_label_file_error(tmp_path):
+    shadow_path = tmp_path / "shadow.jsonl"
+    shadow_path.write_text("", encoding="utf-8")
+    production_path = tmp_path / "production.jsonl"
+    labels_path = tmp_path / "production-labels.jsonl"
+    labels_path.mkdir()
+    production_path.write_text(
+        json.dumps(
+            {
+                "source": "pi_hybrid_production",
+                "text_hash": "weather-hash",
+                "accepted": True,
+                "intent_group": "weather",
+                "outcome_label": None,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    env = _env(tmp_path, shadow_path)
+    env["ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_ENABLED"] = "true"
+    env["ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_PATH"] = str(production_path)
+    env["ZOE_PI_HYBRID_PRODUCTION_LABELS_PATH"] = str(labels_path)
+
+    report = pi_readiness_report(env)
+
+    assert report["production_evidence"]["label_count"] == 0
+    assert report["production_evidence"]["label_error"] == "IsADirectoryError"
+    assert report["summary"]["production_unlabeled_count"] == 1
 
 
 def test_readiness_report_missing_production_evidence_is_nonblocking(tmp_path):

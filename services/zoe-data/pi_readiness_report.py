@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from pi_hybrid_buffer import pi_hybrid_buffer_status
+from pi_intent_evidence import apply_pi_hybrid_production_labels, load_pi_hybrid_production_labels
 from pi_intent_shadow import pi_intent_shadow_status
 from zoe_pi_promotion import LOW_RISK_PI_INTENT_GROUPS
 
@@ -396,10 +397,15 @@ def _load_production_evidence(env: Mapping[str, str]) -> dict[str, Any]:
             "record_count": 0,
             "error": exc.__class__.__name__,
         }
-    labels = _load_production_labels(str(labels_path)) if labels_path else {}
-    labeled_records = _apply_production_labels(records, labels)
+    label_error = None
+    try:
+        labels = load_pi_hybrid_production_labels(str(labels_path)) if labels_path else {}
+    except OSError as exc:
+        labels = {}
+        label_error = exc.__class__.__name__
+    labeled_records = apply_pi_hybrid_production_labels(records, labels)
     summary = _summarize_production_records(labeled_records)
-    return {
+    result = {
         "enabled": enabled,
         "loaded": True,
         "path": str(path),
@@ -408,26 +414,9 @@ def _load_production_evidence(env: Mapping[str, str]) -> dict[str, Any]:
         "invalid_lines": invalid_lines,
         **summary,
     }
-
-
-def _load_production_labels(path: str) -> dict[str, dict[str, Any]]:
-    try:
-        from pi_intent_evidence import load_pi_hybrid_production_labels
-
-        return load_pi_hybrid_production_labels(path)
-    except Exception:
-        return {}
-
-
-def _apply_production_labels(
-    records: list[Mapping[str, Any]], labels: Mapping[str, Mapping[str, Any]]
-) -> list[dict[str, Any]]:
-    try:
-        from pi_intent_evidence import apply_pi_hybrid_production_labels
-
-        return apply_pi_hybrid_production_labels(records, labels)
-    except Exception:
-        return [dict(record) for record in records]
+    if label_error:
+        result["label_error"] = label_error
+    return result
 
 
 def _summarize_production_records(records: list[Mapping[str, Any]]) -> dict[str, Any]:
