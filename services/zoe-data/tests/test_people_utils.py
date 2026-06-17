@@ -140,11 +140,25 @@ def test_none_preferences_stays_none():
 
 
 def test_dict_like_row_supports_mapping_style_items():
-    # Records produced by psycopg2 / asyncpg behave like dicts but are not ``dict``
-    # instances. The helper must coerce them via ``dict(row)`` while preserving
-    # the canonical schema.
-    class MappingRow(dict):
-        pass
+    # Records produced by psycopg2 / asyncpg behave like dicts but are NOT ``dict``
+    # instances (they are Mappings). The helper must coerce them via ``dict(row)``
+    # while preserving the canonical schema. Using a real ``Mapping`` that does not
+    # inherit from ``dict`` actually exercises that coercion branch (a dict subclass
+    # would take the ``d = row`` fast-path and never hit ``dict(row)``).
+    from collections.abc import Mapping
+
+    class MappingRow(Mapping):
+        def __init__(self, **data):
+            self._data = dict(data)
+
+        def __getitem__(self, key):
+            return self._data[key]
+
+        def __iter__(self):
+            return iter(self._data)
+
+        def __len__(self):
+            return len(self._data)
 
     row = MappingRow(
         id=7,
@@ -165,6 +179,7 @@ def test_dict_like_row_supports_mapping_style_items():
     person = row_to_person(row)
 
     assert isinstance(row, MappingRow)
+    assert not isinstance(row, dict)  # ensures the dict(row) coercion branch is exercised
     assert person["id"] == 7
     assert person["name"] == "Margaret"
     assert person["circle"] == "inner"
