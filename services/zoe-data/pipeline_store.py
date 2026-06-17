@@ -545,6 +545,23 @@ def _harness_closeout_merge_enabled() -> bool:
     ).strip().lower() not in {"0", "false", "no"}
 
 
+def _is_harness_closeout_merge_evidence(item: Any) -> bool:
+    """True for the harness's OWN confirmed-merge closeout evidence.
+
+    Single source of truth for both the _append_harness_closeout_merge idempotency
+    guard and the sync_pipeline_from_chain closeout-completion check, so the two
+    cannot drift if the evidence schema evolves.
+    """
+    md = getattr(item, "metadata", {}) or {}
+    return (
+        getattr(item, "kind", "") == "greptile"
+        and getattr(item, "passed", None) is True
+        and md.get("phase") == "closeout"
+        and md.get("source") == "harness"
+        and bool(md.get("merge_sha"))
+    )
+
+
 async def _append_harness_closeout_merge(state: PipelineState, phase: PipelinePhase) -> PipelineState:
     """Run the greploop merge guard harness-side and append `greptile` evidence on merge.
 
@@ -562,14 +579,7 @@ async def _append_harness_closeout_merge(state: PipelineState, phase: PipelinePh
     # skip just because the closeout agent recorded a greptile item (source!=
     # "harness"): that agent evidence can be written WITHOUT an actual merge, and
     # skipping here is exactly what let closeout false-complete (PR left open).
-    if any(
-        item.kind == "greptile"
-        and item.passed is True
-        and item.metadata.get("phase") == phase
-        and item.metadata.get("source") == "harness"
-        and item.metadata.get("merge_sha")
-        for item in state.evidence
-    ):
+    if any(_is_harness_closeout_merge_evidence(item) for item in state.evidence):
         return state
     pr_url = _pr_url_from_state(state)
     if not pr_url:
@@ -905,16 +915,16 @@ async def _sync_pipeline_from_chain_once(
             # than completing on the agent's unverified evidence.
             state = await _append_harness_closeout_merge(state, "closeout")
             harness_merged = any(
-                e.kind == "greptile"
-                and e.passed is True
-                and e.metadata.get("phase") == "closeout"
-                and e.metadata.get("source") == "harness"
-                and e.metadata.get("merge_sha")
-                for e in state.evidence
+                _is_harness_closeout_merge_evidence(e) for e in state.evidence
             )
             if harness_merged and can_complete_phase(state):
                 closeout_harness_complete = True
-            else:
+            elif not harness_merged:
+                # Only the NOT-merged case suppresses completion (so an agent's
+                # unverified greptile claim can't advance closeout). If the harness
+                # DID merge but the gate is somehow unsatisfied, fall through to the
+                # normal outcome path so the appended merge evidence is persisted
+                # (gate_block) rather than discarded by a bare continue.
                 closeout_merge_pending = True
 
         outcome = (
