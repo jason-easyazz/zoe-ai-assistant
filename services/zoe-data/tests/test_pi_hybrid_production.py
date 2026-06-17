@@ -604,6 +604,7 @@ async def test_try_pi_hybrid_accepts_pi_validated_timer_action_form_when_router_
     )
 
     assert decision["accepted"] is True
+    assert decision["intent"] == "timer_create"
     assert decision["agreement_kind"] == "pi_validated_action_form"
     assert decision["execution_scope"] == "action_form_prefill"
     assert decision["action_form"] == {"component": "timer_create_form", "prefill": {"duration": "ten minute"}}
