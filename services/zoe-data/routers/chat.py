@@ -51,6 +51,7 @@ _ACTION_FORM_INTENTS: frozenset[str] = frozenset({
     "calendar_create",
     "list_add",
     "list_show",
+    "timer_create",
 })
 
 
@@ -213,13 +214,24 @@ def _intent_action_form_payload(intent, panel_id: str | None = None) -> dict | N
             **({"panel_id": panel_id} if panel_id else {}),
         }
 
+    if name == "timer_create":
+        return {
+            "panel_type": "timer",
+            "title": "New Timer",
+            "data": {
+                "minutes": slots.get("minutes") or slots.get("duration") or 5,
+                "label": slots.get("label") or "Timer",
+            },
+            **({"panel_id": panel_id} if panel_id else {}),
+        }
+
     return None
 
 
 async def _broadcast_intent_nav(intent, panel_id: str | None = None) -> None:
     """Broadcast UI actions to the touch panel when an intent is detected.
 
-    For action-form intents (calendar_create, list_add/show), a full-screen
+    For action-form intents (calendar_create, list_add/show, timer_create), a full-screen
     interactive form overlay is shown instead of navigating to a detail page.
     For all other intents, the classic panel_navigate + panel_open_form flow runs.
     A show_card is always emitted so the dashboard overlay shows intent-specific info.

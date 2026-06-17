@@ -83,3 +83,18 @@ async def test_chat_pi_hybrid_action_form_broadcasts_without_tool_memory_side_ef
     assert saved == [{"session_id": "session-1", "role": "assistant", "content": "Timer is ready to confirm."}]
     assert run_states[0]["metadata"]["pi_hybrid"]["execution_scope"] == "action_form_prefill"
     assert run_states[0]["metadata"]["pi_hybrid"]["action_form"] is True
+
+
+
+def test_timer_create_has_touch_panel_action_form_payload():
+    class Intent:
+        name = "timer_create"
+        slots = {"minutes": 10, "label": "Tea"}
+
+    assert "timer_create" in chat._ACTION_FORM_INTENTS
+    assert chat._intent_action_form_payload(Intent(), panel_id="panel-1") == {
+        "panel_type": "timer",
+        "title": "New Timer",
+        "data": {"minutes": 10, "label": "Tea"},
+        "panel_id": "panel-1",
+    }

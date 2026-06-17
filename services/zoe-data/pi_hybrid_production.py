@@ -319,6 +319,8 @@ def _router_fast_acceptance_decision(result: Mapping[str, Any], config: PiHybrid
         "pi_audit_scheduled": True,
         "safe_fulfillment_latency_ms": safe.get("latency_ms"),
         "speculative_safe_fulfillment": safe.get("speculative_safe_fulfillment"),
+        "execution_scope": safe.get("execution_scope"),
+        "action_form": safe.get("action_form"),
     }
 
 

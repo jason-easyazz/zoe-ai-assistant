@@ -366,6 +366,37 @@ async def test_lab_prefills_timer_action_form_without_dispatching(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_lab_blocks_non_allowlisted_side_effect_pi_fulfillment(monkeypatch):
+    calls = []
+    _install_fake_intent_router(monkeypatch, raw=None, extracted=None, execute_response="reminder set", execute_calls=calls)
+    _install_fake_pi_classifier(
+        monkeypatch,
+        result=types.SimpleNamespace(
+            intent="reminder_create",
+            slots={"title": "take bins out"},
+            confidence=0.95,
+            task_lane="fast_tool",
+            source="fake_pi",
+            latency_ms=90.0,
+            reason="reminder signal",
+        ),
+    )
+
+    result = await compare_pi_intent_lab(
+        "remind me to take the bins out",
+        include_hybrid_status=False,
+        include_safe_fulfillment=True,
+    )
+
+    assert calls == []
+    assert result["safe_fulfillment"]["attempted"] is False
+    assert result["safe_fulfillment"]["allowed"] is False
+    assert result["safe_fulfillment"]["blocked_reason"] == "side_effect_or_unsupported_intent"
+    assert result["safe_fulfillment"]["intent"] == "reminder_create"
+    assert result["safe_fulfillment"]["would_execute"] is False
+
+
+@pytest.mark.asyncio
 async def test_lab_safe_fulfillment_timeout_is_reported(monkeypatch):
     calls = []
     _install_fake_intent_router(
