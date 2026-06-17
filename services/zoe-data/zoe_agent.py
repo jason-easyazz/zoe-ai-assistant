@@ -1229,6 +1229,27 @@ def _check_fast_response(message: str) -> str | None:
         spoken_day = _spoken_day_ordinal(now.day)
         return f"Today is {now.strftime('%A')}, {now.strftime('%B')} {spoken_day}."
 
+    # Lightweight curiosity prompts - keep this tiny and factual. Unknown topics fall through to the model.
+    _interesting_match = re.match(
+        r"^(?:tell me|give me|say) (?:something interesting|an interesting fact|a fun fact)(?: about (?P<topic>[a-z0-9 _-]+))?$",
+        msg,
+        re.IGNORECASE,
+    )
+    if _interesting_match:
+        topic = (_interesting_match.group("topic") or "").strip().replace("_", " ")
+        ocean_fact = "The oceans make more than half of Earth's oxygen, largely thanks to tiny drifting phytoplankton."
+        facts = {
+            "ocean": ocean_fact,
+            "oceans": ocean_fact,
+            "space": "Space is so quiet because sound needs particles to travel through, and space is almost a vacuum.",
+            "dinosaurs": "Some dinosaurs had feathers, so birds are not just dinosaur relatives - they are living dinosaurs.",
+            "bees": "Bees can recognise patterns and communicate food locations with a waggle dance.",
+        }
+        if not topic:
+            return ocean_fact
+        if topic in facts:
+            return facts[topic]
+
     # Uptime / status
     _status_triggers = {
         "status", "are you running", "are you there", "you there", "ping",
