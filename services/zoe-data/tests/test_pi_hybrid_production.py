@@ -263,6 +263,50 @@ async def test_try_pi_hybrid_fast_accepts_deterministic_daily_briefing(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_try_pi_hybrid_fast_accepts_deterministic_greeting(monkeypatch):
+    _install_prefilter(monkeypatch)
+    calls = []
+
+    async def fake_compare(text, **kwargs):
+        calls.append(dict(kwargs))
+        if kwargs.get("run_pi") is False:
+            return _router_fast_lab_result(
+                intent="greeting",
+                response="Hi, Jason! How can I help?",
+            )
+        return _accepted_lab_result(
+            intent="greeting",
+            response="Hi, Jason! How can I help?",
+            router_intent="greeting",
+        )
+
+    monkeypatch.setattr(pi_hybrid_production, "compare_pi_intent_lab", fake_compare)
+    monkeypatch.setattr(pi_hybrid_production, "_read_meminfo_mb", lambda: {"MemAvailable": 99999, "SwapFree": 99999})
+
+    decision = await try_pi_hybrid_production(
+        "hi there",
+        user_id="jason",
+        config=PiHybridProductionConfig(
+            enabled=True,
+            groups=("greetings",),
+            resource_guard_enabled=True,
+            router_fast_accept_enabled=True,
+        ),
+    )
+    await asyncio.sleep(0.01)
+
+    assert decision["accepted"] is True
+    assert decision["intent"] == "greeting"
+    assert decision["intent_group"] == "greetings"
+    assert decision["reason"] == "router_confirmed_fast_accept"
+    assert decision["agreement_kind"] == "zoe_router_fast"
+    assert decision["response_text"] == "Hi, Jason! How can I help?"
+    assert len(calls) == 2
+    assert calls[0]["run_pi"] is False
+    assert calls[1]["run_pi"] is True
+
+
+@pytest.mark.asyncio
 async def test_try_pi_hybrid_fast_accepts_deterministic_list_show(monkeypatch):
     _install_prefilter(monkeypatch)
     calls = []

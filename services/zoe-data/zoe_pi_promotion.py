@@ -15,6 +15,7 @@ from typing import Any, Mapping, Sequence
 
 
 LOW_RISK_PI_INTENT_GROUPS = {
+    "greetings": {"greeting"},
     "weather": {"weather"},
     "reminders": {"reminder_list", "reminder_create"},
     "lists": {"list_show", "list_add", "list_remove"},
