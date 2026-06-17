@@ -101,7 +101,7 @@ def _readiness_state(
     promote_groups = list(actions.get("promote_groups") or promotion.get("promotable_groups") or [])
     if contract.get("blockers"):
         return "configuration_blocked"
-    if (production_config or {}).get("ignored_groups"):
+    if (production_config or {}).get("enabled") and (production_config or {}).get("ignored_groups"):
         return "configuration_blocked"
     if rollback_groups:
         return "rollback_required"
@@ -265,7 +265,7 @@ def _next_actions(
                 "blockers": blockers,
             }
         )
-    if ignored_production_groups:
+    if production_config.get("enabled") and ignored_production_groups:
         next_actions.append(
             {
                 "kind": "fix_configuration",
