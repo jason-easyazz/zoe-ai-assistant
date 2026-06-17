@@ -1763,6 +1763,88 @@ async def chat_stream_generator(
             force_openclaw = True
             use_intent_fast_path = False
 
+        if use_intent_fast_path:
+            try:
+                from pi_hybrid_production import (
+                    PiHybridProductionConfig,
+                    pi_hybrid_production_eligible,
+                    processing_cue_packet,
+                    try_pi_hybrid_production,
+                )
+
+                _pi_hybrid_config = PiHybridProductionConfig.from_env()
+                _pi_hybrid_eligible, _pi_hybrid_reason = pi_hybrid_production_eligible(
+                    message_for_processing,
+                    config=_pi_hybrid_config,
+                )
+                if _pi_hybrid_eligible:
+                    _pi_cue = await processing_cue_packet()
+                    if _pi_cue.get("available"):
+                        yield emit(CustomEvent(name="zoe.pi_hybrid_cue", value={
+                            "text": _pi_cue.get("text") or "",
+                            "event": _pi_cue.get("event"),
+                            "source": "pi_hybrid_production",
+                        }))
+                    yield emit(StateSnapshotEvent(
+                        type=EventType.STATE_SNAPSHOT,
+                        snapshot={
+                            "status": "generating",
+                            "phase": "pi_hybrid",
+                            "model": "Zoe Pi Hybrid",
+                            "detail": _pi_cue.get("text") or "Checking...",
+                        },
+                    ))
+                    _pi_hybrid = await try_pi_hybrid_production(
+                        message_for_processing,
+                        user_id=user_id,
+                        context_turns="",
+                        config=_pi_hybrid_config,
+                    )
+                    yield emit(CustomEvent(name="zoe.pi_hybrid_decision", value={
+                        "accepted": _pi_hybrid.get("accepted"),
+                        "reason": _pi_hybrid.get("reason"),
+                        "intent": _pi_hybrid.get("intent"),
+                        "intent_group": _pi_hybrid.get("intent_group"),
+                        "agreement_kind": _pi_hybrid.get("agreement_kind"),
+                        "production_route_change": _pi_hybrid.get("production_route_change"),
+                        "lab_result": _pi_hybrid.get("lab_result"),
+                    }))
+                    if _pi_hybrid.get("accepted") and _pi_hybrid.get("response_text"):
+                        response_text = str(_pi_hybrid.get("response_text") or "")
+                        yield emit(TextMessageStartEvent(
+                            type=EventType.TEXT_MESSAGE_START,
+                            message_id=assistant_message_id,
+                            role="assistant",
+                        ))
+                        async for line in iter_text_message_chunks(enc, recorder, assistant_message_id, response_text):
+                            yield line
+                        yield emit(TextMessageEndEvent(type=EventType.TEXT_MESSAGE_END, message_id=assistant_message_id))
+                        asyncio.ensure_future(chat_inject_background(
+                            message_for_processing,
+                            response_text,
+                            str(_pi_hybrid.get("intent") or "pi_hybrid"),
+                            user_id,
+                            session_id,
+                        ))
+                        asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, response_text))
+                        asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text))
+                        yield emit(RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id=session_id, run_id=run_id))
+                        await _record_run_state(
+                            run_id,
+                            session_id,
+                            user_id,
+                            mode="chat",
+                            status="completed",
+                            request_text=message,
+                            response_text=response_text,
+                            metadata={"pi_hybrid": _pi_hybrid},
+                        )
+                        return
+                elif _pi_hybrid_config.enabled:
+                    logger.debug("Pi hybrid production skipped: %s", _pi_hybrid_reason)
+            except Exception as _pi_hybrid_exc:
+                logger.debug("Pi hybrid production path failed open to Zoe route: %s", _pi_hybrid_exc)
+
         _chat_ctx = _CHAT_CONTEXTS.get(session_id) or _CC()
         intent = await detect_and_extract_intent(
             message_for_processing, user_id, context=_chat_ctx
@@ -2950,6 +3032,60 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
             message_for_processing = message_for_processing[len("/openclaw ") :].strip()
             force_openclaw = True
             use_intent_fast_path = False
+
+        if use_intent_fast_path:
+            try:
+                from pi_hybrid_production import (
+                    PiHybridProductionConfig,
+                    pi_hybrid_production_eligible,
+                    processing_cue_packet,
+                    try_pi_hybrid_production,
+                )
+
+                _pi_hybrid_config = PiHybridProductionConfig.from_env()
+                _pi_hybrid_eligible, _pi_hybrid_reason = pi_hybrid_production_eligible(
+                    message_for_processing,
+                    config=_pi_hybrid_config,
+                )
+                if _pi_hybrid_eligible:
+                    _pi_cue = await processing_cue_packet()
+                    _pi_hybrid = await try_pi_hybrid_production(
+                        message_for_processing,
+                        user_id=user_id,
+                        context_turns="",
+                        config=_pi_hybrid_config,
+                    )
+                    if _pi_hybrid.get("accepted") and _pi_hybrid.get("response_text"):
+                        response_text = str(_pi_hybrid.get("response_text") or "")
+                        asyncio.ensure_future(chat_inject_background(
+                            message_for_processing,
+                            response_text,
+                            str(_pi_hybrid.get("intent") or "pi_hybrid"),
+                            user_id,
+                            session_id,
+                        ))
+                        asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, response_text))
+                        await _save_chat_message(session_id, "assistant", response_text)
+                        return {
+                            "response": response_text,
+                            "session_id": session_id,
+                            "processing_cue": {
+                                "available": bool(_pi_cue.get("available")),
+                                "text": _pi_cue.get("text") or "",
+                                "event": _pi_cue.get("event"),
+                            },
+                            "pi_hybrid": {
+                                "accepted": True,
+                                "reason": _pi_hybrid.get("reason"),
+                                "intent": _pi_hybrid.get("intent"),
+                                "intent_group": _pi_hybrid.get("intent_group"),
+                                "agreement_kind": _pi_hybrid.get("agreement_kind"),
+                            },
+                        }
+                elif _pi_hybrid_config.enabled:
+                    logger.debug("Pi hybrid production skipped: %s", _pi_hybrid_reason)
+            except Exception as _pi_hybrid_exc:
+                logger.debug("Pi hybrid production non-stream failed open to Zoe route: %s", _pi_hybrid_exc)
 
         intent = await detect_and_extract_intent(message_for_processing, user_id) if use_intent_fast_path else None
         # Save original message before appending voice suffix; run_zoe_agent needs the

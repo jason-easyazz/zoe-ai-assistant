@@ -784,3 +784,85 @@ async def test_voice_command_stream_emits_processing_ack_before_slow_response(mo
     assert final_header["text"] == "The answer is ready."
     assert done["done"] is True
     assert done["reply"] == "The answer is ready."
+
+
+@pytest.mark.asyncio
+async def test_voice_command_uses_pi_hybrid_production_with_processing_cue(monkeypatch) -> None:
+    import pi_hybrid_production
+
+    calls: dict[str, object] = {"broadcast": [], "tts": []}
+
+    async def no_user(*_args, **_kwargs):
+        return None
+
+    async def panel_user(*_args, **_kwargs):
+        return "panel-user"
+
+    async def resolve_skybridge_request(*_args, **_kwargs):
+        return None
+
+    class Broadcaster:
+        async def broadcast(self, channel, event, payload):
+            calls["broadcast"].append((channel, event, payload))
+
+    async def fake_synthesize(payload, caller=None):
+        calls["tts"].append(payload)
+        return types.SimpleNamespace(body=b"RIFF-pi-hybrid", media_type="audio/wav")
+
+    async def fake_try_pi(text, **kwargs):
+        assert text == "will it rain later"
+        return {
+            "accepted": True,
+            "reason": "accepted",
+            "intent": "weather",
+            "intent_group": "weather",
+            "agreement_kind": "intent_buffer_hint",
+            "response_text": "It is 18.5 C and clear.",
+        }
+
+    async def fake_processing_cue():
+        return {"available": True, "text": "Let me check.", "event": {"type": "voice:processing_ack", "text": "Let me check."}}
+
+    monkeypatch.setattr(voice_tts, "_resolve_recent_panel_session_user", panel_user)
+    monkeypatch.setattr(voice_tts, "_resolve_panel_default_user", no_user)
+    monkeypatch.setattr(voice_tts, "_VOICE_SESSIONS", {})
+    monkeypatch.setattr(voice_tts, "synthesize", fake_synthesize)
+    monkeypatch.setattr(pi_hybrid_production.PiHybridProductionConfig, "from_env", classmethod(lambda cls: cls(enabled=True, resource_guard_enabled=False)))
+    monkeypatch.setattr(pi_hybrid_production, "pi_hybrid_production_eligible", lambda text, config=None: (True, "eligible"))
+    monkeypatch.setattr(pi_hybrid_production, "processing_cue_packet", fake_processing_cue)
+    monkeypatch.setattr(pi_hybrid_production, "try_pi_hybrid_production", fake_try_pi)
+    monkeypatch.setitem(sys.modules, "push", types.SimpleNamespace(broadcaster=Broadcaster()))
+    monkeypatch.setitem(
+        sys.modules,
+        "skybridge_service",
+        types.SimpleNamespace(resolve_skybridge_request=resolve_skybridge_request),
+    )
+    monkeypatch.setattr(skybridge_service, "resolve_skybridge_request", resolve_skybridge_request)
+
+    response = await voice_command(
+        {"text": "will it rain later", "panel_id": "panel-pi", "session_id": "session-pi"},
+        caller={"user_id": "guest", "panel_id": "panel-pi"},
+        stream=False,
+        db=object(),
+    )
+
+    assert response["ok"] is True
+    assert response["reply"] == "It is 18.5 C and clear."
+    assert response["intent"] == "weather"
+    assert response["pi_hybrid"]["accepted"] is True
+    assert response["pi_hybrid"]["processing_cue"] == {"available": True, "text": "Let me check."}
+    assert calls["tts"] == [{"text": "It is 18.5 C and clear."}]
+    assert (
+        "all",
+        "voice:responding",
+        {
+            "panel_id": "panel-pi",
+            "text": "Let me check.",
+            "processing_ack": True,
+            "source": "pi_hybrid_production",
+        },
+    ) in calls["broadcast"]
+    assert any(
+        event == "voice:responding" and payload.get("pi_hybrid") is True
+        for _, event, payload in calls["broadcast"]
+    )
