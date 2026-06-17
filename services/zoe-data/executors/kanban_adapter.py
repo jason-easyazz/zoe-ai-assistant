@@ -1214,7 +1214,12 @@ class KanbanAdapter:
         A crashed/killed worker (e.g. out-of-context HTTP error, OOM) can leave its
         run 'running' forever, holding the single lane. Block it so the row becomes
         terminal — which both frees the lane and lets the deterministic verify/
-        review/closeout overrides engage (they fire on a terminal row)."""
+        review/closeout overrides engage (they fire on a terminal row).
+
+        Covered by tests/test_kanban_adapter.py::test_auto_block_dead_worker_*
+        (blocks zombie, no-op when worker alive / row not running / kill-switch
+        off, swallows KanbanCLIError); detector covered by
+        tests/test_kanban_phase_budget.py::test_dead_worker_reason_*."""
         if not _REAP_DEAD_WORKERS:
             return False
         if (row.get("status") or "").lower() != "running":
