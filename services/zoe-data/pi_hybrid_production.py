@@ -18,8 +18,10 @@ from typing import Any, Mapping
 from pi_intent_lab import SAFE_FULFILLMENT_INTENTS, compare_pi_intent_lab
 from zoe_pi_promotion import LOW_RISK_PI_INTENT_GROUPS, intent_group_for_intent
 
-_SAFE_PRODUCTION_INTENTS = frozenset({"weather", "daily_briefing", "list_show", "greeting"})
-_DEFAULT_GROUPS = ("weather", "daily_briefing", "lists", "greetings")
+_SAFE_PRODUCTION_INTENTS = frozenset(
+    {"weather", "daily_briefing", "list_show", "greeting", "time_query", "date_query", "calculate"}
+)
+_DEFAULT_GROUPS = ("weather", "daily_briefing", "lists", "greetings", "clock", "calculations")
 _WEATHER_SIGNAL_RE = re.compile(
     r"\b(weather|rain|forecast|temperature|storm|windy|humid|umbrella|jacket|hot|cold|degrees|celsius)\b",
     re.I,
@@ -31,6 +33,17 @@ _DAILY_BRIEFING_SIGNAL_RE = re.compile(
 _LIST_SHOW_SIGNAL_RE = re.compile(r"\b(what(?:'s| is) on|show|read|check)\b.*\b(list|shopping|grocer)", re.I)
 _GREETING_SIGNAL_RE = re.compile(
     r"^(?:hello|hi|hey|howdy|heya|greetings|yo)(?:\s+(?:there|zoe|there\s+zoe))?\s*[!.,]?\s*$",
+    re.I,
+)
+_CLOCK_SIGNAL_RE = re.compile(
+    r"\b(?:what(?:'s| is) the time|what time is it|current time|today(?:'s)? date|what(?:'s| is) the date|what day is it)\b",
+    re.I,
+)
+_CALCULATION_SIGNAL_RE = re.compile(
+    r"(?:\b(?:calculate|compute|what(?:'s| is)|how much is)\s+"
+    r"(?:\d+(?:\.\d+)?\s*(?:plus|minus|times|multiplied by|divided by|percent|%)\s*\d*(?:\.\d+)?|"
+    r"\d+(?:\.\d+)?\s*(?:\+|-|x|×|\*|/|÷)\s*\d+(?:\.\d+)?)\b|"
+    r"\b\d+(?:\.\d+)?\s*(?:\+|-|x|×|\*|/|÷)\s*\d+(?:\.\d+)?\b)",
     re.I,
 )
 _SECRET_TEXT_RE = re.compile(
@@ -388,6 +401,10 @@ def _production_prefilter_allows(text: str, groups: tuple[str, ...]) -> bool:
     if "lists" in selected and _LIST_SHOW_SIGNAL_RE.search(text):
         return True
     if "greetings" in selected and _GREETING_SIGNAL_RE.search(text):
+        return True
+    if "clock" in selected and _CLOCK_SIGNAL_RE.search(text):
+        return True
+    if "calculations" in selected and _CALCULATION_SIGNAL_RE.search(text):
         return True
     return False
 
