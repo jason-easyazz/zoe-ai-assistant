@@ -12,6 +12,8 @@ def _env(tmp_path, shadow_path):
         "ZOE_PI_INTENT_TRANSPORT": "rpc",
         "ZOE_PI_INTENT_SHADOW_PATH": str(shadow_path),
         "ZOE_PI_INTENT_SHADOW_LABELS_PATH": str(tmp_path / "labels.jsonl"),
+        "ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_PATH": str(tmp_path / "production.jsonl"),
+        "ZOE_PI_PROMOTION_EVAL_REPORT_PATH": str(tmp_path / "missing-eval-report.json"),
     }
 
 
@@ -341,10 +343,203 @@ def test_readiness_report_missing_eval_benchmark_is_nonblocking(tmp_path):
     shadow_path = tmp_path / "shadow.jsonl"
     shadow_path.write_text("", encoding="utf-8")
     env = _env(tmp_path, shadow_path)
-    env["ZOE_PI_PROMOTION_EVAL_REPORT_PATH"] = str(tmp_path / "missing.json")
 
     report = pi_readiness_report(env)
 
     assert report["benchmark"]["loaded"] is False
     assert report["evidence"]["benchmark_loaded"] is False
     assert report["state"] == "shadow_collecting"
+
+
+def test_readiness_report_surfaces_production_evidence_summary(tmp_path):
+    shadow_path = tmp_path / "shadow.jsonl"
+    shadow_path.write_text("", encoding="utf-8")
+    production_path = tmp_path / "production.jsonl"
+    production_path.write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in [
+                {
+                    "ts": 1.0,
+                    "source": "pi_hybrid_production",
+                    "accepted": True,
+                    "reason": "accepted",
+                    "intent": "weather",
+                    "intent_group": "weather",
+                    "pi_intent": "weather",
+                    "pi_latency_ms": 4100.0,
+                    "safe_fulfillment_latency_ms": 900.0,
+                    "production_route_change": True,
+                    "text_preview": "will it rain later",
+                    "outcome_label": None,
+                },
+                {
+                    "ts": 2.0,
+                    "source": "pi_hybrid_production",
+                    "accepted": False,
+                    "reason": "timeout",
+                    "intent_group": "weather",
+                    "pi_latency_ms": 8000.0,
+                    "safe_fulfillment_latency_ms": None,
+                    "production_route_change": False,
+                    "text_preview": "weather tomorrow",
+                    "outcome_label": "weather_timeout",
+                },
+                {
+                    "ts": 3.0,
+                    "source": "pi_hybrid_production",
+                    "accepted": True,
+                    "reason": "accepted",
+                    "intent": "daily_briefing",
+                    "intent_group": "daily_briefing",
+                    "pi_intent": "daily_briefing",
+                    "pi_latency_ms": 2200.0,
+                    "safe_fulfillment_latency_ms": 1100.0,
+                    "production_route_change": True,
+                    "text_preview": "give me my daily briefing",
+                    "outcome_label": None,
+                },
+            ]
+        )
+        + "\nnot-json\n",
+        encoding="utf-8",
+    )
+    env = _env(tmp_path, shadow_path)
+    env["ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_ENABLED"] = "true"
+    env["ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_PATH"] = str(production_path)
+
+    report = pi_readiness_report(env)
+
+    assert report["summary"]["production_record_count"] == 3
+    assert report["summary"]["production_accepted_count"] == 2
+    assert report["summary"]["production_unlabeled_count"] == 2
+    assert report["summary"]["production_groups"] == ["daily_briefing", "weather"]
+    assert report["evidence"]["production_record_count_by_group"] == {"daily_briefing": 1, "weather": 2}
+    assert report["production_evidence"] == {
+        "enabled": True,
+        "loaded": True,
+        "path": str(production_path),
+        "invalid_lines": 1,
+        "record_count": 3,
+        "accepted_count": 2,
+        "rejected_count": 1,
+        "route_change_count": 2,
+        "unlabeled_count": 2,
+        "by_group": {
+            "daily_briefing": {
+                "record_count": 1,
+                "accepted_count": 1,
+                "rejected_count": 0,
+                "route_change_count": 1,
+                "unlabeled_count": 1,
+                "pi_p95_latency_ms": 2200.0,
+                "safe_fulfillment_p95_latency_ms": 1100.0,
+            },
+            "weather": {
+                "record_count": 2,
+                "accepted_count": 1,
+                "rejected_count": 1,
+                "route_change_count": 1,
+                "unlabeled_count": 1,
+                "pi_p95_latency_ms": 8000.0,
+                "safe_fulfillment_p95_latency_ms": 900.0,
+            },
+        },
+        "recent": [
+            {
+                "ts": 1.0,
+                "intent_group": "weather",
+                "accepted": True,
+                "reason": "accepted",
+                "intent": "weather",
+                "pi_intent": "weather",
+                "pi_latency_ms": 4100.0,
+                "safe_fulfillment_latency_ms": 900.0,
+                "production_route_change": True,
+                "outcome_label": None,
+                "text_preview": "will it rain later",
+            },
+            {
+                "ts": 2.0,
+                "intent_group": "weather",
+                "accepted": False,
+                "reason": "timeout",
+                "intent": None,
+                "pi_intent": None,
+                "pi_latency_ms": 8000.0,
+                "safe_fulfillment_latency_ms": None,
+                "production_route_change": False,
+                "outcome_label": "weather_timeout",
+                "text_preview": "weather tomorrow",
+            },
+            {
+                "ts": 3.0,
+                "intent_group": "daily_briefing",
+                "accepted": True,
+                "reason": "accepted",
+                "intent": "daily_briefing",
+                "pi_intent": "daily_briefing",
+                "pi_latency_ms": 2200.0,
+                "safe_fulfillment_latency_ms": 1100.0,
+                "production_route_change": True,
+                "outcome_label": None,
+                "text_preview": "give me my daily briefing",
+            },
+        ],
+    }
+    assert {
+        "kind": "label_production_evidence",
+        "priority": "p1",
+        "detail": "Label 2 Pi hybrid production evidence records before promotion scoring.",
+        "path": str(production_path),
+        "groups": ["daily_briefing", "weather"],
+    } in report["next_actions"]
+
+
+def test_readiness_report_missing_production_evidence_is_nonblocking(tmp_path):
+    shadow_path = tmp_path / "shadow.jsonl"
+    shadow_path.write_text("", encoding="utf-8")
+    env = _env(tmp_path, shadow_path)
+    env["ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_ENABLED"] = "true"
+
+    report = pi_readiness_report(env)
+
+    assert report["production_evidence"] == {
+        "enabled": True,
+        "loaded": False,
+        "path": str(tmp_path / "production.jsonl"),
+        "record_count": 0,
+    }
+    assert report["state"] == "shadow_collecting"
+
+
+def test_readiness_report_disabled_production_evidence_does_not_load_existing_file(tmp_path):
+    shadow_path = tmp_path / "shadow.jsonl"
+    shadow_path.write_text("", encoding="utf-8")
+    production_path = tmp_path / "production.jsonl"
+    production_path.write_text(
+        json.dumps(
+            {
+                "source": "pi_hybrid_production",
+                "accepted": True,
+                "intent_group": "weather",
+                "outcome_label": None,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    env = _env(tmp_path, shadow_path)
+    env["ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_ENABLED"] = "false"
+    env["ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_PATH"] = str(production_path)
+
+    report = pi_readiness_report(env)
+
+    assert report["production_evidence"] == {
+        "enabled": False,
+        "loaded": False,
+        "path": str(production_path),
+        "record_count": 0,
+        "disabled": True,
+    }
+    assert not [action for action in report["next_actions"] if action.get("kind") == "label_production_evidence"]

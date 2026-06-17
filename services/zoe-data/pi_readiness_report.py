@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from pathlib import Path
 from typing import Any, Mapping
@@ -12,6 +13,7 @@ from pi_intent_shadow import pi_intent_shadow_status
 from zoe_pi_promotion import LOW_RISK_PI_INTENT_GROUPS
 
 DEFAULT_EVAL_REPORT_PATH = "~/.zoe/data/pi-promotion-eval-report.json"
+DEFAULT_PRODUCTION_EVIDENCE_PATH = "~/.zoe/data/pi-hybrid-production-evidence.jsonl"
 
 
 def pi_readiness_report(env: Mapping[str, str] | None = None) -> dict[str, Any]:
@@ -22,6 +24,7 @@ def pi_readiness_report(env: Mapping[str, str] | None = None) -> dict[str, Any]:
     promotion = shadow.get("promotion_report") or {}
     eval_report = _load_eval_report(values)
     benchmark = _benchmark_from_eval_report(eval_report)
+    production = _load_production_evidence(values)
     benchmark_promotion = benchmark.get("promotion_report") or {}
     contract = hybrid.get("contract") or {}
     actions = promotion.get("promotion_actions") or {}
@@ -30,7 +33,7 @@ def pi_readiness_report(env: Mapping[str, str] | None = None) -> dict[str, Any]:
     return {
         "report_kind": "zoe_pi_readiness_report",
         "state": state,
-        "summary": _summary(state, contract, shadow, promotion, actions, benchmark),
+        "summary": _summary(state, contract, shadow, promotion, actions, benchmark, production),
         "hybrid": {
             "mode": contract.get("mode"),
             "ready": bool(contract.get("ready")),
@@ -38,12 +41,21 @@ def pi_readiness_report(env: Mapping[str, str] | None = None) -> dict[str, Any]:
             "warnings": list(contract.get("warnings") or []),
             "promoted_groups": list(contract.get("promoted_groups") or []),
         },
-        "evidence": _evidence(shadow, promotion, benchmark),
+        "evidence": _evidence(shadow, promotion, benchmark, production),
         "benchmark": benchmark,
+        "production_evidence": production,
         "candidates": _candidate_details(candidate_wins),
         "blocked_decisions": _blocked_decisions(promotion),
         "promotion_actions": actions,
-        "next_actions": _next_actions(state, contract, shadow, promotion, actions, benchmark_promotion=benchmark_promotion),
+        "next_actions": _next_actions(
+            state,
+            contract,
+            shadow,
+            promotion,
+            actions,
+            benchmark_promotion=benchmark_promotion,
+            production=production,
+        ),
     }
 
 
@@ -80,9 +92,11 @@ def _summary(
     promotion: Mapping[str, Any],
     actions: Mapping[str, Any],
     benchmark: Mapping[str, Any] | None = None,
+    production: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     evidence = shadow.get("report") or {}
     benchmark = benchmark or {}
+    production = production or {}
     return {
         "state": state,
         "mode": contract.get("mode"),
@@ -94,15 +108,23 @@ def _summary(
         "promotion_ready_groups": list(promotion.get("promotable_groups") or []),
         "rollback_groups": list(actions.get("rollback_groups") or promotion.get("rollback_groups") or []),
         "requires_operator_apply": bool(actions.get("requires_operator_apply")),
+        "production_record_count": int(production.get("record_count") or 0),
+        "production_accepted_count": int(production.get("accepted_count") or 0),
+        "production_unlabeled_count": int(production.get("unlabeled_count") or 0),
+        "production_groups": list((production.get("by_group") or {}).keys()),
     }
 
 
 def _evidence(
-    shadow: Mapping[str, Any], promotion: Mapping[str, Any], benchmark: Mapping[str, Any] | None = None
+    shadow: Mapping[str, Any],
+    promotion: Mapping[str, Any],
+    benchmark: Mapping[str, Any] | None = None,
+    production: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     report = shadow.get("report") or {}
     source = promotion.get("source_breakdown") or {}
     benchmark = benchmark or {}
+    production = production or {}
     return {
         "record_count_window": shadow.get("record_count_window"),
         "raw_record_count_window": shadow.get("raw_record_count_window"),
@@ -116,6 +138,14 @@ def _evidence(
         "benchmark_report_path": benchmark.get("path"),
         "benchmark_loaded": bool(benchmark.get("loaded")),
         "benchmark_candidate_win_groups": list((benchmark.get("candidate_wins") or {}).get("groups") or []),
+        "production_record_count": int(production.get("record_count") or 0),
+        "production_accepted_count": int(production.get("accepted_count") or 0),
+        "production_unlabeled_count": int(production.get("unlabeled_count") or 0),
+        "production_record_count_by_group": {
+            group: int(stats.get("record_count") or 0)
+            for group, stats in (production.get("by_group") or {}).items()
+            if isinstance(stats, Mapping)
+        },
     }
 
 
@@ -170,6 +200,7 @@ def _next_actions(
     actions: Mapping[str, Any],
     *,
     benchmark_promotion: Mapping[str, Any] | None = None,
+    production: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     next_actions: list[dict[str, Any]] = []
     blockers = list(contract.get("blockers") or [])
@@ -227,6 +258,7 @@ def _next_actions(
                 "groups": baseline_groups,
             }
         )
+    next_actions.extend(_production_evidence_actions(production or {}))
     if not next_actions and int(shadow.get("label_count") or 0) == 0:
         next_actions.append(
             {
@@ -287,6 +319,169 @@ def _evidence_collection_actions(promotion: Mapping[str, Any], *, source: str = 
             action["needed_real_source_cases"] = real_source_deficit
         actions.append(action)
     return actions
+
+
+def _production_evidence_actions(production: Mapping[str, Any]) -> list[dict[str, Any]]:
+    unlabeled = int(production.get("unlabeled_count") or 0)
+    if unlabeled <= 0:
+        return []
+    groups = sorted(
+        group
+        for group, stats in (production.get("by_group") or {}).items()
+        if isinstance(stats, Mapping) and int(stats.get("unlabeled_count") or 0) > 0
+    )
+    return [
+        {
+            "kind": "label_production_evidence",
+            "priority": "p1",
+            "detail": f"Label {unlabeled} Pi hybrid production evidence records before promotion scoring.",
+            "path": production.get("path"),
+            "groups": groups,
+        }
+    ]
+
+
+def _load_production_evidence(env: Mapping[str, str]) -> dict[str, Any]:
+    raw_path = (env.get("ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_PATH") or DEFAULT_PRODUCTION_EVIDENCE_PATH).strip()
+    enabled = _env_bool(env.get("ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_ENABLED"), default=False)
+    if not raw_path:
+        return {"enabled": enabled, "loaded": False, "path": None, "record_count": 0}
+    path = Path(raw_path).expanduser()
+    if not enabled:
+        return {"enabled": False, "loaded": False, "path": str(path), "record_count": 0, "disabled": True}
+    if not path.exists():
+        return {"enabled": enabled, "loaded": False, "path": str(path), "record_count": 0}
+    records: list[dict[str, Any]] = []
+    invalid_lines = 0
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    invalid_lines += 1
+                    continue
+                if isinstance(payload, Mapping):
+                    records.append(dict(payload))
+                else:
+                    invalid_lines += 1
+    except OSError as exc:
+        return {"enabled": enabled, "loaded": False, "path": str(path), "record_count": 0, "error": exc.__class__.__name__}
+    summary = _summarize_production_records(records)
+    return {"enabled": enabled, "loaded": True, "path": str(path), "invalid_lines": invalid_lines, **summary}
+
+
+def _summarize_production_records(records: list[Mapping[str, Any]]) -> dict[str, Any]:
+    by_group: dict[str, dict[str, Any]] = {}
+    accepted_count = 0
+    route_change_count = 0
+    unlabeled_count = 0
+    recent: list[dict[str, Any]] = []
+    for record in records:
+        group = _production_group(record)
+        stats = by_group.setdefault(
+            group,
+            {
+                "record_count": 0,
+                "accepted_count": 0,
+                "rejected_count": 0,
+                "route_change_count": 0,
+                "unlabeled_count": 0,
+                "pi_latency_ms": [],
+                "safe_fulfillment_latency_ms": [],
+            },
+        )
+        stats["record_count"] += 1
+        if record.get("accepted"):
+            accepted_count += 1
+            stats["accepted_count"] += 1
+        else:
+            stats["rejected_count"] += 1
+        if record.get("production_route_change"):
+            route_change_count += 1
+            stats["route_change_count"] += 1
+        if not record.get("outcome_label"):
+            unlabeled_count += 1
+            stats["unlabeled_count"] += 1
+        _append_number(stats["pi_latency_ms"], record.get("pi_latency_ms"))
+        _append_number(stats["safe_fulfillment_latency_ms"], record.get("safe_fulfillment_latency_ms"))
+        recent.append(_compact_production_record(record, group))
+    compact_groups: dict[str, dict[str, Any]] = {}
+    for group, stats in sorted(by_group.items()):
+        compact_groups[group] = {
+            "record_count": stats["record_count"],
+            "accepted_count": stats["accepted_count"],
+            "rejected_count": stats["rejected_count"],
+            "route_change_count": stats["route_change_count"],
+            "unlabeled_count": stats["unlabeled_count"],
+            "pi_p95_latency_ms": _p95(stats["pi_latency_ms"]),
+            "safe_fulfillment_p95_latency_ms": _p95(stats["safe_fulfillment_latency_ms"]),
+        }
+    return {
+        "record_count": len(records),
+        "accepted_count": accepted_count,
+        "rejected_count": len(records) - accepted_count,
+        "route_change_count": route_change_count,
+        "unlabeled_count": unlabeled_count,
+        "by_group": compact_groups,
+        "recent": recent[-5:],
+    }
+
+
+def _production_group(record: Mapping[str, Any]) -> str:
+    for key in ("intent_group", "pi_intent_group", "intent", "pi_intent"):
+        value = str(record.get(key) or "").strip()
+        if value:
+            return value
+    return "unknown"
+
+
+def _compact_production_record(record: Mapping[str, Any], group: str) -> dict[str, Any]:
+    return {
+        "ts": record.get("ts"),
+        "intent_group": group,
+        "accepted": bool(record.get("accepted")),
+        "reason": record.get("reason"),
+        "intent": record.get("intent"),
+        "pi_intent": record.get("pi_intent"),
+        "pi_latency_ms": _float_or_none(record.get("pi_latency_ms")),
+        "safe_fulfillment_latency_ms": _float_or_none(record.get("safe_fulfillment_latency_ms")),
+        "production_route_change": bool(record.get("production_route_change")),
+        "outcome_label": record.get("outcome_label"),
+        "text_preview": record.get("text_preview"),
+    }
+
+
+def _append_number(values: list[float], value: Any) -> None:
+    number = _float_or_none(value)
+    if number is not None:
+        values.append(number)
+
+
+def _p95(values: list[float]) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    index = max(0, min(len(ordered) - 1, math.ceil(len(ordered) * 0.95) - 1))
+    return ordered[index]
+
+
+def _float_or_none(value: Any) -> float | None:
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _env_bool(value: str | None, *, default: bool = False) -> bool:
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _load_eval_report(env: Mapping[str, str]) -> dict[str, Any]:
@@ -355,4 +550,4 @@ def _groups_with_blocker(promotion: Mapping[str, Any], blocker: str) -> list[str
     return sorted(set(groups))
 
 
-__all__ = ["pi_readiness_report", "DEFAULT_EVAL_REPORT_PATH"]
+__all__ = ["pi_readiness_report", "DEFAULT_EVAL_REPORT_PATH", "DEFAULT_PRODUCTION_EVIDENCE_PATH"]
