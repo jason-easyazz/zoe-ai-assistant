@@ -441,6 +441,51 @@ def test_pi_intent_shadow_label_endpoint_rejects_non_admin():
     assert resp.status_code == 403
 
 
+def test_pi_hybrid_production_label_endpoint_appends_trusted_label(tmp_path, monkeypatch):
+    production_path = tmp_path / "production.jsonl"
+    labels_path = tmp_path / "production-labels.jsonl"
+    production_path.write_text(
+        '{"text_hash":"weatherhash","text_preview":"rain later","accepted":true,"reason":"accepted","intent":"weather","intent_group":"weather","pi_intent":"weather"}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_PATH", str(production_path))
+    monkeypatch.setenv("ZOE_PI_HYBRID_PRODUCTION_LABELS_PATH", str(labels_path))
+    app = _admin_app()
+
+    resp = TestClient(app).post(
+        "/api/system/pi-intent/production-labels",
+        json={"text_hash": "weatherhash", "outcome_label": "weather"},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["label"]["outcome_label"] == "weather"
+    assert data["matched_record"]["text_preview"] == "rain later"
+    saved = json.loads(labels_path.read_text(encoding="utf-8"))
+    assert saved["text_hash"] == "weatherhash"
+    assert saved["outcome_label"] == "weather"
+    assert len(saved["reviewed_by_hash"]) == 64
+    assert data["labels_store"] == "production_labels_sidecar"
+
+
+def test_pi_hybrid_production_label_endpoint_rejects_non_admin():
+    app = FastAPI()
+    app.include_router(system_router)
+
+    async def fake_non_admin():
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    app.dependency_overrides[require_admin] = fake_non_admin
+
+    resp = TestClient(app).post(
+        "/api/system/pi-intent/production-labels",
+        json={"text_hash": "known", "outcome_label": "weather"},
+    )
+
+    assert resp.status_code == 403
+
+
 def test_pi_intent_shadow_status_endpoint_rejects_non_admin():
     app = FastAPI()
     app.include_router(system_router)

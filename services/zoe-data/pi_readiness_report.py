@@ -9,11 +9,13 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from pi_hybrid_buffer import pi_hybrid_buffer_status
+from pi_intent_evidence import apply_pi_hybrid_production_labels, load_pi_hybrid_production_labels
 from pi_intent_shadow import pi_intent_shadow_status
 from zoe_pi_promotion import LOW_RISK_PI_INTENT_GROUPS
 
 DEFAULT_EVAL_REPORT_PATH = "~/.zoe/data/pi-promotion-eval-report.json"
 DEFAULT_PRODUCTION_EVIDENCE_PATH = "~/.zoe/data/pi-hybrid-production-evidence.jsonl"
+DEFAULT_PRODUCTION_LABELS_PATH = "~/.zoe/data/pi-hybrid-production-labels.jsonl"
 
 
 def pi_readiness_report(env: Mapping[str, str] | None = None) -> dict[str, Any]:
@@ -110,6 +112,7 @@ def _summary(
         "requires_operator_apply": bool(actions.get("requires_operator_apply")),
         "production_record_count": int(production.get("record_count") or 0),
         "production_accepted_count": int(production.get("accepted_count") or 0),
+        "production_label_count": int(production.get("label_count") or 0),
         "production_unlabeled_count": int(production.get("unlabeled_count") or 0),
         "production_groups": list((production.get("by_group") or {}).keys()),
     }
@@ -140,6 +143,7 @@ def _evidence(
         "benchmark_candidate_win_groups": list((benchmark.get("candidate_wins") or {}).get("groups") or []),
         "production_record_count": int(production.get("record_count") or 0),
         "production_accepted_count": int(production.get("accepted_count") or 0),
+        "production_label_count": int(production.get("label_count") or 0),
         "production_unlabeled_count": int(production.get("unlabeled_count") or 0),
         "production_record_count_by_group": {
             group: int(stats.get("record_count") or 0)
@@ -336,6 +340,7 @@ def _production_evidence_actions(production: Mapping[str, Any]) -> list[dict[str
             "priority": "p1",
             "detail": f"Label {unlabeled} Pi hybrid production evidence records before promotion scoring.",
             "path": production.get("path"),
+            "labels_path": production.get("labels_path"),
             "groups": groups,
         }
     ]
@@ -343,14 +348,29 @@ def _production_evidence_actions(production: Mapping[str, Any]) -> list[dict[str
 
 def _load_production_evidence(env: Mapping[str, str]) -> dict[str, Any]:
     raw_path = (env.get("ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_PATH") or DEFAULT_PRODUCTION_EVIDENCE_PATH).strip()
+    raw_labels_path = (env.get("ZOE_PI_HYBRID_PRODUCTION_LABELS_PATH") or DEFAULT_PRODUCTION_LABELS_PATH).strip()
     enabled = _env_bool(env.get("ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_ENABLED"), default=False)
     if not raw_path:
-        return {"enabled": enabled, "loaded": False, "path": None, "record_count": 0}
+        return {"enabled": enabled, "loaded": False, "path": None, "labels_path": None, "record_count": 0}
     path = Path(raw_path).expanduser()
+    labels_path = Path(raw_labels_path).expanduser() if raw_labels_path else None
     if not enabled:
-        return {"enabled": False, "loaded": False, "path": str(path), "record_count": 0, "disabled": True}
+        return {
+            "enabled": False,
+            "loaded": False,
+            "path": str(path),
+            "labels_path": str(labels_path) if labels_path else None,
+            "record_count": 0,
+            "disabled": True,
+        }
     if not path.exists():
-        return {"enabled": enabled, "loaded": False, "path": str(path), "record_count": 0}
+        return {
+            "enabled": enabled,
+            "loaded": False,
+            "path": str(path),
+            "labels_path": str(labels_path) if labels_path else None,
+            "record_count": 0,
+        }
     records: list[dict[str, Any]] = []
     invalid_lines = 0
     try:
@@ -369,9 +389,34 @@ def _load_production_evidence(env: Mapping[str, str]) -> dict[str, Any]:
                 else:
                     invalid_lines += 1
     except OSError as exc:
-        return {"enabled": enabled, "loaded": False, "path": str(path), "record_count": 0, "error": exc.__class__.__name__}
-    summary = _summarize_production_records(records)
-    return {"enabled": enabled, "loaded": True, "path": str(path), "invalid_lines": invalid_lines, **summary}
+        return {
+            "enabled": enabled,
+            "loaded": False,
+            "path": str(path),
+            "labels_path": str(labels_path) if labels_path else None,
+            "record_count": 0,
+            "error": exc.__class__.__name__,
+        }
+    label_error = None
+    try:
+        labels = load_pi_hybrid_production_labels(str(labels_path)) if labels_path else {}
+    except OSError as exc:
+        labels = {}
+        label_error = exc.__class__.__name__
+    labeled_records = apply_pi_hybrid_production_labels(records, labels)
+    summary = _summarize_production_records(labeled_records)
+    result = {
+        "enabled": enabled,
+        "loaded": True,
+        "path": str(path),
+        "labels_path": str(labels_path) if labels_path else None,
+        "label_count": len(labels),
+        "invalid_lines": invalid_lines,
+        **summary,
+    }
+    if label_error:
+        result["label_error"] = label_error
+    return result
 
 
 def _summarize_production_records(records: list[Mapping[str, Any]]) -> dict[str, Any]:
@@ -403,7 +448,7 @@ def _summarize_production_records(records: list[Mapping[str, Any]]) -> dict[str,
         if record.get("production_route_change"):
             route_change_count += 1
             stats["route_change_count"] += 1
-        if not record.get("outcome_label"):
+        if not record.get("outcome_label") and not record.get("negative"):
             unlabeled_count += 1
             stats["unlabeled_count"] += 1
         _append_number(stats["pi_latency_ms"], record.get("pi_latency_ms"))
@@ -442,6 +487,7 @@ def _production_group(record: Mapping[str, Any]) -> str:
 def _compact_production_record(record: Mapping[str, Any], group: str) -> dict[str, Any]:
     return {
         "ts": record.get("ts"),
+        "text_hash": record.get("text_hash"),
         "intent_group": group,
         "accepted": bool(record.get("accepted")),
         "reason": record.get("reason"),
@@ -451,6 +497,7 @@ def _compact_production_record(record: Mapping[str, Any], group: str) -> dict[st
         "safe_fulfillment_latency_ms": _float_or_none(record.get("safe_fulfillment_latency_ms")),
         "production_route_change": bool(record.get("production_route_change")),
         "outcome_label": record.get("outcome_label"),
+        "outcome_label_source": record.get("outcome_label_source"),
         "text_preview": record.get("text_preview"),
     }
 
@@ -550,4 +597,4 @@ def _groups_with_blocker(promotion: Mapping[str, Any], blocker: str) -> list[str
     return sorted(set(groups))
 
 
-__all__ = ["pi_readiness_report", "DEFAULT_EVAL_REPORT_PATH", "DEFAULT_PRODUCTION_EVIDENCE_PATH"]
+__all__ = ["pi_readiness_report", "DEFAULT_EVAL_REPORT_PATH", "DEFAULT_PRODUCTION_EVIDENCE_PATH", "DEFAULT_PRODUCTION_LABELS_PATH"]

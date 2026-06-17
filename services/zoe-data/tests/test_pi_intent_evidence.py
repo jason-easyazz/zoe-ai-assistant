@@ -2,8 +2,17 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
+
 from intent_router import detect_intent
-from pi_intent_evidence import record_intent_miss_evidence, record_pi_hybrid_production_evidence, sanitize_evidence_text
+from pi_intent_evidence import (
+    append_pi_hybrid_production_label,
+    apply_pi_hybrid_production_labels,
+    load_pi_hybrid_production_labels,
+    record_intent_miss_evidence,
+    record_pi_hybrid_production_evidence,
+    sanitize_evidence_text,
+)
 
 
 def test_record_intent_miss_evidence_disabled_does_not_write(tmp_path):
@@ -138,6 +147,78 @@ def test_record_pi_hybrid_production_evidence_writes_compact_sanitized_jsonl(tmp
     assert saved["enabled_groups"] == ["weather"]
     assert saved["outcome_label"] is None
     assert "Jason Smith" not in path.read_text(encoding="utf-8")
+
+
+def test_pi_hybrid_production_label_sidecar_applies_latest_valid_label(tmp_path):
+    evidence_path = tmp_path / "production.jsonl"
+    labels_path = tmp_path / "production-labels.jsonl"
+    record = record_pi_hybrid_production_evidence(
+        "will it rain later",
+        user_id="jason",
+        decision=_production_decision(),
+        env={
+            "ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_ENABLED": "true",
+            "ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_PATH": str(evidence_path),
+        },
+    )
+    assert record is not None
+
+    result = append_pi_hybrid_production_label(
+        text_hash=record["text_hash"],
+        outcome_label="weather",
+        reviewed_by="jason",
+        evidence_path=str(evidence_path),
+        labels_path=str(labels_path),
+    )
+
+    labels = load_pi_hybrid_production_labels(str(labels_path))
+    labeled = apply_pi_hybrid_production_labels([record], labels)
+
+    assert result["ok"] is True
+    assert result["labels_store"] == "production_labels_sidecar"
+    assert result["matched_record"]["text_preview"] == "will it rain later"
+    assert labels[record["text_hash"]]["outcome_label"] == "weather"
+    assert labeled[0]["outcome_label"] == "weather"
+    assert labeled[0]["outcome_label_source"] == "production_label_sidecar"
+    assert "reviewed_by_hash" in labels_path.read_text(encoding="utf-8")
+
+
+def test_pi_hybrid_production_label_rejects_missing_or_privileged_label(tmp_path):
+    evidence_path = tmp_path / "production.jsonl"
+    labels_path = tmp_path / "production-labels.jsonl"
+    record = record_pi_hybrid_production_evidence(
+        "will it rain later",
+        user_id="jason",
+        decision=_production_decision(),
+        env={
+            "ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_ENABLED": "true",
+            "ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_PATH": str(evidence_path),
+        },
+    )
+    assert record is not None
+
+    with pytest.raises(ValueError, match="text_hash not found"):
+        append_pi_hybrid_production_label(
+            text_hash="missing",
+            outcome_label="weather",
+            evidence_path=str(evidence_path),
+            labels_path=str(labels_path),
+        )
+    with pytest.raises(ValueError, match="low-risk"):
+        append_pi_hybrid_production_label(
+            text_hash=record["text_hash"],
+            outcome_label="extend_capability",
+            evidence_path=str(evidence_path),
+            labels_path=str(labels_path),
+        )
+    with pytest.raises(ValueError, match="low-risk"):
+        append_pi_hybrid_production_label(
+            text_hash=record["text_hash"],
+            outcome_label="weather",
+            negative=True,
+            evidence_path=str(evidence_path),
+            labels_path=str(labels_path),
+        )
 
 
 def test_record_pi_hybrid_production_evidence_skips_secret_like_text(tmp_path):
