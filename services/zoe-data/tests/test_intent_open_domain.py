@@ -68,3 +68,21 @@ async def test_ambiguous_time_clarification_executes_as_question(text: str, resp
     intent = detect_intent(text)
 
     assert await execute_intent(intent) == response
+
+
+@pytest.mark.parametrize("text", ["hi there how are you", "hey zoe how are you?", "hello how are you today"])
+def test_greeting_wellbeing_phrases_route_to_fast_greeting(text: str):
+    intent = detect_intent(text)
+
+    assert intent is not None
+    assert intent.name == "greeting"
+
+
+@pytest.mark.asyncio
+async def test_greeting_wellbeing_executes_without_open_domain_agent():
+    intent = detect_intent("hi there how are you")
+
+    response = await execute_intent(intent)
+
+    assert response.startswith(("Hi", "Good"))
+    assert "help" in response.lower() or "do for you" in response.lower()

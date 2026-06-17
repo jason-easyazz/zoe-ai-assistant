@@ -453,6 +453,7 @@ _LETS_TALK_RE = re.compile(
 # good_morning/good_evening are kept as separate intents for the daily-briefing flow.
 _GREETING_RE = re.compile(
     r"^(?:hello|hi|hey|howdy|heya|greetings|yo)(?:\s+(?:there|zoe|there\s+zoe))?\s*[!.,]?\s*$"
+    r"|^(?:hello|hi|hey|howdy|heya|yo)(?:\s+(?:there|zoe|there\s+zoe))?\s+how\s+are\s+you(?:\s+today)?\s*[!.,?]?\s*$"
     r"|^sup(?:\s+zoe)?\s*\??$"
     r"|^what'?s\s+up(?:\s+zoe)?\s*\??\s*$"
     r"|^how\s+are\s+you(?:\s+today)?(?:\s+zoe)?\s*\??\s*$"
