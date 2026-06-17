@@ -1080,6 +1080,12 @@ async def test_pi_lab_resource_pressure_guard_can_be_disabled(monkeypatch):
 
     payload = route_module.PiIntentLabCompareRequest(text="rain later", run_pi=True)
     monkeypatch.setenv("ZOE_PI_LAB_RESOURCE_GUARD_ENABLED", "0")
+    # Set real (non-zero) thresholds so the `min_*_mb <= 0` short-circuit does NOT
+    # fire (the autouse fixture zeros them by default). With low meminfo + these
+    # thresholds, the guard would block IF enabled — so a None result here proves
+    # the GUARD_ENABLED=0 flag specifically, not the zeroed-threshold short-circuit.
+    monkeypatch.setenv("ZOE_PI_LAB_MIN_AVAILABLE_MB", "2048")
+    monkeypatch.setenv("ZOE_PI_LAB_MIN_SWAP_FREE_MB", "256")
     monkeypatch.setattr(route_module, "_read_meminfo_mb", lambda: {"MemAvailable": 1, "SwapFree": 1})
 
     assert await route_module._pi_lab_resource_pressure_blocker(payload) is None
