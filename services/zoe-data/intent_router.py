@@ -2534,7 +2534,8 @@ async def _execute_daily_briefing(user_id: str) -> Optional[str]:
             lines.append(f"  - {r.get('title', '?')}{suffix}")
 
     response = "\n".join(lines)
-    _daily_briefing_cache_set(user_id, response)
+    if all(key in results for key in task_keys):
+        _daily_briefing_cache_set(user_id, response)
     return response
 
 

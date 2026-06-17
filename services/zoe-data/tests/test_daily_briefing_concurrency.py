@@ -140,8 +140,32 @@ async def test_daily_briefing_weather_uses_router_weather_cache(monkeypatch):
     async def fail_get_current(*_args, **_kwargs):
         raise AssertionError("cached daily briefing weather should not refetch")
 
-    monkeypatch.setattr(weather, "_get_current", fail_get_current)
-    result = await _daily_briefing_weather("family-admin")
+    try:
+        monkeypatch.setattr(weather, "_get_current", fail_get_current)
+        result = await _daily_briefing_weather("family-admin")
 
-    assert result == {"temp": 22, "city": "Geraldton", "description": "clear sky"}
-    weather._weather_cache.clear()
+        assert result == {"temp": 22, "city": "Geraldton", "description": "clear sky"}
+    finally:
+        weather._weather_cache.pop("current", None)
+
+@pytest.mark.asyncio
+async def test_daily_briefing_does_not_cache_degraded_partial_result(monkeypatch):
+    calls = []
+
+    async def fake_weather(user_id):
+        calls.append("weather")
+        if len(calls) == 1:
+            raise RuntimeError("weather unavailable")
+        return {"temp": 20, "city": "Perth", "description": "clear"}
+
+    monkeypatch.setattr("intent_router._daily_briefing_weather", fake_weather)
+    monkeypatch.setattr("intent_router._daily_briefing_calendar", lambda user_id: asyncio.sleep(0, result={"events": []}))
+    monkeypatch.setattr("intent_router._daily_briefing_reminders", lambda user_id: asyncio.sleep(0, result={"reminders": []}))
+    monkeypatch.setattr("intent_router._DAILY_BRIEFING_CACHE_TTL_SECONDS", 120)
+
+    first = await _execute_daily_briefing("family-admin")
+    second = await _execute_daily_briefing("family-admin")
+
+    assert "Weather:" not in first
+    assert "Weather: 20" in second
+    assert calls == ["weather", "weather"]
