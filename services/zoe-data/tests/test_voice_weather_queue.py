@@ -786,8 +786,28 @@ async def test_voice_command_stream_emits_processing_ack_before_slow_response(mo
     assert done["reply"] == "The answer is ready."
 
 
+@pytest.mark.parametrize(
+    ("utterance", "intent", "intent_group", "agreement_kind", "response_text"),
+    [
+        ("will it rain later", "weather", "weather", "zoe_router", "It is 18.5 C and clear."),
+        (
+            "what is my day looking like",
+            "daily_briefing",
+            "daily_briefing",
+            "intent_buffer_hint",
+            "Here's your day:\n\nNo events on the calendar today.",
+        ),
+    ],
+)
 @pytest.mark.asyncio
-async def test_voice_command_uses_pi_hybrid_production_with_processing_cue(monkeypatch) -> None:
+async def test_voice_command_uses_pi_hybrid_production_with_processing_cue(
+    monkeypatch,
+    utterance,
+    intent,
+    intent_group,
+    agreement_kind,
+    response_text,
+) -> None:
     import pi_hybrid_production
 
     calls: dict[str, object] = {"broadcast": [], "tts": []}
@@ -810,14 +830,15 @@ async def test_voice_command_uses_pi_hybrid_production_with_processing_cue(monke
         return types.SimpleNamespace(body=b"RIFF-pi-hybrid", media_type="audio/wav")
 
     async def fake_try_pi(text, **kwargs):
-        assert text == "will it rain later"
+        assert text == utterance
+        assert kwargs["user_id"] == "panel-user"
         return {
             "accepted": True,
             "reason": "accepted",
-            "intent": "weather",
-            "intent_group": "weather",
-            "agreement_kind": "intent_buffer_hint",
-            "response_text": "It is 18.5 C and clear.",
+            "intent": intent,
+            "intent_group": intent_group,
+            "agreement_kind": agreement_kind,
+            "response_text": response_text,
         }
 
     async def fake_processing_cue():
@@ -840,18 +861,21 @@ async def test_voice_command_uses_pi_hybrid_production_with_processing_cue(monke
     monkeypatch.setattr(skybridge_service, "resolve_skybridge_request", resolve_skybridge_request)
 
     response = await voice_command(
-        {"text": "will it rain later", "panel_id": "panel-pi", "session_id": "session-pi"},
+        {"text": utterance, "panel_id": "panel-pi", "session_id": "session-pi"},
         caller={"user_id": "guest", "panel_id": "panel-pi"},
         stream=False,
         db=object(),
     )
 
     assert response["ok"] is True
-    assert response["reply"] == "It is 18.5 C and clear."
-    assert response["intent"] == "weather"
+    assert response["reply"] == response_text
+    assert response["intent"] == intent
     assert response["pi_hybrid"]["accepted"] is True
+    assert response["pi_hybrid"]["intent_group"] == intent_group
+    assert response["pi_hybrid"]["agreement_kind"] == agreement_kind
     assert response["pi_hybrid"]["processing_cue"] == {"available": True, "text": "Let me check."}
-    assert calls["tts"] == [{"text": "It is 18.5 C and clear."}]
+    assert response["audio_base64"]
+    assert calls["tts"] == [{"text": response_text}]
     assert (
         "all",
         "voice:responding",
