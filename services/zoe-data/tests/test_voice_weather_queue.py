@@ -789,7 +789,7 @@ async def test_voice_command_stream_emits_processing_ack_before_slow_response(mo
 @pytest.mark.parametrize(
     ("utterance", "intent", "intent_group", "agreement_kind", "response_text"),
     [
-        ("will it rain later", "weather", "weather", "zoe_router", "It is 18.5 C and clear."),
+        ("will it rain later", "weather", "weather", "intent_buffer_hint", "It is 18.5 C and clear."),
         (
             "what is my day looking like",
             "daily_briefing",
