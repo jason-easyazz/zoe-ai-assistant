@@ -168,24 +168,20 @@ def test_probe_requires_device_token():
         raise AssertionError("expected ValueError")
 
 
-def test_cli_report_redacts_device_token(capsys):
+def test_cli_report_redacts_device_token(capsys, monkeypatch):
     module = _load_module()
 
     def fake_run_probe(cases, **kwargs):
         assert kwargs["device_token"] == "secret-token"
         return []
 
-    old = module.run_probe
-    module.run_probe = fake_run_probe
-    try:
-        assert module.main([
-            "--base-url", "http://testserver",
-            "--panel-id", "panel-touch",
-            "--device-token", "secret-token",
-            "--no-default-cases",
-        ]) == 0
-    finally:
-        module.run_probe = old
+    monkeypatch.setattr(module, "run_probe", fake_run_probe)
+    assert module.main([
+        "--base-url", "http://testserver",
+        "--panel-id", "panel-touch",
+        "--device-token", "secret-token",
+        "--no-default-cases",
+    ]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert "secret-token" not in json.dumps(payload)
     assert payload["panel_id"] == "panel-touch"
