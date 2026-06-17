@@ -226,6 +226,57 @@ def test_probe_counts_expected_fast_fallback_http_reply_as_natural_flow():
     assert report["readiness"] == {"ready_for_touch_panel_smoke": True, "blockers": []}
 
 
+def test_probe_does_not_require_processing_ack_when_case_opts_out():
+    module = _load_module()
+
+    def sender(url, payload, timeout_seconds, headers):
+        return {
+            "ok": True,
+            "reply": "Ready without a cue.",
+            "audio_base64": "UklGRg==",
+            "intent": "general",
+        }
+
+    def panel_observer(ws_url, panel_id, device_token, timeout_seconds, action):
+        response = action()
+        return response, [
+            {"offset_ms": 120.0, "message": {"type": "voice:done", "data": {"panel_id": panel_id}}},
+        ], None
+
+    cases = [{
+        "case_id": "no_ack_expected",
+        "text": "continue",
+        "expected_intent": "general",
+        "intent_group": "general",
+        "expect_pi_hybrid": False,
+        "expect_processing_ack": False,
+        "expect_natural_flow": True,
+    }]
+    observations = module.run_probe(
+        cases,
+        base_url="http://testserver",
+        panel_id="panel-touch",
+        device_token="token-secret",
+        repeat=1,
+        timeout_seconds=15.0,
+        websocket_timeout_seconds=5.0,
+        sender=sender,
+        panel_observer=panel_observer,
+    )
+    report = module.build_report(
+        cases,
+        observations,
+        base_url="http://testserver",
+        panel_id="panel-touch",
+        repeat=1,
+    )
+
+    assert observations[0]["processing_ack_available"] is False
+    assert observations[0]["natural_flow_pass"] is True
+    assert report["summary"]["expected_natural_flow"]["processing_ack_expected_count"] == 0
+    assert report["readiness"] == {"ready_for_touch_panel_smoke": True, "blockers": []}
+
+
 def test_probe_does_not_block_readiness_for_cases_that_do_not_expect_natural_flow():
     module = _load_module()
 

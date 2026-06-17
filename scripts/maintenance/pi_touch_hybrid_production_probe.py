@@ -261,7 +261,7 @@ def _post_voice_command(
 
 
 def _observation(
-    case: Mapping[str, str],
+    case: Mapping[str, Any],
     *,
     repeat_index: int,
     response: Mapping[str, Any] | None,
@@ -358,13 +358,18 @@ def _stats(observations: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             "processing_ack_latency_ms": _latency_stats([]),
             "final_panel_response_latency_ms": _latency_stats([]),
             "final_http_latency_ms": _latency_stats([]),
+            "processing_ack_expected_count": 0,
+            "processing_ack_expected_rate": None,
             "pi_hybrid_expected_count": 0,
             "pi_hybrid_expected_accept_rate": None,
         }
+    ack_expected = [item for item in observations if bool(item.get("expect_processing_ack"))]
     pi_expected = [item for item in observations if bool(item.get("expect_pi_hybrid"))]
     return {
         "observation_count": len(observations),
         "unique_case_count": len({str(item.get("case_id")) for item in observations}),
+        "processing_ack_expected_count": len(ack_expected),
+        "processing_ack_expected_rate": _rate(bool(item.get("processing_ack_available")) for item in ack_expected),
         "pi_hybrid_expected_count": len(pi_expected),
         "pi_hybrid_expected_accept_rate": _rate(bool(item.get("pi_hybrid_accepted")) for item in pi_expected),
         "natural_flow_pass_rate": _rate(bool(item.get("natural_flow_pass")) for item in observations),
@@ -386,7 +391,7 @@ def _readiness(overall: Mapping[str, Any], expected: Mapping[str, Any] | None = 
     blockers: list[str] = []
     if scoped.get("observation_count", 0) > 0 and scoped.get("natural_flow_pass_rate") != 1.0:
         blockers.append("natural_flow_not_passing_expected_cases")
-    if scoped.get("observation_count", 0) > 0 and scoped.get("processing_ack_rate") != 1.0:
+    if _expected_processing_ack_required(scoped) and scoped.get("processing_ack_expected_rate") != 1.0:
         blockers.append("panel_processing_ack_missing")
     if _expected_pi_accept_rate_required(scoped) and scoped.get("pi_hybrid_expected_accept_rate") != 1.0:
         blockers.append("pi_hybrid_not_accepting_expected_pi_cases")
@@ -397,6 +402,10 @@ def _readiness(overall: Mapping[str, Any], expected: Mapping[str, Any] | None = 
     if (overall.get("observer_error_rate") or 0) > 0:
         blockers.append("panel_websocket_observer_errors")
     return {"ready_for_touch_panel_smoke": not blockers, "blockers": blockers}
+
+
+def _expected_processing_ack_required(stats: Mapping[str, Any]) -> bool:
+    return bool(stats.get("processing_ack_expected_count", 0))
 
 
 def _expected_pi_accept_rate_required(stats: Mapping[str, Any]) -> bool:
