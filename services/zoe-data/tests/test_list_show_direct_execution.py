@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 
 import pytest
 
-from intent_router import Intent, _execute_list_show_direct, execute_intent
+from intent_router import Intent, _execute_list_show_direct, detect_intent, execute_intent
 
 
 class _Cursor:
@@ -29,6 +29,13 @@ def _install_fake_db(monkeypatch, db):
         yield db
 
     monkeypatch.setattr("database.get_db_ctx", fake_get_db_ctx)
+
+
+def test_detect_intent_handles_spoken_what_is_list_show():
+    intent = detect_intent("what is on my shopping list")
+
+    assert intent.name == "list_show"
+    assert intent.slots == {"list_type": "shopping"}
 
 
 @pytest.mark.asyncio

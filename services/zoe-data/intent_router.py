@@ -1055,8 +1055,7 @@ def detect_intent(
     # --- LIST SHOW ---
     for pattern in [
         r"^(?:show|read|check) (?:me )?(?:the |my )?(.+?) ?list$",
-        r"^what'?s on (?:the |my )?(.+?) ?list$",
-        r"^whats on (?:the |my )?(.+?) ?list$",
+        r"^what(?:'?s| is) on (?:the |my )?(.+?) ?list$",
         r"^what do i need to (?:buy|get)$",
         r"^what'?s on my list$",
         r"^show my list$",
