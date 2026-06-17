@@ -454,17 +454,31 @@ def test_pi_hybrid_production_label_endpoint_appends_trusted_label(tmp_path, mon
 
     resp = TestClient(app).post(
         "/api/system/pi-intent/production-labels",
-        json={"text_hash": "weatherhash", "outcome_label": "weather"},
+        json={
+            "text_hash": "weatherhash",
+            "outcome_label": "weather",
+            "route_class": "fallback",
+            "baseline_kind": "zoe_agent_fallback_baseline",
+            "baseline_comparable": True,
+            "zoe_latency_ms": 4321.0,
+        },
     )
 
     assert resp.status_code == 200
     data = resp.json()
     assert data["ok"] is True
     assert data["label"]["outcome_label"] == "weather"
+    assert data["label"]["route_class"] == "fallback"
+    assert data["label"]["baseline_kind"] == "zoe_agent_fallback_baseline"
+    assert data["label"]["baseline_comparable"] is True
+    assert data["label"]["zoe_latency_ms"] == 4321.0
     assert data["matched_record"]["text_preview"] == "rain later"
     saved = json.loads(labels_path.read_text(encoding="utf-8"))
     assert saved["text_hash"] == "weatherhash"
     assert saved["outcome_label"] == "weather"
+    assert saved["baseline_kind"] == "zoe_agent_fallback_baseline"
+    assert saved["baseline_comparable"] is True
+    assert saved["zoe_latency_ms"] == 4321.0
     assert len(saved["reviewed_by_hash"]) == 64
     assert data["labels_store"] == "production_labels_sidecar"
 

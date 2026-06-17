@@ -290,6 +290,24 @@ class PiHybridProductionLabelRequest(BaseModel):
     outcome_label: Optional[str] = None
     negative: bool = False
     source: Literal["admin_review", "operator_override"] = "admin_review"
+    route_class: Optional[Literal["deterministic", "fallback", "extraction_failed"]] = None
+    baseline_kind: Optional[
+        Literal[
+            "operator_extraction_failed_override",
+            "operator_fallback_override",
+            "router",
+            "router_extraction_failed_not_comparable",
+            "router_only_not_comparable",
+            "zoe_agent_extraction_failed_baseline",
+            "zoe_agent_extraction_failed_error",
+            "zoe_agent_extraction_failed_timeout",
+            "zoe_agent_fallback_baseline",
+            "zoe_agent_fallback_error",
+            "zoe_agent_fallback_timeout",
+        ]
+    ] = None
+    baseline_comparable: Optional[bool] = None
+    zoe_latency_ms: Optional[float] = None
 
 
 @router.post("/pi-intent/production-labels")
@@ -307,6 +325,10 @@ async def post_pi_hybrid_production_label(
             negative=payload.negative,
             source=payload.source,
             reviewed_by=str(user.get("user_id") or "admin"),
+            route_class=payload.route_class,
+            baseline_kind=payload.baseline_kind,
+            baseline_comparable=payload.baseline_comparable,
+            zoe_latency_ms=payload.zoe_latency_ms,
             evidence_path=os.environ.get("ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_PATH")
             or "~/.zoe/data/pi-hybrid-production-evidence.jsonl",
             labels_path=os.environ.get("ZOE_PI_HYBRID_PRODUCTION_LABELS_PATH")

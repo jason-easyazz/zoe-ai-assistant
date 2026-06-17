@@ -28,6 +28,19 @@ _SPACE_RE = re.compile(r"\s+")
 _SECRET_KEY_RE = re.compile(r"(?i)(api[_-]?key|\btoken\b|\bsecret\b|password|authorization|\bbearer\b)")
 _SECRET_TEXT_RE = re.compile(r"(?i)(api[\s_-]?key|authorization|bearer\s+[a-z0-9._\-]+|password\s*(is|=)|secret\s*(is|=)|token\s*(is|=))")
 _ALLOWED_ROUTE_CLASSES = {"deterministic", "fallback", "extraction_failed"}
+_ALLOWED_BASELINE_KINDS = {
+    "operator_extraction_failed_override",
+    "operator_fallback_override",
+    "router",
+    "router_extraction_failed_not_comparable",
+    "router_only_not_comparable",
+    "zoe_agent_extraction_failed_baseline",
+    "zoe_agent_extraction_failed_error",
+    "zoe_agent_extraction_failed_timeout",
+    "zoe_agent_fallback_baseline",
+    "zoe_agent_fallback_error",
+    "zoe_agent_fallback_timeout",
+}
 _ALLOWED_LABEL_SOURCES = {"admin_review", "operator_override"}
 _DEFAULT_PRODUCTION_RECORD_LIMIT = 1000
 
@@ -187,6 +200,10 @@ def append_pi_hybrid_production_label(
     negative: bool = False,
     source: str = "admin_review",
     reviewed_by: str | None = None,
+    route_class: str | None = None,
+    baseline_kind: str | None = None,
+    baseline_comparable: bool | None = None,
+    zoe_latency_ms: float | None = None,
     evidence_path: str = _DEFAULT_PRODUCTION_PATH,
     labels_path: str = _DEFAULT_PRODUCTION_LABELS_PATH,
     production_limit: int = _DEFAULT_PRODUCTION_RECORD_LIMIT,
@@ -218,6 +235,14 @@ def append_pi_hybrid_production_label(
         row["negative"] = True
     if reviewed_by:
         row["reviewed_by_hash"] = _hash_text(reviewed_by)
+    if route_class is not None:
+        row["route_class"] = route_class
+    if baseline_kind is not None:
+        row["baseline_kind"] = baseline_kind
+    if baseline_comparable is not None:
+        row["baseline_comparable"] = bool(baseline_comparable)
+    if zoe_latency_ms is not None:
+        row["zoe_latency_ms"] = zoe_latency_ms
 
     label = _production_label_from_row(row)
     if not label:
@@ -315,10 +340,19 @@ def _production_label_from_row(row: Mapping[str, Any]) -> dict[str, Any]:
     for key in ("route_class", "baseline_kind", "source"):
         value = _optional_str(row.get(key))
         if value:
+            if key == "route_class" and value not in _ALLOWED_ROUTE_CLASSES:
+                return {}
+            if key == "baseline_kind" and value not in _ALLOWED_BASELINE_KINDS:
+                return {}
             label[key] = value
     for key in ("baseline_comparable", "user_corrected", "rollback_blocked"):
         if row.get(key) is not None:
             label[key] = _bool_record_value(row.get(key))
+    if row.get("zoe_latency_ms") is not None:
+        latency_ms = _float_or_none(row.get("zoe_latency_ms"))
+        if latency_ms is None or latency_ms < 0:
+            return {}
+        label["zoe_latency_ms"] = latency_ms
     return label
 
 
