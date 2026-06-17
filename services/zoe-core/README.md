@@ -42,8 +42,12 @@ via Pi's extension hooks.
 
 `extensions/provider-local-gemma.ts` registers a Pi provider `local-gemma`
 pointing at the host model server (`GEMMA_SERVER_URL`, default
-`http://127.0.0.1:11434/v1`, OpenAI-compatible). Smoke test:
+`http://127.0.0.1:11434/v1`, OpenAI-compatible). `package.json` declares the Pi
+dependency and the extension manifest; `tsconfig.json` type-checks the extension
+(Pi loads `.ts` directly via jiti — no build step).
+
+Smoke test (integration; skips if `pi` or the model server are unavailable):
 
 ```bash
-./test/brick1_smoke.sh
+python -m pytest services/zoe-core/test/test_brick1_provider.py -v
 ```
