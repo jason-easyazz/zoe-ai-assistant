@@ -13,6 +13,7 @@ def _env(tmp_path, shadow_path):
         "ZOE_PI_INTENT_SHADOW_PATH": str(shadow_path),
         "ZOE_PI_INTENT_SHADOW_LABELS_PATH": str(tmp_path / "labels.jsonl"),
         "ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_PATH": str(tmp_path / "production.jsonl"),
+        "ZOE_PI_HYBRID_PRODUCTION_LABELS_PATH": str(tmp_path / "production-labels.jsonl"),
         "ZOE_PI_PROMOTION_EVAL_REPORT_PATH": str(tmp_path / "missing-eval-report.json"),
     }
 
@@ -361,6 +362,7 @@ def test_readiness_report_surfaces_production_evidence_summary(tmp_path):
             for row in [
                 {
                     "ts": 1.0,
+                    "text_hash": None,
                     "source": "pi_hybrid_production",
                     "accepted": True,
                     "reason": "accepted",
@@ -375,6 +377,7 @@ def test_readiness_report_surfaces_production_evidence_summary(tmp_path):
                 },
                 {
                     "ts": 2.0,
+                    "text_hash": None,
                     "source": "pi_hybrid_production",
                     "accepted": False,
                     "reason": "timeout",
@@ -387,6 +390,7 @@ def test_readiness_report_surfaces_production_evidence_summary(tmp_path):
                 },
                 {
                     "ts": 3.0,
+                    "text_hash": None,
                     "source": "pi_hybrid_production",
                     "accepted": True,
                     "reason": "accepted",
@@ -419,6 +423,8 @@ def test_readiness_report_surfaces_production_evidence_summary(tmp_path):
         "enabled": True,
         "loaded": True,
         "path": str(production_path),
+        "labels_path": str(tmp_path / "production-labels.jsonl"),
+        "label_count": 0,
         "invalid_lines": 1,
         "record_count": 3,
         "accepted_count": 2,
@@ -448,6 +454,7 @@ def test_readiness_report_surfaces_production_evidence_summary(tmp_path):
         "recent": [
             {
                 "ts": 1.0,
+                "text_hash": None,
                 "intent_group": "weather",
                 "accepted": True,
                 "reason": "accepted",
@@ -457,10 +464,12 @@ def test_readiness_report_surfaces_production_evidence_summary(tmp_path):
                 "safe_fulfillment_latency_ms": 900.0,
                 "production_route_change": True,
                 "outcome_label": None,
+                "outcome_label_source": None,
                 "text_preview": "will it rain later",
             },
             {
                 "ts": 2.0,
+                "text_hash": None,
                 "intent_group": "weather",
                 "accepted": False,
                 "reason": "timeout",
@@ -470,10 +479,12 @@ def test_readiness_report_surfaces_production_evidence_summary(tmp_path):
                 "safe_fulfillment_latency_ms": None,
                 "production_route_change": False,
                 "outcome_label": "weather_timeout",
+                "outcome_label_source": None,
                 "text_preview": "weather tomorrow",
             },
             {
                 "ts": 3.0,
+                "text_hash": None,
                 "intent_group": "daily_briefing",
                 "accepted": True,
                 "reason": "accepted",
@@ -483,6 +494,7 @@ def test_readiness_report_surfaces_production_evidence_summary(tmp_path):
                 "safe_fulfillment_latency_ms": 1100.0,
                 "production_route_change": True,
                 "outcome_label": None,
+                "outcome_label_source": None,
                 "text_preview": "give me my daily briefing",
             },
         ],
@@ -492,8 +504,80 @@ def test_readiness_report_surfaces_production_evidence_summary(tmp_path):
         "priority": "p1",
         "detail": "Label 2 Pi hybrid production evidence records before promotion scoring.",
         "path": str(production_path),
+        "labels_path": str(tmp_path / "production-labels.jsonl"),
         "groups": ["daily_briefing", "weather"],
     } in report["next_actions"]
+
+
+def test_readiness_report_applies_production_label_sidecar(tmp_path):
+    shadow_path = tmp_path / "shadow.jsonl"
+    shadow_path.write_text("", encoding="utf-8")
+    production_path = tmp_path / "production.jsonl"
+    labels_path = tmp_path / "production-labels.jsonl"
+    production_path.write_text(
+        "".join(
+            json.dumps(row) + "\n"
+            for row in [
+                {
+                    "ts": 1.0,
+                    "source": "pi_hybrid_production",
+                    "text_hash": "weather-hash",
+                    "accepted": True,
+                    "reason": "accepted",
+                    "intent": "weather",
+                    "intent_group": "weather",
+                    "pi_intent": "weather",
+                    "pi_latency_ms": 4100.0,
+                    "safe_fulfillment_latency_ms": 900.0,
+                    "production_route_change": True,
+                    "text_preview": "will it rain later",
+                    "outcome_label": None,
+                },
+                {
+                    "ts": 2.0,
+                    "source": "pi_hybrid_production",
+                    "text_hash": "briefing-hash",
+                    "accepted": True,
+                    "reason": "accepted",
+                    "intent": "daily_briefing",
+                    "intent_group": "daily_briefing",
+                    "pi_intent": "daily_briefing",
+                    "pi_latency_ms": 2200.0,
+                    "safe_fulfillment_latency_ms": 1100.0,
+                    "production_route_change": True,
+                    "text_preview": "give me my daily briefing",
+                    "outcome_label": None,
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+    labels_path.write_text(
+        "".join(
+            json.dumps(row) + "\n"
+            for row in [
+                {"text_hash": "weather-hash", "outcome_label": "weather", "source": "admin_review"},
+                {"text_hash": "briefing-hash", "outcome_label": "daily_briefing", "source": "admin_review"},
+            ]
+        ),
+        encoding="utf-8",
+    )
+    env = _env(tmp_path, shadow_path)
+    env["ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_ENABLED"] = "true"
+    env["ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_PATH"] = str(production_path)
+    env["ZOE_PI_HYBRID_PRODUCTION_LABELS_PATH"] = str(labels_path)
+
+    report = pi_readiness_report(env)
+
+    assert report["summary"]["production_label_count"] == 2
+    assert report["summary"]["production_unlabeled_count"] == 0
+    assert report["production_evidence"]["label_count"] == 2
+    assert report["production_evidence"]["unlabeled_count"] == 0
+    assert {row["outcome_label"] for row in report["production_evidence"]["recent"]} == {"weather", "daily_briefing"}
+    assert {row["outcome_label_source"] for row in report["production_evidence"]["recent"]} == {
+        "production_label_sidecar"
+    }
+    assert not [action for action in report["next_actions"] if action.get("kind") == "label_production_evidence"]
 
 
 def test_readiness_report_missing_production_evidence_is_nonblocking(tmp_path):
@@ -508,6 +592,7 @@ def test_readiness_report_missing_production_evidence_is_nonblocking(tmp_path):
         "enabled": True,
         "loaded": False,
         "path": str(tmp_path / "production.jsonl"),
+        "labels_path": str(tmp_path / "production-labels.jsonl"),
         "record_count": 0,
     }
     assert report["state"] == "shadow_collecting"
@@ -539,6 +624,7 @@ def test_readiness_report_disabled_production_evidence_does_not_load_existing_fi
         "enabled": False,
         "loaded": False,
         "path": str(production_path),
+        "labels_path": str(tmp_path / "production-labels.jsonl"),
         "record_count": 0,
         "disabled": True,
     }

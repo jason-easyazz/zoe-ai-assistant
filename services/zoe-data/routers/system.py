@@ -285,6 +285,37 @@ async def post_pi_intent_shadow_label(payload: PiIntentShadowLabelRequest, user:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+class PiHybridProductionLabelRequest(BaseModel):
+    text_hash: str
+    outcome_label: Optional[str] = None
+    negative: bool = False
+    source: Literal["admin_review", "operator_override"] = "admin_review"
+
+
+@router.post("/pi-intent/production-labels")
+async def post_pi_hybrid_production_label(
+    payload: PiHybridProductionLabelRequest,
+    user: dict = Depends(require_admin),
+):
+    """Append one trusted admin label for an existing Pi hybrid production record."""
+    from pi_intent_evidence import append_pi_hybrid_production_label
+
+    try:
+        return append_pi_hybrid_production_label(
+            text_hash=payload.text_hash,
+            outcome_label=payload.outcome_label,
+            negative=payload.negative,
+            source=payload.source,
+            reviewed_by=str(user.get("user_id") or "admin"),
+            evidence_path=os.environ.get("ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_PATH")
+            or "~/.zoe/data/pi-hybrid-production-evidence.jsonl",
+            labels_path=os.environ.get("ZOE_PI_HYBRID_PRODUCTION_LABELS_PATH")
+            or "~/.zoe/data/pi-hybrid-production-labels.jsonl",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 def _load_skills_and_cron():
     skills = []
     skills_dir = os.path.expanduser("~/.openclaw/workspace/skills")

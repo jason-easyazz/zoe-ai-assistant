@@ -11,11 +11,15 @@ import json
 import os
 import re
 import time
+from collections import deque
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
+
+from zoe_pi_promotion import intent_group_for_intent
 
 _DEFAULT_MISS_PATH = "~/.zoe/data/pi-intent-miss-evidence.jsonl"
 _DEFAULT_PRODUCTION_PATH = "~/.zoe/data/pi-hybrid-production-evidence.jsonl"
+_DEFAULT_PRODUCTION_LABELS_PATH = "~/.zoe/data/pi-hybrid-production-labels.jsonl"
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.\w+")
 _URL_RE = re.compile(r"https?://\S+")
 _PHONE_RE = re.compile(r"\b\d[\d\s\-]{5,}\d\b")
@@ -24,6 +28,8 @@ _SPACE_RE = re.compile(r"\s+")
 _SECRET_KEY_RE = re.compile(r"(?i)(api[_-]?key|\btoken\b|\bsecret\b|password|authorization|\bbearer\b)")
 _SECRET_TEXT_RE = re.compile(r"(?i)(api[\s_-]?key|authorization|bearer\s+[a-z0-9._\-]+|password\s*(is|=)|secret\s*(is|=)|token\s*(is|=))")
 _ALLOWED_ROUTE_CLASSES = {"deterministic", "fallback", "extraction_failed"}
+_ALLOWED_LABEL_SOURCES = {"admin_review", "operator_override"}
+_DEFAULT_PRODUCTION_RECORD_LIMIT = 1000
 
 
 def record_intent_miss_evidence(
@@ -110,6 +116,164 @@ def record_pi_hybrid_production_evidence(
     return record
 
 
+def load_pi_hybrid_production_records(
+    path: str = _DEFAULT_PRODUCTION_PATH,
+    *,
+    limit: int = _DEFAULT_PRODUCTION_RECORD_LIMIT,
+) -> list[dict[str, Any]]:
+    """Load recent production Pi hybrid evidence records from JSONL."""
+    target = Path(path or _DEFAULT_PRODUCTION_PATH).expanduser()
+    if not target.exists():
+        return []
+    with target.open("r", encoding="utf-8", errors="replace") as handle:
+        rows = deque(handle, maxlen=max(1, int(limit)))
+    records: list[dict[str, Any]] = []
+    for line in rows:
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(item, dict):
+            records.append(item)
+    return records
+
+
+def load_pi_hybrid_production_labels(path: str = _DEFAULT_PRODUCTION_LABELS_PATH) -> dict[str, dict[str, Any]]:
+    """Load latest valid append-only labels keyed by production evidence text_hash."""
+    target = Path(path or _DEFAULT_PRODUCTION_LABELS_PATH).expanduser()
+    if not target.exists():
+        return {}
+    labels: dict[str, dict[str, Any]] = {}
+    with target.open("r", encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            try:
+                row = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(row, Mapping):
+                continue
+            text_hash = _optional_str(row.get("text_hash"))
+            if not text_hash:
+                continue
+            label = _production_label_from_row(row)
+            if label:
+                labels[text_hash] = label
+    return labels
+
+
+def apply_pi_hybrid_production_labels(
+    records: Sequence[Mapping[str, Any]], labels: Mapping[str, Mapping[str, Any]]
+) -> list[dict[str, Any]]:
+    """Return production records with label sidecar values applied."""
+    output: list[dict[str, Any]] = []
+    for record in records:
+        item = dict(record)
+        text_hash = _optional_str(item.get("text_hash"))
+        label = labels.get(text_hash or "")
+        if label:
+            item.update(label)
+            item["outcome_label_source"] = "production_label_sidecar"
+        output.append(item)
+    return output
+
+
+def append_pi_hybrid_production_label(
+    *,
+    text_hash: str,
+    outcome_label: str | None = None,
+    negative: bool = False,
+    source: str = "admin_review",
+    reviewed_by: str | None = None,
+    evidence_path: str = _DEFAULT_PRODUCTION_PATH,
+    labels_path: str = _DEFAULT_PRODUCTION_LABELS_PATH,
+    production_limit: int = _DEFAULT_PRODUCTION_RECORD_LIMIT,
+) -> dict[str, Any]:
+    """Append one trusted admin label for an existing production evidence record."""
+    normalized_hash = str(text_hash or "").strip()
+    if not normalized_hash:
+        raise ValueError("text_hash is required")
+    records = load_pi_hybrid_production_records(evidence_path, limit=production_limit)
+    matching_record = next(
+        (record for record in records if str(record.get("text_hash") or "").strip() == normalized_hash),
+        None,
+    )
+    if matching_record is None:
+        raise ValueError(f"text_hash not found in the most-recent {production_limit} Pi hybrid production records")
+
+    source_value = str(source or "admin_review").strip() or "admin_review"
+    if source_value not in _ALLOWED_LABEL_SOURCES:
+        raise ValueError("source must be one of: admin_review, operator_override")
+
+    row: dict[str, Any] = {
+        "text_hash": normalized_hash,
+        "source": source_value,
+        "labeled_at": time.time(),
+    }
+    if outcome_label is not None:
+        row["outcome_label"] = str(outcome_label).strip()
+    if negative:
+        row["negative"] = True
+    if reviewed_by:
+        row["reviewed_by_hash"] = _hash_text(reviewed_by)
+
+    label = _production_label_from_row(row)
+    if not label:
+        raise ValueError("label must be a low-risk Pi intent or a negative chat/none label")
+
+    _append_jsonl(labels_path, row)
+    return {
+        "ok": True,
+        "text_hash": normalized_hash,
+        "labels_store": "production_labels_sidecar",
+        "label": label,
+        "matched_record": _compact_production_record_for_label_response(matching_record),
+    }
+
+
+def _production_label_from_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    label: dict[str, Any] = {}
+    negative = _bool_record_value(row.get("negative"))
+    outcome_label = _optional_str(row.get("outcome_label") or row.get("expected_intent") or row.get("label"))
+    if negative and outcome_label and outcome_label not in {"chat", "none", "no_intent"}:
+        return {}
+    if negative or outcome_label in {"chat", "none", "no_intent"}:
+        label["negative"] = True
+        label["outcome_label"] = None
+    elif outcome_label and intent_group_for_intent(outcome_label):
+        label["outcome_label"] = outcome_label
+    else:
+        return {}
+    for key in ("route_class", "baseline_kind", "source"):
+        value = _optional_str(row.get(key))
+        if value:
+            label[key] = value
+    for key in ("baseline_comparable", "user_corrected", "rollback_blocked"):
+        if row.get(key) is not None:
+            label[key] = _bool_record_value(row.get(key))
+    return label
+
+
+def _compact_production_record_for_label_response(record: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "text_hash": _optional_str(record.get("text_hash")),
+        "text_preview": _optional_str(record.get("text_preview")),
+        "accepted": bool(record.get("accepted")),
+        "reason": _optional_str(record.get("reason")),
+        "intent": _optional_str(record.get("intent")),
+        "pi_intent": _optional_str(record.get("pi_intent")),
+        "intent_group": _optional_str(record.get("intent_group")),
+    }
+
+
+def _bool_record_value(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
 def sanitize_evidence_text(text: str) -> str:
     clean = _EMAIL_RE.sub("[EMAIL]", str(text or ""))
     clean = _URL_RE.sub("[URL]", clean)
@@ -175,4 +339,13 @@ def _env_bool(value: str | None, *, default: bool = False) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
-__all__ = ["has_secret_evidence_text", "record_intent_miss_evidence", "record_pi_hybrid_production_evidence", "sanitize_evidence_text"]
+__all__ = [
+    "append_pi_hybrid_production_label",
+    "apply_pi_hybrid_production_labels",
+    "has_secret_evidence_text",
+    "load_pi_hybrid_production_labels",
+    "load_pi_hybrid_production_records",
+    "record_intent_miss_evidence",
+    "record_pi_hybrid_production_evidence",
+    "sanitize_evidence_text",
+]
