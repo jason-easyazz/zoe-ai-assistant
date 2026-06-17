@@ -24,7 +24,7 @@ class _Intent:
 
 
 def _disable_pi_lab_resource_guard(monkeypatch):
-    monkeypatch.setenv("ZOE_PI_LAB_MIN_AVAILABLE_MB", "0")
+    monkeypatch.setenv("ZOE_PI_LAB_RESOURCE_GUARD_ENABLED", "0")
 
 def _install_fake_intent_router(
     monkeypatch,
