@@ -11,7 +11,7 @@ Production runtime services for the Zoe assistant: the web/chat API, static UI, 
 - `zoe-auth/` — authentication service.
 - `homeassistant-mcp-bridge/`, `n8n-mcp-bridge/` — MCP protocol bridges to external systems.
 - `livekit/` — realtime audio/video infrastructure config.
-- `zoe-core/` does not exist here anymore: it is RETIRED legacy reference code. Never extend it for new features.
+- `zoe-core/` — Zoe's reasoning/orchestration core: the Pi agent (Gemma 4) that binds the other services together and calls abilities. This is the center of Zoe, not a monolith — it orchestrates and delegates; it does not absorb the other services' code. NOTE: a *different*, older `zoe-core` (the retired Docker monolith, replaced by `zoe-data`) is archived at `docs/archive/retired-services/zoe-core/` — that legacy tree must never be revived or extended. This service is the new Pi core, not that archive.
 
 ## Local Contracts
 

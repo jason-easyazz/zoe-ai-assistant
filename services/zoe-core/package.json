@@ -1,0 +1,15 @@
+{
+  "name": "@zoe/zoe-core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Zoe's reasoning/orchestration core — Pi-agent extensions (provider, soul, memory, abilities).",
+  "type": "module",
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "^0.79.3"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/provider-local-gemma.ts"
+    ]
+  }
+}
