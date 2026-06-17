@@ -321,11 +321,13 @@ def _stats(observations: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             "natural_flow_pass_rate": None,
             "pi_hybrid_accept_rate": None,
             "processing_ack_rate": None,
+            "final_panel_response_rate": None,
             "final_http_response_rate": None,
             "audio_return_rate": None,
             "request_error_rate": None,
             "observer_error_rate": None,
             "processing_ack_latency_ms": _latency_stats([]),
+            "final_panel_response_latency_ms": _latency_stats([]),
             "final_http_latency_ms": _latency_stats([]),
         }
     return {
