@@ -312,6 +312,17 @@ _DATE_QUERY_RE = re.compile(
     re.IGNORECASE,
 )
 
+_TIME_PLANNING_CLARIFICATION_RE = re.compile(
+    r"^(?:what(?:'s|\s+is)\s+)?(?:the\s+)?best\s+time\s+to\s+(?:leave|go|start|head\s+out|arrive)\b",
+    re.IGNORECASE,
+)
+
+_TIME_MATH_CLARIFICATION_RE = re.compile(
+    r"^(?:what(?:'s|\s+is)\s+)?(?:the\s+)?(?:meeting|travel|arrival|departure)\s+time\s+"
+    r"(?:plus|minus|\+|-)\s+(?:the\s+)?(?:meeting|travel|arrival|departure)\s+time\b",
+    re.IGNORECASE,
+)
+
 
 _CONNECT_CHATGPT_RE = re.compile(
     r"^(?:can you |please |could you )?(?:connect|link|auth(?:orize|orise|)?|set\s*up|add|enable)\b"
@@ -637,6 +648,12 @@ def detect_intent(
         return Intent("memory_remember", {"raw": text})
 
     # === CLOCK / CALENDAR QUERIES — checked before domain patterns (no slots needed) ===
+
+    if _TIME_PLANNING_CLARIFICATION_RE.match(t):
+        return Intent("time_planning_clarification", {"kind": "best_time_to_leave"})
+
+    if _TIME_MATH_CLARIFICATION_RE.match(t):
+        return Intent("time_planning_clarification", {"kind": "time_math"})
 
     # Modelled on HA's HassGetCurrentTime and HassGetCurrentDate — two separate intents
     if _TIME_QUERY_RE.match(t):
@@ -1944,6 +1961,11 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
         now = datetime.now()
         spoken_day = _spoken_day_ordinal(now.day)
         return f"Today is {now.strftime('%A')}, {now.strftime('%B')} {spoken_day}."
+
+    if intent.name == "time_planning_clarification":
+        if intent.slots.get("kind") == "time_math":
+            return "I need the actual times before I can work that out."
+        return "What time do you need to arrive?"
 
     if intent.name == "connect_chatgpt":
         # Handled directly by chat.py via _chatgpt_connect_flow() — which runs
