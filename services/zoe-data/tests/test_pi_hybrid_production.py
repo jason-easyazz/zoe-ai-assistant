@@ -111,7 +111,11 @@ async def test_try_pi_hybrid_fast_accepts_deterministic_router_weather(monkeypat
     decision = await try_pi_hybrid_production(
         "will it rain later",
         user_id="jason",
-        config=PiHybridProductionConfig(enabled=True, resource_guard_enabled=True),
+        config=PiHybridProductionConfig(
+            enabled=True,
+            resource_guard_enabled=True,
+            router_fast_accept_enabled=True,
+        ),
     )
     await asyncio.sleep(0)
 
@@ -141,7 +145,11 @@ async def test_try_pi_hybrid_fast_accept_records_audit_disagreement(tmp_path, mo
     decision = await try_pi_hybrid_production(
         "will it rain later",
         user_id="jason",
-        config=PiHybridProductionConfig(enabled=True, resource_guard_enabled=True),
+        config=PiHybridProductionConfig(
+            enabled=True,
+            resource_guard_enabled=True,
+            router_fast_accept_enabled=True,
+        ),
         env={
             "ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_ENABLED": "true",
             "ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_PATH": str(evidence_path),

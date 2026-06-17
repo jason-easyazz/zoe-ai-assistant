@@ -45,7 +45,7 @@ class PiHybridProductionConfig:
     min_available_mb: int = 2048
     min_swap_free_mb: int = 256
     resource_guard_enabled: bool = True
-    router_fast_accept_enabled: bool = True
+    router_fast_accept_enabled: bool = False
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "PiHybridProductionConfig":
