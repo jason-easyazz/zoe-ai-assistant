@@ -36,7 +36,7 @@ Current merged foundation:
 
 Important non-complete truth:
 
-- Pi hybrid production is operational, but formal auto-promotion is intentionally still gated by evidence volume. The deployed readiness report is `ready=true`, `mode=shadow_buffer`, with candidate wins for `daily_briefing`, `timers`, and `weather`; promotion remains `collect_more_evidence` until 30 unique real/log-derived labeled samples clear the policy for a group.
+- Pi hybrid production is operational, but formal auto-promotion is intentionally still gated by evidence volume. The deployed readiness report is `ready=true`, `mode=shadow_buffer`, with candidate wins for `daily_briefing`, `timers`, and `weather`; `timers` is a benchmark candidate only and is not yet enabled in the production hybrid lane. Promotion remains `collect_more_evidence` until 30 unique real/log-derived labeled samples clear the policy for a group.
 - Graphify was last successfully refreshed through source commit `75f5345d`.
   A refresh attempt after `18b8bd5` scanned 599 code files and 257 docs but
   all 7 OpenAI semantic chunks failed with `insufficient_quota`; the tool still
