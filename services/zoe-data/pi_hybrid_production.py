@@ -19,7 +19,7 @@ from pi_intent_lab import SAFE_FULFILLMENT_INTENTS, compare_pi_intent_lab
 from zoe_pi_promotion import LOW_RISK_PI_INTENT_GROUPS, intent_group_for_intent
 
 _SAFE_PRODUCTION_INTENTS = frozenset({"weather", "daily_briefing", "list_show"})
-_DEFAULT_GROUPS = ("weather", "daily_briefing")
+_DEFAULT_GROUPS = ("weather", "daily_briefing", "lists")
 _WEATHER_SIGNAL_RE = re.compile(
     r"\b(weather|rain|forecast|temperature|storm|windy|humid|umbrella|jacket|hot|cold|degrees|celsius)\b",
     re.I,

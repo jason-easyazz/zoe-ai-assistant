@@ -7,6 +7,7 @@ import pytest
 
 import pi_hybrid_production
 from pi_hybrid_production import PiHybridProductionConfig, pi_hybrid_production_eligible, try_pi_hybrid_production
+from zoe_pi_promotion import intent_group_for_intent
 
 
 def _install_prefilter(monkeypatch, *, allowed=True):
@@ -26,7 +27,7 @@ def _accepted_lab_result(*, intent="weather", response="It is 18.5 C.", router_i
         "pi": {
             "ran": True,
             "intent": intent,
-            "intent_group": "weather" if intent == "weather" else "daily_briefing",
+            "intent_group": intent_group_for_intent(intent),
             "confidence": 0.94,
             "latency_ms": 123.0,
             "timed_out": False,
@@ -59,6 +60,10 @@ def test_production_eligibility_is_disabled_and_tightly_prefiltered(monkeypatch)
         "production_prefilter_rejected",
     )
     assert pi_hybrid_production_eligible("will it rain later", config=PiHybridProductionConfig(enabled=True)) == (
+        True,
+        "eligible",
+    )
+    assert pi_hybrid_production_eligible("what is on my shopping list", config=PiHybridProductionConfig(enabled=True)) == (
         True,
         "eligible",
     )
@@ -210,6 +215,50 @@ async def test_try_pi_hybrid_fast_accepts_deterministic_daily_briefing(monkeypat
     assert decision["reason"] == "router_confirmed_fast_accept"
     assert decision["agreement_kind"] == "zoe_router_fast"
     assert decision["response_text"] == "Here's your day: No events on the calendar today."
+    assert len(calls) == 2
+    assert calls[0]["run_pi"] is False
+    assert calls[1]["run_pi"] is True
+
+
+@pytest.mark.asyncio
+async def test_try_pi_hybrid_fast_accepts_deterministic_list_show(monkeypatch):
+    _install_prefilter(monkeypatch)
+    calls = []
+
+    async def fake_compare(text, **kwargs):
+        calls.append(dict(kwargs))
+        if kwargs.get("run_pi") is False:
+            return _router_fast_lab_result(
+                intent="list_show",
+                response="Your shopping list has milk and bread.",
+            )
+        return _accepted_lab_result(
+            intent="list_show",
+            response="Your shopping list has milk and bread.",
+            router_intent="list_show",
+        )
+
+    monkeypatch.setattr(pi_hybrid_production, "compare_pi_intent_lab", fake_compare)
+    monkeypatch.setattr(pi_hybrid_production, "_read_meminfo_mb", lambda: {"MemAvailable": 99999, "SwapFree": 99999})
+
+    decision = await try_pi_hybrid_production(
+        "what is on my shopping list",
+        user_id="jason",
+        config=PiHybridProductionConfig(
+            enabled=True,
+            resource_guard_enabled=True,
+            router_fast_accept_enabled=True,
+        ),
+    )
+    await asyncio.sleep(0.01)
+
+    assert decision["accepted"] is True
+    assert decision["intent"] == "list_show"
+    assert decision["intent_group"] == "lists"
+    assert decision["reason"] == "router_confirmed_fast_accept"
+    assert decision["agreement_kind"] == "zoe_router_fast"
+    assert decision["pi_audit_scheduled"] is True
+    assert decision["response_text"] == "Your shopping list has milk and bread."
     assert len(calls) == 2
     assert calls[0]["run_pi"] is False
     assert calls[1]["run_pi"] is True
