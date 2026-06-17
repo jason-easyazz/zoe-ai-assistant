@@ -121,6 +121,30 @@ async def test_try_pi_hybrid_records_production_evidence_when_enabled(tmp_path, 
 
 
 @pytest.mark.asyncio
+async def test_try_pi_hybrid_records_rejected_production_evidence_when_enabled(tmp_path, monkeypatch):
+    _install_prefilter(monkeypatch)
+    evidence_path = tmp_path / "production-rejected.jsonl"
+
+    decision = await try_pi_hybrid_production(
+        "will it rain later",
+        user_id="jason",
+        config=PiHybridProductionConfig(enabled=False),
+        env={
+            "ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_ENABLED": "true",
+            "ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_PATH": str(evidence_path),
+        },
+    )
+
+    assert decision["accepted"] is False
+    assert decision["reason"] == "disabled"
+    saved = json.loads(evidence_path.read_text(encoding="utf-8"))
+    assert saved["source"] == "pi_hybrid_production"
+    assert saved["accepted"] is False
+    assert saved["reason"] == "disabled"
+    assert saved["production_route_change"] is False
+
+
+@pytest.mark.asyncio
 async def test_try_pi_hybrid_rejects_side_effect_intent(monkeypatch):
     _install_prefilter(monkeypatch)
 

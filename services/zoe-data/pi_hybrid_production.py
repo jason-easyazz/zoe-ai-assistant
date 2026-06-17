@@ -109,6 +109,7 @@ async def try_pi_hybrid_production(
     active_config = config or PiHybridProductionConfig.from_env(env)
     active_config.validate()
     stripped = (text or "").strip()
+
     def _with_evidence(decision: dict[str, Any]) -> dict[str, Any]:
         _record_production_evidence(stripped, user_id=user_id, decision=decision, env=env)
         return decision
@@ -395,14 +396,6 @@ def _optional_str(value: Any) -> str | None:
     return text or None
 
 
-__all__ = [
-    "PiHybridProductionConfig",
-    "pi_hybrid_production_eligible",
-    "processing_cue_packet",
-    "try_pi_hybrid_production",
-]
-
-
 def _record_production_evidence(
     text: str,
     *,
@@ -416,3 +409,11 @@ def _record_production_evidence(
         record_pi_hybrid_production_evidence(text, user_id=user_id, decision=decision, env=env)
     except Exception:
         return
+
+
+__all__ = [
+    "PiHybridProductionConfig",
+    "pi_hybrid_production_eligible",
+    "processing_cue_packet",
+    "try_pi_hybrid_production",
+]
