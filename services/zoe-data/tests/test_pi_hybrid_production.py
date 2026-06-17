@@ -117,7 +117,7 @@ async def test_try_pi_hybrid_fast_accepts_deterministic_router_weather(monkeypat
             router_fast_accept_enabled=True,
         ),
     )
-    await asyncio.sleep(0)
+    await asyncio.sleep(0.01)
 
     assert decision["accepted"] is True
     assert decision["reason"] == "router_confirmed_fast_accept"
@@ -125,6 +125,7 @@ async def test_try_pi_hybrid_fast_accepts_deterministic_router_weather(monkeypat
     assert decision["pi_audit_scheduled"] is True
     assert decision["safe_fulfillment_latency_ms"] == 950.0
     assert decision["response_text"] == "It is 18.5 C."
+    assert len(calls) == 2
     assert calls[0]["run_pi"] is False
     assert calls[1]["run_pi"] is True
 
@@ -155,7 +156,7 @@ async def test_try_pi_hybrid_fast_accept_records_audit_disagreement(tmp_path, mo
             "ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_PATH": str(evidence_path),
         },
     )
-    await asyncio.sleep(0)
+    await asyncio.sleep(0.01)
 
     assert decision["accepted"] is True
     records = [json.loads(line) for line in evidence_path.read_text(encoding="utf-8").splitlines()]
@@ -164,6 +165,54 @@ async def test_try_pi_hybrid_fast_accept_records_audit_disagreement(tmp_path, mo
     assert records[1]["reason"] == "audit_disagreement"
     assert records[1]["intent"] == "weather"
     assert records[1]["pi_intent"] == "daily_briefing"
+
+
+def test_router_fast_accept_requires_explicit_env_opt_in():
+    assert PiHybridProductionConfig.from_env({}).router_fast_accept_enabled is False
+    config = PiHybridProductionConfig.from_env({"ZOE_PI_HYBRID_ROUTER_FAST_ACCEPT_ENABLED": "true"})
+    assert config.router_fast_accept_enabled is True
+
+
+@pytest.mark.asyncio
+async def test_try_pi_hybrid_fast_accepts_deterministic_daily_briefing(monkeypatch):
+    _install_prefilter(monkeypatch)
+    calls = []
+
+    async def fake_compare(text, **kwargs):
+        calls.append(dict(kwargs))
+        if kwargs.get("run_pi") is False:
+            return _router_fast_lab_result(
+                intent="daily_briefing",
+                response="Here's your day: No events on the calendar today.",
+            )
+        return _accepted_lab_result(
+            intent="daily_briefing",
+            response="Here's your day: No events on the calendar today.",
+            router_intent="daily_briefing",
+        )
+
+    monkeypatch.setattr(pi_hybrid_production, "compare_pi_intent_lab", fake_compare)
+    monkeypatch.setattr(pi_hybrid_production, "_read_meminfo_mb", lambda: {"MemAvailable": 99999, "SwapFree": 99999})
+
+    decision = await try_pi_hybrid_production(
+        "give me my daily briefing",
+        user_id="jason",
+        config=PiHybridProductionConfig(
+            enabled=True,
+            resource_guard_enabled=True,
+            router_fast_accept_enabled=True,
+        ),
+    )
+    await asyncio.sleep(0.01)
+
+    assert decision["accepted"] is True
+    assert decision["intent"] == "daily_briefing"
+    assert decision["reason"] == "router_confirmed_fast_accept"
+    assert decision["agreement_kind"] == "zoe_router_fast"
+    assert decision["response_text"] == "Here's your day: No events on the calendar today."
+    assert len(calls) == 2
+    assert calls[0]["run_pi"] is False
+    assert calls[1]["run_pi"] is True
 
 
 @pytest.mark.asyncio
