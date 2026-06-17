@@ -69,6 +69,39 @@ def test_production_eligibility_is_disabled_and_tightly_prefiltered(monkeypatch)
     )
 
 
+
+def test_production_attempt_all_requests_mode_allows_short_non_secret_text(monkeypatch):
+    _install_prefilter(monkeypatch, allowed=False)
+
+    config = PiHybridProductionConfig(enabled=True, attempt_all_requests_enabled=True)
+
+    assert pi_hybrid_production_eligible("hi there how are you", config=config) == (True, "eligible")
+    assert pi_hybrid_production_eligible("check calendar authorization", config=config) == (True, "eligible")
+    assert pi_hybrid_production_eligible(
+        "one two three four",
+        config=PiHybridProductionConfig(enabled=True, attempt_all_requests_enabled=True, max_words=3),
+    ) == (False, "too_many_words")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "my api key is abc123",
+        "authorization: Bearer abc123",
+        "bearer abc123",
+        "password is abc123",
+        "secret is abc123",
+        "token is abc123",
+    ],
+)
+def test_production_attempt_all_requests_mode_rejects_secret_like_text(monkeypatch, text):
+    _install_prefilter(monkeypatch, allowed=False)
+
+    config = PiHybridProductionConfig(enabled=True, attempt_all_requests_enabled=True)
+
+    assert pi_hybrid_production_eligible(text, config=config) == (False, "secret_like_text")
+
+
 def _router_fast_lab_result(*, intent="weather", response="It is 18.5 C."):
     return {
         "zoe_router": {
@@ -172,10 +205,19 @@ async def test_try_pi_hybrid_fast_accept_records_audit_disagreement(tmp_path, mo
     assert records[1]["pi_intent"] == "daily_briefing"
 
 
-def test_router_fast_accept_requires_explicit_env_opt_in():
+def test_router_fast_accept_and_attempt_all_require_explicit_env_opt_in():
     assert PiHybridProductionConfig.from_env({}).router_fast_accept_enabled is False
-    config = PiHybridProductionConfig.from_env({"ZOE_PI_HYBRID_ROUTER_FAST_ACCEPT_ENABLED": "true"})
+    assert PiHybridProductionConfig.from_env({}).attempt_all_requests_enabled is False
+
+    config = PiHybridProductionConfig.from_env(
+        {
+            "ZOE_PI_HYBRID_ROUTER_FAST_ACCEPT_ENABLED": "true",
+            "ZOE_PI_HYBRID_ATTEMPT_ALL_REQUESTS_ENABLED": "true",
+        }
+    )
+
     assert config.router_fast_accept_enabled is True
+    assert config.attempt_all_requests_enabled is True
 
 
 @pytest.mark.asyncio
@@ -262,6 +304,49 @@ async def test_try_pi_hybrid_fast_accepts_deterministic_list_show(monkeypatch):
     assert len(calls) == 2
     assert calls[0]["run_pi"] is False
     assert calls[1]["run_pi"] is True
+
+
+@pytest.mark.asyncio
+async def test_try_pi_hybrid_attempt_all_casual_chat_falls_through_safely(monkeypatch):
+    calls = []
+
+    async def fake_compare(text, **kwargs):
+        calls.append((text, dict(kwargs)))
+        return {
+            "zoe_router": {"intent": None, "route_class": "fallback", "baseline_kind": "router_only_not_comparable"},
+            "pi": {
+                "ran": True,
+                "intent": None,
+                "intent_group": None,
+                "confidence": 0.2,
+                "latency_ms": 50.0,
+                "timed_out": False,
+                "error": None,
+            },
+            "safe_fulfillment": {"attempted": False, "allowed": False, "blocked_reason": "no_intent"},
+            "simulated_hybrid_flow": {"cue_available": True, "final_completion_latency_ms": 50.0},
+        }
+
+    monkeypatch.setattr(pi_hybrid_production, "compare_pi_intent_lab", fake_compare)
+    monkeypatch.setattr(pi_hybrid_production, "_read_meminfo_mb", lambda: {"MemAvailable": 99999, "SwapFree": 99999})
+
+    decision = await try_pi_hybrid_production(
+        "hi there how are you",
+        user_id="jason",
+        config=PiHybridProductionConfig(
+            enabled=True,
+            attempt_all_requests_enabled=True,
+            resource_guard_enabled=True,
+        ),
+    )
+
+    assert decision["accepted"] is False
+    assert decision["reason"] == "pi_no_intent"
+    assert decision["intent"] is None
+    assert decision["production_route_change"] is False
+    assert len(calls) == 1
+    assert calls[0][0] == "hi there how are you"
+    assert calls[0][1]["run_pi"] is True
 
 
 @pytest.mark.asyncio
