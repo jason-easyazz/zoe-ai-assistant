@@ -57,9 +57,11 @@ def test_parse_birthday_is_exported_by_name():
 def test_months_table_has_twelve_short_names():
     # Birthday parsing depends on every short month key resolving to an
     # int in [1, 12]. A missing key would silently drop date facts.
-    expected_short = ["jan", "feb", "mar", "apr", "may", "jun",
-                      "jul", "aug", "sep", "oct", "nov", "dec"]
-    assert list(_MONTHS.keys())[:12] == expected_short
+    expected_short = {"jan", "feb", "mar", "apr", "may", "jun",
+                      "jul", "aug", "sep", "oct", "nov", "dec"}
+    # Set-membership, not insertion order: reorganising _MONTHS must not break this.
+    assert expected_short.issubset(_MONTHS.keys())
+    assert all(1 <= _MONTHS[k] <= 12 for k in expected_short)
 
 
 def test_months_short_and_long_names_agree():
@@ -98,10 +100,11 @@ def test_parse_birthday_month_first_format():
     assert _parse_birthday("March 15") == (3, 15, None)
 
 
-def test_parse_birthday_iso_format_takes_precedence():
-    # YYYY-MM-DD is the unambiguous wire format. The m3 branch must win
-    # even when the day-first or month-first regex could also match, and
-    # it must produce all three components.
+def test_parse_birthday_iso_format():
+    # YYYY-MM-DD is the unambiguous wire format; the m3 branch (re.match)
+    # runs last and produces all three components when matched. Note: the
+    # three date patterns are structurally mutually exclusive (ISO has no
+    # alpha or spaces), so "precedence" is never actually contested.
     assert _parse_birthday("2024-03-15") == (3, 15, 2024)
 
 
@@ -463,10 +466,30 @@ def test_role_to_type_singular_and_plural_variants_collapse():
              ("friend", "friends"),
              ("colleague", "colleagues"),
              ("spouse", "spouses"),
-             ("cousin", "cousins")]
+             ("cousin", "cousins"),
+             ("twin", "twins")]  # "twins".rstrip("s") == "twin" must resolve too
     for singular, plural in pairs:
         assert singular in _ROLE_TO_TYPE, f"{singular!r} missing"
         assert plural in _ROLE_TO_TYPE, f"{plural!r} missing"
         assert _ROLE_TO_TYPE[singular][0] == _ROLE_TO_TYPE[plural][0], (
             (singular, plural)
+        )
+
+
+def test_are_branch_role2_tokens_resolve_after_rstrip():
+    # Regression for a live drop-bug: process_text resolves the are-branch
+    # role via ``role.rstrip("s")`` before looking it up in _ROLE_TO_TYPE.
+    # Every plural alternative the _REL_RE role2 group can capture must
+    # therefore have its rstripped form present in the table, or the
+    # relationship is silently dropped (this is exactly what happened for
+    # "twins" -> "twin"). Enumerate the regex's role2 tokens and pin it.
+    role2_tokens = [
+        "siblings", "partners", "friends", "colleagues",
+        "spouses", "twins", "cousins",
+    ]
+    for token in role2_tokens:
+        looked_up = token.lower().rstrip("s")
+        assert looked_up in _ROLE_TO_TYPE, (
+            f"are-branch token {token!r} -> {looked_up!r} is not in _ROLE_TO_TYPE; "
+            "the relationship would be silently dropped"
         )
