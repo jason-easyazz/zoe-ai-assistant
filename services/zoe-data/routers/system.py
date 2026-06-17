@@ -60,7 +60,7 @@ def _pi_hybrid_production_status() -> dict[str, Any]:
     return {
         "report_kind": "zoe_pi_hybrid_production_status",
         "ok": bool(config.enabled and enabled_groups),
-        "status": "enabled" if config.enabled else "disabled",
+        "status": "enabled_no_groups" if config.enabled and not enabled_groups else "enabled" if config.enabled else "disabled",
         "route": "pi_intent_buffer_plus_zoe_safe_fulfillment",
         "surfaces": ["chat_non_stream", "chat_stream", "voice_non_stream"],
         "config": config_dict,
