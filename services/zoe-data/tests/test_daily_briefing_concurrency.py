@@ -4,6 +4,15 @@ import pytest
 from intent_router import _execute_daily_briefing
 
 
+@pytest.fixture(autouse=True)
+def clear_daily_briefing_cache():
+    from intent_router import _DAILY_BRIEFING_RESPONSE_CACHE
+
+    _DAILY_BRIEFING_RESPONSE_CACHE.clear()
+    yield
+    _DAILY_BRIEFING_RESPONSE_CACHE.clear()
+
+
 @pytest.mark.asyncio
 async def test_daily_briefing_runs_direct_calls_concurrently(monkeypatch):
     calls = []
@@ -96,3 +105,43 @@ async def test_daily_briefing_natural_phrases_are_deterministic():
         assert intent is not None
         assert intent.name == "daily_briefing"
         assert intent.slots == {}
+
+
+@pytest.mark.asyncio
+async def test_daily_briefing_uses_short_response_cache(monkeypatch):
+    calls = []
+
+    async def fake_weather(user_id):
+        calls.append("weather")
+        return {"temp": 18.5, "city": "Perth", "description": "clear"}
+
+    monkeypatch.setattr("intent_router._daily_briefing_weather", fake_weather)
+    monkeypatch.setattr("intent_router._daily_briefing_calendar", lambda user_id: asyncio.sleep(0, result={"events": []}))
+    monkeypatch.setattr("intent_router._daily_briefing_reminders", lambda user_id: asyncio.sleep(0, result={"reminders": []}))
+    monkeypatch.setattr("intent_router._DAILY_BRIEFING_CACHE_TTL_SECONDS", 120)
+    from intent_router import _DAILY_BRIEFING_RESPONSE_CACHE
+
+    _DAILY_BRIEFING_RESPONSE_CACHE.clear()
+    first = await _execute_daily_briefing("family-admin")
+    second = await _execute_daily_briefing("family-admin")
+
+    assert first == second
+    assert calls == ["weather"]
+    _DAILY_BRIEFING_RESPONSE_CACHE.clear()
+
+
+@pytest.mark.asyncio
+async def test_daily_briefing_weather_uses_router_weather_cache(monkeypatch):
+    from intent_router import _daily_briefing_weather
+    import routers.weather as weather
+
+    weather._weather_cache["current"] = {"temp": 22, "city": "Geraldton", "description": "clear sky"}
+
+    async def fail_get_current(*_args, **_kwargs):
+        raise AssertionError("cached daily briefing weather should not refetch")
+
+    monkeypatch.setattr(weather, "_get_current", fail_get_current)
+    result = await _daily_briefing_weather("family-admin")
+
+    assert result == {"temp": 22, "city": "Geraldton", "description": "clear sky"}
+    weather._weather_cache.clear()
