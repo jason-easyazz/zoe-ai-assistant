@@ -30,6 +30,44 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_DAILY_BRIEFING_RESPONSE_CACHE: dict[str, tuple[float, str]] = {}
+_DAILY_BRIEFING_CACHE_TTL_SECONDS = float(os.environ.get("ZOE_DAILY_BRIEFING_CACHE_TTL_SECONDS", "120"))
+
+
+def _daily_briefing_cache_get(user_id: str) -> Optional[str]:
+    if _DAILY_BRIEFING_CACHE_TTL_SECONDS <= 0:
+        return None
+    cached = _DAILY_BRIEFING_RESPONSE_CACHE.get(user_id)
+    if not cached:
+        return None
+    stored_at, response = cached
+    if (time.time() - stored_at) > _DAILY_BRIEFING_CACHE_TTL_SECONDS:
+        _DAILY_BRIEFING_RESPONSE_CACHE.pop(user_id, None)
+        return None
+    return response
+
+
+def _daily_briefing_cache_set(user_id: str, response: str) -> None:
+    if _DAILY_BRIEFING_CACHE_TTL_SECONDS <= 0 or not response:
+        return
+    _DAILY_BRIEFING_RESPONSE_CACHE[user_id] = (time.time(), response)
+
+
+def _daily_briefing_cached_weather() -> Optional[dict]:
+    try:
+        from routers.weather import _weather_cache
+
+        current = _weather_cache.get("current") or {}
+        if current.get("temp") is None:
+            return None
+        return {
+            "temp": current.get("temp"),
+            "city": current.get("city") or "your area",
+            "description": current.get("description", ""),
+        }
+    except Exception:
+        return None
+
 
 def _spoken_day_ordinal(day: int) -> str:
     ordinals = {
@@ -2454,6 +2492,10 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
 
 async def _execute_daily_briefing(user_id: str) -> Optional[str]:
     """Composite intent: weather + calendar + reminders."""
+    cached_response = _daily_briefing_cache_get(user_id)
+    if cached_response:
+        return cached_response
+
     task_keys = ["weather", "calendar", "reminders"]
     task_results = await asyncio.gather(
         _daily_briefing_weather(user_id),
@@ -2491,10 +2533,16 @@ async def _execute_daily_briefing(user_id: str) -> Optional[str]:
             suffix = f" at {t_str}" if t_str else ""
             lines.append(f"  - {r.get('title', '?')}{suffix}")
 
-    return "\n".join(lines)
+    response = "\n".join(lines)
+    if all(key in results for key in task_keys):
+        _daily_briefing_cache_set(user_id, response)
+    return response
 
 
 async def _daily_briefing_weather(user_id: str) -> Optional[dict]:
+    cached_weather = _daily_briefing_cached_weather()
+    if cached_weather:
+        return cached_weather
     try:
         from database import get_db
         from routers.weather import _get_current, _resolve_location, _row_to_prefs
