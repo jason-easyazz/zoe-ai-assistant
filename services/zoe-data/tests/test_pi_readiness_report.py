@@ -244,6 +244,72 @@ def test_readiness_report_uses_persisted_eval_benchmark_for_candidate_wins(tmp_p
 
 
 
+def test_readiness_report_reports_operator_hybrid_as_operational(tmp_path):
+    shadow_path = tmp_path / "shadow.jsonl"
+    shadow_path.write_text("", encoding="utf-8")
+    eval_report_path = tmp_path / "pi-eval.json"
+    eval_report_path.write_text(
+        json.dumps(
+            {
+                "promotion_report": {
+                    "candidate_wins": {
+                        "groups": ["weather"],
+                        "details": [
+                            {
+                                "intent_group": "weather",
+                                "status": "needs_more_evidence",
+                                "unique_case_deficit": 27,
+                                "sample_deficit": 27,
+                                "real_source_sample_deficit": 27,
+                                "accuracy_delta": 1.0,
+                                "latency_delta_ms": 5000.0,
+                                "pi_p95_latency_ms": 3000.0,
+                                "zoe_p95_latency_ms": 8000.0,
+                                "promotion_blockers": ["insufficient_samples", "insufficient_real_source_samples"],
+                            }
+                        ],
+                    },
+                    "decisions": [],
+                    "promotion_actions": {},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    env = _env(tmp_path, shadow_path)
+    env["ZOE_PI_PROMOTION_EVAL_REPORT_PATH"] = str(eval_report_path)
+    env["ZOE_PI_HYBRID_PRODUCTION_ENABLED"] = "true"
+    env["ZOE_PI_HYBRID_PRODUCTION_GROUPS"] = "weather,daily_briefing"
+
+    report = pi_readiness_report(env)
+
+    assert report["state"] == "production_hybrid_operational"
+    assert report["production_hybrid"] == {
+        "enabled": True,
+        "groups": ["weather", "daily_briefing"],
+        "ignored_groups": [],
+        "operational": True,
+        "route": "pi_intent_buffer_plus_zoe_safe_fulfillment",
+    }
+    assert report["summary"]["production_hybrid_operational"] is True
+    assert report["summary"]["production_hybrid_groups"] == ["weather", "daily_briefing"]
+    assert report["next_actions"][0] == {
+        "kind": "monitor_production_hybrid",
+        "priority": "p1",
+        "detail": "Production Pi hybrid is live for operator-approved groups; keep formal default-route promotion evidence separate.",
+        "groups": ["weather", "daily_briefing"],
+    }
+    assert {
+        "kind": "collect_labeled_evidence",
+        "priority": "p2",
+        "intent_group": "weather",
+        "needed_unique_cases": 27,
+        "needed_real_source_cases": 27,
+        "detail": "Collect and label 27 more unique weather cases (27 must be real/log-derived) before formal default-route promotion.",
+        "evidence_source": "benchmark",
+    } in report["next_actions"]
+
+
 def test_readiness_report_deduplicates_shadow_and_benchmark_collection_actions(tmp_path):
     shadow_path = tmp_path / "shadow.jsonl"
     shadow_path.write_text(json.dumps(_winning_weather_row(1)) + "\n", encoding="utf-8")
