@@ -32,7 +32,8 @@ _DAILY_BRIEFING_SIGNAL_RE = re.compile(
 )
 _LIST_SHOW_SIGNAL_RE = re.compile(r"\b(what(?:'s| is) on|show|read|check)\b.*\b(list|shopping|grocer)", re.I)
 _GREETING_SIGNAL_RE = re.compile(
-    r"^(?:hello|hi|hey|howdy|heya|greetings|yo)(?:\s+(?:there|zoe|there\s+zoe))?\s*[!.,]?\s*$",
+    r"^(?:hello|hi|hey|howdy|heya|greetings|yo)(?:\s+(?:there|zoe|there\s+zoe))?\s*[!.,]?\s*$"
+    r"|^(?:hello|hi|hey|howdy|heya|yo)(?:\s+(?:there|zoe|there\s+zoe))?\s+how\s+are\s+you(?:\s+today)?\s*[!.,?]?\s*$",
     re.I,
 )
 _CLOCK_SIGNAL_RE = re.compile(

@@ -279,7 +279,8 @@ async def test_try_pi_hybrid_fast_accepts_deterministic_daily_briefing(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_try_pi_hybrid_fast_accepts_deterministic_greeting(monkeypatch):
+@pytest.mark.parametrize("utterance", ["hi there", "hi there how are you"])
+async def test_try_pi_hybrid_fast_accepts_deterministic_greeting(monkeypatch, utterance):
     _install_prefilter(monkeypatch)
     calls = []
 
@@ -300,7 +301,7 @@ async def test_try_pi_hybrid_fast_accepts_deterministic_greeting(monkeypatch):
     monkeypatch.setattr(pi_hybrid_production, "_read_meminfo_mb", lambda: {"MemAvailable": 99999, "SwapFree": 99999})
 
     decision = await try_pi_hybrid_production(
-        "hi there",
+        utterance,
         user_id="jason",
         config=PiHybridProductionConfig(
             enabled=True,
@@ -438,7 +439,7 @@ async def test_try_pi_hybrid_attempt_all_casual_chat_falls_through_safely(monkey
     monkeypatch.setattr(pi_hybrid_production, "_read_meminfo_mb", lambda: {"MemAvailable": 99999, "SwapFree": 99999})
 
     decision = await try_pi_hybrid_production(
-        "hi there how are you",
+        "tell me something interesting about oceans",
         user_id="jason",
         config=PiHybridProductionConfig(
             enabled=True,
@@ -452,7 +453,7 @@ async def test_try_pi_hybrid_attempt_all_casual_chat_falls_through_safely(monkey
     assert decision["intent"] is None
     assert decision["production_route_change"] is False
     assert len(calls) == 1
-    assert calls[0][0] == "hi there how are you"
+    assert calls[0][0] == "tell me something interesting about oceans"
     assert calls[0][1]["run_pi"] is True
 
 
