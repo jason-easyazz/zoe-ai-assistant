@@ -82,3 +82,17 @@ async def test_daily_briefing_does_not_use_mcporter(monkeypatch):
     result = await _execute_daily_briefing("family-admin")
 
     assert result == "Here\'s your day:\n\nNo events on the calendar today."
+
+@pytest.mark.asyncio
+async def test_daily_briefing_natural_phrases_are_deterministic():
+    from intent_router import detect_and_extract_intent
+
+    for phrase in [
+        "give me my daily briefing",
+        "give me a morning update",
+        "what is coming up today",
+    ]:
+        intent = await detect_and_extract_intent(phrase, user_id="guest")
+        assert intent is not None
+        assert intent.name == "daily_briefing"
+        assert intent.slots == {}

@@ -911,7 +911,8 @@ def detect_intent(
         r"^what(?:'?s| is) (?:on )?(?:today|my day)(?: like)?$",
         r"^whats (?:on )?(?:today|my day)(?: like)?$",
         r"^(?:daily|morning) (?:briefing|update|rundown)$",
-        r"^give me (?:a )?rundown$",
+        r"^give me (?:a |my )?(?:daily |morning )?(?:briefing|update|rundown)$",
+        r"^what(?:'s| is) (?:coming up|on|left)(?: for me)? today$",
         r"^what (?:do i|have i got) (?:have )?(?:on )?today$",
     ]:
         if re.match(pattern, t):

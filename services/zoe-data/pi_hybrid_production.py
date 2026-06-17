@@ -66,7 +66,7 @@ class PiHybridProductionConfig:
             min_swap_free_mb=_int_env(values.get("ZOE_PI_HYBRID_MIN_SWAP_FREE_MB"), default=256),
             resource_guard_enabled=_env_bool(values.get("ZOE_PI_HYBRID_RESOURCE_GUARD_ENABLED"), default=True),
             router_fast_accept_enabled=_env_bool(
-                values.get("ZOE_PI_HYBRID_ROUTER_FAST_ACCEPT_ENABLED"), default=True
+                values.get("ZOE_PI_HYBRID_ROUTER_FAST_ACCEPT_ENABLED"), default=False
             ),
         )
 
