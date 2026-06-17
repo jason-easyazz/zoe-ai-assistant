@@ -3,7 +3,7 @@
  * Intents (verified in intent_router): note_create {title,content} | note_search {query};
  * journal_create {content} | journal_prompt {} | journal_streak {}.
  */
-import { Type } from "typebox";
+import { Type } from "@sinclair/typebox";
 import type { AbilityContext, CapabilityEntry } from "./types";
 import { dispatchIntent } from "./_dispatch";
 

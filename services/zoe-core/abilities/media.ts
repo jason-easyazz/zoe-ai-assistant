@@ -5,7 +5,7 @@
  *   home:  smart_home {action: turn_on|turn_off|dim|brighten, entity:"light", room?}
  * Note: smart_home is lights-only server-side; set_volume = system/TTS volume, not the music player.
  */
-import { Type } from "typebox";
+import { Type } from "@sinclair/typebox";
 import type { AbilityContext, CapabilityEntry } from "./types";
 import { dispatchIntent } from "./_dispatch";
 
@@ -78,10 +78,10 @@ const home: CapabilityEntry = {
   name: "home",
   domain: "home",
   description:
-    "Control smart-home lights via Home Assistant. action=on|off|toggle|dim|brighten, optionally scoped to a " +
+    "Control smart-home lights via Home Assistant. action=on|off|dim|brighten, optionally scoped to a " +
     "room (kitchen/bedroom/living room). NOTE: lights only today. NOT for music/media volume.",
   parameters: Type.Object({
-    action: Type.String({ description: "one of: on | off | toggle | dim | brighten" }),
+    action: Type.String({ description: "one of: on | off | dim | brighten" }),
     room: Type.Optional(Type.String({ description: "optional room, e.g. 'kitchen', 'bedroom'; omit for all lights" })),
   }),
   examples: ["turn on the kitchen lights", "turn off the lights", "dim the bedroom lights", "brighten the living room"],
@@ -91,7 +91,10 @@ const home: CapabilityEntry = {
   triggers: [/\b(turn|switch|flip)\s+(on|off)\b.*\blights?\b/i, /\blights?\s+(on|off)\b/i, /\bdim\b.*\blights?\b/i, /\bbrighten\b.*\blights?\b/i],
   async execute(params, ctx: AbilityContext): Promise<string> {
     const raw = String(params.action ?? "").toLowerCase();
-    const actionMap: Record<string, string> = { on: "turn_on", off: "turn_off", toggle: "turn_on", dim: "dim", brighten: "brighten" };
+    // No "toggle": the smart_home backend only supports explicit turn_on/turn_off/
+    // dim/brighten, so mapping toggle→turn_on would lie ("toggle" that only ever
+    // turns on). Expose only actions the backend can honor.
+    const actionMap: Record<string, string> = { on: "turn_on", off: "turn_off", dim: "dim", brighten: "brighten" };
     const action = actionMap[raw];
     if (!action) return `Unknown home action: ${raw}`;
     const roomRaw = String(params.room ?? "").trim();

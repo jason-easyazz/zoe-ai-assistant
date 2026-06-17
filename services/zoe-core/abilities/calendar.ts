@@ -4,7 +4,7 @@
  *   create -> calendar_create { title, date?, time?, category? }
  *   show   -> calendar_show   { qualifier }   (today|tomorrow|this week|this month|"")
  */
-import { Type } from "typebox";
+import { Type } from "@sinclair/typebox";
 import type { AbilityContext, CapabilityEntry } from "./types";
 import { dispatchIntent } from "./_dispatch";
 

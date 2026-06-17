@@ -5,7 +5,7 @@
  *   reminders -> reminder_create {title,date?,time?} | reminder_list {}
  *   timers    -> timer_create {minutes,label}
  */
-import { Type } from "typebox";
+import { Type } from "@sinclair/typebox";
 import type { AbilityContext, CapabilityEntry } from "./types";
 import { dispatchIntent } from "./_dispatch";
 

@@ -3,7 +3,7 @@
  * Intents (verified in intent_router): people_create {name,relationship,context,circle,notes?}
  *   | people_relate {name_a,name_b,role} | people_search {query}.
  */
-import { Type } from "typebox";
+import { Type } from "@sinclair/typebox";
 import type { AbilityContext, CapabilityEntry } from "./types";
 import { dispatchIntent } from "./_dispatch";
 
