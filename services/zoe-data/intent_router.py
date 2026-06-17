@@ -32,11 +32,29 @@ logger = logging.getLogger(__name__)
 
 _DAILY_BRIEFING_RESPONSE_CACHE: dict[str, tuple[float, str]] = {}
 _DAILY_BRIEFING_CACHE_TTL_SECONDS = float(os.environ.get("ZOE_DAILY_BRIEFING_CACHE_TTL_SECONDS", "120"))
+_DAILY_BRIEFING_CACHE_MAX_USERS = max(1, int(os.environ.get("ZOE_DAILY_BRIEFING_CACHE_MAX_USERS", "64")))
+
+
+def _daily_briefing_cache_sweep(now: float | None = None) -> None:
+    if not _DAILY_BRIEFING_RESPONSE_CACHE:
+        return
+    current = time.time() if now is None else now
+    expired = [
+        user_id
+        for user_id, (stored_at, _response) in _DAILY_BRIEFING_RESPONSE_CACHE.items()
+        if (current - stored_at) > _DAILY_BRIEFING_CACHE_TTL_SECONDS
+    ]
+    for user_id in expired:
+        _DAILY_BRIEFING_RESPONSE_CACHE.pop(user_id, None)
+    while len(_DAILY_BRIEFING_RESPONSE_CACHE) > _DAILY_BRIEFING_CACHE_MAX_USERS:
+        oldest_user = min(_DAILY_BRIEFING_RESPONSE_CACHE, key=lambda key: _DAILY_BRIEFING_RESPONSE_CACHE[key][0])
+        _DAILY_BRIEFING_RESPONSE_CACHE.pop(oldest_user, None)
 
 
 def _daily_briefing_cache_get(user_id: str) -> Optional[str]:
     if _DAILY_BRIEFING_CACHE_TTL_SECONDS <= 0:
         return None
+    _daily_briefing_cache_sweep()
     cached = _DAILY_BRIEFING_RESPONSE_CACHE.get(user_id)
     if not cached:
         return None
@@ -50,7 +68,9 @@ def _daily_briefing_cache_get(user_id: str) -> Optional[str]:
 def _daily_briefing_cache_set(user_id: str, response: str) -> None:
     if _DAILY_BRIEFING_CACHE_TTL_SECONDS <= 0 or not response:
         return
+    _daily_briefing_cache_sweep()
     _DAILY_BRIEFING_RESPONSE_CACHE[user_id] = (time.time(), response)
+    _daily_briefing_cache_sweep()
 
 
 def _daily_briefing_cached_weather() -> Optional[dict]:

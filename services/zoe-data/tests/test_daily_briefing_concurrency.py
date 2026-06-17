@@ -130,6 +130,26 @@ async def test_daily_briefing_uses_short_response_cache(monkeypatch):
     _DAILY_BRIEFING_RESPONSE_CACHE.clear()
 
 
+def test_daily_briefing_cache_evicts_oldest_when_capped(monkeypatch):
+    from intent_router import (
+        _DAILY_BRIEFING_RESPONSE_CACHE,
+        _daily_briefing_cache_set,
+    )
+
+    _DAILY_BRIEFING_RESPONSE_CACHE.clear()
+    monkeypatch.setattr("intent_router._DAILY_BRIEFING_CACHE_TTL_SECONDS", 120)
+    monkeypatch.setattr("intent_router._DAILY_BRIEFING_CACHE_MAX_USERS", 2)
+
+    try:
+        _daily_briefing_cache_set("user-1", "one")
+        _daily_briefing_cache_set("user-2", "two")
+        _daily_briefing_cache_set("user-3", "three")
+
+        assert set(_DAILY_BRIEFING_RESPONSE_CACHE) == {"user-2", "user-3"}
+    finally:
+        _DAILY_BRIEFING_RESPONSE_CACHE.clear()
+
+
 @pytest.mark.asyncio
 async def test_daily_briefing_weather_uses_router_weather_cache(monkeypatch):
     from intent_router import _daily_briefing_weather
