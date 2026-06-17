@@ -33,10 +33,11 @@ via Pi's extension hooks.
 
 ## Build bricks
 
-1. **Provider** — Pi runs on local Gemma. *(this brick — `extensions/provider-local-gemma.ts`)*
-2. **Soul + memory** — Zoe personality + layered memory packet injected per turn.
-3. **Abilities** — native zoe-data tools + delegation tools (Hermes/OpenClaw); safety rails as `tool_call` gates.
-4. **Cutover** — chat/voice point at the zoe-core brain; intent fast-path stays in front; retire `zoe_agent.py`.
+1. **Provider** — Pi runs on local Gemma. ✅ done (`extensions/provider-local-gemma.ts`)
+2. **Soul** — Zoe's persona replaces Pi's default coding-assistant prompt. ✅ done (`SOUL.md` + `extensions/soul.ts`)
+3. **Memory** — layered memory packet (MemPalace + Hindsight + relational) injected per turn via `before_agent_start`, calling zoe-data over HTTP.
+4. **Abilities** — native zoe-data tools + delegation tools (Hermes/OpenClaw); safety rails as `tool_call` gates.
+5. **Cutover** — chat/voice point at the zoe-core brain; intent fast-path stays in front; retire `zoe_agent.py`.
 
 ## Brick 1 — local Gemma provider
 

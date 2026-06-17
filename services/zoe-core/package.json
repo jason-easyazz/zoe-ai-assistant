@@ -9,7 +9,8 @@
   },
   "pi": {
     "extensions": [
-      "./extensions/provider-local-gemma.ts"
+      "./extensions/provider-local-gemma.ts",
+      "./extensions/soul.ts"
     ]
   }
 }
