@@ -7,7 +7,7 @@
  * progressive disclosure (only surfaces relevant tools per turn). Adding a
  * domain = adding ONE file; no manifest or shared-file edits.
  */
-import type { TSchema } from "typebox";
+import type { TSchema } from "@sinclair/typebox";
 
 /** Permission envelope (validated before every tool execution). */
 export type Permission =

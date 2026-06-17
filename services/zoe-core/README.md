@@ -17,6 +17,12 @@ via Pi's extension hooks.
 > (extensions/tools). The retired Docker monolith that once held this name is
 > archived at `docs/archive/retired-services/zoe-core/` — do not revive it.
 
+> **Status: lab-only / additive.** zoe-core is the destination brain (Pi on
+> Gemma 4 E2B), built and proven *beside* the live system. `zoe_agent` remains
+> the production chat brain until zoe-core clears the Samantha tests +
+> Pi-vs-`zoe_agent` benchmarks — then cutover. Nothing here is wired into
+> production yet.
+
 ## Architecture (target)
 
 ```
@@ -35,9 +41,9 @@ via Pi's extension hooks.
 
 1. **Provider** — Pi runs on local Gemma. ✅ done (`extensions/provider-local-gemma.ts`)
 2. **Soul** — Zoe's persona replaces Pi's default coding-assistant prompt. ✅ done (`SOUL.md` + `extensions/soul.ts`)
-3. **Memory** — layered memory packet (MemPalace + Hindsight + relational) injected per turn via `before_agent_start`, calling zoe-data over HTTP.
+3. **Memory** — MemPalace packet injected per turn via `before_agent_start`, fetched from zoe-data's internal `/api/memories/for-prompt` (compact, cited, fail-open). ✅ done (`extensions/memory.ts`). Hindsight/Graphiti compose into the same packet later.
 4. **Abilities** — native zoe-data tools + delegation tools (Hermes/OpenClaw); safety rails as `tool_call` gates.
-5. **Cutover** — chat/voice point at the zoe-core brain; intent fast-path stays in front; retire `zoe_agent.py`.
+5. **Cutover (benchmark-gated)** — only after the Samantha tests + Pi-vs-`zoe_agent` benchmarks pass: point chat/voice at the zoe-core brain, intent fast-path in front, retire `zoe_agent.py`. Until then, lab-only; `zoe_agent` stays production.
 
 ## Brick 1 — local Gemma provider
 
