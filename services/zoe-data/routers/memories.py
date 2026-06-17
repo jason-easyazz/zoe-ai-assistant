@@ -262,6 +262,13 @@ def _build_memory_prompt_packet(
             return
         meta = ref.metadata or {}
         status = str(meta.get("status") or "active").lower()
+        # Drop-set mirrors memory_service._BLOCKED_READ_STATUSES *except* "disputed",
+        # which the Samantha prompt-policy surfaces as "(uncertain)" rather than
+        # hiding. NOTE: today's callers (load_for_prompt / search) already pre-filter
+        # disputed at the service layer, so the disputed branch below is exercised
+        # only by future direct callers (e.g. Hindsight/Graphiti passing refs in) —
+        # it is intentional policy, not dead code. Keep this drop-set in sync with
+        # the service block list if statuses change.
         if status in {"superseded", "archived", "rejected", "pending"}:
             return
         text = (ref.text or "").strip()

@@ -13,6 +13,11 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const ZOE_DATA_URL = process.env.ZOE_DATA_URL ?? "http://127.0.0.1:8000";
 const INTERNAL_TOKEN = process.env.ZOE_INTERNAL_TOKEN ?? "";
+// NOTE: resolved once per process. Fine for the current CLI-per-session model
+// (each `pi` invocation is a fresh process for one user). BEFORE promoting Pi to
+// a long-running/multi-session server, this MUST become per-turn/per-session —
+// otherwise every caller would receive family-admin's memories (a privacy bug).
+// Tracked as a cutover prerequisite.
 const USER_ID = process.env.ZOE_CORE_USER_ID ?? "family-admin";
 const TIMEOUT_MS = Number(process.env.ZOE_CORE_MEMORY_TIMEOUT_MS ?? 2000);
 
