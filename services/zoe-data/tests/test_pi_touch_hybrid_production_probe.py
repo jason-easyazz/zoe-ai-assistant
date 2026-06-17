@@ -161,6 +161,153 @@ def test_probe_marks_missing_panel_cue_as_not_ready():
     assert "panel_processing_ack_missing" in report["readiness"]["blockers"]
 
 
+def test_probe_counts_expected_fast_fallback_http_reply_as_natural_flow():
+    module = _load_module()
+
+    def sender(url, payload, timeout_seconds, headers):
+        assert payload["text"] == "who are you"
+        return {
+            "ok": True,
+            "reply": "I'm Zoe, your local assistant.",
+            "audio_base64": "UklGRg==",
+            "intent": "general",
+        }
+
+    def panel_observer(ws_url, panel_id, device_token, timeout_seconds, action):
+        response = action()
+        return response, [
+            {
+                "offset_ms": 9.0,
+                "message": {
+                    "type": "voice:responding",
+                    "data": {"panel_id": panel_id, "text": "One moment.", "processing_ack": True},
+                },
+            },
+            {"offset_ms": 330.0, "message": {"type": "voice:done", "data": {"panel_id": panel_id}}},
+        ], None
+
+    cases = [{
+        "case_id": "identity_fast",
+        "text": "who are you",
+        "expected_intent": "general",
+        "intent_group": "greetings",
+        "expect_pi_hybrid": False,
+        "expect_processing_ack": True,
+        "expect_natural_flow": True,
+    }]
+    observations = module.run_probe(
+        cases,
+        base_url="http://testserver",
+        panel_id="panel-touch",
+        device_token="token-secret",
+        repeat=1,
+        timeout_seconds=15.0,
+        websocket_timeout_seconds=5.0,
+        sender=sender,
+        panel_observer=panel_observer,
+    )
+    report = module.build_report(
+        cases,
+        observations,
+        base_url="http://testserver",
+        panel_id="panel-touch",
+        repeat=1,
+    )
+
+    obs = observations[0]
+    assert obs["expect_pi_hybrid"] is False
+    assert obs["processing_ack_available"] is True
+    assert obs["final_panel_response_available"] is False
+    assert obs["final_http_response_available"] is True
+    assert obs["final_contract_met"] is True
+    assert obs["pi_hybrid_accepted"] is False
+    assert obs["natural_flow_pass"] is True
+    assert report["summary"]["expected_natural_flow"]["pi_hybrid_expected_count"] == 0
+    assert report["readiness"] == {"ready_for_touch_panel_smoke": True, "blockers": []}
+
+
+def test_probe_does_not_require_processing_ack_when_case_opts_out():
+    module = _load_module()
+
+    def sender(url, payload, timeout_seconds, headers):
+        return {
+            "ok": True,
+            "reply": "Ready without a cue.",
+            "audio_base64": "UklGRg==",
+            "intent": "general",
+        }
+
+    def panel_observer(ws_url, panel_id, device_token, timeout_seconds, action):
+        response = action()
+        return response, [
+            {"offset_ms": 120.0, "message": {"type": "voice:done", "data": {"panel_id": panel_id}}},
+        ], None
+
+    cases = [{
+        "case_id": "no_ack_expected",
+        "text": "continue",
+        "expected_intent": "general",
+        "intent_group": "general",
+        "expect_pi_hybrid": False,
+        "expect_processing_ack": False,
+        "expect_natural_flow": True,
+    }]
+    observations = module.run_probe(
+        cases,
+        base_url="http://testserver",
+        panel_id="panel-touch",
+        device_token="token-secret",
+        repeat=1,
+        timeout_seconds=15.0,
+        websocket_timeout_seconds=5.0,
+        sender=sender,
+        panel_observer=panel_observer,
+    )
+    report = module.build_report(
+        cases,
+        observations,
+        base_url="http://testserver",
+        panel_id="panel-touch",
+        repeat=1,
+    )
+
+    assert observations[0]["processing_ack_available"] is False
+    assert observations[0]["natural_flow_pass"] is True
+    assert report["summary"]["expected_natural_flow"]["processing_ack_expected_count"] == 0
+    assert report["readiness"] == {"ready_for_touch_panel_smoke": True, "blockers": []}
+
+
+def test_probe_does_not_block_readiness_for_cases_that_do_not_expect_natural_flow():
+    module = _load_module()
+
+    observations = [{
+        "case_id": "negative_control",
+        "intent_group": "general",
+        "source": "negative",
+        "expect_natural_flow": False,
+        "expect_pi_hybrid": False,
+        "pi_hybrid_accepted": False,
+        "natural_flow_pass": False,
+        "processing_ack_available": False,
+        "final_panel_response_available": False,
+        "final_http_response_available": False,
+        "audio_returned": False,
+        "request_error": None,
+        "observer_error": None,
+    }]
+    report = module.build_report(
+        [{"case_id": "negative_control", "text": "chat", "expected_intent": "general", "expect_natural_flow": False}],
+        observations,
+        base_url="http://testserver",
+        panel_id="panel-touch",
+        repeat=1,
+    )
+
+    assert report["summary"]["overall"]["natural_flow_pass_rate"] == 0.0
+    assert report["summary"]["expected_natural_flow"]["observation_count"] == 0
+    assert report["readiness"] == {"ready_for_touch_panel_smoke": True, "blockers": []}
+
+
 def test_probe_requires_device_token():
     module = _load_module()
     try:

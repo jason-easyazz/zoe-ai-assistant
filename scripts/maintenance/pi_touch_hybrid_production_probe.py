@@ -143,8 +143,10 @@ def build_report(
     cue_max_ms: float = DEFAULT_CUE_MAX_MS,
     final_max_ms: float = DEFAULT_FINAL_MAX_MS,
 ) -> dict[str, Any]:
+    expected_observations = [item for item in observations if bool(item.get("expect_natural_flow"))]
     summary = {
         "overall": _stats(observations),
+        "expected_natural_flow": _stats(expected_observations),
         "by_intent_group": _breakdown(observations, lambda item: str(item.get("intent_group") or "unknown")),
         "by_source": _breakdown(observations, lambda item: str(item.get("source") or "unknown")),
     }
@@ -165,14 +167,14 @@ def build_report(
             "route": "pi_hybrid_production_non_stream_voice_command",
             "panel_transport": "/ws/push?panel_id=<panel>",
             "cue_source": "voice:responding processing_ack=true source=pi_hybrid_production",
-            "final_source": "voice:responding pi_hybrid=true plus /api/voice/command JSON",
+            "final_source": "voice:responding pi_hybrid=true for Pi cases, or /api/voice/command JSON reply for expected fast-fallback cases",
             "promotion_enabled": False,
             "memory_writes": "same_as_live_voice_command_for_effective_user",
             "cue_max_ms": cue_max_ms,
             "final_max_ms": final_max_ms,
         },
         "summary": summary,
-        "readiness": _readiness(summary["overall"]),
+        "readiness": _readiness(summary["overall"], summary["expected_natural_flow"]),
     }
     if include_observations:
         report["observations"] = list(observations)
@@ -259,7 +261,7 @@ def _post_voice_command(
 
 
 def _observation(
-    case: Mapping[str, str],
+    case: Mapping[str, Any],
     *,
     repeat_index: int,
     response: Mapping[str, Any] | None,
@@ -282,8 +284,24 @@ def _observation(
     final_latency = http_latency_ms if reply else None
     cue_text = str(_message_data(cue.get("message") if cue else {}).get("text") or "")
     final_text = str(_message_data(final.get("message") if final else {}).get("text") or "")
+    expect_processing_ack = bool(case["expect_processing_ack"])
+    expect_pi_hybrid = bool(case["expect_pi_hybrid"])
+    expect_natural_flow = bool(case["expect_natural_flow"])
     natural_cue = cue_latency is not None and cue_latency <= cue_max_ms
-    natural_final = final_latency is not None and final_latency <= final_max_ms
+    natural_final_http = final_latency is not None and final_latency <= final_max_ms
+    natural_final_panel = final_ws_latency is not None and final_ws_latency <= final_max_ms
+    final_contract_met = natural_final_panel if expect_pi_hybrid else natural_final_http
+    pi_contract_met = accepted if expect_pi_hybrid else True
+    ack_contract_met = natural_cue if expect_processing_ack else True
+    natural_flow_pass = bool(
+        expect_natural_flow
+        and ack_contract_met
+        and final_contract_met
+        and pi_contract_met
+        and reply
+        and not request_error
+        and not observer_error
+    )
     return {
         "case_id": case["case_id"],
         "repeat_index": repeat_index,
@@ -291,6 +309,9 @@ def _observation(
         "intent_group": case["intent_group"],
         "expected_intent": case["expected_intent"],
         "source": case["source"],
+        "expect_processing_ack": expect_processing_ack,
+        "expect_pi_hybrid": expect_pi_hybrid,
+        "expect_natural_flow": expect_natural_flow,
         "request_error": request_error,
         "observer_error": observer_error,
         "http_latency_ms": http_latency_ms,
@@ -307,7 +328,8 @@ def _observation(
         "final_http_response_available": bool(reply),
         "final_http_response_preview": _preview(reply, limit=260),
         "final_http_latency_ms": final_latency,
-        "final_http_within_budget": natural_final,
+        "final_http_within_budget": natural_final_http,
+        "final_contract_met": final_contract_met,
         "response_ok": bool(response.get("ok")),
         "response_intent": response.get("intent"),
         "expected_intent_matched": response.get("intent") == case["expected_intent"],
@@ -316,7 +338,7 @@ def _observation(
         "pi_hybrid_intent_group": pi_hybrid.get("intent_group"),
         "pi_hybrid_agreement_kind": pi_hybrid.get("agreement_kind"),
         "audio_returned": bool(response.get("audio_base64")),
-        "natural_flow_pass": bool(natural_cue and natural_final and accepted and reply and not request_error),
+        "natural_flow_pass": natural_flow_pass,
     }
 
 
@@ -336,10 +358,20 @@ def _stats(observations: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             "processing_ack_latency_ms": _latency_stats([]),
             "final_panel_response_latency_ms": _latency_stats([]),
             "final_http_latency_ms": _latency_stats([]),
+            "processing_ack_expected_count": 0,
+            "processing_ack_expected_rate": None,
+            "pi_hybrid_expected_count": 0,
+            "pi_hybrid_expected_accept_rate": None,
         }
+    ack_expected = [item for item in observations if bool(item.get("expect_processing_ack"))]
+    pi_expected = [item for item in observations if bool(item.get("expect_pi_hybrid"))]
     return {
         "observation_count": len(observations),
         "unique_case_count": len({str(item.get("case_id")) for item in observations}),
+        "processing_ack_expected_count": len(ack_expected),
+        "processing_ack_expected_rate": _rate(bool(item.get("processing_ack_available")) for item in ack_expected),
+        "pi_hybrid_expected_count": len(pi_expected),
+        "pi_hybrid_expected_accept_rate": _rate(bool(item.get("pi_hybrid_accepted")) for item in pi_expected),
         "natural_flow_pass_rate": _rate(bool(item.get("natural_flow_pass")) for item in observations),
         "pi_hybrid_accept_rate": _rate(bool(item.get("pi_hybrid_accepted")) for item in observations),
         "processing_ack_rate": _rate(bool(item.get("processing_ack_available")) for item in observations),
@@ -354,21 +386,30 @@ def _stats(observations: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _readiness(overall: Mapping[str, Any]) -> dict[str, Any]:
+def _readiness(overall: Mapping[str, Any], expected: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    scoped = expected or overall
     blockers: list[str] = []
-    if overall.get("natural_flow_pass_rate") != 1.0:
-        blockers.append("natural_flow_not_passing_all_cases")
-    if overall.get("processing_ack_rate") != 1.0:
+    if scoped.get("observation_count", 0) > 0 and scoped.get("natural_flow_pass_rate") != 1.0:
+        blockers.append("natural_flow_not_passing_expected_cases")
+    if _expected_processing_ack_required(scoped) and scoped.get("processing_ack_expected_rate") != 1.0:
         blockers.append("panel_processing_ack_missing")
-    if overall.get("pi_hybrid_accept_rate") != 1.0:
-        blockers.append("pi_hybrid_not_accepting_all_cases")
-    if overall.get("audio_return_rate") != 1.0:
+    if _expected_pi_accept_rate_required(scoped) and scoped.get("pi_hybrid_expected_accept_rate") != 1.0:
+        blockers.append("pi_hybrid_not_accepting_expected_pi_cases")
+    if scoped.get("observation_count", 0) > 0 and scoped.get("audio_return_rate") != 1.0:
         blockers.append("voice_audio_missing")
     if (overall.get("request_error_rate") or 0) > 0:
         blockers.append("voice_command_request_errors")
     if (overall.get("observer_error_rate") or 0) > 0:
         blockers.append("panel_websocket_observer_errors")
     return {"ready_for_touch_panel_smoke": not blockers, "blockers": blockers}
+
+
+def _expected_processing_ack_required(stats: Mapping[str, Any]) -> bool:
+    return bool(stats.get("processing_ack_expected_count", 0))
+
+
+def _expected_pi_accept_rate_required(stats: Mapping[str, Any]) -> bool:
+    return bool(stats.get("pi_hybrid_expected_count", 0))
 
 
 def _event_matches_panel(message: Mapping[str, Any], panel_id: str) -> bool:
@@ -418,8 +459,8 @@ def _breakdown(observations: Sequence[Mapping[str, Any]], key_fn: Callable[[Mapp
     return {key: _stats(values) for key, values in sorted(grouped.items())}
 
 
-def _load_cases(paths: Sequence[str], *, no_default_cases: bool) -> list[dict[str, str]]:
-    cases: list[dict[str, str]] = [] if no_default_cases else [_normalise_case(item) for item in DEFAULT_CASES]
+def _load_cases(paths: Sequence[str], *, no_default_cases: bool) -> list[dict[str, Any]]:
+    cases: list[dict[str, Any]] = [] if no_default_cases else [_normalise_case(item) for item in DEFAULT_CASES]
     for path in paths:
         raw = json.loads(Path(path).read_text(encoding="utf-8"))
         rows = raw if isinstance(raw, list) else [raw]
@@ -427,14 +468,26 @@ def _load_cases(paths: Sequence[str], *, no_default_cases: bool) -> list[dict[st
     return cases
 
 
-def _normalise_case(raw: Mapping[str, Any]) -> dict[str, str]:
+def _normalise_case(raw: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "case_id": str(raw.get("case_id") or raw.get("id") or raw.get("text") or "case"),
         "text": str(raw.get("text") or ""),
         "expected_intent": str(raw.get("expected_intent") or ""),
         "intent_group": str(raw.get("intent_group") or raw.get("expected_intent") or "unknown"),
         "source": str(raw.get("source") or "synthetic"),
+        "expect_processing_ack": _bool_case(raw, "expect_processing_ack", True),
+        "expect_pi_hybrid": _bool_case(raw, "expect_pi_hybrid", True),
+        "expect_natural_flow": _bool_case(raw, "expect_natural_flow", True),
     }
+
+
+def _bool_case(raw: Mapping[str, Any], key: str, default: bool) -> bool:
+    value = raw.get(key, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return bool(value)
 
 
 def _latency_stats(values: Sequence[float]) -> dict[str, float | None]:
