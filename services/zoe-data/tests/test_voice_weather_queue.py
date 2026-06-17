@@ -535,6 +535,96 @@ async def test_voice_command_uses_skybridge_fast_path(monkeypatch, utterance, re
 
 
 @pytest.mark.asyncio
+async def test_voice_command_emits_processing_cue_for_non_pi_fallback(monkeypatch) -> None:
+    import pi_hybrid_production
+
+    calls: dict[str, object] = {"broadcast": [], "events": []}
+
+    async def resolve_skybridge_request(text, user_id, *, context=None, db=None):
+        return {
+            "handled": True,
+            "spoken_summary": "Here is the calendar.",
+            "intent": {"domain": "calendar", "action": "current"},
+            "skybridge_context": {"domain": "calendar"},
+            "cards": [],
+        }
+
+    async def broadcast_skybridge_ui(*_args, **_kwargs):
+        return None
+
+    class Broadcaster:
+        async def broadcast(self, channel, event, payload):
+            calls["broadcast"].append((channel, event, payload))
+            calls["events"].append(event)
+
+    class Audio:
+        body = b"RIFF-test"
+        media_type = "audio/wav"
+
+    async def synthesize(payload, caller=None):
+        calls["events"].append("synthesize")
+        return Audio()
+
+    async def no_user(*_args, **_kwargs):
+        return None
+
+    async def fake_processing_cue(**_kwargs):
+        return {"available": True, "text": "One moment."}
+
+    async def save_chat(*_args, **_kwargs):
+        return None
+
+    async def memory_passes(*_args, **_kwargs):
+        return None
+
+    ineligible_config = types.SimpleNamespace(enabled=True)
+    monkeypatch.setattr(
+        pi_hybrid_production.PiHybridProductionConfig,
+        "from_env",
+        classmethod(lambda cls: ineligible_config),
+    )
+    def fake_pi_eligible(text, config=None):
+        assert config is ineligible_config
+        return False, "not_low_risk"
+
+    monkeypatch.setattr(pi_hybrid_production, "pi_hybrid_production_eligible", fake_pi_eligible)
+    monkeypatch.setattr(pi_hybrid_production, "processing_cue_packet", fake_processing_cue)
+    skybridge_module = types.SimpleNamespace(resolve_skybridge_request=resolve_skybridge_request)
+    monkeypatch.setitem(sys.modules, "skybridge_service", skybridge_module)
+    monkeypatch.setattr(skybridge_service, "resolve_skybridge_request", resolve_skybridge_request)
+    monkeypatch.setitem(sys.modules, "push", types.SimpleNamespace(broadcaster=Broadcaster()))
+    monkeypatch.setattr(voice_tts, "_broadcast_skybridge_ui", broadcast_skybridge_ui)
+    monkeypatch.setattr(voice_tts, "synthesize", synthesize)
+    monkeypatch.setattr(voice_tts, "_resolve_recent_panel_session_user", no_user)
+    monkeypatch.setattr(voice_tts, "_resolve_panel_default_user", no_user)
+    monkeypatch.setattr(voice_tts, "_schedule_voice_chat_save", save_chat)
+    monkeypatch.setattr(voice_tts, "_run_voice_memory_passes", memory_passes)
+    monkeypatch.setattr(voice_tts.asyncio, "ensure_future", lambda coro: coro.close() if hasattr(coro, "close") else None)
+    monkeypatch.setattr(voice_tts, "_VOICE_SESSIONS", {})
+
+    response = await voice_command(
+        {"text": "show my calendar", "panel_id": "panel-sky", "session_id": "session-sky"},
+        caller={"user_id": "guest", "panel_id": "panel-sky"},
+        stream=False,
+        db=object(),
+    )
+
+    assert response["ok"] is True
+    assert response["reply"] == "Here is the calendar."
+    assert (
+        "all",
+        "voice:responding",
+        {
+            "panel_id": "panel-sky",
+            "text": "One moment.",
+            "processing_ack": True,
+            "source": "voice_command_fallback",
+        },
+    ) in calls["broadcast"]
+    assert calls["events"].index("voice:responding") < calls["events"].index("synthesize")
+
+
+@pytest.mark.asyncio
 async def test_voice_skybridge_private_request_challenges_guest_before_cards(monkeypatch) -> None:
     calls: dict[str, object] = {"broadcast_called": False, "challenge_called": False}
 

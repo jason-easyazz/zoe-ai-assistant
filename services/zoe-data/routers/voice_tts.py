@@ -3028,6 +3028,7 @@ async def voice_command(
     except Exception:
         pass
 
+    _voice_processing_ack_sent = False
     if not stream:
         try:
             from pi_hybrid_production import (
@@ -3052,6 +3053,7 @@ async def voice_command(
                             "processing_ack": True,
                             "source": "pi_hybrid_production",
                         })
+                        _voice_processing_ack_sent = True
                     except Exception:
                         pass
                 _pi_hybrid = await try_pi_hybrid_production(
@@ -3099,6 +3101,23 @@ async def voice_command(
                 logger.debug("voice/command Pi hybrid production skipped: %s", _pi_hybrid_reason)
         except Exception as _pi_hybrid_exc:
             logger.debug("voice/command Pi hybrid failed open to existing voice route: %s", _pi_hybrid_exc)
+
+    if not stream and not _voice_processing_ack_sent:
+        try:
+            from pi_hybrid_production import processing_cue_packet
+            from push import broadcaster as _bc_voice_fallback
+
+            _fallback_cue = await processing_cue_packet(text=text)
+            _fallback_ack_text = str(_fallback_cue.get("text") or "").strip()
+            if _fallback_ack_text:
+                await _bc_voice_fallback.broadcast("all", "voice:responding", {
+                    "panel_id": panel_id,
+                    "text": _fallback_ack_text,
+                    "processing_ack": True,
+                    "source": "voice_command_fallback",
+                })
+        except Exception as _fallback_ack_exc:
+            logger.debug("voice/command fallback processing acknowledgement failed: %s", _fallback_ack_exc)
 
     # Skybridge-first touch prototype: supported visual domains render as cards
     # on the single Skybridge surface instead of navigating to domain pages.
