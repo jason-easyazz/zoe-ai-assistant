@@ -262,7 +262,7 @@ def _build_memory_prompt_packet(
             return
         meta = ref.metadata or {}
         status = str(meta.get("status") or "active").lower()
-        if status in {"superseded", "archived", "rejected"}:
+        if status in {"superseded", "archived", "rejected", "pending"}:
             return
         text = (ref.text or "").strip()
         if not text or ref.id in seen:
