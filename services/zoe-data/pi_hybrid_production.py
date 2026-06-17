@@ -29,6 +29,11 @@ _DAILY_BRIEFING_SIGNAL_RE = re.compile(
     re.I,
 )
 _LIST_SHOW_SIGNAL_RE = re.compile(r"\b(what(?:'s| is) on|show|read|check)\b.*\b(list|shopping|grocer)", re.I)
+_SECRET_TEXT_RE = re.compile(
+    r"(api[\s_-]?key|authorization\s*(?:[:=]\s*\S+|bearer\s+[a-z0-9._\-]+|token\s+\S+)|"
+    r"bearer\s+[a-z0-9._\-]+|password\s*(?:is|=)|secret\s*(?:is|=)|token\s*(?:is|=))",
+    re.I,
+)
 
 
 @dataclass(frozen=True)
@@ -46,6 +51,7 @@ class PiHybridProductionConfig:
     min_swap_free_mb: int = 256
     resource_guard_enabled: bool = True
     router_fast_accept_enabled: bool = False
+    attempt_all_requests_enabled: bool = False
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "PiHybridProductionConfig":
@@ -67,6 +73,9 @@ class PiHybridProductionConfig:
             resource_guard_enabled=_env_bool(values.get("ZOE_PI_HYBRID_RESOURCE_GUARD_ENABLED"), default=True),
             router_fast_accept_enabled=_env_bool(
                 values.get("ZOE_PI_HYBRID_ROUTER_FAST_ACCEPT_ENABLED"), default=False
+            ),
+            attempt_all_requests_enabled=_env_bool(
+                values.get("ZOE_PI_HYBRID_ATTEMPT_ALL_REQUESTS_ENABLED"), default=False
             ),
         )
 
@@ -99,6 +108,7 @@ class PiHybridProductionConfig:
             "min_available_mb": self.min_available_mb,
             "min_swap_free_mb": self.min_swap_free_mb,
             "router_fast_accept_enabled": self.router_fast_accept_enabled,
+            "attempt_all_requests_enabled": self.attempt_all_requests_enabled,
         }
 
 
@@ -349,6 +359,10 @@ def pi_hybrid_production_eligible(text: str, *, config: PiHybridProductionConfig
         return False, "empty_text"
     if len(stripped.split()) > active_config.max_words:
         return False, "too_many_words"
+    if _SECRET_TEXT_RE.search(stripped):
+        return False, "secret_like_text"
+    if active_config.attempt_all_requests_enabled:
+        return True, "eligible"
     try:
         from pi_intent_classifier import pi_intent_prefilter_allows
 
