@@ -59,9 +59,10 @@ async function loadAbilities(): Promise<CapabilityEntry[]> {
 function isRelevant(entry: CapabilityEntry, msg: string): boolean {
   if (entry.tier === "core") return true;
   if ((entry.triggers ?? []).some((re) => re.test(msg))) return true;
+  const normalizedMsg = msg.replace(/[^a-z0-9 ]/g, "");
   return entry.examples.some((ex) => {
     const key = ex.toLowerCase().replace(/[^a-z0-9 ]/g, "").trim();
-    return key.length >= 4 && msg.includes(key.slice(0, Math.min(key.length, 16)));
+    return key.length >= 4 && normalizedMsg.includes(key.slice(0, Math.min(key.length, 16)));
   });
 }
 
