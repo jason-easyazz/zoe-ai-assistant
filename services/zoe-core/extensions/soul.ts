@@ -21,8 +21,17 @@ function loadSoul(): string {
   try {
     const text = readFileSync(SOUL_PATH, "utf8").trim();
     if (text) return text;
-  } catch {
-    // fall through to the inline persona below
+    console.warn(
+      `[zoe-core/soul] SOUL.md at ${SOUL_PATH} is empty; using inline persona fallback.`,
+    );
+  } catch (err) {
+    // Don't degrade Zoe's identity silently — surface why the persona file
+    // couldn't be loaded so a misconfigured deploy is diagnosable.
+    console.warn(
+      `[zoe-core/soul] could not read SOUL.md at ${SOUL_PATH}; using inline persona fallback: ${
+        (err as Error)?.message ?? err
+      }`,
+    );
   }
   return _FALLBACK_SOUL;
 }
