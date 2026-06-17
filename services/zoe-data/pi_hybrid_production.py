@@ -60,6 +60,7 @@ _TIMER_SIGNAL_RE = re.compile(
     r"\s*(?:second|seconds|minute|minutes|hour|hours|min|mins|hr|hrs)\b",
     re.I,
 )
+_PI_AUDIT_TASKS: set[asyncio.Task[Any]] = set()
 
 
 @dataclass(frozen=True)
@@ -135,6 +136,11 @@ class PiHybridProductionConfig:
             "min_swap_free_mb": self.min_swap_free_mb,
             "router_fast_accept_enabled": self.router_fast_accept_enabled,
             "attempt_all_requests_enabled": self.attempt_all_requests_enabled,
+            "fast_accept_posture": (
+                "router_speculative_pi_audited"
+                if self.router_fast_accept_enabled
+                else "pi_gated_before_response"
+            ),
         }
 
 
@@ -151,8 +157,8 @@ async def try_pi_hybrid_production(
     active_config.validate()
     stripped = (text or "").strip()
 
-    def _with_evidence(decision: dict[str, Any]) -> dict[str, Any]:
-        _record_production_evidence(stripped, user_id=user_id, decision=decision, env=env)
+    async def _with_evidence(decision: dict[str, Any]) -> dict[str, Any]:
+        await asyncio.to_thread(_record_production_evidence, stripped, user_id=user_id, decision=decision, env=env)
         return decision
 
     base = {
@@ -168,13 +174,13 @@ async def try_pi_hybrid_production(
     eligible, reason = pi_hybrid_production_eligible(stripped, config=active_config)
     if not eligible:
         base["reason"] = reason
-        return _with_evidence(base)
+        return await _with_evidence(base)
 
     pressure = await _resource_pressure(active_config)
     if pressure:
         base["reason"] = "resource_pressure"
         base["resource"] = pressure
-        return _with_evidence(base)
+        return await _with_evidence(base)
 
     if active_config.router_fast_accept_enabled:
         fast = await _try_router_confirmed_fast_accept(
@@ -192,7 +198,7 @@ async def try_pi_hybrid_production(
                 env=env,
                 fast_decision=fast,
             )
-            return _with_evidence({
+            return await _with_evidence({
                 **base,
                 **fast,
                 "response_text": str(fast.get("response_text") or ""),
@@ -219,19 +225,19 @@ async def try_pi_hybrid_production(
         )
     except asyncio.TimeoutError:
         base["reason"] = "timeout"
-        return _with_evidence(base)
+        return await _with_evidence(base)
     except ValueError as exc:
         base["reason"] = "validation_error"
         base["error"] = str(exc)
-        return _with_evidence(base)
+        return await _with_evidence(base)
     except Exception as exc:  # pragma: no cover - production guard must fall back closed
         base["reason"] = "exception"
         base["error"] = exc.__class__.__name__
-        return _with_evidence(base)
+        return await _with_evidence(base)
 
     decision = _acceptance_decision(result, active_config)
     response_text = str(decision.get("response_text") or "")
-    return _with_evidence({
+    return await _with_evidence({
         **base,
         **decision,
         "response_text": response_text,
@@ -358,7 +364,8 @@ def _schedule_pi_audit_after_fast_accept(
                         fast_decision.get("intent"),
                         pi.get("intent"),
                     )
-                    _record_production_evidence(
+                    await asyncio.to_thread(
+                        _record_production_evidence,
                         text,
                         user_id=user_id,
                         decision={
@@ -378,7 +385,9 @@ def _schedule_pi_audit_after_fast_accept(
         except Exception:
             return
 
-    asyncio.create_task(_runner())
+    task = asyncio.create_task(_runner())
+    _PI_AUDIT_TASKS.add(task)
+    task.add_done_callback(_PI_AUDIT_TASKS.discard)
 
 
 def pi_hybrid_production_eligible(text: str, *, config: PiHybridProductionConfig | None = None) -> tuple[bool, str]:

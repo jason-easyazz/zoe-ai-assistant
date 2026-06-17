@@ -249,15 +249,20 @@ async def test_try_pi_hybrid_fast_accept_records_audit_disagreement(tmp_path, mo
             "ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_PATH": str(evidence_path),
         },
     )
+    assert pi_hybrid_production._PI_AUDIT_TASKS
     await asyncio.sleep(0.01)
 
     assert decision["accepted"] is True
     records = [json.loads(line) for line in evidence_path.read_text(encoding="utf-8").splitlines()]
-    assert records[0]["accepted"] is True
-    assert records[1]["accepted"] is False
-    assert records[1]["reason"] == "audit_disagreement"
-    assert records[1]["intent"] == "weather"
-    assert records[1]["pi_intent"] == "daily_briefing"
+    accepted = [record for record in records if record.get("accepted") is True]
+    disagreements = [record for record in records if record.get("reason") == "audit_disagreement"]
+
+    assert len(accepted) == 1
+    assert len(disagreements) == 1
+    assert disagreements[0]["accepted"] is False
+    assert disagreements[0]["intent"] == "weather"
+    assert disagreements[0]["pi_intent"] == "daily_briefing"
+    assert not pi_hybrid_production._PI_AUDIT_TASKS
 
 
 def test_router_fast_accept_and_attempt_all_require_explicit_env_opt_in():
@@ -273,6 +278,7 @@ def test_router_fast_accept_and_attempt_all_require_explicit_env_opt_in():
 
     assert config.router_fast_accept_enabled is True
     assert config.attempt_all_requests_enabled is True
+    assert config.to_dict()["fast_accept_posture"] == "router_speculative_pi_audited"
 
 
 @pytest.mark.asyncio
