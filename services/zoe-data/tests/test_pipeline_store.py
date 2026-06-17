@@ -1157,7 +1157,7 @@ def _patch_review_ready(monkeypatch, *, ready: bool):
     monkeypatch.setattr(
         prv,
         "assess_pr_review_ready",
-        lambda pr_url, *, repo_root=None: ReviewReadiness(ready, "test", 0 if ready else 1),
+        lambda pr_url, *, repo_root=None: ReviewReadiness(ready, "test"),
     )
 
 

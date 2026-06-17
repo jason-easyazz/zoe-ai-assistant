@@ -501,12 +501,14 @@ async def _append_harness_review_approval(state: PipelineState, phase: PipelineP
     """Append objective `human` review-approval evidence when the PR passes review.
 
     Makes review deterministic: rather than trusting the zoe-reviewer agent (which
-    can spuriously block "no code/evidence"), the harness approves review from
-    objective signals — PR OPEN + all required CI checks green + zero unresolved
-    Greptile review threads, on top of the verify phase having already run the PR's
-    focused tests. No-ops (returns state unchanged) when disabled, when human
-    evidence already exists, when there is no PR, or when the PR is not objectively
-    review-ready (fail-open: the agent-driven flow then applies).
+    can spuriously block "no code/evidence" or complete with an empty verdict), the
+    harness approves review from objective signals — PR OPEN + all required CI
+    checks green, on top of the verify phase having already run the PR's focused
+    tests. Greptile threads/confidence are owned by the closeout greploop merge
+    gate, NOT review (gating them here deadlocks, since a fresh PR has open Greptile
+    threads at review time). No-ops (returns state unchanged) when disabled, when
+    human evidence already exists, when there is no PR, or when the PR is not
+    objectively review-ready (fail-open: the agent-driven flow then applies).
     """
     if not _harness_review_approve_enabled():
         return state
