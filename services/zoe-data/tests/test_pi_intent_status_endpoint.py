@@ -3,7 +3,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from auth import require_admin
-from routers.system import router as system_router
+from routers.system import _pi_hybrid_production_public_status, router as system_router
 
 
 def _write_exe(path, body):
@@ -285,6 +285,22 @@ def test_pi_hybrid_production_status_endpoint_reports_invalid_config(monkeypatch
     assert data["ok"] is False
     assert data["status"] == "invalid_config"
     assert "device_control" in data["error"]
+
+
+def test_pi_hybrid_production_public_status_hides_admin_details(monkeypatch):
+    monkeypatch.setenv("ZOE_PI_HYBRID_PRODUCTION_ENABLED", "true")
+    monkeypatch.setenv("ZOE_PI_HYBRID_PRODUCTION_GROUPS", "weather,device_control")
+
+    data = _pi_hybrid_production_public_status()
+
+    assert data == {
+        "report_kind": "zoe_pi_hybrid_production_summary",
+        "ok": False,
+        "status": "invalid_config",
+        "details_endpoint": "/api/system/pi-intent/production-status",
+    }
+    assert "config" not in data
+    assert "error" not in data
 
 
 def test_pi_hybrid_production_status_endpoint_rejects_non_admin():

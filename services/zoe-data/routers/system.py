@@ -34,6 +34,17 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/system", tags=["system"])
 
 
+def _pi_hybrid_production_public_status() -> dict[str, Any]:
+    """Minimal non-admin summary for the live Pi hybrid production lane."""
+    status = _pi_hybrid_production_status()
+    return {
+        "report_kind": "zoe_pi_hybrid_production_summary",
+        "ok": bool(status.get("ok")),
+        "status": status.get("status") or "unknown",
+        "details_endpoint": "/api/system/pi-intent/production-status",
+    }
+
+
 def _pi_hybrid_production_status() -> dict[str, Any]:
     """Read-only status for the live Pi hybrid production lane."""
     try:
@@ -199,7 +210,7 @@ async def get_system_status(
             "pending_actions": ui_actions_pending,
             "online_panels_30s": panels_online,
         },
-        "pi_hybrid_production": _pi_hybrid_production_status(),
+        "pi_hybrid_production": _pi_hybrid_production_public_status(),
     }
 
 
