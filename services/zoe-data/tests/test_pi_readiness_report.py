@@ -689,6 +689,70 @@ def test_readiness_report_scores_labeled_production_evidence_conservatively(tmp_
 
 
 
+def test_readiness_report_scores_labeled_production_baseline_override(tmp_path):
+    shadow_path = tmp_path / "shadow.jsonl"
+    shadow_path.write_text("", encoding="utf-8")
+    production_path = tmp_path / "production.jsonl"
+    labels_path = tmp_path / "production-labels.jsonl"
+    production_path.write_text(
+        json.dumps(
+            {
+                "ts": 1.0,
+                "source": "pi_hybrid_production",
+                "text_hash": "briefing-hash",
+                "accepted": True,
+                "reason": "accepted",
+                "intent": "daily_briefing",
+                "intent_group": "daily_briefing",
+                "pi_intent": "daily_briefing",
+                "route_class": "fallback",
+                "baseline_kind": "router_only_not_comparable",
+                "baseline_comparable": False,
+                "zoe_latency_ms": 1.0,
+                "pi_latency_ms": 2200.0,
+                "safe_fulfillment_latency_ms": 1100.0,
+                "production_route_change": True,
+                "text_preview": "give me my daily briefing",
+                "outcome_label": None,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    labels_path.write_text(
+        json.dumps(
+            {
+                "text_hash": "briefing-hash",
+                "outcome_label": "daily_briefing",
+                "source": "admin_review",
+                "route_class": "fallback",
+                "baseline_kind": "zoe_agent_fallback_baseline",
+                "baseline_comparable": True,
+                "zoe_latency_ms": 4800.0,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    env = _env(tmp_path, shadow_path)
+    env["ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_ENABLED"] = "true"
+    env["ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_PATH"] = str(production_path)
+    env["ZOE_PI_HYBRID_PRODUCTION_LABELS_PATH"] = str(labels_path)
+
+    report = pi_readiness_report(env)
+
+    decision = [
+        item
+        for item in report["production_evidence"]["promotion_report"]["decisions"]
+        if item["intent_group"] == "daily_briefing"
+    ][0]
+    assert "baseline_not_comparable" not in decision["blockers"]
+    assert "latency_not_faster_than_zoe" not in decision["blockers"]
+    assert decision["zoe_p95_latency_ms"] == 4800.0
+    assert decision["pi_p95_latency_ms"] == 2200.0
+    assert decision["baseline_lane_latency"]["fallback:zoe_agent_fallback_baseline"]["latency_delta_ms"] == 2600.0
+
+
 def test_readiness_report_surfaces_production_label_file_error(tmp_path):
     shadow_path = tmp_path / "shadow.jsonl"
     shadow_path.write_text("", encoding="utf-8")

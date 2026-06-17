@@ -184,6 +184,48 @@ def test_pi_hybrid_production_label_sidecar_applies_latest_valid_label(tmp_path)
     assert "reviewed_by_hash" in labels_path.read_text(encoding="utf-8")
 
 
+def test_pi_hybrid_production_label_can_override_comparable_baseline(tmp_path):
+    evidence_path = tmp_path / "production.jsonl"
+    labels_path = tmp_path / "production-labels.jsonl"
+    record = {
+        "text_hash": "briefing-hash",
+        "source": "pi_hybrid_production",
+        "outcome_label": None,
+        "zoe_intent": None,
+        "pi_intent": "daily_briefing",
+        "pi_latency_ms": 2200.0,
+        "pi_confidence": 0.93,
+        "route_class": "fallback",
+        "baseline_kind": "router_only_not_comparable",
+        "baseline_comparable": False,
+        "zoe_latency_ms": 1.0,
+    }
+    evidence_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+    result = append_pi_hybrid_production_label(
+        text_hash="briefing-hash",
+        outcome_label="daily_briefing",
+        route_class="fallback",
+        baseline_kind="zoe_agent_fallback_baseline",
+        baseline_comparable=True,
+        zoe_latency_ms=4800.0,
+        evidence_path=str(evidence_path),
+        labels_path=str(labels_path),
+    )
+
+    labels = load_pi_hybrid_production_labels(str(labels_path))
+    labeled = apply_pi_hybrid_production_labels([record], labels)
+    samples = production_records_to_route_samples(labeled)
+
+    assert result["label"]["baseline_kind"] == "zoe_agent_fallback_baseline"
+    assert result["label"]["baseline_comparable"] is True
+    assert result["label"]["zoe_latency_ms"] == 4800.0
+    assert labeled[0]["zoe_latency_ms"] == 4800.0
+    assert samples[0].zoe_latency_ms == 4800.0
+    assert samples[0].metadata["baseline_kind"] == "zoe_agent_fallback_baseline"
+    assert samples[0].metadata["baseline_comparable"] is True
+
+
 def test_pi_hybrid_production_label_rejects_missing_or_privileged_label(tmp_path):
     evidence_path = tmp_path / "production.jsonl"
     labels_path = tmp_path / "production-labels.jsonl"
