@@ -539,6 +539,54 @@ async def _append_harness_review_approval(state: PipelineState, phase: PipelineP
     )
 
 
+def _harness_closeout_merge_enabled() -> bool:
+    return (
+        os.environ.get("ZOE_PIPELINE_HARNESS_CLOSEOUT_MERGE", "true") or "true"
+    ).strip().lower() not in {"0", "false", "no"}
+
+
+async def _append_harness_closeout_merge(state: PipelineState, phase: PipelinePhase) -> PipelineState:
+    """Run the greploop merge guard harness-side and append `greptile` evidence on merge.
+
+    Makes closeout deterministic: rather than trusting the closeout agent worker to
+    invoke the greploop guard (it can bail "no valid PR URL"), the harness runs the
+    proven guard CLI itself (which owns confidence/threads/squash-merge safety) and,
+    when the PR ends up MERGED, records the closeout `greptile` evidence with the
+    merge SHA. No-ops (returns state unchanged) when disabled, when closeout greptile
+    evidence already exists, when there is no PR, or when the guard did not merge
+    (fail-open: the agent-driven closeout flow then applies and can retry next cycle).
+    """
+    if not _harness_closeout_merge_enabled():
+        return state
+    if any(
+        item.kind == "greptile" and item.passed is True and item.metadata.get("phase") == phase
+        for item in state.evidence
+    ):
+        return state
+    pr_url = _pr_url_from_state(state)
+    if not pr_url:
+        return state
+    from pipeline_closeout import run_closeout_merge
+
+    result = await _run_io(partial(run_closeout_merge, pr_url))
+    if not result.merged:
+        return state
+    return with_evidence(
+        state,
+        EvidenceItem(
+            kind="greptile",
+            summary=("harness closeout merge: " + result.reason)[:500],
+            artifact=pr_url,
+            passed=True,
+            metadata={
+                "source": "harness",
+                "phase": "closeout",
+                "merge_sha": result.merge_sha,
+            },
+        ),
+    )
+
+
 def _protocol_only_block(detail: dict[str, Any]) -> bool:
     """True when Hermes only failed the terminal protocol for a no-op phase."""
     protocol_seen = False
@@ -828,9 +876,21 @@ async def _sync_pipeline_from_chain_once(
             if can_complete_phase(state):
                 review_harness_complete = True
 
+        closeout_harness_complete = False
+        if phase == "closeout" and row_status in _TERMINAL:
+            # Deterministic closeout: the closeout agent worker can fail to invoke
+            # the greploop merge guard (observed: "cannot proceed without a valid
+            # PR URL"). Run the proven guard CLI harness-side; when it merges the
+            # PR, record the closeout greptile evidence and complete closeout
+            # regardless of the agent's signal. Otherwise fall through to the
+            # agent-derived outcome (and retry next cycle).
+            state = await _append_harness_closeout_merge(state, "closeout")
+            if can_complete_phase(state):
+                closeout_harness_complete = True
+
         outcome = (
             "complete"
-            if (verify_harness_complete or review_harness_complete)
+            if (verify_harness_complete or review_harness_complete or closeout_harness_complete)
             else infer_outcome(phase, row_status, detail)  # type: ignore[arg-type]
         )
         if not outcome:
