@@ -9,6 +9,7 @@ from pi_intent_evidence import (
     append_pi_hybrid_production_label,
     apply_pi_hybrid_production_labels,
     load_pi_hybrid_production_labels,
+    production_records_to_route_samples,
     record_intent_miss_evidence,
     record_pi_hybrid_production_evidence,
     sanitize_evidence_text,
@@ -219,6 +220,59 @@ def test_pi_hybrid_production_label_rejects_missing_or_privileged_label(tmp_path
             evidence_path=str(evidence_path),
             labels_path=str(labels_path),
         )
+
+
+def test_production_records_to_route_samples_uses_reviewed_positive_labels_only():
+    records = [
+        {
+            "text_hash": "weather-hash",
+            "outcome_label": "weather",
+            "zoe_intent": "weather",
+            "pi_intent": "weather",
+            "zoe_latency_ms": 1.0,
+            "pi_latency_ms": 4200.0,
+            "pi_confidence": 0.92,
+            "pi_transport": "rpc",
+            "route_class": "deterministic",
+            "baseline_kind": "router",
+            "safe_fulfillment_latency_ms": 900.0,
+            "production_route_change": True,
+            "accepted": True,
+            "outcome_label_source": "production_label_sidecar",
+        },
+        {
+            "text_hash": "chat-hash",
+            "outcome_label": None,
+            "negative": True,
+            "zoe_latency_ms": 1.0,
+            "pi_latency_ms": 2000.0,
+            "route_class": "fallback",
+        },
+        {
+            "text_hash": "missing-latency",
+            "outcome_label": "weather",
+            "pi_intent": "weather",
+            "pi_latency_ms": 2000.0,
+            "route_class": "fallback",
+        },
+    ]
+
+    samples = production_records_to_route_samples(records)
+
+    assert len(samples) == 1
+    sample = samples[0]
+    assert sample.case_id == "weather-hash"
+    assert sample.intent_group == "weather"
+    assert sample.expected_intent == "weather"
+    assert sample.zoe_intent == "weather"
+    assert sample.pi_intent == "weather"
+    assert sample.zoe_latency_ms == 1.0
+    assert sample.pi_latency_ms == 4200.0
+    assert sample.metadata["source"] == "pi_hybrid_production"
+    assert sample.metadata["baseline_kind"] == "router"
+    assert sample.metadata["baseline_comparable"] is True
+    assert sample.metadata["safe_fulfillment_latency_ms"] == 900.0
+
 
 
 def test_record_pi_hybrid_production_evidence_skips_secret_like_text(tmp_path):
