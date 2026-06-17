@@ -16,7 +16,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from auth import get_current_user, require_admin
+from auth import get_current_user, require_admin, require_internal_token
 from database import get_db
 from guest_policy import require_feature_access
 from memory_service import (
@@ -235,6 +235,90 @@ async def search_memories(
         row["score"] = ref.score
         results.append(row)
     return {"query": q, "results": results, "count": len(results)}
+
+
+_PROMPT_PACKET_MAX_FACTS = 12
+
+
+def _build_memory_prompt_packet(
+    facts: list[MemoryRef],
+    hits: list[MemoryRef],
+    *,
+    max_facts: int = _PROMPT_PACKET_MAX_FACTS,
+) -> dict[str, Any]:
+    """Compile a compact, cited memory packet for system-prompt injection.
+
+    Honors the Samantha memory prompt-policy: a small packet (not a raw dump),
+    every line carries a source/evidence id, superseded/archived facts are
+    dropped (prefer current), and disputed facts are surfaced as uncertain.
+    Message-relevant semantic hits lead; general facts follow.
+    """
+    seen: set[str] = set()
+    lines: list[str] = []
+    refs: list[dict[str, Any]] = []
+
+    def _consider(ref: MemoryRef, *, from_search: bool) -> None:
+        if len(lines) >= max_facts:
+            return
+        meta = ref.metadata or {}
+        status = str(meta.get("status") or "active").lower()
+        if status in {"superseded", "archived", "rejected"}:
+            return
+        text = (ref.text or "").strip()
+        if not text or ref.id in seen:
+            return
+        seen.add(ref.id)
+        cite = f"[mem:{str(ref.id)[:8]}]"
+        prefix = "(uncertain) " if status == "disputed" else ""
+        lines.append(f"- {prefix}{text[:200]} {cite}")
+        refs.append(
+            {
+                "id": ref.id,
+                "memory_type": meta.get("memory_type", "fact"),
+                "status": status,
+                "from_search": from_search,
+            }
+        )
+
+    for ref in hits:
+        _consider(ref, from_search=True)
+    for ref in facts:
+        _consider(ref, from_search=False)
+
+    if not lines:
+        return {"packet": "", "refs": [], "count": 0}
+    return {"packet": "## What I know about you\n" + "\n".join(lines), "refs": refs, "count": len(refs)}
+
+
+@router.get("/for-prompt")
+async def memory_for_prompt(
+    user_id: str = Query(..., min_length=1),
+    message: str = Query("", description="Current user message, for relevance ranking"),
+    limit: int = Query(_PROMPT_PACKET_MAX_FACTS, ge=1, le=40),
+    _: None = Depends(require_internal_token),
+):
+    """Compact, cited memory packet for injection into an agent's system prompt.
+
+    Internal/service endpoint (loopback or `X-Internal-Token`) — this is how the
+    zoe-core Pi brain pulls Zoe's memory each turn. Fails closed: guest/unknown
+    users get an empty packet. MemPalace-backed today; the Samantha plan's
+    Hindsight/Graphiti layers compose into this same packet later.
+    """
+    from memory_service import is_guest_memory_user
+
+    if not user_id or is_guest_memory_user(user_id):
+        return {"packet": "", "refs": [], "count": 0, "user_scoped": False}
+    svc = _svc()
+    facts = await svc.load_for_prompt(user_id, limit=limit)
+    hits: list[MemoryRef] = []
+    if message.strip():
+        try:
+            hits = await svc.search(message, user_id=user_id, limit=6)
+        except Exception:
+            hits = []
+    result = _build_memory_prompt_packet(facts, hits, max_facts=limit)
+    result["user_scoped"] = True
+    return result
 
 
 @router.get("/people")
