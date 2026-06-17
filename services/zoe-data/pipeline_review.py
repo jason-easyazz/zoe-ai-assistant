@@ -63,14 +63,20 @@ def _unresolved_thread_count(pr_number: str, *, cwd: str) -> int | None:
     query = (
         "{ repository(owner:\"jason-easyazz\", name:\"zoe-ai-assistant\") { pullRequest(number:"
         + pr_number
-        + ") { reviewThreads(first:100) { nodes { isResolved } } } } }"
+        + ") { reviewThreads(first:100) { nodes { isResolved } pageInfo { hasNextPage } } } } }"
     )
     code, out = _run(["gh", "api", "graphql", "-f", f"query={query}"], cwd=cwd)
     if code != 0 or not out:
         return None
     try:
-        nodes = json.loads(out)["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"]
+        threads = json.loads(out)["data"]["repository"]["pullRequest"]["reviewThreads"]
+        nodes = threads["nodes"]
     except (ValueError, TypeError, KeyError):
+        return None
+    # Fail open (treat as unknown) when there are more thread pages than we
+    # fetched, so a PR with >100 threads can't be silently approved on a partial
+    # page that happens to show all-resolved.
+    if (threads.get("pageInfo") or {}).get("hasNextPage"):
         return None
     return sum(1 for t in nodes if not t.get("isResolved"))
 

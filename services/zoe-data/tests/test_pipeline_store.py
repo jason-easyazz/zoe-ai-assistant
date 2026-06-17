@@ -1219,6 +1219,25 @@ async def test_harness_review_does_not_approve_when_not_ready(isolated_store, mo
 
 
 @pytest.mark.asyncio
+async def test_harness_review_disabled_by_env_does_not_approve(isolated_store, monkeypatch):
+    # Kill switch: ZOE_PIPELINE_HARNESS_REVIEW_APPROVE=false -> no harness approval
+    # even when the PR is objectively ready; review must not advance to closeout.
+    monkeypatch.setenv("ZOE_PIPELINE_HARNESS_VERIFY_TESTS", "false")
+    monkeypatch.setenv("ZOE_PIPELINE_HARNESS_REVIEW_APPROVE", "false")
+    _patch_review_ready(monkeypatch, ready=True)  # ready, but the gate is disabled
+    await store.bootstrap_state("multica:hr-off")
+
+    phases = {
+        "implement": {"id": "t_impl", "status": "done"},
+        "verify": {"id": "t_verify", "status": "done"},
+        "review": {"id": "t_review", "status": "done"},
+    }
+    state = await store.sync_pipeline_from_chain("multica:hr-off", phases, _review_chain_fetch_detail())
+    assert state.phase == "review"
+    assert not any(e.kind == "human" and e.metadata.get("source") == "harness" for e in state.evidence)
+
+
+@pytest.mark.asyncio
 async def test_sync_pipeline_audit_only_verify_skips_test_gate(isolated_store):
     await store.bootstrap_state("multica:audit-gate")
 
