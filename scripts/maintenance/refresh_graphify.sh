@@ -240,6 +240,16 @@ Rebuilt \`graphify-out/\` (graph.json + GRAPH_REPORT.md) from a clean \`origin/m
     fail "gh pr create for $branch failed; committed graph untouched"
   fi
   log "opened graphify-refresh PR for $branch (head $current_head)"
+
+  # Enable native auto-merge so the graph-only PR lands without manual action
+  # once Greptile + CI go green (repo allow_auto_merge=true; main requires 0
+  # approvals + green checks). Non-fatal: a failure here simply leaves the PR
+  # open for manual merge — it must never trip the fail-closed path.
+  if gh pr merge "$branch" --auto --squash >/dev/null 2>&1; then
+    log "auto-merge enabled for $branch; will merge when Greptile + CI pass"
+  else
+    log "WARN: could not enable auto-merge for $branch; PR left open for manual merge"
+  fi
 }
 
 open_refresh_pr
