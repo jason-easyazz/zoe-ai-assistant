@@ -51,3 +51,16 @@ async def test_streaming_routes_to_core_by_default(monkeypatch):
     monkeypatch.setenv("ZOE_USE_CORE_BRAIN", "true")
     chunks = [c async for c in bd.brain_streaming("hi", "s", "jason")]
     assert chunks == ["a", "b"]
+
+
+@pytest.mark.asyncio
+async def test_streaming_routes_to_legacy_when_off(monkeypatch):
+    import zoe_agent
+
+    async def fake_legacy_stream(msg, sid, uid="family-admin", **kw):
+        yield f"legacy:{msg}"
+
+    monkeypatch.setattr(zoe_agent, "run_zoe_agent_streaming", fake_legacy_stream)
+    monkeypatch.setenv("ZOE_USE_CORE_BRAIN", "false")
+    chunks = [c async for c in bd.brain_streaming("hi", "s", "jason")]
+    assert chunks == ["legacy:hi"]

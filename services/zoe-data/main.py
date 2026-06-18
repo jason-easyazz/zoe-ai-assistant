@@ -1900,28 +1900,38 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
             # greeting, acknowledgement, presence check) — answer + speak without
             # waking the ~2-4s brain. Restricted to READ-ONLY intents so it can
             # never double-execute a write the skybridge path already handled.
+            #
+            # Detect+execute is wrapped so a FAILURE THERE (before any send) falls
+            # through to the brain. But once we have a reply and start sending, we
+            # are committed: TTS is best-effort and we never fall through (avoids a
+            # duplicate transcript if the brain path also ran).
+            _fp_reply = None
             try:
                 from intent_router import detect_intent as _fp_detect, execute_intent as _fp_exec
                 _fp_intent = _fp_detect(message_text, log_miss=False, user_id=user_id)
                 if _fp_intent is not None and _fp_intent.name in _VOICE_INSTANT_INTENTS:
                     _fp_reply = await _fp_exec(_fp_intent, user_id=user_id)
-                    if _fp_reply:
-                        import base64 as _b64fp
-                        from routers.voice_tts import _synthesize_kokoro_sidecar as _fp_tts
-                        await websocket.send_json({"type": "state", "state": "responding"})
-                        await websocket.send_json({"type": "transcript", "role": "zoe", "text": _fp_reply})
-                        _fp_wav = await _fp_tts(_fp_reply)
-                        if _fp_wav:
-                            await websocket.send_json({
-                                "type": "audio",
-                                "audio_base64": _b64fp.b64encode(_fp_wav).decode("ascii"),
-                                "content_type": "audio/wav",
-                            })
-                        await websocket.send_json({"type": "state", "state": "ambient"})
-                        await websocket.send_json({"type": "done"})
-                        continue
             except Exception as _fp_exc:
-                logger.debug("voice instant fast-path skipped: %s", _fp_exc)
+                logger.debug("voice instant fast-path detect/execute skipped: %s", _fp_exc)
+                _fp_reply = None
+            if _fp_reply:
+                import base64 as _b64fp
+                await websocket.send_json({"type": "state", "state": "responding"})
+                await websocket.send_json({"type": "transcript", "role": "zoe", "text": _fp_reply})
+                try:
+                    from routers.voice_tts import _synthesize_kokoro_sidecar as _fp_tts
+                    _fp_wav = await _fp_tts(_fp_reply)
+                    if _fp_wav:
+                        await websocket.send_json({
+                            "type": "audio",
+                            "audio_base64": _b64fp.b64encode(_fp_wav).decode("ascii"),
+                            "content_type": "audio/wav",
+                        })
+                except Exception as _fp_tts_exc:
+                    logger.debug("voice fast-path TTS failed (text already sent): %s", _fp_tts_exc)
+                await websocket.send_json({"type": "state", "state": "ambient"})
+                await websocket.send_json({"type": "done"})
+                continue
 
             # ── Streaming LLM + per-sentence TTS ────────────────────────────────
             # Track LLM output and TTS output separately so fallback only re-runs
