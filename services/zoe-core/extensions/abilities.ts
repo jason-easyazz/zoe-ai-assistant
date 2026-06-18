@@ -58,7 +58,9 @@ function permissionDenial(entry: CapabilityEntry): string | null {
 async function loadAbilities(): Promise<CapabilityEntry[]> {
   let files: string[] = [];
   try {
-    files = readdirSync(ABILITIES_DIR).filter((f) => f.endsWith(".ts") && f !== "types.ts");
+    files = readdirSync(ABILITIES_DIR).filter(
+      (f) => f.endsWith(".ts") && f !== "types.ts" && !f.startsWith("_"),
+    );
   } catch {
     return [];
   }

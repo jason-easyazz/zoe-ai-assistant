@@ -9,7 +9,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
-from auth import get_current_user, require_admin, get_a2a_caller
+from auth import get_current_user, require_admin, get_a2a_caller, require_internal_token
 from database import get_db
 from hermes_http import hermes_auth_headers
 from openclaw_maintenance import (
@@ -2353,3 +2353,53 @@ async def _persist_alsa_state() -> None:
         await asyncio.wait_for(proc.communicate(), timeout=5.0)
     except Exception as exc:
         logger.debug("alsactl store failed (non-fatal): %s", exc)
+
+
+# ─── Internal intent dispatch (zoe-core Pi brain → existing fulfillment) ──────
+
+# Allowlist = the capabilities the zoe-core abilities registry exposes. The
+# brain-side permission envelope gates writes before this is called; this
+# allowlist is defense-in-depth so the endpoint can't run arbitrary intents.
+_DISPATCHABLE_INTENTS = frozenset({
+    "calendar_create", "calendar_show",
+    "list_add", "list_remove", "list_show",
+    "reminder_create", "reminder_list", "timer_create",
+    "note_create", "note_search",
+    "journal_create", "journal_prompt", "journal_streak",
+    "people_create", "people_relate", "people_search",
+    "music_play", "music_control", "music_volume", "music_setup", "set_volume",
+    "smart_home", "weather", "daily_briefing", "time_query", "date_query", "calculate",
+})
+
+
+class _IntentDispatchBody(BaseModel):
+    user_id: str
+    intent: str
+    slots: dict[str, Any] = {}
+
+
+@router.post("/intent-dispatch")
+async def intent_dispatch(body: _IntentDispatchBody, _: None = Depends(require_internal_token)):
+    """Run one allowlisted intent for a user via the existing fulfillment path.
+
+    Internal/service endpoint (loopback or X-Internal-Token) — how the zoe-core
+    Pi brain's tools execute capabilities, reusing intent_router.execute_intent
+    (the same dispatch the live chat path uses). Fails closed on unknown user or
+    non-allowlisted intent.
+    """
+    intent_name = (body.intent or "").strip()
+    user_id = (body.user_id or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id required")
+    if intent_name not in _DISPATCHABLE_INTENTS:
+        raise HTTPException(status_code=400, detail=f"intent not dispatchable: {intent_name}")
+    try:
+        from intent_router import Intent, execute_intent
+
+        result = await execute_intent(
+            Intent(name=intent_name, slots=dict(body.slots or {})), user_id=user_id
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("intent-dispatch failed intent=%s: %s", intent_name, exc)
+        raise HTTPException(status_code=500, detail="intent execution failed") from exc
+    return {"intent": intent_name, "ok": result is not None, "result": result or ""}
