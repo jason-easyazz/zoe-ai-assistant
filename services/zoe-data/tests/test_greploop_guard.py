@@ -2265,3 +2265,224 @@ async def test_assess_merge_readiness_blocks_actionable_findings(monkeypatch):
     assert out["ready"] is False
     assert out["unaddressed_count"] == 1
     assert "GREPTILE_ACTIONABLE_FINDINGS:1" in out["blockers"]
+
+
+# --- Local serial merge queue ------------------------------------------------
+
+
+def _mq_assessment(*, ready=False, behind=False, blockers=None):
+    blk = list(blockers or [])
+    gh = {}
+    if behind:
+        gh = {"ok": False, "reason": "GH_NOT_MERGEABLE", "mergeStateStatus": "BEHIND"}
+        if "GH_NOT_MERGEABLE" not in blk:
+            blk.append("GH_NOT_MERGEABLE")
+    return {"ready": ready, "blockers": blk, "gh": gh}
+
+
+@pytest.fixture
+def _mq_enabled(monkeypatch, tmp_path):
+    """Queue enabled with a guaranteed-absent kill file."""
+    monkeypatch.setenv("ZOE_MERGE_QUEUE_ENABLED", "1")
+    monkeypatch.setattr(greploop_guard, "MERGE_QUEUE_KILL_FILE", tmp_path / "absent.disabled")
+
+
+def test_blocked_only_behind_logic():
+    assert greploop_guard._blocked_only_behind(_mq_assessment(behind=True)) is True
+    # behind but a Greptile thread also blocks -> rebase would not help
+    assert (
+        greploop_guard._blocked_only_behind(
+            _mq_assessment(behind=True, blockers=["GREPTILE_UNRESOLVED_THREADS:1"])
+        )
+        is False
+    )
+    # not BEHIND (e.g. DIRTY/BLOCKED) -> not a rebase candidate
+    assert (
+        greploop_guard._blocked_only_behind({"gh": {"mergeStateStatus": "BLOCKED"}, "blockers": ["X"]})
+        is False
+    )
+    # BEHIND but no blocker recorded -> nothing to act on
+    assert (
+        greploop_guard._blocked_only_behind({"gh": {"mergeStateStatus": "BEHIND"}, "blockers": []})
+        is False
+    )
+
+
+async def test_queue_disabled_by_default(monkeypatch):
+    monkeypatch.delenv("ZOE_MERGE_QUEUE_ENABLED", raising=False)
+    listed = {"n": 0}
+    monkeypatch.setattr(
+        greploop_guard,
+        "_merge_queue_candidates",
+        lambda **k: listed.__setitem__("n", listed["n"] + 1) or [],
+    )
+    out = await greploop_guard.run_merge_queue()
+    assert out["action"] == "disabled"
+    assert listed["n"] == 0  # never even lists candidates when disabled
+
+
+async def test_queue_kill_file_disables(monkeypatch, tmp_path):
+    monkeypatch.setenv("ZOE_MERGE_QUEUE_ENABLED", "1")
+    kill = tmp_path / "merge_queue.disabled"
+    kill.write_text("stop")
+    monkeypatch.setattr(greploop_guard, "MERGE_QUEUE_KILL_FILE", kill)
+    out = await greploop_guard.run_merge_queue()
+    assert out["action"] == "disabled"
+
+
+async def test_queue_merges_ready_head_only(monkeypatch, _mq_enabled):
+    monkeypatch.setattr(
+        greploop_guard,
+        "_merge_queue_candidates",
+        lambda **k: [
+            {"number": 101, "branch": "a", "created_at": "1"},
+            {"number": 102, "branch": "b", "created_at": "2"},
+        ],
+    )
+    merged, rebased = [], []
+
+    async def fake_assess(pr, **k):
+        return _mq_assessment(ready=(pr == 101))
+
+    async def fake_merge(pr, **k):
+        merged.append(pr)
+        return {"ok": True, "state": "MERGED"}
+
+    monkeypatch.setattr(greploop_guard, "assess_merge_readiness", fake_assess)
+    monkeypatch.setattr(greploop_guard, "merge_pr_when_ready", fake_merge)
+    monkeypatch.setattr(
+        greploop_guard, "_rebase_pr_branch", lambda *a, **k: rebased.append(a) or {"ok": True}
+    )
+    out = await greploop_guard.run_merge_queue()
+    assert out["action"] == "merged" and out["pr"] == 101
+    assert merged == [101]  # head only, one merge per cycle
+    assert rebased == []
+
+
+async def test_queue_rebases_behind_head(monkeypatch, _mq_enabled):
+    monkeypatch.setattr(
+        greploop_guard,
+        "_merge_queue_candidates",
+        lambda **k: [{"number": 201, "branch": "feat/x", "created_at": "1"}],
+    )
+    merged, rebased = [], []
+
+    async def fake_assess(pr, **k):
+        return _mq_assessment(behind=True)
+
+    async def fake_merge(pr, **k):
+        merged.append(pr)
+        return {"ok": True}
+
+    monkeypatch.setattr(greploop_guard, "assess_merge_readiness", fake_assess)
+    monkeypatch.setattr(greploop_guard, "merge_pr_when_ready", fake_merge)
+    monkeypatch.setattr(
+        greploop_guard,
+        "_rebase_pr_branch",
+        lambda pr, branch, **k: rebased.append((pr, branch)) or {"ok": True, "branch": branch},
+    )
+    out = await greploop_guard.run_merge_queue()
+    assert out["action"] == "rebased" and out["pr"] == 201
+    assert rebased == [(201, "feat/x")]
+    assert merged == []  # a behind PR is never merged directly
+
+
+async def test_queue_skips_blocked_then_acts_on_next(monkeypatch, _mq_enabled):
+    monkeypatch.setattr(
+        greploop_guard,
+        "_merge_queue_candidates",
+        lambda **k: [
+            {"number": 301, "branch": "a", "created_at": "1"},
+            {"number": 302, "branch": "b", "created_at": "2"},
+        ],
+    )
+    merged = []
+
+    async def fake_assess(pr, **k):
+        if pr == 301:
+            return _mq_assessment(blockers=["GREPTILE_UNRESOLVED_THREADS:2"])
+        return _mq_assessment(ready=True)
+
+    async def fake_merge(pr, **k):
+        merged.append(pr)
+        return {"ok": True}
+
+    monkeypatch.setattr(greploop_guard, "assess_merge_readiness", fake_assess)
+    monkeypatch.setattr(greploop_guard, "merge_pr_when_ready", fake_merge)
+    monkeypatch.setattr(greploop_guard, "_rebase_pr_branch", lambda *a, **k: {"ok": True})
+    out = await greploop_guard.run_merge_queue()
+    assert out["action"] == "merged" and out["pr"] == 302
+    assert merged == [302]
+    assert any(s["pr"] == 301 for s in out["skipped"])
+
+
+async def test_queue_dry_run_no_mutation(monkeypatch):
+    monkeypatch.delenv("ZOE_MERGE_QUEUE_ENABLED", raising=False)  # dry-run ignores the gate
+    monkeypatch.setattr(
+        greploop_guard,
+        "_merge_queue_candidates",
+        lambda **k: [{"number": 401, "branch": "a", "created_at": "1"}],
+    )
+    calls = {"merge": 0, "rebase": 0}
+
+    async def fake_assess(pr, **k):
+        return _mq_assessment(ready=True)
+
+    async def fake_merge(pr, **k):
+        calls["merge"] += 1
+        return {"ok": True}
+
+    monkeypatch.setattr(greploop_guard, "assess_merge_readiness", fake_assess)
+    monkeypatch.setattr(greploop_guard, "merge_pr_when_ready", fake_merge)
+    monkeypatch.setattr(
+        greploop_guard,
+        "_rebase_pr_branch",
+        lambda *a, **k: calls.__setitem__("rebase", calls["rebase"] + 1) or {"ok": True},
+    )
+    out = await greploop_guard.run_merge_queue(dry_run=True)
+    assert out["action"] == "would_merge" and out["pr"] == 401
+    assert calls == {"merge": 0, "rebase": 0}  # no mutation in dry-run
+
+
+async def test_queue_dry_run_would_rebase(monkeypatch):
+    monkeypatch.delenv("ZOE_MERGE_QUEUE_ENABLED", raising=False)
+    monkeypatch.setattr(
+        greploop_guard,
+        "_merge_queue_candidates",
+        lambda **k: [{"number": 402, "branch": "feat/y", "created_at": "1"}],
+    )
+    calls = {"merge": 0, "rebase": 0}
+
+    async def fake_assess(pr, **k):
+        return _mq_assessment(behind=True)
+
+    async def fake_merge(pr, **k):
+        calls["merge"] += 1
+        return {"ok": True}
+
+    monkeypatch.setattr(greploop_guard, "assess_merge_readiness", fake_assess)
+    monkeypatch.setattr(greploop_guard, "merge_pr_when_ready", fake_merge)
+    monkeypatch.setattr(
+        greploop_guard,
+        "_rebase_pr_branch",
+        lambda *a, **k: calls.__setitem__("rebase", calls["rebase"] + 1) or {"ok": True},
+    )
+    out = await greploop_guard.run_merge_queue(dry_run=True)
+    assert out["action"] == "would_rebase" and out["pr"] == 402 and out["branch"] == "feat/y"
+    assert calls == {"merge": 0, "rebase": 0}
+
+
+async def test_queue_idle_when_no_candidates(monkeypatch, _mq_enabled):
+    monkeypatch.setattr(greploop_guard, "_merge_queue_candidates", lambda **k: [])
+    out = await greploop_guard.run_merge_queue()
+    assert out["action"] == "idle" and out["checked"] == 0
+
+
+def test_merge_command_never_admin_or_force():
+    # Guardrail against a future edit sneaking in an admin/force merge.
+    import inspect
+
+    src = inspect.getsource(greploop_guard.merge_pr_when_ready)
+    assert '"--squash"' in src
+    assert "--admin" not in src
+    assert "--force" not in src
