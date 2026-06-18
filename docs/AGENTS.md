@@ -16,6 +16,7 @@ All project documentation, organized by category. The root of the repository hol
 - New documentation goes in `docs/{category}/`, NEVER in the repository root.
 - The charter in `governance/` is normative: read it before large design changes; the enforceable subset is mirrored in `.cursorrules` and `.cursor/rules/`.
 - When in doubt about deleting a doc, move it to `archive/`.
+- `knowledge/` is an OKF knowledge bundle (markdown + YAML frontmatter, agent-curatable records — see root "Knowledge vs. Records (OKF)"). It holds descriptive facts, NOT contracts; binding rules stay in `AGENTS.md`.
 
 ## Work Guidance
 
@@ -28,3 +29,6 @@ Several loose top-level .md files predate the category structure; place new mate
 ## Child DOX Index
 
 No child AGENTS.md files yet.
+
+OKF knowledge bundles (records, not contracts — see root "Knowledge vs. Records (OKF)"):
+- [knowledge/](knowledge/index.md) — curated Zoe reference knowledge (tool stack, topology); agent-curatable.
