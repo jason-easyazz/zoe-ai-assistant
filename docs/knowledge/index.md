@@ -13,3 +13,7 @@ This is **knowledge / records** (descriptive facts), not a DOX contract. See the
 ## Concepts
 
 - [Zoe tool stack](zoe-tool-stack.md) — the installed agent tooling (graphify, opensrc, Multica, Pi, Hermes, OpenClaw, MemPalace, SkillSpector) and how the pieces relate.
+
+## Bundles
+
+- [Multica autopilot loop contracts](autopilots/index.md) — Loop-Engineering contracts (Job / Inputs / Allowed / Forbidden / Output / Evaluation) for the three live Multica autopilots.
