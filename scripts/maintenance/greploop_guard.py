@@ -63,6 +63,8 @@ def main() -> int:
         help="With --queue: decide but perform no mutation (safe to run while disabled)",
     )
     args = parser.parse_args()
+    if args.dry_run and not args.queue:
+        parser.error("--dry-run only applies to --queue")
 
     try:
         if args.queue:

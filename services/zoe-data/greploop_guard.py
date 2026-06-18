@@ -1514,23 +1514,24 @@ def _rebase_pr_branch(
     conflict, abort and report — conflicts are never resolved automatically.
     """
     if not branch:
-        return {"ok": False, "error": "NO_BRANCH"}
+        return {"ok": False, "pr": pr_number, "error": "NO_BRANCH"}
     fetch = _run_git(["fetch", "origin", default_branch, branch], check=False)
     if fetch.returncode != 0:
-        return {"ok": False, "error": "FETCH_FAILED", "detail": (fetch.stderr or "").strip()[:500]}
+        return {"ok": False, "pr": pr_number, "error": "FETCH_FAILED", "detail": (fetch.stderr or "").strip()[:500]}
     tmp = STATE_ROOT / f"mq-rebase-{branch.replace('/', '_')}"
     _run_git(["worktree", "remove", "--force", str(tmp)], check=False)
     add = _run_git(
         ["worktree", "add", "--force", "--detach", str(tmp), f"origin/{branch}"], check=False
     )
     if add.returncode != 0:
-        return {"ok": False, "error": "WORKTREE_FAILED", "detail": (add.stderr or "").strip()[:500]}
+        return {"ok": False, "pr": pr_number, "error": "WORKTREE_FAILED", "detail": (add.stderr or "").strip()[:500]}
     try:
         rebase = _run_git(["-C", str(tmp), "rebase", f"origin/{default_branch}"], check=False)
         if rebase.returncode != 0:
             _run_git(["-C", str(tmp), "rebase", "--abort"], check=False)
             return {
                 "ok": False,
+                "pr": pr_number,
                 "error": "REBASE_CONFLICT",
                 "detail": (rebase.stdout or rebase.stderr or "").strip()[:500],
             }
@@ -1539,8 +1540,8 @@ def _rebase_pr_branch(
             check=False,
         )
         if push.returncode != 0:
-            return {"ok": False, "error": "PUSH_FAILED", "detail": (push.stderr or "").strip()[:500]}
-        return {"ok": True, "branch": branch}
+            return {"ok": False, "pr": pr_number, "error": "PUSH_FAILED", "detail": (push.stderr or "").strip()[:500]}
+        return {"ok": True, "pr": pr_number, "branch": branch}
     finally:
         _run_git(["worktree", "remove", "--force", str(tmp)], check=False)
 

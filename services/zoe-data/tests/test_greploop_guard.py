@@ -2486,3 +2486,20 @@ def test_merge_command_never_admin_or_force():
     assert '"--squash"' in src
     assert "--admin" not in src
     assert "--force" not in src
+
+
+def test_cli_dry_run_requires_queue():
+    # --dry-run reads as a safety net, so it must HARD-ERROR without --queue
+    # (otherwise `--dry-run --merge-when-ready` would do a real merge). The guard
+    # fires before any network/gh, so this subprocess is fast and offline-safe.
+    import subprocess
+    import sys
+
+    cli = Path(__file__).resolve().parents[3] / "scripts" / "maintenance" / "greploop_guard.py"
+    proc = subprocess.run(
+        [sys.executable, str(cli), "--dry-run", "--merge-when-ready", "--pr", "1"],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode != 0
+    assert "--dry-run only applies to --queue" in (proc.stderr + proc.stdout)
