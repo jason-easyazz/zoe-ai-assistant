@@ -13,18 +13,22 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const ZOE_DATA_URL = process.env.ZOE_DATA_URL ?? "http://127.0.0.1:8000";
 const INTERNAL_TOKEN = process.env.ZOE_INTERNAL_TOKEN ?? "";
-// NOTE: resolved once per process. Fine for the current CLI-per-session model
-// (each `pi` invocation is a fresh process for one user). BEFORE promoting Pi to
-// a long-running/multi-session server, this MUST become per-turn/per-session —
-// otherwise every caller would receive family-admin's memories (a privacy bug).
-// Tracked as a cutover prerequisite.
-const USER_ID = process.env.ZOE_CORE_USER_ID ?? "family-admin";
 const TIMEOUT_MS = Number(process.env.ZOE_CORE_MEMORY_TIMEOUT_MS ?? 2000);
 
+// The acting user is resolved PER TURN (not baked at module load), with NO
+// default identity: if the user is unknown we inject NO memory packet rather
+// than leak a default user's memories. zoe-data drives one Pi session per
+// user-conversation and sets ZOE_CORE_USER_ID for that session.
+function currentUserId(): string {
+  return (process.env.ZOE_CORE_USER_ID ?? "").trim();
+}
+
 async function fetchMemoryPacket(message: string): Promise<string> {
+  const userId = currentUserId();
+  if (!userId) return ""; // fail closed: unknown user → inject no memory
   try {
     const url = new URL("/api/memories/for-prompt", ZOE_DATA_URL);
-    url.searchParams.set("user_id", USER_ID);
+    url.searchParams.set("user_id", userId);
     if (message) url.searchParams.set("message", message.slice(0, 500));
     const headers: Record<string, string> = { Accept: "application/json" };
     if (INTERNAL_TOKEN) headers["X-Internal-Token"] = INTERNAL_TOKEN;
