@@ -132,6 +132,18 @@ async def stub(monkeypatch):
         s.stop()
 
 
+def test_data_url_read_lazily_and_defaults_to_8011(monkeypatch):
+    """Not an integration test: guards the bootstrap-timing fix. The data URL
+    must be read at call time (so a .env value bootstrapped after import is
+    honored) and default to loopback :8011 (live zoe-data), never the old :8000."""
+    import zoe_core_client as zc
+    monkeypatch.delenv("ZOE_CORE_DATA_URL", raising=False)
+    monkeypatch.delenv("ZOE_DATA_URL", raising=False)
+    assert zc._data_url() == "http://127.0.0.1:8011"
+    monkeypatch.setenv("ZOE_CORE_DATA_URL", "http://127.0.0.1:9999")
+    assert zc._data_url() == "http://127.0.0.1:9999"
+
+
 @pytest.mark.integration
 @requires_env
 @pytest.mark.asyncio

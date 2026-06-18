@@ -27,6 +27,10 @@ _BOOTSTRAP_KEYS = frozenset({
     "MULTICA_WEBHOOK_SECRET",
     "POSTGRES_URL",
     "ZOE_INTERNAL_TOKEN",
+    # zoe-core brain: loopback URL it calls back for tools/delegation. Bootstrapped
+    # so a .env value lands in os.environ at startup and the brain (which reads it
+    # lazily) picks up the right port without a launch-procedure change.
+    "ZOE_CORE_DATA_URL",
 })
 
 
