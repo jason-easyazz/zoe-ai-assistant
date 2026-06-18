@@ -79,6 +79,15 @@ Trunk-based development off protected `main`. No permanent `develop` or `staging
   - Both detect **squash-merged** branches via `gh pr view` (not just git-ancestor merges) and never touch dirty, locked, unmerged, or the live checkout.
 - Manual prune still available: `scripts/maintenance/prune_worktrees.sh` (dry-run first, `--execute` after operator review).
 
+## Skill & extension safety
+
+Third-party skills and extensions run with the agent's privileges. Treat them as untrusted code.
+
+- Before installing any third-party skill, Pi/OpenClaw extension, or code-bearing MCP server into a Zoe agent runtime — and before promoting a self-authored skill from the lab to a live agent — scan it: `skillspector scan <dir|file|git-url>` (installed at `~/.local/bin/skillspector`).
+- The static stage needs no credentials but is deliberately conservative: it flags legitimately powerful, process-spawning extensions as HIGH/CRITICAL. Do not treat the raw static score as a verdict — use the optional LLM stage (`SKILLSPECTOR_PROVIDER=...`) plus human judgement for promotion decisions.
+- Do not egress internal Zoe skill content to an external LLM provider for scanning without operator consent; prefer static scans, or a local/NV provider, for internal skills.
+- Record the scan outcome (or a deliberate waiver) when adopting a new skill or extension.
+
 # DOX framework
 
 - DOX is highly performant AGENTS.md hierarchy installed here
@@ -88,6 +97,15 @@ Trunk-based development off protected `main`. No permanent `develop` or `staging
 
 - AGENTS.md files are binding work contracts for their subtrees
 - Work products, source materials, instructions, records, assets, and durable docs must stay understandable from the nearest applicable AGENTS.md plus every parent AGENTS.md above it
+
+## Knowledge vs. Records (OKF)
+
+DOX governs two kinds of document; do not conflate them.
+
+- **Contracts** — `AGENTS.md` files. Prescriptive, binding, prose. They change only through the deliberate DOX pass below — never by an autonomous loop.
+- **Records / knowledge** — curated facts, schemas, learned insights, and durable reference (e.g. the graphify wiki, memory exports, tool/topology notes). Write these as **Open Knowledge Format (OKF)** bundles: a directory of markdown files with YAML frontmatter (required `type`), an `index.md` per directory, and cross-links via relative markdown links.
+- Register every OKF bundle in the nearest owning AGENTS.md's Child DOX Index so the DOX walk discovers it. An OKF bundle stays inside DOX governance; it is not a parallel system.
+- The autonomous memory/knowledge loop may freely create, update, and lint OKF records. It must never edit an AGENTS.md contract — contract changes go through the DOX pass and human review.
 
 ## Read Before Editing
 
@@ -127,11 +145,13 @@ Update parent docs when parent-level structure, ownership, workflow, or child in
 - Create a child AGENTS.md when a folder becomes a durable boundary with its own purpose, rules, responsibilities, workflow, materials, or quality standards
 - Work Guidance must reflect the current standards of the project or user instructions; if there are no specific standards or instructions yet, leave it empty
 - Verification must reflect an existing check; if no verification framework exists yet, leave it empty and update it when one exists
+- A subtree that owns an autonomous loop or agent MUST state a Forbidden list (what the agent must never do, e.g. paths/actions out of scope). It is the most load-bearing part of the contract; omit it only when nothing is autonomous in the subtree
 
 Default section order:
 - Purpose
 - Ownership
 - Local Contracts
+- Forbidden
 - Work Guidance
 - Verification
 - Child DOX Index
