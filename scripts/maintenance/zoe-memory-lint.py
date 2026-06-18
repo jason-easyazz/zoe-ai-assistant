@@ -23,7 +23,7 @@ import json
 import pathlib
 import sys
 
-ZOE_DATA = pathlib.Path("/home/zoe/assistant/services/zoe-data")
+ZOE_DATA = pathlib.Path(__file__).resolve().parents[2] / "services" / "zoe-data"
 if str(ZOE_DATA) not in sys.path:
     sys.path.insert(0, str(ZOE_DATA))
 

@@ -410,16 +410,26 @@ def lint_memories(
     *,
     user_id: str = "",
     now: Optional[datetime.datetime] = None,
-    stale_age_days: float = STALE_AGE_DAYS_DEFAULT,
-    near_duplicate_ratio: float = NEAR_DUPLICATE_RATIO_DEFAULT,
+    stale_age_days: Optional[float] = None,
+    near_duplicate_ratio: Optional[float] = None,
 ) -> LintReport:
     """Pure, report-only lint over an iterable of memory rows.
 
     Accepts ``MemoryRef`` objects, anything with ``id``/``text``/``metadata``
     attributes, or plain ``{"id","text","metadata"}`` mappings. Returns a
     :class:`LintReport`. Never mutates the inputs or any store.
+
+    Tunables resolve from the environment at call time (consistent with
+    ``dreaming_lint_enabled``); the module-level ``*_DEFAULT`` constants are the
+    documented fallbacks.
     """
     now = now or datetime.datetime.utcnow()
+    if stale_age_days is None:
+        stale_age_days = float(os.environ.get("ZOE_MEMORY_LINT_STALE_DAYS", "365"))
+    if near_duplicate_ratio is None:
+        near_duplicate_ratio = float(
+            os.environ.get("ZOE_MEMORY_LINT_NEAR_DUP_RATIO", "0.92")
+        )
     rows = _coerce_rows(memories)
     return LintReport(
         user_id=user_id,
@@ -438,8 +448,8 @@ async def lint_user(
     user_id: str,
     *,
     service: Any = None,
-    stale_age_days: float = STALE_AGE_DAYS_DEFAULT,
-    near_duplicate_ratio: float = NEAR_DUPLICATE_RATIO_DEFAULT,
+    stale_age_days: Optional[float] = None,
+    near_duplicate_ratio: Optional[float] = None,
 ) -> LintReport:
     """Read every stored row for ``user_id`` and return a report-only LintReport.
 
@@ -474,11 +484,9 @@ async def lint_all(*, service: Any = None) -> list[LintReport]:
 
         service = get_memory_service()
 
-    try:
-        sizes = await service.collection_sizes_by_user()
-        user_ids = [uid for uid in sizes if uid and uid != "unknown"]
-    except Exception:
-        user_ids = []
+    # Let a real service failure surface (never mask it as "no users have memory").
+    sizes = await service.collection_sizes_by_user()
+    user_ids = [uid for uid in sizes if uid and uid != "unknown"]
 
     reports: list[LintReport] = []
     for uid in user_ids:
