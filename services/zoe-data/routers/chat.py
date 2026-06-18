@@ -319,6 +319,7 @@ from zoe_agent import (
     _mempalace_load_user_facts, _mempalace_add, _fire_memory_capture,
     _build_memory_context,
 )
+from zoe_core_client import run_zoe_core, run_zoe_core_streaming
 from auth import get_current_user
 from database import get_db
 from ui_orchestrator import enqueue_ui_action
@@ -468,6 +469,28 @@ _MEMORY_AUTO_INGEST = os.environ.get("MEMORY_AUTO_INGEST", "false").lower() == "
 _ZOE_AGENT_MODE    = os.environ.get("HERMES_FAST_PATH", "true").lower() != "true"
 _JETSON_AGENT_MODE = os.environ.get("JETSON_AGENT_MODE", "false").lower() == "true"
 _USE_ZOE_AGENT = _ZOE_AGENT_MODE or _JETSON_AGENT_MODE
+
+# Production cutover: the brain is now zoe-core (Pi full-agent on local Gemma).
+# Defaults ON. ZOE_USE_CORE_BRAIN=false falls back to the legacy zoe_agent brain
+# during the validation window (removed once every avenue is proven).
+_USE_ZOE_CORE = os.environ.get("ZOE_USE_CORE_BRAIN", "true").lower() == "true"
+# "Use a local brain" = either the new zoe-core (Pi) or the legacy zoe_agent.
+# When set, the local brain takes the slot that would otherwise fall to OpenClaw.
+_USE_LOCAL_BRAIN = _USE_ZOE_AGENT or _USE_ZOE_CORE
+
+
+def _brain_streaming(message, session_id, user_id="family-admin", **kwargs):
+    """Brain streaming dispatch — zoe-core (Pi) by default, legacy on fallback."""
+    if _USE_ZOE_CORE:
+        return run_zoe_core_streaming(message, session_id, user_id, **kwargs)
+    return run_zoe_agent_streaming(message, session_id, user_id, **kwargs)
+
+
+async def _brain_oneshot(message, session_id, user_id="family-admin", **kwargs):
+    """Brain non-streaming dispatch — zoe-core (Pi) by default, legacy on fallback."""
+    if _USE_ZOE_CORE:
+        return await run_zoe_core(message, session_id, user_id, **kwargs)
+    return await run_zoe_agent(message, session_id, user_id, **kwargs)
 _GUARDED_AUTO = (
     os.environ.get("OPENCLAW_GUARDED_AUTO", "true").lower() == "true"
     and not _USE_ZOE_AGENT
@@ -2152,7 +2175,7 @@ async def chat_stream_generator(
                 # Delegation intents go through Hermes/Multica by default.
                 # OpenClaw is only used for explicit /openclaw or force_agent=openclaw requests.
                 _force_openclaw_here = force_openclaw
-                if _USE_ZOE_AGENT and not _force_openclaw_here:
+                if _USE_LOCAL_BRAIN and not _force_openclaw_here:
                     yield emit(
                         StateSnapshotEvent(
                             type=EventType.STATE_SNAPSHOT,
@@ -2165,7 +2188,7 @@ async def chat_stream_generator(
                         )
                     )
                     task = asyncio.create_task(
-                        run_zoe_agent(message_for_processing, session_id, user_id)
+                        _brain_oneshot(message_for_processing, session_id, user_id)
                     )
                     async for hb in _iter_openclaw_heartbeats(emit, task, phase_label="Zoe Agent"):
                         yield hb
@@ -2225,7 +2248,7 @@ async def chat_stream_generator(
                     yield line
         else:
             logger.info("intent_outcome=no_match fast_path=%s", bool(use_intent_fast_path))
-            if _USE_ZOE_AGENT:
+            if _USE_LOCAL_BRAIN:
                 # ── Zoe Agent: Gemma 4 E2B with MemPalace + tools — true SSE streaming ──
                 tier_label = "Jetson" if _JETSON_AGENT_MODE else "Pi"
                 yield emit(
@@ -2288,7 +2311,7 @@ async def chat_stream_generator(
                         f"[Intent hint: {_tier05_hint.name}, confidence {_tier05_hint.confidence:.2f}, "
                         f"slots {_tier05_hint.slots}] "
                     ) + expanded_msg
-                async for chunk in run_zoe_agent_streaming(
+                async for chunk in _brain_streaming(
                     expanded_msg,
                     session_id,
                     user_id,
@@ -3204,11 +3227,11 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
                 _build_memory_context(message_for_processing, user_id=user_id),
             )
             ns_full_mem = "\n\n".join(filter(None, [ns_portrait, ns_db_memory, ns_semantic]))
-            if _USE_ZOE_AGENT:
+            if _USE_LOCAL_BRAIN:
                 # Use original (pre-suffix) message for agent so fast-path checks work
                 _agent_msg = _original_message_for_agent if is_voice_mode else message_for_processing
                 expanded_msg = openclaw_user_message(intent, _agent_msg) if intent else _agent_msg
-                response_text = await run_zoe_agent(
+                response_text = await _brain_oneshot(
                     expanded_msg, session_id, user_id,
                     portrait=ns_portrait,
                     db_memory_context=None,

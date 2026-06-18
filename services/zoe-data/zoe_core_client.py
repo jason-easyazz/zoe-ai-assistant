@@ -267,6 +267,7 @@ async def run_zoe_core(
     history: list[dict] | None = None,
     db_memory_context: str | None = None,
     portrait: str | None = None,
+    max_tokens_override: int = 0,  # accepted for run_zoe_agent compatibility; honored in Phase 4
     voice_mode: bool = False,
 ) -> str:
     """Non-streaming brain turn — collects the stream into one string."""
