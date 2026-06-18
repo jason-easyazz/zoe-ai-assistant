@@ -1448,8 +1448,12 @@ def _merge_queue_enabled() -> bool:
     return enabled and not MERGE_QUEUE_KILL_FILE.exists()
 
 
-def _merge_queue_candidates(*, repo: str = DEFAULT_REPO) -> list[dict[str, Any]]:
-    """Open, non-draft PRs carrying the queue label, oldest-first (FIFO)."""
+def _merge_queue_candidates(*, repo: str = DEFAULT_REPO) -> list[dict[str, Any]] | None:
+    """Open, non-draft PRs carrying the queue label, oldest-first (FIFO).
+
+    Returns ``None`` (not ``[]``) when the ``gh pr list`` call fails, so a broken
+    gh (auth/rate-limit/network) is never mistaken for an empty queue.
+    """
     proc = _run_gh(
         [
             "pr",
@@ -1466,11 +1470,11 @@ def _merge_queue_candidates(*, repo: str = DEFAULT_REPO) -> list[dict[str, Any]]
         repo=repo,
     )
     if proc.returncode != 0:
-        return []
+        return None  # signal failure — never conflate a broken gh with "no PRs"
     try:
         rows = json.loads(proc.stdout or "[]")
     except json.JSONDecodeError:
-        return []
+        return None
     candidates = [
         {
             "number": int(row.get("number")),
@@ -1567,6 +1571,12 @@ async def run_merge_queue(
             "detail": "set ZOE_MERGE_QUEUE_ENABLED=1 and remove the kill file to enable",
         }
     candidates = _merge_queue_candidates(repo=repo)
+    if candidates is None:
+        return {
+            "ok": False,
+            "action": "list_failed",
+            "detail": "gh pr list failed (auth/rate-limit/network); not treating as idle",
+        }
     if not candidates:
         return {"ok": True, "action": "idle", "checked": 0, "skipped": []}
     skipped: list[dict[str, Any]] = []

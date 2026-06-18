@@ -2503,3 +2503,31 @@ def test_cli_dry_run_requires_queue():
     )
     assert proc.returncode != 0
     assert "--dry-run only applies to --queue" in (proc.stderr + proc.stdout)
+
+
+def test_candidates_none_on_gh_failure(monkeypatch):
+    # A broken gh must NOT look like an empty queue: return None, not [].
+    def fail_gh(args, **k):
+        return subprocess.CompletedProcess(args=args, returncode=1, stdout="", stderr="bad token")
+
+    monkeypatch.setattr(greploop_guard, "_run_gh", fail_gh)
+    assert greploop_guard._merge_queue_candidates() is None
+
+    def bad_json_gh(args, **k):
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="not json", stderr="")
+
+    monkeypatch.setattr(greploop_guard, "_run_gh", bad_json_gh)
+    assert greploop_guard._merge_queue_candidates() is None
+
+    def ok_gh(args, **k):
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="[]", stderr="")
+
+    monkeypatch.setattr(greploop_guard, "_run_gh", ok_gh)
+    assert greploop_guard._merge_queue_candidates() == []  # genuinely empty, not failure
+
+
+async def test_queue_reports_list_failure(monkeypatch, _mq_enabled):
+    # gh failure surfaces as a non-ok result so a scheduler sees the error.
+    monkeypatch.setattr(greploop_guard, "_merge_queue_candidates", lambda **k: None)
+    out = await greploop_guard.run_merge_queue()
+    assert out["ok"] is False and out["action"] == "list_failed"
