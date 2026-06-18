@@ -320,15 +320,18 @@ def openclaw_user_message(intent: Optional[Intent], user_text: str) -> str:
 
 _TIME_QUERY_RE = re.compile(
     r"^(what'?s?\s+the\s+time|what\s+time\s+is\s+it(\s+(right\s+now|now))?"
-    r"|tell\s+me\s+the\s+time|current\s+time|time\s+now|time\s+please|what\s+time\s+is\s+it)\??$",
+    r"|tell\s+me\s+the\s+time|current\s+time|time\s+now|time\s+please|what\s+time\s+is\s+it"
+    r"|do\s+you\s+have\s+the\s+time|(?:can\s+you\s+)?give\s+me\s+the\s+time"
+    r"|what\s+hour\s+is\s+it)\??$",
     re.IGNORECASE,
 )
 
 _DATE_QUERY_RE = re.compile(
     r"^(what'?s?\s+today'?s?\s+date|what\s+(is\s+)?the\s+date(\s+today)?"
-    r"|what\s+day\s+(is\s+it|of\s+the\s+week(\s+is\s+it)?)|today'?s?\s+date"
+    r"|what\s+day\s+(is\s+it(\s+today)?|of\s+the\s+week(\s+is\s+it)?)|today'?s?\s+date"
     r"|what\s+year\s+is\s+it(\s+now)?|what\s+month\s+is\s+it(\s+now)?"
-    r"|day\s+of\s+the\s+week|what'?s?\s+the\s+date(\s+today)?)\??$",
+    r"|day\s+of\s+the\s+week|what'?s?\s+the\s+date(\s+today)?"
+    r"|(?:show\s+me|tell\s+me)\s+(?:the\s+|today'?s?\s+)?date|what'?s?\s+today)\??$",
     re.IGNORECASE,
 )
 
@@ -472,12 +475,35 @@ _LETS_TALK_RE = re.compile(
 # Placed after lets_talk so "let's chat" doesn't become a greeting.
 # good_morning/good_evening are kept as separate intents for the daily-briefing flow.
 _GREETING_RE = re.compile(
-    r"^(?:hello|hi|hey|howdy|heya|greetings|yo)(?:\s+(?:there|zoe|there\s+zoe))?\s*[!.,]?\s*$"
-    r"|^(?:hello|hi|hey|howdy|heya|yo)(?:\s+(?:there|zoe|there\s+zoe))?\s+how\s+are\s+you(?:\s+today)?\s*[!.,?]?\s*$"
+    r"^(?:hello|hi|hey|howdy|heya|hiya|greetings|yo|g'?day)(?:\s+(?:there|zoe|there\s+zoe))?\s*[!.,]?\s*$"
+    r"|^(?:hello|hi|hey|howdy|heya|hiya|yo)(?:\s+(?:there|zoe|there\s+zoe))?\s+how\s+are\s+you(?:\s+today)?\s*[!.,?]?\s*$"
     r"|^sup(?:\s+zoe)?\s*\??$"
     r"|^what'?s\s+up(?:\s+zoe)?\s*\??\s*$"
     r"|^how\s+are\s+you(?:\s+today)?(?:\s+zoe)?\s*\??\s*$"
+    r"|^how'?s\s+it\s+going(?:\s+zoe)?\s*\??\s*$"
     r"|^good\s+(?:afternoon|night)(?:\s+zoe)?\s*[!.,]?\s*$",
+    re.IGNORECASE,
+)
+
+# Social acknowledgements ("thanks", "got it") and presence checks ("are you
+# there?") — instant canned replies so they never wake the ~2-4s brain. All
+# anchored ^...$ so they can't swallow a real request ("okay add milk" won't match).
+_THANKS_RE = re.compile(
+    r"^(?:thanks?|thank\s+you|thank\s+u|thx|ty|cheers|much\s+appreciated)"
+    r"(?:\s+(?:so\s+much|a\s+lot|very\s+much|heaps))?(?:\s+zoe)?\s*[!.,]*$",
+    re.IGNORECASE,
+)
+_ACK_RE = re.compile(
+    r"^(?:got\s+it|gotcha|understood|makes\s+sense|good\s+to\s+know|noted|fair\s+enough)\s*[!.,]*$"
+    r"|^(?:ok|okay|okey|k|alright|cool|nice|great|perfect|awesome|lovely|sweet|sounds\s+good)\s*[!.,]*$"
+    r"|^(?:no\s+(?:problem|worries)|all\s+good)\s*[!.,]*$",
+    re.IGNORECASE,
+)
+_STATUS_CHECK_RE = re.compile(
+    r"^(?:are\s+you\s+|you\s+)?(?:there|listening|awake|around|still\s+(?:there|listening|awake|with\s+me))\s*\??$"
+    r"|^(?:can\s+you\s+)?hear\s+me(?:\s+(?:ok|okay|now))?\s*\??$"
+    r"|^(?:are\s+you\s+)?(?:still\s+)?(?:working|online|up|ready)\s*\??$"
+    r"|^zoe\s*\??$",
     re.IGNORECASE,
 )
 
@@ -655,6 +681,14 @@ def detect_intent(
 
     if re.match(r"^ping\.?$", t):
         return Intent("greeting", {})
+
+    # Social acknowledgements & presence checks — instant, no brain.
+    if _THANKS_RE.match(t):
+        return Intent("acknowledgement", {"kind": "thanks"})
+    if _ACK_RE.match(t):
+        return Intent("acknowledgement", {"kind": "ack"})
+    if _STATUS_CHECK_RE.match(t):
+        return Intent("status_check", {})
 
     if re.match(r"^what lists do i have\??$", t):
         return Intent("list_show", {})
@@ -1982,6 +2016,17 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
         now = datetime.now()
         spoken_day = _spoken_day_ordinal(now.day)
         return f"Today is {now.strftime('%A')}, {now.strftime('%B')} {spoken_day}."
+
+    # Social acknowledgements & presence checks — instant canned replies (no LLM).
+    if intent.name == "acknowledgement":
+        import random
+        if intent.slots.get("kind") == "thanks":
+            return random.choice(["You're welcome!", "Anytime.", "Happy to help.", "No worries."])
+        return random.choice(["Got it.", "Sure thing.", "Okay.", "No problem."])
+
+    if intent.name == "status_check":
+        import random
+        return random.choice(["I'm here.", "Still here.", "Listening.", "Ready when you are."])
 
     if intent.name == "time_planning_clarification":
         if intent.slots.get("kind") == "time_math":
