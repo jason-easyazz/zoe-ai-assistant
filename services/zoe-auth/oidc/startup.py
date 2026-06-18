@@ -46,3 +46,20 @@ def bootstrap_oidc() -> None:
         logger.info(f"OIDC client seeded: {multica_client_id}")
     else:
         logger.warning("MULTICA_OIDC_CLIENT_SECRET not set — Multica OIDC client not seeded")
+
+    omnigent_secret = os.getenv("OMNIGENT_OIDC_CLIENT_SECRET", "")
+    omnigent_client_id = os.getenv("OMNIGENT_OIDC_CLIENT_ID", "omnigent")
+    if omnigent_secret:
+        upsert_client(
+            client_id=omnigent_client_id,
+            client_name="Omnigent",
+            secret=omnigent_secret,
+            redirect_uris=[
+                f"{base_url}:6767/auth/callback",
+                "http://zoe.local:6767/auth/callback",
+                "http://192.168.1.218:6767/auth/callback",
+            ],
+        )
+        logger.info(f"OIDC client seeded: {omnigent_client_id}")
+    else:
+        logger.warning("OMNIGENT_OIDC_CLIENT_SECRET not set — Omnigent OIDC client not seeded")
