@@ -375,6 +375,10 @@ async def test_zoe_agent_hermes_escalation_stays_in_parent_agui_run(monkeypatch)
     monkeypatch.setattr(chat_router, "_GUARDED_AUTO", False)
     monkeypatch.setattr(chat_router, "_ALL_TOOLS_ENABLED", False)
     monkeypatch.setattr(chat_router, "_USE_ZOE_AGENT", True)
+    # This test validates the legacy zoe_agent Hermes-escalation contract, so pin
+    # the brain to zoe_agent: the cutover routes to zoe-core by default, which has
+    # no Hermes-escalation signal yet (delegation abilities tracked separately).
+    monkeypatch.setattr(chat_router, "_USE_ZOE_CORE", False)
     monkeypatch.setattr(chat_router, "classify_query", lambda *_: "general")
     monkeypatch.setattr(chat_router, "_mempalace_load_user_facts", fake_empty)
     monkeypatch.setattr(chat_router, "_safe_load_portrait", fake_empty)
