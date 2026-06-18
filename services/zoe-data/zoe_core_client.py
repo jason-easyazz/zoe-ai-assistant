@@ -57,6 +57,11 @@ _PROVIDER = os.environ.get("ZOE_CORE_PROVIDER", "local-gemma")
 _MODEL = os.environ.get("ZOE_CORE_MODEL_ID", "gemma-4-E2B-it-Q4_K_M.gguf")
 _DATA_URL = os.environ.get("ZOE_CORE_DATA_URL") or os.environ.get("ZOE_DATA_URL", "http://127.0.0.1:8000")
 _TIMEOUT_S = float(os.environ.get("ZOE_CORE_TIMEOUT_S", "180"))
+# Safety valve: once an answer has streamed and a turn has ended, if no further
+# event arrives within this idle window we assume the loop is done even if
+# agent_end was never emitted (Pi crash / lost event / older build) — bounding
+# the worst case to ~idle seconds instead of the full _TIMEOUT_S hang.
+_IDLE_TIMEOUT_S = float(os.environ.get("ZOE_CORE_IDLE_TIMEOUT_S", "20"))
 _MAX_WORKERS = int(os.environ.get("ZOE_CORE_MAX_WORKERS", "4"))
 
 
@@ -145,14 +150,24 @@ class _ZoeCoreWorker:
 
     async def _read_turn(self, request_id: str, timeout_s: float) -> AsyncIterator[str]:
         assert self.proc and self.proc.stdout
-        emitted = ""
+        emitted = ""           # text already streamed for the CURRENT message
+        streamed_any = False   # whether we've yielded anything this whole turn
+        saw_turn_end = False   # at least one turn has completed
         prompt_accepted = False
         deadline = time.monotonic() + timeout_s
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise asyncio.TimeoutError("zoe-core turn timed out")
-            line = await asyncio.wait_for(self.proc.stdout.readline(), timeout=remaining)
+            # Once we have an answer and a completed turn, bound each read to the
+            # idle window: if agent_end never comes, return rather than hang.
+            read_timeout = min(remaining, _IDLE_TIMEOUT_S) if (streamed_any and saw_turn_end) else remaining
+            try:
+                line = await asyncio.wait_for(self.proc.stdout.readline(), timeout=read_timeout)
+            except asyncio.TimeoutError:
+                if streamed_any and saw_turn_end:
+                    return  # answer delivered + a turn ended; agent_end presumed lost
+                raise
             if not line:
                 raise RuntimeError("zoe-core Pi RPC process closed")
             try:
@@ -166,15 +181,32 @@ class _ZoeCoreWorker:
                 continue
             if not prompt_accepted or not _rpc_event_matches_request(event, request_id):
                 continue
+            etype = event.get("type")
+            # A new assistant message resets the per-message delta tracker. The
+            # agent loop can span multiple messages/turns (e.g. a tool-call turn
+            # followed by the answer turn); deltas are cumulative WITHIN a message.
+            if etype == "message_start":
+                emitted = ""
             text = _assistant_text_from_rpc_event(event)
             if text and text.startswith(emitted) and len(text) > len(emitted):
                 yield text[len(emitted):]
                 emitted = text
+                streamed_any = True
             elif text and not text.startswith(emitted):
-                # Non-monotonic (rare): emit the whole fresh text.
+                # Message boundary / non-monotonic update — emit the fresh text.
                 yield text
                 emitted = text
-            if event.get("type") in ("turn_end", "agent_end"):
+                streamed_any = True
+            if etype == "turn_end":
+                saw_turn_end = True
+            # Only the END OF THE WHOLE AGENT LOOP terminates the turn. A bare
+            # turn_end fires after each tool-call turn too — returning there would
+            # cut off before the model synthesizes its answer from the tool result.
+            if etype == "agent_end":
+                if not streamed_any:
+                    final = _assistant_text_from_rpc_event(event)
+                    if final:
+                        yield final
                 return
 
 
