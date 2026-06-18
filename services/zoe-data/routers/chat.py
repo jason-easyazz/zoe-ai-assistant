@@ -479,15 +479,23 @@ _USE_ZOE_CORE = os.environ.get("ZOE_USE_CORE_BRAIN", "true").lower() == "true"
 _USE_LOCAL_BRAIN = _USE_ZOE_AGENT or _USE_ZOE_CORE
 
 
-def _brain_streaming(message, session_id, user_id="family-admin", **kwargs):
-    """Brain streaming dispatch — zoe-core (Pi) by default, legacy on fallback."""
+def _brain_streaming(message, session_id, user_id="", **kwargs):
+    """Brain streaming dispatch — zoe-core (Pi) by default, legacy on fallback.
+
+    user_id defaults to "" (not a real identity) to preserve the fail-closed
+    multi-user guarantee (#692): an omitted user must never inherit another
+    user's identity/memory. All call sites pass it explicitly.
+    """
     if _USE_ZOE_CORE:
         return run_zoe_core_streaming(message, session_id, user_id, **kwargs)
     return run_zoe_agent_streaming(message, session_id, user_id, **kwargs)
 
 
-async def _brain_oneshot(message, session_id, user_id="family-admin", **kwargs):
-    """Brain non-streaming dispatch — zoe-core (Pi) by default, legacy on fallback."""
+async def _brain_oneshot(message, session_id, user_id="", **kwargs):
+    """Brain non-streaming dispatch — zoe-core (Pi) by default, legacy on fallback.
+
+    See _brain_streaming on the fail-closed user_id default.
+    """
     if _USE_ZOE_CORE:
         return await run_zoe_core(message, session_id, user_id, **kwargs)
     return await run_zoe_agent(message, session_id, user_id, **kwargs)
