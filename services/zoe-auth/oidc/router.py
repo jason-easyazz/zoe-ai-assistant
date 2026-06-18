@@ -187,6 +187,11 @@ async def authorize(
 # client (Omnigent, Home Assistant, Multica). The main app uses header-based
 # (X-Session-ID) sessions, which a browser redirect to /authorize can't carry,
 # so the consent flow needs its own cookie-setting login.
+#
+# Test coverage: tests/test_oidc_login.py exercises _login_page_html escaping, the
+# GET page (expired-state->400, valid form, error allow-list) and the POST submit
+# (expired state, bad credentials, unknown user, SETUP_REQUIRED hash, success ->
+# zoe_session cookie + resume to authorize/complete).
 # ---------------------------------------------------------------------------
 
 def _login_page_html(oidc_state_id: str, error: str = "") -> str:
