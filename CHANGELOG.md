@@ -140,3 +140,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [0.1.0]: https://github.com/YOUR-USERNAME/zoe-ai-assistant/releases/tag/v0.1.0
 [0.0.1]: https://github.com/YOUR-USERNAME/zoe-ai-assistant/releases/tag/v0.0.1
+
+- chore: local merge-queue live verification (2026-06-19) — throwaway PR processed end-to-end by `greploop_guard.py --queue`.
