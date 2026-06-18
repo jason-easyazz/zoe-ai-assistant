@@ -55,7 +55,6 @@ _EXTENSIONS = [
 _PI_COMMAND = os.environ.get("ZOE_CORE_PI_COMMAND", "pi")
 _PROVIDER = os.environ.get("ZOE_CORE_PROVIDER", "local-gemma")
 _MODEL = os.environ.get("ZOE_CORE_MODEL_ID", "gemma-4-E2B-it-Q4_K_M.gguf")
-_DATA_URL = os.environ.get("ZOE_CORE_DATA_URL") or os.environ.get("ZOE_DATA_URL", "http://127.0.0.1:8000")
 _TIMEOUT_S = float(os.environ.get("ZOE_CORE_TIMEOUT_S", "180"))
 # Safety valve: once an answer has streamed and a turn has ended, if no further
 # event arrives within this idle window we assume the loop is done even if
@@ -76,11 +75,27 @@ def _rpc_command() -> list[str]:
     return cmd
 
 
+def _data_url() -> str:
+    """zoe-data base URL the brain calls back for tools/delegation.
+
+    Read lazily (NOT at import): bootstrap_runtime_env() populates os.environ in
+    the lifespan startup, which runs AFTER this module is imported — a
+    module-level constant would miss a .env-provided ZOE_CORE_DATA_URL and fall
+    back to the wrong port. Default is loopback :8011 (the live zoe-data port),
+    not the legacy :8000.
+    """
+    return (
+        os.environ.get("ZOE_CORE_DATA_URL")
+        or os.environ.get("ZOE_DATA_URL")
+        or "http://127.0.0.1:8011"
+    )
+
+
 def _worker_env(user_id: str) -> dict[str, str]:
     """Env for a worker. ZOE_CORE_USER_ID is baked per worker (fail-closed:
     a guest/empty user means the memory extension fetches nothing)."""
     env = _pi_subprocess_env(os.environ)
-    env["ZOE_DATA_URL"] = _DATA_URL
+    env["ZOE_DATA_URL"] = _data_url()
     env["ZOE_CORE_SOUL_PATH"] = str(_SOUL_PATH)
     # Only known users get an identity; unknown -> empty (memory fails closed).
     env["ZOE_CORE_USER_ID"] = (user_id or "").strip()
