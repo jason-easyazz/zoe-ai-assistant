@@ -65,7 +65,13 @@ def _stub():
     return srv
 
 
-def _run_once(prompt: str, url: str) -> float:
+def _run_once(prompt: str, url: str) -> float | None:
+    """Time one pi turn. Returns elapsed seconds, or None if the run failed.
+
+    A non-zero exit (extension load error, model crash, OOM) is NOT a valid
+    latency sample — a sub-second crash would otherwise deflate p50/min — so we
+    drop it instead of recording its duration.
+    """
     env = {**os.environ, "ZOE_DATA_URL": url, "ZOE_CORE_USER_ID": "family-admin",
            "ZOE_INTERNAL_TOKEN": "test", "ZOE_CORE_SOUL_PATH": str(_SOUL), "ZOE_CORE_ALLOW_WRITES": "true"}
     cmd = ["pi", "-p", "--provider", "local-gemma", "--model", _MODEL]
@@ -74,8 +80,12 @@ def _run_once(prompt: str, url: str) -> float:
     cmd += ["--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes",
             "--no-context-files", "--no-session", "--thinking", "off", prompt]
     t0 = time.monotonic()
-    subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=180)
-    return time.monotonic() - t0
+    p = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=180)
+    elapsed = time.monotonic() - t0
+    if p.returncode != 0:
+        print(f"  ! pi exited {p.returncode} on {prompt!r}: {(p.stderr or '').strip()[:140]}", file=sys.stderr)
+        return None
+    return elapsed
 
 
 def main() -> int:
@@ -88,10 +98,15 @@ def main() -> int:
     results = {}
     try:
         for name, prompt in _TASKS.items():
-            samples = [_run_once(prompt, url) for _ in range(_REPEATS)]
+            raw = [_run_once(prompt, url) for _ in range(_REPEATS)]
+            samples = [s for s in raw if s is not None]
+            failures = len(raw) - len(samples)
+            if not samples:
+                results[name] = {"p50_s": None, "min_s": None, "max_s": None, "n": 0, "failures": failures}
+                continue
             results[name] = {"p50_s": round(statistics.median(samples), 2),
                              "min_s": round(min(samples), 2), "max_s": round(max(samples), 2),
-                             "n": len(samples)}
+                             "n": len(samples), "failures": failures}
     finally:
         srv.shutdown()
     if as_json:
@@ -99,7 +114,11 @@ def main() -> int:
     else:
         print(f"Pi-brain latency ({_MODEL}, {_REPEATS} runs/task):")
         for name, r in results.items():
-            print(f"  {name:14s} p50={r['p50_s']:5.2f}s  ({r['min_s']:.2f}–{r['max_s']:.2f}s)")
+            if r["n"] == 0:
+                print(f"  {name:14s} ALL {r['failures']} run(s) FAILED — no valid sample")
+                continue
+            fail = f"  [{r['failures']} failed, excluded]" if r.get("failures") else ""
+            print(f"  {name:14s} p50={r['p50_s']:5.2f}s  ({r['min_s']:.2f}–{r['max_s']:.2f}s){fail}")
         print("\nTODO (owner-coordinated): zoe_agent head-to-head via the live zoe-data chat path.")
     return 0
 

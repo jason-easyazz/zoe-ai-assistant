@@ -60,7 +60,11 @@ def _skip_reason() -> str | None:
     return None
 
 
-requires_env = pytest.mark.skipif(_skip_reason() is not None, reason=_skip_reason() or "")
+# Evaluate once: a second call would re-walk the filesystem and re-probe the
+# model server (a 4s HTTP call), and could observe a different state than the
+# skipif condition. Cache the single observation for both condition and reason.
+_SKIP_REASON = _skip_reason()
+requires_env = pytest.mark.skipif(_SKIP_REASON is not None, reason=_SKIP_REASON or "")
 
 
 class _Stub:
