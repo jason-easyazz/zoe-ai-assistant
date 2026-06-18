@@ -41,6 +41,24 @@ GREPTILE_REPO_ACTIVE_REVIEW_STALE_SECONDS = int(
         str(max(GREPTILE_WAIT_TIMEOUT_SECONDS, GREPTILE_WAIT_POLL_SECONDS * 2)),
     )
 )
+# P1: do not (re)trigger a review until the PR head SHA has been unchanged for this
+# many seconds, so reviews are not restarted faster than the head settles.
+HEAD_STABILITY_WINDOW_SECONDS = int(os.environ.get("ZOE_PR_GUARD_HEAD_STABILITY_SECONDS", "90"))
+# P2c: bound how many times the guard re-triggers a clean-but-sub-confidence review
+# for the same head before escalating to Hermes instead of looping forever.
+NO_FINDINGS_RETRIGGER_LIMIT = int(os.environ.get("ZOE_PR_GUARD_NO_FINDINGS_RETRIGGER_LIMIT", "3"))
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off", ""}
+
+
+# P2c: when the Greptile check has SUCCEEDED with zero unresolved/actionable threads,
+# treat the PR as mergeable even if the summary confidence is below target.
+CLEAN_MERGE_IGNORES_CONFIDENCE = _env_flag("ZOE_PR_GUARD_CLEAN_MERGE_IGNORES_CONFIDENCE", True)
 
 # Cheap-model repair packets must never merge or bypass hooks; use merge_pr_when_ready().
 FORBIDDEN_ACTIONS = [
@@ -192,6 +210,56 @@ def read_observed_guard_state(pr_number: int, *, repo: str = DEFAULT_REPO) -> di
             state["historical_terminal_state"] = state.get("terminal_state")
             state["terminal_state"] = "GITHUB_GREPTILE_COMPLETE"
     return state
+
+
+def finalize_merged_guard_state(
+    *, repo: str = DEFAULT_REPO, pr_numbers: list[int] | None = None
+) -> dict[str, Any]:
+    """P3: mark guard state for already merged/closed PRs as finalized.
+
+    Stale ``WAITING_GREPTILE`` state for PRs that merged out-of-band (e.g. via the
+    GitHub UI) pollutes capacity and backlog scans. This sweep finalizes only PRs that
+    GitHub reports as MERGED or CLOSED; it never clears or mutates mid-flight (open)
+    PR state, so in-progress reviews are left untouched.
+    """
+    finalized: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    if pr_numbers is None:
+        if not STATE_ROOT.exists():
+            return {"finalized": finalized, "skipped": skipped}
+        candidates: list[int] = []
+        for status_path in STATE_ROOT.glob("pr-*/status.json"):
+            try:
+                candidates.append(int(status_path.parent.name.removeprefix("pr-")))
+            except ValueError:
+                continue
+    else:
+        candidates = [int(pr) for pr in pr_numbers]
+    for pr in sorted(set(candidates)):
+        state = read_guard_state(pr)
+        if state.get("state") in ("MISSING", "STALE_READ_RETRY"):
+            skipped.append({"pr": pr, "reason": "no_local_state"})
+            continue
+        if state.get("finalized"):
+            skipped.append({"pr": pr, "reason": "already_finalized"})
+            continue
+        observation = _gh_pr_observation(pr, repo=repo)
+        if not observation.get("ok"):
+            skipped.append({"pr": pr, "reason": "observation_failed"})
+            continue
+        gh_state = str(observation.get("state") or "").upper()
+        if gh_state not in ("MERGED", "CLOSED"):
+            # CRITICAL: never finalize an open / mid-flight PR.
+            skipped.append({"pr": pr, "reason": "still_open", "state": gh_state})
+            continue
+        state["finalized"] = True
+        state["finalized_at"] = time.time()
+        state["historical_terminal_state"] = state.get("terminal_state")
+        state["terminal_state"] = "MERGED" if gh_state == "MERGED" else "CLOSED"
+        _clear_greptile_wait_state(state)
+        _write_json(pr, "status.json", state)
+        finalized.append({"pr": pr, "state": state["terminal_state"]})
+    return {"finalized": finalized, "skipped": skipped}
 
 
 def _append_progress(pr_number: int, line: str) -> None:
@@ -647,20 +715,66 @@ def _repo_waiting_greptile_prs(*, exclude_pr_number: int, now: float) -> list[di
     return sorted(active, key=lambda item: int(item["pr"]))
 
 
-def _repo_greptile_capacity_skip(*, pr_number: int, now: float) -> dict[str, Any] | None:
+def _gh_open_prs_with_running_greptile(*, repo: str = DEFAULT_REPO) -> set[int] | None:
+    """Return open PR numbers whose GitHub "Greptile Review" check is IN_PROGRESS.
+
+    This is the authoritative source of in-flight reviews: it sees reviews started by
+    the GitHub Greptile app (auto-on-push), raw MCP triggers, and PRs that have no
+    local guard state dir. Returns ``None`` when the GitHub query fails so the caller
+    can fall back to local state only.
+    """
+    proc = _run_gh(
+        ["pr", "list", "--state", "open", "--limit", "200", "--json", "number,statusCheckRollup"],
+        repo=repo,
+    )
+    if proc.returncode != 0:
+        return None
+    try:
+        rows = json.loads(proc.stdout or "[]")
+    except json.JSONDecodeError:
+        return None
+    running: set[int] = set()
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        number = row.get("number")
+        try:
+            number = int(number)
+        except (TypeError, ValueError):
+            continue
+        if _gh_greptile_check_running({"statusCheckRollup": row.get("statusCheckRollup") or []}):
+            running.add(number)
+    return running
+
+
+def _repo_greptile_capacity_skip(
+    *, pr_number: int, now: float, repo: str = DEFAULT_REPO
+) -> dict[str, Any] | None:
     if GREPTILE_REPO_ACTIVE_REVIEW_LIMIT <= 0:
         return None
-    active = _repo_waiting_greptile_prs(exclude_pr_number=pr_number, now=now)
-    if len(active) < GREPTILE_REPO_ACTIVE_REVIEW_LIMIT:
+    local_active = _repo_waiting_greptile_prs(exclude_pr_number=pr_number, now=now)
+    local_prs = {int(item["pr"]) for item in local_active}
+    github_running = _gh_open_prs_with_running_greptile(repo=repo)
+    github_prs: set[int] = set()
+    if github_running is not None:
+        github_prs = {pr for pr in github_running if pr != int(pr_number)}
+    active_prs = sorted(local_prs | github_prs)
+    if len(active_prs) < GREPTILE_REPO_ACTIVE_REVIEW_LIMIT:
         return None
-    future_polls = [int(item["next_poll_after"]) for item in active if int(item.get("next_poll_after") or 0) > now]
+    future_polls = [
+        int(item["next_poll_after"])
+        for item in local_active
+        if int(item.get("next_poll_after") or 0) > now
+    ]
     retry_after = min(future_polls) - int(now) if future_polls else GREPTILE_WAIT_POLL_SECONDS
     return {
         "skipped": True,
         "reason": "repo_greptile_review_capacity",
-        "active_review_count": len(active),
+        "active_review_count": len(active_prs),
         "active_review_limit": GREPTILE_REPO_ACTIVE_REVIEW_LIMIT,
-        "active_prs": [int(item["pr"]) for item in active],
+        "active_prs": active_prs,
+        "github_active_prs": sorted(github_prs),
+        "local_waiting_prs": sorted(local_prs),
         "retry_after_seconds": max(1, int(retry_after)),
     }
 
@@ -903,6 +1017,25 @@ def _effective_greptile_confidence(
     return confidence
 
 
+def _greptile_clean_without_findings(
+    *,
+    greptile_check_success: bool,
+    thread_counts: dict[str, Any],
+    actionable_findings: list[dict[str, Any]],
+) -> bool:
+    """P2c: GitHub Greptile check passed with zero unresolved/actionable threads.
+
+    A PR in this state has no real review work left even when the summary confidence
+    is below target, so it can be treated as mergeable rather than re-triggered forever.
+    """
+    return bool(
+        greptile_check_success
+        and not actionable_findings
+        and thread_counts.get("ok")
+        and int(thread_counts.get("unresolved") or 0) == 0
+    )
+
+
 def _gh_pr_observation(pr_number: int, *, repo: str = DEFAULT_REPO) -> dict[str, Any]:
     proc = _run_gh(
         [
@@ -1029,6 +1162,35 @@ def _should_skip_greptile_trigger(
     return None
 
 
+def _head_stability_skip(
+    state: dict[str, Any], *, head_sha: str | None, now: float, force: bool = False
+) -> dict[str, Any] | None:
+    """P1: defer (re)triggering until the head SHA has been stable for the window.
+
+    The first time a head SHA is observed we record it and start the stability clock,
+    so a head that keeps drifting can never be (re)triggered fast enough to thrash the
+    Greptile check. Mutates ``state`` with ``head_seen_sha`` / ``head_seen_at`` so the
+    clock persists across guard iterations.
+    """
+    if force or HEAD_STABILITY_WINDOW_SECONDS <= 0 or not head_sha:
+        return None
+    if str(state.get("head_seen_sha") or "") != head_sha:
+        state["head_seen_sha"] = head_sha
+        state["head_seen_at"] = now
+    seen_at = _float_state(state.get("head_seen_at"), now)
+    stable_for = max(0.0, now - seen_at)
+    if stable_for >= HEAD_STABILITY_WINDOW_SECONDS:
+        return None
+    return {
+        "skipped": True,
+        "reason": "head_not_stable",
+        "head_sha": head_sha,
+        "head_stable_seconds": int(stable_for),
+        "head_stability_window_seconds": HEAD_STABILITY_WINDOW_SECONDS,
+        "retry_after_seconds": max(1, int(HEAD_STABILITY_WINDOW_SECONDS - stable_for)),
+    }
+
+
 async def trigger_review_safely(
     *,
     pr_number: int,
@@ -1080,7 +1242,9 @@ async def trigger_review_safely(
             force=force,
         )
     if not skipped and not force:
-        skipped = _repo_greptile_capacity_skip(pr_number=pr_number, now=now)
+        skipped = _repo_greptile_capacity_skip(pr_number=pr_number, now=now, repo=repo)
+    if not skipped:
+        skipped = _head_stability_skip(active_state, head_sha=head_sha, now=now, force=force)
 
     if skipped:
         decision = {
@@ -1269,12 +1433,19 @@ async def assess_merge_readiness(
         clear_when_no_unresolved=greptile_check_success,
     )
     unresolved_threads = int(thread_counts.get("unresolved") or 0) if thread_counts.get("ok") else None
+    clean_without_findings = _greptile_clean_without_findings(
+        greptile_check_success=greptile_check_success,
+        thread_counts=thread_counts,
+        actionable_findings=actionable,
+    )
+    # P2c: a clean check with no findings is mergeable even below confidence target.
+    confidence_satisfied = confidence >= int(target_confidence) or (
+        CLEAN_MERGE_IGNORES_CONFIDENCE and clean_without_findings
+    )
     stale_running_review = (
         status.get("reviewIsRunning")
-        and greptile_check_success
-        and thread_counts.get("ok")
-        and int(thread_counts.get("unresolved") or 0) == 0
-        and confidence >= int(target_confidence)
+        and clean_without_findings
+        and confidence_satisfied
     )
     blockers: list[str] = []
     if status.get("reviewIsRunning") and not stale_running_review:
@@ -1283,7 +1454,7 @@ async def assess_merge_readiness(
         blockers.append("GREPTILE_THREAD_CHECK_FAILED")
     elif unresolved_threads:
         blockers.append(f"GREPTILE_UNRESOLVED_THREADS:{unresolved_threads}")
-    if confidence < int(target_confidence):
+    if not confidence_satisfied:
         blockers.append(f"GREPTILE_CONFIDENCE:{confidence}<{target_confidence}")
     if actionable:
         blockers.append(f"GREPTILE_ACTIONABLE_FINDINGS:{len(actionable)}")
@@ -1325,6 +1496,30 @@ async def merge_pr_when_ready(
                 actionable_count=0,
                 summary_count=0,
             )
+            # P2b: a genuinely stuck review must escalate here too. Without this the
+            # merge path overwrote run_guard_once's BLOCKED_GREPTILE_STUCK with
+            # WAITING_GREPTILE, so a hung review never reached Hermes escalation.
+            if wait["stuck"]:
+                state["terminal_state"] = "BLOCKED_GREPTILE_STUCK"
+                state["merge_blockers"] = ["GREPTILE_REVIEW_STUCK"]
+                _write_json(pr_number, "status.json", state)
+                _record_guardrail(
+                    pr_number,
+                    f"merge path: Greptile review stayed active for {wait['elapsed_seconds']}s past wait limit",
+                )
+                return {
+                    "ok": False,
+                    "state": "BLOCKED_GREPTILE_STUCK",
+                    "blockers": ["GREPTILE_REVIEW_STUCK"],
+                    "retry_after_seconds": wait["retry_after_seconds"],
+                    "wait": wait,
+                    "assessment": {
+                        "ready": False,
+                        "blockers": ["GREPTILE_REVIEW_STUCK"],
+                        "greptile": status,
+                        "gh": gh_observation,
+                    },
+                }
             state["terminal_state"] = "WAITING_GREPTILE"
             state["merge_blockers"] = ["GREPTILE_REVIEW_RUNNING"]
             _write_json(pr_number, "status.json", state)
@@ -1437,12 +1632,20 @@ async def run_guard_once(
             thread_counts=thread_counts,
             clear_when_no_unresolved=greptile_check_success,
         )
+        target = int(task.get("target_confidence") or 5)
+        clean_without_findings = _greptile_clean_without_findings(
+            greptile_check_success=greptile_check_success,
+            thread_counts=thread_counts,
+            actionable_findings=actionable_findings,
+        )
+        # P2c: clean check + no findings is mergeable even below the confidence target.
+        confidence_satisfied = confidence >= target or (
+            CLEAN_MERGE_IGNORES_CONFIDENCE and clean_without_findings
+        )
         stale_running_review = (
             status.get("reviewIsRunning")
-            and greptile_check_success
-            and thread_counts.get("ok")
-            and int(thread_counts.get("unresolved") or 0) == 0
-            and confidence >= int(task.get("target_confidence") or 5)
+            and clean_without_findings
+            and confidence_satisfied
         )
         if status.get("reviewIsRunning") and not stale_running_review:
             wait = _update_greptile_wait_state(
@@ -1479,11 +1682,35 @@ async def run_guard_once(
             "summary_count": max(0, len(findings) - len(actionable_findings)),
         }
         _write_json(pr_number, "status.json", state)
-        if greptile_check_success and confidence >= int(task.get("target_confidence") or 5) and not actionable_findings:
+        if clean_without_findings and confidence_satisfied:
             state["terminal_state"] = "READY_TO_MERGE"
+            state.pop("no_findings_retrigger_count", None)
+            state.pop("no_findings_retrigger_key", None)
             _write_json(pr_number, "status.json", state)
             return {"ok": True, "state": "READY_TO_MERGE", "greptile": {**status, "confidenceScore": confidence}}
         if not actionable_findings:
+            # P2c: bound re-triggers for a clean-but-sub-confidence (or not-yet-complete)
+            # review so the guard escalates to Hermes instead of looping forever.
+            retrigger_key = f"{pr_head_sha}:{confidence}"
+            if state.get("no_findings_retrigger_key") == retrigger_key:
+                state["no_findings_retrigger_count"] = int(state.get("no_findings_retrigger_count") or 0) + 1
+            else:
+                state["no_findings_retrigger_key"] = retrigger_key
+                state["no_findings_retrigger_count"] = 1
+            if state["no_findings_retrigger_count"] > NO_FINDINGS_RETRIGGER_LIMIT:
+                state["terminal_state"] = "ESCALATE_HERMES"
+                _write_json(pr_number, "status.json", state)
+                _record_guardrail(
+                    pr_number,
+                    "Greptile review made no progress below confidence target after "
+                    f"{state['no_findings_retrigger_count']} re-triggers; escalating to Hermes",
+                )
+                return {
+                    "ok": False,
+                    "state": "ESCALATE_HERMES",
+                    "reason": "greptile_no_progress_below_confidence",
+                    "greptile": {**status, "confidenceScore": confidence},
+                }
             triggered = await trigger_review_safely(
                 pr_number=pr_number,
                 repo=DEFAULT_REPO,
