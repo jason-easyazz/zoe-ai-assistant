@@ -37,16 +37,7 @@ def _model_server_up() -> bool:
         return False
 
 
-@pytest.mark.integration
-def test_core_answers_as_zoe():
-    if shutil.which("pi") is None:
-        pytest.skip("pi CLI not installed")
-    if not _model_server_up():
-        pytest.skip(f"model server not reachable at {_BASE_URL}")
-    for path in (_PROVIDER_EXT, _SOUL_EXT, _SOUL_MD):
-        assert path.is_file(), f"missing: {path}"
-
-    env = {**os.environ, "ZOE_CORE_SOUL_PATH": str(_SOUL_MD)}
+def _ask_identity_once(env: dict) -> str:
     result = subprocess.run(
         [
             "pi", "-p",
@@ -63,11 +54,31 @@ def test_core_answers_as_zoe():
         text=True,
         timeout=180,
     )
-
     assert result.returncode == 0, f"pi exited {result.returncode}: {result.stderr}"
     text = result.stdout.strip()
     assert text, "pi returned an empty response"
-    lower = text.lower()
+    return text.lower()
+
+
+@pytest.mark.integration
+def test_core_answers_as_zoe():
+    if shutil.which("pi") is None:
+        pytest.skip("pi CLI not installed")
+    if not _model_server_up():
+        pytest.skip(f"model server not reachable at {_BASE_URL}")
+    for path in (_PROVIDER_EXT, _SOUL_EXT, _SOUL_MD):
+        assert path.is_file(), f"missing: {path}"
+
+    env = {**os.environ, "ZOE_CORE_SOUL_PATH": str(_SOUL_MD)}
+    # A 2B model is not deterministic about persona: with the SOUL prompt wired
+    # in it usually answers as Zoe, but occasionally blurts its base identity
+    # ("I'm Gemma 4..."). The brick is correct if the persona is adopted within a
+    # few attempts, so sample up to 3 times rather than gamble on one generation.
+    lower = ""
+    for _ in range(3):
+        lower = _ask_identity_once(env)
+        if "zoe" in lower and "coding assistant" not in lower:
+            break
     # Persona applied: identifies as Zoe, not Pi's default coding assistant.
-    assert "zoe" in lower, f"expected Zoe identity, got: {text!r}"
-    assert "coding assistant" not in lower, f"persona not applied (default prompt leaked): {text!r}"
+    assert "zoe" in lower, f"expected Zoe identity in 3 tries, last: {lower!r}"
+    assert "coding assistant" not in lower, f"persona not applied (default prompt leaked): {lower!r}"

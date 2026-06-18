@@ -937,7 +937,7 @@ def _build_agent_card() -> dict:
         {
             "tier": 2,
             "name": "openclaw",
-            "model": "Codex",
+            "model": "Gemma 4 E2B",
             "browser": True,
             "status": "online" if _RUNTIME_HEALTH.get("openclaw") else "offline",
         },
@@ -1423,7 +1423,7 @@ async def get_agent_runtimes():
             },
             "openclaw": {
                 "port": 18789,
-                "description": "OpenClaw Gateway (Codex mini, browser/exec)",
+                "description": "OpenClaw Gateway (Gemma 4 E2B, browser/exec)",
                 "online": _RUNTIME_HEALTH.get("openclaw", False),
             },
         },
@@ -2403,3 +2403,58 @@ async def intent_dispatch(body: _IntentDispatchBody, _: None = Depends(require_i
         logger.warning("intent-dispatch failed intent=%s: %s", intent_name, exc)
         raise HTTPException(status_code=500, detail="intent execution failed") from exc
     return {"intent": intent_name, "ok": result is not None, "result": result or ""}
+
+
+# Synchronous delegation targets the zoe-core brain may invoke in-turn. Hermes
+# only: it owns web browsing / Telegram / the harness, and returns a completion
+# we can fold into the chat answer. OpenClaw stays explicit-opt-in (see the
+# async A2A /api/agent/delegate endpoint), so it is intentionally NOT here.
+_SYNC_DELEGATE_TARGETS = frozenset({"hermes"})
+
+
+class _DelegateSyncBody(BaseModel):
+    user_id: str
+    task: str
+    target: str = "hermes"
+
+
+@router.post("/delegate-sync")
+async def delegate_sync(body: _DelegateSyncBody, _: None = Depends(require_internal_token)):
+    """Synchronously delegate one task to a peer agent and return its completion.
+
+    Internal/service endpoint — how the zoe-core Pi brain delegates work it can't
+    do natively yet (web research, complex tasks) to Hermes and folds the answer
+    into its turn, the synchronous parity of the legacy __ESCALATE_HERMES__ path.
+    Fails closed on unknown user or non-allowlisted target.
+    """
+    user_id = (body.user_id or "").strip()
+    task = (body.task or "").strip()
+    target = (body.target or "hermes").strip().lower()
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id required")
+    if not task:
+        raise HTTPException(status_code=400, detail="task required")
+    if target not in _SYNC_DELEGATE_TARGETS:
+        raise HTTPException(status_code=400, detail=f"target not sync-delegatable: {target}")
+    try:
+        # Lazy import: routers.chat owns the Hermes client; importing at module
+        # load would be circular (chat imports system-side helpers too).
+        from routers.chat import _hermes_completion, _mempalace_load_user_facts, _safe_load_portrait
+
+        # Attach the same user context the legacy __ESCALATE_HERMES__ path sent,
+        # so delegated answers stay personalized (preferences + memory), not generic.
+        portrait, facts = await asyncio.gather(
+            _safe_load_portrait(user_id),
+            _mempalace_load_user_facts(user_id),
+        )
+        result = await _hermes_completion(
+            task,
+            session_id=f"delegate-{user_id}",
+            user_id=user_id,
+            portrait=portrait or "",
+            facts=facts or "",
+        )
+    except Exception as exc:
+        logger.warning("delegate-sync failed target=%s: %s", target, exc)
+        raise HTTPException(status_code=502, detail="delegation failed") from exc
+    return {"target": target, "ok": bool(result), "result": result or ""}
