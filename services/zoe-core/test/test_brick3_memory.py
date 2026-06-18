@@ -43,9 +43,15 @@ def _model_server_up() -> bool:
         return False
 
 
+# Records every /api/memories/for-prompt request the stub receives, so a test
+# can assert the brain did NOT fetch memory (fail-closed) when the user is unknown.
+_FOR_PROMPT_HITS: list[str] = []
+
+
 class _MemoryStub(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
         if self.path.startswith("/api/memories/for-prompt"):
+            _FOR_PROMPT_HITS.append(self.path)
             body = json.dumps(
                 {"packet": _PACKET, "refs": [], "count": 1, "user_scoped": True}
             ).encode()
@@ -105,3 +111,47 @@ def test_memory_packet_reaches_the_brain():
     assert text, "pi returned an empty response"
     # The injected memory packet said the dog is "Pixel" — the brain should use it.
     assert "pixel" in text.lower(), f"memory not used; got: {text!r}"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("user_env", [None, "", "   "], ids=["unset", "empty", "whitespace"])
+def test_memory_fail_closed_when_user_unknown(user_env):
+    """No known user (unset / empty / whitespace) → NO memory packet is even
+    requested. Proves the fail-closed path: we never fetch a default user's
+    memories when the acting user is unknown."""
+    if shutil.which("pi") is None:
+        pytest.skip("pi CLI not installed")
+    if not _model_server_up():
+        pytest.skip(f"model server not reachable at {_BASE_URL}")
+    _FOR_PROMPT_HITS.clear()
+
+    server = HTTPServer(("127.0.0.1", 0), _MemoryStub)
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        env = {k: v for k, v in os.environ.items() if k != "ZOE_CORE_USER_ID"}
+        if user_env is not None:
+            env["ZOE_CORE_USER_ID"] = user_env
+        env.update({"ZOE_DATA_URL": f"http://127.0.0.1:{port}", "ZOE_INTERNAL_TOKEN": "test"})
+        result = subprocess.run(
+            [
+                "pi", "-p",
+                "--provider", "local-gemma",
+                "--model", _MODEL,
+                "-e", str(_PROVIDER_EXT),
+                "-e", str(_MEMORY_EXT),
+                "--no-extensions", "--no-skills", "--no-prompt-templates",
+                "--no-themes", "--no-context-files", "--no-session", "--thinking", "off",
+                "What's my dog's name?",
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+    finally:
+        server.shutdown()
+
+    assert result.returncode == 0, f"pi exited {result.returncode}: {result.stderr}"
+    # The headline guarantee: unknown user → memory was never fetched.
+    assert _FOR_PROMPT_HITS == [], f"memory fetched despite unknown user ({user_env!r}): {_FOR_PROMPT_HITS}"
