@@ -57,7 +57,6 @@ def bootstrap_oidc() -> None:
             redirect_uris=[
                 f"{base_url}:6767/auth/callback",
                 "http://zoe.local:6767/auth/callback",
-                "http://192.168.1.218:6767/auth/callback",
             ],
         )
         logger.info(f"OIDC client seeded: {omnigent_client_id}")

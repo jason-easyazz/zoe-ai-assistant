@@ -1,6 +1,7 @@
 """Native OIDC provider endpoints for zoe-auth."""
 import base64
 import hashlib
+import html
 import uuid
 from typing import Optional
 
@@ -189,7 +190,11 @@ async def authorize(
 # ---------------------------------------------------------------------------
 
 def _login_page_html(oidc_state_id: str, error: str = "") -> str:
-    err_html = f'<p class="err">{error}</p>' if error else ""
+    # Defense-in-depth: oidc_state_id is only ever a server-generated UUID and
+    # error is mapped through a fixed allow-list, but escape both reflected
+    # values so the form can never become an HTML-injection sink.
+    oidc_state_id = html.escape(oidc_state_id, quote=True)
+    err_html = f'<p class="err">{html.escape(error)}</p>' if error else ""
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -276,6 +281,10 @@ async def oidc_login_submit(
         AuthenticationRequest(
             user_id=auth_result.user_id,
             auth_method=AuthMethod.PASSWORD,
+            # session_manager.authenticate re-verifies via _verify_password_auth ->
+            # verify_password(user_id, credentials["password"]); an empty credentials
+            # dict would verify an empty password and fail, so the password is
+            # required here (mirrors the SPA login path).
             credentials={"password": password},
             device_info={},
             ip_address=ip_address,
