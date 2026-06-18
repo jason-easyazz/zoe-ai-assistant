@@ -65,6 +65,10 @@ def test_happy_path_calls_hermes(monkeypatch):
         return "Hermes says: sunny with a high of 24."
 
     import routers.chat as chat
+    async def _empty(*a, **k):
+        return ""
+    monkeypatch.setattr(chat, "_safe_load_portrait", _empty)
+    monkeypatch.setattr(chat, "_mempalace_load_user_facts", _empty)
     monkeypatch.setattr(chat, "_hermes_completion", fake_hermes)
 
     resp = TestClient(_app()).post(
@@ -88,6 +92,10 @@ def test_target_defaults_to_hermes(monkeypatch):
         return "ok"
 
     import routers.chat as chat
+    async def _empty(*a, **k):
+        return ""
+    monkeypatch.setattr(chat, "_safe_load_portrait", _empty)
+    monkeypatch.setattr(chat, "_mempalace_load_user_facts", _empty)
     monkeypatch.setattr(chat, "_hermes_completion", fake_hermes)
     resp = TestClient(_app()).post(
         "/api/system/delegate-sync",
@@ -105,6 +113,10 @@ def test_hermes_failure_surfaces_502(monkeypatch):
         raise RuntimeError("hermes down")
 
     import routers.chat as chat
+    async def _empty(*a, **k):
+        return ""
+    monkeypatch.setattr(chat, "_safe_load_portrait", _empty)
+    monkeypatch.setattr(chat, "_mempalace_load_user_facts", _empty)
     monkeypatch.setattr(chat, "_hermes_completion", boom)
     resp = TestClient(_app()).post(
         "/api/system/delegate-sync",

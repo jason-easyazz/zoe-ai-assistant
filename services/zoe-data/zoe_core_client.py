@@ -57,6 +57,11 @@ _PROVIDER = os.environ.get("ZOE_CORE_PROVIDER", "local-gemma")
 _MODEL = os.environ.get("ZOE_CORE_MODEL_ID", "gemma-4-E2B-it-Q4_K_M.gguf")
 _DATA_URL = os.environ.get("ZOE_CORE_DATA_URL") or os.environ.get("ZOE_DATA_URL", "http://127.0.0.1:8000")
 _TIMEOUT_S = float(os.environ.get("ZOE_CORE_TIMEOUT_S", "180"))
+# Safety valve: once an answer has streamed and a turn has ended, if no further
+# event arrives within this idle window we assume the loop is done even if
+# agent_end was never emitted (Pi crash / lost event / older build) — bounding
+# the worst case to ~idle seconds instead of the full _TIMEOUT_S hang.
+_IDLE_TIMEOUT_S = float(os.environ.get("ZOE_CORE_IDLE_TIMEOUT_S", "20"))
 _MAX_WORKERS = int(os.environ.get("ZOE_CORE_MAX_WORKERS", "4"))
 
 
@@ -147,13 +152,22 @@ class _ZoeCoreWorker:
         assert self.proc and self.proc.stdout
         emitted = ""           # text already streamed for the CURRENT message
         streamed_any = False   # whether we've yielded anything this whole turn
+        saw_turn_end = False   # at least one turn has completed
         prompt_accepted = False
         deadline = time.monotonic() + timeout_s
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise asyncio.TimeoutError("zoe-core turn timed out")
-            line = await asyncio.wait_for(self.proc.stdout.readline(), timeout=remaining)
+            # Once we have an answer and a completed turn, bound each read to the
+            # idle window: if agent_end never comes, return rather than hang.
+            read_timeout = min(remaining, _IDLE_TIMEOUT_S) if (streamed_any and saw_turn_end) else remaining
+            try:
+                line = await asyncio.wait_for(self.proc.stdout.readline(), timeout=read_timeout)
+            except asyncio.TimeoutError:
+                if streamed_any and saw_turn_end:
+                    return  # answer delivered + a turn ended; agent_end presumed lost
+                raise
             if not line:
                 raise RuntimeError("zoe-core Pi RPC process closed")
             try:
@@ -183,6 +197,8 @@ class _ZoeCoreWorker:
                 yield text
                 emitted = text
                 streamed_any = True
+            if etype == "turn_end":
+                saw_turn_end = True
             # Only the END OF THE WHOLE AGENT LOOP terminates the turn. A bare
             # turn_end fires after each tool-call turn too — returning there would
             # cut off before the model synthesizes its answer from the tool result.

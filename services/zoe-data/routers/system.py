@@ -2439,9 +2439,21 @@ async def delegate_sync(body: _DelegateSyncBody, _: None = Depends(require_inter
     try:
         # Lazy import: routers.chat owns the Hermes client; importing at module
         # load would be circular (chat imports system-side helpers too).
-        from routers.chat import _hermes_completion
+        from routers.chat import _hermes_completion, _mempalace_load_user_facts, _safe_load_portrait
 
-        result = await _hermes_completion(task, session_id=f"delegate-{user_id}", user_id=user_id)
+        # Attach the same user context the legacy __ESCALATE_HERMES__ path sent,
+        # so delegated answers stay personalized (preferences + memory), not generic.
+        portrait, facts = await asyncio.gather(
+            _safe_load_portrait(user_id),
+            _mempalace_load_user_facts(user_id),
+        )
+        result = await _hermes_completion(
+            task,
+            session_id=f"delegate-{user_id}",
+            user_id=user_id,
+            portrait=portrait or "",
+            facts=facts or "",
+        )
     except Exception as exc:
         logger.warning("delegate-sync failed target=%s: %s", target, exc)
         raise HTTPException(status_code=502, detail="delegation failed") from exc
