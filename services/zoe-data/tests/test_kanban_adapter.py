@@ -5851,3 +5851,97 @@ def test_auto_block_dead_worker_swallows_cli_error(monkeypatch):
     # CLI failure -> returns False, row left untouched (next poll retries)
     assert asyncio.run(adapter._maybe_auto_block_dead_worker("t", "verify", row, _dead_detail())) is False
     assert row["status"] == "running"
+
+
+# ---------------------------------------------------------------------------
+# _maybe_converge_noop_implement — no-op implement (empty worktree) -> ALREADY_COVERED
+# ---------------------------------------------------------------------------
+
+
+def _noop_adapter(monkeypatch, tmp_path, *, dirty="", unpushed="0", branch="wt/t_x", log=""):
+    import worktree_bootstrap as wb
+    wt = tmp_path / "wt"
+    wt.mkdir(exist_ok=True)
+    monkeypatch.setattr(ka, "_CONVERGE_NOOP_IMPLEMENT", True)
+    monkeypatch.setattr(ka, "latest_log_session", lambda task_id, max_lines=120: log)
+    monkeypatch.setattr(wb, "worktree_branch", lambda task_id: "wt/t_x")
+    monkeypatch.setattr(wb, "worktree_path", lambda task_id: str(wt))
+    adapter = ka.KanbanAdapter()
+    calls = {"run": [], "wt": []}
+
+    async def fake_run(args, *, expect_json=False):
+        calls["run"].append(args)
+        return ""
+
+    async def fake_wt(args, *, cwd, timeout=45.0):
+        calls["wt"].append(args)
+        if args[:3] == ["git", "branch", "--show-current"]:
+            return branch
+        if args[:2] == ["git", "status"]:
+            return dirty
+        if args[:3] == ["git", "rev-list", "--count"]:
+            return unpushed
+        raise AssertionError(args)
+
+    adapter._run = fake_run  # type: ignore[assignment]
+    adapter._run_worktree_command = fake_wt  # type: ignore[assignment]
+    return adapter, calls, str(wt)
+
+
+def _gate_row(wt, reason="BLOCKER=GATE_BLOCKED: missing required evidence pr"):
+    return {"status": "blocked", "block_reason": reason, "workspace_path": wt}
+
+
+def test_converge_noop_implement_blocks_already_covered(monkeypatch, tmp_path):
+    a, calls, wt = _noop_adapter(monkeypatch, tmp_path)  # clean tree, nothing unpushed
+    row = _gate_row(wt)
+    out = asyncio.run(a._maybe_converge_noop_implement("t_x", "implement", row, detail={}))
+    assert out is True
+    assert calls["run"] and calls["run"][0][0] == "block" and calls["run"][0][1] == "t_x"
+    assert "ALREADY_COVERED" in calls["run"][0][2]
+    assert "ALREADY_COVERED" in row["block_reason"]
+
+
+def test_converge_noop_implement_noop_when_dirty(monkeypatch, tmp_path):
+    # A dirty tree means there IS a diff -> unshipped-diff salvage owns it, not this.
+    a, calls, wt = _noop_adapter(monkeypatch, tmp_path, dirty=" M file.py")
+    row = _gate_row(wt)
+    assert asyncio.run(a._maybe_converge_noop_implement("t_x", "implement", row, detail={})) is False
+    assert not calls["run"]
+
+
+def test_converge_noop_implement_noop_when_unpushed_commits(monkeypatch, tmp_path):
+    a, calls, wt = _noop_adapter(monkeypatch, tmp_path, unpushed="2")
+    row = _gate_row(wt)
+    assert asyncio.run(a._maybe_converge_noop_implement("t_x", "implement", row, detail={})) is False
+    assert not calls["run"]
+
+
+def test_converge_noop_implement_ignores_real_blockers(monkeypatch, tmp_path):
+    a, calls, wt = _noop_adapter(monkeypatch, tmp_path)
+    row = _gate_row(wt, reason="BLOCKER=TEST_ENVIRONMENT: import error")
+    assert asyncio.run(a._maybe_converge_noop_implement("t_x", "implement", row, detail={})) is False
+    assert not calls["run"]
+
+
+def test_converge_noop_implement_skips_when_pr_in_log(monkeypatch, tmp_path):
+    a, calls, wt = _noop_adapter(monkeypatch, tmp_path, log="PR_URL=https://x/pull/1")
+    row = _gate_row(wt)
+    assert asyncio.run(a._maybe_converge_noop_implement("t_x", "implement", row, detail={})) is False
+    assert not calls["run"]
+
+
+def test_converge_noop_implement_respects_kill_switch(monkeypatch, tmp_path):
+    a, calls, wt = _noop_adapter(monkeypatch, tmp_path)
+    monkeypatch.setattr(ka, "_CONVERGE_NOOP_IMPLEMENT", False)
+    row = _gate_row(wt)
+    assert asyncio.run(a._maybe_converge_noop_implement("t_x", "implement", row, detail={})) is False
+    assert not calls["run"]
+
+
+def test_converge_noop_implement_noop_when_not_blocked(monkeypatch, tmp_path):
+    a, calls, wt = _noop_adapter(monkeypatch, tmp_path)
+    row = {"status": "running", "block_reason": "", "workspace_path": wt}
+    assert asyncio.run(a._maybe_converge_noop_implement("t_x", "implement", row, detail={})) is False
+    assert asyncio.run(a._maybe_converge_noop_implement("t_x", "verify", _gate_row(wt), detail={})) is False
+    assert not calls["run"]

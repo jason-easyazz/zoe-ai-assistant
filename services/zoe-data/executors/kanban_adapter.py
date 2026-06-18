@@ -42,6 +42,15 @@ _REAP_DEAD_WORKERS = (
     os.environ.get("ZOE_KANBAN_REAP_DEAD_WORKERS", "true") or "true"
 ).strip().lower() not in {"0", "false", "no"}
 
+# When an implement row is gate-blocked for a missing PR but the task worktree
+# is provably empty (no diff, nothing unpushed), there is genuinely nothing to
+# ship — the work is already present on the base. Converge it to the proven
+# ALREADY_COVERED -> skip_implementation -> audit path instead of stranding the
+# single lane on a permanent gate block. Default on; disable with =0/false/no.
+_CONVERGE_NOOP_IMPLEMENT = (
+    os.environ.get("ZOE_KANBAN_CONVERGE_NOOP_IMPLEMENT", "true") or "true"
+).strip().lower() not in {"0", "false", "no"}
+
 logger = logging.getLogger(__name__)
 
 NAME = "kanban"
@@ -896,6 +905,11 @@ class KanbanAdapter:
                 " that wastes the run: open the PR yourself instead. `kanban_block` is ONLY for genuine"
                 " blockers where you cannot ship (dirty tree, missing auth, ambiguous product decision,"
                 " repeated test failure, scope too broad).\n"
+                "- ALREADY DONE / NO CHANGE NEEDED: if the acceptance criteria are already met on the base"
+                " branch and no code change is required (e.g. the fix already landed, or the target file"
+                " does not exist in the repo), call `kanban_block` with BLOCKER=ALREADY_COVERED and the"
+                " evidence (e.g. the passing test output). NEVER call `kanban_complete` without a PR_URL —"
+                " a completion with an empty diff and no PR fails the evidence gate and strands the ticket.\n"
                 f"{code_audit_hint}"
                 f"{harness_hint}"
                 f"{intent_gap_hint}"
@@ -1575,6 +1589,105 @@ class KanbanAdapter:
             )
             return None
 
+    async def _maybe_converge_noop_implement(
+        self,
+        task_id: str,
+        phase: str,
+        row: dict[str, Any],
+        *,
+        detail: dict[str, Any] | None = None,
+    ) -> bool:
+        """Converge a no-op implement (empty worktree, missing-PR gate) to ALREADY_COVERED.
+
+        ``_maybe_recover_unshipped_diff`` salvages a *non-empty* diff the worker
+        never pushed. This handles the other case observed live (ZOE-5856): the fix
+        was already present on the base branch, so implement produced NO diff, then
+        completed without a PR -> the evidence gate blocks on missing ``pr`` and the
+        single lane strands on a permanent gate block. When the task worktree is
+        provably empty (clean tree, nothing unpushed) there is nothing to ship, so
+        re-block with ``BLOCKER=ALREADY_COVERED`` and let pipeline_store converge it
+        via the proven skip_implementation -> audit path (no PR required).
+
+        Safety: only fires for an implement row blocked specifically on the
+        missing-PR evidence gate (never real blockers like TEST_ENVIRONMENT /
+        IMPLEMENT_BUDGET / a dirty or unpushed tree), and only inside the task's own
+        ``wt/<task_id>`` branch. Gated by ZOE_KANBAN_CONVERGE_NOOP_IMPLEMENT.
+        """
+        if not _CONVERGE_NOOP_IMPLEMENT:
+            return False
+        if phase != "implement" or (row.get("status") or "").lower() != "blocked":
+            return False
+        low = str(row.get("block_reason") or "").lower()
+        if "already_covered" in low:
+            return False  # already on the convergence path
+        # Strictly the missing-PR evidence gate, not a substantive blocker.
+        if not ("missing required evidence" in low and "pr" in low):
+            return False
+        try:
+            from worktree_bootstrap import worktree_branch, worktree_path
+
+            if "PR_URL=" in latest_log_session(task_id, max_lines=120):
+                return False  # worker did hand off a PR -> not a no-op
+            task = detail.get("task") if isinstance((detail or {}).get("task"), dict) else {}
+            wt_path = Path(
+                row.get("workspace_path") or task.get("workspace_path") or worktree_path(task_id)
+            ).expanduser()
+            if not wt_path.exists():
+                return False
+            branch = (
+                await self._run_worktree_command(
+                    ["git", "branch", "--show-current"], cwd=wt_path, timeout=10
+                )
+            ).strip()
+            # Hard safety gate: only the task's own worktree branch.
+            if not branch or branch in {"main", "master"} or branch != worktree_branch(task_id):
+                return False
+            dirty = bool(
+                (
+                    await self._run_worktree_command(
+                        ["git", "status", "--porcelain"], cwd=wt_path, timeout=20
+                    )
+                ).strip()
+            )
+            if dirty:
+                return False  # there IS uncommitted work -> unshipped-diff salvage owns it
+            unpushed = (
+                await self._run_worktree_command(
+                    ["git", "rev-list", "--count", "HEAD", "--not", "--remotes"],
+                    cwd=wt_path,
+                    timeout=15,
+                )
+            ).strip()
+            if unpushed not in {"", "0"}:
+                return False  # commits to push -> not a no-op
+        except Exception as exc:  # noqa: BLE001 - convergence check must not break poll.
+            logger.warning(
+                "kanban_adapter: no-op implement convergence check failed for %s: %s",
+                task_id,
+                exc,
+            )
+            return False
+
+        reason = (
+            "BLOCKER=ALREADY_COVERED: implement produced no diff and the task worktree "
+            "is empty (no changes, nothing to push) — the work is already present on the "
+            "base branch; converging to audit (no PR required)."
+        )
+        try:
+            await self._run(["block", task_id, reason])
+        except KanbanCLIError as exc:
+            logger.warning(
+                "kanban_adapter: no-op implement converge-block failed for %s: %s", task_id, exc
+            )
+            return False
+        row["block_reason"] = reason
+        logger.warning(
+            "kanban_adapter: converged no-op implement %s to ALREADY_COVERED "
+            "(empty worktree, missing-pr gate)",
+            task_id,
+        )
+        return True
+
     async def dispatch(self, issue: dict) -> dict:
         """Create the single current ready phase for a Multica engineering run.
 
@@ -2011,6 +2124,12 @@ class KanbanAdapter:
                     "TESTS=recovered; downstream verify/review must validate\n"
                     "SUMMARY=Recovered PR handoff after worker interruption"
                 )
+                phases[phase] = row
+            elif await self._maybe_converge_noop_implement(
+                task_id, phase, row, detail=detail
+            ):
+                # No PR and an empty worktree: the work is already present, so
+                # converge to ALREADY_COVERED rather than strand the lane.
                 phases[phase] = row
 
         statuses = {p: (r.get("status") or "") for p, r in phases.items()}
