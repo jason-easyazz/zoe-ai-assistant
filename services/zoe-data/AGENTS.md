@@ -10,6 +10,7 @@ THE production Zoe API: FastAPI app served by host uvicorn on port 8000. Owns ch
 - Routing/NLU: `intent_router.py`, `intent_classifier_llm.py`, `pi_intent_classifier.py`, `routers/` (see child doc).
 - Agents and tools: `mcp_server.py`, `openclaw_ws.py`, `hermes_http.py`, `zoe_agent`-related modules, `executors/` (engineering-board executors, currently `kanban_adapter.py`).
 - Memory: `hindsight_memory.py`, `hindsight_retain_candidates.py`, `conversation_context.py`.
+- Memory ops: Ingest (`memory_digest.py` dreaming), Query (`memory_service.py` search), and Lint (`memory_lint.py`) — the report-only scan for contradictions/stale/orphan/duplicate rows.
 - Streaming/UI protocol: `ag_ui_stream.py`, `card_service.py`, `card_contract.py`.
 - Engineering loop: `greptile_client.py` and `background_runner.py`. The Greploop guard script is NOT here — it lives at `scripts/maintenance/greploop_guard.py` (see `scripts/AGENTS.md`).
 
@@ -21,6 +22,12 @@ THE production Zoe API: FastAPI app served by host uvicorn on port 8000. Owns ch
 - Tools register through the allow-list mechanism; every world-changing action goes through a proposal path.
 - Schema changes go through Alembic; never DROP/DELETE without WHERE and a backup.
 - Harness engineering rules apply (charter section 9): minimize structure, ablate module by module, prefer natural-language harness over brittle Python control flow.
+
+## Forbidden
+
+- Memory Lint (`memory_lint.py`) is REPORT-ONLY. It must never delete, merge, edit, archive, supersede, or otherwise mutate stored memory, and must never trigger such mutation. It reads through the `MemoryService` facade and returns flags/reports for human or curation review only.
+- Lint must not run inside the nightly dreaming cycle by default. Emitting a lint report from dreaming is opt-in via `ZOE_MEMORY_LINT_IN_DREAMING` and stays report-only even when enabled.
+- No DB schema migration, no destructive ops, and no cloud/LLM dependency from the lint detectors (they stay offline-safe heuristics).
 
 ## Work Guidance
 

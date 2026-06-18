@@ -1197,6 +1197,23 @@ async def run_dreaming_cycle(user_id: str, db=None, run_agent_sync_phase: bool =
                 logger.warning("dreaming: agent_sync failed: %s", exc)
                 result["agent_sync"] = {"status": "error", "error": str(exc)}
 
+    # Opt-in, report-only Lint pass (default OFF via ZOE_MEMORY_LINT_IN_DREAMING).
+    # Lint never mutates stored memory; it only emits a structured report of
+    # contradictions / stale / orphan / duplicate rows for human review.
+    try:
+        from memory_lint import dreaming_lint_enabled, lint_user
+
+        if dreaming_lint_enabled():
+            report = await lint_user(user_id)
+            result["lint"] = report.to_dict()
+            logger.info(
+                "dreaming: lint report user=%s scanned=%d findings=%d",
+                user_id, report.scanned, report.total,
+            )
+    except Exception as exc:
+        logger.warning("dreaming: lint pass failed user=%s: %s", user_id, exc)
+        result["lint"] = {"status": "error", "error": str(exc)}
+
     logger.info("dreaming cycle complete: %s", result)
     return result
 
