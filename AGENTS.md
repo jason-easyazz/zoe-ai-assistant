@@ -18,7 +18,8 @@ Use `opensrc` for third-party library source before guessing API behavior.
 
 Rules:
 - Keep the global source cache outside the repo at `~/.opensrc/repos/`.
-- Prefer `opensrc path pypi:<package>` or `opensrc path owner/repo` to locate already-fetched source.
+- Prefer `opensrc path pypi:<package>@<version>` or `opensrc path owner/repo` to locate already-fetched source.
+- Pin the version to the one Zoe actually installs (for example `opensrc path pypi:chromadb@0.6.3`). A bare package name resolves to the latest published version (e.g. bare `chromadb` is 1.5.9), which can be a major-version mismatch from the running stack and will mislead you.
 - Search package source directly when debugging integrations, for example:
   `rg "class FastAPI" "$(opensrc path pypi:fastapi)"`
 - When source context informs an implementation, report the package files, examples, or tests that were used.

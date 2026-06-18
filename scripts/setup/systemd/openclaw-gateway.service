@@ -1,4 +1,4 @@
-# OpenClaw agent gateway (Codex + browser fallback), port 18789.
+# OpenClaw agent gateway (Gemma 4 E2B + browser fallback), port 18789.
 # Requires the `openclaw` npm package installed globally (see README).
 [Unit]
 Description=OpenClaw Gateway (agent fallback, port 18789)
