@@ -311,7 +311,7 @@ def _build_capabilities_md(
         "| 0 | intent_router | regex | — | <10ms fast path |",
         "| 1 | Zoe Agent | Gemma 4 E2B | :11434 | tool loop, escalation |",
         "| 1.5 | Hermes | GPT-5.4 | :8642 | default engineering, planning, review, repair |",
-        "| 2 | OpenClaw | Codex + browser | :18789 | available fallback, not default route |",
+        "| 2 | OpenClaw | Gemma 4 E2B + browser | :18789 | available fallback, not default route |",
         "",
         "## MCP Tools",
     ]
