@@ -1620,8 +1620,11 @@ class KanbanAdapter:
         low = str(row.get("block_reason") or "").lower()
         if "already_covered" in low:
             return False  # already on the convergence path
-        # Strictly the missing-PR evidence gate, not a substantive blocker.
-        if not ("missing required evidence" in low and "pr" in low):
+        # Strictly the missing-PR evidence gate, not a substantive blocker. Match
+        # "pr" as a whole word (the gate joins the missing-evidence kinds, e.g.
+        # "missing required evidence pr" or "...pr,tool") so reasons like
+        # "process"/"approved"/"prior" never trip this.
+        if not ("missing required evidence" in low and re.search(r"\bpr\b", low)):
             return False
         try:
             from worktree_bootstrap import worktree_branch, worktree_path

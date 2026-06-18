@@ -5945,3 +5945,22 @@ def test_converge_noop_implement_noop_when_not_blocked(monkeypatch, tmp_path):
     assert asyncio.run(a._maybe_converge_noop_implement("t_x", "implement", row, detail={})) is False
     assert asyncio.run(a._maybe_converge_noop_implement("t_x", "verify", _gate_row(wt), detail={})) is False
     assert not calls["run"]
+
+
+@pytest.mark.parametrize("branch", ["main", "master", "wt/other_task"])
+def test_converge_noop_implement_noop_wrong_branch(monkeypatch, tmp_path, branch):
+    # Safety gate: never converge on main/master or a different task's worktree
+    # branch — a regression here would converge on the wrong branch.
+    a, calls, wt = _noop_adapter(monkeypatch, tmp_path, branch=branch)
+    row = _gate_row(wt)
+    assert asyncio.run(a._maybe_converge_noop_implement("t_x", "implement", row, detail={})) is False
+    assert not calls["run"]
+
+
+def test_converge_noop_implement_ignores_pr_substring_in_other_words(monkeypatch, tmp_path):
+    # "pr" must match as a whole word: a missing-evidence reason naming e.g.
+    # "prior_result" must NOT trip the missing-PR convergence.
+    a, calls, wt = _noop_adapter(monkeypatch, tmp_path)
+    row = _gate_row(wt, reason="BLOCKER=GATE_BLOCKED: missing required evidence prior_result")
+    assert asyncio.run(a._maybe_converge_noop_implement("t_x", "implement", row, detail={})) is False
+    assert not calls["run"]
