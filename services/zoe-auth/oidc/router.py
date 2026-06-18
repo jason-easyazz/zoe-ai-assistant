@@ -5,8 +5,15 @@ import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Cookie, Form, Header, HTTPException, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
+from core.auth import auth_manager
+from core.sessions import (
+    AuthenticationRequest,
+    AuthMethod,
+    SessionType,
+    session_manager,
+)
 from oidc.clients import get_client, validate_redirect_uri, verify_secret
 from oidc.codes import (
     consume_auth_code,
@@ -35,12 +42,20 @@ def _base_url(request: Request) -> str:
 def _get_user_info(user_id: str) -> dict | None:
     with get_db() as conn:
         row = conn.execute(
-            "SELECT user_id, username, email, role FROM auth_users WHERE user_id = ?",
+            "SELECT user_id, username, email, role, is_verified FROM auth_users WHERE user_id = ?",
             (user_id,),
         ).fetchone()
     if row is None:
         return None
-    return {"user_id": row[0], "username": row[1], "email": row[2], "role": row[3]}
+    # email_verified must be carried into the OIDC id_token — clients (e.g. Omnigent)
+    # hard-reject the email claim unless email_verified is true.
+    return {
+        "user_id": row[0],
+        "username": row[1],
+        "email": row[2],
+        "role": row[3],
+        "email_verified": bool(row[4]),
+    }
 
 
 def _get_user_from_session(session_id: str) -> str | None:
@@ -49,7 +64,7 @@ def _get_user_from_session(session_id: str) -> str | None:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     with get_db() as conn:
         row = conn.execute(
-            "SELECT user_id FROM auth_sessions WHERE session_id = ? AND is_active = TRUE AND expires_at > ?",
+            "SELECT user_id FROM auth_sessions WHERE session_id = ? AND is_active = 1 AND expires_at > ?",
             (session_id, now),
         ).fetchone()
     return row[0] if row else None
@@ -160,7 +175,131 @@ async def authorize(
         "code_challenge_method": code_challenge_method,
         "nonce": nonce,
     })
-    return RedirectResponse(f"/?oidc_state_id={oidc_state_id}", status_code=302)
+    return RedirectResponse(
+        f"/application/o/login?oidc_state_id={oidc_state_id}", status_code=302
+    )
+
+
+# ---------------------------------------------------------------------------
+# Login page (server-rendered) — bridges password auth into a zoe_session cookie
+# so the OIDC flow completes without depending on the SPA. Used by every OIDC
+# client (Omnigent, Home Assistant, Multica). The main app uses header-based
+# (X-Session-ID) sessions, which a browser redirect to /authorize can't carry,
+# so the consent flow needs its own cookie-setting login.
+# ---------------------------------------------------------------------------
+
+def _login_page_html(oidc_state_id: str, error: str = "") -> str:
+    err_html = f'<p class="err">{error}</p>' if error else ""
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in to Zoe</title>
+<style>
+  body {{ font-family: system-ui, sans-serif; background:#0f1115; color:#e8e8e8;
+         display:flex; min-height:100vh; align-items:center; justify-content:center; margin:0; }}
+  form {{ background:#1a1d24; padding:2rem; border-radius:12px; width:320px;
+          box-shadow:0 8px 30px rgba(0,0,0,.4); }}
+  h1 {{ font-size:1.25rem; margin:0 0 1rem; }}
+  label {{ display:block; font-size:.8rem; margin:.75rem 0 .25rem; color:#9aa0aa; }}
+  input {{ width:100%; box-sizing:border-box; padding:.6rem; border-radius:8px;
+           border:1px solid #2c313c; background:#0f1115; color:#e8e8e8; }}
+  button {{ width:100%; margin-top:1.25rem; padding:.65rem; border:0; border-radius:8px;
+            background:#4f8cff; color:#fff; font-weight:600; cursor:pointer; }}
+  .err {{ color:#ff6b6b; font-size:.85rem; margin:.5rem 0 0; }}
+  .sub {{ color:#6b7280; font-size:.75rem; margin-top:1rem; text-align:center; }}
+</style></head>
+<body>
+  <form method="post" action="/application/o/login">
+    <h1>Sign in to Zoe</h1>
+    <input type="hidden" name="oidc_state_id" value="{oidc_state_id}">
+    <label for="u">Username</label>
+    <input id="u" name="username" autocomplete="username" autofocus required>
+    <label for="p">Password</label>
+    <input id="p" name="password" type="password" autocomplete="current-password" required>
+    {err_html}
+    <button type="submit">Sign in</button>
+    <p class="sub">Authorizing an application to use your Zoe account.</p>
+  </form>
+</body></html>"""
+
+
+@router.get("/application/o/login", response_class=HTMLResponse)
+async def oidc_login_page(oidc_state_id: str, error: str = ""):
+    if get_pending_auth(oidc_state_id) is None:
+        return HTMLResponse(
+            _login_page_html("", "This login request expired — please retry from the app."),
+            status_code=400,
+        )
+    msg = {
+        "invalid": "Invalid username or password.",
+        "session_required": "Please sign in to continue.",
+        "session_expired": "Your session expired — please sign in again.",
+    }.get(error, "")
+    return HTMLResponse(_login_page_html(oidc_state_id, msg))
+
+
+@router.post("/application/o/login")
+async def oidc_login_submit(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+    oidc_state_id: str = Form(...),
+):
+    if get_pending_auth(oidc_state_id) is None:
+        return RedirectResponse("/?error=oidc_expired", status_code=302)
+
+    ip_address = request.client.host if request.client else None
+
+    # Match either username or user_id, case-insensitively — the username column is
+    # capitalized (e.g. "Jason") while user_id is lowercase ("jason"), and people type
+    # either in any case.
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT user_id, password_hash FROM auth_users"
+            " WHERE LOWER(username) = LOWER(?) OR LOWER(user_id) = LOWER(?)",
+            (username, username),
+        ).fetchone()
+
+    bad = RedirectResponse(
+        f"/application/o/login?oidc_state_id={oidc_state_id}&error=invalid",
+        status_code=302,
+    )
+    if not row or row[1] in (None, "SETUP_REQUIRED"):
+        return bad
+
+    user_id = row[0]
+    auth_result = auth_manager.verify_password(user_id, password, ip_address)
+    if not auth_result.success:
+        return bad
+
+    session_result = session_manager.authenticate(
+        AuthenticationRequest(
+            user_id=auth_result.user_id,
+            auth_method=AuthMethod.PASSWORD,
+            credentials={"password": password},
+            device_info={},
+            ip_address=ip_address,
+            user_agent=request.headers.get("user-agent"),
+            requested_session_type=SessionType.STANDARD,
+        )
+    )
+    if not session_result.success or not session_result.session:
+        return bad
+
+    # Set the zoe_session cookie the OIDC endpoints read, then resume the flow.
+    resp = RedirectResponse(
+        f"/application/o/authorize/complete?oidc_state_id={oidc_state_id}",
+        status_code=302,
+    )
+    resp.set_cookie(
+        "zoe_session",
+        session_result.session.session_id,
+        httponly=True,
+        samesite="lax",
+        max_age=8 * 3600,
+        path="/",
+    )
+    return resp
 
 
 # ---------------------------------------------------------------------------
@@ -175,13 +314,15 @@ async def authorize_complete(
 ):
     if not zoe_session:
         return RedirectResponse(
-            f"/?oidc_state_id={oidc_state_id}&error=session_required", status_code=302
+            f"/application/o/login?oidc_state_id={oidc_state_id}&error=session_required",
+            status_code=302,
         )
 
     user_id = _get_user_from_session(zoe_session)
     if not user_id:
         return RedirectResponse(
-            f"/?oidc_state_id={oidc_state_id}&error=session_expired", status_code=302
+            f"/application/o/login?oidc_state_id={oidc_state_id}&error=session_expired",
+            status_code=302,
         )
 
     params = get_pending_auth(oidc_state_id)
@@ -332,7 +473,7 @@ async def end_session(
     if zoe_session:
         with get_db() as conn:
             conn.execute(
-                "UPDATE auth_sessions SET is_active = FALSE WHERE session_id = ?",
+                "UPDATE auth_sessions SET is_active = 0 WHERE session_id = ?",
                 (zoe_session,),
             )
 

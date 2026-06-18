@@ -74,6 +74,8 @@ services:
     - HA_OIDC_CLIENT_SECRET=${HA_OIDC_CLIENT_SECRET:-}
     - MULTICA_OIDC_CLIENT_ID=${MULTICA_OIDC_CLIENT_ID:-multica}
     - MULTICA_OIDC_CLIENT_SECRET=${MULTICA_OIDC_CLIENT_SECRET:-}
+    - OMNIGENT_OIDC_CLIENT_ID=${OMNIGENT_OIDC_CLIENT_ID:-omnigent}
+    - OMNIGENT_OIDC_CLIENT_SECRET=${OMNIGENT_OIDC_CLIENT_SECRET:-}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
       interval: 30s
@@ -237,7 +239,9 @@ services:
   # These were replaced by host-native services + OpenClaw (March 2026)
   # ═══════════════════════════════════════════════════════════════════════════
 
-  # zoe-core: RETIRED - Replaced by zoe-data (host uvicorn :8000) + OpenClaw gateway
+  # zoe-core (old Docker monolith): RETIRED - Replaced by zoe-data (host uvicorn :8000) + OpenClaw gateway.
+  #   NOTE: the name "zoe-core" is now REUSED for the new Pi-agent core (services/zoe-core/), the reasoning
+  #   brain on Gemma 4. That new service is defined separately — this comment refers only to the old monolith.
   # zoe-litellm: RETIRED - OpenClaw handles model routing (GPT-4o-mini / Gemini Flash / local Hermes)
   # zoe-llamacpp: RETIRED - Native llama-server on host :11434 (Hermes-3-8B, better GPU perf)
   # zoe-mcp-server: RETIRED - OpenClaw native tool system

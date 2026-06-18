@@ -14,6 +14,19 @@ from pi_intent_lab import _await_speculative_safe_fulfillment, compare_pi_intent
 from routers.pi_intent_lab import router as pi_intent_lab_router
 
 
+@pytest.fixture(autouse=True)
+def _neutralize_pi_lab_resource_guard(monkeypatch):
+    """These tests assert routing/endpoint behavior, not host memory.
+
+    The lab resource-pressure guard reads live /proc/meminfo, so under a loaded
+    full-suite run available memory can dip below the default 2048MB floor and the
+    endpoint 503s — making these tests flaky by machine state. Default the guard
+    off here; the guard-specific tests below re-enable it via their own setenv.
+    """
+    monkeypatch.setenv("ZOE_PI_LAB_MIN_AVAILABLE_MB", "0")
+    monkeypatch.setenv("ZOE_PI_LAB_MIN_SWAP_FREE_MB", "0")
+
+
 class _Intent:
     def __init__(self, name, slots=None, confidence=0.9):
         self.name = name
