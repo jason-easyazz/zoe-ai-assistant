@@ -937,7 +937,7 @@ def _build_agent_card() -> dict:
         {
             "tier": 2,
             "name": "openclaw",
-            "model": "Codex",
+            "model": "Gemma 4 E2B",
             "browser": True,
             "status": "online" if _RUNTIME_HEALTH.get("openclaw") else "offline",
         },
@@ -1423,7 +1423,7 @@ async def get_agent_runtimes():
             },
             "openclaw": {
                 "port": 18789,
-                "description": "OpenClaw Gateway (Codex mini, browser/exec)",
+                "description": "OpenClaw Gateway (Gemma 4 E2B, browser/exec)",
                 "online": _RUNTIME_HEALTH.get("openclaw", False),
             },
         },
