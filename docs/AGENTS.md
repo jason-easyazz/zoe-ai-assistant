@@ -18,6 +18,14 @@ All project documentation, organized by category. The root of the repository hol
 - When in doubt about deleting a doc, move it to `archive/`.
 - `knowledge/` is an OKF knowledge bundle (markdown + YAML frontmatter, agent-curatable records — see root "Knowledge vs. Records (OKF)"). It holds descriptive facts, NOT contracts; binding rules stay in `AGENTS.md`.
 
+## Forbidden
+
+The autonomous knowledge/memory loop curates `knowledge/` only. It must NEVER:
+- edit any `AGENTS.md` contract (contracts change only via the DOX pass + human review)
+- create, modify, or delete documentation outside `knowledge/`
+- alter `governance/` (the normative charter) or move docs into/out of `archive/`
+- add files to the repository root
+
 ## Work Guidance
 
 Several loose top-level .md files predate the category structure; place new material in categories rather than adding more loose files.
