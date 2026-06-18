@@ -2485,9 +2485,15 @@ async def whisper_warm(_: None = Depends(require_internal_token)):
     # system-side helpers; importing at module load would risk an import cycle.
     from routers.voice_tts import (
         _create_warmup_wav_path,
+        _reset_faster_whisper_worker,
         _run_faster_whisper_worker,
         _write_warmup_silence_wav,
     )
+
+    try:
+        timeout_s = float(os.environ.get("ZOE_WHISPER_WARMUP_TIMEOUT_S", "45"))
+    except (TypeError, ValueError):
+        timeout_s = 45.0
 
     wav_path = ""
     started = time.monotonic()
@@ -2495,10 +2501,19 @@ async def whisper_warm(_: None = Depends(require_internal_token)):
         # Offload sync file I/O to a worker thread so the event loop never blocks.
         wav_path = await asyncio.to_thread(_create_warmup_wav_path)
         await asyncio.to_thread(_write_warmup_silence_wav, wav_path)
-        await _run_faster_whisper_worker(wav_path)
+        # Bound the worker call: a hung/deadlocked subprocess must not hang the
+        # request (the 30s keepwarm timer would otherwise pile up coroutines).
+        await asyncio.wait_for(_run_faster_whisper_worker(wav_path), timeout=timeout_s)
         latency_ms = int((time.monotonic() - started) * 1000)
         return {"ok": True, "warmed": True, "latency_ms": latency_ms}
     except Exception as exc:
+        # Reset the persistent worker so a broken/hung one is torn down and the
+        # NEXT warm starts fresh — otherwise every subsequent ping reuses the
+        # broken worker and the model never recovers without a service restart.
+        try:
+            await _reset_faster_whisper_worker()
+        except Exception:  # noqa: BLE001 - best-effort teardown
+            logger.warning("whisper-warm: worker reset after failure also failed", exc_info=True)
         logger.warning("whisper-warm failed: %s", exc)
         return {"ok": False, "warmed": False, "error": exc.__class__.__name__}
     finally:
