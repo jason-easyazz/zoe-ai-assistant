@@ -33,7 +33,10 @@ export async function dispatchIntent(
     }
     const data = (await res.json()) as { result?: string; ok?: boolean };
     return (data.result ?? "").trim() || "Done.";
-  } catch {
+  } catch (err) {
+    // Don't swallow silently: surface the failure for observability while still
+    // returning a calm, user-facing message (mirrors the abilities.ts pattern).
+    console.warn(`[zoe-core] intent-dispatch failed for "${intent}":`, err);
     return "I couldn't reach that service right now.";
   }
 }
