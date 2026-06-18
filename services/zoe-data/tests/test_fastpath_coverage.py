@@ -71,7 +71,7 @@ def test_real_requests_not_short_circuited(text):
     n = _name(text)
     assert n not in ("acknowledgement", "status_check"), f"{text!r} wrongly caught as {n}"
     # also must not be reduced to a bare clock read
-    assert n not in ("time_query", "date_query") or "weather" not in text, f"{text!r} -> {n}"
+    assert n not in ("time_query", "date_query"), f"{text!r} -> {n}"
 
 
 @pytest.mark.asyncio
