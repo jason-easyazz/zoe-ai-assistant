@@ -1782,6 +1782,13 @@ async def _resolve_voice_cards(message_text: str, user_id: str, context: dict | 
         return {"handled": False, "cards": [], "spoken_summary": ""}
 
 
+# Read-only intents the voice WS may answer instantly (no writes → cannot
+# double-execute a skybridge-card action). Kept narrow on purpose.
+_VOICE_INSTANT_INTENTS = frozenset({
+    "calculate", "time_query", "date_query", "greeting", "acknowledgement", "status_check",
+})
+
+
 @app.websocket("/ws/voice/")
 async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
     """Local voice session WebSocket for voice.html.
@@ -1888,6 +1895,44 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
                 continue
             skybridge_context = {}
 
+            # ── Instant intent fast-path ────────────────────────────────────────
+            # Side-effect-free commands the card path doesn't cover (calc, clock,
+            # greeting, acknowledgement, presence check) — answer + speak without
+            # waking the ~2-4s brain. Restricted to READ-ONLY intents so it can
+            # never double-execute a write the skybridge path already handled.
+            #
+            # Detect+execute is wrapped so a FAILURE THERE (before any send) falls
+            # through to the brain. But once we have a reply and start sending, we
+            # are committed: TTS is best-effort and we never fall through (avoids a
+            # duplicate transcript if the brain path also ran).
+            _fp_reply = None
+            try:
+                from intent_router import detect_intent as _fp_detect, execute_intent as _fp_exec
+                _fp_intent = _fp_detect(message_text, log_miss=False, user_id=user_id)
+                if _fp_intent is not None and _fp_intent.name in _VOICE_INSTANT_INTENTS:
+                    _fp_reply = await _fp_exec(_fp_intent, user_id=user_id)
+            except Exception as _fp_exc:
+                logger.debug("voice instant fast-path detect/execute skipped: %s", _fp_exc)
+                _fp_reply = None
+            if _fp_reply:
+                import base64 as _b64fp
+                await websocket.send_json({"type": "state", "state": "responding"})
+                await websocket.send_json({"type": "transcript", "role": "zoe", "text": _fp_reply})
+                try:
+                    from routers.voice_tts import _synthesize_kokoro_sidecar as _fp_tts
+                    _fp_wav = await _fp_tts(_fp_reply)
+                    if _fp_wav:
+                        await websocket.send_json({
+                            "type": "audio",
+                            "audio_base64": _b64fp.b64encode(_fp_wav).decode("ascii"),
+                            "content_type": "audio/wav",
+                        })
+                except Exception as _fp_tts_exc:
+                    logger.debug("voice fast-path TTS failed (text already sent): %s", _fp_tts_exc)
+                await websocket.send_json({"type": "state", "state": "ambient"})
+                await websocket.send_json({"type": "done"})
+                continue
+
             # ── Streaming LLM + per-sentence TTS ────────────────────────────────
             # Track LLM output and TTS output separately so fallback only re-runs
             # what actually failed (avoids double-transcript if LLM works but TTS is down).
@@ -1895,14 +1940,14 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
             _stream_tts_ok = False   # True if at least one audio chunk was sent
             try:
                 import base64 as _b64
-                from zoe_agent import run_zoe_agent_streaming  # type: ignore
+                from brain_dispatch import brain_streaming  # zoe-core by default
                 from routers.voice_tts import _extract_complete_sentences, _synthesize_kokoro_sidecar  # type: ignore
 
                 token_buf = ""
                 full_reply: list[str] = []
                 tts_started = False
 
-                async for delta in run_zoe_agent_streaming(
+                async for delta in brain_streaming(
                     message_text, ws_session_id, user_id=user_id, voice_mode=True
                 ):
                     if _ws_cancelled[0]:
@@ -1951,9 +1996,9 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
                     # LLM streaming failed entirely → full single-shot fallback
                     try:
                         import base64 as _b64
-                        from zoe_agent import run_zoe_agent  # type: ignore
+                        from brain_dispatch import brain_oneshot  # zoe-core by default
                         from routers.voice_tts import synthesize as _synth  # type: ignore
-                        _fallback_response = await run_zoe_agent(
+                        _fallback_response = await brain_oneshot(
                             message_text, ws_session_id, user_id, voice_mode=True
                         )
                         await websocket.send_json({"type": "state", "state": "responding"})

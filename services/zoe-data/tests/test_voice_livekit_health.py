@@ -119,6 +119,9 @@ async def test_pipeline_emits_processing_ack_before_slow_response(monkeypatch):
 
     monkeypatch.setattr(voice_tts, "_transcribe_audio", _fake_transcribe)
     monkeypatch.setattr(voice_tts, "synthesize", _fake_synthesize)
+    # Pipeline behaviour is brain-agnostic; pin the legacy brain so the dispatch
+    # routes to the mocked zoe_agent (default is now zoe-core).
+    monkeypatch.setenv("ZOE_USE_CORE_BRAIN", "false")
     monkeypatch.setitem(sys.modules, "zoe_agent", types.SimpleNamespace(run_zoe_agent=_fake_agent))
     monkeypatch.setenv("ZOE_PROCESSING_ACK_PHRASE", "Let me check.")
     local = _LocalParticipant()

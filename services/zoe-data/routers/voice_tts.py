@@ -3700,7 +3700,7 @@ async def voice_command(
         #   * Streaming tokens are accumulated so that Pass 2b can hand the
         #     sentence-buffered stream to Kokoro.create_stream() and bring
         #     first-audio-byte latency down further.
-        from zoe_agent import run_zoe_agent_streaming
+        from brain_dispatch import brain_streaming  # zoe-core by default
 
         voice_timeout = float(os.environ.get("ZOE_VOICE_CHAT_TIMEOUT_S", "20"))
         try:
@@ -3827,7 +3827,7 @@ async def voice_command(
                         logger.debug("voice/command stream processing acknowledgement failed: %s", ack_exc)
 
                     _voice_history = await _load_voice_history(session_id, limit=3)
-                    async for delta in run_zoe_agent_streaming(
+                    async for delta in brain_streaming(
                         text, session_id, user_id=effective_user,
                         voice_mode=True, history=_voice_history or None
                     ):
@@ -3928,7 +3928,7 @@ async def voice_command(
 
         async def _stream_collect() -> None:
             nonlocal _t_first_token
-            async for delta in run_zoe_agent_streaming(
+            async for delta in brain_streaming(
                 text,
                 session_id,
                 user_id=effective_user,
