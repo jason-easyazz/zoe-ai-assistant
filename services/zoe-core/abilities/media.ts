@@ -63,7 +63,9 @@ const media: CapabilityEntry = {
           if (params.level == null) return "What level should I set my speaking volume to (0-100)?";
           return dispatchIntent(ctx, "set_volume", { direction: "set", level: clampLevel(params.level) });
         }
-        return dispatchIntent(ctx, "set_volume", { direction: direction === "down" ? "down" : "up", level: null });
+        // up/down: omit `level` entirely (the set_volume intent treats it as
+        // optional — sending an explicit null could be mishandled vs. absent).
+        return dispatchIntent(ctx, "set_volume", { direction: direction === "down" ? "down" : "up" });
       }
       case "setup":
         return dispatchIntent(ctx, "music_setup", {});
