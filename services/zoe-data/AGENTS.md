@@ -28,6 +28,7 @@ THE production Zoe API: FastAPI app served by host uvicorn on port 8000. Owns ch
 - Memory Lint (`memory_lint.py`) is REPORT-ONLY. It must never delete, merge, edit, archive, supersede, or otherwise mutate stored memory, and must never trigger such mutation. It reads through the `MemoryService` facade and returns flags/reports for human or curation review only.
 - Lint must not run inside the nightly dreaming cycle by default. Emitting a lint report from dreaming is opt-in via `ZOE_MEMORY_LINT_IN_DREAMING` and stays report-only even when enabled.
 - No DB schema migration, no destructive ops, and no cloud/LLM dependency from the lint detectors (they stay offline-safe heuristics).
+- The local merge queue (`run_merge_queue` in `greploop_guard.py`) is DISABLED by default (requires `ZOE_MERGE_QUEUE_ENABLED=1` and no `merge_queue.disabled` kill file). It must NEVER use `--admin` or force-merge, never bypass branch protection, never merge a PR not assessed READY, never act on PRs lacking the `auto-merge` label, never resolve rebase conflicts automatically (abort + report), never touch the live checkout (rebases run in a disposable worktree), and act on at most one PR per cycle.
 
 ## Work Guidance
 
