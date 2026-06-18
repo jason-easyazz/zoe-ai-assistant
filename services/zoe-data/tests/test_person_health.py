@@ -59,10 +59,25 @@ class _FrozenDateTime:
         return datetime.fromisoformat(value)
 
 
+class _FrozenDate(date):
+    """``person_health.date`` with ``today()`` pinned to FIXED_NOW's date.
+
+    The birthday-boost path computes ``(next_birthday - date.today()).days``,
+    so ``date.today()`` must be frozen too — otherwise a run that straddles
+    midnight shifts the boundary by a day and flips the boost. Subclassing
+    ``date`` keeps the ``date(y, m, d)`` constructor working for other callers.
+    """
+
+    @classmethod
+    def today(cls):
+        return FIXED_NOW.date()
+
+
 @pytest.fixture
 def fixed_now(monkeypatch):
-    """Pin ``datetime.now`` inside ``person_health`` to FIXED_NOW for the test."""
+    """Pin both ``datetime.now`` and ``date.today`` inside ``person_health``."""
     monkeypatch.setattr(person_health, "datetime", _FrozenDateTime)
+    monkeypatch.setattr(person_health, "date", _FrozenDate)
 
 
 def _days_ago(days: int) -> str:
@@ -71,8 +86,8 @@ def _days_ago(days: int) -> str:
 
 
 def _birthday_in(days: int) -> date:
-    """Return a date object ``days`` after today (the file's "now")."""
-    return date.today() + timedelta(days=days)
+    """Return a date ``days`` after the frozen "now" (no midnight race)."""
+    return FIXED_NOW.date() + timedelta(days=days)
 
 
 # ── __all__ public contract ─────────────────────────────────────────────────
@@ -392,12 +407,15 @@ def test_health_score_legacy_circle_string_resolves_via_legacy_table(fixed_now):
     # The lookup falls through ``_HALF_LIFE`` (which is keyed on
     # context:tier) to ``_HALF_LIFE_LEGACY``. Pin that this still
     # produces a valid, well-shaped score (not the 60-day fallback).
-    score = calc_health_score(_days_ago(7), 10, "friends")
-    # Just assert shape and sanity; specific value depends on legacy
-    # table, but a 60-day fallback would yield ≈ exp(-7/60) ≈ 0.890
-    # while the legacy "friends" half-life of 30 yields ≈ exp(-7/30) ≈ 0.792.
-    # So a score strictly below 0.85 confirms the legacy key resolved.
-    assert 0.0 < score < 0.85
+    # Differential check: "friends" must resolve via _HALF_LIFE_LEGACY (half-life
+    # 30) and NOT via the 60-day default. With identical inputs, an unknown circle
+    # falls back to 60 → slower decay → strictly higher recency/score. If "friends"
+    # silently fell through to the 60 default the two scores would be equal.
+    score_legacy = calc_health_score(_days_ago(7), 10, "friends")
+    score_fallback = calc_health_score(_days_ago(7), 10, "totally-bogus-circle")
+    assert 0.0 < score_legacy < score_fallback <= 1.0
+    # Pin the table value the lookup must use, so a future table edit is visible here.
+    assert _HALF_LIFE_LEGACY["friends"] == 30
 
 
 def test_health_score_unknown_circle_falls_back_to_60_day_default(fixed_now):
