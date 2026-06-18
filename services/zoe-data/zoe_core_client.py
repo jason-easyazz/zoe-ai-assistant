@@ -145,7 +145,8 @@ class _ZoeCoreWorker:
 
     async def _read_turn(self, request_id: str, timeout_s: float) -> AsyncIterator[str]:
         assert self.proc and self.proc.stdout
-        emitted = ""
+        emitted = ""           # text already streamed for the CURRENT message
+        streamed_any = False   # whether we've yielded anything this whole turn
         prompt_accepted = False
         deadline = time.monotonic() + timeout_s
         while True:
@@ -166,15 +167,30 @@ class _ZoeCoreWorker:
                 continue
             if not prompt_accepted or not _rpc_event_matches_request(event, request_id):
                 continue
+            etype = event.get("type")
+            # A new assistant message resets the per-message delta tracker. The
+            # agent loop can span multiple messages/turns (e.g. a tool-call turn
+            # followed by the answer turn); deltas are cumulative WITHIN a message.
+            if etype == "message_start":
+                emitted = ""
             text = _assistant_text_from_rpc_event(event)
             if text and text.startswith(emitted) and len(text) > len(emitted):
                 yield text[len(emitted):]
                 emitted = text
+                streamed_any = True
             elif text and not text.startswith(emitted):
-                # Non-monotonic (rare): emit the whole fresh text.
+                # Message boundary / non-monotonic update — emit the fresh text.
                 yield text
                 emitted = text
-            if event.get("type") in ("turn_end", "agent_end"):
+                streamed_any = True
+            # Only the END OF THE WHOLE AGENT LOOP terminates the turn. A bare
+            # turn_end fires after each tool-call turn too — returning there would
+            # cut off before the model synthesizes its answer from the tool result.
+            if etype == "agent_end":
+                if not streamed_any:
+                    final = _assistant_text_from_rpc_event(event)
+                    if final:
+                        yield final
                 return
 
 

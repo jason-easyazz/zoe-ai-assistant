@@ -82,6 +82,9 @@ class _Stub:
                 if "intent-dispatch" in self.path:
                     item = (body.get("slots") or {}).get("item", "it")
                     self._json({"intent": body.get("intent"), "ok": True, "result": f"Added {item}."})
+                elif "delegate-sync" in self.path:
+                    self._json({"target": "hermes", "ok": True,
+                                "result": "Hermes web result: Saturday is sunny, 24 degrees."})
                 else:
                     self._json({"ok": True})
 
@@ -99,6 +102,10 @@ class _Stub:
     def dispatches(self) -> list[dict[str, Any]]:
         with self._lock:
             return [r["body"] for r in self.requests if r["m"] == "POST" and "intent-dispatch" in r["path"]]
+
+    def delegations(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return [r["body"] for r in self.requests if r["m"] == "POST" and "delegate-sync" in r["path"]]
 
     def memory_hits(self) -> int:
         with self._lock:
@@ -137,6 +144,21 @@ async def test_identity_streams_as_zoe(stub):
         n_chunks += 1
     assert "zoe" in text.lower(), text
     assert n_chunks >= 1
+
+
+@pytest.mark.integration
+@requires_env
+@pytest.mark.asyncio
+async def test_web_query_delegates_and_synthesizes(stub):
+    """A web/research query delegates to Hermes AND folds the result into a
+    spoken answer. Guards the post-tool-synthesis fix: the agent loop must run
+    to agent_end (not stop at the tool-call turn_end) so the answer isn't empty."""
+    s, zc = stub
+    answer = await zc.run_zoe_core(
+        "Search the web for this weekend's weather forecast.", "deleg", "family-admin"
+    )
+    assert len(s.delegations()) >= 1, f"did not delegate; requests={s.requests}"
+    assert answer.strip(), "delegated but produced no synthesized answer (post-tool synthesis broken)"
 
 
 @pytest.mark.integration
