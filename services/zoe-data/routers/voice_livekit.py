@@ -243,8 +243,8 @@ async def _run_pipeline(local_participant, frames: list[bytes], user_id: str, se
     stage_started = time.monotonic()
     _health_update(last_stage="llm")
     try:
-        from zoe_agent import run_zoe_agent
-        response = await run_zoe_agent(transcript, session_id, user_id, voice_mode=True)
+        from brain_dispatch import brain_oneshot
+        response = await brain_oneshot(transcript, session_id, user_id, voice_mode=True)
     except Exception as exc:
         llm_ok = False
         _VOICE_HEALTH["pipeline_failures"] += 1
@@ -303,8 +303,8 @@ async def _run_text_pipeline(local_participant, message: str, user_id: str, sess
     stage_started = time.monotonic()
     _health_update(last_stage="llm", last_error=None)
     try:
-        from zoe_agent import run_zoe_agent
-        response = await run_zoe_agent(message, session_id, user_id, voice_mode=True)
+        from brain_dispatch import brain_oneshot
+        response = await brain_oneshot(message, session_id, user_id, voice_mode=True)
     except Exception as exc:
         llm_ok = False
         _VOICE_HEALTH["pipeline_failures"] += 1
@@ -803,8 +803,8 @@ async def livekit_audio(
         return JSONResponse({"ok": True, "cancelled": True})
 
     try:
-        from zoe_agent import run_zoe_agent
-        response_text = await run_zoe_agent(transcript, sid, user_id, voice_mode=True)
+        from brain_dispatch import brain_oneshot
+        response_text = await brain_oneshot(transcript, sid, user_id, voice_mode=True)
     except Exception as exc:
         logger.error("LiveKit HTTP LLM error: %s", exc)
         response_text = "Sorry, I had trouble processing that."
