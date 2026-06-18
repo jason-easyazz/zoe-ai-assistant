@@ -199,6 +199,15 @@ open_refresh_pr() {
     return 0
   fi
 
+  # Pre-flight: without an authenticated gh we cannot open (or even look up) a
+  # PR. Bail BEFORE creating or pushing any branch so a missing/unauthenticated
+  # gh can never leave an orphaned ref on origin. The live tree was already
+  # refreshed via the rsync above, so skipping the PR here degrades gracefully.
+  if ! command -v gh >/dev/null 2>&1 || ! gh auth status >/dev/null 2>&1; then
+    log "WARN: gh unavailable or unauthenticated; live graph updated but no refresh PR opened"
+    return 0
+  fi
+
   # Reuse an existing branch/PR for this head; never open a duplicate.
   if gh pr list --head "$branch" --state open --json number \
        --jq '.[].number' 2>/dev/null | grep -q .; then
@@ -219,7 +228,12 @@ open_refresh_pr() {
     -m "Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>" >/dev/null \
     || fail "git commit of graphify-out failed in snapshot; committed graph untouched"
 
-  git -C "$SNAPSHOT_DIR" push --force-with-lease origin "$branch" >/dev/null 2>&1 \
+  # Populate a remote-tracking ref for the branch (the detached snapshot
+  # worktree has none) so --force-with-lease has a real basis and cannot
+  # silently degrade to a plain --force when reusing an existing branch. For a
+  # brand-new branch there is nothing to overwrite, so the absent ref is fine.
+  git -C "$SNAPSHOT_DIR" fetch origin "+refs/heads/$branch:refs/remotes/origin/$branch" >/dev/null 2>&1 || true
+  git -C "$SNAPSHOT_DIR" push --force-with-lease="$branch" origin "$branch" >/dev/null 2>&1 \
     || fail "git push of $branch failed; committed graph untouched and no PR opened"
 
   local body
