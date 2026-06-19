@@ -107,6 +107,22 @@ def _bounded_blocked_resume_window(
     return window, (start + budget) % count
 
 
+def _multica_poll_interval_s(paused: bool, *, active_s: float, paused_s: float) -> float:
+    """Cadence for the Multica poll loop.
+
+    Throttle to ``paused_s`` while dispatch is paused — the per-issue chain
+    reconcile (worktree + git ops) is expensive and pointless when nothing is
+    being dispatched — and use the normal ``active_s`` otherwise.
+
+    Floors the paused cadence at ``active_s`` so a misconfigured
+    ``ZOE_MULTICA_PAUSED_POLL_S`` of 0 or a negative value can't turn the paused
+    path into a tight spin loop that burns *more* CPU than the active cadence.
+    """
+    if not paused:
+        return active_s
+    return max(paused_s, active_s)
+
+
 async def _poll_chain_guarded(ref: str, *, issue: dict | None, timeout: float) -> dict:
     """Poll a chain without letting one dead ref wedge the whole poll loop.
 
@@ -783,9 +799,45 @@ async def lifespan(app: FastAPI):
                 os.environ.get("ZOE_WORKTREE_PRUNE_INTERVAL_S"),
             )
             _prune_interval_s = 86400.0
+        # Cadence when dispatch is paused. The per-issue chain reconcile below
+        # (poll_ref → worktree+git ops) costs ~30s CPU and a multi-GB transient
+        # allocation each pass; running it every 30s while nothing is being
+        # dispatched is pure waste. Poll every 30s when active, every
+        # ZOE_MULTICA_PAUSED_POLL_S (default 300s) when paused.
+        try:
+            _paused_poll_s = float(os.environ.get("ZOE_MULTICA_PAUSED_POLL_S", "300") or "300")
+        except ValueError:
+            logger.warning(
+                "multica_poll: invalid ZOE_MULTICA_PAUSED_POLL_S=%r; using 300",
+                os.environ.get("ZOE_MULTICA_PAUSED_POLL_S"),
+            )
+            _paused_poll_s = 300.0
+        _ACTIVE_POLL_S = 30.0
+        _pause_check_warned = False
         while True:
             try:
-                await asyncio.sleep(30)
+                # Re-checked inside the cycle, so a resume still takes effect
+                # promptly on the next pass.
+                try:
+                    from multica_dispatch_control import dispatch_is_paused as _dispatch_is_paused
+                    _poll_interval = _multica_poll_interval_s(
+                        _dispatch_is_paused(), active_s=_ACTIVE_POLL_S, paused_s=_paused_poll_s
+                    )
+                    _pause_check_warned = False
+                except Exception as _pause_exc:
+                    # A pause-check failure must not silently disable the throttle
+                    # forever with no trace. Warn once (then debug), and fall back
+                    # to the active cadence until it recovers.
+                    if not _pause_check_warned:
+                        logger.warning(
+                            "multica_poll: pause check failed (%s); using active poll "
+                            "cadence until it recovers", _pause_exc,
+                        )
+                        _pause_check_warned = True
+                    else:
+                        logger.debug("multica_poll: pause check still failing: %s", _pause_exc)
+                    _poll_interval = _ACTIVE_POLL_S
+                await asyncio.sleep(_poll_interval)
                 from multica_client import MULClient  # type: ignore[import]
                 client = MULClient()
                 if not client.is_configured():
