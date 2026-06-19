@@ -66,6 +66,10 @@ def test_multica_poll_interval_throttles_when_paused():
     assert _multica_poll_interval_s(False, active_s=30.0, paused_s=300.0) == 30.0
     # ...and the throttled cadence while it's paused.
     assert _multica_poll_interval_s(True, active_s=30.0, paused_s=300.0) == 300.0
+    # A misconfigured 0/negative paused interval is floored at the active cadence
+    # so the paused path can never become a tighter spin loop than active.
+    assert _multica_poll_interval_s(True, active_s=30.0, paused_s=0.0) == 30.0
+    assert _multica_poll_interval_s(True, active_s=30.0, paused_s=-5.0) == 30.0
 
 
 def test_multica_poll_loop_routes_sleep_through_paused_interval_helper():
