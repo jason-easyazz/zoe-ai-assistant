@@ -908,8 +908,13 @@ async def start_livekit_agent() -> None:
     if _ondemand_enabled():
         # On-demand mode: leave the container stopped; ensure_livekit_started()
         # spins it up (and the agent loop) on the first /livekit-token request.
+        # Start the idle monitor now so a container left running across a service
+        # restart (orphaned, with no agent/monitor) still gets reaped.
+        global _idle_task
         note_voice_activity()
         _health_update(status="stopped", connected=False, last_error=None)
+        if _idle_task is None or _idle_task.done():
+            _idle_task = asyncio.create_task(_idle_monitor(), name="livekit_idle_monitor")
         logger.info(
             "LiveKit on-demand mode: agent will start on first /livekit-token request"
         )

@@ -212,8 +212,11 @@ async def test_start_agent_ondemand_does_not_run_loop(monkeypatch):
         ran.append(True)
 
     monkeypatch.setattr(voice_livekit, "_agent_loop", _loop)
+    monkeypatch.setattr(voice_livekit, "_idle_monitor", _never_ending)
 
     await voice_livekit.start_livekit_agent()
 
     assert ran == []  # boot must not start the agent loop in on-demand mode
     assert voice_livekit.get_voice_health()["status"] == "stopped"
+    # but the idle reaper IS started so an orphaned container still gets reaped
+    assert voice_livekit._idle_task is not None and not voice_livekit._idle_task.done()
