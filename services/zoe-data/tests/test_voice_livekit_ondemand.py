@@ -146,8 +146,7 @@ async def test_reap_if_idle_holds_open_with_participants(monkeypatch):
     monkeypatch.setattr(voice_livekit, "stop_livekit_ondemand", _fake_stop)
 
     monkeypatch.setattr(voice_livekit, "_last_activity", 0.0)
-    # mutating the per-test fresh set is discarded on teardown (no global leak)
-    voice_livekit._active_participant_sids.add("participant-1")
+    monkeypatch.setattr(voice_livekit, "_active_participant_sids", {"participant-1"})
 
     should_exit = await voice_livekit._reap_if_idle()
 
