@@ -86,6 +86,34 @@ async def test_chat_pi_hybrid_action_form_broadcasts_without_tool_memory_side_ef
 
 
 
+def test_chat_stream_generator_accepts_req_panel_id():
+    """Regression for aea6456a: chat_stream_generator's intent fast-path calls
+    the Pi hybrid lane with panel_id=req_panel_id, but the parameter was never
+    threaded into the function — so every fast-path chat raised
+    `NameError: name 'req_panel_id' is not defined`. The existing lane test
+    exercised _run_chat_pi_hybrid_lane directly and missed the caller bug."""
+    import inspect
+
+    sig = inspect.signature(chat.chat_stream_generator)
+    assert "req_panel_id" in sig.parameters, (
+        "chat_stream_generator must accept req_panel_id or the fast-path NameErrors"
+    )
+
+
+def test_chat_stream_generator_forwards_panel_id_to_hybrid_lane():
+    """Stronger guard (per review): accepting req_panel_id isn't enough — the
+    fast-path must actually forward it to the Pi hybrid lane. A refactor that
+    keeps the parameter but drops it before the call would silently reintroduce
+    the NameError-era bug; this asserts the call site still wires it through."""
+    import inspect
+    import re
+
+    src = inspect.getsource(chat.chat_stream_generator)
+    assert re.search(
+        r"_run_chat_pi_hybrid_lane\([^)]*panel_id\s*=\s*req_panel_id", src, re.S
+    ), "fast-path must forward req_panel_id into _run_chat_pi_hybrid_lane(panel_id=...)"
+
+
 def test_timer_create_has_touch_panel_action_form_payload():
     class Intent:
         name = "timer_create"
