@@ -17,18 +17,22 @@ def _reset_lifecycle(monkeypatch):
     # Always have credentials so the start path isn't short-circuited.
     monkeypatch.setenv("LIVEKIT_API_KEY", "test-key")
     monkeypatch.setenv("LIVEKIT_API_SECRET", "test-secret")
-    voice_livekit._agent_task = None
-    voice_livekit._idle_task = None
-    voice_livekit._lifecycle_lock = None
-    voice_livekit._active_participant_sids.clear()
-    voice_livekit._last_activity = 0.0
+    # monkeypatch.setattr restores the original bindings on teardown even if a
+    # test raises before the cleanup below — no stale global leaks into the next
+    # test. Use a fresh set so in-test mutations are discarded with it.
+    monkeypatch.setattr(voice_livekit, "_agent_task", None)
+    monkeypatch.setattr(voice_livekit, "_idle_task", None)
+    monkeypatch.setattr(voice_livekit, "_lifecycle_lock", None)
+    monkeypatch.setattr(voice_livekit, "_active_participant_sids", set())
+    monkeypatch.setattr(voice_livekit, "_last_activity", 0.0)
     voice_livekit.reset_voice_health_for_tests()
     yield
+    # Tasks created during the test must still be cancelled — monkeypatch
+    # restores the binding, not any task object the test spawned into it.
     for handle in (voice_livekit._agent_task, voice_livekit._idle_task):
         if handle is not None and not handle.done():
             handle.cancel()
-    voice_livekit._agent_task = None
-    voice_livekit._idle_task = None
+    voice_livekit.reset_voice_health_for_tests()
 
 
 async def _never_ending():
@@ -122,8 +126,7 @@ async def test_reap_if_idle_stops_when_idle(monkeypatch):
     monkeypatch.setattr(voice_livekit, "_container_running", _fake_running)
     monkeypatch.setattr(voice_livekit, "stop_livekit_ondemand", _fake_stop)
 
-    voice_livekit._last_activity = 0.0  # long ago
-    voice_livekit._active_participant_sids.clear()
+    monkeypatch.setattr(voice_livekit, "_last_activity", 0.0)  # long ago
 
     should_exit = await voice_livekit._reap_if_idle()
 
@@ -142,7 +145,8 @@ async def test_reap_if_idle_holds_open_with_participants(monkeypatch):
 
     monkeypatch.setattr(voice_livekit, "stop_livekit_ondemand", _fake_stop)
 
-    voice_livekit._last_activity = 0.0
+    monkeypatch.setattr(voice_livekit, "_last_activity", 0.0)
+    # mutating the per-test fresh set is discarded on teardown (no global leak)
     voice_livekit._active_participant_sids.add("participant-1")
 
     should_exit = await voice_livekit._reap_if_idle()
@@ -201,6 +205,25 @@ def test_agent_identity_does_not_hold_reaper_open():
     # A real browser participant → tracked.
     room.handlers["participant_connected"](_P("browser-1", "PA_browser"))
     assert "PA_browser" in voice_livekit._active_participant_sids
+
+
+@pytest.mark.asyncio
+async def test_direct_stop_tears_down_idle_monitor(monkeypatch):
+    """Calling stop_livekit_ondemand directly (not from the monitor itself) must
+    cancel + clear _idle_task, so the next ensure_livekit_started() recreates it
+    rather than skipping it via the done()-guard."""
+    async def _fake_docker(*args, timeout=20.0):
+        return 0, ""
+
+    monkeypatch.setattr(voice_livekit, "_docker_cmd", _fake_docker)
+    idle = asyncio.create_task(_never_ending())
+    monkeypatch.setattr(voice_livekit, "_idle_task", idle)
+
+    await voice_livekit.stop_livekit_ondemand(reason="manual")
+
+    assert voice_livekit._idle_task is None
+    await asyncio.sleep(0)
+    assert idle.cancelled() or idle.done()
 
 
 @pytest.mark.asyncio

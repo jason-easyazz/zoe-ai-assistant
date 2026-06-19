@@ -204,7 +204,7 @@ async def ensure_livekit_started(wait_ready: float = 8.0) -> bool:
 
 async def stop_livekit_ondemand(reason: str = "idle") -> None:
     """Cancel the agent loop and stop the LiveKit container."""
-    global _agent_task
+    global _agent_task, _idle_task
     async with _get_lifecycle_lock():
         task = _agent_task
         _agent_task = None
@@ -216,6 +216,14 @@ async def stop_livekit_ondemand(reason: str = "idle") -> None:
                 pass
             except Exception:
                 pass
+        # Tear the idle monitor down too, so a later ensure_livekit_started()
+        # recreates it. Skip when we're being called *from* the monitor itself
+        # (the normal _reap_if_idle path) — that task returns naturally and must
+        # not cancel itself mid-await.
+        idle = _idle_task
+        if idle is not None and idle is not asyncio.current_task() and not idle.done():
+            idle.cancel()
+            _idle_task = None
         _active_participant_sids.clear()
         logger.info("LiveKit on-demand: stopping container '%s' (reason=%s)", _CONTAINER_NAME, reason)
         await _docker_cmd("stop", _CONTAINER_NAME, timeout=30)
