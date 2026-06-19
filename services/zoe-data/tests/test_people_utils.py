@@ -9,11 +9,14 @@ person dict consumed by UI surfaces. It must:
 * apply the documented defaults for ``circle`` / ``context`` / ``health_score``
   / ``notification_count`` / ``contact_count`` / ``is_partial``,
 * coerce ``is_partial`` to a real boolean, and
-* preserve any extra columns the caller happened to include.
+* drop any columns outside the canonical schema (the return dict has a
+  fixed key set — see ``test_extra_row_fields_are_dropped_by_design``).
 
 The helper is intentionally pure — it takes a dict-like row, performs no I/O,
 and returns a fresh dict. The tests below pin each branch independently.
 """
+
+import collections.abc
 
 from people_utils import row_to_person
 
@@ -268,17 +271,24 @@ def test_dict_like_row_is_supported():
     asyncpg / dataclasses.asdict all qualify because they expose either
     ``keys()`` or ``__iter__``)."""
 
-    class DictLike:
+    # Full collections.abc.Mapping protocol (not just keys/__getitem__) so this
+    # mirrors real psycopg2/asyncpg rows and exercises the non-dict dict(row)
+    # branch via iteration, like the production path.
+    class DictLike(collections.abc.Mapping):
         def __init__(self, data):
             self._d = data
 
         def __getitem__(self, key):
             return self._d[key]
 
-        def keys(self):
-            return self._d.keys()
+        def __iter__(self):
+            return iter(self._d)
+
+        def __len__(self):
+            return len(self._d)
 
     row = DictLike({"id": 1, "name": "A", "preferences": '{"k": 1}'})
+    assert not isinstance(row, dict)
     person = row_to_person(row)
     assert person["id"] == 1
     assert person["name"] == "A"
