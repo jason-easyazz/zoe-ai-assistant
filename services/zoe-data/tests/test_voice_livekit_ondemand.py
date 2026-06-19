@@ -171,6 +171,38 @@ async def test_reap_if_idle_waits_out_recent_activity(monkeypatch):
     assert stopped == []
 
 
+def test_agent_identity_does_not_hold_reaper_open():
+    """The agent's own join must not count as an active participant, else the
+    container never reaps (the aiortc backend emits participant_connected for
+    every participant already in the room when the agent joins)."""
+
+    class _Room:
+        def __init__(self):
+            self.handlers = {}
+
+        def on(self, event):
+            def _decorator(func):
+                self.handlers[event] = func
+                return func
+            return _decorator
+
+    class _P:
+        def __init__(self, identity, sid):
+            self.identity = identity
+            self.sid = sid
+
+    room = _Room()
+    voice_livekit._build_room_handlers(room, {}, {})
+
+    # Agent's own identity → ignored.
+    room.handlers["participant_connected"](_P(voice_livekit._AGENT_IDENTITY, "PA_agent"))
+    assert "PA_agent" not in voice_livekit._active_participant_sids
+
+    # A real browser participant → tracked.
+    room.handlers["participant_connected"](_P("browser-1", "PA_browser"))
+    assert "PA_browser" in voice_livekit._active_participant_sids
+
+
 @pytest.mark.asyncio
 async def test_start_agent_ondemand_does_not_run_loop(monkeypatch):
     monkeypatch.setenv("ZOE_LIVEKIT_ONDEMAND", "true")

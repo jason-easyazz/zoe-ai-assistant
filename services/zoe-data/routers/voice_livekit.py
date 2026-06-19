@@ -279,7 +279,17 @@ def _record_voice_connected() -> None:
 
 
 def get_voice_health() -> dict:
-    return copy.deepcopy(_VOICE_HEALTH)
+    health = copy.deepcopy(_VOICE_HEALTH)
+    idle_age = (time.monotonic() - _last_activity) if _last_activity else None
+    health["ondemand"] = {
+        "enabled": _ondemand_enabled(),
+        "idle_timeout_s": _idle_timeout_s(),
+        "idle_age_s": round(idle_age, 1) if idle_age is not None else None,
+        "active_participants": sorted(_active_participant_sids),
+        "agent_task_running": _agent_task is not None and not _agent_task.done(),
+        "idle_monitor_running": _idle_task is not None and not _idle_task.done(),
+    }
+    return health
 
 
 def reset_voice_health_for_tests() -> None:
@@ -651,7 +661,10 @@ def _build_room_handlers(room, participant_state: dict, audio_tasks: dict) -> No
     def on_participant_connected(participant) -> None:
         logger.info("LiveKit: participant joined %s (%s)", participant.identity, participant.sid[:8])
         participant_state[participant.sid] = _make_participant_state(participant.sid)
-        _active_participant_sids.add(participant.sid)
+        # Only real (non-agent) participants hold the idle reaper open.  The
+        # agent's own identity must never count, or the container never reaps.
+        if getattr(participant, "identity", None) != _AGENT_IDENTITY:
+            _active_participant_sids.add(participant.sid)
         note_voice_activity()
 
     @room.on("participant_disconnected")
