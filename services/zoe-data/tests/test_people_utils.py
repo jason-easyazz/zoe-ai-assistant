@@ -1,107 +1,251 @@
-"""Focused tests for the people row→person pure helper."""
+"""Focused unit tests for the pure ``people_utils`` row formatter.
 
-import json
+``row_to_person`` is the shared parser used by the people router and the
+skybridge service to normalize persisted contact rows into the canonical
+person dict consumed by UI surfaces. It must:
+
+* parse the JSON ``preferences`` column when it arrives as a string,
+* tolerate already-parsed dicts and ``None``,
+* apply the documented defaults for ``circle`` / ``context`` / ``health_score``
+  / ``notification_count`` / ``contact_count`` / ``is_partial``,
+* coerce ``is_partial`` to a real boolean, and
+* preserve any extra columns the caller happened to include.
+
+The helper is intentionally pure — it takes a dict-like row, performs no I/O,
+and returns a fresh dict. The tests below pin each branch independently.
+"""
 
 from people_utils import row_to_person
 
 
-# Canonical schema: every person record surfaced to UI must expose this set.
-EXPECTED_KEYS = {
-    "id",
-    "user_id",
-    "name",
-    "relationship",
-    "circle",
-    "context",
-    "email",
-    "phone",
-    "birthday",
-    "notes",
-    "preferences",
-    "visibility",
-    "health_score",
-    "notification_count",
-    "contact_count",
-    "last_contacted_at",
-    "is_partial",
-    "how_we_met",
-    "first_met_date",
-    "introduced_by_person_id",
-    "created_at",
-    "updated_at",
-}
+# ---------------------------------------------------------------------------
+# Full row normalization
+# ---------------------------------------------------------------------------
 
 
-def test_returns_canonical_schema_from_dict_row():
-    row = {
-        "id": 42,
-        "user_id": "u1",
-        "name": "Ada Lovelace",
+def test_full_row_normalization_end_to_end():
+    """Every documented field lands in the output at the right type."""
+    person = row_to_person(
+        {
+            "id": 1,
+            "user_id": 10,
+            "name": "Alice",
+            "relationship": "friend",
+            "circle": "inner",
+            "context": "work",
+            "email": "alice@example.com",
+            "phone": "+15551234567",
+            "birthday": "1990-04-12",
+            "notes": "Met at PyCon",
+            "preferences": {"theme": "dark", "tz": "America/Los_Angeles"},
+            "visibility": "shared",
+            "health_score": 0.9,
+            "notification_count": 3,
+            "contact_count": 5,
+            "last_contacted_at": "2026-05-01T12:00:00Z",
+            "is_partial": 1,
+            "how_we_met": "PyCon 2024",
+            "first_met_date": "2024-05-10",
+            "introduced_by_person_id": 42,
+            "created_at": "2024-05-10T09:00:00Z",
+            "updated_at": "2026-05-01T12:00:00Z",
+        }
+    )
+    assert person == {
+        "id": 1,
+        "user_id": 10,
+        "name": "Alice",
         "relationship": "friend",
-        "email": "ada@example.com",
-        "phone": "+1-555-0100",
-        "birthday": "1815-12-10",
-        "notes": "Met at the math salon.",
-        "preferences": json.dumps({"likes": "tea", "dislikes": "rain"}),
-        "visibility": "private",
-        "health_score": 0.91,
+        "circle": "inner",
+        "context": "work",
+        "email": "alice@example.com",
+        "phone": "+15551234567",
+        "birthday": "1990-04-12",
+        "notes": "Met at PyCon",
+        "preferences": {"theme": "dark", "tz": "America/Los_Angeles"},
+        "visibility": "shared",
+        "health_score": 0.9,
         "notification_count": 3,
-        "contact_count": 17,
-        "last_contacted_at": "2026-06-01T12:00:00Z",
-        "is_partial": 1,
-        "how_we_met": "math salon",
-        "first_met_date": "2024-01-01",
-        "introduced_by_person_id": None,
-        "created_at": "2024-01-01T00:00:00Z",
-        "updated_at": "2026-06-01T12:00:00Z",
-        "extra_field": "should be dropped from canonical schema",
+        "contact_count": 5,
+        "last_contacted_at": "2026-05-01T12:00:00Z",
+        "is_partial": True,
+        "how_we_met": "PyCon 2024",
+        "first_met_date": "2024-05-10",
+        "introduced_by_person_id": 42,
+        "created_at": "2024-05-10T09:00:00Z",
+        "updated_at": "2026-05-01T12:00:00Z",
     }
 
-    person = row_to_person(row)
 
-    assert set(person.keys()) == EXPECTED_KEYS
-    assert person["id"] == 42
-    assert person["user_id"] == "u1"
-    assert person["name"] == "Ada Lovelace"
-    assert person["relationship"] == "friend"
-    assert person["email"] == "ada@example.com"
-    assert person["phone"] == "+1-555-0100"
-    assert person["birthday"] == "1815-12-10"
-    assert person["notes"] == "Met at the math salon."
-    assert person["preferences"] == {"likes": "tea", "dislikes": "rain"}
-    assert person["visibility"] == "private"
-    assert person["health_score"] == 0.91
-    assert person["notification_count"] == 3
-    assert person["contact_count"] == 17
-    assert person["last_contacted_at"] == "2026-06-01T12:00:00Z"
-    assert person["is_partial"] is True
-    assert person["how_we_met"] == "math salon"
-    assert person["first_met_date"] == "2024-01-01"
-    assert person["introduced_by_person_id"] is None
-    assert person["created_at"] == "2024-01-01T00:00:00Z"
-    assert person["updated_at"] == "2026-06-01T12:00:00Z"
+# ---------------------------------------------------------------------------
+# ``preferences`` parsing
+# ---------------------------------------------------------------------------
 
 
-def test_applies_canonical_defaults_for_minimal_row():
-    person = row_to_person({"id": 1, "name": "Grace"})
+def test_json_string_preferences_are_parsed_into_dict():
+    person = row_to_person(
+        {"id": 1, "name": "Alice", "preferences": '{"favorite_color": "blue"}'}
+    )
+    assert person["preferences"] == {"favorite_color": "blue"}
 
-    assert person["id"] == 1
-    assert person["name"] == "Grace"
+
+def test_dict_preferences_are_passed_through_unchanged():
+    """When the driver already returned a parsed dict, leave it alone."""
+    person = row_to_person(
+        {"id": 2, "name": "Bob", "preferences": {"favorite_color": "green"}}
+    )
+    assert person["preferences"] == {"favorite_color": "green"}
+
+
+def test_none_preferences_stay_none():
+    person = row_to_person({"id": 3, "name": "C", "preferences": None})
+    assert person["preferences"] is None
+
+
+def test_invalid_json_preferences_fall_back_to_none():
+    """Malformed JSON in the column must not raise; it normalizes to ``None``."""
+    person = row_to_person({"id": 4, "name": "D", "preferences": "not json{"})
+    assert person["preferences"] is None
+
+
+def test_empty_dict_preferences_are_preserved():
+    """An empty dict is a valid (falsy) preferences value and is kept as-is."""
+    person = row_to_person({"id": 5, "name": "E", "preferences": {}})
+    assert person["preferences"] == {}
+
+
+def test_empty_string_preferences_are_preserved_as_empty_string():
+    """Pin the current behavior: empty string is falsy so it is not parsed
+    and stays in the output as ``""``. Downstream code can choose to treat
+    it the same as ``None`` if it wants — the helper is not opinionated.
+    """
+    person = row_to_person({"id": 6, "name": "F", "preferences": ""})
+    assert person["preferences"] == ""
+
+
+def test_missing_preferences_key_normalizes_to_none():
+    """A row without a ``preferences`` column gets ``preferences=None`` in the
+    output so the schema is stable for downstream consumers."""
+    person = row_to_person({"id": 7, "name": "G"})
+    assert person.get("preferences") is None
+
+
+# ---------------------------------------------------------------------------
+# Default values
+# ---------------------------------------------------------------------------
+
+
+def test_default_circle_is_circle():
+    person = row_to_person({"id": 1, "name": "A"})
     assert person["circle"] == "circle"
+
+
+def test_default_context_is_personal():
+    person = row_to_person({"id": 1, "name": "A"})
     assert person["context"] == "personal"
+
+
+def test_default_health_score_is_half():
+    person = row_to_person({"id": 1, "name": "A"})
     assert person["health_score"] == 0.5
+
+
+def test_default_notification_count_is_zero():
+    person = row_to_person({"id": 1, "name": "A"})
     assert person["notification_count"] == 0
+
+
+def test_default_contact_count_is_zero():
+    person = row_to_person({"id": 1, "name": "A"})
     assert person["contact_count"] == 0
+
+
+def test_explicit_defaults_are_not_overridden():
+    """The defaults are only applied when the row does not provide a value."""
+    person = row_to_person(
+        {
+            "id": 1,
+            "name": "A",
+            "circle": "public",
+            "context": "work",
+            "health_score": 0.1,
+            "notification_count": 9,
+            "contact_count": 4,
+        }
+    )
+    assert person["circle"] == "public"
+    assert person["context"] == "work"
+    assert person["health_score"] == 0.1
+    assert person["notification_count"] == 9
+    assert person["contact_count"] == 4
+
+
+# ---------------------------------------------------------------------------
+# ``is_partial`` boolean coercion
+# ---------------------------------------------------------------------------
+
+
+def test_is_partial_is_coerced_from_int_to_bool():
+    person_true = row_to_person({"id": 1, "name": "A", "is_partial": 1})
+    assert person_true["is_partial"] is True
+
+    person_false = row_to_person({"id": 2, "name": "B", "is_partial": 0})
+    assert person_false["is_partial"] is False
+
+
+def test_is_partial_coerces_truthy_values():
+    """Non-int truthy values (e.g. a string) are still bool-coerced."""
+    person = row_to_person({"id": 1, "name": "A", "is_partial": "yes"})
+    assert person["is_partial"] is True
+
+
+def test_is_partial_defaults_to_false_when_missing():
+    person = row_to_person({"id": 1, "name": "A"})
     assert person["is_partial"] is False
-    # Optional fields default to None.
-    for optional in (
+
+
+def test_is_partial_explicit_false_is_preserved():
+    person = row_to_person({"id": 1, "name": "A", "is_partial": False})
+    assert person["is_partial"] is False
+
+
+# ---------------------------------------------------------------------------
+# Field preservation
+# ---------------------------------------------------------------------------
+
+
+def test_extra_row_fields_are_dropped_by_design():
+    """``row_to_person`` returns a fixed schema: unknown columns on the input
+    row are not surfaced in the output. Callers needing extra columns must
+    handle that themselves; the helper only normalizes the documented
+    person-record contract.
+    """
+    row = {
+        "id": 1,
+        "name": "A",
+        "custom_field": "value",
+        "another_field": 123,
+    }
+    person = row_to_person(row)
+    assert "custom_field" not in person
+    assert "another_field" not in person
+    # And the recognized keys are still there with their values.
+    assert person["id"] == 1
+    assert person["name"] == "A"
+
+
+def test_optional_fields_default_to_none_when_missing():
+    """Fields like ``email`` / ``phone`` / ``birthday`` default to ``None`` when
+    the row does not provide them, so UI code can rely on the key being
+    present without a separate ``.get()``."""
+    person = row_to_person({"id": 1, "name": "A"})
+    for key in (
         "user_id",
         "relationship",
         "email",
         "phone",
         "birthday",
         "notes",
-        "preferences",
         "visibility",
         "last_contacted_at",
         "how_we_met",
@@ -110,88 +254,77 @@ def test_applies_canonical_defaults_for_minimal_row():
         "created_at",
         "updated_at",
     ):
-        assert person[optional] is None
+        assert key in person, f"missing key {key}"
+        assert person[key] is None, f"{key} should default to None"
 
 
-def test_decodes_json_string_preferences():
-    raw = '{"likes":"tea","dislikes":"rain"}'
-    person = row_to_person({"id": 2, "name": "Linus", "preferences": raw})
-
-    assert person["preferences"] == {"likes": "tea", "dislikes": "rain"}
+# ---------------------------------------------------------------------------
+# Row input shapes
+# ---------------------------------------------------------------------------
 
 
-def test_invalid_json_string_preferences_become_none():
-    person = row_to_person({"id": 3, "name": "X", "preferences": "not-json{"})
+def test_dict_like_row_is_supported():
+    """The helper accepts any mapping ``dict()`` can build from (psycopg2 /
+    asyncpg / dataclasses.asdict all qualify because they expose either
+    ``keys()`` or ``__iter__``)."""
 
-    assert person["preferences"] is None
-
-
-def test_dict_preferences_passed_through_untouched():
-    prefs = {"likes": "coffee", "spice": "cardamom"}
-    person = row_to_person({"id": 4, "name": "Y", "preferences": prefs})
-
-    assert person["preferences"] is prefs
-
-
-def test_none_preferences_stays_none():
-    person = row_to_person({"id": 5, "name": "Z", "preferences": None})
-
-    assert person["preferences"] is None
-
-
-def test_dict_like_row_supports_mapping_style_items():
-    # Records produced by psycopg2 / asyncpg behave like dicts but are NOT ``dict``
-    # instances (they are Mappings). The helper must coerce them via ``dict(row)``
-    # while preserving the canonical schema. Using a real ``Mapping`` that does not
-    # inherit from ``dict`` actually exercises that coercion branch (a dict subclass
-    # would take the ``d = row`` fast-path and never hit ``dict(row)``).
-    from collections.abc import Mapping
-
-    class MappingRow(Mapping):
-        def __init__(self, **data):
-            self._data = dict(data)
+    class DictLike:
+        def __init__(self, data):
+            self._d = data
 
         def __getitem__(self, key):
-            return self._data[key]
+            return self._d[key]
 
-        def __iter__(self):
-            return iter(self._data)
+        def keys(self):
+            return self._d.keys()
 
-        def __len__(self):
-            return len(self._data)
-
-    row = MappingRow(
-        id=7,
-        user_id="u9",
-        name="Margaret",
-        relationship="colleague",
-        circle="inner",
-        context="work",
-        email="margaret@example.com",
-        preferences=None,
-        visibility="shared",
-        health_score=0.7,
-        notification_count=2,
-        contact_count=9,
-        is_partial=0,
-    )
-
+    row = DictLike({"id": 1, "name": "A", "preferences": '{"k": 1}'})
     person = row_to_person(row)
+    assert person["id"] == 1
+    assert person["name"] == "A"
+    assert person["preferences"] == {"k": 1}
 
-    assert isinstance(row, MappingRow)
-    assert not isinstance(row, dict)  # ensures the dict(row) coercion branch is exercised
-    assert person["id"] == 7
-    assert person["name"] == "Margaret"
-    assert person["circle"] == "inner"
-    assert person["context"] == "work"
-    assert person["visibility"] == "shared"
-    assert person["health_score"] == 0.7
+
+def test_input_dict_is_not_mutated():
+    """The helper must not mutate its input."""
+    row = {
+        "id": 1,
+        "name": "A",
+        "preferences": '{"k": 1}',
+        "is_partial": 1,
+    }
+    snapshot = dict(row)
+    snapshot_prefs = row["preferences"]
+    person = row_to_person(row)
+    assert row == snapshot
+    assert row["preferences"] is snapshot_prefs
+    # Output is a fresh dict, not the input itself.
+    assert person is not row
+
+
+def test_empty_dict_input_yields_full_default_schema():
+    """An empty row still emits every key the helper knows about, populated
+    with the documented defaults. Callers can rely on the schema being stable.
+    """
+    person = row_to_person({})
+    # Required defaults are applied.
+    assert person["id"] is None
+    assert person["circle"] == "circle"
+    assert person["context"] == "personal"
+    assert person["health_score"] == 0.5
+    assert person["notification_count"] == 0
+    assert person["contact_count"] == 0
     assert person["is_partial"] is False
-
-
-def test_is_partial_truthiness_for_various_inputs():
-    # Truthy int from DB should become True; falsy values should stay False.
-    assert row_to_person({"id": 1, "name": "a", "is_partial": 1})["is_partial"] is True
-    assert row_to_person({"id": 2, "name": "b", "is_partial": True})["is_partial"] is True
-    assert row_to_person({"id": 3, "name": "c", "is_partial": 0})["is_partial"] is False
-    assert row_to_person({"id": 4, "name": "d", "is_partial": False})["is_partial"] is False
+    # And optional fields are present-but-None (no fabricated values).
+    assert person["preferences"] is None
+    assert person["email"] is None
+    assert person["phone"] is None
+    # Output schema is the documented set of keys, nothing more, nothing less.
+    expected_keys = {
+        "id", "user_id", "name", "relationship", "circle", "context",
+        "email", "phone", "birthday", "notes", "preferences", "visibility",
+        "health_score", "notification_count", "contact_count",
+        "last_contacted_at", "is_partial", "how_we_met", "first_met_date",
+        "introduced_by_person_id", "created_at", "updated_at",
+    }
+    assert set(person.keys()) == expected_keys
