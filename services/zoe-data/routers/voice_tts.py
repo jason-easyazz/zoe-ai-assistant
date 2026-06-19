@@ -4702,6 +4702,17 @@ async def get_livekit_token(request: Request, user: dict = Depends(get_current_u
     if not api_key or not api_secret:
         raise HTTPException(status_code=503, detail="LiveKit credentials not configured")
 
+    # On-demand: spin up the LiveKit container + agent before handing back a token,
+    # so the browser's WebRTC connect succeeds.  Best-effort and bounded — never
+    # blocks token issuance if the container is slow or docker is unavailable.
+    livekit_ready: bool = True
+    try:
+        from routers.voice_livekit import ensure_livekit_started, _ondemand_enabled
+        if _ondemand_enabled():
+            livekit_ready = await ensure_livekit_started()
+    except Exception as _lk_exc:  # pragma: no cover - defensive
+        logger.warning("livekit on-demand start failed (non-fatal): %s", _lk_exc)
+
     # Derive the LiveKit URL from the browser's request host.
     # nginx passes the original Host header and X-Forwarded-Proto so we can reconstruct
     # the correct ws(s)://<browser-host>/livekit/ URL.  This works for LAN IPs, the
@@ -4759,7 +4770,7 @@ async def get_livekit_token(request: Request, user: dict = Depends(get_current_u
         except Exception:
             return False
     livekit_lan_only = not bool(os.environ.get("LIVEKIT_TURN_URL", ""))
-    livekit_available = (not livekit_lan_only) or _is_private(_cf_ip)
+    livekit_available = ((not livekit_lan_only) or _is_private(_cf_ip)) and livekit_ready
 
     logger.debug("livekit-token: user=%s url=%s origin=%s lan_ip=%s lk_avail=%s",
                  user_id, livekit_url, origin, _cf_ip, livekit_available)
