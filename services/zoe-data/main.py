@@ -107,6 +107,16 @@ def _bounded_blocked_resume_window(
     return window, (start + budget) % count
 
 
+def _multica_poll_interval_s(paused: bool, *, active_s: float, paused_s: float) -> float:
+    """Cadence for the Multica poll loop.
+
+    Throttle to ``paused_s`` while dispatch is paused — the per-issue chain
+    reconcile (worktree + git ops) is expensive and pointless when nothing is
+    being dispatched — and use the normal ``active_s`` otherwise.
+    """
+    return paused_s if paused else active_s
+
+
 async def _poll_chain_guarded(ref: str, *, issue: dict | None, timeout: float) -> dict:
     """Poll a chain without letting one dead ref wedge the whole poll loop.
 
@@ -783,9 +793,32 @@ async def lifespan(app: FastAPI):
                 os.environ.get("ZOE_WORKTREE_PRUNE_INTERVAL_S"),
             )
             _prune_interval_s = 86400.0
+        # Cadence when dispatch is paused. The per-issue chain reconcile below
+        # (poll_ref → worktree+git ops) costs ~30s CPU and a multi-GB transient
+        # allocation each pass; running it every 30s while nothing is being
+        # dispatched is pure waste. Poll every 30s when active, every
+        # ZOE_MULTICA_PAUSED_POLL_S (default 300s) when paused.
+        try:
+            _paused_poll_s = float(os.environ.get("ZOE_MULTICA_PAUSED_POLL_S", "300") or "300")
+        except ValueError:
+            logger.warning(
+                "multica_poll: invalid ZOE_MULTICA_PAUSED_POLL_S=%r; using 300",
+                os.environ.get("ZOE_MULTICA_PAUSED_POLL_S"),
+            )
+            _paused_poll_s = 300.0
+        _ACTIVE_POLL_S = 30.0
         while True:
             try:
-                await asyncio.sleep(30)
+                # Re-checked inside the cycle, so a resume still takes effect
+                # promptly on the next pass.
+                try:
+                    from multica_dispatch_control import dispatch_is_paused as _dispatch_is_paused
+                    _poll_interval = _multica_poll_interval_s(
+                        _dispatch_is_paused(), active_s=_ACTIVE_POLL_S, paused_s=_paused_poll_s
+                    )
+                except Exception:
+                    _poll_interval = _ACTIVE_POLL_S
+                await asyncio.sleep(_poll_interval)
                 from multica_client import MULClient  # type: ignore[import]
                 client = MULClient()
                 if not client.is_configured():
