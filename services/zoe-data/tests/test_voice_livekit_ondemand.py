@@ -135,6 +135,33 @@ async def test_reap_if_idle_stops_when_idle(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_reap_if_idle_rechecks_after_container_await(monkeypatch):
+    """TOCTOU guard: if a /livekit-token request connects a participant (or bumps
+    activity) while _container_running() yields, _reap_if_idle must NOT reap the
+    now-active room."""
+    monkeypatch.setenv("ZOE_LIVEKIT_ONDEMAND", "true")
+    monkeypatch.setenv("ZOE_LIVEKIT_IDLE_TIMEOUT_S", "0")
+    stopped = []
+
+    async def _fake_stop(reason="idle"):
+        stopped.append(reason)
+
+    async def _running_but_late_join():
+        # Simulate a participant arriving during the await window.
+        voice_livekit._active_participant_sids.add("late-joiner")
+        return True
+
+    monkeypatch.setattr(voice_livekit, "stop_livekit_ondemand", _fake_stop)
+    monkeypatch.setattr(voice_livekit, "_container_running", _running_but_late_join)
+    monkeypatch.setattr(voice_livekit, "_last_activity", 0.0)
+
+    should_exit = await voice_livekit._reap_if_idle()
+
+    assert stopped == []  # must not reap once a participant appeared mid-check
+    assert should_exit is False
+
+
+@pytest.mark.asyncio
 async def test_reap_if_idle_holds_open_with_participants(monkeypatch):
     monkeypatch.setenv("ZOE_LIVEKIT_ONDEMAND", "true")
     monkeypatch.setenv("ZOE_LIVEKIT_IDLE_TIMEOUT_S", "0")

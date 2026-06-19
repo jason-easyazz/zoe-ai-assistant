@@ -242,6 +242,13 @@ async def _reap_if_idle() -> bool:
     if _active_participant_sids or idle_for < _idle_timeout_s():
         return False
     if await _container_running():
+        # Re-check after the await: _container_running() yields to the event loop,
+        # and a /livekit-token request could have started the container + bumped
+        # activity (or a participant could have connected) in that window. Don't
+        # reap a now-active room.
+        idle_for = time.monotonic() - _last_activity
+        if _active_participant_sids or idle_for < _idle_timeout_s():
+            return False
         logger.info(
             "LiveKit on-demand: idle %.0fs (no participants) → stopping", idle_for
         )
