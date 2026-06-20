@@ -7,6 +7,7 @@ import re
 import shutil
 import sys
 import tempfile
+import threading
 import time
 import wave
 from datetime import datetime, timezone
@@ -2402,16 +2403,26 @@ def _log_voice_stt_sample(
 # it never competes with the brain's GPU). Model + tokenizer are cached once. ---
 _moonshine_model = None
 _moonshine_tok = None
+_moonshine_lock = threading.Lock()
 
 
 def _ensure_moonshine():
     global _moonshine_model, _moonshine_tok
-    if _moonshine_model is None:
-        from moonshine_onnx import MoonshineOnnxModel, load_tokenizer
+    if _moonshine_model is not None and _moonshine_tok is not None:
+        return _moonshine_model, _moonshine_tok
+    # Lock the lazy init so a second concurrent caller can't observe a
+    # half-initialised state (model set, tokenizer still None) and crash in
+    # tok.decode_batch(). Runs in a threadpool worker, so a threading.Lock.
+    with _moonshine_lock:
+        if _moonshine_model is None or _moonshine_tok is None:
+            from moonshine_onnx import MoonshineOnnxModel, load_tokenizer
 
-        name = (os.environ.get("ZOE_MOONSHINE_MODEL") or "moonshine/base").strip()
-        _moonshine_model = MoonshineOnnxModel(model_name=name)
-        _moonshine_tok = load_tokenizer()
+            name = (os.environ.get("ZOE_MOONSHINE_MODEL") or "moonshine/base").strip()
+            tok = load_tokenizer()
+            model = MoonshineOnnxModel(model_name=name)
+            # Publish both only once both are ready.
+            _moonshine_tok = tok
+            _moonshine_model = model
     return _moonshine_model, _moonshine_tok
 
 
@@ -4392,6 +4403,7 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
         raw = base64.b64decode(b64, validate=True)
     except Exception as exc:
         raise HTTPException(status_code=400, detail="invalid base64 audio") from exc
+    t_upload = time.monotonic() - t_turn_start
     suffix = ".wav" if (len(raw) >= 4 and raw[:4] == b"RIFF") else ".raw"
 
     # ── STT (Moonshine, same waterfall as /turn) ──
@@ -4414,6 +4426,12 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
         raise HTTPException(status_code=500, detail=f"Transcription failed: {exc}") from exc
 
     t_stt = time.monotonic() - t_stt_start
+    try:
+        from voice_metrics import voice_stage_seconds
+        voice_stage_seconds.labels(stage="upload").observe(t_upload)
+        voice_stage_seconds.labels(stage="stt").observe(t_stt)
+    except Exception:
+        pass
     transcript = (transcript or "").strip()
     _log_voice_stt_sample(
         route="turn_stream",
@@ -4428,6 +4446,11 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
     import json as _json
 
     if not transcript:
+        try:
+            from voice_metrics import voice_turn_count
+            voice_turn_count.labels(outcome="empty_transcript", path="turn_stream").inc()
+        except Exception:
+            pass
         async def _empty():
             yield (_json.dumps({"transcript": "", "done": True, "reply": ""}) + "\n").encode()
         return StreamingResponse(
@@ -4450,7 +4473,14 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
         command_payload["identified_user_id"] = payload["identified_user_id"]
 
     # Delegate LLM + per-sentence TTS to the existing streaming pipeline.
+    # (voice_command's stream generator records the downstream llm_first_token /
+    # tts_first_byte / total stage metrics + a path="command" turn count.)
     sub = await voice_command(command_payload, caller=caller, stream=True, db=db)
+    try:
+        from voice_metrics import voice_turn_count
+        voice_turn_count.labels(outcome="ok", path="turn_stream").inc()
+    except Exception:
+        pass
 
     async def _wrapped():
         # Lead with the transcript so the panel can show/log what was heard

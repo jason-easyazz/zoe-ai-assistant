@@ -851,6 +851,29 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
     except requests.exceptions.SSLError:
         raise
     except Exception as exc:
+        # If we've already started speaking, re-running the blocking turn would
+        # double-play (user hears a fragment, then the whole reply again). Only
+        # fall back when nothing has played yet; otherwise let the partial reply
+        # stand and finish draining what's queued.
+        if played_any:
+            log.warning("turn_stream failed mid-reply (%s) — keeping partial, no re-play", exc)
+            if aplay is not None:
+                try:
+                    if aplay.stdin:
+                        aplay.stdin.close()
+                except Exception:
+                    pass
+                while aplay.poll() is None:
+                    if _barge_in_requested.is_set():
+                        try:
+                            aplay.terminate()
+                        except Exception:
+                            pass
+                        break
+                    time.sleep(0.05)
+                with _tts_process_lock:
+                    _tts_process = None
+            return True
         log.warning("turn_stream failed (%s) — falling back to blocking turn", exc)
         if aplay is not None:
             try:
