@@ -41,7 +41,7 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "backend:cudaMallocAsync")
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 logging.basicConfig(
@@ -381,6 +381,85 @@ async def synthesize(req: SynthRequest):
         _cache_store(cache_key, wav_bytes)
 
     return Response(content=wav_bytes, media_type="audio/wav", headers={"X-Cache": "miss"})
+
+
+# ─── Streaming synthesis ──────────────────────────────────────────────────────
+
+_STREAM_MEDIA_TYPE = "audio/L16; rate=24000; channels=1"
+
+
+def _float32_to_pcm16_le(samples) -> bytes:
+    """Convert a float32 numpy array of PCM samples to signed 16-bit LE bytes."""
+    import numpy as np
+    arr = np.clip(np.asarray(samples, dtype=np.float32), -1.0, 1.0)
+    return (arr * 32767.0).astype("<i2").tobytes()
+
+
+def _wav_to_pcm16_le(wav_bytes: bytes) -> bytes:
+    """Strip the WAV container, returning raw S16_LE mono 24kHz PCM frames."""
+    with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
+        return wf.readframes(wf.getnframes())
+
+
+@app.post("/synthesize_stream")
+async def synthesize_stream(req: SynthRequest):
+    """Stream raw S16_LE / 24000 Hz / mono PCM as Kokoro synthesises it, so the
+    caller hears first audio long before the full reply is done. Playable via
+    `aplay -f S16_LE -r 24000 -c 1 -`.
+
+    Concurrency: synthesis runs in a producer task that holds ``_pipeline_lock``
+    only for the duration of the model inference, feeding an unbounded queue; the
+    response yields from the queue WITHOUT the lock. So a slow-reading client can
+    never keep the pipeline locked — only the inference itself serialises against
+    other /synthesize calls (the kokoro_onnx pipeline is not concurrency-safe).
+    """
+    text = (req.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="text is required")
+    if _pipeline is None:
+        raise HTTPException(status_code=503, detail="Kokoro model not loaded")
+    voice = (req.voice or _VOICE).strip() or _VOICE
+    speed = req.speed
+    _DONE = object()
+
+    async def _gen():
+        queue: asyncio.Queue = asyncio.Queue()  # unbounded: producer never blocks on a slow client
+
+        async def _produce():
+            try:
+                if _BACKEND == "onnx":
+                    produced = False
+                    async with _pipeline_lock:
+                        async for samples, _sr in _pipeline.create_stream(
+                            text, voice=voice, speed=speed, lang="en-us"
+                        ):
+                            if samples is not None and len(samples):
+                                produced = True
+                                queue.put_nowait(_float32_to_pcm16_le(samples))
+                    if not produced:
+                        queue.put_nowait(RuntimeError("Kokoro stream produced no audio"))
+                else:
+                    queue.put_nowait(_wav_to_pcm16_le(await _run_synthesis(text, voice, speed)))
+            except Exception as exc:  # surfaced to the client generator below
+                queue.put_nowait(exc)
+            finally:
+                queue.put_nowait(_DONE)
+
+        task = asyncio.create_task(_produce())
+        try:
+            while True:
+                item = await queue.get()
+                if item is _DONE:
+                    break
+                if isinstance(item, Exception):
+                    raise item
+                yield item
+        finally:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    return StreamingResponse(_gen(), media_type=_STREAM_MEDIA_TYPE)
 
 
 # ─── Entry point ─────────────────────────────────────────────────────────────
