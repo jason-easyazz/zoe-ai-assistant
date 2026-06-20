@@ -4486,8 +4486,26 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
         # Lead with the transcript so the panel can show/log what was heard
         # before the first audio chunk arrives.
         yield (_json.dumps({"transcript": transcript}) + "\n").encode()
-        async for chunk in sub.body_iterator:
-            yield chunk
+        if hasattr(sub, "body_iterator"):
+            async for chunk in sub.body_iterator:
+                yield chunk
+            return
+        # voice_command returns a plain dict (not a StreamingResponse) on the
+        # skybridge / confirmation-dialog / pi-direct paths regardless of the
+        # stream flag. Those already hold the full reply + synthesized audio, so
+        # forward it as a one-shot full_audio frame the panel plays via its
+        # robust player (handles wav AND mp3) instead of crashing on the missing
+        # body_iterator.
+        result = sub if isinstance(sub, dict) else {}
+        reply_text = str(result.get("reply") or "")
+        audio_b64 = result.get("audio_base64")
+        if audio_b64:
+            yield (_json.dumps({
+                "full_audio": str(audio_b64),
+                "content_type": result.get("content_type") or "audio/wav",
+                "reply": reply_text[:200],
+            }) + "\n").encode()
+        yield (_json.dumps({"done": True, "reply": reply_text}) + "\n").encode()
 
     return StreamingResponse(
         _wrapped(), media_type="application/x-zoe-audio-stream", headers={"Cache-Control": "no-cache"}

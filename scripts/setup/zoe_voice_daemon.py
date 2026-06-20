@@ -839,6 +839,17 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
             if obj.get("error"):
                 log.warning("turn_stream server error: %s", obj["error"])
                 break
+            if "full_audio" in obj:
+                # Skybridge/confirmation path: voice_command returned one full
+                # audio blob (wav or mp3). Play it via the robust player.
+                if not played_any:
+                    _recording_active.clear()
+                if ttfa is None:
+                    ttfa = _time.monotonic() - t0
+                play_audio_b64(str(obj.get("full_audio") or ""), obj.get("content_type") or "audio/wav")
+                played_any = True
+                reply = obj.get("reply", "") or reply
+                continue
             if obj.get("done"):
                 reply = obj.get("reply", "") or reply
                 break
