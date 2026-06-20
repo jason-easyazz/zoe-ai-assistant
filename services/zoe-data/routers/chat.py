@@ -1940,7 +1940,7 @@ async def chat_stream_generator(
                     snapshot={
                         "status": "generating",
                         "phase": "pi_hybrid",
-                        "model": "Zoe Pi Hybrid",
+                        "model": "Zoe",
                         "detail": _pi_cue.get("text") or "Checking...",
                     },
                 ))
@@ -2191,7 +2191,7 @@ async def chat_stream_generator(
                             snapshot={
                                 "status": "generating",
                                 "phase": "zoe_agent",
-                                "model": "Zoe (Zoe Agent fallback)",
+                                "model": "Zoe",
                                 "detail": "Thinking…",
                             },
                         )
@@ -2199,7 +2199,7 @@ async def chat_stream_generator(
                     task = asyncio.create_task(
                         _brain_oneshot(message_for_processing, session_id, user_id)
                     )
-                    async for hb in _iter_openclaw_heartbeats(emit, task, phase_label="Zoe Agent"):
+                    async for hb in _iter_openclaw_heartbeats(emit, task, phase_label="Zoe"):
                         yield hb
                     response_text = await task
                 else:
@@ -2266,7 +2266,7 @@ async def chat_stream_generator(
                         snapshot={
                             "status": "generating",
                             "phase": "zoe_agent",
-                            "model": f"Zoe ({tier_label} Agent)",
+                            "model": "Zoe",
                             "detail": "Thinking…",
                         },
                     )
