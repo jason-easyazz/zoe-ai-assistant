@@ -495,12 +495,25 @@ def _extract_complete_sentences(buffer: str) -> tuple[list[str], str]:
     return complete, buffer[last_end:]
 
 
+def _skybridge_only() -> bool:
+    """When set, voice never navigates the panel to legacy domain pages.
+
+    The Skybridge-first path (`_broadcast_skybridge_ui`) still renders real cards.
+    The legacy `_broadcast_*_ui` helpers below navigate to per-domain pages
+    (`/touch/weather.html`, etc.), which yanks the panel off Skybridge whenever the
+    Skybridge resolver falls through. Gating them keeps the panel on Skybridge.
+    """
+    return os.environ.get("ZOE_SKYBRIDGE_ONLY", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 async def _broadcast_weather_ui(
     panel_id: str,
     summary: str = "Fetching weather...",
     turn_key: Optional[str] = None,
 ) -> None:
     """Mirror chat weather navigation on voice path with durable delivery."""
+    if _skybridge_only():
+        return
     delivery_key = turn_key or str(time.monotonic_ns())
     nav_action = {
         "id": f"voice_weather_nav_{panel_id}_{delivery_key}",
@@ -599,6 +612,8 @@ async def _broadcast_calendar_ui(
     turn_key: Optional[str] = None,
 ) -> None:
     """Mirror calendar intents on voice path with durable delivery."""
+    if _skybridge_only():
+        return
     delivery_key = turn_key or str(time.monotonic_ns())
     nav_action = {
         "id": f"voice_calendar_nav_{panel_id}_{delivery_key}",
@@ -1006,6 +1021,8 @@ async def _broadcast_lets_talk_ui(panel_id: str, turn_key: Optional[str] = None)
     (voice:start_conversation) which the voice page handles directly — it is
     never enqueued in the DB, so it cannot create a replay loop.
     """
+    if _skybridge_only():
+        return
     delivery_key = turn_key or str(time.monotonic_ns())
     # Navigation: no ?conv=1 so the action is skipped when panel is already on voice page.
     nav_action = {
@@ -1200,6 +1217,8 @@ async def _broadcast_reminder_ui(
     summary: str,
     turn_key: Optional[str] = None,
 ) -> None:
+    if _skybridge_only():
+        return
     delivery_key = turn_key or str(time.monotonic_ns())
     nav_action = {
         "id": f"voice_reminder_nav_{panel_id}_{delivery_key}",
@@ -3202,7 +3221,9 @@ async def voice_command(
             }
         _VOICE_SESSIONS.setdefault(panel_id, {})["skybridge_context"] = {}
     except Exception as _skybridge_exc:
-        logger.debug("voice/command skybridge fast path failed (non-fatal): %s", _skybridge_exc)
+        # Surfaced at warning (was debug): when this fires the turn falls through to
+        # the legacy intent path, which is the silent bounce-to-domain-page behavior.
+        logger.warning("voice/command skybridge fast path failed (non-fatal): %s", _skybridge_exc)
 
     # Fallback audio used when any part of the pipeline fails — panel never goes silent.
     _FALLBACK_PHRASE = "Sorry, something went wrong. Please try again."
