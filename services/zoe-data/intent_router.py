@@ -199,6 +199,13 @@ def _normalize_chat_intent_text(raw: str) -> str:
     """Lowercase, Unicode-normalize, collapse whitespace, strip STT filler artifacts."""
     s = unicodedata.normalize("NFKC", (raw or "").strip()).lower()
     s = re.sub(r"\s+", " ", s).strip()
+    # Strip a leading wake word the panel sometimes leaves in the transcript
+    # ("hey zoe, what's the weather" → "what's the weather"). Without this, every
+    # $-anchored fast-path regex misses and the whole turn falls through to the
+    # slow brain path — the dominant cause of "voice feels slow" on common commands.
+    s = re.sub(r"^(?:hey|hi|hello|ok|okay|yo|hiya)\s+zoe\b[\s,]*", "", s)
+    s = re.sub(r"^zoe\b[\s,]*", "", s)
+    s = re.sub(r"\s+", " ", s).strip()
     # Replace "^and" → "add" ONLY when followed by a list-add phrasing ("X to [list-type] list").
     # STT frequently mishears "add" as "and" for Australian accents (e.g. "add bread" → "and bread").
     # The lookahead prevents regressions: "and turn on the lights" is NOT affected.
@@ -2710,29 +2717,36 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False) -> Optio
             lat, lon, city, country = _resolve_location(prefs)
             current = await _get_current(lat, lon, city, country)
             city_name = current.get("city") or city or "your area"
+            # Speak numbers naturally: "18.3" → "18 point 3" (bare decimals get
+            # mangled to "18 3" by TTS), and avoid markdown/°C which also mangle.
+            def _say_num(n) -> str:
+                s = str(n)
+                return s.replace(".", " point ") if "." in s else s
             if forecast:
                 f = await _get_forecast(lat, lon)
                 daily = f.get("daily", [])[:5]
                 if not daily:
                     return f"I couldn't get the forecast for {city_name} right now."
-                lines = [f"Forecast for {city_name}:"]
+                lines = [f"Here's the forecast for {city_name}."]
                 for item in daily:
                     day = item.get("day", "?")
                     hi = item.get("high", "?")
                     lo = item.get("low", "?")
                     desc = item.get("description", "unknown")
-                    lines.append(f"  - {day}: {hi}°C/{lo}°C, {desc}")
-                return "\n".join(lines)
+                    lines.append(f"{day}, a high of {_say_num(hi)} and a low of {_say_num(lo)} degrees, {desc}.")
+                return " ".join(lines)
             temp = current.get("temp")
             desc = current.get("description", "")
             feels = current.get("feels_like")
             if temp is None:
                 return f"I couldn't get the weather for {city_name} right now."
-            msg = f"It's {temp}°C in {city_name} ({desc})"
+            # Speak naturally: "18.3°C (overcast)" → "18 point 3 degrees and overcast".
+            desc_part = f" and {desc}" if desc else ""
+            msg = f"It's {_say_num(temp)} degrees{desc_part} in {city_name}"
             if feels is not None:
                 try:
                     if abs(float(feels) - float(temp)) > 2:
-                        msg += f", feels like {feels}°C"
+                        msg += f", and it feels like {_say_num(feels)} degrees"
                 except Exception:
                     pass
             return msg + "."
