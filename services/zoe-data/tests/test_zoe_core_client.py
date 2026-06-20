@@ -214,3 +214,84 @@ async def test_unknown_user_fails_closed(stub):
     # Empty user -> memory extension must not fetch any packet (PR #692 guarantee).
     await zc.run_zoe_core("What's my dog's name?", "guest-sess", "")
     assert s.memory_hits() == 0, f"memory fetched for unknown user: {s.requests}"
+
+
+# ── Unit tests for _read_turn: the text_delta streaming path ──────────────────
+# These need no `pi` binary or model — they feed a synthetic Pi RPC event stream
+# straight into _read_turn, so they run in CI (unlike the @requires_env tests).
+
+async def _run_read_turn(events: list[dict], request_id: str = "req-1", timeout_s: float = 5.0):
+    """Drive _ZoeCoreWorker._read_turn against a canned Pi RPC event stream and
+    return the list of yielded deltas."""
+    import types
+
+    import zoe_core_client as zc
+
+    reader = asyncio.StreamReader()
+    for ev in events:
+        reader.feed_data((json.dumps(ev) + "\n").encode())
+    reader.feed_eof()
+
+    # Bypass __init__ (which would set up env/locks) — _read_turn only needs .proc.
+    worker = zc._ZoeCoreWorker.__new__(zc._ZoeCoreWorker)
+    worker.proc = types.SimpleNamespace(stdout=reader, stdin=None)
+    return [delta async for delta in worker._read_turn(request_id, timeout_s)]
+
+
+def _accept(rid="req-1"):
+    return {"type": "response", "command": "prompt", "id": rid, "success": True}
+
+
+def _delta(text, rid="req-1"):
+    return {"type": "message_update", "id": rid,
+            "assistantMessageEvent": {"type": "text_delta", "delta": text}}
+
+
+def _agent_end(rid="req-1", **extra):
+    return {"type": "agent_end", "id": rid, **extra}
+
+
+@pytest.mark.asyncio
+async def test_text_delta_streams_incrementally():
+    """Each text_delta is yielded as it arrives, not buffered until the end."""
+    out = await _run_read_turn([
+        _accept(), _delta("Hello"), _delta(" there"), _delta(" friend"), _agent_end(),
+    ])
+    assert out == ["Hello", " there", " friend"]
+
+
+@pytest.mark.asyncio
+async def test_no_double_emit_when_delta_event_also_carries_message():
+    """A message_update carrying BOTH a text_delta and a full message field must
+    emit only the delta — the `continue` guard stops the message-field path from
+    re-emitting (the 'YouYou' double-emit)."""
+    out = await _run_read_turn([
+        _accept(),
+        {"type": "message_update", "id": "req-1",
+         "assistantMessageEvent": {"type": "text_delta", "delta": "Hi"},
+         "message": {"role": "assistant", "content": "Hi there"}},
+        _agent_end(),
+    ])
+    assert out == ["Hi"]
+
+
+@pytest.mark.asyncio
+async def test_agent_end_terminates_and_ignores_trailing_events():
+    """agent_end ends the turn cleanly; anything after it is never read."""
+    out = await _run_read_turn([
+        _accept(), _delta("Done"), _agent_end(), _delta("ghost"),
+    ])
+    assert out == ["Done"]
+
+
+@pytest.mark.asyncio
+async def test_terminal_event_carrying_assistant_field_still_terminates():
+    """Regression guard for the fix: an agent_end that also carries an
+    assistantMessageEvent must still terminate (etype gate) instead of being
+    swallowed by the delta-handling `continue` and hanging the turn."""
+    out = await _run_read_turn([
+        _accept(),
+        _delta("Answer"),
+        _agent_end(assistantMessageEvent={"type": "text_delta", "delta": "x"}),
+    ])
+    assert out == ["Answer"]  # terminates cleanly; the stray "x" is not emitted
