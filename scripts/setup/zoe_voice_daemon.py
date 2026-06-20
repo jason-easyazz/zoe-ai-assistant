@@ -701,6 +701,40 @@ def _identify_speaker_from_wav(wav_bytes: bytes) -> str | None:
         return None
 
 
+_BUFFER_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "buffers")
+_BUFFER_ENABLED = os.environ.get("ZOE_BUFFER_PHRASES", "1").strip().lower() not in {"0", "false", "no", "off"}
+# Only speak a buffer phrase if the answer hasn't come back within this many
+# seconds — so fast/cached turns (~0.5s) play the answer directly with no filler
+# and no added latency, and only genuinely-slow turns get a "thinking" phrase.
+_BUFFER_DELAY_S = float(os.environ.get("ZOE_BUFFER_DELAY_S", "0.8"))
+
+
+def _play_buffer_phrase():
+    """Play a random pre-rendered 'thinking' phrase (non-blocking) to fill the
+    gap while the server computes the answer. Returns the Popen (or None).
+
+    These WAVs are pre-synthesised in Zoe's af_sky voice and staged in
+    ~/.zoe-voice/buffers/ — playback is local + instant, no round-trip."""
+    if not _BUFFER_ENABLED:
+        return None
+    try:
+        import glob
+        import random
+        files = glob.glob(os.path.join(_BUFFER_DIR, "buf_*.wav"))
+        if not files:
+            return None
+        chosen = random.choice(files)
+        cmd = ["aplay", "-q"]
+        if AUDIO_OUTPUT_DEVICE != "default":
+            cmd += ["-D", AUDIO_OUTPUT_DEVICE]
+        cmd.append(chosen)
+        log.info("Buffer phrase playing: %s", os.path.basename(chosen))
+        return subprocess.Popen(cmd, stderr=subprocess.DEVNULL)
+    except Exception as exc:
+        log.debug("buffer phrase skipped: %s", exc)
+        return None
+
+
 def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = True) -> bool:
     """Process one recorded WAV: combined STT+LLM+TTS via /api/voice/turn.
 
@@ -727,23 +761,50 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
     if identified_user_id:
         turn_payload["identified_user_id"] = identified_user_id
 
+    # Run the turn in a thread so we can play a buffer phrase ONLY when the
+    # answer is actually slow. Fast/cached turns (~0.5s) return before the delay
+    # and play the answer directly — no filler, no added latency.
+    _turn_result: dict = {}
+
+    def _run_turn():
+        if VOICE_ROUTE_MODE == "ha_bridge":
+            _turn_result["resp"] = _bridge_post(
+                "/voice/turn",
+                {"panel_id": PANEL_ID, "source": "satellite_pi", "audio_base64": audio_b64_wav},
+            )
+        else:
+            _turn_result["resp"] = _api_post("/api/voice/turn", turn_payload)
+
     _t_post_start = _time.monotonic()
-    ok = False
-    if VOICE_ROUTE_MODE == "ha_bridge":
-        resp = _bridge_post(
-            "/voice/turn",
-            {"panel_id": PANEL_ID, "source": "satellite_pi", "audio_base64": audio_b64_wav},
-        )
-        ok = resp.get("ok", False)
-    else:
-        resp = _api_post("/api/voice/turn", turn_payload)
-        ok = resp.get("ok", False)
+    _turn_thread = threading.Thread(target=_run_turn, daemon=True)
+    _turn_thread.start()
+    _turn_thread.join(timeout=_BUFFER_DELAY_S)
+
+    _buffer_proc = None
+    if _turn_thread.is_alive():
+        # Answer is taking a while → fill the gap with a "thinking" phrase.
+        _buffer_proc = _play_buffer_phrase()
+        _turn_thread.join()
+
+    resp = _turn_result.get("resp", {}) or {}
+    ok = resp.get("ok", False)
     _t_server = _time.monotonic() - _t_post_start
     _t_total = _time.monotonic() - _t_pi_start
     log.info(
-        "voice/turn Pi-side timing: encode=%.3fs vid=%.3fs server_rtt=%.3fs total=%.3fs",
-        _t_encode, _t_vid, _t_server, _t_total,
+        "voice/turn Pi-side timing: encode=%.3fs vid=%.3fs server_rtt=%.3fs total=%.3fs buffered=%s",
+        _t_encode, _t_vid, _t_server, _t_total, _buffer_proc is not None,
     )
+
+    # If a buffer phrase is playing, let it finish before the reply so they
+    # don't overlap (it's ~1.5s and the turn already took >0.8s, so usually done).
+    if _buffer_proc is not None:
+        try:
+            _buffer_proc.wait(timeout=4)
+        except Exception:
+            try:
+                _buffer_proc.terminate()
+            except Exception:
+                pass
 
     if not ok and not resp.get("audio_base64"):
         log.warning("Jetson voice turn failed (%s) — playing local espeak fallback", resp.get("error", "unknown_error"))
