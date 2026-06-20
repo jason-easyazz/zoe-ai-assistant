@@ -926,7 +926,13 @@ async def _resolve_weather(intent: SkybridgeIntent, user_id: str, db: Any) -> di
     # periodic /weather/current + /forecast polls); only pay the ~1s live API when cold.
     from routers.weather import _weather_cache as _wc
     current = _wc.get("current") or {}
-    if not current.get("temp"):
+    # Only trust the shared warm cache when it holds a reading for THIS user's
+    # resolved city (the cache is one flat slot across users) and has a real temp
+    # (`is None` so a legitimate 0° reading isn't treated as missing).
+    _cached_city = str(current.get("city") or "").strip().lower()
+    if current.get("temp") is None or (
+        city and _cached_city and _cached_city != str(city).strip().lower()
+    ):
         current = await _get_current(lat, lon, city, country)
     current = {k: v for k, v in current.items() if not str(k).startswith("_")}
     forecast = _wc.get("forecast") or await _get_forecast(lat, lon)

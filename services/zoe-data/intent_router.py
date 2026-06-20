@@ -2720,7 +2720,13 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False) -> Optio
             # when it's cold. The panel UI route still always fetches live, so this does
             # not affect on-screen freshness.
             current = _weather_cache.get("current") or {}
-            if not current.get("temp"):
+            # Only trust the shared warm cache when it holds a reading for THIS
+            # user's resolved city (the cache is one flat slot across users) and
+            # has a real temp (`is None` so a legit 0° isn't treated as missing).
+            _cached_city = str(current.get("city") or "").strip().lower()
+            if current.get("temp") is None or (
+                city and _cached_city and _cached_city != str(city).strip().lower()
+            ):
                 current = await _get_current(lat, lon, city, country)
             city_name = current.get("city") or city or "your area"
             # Speak numbers naturally: "18.3" → "18 point 3" (bare decimals get
