@@ -24,16 +24,27 @@ A weather voice command fires `_broadcast_weather_ui` → `panel_navigate` to
 voice "what's the weather" returns the legacy reply and a `voice_weather_card`
 action (not `voice_skybridge_card`).
 
-## Keystone gap (must fix before disabling legacy voice routing)
+## Keystone finding (root-caused) — legacy nav is Skybridge's silent fallback
 
-Voice weather/calendar resolve through the **legacy** intent path, not Skybridge —
-i.e. `resolve_skybridge_request()` returns `handled=False` for the guest/voice
-identity at runtime even though the typed `/api/skybridge/resolve` path (real user)
-returns `handled=True`. Root-cause candidate: `_resolve_weather` /
-`_resolve_with_db` requiring per-user prefs that a guest panel session lacks, vs the
-system-default location used elsewhere. **This must be confirmed in a testable env
-(Postgres pool initialised) before Phase 2**, or the cutover will turn voice cards
-off instead of moving them to Skybridge.
+Original hypothesis (Skybridge can't resolve voice/guest weather) was **disproven**
+by reproduction: with the Postgres pool initialised,
+`resolve_skybridge_request("what is the weather", "guest")` returns
+`handled=True` with a weather card ("It is 13.0 degrees in Geraldton with
+overcast"). So the resolver is fine.
+
+The real cause: in `voice_command` the Skybridge block
+(`voice_tts.py` ~3122–3200) is wrapped in `try/except` whose handler only logs at
+`logger.debug` ("skybridge fast path failed (non-fatal)"). When the resolver throws
+at runtime — most likely the external weather HTTP fetch during load/restart
+turbulence — the turn **silently falls through to the legacy intent path**
+(`_broadcast_weather_ui` → `panel_navigate` to `/touch/weather.html`). i.e. the
+**legacy domain-nav paths double as Skybridge's exception fallback**, which is why
+the panel intermittently bounces to legacy pages.
+
+Implication for the cutover: there is **no resolve gap blocking Phase 2**. PR 2 must
+(a) raise that swallowed `debug` log to `warning` so these failures are visible, and
+(b) make the fallback **degrade within Skybridge** (speak the answer / keep the
+surface) instead of navigating to a legacy domain page.
 
 ## Phased PRs
 
@@ -47,12 +58,15 @@ off instead of moving them to Skybridge.
 
 ### PR 2 — `ZOE_SKYBRIDGE_ONLY` flag: stop legacy domain navigation  *(zoe-data)*
 - Add env flag `ZOE_SKYBRIDGE_ONLY` (default off → today's behavior).
-- In `voice_command` + the `_broadcast_*_ui` helpers (`voice_tts.py`):
-  when the flag is on, route weather/calendar/reminder/lets_talk through
-  `_broadcast_skybridge_ui` (target `/touch/skybridge.html`) instead of the
-  per-domain `panel_navigate` targets.
-- **Depends on the keystone fix** so Skybridge actually resolves voice weather/calendar.
-- Flag gating keeps the change fully reversible and reviewable.
+- In `voice_command` (`voice_tts.py`): when the flag is on, never emit
+  `panel_navigate` to per-domain pages (`/touch/weather.html`, `/touch/calendar.html`, …).
+  Weather/calendar/reminder still produce their card, but the panel stays on Skybridge.
+- Raise the swallowed Skybridge `except` log (~3204) from `debug` → `warning` so
+  resolver failures are observable (see keystone finding).
+- On Skybridge-resolve failure with the flag on, degrade in place (speak the answer)
+  rather than falling back to legacy navigation.
+- No resolve gap to fix first — `resolve_skybridge_request` already handles
+  voice/guest weather/calendar/clock. Flag gating keeps it reversible.
 
 ### PR 3 — Retire legacy live-sync WebSockets  *(zoe-data + zoe-ui)*
 - Once nothing loads dashboard/domain pages, these are dead:

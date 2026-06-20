@@ -56,6 +56,14 @@ _PORT = int(os.environ.get("KOKORO_SIDECAR_PORT", "10201"))
 _VOICE = os.environ.get("KOKORO_VOICE", "af_sky").strip() or "af_sky"
 _SAMPLE_RATE = 24000  # Kokoro outputs 24 kHz
 
+# Backend: "onnx" (kokoro-onnx on CPU, ~600MB, frees the ~2.3GB GPU the PyTorch
+# build held — SAME af_sky weights, identical voice) or "pytorch" (KPipeline on
+# CUDA, ~2.3GB, ~150ms). ONNX is the default; set ZOE_KOKORO_BACKEND=pytorch to
+# fall back instantly with no other change.
+_BACKEND = (os.environ.get("ZOE_KOKORO_BACKEND") or "onnx").strip().lower()
+_ONNX_MODEL = os.environ.get("ZOE_KOKORO_MODEL", "/home/zoe/models/kokoro-v1.0.onnx")
+_ONNX_VOICES = os.environ.get("ZOE_KOKORO_VOICES", "/home/zoe/models/voices-v1.0.bin")
+
 # ─── Global state ─────────────────────────────────────────────────────────────
 
 _pipeline = None
@@ -95,7 +103,63 @@ _WARM_PHRASES = [
     "All done.",
     "No problem!",
     "Happy to help!",
+    # Canonical confirmations the voice/fast-path actually emits (verified in
+    # voice_tts.py / main.py) — these are spoken verbatim after common actions,
+    # so caching them means real replies hit the cache, not just generic ones.
+    "Okay, cancelled.",
+    "Cancelled.",
+    "Event saved.",
+    "List saved.",
+    "Got it, updated.",
+    "Good afternoon!",
+    "Yes?",
+    "Mmm?",
+    "Goodbye!",
+    "You're welcome!",
+] + [
+    # Buffer / "thinking" phrases — played on the panel the instant a command is
+    # captured, to fill the STT+brain+TTS gap with natural variation instead of
+    # dead air ("Hey Zoe, what's the weather" → "Let me check" → real answer).
+    # The panel fetches these once at startup and plays one at random per turn.
+    p for p in [
+        "Let me check.",
+        "One moment.",
+        "Just a second.",
+        "Let me see.",
+        "Let me look that up.",
+        "Checking now.",
+        "Give me a moment.",
+        "Looking into that.",
+        "Let me find out.",
+        "One sec.",
+        "Hold on a moment.",
+        "Let me get that for you.",
+    ]
 ]
+
+# Runtime LRU cache bounds: any af_sky / speed-1.0 phrase shorter than this is
+# stored after first synthesis, so repeated replies (which dominate real usage)
+# are served from cache (~2ms) instead of re-synthesised (~1-2.5s).
+_CACHE_MAX_ENTRIES = 400
+_CACHE_MAX_TEXT_LEN = 240
+
+
+def _cache_get(key: str) -> bytes | None:
+    """Return cached WAV and mark it most-recently-used (dict insertion order = LRU)."""
+    wav = _phrase_cache.get(key)
+    if wav is not None:
+        _phrase_cache.pop(key, None)
+        _phrase_cache[key] = wav
+    return wav
+
+
+def _cache_store(key: str, wav: bytes) -> None:
+    """Store WAV, evicting the oldest entry when over the bound."""
+    _phrase_cache[key] = wav
+    while len(_phrase_cache) > _CACHE_MAX_ENTRIES:
+        # pop oldest (first-inserted) key
+        oldest = next(iter(_phrase_cache))
+        _phrase_cache.pop(oldest, None)
 
 
 # ─── Pipeline loading ─────────────────────────────────────────────────────────
@@ -103,6 +167,17 @@ _WARM_PHRASES = [
 def _load_pipeline():
     """Load and return the Kokoro pipeline (blocking; run once in thread pool)."""
     global _device
+
+    if _BACKEND == "onnx":
+        from kokoro_onnx import Kokoro  # type: ignore
+        logger.info("Loading Kokoro ONNX (model=%s voices=%s voice=%s)…",
+                    _ONNX_MODEL, _ONNX_VOICES, _VOICE)
+        pipeline = Kokoro(_ONNX_MODEL, _ONNX_VOICES)
+        _device = "cpu (onnx)"
+        logger.info("Kokoro ONNX pipeline ready (CPU) — same af_sky weights, ~600MB, no GPU.")
+        return pipeline
+
+    # ── PyTorch / CUDA fallback (ZOE_KOKORO_BACKEND=pytorch) ──────────────────
     import torch
     from kokoro import KPipeline  # type: ignore
 
@@ -181,10 +256,32 @@ def _pcm_to_wav(audio_tensor, sample_rate: int = _SAMPLE_RATE) -> bytes:
     return buf.getvalue()
 
 
+def _samples_to_wav(samples, sample_rate: int = _SAMPLE_RATE) -> bytes:
+    """Convert kokoro-onnx float32 PCM samples (numpy array) to WAV bytes."""
+    import numpy as np
+    arr = np.clip(np.asarray(samples, dtype=np.float32), -1.0, 1.0)
+    pcm_bytes = (arr * 32767.0).astype("<i2").tobytes()
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(pcm_bytes)
+    return buf.getvalue()
+
+
 _MAX_OOM_RETRIES = 2  # 2 retries × 500ms sleep = max ~1.5s extra; HTTP conn stays open
 
 
 def _blocking_synthesize(text: str, voice: str, speed: float) -> bytes:
+    if _BACKEND == "onnx":
+        # kokoro-onnx: same af_sky weights, CPU, returns (float32 samples, sample_rate)
+        samples, sr = _pipeline.create(text, voice=voice, speed=speed, lang="en-us")
+        return _samples_to_wav(samples, sr)
+    return _blocking_synthesize_pytorch(text, voice, speed)
+
+
+def _blocking_synthesize_pytorch(text: str, voice: str, speed: float) -> bytes:
     """Run Kokoro inference synchronously (called inside run_in_executor).
 
     Calls torch.cuda.empty_cache() before every attempt to release any
@@ -264,10 +361,13 @@ async def synthesize(req: SynthRequest):
 
     voice = (req.voice or _VOICE).strip() or _VOICE
 
-    # Fast path: return pre-synthesised WAV for common short phrases
+    # Fast path: serve pre-synthesised / previously-synthesised WAV instantly.
+    cacheable = voice == _VOICE and req.speed == 1.0 and len(text) <= _CACHE_MAX_TEXT_LEN
     cache_key = text.lower()
-    if voice == _VOICE and req.speed == 1.0 and cache_key in _phrase_cache:
-        return Response(content=_phrase_cache[cache_key], media_type="audio/wav")
+    if cacheable:
+        hit = _cache_get(cache_key)
+        if hit is not None:
+            return Response(content=hit, media_type="audio/wav", headers={"X-Cache": "hit"})
 
     try:
         wav_bytes = await _run_synthesis(text, voice, req.speed)
@@ -275,7 +375,11 @@ async def synthesize(req: SynthRequest):
         logger.warning("Kokoro synthesis failed voice=%s: %s", voice, exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    return Response(content=wav_bytes, media_type="audio/wav")
+    # Populate the runtime cache so this phrase is instant next time.
+    if cacheable:
+        _cache_store(cache_key, wav_bytes)
+
+    return Response(content=wav_bytes, media_type="audio/wav", headers={"X-Cache": "miss"})
 
 
 # ─── Entry point ─────────────────────────────────────────────────────────────
