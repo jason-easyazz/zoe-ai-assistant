@@ -31,6 +31,7 @@ import math
 
 import http.server
 import numpy as np
+from collections import deque
 import pyaudio
 import requests
 
@@ -161,6 +162,9 @@ _recording_active = threading.Event()
 _WAKE_QUEUE: "queue.Queue[bytes]" = None   # type: ignore  # set in main()
 _BARGE_QUEUE: "queue.Queue[bytes]" = None  # type: ignore  # set in main()
 _AMBIENT_QUEUE: "queue.Queue[bytes]" = None  # type: ignore  # set in main()
+# Pre-roll ring buffer so the wake->record stream-open gap does not clip the
+# START of the command (the "what's the" that went missing).
+_PREROLL: deque = deque(maxlen=int(os.environ.get("PREROLL_CHUNKS", "7")))  # ~560ms @1280/16k
 import queue as _queue_module
 
 
@@ -586,7 +590,7 @@ def record_command(pa: pyaudio.PyAudio) -> bytes | None:
             wait_s = 0.15 * attempt
             log.warning("Mic open failed (%s), retrying in %.2fs [%d/5]...", exc, wait_s, attempt)
             time.sleep(wait_s)
-    frames = []
+    frames = list(_PREROLL)  # prepend pre-roll so the start of speech is kept
     silent_chunks = 0
     stop_reason = "max_duration"
     max_silent = int(SILENCE_TIMEOUT_S * SAMPLE_RATE / CHUNK_SIZE)
@@ -733,6 +737,163 @@ def _play_buffer_phrase():
     except Exception as exc:
         log.debug("buffer phrase skipped: %s", exc)
         return None
+
+
+# ── Streaming turn: play TTS sentence chunks the instant they arrive ──────────
+# When enabled, the panel hits /api/voice/turn_stream and plays each sentence as
+# Kokoro finishes it (first audio ~1.3s) instead of waiting for the whole reply
+# to synthesize. This makes the "thinking" buffer phrase unnecessary on most
+# turns. Any failure falls back to the blocking _do_single_turn.
+VOICE_STREAM_ENABLED = os.environ.get("ZOE_VOICE_STREAM", "1").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _pcm_from_wav(wav_bytes: bytes):
+    """Return (pcm_frames, rate, channels, sampwidth) from one WAV chunk."""
+    with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
+        return wf.readframes(wf.getnframes()), wf.getframerate(), wf.getnchannels(), wf.getsampwidth()
+
+
+def _feed_pcm_chunk(aplay, wav_bytes: bytes):
+    """Strip the WAV header and stream raw PCM into a single persistent aplay so
+    sentence chunks play gaplessly. Starts aplay on the first chunk (format taken
+    from that chunk's header) and registers it as the active TTS process so the
+    barge-in thread can stop it."""
+    global _tts_process
+    try:
+        pcm, rate, ch, width = _pcm_from_wav(wav_bytes)
+    except Exception as exc:
+        log.debug("bad wav chunk: %s", exc)
+        return aplay
+    if aplay is None:
+        fmt = {1: "U8", 2: "S16_LE", 3: "S24_3LE", 4: "S32_LE"}.get(width, "S16_LE")
+        cmd = ["aplay", "-q", "-t", "raw", "-f", fmt, "-c", str(ch), "-r", str(rate)]
+        if AUDIO_OUTPUT_DEVICE != "default":
+            cmd += ["-D", AUDIO_OUTPUT_DEVICE]
+        aplay = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+        with _tts_process_lock:
+            _tts_process = aplay
+    try:
+        if aplay.stdin:
+            aplay.stdin.write(pcm)
+            aplay.stdin.flush()
+    except (BrokenPipeError, ValueError, OSError):
+        pass
+    return aplay
+
+
+def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = True) -> bool:
+    """Streaming turn: POST audio to /api/voice/turn_stream and play each TTS
+    sentence chunk as it arrives (no buffer phrase — first audio ~1.3s). Falls
+    back to the blocking _do_single_turn on any error."""
+    global _tts_process
+    import time as _time
+
+    audio_b64_wav = base64.b64encode(wav).decode()
+    identified_user_id = None
+    try:
+        identified_user_id = _identify_speaker_from_wav(wav)
+        if identified_user_id:
+            log.info("Speaker identified: %s", identified_user_id)
+    except Exception:
+        pass
+    payload: dict = {"audio_base64": audio_b64_wav, "panel_id": PANEL_ID}
+    if identified_user_id:
+        payload["identified_user_id"] = identified_user_id
+
+    url = f"{ZOE_URL}/api/voice/turn_stream"
+    _barge_in_requested.clear()
+    t0 = _time.monotonic()
+    aplay = None
+    ttfa = None
+    transcript = ""
+    reply = ""
+    played_any = False
+    expect_audio = False
+
+    try:
+        r = requests.post(url, json=payload, headers=_headers, timeout=60, stream=True, verify=VERIFY_SSL)
+        r.raise_for_status()
+        for raw_line in r.iter_lines(decode_unicode=False):
+            if _barge_in_requested.is_set():
+                log.info("Barge-in during streamed reply.")
+                break
+            if not raw_line:
+                continue
+            if expect_audio:
+                expect_audio = False
+                try:
+                    wav_bytes = base64.b64decode(raw_line)
+                except Exception:
+                    continue
+                if not played_any:
+                    _recording_active.clear()
+                aplay = _feed_pcm_chunk(aplay, wav_bytes)
+                if ttfa is None:
+                    ttfa = _time.monotonic() - t0
+                played_any = True
+                continue
+            try:
+                obj = json.loads(raw_line.decode("utf-8", "ignore"))
+            except Exception:
+                continue
+            if obj.get("error"):
+                log.warning("turn_stream server error: %s", obj["error"])
+                break
+            if obj.get("done"):
+                reply = obj.get("reply", "") or reply
+                break
+            if "transcript" in obj and "chunk" not in obj:
+                transcript = obj.get("transcript", "") or transcript
+                continue
+            if "chunk" in obj:
+                expect_audio = True
+                continue
+    except requests.exceptions.SSLError:
+        raise
+    except Exception as exc:
+        log.warning("turn_stream failed (%s) — falling back to blocking turn", exc)
+        if aplay is not None:
+            try:
+                aplay.kill()
+            except Exception:
+                pass
+            with _tts_process_lock:
+                _tts_process = None
+        return _do_single_turn(pa, wav, prompt_on_empty=prompt_on_empty)
+
+    # Drain playback (respecting barge-in) once the stream ends.
+    if aplay is not None:
+        try:
+            if aplay.stdin:
+                aplay.stdin.close()
+        except Exception:
+            pass
+        while aplay.poll() is None:
+            if _barge_in_requested.is_set():
+                try:
+                    aplay.terminate()
+                except Exception:
+                    pass
+                break
+            _time.sleep(0.05)
+        with _tts_process_lock:
+            _tts_process = None
+
+    if transcript and _is_junk_transcript(transcript):
+        log.info("Ignoring junk/hallucination transcript: %r", transcript)
+        return False
+    if played_any:
+        log.info("turn_stream TTFA=%.2fs transcript=%r", ttfa if ttfa is not None else -1.0, transcript[:80])
+        return True
+    # Stream produced no audio.
+    if not transcript:
+        if prompt_on_empty:
+            log.info("Empty transcript with no audio — retry chime.")
+            _recording_active.clear()
+            play_follow_up_beep()
+        return False
+    log.info("turn_stream: transcript but no audio (reply=%r) — blocking fallback.", reply[:80])
+    return _do_single_turn(pa, wav, prompt_on_empty=prompt_on_empty)
 
 
 def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = True) -> bool:
@@ -956,7 +1117,8 @@ def voice_command(pa: pyaudio.PyAudio, oww) -> None:
         if not wav:
             return
 
-        played_audio = _do_single_turn(pa, wav)
+        _turn_fn = _do_single_turn_stream if VOICE_STREAM_ENABLED else _do_single_turn
+        played_audio = _turn_fn(pa, wav)
         if FOLLOW_UP_LISTEN_S > 0 and FOLLOW_UP_MAX_TURNS <= 0:
             log.info("Follow-up disabled by config (FOLLOW_UP_MAX_TURNS=%d).", _FOLLOW_UP_MAX_TURNS_RAW)
 
@@ -972,7 +1134,7 @@ def voice_command(pa: pyaudio.PyAudio, oww) -> None:
                 break
             # Follow-up misses should fall back silently to wake mode, not speak a
             # robotic retry prompt after a successful prior answer.
-            played_audio = _do_single_turn(pa, follow_wav, prompt_on_empty=False)
+            played_audio = _turn_fn(pa, follow_wav, prompt_on_empty=False)
             follow_ups_done += 1
 
         if POST_PLAY_TAIL_S > 0:
@@ -1217,6 +1379,7 @@ def main():
                     continue
 
             audio_chunk = stream.read(CHUNK_SIZE, exception_on_overflow=False)
+            _PREROLL.append(audio_chunk)
             # OpenWakeWord expects int16 PCM at 16 kHz (not float32 [-1,1] — that yields ~0 scores forever).
             audio_pcm = np.frombuffer(audio_chunk, dtype=np.int16)
 
