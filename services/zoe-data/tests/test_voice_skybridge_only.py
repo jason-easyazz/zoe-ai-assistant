@@ -50,5 +50,9 @@ async def test_legacy_helpers_noop_when_flag_on(monkeypatch, helper, args):
         raise AssertionError(f"{helper} enqueued a UI action despite ZOE_SKYBRIDGE_ONLY")
 
     monkeypatch.setattr("ui_orchestrator.enqueue_ui_action", _boom, raising=False)
-    # Returns cleanly (no enqueue, no navigation) — the panel stays on Skybridge.
+    # _broadcast_lets_talk_ui broadcasts BEFORE the enqueue step, so a broken
+    # guard there would fire the broadcast and slip past the enqueue boom. Mock
+    # the broadcaster too so every helper's early-return is genuinely covered.
+    monkeypatch.setattr("push.broadcaster.broadcast", _boom, raising=False)
+    # Returns cleanly (no enqueue, no broadcast, no navigation) — stays on Skybridge.
     await getattr(vt, helper)(*args)
