@@ -101,9 +101,12 @@ def test_extract_pr_url_from_output(monkeypatch):
     assert pe._extract_pr_url(out, "wt/x", pe.Path("/tmp")) == "https://github.com/o/r/pull/42"
 
 
-def test_extract_pr_url_bare_url(monkeypatch):
-    out = "opened https://github.com/o/r/pull/13 ok"
-    assert pe._extract_pr_url(out, "wt/x", pe.Path("/tmp")) == "https://github.com/o/r/pull/13"
+def test_extract_pr_url_ignores_bare_url_uses_gh(monkeypatch):
+    # A bare URL in pi's log (could be an unrelated PR) is NOT trusted; the
+    # branch's own PR via gh is authoritative.
+    monkeypatch.setattr(pe, "_gh_pr_for_branch", lambda b, w: None)
+    out = "opened https://github.com/o/r/pull/13 ok"  # no PR_URL= contract line
+    assert pe._extract_pr_url(out, "wt/x", pe.Path("/tmp")) is None
 
 
 def test_extract_pr_url_fallback_to_gh_list(monkeypatch):
@@ -178,3 +181,14 @@ def test_executor_fallback_opens_pr_when_pi_didnt(monkeypatch):
     res = asyncio.run(pe.execute_issue(1))
     assert res.ok is True and res.pr_url == "https://github.com/o/r/pull/77"
     assert calls == ["pi", "tests", "review", "merge"]
+
+
+def test_run_pi_implement_handles_missing_binary(monkeypatch):
+    # If pi can't be spawned (e.g. binary missing), run_pi_implement must return
+    # a clean failure, not let the exception escape into execute_issue.
+    async def boom(*a, **k):
+        raise OSError("pi: command not found")
+    monkeypatch.setattr(pe.asyncio, "create_subprocess_exec", boom)
+    monkeypatch.setattr(pe, "_pi_env", lambda: {})
+    rc, out = asyncio.run(pe.run_pi_implement("prompt", pe.Path("/tmp")))
+    assert rc == -1 and "could not run" in out

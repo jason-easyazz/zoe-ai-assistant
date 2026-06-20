@@ -46,7 +46,6 @@ _PI_MODEL = os.environ.get("ZOE_PI_EXECUTOR_MODEL", "minimax/minimax-m3")
 _PI_MODE = os.environ.get("ZOE_PI_EXECUTOR_MODE", "text")
 _HERMES_ENV = os.path.expanduser("~/.hermes/.env")
 _PR_URL_RE = re.compile(r"PR_URL=\s*(https://github\.com/[^\s\"']+/pull/\d+)")
-_ANY_PR_URL_RE = re.compile(r"https://github\.com/[\w.-]+/[\w.-]+/pull/\d+")
 
 
 def pi_executor_enabled() -> bool:
@@ -190,6 +189,10 @@ async def run_pi_implement(prompt: str, worktree: Path) -> tuple[int, str]:
             proc.kill()
             await proc.communicate()
         return -1, f"pi implement timed out after {_timeout_s()}s"
+    except (OSError, ValueError) as exc:
+        # pi binary missing / not executable / bad argv — must not escape into
+        # execute_issue; surface as a clean failure so the caller reports it.
+        return -1, f"pi implement could not run: {exc}"
 
 
 def _gh_pr_for_branch(branch: str, worktree: Path) -> str | None:
@@ -206,12 +209,13 @@ def _gh_pr_for_branch(branch: str, worktree: Path) -> str | None:
 
 
 def _extract_pr_url(pi_output: str, branch: str, worktree: Path) -> str | None:
+    # Only the explicit `PR_URL=` contract line is trusted from pi's output. A
+    # bare-URL regex over the whole log is unsafe — a stray PR link in pi's
+    # output or the issue body could be an unrelated PR. The branch's own open PR
+    # (via gh) is the authoritative fallback.
     m = _PR_URL_RE.search(pi_output or "")
     if m:
         return m.group(1)
-    m = _ANY_PR_URL_RE.search(pi_output or "")
-    if m:
-        return m.group(0)
     return _gh_pr_for_branch(branch, worktree)
 
 
