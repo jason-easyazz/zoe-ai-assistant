@@ -922,23 +922,36 @@ async def _resolve_weather(intent: SkybridgeIntent, user_id: str, db: Any) -> di
     prefs = _row_to_prefs(row)
     fallback = await _get_system_default_location(db)
     lat, lon, city, country = _resolve_location(prefs, fallback=fallback)
-    current = await _get_current(lat, lon, city, country)
+    # Voice replies must feel instant: prefer the warm cache (kept fresh by the panel's
+    # periodic /weather/current + /forecast polls); only pay the ~1s live API when cold.
+    from routers.weather import _weather_cache as _wc
+    current = _wc.get("current") or {}
+    if not current.get("temp"):
+        current = await _get_current(lat, lon, city, country)
     current = {k: v for k, v in current.items() if not str(k).startswith("_")}
-    forecast = {}
+    forecast = _wc.get("forecast") or await _get_forecast(lat, lon)
+
+    def _say_num(n) -> str:
+        s = str(n)
+        return s.replace(".", " point ") if "." in s else s
+
     if intent.action == "forecast":
-        forecast = await _get_forecast(lat, lon)
         card = card_service.build_weather_forecast_card(
             {"current": current, "forecast": forecast, "location": {"city": city, "country": country}}
         )
         spoken = f"Here is the forecast for {city}."
     else:
-        forecast = await _get_forecast(lat, lon)
         card = card_service.build_weather_current_card(
             {"current": current, "forecast": forecast, "location": {"city": city, "country": country}}
         )
         temp = current.get("temp")
         desc = current.get("description") or "current conditions"
-        spoken = f"It is {temp} degrees in {city} with {desc}." if temp is not None else f"Here is the weather for {city}."
+        # Speak naturally: "18.3" → "18 point 3" (bare decimals get mangled to "18 3"),
+        # and join the condition with "and" rather than the robotic "with".
+        spoken = (
+            f"It's {_say_num(temp)} degrees and {desc} in {city}."
+            if temp is not None else f"Here is the weather for {city}."
+        )
     return {
         "handled": True,
         "intent": {"domain": "weather", "action": intent.action},
