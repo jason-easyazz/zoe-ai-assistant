@@ -203,8 +203,10 @@ def _normalize_chat_intent_text(raw: str) -> str:
     # ("hey zoe, what's the weather" → "what's the weather"). Without this, every
     # $-anchored fast-path regex misses and the whole turn falls through to the
     # slow brain path — the dominant cause of "voice feels slow" on common commands.
-    s = re.sub(r"^(?:hey|hi|hello|ok|okay|yo|hiya)\s+zoe\b[\s,]*", "", s)
-    s = re.sub(r"^zoe\b[\s,]*", "", s)
+    # [\s,.!?:;-]* also eats trailing punctuation, since some STT models render
+    # the wake word as its own sentence ("Zoe. What's the weather").
+    s = re.sub(r"^(?:hey|hi|hello|ok|okay|yo|hiya)\s+zoe\b[\s,.!?:;-]*", "", s)
+    s = re.sub(r"^zoe\b[\s,.!?:;-]*", "", s)
     s = re.sub(r"\s+", " ", s).strip()
     # Replace "^and" → "add" ONLY when followed by a list-add phrasing ("X to [list-type] list").
     # STT frequently mishears "add" as "and" for Australian accents (e.g. "add bread" → "and bread").

@@ -21,7 +21,9 @@ edge-tts>=6.1.12
 # Primary offline TTS: ~82M ONNX model, sub-100ms on Jetson CUDA
 # Install model: https://github.com/thewh1teagle/kokoro-onnx/releases
 kokoro-onnx>=0.4.0
-# STT via Python API (faster than whisper.cpp CLI on Jetson with CUDA)
+# STT primary: Moonshine v2 (MEDIUM_STREAMING) — accurate on real room audio, CPU/ONNX
+moonshine-voice
+# STT fallback via Python API (faster than whisper.cpp CLI on Jetson with CUDA)
 faster-whisper>=1.0.3
 # Speaker diarization for ambient memory (Jetson CUDA only)
 pyannote.audio>=3.3.2
