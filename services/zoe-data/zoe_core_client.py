@@ -208,7 +208,11 @@ class _ZoeCoreWorker:
             # old reader only caught the COMPLETE text, so the first token reached
             # the user only after the whole reply was generated (~2s TTFT → ~0.5s).
             amev = event.get("assistantMessageEvent")
-            if isinstance(amev, Mapping):
+            # Restrict to message_update so a terminal event (agent_end/turn_end)
+            # that also happens to carry assistantMessageEvent still reaches the
+            # terminal handling below instead of being skipped by the `continue`
+            # (which would hang the turn for the full idle timeout).
+            if etype == "message_update" and isinstance(amev, Mapping):
                 if amev.get("type") == "text_delta":
                     delta = str(amev.get("delta") or "")
                     if delta:
