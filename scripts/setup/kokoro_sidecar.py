@@ -440,7 +440,8 @@ async def synthesize_stream(req: SynthRequest):
                         queue.put_nowait(RuntimeError("Kokoro stream produced no audio"))
                 else:
                     queue.put_nowait(_wav_to_pcm16_le(await _run_synthesis(text, voice, speed)))
-            except Exception as exc:  # surfaced to the client generator below
+            except Exception as exc:  # logged here, surfaced to the client generator below
+                logger.warning("Kokoro stream synthesis failed voice=%s: %s", voice, exc)
                 queue.put_nowait(exc)
             finally:
                 queue.put_nowait(_DONE)
