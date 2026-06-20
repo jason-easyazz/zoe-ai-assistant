@@ -2707,7 +2707,7 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False) -> Optio
     """
     try:
         from database import get_db
-        from routers.weather import _row_to_prefs, _resolve_location, _get_current, _get_forecast
+        from routers.weather import _row_to_prefs, _resolve_location, _get_current, _get_forecast, _weather_cache
         async for db in get_db():
             cursor = await db.execute(
                 "SELECT * FROM weather_preferences WHERE user_id = ?",
@@ -2715,7 +2715,13 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False) -> Optio
             )
             prefs = _row_to_prefs(await cursor.fetchone())
             lat, lon, city, country = _resolve_location(prefs)
-            current = await _get_current(lat, lon, city, country)
+            # Voice replies should be instant: prefer the warm cache (kept fresh by the
+            # panel's periodic /weather/current poll) and only pay the ~1s live API call
+            # when it's cold. The panel UI route still always fetches live, so this does
+            # not affect on-screen freshness.
+            current = _weather_cache.get("current") or {}
+            if not current.get("temp"):
+                current = await _get_current(lat, lon, city, country)
             city_name = current.get("city") or city or "your area"
             # Speak numbers naturally: "18.3" → "18 point 3" (bare decimals get
             # mangled to "18 3" by TTS), and avoid markdown/°C which also mangle.
