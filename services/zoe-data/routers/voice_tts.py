@@ -2420,40 +2420,43 @@ def _log_voice_stt_sample(
 
 # --- Moonshine ONNX STT (edge real-time; faster on short commands, CPU-only so
 # it never competes with the brain's GPU). Model + tokenizer are cached once. ---
-_moonshine_model = None
-_moonshine_tok = None
+_moonshine_model = None  # moonshine_voice v2 Transcriber
 _moonshine_lock = threading.Lock()
 
 
 def _ensure_moonshine():
-    global _moonshine_model, _moonshine_tok
-    if _moonshine_model is not None and _moonshine_tok is not None:
-        return _moonshine_model, _moonshine_tok
-    # Lock the lazy init so a second concurrent caller can't observe a
-    # half-initialised state (model set, tokenizer still None) and crash in
-    # tok.decode_batch(). Runs in a threadpool worker, so a threading.Lock.
+    """Lazily build the Moonshine v2 transcriber (MEDIUM_STREAMING by default —
+    accurate on real room audio, ~0.5s/clip). Locked so a concurrent first call
+    can't race the model load."""
+    global _moonshine_model
+    if _moonshine_model is not None:
+        return _moonshine_model
     with _moonshine_lock:
-        if _moonshine_model is None or _moonshine_tok is None:
-            from moonshine_onnx import MoonshineOnnxModel, load_tokenizer
+        if _moonshine_model is None:
+            import moonshine_voice as mv
+            from moonshine_voice.transcriber import Transcriber
 
-            name = (os.environ.get("ZOE_MOONSHINE_MODEL") or "moonshine/base").strip()
-            tok = load_tokenizer()
-            model = MoonshineOnnxModel(model_name=name)
-            # Publish both only once both are ready.
-            _moonshine_tok = tok
-            _moonshine_model = model
-    return _moonshine_model, _moonshine_tok
+            archname = (os.environ.get("ZOE_MOONSHINE_ARCH") or "MEDIUM_STREAMING").strip()
+            arch = getattr(mv.ModelArch, archname, mv.ModelArch.MEDIUM_STREAMING)
+            model_path, resolved_arch = mv.get_model_for_language("en", arch)
+            _moonshine_model = Transcriber(model_path, resolved_arch)
+    return _moonshine_model
 
 
 async def _run_moonshine(wav_path: str) -> str:
-    from moonshine_onnx import load_audio
+    from moonshine_voice.utils import load_wav_file
 
     def _work() -> str:
-        model, tok = _ensure_moonshine()
-        audio = load_audio(wav_path)
-        tokens = model.generate(audio)
-        out = tok.decode_batch(tokens)
-        return (out[0] if out else "").strip()
+        tr = _ensure_moonshine()
+        audio, sr = load_wav_file(wav_path)
+        out = tr.transcribe_without_streaming(audio, sr)
+        text = getattr(out, "text", None)
+        if not (isinstance(text, str) and text.strip()):
+            try:
+                text = " ".join(line.text for line in out.lines)
+            except Exception:
+                text = str(out)
+        return (text or "").strip()
 
     return await asyncio.get_running_loop().run_in_executor(None, _work)
 
@@ -2474,7 +2477,38 @@ async def warm_moonshine() -> bool:
         return False
 
 
+async def _maybe_capture_stt(wav_path: str, primary: str) -> None:
+    """Diagnostic A/B: when ZOE_VOICE_SAVE_AUDIO is set, save the real utterance
+    and log the primary (Moonshine) result alongside whisper's, so we can tell —
+    on the user's actual room audio — which is more accurate and whether the
+    pre-roll is corrupting it. Logs at WARNING so it's visible past the level."""
+    if (os.environ.get("ZOE_VOICE_SAVE_AUDIO") or "").strip().lower() not in ("1", "true", "yes", "on"):
+        return
+    try:
+        import shutil
+        import time as _t
+
+        d = os.environ.get("ZOE_VOICE_SAMPLE_DIR") or "/home/zoe/.zoe-voice-samples"
+        os.makedirs(d, exist_ok=True)
+        dst = os.path.join(d, f"{_t.strftime('%H%M%S')}_{int(_t.time()*1000)%1000:03d}.wav")
+        shutil.copyfile(wav_path, dst)
+        alt = ""
+        try:
+            alt = await _run_faster_whisper(wav_path)
+        except Exception as exc:
+            alt = f"<whisper err: {exc}>"
+        logger.warning("STT_AB file=%s moonshine=%r whisper=%r", dst, (primary or "")[:90], (alt or "")[:90])
+    except Exception as exc:
+        logger.warning("STT capture failed: %s", exc)
+
+
 async def _transcribe_audio(wav_path: str) -> str:
+    text = await _transcribe_audio_impl(wav_path)
+    await _maybe_capture_stt(wav_path, text)
+    return text
+
+
+async def _transcribe_audio_impl(wav_path: str) -> str:
     """
     Transcription waterfall:
     0. Moonshine ONNX (default; edge real-time, CPU) — falls through on error
@@ -3275,9 +3309,17 @@ async def voice_command(
             )
             _bcast_dt = time.monotonic() - _bcast_t0
             _synth_t0 = time.monotonic()
-            _skybridge_audio = await synthesize({"text": _skybridge_reply}, caller=caller)
-            logger.info("SKYBRIDGE TIMING resolve=%.2fs broadcast=%.2fs synth=%.2fs reply=%r",
-                        _sky_t_resolve, _bcast_dt, time.monotonic() - _synth_t0, _skybridge_reply[:50])
+            # In stream mode, /turn_stream synthesizes the reply sentence-by-
+            # sentence for fast first-audio, so skip the blocking full synth here
+            # and hand back just the text (audio_base64=None).
+            _skybridge_audio_b64: Optional[str] = None
+            _skybridge_ct = "audio/wav"
+            if not stream:
+                _skybridge_audio = await synthesize({"text": _skybridge_reply}, caller=caller)
+                _skybridge_audio_b64 = base64.b64encode(_skybridge_audio.body).decode("ascii")
+                _skybridge_ct = _skybridge_audio.media_type
+            logger.info("SKYBRIDGE TIMING resolve=%.2fs broadcast=%.2fs synth=%.2fs stream=%s reply=%r",
+                        _sky_t_resolve, _bcast_dt, time.monotonic() - _synth_t0, stream, _skybridge_reply[:50])
             try:
                 from push import broadcaster as _bc_sky
                 await _bc_sky.broadcast("all", "voice:responding", {"panel_id": panel_id, "text": _skybridge_reply[:200]})
@@ -3290,8 +3332,8 @@ async def voice_command(
                 "ok": True,
                 "panel_id": panel_id,
                 "reply": _skybridge_reply,
-                "audio_base64": base64.b64encode(_skybridge_audio.body).decode("ascii"),
-                "content_type": _skybridge_audio.media_type,
+                "audio_base64": _skybridge_audio_b64,
+                "content_type": _skybridge_ct,
                 "intent": f"skybridge:{(_skybridge_result.get('intent') or {}).get('domain', 'unknown')}",
                 "skybridge": True,
             }
@@ -4521,11 +4563,31 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
         reply_text = str(result.get("reply") or "")
         audio_b64 = result.get("audio_base64")
         if audio_b64:
+            # Pre-synthesized (confirmation / pi-direct paths) — one-shot frame.
             yield (_json.dumps({
                 "full_audio": str(audio_b64),
                 "content_type": result.get("content_type") or "audio/wav",
                 "reply": reply_text[:200],
             }) + "\n").encode()
+        elif reply_text:
+            # Skybridge fast-path returned text only (stream mode) — synthesize it
+            # sentence-by-sentence so the panel starts speaking in ~0.6s instead of
+            # waiting for the whole reply to synthesize.
+            _chunk = 0
+            for _sentence in _split_sentences(reply_text):
+                _sentence = _sentence.strip()
+                if not _sentence:
+                    continue
+                try:
+                    _wav = await _synthesize_kokoro_sidecar(_sentence)
+                except Exception:
+                    _wav = None
+                if not _wav:
+                    continue
+                yield (_json.dumps({"chunk": _chunk, "text": _sentence[:80],
+                                    "provider": "kokoro-sidecar"}) + "\n").encode()
+                yield base64.b64encode(_wav) + b"\n"
+                _chunk += 1
         yield (_json.dumps({"done": True, "reply": reply_text}) + "\n").encode()
 
     return StreamingResponse(
