@@ -1898,6 +1898,7 @@ model = WhisperModel(model_name, device=device, compute_type=compute_type)
 segments, _info = model.transcribe(
     wav_path,
     language=lang,
+    beam_size=_env_int("ZOE_WHISPER_BEAM_SIZE", 1),
     vad_filter=True,
     vad_parameters={
         "threshold": _env_float("ZOE_WHISPER_VAD_THRESHOLD", 0.50),
@@ -2021,6 +2022,7 @@ for line in sys.stdin:
         segments, _info = model.transcribe(
             wav_path,
             language=lang,
+            beam_size=_env_int("ZOE_WHISPER_BEAM_SIZE", 1),
             vad_filter=True,
             vad_parameters={
                 "threshold": _env_float("ZOE_WHISPER_VAD_THRESHOLD", 0.50),
@@ -2271,6 +2273,7 @@ async def _run_faster_whisper_in_process(wav_path: str) -> str:
                 segments, _info = model.transcribe(
                     wav_path,
                     language=lang,
+                    beam_size=int(os.environ.get("ZOE_WHISPER_BEAM_SIZE", "1")),
                     vad_filter=True,
                     vad_parameters={
                         "threshold": vad_threshold,
