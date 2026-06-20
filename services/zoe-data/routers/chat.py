@@ -1645,6 +1645,7 @@ async def chat_stream_generator(
     *,
     force_openclaw: bool = False,
     force_agent: str = "auto",
+    req_panel_id: str | None = None,
 ):
     user_id = user["user_id"]
     user_role = user.get("role")
@@ -3070,6 +3071,7 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
                     user,
                     force_openclaw=force_openclaw,
                     force_agent=force_agent,
+                    req_panel_id=req_panel_id,
                 ):
                     yield chunk
             finally:
