@@ -7,6 +7,7 @@ import re
 import shutil
 import sys
 import tempfile
+import threading
 import time
 import wave
 from datetime import datetime, timezone
@@ -1898,7 +1899,7 @@ model = WhisperModel(model_name, device=device, compute_type=compute_type)
 segments, _info = model.transcribe(
     wav_path,
     language=lang,
-    beam_size=_env_int("ZOE_WHISPER_BEAM_SIZE", 1),
+    beam_size=_env_int("ZOE_WHISPER_BEAM_SIZE", 5),
     vad_filter=True,
     vad_parameters={
         "threshold": _env_float("ZOE_WHISPER_VAD_THRESHOLD", 0.50),
@@ -2022,7 +2023,7 @@ for line in sys.stdin:
         segments, _info = model.transcribe(
             wav_path,
             language=lang,
-            beam_size=_env_int("ZOE_WHISPER_BEAM_SIZE", 1),
+            beam_size=_env_int("ZOE_WHISPER_BEAM_SIZE", 5),
             vad_filter=True,
             vad_parameters={
                 "threshold": _env_float("ZOE_WHISPER_VAD_THRESHOLD", 0.50),
@@ -2273,7 +2274,7 @@ async def _run_faster_whisper_in_process(wav_path: str) -> str:
                 segments, _info = model.transcribe(
                     wav_path,
                     language=lang,
-                    beam_size=int(os.environ.get("ZOE_WHISPER_BEAM_SIZE", "1")),
+                    beam_size=int(os.environ.get("ZOE_WHISPER_BEAM_SIZE", "5")),
                     vad_filter=True,
                     vad_parameters={
                         "threshold": vad_threshold,
@@ -2398,12 +2399,77 @@ def _log_voice_stt_sample(
         logger.debug("voice STT audit log failed: %s", exc)
 
 
+# --- Moonshine ONNX STT (edge real-time; faster on short commands, CPU-only so
+# it never competes with the brain's GPU). Model + tokenizer are cached once. ---
+_moonshine_model = None
+_moonshine_tok = None
+_moonshine_lock = threading.Lock()
+
+
+def _ensure_moonshine():
+    global _moonshine_model, _moonshine_tok
+    if _moonshine_model is not None and _moonshine_tok is not None:
+        return _moonshine_model, _moonshine_tok
+    # Lock the lazy init so a second concurrent caller can't observe a
+    # half-initialised state (model set, tokenizer still None) and crash in
+    # tok.decode_batch(). Runs in a threadpool worker, so a threading.Lock.
+    with _moonshine_lock:
+        if _moonshine_model is None or _moonshine_tok is None:
+            from moonshine_onnx import MoonshineOnnxModel, load_tokenizer
+
+            name = (os.environ.get("ZOE_MOONSHINE_MODEL") or "moonshine/base").strip()
+            tok = load_tokenizer()
+            model = MoonshineOnnxModel(model_name=name)
+            # Publish both only once both are ready.
+            _moonshine_tok = tok
+            _moonshine_model = model
+    return _moonshine_model, _moonshine_tok
+
+
+async def _run_moonshine(wav_path: str) -> str:
+    from moonshine_onnx import load_audio
+
+    def _work() -> str:
+        model, tok = _ensure_moonshine()
+        audio = load_audio(wav_path)
+        tokens = model.generate(audio)
+        out = tok.decode_batch(tokens)
+        return (out[0] if out else "").strip()
+
+    return await asyncio.get_running_loop().run_in_executor(None, _work)
+
+
+async def warm_moonshine() -> bool:
+    """Pre-load the Moonshine STT model+tokenizer so the first panel turn isn't
+    cold (saves the ~1-2s ONNX session load on the first utterance)."""
+    if (os.environ.get("ZOE_STT_BACKEND") or "moonshine").strip().lower() != "moonshine":
+        logger.info("Moonshine warmup skipped; ZOE_STT_BACKEND is not moonshine")
+        return False
+    started = time.monotonic()
+    try:
+        await asyncio.get_running_loop().run_in_executor(None, _ensure_moonshine)
+        logger.info("Moonshine STT warmup completed in %.2fs", time.monotonic() - started)
+        return True
+    except Exception as exc:
+        logger.warning("Moonshine STT warmup failed (non-fatal): %s", exc)
+        return False
+
+
 async def _transcribe_audio(wav_path: str) -> str:
     """
     Transcription waterfall:
+    0. Moonshine ONNX (default; edge real-time, CPU) — falls through on error
     1. whisper.cpp CLI (if binary + ggml model configured)
     2. faster-whisper Python (auto-downloaded model, GPU/CPU)
     """
+    if (os.environ.get("ZOE_STT_BACKEND") or "moonshine").strip().lower() == "moonshine":
+        try:
+            text = await _run_moonshine(wav_path)
+            if text:
+                return text
+            logger.warning("Moonshine STT returned empty; falling back to whisper")
+        except Exception as exc:
+            logger.warning("Moonshine STT failed (%s); falling back to whisper", exc)
     if _whisper_cpp_binary():
         model = (os.environ.get("ZOE_WHISPER_MODEL") or "").strip()
         if model and os.path.isfile(model):
@@ -3130,12 +3196,14 @@ async def voice_command(
         _voice_entry = _VOICE_SESSIONS.get(panel_id, {})
         _skybridge_context = _voice_entry.get("skybridge_context") or {}
         _skybridge_user = _scope_identity_user or "guest"
+        _sky_t0 = time.monotonic()
         _skybridge_result = await resolve_skybridge_request(
             text,
             _skybridge_user,
             context=_skybridge_context,
             db=db,
         )
+        _sky_t_resolve = time.monotonic() - _sky_t0
         if _skybridge_result and _skybridge_result.get("auth_required"):
             _intent = _skybridge_result.get("intent") or {}
             try:
@@ -3179,13 +3247,18 @@ async def voice_command(
                 _skybridge_result.get("skybridge_context") or {}
             )
             _skybridge_reply = str(_skybridge_result.get("spoken_summary") or "Showing that in Skybridge.")
+            _bcast_t0 = time.monotonic()
             await _broadcast_skybridge_ui(
                 panel_id,
                 _skybridge_result,
                 utterance=text,
                 turn_key=_turn_key,
             )
+            _bcast_dt = time.monotonic() - _bcast_t0
+            _synth_t0 = time.monotonic()
             _skybridge_audio = await synthesize({"text": _skybridge_reply}, caller=caller)
+            logger.info("SKYBRIDGE TIMING resolve=%.2fs broadcast=%.2fs synth=%.2fs reply=%r",
+                        _sky_t_resolve, _bcast_dt, time.monotonic() - _synth_t0, _skybridge_reply[:50])
             try:
                 from push import broadcaster as _bc_sky
                 await _bc_sky.broadcast("all", "voice:responding", {"panel_id": panel_id, "text": _skybridge_reply[:200]})
@@ -4306,6 +4379,137 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth),
         pass
     logger.info("voice/turn total=%.1fs (STT=%.1fs LLM+TTS=%.1fs)", t_total, t_stt, t_total - t_stt)
     return result
+
+
+@router.post("/turn_stream")
+async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice_auth), db=Depends(get_db)):
+    """Streaming variant of /turn: STT, then stream brain→sentence→TTS audio
+    chunks as they are produced, so the panel starts speaking the answer ~1.3s
+    in instead of waiting for the whole reply to synthesize.
+
+    Wire format (media type application/x-zoe-audio-stream):
+      line 1:        {"transcript": "..."}
+      per chunk:     {"chunk": N, "text": "...", "provider": "..."}\n<base64 wav>\n
+      final:         {"done": true, "reply": "...", "panel_id": "..."}
+    Reuses voice_command(stream=True) for the LLM+TTS pipeline.
+    """
+    b64 = str((payload or {}).get("audio_base64") or "").strip()
+    panel_id = str((payload or {}).get("panel_id", caller.get("panel_id") or "unknown"))
+    if not b64:
+        raise HTTPException(status_code=400, detail="audio_base64 is required")
+
+    t_turn_start = time.monotonic()
+    try:
+        raw = base64.b64decode(b64, validate=True)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="invalid base64 audio") from exc
+    t_upload = time.monotonic() - t_turn_start
+    suffix = ".wav" if (len(raw) >= 4 and raw[:4] == b"RIFF") else ".raw"
+
+    # ── STT (Moonshine, same waterfall as /turn) ──
+    t_stt_start = time.monotonic()
+    duration_s: float | None = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp.write(raw)
+            wav_path = tmp.name
+        duration_s = _wav_duration_seconds(wav_path) if suffix == ".wav" else None
+        try:
+            transcript = await _transcribe_audio(wav_path)
+        finally:
+            try:
+                os.unlink(wav_path)
+            except OSError:
+                pass
+    except Exception as exc:
+        logger.error("voice/turn_stream STT failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Transcription failed: {exc}") from exc
+
+    t_stt = time.monotonic() - t_stt_start
+    try:
+        from voice_metrics import voice_stage_seconds
+        voice_stage_seconds.labels(stage="upload").observe(t_upload)
+        voice_stage_seconds.labels(stage="stt").observe(t_stt)
+    except Exception:
+        pass
+    transcript = (transcript or "").strip()
+    _log_voice_stt_sample(
+        route="turn_stream",
+        panel_id=panel_id,
+        audio_bytes=len(raw),
+        suffix=suffix,
+        transcript=transcript,
+        duration_seconds=duration_s,
+        stt_seconds=t_stt,
+    )
+
+    import json as _json
+
+    if not transcript:
+        try:
+            from voice_metrics import voice_turn_count
+            voice_turn_count.labels(outcome="empty_transcript", path="turn_stream").inc()
+        except Exception:
+            pass
+        async def _empty():
+            yield (_json.dumps({"transcript": "", "done": True, "reply": ""}) + "\n").encode()
+        return StreamingResponse(
+            _empty(), media_type="application/x-zoe-audio-stream", headers={"Cache-Control": "no-cache"}
+        )
+
+    logger.info("voice/turn_stream panel=%s STT=%.2fs transcript=%r", panel_id, t_stt, transcript[:80])
+    try:
+        from push import broadcaster as _bc_t
+        await _bc_t.broadcast("all", "voice:transcript", {"panel_id": panel_id, "text": transcript})
+    except Exception:
+        pass
+
+    command_payload = {
+        "text": transcript,
+        "panel_id": panel_id,
+        "_t_turn_start": t_turn_start,
+    }
+    if (payload or {}).get("identified_user_id"):
+        command_payload["identified_user_id"] = payload["identified_user_id"]
+
+    # Delegate LLM + per-sentence TTS to the existing streaming pipeline.
+    # (voice_command's stream generator records the downstream llm_first_token /
+    # tts_first_byte / total stage metrics + a path="command" turn count.)
+    sub = await voice_command(command_payload, caller=caller, stream=True, db=db)
+    try:
+        from voice_metrics import voice_turn_count
+        voice_turn_count.labels(outcome="ok", path="turn_stream").inc()
+    except Exception:
+        pass
+
+    async def _wrapped():
+        # Lead with the transcript so the panel can show/log what was heard
+        # before the first audio chunk arrives.
+        yield (_json.dumps({"transcript": transcript}) + "\n").encode()
+        if hasattr(sub, "body_iterator"):
+            async for chunk in sub.body_iterator:
+                yield chunk
+            return
+        # voice_command returns a plain dict (not a StreamingResponse) on the
+        # skybridge / confirmation-dialog / pi-direct paths regardless of the
+        # stream flag. Those already hold the full reply + synthesized audio, so
+        # forward it as a one-shot full_audio frame the panel plays via its
+        # robust player (handles wav AND mp3) instead of crashing on the missing
+        # body_iterator.
+        result = sub if isinstance(sub, dict) else {}
+        reply_text = str(result.get("reply") or "")
+        audio_b64 = result.get("audio_base64")
+        if audio_b64:
+            yield (_json.dumps({
+                "full_audio": str(audio_b64),
+                "content_type": result.get("content_type") or "audio/wav",
+                "reply": reply_text[:200],
+            }) + "\n").encode()
+        yield (_json.dumps({"done": True, "reply": reply_text}) + "\n").encode()
+
+    return StreamingResponse(
+        _wrapped(), media_type="application/x-zoe-audio-stream", headers={"Cache-Control": "no-cache"}
+    )
 
 
 @router.post("/wake")

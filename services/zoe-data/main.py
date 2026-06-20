@@ -690,9 +690,10 @@ async def lifespan(app: FastAPI):
     _zoe_update_bg_task = start_zoe_update_background_tasks()
 
     try:
-        from routers.voice_tts import warm_faster_whisper_worker
+        from routers.voice_tts import warm_faster_whisper_worker, warm_moonshine
+        asyncio.create_task(warm_moonshine(), name="moonshine_warmup")
         asyncio.create_task(warm_faster_whisper_worker(), name="faster_whisper_warmup")
-        logger.info("Voice STT worker warmup scheduled")
+        logger.info("Voice STT worker warmup scheduled (moonshine + whisper)")
     except Exception as _voice_warmup_exc:
         logger.warning("Voice STT worker warmup scheduling failed (non-fatal): %s", _voice_warmup_exc)
 
