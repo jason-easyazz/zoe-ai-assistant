@@ -202,6 +202,27 @@ class _ZoeCoreWorker:
             # followed by the answer turn); deltas are cumulative WITHIN a message.
             if etype == "message_start":
                 emitted = ""
+            # Stream incremental text deltas as Pi generates them, instead of
+            # waiting for text_end/agent_end. Pi emits message_update events with
+            # assistantMessageEvent={type:"text_delta", delta:"…"} per chunk; the
+            # old reader only caught the COMPLETE text, so the first token reached
+            # the user only after the whole reply was generated (~2s TTFT → ~0.5s).
+            amev = event.get("assistantMessageEvent")
+            # Restrict to message_update so a terminal event (agent_end/turn_end)
+            # that also happens to carry assistantMessageEvent still reaches the
+            # terminal handling below instead of being skipped by the `continue`
+            # (which would hang the turn for the full idle timeout).
+            if etype == "message_update" and isinstance(amev, Mapping):
+                if amev.get("type") == "text_delta":
+                    delta = str(amev.get("delta") or "")
+                    if delta:
+                        emitted += delta
+                        streamed_any = True
+                        yield delta
+                # Every message_update (text_start/delta/end, thinking, toolcall) is
+                # fully handled here — never fall through to the message-field path,
+                # which re-emits the first chunk (the "YouYou" double-emit).
+                continue
             text = _assistant_text_from_rpc_event(event)
             if text and text.startswith(emitted) and len(text) > len(emitted):
                 yield text[len(emitted):]
