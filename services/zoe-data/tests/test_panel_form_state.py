@@ -28,15 +28,15 @@ import panel_form_state
 
 
 @pytest.fixture(autouse=True)
-def _reset_active_forms():
+def _reset_active_forms(monkeypatch):
     """Ensure each test sees an empty ``_ACTIVE_FORMS`` registry.
 
-    The module keeps state in a module-level dict; without this fixture
-    tests would silently leak entries into each other.
+    The module keeps state in a module-level dict. Swapping in a fresh dict via
+    ``monkeypatch.setattr`` (rather than mutating the real one with ``.clear()``)
+    isolates each test *and* lets pytest restore the original object on teardown,
+    so a crashing test can't leave the module's registry permanently emptied.
     """
-    panel_form_state._ACTIVE_FORMS.clear()
-    yield
-    panel_form_state._ACTIVE_FORMS.clear()
+    monkeypatch.setattr(panel_form_state, "_ACTIVE_FORMS", {})
 
 
 # ---------------------------------------------------------------------------
