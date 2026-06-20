@@ -2491,15 +2491,22 @@ async def _maybe_capture_stt(wav_path: str, primary: str) -> None:
         d = os.environ.get("ZOE_VOICE_SAMPLE_DIR") or "/home/zoe/.zoe-voice-samples"
         os.makedirs(d, exist_ok=True)
         dst = os.path.join(d, f"{_t.strftime('%H%M%S')}_{int(_t.time()*1000)%1000:03d}.wav")
+        # Copy synchronously (fast) before the caller unlinks the original.
         shutil.copyfile(wav_path, dst)
-        alt = ""
+    except Exception as exc:
+        logger.warning("STT capture failed: %s", exc)
+        return
+
+    # Run the whisper A/B on the COPY fire-and-forget, so it never adds latency to
+    # the live transcription path (the whole point of the Moonshine v2 win).
+    async def _ab() -> None:
         try:
-            alt = await _run_faster_whisper(wav_path)
+            alt = await _run_faster_whisper(dst)
         except Exception as exc:
             alt = f"<whisper err: {exc}>"
         logger.warning("STT_AB file=%s moonshine=%r whisper=%r", dst, (primary or "")[:90], (alt or "")[:90])
-    except Exception as exc:
-        logger.warning("STT capture failed: %s", exc)
+
+    asyncio.ensure_future(_ab())
 
 
 async def _transcribe_audio(wav_path: str) -> str:
@@ -4578,14 +4585,24 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
                 _sentence = _sentence.strip()
                 if not _sentence:
                     continue
+                _provider = "kokoro-sidecar"
                 try:
                     _wav = await _synthesize_kokoro_sidecar(_sentence)
                 except Exception:
                     _wav = None
                 if not _wav:
+                    # Sidecar down — use the full synth fallback chain (kokoro-onnx
+                    # -> edge-tts -> espeak) so the panel is never left silent.
+                    try:
+                        _resp = await synthesize({"text": _sentence}, caller=caller)
+                        _wav = _resp.body
+                        _provider = _resp.headers.get("X-Zoe-TTS-Provider", "fallback")
+                    except Exception:
+                        _wav = None
+                if not _wav:
                     continue
                 yield (_json.dumps({"chunk": _chunk, "text": _sentence[:80],
-                                    "provider": "kokoro-sidecar"}) + "\n").encode()
+                                    "provider": _provider}) + "\n").encode()
                 yield base64.b64encode(_wav) + b"\n"
                 _chunk += 1
         yield (_json.dumps({"done": True, "reply": reply_text}) + "\n").encode()
