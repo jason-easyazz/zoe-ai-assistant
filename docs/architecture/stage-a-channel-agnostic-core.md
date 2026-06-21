@@ -152,6 +152,11 @@ classifier is needed directly, promote `_plan`'s classification to a named publi
 (`expert_dispatch.classify(domain, text) -> kind`) as part of Stage A rather than reaching into the
 underscore API.
 
+**Ambiguity → brain (margin check).** Beyond the absolute confidence threshold, when the top two
+routes score within a small margin (e.g. < 0.05) the utterance is ambiguous — return `None` and let
+the brain handle it rather than guessing a domain. This is a standard semantic-router safeguard
+(§8.2) and belongs in `semantic_router` next to the threshold.
+
 ---
 
 ## 4. The migration, file by file (behavior-preserving)
@@ -203,10 +208,12 @@ in a flowing exchange) and tone/context consistency matters more. So:
 - Fast-path interception is **opt-in via a per-channel flag, OFF by default**, and even when on it is
   **narrow**: only unambiguous, *context-free* reads (time/date/weather/"what's on my list") at a
   **high** confidence threshold; anything conversational or context-dependent flows to the brain.
-- **Preferred long-term (Option B):** rather than *replacing* the brain with a templated reply, hand
-  the deterministic result to the brain as context so it phrases the answer **in Zoe's voice** —
-  keeps the conversational tone, trades back the latency that conversation mode can afford. Decision
-  deferred to implementation.
+- **Preferred long-term (Option B) — the documented best practice (§8.3):** the field's pattern is
+  **parallel fast + brain**, not bypass. On end-of-turn, fire `fast_tiers` *and* the brain
+  concurrently; if the fast tier has a confident factual answer, speak it immediately for instant
+  feedback, but mark it **`add_to_chat_ctx=False`** so it never enters conversation memory — the
+  brain's reply is the authoritative turn. Pair with streaming + preemptive generation. This keeps
+  Zoe's voice and continuity while still feeling instant. Decision deferred to implementation.
 - **Gate = conversation-quality review, not just a latency smoke test** (see §5, gate 3).
 - Skybridge cards are not added to LiveKit (audio-only, no panel); it would consume the spoken
   `reply` only.
@@ -274,3 +281,55 @@ aggressiveness** — the `run_tier0` flag plus a per-channel enable/threshold kn
   `pi_hybrid` and voice-TTS stay channel-side. This is where Flue becomes the Tier-2 backend.
 - **Phase 1 proper** — wire the Telegram adapter to the Flue `@flue/telegram` channel, forwarding
   to `fast_tiers.resolve` (this doc's core), brain on a dev/cloud model per §2b.
+
+---
+
+## 8. Industry alignment & best practices
+
+This design is not bespoke — it is the established pattern for multi-channel + tiered-routing
+systems. Capturing the alignment so the plan is defensible and so we adopt the known safeguards.
+
+### 8.1 Architecture: hexagonal / ports-and-adapters (our `fast_tiers` core + tag→profile)
+The "platform-agnostic conversation core + thin per-channel adapters" shape is the standard
+omnichannel-bot architecture, and the formal name is **hexagonal architecture (ports & adapters)**:
+- **Driving (input) ports** = each channel adapter forwards messages into the core
+  (`processUserMessage(user, text)`); our channels calling `fast_tiers.resolve(text, tag, …)`.
+- **Driven (output) ports** = the core calls out to the brain, TTS, persistence behind interfaces.
+- The core depends **only on interfaces**, never on a channel's web server / SDK / DB — so we can
+  add a channel by writing one adapter and test the core without standing up a real LLM/DB. Our
+  **tag→profile** is exactly the adapter-selects-behavior idea; central session/Postgres state is
+  the "shared context readable from any channel" the omnichannel guides call for.
+  Refs: [hexagonal for GenAI chatbots](https://shivaramp.medium.com/hexagonal-architecture-for-genai-chatbots-decoupling-ai-logic-from-the-rest-fef1a162330c),
+  [omnichannel core+adapters](https://futureagi.com/glossary/omnichannel-cx-solutions/),
+  [Haptik omnichannel voice](https://www.haptik.ai/blog/omnichannel-voice-ai).
+
+### 8.2 Routing: cascade + the threshold is load-bearing (+ a margin check)
+The recommended cascade is **rule/keyword filter → semantic router → LLM catch-all** — exactly our
+Tier-0 → Tier-1 → brain. Two safeguards to bake in:
+- **Threshold is the load-bearing hyperparameter.** Per-route (per-domain) thresholds, re-tuned
+  whenever routes/utterances/embedding model change. We already have per-domain thresholds in
+  `expert_dispatch`; the profile (§8.1) carries a per-channel multiplier (stricter for LiveKit).
+- **Margin check for ambiguity (new).** When the top two routes are close (e.g. 0.76 vs 0.74,
+  margin < 0.05), treat it as ambiguous and **fall through to the brain** rather than guessing.
+  Add this to `semantic_router` alongside the absolute threshold.
+  Refs: [Aurelio threshold optimization](https://docs.aurelio.ai/semantic-router/user-guide/features/threshold-optimization),
+  [three-tier routing](https://www.mindstudio.ai/blog/set-up-ai-model-router-llm-stack-c2610),
+  [semantic router fast-path](https://sureprompts.com/blog/semantic-router-implementation).
+
+### 8.3 Conversation mode (LiveKit): don't bypass the LLM — run fast + brain in parallel
+LiveKit's own latency guidance **keeps the LLM always-on** and buys latency elsewhere, which
+confirms §4.5. The production pattern is **parallel SLM + LLM**: on end-of-turn, fire a fast model
+*and* the brain concurrently; the fast reply goes to TTS immediately (~300ms) for instant feedback
+but is **NOT committed to conversation memory** (`add_to_chat_ctx=False`) — the brain's answer
+becomes the official turn. For us, deterministic `fast_tiers` is an even-faster stand-in for that
+SLM on the unambiguous factual subset. Combine with **streaming** (total latency → ≈ `max(stages)`,
+not the sum) and **preemptive generation** (start the brain on the partial transcript). Avoid
+aggressive turn-detection tuning — it "makes the conversation feel less natural."
+  Refs: [parallel SLM+LLM](https://webrtc.ventures/2025/06/reducing-voice-agent-latency-with-parallel-slms-and-llms/),
+  [LiveKit agent latency](https://livekit.com/blog/understand-and-improve-agent-latency).
+
+### 8.4 What we adopt into the plan
+1. Name the architecture **ports-and-adapters**; keep the core free of channel/vendor deps (§8.1).
+2. Add a **margin check** to `semantic_router`; per-channel threshold multiplier in the profile (§8.2).
+3. LiveKit (§4.5): adopt **parallel fast+brain** with **`add_to_chat_ctx=False`** for any instant
+   reply, plus streaming + preemptive generation — never a bare LLM bypass (§8.3).
