@@ -1952,6 +1952,9 @@ async def chat_stream_generator(
                 asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, _fp_reply))
                 asyncio.ensure_future(_save_chat_message(session_id, "assistant", _fp_reply))
                 yield emit(RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id=session_id, run_id=run_id))
+                # Close out the run row (opened status="running" at the top); every
+                # other early exit here records completed/error before returning.
+                await _record_run_state(run_id, session_id, user_id, mode=run_mode, status="completed", request_text=message, response_text=_fp_reply)
                 return
             _pi_hybrid = await _run_chat_pi_hybrid_lane(
                 message_for_processing,
@@ -3207,29 +3210,35 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
             # of paying ~5s for the Pi-hybrid/brain lane below. Threshold-gated inside
             # expert_dispatch, so only confident matches short-circuit; everything else
             # returns None and falls through to the hybrid lane unchanged. Non-fatal.
+            # Keep ONLY resolve() inside the try so a fast-path miss/error falls
+            # through to the hybrid lane. The success branch is OUTSIDE the try:
+            # if persistence raises it must NOT be swallowed (that would re-run the
+            # turn on the brain and return a different reply than we injected).
+            _fp_res = None
             try:
                 import fast_path as _fast_path
                 _fp_res = await _fast_path.resolve(
                     message_for_processing, user_id, session_id,
                     allow_writes=False,
                 )
-                if _fp_res is not None and getattr(_fp_res, "reply", ""):
-                    _fp_reply = _fp_res.reply
-                    asyncio.ensure_future(
-                        chat_inject_background(
-                            message_for_processing, _fp_reply,
-                            f"fast:{_fp_res.domain}", user_id, session_id,
-                        )
-                    )
-                    asyncio.ensure_future(
-                        _persist_memory_candidates(
-                            user_id, session_id, message_for_processing, _fp_reply
-                        )
-                    )
-                    await _save_chat_message(session_id, "assistant", _fp_reply)
-                    return {"response": _fp_reply, "session_id": session_id}
             except Exception as _fp_exc:  # never let the fast path break a turn
                 logger.debug("chat fast_path resolve failed (non-fatal): %s", _fp_exc)
+                _fp_res = None
+            if _fp_res is not None and getattr(_fp_res, "reply", ""):
+                _fp_reply = _fp_res.reply
+                asyncio.ensure_future(
+                    chat_inject_background(
+                        message_for_processing, _fp_reply,
+                        f"fast:{_fp_res.domain}", user_id, session_id,
+                    )
+                )
+                asyncio.ensure_future(
+                    _persist_memory_candidates(
+                        user_id, session_id, message_for_processing, _fp_reply
+                    )
+                )
+                await _save_chat_message(session_id, "assistant", _fp_reply)
+                return {"response": _fp_reply, "session_id": session_id}
             _pi_hybrid = await _run_chat_pi_hybrid_lane(
                 message_for_processing,
                 user_id=user_id,
