@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from zoe_pi_promotion import (
@@ -5,8 +7,10 @@ from zoe_pi_promotion import (
     PiIntentEvalCase,
     PiPromotionPolicy,
     PiRouteSample,
+    build_pi_candidate_wins,
     build_pi_failure_examples,
     build_pi_route_class_breakdown,
+    build_pi_source_breakdown,
     build_pi_transport_breakdown,
     build_pi_promotion_actions,
     eval_cases_to_dict,
@@ -20,6 +24,8 @@ from zoe_pi_promotion import (
 
 
 def _sample(index, *, group="weather", zoe="reminder_list", pi="weather", expected="weather", zoe_ms=900, pi_ms=300, **kwargs):
+    metadata = dict(kwargs.pop("metadata", {}) or {})
+    metadata.setdefault("source", "intent_miss")
     return PiRouteSample(
         case_id=f"case_{index}",
         intent_group=group,
@@ -29,6 +35,7 @@ def _sample(index, *, group="weather", zoe="reminder_list", pi="weather", expect
         zoe_latency_ms=zoe_ms,
         pi_latency_ms=pi_ms,
         pi_confidence=0.91,
+        metadata=metadata,
         **kwargs,
     )
 
@@ -97,6 +104,47 @@ def test_load_pi_intent_eval_cases_from_json_object(tmp_path):
     assert len(cases) == 1
     assert cases[0].case_id == "timer_file"
     assert cases[0].source == "intent_miss"
+
+
+def test_committed_pi_intent_eval_cases_validate_requested_coverage():
+    repo_root = Path(__file__).resolve().parents[3]
+    path = repo_root / "data" / "eval" / "pi_intent_eval_cases.jsonl"
+
+    cases = load_pi_intent_eval_cases(path)
+    by_id = {case.case_id: case for case in cases}
+    new_synthetic_case_ids = {
+        "eval_reminder_stretch",
+        "eval_reminder_today",
+        "eval_list_show_packing",
+        "eval_list_add_tomatoes",
+        "eval_list_remove_milk",
+        "eval_list_remove_done",
+        "eval_timer_tea",
+        "eval_timer_laundry",
+        "eval_calc_percent",
+        "eval_calc_addition",
+        "eval_briefing_evening",
+        "eval_briefing_schedule",
+        "eval_negative_timer_story",
+        "eval_negative_shopping_memory",
+    }
+
+    assert new_synthetic_case_ids <= set(by_id)
+    assert all(by_id[case_id].source == "synthetic" for case_id in new_synthetic_case_ids)
+    assert {
+        "reminder_create",
+        "reminder_list",
+        "list_add",
+        "list_show",
+        "list_remove",
+        "timer_create",
+        "calculate",
+        "daily_briefing",
+    } <= {case.expected_intent for case in cases if case.expected_intent}
+    assert by_id["eval_negative_timer_story"].negative is True
+    assert by_id["eval_negative_timer_story"].intent_group == "chat"
+    assert by_id["eval_negative_shopping_memory"].negative is True
+    assert by_id["eval_negative_shopping_memory"].intent_group == "chat"
 
 
 def test_load_pi_intent_eval_cases_rejects_duplicate_case_ids(tmp_path):
@@ -210,6 +258,94 @@ def test_promotion_requires_five_percent_accuracy_win_and_latency_win():
     assert decision.blockers == ()
 
 
+def test_collapsed_mixed_source_case_counts_real_evidence():
+    samples = [
+        _sample(1, metadata={"source": "synthetic"}),
+        _sample(1, metadata={"source": "intent_miss"}),
+    ]
+    policy = PiPromotionPolicy(min_samples=1, accuracy_win_margin=0.05)
+
+    decision = evaluate_pi_promotion(samples, intent_group="weather", policy=policy)
+    summary = build_pi_candidate_wins(samples, policy=policy)
+
+    assert decision.state == "promote"
+    assert "insufficient_real_source_samples" not in decision.blockers
+    assert summary["details"][0]["real_source_sample_deficit"] == 0
+
+
+def test_synthetic_only_evidence_blocks_promotion_until_real_sources_exist():
+    samples = [_sample(i, metadata={"source": "synthetic"}) for i in range(10)]
+    policy = PiPromotionPolicy(min_samples=10, accuracy_win_margin=0.05)
+
+    decision = evaluate_pi_promotion(samples, intent_group="weather", policy=policy)
+
+    assert decision.state == "keep_shadow"
+    assert "insufficient_real_source_samples" in decision.blockers
+    assert "insufficient_samples" not in decision.blockers
+
+
+def test_policy_can_disable_real_source_gate_for_smoke_data():
+    samples = [_sample(i, metadata={"source": "synthetic"}) for i in range(10)]
+    policy = PiPromotionPolicy(min_samples=10, require_real_source_evidence=False)
+
+    decision = evaluate_pi_promotion(samples, intent_group="weather", policy=policy)
+
+    assert decision.state == "promote"
+    assert "insufficient_real_source_samples" not in decision.blockers
+
+
+def test_promotion_counts_unique_cases_not_repeated_observations():
+    samples = [_sample(1) for _ in range(10)]
+    policy = PiPromotionPolicy(min_samples=2, accuracy_win_margin=0.05)
+
+    decision = evaluate_pi_promotion(samples, intent_group="weather", policy=policy)
+
+    assert decision.state == "keep_shadow"
+    assert decision.sample_count == 1
+    assert decision.pi_accuracy == 1.0
+    assert decision.zoe_accuracy == 0.0
+    assert "insufficient_samples" in decision.blockers
+
+
+def test_promotion_accuracy_uses_unique_case_evidence_not_duplicate_observations():
+    samples = []
+    for index in range(30):
+        pi_intent = "weather" if index < 15 else "reminder_list"
+        zoe_intent = "weather" if index < 14 else "reminder_list"
+        samples.append(_sample(index, pi=pi_intent, zoe=zoe_intent))
+    samples.extend([_sample(14), _sample(14)])
+    policy = PiPromotionPolicy(min_samples=30, accuracy_win_margin=0.05)
+
+    decision = evaluate_pi_promotion(samples, intent_group="weather", policy=policy)
+
+    assert decision.state == "keep_shadow"
+    assert decision.sample_count == 30
+    assert decision.pi_accuracy == 0.5
+    assert decision.zoe_accuracy == 14 / 30
+    assert decision.accuracy_delta == pytest.approx(1 / 30)
+    assert "accuracy_delta_below_threshold" in decision.blockers
+
+
+def test_candidate_wins_separate_speed_accuracy_evidence_from_promotion_readiness():
+    samples = [_sample(1) for _ in range(10)]
+    policy = PiPromotionPolicy(min_samples=2, accuracy_win_margin=0.05)
+
+    summary = build_pi_candidate_wins(samples, policy=policy)
+
+    assert summary["groups"] == ["weather"]
+    assert summary["blocked_groups"] == ["weather"]
+    assert summary["promotion_ready_groups"] == []
+    detail = summary["details"][0]
+    assert detail["status"] == "needs_more_evidence"
+    assert detail["observation_count"] == 10
+    assert detail["unique_case_count"] == 1
+    assert "sample_count" not in detail
+    assert detail["sample_deficit"] == 1
+    assert detail["unique_case_deficit"] == 1
+    assert detail["promotion_blockers"] == ["insufficient_samples", "insufficient_real_source_samples"]
+    assert detail["real_source_sample_deficit"] == 1
+
+
 def test_promotion_blocks_when_accuracy_delta_is_too_small():
     samples = [_sample(i, zoe="weather", pi="weather") for i in range(10)]
     policy = PiPromotionPolicy(min_samples=10, accuracy_win_margin=0.05)
@@ -220,6 +356,28 @@ def test_promotion_blocks_when_accuracy_delta_is_too_small():
     assert "accuracy_delta_below_threshold" in decision.blockers
 
 
+def test_promotion_blocks_when_pi_absolute_accuracy_is_too_low():
+    samples = []
+    for index in range(30):
+        pi_intent = "weather" if index < 18 else "reminder_list"
+        zoe_intent = "weather" if index < 3 else "reminder_list"
+        samples.append(_sample(index, pi=pi_intent, zoe=zoe_intent))
+    policy = PiPromotionPolicy(min_samples=30, accuracy_win_margin=0.05, min_pi_accuracy=0.90)
+
+    decision = evaluate_pi_promotion(samples, intent_group="weather", policy=policy)
+
+    assert decision.state == "keep_shadow"
+    assert decision.pi_accuracy == 0.6
+    assert decision.zoe_accuracy == 0.1
+    assert decision.accuracy_delta == 0.5
+    assert "pi_accuracy_below_threshold" in decision.blockers
+    assert "accuracy_delta_below_threshold" not in decision.blockers
+
+    summary = build_pi_candidate_wins(samples, policy=policy)
+    assert summary["groups"] == []
+    assert summary["promotion_ready_groups"] == []
+
+
 def test_promotion_blocks_when_pi_is_not_faster_than_zoe():
     samples = [_sample(i, zoe_ms=250, pi_ms=450) for i in range(10)]
     policy = PiPromotionPolicy(min_samples=10, accuracy_win_margin=0.05)
@@ -228,6 +386,95 @@ def test_promotion_blocks_when_pi_is_not_faster_than_zoe():
 
     assert decision.state == "keep_shadow"
     assert "latency_not_faster_than_zoe" in decision.blockers
+
+
+def test_promotion_blocks_when_pi_loses_a_fast_baseline_lane():
+    samples = [
+        _sample(
+            index,
+            zoe_ms=6000,
+            pi_ms=2500,
+            metadata={"baseline_comparable": True, "baseline_kind": "zoe_agent_fallback_baseline"},
+        )
+        for index in range(15)
+    ]
+    samples.extend(
+        _sample(
+            index + 100,
+            zoe_ms=10,
+            pi_ms=2500,
+            metadata={"baseline_comparable": True, "baseline_kind": "router"},
+        )
+        for index in range(15)
+    )
+    policy = PiPromotionPolicy(min_samples=30, accuracy_win_margin=0.05)
+
+    decision = evaluate_pi_promotion(samples, intent_group="weather", policy=policy)
+
+    assert decision.state == "keep_shadow"
+    assert decision.latency_delta_ms and decision.latency_delta_ms > 0
+    assert "latency_not_faster_than_zoe" not in decision.blockers
+    assert "baseline_lane_not_faster_than_zoe" in decision.blockers
+    assert decision.baseline_lane_latency["fallback:zoe_agent_fallback_baseline"]["latency_delta_ms"] > 0
+    assert decision.baseline_lane_latency["fallback:router"]["latency_delta_ms"] < 0
+
+
+def test_promoted_group_rolls_back_when_pi_loses_a_fast_baseline_lane():
+    samples = [
+        _sample(
+            index,
+            zoe_ms=6000,
+            pi_ms=2500,
+            metadata={"baseline_comparable": True, "baseline_kind": "zoe_agent_fallback_baseline"},
+        )
+        for index in range(15)
+    ]
+    samples.extend(
+        _sample(
+            index + 100,
+            zoe_ms=10,
+            pi_ms=2500,
+            metadata={"baseline_comparable": True, "baseline_kind": "router"},
+        )
+        for index in range(15)
+    )
+    policy = PiPromotionPolicy(min_samples=30, accuracy_win_margin=0.05)
+
+    decision = evaluate_pi_promotion(samples, intent_group="weather", policy=policy, promoted=True)
+
+    assert decision.state == "rollback"
+    assert "baseline_lane_not_faster_than_zoe" in decision.blockers
+
+
+def test_policy_can_disable_baseline_lane_gate_for_smoke_data():
+    samples = [
+        _sample(
+            index,
+            zoe_ms=6000,
+            pi_ms=2500,
+            metadata={"baseline_comparable": True, "baseline_kind": "zoe_agent_fallback_baseline"},
+        )
+        for index in range(15)
+    ]
+    samples.extend(
+        _sample(
+            index + 100,
+            zoe_ms=10,
+            pi_ms=2500,
+            metadata={"baseline_comparable": True, "baseline_kind": "router"},
+        )
+        for index in range(15)
+    )
+    policy = PiPromotionPolicy(
+        min_samples=30,
+        accuracy_win_margin=0.05,
+        require_baseline_lane_latency_win=False,
+    )
+
+    decision = evaluate_pi_promotion(samples, intent_group="weather", policy=policy)
+
+    assert decision.state == "promote"
+    assert "baseline_lane_not_faster_than_zoe" not in decision.blockers
 
 
 def test_promotion_blocks_non_allowlisted_groups():
@@ -245,6 +492,20 @@ def test_promoted_group_rolls_back_on_accuracy_regression():
 
     assert decision.state == "rollback"
     assert "accuracy_delta_below_threshold" in decision.blockers
+
+
+def test_promoted_group_rolls_back_when_pi_absolute_accuracy_regresses():
+    samples = []
+    for index in range(30):
+        pi_intent = "weather" if index < 18 else "reminder_list"
+        zoe_intent = "weather" if index < 3 else "reminder_list"
+        samples.append(_sample(index, pi=pi_intent, zoe=zoe_intent))
+    policy = PiPromotionPolicy(min_samples=30, accuracy_win_margin=0.05, min_pi_accuracy=0.90)
+
+    decision = evaluate_pi_promotion(samples, intent_group="weather", policy=policy, promoted=True)
+
+    assert decision.state == "rollback"
+    assert "pi_accuracy_below_threshold" in decision.blockers
 
 
 def test_promoted_group_rolls_back_when_evidence_stops():
@@ -360,6 +621,30 @@ def test_route_class_breakdown_compares_baselines_independently():
     assert breakdown["extraction_failed"]["zoe_p95_latency_ms"] is None
 
 
+def test_source_breakdown_counts_real_synthetic_and_unknown_sources():
+    samples = [
+        _sample(1, metadata={"source": "synthetic"}),
+        _sample(2, metadata={"source": "intent_miss"}),
+        _sample(3, metadata={"source": "unknown"}),
+        _sample(4, group="timers", expected="timer_create", zoe="weather", pi="timer_create", metadata={"source": "pi_intent_shadow"}),
+    ]
+
+    breakdown = build_pi_source_breakdown(samples, policy=PiPromotionPolicy(min_samples=2))
+
+    assert breakdown["sample_count"] == 4
+    assert breakdown["source_counts"] == {"intent_miss": 1, "pi_intent_shadow": 1, "synthetic": 1, "unknown": 1}
+    assert breakdown["real_source_sample_count"] == 2
+    assert breakdown["synthetic_sample_count"] == 1
+    assert breakdown["unknown_source_sample_count"] == 1
+    assert breakdown["source_counts_by_group"]["weather"] == {"intent_miss": 1, "synthetic": 1, "unknown": 1}
+    assert breakdown["source_counts_by_group"]["timers"] == {"pi_intent_shadow": 1}
+    assert breakdown["real_source_sample_count_by_group"]["weather"] == 1
+    assert breakdown["real_source_sample_count_by_group"]["timers"] == 1
+    assert breakdown["real_source_sample_deficit_by_group"]["weather"] == 1
+    assert breakdown["real_source_sample_deficit_by_group"]["timers"] == 1
+    assert breakdown["real_source_ready_groups"] == []
+
+
 def test_transport_breakdown_separates_print_and_rpc_latency():
     samples = [
         _sample(1, pi_transport="print", zoe_ms=900, pi_ms=700),
@@ -408,11 +693,16 @@ def test_summary_lists_promotable_groups():
     assert "weather" in report["promotable_groups"]
     assert report["promoted_groups"] == []
     assert report["sample_count"] == 10
+    assert report["unique_case_count"] == 10
+    assert report["candidate_wins"]["promotion_ready_groups"] == ["weather"]
     assert report["policy"]["accuracy_win_margin"] == 0.05
+    assert report["policy"]["min_pi_accuracy"] == 0.90
     assert report["route_class_breakdown"]["fallback"]["sample_count"] == 10
     assert report["route_class_breakdown"]["fallback"]["latency_delta_ms"] > 0
     assert report["transport_breakdown"]["rpc"]["sample_count"] == 10
     assert report["transport_breakdown"]["rpc"]["latency_delta_ms"] > 0
+    assert report["source_breakdown"]["unknown_source_sample_count"] == 0
+    assert report["source_breakdown"]["real_source_sample_deficit_by_group"]["weather"] == 0
 
 
 def test_summary_lists_rollback_groups_for_active_promotions():
@@ -434,6 +724,7 @@ def test_summary_includes_operator_promotion_actions():
             zoe_latency_ms=500,
             pi_latency_ms=100,
             pi_confidence=0.9,
+            metadata={"source": "intent_miss"},
         )
         for index in range(30)
     ] + [
@@ -446,6 +737,7 @@ def test_summary_includes_operator_promotion_actions():
             zoe_latency_ms=450,
             pi_latency_ms=90,
             pi_confidence=0.9,
+            metadata={"source": "intent_miss"},
         )
         for index in range(30)
     ]

@@ -8,6 +8,7 @@ from guest_policy import (
     PAGE_IDS,
     PUBLIC_HOUSEHOLD_INTENTS,
     USER_SCOPED_INTENTS,
+    can_use_voice_intent,
     default_capability_matrix,
     is_guest_user,
     require_feature_access,
@@ -17,6 +18,19 @@ from guest_policy import (
 
 def test_household_intents_include_shared_calendar_read() -> None:
     assert "calendar_show" in PUBLIC_HOUSEHOLD_INTENTS
+
+
+def test_household_intents_include_time_planning_clarification() -> None:
+    assert "time_planning_clarification" in PUBLIC_HOUSEHOLD_INTENTS
+
+
+@pytest.mark.asyncio
+async def test_guest_can_use_time_planning_clarification_voice_intent() -> None:
+    assert await can_use_voice_intent(
+        None,
+        {"role": "guest", "user_id": "guest"},
+        "time_planning_clarification",
+    ) is True
 
 
 def test_user_scoped_intents_exclude_shared_calendar_read() -> None:

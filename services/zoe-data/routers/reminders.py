@@ -2,8 +2,6 @@
 FastAPI router for reminders.
 Mounted at prefix="/api/reminders" with tag "reminders".
 """
-import json
-import uuid
 from datetime import date, datetime, timedelta
 from typing import Optional
 
@@ -14,42 +12,14 @@ from database import get_db
 from guest_policy import require_feature_access
 from models import ReminderCreate, ReminderUpdate, SnoozeBody
 from push import broadcaster
+from reminder_service import create_reminder_record, row_to_dict
 
 router = APIRouter(prefix="/api/reminders", tags=["reminders"])
-
-
-def _row_to_dict(row) -> dict:
-    """Convert asyncpg Row to dict."""
-    if row is None:
-        return None
-    d = dict(row)
-    if "is_active" in d and d["is_active"] is not None:
-        d["is_active"] = bool(d["is_active"])
-    if "acknowledged" in d and d["acknowledged"] is not None:
-        d["acknowledged"] = bool(d["acknowledged"])
-    if "deleted" in d and d["deleted"] is not None:
-        d["deleted"] = bool(d["deleted"])
-    return d
 
 
 def _visibility_filter_sql() -> str:
     """SQL fragment: (visibility='family' OR user_id=?) AND deleted=0"""
     return "(visibility = 'family' OR user_id = ?) AND deleted = 0"
-
-
-async def _create_notification(db, user_id: str, notif_type: str, title: str, message: str, data: dict):
-    await db.execute(
-        """INSERT INTO notifications (id, user_id, type, title, message, data, delivered, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, 0, NOW())""",
-        (
-            str(uuid.uuid4()),
-            user_id,
-            notif_type,
-            title,
-            message,
-            json.dumps(data or {}),
-        ),
-    )
 
 
 @router.post("/", response_model=dict)
@@ -59,46 +29,7 @@ async def create_reminder(
     db=Depends(get_db),
 ):
     """Create a new reminder."""
-    await require_feature_access(db, user, feature="reminders", action="create")
-    user_id = user["user_id"]
-    reminder_id = str(uuid.uuid4())
-
-    await db.execute(
-        """INSERT INTO reminders (
-            id, user_id, title, description, reminder_type, category, priority,
-            due_date, due_time, recurring_pattern, is_active, acknowledged,
-            snoozed_until, visibility, deleted
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, NULL, ?, 0)""",
-        (
-            reminder_id,
-            user_id,
-            payload.title,
-            payload.description,
-            payload.reminder_type,
-            payload.category,
-            payload.priority,
-            payload.due_date,
-            payload.due_time,
-            payload.recurring_pattern,
-            payload.visibility,
-        ),
-    )
-    await _create_notification(
-        db,
-        user_id=user_id,
-        notif_type="reminder_created",
-        title="Reminder Created",
-        message=f"Reminder added: {payload.title}",
-        data={"reminder_id": reminder_id, "due_date": payload.due_date, "due_time": payload.due_time},
-    )
-    await db.commit()
-
-    cursor = await db.execute("SELECT * FROM reminders WHERE id = ?", [reminder_id])
-    row = await cursor.fetchone()
-    reminder = _row_to_dict(row)
-
-    await broadcaster.broadcast("reminders", "reminder_created", reminder, user_id=user_id)
-    return reminder
+    return await create_reminder_record(payload, user=user, db=db)
 
 
 @router.get("/", response_model=dict)
@@ -131,7 +62,7 @@ async def list_reminders(
     params.append(limit)
     cursor = await db.execute(sql, params)
     rows = await cursor.fetchall()
-    reminders = [_row_to_dict(r) for r in rows]
+    reminders = [row_to_dict(r) for r in rows]
     return {"reminders": reminders}
 
 
@@ -152,7 +83,7 @@ async def list_today_reminders(
     """
     cursor = await db.execute(sql, [user_id, today])
     rows = await cursor.fetchall()
-    reminders = [_row_to_dict(r) for r in rows]
+    reminders = [row_to_dict(r) for r in rows]
     return {"reminders": reminders}
 
 
@@ -189,7 +120,7 @@ async def update_reminder(
             params.append(value)
 
     if not updates:
-        return _row_to_dict(row)
+        return row_to_dict(row)
 
     updates.append("updated_at = NOW()")
     params.append(reminder_id)
@@ -201,7 +132,7 @@ async def update_reminder(
 
     cursor = await db.execute("SELECT * FROM reminders WHERE id = ?", [reminder_id])
     row = await cursor.fetchone()
-    reminder = _row_to_dict(row)
+    reminder = row_to_dict(row)
 
     await broadcaster.broadcast("reminders", "reminder_updated", reminder, user_id=user_id)
     return reminder
@@ -288,7 +219,7 @@ async def snooze_reminder(
 
     cursor = await db.execute("SELECT * FROM reminders WHERE id = ?", [reminder_id])
     row = await cursor.fetchone()
-    reminder = _row_to_dict(row)
+    reminder = row_to_dict(row)
 
     await broadcaster.broadcast("reminders", "reminder_snoozed", reminder, user_id=user_id)
     return reminder
@@ -328,7 +259,7 @@ async def acknowledge_reminder(
 
     cursor = await db.execute("SELECT * FROM reminders WHERE id = ?", [reminder_id])
     row = await cursor.fetchone()
-    reminder = _row_to_dict(row)
+    reminder = row_to_dict(row)
 
     await broadcaster.broadcast("reminders", "reminder_acknowledged", reminder, user_id=user_id)
     return reminder

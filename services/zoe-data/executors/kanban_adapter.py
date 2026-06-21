@@ -30,12 +30,26 @@ from typing import Any
 
 from hermes_http import hermes_bin, zoe_repo_root
 from kanban_phase_budget import (
+    dead_worker_reason,
     latest_log_session,
     phase_budget_reason,
     phase_budget_reason_from_log,
     task_log_tail,
     terminate_running_workers,
 )
+
+_REAP_DEAD_WORKERS = (
+    os.environ.get("ZOE_KANBAN_REAP_DEAD_WORKERS", "true") or "true"
+).strip().lower() not in {"0", "false", "no"}
+
+# When an implement row is gate-blocked for a missing PR but the task worktree
+# is provably empty (no diff, nothing unpushed), there is genuinely nothing to
+# ship — the work is already present on the base. Converge it to the proven
+# ALREADY_COVERED -> skip_implementation -> audit path instead of stranding the
+# single lane on a permanent gate block. Default on; disable with =0/false/no.
+_CONVERGE_NOOP_IMPLEMENT = (
+    os.environ.get("ZOE_KANBAN_CONVERGE_NOOP_IMPLEMENT", "true") or "true"
+).strip().lower() not in {"0", "false", "no"}
 
 logger = logging.getLogger(__name__)
 
@@ -457,11 +471,69 @@ def _issue_with_phase_handoff(issue: dict, phase: str, state: Any | None) -> dic
         for item in evidence
     )
     audit_profile = getattr(state, "evidence_profile", "") == "audit"
-    if not already_covered and not audit_profile:
-        return issue
     description = str(issue.get("description") or "")
     if "Zoe pipeline handoff (authoritative):" in description:
         return issue
+
+    # Authoritative PR URL from the implement phase's recorded evidence. This is
+    # written synchronously when implement completes, so it is available even
+    # before the poll loop's async write of pr_url onto the Multica ticket. The
+    # downstream verify/review/closeout worker must not have to race that write
+    # or hunt for the PR — without it, verify blocks "awaiting PR evidence" and
+    # the chain bounces back to implement.
+    def _pr_artifact(item: Any) -> str:
+        if getattr(item, "kind", "") != "pr" or not getattr(item, "artifact", None):
+            return ""
+        return str(getattr(item, "artifact", "") or "").strip()
+
+    # Prefer the implement phase's recorded PR (the authoritative one this
+    # ticket is shipping); only fall back to any other recorded PR, then the
+    # ticket. A later phase that recorded its own pr item must not shadow it.
+    pr_url = (
+        next(
+            (
+                _pr_artifact(item)
+                for item in reversed(evidence)
+                if _pr_artifact(item) and (getattr(item, "metadata", {}) or {}).get("phase") == "implement"
+            ),
+            "",
+        )
+        or next((_pr_artifact(item) for item in reversed(evidence) if _pr_artifact(item)), "")
+        or _existing_pr_url(issue)
+    )
+
+    if not already_covered and not audit_profile:
+        # Normal (real-PR) path: inject only the authoritative PR_URL so the
+        # worker can act on the implement output directly. If there is no PR URL
+        # yet there is nothing to hand off, so preserve the prior behavior.
+        if not pr_url:
+            return issue
+        if phase == "verify":
+            role_summary = (
+                "Verify this PR: check out the PR head from your workspace_path, run the focused "
+                "tests/validators against the diff, then call kanban_complete with TESTS/VALIDATORS; "
+                "call kanban_block only on a concrete verification failure (not for missing evidence)."
+            )
+        elif phase == "review":
+            role_summary = (
+                "Review this PR: grade the diff and scope against the acceptance criteria and "
+                "verify-phase evidence, write the review marker, then call kanban_complete with "
+                "REVIEW=approved; call kanban_block only with a concrete review concern."
+            )
+        else:  # closeout / retro
+            role_summary = (
+                "This is the authoritative PR to close out: run the Greptile/merge closeout steps "
+                "against it, then call kanban_complete; call kanban_block only on a concrete blocker."
+            )
+        handoff = (
+            "Zoe pipeline handoff (authoritative):\n"
+            f"PR_URL={pr_url}\n"
+            "SUMMARY=Use this PR_URL as the authoritative PR for this ticket. Do not wait for, "
+            f"re-derive, or hunt for a different PR. {role_summary}\n\n"
+        )
+        updated = dict(issue)
+        updated["description"] = handoff + description
+        return updated
 
     validator_summary = next(
         (getattr(item, "summary", "") for item in reversed(evidence) if getattr(item, "kind", "") == "validator"),
@@ -833,6 +905,11 @@ class KanbanAdapter:
                 " that wastes the run: open the PR yourself instead. `kanban_block` is ONLY for genuine"
                 " blockers where you cannot ship (dirty tree, missing auth, ambiguous product decision,"
                 " repeated test failure, scope too broad).\n"
+                "- ALREADY DONE / NO CHANGE NEEDED: if the acceptance criteria are already met on the base"
+                " branch and no code change is required (e.g. the fix already landed, or the target file"
+                " does not exist in the repo), call `kanban_block` with BLOCKER=ALREADY_COVERED and the"
+                " evidence (e.g. the passing test output). NEVER call `kanban_complete` without a PR_URL —"
+                " a completion with an empty diff and no PR fails the evidence gate and strands the ticket.\n"
                 f"{code_audit_hint}"
                 f"{harness_hint}"
                 f"{intent_gap_hint}"
@@ -968,6 +1045,15 @@ class KanbanAdapter:
                 " do not use relative `cd services/zoe-data` from an unknown cwd.\n"
                 "- Do not redesign or refactor. Run the declared tests and the minimum extra checks needed"
                 " for the touched surface.\n"
+                "- MANDATORY for any PR (PR_URL present / code or test changes): you MUST check out the"
+                " PR head into your workspace_path and actually RUN the focused pytest for the changed"
+                " files (e.g. `cd <workspace_path> && PYTHONPATH=services/zoe-data python3 -m pytest -q"
+                " <changed test/module paths>`), then report the exact command(s) and pass/fail in TESTS=."
+                " The structure validators (validate_structure/validate_critical_files) are NOT a"
+                " substitute for running the PR's tests — completing with only VALIDATORS and no real"
+                " TESTS= pytest run is REJECTED by the evidence gate (verify requires `test` evidence)."
+                " If you cannot run the focused tests (e.g. cannot check out the PR), call `kanban_block`"
+                " with BLOCKER=VERIFY_BUDGET and say so — do NOT call `kanban_complete` without a pytest run.\n"
                 "- Always run and record `python3 tools/audit/validate_structure.py` and"
                 " `python3 tools/audit/validate_critical_files.py` in VALIDATORS unless the task"
                 " is explicitly audit-only with no code/config changes.\n"
@@ -1070,11 +1156,14 @@ class KanbanAdapter:
             "- Drive the Greptile grep loop with the pinned github-greptile-loop skill (guard REQUIRES --pr N;"
             " <=5 rounds, target confidence 5). Each round:\n"
             "    scripts/maintenance/run_greploop_guard.sh --pr N --once\n"
+            "  Repair-capable modes auto-switch to the matching PR branch worktree when it exists; if"
+            " no matching worktree is found, create/check out that PR worktree before rerunning.\n"
             "  Apply fixes yourself when the guard returns ESCALATE_HERMES or PACKET_READY; use --packet-only"
             " only to hand off to a cheap Cursor runner.\n"
-            "  Re-trigger review when needed via"
-            f" `{_greptile_mcp_bin()} trigger-review jason-easyazz/zoe-ai-assistant N`"
-            " (operator-local binary; override with GREPTILE_MCP_BIN).\n"
+            "  Re-trigger review when needed via the guarded loop only:\n"
+            "    scripts/maintenance/run_greploop_guard.sh --pr N --once\n"
+            "  Do not call Greptile trigger-review directly; the guard dedupes running/successful reviews"
+            " and records state for other agents.\n"
             "- When Greptile is clear (confidence 5/5, no unaddressed findings) and CI is green, squash-merge"
             " via normal GitHub (never --admin, never force, never --no-verify):\n"
             "    scripts/maintenance/run_greploop_guard.sh --pr N --merge-when-ready\n"
@@ -1124,6 +1213,46 @@ class KanbanAdapter:
             task_id,
             phase,
             violations,
+        )
+        return True
+
+    async def _maybe_auto_block_dead_worker(
+        self,
+        task_id: str,
+        phase: str,
+        row: dict[str, Any],
+        detail: dict[str, Any],
+    ) -> bool:
+        """Reap a zombie 'running' task whose worker process has died.
+
+        A crashed/killed worker (e.g. out-of-context HTTP error, OOM) can leave its
+        run 'running' forever, holding the single lane. Block it so the row becomes
+        terminal — which both frees the lane and lets the deterministic verify/
+        review/closeout overrides engage (they fire on a terminal row).
+
+        Covered by tests/test_kanban_adapter.py::test_auto_block_dead_worker_*
+        (blocks zombie, no-op when worker alive / row not running / kill-switch
+        off, swallows KanbanCLIError); detector covered by
+        tests/test_kanban_phase_budget.py::test_dead_worker_reason_*."""
+        if not _REAP_DEAD_WORKERS:
+            return False
+        if (row.get("status") or "").lower() != "running":
+            return False
+        reason = dead_worker_reason(detail)
+        if not reason:
+            return False
+        reason = f"BLOCKER={reason}"
+        try:
+            await self._run(["block", task_id, reason])
+        except KanbanCLIError as exc:
+            logger.warning(
+                "kanban_adapter: dead-worker reap failed for %s (%s): %s", task_id, phase, exc
+            )
+            return False
+        row["status"] = "blocked"
+        row["block_reason"] = reason
+        logger.warning(
+            "kanban_adapter: reaped zombie running task %s (%s): %s", task_id, phase, reason
         )
         return True
 
@@ -1459,6 +1588,108 @@ class KanbanAdapter:
                 "kanban_adapter: unshipped-diff recovery failed for %s: %s", task_id, exc
             )
             return None
+
+    async def _maybe_converge_noop_implement(
+        self,
+        task_id: str,
+        phase: str,
+        row: dict[str, Any],
+        *,
+        detail: dict[str, Any] | None = None,
+    ) -> bool:
+        """Converge a no-op implement (empty worktree, missing-PR gate) to ALREADY_COVERED.
+
+        ``_maybe_recover_unshipped_diff`` salvages a *non-empty* diff the worker
+        never pushed. This handles the other case observed live (ZOE-5856): the fix
+        was already present on the base branch, so implement produced NO diff, then
+        completed without a PR -> the evidence gate blocks on missing ``pr`` and the
+        single lane strands on a permanent gate block. When the task worktree is
+        provably empty (clean tree, nothing unpushed) there is nothing to ship, so
+        re-block with ``BLOCKER=ALREADY_COVERED`` and let pipeline_store converge it
+        via the proven skip_implementation -> audit path (no PR required).
+
+        Safety: only fires for an implement row blocked specifically on the
+        missing-PR evidence gate (never real blockers like TEST_ENVIRONMENT /
+        IMPLEMENT_BUDGET / a dirty or unpushed tree), and only inside the task's own
+        ``wt/<task_id>`` branch. Gated by ZOE_KANBAN_CONVERGE_NOOP_IMPLEMENT.
+        """
+        if not _CONVERGE_NOOP_IMPLEMENT:
+            return False
+        if phase != "implement" or (row.get("status") or "").lower() != "blocked":
+            return False
+        low = str(row.get("block_reason") or "").lower()
+        if "already_covered" in low:
+            return False  # already on the convergence path
+        # Strictly the missing-PR evidence gate, not a substantive blocker. Match
+        # "pr" as a whole word (the gate joins the missing-evidence kinds, e.g.
+        # "missing required evidence pr" or "...pr,tool") so reasons like
+        # "process"/"approved"/"prior" never trip this.
+        if not ("missing required evidence" in low and re.search(r"\bpr\b", low)):
+            return False
+        try:
+            from worktree_bootstrap import worktree_branch, worktree_path
+
+            if "PR_URL=" in latest_log_session(task_id, max_lines=120):
+                return False  # worker did hand off a PR -> not a no-op
+            task = detail.get("task") if isinstance((detail or {}).get("task"), dict) else {}
+            wt_path = Path(
+                row.get("workspace_path") or task.get("workspace_path") or worktree_path(task_id)
+            ).expanduser()
+            if not wt_path.exists():
+                return False
+            branch = (
+                await self._run_worktree_command(
+                    ["git", "branch", "--show-current"], cwd=wt_path, timeout=10
+                )
+            ).strip()
+            # Hard safety gate: only the task's own worktree branch.
+            if not branch or branch in {"main", "master"} or branch != worktree_branch(task_id):
+                return False
+            dirty = bool(
+                (
+                    await self._run_worktree_command(
+                        ["git", "status", "--porcelain"], cwd=wt_path, timeout=20
+                    )
+                ).strip()
+            )
+            if dirty:
+                return False  # there IS uncommitted work -> unshipped-diff salvage owns it
+            unpushed = (
+                await self._run_worktree_command(
+                    ["git", "rev-list", "--count", "HEAD", "--not", "--remotes"],
+                    cwd=wt_path,
+                    timeout=15,
+                )
+            ).strip()
+            if unpushed not in {"", "0"}:
+                return False  # commits to push -> not a no-op
+        except Exception as exc:  # noqa: BLE001 - convergence check must not break poll.
+            logger.warning(
+                "kanban_adapter: no-op implement convergence check failed for %s: %s",
+                task_id,
+                exc,
+            )
+            return False
+
+        reason = (
+            "BLOCKER=ALREADY_COVERED: implement produced no diff and the task worktree "
+            "is empty (no changes, nothing to push) — the work is already present on the "
+            "base branch; converging to audit (no PR required)."
+        )
+        try:
+            await self._run(["block", task_id, reason])
+        except KanbanCLIError as exc:
+            logger.warning(
+                "kanban_adapter: no-op implement converge-block failed for %s: %s", task_id, exc
+            )
+            return False
+        row["block_reason"] = reason
+        logger.warning(
+            "kanban_adapter: converged no-op implement %s to ALREADY_COVERED "
+            "(empty worktree, missing-pr gate)",
+            task_id,
+        )
+        return True
 
     async def dispatch(self, issue: dict) -> dict:
         """Create the single current ready phase for a Multica engineering run.
@@ -1853,6 +2084,9 @@ class KanbanAdapter:
                 continue
             if await self._maybe_auto_block_protocol_violation(task_id, phase, row, detail):
                 phases[phase] = row
+                continue
+            if await self._maybe_auto_block_dead_worker(task_id, phase, row, detail):
+                phases[phase] = row
 
         for phase, row in list(phases.items()):
             if phase != "implement" or (row.get("status") or "").lower() != "blocked":
@@ -1893,6 +2127,12 @@ class KanbanAdapter:
                     "TESTS=recovered; downstream verify/review must validate\n"
                     "SUMMARY=Recovered PR handoff after worker interruption"
                 )
+                phases[phase] = row
+            elif await self._maybe_converge_noop_implement(
+                task_id, phase, row, detail=detail
+            ):
+                # No PR and an empty worktree: the work is already present, so
+                # converge to ALREADY_COVERED rather than strand the lane.
                 phases[phase] = row
 
         statuses = {p: (r.get("status") or "") for p, r in phases.items()}

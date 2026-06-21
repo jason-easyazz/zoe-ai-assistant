@@ -15,8 +15,9 @@ sys.path.insert(0, str(ROOT / "services" / "zoe-data"))
 from greploop_guard import (  # noqa: E402
     GuardError,
     merge_pr_when_ready,
-    read_guard_state,
+    read_observed_guard_state,
     run_guard_once,
+    run_merge_queue,
 )
 
 
@@ -47,13 +48,38 @@ def main() -> int:
         help="Squash-merge when READY (Greptile clear + CI green); optional after --once",
     )
     parser.add_argument("--state", action="store_true", help="Print file-backed guard state")
+    parser.add_argument(
+        "--queue",
+        action="store_true",
+        help=(
+            "Run one serial local merge-queue cycle: advance or merge exactly one "
+            "labelled, ready PR (rebase-on-behind, never --admin/force). Disabled "
+            "unless ZOE_MERGE_QUEUE_ENABLED=1 and no kill file."
+        ),
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="With --queue: decide but perform no mutation (safe to run while disabled)",
+    )
     args = parser.parse_args()
+    if args.dry_run and not args.queue:
+        parser.error("--dry-run only applies to --queue")
 
     try:
+        if args.queue:
+            queue_result = asyncio.run(
+                run_merge_queue(
+                    target_confidence=args.target_confidence,
+                    dry_run=args.dry_run,
+                )
+            )
+            print(json.dumps(queue_result, indent=2, sort_keys=True))
+            return 0 if queue_result.get("ok") else 2
         if not args.pr:
             parser.error("--pr is required")
         if args.state:
-            print(json.dumps(read_guard_state(args.pr), indent=2, sort_keys=True))
+            print(json.dumps(read_observed_guard_state(args.pr), indent=2, sort_keys=True))
             return 0
         if args.packet_only and args.merge_when_ready:
             parser.error("--merge-when-ready is incompatible with --packet-only")

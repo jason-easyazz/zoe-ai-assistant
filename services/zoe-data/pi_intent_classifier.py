@@ -14,7 +14,6 @@ import logging
 import glob
 import os
 import re
-import shutil
 import time
 import uuid
 from dataclasses import dataclass
@@ -85,6 +84,11 @@ _TASK_LANES = {
     "chat": set(),
 }
 
+_LOW_RISK_PI_INTENT_CANDIDATES = frozenset(
+    intent for intents in LOW_RISK_PI_INTENT_GROUPS.values() for intent in intents
+)
+_PI_PROMPT_TASK_LANES = {"fast_tool": sorted(_LOW_RISK_PI_INTENT_CANDIDATES), "chat": []}
+
 _SECRET_ENV_MARKERS = ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENROUTER_API_KEY")
 _PI_CLASSIFIER_BASE_FLAGS = (
     "--no-tools",
@@ -100,14 +104,14 @@ _PI_CLASSIFIER_SYSTEM_PROMPT = (
     "You are Zoe's offline intent classifier. Classify only; do not answer the user. "
     "Return exactly one compact JSON object with keys intent, slots, confidence, task_lane, reason. "
     "Use intent null and task_lane chat for casual chat, advice, research, or uncertain requests. "
-    "Use governed_agent only for self-extension, complaints, or missing capability requests. "
-    "Never create memory-write intents from ambiguous phrasing."
+    "Only choose from the low-risk candidate intents in the user prompt. "
+    "Never create intents outside that candidate set."
 )
 
 _LOW_RISK_TASK_SIGNAL_RE = re.compile(
     r"\b("
     r"rain|umbrella|forecast|weather|jacket|temperature|temp|storm|windy|humid|"
-    r"remember|remind|reminder|due|todo|"
+    r"remember|remind|reminders?|due|todo|"
     r"list|shopping|groceries|"
     r"timer|alarm|minute|minutes|hour|hours|"
     r"calculate|math|multiplied|divided|percent|"
@@ -119,11 +123,14 @@ _LOW_RISK_TASK_PHRASE_RE = re.compile(
     r"("
     r"\bwhat(?:'s| is) my day\b|"
     r"\bmy day looking\b|"
+    r"\bleft on my day\b|"
+    r"\bwhat(?:'s| is) coming up today\b|"
     r"\bwhat(?:'s| is) on (?:my |the )?(?:shopping )?list\b|"
     r"\b(?:add|remove)\b.+\b(?:list|shopping|grocer(?:y|ies)|reminder|todo)\b|"
     r"\b(?:is it|will it be)\s+(?:hot|cold)\b|"
     r"\b(?:hot|cold)\s+(?:today|tonight|tomorrow|outside)\b|"
-    r"\b\d+\s*(?:\+|-|x|×|\*|/|÷|plus|minus|times)\s*\d+\b"
+    r"\b\d+\s*(?:\+|-|x|×|\*|/|÷|plus|minus|times)\s*\d+\b|"
+    r"\badd\s+\d+\s+and\s+\d+\b"
     r")",
     re.I,
 )
@@ -347,17 +354,24 @@ async def _classify_with_pi_rpc(
         logger.debug("Pi RPC intent governor failed: %s", exc)
         return None
     latency_ms = (time.perf_counter() - start) * 1000
-    return _parse_pi_classification(raw, latency_ms=latency_ms)
+    parsed = _parse_pi_classification(raw, latency_ms=latency_ms)
+    if parsed is None:
+        text = raw.strip().lstrip("` \n").rstrip("` \n")
+        if _extract_first_json_object(text) is None:
+            await worker.reset()
+            logger.debug("Pi RPC intent governor returned unparsable output; worker reset")
+    return parsed
 
 
 def _classification_prompt(text: str, *, context_turns: str = "") -> str:
-    lanes = {lane: sorted(intents) for lane, intents in _TASK_LANES.items() if intents}
     return (
         "Schema: {\"intent\": string|null, \"slots\": object, \"confidence\": number, "
-        "\"task_lane\": \"fast_tool\"|\"governed_agent\"|\"chat\", \"reason\": string}.\n"
-        f"Allowed intents: {sorted(_ALLOWED_EXECUTABLE_INTENTS)}\n"
-        f"Task lanes: {json.dumps(lanes, sort_keys=True)}\n"
-        "Hints: rain/umbrella/jacket=>weather; due/todo=>reminder_list; timer/alarm=>timer_create. "
+        "\"task_lane\": \"fast_tool\"|\"chat\", \"reason\": string}.\n"
+        f"Low-risk candidate intents: {sorted(_LOW_RISK_PI_INTENT_CANDIDATES)}\n"
+        f"Task lanes: {json.dumps(_PI_PROMPT_TASK_LANES, sort_keys=True)}\n"
+        "Hints: rain/umbrella/jacket=>weather; reminders/due/todo=>reminder_list; "
+        "add numbers/percent/divided/times=>calculate; day/agenda/coming up=>daily_briefing; "
+        "timer/alarm=>timer_create. "
         "Keep confidence below 0.78 unless obvious.\n"
         f"Recent context: {_sanitize_prompt_value(context_turns) or '(none)'}\n"
         f"User message: {_sanitize_prompt_value(text)}\n"
@@ -665,7 +679,9 @@ def _runtime_probe_env(env: Mapping[str, str] | None, config: PiIntentClassifier
     )
     values["ZOE_PI_ALLOW_EXECUTION"] = values.get("ZOE_PI_ALLOW_EXECUTION", "false")
     values["ZOE_PI_LOCAL_MODEL_CONFIGURED"] = values.get("ZOE_PI_LOCAL_MODEL_CONFIGURED", "false")
-    values["PATH"] = _path_with_node(values.get("PATH", ""))
+    values["PATH"] = _path_with_node(
+        values.get("PATH", ""), pi_command=config.command, discover_runtime_bins=env is None
+    )
     return values
 
 
@@ -678,19 +694,24 @@ def _pi_subprocess_env(env: Mapping[str, str]) -> dict[str, str]:
     return values
 
 
-def _path_with_node(path: str) -> str:
+def _path_with_node(path: str, *, pi_command: str, discover_runtime_bins: bool) -> str:
     parts = [part for part in path.split(os.pathsep) if part]
-    joined = os.pathsep.join(parts)
-    if shutil.which("node", path=joined) and shutil.which("npm", path=joined):
-        return joined
-    node_bin = os.environ.get("ZOE_NVM_NODE_BIN") or _discover_nvm_node_bin()
+    if not discover_runtime_bins:
+        return os.pathsep.join(parts)
+    configured_node_bin = os.environ.get("ZOE_NVM_NODE_BIN")
+    node_bin = configured_node_bin if _nvm_bin_has_runtime(configured_node_bin, pi_command=pi_command) else None
+    node_bin = node_bin or _discover_nvm_node_bin(pi_command=pi_command)
     if node_bin and node_bin not in parts:
         parts.append(node_bin)
     return os.pathsep.join(parts)
 
 
-def _discover_nvm_node_bin() -> str | None:
-    candidates = [path for path in glob.glob(os.path.expanduser("~/.nvm/versions/node/*/bin")) if os.path.isdir(path)]
+def _discover_nvm_node_bin(*, pi_command: str) -> str | None:
+    candidates = [
+        path
+        for path in glob.glob(os.path.expanduser("~/.nvm/versions/node/*/bin"))
+        if _nvm_bin_has_runtime(path, pi_command=pi_command)
+    ]
     if not candidates:
         return None
 
@@ -702,6 +723,16 @@ def _discover_nvm_node_bin() -> str | None:
             return (0,)
 
     return sorted(candidates, key=version_key)[-1]
+
+
+def _nvm_bin_has_runtime(path: str | None, *, pi_command: str) -> bool:
+    return bool(
+        path
+        and os.path.isdir(path)
+        and os.path.exists(os.path.join(path, "node"))
+        and os.path.exists(os.path.join(path, "npm"))
+        and os.path.exists(os.path.join(path, pi_command))
+    )
 
 
 def _sanitize_prompt_value(value: str) -> str:

@@ -175,5 +175,98 @@ NORMALIZE_GRAPHIFY_PATHS
 
 log "syncing refreshed graph back to $ROOT/graphify-out"
 rsync -a --delete "$SNAPSHOT_DIR/graphify-out/" "$ROOT/graphify-out/" || fail "rsync of refreshed graph back to $ROOT/graphify-out failed; live copy may be partial"
+
+# Land the refreshed graph in git via an automated PR.
+#
+# All git work happens inside the disposable snapshot worktree ($SNAPSHOT_DIR),
+# which is a pristine detached `origin/main` checkout with only graphify-out/
+# regenerated. The live checkout ($ROOT) is never touched by this step, so a
+# failure here leaves both the committed artifacts on origin/main and the
+# freshly-synced live tree intact. The step is fail-closed: any git/gh error
+# routes through `fail` (logs, writes the error marker, exits non-zero) and the
+# snapshot worktree is discarded by the EXIT trap.
+open_refresh_pr() {
+  local branch="chore/graphify-refresh-$current_head"
+  local title="chore(graphify): automated knowledge-graph refresh for $current_head"
+
+  # Only the tracked graphify-out artifacts should ever change. Stage the
+  # directory (respects .gitignore, so graphify-out/cache stays excluded) and
+  # bail cleanly if it matches origin/main — no commit, no branch, no PR.
+  git -C "$SNAPSHOT_DIR" add -A graphify-out >/dev/null 2>&1 \
+    || fail "git add of graphify-out failed in snapshot; committed graph untouched"
+  if git -C "$SNAPSHOT_DIR" diff --cached --quiet -- graphify-out; then
+    log "refreshed graphify-out matches $REF for $current_head; no PR needed"
+    return 0
+  fi
+
+  # Pre-flight: without an authenticated gh we cannot open (or even look up) a
+  # PR. Bail BEFORE creating or pushing any branch so a missing/unauthenticated
+  # gh can never leave an orphaned ref on origin. The live tree was already
+  # refreshed via the rsync above, so skipping the PR here degrades gracefully.
+  if ! command -v gh >/dev/null 2>&1 || ! gh auth status >/dev/null 2>&1; then
+    log "WARN: gh unavailable or unauthenticated; live graph updated but no refresh PR opened"
+    return 0
+  fi
+
+  # Reuse an existing branch/PR for this head; never open a duplicate.
+  if gh pr list --head "$branch" --state open --json number \
+       --jq '.[].number' 2>/dev/null | grep -q .; then
+    log "open PR for $branch already exists; skipping duplicate PR creation"
+    return 0
+  fi
+
+  git -C "$SNAPSHOT_DIR" switch -C "$branch" >/dev/null 2>&1 \
+    || fail "git switch -C $branch failed in snapshot; committed graph untouched"
+  git -C "$SNAPSHOT_DIR" add -A graphify-out >/dev/null 2>&1 \
+    || fail "git add of graphify-out failed after branch switch; committed graph untouched"
+
+  GIT_AUTHOR_NAME="zoe-graphify-bot" GIT_AUTHOR_EMAIL="noreply@anthropic.com" \
+  GIT_COMMITTER_NAME="zoe-graphify-bot" GIT_COMMITTER_EMAIL="noreply@anthropic.com" \
+  git -C "$SNAPSHOT_DIR" commit --only -- graphify-out \
+    -m "chore(graphify): refresh knowledge graph for $current_head" \
+    -m "Automated nightly Graphify rebuild from origin/main snapshot $current_head." \
+    -m "Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>" >/dev/null \
+    || fail "git commit of graphify-out failed in snapshot; committed graph untouched"
+
+  # Populate a remote-tracking ref for the branch (the detached snapshot
+  # worktree has none) so --force-with-lease has a real basis and cannot
+  # silently degrade to a plain --force when reusing an existing branch. For a
+  # brand-new branch there is nothing to overwrite, so the absent ref is fine.
+  git -C "$SNAPSHOT_DIR" fetch origin "+refs/heads/$branch:refs/remotes/origin/$branch" >/dev/null 2>&1 || true
+  git -C "$SNAPSHOT_DIR" push --force-with-lease="$branch" origin "$branch" >/dev/null 2>&1 \
+    || fail "git push of $branch failed; committed graph untouched and no PR opened"
+
+  local body
+  body="Automated knowledge-graph refresh.
+
+Rebuilt \`graphify-out/\` (graph.json + GRAPH_REPORT.md) from a clean \`origin/main\` snapshot at commit \`$current_head\` by the nightly \`zoe-graphify-refresh\` timer. This keeps the committed graph that agents read in sync with HEAD instead of drifting.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)"
+
+  if ! gh pr create --base main --head "$branch" \
+       --title "$title" --body "$body" >/dev/null 2>&1; then
+    # A pre-existing open PR (race) is benign; anything else is a real failure.
+    if gh pr list --head "$branch" --state open --json number \
+         --jq '.[].number' 2>/dev/null | grep -q .; then
+      log "PR for $branch already open after push; not creating a duplicate"
+      return 0
+    fi
+    fail "gh pr create for $branch failed; committed graph untouched"
+  fi
+  log "opened graphify-refresh PR for $branch (head $current_head)"
+
+  # Enable native auto-merge so the graph-only PR lands without manual action
+  # once Greptile + CI go green (repo allow_auto_merge=true; main requires 0
+  # approvals + green checks). Non-fatal: a failure here simply leaves the PR
+  # open for manual merge — it must never trip the fail-closed path.
+  if gh pr merge "$branch" --auto --squash >/dev/null 2>&1; then
+    log "auto-merge enabled for $branch; will merge when Greptile + CI pass"
+  else
+    log "WARN: could not enable auto-merge for $branch; PR left open for manual merge"
+  fi
+}
+
+open_refresh_pr
+
 rm -f "$ERROR_MARKER"
 log "graphify refresh complete for $current_head"

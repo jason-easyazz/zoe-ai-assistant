@@ -1,29 +1,137 @@
-body:not(.sky-empty) .zoe-list-card {
+body:not(.sky-empty) {
+    --sky-accent-work: 37, 99, 235;
+    --sky-accent-personal: 147, 51, 234;
+    --sky-accent-family: 147, 51, 234;
+    --sky-accent-bucket: 5, 150, 105;
+    --sky-accent-social: 22, 163, 74;
+    --sky-accent-shopping: 234, 88, 12;
+    --sky-accent-health: 190, 24, 93;
+    --sky-accent-medical: 239, 68, 68;
+    --sky-accent-routine: 55, 65, 81;
+    --sky-accent-household: 107, 114, 128;
+    --sky-accent-tasks: 90, 224, 224;
+    --sky-accent-general: 90, 224, 224;
+    --sky-accent-all: 90, 224, 224;
+}
+
+body:not(.sky-empty) .sky-accent-work { --sky-card-accent: var(--sky-accent-work); }
+body:not(.sky-empty) .sky-accent-personal { --sky-card-accent: var(--sky-accent-personal); }
+body:not(.sky-empty) .sky-accent-family { --sky-card-accent: var(--sky-accent-family); }
+body:not(.sky-empty) .sky-accent-bucket { --sky-card-accent: var(--sky-accent-bucket); }
+body:not(.sky-empty) .sky-accent-social { --sky-card-accent: var(--sky-accent-social); }
+body:not(.sky-empty) .sky-accent-shopping { --sky-card-accent: var(--sky-accent-shopping); }
+body:not(.sky-empty) .sky-accent-health { --sky-card-accent: var(--sky-accent-health); }
+body:not(.sky-empty) .sky-accent-medical { --sky-card-accent: var(--sky-accent-medical); }
+body:not(.sky-empty) .sky-accent-routine { --sky-card-accent: var(--sky-accent-routine); }
+body:not(.sky-empty) .sky-accent-household { --sky-card-accent: var(--sky-accent-household); }
+body:not(.sky-empty) .sky-accent-tasks { --sky-card-accent: var(--sky-accent-tasks); }
+body:not(.sky-empty) .sky-accent-general,
+body:not(.sky-empty) .sky-accent-all {
+    --sky-card-accent: var(--sky-accent-general);
+}
+
+body:not(.sky-empty) .clock-card.sky-premium-card {
     background:
-        radial-gradient(circle at 18% 8%, rgba(251,146,60,0.24), transparent 34%),
-        radial-gradient(circle at 92% 20%, rgba(34,197,94,0.18), transparent 32%),
+        radial-gradient(circle at 13% 10%, rgba(90,224,224,0.2), transparent 34%),
+        radial-gradient(circle at 88% 12%, rgba(147,51,234,0.2), transparent 36%),
+        linear-gradient(145deg, rgba(14,19,30,0.96), rgba(5,7,12,0.99)) !important;
+    border-color: rgba(255,255,255,0.15) !important;
+    min-height: min(610px, calc(100dvh - 110px)) !important;
+    padding: clamp(24px, 2.5vw, 34px) !important;
+    position: relative;
+    overflow: hidden !important;
+}
+
+body:not(.sky-empty) .sky-clock-scene {
+    height: 100%;
+    min-height: 100%;
+    position: static;
+    text-align: center;
+}
+
+body:not(.sky-empty) .sky-clock-main {
+    position: static;
+}
+
+body:not(.sky-empty) .sky-clock-time {
+    position: absolute;
+    top: 53%;
+    left: 0;
+    right: 0;
+    transform: translateY(-50%);
+    display: flex;
+    align-items: baseline;
+    justify-content: center;
+    gap: clamp(10px, 1.4vw, 18px);
+    color: white;
+    font-variant-numeric: tabular-nums;
+    line-height: 0.78;
+}
+
+body:not(.sky-empty) .sky-clock-time span {
+    font-size: clamp(12.2rem, 23.5vw, 20.2rem);
+    font-weight: 860;
+    letter-spacing: 0;
+}
+
+body:not(.sky-empty) .sky-clock-time i {
+    font-size: clamp(9.4rem, 18vw, 15.4rem);
+    font-style: normal;
+    opacity: 0.42;
+}
+
+body:not(.sky-empty) .sky-clock-time b {
+    margin-left: clamp(6px, 0.9vw, 12px);
+    color: rgba(255,255,255,0.56);
+    font-size: clamp(2.1rem, 3.5vw, 3.15rem);
+    font-weight: 850;
+    letter-spacing: 0;
+    text-transform: uppercase;
+}
+
+body:not(.sky-empty) .sky-clock-date {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: clamp(28px, 5vh, 42px);
+    z-index: 8;
+    color: rgba(255,255,255,0.66);
+    font-size: clamp(1.7rem, 3.2vw, 2.65rem);
+    font-weight: 800;
+    line-height: 1;
+}
+
+
+body:not(.sky-empty) .zoe-list-card {
+    --sky-card-accent: var(--sky-accent-shopping);
+    background:
+        radial-gradient(circle at 18% 8%, rgba(var(--sky-card-accent),0.24), transparent 34%),
+        radial-gradient(circle at 92% 20%, rgba(var(--sky-accent-social),0.18), transparent 32%),
         linear-gradient(145deg, rgba(18,22,30,0.96), rgba(8,10,16,0.98)) !important;
     border-color: rgba(255,255,255,0.15) !important;
 }
 
 body:not(.sky-empty) .zoe-list-card.work {
+    --sky-card-accent: var(--sky-accent-work);
     background:
-        radial-gradient(circle at 16% 8%, rgba(59,130,246,0.24), transparent 34%),
-        radial-gradient(circle at 92% 20%, rgba(90,224,224,0.14), transparent 32%),
+        radial-gradient(circle at 16% 8%, rgba(var(--sky-card-accent),0.24), transparent 34%),
+        radial-gradient(circle at 92% 20%, rgba(var(--sky-accent-tasks),0.14), transparent 32%),
         linear-gradient(145deg, rgba(17,24,39,0.96), rgba(7,11,19,0.98)) !important;
 }
 
 body:not(.sky-empty) .zoe-list-card.personal {
+    --sky-card-accent: var(--sky-accent-personal);
     background:
-        radial-gradient(circle at 16% 8%, rgba(168,85,247,0.24), transparent 34%),
-        radial-gradient(circle at 92% 20%, rgba(236,72,153,0.16), transparent 32%),
+        radial-gradient(circle at 16% 8%, rgba(var(--sky-card-accent),0.24), transparent 34%),
+        radial-gradient(circle at 92% 20%, rgba(var(--sky-accent-health),0.16), transparent 32%),
         linear-gradient(145deg, rgba(24,18,34,0.96), rgba(10,8,16,0.98)) !important;
 }
 
 body:not(.sky-empty) .zoe-list-card.tasks {
+    --sky-card-accent: var(--sky-accent-tasks);
     background:
-        radial-gradient(circle at 16% 8%, rgba(90,224,224,0.2), transparent 34%),
-        radial-gradient(circle at 92% 20%, rgba(34,197,94,0.14), transparent 32%),
+        radial-gradient(circle at 16% 8%, rgba(var(--sky-card-accent),0.2), transparent 34%),
+        radial-gradient(circle at 92% 20%, rgba(var(--sky-accent-social),0.14), transparent 32%),
         linear-gradient(145deg, rgba(12,25,28,0.96), rgba(6,12,16,0.98)) !important;
 }
 
@@ -66,29 +174,6 @@ body:not(.sky-empty) .sky-profile-title h3 {
     letter-spacing: 0;
 }
 
-body:not(.sky-empty) .sky-people-count {
-    width: 96px;
-    height: 96px;
-    border-radius: 32px;
-    display: grid;
-    place-items: center;
-    background: linear-gradient(180deg, rgba(255,255,255,0.18), rgba(255,255,255,0.07));
-    border: 1px solid rgba(255,255,255,0.18);
-    box-shadow: inset 0 1px 0 rgba(255,255,255,0.18), 0 18px 45px rgba(0,0,0,0.24);
-}
-
-body:not(.sky-empty) .sky-people-count strong {
-    color: white;
-    font-size: 2.05rem;
-    line-height: 1;
-}
-
-body:not(.sky-empty) .sky-people-count span {
-    color: rgba(255,255,255,0.58);
-    font-size: 0.76rem;
-    font-weight: 800;
-}
-
 body:not(.sky-empty) .sky-list-switcher {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(124px, 1fr));
@@ -119,26 +204,30 @@ body:not(.sky-empty) .sky-list-tab span {
 
 body:not(.sky-empty) .sky-list-tab.shopping,
 body:not(.sky-empty) .sky-list-column.shopping {
-    border-color: rgba(251,146,60,0.42);
-    background: linear-gradient(145deg, rgba(251,146,60,0.18), rgba(255,255,255,0.07));
+    --sky-card-accent: var(--sky-accent-shopping);
+    border-color: rgba(var(--sky-card-accent),0.42);
+    background: linear-gradient(145deg, rgba(var(--sky-card-accent),0.18), rgba(255,255,255,0.07));
 }
 
 body:not(.sky-empty) .sky-list-tab.work,
 body:not(.sky-empty) .sky-list-column.work {
-    border-color: rgba(59,130,246,0.46);
-    background: linear-gradient(145deg, rgba(59,130,246,0.2), rgba(255,255,255,0.07));
+    --sky-card-accent: var(--sky-accent-work);
+    border-color: rgba(var(--sky-card-accent),0.46);
+    background: linear-gradient(145deg, rgba(var(--sky-card-accent),0.2), rgba(255,255,255,0.07));
 }
 
 body:not(.sky-empty) .sky-list-tab.personal,
 body:not(.sky-empty) .sky-list-column.personal {
-    border-color: rgba(168,85,247,0.48);
-    background: linear-gradient(145deg, rgba(168,85,247,0.2), rgba(255,255,255,0.07));
+    --sky-card-accent: var(--sky-accent-personal);
+    border-color: rgba(var(--sky-card-accent),0.48);
+    background: linear-gradient(145deg, rgba(var(--sky-card-accent),0.2), rgba(255,255,255,0.07));
 }
 
 body:not(.sky-empty) .sky-list-tab.tasks,
 body:not(.sky-empty) .sky-list-column.tasks {
-    border-color: rgba(90,224,224,0.42);
-    background: linear-gradient(145deg, rgba(90,224,224,0.18), rgba(255,255,255,0.07));
+    --sky-card-accent: var(--sky-accent-tasks);
+    border-color: rgba(var(--sky-card-accent),0.42);
+    background: linear-gradient(145deg, rgba(var(--sky-card-accent),0.18), rgba(255,255,255,0.07));
 }
 
 body:not(.sky-empty) .sky-list-tab.is-active {
@@ -315,9 +404,14 @@ body:not(.sky-empty) .sky-profile-grid span {
 }
 
 body:not(.sky-empty) .sky-list-items,
-body:not(.sky-empty) .sky-people-list {
+body:not(.sky-empty) .sky-people-grid {
     display: grid;
     gap: 10px;
+}
+
+body:not(.sky-empty) .sky-people-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    align-content: start;
 }
 
 body:not(.sky-empty) .sky-list-items.is-list-detail {
@@ -327,7 +421,7 @@ body:not(.sky-empty) .sky-list-items.is-list-detail {
 
 body:not(.sky-empty) .sky-list-item-row,
 body:not(.sky-empty) .sky-list-overview-row,
-body:not(.sky-empty) .sky-person-row {
+body:not(.sky-empty) .sky-person-card {
     display: grid;
     align-items: center;
     gap: 12px;
@@ -353,8 +447,20 @@ body:not(.sky-empty) .sky-list-item-row.is-recent .sky-list-check {
     background: rgba(90,224,224,0.14);
 }
 
-body:not(.sky-empty) .sky-person-row {
-    grid-template-columns: auto minmax(0, 1fr) minmax(72px, 0.22fr);
+body:not(.sky-empty) .sky-person-card {
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    min-height: 116px;
+    align-content: start;
+    text-align: left;
+    color: inherit;
+    font: inherit;
+    border-left: 5px solid rgba(var(--sky-card-accent),0.95);
+    background:
+        radial-gradient(circle at 12% 0%, rgba(var(--sky-card-accent),0.22), transparent 44%),
+        linear-gradient(145deg, rgba(255,255,255,0.10), rgba(255,255,255,0.055));
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.13);
+    cursor: pointer;
 }
 
 body:not(.sky-empty) .sky-list-overview-row {
@@ -362,9 +468,9 @@ body:not(.sky-empty) .sky-list-overview-row {
     border-left: 4px solid rgba(251,146,60,0.9);
 }
 
-body:not(.sky-empty) .sky-list-overview-row.work { border-left-color: rgba(59,130,246,0.9); }
-body:not(.sky-empty) .sky-list-overview-row.personal { border-left-color: rgba(168,85,247,0.9); }
-body:not(.sky-empty) .sky-list-overview-row.tasks { border-left-color: rgba(90,224,224,0.9); }
+body:not(.sky-empty) .sky-list-overview-row.work { border-left-color: rgba(var(--sky-accent-work),0.9); }
+body:not(.sky-empty) .sky-list-overview-row.personal { border-left-color: rgba(var(--sky-accent-personal),0.9); }
+body:not(.sky-empty) .sky-list-overview-row.tasks { border-left-color: rgba(var(--sky-accent-tasks),0.9); }
 
 body:not(.sky-empty) .sky-list-check {
     width: 28px;
@@ -417,7 +523,8 @@ body:not(.sky-empty) .sky-person-main em {
 body:not(.sky-empty) .sky-list-item-meta b,
 body:not(.sky-empty) .sky-list-item-meta span,
 body:not(.sky-empty) .sky-list-overview-row > span,
-body:not(.sky-empty) .sky-people-filter-row span {
+body:not(.sky-empty) .sky-people-filter-row span,
+body:not(.sky-empty) .sky-people-chips span {
     display: inline-flex;
     align-items: center;
     border-radius: 999px;
@@ -428,12 +535,54 @@ body:not(.sky-empty) .sky-people-filter-row span {
     font-weight: 800;
 }
 
+body:not(.sky-empty) .sky-people-chips .sky-accent-personal,
+body:not(.sky-empty) .sky-people-chips .sky-accent-work {
+    border: 1px solid rgba(var(--sky-card-accent),0.34);
+    background: rgba(var(--sky-card-accent),0.15);
+    color: rgba(255,255,255,0.88);
+}
+
 body:not(.sky-empty) .people-card,
 body:not(.sky-empty) .person-profile-card {
+    --sky-card-accent: var(--sky-accent-personal);
     background:
-        radial-gradient(circle at 18% 10%, rgba(90,224,224,0.22), transparent 34%),
-        radial-gradient(circle at 90% 18%, rgba(168,85,247,0.18), transparent 32%),
+        radial-gradient(circle at 18% 10%, rgba(var(--sky-accent-tasks),0.18), transparent 34%),
+        radial-gradient(circle at 90% 18%, rgba(var(--sky-card-accent),0.20), transparent 32%),
         linear-gradient(145deg, rgba(13,20,25,0.96), rgba(8,9,15,0.98)) !important;
+}
+
+body:not(.sky-empty) .people-card {
+    padding: clamp(18px, 2.5vw, 26px) !important;
+}
+
+body:not(.sky-empty) .sky-people-toolbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 14px;
+}
+
+body:not(.sky-empty) .sky-people-title span {
+    display: block;
+    color: rgba(255,255,255,0.58);
+    font-size: 0.72rem;
+    font-weight: 850;
+    letter-spacing: 0;
+    text-transform: uppercase;
+}
+
+body:not(.sky-empty) .sky-people-title strong {
+    display: block;
+    color: white;
+    font-size: clamp(1.25rem, 2.4vw, 2.1rem);
+    line-height: 1.02;
+}
+
+body:not(.sky-empty) .sky-people-chips {
+    display: flex;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 8px;
 }
 
 body:not(.sky-empty) .sky-people-filter-row {
@@ -450,9 +599,9 @@ body:not(.sky-empty) .sky-profile-avatar {
     color: white;
     font-weight: 900;
     background:
-        linear-gradient(145deg, rgba(90,224,224,0.9), rgba(168,85,247,0.76)),
+        linear-gradient(145deg, rgba(var(--sky-accent-tasks),0.88), rgba(var(--sky-card-accent),0.76)),
         rgba(255,255,255,0.08);
-    box-shadow: inset 0 1px 0 rgba(255,255,255,0.28), 0 14px 35px rgba(90,224,224,0.14);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.28), 0 14px 35px rgba(var(--sky-card-accent),0.16);
 }
 
 body:not(.sky-empty) .sky-person-avatar {
@@ -470,6 +619,7 @@ body:not(.sky-empty) .sky-profile-avatar {
 }
 
 body:not(.sky-empty) .sky-person-health {
+    grid-column: 1 / -1;
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
@@ -490,7 +640,7 @@ body:not(.sky-empty) .sky-person-health i {
     grid-row: 1;
     height: 7px;
     border-radius: 999px;
-    background: linear-gradient(90deg, #5AE0E0, #A78BFA);
+    background: linear-gradient(90deg, rgba(var(--sky-accent-tasks),0.92), rgba(var(--sky-card-accent),0.92));
 }
 
 body:not(.sky-empty) .sky-person-health span {
@@ -555,16 +705,17 @@ body:not(.sky-empty) .sky-profile-notes {
 
 @media (max-width: 780px) {
     body:not(.sky-empty) .sky-people-hero,
+    body:not(.sky-empty) .sky-people-toolbar,
     body:not(.sky-empty) .sky-profile-hero {
         grid-template-columns: 1fr;
     }
 
-    body:not(.sky-empty) .sky-person-row {
-        grid-template-columns: auto minmax(0, 1fr);
+    body:not(.sky-empty) .sky-people-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
-    body:not(.sky-empty) .sky-person-health {
-        grid-column: 1 / -1;
+    body:not(.sky-empty) .sky-people-chips {
+        justify-content: flex-start;
     }
 
     body:not(.sky-empty) .sky-profile-grid {

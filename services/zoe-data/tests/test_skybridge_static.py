@@ -192,7 +192,7 @@ def test_livekit_voice_router_accepts_text_commands():
 
     assert "async def _run_text_pipeline" in router
     assert "elif msg_type == \"text\"" in router
-    assert "run_zoe_agent(message, session_id, user_id, voice_mode=True)" in router
+    assert "brain_oneshot(message, session_id, user_id, voice_mode=True)" in router
 
 
 def test_skybridge_renderer_keeps_button_actions_functional():
@@ -267,7 +267,8 @@ def test_skybridge_auth_and_voice_bus_contracts_are_wired():
     assert '"type": "cards", "result": skybridge_result' in main
     assert '"type": "skybridge_context", "context": skybridge_context' in main
     assert '"type": "transcript", "role": "assistant", "text": spoken_summary' in main
-    assert 'skybridge_context = {}\n\n            # ── Streaming LLM' in main
+    assert 'skybridge_context = {}\n\n            # ── Instant intent fast-path' in main
+    assert "# ── Streaming LLM + per-sentence TTS" in main
 
 
 def test_skybridge_touch_executor_card_shell_spans_panel_grid():
@@ -315,9 +316,11 @@ def test_skybridge_renderer_supports_real_data_cards():
     assert "props.source === 'list_show'" in renderer
     assert "props.source === 'people_directory'" in renderer
     assert "props.source === 'person_profile'" in renderer
+    assert "props.source === 'clock_show'" in renderer
     assert "renderZoeList(props)" in renderer
     assert "renderPeopleDirectory(props)" in renderer
     assert "renderPersonProfile(props)" in renderer
+    assert "renderClock(props)" in renderer
     assert "sky-list-scene" in renderer
     assert "sky-people-scene" in renderer
     assert "sky-profile-scene" in renderer
@@ -327,8 +330,17 @@ def test_skybridge_renderer_supports_real_data_cards():
     assert "/touch/css/skybridge-data-widgets.css?v=skybridge-panel-session-2" in html
     assert "skybridge-lists-people-widgets" not in html
     assert "sky-list-item-row" in data_widgets_css
-    assert "sky-person-row" in data_widgets_css
+    assert "sky-person-card" in renderer
+    assert "sky-person-card" in data_widgets_css
+    assert "sky-people-grid" in renderer
+    assert "sky-people-grid" in data_widgets_css
     assert "sky-profile-health" in data_widgets_css
+    assert "--sky-accent-work: 37, 99, 235" in data_widgets_css
+    assert "--sky-accent-personal: 147, 51, 234" in data_widgets_css
+    assert "sky-clock-scene" in data_widgets_css
+    assert "sky-live-clock" in renderer
+    assert "skyAmbientClock" in html
+    assert "sky-ambient-clock" in html
     assert "sky-weather-scene" in html
     assert "weather-sunny" in html
     assert "skybridge-runtime-overrides" in html
@@ -339,6 +351,24 @@ def test_skybridge_renderer_supports_real_data_cards():
     assert "skybridge-push-ack-1" in html
     assert "backdrop-filter: none !important" in html
     assert "No events " in renderer
+
+
+def test_skybridge_returns_to_ambient_clock_after_card_idle():
+    app = read(UI / "js" / "skybridge.js")
+    html = read(UI / "skybridge.html")
+
+    assert "CARD_IDLE_MS" in app
+    assert "skybridge_idle_return_ms" in app
+    assert "function scheduleIdleReturn()" in app
+    assert "function returnToAmbientClock()" in app
+    assert "renderHome({ idle: true })" in app
+    assert "function updateAllClocks()" in app
+    assert "document.querySelectorAll('.sky-live-clock')" in app
+    assert "id=\"skyAmbientClock\"" in html
+    ambient_start = html.index("id=\"skyAmbientClock\"")
+    ambient_tag = html[html.rfind("<div", 0, ambient_start):html.find(">", ambient_start) + 1]
+    assert "aria-live" not in ambient_tag
+    assert "body.sky-empty.sky-ambient-clock .sky-ambient-clock" in html
 
 
 def test_skybridge_weather_renderer_uses_widget_forecast_structure():
@@ -411,7 +441,14 @@ def test_skybridge_calendar_renderer_handles_datetime_dates_and_ordering():
     assert "const detail = [item.location].filter(Boolean).join(' · ');" in renderer
     assert "const detail = [item.location, calendarAccentLabel(item.category)]" not in renderer
     assert "calendarAccentLabel" not in renderer
-    assert "return known.indexOf(token) >= 0 ? token : 'general';" in renderer
+    assert "function accentClass(value, fallback)" in renderer
+    assert "const category = accentClass(value, 'general');" in renderer
+    assert "return ['tasks', 'all'].indexOf(category) >= 0 ? 'general' : category;" in renderer
+    assert "'medical'" in renderer
+    assert "'household'" in renderer
+    assert "personAccentClass(person) === 'personal'" in renderer
+    assert "const otherCount = Math.max(0, people.length - workCount - personalCount);" in renderer
+    assert " + ' other</span>'" in renderer
 
 
 def test_skybridge_is_registered_in_touch_menu():
@@ -619,6 +656,18 @@ def test_skybridge_has_touch_panel_fit_overrides():
     assert '.sky-orb-button span' in html
     assert '.sky-orb-button::before' in html
     assert 'display: none !important' in html
+    assert 'skybridge-native-panel-fit-final' in html
+    assert 'inset: 24px 24px 112px !important' in html
+    assert 'Native Zoe touch panel: 1280x720 rotated DSI display' in html
+
+
+def test_skybridge_weather_renderer_accepts_temperature_aliases():
+    renderer = read(UI / "js" / "skybridge-renderer.js")
+
+    assert "function weatherValue(source, keys)" in renderer
+    assert "['temp', 'temperature', 'temperature_c', 'temp_c', 'current_temp']" in renderer
+    assert "['feels_like', 'feels_like_c', 'apparent_temperature']" in renderer
+    assert "['temp', 'temperature', 'temperature_c', 'temp_c', 'high']" in renderer
 
 
 def test_skybridge_list_create_has_database_conflict_guard():

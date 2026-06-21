@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "services" / "zoe-data"))
 
 from pi_intent_evidence import has_secret_evidence_text, sanitize_evidence_text  # noqa: E402
+from pi_intent_shadow import apply_pi_intent_shadow_labels, load_pi_intent_shadow_labels  # noqa: E402
 from zoe_pi_promotion import PiIntentEvalCase, intent_group_for_intent, merge_pi_intent_eval_cases  # noqa: E402
 
 _ALLOWED_SOURCES = {"intent_miss", "chat_log", "voice_log", "known_failure", "synthetic"}
@@ -55,7 +56,9 @@ def export_eval_cases(
     if source not in _ALLOWED_SOURCES:
         raise ValueError(f"unsupported source {source!r}")
     cases: list[PiIntentEvalCase] = []
+    implicit_cases: dict[str, dict[str, Any]] = {}
     for index, row in enumerate(rows, start=1):
+        explicit_case_id = bool(_optional_str(row.get("case_id")))
         case = _case_from_row(
             row,
             index=index,
@@ -64,8 +67,17 @@ def export_eval_cases(
             default_route_class=default_route_class,
             max_words=max_words,
         )
-        if case is not None:
-            cases.append(case)
+        if case is None:
+            continue
+        if not explicit_case_id:
+            payload = case.to_dict()
+            previous = implicit_cases.get(case.case_id)
+            if previous is not None:
+                if previous == payload:
+                    continue
+                raise ValueError(f"conflicting duplicate implicit eval case_id: {case.case_id}")
+            implicit_cases[case.case_id] = payload
+        cases.append(case)
     return merge_pi_intent_eval_cases(cases)
 
 
@@ -177,12 +189,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--case-prefix", default="evidence")
     parser.add_argument("--route-class", choices=sorted(_ALLOWED_ROUTE_CLASSES), default="fallback")
     parser.add_argument("--max-words", type=int, default=32)
+    parser.add_argument("--labels-file", help="Optional JSONL sidecar mapping text_hash to trusted labels")
     parser.add_argument("--summary", action="store_true", help="Write summary JSON to stderr")
     args = parser.parse_args(argv)
 
     rows = load_jsonl(args.input)
+    labels = load_pi_intent_shadow_labels(args.labels_file) if args.labels_file else {}
+    labeled_rows = apply_pi_intent_shadow_labels(rows, labels) if labels else rows
     cases = export_eval_cases(
-        rows,
+        labeled_rows,
         source=args.source,
         case_prefix=args.case_prefix,
         default_route_class=args.route_class,
@@ -196,7 +211,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         sys.stdout.write(payload)
     if args.summary:
-        print(json.dumps({"input_rows": len(rows), "exported_cases": len(cases)}, sort_keys=True), file=sys.stderr)
+        print(json.dumps({"input_rows": len(rows), "label_count": len(labels), "exported_cases": len(cases)}, sort_keys=True), file=sys.stderr)
     return 0
 
 

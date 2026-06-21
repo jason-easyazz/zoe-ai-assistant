@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import os
 import re
 import uuid
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from calendar_utils import row_to_event
 from card_service import card_service
@@ -85,8 +88,51 @@ PEOPLE_CONTEXTS = ("personal", "work")
 PEOPLE_CIRCLES = ("inner", "circle", "public")
 
 
+def _host_clock_timezone() -> str | None:
+    tz_env = (os.environ.get("TZ") or "").strip()
+    if tz_env and not tz_env.startswith(":"):
+        return tz_env
+
+    try:
+        timezone_file = Path("/etc/timezone")
+        if timezone_file.exists():
+            timezone_name = timezone_file.read_text(encoding="utf-8").strip()
+            if timezone_name:
+                return timezone_name
+    except OSError:
+        pass
+
+    try:
+        localtime = Path("/etc/localtime")
+        if localtime.is_symlink():
+            target = str(localtime.resolve())
+            marker = "/zoneinfo/"
+            if marker in target:
+                timezone_name = target.split(marker, 1)[1]
+                if timezone_name:
+                    return timezone_name
+    except OSError:
+        pass
+
+    return None
+
+
+def _default_clock_timezone() -> str:
+    return os.environ.get("ZOE_SKYBRIDGE_TIMEZONE") or _host_clock_timezone() or "UTC"
+
+
 def _today() -> date:
     return date.today()
+
+
+def _clock_now(timezone_name: str | None = None) -> tuple[datetime, str]:
+    name = timezone_name or _default_clock_timezone()
+    try:
+        tz = ZoneInfo(name)
+    except ZoneInfoNotFoundError:
+        name = "UTC"
+        tz = ZoneInfo("UTC")
+    return datetime.now(tz), name
 
 
 async def _get_current(lat, lon, city, country):
@@ -489,6 +535,14 @@ def classify_skybridge_intent(message: str, context: dict[str, Any] | None = Non
         parsed_range = _calendar_date_from_text(text, _today())
         start = parsed_range[1] if parsed_range else _context_calendar_date(context)
         return SkybridgeIntent(domain="calendar", action="create_event", title=title, target_time=target_time, range_label=start.isoformat(), start_date=start, end_date=start)
+    if (
+        " clock " in text
+        or re.search(r"\bwhat(?:'s| is)?\s+the\s+time\b", text)
+        or re.search(r"\bwhat\s+time\s+is\s+it\b", text)
+        or re.search(r"\bshow\s+(?:me\s+)?(?:the\s+)?time\b", text)
+        or re.search(r"\bcurrent\s+time\b", text)
+    ):
+        return SkybridgeIntent(domain="clock", action="show")
     if any(term in text for term in (" weather", " forecast", " temperature", " rain", " windy", " wind ")):
         action = "forecast" if any(term in text for term in ("forecast", "tomorrow", "week", "next few days")) else "current"
         return SkybridgeIntent(domain="weather", action=action)
@@ -550,6 +604,9 @@ async def resolve_skybridge_request(
     if skybridge_intent_requires_identity(intent) and _is_guest_user(user_id):
         return _attach_skybridge_context(_auth_required_result(intent))
 
+    if intent.domain == "clock":
+        return _attach_skybridge_context(_resolve_clock(intent))
+
     if db is not None:
         return _attach_skybridge_context(await _resolve_with_db(intent, user_id, db, context=context))
 
@@ -576,6 +633,8 @@ def skybridge_intent_requires_identity(intent: SkybridgeIntent | None) -> bool:
 
 
 async def _resolve_with_db(intent: SkybridgeIntent, user_id: str, db: Any, *, context: dict[str, Any] | None = None) -> dict[str, Any]:
+    if intent.domain == "clock":
+        return _resolve_clock(intent)
     if intent.domain == "calendar":
         if intent.action == "create_event":
             return await _resolve_calendar_create(intent, user_id, db)
@@ -595,6 +654,32 @@ async def _resolve_with_db(intent: SkybridgeIntent, user_id: str, db: Any, *, co
             return await _resolve_people_remember_fact(intent, user_id, db)
         return await _resolve_people(intent, user_id, db)
     return {"handled": False, "intent": None, "spoken_summary": "", "cards": []}
+
+
+def _resolve_clock(intent: SkybridgeIntent) -> dict[str, Any]:
+    now, timezone_name = _clock_now()
+    hour_str = str(now.hour % 12 or 12)
+    spoken = f"It is {hour_str}:{now.strftime('%M %p')}."
+    return {
+        "handled": True,
+        "intent": {"domain": "clock", "action": intent.action, "timezone": timezone_name},
+        "spoken_summary": spoken,
+        "cards": [{
+            "component": "status",
+            "props": {
+                "source": "clock_show",
+                "title": "Clock",
+                "summary": spoken,
+                "timezone": timezone_name,
+                "iso": now.isoformat(),
+                "hour": hour_str,
+                "minute": now.strftime("%M"),
+                "meridiem": now.strftime("%p"),
+                "weekday": now.strftime("%A"),
+                "date_label": now.strftime("%d %B"),
+            },
+        }],
+    }
 
 
 async def _maybe_commit(db: Any) -> None:
@@ -837,23 +922,46 @@ async def _resolve_weather(intent: SkybridgeIntent, user_id: str, db: Any) -> di
     prefs = _row_to_prefs(row)
     fallback = await _get_system_default_location(db)
     lat, lon, city, country = _resolve_location(prefs, fallback=fallback)
-    current = await _get_current(lat, lon, city, country)
+    # Voice replies must feel instant: prefer the warm cache (kept fresh by the panel's
+    # periodic /weather/current + /forecast polls); only pay the ~1s live API when cold.
+    from routers.weather import _weather_cache as _wc
+    current = _wc.get("current") or {}
+    # Only trust the shared warm caches (current AND forecast) when the cached
+    # reading is for THIS user's resolved city — the cache is one flat slot across
+    # users, so a Perth refresh must not feed a Sydney user. `is None` so a
+    # legitimate 0° reading isn't treated as missing.
+    _cached_city = str(current.get("city") or "").strip().lower()
+    _cache_ok = current.get("temp") is not None and not (
+        city and _cached_city and _cached_city != str(city).strip().lower()
+    )
+    if not _cache_ok:
+        current = await _get_current(lat, lon, city, country)
     current = {k: v for k, v in current.items() if not str(k).startswith("_")}
-    forecast = {}
+    # Forecast shares the same flat cache slot — only reuse it when current was a
+    # trusted same-city hit, else fetch live for the right location.
+    forecast = (_wc.get("forecast") if _cache_ok else None) or await _get_forecast(lat, lon)
+
+    def _say_num(n) -> str:
+        s = str(n)
+        return s.replace(".", " point ") if "." in s else s
+
     if intent.action == "forecast":
-        forecast = await _get_forecast(lat, lon)
         card = card_service.build_weather_forecast_card(
             {"current": current, "forecast": forecast, "location": {"city": city, "country": country}}
         )
         spoken = f"Here is the forecast for {city}."
     else:
-        forecast = await _get_forecast(lat, lon)
         card = card_service.build_weather_current_card(
             {"current": current, "forecast": forecast, "location": {"city": city, "country": country}}
         )
         temp = current.get("temp")
         desc = current.get("description") or "current conditions"
-        spoken = f"It is {temp} degrees in {city} with {desc}." if temp is not None else f"Here is the weather for {city}."
+        # Speak naturally: "18.3" → "18 point 3" (bare decimals get mangled to "18 3"),
+        # and join the condition with "and" rather than the robotic "with".
+        spoken = (
+            f"It's {_say_num(temp)} degrees and {desc} in {city}."
+            if temp is not None else f"Here is the weather for {city}."
+        )
     return {
         "handled": True,
         "intent": {"domain": "weather", "action": intent.action},

@@ -108,6 +108,30 @@ def test_invalid_route_class_falls_back_to_default():
     assert cases[0].route_class == "fallback"
 
 
+def test_skips_duplicate_implicit_shadow_case_ids():
+    module = _load_module()
+    rows = [
+        {"text_hash": "samehash", "text_preview": "rain later", "outcome_label": "weather"},
+        {"text_hash": "samehash", "text_preview": "rain later", "outcome_label": "weather"},
+    ]
+
+    cases = module.export_eval_cases(rows, source="intent_miss", case_prefix="shadow")
+
+    assert len(cases) == 1
+    assert cases[0].case_id == "shadow_samehash"
+
+
+def test_rejects_conflicting_duplicate_implicit_case_ids():
+    module = _load_module()
+    rows = [
+        {"text_hash": "samehash", "text_preview": "rain later", "outcome_label": "weather"},
+        {"text_hash": "samehash", "text_preview": "will it snow", "outcome_label": "weather"},
+    ]
+
+    with pytest.raises(ValueError, match="conflicting duplicate implicit"):
+        module.export_eval_cases(rows, source="intent_miss", case_prefix="shadow")
+
+
 def test_rejects_duplicate_exported_case_ids():
     module = _load_module()
     rows = [
@@ -132,6 +156,44 @@ def test_skips_privileged_intent_with_explicit_intent_group():
     cases = module.export_eval_cases(rows, source="intent_miss")
     assert len(cases) == 0
 
+
+
+def test_cli_applies_sidecar_labels_before_export(tmp_path, capsys):
+    module = _load_module()
+    source_path = tmp_path / "shadow.jsonl"
+    labels_path = tmp_path / "labels.jsonl"
+    output_path = tmp_path / "cases.jsonl"
+    source_path.write_text(
+        json.dumps({"text_preview": "rain later", "text_hash": "abc123", "route_class": "fallback"}) + "\n",
+        encoding="utf-8",
+    )
+    labels_path.write_text(
+        json.dumps({"text_hash": "abc123", "outcome_label": "weather"}) + "\n",
+        encoding="utf-8",
+    )
+
+    exit_code = module.main(
+        [
+            str(source_path),
+            "--labels-file",
+            str(labels_path),
+            "--output",
+            str(output_path),
+            "--source",
+            "intent_miss",
+            "--case-prefix",
+            "shadow",
+            "--summary",
+        ]
+    )
+
+    summary = json.loads(capsys.readouterr().err)
+    rows = [json.loads(line) for line in output_path.read_text().splitlines()]
+    assert exit_code == 0
+    assert summary == {"exported_cases": 1, "input_rows": 1, "label_count": 1}
+    assert rows[0]["case_id"] == "shadow_abc123"
+    assert rows[0]["expected_intent"] == "weather"
+    assert rows[0]["intent_group"] == "weather"
 
 def test_cli_output_feeds_pi_promotion_eval(tmp_path, capsys):
     export_module = _load_module()

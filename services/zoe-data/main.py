@@ -31,6 +31,7 @@ from routers import (
     music_router,
     skybridge_router,
     autoresearch_router,
+    pi_intent_lab_router,
 )
 from routers.dashboard import router as dashboard_router
 from routers.stubs import router as stubs_router
@@ -106,6 +107,22 @@ def _bounded_blocked_resume_window(
     return window, (start + budget) % count
 
 
+def _multica_poll_interval_s(paused: bool, *, active_s: float, paused_s: float) -> float:
+    """Cadence for the Multica poll loop.
+
+    Throttle to ``paused_s`` while dispatch is paused — the per-issue chain
+    reconcile (worktree + git ops) is expensive and pointless when nothing is
+    being dispatched — and use the normal ``active_s`` otherwise.
+
+    Floors the paused cadence at ``active_s`` so a misconfigured
+    ``ZOE_MULTICA_PAUSED_POLL_S`` of 0 or a negative value can't turn the paused
+    path into a tight spin loop that burns *more* CPU than the active cadence.
+    """
+    if not paused:
+        return active_s
+    return max(paused_s, active_s)
+
+
 async def _poll_chain_guarded(ref: str, *, issue: dict | None, timeout: float) -> dict:
     """Poll a chain without letting one dead ref wedge the whole poll loop.
 
@@ -125,6 +142,23 @@ async def _poll_chain_guarded(ref: str, *, issue: dict | None, timeout: float) -
     except Exception as exc:
         logger.warning("multica_poll: poll_ref error for %s: %s", ref, exc)
         return {"found": False, "status": "poll_error", "error": str(exc)}
+
+
+async def _resolve_chain_for_dispatch(chain, *, ref, issue, poll_guarded, poll_timeout):
+    """Re-poll once with a longer timeout when the first poll failed.
+
+    ``_poll_chain_guarded`` returns a timeout/error sentinel on a slow/failed
+    poll. An *existing* multi-row chain's poll (worktree + git ops) is expensive
+    and can time out under event-loop load, while a fresh todo's poll is cheap —
+    so without a retry the sentinel made the backfill skip the chain forever
+    (stranding it past implement). If the chain isn't a sentinel, return it
+    unchanged (no extra poll).
+    """
+    from multica_poll_dispatch import chain_poll_failed  # type: ignore[import]
+
+    if not chain_poll_failed(chain):
+        return chain
+    return await poll_guarded(ref, issue=issue, timeout=max(float(poll_timeout) * 2, 60.0))
 
 
 async def _recover_stale_in_progress_issues(
@@ -450,6 +484,35 @@ async def _record_blocked_multica_chain(client, issue_id: str, chain: dict) -> s
     await _ensure_blocker_followup_ticket(client, issue_id, chain, blocker)
     return blocker
 
+
+async def _reconcile_diverged_board_status(client, issue_id: str, issue: dict, chain: dict) -> bool:
+    """Converge a board status that diverged from a regressed (partial) chain.
+
+    When a found, non-terminal ``partial`` chain (ready next phase) is paired with
+    a board status that is not ``in_progress`` — e.g. stuck ``in_review`` after a
+    verify bounce — the issue is neither a dispatch candidate nor advanced by the
+    done/blocked/running reconcile branches, so it freezes the single lane (and
+    blocks auto-admission while it sits ``in_review``). Move the board back to
+    ``in_progress`` so the next cycle's backfill re-dispatches the ready phase.
+
+    Returns True iff a reconcile write was made. No-ops (returns False) when the
+    chain is not a reconcilable partial or the board is already ``in_progress``.
+    """
+    from multica_poll_dispatch import chain_needs_reconcile  # type: ignore[import]
+
+    if not (chain.get("found") and chain_needs_reconcile(chain)):
+        return False
+    if str(issue.get("status") or "") == "in_progress":
+        return False
+    await client.record_progress(
+        str(issue_id),
+        evidence="Engineering run reconciled (board/journal divergence)",
+        status="in_progress",
+        clear_blocker=True,
+    )
+    return True
+
+
 async def _run_memory_capture_startup_probe() -> None:
     """Validate memory capture plumbing at startup.
 
@@ -627,9 +690,17 @@ async def lifespan(app: FastAPI):
     _zoe_update_bg_task = start_zoe_update_background_tasks()
 
     try:
-        from routers.voice_tts import warm_faster_whisper_worker
+        from routers.voice_tts import warm_faster_whisper_worker, warm_moonshine
+        asyncio.create_task(warm_moonshine(), name="moonshine_warmup")
         asyncio.create_task(warm_faster_whisper_worker(), name="faster_whisper_warmup")
-        logger.info("Voice STT worker warmup scheduled")
+        logger.info("Voice STT worker warmup scheduled (moonshine + whisper)")
+        try:
+            import semantic_router as _sr
+            if _sr.is_enabled():
+                asyncio.create_task(asyncio.to_thread(_sr.warm), name="semantic_router_warmup")
+                logger.info("Semantic router (Tier-1) warmup scheduled — mode=%s", _sr.mode())
+        except Exception as _sr_exc:
+            logger.warning("Semantic router warmup scheduling failed (non-fatal): %s", _sr_exc)
     except Exception as _voice_warmup_exc:
         logger.warning("Voice STT worker warmup scheduling failed (non-fatal): %s", _voice_warmup_exc)
 
@@ -709,6 +780,24 @@ async def lifespan(app: FastAPI):
     # Multica board polling loop (30s interval, no-op if ZOE_MULTICA=false)
     async def _multica_poll_loop():
         import time as _t
+        # Observability: the systemd unit doesn't capture app stdout (journalctl
+        # shows nothing for zoe-data), so persist poll-loop diagnostics to a
+        # dedicated rotating file. Isolated to this module logger — does not touch
+        # uvicorn's logging config. Without this, dispatch stalls are invisible.
+        try:
+            from logging.handlers import RotatingFileHandler
+
+            if not any(getattr(_h, "_zoe_poll_log", False) for _h in logger.handlers):
+                _poll_log_path = os.path.expanduser("~/.zoe/zoe-data-poll.log")
+                os.makedirs(os.path.dirname(_poll_log_path), exist_ok=True)
+                _fh = RotatingFileHandler(_poll_log_path, maxBytes=2_000_000, backupCount=3)
+                _fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+                _fh.setLevel(logging.INFO)  # handler-scoped; do NOT mutate the shared logger level
+                _fh._zoe_poll_log = True  # type: ignore[attr-defined]
+                logger.addHandler(_fh)
+                logger.info("multica_poll: diagnostics logging to %s", _poll_log_path)
+        except Exception as _log_exc:  # pragma: no cover - logging setup must never break the loop
+            logger.warning("multica_poll: could not attach poll-loop file log: %s", _log_exc)
         _last_worktree_prune = 0.0
         try:
             _prune_interval_s = float(os.environ.get("ZOE_WORKTREE_PRUNE_INTERVAL_S", "86400") or "86400")
@@ -718,9 +807,45 @@ async def lifespan(app: FastAPI):
                 os.environ.get("ZOE_WORKTREE_PRUNE_INTERVAL_S"),
             )
             _prune_interval_s = 86400.0
+        # Cadence when dispatch is paused. The per-issue chain reconcile below
+        # (poll_ref → worktree+git ops) costs ~30s CPU and a multi-GB transient
+        # allocation each pass; running it every 30s while nothing is being
+        # dispatched is pure waste. Poll every 30s when active, every
+        # ZOE_MULTICA_PAUSED_POLL_S (default 300s) when paused.
+        try:
+            _paused_poll_s = float(os.environ.get("ZOE_MULTICA_PAUSED_POLL_S", "300") or "300")
+        except ValueError:
+            logger.warning(
+                "multica_poll: invalid ZOE_MULTICA_PAUSED_POLL_S=%r; using 300",
+                os.environ.get("ZOE_MULTICA_PAUSED_POLL_S"),
+            )
+            _paused_poll_s = 300.0
+        _ACTIVE_POLL_S = 30.0
+        _pause_check_warned = False
         while True:
             try:
-                await asyncio.sleep(30)
+                # Re-checked inside the cycle, so a resume still takes effect
+                # promptly on the next pass.
+                try:
+                    from multica_dispatch_control import dispatch_is_paused as _dispatch_is_paused
+                    _poll_interval = _multica_poll_interval_s(
+                        _dispatch_is_paused(), active_s=_ACTIVE_POLL_S, paused_s=_paused_poll_s
+                    )
+                    _pause_check_warned = False
+                except Exception as _pause_exc:
+                    # A pause-check failure must not silently disable the throttle
+                    # forever with no trace. Warn once (then debug), and fall back
+                    # to the active cadence until it recovers.
+                    if not _pause_check_warned:
+                        logger.warning(
+                            "multica_poll: pause check failed (%s); using active poll "
+                            "cadence until it recovers", _pause_exc,
+                        )
+                        _pause_check_warned = True
+                    else:
+                        logger.debug("multica_poll: pause check still failing: %s", _pause_exc)
+                    _poll_interval = _ACTIVE_POLL_S
+                await asyncio.sleep(_poll_interval)
                 from multica_client import MULClient  # type: ignore[import]
                 client = MULClient()
                 if not client.is_configured():
@@ -782,9 +907,9 @@ async def lifespan(app: FastAPI):
 
                 # Webhook bridge: Hermes-assigned todos / in_progress (no chain) → issue.assigned.
                 try:
-                    from multica_webhook_emitter import emit_issue_assigned, is_configured as _wh_ok
+                    from multica_webhook_emitter import is_configured as _wh_ok
                     from multica_client import get_engineering_multica_agent_id  # type: ignore[import]
-                    from multica_poll_dispatch import chain_is_running, chain_needs_dispatch  # type: ignore[import]
+                    from multica_poll_dispatch import chain_is_running, chain_needs_dispatch, chain_poll_failed  # type: ignore[import]
                     from multica_dispatch_control import dispatch_is_paused, pause_reason
 
                     _dispatch_paused = dispatch_is_paused()
@@ -898,43 +1023,99 @@ async def lifespan(app: FastAPI):
                             if not _tid:
                                 return
                             _chain = await _poll_chain(_candidate)
-                            if not chain_needs_dispatch(_chain):
-                                return
-                            _emit = await emit_issue_assigned(_candidate)
-                            _body = _emit.get("body") or {}
-                            if _emit.get("ok") and isinstance(_body, dict) and _body.get("dispatched"):
-                                if from_todo:
-                                    try:
-                                        await client.update_issue(_tid, status="in_progress")
-                                    except Exception as _ip_exc:
-                                        logger.debug(
-                                            "multica_poll: set in_progress failed for %s: %s",
-                                            _tid,
-                                            _ip_exc,
-                                        )
-                                elif (_candidate.get("status") or "") == "blocked":
-                                    try:
-                                        _phase = (_chain.get("pipeline") or {}).get("phase")
-                                        await client.record_progress(
-                                            _tid,
-                                            phase=_phase,
-                                            evidence="Engineering run resumed",
-                                            status="in_progress",
-                                            clear_blocker=True,
-                                        )
-                                    except Exception as _resume_exc:
-                                        logger.debug(
-                                            "multica_poll: clear stale blocked status failed for %s: %s",
-                                            _tid,
-                                            _resume_exc,
-                                        )
-                                _wh_dispatched += 1
-                                _wh_dispatched_ids.add(_tid)
+                            # A failed poll (timeout/error sentinel) on a known in-progress
+                            # chain must NOT silently skip it — that stranded chains past
+                            # implement forever (an existing multi-row chain's poll can time
+                            # out under load). Re-poll once fresh with a generous timeout; if
+                            # it still can't resolve, fall through to dispatch_issue anyway —
+                            # dispatch is idempotent + re-derives state from the journal, so it
+                            # safely creates the next ready phase or no-ops if a row exists.
+                            if chain_poll_failed(_chain) and not from_todo:
                                 logger.info(
-                                    "multica_poll: webhook dispatched %s (%s)",
+                                    "multica_poll: chain poll failed for %s (%s); re-polling before skip",
                                     _candidate.get("identifier") or _tid,
-                                    "todo" if from_todo else "in_progress-backfill",
+                                    _chain.get("status"),
                                 )
+                                _chain = await _resolve_chain_for_dispatch(
+                                    _chain,
+                                    ref=f"multica:{_tid}",
+                                    issue=_candidate,
+                                    poll_guarded=_poll_chain_guarded,
+                                    poll_timeout=_poll_timeout,
+                                )
+                                # Keep the per-cycle cache consistent with the re-poll so the
+                                # later todo loop sees the resolved state, not the stale sentinel.
+                                _chain_cache[_tid] = _chain
+                                # If the re-poll revealed an active worker, the single lane is
+                                # genuinely occupied (the earlier running-count missed it via the
+                                # sentinel). Mark the lane full so the todo loop can't over-dispatch.
+                                if chain_is_running(_chain):
+                                    _wh_dispatched = _wh_limit
+                                    return
+                            if not chain_needs_dispatch(_chain) and not chain_poll_failed(_chain):
+                                return
+                            _phase = (_chain.get("pipeline") or {}).get("phase")
+                            # Dispatch the next ready phase IN-PROCESS. The poll loop runs
+                            # inside zoe-data, so it calls dispatch_issue() directly rather
+                            # than POSTing issue.assigned to its own :8000 webhook receiver.
+                            # That loopback hop (a self-HTTP call with a 10s timeout against a
+                            # busy event loop) could silently no-op and strand a chain at its
+                            # next phase — e.g. implement done but verify never dispatched,
+                            # which blocked autonomous verify→review→closeout advancement.
+                            try:
+                                from executor_registry import dispatch_issue  # type: ignore[import]
+
+                                _result = await dispatch_issue(_candidate)
+                            except Exception as _disp_exc:
+                                logger.warning(
+                                    "multica_poll: dispatch_issue failed for %s (phase=%s): %s",
+                                    _candidate.get("identifier") or _tid,
+                                    _phase,
+                                    _disp_exc,
+                                )
+                                return
+                            if not (isinstance(_result, dict) and _result.get("ok")):
+                                logger.info(
+                                    "multica_poll: dispatch_issue(%s) phase=%s not dispatched: %s",
+                                    _candidate.get("identifier") or _tid,
+                                    _phase,
+                                    (_result or {}).get("reason")
+                                    if isinstance(_result, dict)
+                                    else _result,
+                                )
+                                return
+                            if from_todo:
+                                try:
+                                    await client.update_issue(_tid, status="in_progress")
+                                except Exception as _ip_exc:
+                                    logger.debug(
+                                        "multica_poll: set in_progress failed for %s: %s",
+                                        _tid,
+                                        _ip_exc,
+                                    )
+                            elif (_candidate.get("status") or "") == "blocked":
+                                try:
+                                    await client.record_progress(
+                                        _tid,
+                                        phase=_phase,
+                                        evidence="Engineering run resumed",
+                                        status="in_progress",
+                                        clear_blocker=True,
+                                    )
+                                except Exception as _resume_exc:
+                                    logger.debug(
+                                        "multica_poll: clear stale blocked status failed for %s: %s",
+                                        _tid,
+                                        _resume_exc,
+                                    )
+                            _wh_dispatched += 1
+                            _wh_dispatched_ids.add(_tid)
+                            logger.info(
+                                "multica_poll: dispatched %s phase=%s (%s)",
+                                _candidate.get("identifier") or _tid,
+                                _phase,
+                                "todo" if from_todo else "in_progress-backfill",
+                            )
 
                         # Backfill existing in-progress runs before starting fresh todo work.
                         # A partial chain owns the one active ticket lane but still needs this
@@ -998,6 +1179,17 @@ async def lifespan(app: FastAPI):
                     for issue in in_review_issues
                     if issue.get("id")
                 }
+                # Read the poll timeout once per cycle (not per tracked issue). The
+                # dispatch path resolves the same env var separately; this branch may
+                # run when that block was skipped, so it keeps its own local.
+                try:
+                    _reconcile_timeout = float(
+                        os.environ.get("ZOE_MULTICA_POLL_REF_TIMEOUT_S", "20") or "20"
+                    )
+                except ValueError:
+                    _reconcile_timeout = 20.0
+                from multica_poll_dispatch import chain_needs_reconcile  # type: ignore[import]
+
                 for issue in issues:
                     # Check whether a linked engineering workflow has reached a terminal state.
                     issue_id = issue.get("id")
@@ -1030,9 +1222,16 @@ async def lifespan(app: FastAPI):
                             logger.debug("multica_poll: autopilot in_progress close: %s", _ap_exc)
                         continue
                     try:
-                        from executor_registry import poll_ref  # type: ignore[import]
-
-                        chain = await poll_ref(f"multica:{issue_id}", issue=issue)
+                        # Use the timeout-guarded poller (not raw poll_ref): a died
+                        # executor reference must not hang the whole poll iteration.
+                        # On timeout/error this returns a sentinel with found=False,
+                        # so every branch below is safely skipped this cycle. See
+                        # test_reconcile_branch_skips_on_poll_timeout_sentinel
+                        # (tests/test_main_multica_poll.py) for the skip-on-sentinel
+                        # regression coverage of this call site.
+                        chain = await _poll_chain_guarded(
+                            f"multica:{issue_id}", issue=issue, timeout=_reconcile_timeout
+                        )
                         if chain.get("found") and chain.get("status") == "done":
                             pr_url = chain.get("pr_url")
                             await _record_completed_multica_chain(client, str(issue_id), chain)
@@ -1102,6 +1301,24 @@ async def lifespan(app: FastAPI):
                                     )
                                 except Exception as _push_exc:
                                     logger.debug("multica_poll: ws progress push failed: %s", _push_exc)
+                        elif chain.get("found") and chain_needs_reconcile(chain):
+                            try:
+                                if await _reconcile_diverged_board_status(
+                                    client, str(issue_id), issue, chain
+                                ):
+                                    logger.warning(
+                                        "multica_poll: reconciled diverged issue %s (%s) %s->in_progress "
+                                        "(partial chain needs re-dispatch)",
+                                        issue_id,
+                                        title[:40],
+                                        issue.get("status"),
+                                    )
+                            except Exception as _rec_exc:
+                                logger.debug(
+                                    "multica_poll: divergence reconcile failed for %s: %s",
+                                    issue_id,
+                                    _rec_exc,
+                                )
                     except Exception as _inner_exc:
                         logger.debug("multica_poll: inner error for issue %s: %s", issue_id, _inner_exc)
 
@@ -1215,6 +1432,7 @@ app.include_router(capability_matrix_router)
 app.include_router(music_router)
 app.include_router(skybridge_router)
 app.include_router(autoresearch_router)
+app.include_router(pi_intent_lab_router)
 
 from routers.portrait import router as portrait_router
 app.include_router(portrait_router)
@@ -1248,6 +1466,17 @@ async def root_health():
         "version": "1.0.0",
         "memory_capture": _memory_capture_health,
     }
+
+
+@app.get("/api/router/classify")
+async def router_classify(text: str, _: None = Depends(require_internal_token)):
+    """Tier-1 semantic router test endpoint: classify an utterance into a domain.
+    Internal-token gated (like /metrics) — it exposes per-domain scores, the
+    active mode and the threshold, which could be used to calibrate utterances
+    to influence routing if the service were LAN-exposed."""
+    import semantic_router as _sr
+    return {"enabled": _sr.is_enabled(), "mode": _sr.mode(),
+            "threshold": _sr.threshold(), **_sr.route(text)}
 
 
 @app.get("/api/settings")
@@ -1624,6 +1853,13 @@ async def _resolve_voice_cards(message_text: str, user_id: str, context: dict | 
         return {"handled": False, "cards": [], "spoken_summary": ""}
 
 
+# Read-only intents the voice WS may answer instantly (no writes → cannot
+# double-execute a skybridge-card action). Kept narrow on purpose.
+_VOICE_INSTANT_INTENTS = frozenset({
+    "calculate", "time_query", "date_query", "greeting", "acknowledgement", "status_check",
+})
+
+
 @app.websocket("/ws/voice/")
 async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
     """Local voice session WebSocket for voice.html.
@@ -1730,6 +1966,44 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
                 continue
             skybridge_context = {}
 
+            # ── Instant intent fast-path ────────────────────────────────────────
+            # Side-effect-free commands the card path doesn't cover (calc, clock,
+            # greeting, acknowledgement, presence check) — answer + speak without
+            # waking the ~2-4s brain. Restricted to READ-ONLY intents so it can
+            # never double-execute a write the skybridge path already handled.
+            #
+            # Detect+execute is wrapped so a FAILURE THERE (before any send) falls
+            # through to the brain. But once we have a reply and start sending, we
+            # are committed: TTS is best-effort and we never fall through (avoids a
+            # duplicate transcript if the brain path also ran).
+            _fp_reply = None
+            try:
+                from intent_router import detect_intent as _fp_detect, execute_intent as _fp_exec
+                _fp_intent = _fp_detect(message_text, log_miss=False, user_id=user_id)
+                if _fp_intent is not None and _fp_intent.name in _VOICE_INSTANT_INTENTS:
+                    _fp_reply = await _fp_exec(_fp_intent, user_id=user_id)
+            except Exception as _fp_exc:
+                logger.debug("voice instant fast-path detect/execute skipped: %s", _fp_exc)
+                _fp_reply = None
+            if _fp_reply:
+                import base64 as _b64fp
+                await websocket.send_json({"type": "state", "state": "responding"})
+                await websocket.send_json({"type": "transcript", "role": "zoe", "text": _fp_reply})
+                try:
+                    from routers.voice_tts import _synthesize_kokoro_sidecar as _fp_tts
+                    _fp_wav = await _fp_tts(_fp_reply)
+                    if _fp_wav:
+                        await websocket.send_json({
+                            "type": "audio",
+                            "audio_base64": _b64fp.b64encode(_fp_wav).decode("ascii"),
+                            "content_type": "audio/wav",
+                        })
+                except Exception as _fp_tts_exc:
+                    logger.debug("voice fast-path TTS failed (text already sent): %s", _fp_tts_exc)
+                await websocket.send_json({"type": "state", "state": "ambient"})
+                await websocket.send_json({"type": "done"})
+                continue
+
             # ── Streaming LLM + per-sentence TTS ────────────────────────────────
             # Track LLM output and TTS output separately so fallback only re-runs
             # what actually failed (avoids double-transcript if LLM works but TTS is down).
@@ -1737,14 +2011,14 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
             _stream_tts_ok = False   # True if at least one audio chunk was sent
             try:
                 import base64 as _b64
-                from zoe_agent import run_zoe_agent_streaming  # type: ignore
+                from brain_dispatch import brain_streaming  # zoe-core by default
                 from routers.voice_tts import _extract_complete_sentences, _synthesize_kokoro_sidecar  # type: ignore
 
                 token_buf = ""
                 full_reply: list[str] = []
                 tts_started = False
 
-                async for delta in run_zoe_agent_streaming(
+                async for delta in brain_streaming(
                     message_text, ws_session_id, user_id=user_id, voice_mode=True
                 ):
                     if _ws_cancelled[0]:
@@ -1793,9 +2067,9 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
                     # LLM streaming failed entirely → full single-shot fallback
                     try:
                         import base64 as _b64
-                        from zoe_agent import run_zoe_agent  # type: ignore
+                        from brain_dispatch import brain_oneshot  # zoe-core by default
                         from routers.voice_tts import synthesize as _synth  # type: ignore
-                        _fallback_response = await run_zoe_agent(
+                        _fallback_response = await brain_oneshot(
                             message_text, ws_session_id, user_id, voice_mode=True
                         )
                         await websocket.send_json({"type": "state", "state": "responding"})

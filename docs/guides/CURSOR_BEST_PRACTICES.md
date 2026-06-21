@@ -70,11 +70,11 @@ For reviewable changes:
 2. Keep the diff small enough to review.
 3. Push a focused PR against `main`.
 4. Let Greptile review independently.
-5. Use Greptile MCP first, or `~/bin/greptile-mcp.py` (install path varies by host; see `/grep-loop`) if MCP tools are unavailable.
+5. Use Greptile MCP for status/comment reads only; trigger or re-trigger reviews through `scripts/maintenance/run_greploop_guard.sh --pr N --once` so the shared Greploop state prevents duplicate agent work.
 6. For Zoe engineering tasks, run `python3 scripts/maintenance/greploop_guard.py --task-id <id> --packet-only` before broad expensive-agent repair.
 7. Read the PR diff first; if it is too large or bundled, split before running the loop.
 8. Fix real correctness, security, data-loss, behavior, or test findings.
-9. Re-run focused tests and trigger Greptile re-review.
+9. Re-run focused tests and use the guarded loop to request any needed Greptile re-review.
 
 Do not push directly to `main`, bypass branch protection, or force-push protected branches.
 
