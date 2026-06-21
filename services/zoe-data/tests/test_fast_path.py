@@ -39,7 +39,7 @@ def test_dispatches_for_real_domain_with_correct_ctx(monkeypatch):
     monkeypatch.setattr(expert_dispatch, "is_enabled", lambda: True)
     seen = {}
 
-    async def _fake_dispatch(domain, text, ctx):
+    async def _fake_dispatch(domain, text, ctx, *, write_ok=True):
         seen["domain"] = domain
         seen["text"] = text
         seen["ctx"] = ctx
@@ -68,7 +68,7 @@ def test_routes_via_semantic_router_when_no_decision(monkeypatch):
     monkeypatch.setattr(semantic_router, "route", lambda text: {"domain": "weather", "score": 0.9})
     seen = {}
 
-    async def _fake_dispatch(domain, text, ctx):
+    async def _fake_dispatch(domain, text, ctx, *, write_ok=True):
         seen["domain"] = domain
         return "OK"
 
@@ -92,7 +92,7 @@ def test_extra_ctx_cannot_overwrite_base_fields(monkeypatch):
     monkeypatch.setattr(expert_dispatch, "is_enabled", lambda: True)
     seen = {}
 
-    async def _fake_dispatch(domain, text, ctx):
+    async def _fake_dispatch(domain, text, ctx, *, write_ok=True):
         seen["ctx"] = ctx
         return "OK"
 
@@ -106,6 +106,26 @@ def test_extra_ctx_cannot_overwrite_base_fields(monkeypatch):
     assert seen["ctx"]["user_id"] == "jason"
     assert seen["ctx"]["score"] == 0.95
     assert seen["ctx"]["db"] is None  # genuinely-extra keys still pass through
+
+
+def test_allow_writes_flag_threads_to_dispatch(monkeypatch):
+    # Chat passes allow_writes=False so writes defer to the brain; voice keeps the
+    # default True. Either way the flag must reach expert_dispatch.dispatch().
+    monkeypatch.setattr(expert_dispatch, "is_enabled", lambda: True)
+    seen = {}
+
+    async def _fake_dispatch(domain, text, ctx, *, write_ok=True):
+        seen["write_ok"] = write_ok
+        return "OK"
+
+    monkeypatch.setattr(expert_dispatch, "dispatch", _fake_dispatch)
+    _run(fast_path.resolve("add milk", "u", "s",
+                           router_decision={"domain": "lists", "score": 0.95},
+                           allow_writes=False))
+    assert seen["write_ok"] is False
+    _run(fast_path.resolve("add milk", "u", "s",
+                           router_decision={"domain": "lists", "score": 0.95}))
+    assert seen["write_ok"] is True  # default keeps writes on (voice)
 
 
 def test_swallows_dispatch_errors(monkeypatch):

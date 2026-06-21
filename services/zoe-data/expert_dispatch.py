@@ -127,8 +127,14 @@ def _ui_for(domain: str) -> Optional[dict]:
             "reminders": {"kind": "reminder"}, "weather": {"kind": "weather"}}.get(domain)
 
 
-async def dispatch(domain: str, text: str, ctx: dict[str, Any]) -> Optional[DispatchResult]:
-    """Fulfill `text` as `domain` via existing handlers, or None → brain."""
+async def dispatch(domain: str, text: str, ctx: dict[str, Any], *, write_ok: bool = True) -> Optional[DispatchResult]:
+    """Fulfill `text` as `domain` via existing handlers, or None → brain.
+
+    `write_ok=False` lets a caller take the read/recall fast path but defer any
+    WRITE intent (create/add) to the brain — used by the chat channel, where a
+    write needs LLM slot-extraction anyway (never sub-50ms) and we'd rather not
+    run that extraction speculatively only to fall through. Reads/expert-recall
+    are unaffected."""
     if not is_enabled():
         return None
     domain = (domain or "").strip().lower()
@@ -153,6 +159,12 @@ async def dispatch(domain: str, text: str, ctx: dict[str, Any]) -> Optional[Disp
         logger.info("EXPERT_MISS domain=%s score=%.2f (no plan) → brain", domain, score)
         return None
     intent_name, regex_slots, kind = plan
+
+    # Caller opted out of writes on this channel (e.g. chat): defer create/add to
+    # the brain BEFORE paying for slot extraction. Reads/expert-recall continue.
+    if kind == "write" and not write_ok:
+        logger.info("EXPERT_DEFER_WRITE domain=%s intent=%s (write_ok=False) → brain", domain, intent_name)
+        return None
 
     # 2) Decide whether we may ACT: active mode, domain allow-listed, and for
     #    WRITE/EXPERT kinds an extra opt-in (reads are always safe).
