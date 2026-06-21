@@ -671,7 +671,10 @@ def _append_audit_protocol_recovery_evidence(state: PipelineState, phase: Pipeli
         "retro": "log",
     }
     kind = kind_by_phase[phase]
-    if any(item.kind == kind and item.metadata.get("phase") == phase for item in state.evidence):
+    if any(
+        item.kind == kind and item.metadata.get("phase") == phase and item.passed is True
+        for item in state.evidence
+    ):
         return state
     return with_evidence(
         state,
@@ -947,13 +950,19 @@ async def _sync_pipeline_from_chain_once(
             outcome = "skip_implementation"
         if (
             state.evidence_profile == "audit"
-            and outcome in {"block", "verification_failed", "request_changes", "merge_blocked"}
             and (_protocol_only_block(detail) or _run_is_already_covered(state))
+            and (
+                outcome in {"block", "verification_failed", "request_changes", "merge_blocked"}
+                or (outcome == "complete" and not can_complete_phase(state))
+            )
         ):
             # An already-covered run has no diff to verify/review/merge, so a
-            # no-op downstream block (e.g. review request_changes with no PR) is
-            # recovered to completion. Without this it bounces review -> implement
-            # forever, never reaching a terminal handoff and holding the lane.
+            # no-op downstream phase is recovered to completion. This covers both a
+            # no-op block (e.g. review request_changes with no PR) and a terminal
+            # "done" row whose gate evidence can't be produced (e.g. verify, where
+            # the harness validators have no diff to pass on). Without this the run
+            # either bounces review -> implement forever or stalls at the verify
+            # gate, never reaching a terminal handoff and holding the lane.
             state = _append_audit_protocol_recovery_evidence(state, phase)  # type: ignore[arg-type]
             if can_complete_phase(state):
                 state = await _run_io(
