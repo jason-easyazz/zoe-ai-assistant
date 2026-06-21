@@ -27,7 +27,16 @@ moonshine-voice
 # fuzzy domain classification between the regex fast-path and the Pi brain.
 fastembed
 # STT fallback via Python API (faster than whisper.cpp CLI on Jetson with CUDA)
-faster-whisper>=1.0.3
+# Pinned: the aarch64/Jetson ctranslate2 4.7.1 wheel ships _ext.so with a broken
+# RUNPATH (/usr/local/lib64:/usr/local/lib) that does NOT point at its own bundled
+# ctranslate2.libs/, so `import ctranslate2` fails with
+#   ImportError: libctranslate2.so.4: cannot open shared object file
+# unless LD_LIBRARY_PATH happens to include the lib. Fix after any reinstall:
+#   patchelf --set-rpath '$ORIGIN/../ctranslate2.libs:/usr/local/lib64:/usr/local/lib' \
+#     ~/.local/lib/python3.10/site-packages/ctranslate2/_ext.cpython-310-aarch64-linux-gnu.so
+# Versions known-good on JetPack 6.2.1 / CUDA 12.6 / numpy 1.26 / py3.10:
+faster-whisper==1.2.1
+ctranslate2==4.7.1
 # Speaker diarization for ambient memory (Jetson CUDA only)
 pyannote.audio>=3.3.2
 # VAD for barge-in and ambient capture (server-side copy; Pi uses same package)
