@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import contextvars
 import json
 import logging
 import os
@@ -2463,7 +2464,7 @@ def _log_voice_stt_sample(
             "transcript": transcript,
             "transcript_chars": len(transcript or ""),
             # Actual backend that produced this transcript (was hardcoded base.en).
-            "model": _last_stt_backend or (os.environ.get("ZOE_STT_BACKEND") or "moonshine").strip(),
+            "model": _stt_backend_var.get() or (os.environ.get("ZOE_STT_BACKEND") or "moonshine").strip(),
             "device": (os.environ.get("ZOE_WHISPER_DEVICE") or "").strip(),
             "compute_type": (os.environ.get("ZOE_WHISPER_COMPUTE_TYPE") or "").strip(),
             "vad_threshold": _env_float("ZOE_WHISPER_VAD_THRESHOLD", 0.50),
@@ -2577,10 +2578,11 @@ async def _transcribe_audio(wav_path: str) -> str:
     return text
 
 
-# Records which backend actually produced the last transcript, so the STT audit
-# log reflects reality instead of a hardcoded "base.en" (which previously masked
-# whether Moonshine or the whisper fallback ran).
-_last_stt_backend: str = ""
+# Records which backend produced the transcript for the current turn, so the STT
+# audit log reflects reality instead of a hardcoded "base.en". A ContextVar (not a
+# module global) keeps this per-asyncio-task, so overlapping voice turns / an A/B
+# capture running beside a live turn can't clobber each other's value.
+_stt_backend_var: contextvars.ContextVar[str] = contextvars.ContextVar("stt_backend", default="")
 
 
 async def _transcribe_audio_impl(wav_path: str) -> str:
@@ -2590,12 +2592,11 @@ async def _transcribe_audio_impl(wav_path: str) -> str:
     1. whisper.cpp CLI (if binary + ggml model configured)
     2. faster-whisper Python (auto-downloaded model, GPU/CPU)
     """
-    global _last_stt_backend
     if (os.environ.get("ZOE_STT_BACKEND") or "moonshine").strip().lower() == "moonshine":
         try:
             text = await _run_moonshine(wav_path)
             if text:
-                _last_stt_backend = "moonshine:" + (os.environ.get("ZOE_MOONSHINE_ARCH") or "v2").strip()
+                _stt_backend_var.set("moonshine:" + (os.environ.get("ZOE_MOONSHINE_ARCH") or "v2").strip())
                 return text
             logger.warning("Moonshine STT returned empty; falling back to whisper")
         except Exception as exc:
@@ -2603,9 +2604,9 @@ async def _transcribe_audio_impl(wav_path: str) -> str:
     if _whisper_cpp_binary():
         model = (os.environ.get("ZOE_WHISPER_MODEL") or "").strip()
         if model and os.path.isfile(model):
-            _last_stt_backend = "whisper.cpp:" + os.path.basename(model)
+            _stt_backend_var.set("whisper.cpp:" + os.path.basename(model))
             return await _run_whisper_cpp(wav_path)
-    _last_stt_backend = "faster-whisper:" + (os.environ.get("ZOE_WHISPER_MODEL") or "base.en").strip()
+    _stt_backend_var.set("faster-whisper:" + (os.environ.get("ZOE_WHISPER_MODEL") or "base.en").strip())
     return await _run_faster_whisper(wav_path)
 
 

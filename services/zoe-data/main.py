@@ -1469,9 +1469,11 @@ async def root_health():
 
 
 @app.get("/api/router/classify")
-async def router_classify(text: str):
+async def router_classify(text: str, _: None = Depends(require_internal_token)):
     """Tier-1 semantic router test endpoint: classify an utterance into a domain.
-    No auth (local test/observability); returns the full score breakdown."""
+    Internal-token gated (like /metrics) — it exposes per-domain scores, the
+    active mode and the threshold, which could be used to calibrate utterances
+    to influence routing if the service were LAN-exposed."""
     import semantic_router as _sr
     return {"enabled": _sr.is_enabled(), "mode": _sr.mode(),
             "threshold": _sr.threshold(), **_sr.route(text)}
