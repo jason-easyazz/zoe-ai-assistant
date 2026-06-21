@@ -2833,6 +2833,20 @@ async def voice_command(
         logger.info("voice/command normalized transcript %r -> %r", text[:80], normalized_text[:80])
         text = normalized_text
 
+    # Tier-1 semantic router (SHADOW by default): log what it would classify this
+    # utterance as, so we can validate routing accuracy on live traffic before it
+    # ever changes behavior. Logged at WARNING so it's visible past the log level.
+    _router_decision: Optional[dict] = None
+    try:
+        import semantic_router as _sr
+        if _sr.is_enabled():
+            _rr = _sr.route(text)
+            _router_decision = _rr
+            logger.warning("ROUTER_SHADOW text=%r -> routed=%s (best=%s %.2f) %.1fms scores=%s",
+                           text[:70], _rr["routed"], _rr["domain"], _rr["score"], _rr["ms"], _rr["scores"])
+    except Exception as _rexc:
+        logger.debug("semantic router shadow failed: %s", _rexc)
+
     # Classify identity source for Pass 3 observability (Pass 1 is measurement-only).
     try:
         from voice_metrics import voice_identity_source_count
@@ -3765,6 +3779,53 @@ async def voice_command(
                 }
     except Exception as _weather_fb_exc:
         logger.warning("voice/command weather fallback failed: %s", _weather_fb_exc)
+
+    # ── Tier-1.5: router → domain-expert dispatch ────────────────────────────
+    # Every deterministic fast-path above MISSED. If the semantic router was
+    # confident about a domain, fulfill it via the existing handlers instead of
+    # dropping to the slow general brain. Shadow by default (logs, returns None);
+    # only ZOE_EXPERT_MODE=active + an allow-listed domain actually fulfills.
+    try:
+        import expert_dispatch as _xd
+        if _xd.is_enabled() and _router_decision and _router_decision.get("domain") not in (None, "chat"):
+            _xresult = await _xd.dispatch(
+                _router_decision["domain"], text,
+                {"user_id": effective_user, "session_id": session_id, "db": db,
+                 "score": _router_decision.get("score", 0.0), "panel_id": panel_id},
+            )
+            if _xresult is not None:
+                reply_text = _xresult.reply
+                _ui = (_xresult.ui or {}).get("kind")
+                try:
+                    if _ui == "weather":
+                        await _broadcast_weather_ui(panel_id, reply_text, turn_key=_turn_key)
+                    elif _ui == "calendar":
+                        await _broadcast_calendar_ui(panel_id, reply_text, turn_key=_turn_key)
+                    elif _ui == "reminder":
+                        await _broadcast_reminder_ui(panel_id=panel_id, summary=reply_text, turn_key=_turn_key)
+                except Exception:
+                    pass
+                _xaudio_b64: Optional[str] = None
+                _xct = "audio/wav"
+                if not stream:
+                    _xaudio = await synthesize({"text": reply_text}, caller=caller)
+                    _xaudio_b64 = base64.b64encode(_xaudio.body).decode("ascii")
+                    _xct = _xaudio.media_type
+                try:
+                    from push import broadcaster as _bc_xd
+                    await _bc_xd.broadcast("all", "voice:responding", {"panel_id": panel_id, "text": reply_text[:200]})
+                    await _bc_xd.broadcast("all", "voice:done", {"panel_id": panel_id})
+                except Exception:
+                    pass
+                await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
+                asyncio.ensure_future(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
+                return {
+                    "ok": True, "panel_id": panel_id, "reply": reply_text,
+                    "audio_base64": _xaudio_b64, "content_type": _xct,
+                    "intent": f"expert:{_xresult.domain}:{_xresult.intent}",
+                }
+    except Exception as _xd_exc:
+        logger.warning("voice/command expert dispatch failed (non-fatal): %s", _xd_exc)
 
     # ── Pass 3 B3/B4: scope gate + PIN challenge ─────────────────────────────
     # Check if this utterance needs a known user. If so, and we have none,

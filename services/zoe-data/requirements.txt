@@ -23,6 +23,9 @@ edge-tts>=6.1.12
 kokoro-onnx>=0.4.0
 # STT primary: Moonshine v2 (MEDIUM_STREAMING) — accurate on real room audio, CPU/ONNX
 moonshine-voice
+# Tier-1 semantic router: bge-small ONNX embeddings (~7-30ms/query, CPU) for
+# fuzzy domain classification between the regex fast-path and the Pi brain.
+fastembed
 # STT fallback via Python API (faster than whisper.cpp CLI on Jetson with CUDA)
 faster-whisper>=1.0.3
 # Speaker diarization for ambient memory (Jetson CUDA only)
