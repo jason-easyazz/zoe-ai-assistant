@@ -604,10 +604,11 @@ def _append_jsonl(path: str, record: Mapping[str, Any], *, max_records: int | No
 
 def _prune_jsonl(target: Path, *, max_records: int) -> None:
     try:
-        with target.open("r", encoding="utf-8", errors="replace") as handle:
+        with target.open("r+", encoding="utf-8", errors="replace") as handle:
             rows = deque(handle, maxlen=max_records)
-        with target.open("w", encoding="utf-8") as handle:
+            handle.seek(0)
             handle.writelines(rows)
+            handle.truncate()
     except FileNotFoundError:
         return
 
