@@ -136,6 +136,15 @@ The Tier-0 branch wraps `execute_intent`'s string into the same `DispatchResult(
 Calling convention stays **byte-identical**: existing code keeps reading `.reply`; only the optional
 `.tier` is new.
 
+**`add_to_chat_ctx` is NOT a field on this schema — it is a channel-side persistence decision.**
+The core only *produces* a reply; whether a given channel *commits* that reply to conversation
+memory is the adapter's call. Most channels persist normally. LiveKit's parallel-fast+brain mode
+(§4.5/§8.3) is the one exception: it speaks the fast reply but does **not** persist it (its
+`add_to_chat_ctx=False` decision), because the brain's concurrent reply is the authoritative turn —
+so a stateless expert answer never poisons the brain's next-turn context. This lives in the LiveKit
+adapter, not in `DispatchResult`; the `tier` field is enough for the adapter to recognise a
+fast-tier reply and apply the rule.
+
 ### 3.3 Tier-0 read-only shortcut (the new bit)
 
 Before the router, run `detect_intent(text)`. **Only** when it yields a **read** intent whose
