@@ -67,7 +67,8 @@ _DEFAULT_THRESHOLDS: dict[str, float] = {
 }
 # Domains allowed to ACT in active mode. Read intents within these are always
 # safe; WRITE intents (create/add) additionally require ZOE_EXPERT_ALLOW_WRITES.
-_DEFAULT_ACTIVE = "weather,time,lists,calendar,reminders,timers,people,memory"
+# NOTE: timers excluded — no backing store yet, so it would falsely confirm.
+_DEFAULT_ACTIVE = "weather,time,lists,calendar,reminders,people,memory"
 
 
 def _allow_writes() -> bool:
@@ -157,7 +158,8 @@ async def dispatch(domain: str, text: str, ctx: dict[str, Any]) -> Optional[Disp
     # 3) ACTIVE: fulfill via the existing path.
     try:
         if kind == "expert":
-            reply = await _run_expert(domain, text, user_id, session_id)
+            reply = await store_fact(domain, text, user_id, session_id,
+                                     user_turn_id=str(ctx.get("user_turn_id") or "") or None)
         else:
             from intent_router import Intent, execute_intent
             slots = dict(regex_slots or {})
@@ -187,7 +189,13 @@ def _plan(domain: str, text: str):
     from intent_router import detect_intent
 
     if domain == "weather":
-        return ("weather", {}, "read")
+        # Forecast/advice questions ("rain later", "will it be sunny", "should I
+        # wear a jacket") need the forecast, not just current conditions.
+        fc = bool(re.search(
+            r"\b(later|tonight|tomorrow|this\s+week|weekend|forecast|will\s+it|"
+            r"going\s+to|gonna|rain|sunny|wear|umbrella|jacket|coat|do\s+i\s+need)\b",
+            text, re.IGNORECASE))
+        return ("weather", {"forecast": fc}, "read")
     if domain == "time":
         det = detect_intent(text, log_miss=False)
         name = det.name if det and det.name in ("time_query", "date_query") else "time_query"
@@ -236,6 +244,42 @@ _EXPERT_PROMPTS = {
     "memory": ("Recall what the user previously told you using ONLY the remembered facts below. "
                "If it isn't there, say you don't recall it. One or two spoken sentences."),
 }
+
+
+_QUESTION_RE = re.compile(
+    r"\b(what'?s|what\s+is|who'?s|who\s+is|when'?s|when\s+is|where'?s|where\s+is|"
+    r"does|do\s+i|did|how\s+old|tell\s+me\b(?!.*\bremember\b)|remind\s+me\s+what)\b",
+    re.IGNORECASE,
+)
+
+
+async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
+                     user_turn_id: Optional[str] = None) -> Optional[str]:
+    """people/memory: STORE a taught fact (statement) or RECALL one (question).
+
+    Statements are persisted to MemPalace via MemoryService.ingest (which has
+    built-in idempotency via user_turn_id, so a double-submit can't double-store)
+    so they become recallable. Questions fall back to the recall expert."""
+    text = (text or "").strip()
+    if not text:
+        return None
+    # Question → recall (unless it's an explicit "remember that …").
+    explicit_store = bool(re.search(r"\b(remember|note that|don'?t forget|make a note)\b", text, re.IGNORECASE))
+    if _QUESTION_RE.search(text) and not explicit_store:
+        return await _run_expert(domain, text, user_id, session_id)
+    # Statement → store the fact.
+    try:
+        from memory_service import get_memory_service
+        await get_memory_service().ingest(
+            text, user_id=user_id, source="voice_fact",
+            session_id=session_id or None, user_turn_id=user_turn_id,
+            memory_type="fact", confidence=0.85, status="approved",
+            tags=["voice", "self"],
+        )
+    except Exception as exc:
+        logger.warning("store_fact ingest failed (%s) → brain", exc)
+        return None
+    return "Got it — I'll remember that."
 
 
 async def _run_expert(domain: str, text: str, user_id: str, session_id: str) -> Optional[str]:
