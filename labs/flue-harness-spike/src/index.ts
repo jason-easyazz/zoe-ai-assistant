@@ -1,28 +1,33 @@
 /**
- * Entry point — wires the local provider + agents + durable workflow together
- * and runs the spike once.
+ * Entry point — wires the providers + agents + durable workflow together and
+ * runs the spike once.
  *
  * Run with: `npm run spike`  (after `cp .env.example .env` and editing it).
  *
- * LAB ONLY. Do not run on the production Jetson. See ../RUNBOOK.md.
+ * LAB ONLY. Runs ON THE JETSON, isolated from the live voice path: the harness
+ * agents run on the separate HARNESS_LLM_* model; the voice brain on :11434 is
+ * untouched. See ../RUNBOOK.md.
  */
 import { loadConfig } from './config.ts';
-import { registerLocalLlm } from './provider.ts';
+import { registerProviders } from './provider.ts';
 import { buildAgents } from './agents.ts';
 import { buildSpikeWorkflow } from './workflow.ts';
 
 async function main(): Promise<void> {
   const cfg = loadConfig();
   console.log(
-    `[spike] repo=${cfg.githubRepo} issue=#${cfg.targetIssue} llm=${cfg.llmBaseUrl}`,
+    `[spike] repo=${cfg.githubRepo} issue=#${cfg.targetIssue} ` +
+      `voiceBrain=${cfg.llmBaseUrl} (untouched) harness=${cfg.harnessLlmBaseUrl}`,
   );
 
-  // 1. Point Flue at the local llama.cpp OpenAI-compatible endpoint.
-  const model = registerLocalLlm(cfg);
-  console.log(`[spike] registered local provider -> model="${model}"`);
+  // 1. Register BOTH providers: the live local voice brain (:11434, untouched)
+  //    and the configurable harness model. The harness AGENTS run on the latter,
+  //    so they never compete with the voice brain for the live GPU slot.
+  const { harnessModel } = registerProviders(cfg);
+  console.log(`[spike] harness agents bound to model="${harnessModel}"`);
 
-  // 2. Build the role-specialized subagents bound to that local model.
-  const agents = buildAgents(model);
+  // 2. Build the role-specialized subagents bound to the harness model.
+  const agents = buildAgents(harnessModel);
 
   // 3. Build + run the durable workflow: scout -> implement -> verify -> openPR.
   const workflow = buildSpikeWorkflow({ cfg, agents });

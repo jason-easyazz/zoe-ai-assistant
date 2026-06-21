@@ -2,7 +2,7 @@
  * Thin GitHub + local-git helpers for the spike.
  *
  * Deliberately shells out to `git` and `gh` rather than pulling an Octokit dep:
- * fewer moving parts for a spike, and `gh` reuses the dev box's existing auth.
+ * fewer moving parts for a spike, and `gh` reuses the box's existing auth.
  *
  * LAB ONLY.
  */

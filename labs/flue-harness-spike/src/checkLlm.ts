@@ -1,9 +1,10 @@
 /**
  * Bounded connectivity check (run via `npm run check:llm`).
  *
- * Sends ONE small, non-streaming, low-max_tokens request to LLM_BASE_URL to
- * prove the provider target is reachable and OpenAI-compatible. Intentionally
- * tiny so it doesn't load whatever model is serving.
+ * Sends ONE small, non-streaming, low-max_tokens request to the HARNESS model
+ * endpoint (HARNESS_LLM_BASE_URL) — the model the agents actually run on — to
+ * prove it is reachable and OpenAI-compatible before the full loop. It does NOT
+ * touch the live voice brain on :11434. Intentionally tiny.
  *
  * LAB ONLY.
  */
@@ -11,17 +12,17 @@ import { loadConfig } from './config.ts';
 
 async function main(): Promise<void> {
   const cfg = loadConfig();
-  const url = `${cfg.llmBaseUrl.replace(/\/$/, '')}/chat/completions`;
+  const url = `${cfg.harnessLlmBaseUrl.replace(/\/$/, '')}/chat/completions`;
   const started = Date.now();
 
   const res = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${cfg.llmApiKey}`,
+      Authorization: `Bearer ${cfg.harnessLlmApiKey}`,
     },
     body: JSON.stringify({
-      model: cfg.llmModel,
+      model: cfg.harnessLlmModel,
       messages: [{ role: 'user', content: 'reply with the single word: ok' }],
       max_tokens: 3,
       temperature: 0,

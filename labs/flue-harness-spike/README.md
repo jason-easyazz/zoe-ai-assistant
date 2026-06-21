@@ -20,45 +20,71 @@ The decided architecture (do not re-derive):
   (it is unlicensed / all-rights-reserved).
 - This spike implements only a **minimal slice** of that pattern:
   **`scout → implement → verify → openPR`** — enough to prove the loop closes
-  end-to-end on one real Zoe GitHub issue, fully locally, with no cloud LLM.
-- The LLM is the **local llama.cpp** OpenAI-compatible server already running on
-  the Jetson (Gemma-4-E4B on `:11434`), wired via Flue's provider registration
-  pointed at `http://127.0.0.1:11434/v1`.
+  end-to-end on one real Zoe GitHub issue.
+- **Two providers, two models (the key design point).** Flue sets the model
+  **per agent** via `registerProvider`. So the spike registers **two** providers
+  and uses them for different things:
+  1. the **local llama.cpp** OpenAI-compatible server already running on the
+     Jetson (Gemma-4-E4B on `:11434`) — this is the **voice brain, left
+     untouched**; and
+  2. a **configurable harness model** (`HARNESS_LLM_*`, default a **cloud/dev
+     model**) that the **harness agents** run on.
+  The harness agents are bound to the harness model so they **never compete with
+  the live voice brain for the GPU slot on `:11434`.** Later, point
+  `HARNESS_LLM_*` at a local endpoint and the harness goes fully local with **no
+  code change** — see [Model knob](#the-per-agent-model-knob).
 
 If this slice closes the loop and produces a reviewable PR with evidence, we have
 de-risked Flue as the harness substrate. See [`RUNBOOK.md`](./RUNBOOK.md) for the
 exact run steps and [acceptance criteria](#acceptance-criteria-the-samantha-tests).
 
-## Why lab-only / why you must NOT run a full loop on the Jetson
+## Where this runs: on the Jetson itself, isolated from the live path
 
-The Jetson Orin NX is the **live production voice box**: Gemma on llama.cpp
-(`:11434`), Kokoro TTS (`:10201`), and `zoe-data` (`:8000`) are all serving real
-traffic on it. A full Flue agent loop (27-package monorepo install + a durable
-workflow hammering the GPU) would contend with the live model for VRAM and CPU.
+There is **no separate dev box.** This spike runs **on the live Jetson Orin NX**
+— the same box serving Gemma on llama.cpp (`:11434`), Kokoro TTS (`:10201`),
+`zoe-data` (`:8000`), and Moonshine STT. That is safe because the spike is kept
+**isolated from the live voice path**:
 
-**Therefore: run this on a separate dev box, not on the Jetson.** The Jetson's
-`:11434` endpoint *can* be reached from the dev box over LAN for the bounded
-connectivity test, but the agent loop itself should run elsewhere (ideally the
-dev box runs its own local llama.cpp, or points at a non-production endpoint).
+- It runs as its **own process, started by hand**, not in any voice request path.
+- The **harness agents run on a separate model** (`HARNESS_LLM_*`, default a
+  cloud/dev endpoint), **not** the voice brain on `:11434`, so the live GPU slot
+  is never contended by the harness.
+- The **voice brain on `:11434` is left completely untouched** by this spike.
+
+### The per-agent model knob
+
+Flue binds a model **per agent**, so the *same* harness code runs on *any* model
+just by changing env:
+
+- **Now (default):** `HARNESS_LLM_*` points at a **cloud/dev** OpenAI-compatible
+  endpoint. The harness runs there; voice stays local on `:11434`.
+- **Later (one-line swap to fully local):** point `HARNESS_LLM_BASE_URL` /
+  `HARNESS_LLM_MODEL` at a **local** endpoint (e.g. a second llama.cpp, or the
+  Jetson's own `:11434` once headroom allows). **No `src/` change** — only env.
+- **Per-phase tuning:** because the model is per-agent, you can later give
+  scout/triage a cheap/fast model and implementer/reviewer a stronger one
+  (`src/agents.ts` is where each agent's model is selected).
 
 ## What's in here
 
 | File | Purpose |
 |------|---------|
 | `README.md` | This file — what the spike proves + acceptance bar |
-| `RUNBOOK.md` | Exact dev-box steps: prereqs, install, env, run |
+| `RUNBOOK.md` | Exact on-Jetson steps: prereqs, install, env, run |
 | `package.json` | Pinned deps (`@flue/*`), Node ≥22, run scripts |
-| `.env.example` | Knobs: LLM URL/model, GitHub token, repo, target issue |
-| `src/provider.ts` | Registers the local llama.cpp OpenAI-compatible provider |
-| `src/agents.ts` | Subagent definitions: scout / implementer / verifier |
+| `.env.example` | Knobs: voice-brain URL + **separate `HARNESS_LLM_*` model**, GitHub token, repo, target issue |
+| `src/provider.ts` | Registers **two** providers — the local llama.cpp voice brain **and** the configurable harness model |
+| `src/agents.ts` | Subagent definitions (scout / implementer / verifier), each bound to the harness model |
 | `src/workflow.ts` | Durable workflow: `scout → implement → verify → openPR` |
 | `src/github.ts` | Thin GitHub helpers (branch + PR open) |
 | `src/index.ts` | Entry point — wires it all together |
-| `FINDINGS.md` | Stub for the human to fill after the dev-box run |
+| `FINDINGS.md` | Stub for the human to fill after the on-Jetson run |
 
 ## Acceptance criteria (the "Samantha tests")
 
-The spike **passes** if, on a dev box with no cloud access, a single run:
+The spike **passes** if, running **on the Jetson but isolated from the live path**
+(harness on the `HARNESS_LLM_*` model, voice brain untouched on `:11434`), a
+single run:
 
 1. **Scouts** one real Zoe GitHub issue (default: `#715`) — reads the issue and
    relevant repo files, produces a written plan.
@@ -68,9 +94,10 @@ The spike **passes** if, on a dev box with no cloud access, a single run:
    captures the output as evidence.
 4. **Opens a reviewable PR** against `jason-easyazz/zoe-ai-assistant` containing
    the diff **and** the verify evidence in the PR body.
-5. Does all of the above **fully locally** — the only LLM calls go to the
-   `http://127.0.0.1:11434/v1` (or LAN-equivalent) llama.cpp endpoint. **No cloud
-   LLM, no Anthropic/OpenAI API key required.**
+5. Does all of the above **without disturbing the live voice path** — the harness
+   talks to its **own `HARNESS_LLM_*` endpoint**, the **voice brain on `:11434`
+   is never touched**, and (Phase 0 acceptance, per PR #736 §5) running it shows
+   **no voice-latency regression** measured by the **#735 latency probe**.
 
 If the loop stalls, the run must fail *loudly* at the phase boundary (durable
 workflow checkpoint) so we can see *which* phase Flue couldn't carry.
@@ -79,10 +106,10 @@ workflow checkpoint) so we can see *which* phase Flue couldn't carry.
 
 - The exact Flue API surface (`registerProvider` signature, `defineAgent` /
   durable-workflow helpers) is pinned to the package versions in `package.json`
-  but was **not** runtime-verified on the Jetson (we deliberately did not
-  `npm install` the monorepo on the production box). The `src/` code is written
-  against the documented/expected shape and is annotated with `// FLUE-API:`
-  comments wherever the human must confirm the call against the installed
-  package. Treat the first dev-box `npm install` + typecheck as part of the spike.
+  but is **not yet runtime-verified** — the scaffold was authored without an
+  `npm install`. The `src/` code is written against the documented/expected shape
+  and is annotated with `// FLUE-API:` comments wherever the human must confirm
+  the call against the installed package. Treat the **first on-Jetson
+  `npm install` + typecheck** as part of the spike.
 - This is a **spike**: clarity over completeness. Phases 5–6 of the `case`
   pattern (`reviewer → closer → retrospective`) are intentionally omitted.

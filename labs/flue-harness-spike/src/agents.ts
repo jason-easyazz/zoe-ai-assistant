@@ -18,9 +18,16 @@
 import { defineAgent } from '@flue/sdk';
 
 /**
- * Build the three subagents bound to the local model string returned by
- * registerLocalLlm(). Passing the model in (rather than reading env here) keeps
- * the local-only seam in one place.
+ * Build the three subagents bound to the HARNESS model string returned by
+ * registerProviders() (the configurable HARNESS_LLM_* model, NOT the live voice
+ * brain). Passing the model in — rather than reading env here — keeps the
+ * model-selection seam in one place, so the harness can move between a cloud/dev
+ * model now and a local one later with no change in this file.
+ *
+ * Per-phase models (future): because Flue binds a model per agent, each agent
+ * could later take its OWN model string (cheap/fast for `scout`, stronger for
+ * `implementer`/reviewer) — just register more providers and pass distinct
+ * `${providerId}/${modelName}` strings here.
  */
 export function buildAgents(model: string) {
   /**
