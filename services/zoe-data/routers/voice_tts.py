@@ -3462,17 +3462,11 @@ async def voice_command(
         _quick_intent = await _detect_async(text, effective_user, context=_ctx)
         if _quick_intent:
             _ctx.activate(_quick_intent.name, getattr(_quick_intent, "slots", {}), text)
-        # Tier 0.5 for voice: LLM classifier on short missed utterances
-        if _quick_intent is None and len(text.split()) <= 20:
-            try:
-                from intent_classifier_llm import classify_intent_with_context as _classify_v
-                _v_classified = await _classify_v(text, context=_ctx, timeout=1.5)
-                if _v_classified and _v_classified.confidence >= 0.75:
-                    _quick_intent = _v_classified
-                    _ctx.activate(_quick_intent.name, getattr(_quick_intent, "slots", {}), text)
-                    logger.info("Voice Tier 0.5 hit: %s confidence=%.2f", _quick_intent.name, _quick_intent.confidence)
-            except Exception as _ve:
-                logger.debug("Voice Tier 0.5 failed (non-fatal): %s", _ve)
+        # (Removed Tier-0.5 LLM classifier.) It produced 0 hits across 7 days of
+        # live logs and 0 non-None returns over 41 real missed utterances, while
+        # costing a ~1.5s LLM call on every short missed utterance. The Tier-1
+        # semantic_router + Tier-1.5 expert_dispatch now cover this ground, so a
+        # detect_intent miss falls straight through to them / the brain.
         _quick_intent_name = _quick_intent.name if _quick_intent else None
         try:
             from voice_metrics import voice_stage_seconds, voice_intent_hit_count
