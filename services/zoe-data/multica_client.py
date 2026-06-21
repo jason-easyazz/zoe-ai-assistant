@@ -185,7 +185,9 @@ class MULClient:
                 resp = await client.get(url, params=params, headers=self._headers())
                 resp.raise_for_status()
                 data = resp.json()
-                return data if isinstance(data, list) else data.get("issues", [])
+                if isinstance(data, list):
+                    return data
+                return data.get("issues", []) if isinstance(data, dict) else []
         except (httpx.HTTPError, ValueError, TypeError) as exc:
             logger.warning("Multica list_issues failed: %s", exc)
             return []
@@ -219,7 +221,9 @@ class MULClient:
                 resp = await client.get(f"{self._base}/api/labels", headers=self._headers())
                 resp.raise_for_status()
                 data = resp.json()
-                return data if isinstance(data, list) else data.get("labels", [])
+                if isinstance(data, list):
+                    return data
+                return data.get("labels", []) if isinstance(data, dict) else []
         except (httpx.HTTPError, ValueError, TypeError) as exc:
             logger.warning("Multica list_labels failed: %s", exc)
             return []
@@ -277,7 +281,9 @@ class MULClient:
                 resp = await client.get(f"{self._base}/api/projects", headers=self._headers())
                 resp.raise_for_status()
                 data = resp.json()
-                return data if isinstance(data, list) else data.get("projects", [])
+                if isinstance(data, list):
+                    return data
+                return data.get("projects", []) if isinstance(data, dict) else []
         except (httpx.HTTPError, ValueError, TypeError) as exc:
             logger.warning("Multica list_projects failed: %s", exc)
             return []

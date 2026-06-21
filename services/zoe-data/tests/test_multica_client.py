@@ -72,6 +72,78 @@ async def test_list_issues_forwards_explicit_limit(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("body", [None, "unexpected", 42])
+async def test_list_issues_returns_empty_for_non_dict_non_list_body(monkeypatch, body):
+    """A 200 with a null/non-dict/non-list JSON body must yield [] not AttributeError."""
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return body
+
+    class FakeHttpClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setenv("MULTICA_BASE_URL", "https://multica.example")
+    monkeypatch.setenv("MULTICA_API_TOKEN", "token-1")
+    monkeypatch.setenv("MULTICA_WORKSPACE_ID", "workspace-1")
+    monkeypatch.setattr(
+        multica_client.httpx,
+        "AsyncClient",
+        lambda **_kwargs: FakeHttpClient(),
+    )
+
+    assert await multica_client.MULClient().list_issues() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method, endpoint",
+    [("list_labels", "/api/labels"), ("list_projects", "/api/projects")],
+)
+async def test_list_methods_return_empty_for_null_body(monkeypatch, method, endpoint):
+    """list_labels/list_projects must also tolerate a null JSON body without raising."""
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return None
+
+    class FakeHttpClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url, **kwargs):
+            assert url.endswith(endpoint)
+            return FakeResponse()
+
+    monkeypatch.setenv("MULTICA_BASE_URL", "https://multica.example")
+    monkeypatch.setenv("MULTICA_API_TOKEN", "token-1")
+    monkeypatch.setenv("MULTICA_WORKSPACE_ID", "workspace-1")
+    monkeypatch.setattr(
+        multica_client.httpx,
+        "AsyncClient",
+        lambda **_kwargs: FakeHttpClient(),
+    )
+
+    assert await getattr(multica_client.MULClient(), method)() == []
+
+
+@pytest.mark.asyncio
 async def test_lookup_evolution_resources_skips_matching_rows_without_ids(monkeypatch):
     requests = []
 
