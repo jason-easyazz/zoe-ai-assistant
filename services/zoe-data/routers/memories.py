@@ -297,26 +297,11 @@ def _build_memory_prompt_packet(
     return {"packet": "## What I know about you\n" + "\n".join(lines), "refs": refs, "count": len(refs)}
 
 
-# Keyword gate for the per-turn semantic search (ported from zoe_agent.py so this
-# endpoint doesn't import the legacy brain). Facts always load; the ONNX+Chroma
-# semantic search only fires when the message looks like a recall/personal-fact
-# query — most turns don't, and the embed+query is the endpoint's main cost.
-_MEMORY_TRIGGER_WORDS = frozenset({
-    "remember", "recall", "did i", "have i", "last time", "before",
-    "you said", "we talked", "my name", "my preference", "i told you",
-    "favourite", "favorite", "prefer", "like", "usually", "always", "never", "often",
-    "who is", "what is my", "what do i", "what's my", "family", "remind me",
-    "do i have", "my favourite", "my favorite", "my usual", "i usually", "i like",
-    "i prefer", "i love", "i hate", "i enjoy", "do you know my",
-    "born", "age", "years old", "my age", "how old", "my birthday", "birthday",
-    "my full name", "called", "known as", "allerg", "condition", "medical",
-})
-
-
-def _message_needs_memory(message: str) -> bool:
-    """True only when the message likely benefits from MemPalace semantic search."""
-    low = (message or "").lower()
-    return any(kw in low for kw in _MEMORY_TRIGGER_WORDS)
+# Keyword gate for the per-turn semantic search. Single source of truth lives in
+# memory_gate (shared with zoe_agent) so the two paths can't silently diverge. The
+# ONNX+Chroma semantic search only fires when the message looks like a recall query
+# — most turns don't, and the embed+query is the endpoint's main cost.
+from memory_gate import message_needs_memory as _message_needs_memory  # noqa: E402
 
 
 @router.get("/for-prompt")

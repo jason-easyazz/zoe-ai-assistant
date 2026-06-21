@@ -1504,23 +1504,12 @@ async def _mempalace_load_user_facts(user_id: str, limit: int = 20) -> str:
 # Keywords that suggest the message benefits from memory context retrieval.
 # Queries without these skip MemPalace semantic search (saves 1-25s of ONNX inference time).
 # Note: _mempalace_load_user_facts() (fast metadata filter) runs on EVERY turn regardless.
-_MEMORY_TRIGGER_WORDS = frozenset({
-    "remember", "recall", "did i", "have i", "last time", "before",
-    "you said", "we talked", "my name", "my preference", "i told you",
-    "favourite", "favorite", "prefer", "like", "usually", "always", "never", "often",
-    "who is", "what is my", "what do i", "what's my", "family", "remind me",
-    "do i have", "my favourite", "my favorite", "my usual", "i usually", "i like",
-    "i prefer", "i love", "i hate", "i enjoy", "do you know my",
-    # Added: common personal-fact retrieval phrases
-    "born", "age", "years old", "my age", "how old", "my birthday", "birthday",
-    "my full name", "called", "known as", "allerg", "condition", "medical",
-})
-
-
-def _message_needs_memory(message: str) -> bool:
-    """Return True only if this message is likely to benefit from MemPalace semantic search."""
-    msg_lower = message.lower()
-    return any(kw in msg_lower for kw in _MEMORY_TRIGGER_WORDS)
+# The memory-recall keyword gate lives in memory_gate (single source of truth,
+# shared with routers/memories.py's /for-prompt endpoint so the two can't diverge).
+from memory_gate import (  # noqa: E402
+    MEMORY_TRIGGER_WORDS as _MEMORY_TRIGGER_WORDS,
+    message_needs_memory as _message_needs_memory,
+)
 
 
 async def _build_memory_context(message: str, user_id: str = "family-admin") -> str:

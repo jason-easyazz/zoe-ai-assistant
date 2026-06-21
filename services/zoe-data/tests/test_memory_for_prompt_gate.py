@@ -7,7 +7,18 @@ gate predicate.
 """
 import pytest
 
-from routers.memories import _message_needs_memory
+from memory_gate import message_needs_memory as _message_needs_memory
+
+
+def test_single_source_of_truth():
+    """Both the /for-prompt endpoint and the legacy agent must use the ONE gate in
+    memory_gate, so a keyword change can never make the two paths diverge."""
+    import memory_gate
+    from routers import memories
+    assert memories._message_needs_memory is memory_gate.message_needs_memory
+    import zoe_agent
+    assert zoe_agent._message_needs_memory is memory_gate.message_needs_memory
+    assert zoe_agent._MEMORY_TRIGGER_WORDS is memory_gate.MEMORY_TRIGGER_WORDS
 
 
 @pytest.mark.parametrize("msg", [
