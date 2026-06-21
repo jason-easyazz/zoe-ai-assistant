@@ -10,8 +10,9 @@ it." Also keeps §3.1 (fast path independent of Flue) intact.
 
 ## 1. Goal
 
-Turn the deterministic sub-second tiers into **one callable, channel-agnostic unit** that any
-channel — voice, web chat, and (next) Telegram-via-Flue — invokes the same way:
+Turn the deterministic sub-second tiers into **one callable, channel-agnostic unit** that **every**
+avenue — web chat, voice (touch panel + Jabra), LiveKit real-time WebRTC, WhatsApp, and (next)
+Telegram-via-Flue — invokes the same way (full inventory in §2a):
 
 ```
 outcome = fast_tiers.resolve(text, user_id, session_id, ctx)
@@ -47,8 +48,33 @@ chat, and there is **no single entry** that runs Tier-0 → Tier-1 → Tier-1.5 
 uniform result. Telegram-via-Flue needs exactly that single entry.
 
 `fast_path.resolve` is called from 3 sites today:
-- `routers/voice_tts.py` — `voice_command` (~L3648), `extra_ctx={"db","panel_id"}`, writes allowed.
+- `routers/voice_tts.py` — `voice_command` (~L3648), `extra_ctx={"db": db, "panel_id": panel_id}`, writes allowed.
 - `routers/chat.py` — `chat_stream_generator` (~L1931) and the non-stream `chat` (~L3220), `allow_writes=False`.
+
+---
+
+## 2a. Channel inventory — every avenue (the full picture)
+
+A "channel" = an input/output surface that wants a Zoe answer. The shared core must serve **all**
+of them; only the **I/O** (how text arrives, how the answer is rendered) and the **brain lane**
+differ. The touch panel and skybridge are *not* channels — they are a **rendering surface** and a
+**voice-side resolver**, called out below so they aren't mistaken for tiers.
+
+| Avenue | Entry point | Input I/O | Output I/O | Uses the deterministic core today? |
+|--------|-------------|-----------|------------|-----------------------------------|
+| **Web chat** | `routers/chat.py` `/api/chat/` (stream + non-stream) | text | SSE / dict, AG-UI events | **Yes** — `fast_path.resolve` (Tier-1.5) via #742; Tier-0 still inline |
+| **Voice (panel + Jabra)** | `routers/voice_tts.py` `/voice/command`, `/voice/turn` | STT (Moonshine/whisper) | Kokoro TTS + panel cards/forms | **Yes** — skybridge → public-intent → `fast_path.resolve` → brain |
+| **LiveKit (real-time WebRTC)** | `routers/voice_livekit.py` `_run_pipeline` / `_run_text_pipeline` | STT (reuses `_transcribe_audio`) | Kokoro TTS over WebRTC data | **NO — straight to `brain_oneshot`**, skips Tier-0/1/1.5 **and** skybridge |
+| **Telegram** | today via OpenClaw (`routers/openclaw.py`); next via Flue `@flue/telegram` | text | text | **No** — not wired to the core yet |
+| **WhatsApp** | `_WHATSAPP_FLOW` inside `chat.py` | text | text/dict | Inherits chat's core (it's a chat sub-flow) |
+| **Touch panel** *(surface, not a channel)* | WebSocket push + skybridge `/resolve` endpoint | n/a | cards / forms / nav / audio | Renders voice's & chat's outcomes; has its own skybridge resolver |
+| **Skybridge** *(voice-side resolver, not a tier)* | `skybridge_service.resolve_skybridge_request`; `/skybridge/resolve` | text + context | spoken summary + **panel cards** + identity/auth flow | Voice-only (chat = 0 refs); runs **before** `fast_path` |
+
+**Two gaps this exposes:**
+1. **LiveKit pays full brain cost for everything** — "what time is it" over LiveKit hits the LLM
+   because it never calls the fast tiers. This is the **exact gap #742 fixed for chat**, still open
+   on the real-time path. Stage A closes it (see §4.5).
+2. **Tier-0 is still inline** in voice, chat, *and* LiveKit — three copies of the same regex front.
 
 ---
 
@@ -156,6 +182,38 @@ underscore API.
   on `None`, forwards to the brain. **Not wired to Flue yet** — that's Phase 1 proper. Included
   here only to prove the core is genuinely channel-agnostic.
 
+### 4.5 `routers/voice_livekit.py` (`_run_pipeline` / `_run_text_pipeline`) — closes a real gap
+LiveKit today does **STT → `brain_oneshot` → TTS** with **no fast tiers and no skybridge**, so
+every real-time utterance pays the full LLM cost — the same gap #742 fixed for chat.
+- Insert `outcome = await fast_tiers.resolve(transcript, user_id, session_id)` **before** the
+  `brain_oneshot` call. On a hit, render `outcome.reply` straight to TTS (LiveKit already reuses
+  `voice_tts.synthesize`); on `None`, fall through to `brain_oneshot` unchanged.
+- This is a **pure win** (no behavior to preserve — LiveKit had no fast path), but it is gated the
+  same way: a LiveKit smoke test ("what time is it", "show shopping list") must return sub-second
+  via the core and a chat-style query must still reach the brain.
+- Skybridge cards are **not** added to LiveKit here (LiveKit is audio-only, no panel surface); it
+  consumes the spoken `reply` only.
+
+### 4.6 Touch panel & skybridge — what does *not* change
+- **Touch panel is a rendering surface, not a channel.** `fast_tiers` returns a `reply` + optional
+  `ui` hint; the **voice/chat channel** decides whether to push cards/forms/nav + TTS to the panel
+  (voice) or AG-UI components (chat). All panel broadcasts, `get_active_form` field-filling, and
+  `_broadcast_intent_nav` stay exactly where they are. Telegram/LiveKit (no panel) just render text.
+- **Skybridge stays a voice-side resolver, untouched in Stage A.** It is voice-only, produces panel
+  cards + an **identity/auth challenge** (security that must never be bypassed by a generic core),
+  and runs *before* the tiers. Keeping `run_tier0=False` for voice (§4.3) preserves its priority;
+  replay proves the shared core didn't steal a query skybridge should have answered with a card.
+  Its standalone `/skybridge/resolve` endpoint (panel calls it directly) is unaffected.
+- **Convergence is later (Stage B/C), not now.** Skybridge's card logic overlaps `expert_dispatch`'s
+  domains, and `DispatchResult.ui` already exists; a future step can have the core emit one
+  structured result that both the panel renderer and chat AG-UI consume — with its own replay gate.
+
+### 4.7 Telegram & WhatsApp
+- **Telegram** is the Flue Phase-1 target: the §4.4 adapter calls `fast_tiers.resolve` and renders
+  `reply` as text, brain on a dev/cloud model. No panel, no skybridge cards.
+- **WhatsApp** is a sub-flow inside `chat.py` (`_WHATSAPP_FLOW`), so it **inherits chat's
+  `fast_tiers` automatically** once §4.2 lands — no separate wiring.
+
 ---
 
 ## 5. Verification gates (must pass before merge)
@@ -164,9 +222,12 @@ underscore API.
    the same routing + spoken text as pre-change. Any divergence blocks the merge.
 2. **Chat latency probe unchanged.** `zoe_latency_probe.py` — `show shopping list` stays <60ms,
    `what time is it` Tier-0, no regression vs the saved baseline.
-3. **Unit tests.** Existing `test_fast_path.py`, `test_voice_routing.py`, `test_fastpath_coverage.py`
+3. **LiveKit smoke test (new behavior).** A read ("what time is it", "show shopping list") returns
+   sub-second via the core; a chat-style query still reaches `brain_oneshot`. (LiveKit had no fast
+   path before, so this is additive — verified by the `test_voice_livekit_*` suite + a live turn.)
+4. **Unit tests.** Existing `test_fast_path.py`, `test_voice_routing.py`, `test_fastpath_coverage.py`
    green; add `test_fast_tiers.py` covering the Tier-0 read shortcut + the write/None deferral.
-4. **Greptile + validate + GitGuardian** green; threads resolved.
+5. **Greptile + validate + GitGuardian** green; threads resolved.
 
 ---
 
