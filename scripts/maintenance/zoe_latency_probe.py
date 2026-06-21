@@ -231,7 +231,7 @@ def main() -> int:
         print(f"Baseline saved: {args.baseline}")
     print(f"Results saved: {args.results}")
 
-    return 1 if failures else 0
+    return 1 if (failures or warnings) else 0
 
 
 if __name__ == "__main__":
