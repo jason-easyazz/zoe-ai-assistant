@@ -298,6 +298,22 @@ _QUESTION_RE = re.compile(
 )
 
 
+def _echo_fact(text: str) -> str:
+    """Turn a stored statement into a second-person read-back for confirmation.
+    "My mum's birthday is the 17th of the 11th" → "your mum's birthday is the
+    17th of the 11th". Strips any leading 'remember that…' so it doesn't double up."""
+    t = (text or "").strip().rstrip(".!?")
+    t = re.sub(r"^(please\s+)?(remember|note|don'?t\s+forget|make\s+a\s+note|keep\s+in\s+mind)"
+               r"(\s+(that|to))?\s*", "", t, flags=re.IGNORECASE)
+    for pat, rep in (
+        (r"\bI'?m\b", "you're"), (r"\bI\s+am\b", "you are"),
+        (r"\bI'?ve\b", "you've"), (r"\bI'?ll\b", "you'll"), (r"\bI\b", "you"),
+        (r"\bmy\b", "your"), (r"\bmine\b", "yours"), (r"\bme\b", "you"),
+    ):
+        t = re.sub(pat, rep, t, flags=re.IGNORECASE)
+    return t.strip()
+
+
 async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
                      user_turn_id: Optional[str] = None) -> Optional[str]:
     """people/memory: STORE a taught fact (statement) or RECALL one (question).
@@ -332,7 +348,11 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
     except Exception as exc:
         logger.warning("store_fact ingest failed (%s) → brain", exc)
         return None
-    return "Got it — I'll remember that."
+    # Echo the captured fact back (second person) so the user hears exactly what
+    # landed and can correct it — a confirmation without a separate "should I
+    # save that?" turn.
+    echo = _echo_fact(text)
+    return f"Got it — I'll remember {echo}." if echo else "Got it — I'll remember that."
 
 
 async def _run_expert(domain: str, text: str, user_id: str, session_id: str) -> Optional[str]:

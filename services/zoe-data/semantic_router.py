@@ -69,6 +69,10 @@ ROUTES: dict[str, list[str]] = {
         "my friend's birthday is in june", "remember that my friend lives in perth",
         "let me tell you about my friend", "I want to tell you about my mum",
         "her name is emma and she's my sister", "his birthday is the third of may",
+        # birthdays/dates spoken as NUMERIC dates ("the 17th of the 11th, 1947")
+        "my mum's birthday is the 17th of the 11th 1947",
+        "my dad's birthday is the 5th of the 6th 1950",
+        "her birthday is the 22nd of the 9th", "his anniversary is the 10th of the 6th",
     ],
     "memory": [
         "what did I say about the project", "do you remember what I told you yesterday",
