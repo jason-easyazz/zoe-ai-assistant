@@ -2462,7 +2462,8 @@ def _log_voice_stt_sample(
             "stt_seconds": round(stt_seconds, 3) if stt_seconds is not None else None,
             "transcript": transcript,
             "transcript_chars": len(transcript or ""),
-            "model": (os.environ.get("ZOE_WHISPER_MODEL") or "base.en").strip(),
+            # Actual backend that produced this transcript (was hardcoded base.en).
+            "model": _last_stt_backend or (os.environ.get("ZOE_STT_BACKEND") or "moonshine").strip(),
             "device": (os.environ.get("ZOE_WHISPER_DEVICE") or "").strip(),
             "compute_type": (os.environ.get("ZOE_WHISPER_COMPUTE_TYPE") or "").strip(),
             "vad_threshold": _env_float("ZOE_WHISPER_VAD_THRESHOLD", 0.50),
@@ -2576,6 +2577,12 @@ async def _transcribe_audio(wav_path: str) -> str:
     return text
 
 
+# Records which backend actually produced the last transcript, so the STT audit
+# log reflects reality instead of a hardcoded "base.en" (which previously masked
+# whether Moonshine or the whisper fallback ran).
+_last_stt_backend: str = ""
+
+
 async def _transcribe_audio_impl(wav_path: str) -> str:
     """
     Transcription waterfall:
@@ -2583,10 +2590,12 @@ async def _transcribe_audio_impl(wav_path: str) -> str:
     1. whisper.cpp CLI (if binary + ggml model configured)
     2. faster-whisper Python (auto-downloaded model, GPU/CPU)
     """
+    global _last_stt_backend
     if (os.environ.get("ZOE_STT_BACKEND") or "moonshine").strip().lower() == "moonshine":
         try:
             text = await _run_moonshine(wav_path)
             if text:
+                _last_stt_backend = "moonshine:" + (os.environ.get("ZOE_MOONSHINE_ARCH") or "v2").strip()
                 return text
             logger.warning("Moonshine STT returned empty; falling back to whisper")
         except Exception as exc:
@@ -2594,7 +2603,9 @@ async def _transcribe_audio_impl(wav_path: str) -> str:
     if _whisper_cpp_binary():
         model = (os.environ.get("ZOE_WHISPER_MODEL") or "").strip()
         if model and os.path.isfile(model):
+            _last_stt_backend = "whisper.cpp:" + os.path.basename(model)
             return await _run_whisper_cpp(wav_path)
+    _last_stt_backend = "faster-whisper:" + (os.environ.get("ZOE_WHISPER_MODEL") or "base.en").strip()
     return await _run_faster_whisper(wav_path)
 
 
