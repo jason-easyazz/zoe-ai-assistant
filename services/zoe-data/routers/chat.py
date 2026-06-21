@@ -477,6 +477,11 @@ _USE_ZOE_CORE = os.environ.get("ZOE_USE_CORE_BRAIN", "true").lower() == "true"
 # "Use a local brain" = either the new zoe-core (Pi) or the legacy zoe_agent.
 # When set, the local brain takes the slot that would otherwise fall to OpenClaw.
 _USE_LOCAL_BRAIN = _USE_ZOE_AGENT or _USE_ZOE_CORE
+# The zoe-core Pi brain pulls memory itself every turn via the memory.ts extension
+# (/api/memories/for-prompt), so also passing db_memory_context into the brain
+# prompt double-injects the same facts (extra prefill). Default OFF (deduped);
+# set ZOE_CHAT_INJECT_DB_MEMORY=1 to restore the old double-injection if needed.
+_CHAT_INJECT_DB_MEMORY = os.environ.get("ZOE_CHAT_INJECT_DB_MEMORY", "0").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _brain_streaming(message, session_id, user_id="", **kwargs):
@@ -2364,7 +2369,9 @@ async def chat_stream_generator(
                     session_id,
                     user_id,
                     history=prior_history or None,
-                    db_memory_context=pi_db_memory or None,
+                    # Deduped by default: the memory.ts extension already injects the
+                    # for-prompt packet, so don't double-inject the same facts here.
+                    db_memory_context=(pi_db_memory or None) if _CHAT_INJECT_DB_MEMORY else None,
                     portrait=pi_portrait or None,
                 ):
                     if chunk.startswith("__ESCALATE__:") or chunk.startswith("__ESCALATE_BG__:") or chunk.startswith("__ESCALATE_HERMES__:"):
@@ -3303,13 +3310,26 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
 
         response_text = ""
         try:
-            # Load portrait + facts + semantic recall concurrently for all non-streaming branches
-            ns_portrait, ns_db_memory, ns_semantic = await asyncio.gather(
-                _safe_load_portrait(user_id),
-                _mempalace_load_user_facts(user_id),
-                _build_memory_context(message_for_processing, user_id=user_id),
-            )
-            ns_full_mem = "\n\n".join(filter(None, [ns_portrait, ns_db_memory, ns_semantic]))
+            # Portrait is cheap and the local brain takes it directly, so load it
+            # eagerly. Facts + semantic recall (ns_full_mem) are ONLY consumed by the
+            # Hermes/OpenClaw escalation branches and the non-local-brain path — the
+            # local Pi brain gets its memory from the memory.ts extension's
+            # /api/memories/for-prompt packet (db_memory_context=None below). So
+            # compute them LAZILY to avoid a redundant facts-load + semantic search
+            # on every non-escalating turn (the recall double-load this PR removes).
+            ns_portrait = await _safe_load_portrait(user_id)
+            _ns_full_mem_cache: "str | None" = None
+
+            async def _ns_full_mem() -> str:
+                nonlocal _ns_full_mem_cache
+                if _ns_full_mem_cache is None:
+                    _dbm, _sem = await asyncio.gather(
+                        _mempalace_load_user_facts(user_id),
+                        _build_memory_context(message_for_processing, user_id=user_id),
+                    )
+                    _ns_full_mem_cache = "\n\n".join(filter(None, [ns_portrait, _dbm, _sem]))
+                return _ns_full_mem_cache
+
             if _USE_LOCAL_BRAIN:
                 # Use original (pre-suffix) message for agent so fast-path checks work
                 _agent_msg = _original_message_for_agent if is_voice_mode else message_for_processing
@@ -3332,7 +3352,7 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
                             user_id,
                             username=user.get("username") or "",
                             portrait=ns_portrait,
-                            facts=ns_full_mem or "",
+                            facts=await _ns_full_mem() or "",
                         )
                     except Exception as _he:
                         logger.warning("Hermes non-stream escalation failed: %s", _he)
@@ -3346,7 +3366,7 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
                         user_id,
                         username=user.get("username") or "",
                         portrait=ns_portrait,
-                        facts=ns_full_mem or "",
+                        facts=await _ns_full_mem() or "",
                     )
             else:
                 oc_message = openclaw_user_message(intent, message_for_processing)
@@ -3356,7 +3376,7 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
                     user_id,
                     username=user.get("username") or "",
                     portrait=ns_portrait,
-                    facts=ns_full_mem or "",
+                    facts=await _ns_full_mem() or "",
                 )
         except Exception as exc:
             if task_class != "research":
