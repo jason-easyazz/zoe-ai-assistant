@@ -516,6 +516,13 @@ _STATUS_CHECK_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Bare wake-word used as a question ("zoe?", "hey zoe?") = a presence check.
+# This must be tested against the RAW text: _normalize_chat_intent_text strips the
+# wake word, so by the time the body runs "zoe?" has become "" and _STATUS_CHECK_RE
+# never sees it. The trailing '?' is required so a plain vocative "zoe" (or "zoe,
+# add milk", which normalizes to a real command) is NOT swallowed as a status check.
+_BARE_NAME_QUERY_RE = re.compile(r"^(?:hey\s+|ok(?:ay)?\s+)?zoe\s*\?+$", re.IGNORECASE)
+
 # Open-domain Q&A / creative — route to agent path (not brittle per-phrase intents).
 _AGENT_CHAT_RE = re.compile(
     r"^(?:tell me about|what(?:'s| is) the (?:capital|weather)|"
@@ -614,6 +621,11 @@ def detect_intent(
     user_id: str = "unknown",
 ) -> Optional[Intent]:
     t = _normalize_chat_intent_text(text)
+
+    # Bare name-as-question ("zoe?") — normalization strips the wake word to '', so
+    # catch the presence check from the raw text before the body runs.
+    if _BARE_NAME_QUERY_RE.match((text or "").strip()):
+        return Intent("status_check", {})
 
     # Full Home Assistant / automation setup → OpenClaw (execute_intent returns None; chat expands message)
     if _is_ha_full_setup_message(t):
