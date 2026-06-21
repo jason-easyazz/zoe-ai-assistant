@@ -58,14 +58,26 @@ ROUTES: dict[str, list[str]] = {
         "what's today's date", "is it morning or afternoon", "got the time on you",
     ],
     "people": [
+        # questions about a person
         "when is john's birthday", "what's sarah's phone number",
         "tell me about my brother", "who is michael",
         "what do I know about emma", "what's my wife's favourite colour",
+        "what is my mum's name", "what's my dad's name",
+        # STATEMENTS that teach Zoe a fact about a person (store, not query)
+        "my mum's name is janice", "my dad's name is neil",
+        "my brother is called tom", "my wife's name is sarah",
+        "my friend's birthday is in june", "remember that my friend lives in perth",
+        "let me tell you about my friend", "I want to tell you about my mum",
+        "her name is emma and she's my sister", "his birthday is the third of may",
     ],
     "memory": [
         "what did I say about the project", "do you remember what I told you yesterday",
         "what did I tell you about my goals", "remind me what we discussed",
         "what's my favourite restaurant", "have I mentioned my car before",
+        # statements to remember (store a fact)
+        "remember that I parked on level three", "I want you to remember something",
+        "make a note that the wifi password is bluebird", "keep in mind I'm allergic to nuts",
+        "remember I like my coffee black",
     ],
     "chat": [
         "how are you feeling today", "tell me a joke", "what's the meaning of life",

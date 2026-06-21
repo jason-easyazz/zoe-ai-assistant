@@ -60,8 +60,10 @@ _WRITE_DOMAINS = {"calendar", "lists", "reminders", "timers"}
 _EXPERT_DOMAINS = {"memory", "people"}  # focused recall (people also tries read first)
 
 _DEFAULT_THRESHOLDS: dict[str, float] = {
-    "weather": 0.60, "time": 0.60, "people": 0.70,
-    "calendar": 0.66, "lists": 0.66, "reminders": 0.68, "timers": 0.66, "memory": 0.70,
+    # Raised reads to 0.68 so noisy STT fragments (e.g. "Name is genus" → time
+    # 0.63) can't act, while real queries (got-the-time 0.71, weather 0.72+) pass.
+    "weather": 0.68, "time": 0.68, "people": 0.72,
+    "calendar": 0.68, "lists": 0.68, "reminders": 0.70, "timers": 0.68, "memory": 0.72,
 }
 # Domains allowed to ACT in active mode. Read intents within these are always
 # safe; WRITE intents (create/add) additionally require ZOE_EXPERT_ALLOW_WRITES.
