@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT / "services" / "zoe-data"))
 
 from greploop_guard import (  # noqa: E402
     GuardError,
+    finalize_merged_guard_state,
     merge_pr_when_ready,
     read_observed_guard_state,
     run_guard_once,
@@ -49,6 +50,11 @@ def main() -> int:
     )
     parser.add_argument("--state", action="store_true", help="Print file-backed guard state")
     parser.add_argument(
+        "--finalize-merged",
+        action="store_true",
+        help="Sweep guard state and finalize already merged/closed PRs (repo-wide unless --pr given)",
+    )
+    parser.add_argument(
         "--queue",
         action="store_true",
         help=(
@@ -67,6 +73,11 @@ def main() -> int:
         parser.error("--dry-run only applies to --queue")
 
     try:
+        if args.finalize_merged:
+            pr_numbers = [args.pr] if args.pr else None
+            result = finalize_merged_guard_state(pr_numbers=pr_numbers)
+            print(json.dumps(result, indent=2, sort_keys=True))
+            return 0
         if args.queue:
             queue_result = asyncio.run(
                 run_merge_queue(
