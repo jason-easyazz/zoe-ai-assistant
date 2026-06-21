@@ -2557,7 +2557,11 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
     # Weather should not depend on mcporter command availability.
     # Route directly to the weather backend helpers for deterministic voice UX.
     if intent.name == "weather":
-        return await _execute_weather_direct(user_id=user_id, forecast=bool(intent.slots.get("forecast")))
+        return await _execute_weather_direct(
+            user_id=user_id,
+            forecast=bool(intent.slots.get("forecast")),
+            advice=str(intent.slots.get("advice") or ""),
+        )
 
     if intent.name == "list_show":
         direct_result = await _execute_list_show_direct(intent, user_id)
@@ -2701,11 +2705,30 @@ async def _daily_briefing_reminders(user_id: str) -> Optional[dict]:
     return None
 
 
-async def _execute_weather_direct(user_id: str, forecast: bool = False) -> Optional[str]:
+def _spoken_day(raw: str) -> str:
+    """'2026-06-22' → 'Monday' (today→'today', tomorrow→'tomorrow'); raw on miss."""
+    try:
+        import datetime as _dt
+        d = _dt.date.fromisoformat(str(raw)[:10])
+        today = _dt.date.today()
+        if d == today:
+            return "today"
+        if d == today + _dt.timedelta(days=1):
+            return "tomorrow"
+        return d.strftime("%A")
+    except Exception:
+        return str(raw)
+
+
+async def _execute_weather_direct(user_id: str, forecast: bool = False,
+                                  advice: str = "") -> Optional[str]:
     """Direct weather path used by voice fast-intent execution.
 
     This bypasses mcporter so household voice weather works even if external
     command tooling is unavailable.
+
+    `advice` ("rain"|"warmth") returns a DIRECT yes/no answer to questions like
+    "do I need an umbrella" / "should I take a jacket" instead of a forecast dump.
     """
     try:
         from database import get_db
@@ -2734,8 +2757,54 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False) -> Optio
             # Speak numbers naturally: "18.3" → "18 point 3" (bare decimals get
             # mangled to "18 3" by TTS), and avoid markdown/°C which also mangle.
             def _say_num(n) -> str:
+                try:
+                    f = float(n)
+                    if f == int(f):
+                        return str(int(f))  # 21.0 → "21", not "21 point 0"
+                except (TypeError, ValueError):
+                    pass
                 s = str(n)
                 return s.replace(".", " point ") if "." in s else s
+            # Direct advice answer ("do I need a jacket / umbrella") — reason over
+            # today's forecast + current conditions and lead with yes/no.
+            if advice:
+                cur_desc = str(current.get("description", "")).lower()
+                cur_temp = current.get("temp")
+                today_hi = None
+                today_desc = cur_desc
+                try:
+                    f = await _get_forecast(lat, lon)
+                    d0 = (f.get("daily") or [{}])[0]
+                    today_hi = d0.get("high")
+                    today_desc = (str(d0.get("description", "")) or cur_desc).lower()
+                except Exception:
+                    pass
+                wet_words = ("rain", "shower", "drizzle", "thunder", "storm", "sleet", "snow")
+                is_wet = any(w in cur_desc or w in today_desc for w in wet_words)
+                cond_desc = (current.get("description") or "").strip()
+                cond_part = f" — it's {cond_desc}" if cond_desc else ""
+                if advice == "rain":
+                    if is_wet:
+                        return f"Yes, take an umbrella{cond_part} in {city_name}."
+                    return f"No, you shouldn't need an umbrella{cond_part} in {city_name}."
+                # warmth / jacket
+                ref = None
+                for v in (today_hi, cur_temp):
+                    try:
+                        ref = float(v); break
+                    except Exception:
+                        continue
+                cold = (ref is not None and ref < 16)
+                if cold or is_wet:
+                    why = []
+                    if ref is not None:
+                        why.append(f"it's around {_say_num(round(ref))} degrees")
+                    if is_wet:
+                        why.append("and wet" if why else "it's wet")
+                    reason = (", " + " ".join(why)) if why else ""
+                    return f"Yes, I'd take a jacket{reason} in {city_name}."
+                temp_part = f" — it's around {_say_num(round(ref))} degrees" if ref is not None else ""
+                return f"No, you should be fine without a jacket{temp_part} in {city_name}."
             if forecast:
                 f = await _get_forecast(lat, lon)
                 daily = f.get("daily", [])[:5]
@@ -2743,7 +2812,7 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False) -> Optio
                     return f"I couldn't get the forecast for {city_name} right now."
                 lines = [f"Here's the forecast for {city_name}."]
                 for item in daily:
-                    day = item.get("day", "?")
+                    day = _spoken_day(item.get("day", "?"))
                     hi = item.get("high", "?")
                     lo = item.get("low", "?")
                     desc = item.get("description", "unknown")

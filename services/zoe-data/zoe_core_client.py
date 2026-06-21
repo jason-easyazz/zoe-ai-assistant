@@ -223,16 +223,17 @@ class _ZoeCoreWorker:
                 # fully handled here — never fall through to the message-field path,
                 # which re-emits the first chunk (the "YouYou" double-emit).
                 continue
-            text = _assistant_text_from_rpc_event(event)
-            if text and text.startswith(emitted) and len(text) > len(emitted):
-                yield text[len(emitted):]
-                emitted = text
-                streamed_any = True
-            elif text and not text.startswith(emitted):
-                # Message boundary / non-monotonic update — emit the fresh text.
-                yield text
-                emitted = text
-                streamed_any = True
+            # Only fall back to the whole-message field when NOTHING has streamed
+            # for this turn yet. Once text_delta chunks have streamed, a terminal
+            # message/text_end/agent_end event re-delivers the COMPLETE message;
+            # emitting it again double-speaks the reply (whole-paragraph + "YouYou"
+            # first-token doubling). Deltas are the source of truth.
+            if not streamed_any:
+                text = _assistant_text_from_rpc_event(event)
+                if text:
+                    yield text
+                    emitted = text
+                    streamed_any = True
             if etype == "turn_end":
                 saw_turn_end = True
             # Only the END OF THE WHOLE AGENT LOOP terminates the turn. A bare

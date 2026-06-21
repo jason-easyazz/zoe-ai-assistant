@@ -26,6 +26,24 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/voice", tags=["voice"])
 
+# Strong references to fire-and-forget background tasks. asyncio only keeps a
+# WEAK reference to tasks created by ensure_future, so a GC mid-flight could
+# cancel a DB-writing coroutine partway through — that's what corrupted the
+# asyncpg connection ("another operation is in progress") and silently dropped
+# chat_messages saves. Holding the task here until it finishes prevents that.
+_BG_TASKS: set = set()
+
+
+def _spawn_bg(coro) -> None:
+    """Schedule a background coroutine with a strong reference (see _BG_TASKS)."""
+    try:
+        t = asyncio.ensure_future(coro)
+    except Exception as exc:  # no running loop — run inline best-effort
+        logger.warning("_spawn_bg could not schedule task: %s", exc)
+        return
+    _BG_TASKS.add(t)
+    t.add_done_callback(_BG_TASKS.discard)
+
 # ── Voice session continuity ───────────────────────────────────────────────
 # Persist one session_id per panel so follow-up voice commands have context.
 # Pass 3 B3: also stores bound_user_id (resolved via daemon VID or PIN) with
@@ -359,6 +377,48 @@ async def _synthesize_local_service(text: str, profile: str, base_url: str) -> O
         return None
 
 
+_MONTHS_SPOKEN = ["January", "February", "March", "April", "May", "June", "July",
+                  "August", "September", "October", "November", "December"]
+_ISO_DATE_RE = re.compile(r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b")
+_EMOJI_RE = re.compile(r"[\U0001F000-\U0001FAFF☀-➿️←-⇿⬀-⯿]")
+
+
+def _ordinal(n: int) -> str:
+    if 10 <= (n % 100) <= 20:
+        suf = "th"
+    else:
+        suf = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suf}"
+
+
+def _humanize_iso_date(m: "re.Match") -> str:
+    try:
+        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if 1 <= mo <= 12 and 1 <= d <= 31:
+            return f"the {_ordinal(d)} of {_MONTHS_SPOKEN[mo - 1]} {y}"
+    except Exception:
+        pass
+    return m.group(0)
+
+
+def _clean_for_speech(text: str) -> str:
+    """Normalize reply text so Kokoro doesn't read junk aloud: strip a leaked
+    JSON object, markdown (* _ ` # ~ |), emoji; speak ISO dates as words; turn
+    em/en dashes and ° into spoken forms. Applied at every TTS entry point."""
+    if not text:
+        return text
+    t = str(text)
+    t = re.sub(r"^\s*\{[^{}]*\}\s*", "", t)            # drop leading JSON leak
+    t = _ISO_DATE_RE.sub(_humanize_iso_date, t)         # 2026-06-22 -> the 22nd of June 2026
+    t = t.replace("°C", " degrees").replace("°F", " degrees").replace("°", " degrees")
+    t = t.replace("—", ", ").replace("–", ", ")
+    t = _EMOJI_RE.sub("", t)
+    t = re.sub(r"[*_`#~|>]+", "", t)                    # markdown
+    t = re.sub(r"\s+([,.!?;:])", r"\1", t)              # no space before punctuation
+    t = re.sub(r"\s{2,}", " ", t).strip()
+    return t
+
+
 async def _synthesize_kokoro_sidecar(text: str) -> Optional[bytes]:
     """Synthesize via Kokoro PyTorch sidecar (GPU, natural af_sky voice).
 
@@ -367,6 +427,7 @@ async def _synthesize_kokoro_sidecar(text: str) -> Optional[bytes]:
     Set ZOE_KOKORO_SIDECAR_URL to override (default http://127.0.0.1:10201).
     Falls through silently if the sidecar is unavailable.
     """
+    text = _clean_for_speech(text)
     sidecar_url = os.environ.get("ZOE_KOKORO_SIDECAR_URL", "http://127.0.0.1:10201").rstrip("/")
     voice = os.environ.get("ZOE_KOKORO_VOICE", "af_sky").strip() or "af_sky"
     try:
@@ -1607,7 +1668,7 @@ async def synthesize(payload: dict, caller: dict = Depends(_require_voice_auth))
         raise HTTPException(status_code=400, detail="text is required")
 
     # Pre-process: strip markdown and normalise units so TTS sounds natural.
-    text = _voice_preprocess(str(text).strip())[:1200]
+    text = _clean_for_speech(_voice_preprocess(str(text).strip()))[:1200]
     mode = os.getenv("ZOE_TTS_MODE", "hybrid").lower()
     profile = str((payload or {}).get("profile") or os.getenv("ZOE_VOICE_PROFILE", "zoe_au_natural_v1"))
     prof = VOICE_PROFILES.get(profile, VOICE_PROFILES["zoe_au_natural_v1"])
@@ -2506,7 +2567,7 @@ async def _maybe_capture_stt(wav_path: str, primary: str) -> None:
             alt = f"<whisper err: {exc}>"
         logger.warning("STT_AB file=%s moonshine=%r whisper=%r", dst, (primary or "")[:90], (alt or "")[:90])
 
-    asyncio.ensure_future(_ab())
+    _spawn_bg(_ab())
 
 
 async def _transcribe_audio(wav_path: str) -> str:
@@ -2711,9 +2772,9 @@ async def _schedule_voice_chat_save(
     try:
         from chat import _save_chat_message as _svc  # lazy — avoids circular import
         if user_text:
-            asyncio.ensure_future(_svc(session_id, "user", user_text))
+            _spawn_bg(_svc(session_id, "user", user_text))
         if reply:
-            asyncio.ensure_future(_svc(session_id, "assistant", reply))
+            _spawn_bg(_svc(session_id, "assistant", reply))
     except Exception:
         pass
 
@@ -2752,7 +2813,7 @@ async def _run_voice_memory_passes(
             ),
             return_exceptions=True,
         )
-        asyncio.ensure_future(_detect_suggestions(
+        _spawn_bg(_detect_suggestions(
             user_text,
             user_id=user_id,
             session_id=session_id,
@@ -2908,7 +2969,7 @@ async def voice_command(
     if text and effective_user not in ("guest", "voice-daemon", ""):
         try:
             from chat import _save_chat_message as _svc_user_turn
-            asyncio.ensure_future(_svc_user_turn(session_id, "user", text))
+            _spawn_bg(_svc_user_turn(session_id, "user", text))
         except Exception:
             pass
 
@@ -3135,7 +3196,7 @@ async def voice_command(
                 except Exception:
                     pass
                 await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
-                asyncio.ensure_future(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
+                _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
                 return {"ok": True, "panel_id": panel_id, "reply": reply_text,
                         "audio_base64": audio_b64_conf, "content_type": ct_conf}
             elif _contains_decision_keyword(lc, _CANCEL_KEYWORDS):
@@ -3224,7 +3285,7 @@ async def voice_command(
                     except Exception:
                         pass
                     await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
-                    asyncio.ensure_future(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
+                    _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
                     return {
                         "ok": True,
                         "panel_id": panel_id,
@@ -3348,7 +3409,7 @@ async def voice_command(
             except Exception:
                 pass
             await _schedule_voice_chat_save(session_id, text, _skybridge_reply, _skybridge_user)
-            asyncio.ensure_future(_run_voice_memory_passes(text, _skybridge_reply, _skybridge_user, session_id))
+            _spawn_bg(_run_voice_memory_passes(text, _skybridge_reply, _skybridge_user, session_id))
             return {
                 "ok": True,
                 "panel_id": panel_id,
@@ -3439,7 +3500,7 @@ async def voice_command(
                     }
                     _intro_audio = await synthesize({"text": reply_text}, caller=caller)
                     await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
-                    asyncio.ensure_future(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
+                    _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
                     return {
                         "ok": True,
                         "panel_id": panel_id,
@@ -3528,7 +3589,7 @@ async def voice_command(
                     )
                     _list_audio = await synthesize({"text": reply_text}, caller=caller)
                     await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
-                    asyncio.ensure_future(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
+                    _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
                     return {
                         "ok": True,
                         "panel_id": panel_id,
@@ -3580,7 +3641,7 @@ async def voice_command(
                     )
                     _cal_audio = await synthesize({"text": reply_text}, caller=caller)
                     await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
-                    asyncio.ensure_future(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
+                    _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
                     return {
                         "ok": True,
                         "panel_id": panel_id,
@@ -3609,7 +3670,7 @@ async def voice_command(
                     await _broadcast_reminder_ui(panel_id=panel_id, summary=reply_text, turn_key=_turn_key)
                     _rem_audio = await synthesize({"text": reply_text}, caller=caller)
                     await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
-                    asyncio.ensure_future(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
+                    _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
                     return {
                         "ok": True,
                         "panel_id": panel_id,
@@ -3743,7 +3804,7 @@ async def voice_command(
                     action=_pub_intent.name,
                 )
                 await _schedule_voice_chat_save(session_id, text, _pub_reply, effective_user)
-                asyncio.ensure_future(_run_voice_memory_passes(text, _pub_reply, effective_user, session_id))
+                _spawn_bg(_run_voice_memory_passes(text, _pub_reply, effective_user, session_id))
                 return {
                     "ok": True, "panel_id": panel_id,
                     "reply": _pub_reply,
@@ -3768,7 +3829,7 @@ async def voice_command(
                 await _broadcast_weather_ui(panel_id, _weather_fb_reply, turn_key=_turn_key)
                 _weather_fb_audio = await synthesize({"text": _weather_fb_reply}, caller=caller)
                 await _schedule_voice_chat_save(session_id, text, _weather_fb_reply, effective_user)
-                asyncio.ensure_future(_run_voice_memory_passes(text, _weather_fb_reply, effective_user, session_id))
+                _spawn_bg(_run_voice_memory_passes(text, _weather_fb_reply, effective_user, session_id))
                 return {
                     "ok": True,
                     "panel_id": panel_id,
@@ -3818,7 +3879,7 @@ async def voice_command(
                 except Exception:
                     pass
                 await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
-                asyncio.ensure_future(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
+                _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
                 return {
                     "ok": True, "panel_id": panel_id, "reply": reply_text,
                     "audio_base64": _xaudio_b64, "content_type": _xct,
@@ -4046,7 +4107,7 @@ async def voice_command(
                                 logger.info("voice/command stream escalation -> Hermes background=%s reason=%s", is_bg, reason or "unspecified")
                                 if is_bg:
                                     from background_runner import enqueue_background_task
-                                    asyncio.ensure_future(enqueue_background_task(hermes_prompt, effective_user, session_id))
+                                    _spawn_bg(enqueue_background_task(hermes_prompt, effective_user, session_id))
                                     delta = "I'll work on that in the background and let you know when it's done."
                                 else:
                                     # Voice foreground turns should answer aloud when possible;
@@ -4151,7 +4212,7 @@ async def voice_command(
                         logger.info("voice/command escalation -> Hermes background=%s reason=%s", is_bg, reason or "unspecified")
                         if is_bg:
                             from background_runner import enqueue_background_task
-                            asyncio.ensure_future(enqueue_background_task(hermes_prompt, effective_user, session_id))
+                            _spawn_bg(enqueue_background_task(hermes_prompt, effective_user, session_id))
                             delta = "I'll work on that in the background and let you know when it's done."
                         else:
                             # Voice foreground turns should answer aloud when possible;
@@ -4376,7 +4437,7 @@ async def voice_command(
     # handles both regex and LLM extraction passes in the background.
     if reply_text and effective_user and effective_user not in ("guest", "voice-daemon"):
         await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
-        asyncio.ensure_future(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
+        _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
 
     return {
         "ok": True,

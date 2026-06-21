@@ -189,12 +189,17 @@ def _plan(domain: str, text: str):
     from intent_router import detect_intent
 
     if domain == "weather":
-        # Forecast/advice questions ("rain later", "will it be sunny", "should I
-        # wear a jacket") need the forecast, not just current conditions.
+        low = text.lower()
+        # Advice questions get a DIRECT yes/no answer, not a forecast dump.
+        if re.search(r"\bumbrella\b|\brain(coat)?\b|will\s+it\s+rain|going\s+to\s+rain", low):
+            return ("weather", {"advice": "rain"}, "read")
+        if re.search(r"\bjacket\b|\bcoat\b|\bjumper\b|\bwarm(ly)?\b|\bcold\b|"
+                     r"what\s+should\s+i\s+wear|do\s+i\s+need\s+a", low):
+            return ("weather", {"advice": "warmth"}, "read")
+        # Otherwise: forecast for time-shifted questions, current for "right now".
         fc = bool(re.search(
             r"\b(later|tonight|tomorrow|this\s+week|weekend|forecast|will\s+it|"
-            r"going\s+to|gonna|rain|sunny|wear|umbrella|jacket|coat|do\s+i\s+need)\b",
-            text, re.IGNORECASE))
+            r"going\s+to|gonna|sunny)\b", low))
         return ("weather", {"forecast": fc}, "read")
     if domain == "time":
         det = detect_intent(text, log_miss=False)
@@ -228,11 +233,16 @@ def _plan(domain: str, text: str):
     }
     if domain in table:
         create_intent, show_intent = table[domain]
-        if _CREATE_RE.search(text):
-            return (create_intent, {}, "write")
+        # Explicit show cue → read. Otherwise default to CREATE: the router was
+        # already confident this is a calendar/lists/reminders request, and
+        # statements like "dentist on my calendar tomorrow" or "milk to the
+        # shopping list" carry no create verb yet are clearly adds (they were
+        # silently lost to the brain before). The forced-tool slot extractor
+        # then validates — if it can't extract a real item/title, dispatch
+        # returns None and we fall back to the brain.
         if _SHOW_RE.search(text):
             return (show_intent, {}, "read")
-        return None  # ambiguous → let the brain handle it
+        return (create_intent, {}, "write")
     if domain == "timers":
         return ("timer_create", {}, "write") if _CREATE_RE.search(text) else None
     return None
@@ -268,6 +278,14 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
     if _QUESTION_RE.search(text) and not explicit_store:
         return await _run_expert(domain, text, user_id, session_id)
     # Statement → store the fact.
+    # Idempotency: ingest dedups on user_turn_id, but the voice path rarely
+    # supplies one, so the same spoken fact got stored 3-4× (which then polluted
+    # recall ranking). Fall back to a stable hash of (user, normalized text) so
+    # repeats of the same statement collapse to one row.
+    if not user_turn_id:
+        import hashlib
+        norm = re.sub(r"\s+", " ", text.lower()).strip()
+        user_turn_id = "fact-" + hashlib.sha1(f"{user_id}|{norm}".encode()).hexdigest()[:16]
     try:
         from memory_service import get_memory_service
         await get_memory_service().ingest(
