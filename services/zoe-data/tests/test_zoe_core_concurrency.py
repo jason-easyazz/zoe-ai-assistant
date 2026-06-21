@@ -17,6 +17,15 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+@pytest.fixture(autouse=True)
+def _reset_brain_sem():
+    """Drop the lazily-created semaphore before/after each test so it never leaks
+    across tests bound to a now-closed event loop (each test uses asyncio.run)."""
+    zc._BRAIN_SEM = None
+    yield
+    zc._BRAIN_SEM = None
+
+
 class _FakeWorker:
     """Stand-in for _ZoeCoreWorker. `script` drives each stream() call:
     a string -> yields it; "empty" -> yields nothing; "raise" -> raises."""

@@ -356,10 +356,14 @@ async def run_zoe_core_streaming(
 
 
 async def _reset_worker_for(user_id: str, session_id: str) -> None:
-    """Reset (terminate) the worker for a key so the next turn re-spawns it fresh.
+    """Reset the worker for a key so the next turn re-spawns its subprocess fresh.
 
     Used by the retry path: when a turn comes back empty under load, the worker's
-    subprocess may be in a bad state — drop it so the retry gets a clean process.
+    subprocess may be in a bad state — `reset()` terminates it. The worker object
+    INTENTIONALLY stays registered in `_WORKERS` (it is restartable by design): the
+    retry's `_worker_for` returns the same object and `_ensure_started` re-spawns
+    the subprocess because `proc is None`. This preserves the (user, session) →
+    worker identity and LRU position across the reset.
     """
     key = ((user_id or "").strip(), session_id or "default")
     async with _WORKERS_LOCK:
