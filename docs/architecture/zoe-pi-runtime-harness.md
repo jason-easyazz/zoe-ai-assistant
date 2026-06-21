@@ -6,26 +6,40 @@ Pi is a candidate external runtime for Zoe capability reuse. Zoe should use Pi
 where it provides proven agent/runtime/package leverage, but Pi execution must
 enter through Zoe governance rather than bypass it.
 
-This first slice is intentionally read-only:
+The harness is gated by default:
 
 - detect whether `node`, `npm`, and `pi` are present;
 - discover project-local `.pi/agents/*.md` files;
 - expose execution policy config;
 - fail closed when execution is requested without a local/offline model path;
-- avoid installing Pi, installing packages, or running Pi agent tasks.
+- avoid installing Pi, installing packages, or running privileged Pi agent tasks;
+- allow explicitly gated local/offline intent probes for shadow and bake-off evidence.
 
 ## Current Zoe Host Result
 
-Date: 2026-06-09
+Date: 2026-06-15
 
-On the clean Zoe worktree:
+On the Zoe host, Pi is installed under `nvm` rather than the default non-login service PATH:
 
-- `node`: not found;
-- `npm`: not found;
-- `pi`: not found;
-- `.pi/agents`: not present in the Zoe repo;
-- execution status: disabled and acceptable;
-- enabled execution status: blocked until runtime prerequisites and local model config exist.
+- `node`: `/home/zoe/.nvm/versions/node/v22.22.0/bin/node`;
+- `npm`: `/home/zoe/.nvm/versions/node/v22.22.0/bin/npm`;
+- `pi`: `/home/zoe/.nvm/versions/node/v22.22.0/bin/pi`;
+- Pi version: `0.79.3`;
+- model config: `/home/zoe/.pi/agent/models.json` points at local `http://127.0.0.1:11434/v1`;
+- default policy: `ZOE_PI_ENABLED=false`, `ZOE_PI_INTENT_AUTO_PROMOTE=false`, and no promoted intent groups.
+
+The readiness probe checks `PATH` plus `~/.nvm/versions/node/*/bin`, so it can report this install truthfully without requiring service PATH changes. Pi remains disabled by default and any live execution still requires the explicit local/offline execution gates.
+
+Current Pi install/readiness facts from upstream docs:
+
+- Pi is distributed as `@earendil-works/pi-coding-agent` and the safe npm install command is
+  `npm install -g --ignore-scripts @earendil-works/pi-coding-agent`.
+- Current Pi requires Node.js `>=22.19.0` based on the Pi 0.75.0 release notes.
+- Zoe's probe may execute `node --version` and `npm --version` for readiness, but it does not
+  execute `pi`, install packages, or run agent/model tasks.
+- Installing Node/Pi remains a Multica-governed runtime change, not an automatic probe action.
+
+Sources checked 2026-06-15: https://pi.dev/docs/latest/quickstart and https://pi.dev/news.
 
 ## Configuration
 
@@ -42,6 +56,24 @@ Environment variables:
 | `ZOE_PI_CWD` | `/home/zoe/assistant` | Project directory for Pi runtime discovery. |
 | `ZOE_PI_AGENT_DIR` | unset | Optional explicit `.pi/agents` directory. |
 | `ZOE_PI_TIMEOUT_SECONDS` | `2.0` | Future runtime command timeout. |
+| `ZOE_PI_INTENT_SHADOW_ENABLED` | `false` | Collect Pi-vs-Zoe intent comparison records without executing Pi output. |
+| `ZOE_PI_INTENT_SHADOW_PATH` | `~/.zoe/data/pi-intent-shadow.jsonl` | JSONL evidence path for shadow records. |
+| `ZOE_PI_INTENT_SHADOW_MAX_WORDS` | `32` | Maximum utterance length eligible for shadow comparison. |
+| `ZOE_PI_INTENT_SHADOW_INCLUDE_PREVIEW` | `true` | Store a short sanitized text preview alongside the text hash. |
+| `ZOE_PI_INTENT_SHADOW_FORCE_ENABLED` | `true` | Force the classifier on inside shadow mode while keeping live routing unchanged. |
+| `ZOE_PI_INTENT_MISS_EVIDENCE_ENABLED` | `false` | Write sanitized intent-miss candidate rows for later review/labeling. |
+| `ZOE_PI_INTENT_MISS_EVIDENCE_PATH` | `~/.zoe/data/pi-intent-miss-evidence.jsonl` | JSONL path for structured intent-miss candidates. |
+| `ZOE_PI_INTENT_AUTO_PROMOTE` | `false` | Report whether automatic Pi promotion was requested. Current runtime remains evidence-only and requires the guarded apply helper. |
+| `ZOE_PI_INTENT_PROMOTED_GROUPS` | unset | Comma-separated low-risk intent groups promoted through Pi for live fallback execution and rollback reporting. Unknown or privileged groups are ignored. |
+| `ZOE_PI_INTENT_RUNTIME_PROBE_CACHE_TTL_SECONDS` | `5.0` | Cache Pi readiness checks inside the intent classifier to avoid repeated `PATH`/version discovery during shadow and eval loops. Set to `0` to disable. |
+
+Readiness report fields:
+
+- `tool_versions.node` / `tool_versions.npm`: read-only version snapshots from `--version`.
+- `requirements.node.minimum`: current Pi Node minimum, currently `22.19.0`.
+- `requirements.node.status`: `missing`, `unknown`, `too_old`, or `ok`.
+- `install_plan.install_command`: the operator-reviewed npm install command.
+- `install_plan.requires_multica_approval`: always `true` for runtime installation.
 
 ## Probe
 
@@ -50,8 +82,159 @@ PYTHONPATH=services/zoe-data python3 scripts/maintenance/pi_runtime_probe.py --j
 ```
 
 The probe is safe to run in production-adjacent environments because it only
-uses filesystem and `PATH` checks. It does not execute `pi`.
+uses filesystem, `PATH`, and `~/.nvm/versions/node/*/bin` checks plus `node --version` and `npm --version`.
+It does not execute `pi`, install packages, or run agent/model tasks.
 
+## Intent Shadow Evidence
+
+Pi intent shadow mode is disabled by default. When
+`ZOE_PI_INTENT_SHADOW_ENABLED=true`, Zoe's current intent route remains
+authoritative and Pi output is never executed by the shadow path. The shadow
+producer records sanitized JSONL evidence containing Zoe intent, Pi intent,
+route class, confidence, agreement, timeout, and latency fields.
+
+Admin status is available at:
+
+```bash
+GET /api/system/pi-intent/shadow-status
+```
+
+The first runtime slice reports agreement and latency for all records. Shadow
+records also carry `baseline_kind`, `baseline_comparable`, and `router_latency_ms`.
+Deterministic router records are comparable by default; fallback and
+extraction_failed records are marked non-comparable unless an operator/reviewed
+producer explicitly labels them with measured Zoe fallback or agent latency. When
+a record includes `outcome_label`, the admin report also converts it into the same
+Pi promotion scoring contract used by `pi_promotion_eval.py`, including
+`promotable_groups` and `rollback_groups`; non-comparable fallback evidence blocks
+promotion instead of being treated as a speed win. Reviewed records may also set
+`user_corrected=true` or `rollback_blocked=true`; those fields feed the same
+rollback gates as promotion samples. Synthetic cases remain useful smoke and
+latency evidence, but cannot promote a group by themselves: promotion also
+requires enough real/log-derived or `pi_intent_shadow` labeled evidence. The
+promotion report includes `route_class_breakdown` for deterministic, fallback,
+and extraction_failed baselines, `transport_breakdown` for print vs RPC latency
+and accuracy, `source_breakdown` for real vs synthetic evidence, plus compact
+`failure_examples` with IDs, intents, latency, transport, and reason flags, but
+not raw text or text previews. Unlabeled
+records are never treated as accuracy evidence. Pi live execution remains
+separately gated by
+`ZOE_PI_INTENT_PROMOTED_GROUPS`, so enabling the classifier alone does not
+promote all Pi classifications into executable Zoe routes. The report includes a read-only
+`promotion_actions.env.ZOE_PI_INTENT_PROMOTED_GROUPS` recommendation for operator
+review; Zoe does not rewrite env or auto-promote groups from shadow evidence.
+`ZOE_PI_INTENT_AUTO_PROMOTE=true` is reported for visibility, but current runtime
+still requires the guarded apply helper rather than silently editing configuration.
+Operators can inspect or explicitly apply that single env update with:
+
+```bash
+scripts/maintenance/pi_promotion_eval.py --demo --min-samples 10 \
+  | scripts/maintenance/pi_promotion_apply.py --env-file /path/to/.env
+scripts/maintenance/pi_promotion_eval.py --demo --min-samples 10 \
+  | scripts/maintenance/pi_promotion_apply.py --env-file /path/to/.env --apply --confirm APPLY_PI_PROMOTION
+```
+
+The apply helper only writes `ZOE_PI_INTENT_PROMOTED_GROUPS`; it rejects any other env key in the report.
+
+Optional structured intent-miss evidence can be enabled with
+`ZOE_PI_INTENT_MISS_EVIDENCE_ENABLED=true`. This writes sanitized candidate rows
+to `ZOE_PI_INTENT_MISS_EVIDENCE_PATH` without changing the live route. These rows
+start unlabeled and must be reviewed by an operator before adding an
+`outcome_label` for promotion scoring.
+
+## Evaluation Datasets
+
+The promotion evaluator can load sanitized JSON or JSONL case files so Zoe can
+grow evidence from intent misses, known failures, chat/voice-derived examples,
+synthetic ambiguous phrasing, and negative casual-chat cases without editing
+Python code. The seed dataset lives at:
+
+```bash
+data/eval/pi_intent_eval_cases.jsonl
+```
+
+Run the seed dataset without touching live routing:
+
+```bash
+scripts/maintenance/pi_promotion_eval.py \
+  --cases-file data/eval/pi_intent_eval_cases.jsonl \
+  --no-default-cases
+```
+
+Add `--run-pi --transport rpc` only when the local/offline Pi intent runtime is
+configured. The RPC path keeps a warm worker, waits for Pi's prompt `response`
+frame before accepting idless session events, resets on timeout or task
+cancellation, and ignores response events whose request id does not match the
+current prompt. Pi intent classification launches in a stripped classifier mode
+with no tools, extensions, skills, prompt templates, themes, or context files.
+A local low-risk task prefilter is enabled by default through
+`ZOE_PI_INTENT_PREFILTER_ENABLED=true`; it allows weather, reminder, list,
+timer, calculation, and daily-briefing signals through to Pi while skipping
+casual fallback misses before runtime probing. Operators can disable it for
+experiments with `ZOE_PI_INTENT_PREFILTER_ENABLED=false`.
+The evaluator treats fallback and extraction-failed router misses as
+`router_only_not_comparable` unless an operator supplies measured comparable
+latency with `--fallback-baseline-latency-ms` and/or
+`--extraction-failed-baseline-latency-ms`, or explicitly opts into live Zoe Agent
+fallback measurement with `--measure-zoe-agent-baseline`. Zoe Agent baseline
+measurement runs `run_zoe_agent()` for fallback/extraction_failed cases with a
+per-case timeout and max-token cap, and only marks the baseline comparable when
+Zoe Agent returns before timeout. The report still remains evidence-only;
+`ZOE_PI_INTENT_PROMOTED_GROUPS` changes must pass the promotion actions and
+guarded apply helper described above.
+
+### Latest Local Pi/Gemma Intent Eval
+
+Measured on 2026-06-15 with the built-in eval cases, local Gemma, and RPC
+transport after the stripped classifier launch, RPC protocol fix, and baseline
+comparability guard:
+
+- eligible samples: 9;
+- Pi accuracy: 100%;
+- Zoe router-only baseline accuracy on the same eligible samples: 33.3%;
+- Pi timeout rate on eligible samples: 0%;
+- Pi RPC p95 latency: about 3.98s in the latest run;
+- Zoe router-only p95 latency: about 1.70s in the latest run, but fallback and
+  extraction-failed cases are now explicitly marked not comparable;
+- promotable groups: none, because the seed fallback/extraction-failed evidence
+  lacks a measured comparable Zoe fallback baseline and Pi still loses the
+  router-only latency gate.
+
+Decision: keep Pi intent routing in shadow/evidence mode. Pi is accurate enough
+on the seed eval to justify more measurement, but promotion requires measured
+Zoe fallback/agent latency or labeled runtime shadow records, not router-only
+miss timing.
+
+Single-case measured fallback smoke on 2026-06-15 using `rain later`, local
+Gemma, RPC transport, `--measure-zoe-agent-baseline`, 20s timeout, and 128-token
+Zoe Agent cap: Zoe Agent fallback returned in about 6.75s with 260 response
+characters; Pi RPC classified `weather` in about 4.09s. This is useful evidence,
+but not enough sample volume for promotion.
+
+Low-risk prefilter benchmark on 2026-06-15 with three repeated RPC runs over the
+same seed set: positive low-risk cases stayed at 100% seed accuracy, with average
+positive latency effectively unchanged (about 2788ms without prefilter vs about
+2785ms with prefilter). Negative casual fallback examples dropped from about
+2303ms average latency without prefilter to about 0.06ms with prefilter, with no
+timeouts reported. End-to-end seed pass time dropped from about 31-32s to about
+26-28s. This protects normal chat from paying a model/RPC cost when there is no
+low-risk task signal, but does not solve the remaining 2.5-4.0s positive Pi
+classification cost.
+
+Sanitized JSONL evidence can be exported into the same eval-case format. For Pi
+shadow records this uses `text_preview` plus a trusted `outcome_label`; unlabeled,
+privileged, secret-looking, or overlong rows are skipped:
+
+```bash
+scripts/maintenance/pi_eval_export.py ~/.zoe/data/pi-intent-shadow.jsonl \
+  --source intent_miss \
+  --case-prefix shadow \
+  --output /tmp/pi-intent-export.jsonl \
+  --summary
+scripts/maintenance/pi_promotion_eval.py \
+  --cases-file /tmp/pi-intent-export.jsonl \
+  --no-default-cases
+```
 
 ## Review-Only Runtime Proposal
 
@@ -82,9 +265,11 @@ Pi remains experimental until all of these are true:
 - execution evidence includes tests, rollback, and PR/Grep loop evidence for
   code-producing changes.
 
-## Why Not Execute Yet
+## Why Not Promote Yet
 
 Pi's official docs support CLI, SDK, RPC, project-local agents, and packages,
-but the Zoe host does not currently have the Node/Pi runtime needed to run it.
-Installing that runtime is a privileged environment change. The correct next
-step is a scored, approved install/runtime proposal, not silent installation.
+and the Zoe host now has a local Pi runtime available under `nvm`. The current
+blocker is not installation; it is promotion evidence. Pi intent RPC must beat
+Zoe's comparable route latency as well as its accuracy before any low-risk group
+is promoted. Current evidence shows strong seed accuracy but slower latency, so
+Pi remains shadow-only.

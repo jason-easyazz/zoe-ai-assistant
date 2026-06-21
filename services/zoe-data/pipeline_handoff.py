@@ -78,6 +78,19 @@ _SURFACED_BLOCKER_RE = re.compile(rf"\b(?:{'|'.join(_SURFACED_BLOCKER_TOKENS)})\
 
 
 _REAL_PR_URL_RE = re.compile(r"^https://github\.com/[^/\s]+/[^/\s]+/pull/\d+(?:[/?#].*)?$", re.I)
+# Non-anchored variant for recovering a PR URL mentioned in prose (e.g. a worker
+# that opened a PR but only wrote "PR opened: <url>" instead of a structured
+# PR_URL= field). Stops at whitespace / sentence punctuation.
+_EMBEDDED_PR_URL_RE = re.compile(r"https://github\.com/[^/\s]+/[^/\s]+/pull/\d+", re.I)
+
+
+def _pr_url_from_haystacks(detail: dict[str, Any]) -> str:
+    """Recover a GitHub PR URL mentioned anywhere in the handoff text."""
+    for chunk in _haystacks(detail):
+        match = _EMBEDDED_PR_URL_RE.search(str(chunk or ""))
+        if match:
+            return match.group(0)
+    return ""
 
 
 def _usable_pr_url(raw: str | None) -> str:
@@ -654,6 +667,12 @@ def evidence_from_handoff(
         items.append(EvidenceItem(kind="log", summary=retro_raw[:500], passed=True, metadata=metadata))
 
     pr_url = _usable_pr_url(fields.get("PR_URL")) or _usable_pr_url(ticket_pr_url)
+    if not pr_url and phase in {"implement", "verify", "closeout"}:
+        # The worker opened a PR but did not echo it in a structured PR_URL=
+        # field (observed: a worker that wrote "PR opened: <url>" in prose).
+        # Recover it from the handoff text so a real, opened PR still satisfies
+        # the pr-evidence gate instead of GATE_BLOCKED: missing required evidence pr.
+        pr_url = _usable_pr_url(_pr_url_from_haystacks(detail))
     if pr_url and phase in {"implement", "verify", "closeout"}:
         items.append(EvidenceItem(kind="pr", summary=pr_url[:500], artifact=pr_url, passed=True))
 

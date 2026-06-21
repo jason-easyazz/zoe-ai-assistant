@@ -1,11 +1,12 @@
 {
   "strictness": 2,
-  "commentTypes": ["logic", "style"],
+  "commentTypes": ["logic", "syntax"],
   "excludeBranches": ["draft", "wip"],
   "triggerOnDrafts": false,
   "triggerOnUpdates": true,
   "statusCheck": true,
   "statusCommentsEnabled": true,
+  "updateExistingSummaryComment": true,
   "summarySection": {
     "included": true,
     "collapsible": true,
@@ -51,6 +52,18 @@
       "id": "no-junk-backups",
       "severity": "medium",
       "rule": "Do not add backup, old, new, fixed, tmp, log, or generated junk files. Use git history and the approved repo structure."
+    },
+    {
+      "id": "pytest-monkeypatch-module-globals",
+      "severity": "medium",
+      "scope": ["**/tests/**/*.py", "**/test_*.py", "**/*_test.py"],
+      "rule": "Reset or override module-level globals (e.g. _ENV_BOOTSTRAPPED, _ENV_FILES, cached singletons) via monkeypatch.setattr, never direct attribute assignment. Direct assignment is not restored on teardown and leaks stale state into later tests."
+    },
+    {
+      "id": "pytest-no-untracked-environ-leak",
+      "severity": "medium",
+      "scope": ["**/tests/**/*.py", "**/test_*.py", "**/*_test.py"],
+      "rule": "When code under test writes os.environ directly (bypassing monkeypatch), guarantee cleanup in a try/finally that pops the key. monkeypatch.delenv only restores keys monkeypatch itself set, so untracked writes leak into later tests."
     }
   ]
 }

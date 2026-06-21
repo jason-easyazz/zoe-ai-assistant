@@ -479,6 +479,7 @@ TOOLS = [
                 "pr_number": {"type": "integer", "description": "Pull request number"},
                 "default_branch": {"type": "string", "default": "main"},
                 "branch": {"type": "string", "description": "Current PR branch"},
+                "force": {"type": "boolean", "default": False, "description": "Bypass same-head trigger cooldown."},
             },
             "required": ["pr_number"],
         },
@@ -1872,12 +1873,13 @@ async def _execute_tool(db, name: str, args: dict):
 
     elif name == "greptile_trigger_review":
         try:
-            from greptile_client import trigger_review  # type: ignore[import]
-            return await trigger_review(
+            from greploop_guard import trigger_review_with_guard_lock  # type: ignore[import]
+            return await trigger_review_with_guard_lock(
                 repo=args.get("repo") or "jason-easyazz/zoe-ai-assistant",
                 pr_number=args.get("pr_number"),
                 default_branch=args.get("default_branch") or "main",
                 branch=args.get("branch"),
+                force=bool(args.get("force", False)),
             )
         except Exception as exc:
             return {"error": f"Greptile trigger review failed: {exc}"}

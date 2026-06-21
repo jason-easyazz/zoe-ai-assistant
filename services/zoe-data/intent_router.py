@@ -15,15 +15,78 @@ import logging
 import os
 import re
 import shlex
+import time
 import shutil
 import unicodedata
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
+from fastapi import HTTPException
+
+from zoe_pi_promotion import LOW_RISK_PI_INTENT_GROUPS
+
 if TYPE_CHECKING:
     from conversation_context import ConversationContext
 
 logger = logging.getLogger(__name__)
+
+_DAILY_BRIEFING_RESPONSE_CACHE: dict[str, tuple[float, str]] = {}
+_DAILY_BRIEFING_CACHE_TTL_SECONDS = float(os.environ.get("ZOE_DAILY_BRIEFING_CACHE_TTL_SECONDS", "120"))
+_DAILY_BRIEFING_CACHE_MAX_USERS = max(1, int(os.environ.get("ZOE_DAILY_BRIEFING_CACHE_MAX_USERS", "64")))
+
+
+def _daily_briefing_cache_sweep(now: float | None = None) -> None:
+    if not _DAILY_BRIEFING_RESPONSE_CACHE:
+        return
+    current = time.time() if now is None else now
+    expired = [
+        user_id
+        for user_id, (stored_at, _response) in _DAILY_BRIEFING_RESPONSE_CACHE.items()
+        if (current - stored_at) > _DAILY_BRIEFING_CACHE_TTL_SECONDS
+    ]
+    for user_id in expired:
+        _DAILY_BRIEFING_RESPONSE_CACHE.pop(user_id, None)
+    while len(_DAILY_BRIEFING_RESPONSE_CACHE) > _DAILY_BRIEFING_CACHE_MAX_USERS:
+        oldest_user = min(_DAILY_BRIEFING_RESPONSE_CACHE, key=lambda key: _DAILY_BRIEFING_RESPONSE_CACHE[key][0])
+        _DAILY_BRIEFING_RESPONSE_CACHE.pop(oldest_user, None)
+
+
+def _daily_briefing_cache_get(user_id: str) -> Optional[str]:
+    if _DAILY_BRIEFING_CACHE_TTL_SECONDS <= 0:
+        return None
+    _daily_briefing_cache_sweep()
+    cached = _DAILY_BRIEFING_RESPONSE_CACHE.get(user_id)
+    if not cached:
+        return None
+    stored_at, response = cached
+    if (time.time() - stored_at) > _DAILY_BRIEFING_CACHE_TTL_SECONDS:
+        _DAILY_BRIEFING_RESPONSE_CACHE.pop(user_id, None)
+        return None
+    return response
+
+
+def _daily_briefing_cache_set(user_id: str, response: str) -> None:
+    if _DAILY_BRIEFING_CACHE_TTL_SECONDS <= 0 or not response:
+        return
+    _daily_briefing_cache_sweep()
+    _DAILY_BRIEFING_RESPONSE_CACHE[user_id] = (time.time(), response)
+    _daily_briefing_cache_sweep()
+
+
+def _daily_briefing_cached_weather() -> Optional[dict]:
+    try:
+        from routers.weather import _weather_cache
+
+        current = _weather_cache.get("current") or {}
+        if current.get("temp") is None:
+            return None
+        return {
+            "temp": current.get("temp"),
+            "city": current.get("city") or "your area",
+            "description": current.get("description", ""),
+        }
+    except Exception:
+        return None
 
 
 def _spoken_day_ordinal(day: int) -> str:
@@ -135,6 +198,15 @@ def _infer_event_category(text: str) -> str:
 def _normalize_chat_intent_text(raw: str) -> str:
     """Lowercase, Unicode-normalize, collapse whitespace, strip STT filler artifacts."""
     s = unicodedata.normalize("NFKC", (raw or "").strip()).lower()
+    s = re.sub(r"\s+", " ", s).strip()
+    # Strip a leading wake word the panel sometimes leaves in the transcript
+    # ("hey zoe, what's the weather" → "what's the weather"). Without this, every
+    # $-anchored fast-path regex misses and the whole turn falls through to the
+    # slow brain path — the dominant cause of "voice feels slow" on common commands.
+    # [\s,.!?:;-]* also eats trailing punctuation, since some STT models render
+    # the wake word as its own sentence ("Zoe. What's the weather").
+    s = re.sub(r"^(?:hey|hi|hello|ok|okay|yo|hiya)\s+zoe\b[\s,.!?:;-]*", "", s)
+    s = re.sub(r"^zoe\b[\s,.!?:;-]*", "", s)
     s = re.sub(r"\s+", " ", s).strip()
     # Replace "^and" → "add" ONLY when followed by a list-add phrasing ("X to [list-type] list").
     # STT frequently mishears "add" as "and" for Australian accents (e.g. "add bread" → "and bread").
@@ -257,15 +329,29 @@ def openclaw_user_message(intent: Optional[Intent], user_text: str) -> str:
 
 _TIME_QUERY_RE = re.compile(
     r"^(what'?s?\s+the\s+time|what\s+time\s+is\s+it(\s+(right\s+now|now))?"
-    r"|tell\s+me\s+the\s+time|current\s+time|time\s+now|time\s+please|what\s+time\s+is\s+it)\??$",
+    r"|tell\s+me\s+the\s+time|current\s+time|time\s+now|time\s+please|what\s+time\s+is\s+it"
+    r"|do\s+you\s+have\s+the\s+time|(?:can\s+you\s+)?give\s+me\s+the\s+time"
+    r"|what\s+hour\s+is\s+it)\??$",
     re.IGNORECASE,
 )
 
 _DATE_QUERY_RE = re.compile(
     r"^(what'?s?\s+today'?s?\s+date|what\s+(is\s+)?the\s+date(\s+today)?"
-    r"|what\s+day\s+(is\s+it|of\s+the\s+week(\s+is\s+it)?)|today'?s?\s+date"
+    r"|what\s+day\s+(is\s+it(\s+today)?|of\s+the\s+week(\s+is\s+it)?)|today'?s?\s+date"
     r"|what\s+year\s+is\s+it(\s+now)?|what\s+month\s+is\s+it(\s+now)?"
-    r"|day\s+of\s+the\s+week|what'?s?\s+the\s+date(\s+today)?)\??$",
+    r"|day\s+of\s+the\s+week|what'?s?\s+the\s+date(\s+today)?"
+    r"|(?:show\s+me|tell\s+me)\s+(?:the\s+|today'?s?\s+)?date|what'?s?\s+today)\??$",
+    re.IGNORECASE,
+)
+
+_TIME_PLANNING_CLARIFICATION_RE = re.compile(
+    r"^(?:what(?:'s|\s+is)\s+)?(?:the\s+)?best\s+time\s+to\s+(?:leave|go|head\s+out)\b",
+    re.IGNORECASE,
+)
+
+_TIME_MATH_CLARIFICATION_RE = re.compile(
+    r"^(?:what(?:'s|\s+is)\s+)?(?:the\s+)?(?:meeting|travel|arrival|departure)\s+time\s+"
+    r"(?:plus|minus|\+|-)\s+(?:the\s+)?(?:meeting|travel|arrival|departure)\s+time\b",
     re.IGNORECASE,
 )
 
@@ -398,11 +484,35 @@ _LETS_TALK_RE = re.compile(
 # Placed after lets_talk so "let's chat" doesn't become a greeting.
 # good_morning/good_evening are kept as separate intents for the daily-briefing flow.
 _GREETING_RE = re.compile(
-    r"^(?:hello|hi|hey|howdy|heya|greetings|yo)(?:\s+(?:there|zoe|there\s+zoe))?\s*[!.,]?\s*$"
+    r"^(?:hello|hi|hey|howdy|heya|hiya|greetings|yo|g'?day)(?:\s+(?:there|zoe|there\s+zoe))?\s*[!.,]?\s*$"
+    r"|^(?:hello|hi|hey|howdy|heya|hiya|yo)(?:\s+(?:there|zoe|there\s+zoe))?\s+how\s+are\s+you(?:\s+today)?\s*[!.,?]?\s*$"
     r"|^sup(?:\s+zoe)?\s*\??$"
     r"|^what'?s\s+up(?:\s+zoe)?\s*\??\s*$"
     r"|^how\s+are\s+you(?:\s+today)?(?:\s+zoe)?\s*\??\s*$"
+    r"|^how'?s\s+it\s+going(?:\s+zoe)?\s*\??\s*$"
     r"|^good\s+(?:afternoon|night)(?:\s+zoe)?\s*[!.,]?\s*$",
+    re.IGNORECASE,
+)
+
+# Social acknowledgements ("thanks", "got it") and presence checks ("are you
+# there?") — instant canned replies so they never wake the ~2-4s brain. All
+# anchored ^...$ so they can't swallow a real request ("okay add milk" won't match).
+_THANKS_RE = re.compile(
+    r"^(?:thanks?|thank\s+you|thank\s+u|thx|ty|cheers|much\s+appreciated)"
+    r"(?:\s+(?:so\s+much|a\s+lot|very\s+much|heaps))?(?:\s+zoe)?\s*[!.,]*$",
+    re.IGNORECASE,
+)
+_ACK_RE = re.compile(
+    r"^(?:got\s+it|gotcha|understood|makes\s+sense|good\s+to\s+know|noted|fair\s+enough)\s*[!.,]*$"
+    r"|^(?:ok|okay|okey|k|alright|cool|nice|great|perfect|awesome|lovely|sweet|sounds\s+good)\s*[!.,]*$"
+    r"|^(?:no\s+(?:problem|worries)|all\s+good)\s*[!.,]*$",
+    re.IGNORECASE,
+)
+_STATUS_CHECK_RE = re.compile(
+    r"^(?:are\s+you\s+|you\s+)?(?:there|listening|awake|around|still\s+(?:there|listening|awake|with\s+me))\s*\??$"
+    r"|^(?:can\s+you\s+)?hear\s+me(?:\s+(?:ok|okay|now))?\s*\??$"
+    r"|^(?:are\s+you\s+)?(?:still\s+)?(?:working|online|up|ready)\s*\??$"
+    r"|^zoe\s*\??$",
     re.IGNORECASE,
 )
 
@@ -501,6 +611,7 @@ def detect_intent(
     text: str,
     log_miss: bool = True,
     context: "Optional[ConversationContext]" = None,
+    user_id: str = "unknown",
 ) -> Optional[Intent]:
     t = _normalize_chat_intent_text(text)
 
@@ -580,6 +691,14 @@ def detect_intent(
     if re.match(r"^ping\.?$", t):
         return Intent("greeting", {})
 
+    # Social acknowledgements & presence checks — instant, no brain.
+    if _THANKS_RE.match(t):
+        return Intent("acknowledgement", {"kind": "thanks"})
+    if _ACK_RE.match(t):
+        return Intent("acknowledgement", {"kind": "ack"})
+    if _STATUS_CHECK_RE.match(t):
+        return Intent("status_check", {})
+
     if re.match(r"^what lists do i have\??$", t):
         return Intent("list_show", {})
 
@@ -593,6 +712,12 @@ def detect_intent(
         return Intent("memory_remember", {"raw": text})
 
     # === CLOCK / CALENDAR QUERIES — checked before domain patterns (no slots needed) ===
+
+    if _TIME_PLANNING_CLARIFICATION_RE.match(t):
+        return Intent("time_planning_clarification", {"kind": "best_time_to_leave"})
+
+    if _TIME_MATH_CLARIFICATION_RE.match(t):
+        return Intent("time_planning_clarification", {"kind": "time_math"})
 
     # Modelled on HA's HassGetCurrentTime and HassGetCurrentDate — two separate intents
     if _TIME_QUERY_RE.match(t):
@@ -905,7 +1030,8 @@ def detect_intent(
         r"^what(?:'?s| is) (?:on )?(?:today|my day)(?: like)?$",
         r"^whats (?:on )?(?:today|my day)(?: like)?$",
         r"^(?:daily|morning) (?:briefing|update|rundown)$",
-        r"^give me (?:a )?rundown$",
+        r"^give me (?:a |my )?(?:daily |morning )?(?:briefing|update|rundown)$",
+        r"^what(?:'s| is) (?:coming up|on|left)(?: for me)? today$",
         r"^what (?:do i|have i got) (?:have )?(?:on )?today$",
     ]:
         if re.match(pattern, t):
@@ -1010,8 +1136,7 @@ def detect_intent(
     # --- LIST SHOW ---
     for pattern in [
         r"^(?:show|read|check) (?:me )?(?:the |my )?(.+?) ?list$",
-        r"^what'?s on (?:the |my )?(.+?) ?list$",
-        r"^whats on (?:the |my )?(.+?) ?list$",
+        r"^what(?:'?s| is) on (?:the |my )?(.+?) ?list$",
         r"^what do i need to (?:buy|get)$",
         r"^what'?s on my list$",
         r"^show my list$",
@@ -1277,7 +1402,254 @@ def detect_intent(
                 _f.write(_json.dumps({"text": _clean, "ts": __import__("time").time()}) + "\n")
         except (OSError, TypeError, ValueError, re.error):
             pass  # Never let logging break intent routing
+        try:
+            from pi_intent_evidence import record_intent_miss_evidence
+
+            record_intent_miss_evidence(text, route_class="fallback", user_id=user_id if isinstance(user_id, str) else "unknown")
+        except Exception:
+            pass  # Never let evidence collection break intent routing
     return None
+
+
+def _relative_reminder_now():
+    from datetime import datetime
+
+    return datetime.now().replace(second=0, microsecond=0)
+
+
+def _parse_relative_reminder_duration(raw: str):
+    from datetime import timedelta
+
+    value = re.sub(r"\s+", " ", str(raw or "").strip().lower())
+    if not value:
+        return None
+
+    if value == "half an hour":
+        return timedelta(minutes=30)
+
+    quantity_words = {
+        "a": 1,
+        "an": 1,
+        "one": 1,
+        "two": 2,
+        "three": 3,
+        "four": 4,
+        "five": 5,
+        "six": 6,
+        "seven": 7,
+        "eight": 8,
+        "nine": 9,
+        "ten": 10,
+        "a few": 3,
+        "a couple": 2,
+        "a couple of": 2,
+    }
+    m = re.match(
+        r"^(?P<qty>\d+|a\s+few|a\s+couple(?:\s+of)?|an?|one|two|three|four|five|six|seven|eight|nine|ten)\s+"
+        r"(?P<unit>min(?:ute)?s?|hours?|days?|weeks?)$",
+        value,
+        flags=re.IGNORECASE,
+    )
+    if not m:
+        return None
+
+    qty_text = m.group("qty").lower()
+    quantity = int(qty_text) if qty_text.isdigit() else quantity_words.get(qty_text)
+    if not quantity or quantity < 1 or quantity > 999:
+        return None
+
+    unit = m.group("unit").lower()
+    if unit.startswith("min"):
+        return timedelta(minutes=quantity)
+    if unit.startswith("hour"):
+        return timedelta(hours=quantity)
+    if unit.startswith("day"):
+        return timedelta(days=quantity)
+    if unit.startswith("week"):
+        return timedelta(weeks=quantity)
+    return None
+
+
+def _extract_relative_reminder_slots(text: str) -> Optional[dict]:
+    raw = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not raw:
+        return None
+
+    duration_pattern = (
+        r"(?P<duration>"
+        r"\d+\s+(?:min(?:ute)?s?|hours?|days?|weeks?)|"
+        r"half\s+an\s+hour|"
+        r"(?:a\s+few|a\s+couple(?:\s+of)?|an?|one|two|three|four|five|six|seven|eight|nine|ten)\s+"
+        r"(?:min(?:ute)?s?|hours?|days?|weeks?)"
+        r")"
+    )
+    patterns = [
+        rf"^remind me in {duration_pattern}\s+(?:to|about)\s+(?P<title>.+)$",
+        rf"^remind me (?:to|about)\s+(?P<title>.+?)\s+in {duration_pattern}$",
+        rf"^remember to\s+(?P<title>.+?)\s+in {duration_pattern}$",
+        rf"^set a reminder in {duration_pattern}\s+(?:to|for|about)\s+(?P<title>.+)$",
+        rf"^set a reminder (?:to|for|about)\s+(?P<title>.+?)\s+in {duration_pattern}$",
+    ]
+    title = ""
+    duration_text = ""
+    for pattern in patterns:
+        match = re.match(pattern, raw, flags=re.IGNORECASE)
+        if match:
+            title = match.group("title").strip(" ,.-")
+            duration_text = match.group("duration")
+            break
+    if not title or not duration_text:
+        return None
+
+    if re.search(r"\bevery\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|day|week|month|year)\b", title, flags=re.IGNORECASE):
+        return None
+    if re.search(r"\b(?:next|this|coming|last)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", title, flags=re.IGNORECASE):
+        return None
+
+    delta = _parse_relative_reminder_duration(duration_text)
+    if not delta:
+        return None
+    due = _relative_reminder_now() + delta
+    return {"title": title, "date": due.date().isoformat(), "time": due.strftime("%H:%M")}
+
+
+def _extract_simple_reminder_slots(text: str) -> Optional[dict]:
+    """Fast slots for common reminder phrases, including bounded relative durations.
+
+    Recurring, modified-weekday, named-time, and other complex phrases fall back to NLU.
+    """
+
+    raw = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not raw:
+        return None
+    relative_slots = _extract_relative_reminder_slots(raw)
+    if relative_slots:
+        return relative_slots
+
+    patterns = [
+        r"^remind me (?:to|about)\s+(.+)$",
+        r"^remember to\s+(.+)$",
+        r"^set a reminder (?:to|for|about)\s+(.+)$",
+        r"^reminder (?:to|for|about)\s+(.+)$",
+        r"^(?:add|create|make|schedule)\s+(?:a |an )?reminder\s+(?:to|for|about)?\s*(.+)$",
+    ]
+    body = ""
+    for pattern in patterns:
+        m = re.match(pattern, raw, flags=re.IGNORECASE)
+        if m:
+            body = m.group(1).strip()
+            break
+    if not body:
+        return None
+    if re.search(r"\bin\s+\d+\s+(?:min(?:ute)?s?|hours?|days?|weeks?)\b", body, flags=re.IGNORECASE):
+        return None
+    if re.search(
+        r"\bin\s+(?:(?:a\s+few|a\s+couple(?:\s+of)?|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:min(?:ute)?s?|hours?|days?|weeks?)|an?\s+(?:min(?:ute)?|hour|day|week)|half\s+an\s+hour)\b",
+        body,
+        flags=re.IGNORECASE,
+    ):
+        return None
+    if re.search(
+        r"\b(?:next|this|coming|last)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
+        body,
+        flags=re.IGNORECASE,
+    ):
+        return None
+    if re.search(
+        r"\bevery\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|day|week|month|year)\b",
+        body,
+        flags=re.IGNORECASE,
+    ):
+        return None
+    if re.search(
+        r"\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)$",
+        body,
+        flags=re.IGNORECASE,
+    ) and not re.search(
+        r"\son\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)$",
+        body,
+        flags=re.IGNORECASE,
+    ):
+        return None
+    if re.search(
+        r"\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(?:at\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm)\b",
+        body,
+        flags=re.IGNORECASE,
+    ):
+        return None
+    if re.search(
+        r"\b(?:noon|midnight|morning|afternoon|evening|(?:to)?night|bedtime|lunchtime|dinnertime)\b",
+        body,
+        flags=re.IGNORECASE,
+    ):
+        return None
+    if re.search(r"\bat\s+\d{1,4}(?::\d{2})?\b(?!\s*(?:am|pm))", body, flags=re.IGNORECASE):
+        return None
+    if re.match(
+        r"^(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
+        body,
+        flags=re.IGNORECASE,
+    ):
+        return None
+    if re.search(
+        r"\bon\s+(?:the\s+)?(?:\d{1,2}(?:st|nd|rd|th)?|(?:my|your|his|her|their)\s+birthday|new\s+year'?s?|christmas|easter|thanksgiving)$",
+        body,
+        flags=re.IGNORECASE,
+    ):
+        return None
+
+    def _pop_time(value: str) -> tuple[str, str]:
+        value = value.strip()
+        time_patterns = [
+            r"\s+at\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm))$",
+            r"\s+(\d{1,2}(?::\d{2})\s*(?:am|pm)|\d{1,2}\s*(?:am|pm))$",
+        ]
+        for pattern in time_patterns:
+            m = re.search(pattern, value, flags=re.IGNORECASE)
+            if not m:
+                continue
+            parsed = _parse_time(m.group(1))
+            if parsed:
+                return value[:m.start()].strip(), parsed
+        return value, ""
+
+    def _pop_date(value: str) -> tuple[str, str]:
+        value = value.strip()
+        day_names = "monday|tuesday|wednesday|thursday|friday|saturday|sunday"
+        month_names = (
+            "january|february|march|april|may|june|july|august|september|october|november|december|"
+            "jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec"
+        )
+        date_patterns = [
+            rf"\s+on\s+(today|tomorrow|{day_names})$",
+            r"\s+(today|tomorrow)$",
+            rf"\s+on\s+((?:{month_names})\s+\d{{1,2}}(?:st|nd|rd|th)?(?:\s+\d{{4}})?)$",
+            rf"\s+on\s+(\d{{1,2}}(?:st|nd|rd|th)?\s+(?:of\s+)?(?:{month_names})(?:\s+\d{{4}})?)$",
+            r"\s+on\s+(\d{4}-\d{2}-\d{2})$",
+        ]
+        for pattern in date_patterns:
+            m = re.search(pattern, value, flags=re.IGNORECASE)
+            if not m:
+                continue
+            parsed = _parse_date(m.group(1))
+            if parsed:
+                return value[:m.start()].strip(), parsed
+        return value, ""
+
+    body, date = _pop_date(body)
+    body, time_value = _pop_time(body)
+    if not date:
+        body, date = _pop_date(body)
+
+    title = re.sub(r"\s+", " ", body).strip(" ,.-")
+    title = re.sub(r"^(?:to|for|about)\s+", "", title, flags=re.IGNORECASE).strip()
+    if not title:
+        return None
+
+    slots = {"title": title, "date": date or _parse_date("today") or ""}
+    if time_value:
+        slots["time"] = time_value
+    return slots
 
 
 async def detect_and_extract_intent(
@@ -1302,15 +1674,124 @@ async def detect_and_extract_intent(
     Returns None when no intent matched OR when LLM extraction failed (caller
     should fall through to Zoe Agent).
     """
-    intent = detect_intent(text, context=context)
+    def _context_turns() -> str:
+        if context and context.is_fresh() and context.last_text:
+            return f"previous={context.last_text!r}; previous_intent={context.last_intent}"
+        return ""
+
+    shadow_unset = object()
+
+    def _env_enabled(name: str) -> bool:
+        return str(os.environ.get(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+    def _schedule_pi_shadow(
+        zoe_intent: Optional["Intent"],
+        *,
+        route_class: str,
+        zoe_latency_ms: float | None,
+        pi_result=shadow_unset,
+        baseline_kind: str | None = None,
+        baseline_comparable: bool | None = None,
+        router_latency_ms: float | None = None,
+    ) -> None:
+        if not _env_enabled("ZOE_PI_INTENT_SHADOW_ENABLED"):
+            return
+
+        async def _runner() -> None:
+            try:
+                from pi_intent_shadow import maybe_record_pi_intent_shadow
+
+                kwargs = {
+                    "zoe_intent": zoe_intent.name if zoe_intent else None,
+                    "zoe_confidence": zoe_intent.confidence if zoe_intent else None,
+                    "zoe_latency_ms": zoe_latency_ms,
+                    "route_class": route_class,
+                    "baseline_kind": baseline_kind,
+                    "baseline_comparable": baseline_comparable,
+                    "router_latency_ms": router_latency_ms,
+                    "user_id": user_id,
+                    "context_turns": _context_turns(),
+                }
+                if pi_result is not shadow_unset:
+                    kwargs["pi_result"] = pi_result
+                await maybe_record_pi_intent_shadow(text, **kwargs)
+            except Exception as exc:
+                logger.debug("detect_and_extract_intent: Pi shadow evidence failed: %s", exc)
+
+        task = asyncio.create_task(_runner())
+        task.add_done_callback(lambda done: done.exception() if not done.cancelled() else None)
+
+    def _pi_execution_has_promoted_groups() -> bool:
+        if not _env_enabled("ZOE_PI_INTENT_ENABLED"):
+            return False
+        requested = {
+            group.strip()
+            for group in str(os.environ.get("ZOE_PI_INTENT_PROMOTED_GROUPS") or "").split(",")
+            if group.strip()
+        }
+        return bool(requested.intersection(LOW_RISK_PI_INTENT_GROUPS))
+
+    async def _try_pi_governor() -> tuple[Optional["Intent"], object | None]:
+        if not _pi_execution_has_promoted_groups():
+            return None, shadow_unset
+        pi_classified = None
+        try:
+            from pi_intent_classifier import PI_INTENT_EXECUTE_THRESHOLD, classify_with_pi_intent_governor, pi_intent_is_promoted
+
+            pi_classified = await classify_with_pi_intent_governor(text, context_turns=_context_turns())
+            if pi_classified and pi_classified.intent and pi_classified.confidence >= PI_INTENT_EXECUTE_THRESHOLD:
+                if pi_intent_is_promoted(pi_classified.intent):
+                    return Intent(pi_classified.intent, dict(pi_classified.slots), confidence=pi_classified.confidence), pi_classified
+                logger.debug(
+                    "detect_and_extract_intent: Pi intent %s classified but not promoted for execution",
+                    pi_classified.intent,
+                )
+        except Exception as exc:
+            logger.debug("detect_and_extract_intent: Pi/Gemma governor failed: %s", exc)
+        return None, pi_classified
+
+    started = time.perf_counter()
+    intent = detect_intent(text, context=context, user_id=user_id)
+    detect_latency_ms = (time.perf_counter() - started) * 1000
     if intent is None:
-        return None
+        routed_intent, pi_classified = await _try_pi_governor()
+        _schedule_pi_shadow(
+            None,
+            route_class="fallback",
+            zoe_latency_ms=detect_latency_ms,
+            pi_result=pi_classified if _env_enabled("ZOE_PI_INTENT_ENABLED") else shadow_unset,
+            baseline_kind="router_only_not_comparable",
+            baseline_comparable=False,
+            router_latency_ms=detect_latency_ms,
+        )
+        return routed_intent
     if intent.slots and "raw" in intent.slots:
+        if intent.name == "reminder_create":
+            structured = _extract_simple_reminder_slots(intent.slots["raw"])
+            if structured:
+                intent.slots = structured
+                _schedule_pi_shadow(
+                    intent,
+                    route_class="deterministic",
+                    zoe_latency_ms=(time.perf_counter() - started) * 1000,
+                    baseline_kind="router",
+                    baseline_comparable=True,
+                    router_latency_ms=detect_latency_ms,
+                )
+                return intent
         try:
             from nlu_extractor import extract_slots_for_intent  # lazy — avoids circular at load
             structured = await extract_slots_for_intent(intent.name, intent.slots["raw"])
             if structured:
                 intent.slots = structured
+                _schedule_pi_shadow(
+                    intent,
+                    route_class="deterministic",
+                    zoe_latency_ms=(time.perf_counter() - started) * 1000,
+                    baseline_kind="router",
+                    baseline_comparable=True,
+                    router_latency_ms=detect_latency_ms,
+                )
                 return intent
         except Exception as _exc:
             logger.warning(
@@ -1318,8 +1799,27 @@ async def detect_and_extract_intent(
                 intent.name,
                 _exc,
             )
-        # Extraction failed — let caller fall through to Zoe Agent
-        return None
+        # Extraction failed — let Pi/Gemma classify the ambiguous utterance once before Zoe Agent fallback.
+        extraction_failed_latency_ms = (time.perf_counter() - started) * 1000
+        routed_intent, pi_classified = await _try_pi_governor()
+        _schedule_pi_shadow(
+            None,
+            route_class="extraction_failed",
+            zoe_latency_ms=extraction_failed_latency_ms,
+            pi_result=pi_classified if _env_enabled("ZOE_PI_INTENT_ENABLED") else shadow_unset,
+            baseline_kind="router_extraction_failed_not_comparable",
+            baseline_comparable=False,
+            router_latency_ms=detect_latency_ms,
+        )
+        return routed_intent
+    _schedule_pi_shadow(
+        intent,
+        route_class="deterministic",
+        zoe_latency_ms=detect_latency_ms,
+        baseline_kind="router",
+        baseline_comparable=True,
+        router_latency_ms=detect_latency_ms,
+    )
     return intent
 
 
@@ -1381,6 +1881,186 @@ async def _run_mcporter(cmd: str) -> Optional[str]:
         return None
 
 
+async def _load_direct_execution_user(db, user_id: str) -> Optional[dict]:
+    cursor = await db.execute("SELECT id, role, name FROM users WHERE id = ?", (user_id,))
+    row = await cursor.fetchone()
+    if not row:
+        return None
+    raw_role = row.get("role") if hasattr(row, "get") else row["role"]
+    return {
+        "user_id": row["id"],
+        "role": raw_role or "user",
+        "username": row.get("name", "") if hasattr(row, "get") else "",
+    }
+
+
+async def _execute_reminder_create_direct(intent: Intent, user_id: str) -> Optional[str]:
+    slots = intent.slots or {}
+    title = str(slots.get("title") or "").strip()
+    if not title:
+        return None
+    try:
+        from database import get_db_ctx
+        from models import ReminderCreate
+        from reminder_service import create_reminder_record
+
+        async with get_db_ctx() as db:
+            user = await _load_direct_execution_user(db, user_id)
+            if not user:
+                return None
+            payload = ReminderCreate(
+                title=title,
+                due_date=slots.get("date") or None,
+                due_time=slots.get("time") or None,
+                category=slots.get("category") or "general",
+            )
+            reminder = await create_reminder_record(payload, user=user, db=db)
+        return _format_response(intent, json.dumps(reminder, default=str))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("reminder_create direct execution unavailable; falling back to mcporter: %s", exc)
+        return None
+
+
+def _escape_like_pattern(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+async def _execute_list_show_direct(intent: Intent, user_id: str) -> Optional[str]:
+    slots = intent.slots or {}
+    list_type = str(slots.get("list_type") or "shopping").strip() or "shopping"
+    list_name = str(slots.get("list_name") or "").strip()
+    try:
+        from database import get_db_ctx
+
+        async with get_db_ctx() as db:
+            if list_name:
+                cursor = await db.execute(
+                    "SELECT l.id, l.name, li.id as item_id, li.text, li.completed, li.quantity, li.category"
+                    " FROM lists l LEFT JOIN list_items li ON l.id = li.list_id AND li.deleted=0"
+                    " WHERE (l.user_id=? OR l.visibility='family') AND l.list_type=?"
+                    " AND l.name LIKE ? ESCAPE '\\' AND l.deleted=0"
+                    " ORDER BY li.sort_order",
+                    (user_id, list_type, f"%{_escape_like_pattern(list_name)}%"),
+                )
+            else:
+                cursor = await db.execute(
+                    "SELECT l.id, l.name, li.id as item_id, li.text, li.completed, li.quantity, li.category"
+                    " FROM lists l LEFT JOIN list_items li ON l.id = li.list_id AND li.deleted=0"
+                    " WHERE (l.user_id=? OR l.visibility='family') AND l.list_type=? AND l.deleted=0"
+                    " ORDER BY l.name, li.sort_order",
+                    (user_id, list_type),
+                )
+            rows = await cursor.fetchall()
+
+        lists_map: dict[str, dict] = {}
+        for row in rows:
+            data = dict(row)
+            list_id = data.get("id")
+            if not list_id:
+                continue
+            if list_id not in lists_map:
+                lists_map[list_id] = {"id": list_id, "name": data.get("name"), "items": []}
+            if data.get("item_id") and data.get("text"):
+                lists_map[list_id]["items"].append(
+                    {
+                        "id": data.get("item_id"),
+                        "text": data.get("text"),
+                        "completed": bool(data.get("completed")),
+                        "quantity": data.get("quantity"),
+                        "category": data.get("category"),
+                    }
+                )
+
+        return _format_response(intent, json.dumps({"lists": list(lists_map.values())}))
+    except Exception as exc:
+        logger.warning("list_show direct execution unavailable; falling back to mcporter: %s", exc)
+        return None
+
+
+def _say_clock(hhmm: str) -> str:
+    """'15:00' → '3 PM', '09:30' → '9:30 AM'. Empty/garbage → ''."""
+    try:
+        h, m = (hhmm or "").split(":")[:2]
+        h = int(h); m = int(m)
+        ap = "AM" if h < 12 else "PM"
+        h12 = h % 12 or 12
+        return f"{h12}:{m:02d} {ap}" if m else f"{h12} {ap}"
+    except Exception:
+        return ""
+
+
+async def _execute_calendar_show_direct(intent: Intent, user_id: str) -> Optional[str]:
+    """Read the calendar straight from the events table so 'what's on my calendar'
+    works even when the mcporter MCP subprocess is down (the source of the
+    calendar 'hit and miss'). Mirrors the qualifier→date-range logic in
+    _build_command's calendar_show branch."""
+    from datetime import date, timedelta
+    slots = intent.slots or {}
+    qualifier = str(slots.get("qualifier", "")).strip().lower()
+    today_d = date.today()
+    if qualifier in ("today", "today's", ""):
+        start = end = today_d
+        scope = "today"
+    elif qualifier == "tomorrow":
+        start = end = today_d + timedelta(days=1)
+        scope = "tomorrow"
+    elif qualifier in ("this week", "this week's"):
+        start = today_d - timedelta(days=today_d.weekday())
+        end = today_d + timedelta(days=6 - today_d.weekday())
+        scope = "this week"
+    elif qualifier in ("this month", "this month's"):
+        import calendar as cal_mod
+        _, last = cal_mod.monthrange(today_d.year, today_d.month)
+        start = today_d.replace(day=1); end = today_d.replace(day=last)
+        scope = "this month"
+    else:
+        start = today_d; end = today_d + timedelta(days=7)
+        scope = "in the next week"
+    try:
+        from database import get_db_ctx
+        async with get_db_ctx() as db:
+            cursor = await db.execute(
+                "SELECT title, start_date, start_time, all_day FROM events"
+                " WHERE (user_id=? OR visibility='family') AND deleted=0"
+                " AND start_date BETWEEN ? AND ?"
+                " ORDER BY start_date, COALESCE(NULLIF(start_time,''),'99:99')",
+                (user_id, start.isoformat(), end.isoformat()),
+            )
+            rows = [dict(r) for r in await cursor.fetchall()]
+    except Exception as exc:
+        logger.warning("calendar_show direct execution unavailable; falling back to mcporter: %s", exc)
+        return None
+
+    if not rows:
+        return f"You've got nothing on {scope}."
+    single_day = start == end
+    parts: list[str] = []
+    seen: set = set()
+    for r in rows:
+        title = (r.get("title") or "something").strip()
+        st = str(r.get("start_time") or "")
+        sd = str(r.get("start_date") or "")
+        dedup = (title.lower(), sd, st)
+        if dedup in seen:  # identical duplicate event rows → say once
+            continue
+        seen.add(dedup)
+        when = "" if r.get("all_day") else _say_clock(st)
+        day = "" if single_day else _spoken_day(sd)
+        # "today"/"tomorrow" read better without "on" ("at 9 AM today" not "...on today").
+        day_phrase = day if day in ("today", "tomorrow") else (f"on {day}" if day else "")
+        bits = [title]
+        if when:
+            bits.append(f"at {when}")
+        if day_phrase:
+            bits.append(day_phrase)
+        parts.append(" ".join(bits))
+    n = len(parts)
+    lead = f"You've got {n} thing{'s' if n != 1 else ''} on {scope}: "
+    return lead + ("; ".join(parts) if n > 1 else parts[0]) + "."
+
+
 async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optional[str]:
     if intent.name == "lets_talk":
         # Navigation is handled by _broadcast_intent_nav via _INTENT_PANEL_NAV in chat.py.
@@ -1433,6 +2113,22 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
         now = datetime.now()
         spoken_day = _spoken_day_ordinal(now.day)
         return f"Today is {now.strftime('%A')}, {now.strftime('%B')} {spoken_day}."
+
+    # Social acknowledgements & presence checks — instant canned replies (no LLM).
+    if intent.name == "acknowledgement":
+        import random
+        if intent.slots.get("kind") == "thanks":
+            return random.choice(["You're welcome!", "Anytime.", "Happy to help.", "No worries."])
+        return random.choice(["Got it.", "Sure thing.", "Okay.", "No problem."])
+
+    if intent.name == "status_check":
+        import random
+        return random.choice(["I'm here.", "Still here.", "Listening.", "Ready when you are."])
+
+    if intent.name == "time_planning_clarification":
+        if intent.slots.get("kind") == "time_math":
+            return "I need the actual times before I can work that out."
+        return "What time do you need to arrive?"
 
     if intent.name == "connect_chatgpt":
         # Handled directly by chat.py via _chatgpt_connect_flow() — which runs
@@ -1949,7 +2645,26 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
     # Weather should not depend on mcporter command availability.
     # Route directly to the weather backend helpers for deterministic voice UX.
     if intent.name == "weather":
-        return await _execute_weather_direct(user_id=user_id, forecast=bool(intent.slots.get("forecast")))
+        return await _execute_weather_direct(
+            user_id=user_id,
+            forecast=bool(intent.slots.get("forecast")),
+            advice=str(intent.slots.get("advice") or ""),
+        )
+
+    if intent.name == "list_show":
+        direct_result = await _execute_list_show_direct(intent, user_id)
+        if direct_result:
+            return direct_result
+
+    if intent.name == "calendar_show":
+        direct_result = await _execute_calendar_show_direct(intent, user_id)
+        if direct_result:
+            return direct_result
+
+    if intent.name == "reminder_create":
+        direct_result = await _execute_reminder_create_direct(intent, user_id)
+        if direct_result:
+            return direct_result
 
     try:
         cmd = _build_command(intent, user_id)
@@ -1970,25 +2685,23 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
 
 async def _execute_daily_briefing(user_id: str) -> Optional[str]:
     """Composite intent: weather + calendar + reminders."""
-    base = f"{MCPORTER} call"
-    cmds = {
-        "weather": f"{base} zoe-data.weather_current",
-        "calendar": f"{base} zoe-data.calendar_today",
-        "reminders": f"{base} zoe-data.reminder_list today_only=true",
+    cached_response = _daily_briefing_cache_get(user_id)
+    if cached_response:
+        return cached_response
+
+    task_keys = ["weather", "calendar", "reminders"]
+    task_results = await asyncio.gather(
+        _daily_briefing_weather(user_id),
+        _daily_briefing_calendar(user_id),
+        _daily_briefing_reminders(user_id),
+        return_exceptions=True,
+    )
+
+    results = {
+        key: raw
+        for key, raw in zip(task_keys, task_results)
+        if raw and not isinstance(raw, BaseException)
     }
-
-    results = {}
-    tasks = []
-    for key, cmd in cmds.items():
-        tasks.append((key, _run_mcporter(cmd)))
-
-    for key, coro in tasks:
-        raw = await coro
-        if raw:
-            try:
-                results[key] = json.loads(raw)
-            except json.JSONDecodeError:
-                pass
 
     lines = ["Here's your day:"]
 
@@ -2013,18 +2726,20 @@ async def _execute_daily_briefing(user_id: str) -> Optional[str]:
             suffix = f" at {t_str}" if t_str else ""
             lines.append(f"  - {r.get('title', '?')}{suffix}")
 
-    return "\n".join(lines)
+    response = "\n".join(lines)
+    if all(key in results for key in task_keys):
+        _daily_briefing_cache_set(user_id, response)
+    return response
 
 
-async def _execute_weather_direct(user_id: str, forecast: bool = False) -> Optional[str]:
-    """Direct weather path used by voice fast-intent execution.
-
-    This bypasses mcporter so household voice weather works even if external
-    command tooling is unavailable.
-    """
+async def _daily_briefing_weather(user_id: str) -> Optional[dict]:
+    cached_weather = _daily_briefing_cached_weather()
+    if cached_weather:
+        return cached_weather
     try:
         from database import get_db
-        from routers.weather import _row_to_prefs, _resolve_location, _get_current, _get_forecast
+        from routers.weather import _get_current, _resolve_location, _row_to_prefs
+
         async for db in get_db():
             cursor = await db.execute(
                 "SELECT * FROM weather_preferences WHERE user_id = ?",
@@ -2033,30 +2748,181 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False) -> Optio
             prefs = _row_to_prefs(await cursor.fetchone())
             lat, lon, city, country = _resolve_location(prefs)
             current = await _get_current(lat, lon, city, country)
+            return {
+                "temp": current.get("temp"),
+                "city": current.get("city") or city or "your area",
+                "description": current.get("description", ""),
+            }
+    except Exception as exc:
+        logger.warning("daily briefing weather direct execution unavailable: %s", exc)
+    return None
+
+
+async def _daily_briefing_calendar(user_id: str) -> Optional[dict]:
+    try:
+        from datetime import date
+        from database import get_db_ctx
+
+        today = date.today().isoformat()
+        async with get_db_ctx() as db:
+            cursor = await db.execute(
+                "SELECT id, title, start_time, end_time, category, location FROM events"
+                " WHERE start_date = ? AND (visibility = 'family' OR user_id = ?) AND deleted = 0"
+                " ORDER BY start_time",
+                (today, user_id),
+            )
+            rows = await cursor.fetchall()
+        return {"date": today, "events": [dict(r) for r in rows]}
+    except Exception as exc:
+        logger.warning("daily briefing calendar direct execution unavailable: %s", exc)
+    return None
+
+
+async def _daily_briefing_reminders(user_id: str) -> Optional[dict]:
+    try:
+        from datetime import date
+        from database import get_db_ctx
+
+        today = date.today().isoformat()
+        async with get_db_ctx() as db:
+            cursor = await db.execute(
+                "SELECT id, title, due_date, due_time, priority, category FROM reminders"
+                " WHERE due_date = ? AND (visibility = 'family' OR user_id = ?)"
+                " AND is_active = 1 AND deleted = 0 ORDER BY due_time",
+                (today, user_id),
+            )
+            rows = await cursor.fetchall()
+        return {"reminders": [dict(r) for r in rows]}
+    except Exception as exc:
+        logger.warning("daily briefing reminder direct execution unavailable: %s", exc)
+    return None
+
+
+def _spoken_day(raw: str) -> str:
+    """'2026-06-22' → 'Monday' (today→'today', tomorrow→'tomorrow'); raw on miss."""
+    try:
+        import datetime as _dt
+        d = _dt.date.fromisoformat(str(raw)[:10])
+        today = _dt.date.today()
+        if d == today:
+            return "today"
+        if d == today + _dt.timedelta(days=1):
+            return "tomorrow"
+        return d.strftime("%A")
+    except Exception:
+        return str(raw)
+
+
+async def _execute_weather_direct(user_id: str, forecast: bool = False,
+                                  advice: str = "") -> Optional[str]:
+    """Direct weather path used by voice fast-intent execution.
+
+    This bypasses mcporter so household voice weather works even if external
+    command tooling is unavailable.
+
+    `advice` ("rain"|"warmth") returns a DIRECT yes/no answer to questions like
+    "do I need an umbrella" / "should I take a jacket" instead of a forecast dump.
+    """
+    try:
+        from database import get_db
+        from routers.weather import _row_to_prefs, _resolve_location, _get_current, _get_forecast, _weather_cache
+        async for db in get_db():
+            cursor = await db.execute(
+                "SELECT * FROM weather_preferences WHERE user_id = ?",
+                [user_id],
+            )
+            prefs = _row_to_prefs(await cursor.fetchone())
+            lat, lon, city, country = _resolve_location(prefs)
+            # Voice replies should be instant: prefer the warm cache (kept fresh by the
+            # panel's periodic /weather/current poll) and only pay the ~1s live API call
+            # when it's cold. The panel UI route still always fetches live, so this does
+            # not affect on-screen freshness.
+            current = _weather_cache.get("current") or {}
+            # Only trust the shared warm cache when it holds a reading for THIS
+            # user's resolved city (the cache is one flat slot across users) and
+            # has a real temp (`is None` so a legit 0° isn't treated as missing).
+            _cached_city = str(current.get("city") or "").strip().lower()
+            if current.get("temp") is None or (
+                city and _cached_city and _cached_city != str(city).strip().lower()
+            ):
+                current = await _get_current(lat, lon, city, country)
             city_name = current.get("city") or city or "your area"
+            # Speak numbers naturally: "18.3" → "18 point 3" (bare decimals get
+            # mangled to "18 3" by TTS), and avoid markdown/°C which also mangle.
+            def _say_num(n) -> str:
+                try:
+                    f = float(n)
+                    if f == int(f):
+                        return str(int(f))  # 21.0 → "21", not "21 point 0"
+                except (TypeError, ValueError):
+                    pass
+                s = str(n)
+                return s.replace(".", " point ") if "." in s else s
+            # Direct advice answer ("do I need a jacket / umbrella") — reason over
+            # today's forecast + current conditions and lead with yes/no.
+            if advice:
+                cur_desc = str(current.get("description", "")).lower()
+                cur_temp = current.get("temp")
+                today_hi = None
+                today_desc = cur_desc
+                try:
+                    f = await _get_forecast(lat, lon)
+                    d0 = (f.get("daily") or [{}])[0]
+                    today_hi = d0.get("high")
+                    today_desc = (str(d0.get("description", "")) or cur_desc).lower()
+                except Exception:
+                    pass
+                wet_words = ("rain", "shower", "drizzle", "thunder", "storm", "sleet", "snow")
+                is_wet = any(w in cur_desc or w in today_desc for w in wet_words)
+                cond_desc = (current.get("description") or "").strip()
+                cond_part = f" — it's {cond_desc}" if cond_desc else ""
+                if advice == "rain":
+                    if is_wet:
+                        return f"Yes, take an umbrella{cond_part} in {city_name}."
+                    return f"No, you shouldn't need an umbrella{cond_part} in {city_name}."
+                # warmth / jacket
+                ref = None
+                for v in (today_hi, cur_temp):
+                    try:
+                        ref = float(v); break
+                    except Exception:
+                        continue
+                cold = (ref is not None and ref < 16)
+                if cold or is_wet:
+                    why = []
+                    if ref is not None:
+                        why.append(f"it's around {_say_num(round(ref))} degrees")
+                    if is_wet:
+                        why.append("and wet" if why else "it's wet")
+                    reason = (", " + " ".join(why)) if why else ""
+                    return f"Yes, I'd take a jacket{reason} in {city_name}."
+                temp_part = f" — it's around {_say_num(round(ref))} degrees" if ref is not None else ""
+                return f"No, you should be fine without a jacket{temp_part} in {city_name}."
             if forecast:
                 f = await _get_forecast(lat, lon)
                 daily = f.get("daily", [])[:5]
                 if not daily:
                     return f"I couldn't get the forecast for {city_name} right now."
-                lines = [f"Forecast for {city_name}:"]
+                lines = [f"Here's the forecast for {city_name}."]
                 for item in daily:
-                    day = item.get("day", "?")
+                    day = _spoken_day(item.get("day", "?"))
                     hi = item.get("high", "?")
                     lo = item.get("low", "?")
                     desc = item.get("description", "unknown")
-                    lines.append(f"  - {day}: {hi}°C/{lo}°C, {desc}")
-                return "\n".join(lines)
+                    lines.append(f"{day}, a high of {_say_num(hi)} and a low of {_say_num(lo)} degrees, {desc}.")
+                return " ".join(lines)
             temp = current.get("temp")
             desc = current.get("description", "")
             feels = current.get("feels_like")
             if temp is None:
                 return f"I couldn't get the weather for {city_name} right now."
-            msg = f"It's {temp}°C in {city_name} ({desc})"
+            # Speak naturally: "18.3°C (overcast)" → "18 point 3 degrees and overcast".
+            desc_part = f" and {desc}" if desc else ""
+            msg = f"It's {_say_num(temp)} degrees{desc_part} in {city_name}"
             if feels is not None:
                 try:
                     if abs(float(feels) - float(temp)) > 2:
-                        msg += f", feels like {feels}°C"
+                        msg += f", and it feels like {_say_num(feels)} degrees"
                 except Exception:
                     pass
             return msg + "."
@@ -2555,16 +3421,26 @@ def _format_response(intent: Intent, raw_output: str) -> str:
         lt = s.get("list_type", "shopping")
         friendly = "shopping list" if lt == "shopping" else f"{lt.replace('_', ' ')} list"
         lists = data.get("lists", [])
-        if not lists or not lists[0].get("items"):
+        active_lists = []
+        for list_data in lists:
+            items = list_data.get("items") or []
+            active = [i["text"] for i in items if i.get("text") and not i.get("completed")]
+            if active:
+                active_lists.append((list_data.get("name") or friendly, active))
+        if not active_lists:
             return f"Your {friendly} is empty."
-        items = lists[0]["items"]
-        active = [i["text"] for i in items if not i.get("completed")]
-        if not active:
-            return f"Your {friendly} is empty."
-        lines = [f"Your {friendly}:"]
-        for item in active:
-            lines.append(f"  - {item}")
+        if len(active_lists) == 1:
+            lines = [f"Your {friendly}:"]
+            for item in active_lists[0][1]:
+                lines.append(f"  - {item}")
+            return "\n".join(lines)
+        lines = [f"Your {friendly}s:"]
+        for list_name, active in active_lists:
+            lines.append(f"{list_name}:")
+            for item in active:
+                lines.append(f"  - {item}")
         return "\n".join(lines)
+
 
     if intent.name == "list_remove":
         item = s.get("item", "item")

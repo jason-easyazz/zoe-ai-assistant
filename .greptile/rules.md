@@ -16,7 +16,7 @@ Greptile should review Zoe as a local-first, multi-user assistant with a host-ru
 
 - Production chat API is `services/zoe-data/routers/chat.py`; do not fork it.
 - Natural-language understanding belongs in `intent_router.py`, Zoe Agent, Hermes, or OpenClaw, not broad ad hoc branches in `chat.py`.
-- `services/zoe-core/` is retired and should not receive new production features.
+- `services/zoe-core/` is Zoe's Pi-agent core (the reasoning/orchestration brain on Gemma 4) — new core features belong here. It orchestrates and delegates; it must not absorb `zoe-data`/`zoe-auth`/`zoe-database` code or become a monolith. The OLD `zoe-core` Docker monolith (replaced by `zoe-data`) is retired and archived under `docs/archive/retired-services/zoe-core/`; do not revive that legacy tree.
 - Host `llama-server`, Hermes, OpenClaw, and Multica are local services; avoid Docker-only assumptions in core code.
 
 ## Data Safety
@@ -46,3 +46,21 @@ For SDK, framework, MCP, or package integrations, expect the implementation to b
 After feature work, flag duplicated runtime mechanics that should live in a service-layer helper: repeated provider calls, command execution, parsing, validation, payload transforms, or readiness/retry mechanics. Keep domain policy in routes, actions, intents, or UI handlers.
 
 Service helpers should use explicit parameters, structured returns, consistent error semantics, and avoid hidden global state or unrelated database mutation.
+
+## Python And Test Hygiene
+
+- Reset or override module-level globals (cached singletons, `_ENV_BOOTSTRAPPED`, `_ENV_FILES`, and similar) with `monkeypatch.setattr`, never direct attribute assignment. Direct assignment is not restored on teardown and leaks stale state into later tests. Apply this consistently across every test in a file, not just newly added ones.
+- For module-level env-derived constants, patch the module variable after import; do not set `os.environ` after importing the module and expect the already-loaded constant to change.
+- When code under test writes `os.environ` directly (bypassing monkeypatch), guarantee cleanup in a `try/finally` that pops the key. `monkeypatch.delenv` only restores keys monkeypatch itself set.
+- Keep test changes scoped to the behavior under test; do not refactor unrelated fixtures in the same PR.
+
+## Pre-PR Self-Review Checklist
+
+This is the standard every PR is graded against — by Greptile and by the harness review phase. Before opening or finalizing a PR, review your own diff against it and fix violations first, so the first review lands clean (target: Greptile 5/5, zero comments):
+
+1. **Scope** — smallest change that satisfies the acceptance criteria; no unrelated churn, no scope creep, one concern.
+2. **Tests** — touched behavior has a focused test; test hygiene above is satisfied (monkeypatch.setattr for globals, no env leaks, consistent across the file).
+3. **Patterns** — matches existing Zoe patterns and the architecture/data-safety rules above; reuses service-layer helpers instead of duplicating mechanics.
+4. **No junk** — no `_new`/`_old`/`_fixed`/backup/tmp files; no commented-out code; no debug prints.
+5. **Secrets** — no credentials, API keys, tokens, or personal data added or logged.
+6. **Commit** — conventional, imperative subject under 72 chars; body explains why, not what.

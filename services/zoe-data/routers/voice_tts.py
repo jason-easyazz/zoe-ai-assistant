@@ -1,11 +1,14 @@
 import asyncio
 import base64
+import contextvars
 import json
 import logging
 import os
 import re
 import shutil
+import sys
 import tempfile
+import threading
 import time
 import wave
 from datetime import datetime, timezone
@@ -23,6 +26,24 @@ from hermes_http import hermes_auth_headers
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/voice", tags=["voice"])
+
+# Strong references to fire-and-forget background tasks. asyncio only keeps a
+# WEAK reference to tasks created by ensure_future, so a GC mid-flight could
+# cancel a DB-writing coroutine partway through — that's what corrupted the
+# asyncpg connection ("another operation is in progress") and silently dropped
+# chat_messages saves. Holding the task here until it finishes prevents that.
+_BG_TASKS: set = set()
+
+
+def _spawn_bg(coro) -> None:
+    """Schedule a background coroutine with a strong reference (see _BG_TASKS)."""
+    try:
+        t = asyncio.ensure_future(coro)
+    except Exception as exc:  # no running loop — run inline best-effort
+        logger.warning("_spawn_bg could not schedule task: %s", exc)
+        return
+    _BG_TASKS.add(t)
+    t.add_done_callback(_BG_TASKS.discard)
 
 # ── Voice session continuity ───────────────────────────────────────────────
 # Persist one session_id per panel so follow-up voice commands have context.
@@ -357,6 +378,48 @@ async def _synthesize_local_service(text: str, profile: str, base_url: str) -> O
         return None
 
 
+_MONTHS_SPOKEN = ["January", "February", "March", "April", "May", "June", "July",
+                  "August", "September", "October", "November", "December"]
+_ISO_DATE_RE = re.compile(r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b")
+_EMOJI_RE = re.compile(r"[\U0001F000-\U0001FAFF☀-➿️←-⇿⬀-⯿]")
+
+
+def _ordinal(n: int) -> str:
+    if 10 <= (n % 100) <= 20:
+        suf = "th"
+    else:
+        suf = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suf}"
+
+
+def _humanize_iso_date(m: "re.Match") -> str:
+    try:
+        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if 1 <= mo <= 12 and 1 <= d <= 31:
+            return f"the {_ordinal(d)} of {_MONTHS_SPOKEN[mo - 1]} {y}"
+    except Exception:
+        pass
+    return m.group(0)
+
+
+def _clean_for_speech(text: str) -> str:
+    """Normalize reply text so Kokoro doesn't read junk aloud: strip a leaked
+    JSON object, markdown (* _ ` # ~ |), emoji; speak ISO dates as words; turn
+    em/en dashes and ° into spoken forms. Applied at every TTS entry point."""
+    if not text:
+        return text
+    t = str(text)
+    t = re.sub(r"^\s*\{[^{}]*\}\s*", "", t)            # drop leading JSON leak
+    t = _ISO_DATE_RE.sub(_humanize_iso_date, t)         # 2026-06-22 -> the 22nd of June 2026
+    t = t.replace("°C", " degrees").replace("°F", " degrees").replace("°", " degrees")
+    t = t.replace("—", ", ").replace("–", ", ")
+    t = _EMOJI_RE.sub("", t)
+    t = re.sub(r"[*_`#~|>]+", "", t)                    # markdown
+    t = re.sub(r"\s+([,.!?;:])", r"\1", t)              # no space before punctuation
+    t = re.sub(r"\s{2,}", " ", t).strip()
+    return t
+
+
 async def _synthesize_kokoro_sidecar(text: str) -> Optional[bytes]:
     """Synthesize via Kokoro PyTorch sidecar (GPU, natural af_sky voice).
 
@@ -365,6 +428,7 @@ async def _synthesize_kokoro_sidecar(text: str) -> Optional[bytes]:
     Set ZOE_KOKORO_SIDECAR_URL to override (default http://127.0.0.1:10201).
     Falls through silently if the sidecar is unavailable.
     """
+    text = _clean_for_speech(text)
     sidecar_url = os.environ.get("ZOE_KOKORO_SIDECAR_URL", "http://127.0.0.1:10201").rstrip("/")
     voice = os.environ.get("ZOE_KOKORO_VOICE", "af_sky").strip() or "af_sky"
     try:
@@ -436,6 +500,36 @@ def _should_supersede_voice_weather_action(row, nav_key: str, card_key: str) -> 
     )
 
 
+def _should_supersede_voice_skybridge_action(row, nav_key: str, card_key: str) -> bool:
+    if row["idempotency_key"] in {nav_key, card_key}:
+        return False
+    try:
+        payload = json.loads(row["payload"] or "{}")
+    except Exception:
+        payload = {}
+    action_type = row["action_type"]
+    source = str(payload.get("source") or "").lower()
+    if source == "voice:skybridge":
+        return True
+    if action_type == "panel_navigate":
+        url = str(payload.get("url") or "").split("?", 1)[0]
+        return url in {
+            "/touch/calendar.html",
+            "/touch/weather.html",
+            "/touch/lists.html",
+            "/touch/chat.html",
+        }
+    if action_type == "show_card":
+        return str(payload.get("type") or "").lower() in {
+            "calendar",
+            "weather",
+            "list",
+            "lists",
+            "skybridge",
+        }
+    return False
+
+
 def _split_sentences(text: str) -> list[str]:
     """Split text into spoken sentences for streaming TTS.
 
@@ -464,12 +558,25 @@ def _extract_complete_sentences(buffer: str) -> tuple[list[str], str]:
     return complete, buffer[last_end:]
 
 
+def _skybridge_only() -> bool:
+    """When set, voice never navigates the panel to legacy domain pages.
+
+    The Skybridge-first path (`_broadcast_skybridge_ui`) still renders real cards.
+    The legacy `_broadcast_*_ui` helpers below navigate to per-domain pages
+    (`/touch/weather.html`, etc.), which yanks the panel off Skybridge whenever the
+    Skybridge resolver falls through. Gating them keeps the panel on Skybridge.
+    """
+    return os.environ.get("ZOE_SKYBRIDGE_ONLY", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 async def _broadcast_weather_ui(
     panel_id: str,
     summary: str = "Fetching weather...",
     turn_key: Optional[str] = None,
 ) -> None:
     """Mirror chat weather navigation on voice path with durable delivery."""
+    if _skybridge_only():
+        return
     delivery_key = turn_key or str(time.monotonic_ns())
     nav_action = {
         "id": f"voice_weather_nav_{panel_id}_{delivery_key}",
@@ -568,6 +675,8 @@ async def _broadcast_calendar_ui(
     turn_key: Optional[str] = None,
 ) -> None:
     """Mirror calendar intents on voice path with durable delivery."""
+    if _skybridge_only():
+        return
     delivery_key = turn_key or str(time.monotonic_ns())
     nav_action = {
         "id": f"voice_calendar_nav_{panel_id}_{delivery_key}",
@@ -629,6 +738,127 @@ async def _broadcast_calendar_ui(
             break
     except Exception as exc:
         logger.debug("voice calendar ui enqueue failed (non-fatal): %s", exc)
+
+
+async def _broadcast_skybridge_ui(
+    panel_id: str,
+    skybridge_result: dict,
+    *,
+    utterance: str = "",
+    turn_key: Optional[str] = None,
+) -> None:
+    """Display a Skybridge result on the touch panel without routing to a domain page."""
+    if not skybridge_result or not skybridge_result.get("handled"):
+        return
+    delivery_key = turn_key or str(time.monotonic_ns())
+    query = quote_plus(str(utterance or skybridge_result.get("spoken_summary") or ""))
+    url = "/touch/skybridge.html" + (f"?q={query}" if query else "")
+    cards = skybridge_result.get("cards") if isinstance(skybridge_result.get("cards"), list) else []
+    summary = str(skybridge_result.get("spoken_summary") or "Showing this in Skybridge.")
+    nav_payload = {
+        "url": url,
+        "label": "Opening Skybridge",
+        "panel_id": panel_id,
+        "source": "voice:skybridge",
+    }
+    card_payload = {
+        "type": "skybridge",
+        "data": {"summary": summary[:300]},
+        "card": cards[0] if cards else None,
+        "cards": cards,
+        "panel_id": panel_id,
+        "source": "voice:skybridge",
+    }
+    try:
+        from database import get_db as _get_db
+        from push import broadcaster
+        from ui_orchestrator import enqueue_ui_action as _enqueue_ui_action
+        async for _db in _get_db():
+            _panel_user_id = "family-admin"
+            try:
+                _cur = await _db.execute(
+                    "SELECT user_id FROM ui_panel_sessions WHERE panel_id = ? ORDER BY last_seen_at DESC LIMIT 1",
+                    (panel_id,),
+                )
+                _row = await _cur.fetchone()
+                if _row and _row["user_id"]:
+                    _panel_user_id = str(_row["user_id"])
+            except Exception:
+                pass
+            nav_message = await _enqueue_ui_action(
+                _db,
+                user_id=_panel_user_id,
+                panel_id=panel_id,
+                action_type="panel_navigate",
+                payload=nav_payload,
+                requested_by="voice",
+                idempotency_key=f"voice_skybridge_nav_{panel_id}_{delivery_key}",
+                broadcast=False,
+                commit=False,
+            )
+            card_message = await _enqueue_ui_action(
+                _db,
+                user_id=_panel_user_id,
+                panel_id=panel_id,
+                action_type="show_card",
+                payload={**card_payload, "result": skybridge_result},
+                requested_by="voice",
+                idempotency_key=f"voice_skybridge_card_{panel_id}_{delivery_key}",
+                broadcast=False,
+                commit=False,
+            )
+            nav_key = f"voice_skybridge_nav_{panel_id}_{delivery_key}"
+            card_key = f"voice_skybridge_card_{panel_id}_{delivery_key}"
+            try:
+                _cur = await _db.execute(
+                    """SELECT id, action_type, payload, idempotency_key
+                       FROM ui_actions
+                       WHERE panel_id = ?
+                         AND user_id = ?
+                         AND requested_by = 'voice'
+                         AND status IN ('queued', 'running')""",
+                    (panel_id, _panel_user_id),
+                )
+                _rows = await _cur.fetchall()
+                _superseded_at = datetime.now(timezone.utc).isoformat()
+                for _row in _rows:
+                    if not _should_supersede_voice_skybridge_action(_row, nav_key, card_key):
+                        continue
+                    await _db.execute(
+                        """UPDATE ui_actions
+                           SET status = 'skipped',
+                               error_code = 'superseded',
+                               error_message = 'Superseded by newer Skybridge voice request',
+                               updated_at = ?
+                           WHERE id = ?""",
+                        (_superseded_at, _row["id"]),
+                    )
+            except Exception as _sup_exc:
+                logger.debug("voice skybridge stale-action cleanup failed (non-fatal): %s", _sup_exc)
+            await _db.commit()
+            nav_delivered = await broadcaster.broadcast_to_panel(
+                panel_id,
+                "ui_action",
+                {**nav_message, "payload": nav_payload},
+            )
+            # Keep the card queued. Navigating the old Skybridge page immediately
+            # can unload the socket before a following show_card frame is handled;
+            # the freshly loaded page will poll /api/ui/actions/pending and render it.
+            if nav_delivered:
+                await _db.execute(
+                    """UPDATE ui_actions
+                       SET status = 'success',
+                           error_code = NULL,
+                           error_message = 'Delivered over panel push',
+                           updated_at = NOW(),
+                           acked_at = NOW()
+                       WHERE id = ?""",
+                    (nav_message["action_id"],),
+                )
+                await _db.commit()
+            break
+    except Exception as exc:
+        logger.debug("voice skybridge ui enqueue failed (non-fatal): %s", exc)
 
 
 async def _broadcast_shopping_chat_ui(
@@ -854,6 +1084,8 @@ async def _broadcast_lets_talk_ui(panel_id: str, turn_key: Optional[str] = None)
     (voice:start_conversation) which the voice page handles directly — it is
     never enqueued in the DB, so it cannot create a replay loop.
     """
+    if _skybridge_only():
+        return
     delivery_key = turn_key or str(time.monotonic_ns())
     # Navigation: no ?conv=1 so the action is skipped when panel is already on voice page.
     nav_action = {
@@ -1048,6 +1280,8 @@ async def _broadcast_reminder_ui(
     summary: str,
     turn_key: Optional[str] = None,
 ) -> None:
+    if _skybridge_only():
+        return
     delivery_key = turn_key or str(time.monotonic_ns())
     nav_action = {
         "id": f"voice_reminder_nav_{panel_id}_{delivery_key}",
@@ -1122,6 +1356,12 @@ async def _request_auth_ui(panel_id: str, challenge_id: str, reason: str) -> boo
             "panel_id": panel_id,
             "challenge_id": challenge_id,
             "action_context": reason,
+            "summary": "Please authenticate on the touch panel to continue.",
+            "title": "Confirm it is you",
+            "message": "Zoe needs to know who is speaking before showing or changing personal data.",
+            "domain": "Private data",
+            "intent_action": "continue",
+            "cta": "Continue",
         },
     }
     delivered = False
@@ -1160,6 +1400,98 @@ async def _request_auth_ui(panel_id: str, challenge_id: str, reason: str) -> boo
     except Exception as exc:
         logger.warning("voice auth ui enqueue failed: %s", exc)
     return delivered
+
+
+async def _request_voice_identity_challenge(
+    *,
+    panel_id: str,
+    text: str,
+    session_id: str,
+    caller: dict | None,
+    reason: str = "Voice command needs identity. Enter your PIN to continue.",
+) -> dict:
+    """Hold a voice turn and ask the touch panel to identify the speaker."""
+    import uuid as _uuid_mod
+
+    _pending_id = _uuid_mod.uuid4().hex
+    _PENDING_VOICE_IDENT[panel_id] = {
+        "pending_id": _pending_id,
+        "transcript": text,
+        "session_id": session_id,
+        "expire_at": time.monotonic() + 120,
+    }
+    _pin_phrase = "Please authenticate on the touch panel. Choose your profile and enter your PIN to continue."
+    _pin_b64 = None
+    _pin_content_type = "audio/wav"
+    try:
+        _pin_audio_resp = await synthesize({"text": _pin_phrase}, caller=caller)
+        _pin_b64 = base64.b64encode(_pin_audio_resp.body).decode("ascii")
+        _pin_content_type = _pin_audio_resp.media_type
+    except Exception as _tts_exc:
+        logger.warning("voice/command auth challenge TTS failed: %s", _tts_exc)
+    _challenge_id = None
+    try:
+        from routers.panel_auth import create_pin_challenge_internal
+        from database import get_db as _get_db
+        async for _db in _get_db():
+            _challenge = await create_pin_challenge_internal(
+                panel_id=panel_id,
+                user_id=None,
+                action_context={
+                    "kind": "voice_turn",
+                    "pending_id": _pending_id,
+                    "panel_id": panel_id,
+                    "pending_transcript": text,
+                    "pending_session_id": session_id,
+                },
+                db=_db,
+            )
+            _challenge_id = (_challenge or {}).get("challenge_id")
+            break
+    except Exception as _challenge_exc:
+        logger.warning("voice/command PIN challenge failed: %s", _challenge_exc)
+    if not _challenge_id:
+        _fail_phrase = "I could not open the authentication screen just now. Please open the touch login page and try again."
+        _fail_audio = await synthesize({"text": _fail_phrase}, caller=caller)
+        return {
+            "ok": True,
+            "panel_id": panel_id,
+            "reply": _fail_phrase,
+            "status": "auth_unavailable",
+            "audio_base64": base64.b64encode(_fail_audio.body).decode("ascii"),
+            "content_type": _fail_audio.media_type,
+        }
+
+    _requested = await _request_auth_ui(
+        panel_id=panel_id,
+        challenge_id=_challenge_id,
+        reason=reason,
+    )
+    if not _requested:
+        logger.warning(
+            "voice/command auth challenge created but panel auth action was not delivered: panel=%s challenge=%s",
+            panel_id,
+            _challenge_id,
+        )
+    try:
+        from voice_metrics import voice_turn_count
+        voice_turn_count.labels(outcome="ok", path="awaiting_pin").inc()
+    except Exception:
+        pass
+    try:
+        from push import broadcaster as _bc_auth_state
+        await _bc_auth_state.broadcast("all", "voice:responding", {"panel_id": panel_id, "text": _pin_phrase[:200]})
+        await _bc_auth_state.broadcast("all", "voice:done", {"panel_id": panel_id})
+    except Exception:
+        pass
+    return {
+        "ok": True,
+        "panel_id": panel_id,
+        "reply": _pin_phrase,
+        "status": "awaiting_pin",
+        "audio_base64": _pin_b64,
+        "content_type": _pin_content_type,
+    }
 
 
 async def _resolve_panel_default_user(panel_id: str, db) -> Optional[str]:
@@ -1251,6 +1583,36 @@ def _contains_decision_keyword(text: str, keywords: frozenset[str]) -> bool:
     return False
 
 
+def _cap_voice_list_show_reply(text: str, *, max_items: int = 5) -> str:
+    """Keep voice list reads short while leaving non-voice list responses untouched."""
+    if max_items <= 0:
+        return text
+    lines = (text or "").splitlines()
+    if not lines:
+        return text
+    capped: list[str] = []
+    item_count = 0
+    omitted = 0
+    def flush_omitted() -> None:
+        nonlocal omitted
+        if omitted:
+            capped.append(f"And {omitted} more.")
+            omitted = 0
+
+    for line in lines:
+        if line.lstrip().startswith("- "):
+            item_count += 1
+            if item_count > max_items:
+                omitted += 1
+                continue
+        elif item_count:
+            flush_omitted()
+            item_count = 0
+        capped.append(line)
+    flush_omitted()
+    return "\n".join(capped)
+
+
 def _should_handoff_calendar(user_text: str, reply_text: str, intent_name: Optional[str] = None) -> bool:
     if intent_name in {"calendar_show", "daily_briefing", "calendar_create"}:
         return True
@@ -1307,7 +1669,7 @@ async def synthesize(payload: dict, caller: dict = Depends(_require_voice_auth))
         raise HTTPException(status_code=400, detail="text is required")
 
     # Pre-process: strip markdown and normalise units so TTS sounds natural.
-    text = _voice_preprocess(str(text).strip())[:1200]
+    text = _clean_for_speech(_voice_preprocess(str(text).strip()))[:1200]
     mode = os.getenv("ZOE_TTS_MODE", "hybrid").lower()
     profile = str((payload or {}).get("profile") or os.getenv("ZOE_VOICE_PROFILE", "zoe_au_natural_v1"))
     prof = VOICE_PROFILES.get(profile, VOICE_PROFILES["zoe_au_natural_v1"])
@@ -1523,6 +1885,36 @@ async def _run_whisper_cpp(wav_path: str) -> str:
 _faster_whisper_model = None
 _faster_whisper_model_name: str = ""
 _faster_whisper_lock = asyncio.Lock()
+_faster_whisper_worker: "_FasterWhisperWorker | None" = None
+
+
+def _use_in_process_faster_whisper() -> bool:
+    return (os.environ.get("ZOE_WHISPER_IN_PROCESS") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _use_persistent_faster_whisper_worker() -> bool:
+    return (os.environ.get("ZOE_WHISPER_PERSISTENT_WORKER") or "true").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+def _normalize_voice_command_text(text: str) -> str:
+    """Correct common STT homophones that block deterministic voice intents."""
+    normalized = (text or "").strip()
+    if not normalized:
+        return normalized
+    replacements = [
+        (r"\b(show|open|display|bring up|pull up)\s+(?:me\s+)?(?:the\s+)?whether\b", r"\1 weather"),
+        (r"\bwhat(?:'s| is)\s+the\s+whether\b", "what is the weather"),
+        (r"\bhow(?:'s| is)\s+the\s+whether\b", "how is the weather"),
+        (r"^whether\b(?=\s+(?:today|tomorrow|forecast|this week|now)\b)", "weather"),
+    ]
+    for pattern, repl in replacements:
+        normalized = re.sub(pattern, repl, normalized, flags=re.IGNORECASE)
+    return normalized
 
 
 async def _get_faster_whisper_model():
@@ -1536,8 +1928,8 @@ async def _get_faster_whisper_model():
             from faster_whisper import WhisperModel  # type: ignore
             device = "cuda" if os.environ.get("ZOE_WHISPER_DEVICE", "").lower() == "cuda" else "cpu"
             # int8_float16 = int8-quantized weights + float16 compute: best speed/memory for Jetson
-            # Falls back to int8 if VRAM is very tight
-            default_compute = "int8_float16" if device == "cuda" else "int8"
+            # CPU defaults to float32; ctranslate2 int8 is not supported on Jetson ARM.
+            default_compute = "int8_float16" if device == "cuda" else "float32"
             compute_type = os.environ.get("ZOE_WHISPER_COMPUTE_TYPE", default_compute).strip() or default_compute
             logger.info("Loading faster-whisper model=%s device=%s", model_name, device)
             _faster_whisper_model = WhisperModel(model_name, device=device, compute_type=compute_type)
@@ -1552,8 +1944,392 @@ async def _get_faster_whisper_model():
             return None
 
 
-async def _run_faster_whisper(wav_path: str) -> str:
-    """Transcribe using faster-whisper Python library (fallback when whisper.cpp unavailable)."""
+async def _run_faster_whisper_subprocess(wav_path: str) -> str:
+    """Transcribe with faster-whisper in a child process so native crashes cannot kill the API worker."""
+    model_name = (os.environ.get("ZOE_WHISPER_MODEL") or "base.en").strip()
+    device = "cuda" if os.environ.get("ZOE_WHISPER_DEVICE", "").lower() == "cuda" else "cpu"
+    timeout = _env_float("ZOE_WHISPER_TIMEOUT_S", 20.0)
+
+    code = r"""
+import json
+import os
+import sys
+
+from faster_whisper import WhisperModel
+
+wav_path = sys.argv[1]
+model_name = os.environ.get("ZOE_WHISPER_MODEL") or "base.en"
+device = "cuda" if os.environ.get("ZOE_WHISPER_DEVICE", "").lower() == "cuda" else "cpu"
+default_compute = "int8_float16" if device == "cuda" else "float32"
+compute_type = (os.environ.get("ZOE_WHISPER_COMPUTE_TYPE") or default_compute).strip() or default_compute
+lang = (os.environ.get("ZOE_WHISPER_LANG") or "en").strip()
+
+def _env_float(name, default):
+    try:
+        return float(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+def _env_int(name, default):
+    try:
+        return int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+model = WhisperModel(model_name, device=device, compute_type=compute_type)
+segments, _info = model.transcribe(
+    wav_path,
+    language=lang,
+    beam_size=_env_int("ZOE_WHISPER_BEAM_SIZE", 5),
+    vad_filter=True,
+    vad_parameters={
+        "threshold": _env_float("ZOE_WHISPER_VAD_THRESHOLD", 0.50),
+        "min_speech_duration_ms": _env_int("ZOE_WHISPER_MIN_SPEECH_MS", 120),
+        "min_silence_duration_ms": _env_int("ZOE_WHISPER_MIN_SILENCE_MS", 350),
+        "speech_pad_ms": _env_int("ZOE_WHISPER_SPEECH_PAD_MS", 220),
+    },
+)
+text = " ".join(seg.text.strip() for seg in segments).strip()
+print(json.dumps({"text": text}), flush=True)
+"""
+
+    logger.info("Running faster-whisper subprocess model=%s device=%s", model_name, device)
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-c",
+        code,
+        wav_path,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=os.environ.copy(),
+    )
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError as exc:
+        proc.kill()
+        await proc.wait()
+        raise RuntimeError(f"faster-whisper timed out after {timeout:.1f}s") from exc
+
+    stderr = err.decode(errors="ignore").strip()
+    stdout = out.decode(errors="ignore").strip()
+    if proc.returncode != 0:
+        if proc.returncode and proc.returncode < 0:
+            reason = f"signal {-proc.returncode}"
+        else:
+            reason = f"exit {proc.returncode}"
+        detail = stderr or stdout or "no stderr"
+        raise RuntimeError(f"faster-whisper subprocess failed ({reason}): {detail[:500]}")
+
+    try:
+        payload = json.loads(stdout.splitlines()[-1] if stdout else "{}")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"faster-whisper subprocess returned invalid output: {stdout[:500]}") from exc
+    return str(payload.get("text") or "").strip()
+
+
+class _FasterWhisperWorker:
+    """Long-lived isolated faster-whisper process with one loaded model."""
+
+    def __init__(self) -> None:
+        self.proc: asyncio.subprocess.Process | None = None
+        self.lock = asyncio.Lock()
+        self.model_key = ""
+
+    def _current_model_key(self) -> str:
+        model_name = (os.environ.get("ZOE_WHISPER_MODEL") or "base.en").strip()
+        device = "cuda" if os.environ.get("ZOE_WHISPER_DEVICE", "").lower() == "cuda" else "cpu"
+        default_compute = "int8_float16" if device == "cuda" else "float32"
+        compute_type = (os.environ.get("ZOE_WHISPER_COMPUTE_TYPE") or default_compute).strip() or default_compute
+        return "|".join((model_name, device, compute_type))
+
+    async def stop(self) -> None:
+        proc = self.proc
+        self.proc = None
+        self.model_key = ""
+        if proc and proc.returncode is None:
+            proc.terminate()
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=2.0)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+
+    async def _stderr_snippet(self, limit: int = 1200) -> str:
+        if not self.proc or not self.proc.stderr:
+            return ""
+        try:
+            data = await asyncio.wait_for(self.proc.stderr.read(limit), timeout=0.2)
+        except Exception:
+            return ""
+        return data.decode(errors="ignore").strip()
+
+    async def _ensure_started(self) -> None:
+        key = self._current_model_key()
+        if self.proc and self.proc.returncode is None and self.model_key == key:
+            return
+        await self.stop()
+        startup_timeout = _env_float("ZOE_WHISPER_WORKER_START_TIMEOUT_S", 30.0)
+        code = r"""
+import json
+import os
+import sys
+
+from faster_whisper import WhisperModel
+
+model_name = os.environ.get("ZOE_WHISPER_MODEL") or "base.en"
+device = "cuda" if os.environ.get("ZOE_WHISPER_DEVICE", "").lower() == "cuda" else "cpu"
+default_compute = "int8_float16" if device == "cuda" else "float32"
+compute_type = (os.environ.get("ZOE_WHISPER_COMPUTE_TYPE") or default_compute).strip() or default_compute
+lang = (os.environ.get("ZOE_WHISPER_LANG") or "en").strip()
+
+def _env_float(name, default):
+    try:
+        return float(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+def _env_int(name, default):
+    try:
+        return int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+model = WhisperModel(model_name, device=device, compute_type=compute_type)
+print(json.dumps({"ready": True, "model": model_name, "device": device, "compute_type": compute_type}), flush=True)
+
+for line in sys.stdin:
+    try:
+        payload = json.loads(line)
+        wav_path = str(payload.get("wav_path") or "")
+        segments, _info = model.transcribe(
+            wav_path,
+            language=lang,
+            beam_size=_env_int("ZOE_WHISPER_BEAM_SIZE", 5),
+            vad_filter=True,
+            vad_parameters={
+                "threshold": _env_float("ZOE_WHISPER_VAD_THRESHOLD", 0.50),
+                "min_speech_duration_ms": _env_int("ZOE_WHISPER_MIN_SPEECH_MS", 120),
+                "min_silence_duration_ms": _env_int("ZOE_WHISPER_MIN_SILENCE_MS", 350),
+                "speech_pad_ms": _env_int("ZOE_WHISPER_SPEECH_PAD_MS", 220),
+            },
+        )
+        text = " ".join(seg.text.strip() for seg in segments).strip()
+        print(json.dumps({"text": text}), flush=True)
+    except Exception as exc:
+        print(json.dumps({"error": str(exc)}), flush=True)
+"""
+        logger.info("Starting faster-whisper worker key=%s", key)
+        self.proc = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-u",
+            "-c",
+            code,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=os.environ.copy(),
+        )
+        if not self.proc.stdout:
+            await self.stop()
+            raise RuntimeError("faster-whisper worker stdout unavailable")
+        try:
+            ready_raw = await asyncio.wait_for(self.proc.stdout.readline(), timeout=startup_timeout)
+        except asyncio.TimeoutError as exc:
+            detail = await self._stderr_snippet()
+            await self.stop()
+            suffix = f": {detail[:500]}" if detail else ""
+            raise RuntimeError(f"faster-whisper worker startup timed out after {startup_timeout:.1f}s{suffix}") from exc
+        if self.proc.returncode is not None:
+            detail = await self._stderr_snippet()
+            suffix = f": {detail[:500]}" if detail else ""
+            raise RuntimeError(f"faster-whisper worker exited during startup ({self.proc.returncode}){suffix}")
+        try:
+            ready = json.loads(ready_raw.decode(errors="ignore"))
+        except json.JSONDecodeError as exc:
+            detail = await self._stderr_snippet()
+            await self.stop()
+            suffix = f": {detail[:500]}" if detail else ""
+            raise RuntimeError(f"faster-whisper worker returned invalid startup output: {ready_raw[:300]!r}{suffix}") from exc
+        if not ready.get("ready"):
+            await self.stop()
+            raise RuntimeError(f"faster-whisper worker did not become ready: {ready}")
+        self.model_key = key
+
+    async def transcribe(self, wav_path: str) -> str:
+        async with self.lock:
+            await self._ensure_started()
+            if not self.proc or not self.proc.stdin or not self.proc.stdout or self.proc.returncode is not None:
+                raise RuntimeError("faster-whisper worker is not running")
+            timeout = _env_float("ZOE_WHISPER_TIMEOUT_S", 20.0)
+            request = json.dumps({"wav_path": wav_path}) + "\n"
+            try:
+                self.proc.stdin.write(request.encode())
+                await self.proc.stdin.drain()
+                raw = await asyncio.wait_for(self.proc.stdout.readline(), timeout=timeout)
+            except Exception:
+                await self.stop()
+                raise
+            if self.proc.returncode is not None:
+                code = self.proc.returncode
+                await self.stop()
+                raise RuntimeError(f"faster-whisper worker exited ({code})")
+            try:
+                payload = json.loads(raw.decode(errors="ignore"))
+            except json.JSONDecodeError as exc:
+                await self.stop()
+                raise RuntimeError(f"faster-whisper worker returned invalid output: {raw[:300]!r}") from exc
+            if payload.get("error"):
+                raise RuntimeError(f"faster-whisper worker failed: {str(payload['error'])[:500]}")
+            return str(payload.get("text") or "").strip()
+
+
+async def _run_faster_whisper_worker(wav_path: str) -> str:
+    global _faster_whisper_worker
+    if _faster_whisper_worker is None:
+        _faster_whisper_worker = _FasterWhisperWorker()
+    return await _faster_whisper_worker.transcribe(wav_path)
+
+
+async def _reset_faster_whisper_worker() -> None:
+    global _faster_whisper_worker
+    worker = _faster_whisper_worker
+    _faster_whisper_worker = None
+    if worker is not None:
+        await worker.stop()
+
+
+def _voice_stt_warmup_enabled() -> bool:
+    return (os.environ.get("ZOE_WHISPER_WARMUP") or "true").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+def _available_memory_mb() -> Optional[int]:
+    """Return roughly available system memory in MB, or None if undetectable.
+
+    Reads /proc/meminfo (Linux-only) so we don't add a new dependency. This is
+    used as a soft guard for the optional faster-whisper startup warmup so it
+    can be skipped when the host is under memory pressure.
+    """
+    try:
+        meminfo = Path("/proc/meminfo")
+        if not meminfo.is_file():
+            return None
+        available_kb: Optional[int] = None
+        total_kb: Optional[int] = None
+        free_kb: Optional[int] = None
+        buffers_kb: Optional[int] = None
+        cached_kb: Optional[int] = None
+        for raw in meminfo.read_text(errors="ignore").splitlines():
+            if raw.startswith("MemAvailable:"):
+                available_kb = int(raw.split()[1])
+            elif raw.startswith("MemTotal:"):
+                total_kb = int(raw.split()[1])
+            elif raw.startswith("MemFree:"):
+                free_kb = int(raw.split()[1])
+            elif raw.startswith("Buffers:"):
+                buffers_kb = int(raw.split()[1])
+            elif raw.startswith("Cached:"):
+                cached_kb = int(raw.split()[1])
+        if available_kb is not None:
+            return available_kb // 1024
+        if total_kb is not None and free_kb is not None:
+            extras = (buffers_kb or 0) + (cached_kb or 0)
+            return (free_kb + extras) // 1024
+        return None
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _should_skip_warmup_for_low_memory() -> Optional[str]:
+    """Return a skip-reason string if warmup should be skipped for low memory, else None.
+
+    Configurable via ZOE_WHISPER_WARMUP_MIN_AVAIL_MB (default 1024 MB). Set to 0
+    to disable the guard. Returns None when memory is healthy or undetectable —
+    we never block the warmup solely because we couldn't read /proc/meminfo.
+    """
+    threshold_mb = _env_float("ZOE_WHISPER_WARMUP_MIN_AVAIL_MB", 1024.0)
+    if threshold_mb <= 0:
+        return None
+    avail_mb = _available_memory_mb()
+    if avail_mb is None:
+        return None
+    if avail_mb < threshold_mb:
+        return f"available memory {avail_mb}MB below threshold {int(threshold_mb)}MB"
+    return None
+
+
+def _write_warmup_silence_wav(path: str, *, seconds: float = 1.0, sample_rate: int = 16000) -> None:
+    frame_count = max(1, int(sample_rate * seconds))
+    with wave.open(path, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(b"\x00\x00" * frame_count)
+
+
+def _create_warmup_wav_path() -> str:
+    """Create an empty temp wav file and return its path. Sync helper.
+
+    Runs in a worker thread via ``asyncio.to_thread`` so it never blocks the
+    event loop while allocating a temp file on disk.
+    """
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        return tmp.name
+
+
+async def warm_faster_whisper_worker() -> bool:
+    """Prime the persistent faster-whisper worker without blocking API startup.
+
+    This coroutine is scheduled as a background task during lifespan startup
+    (see ``main.py``). To guarantee it can never stall zoe-data's :8000 bind
+    we (1) early-return when available system memory is below the configured
+    threshold and (2) offload every synchronous I/O step (tempfile creation,
+    silence-wav write) to a worker thread via ``asyncio.to_thread``. The
+    subprocess model load itself already runs in a child process, not on the
+    event-loop thread.
+    """
+    if not _voice_stt_warmup_enabled():
+        logger.info("faster-whisper warmup disabled by ZOE_WHISPER_WARMUP")
+        return False
+    if _use_in_process_faster_whisper() or not _use_persistent_faster_whisper_worker():
+        logger.info("faster-whisper warmup skipped; persistent worker is not active")
+        return False
+    skip_reason = _should_skip_warmup_for_low_memory()
+    if skip_reason is not None:
+        logger.warning("faster-whisper warmup skipped (%s); will warm lazily on first use", skip_reason)
+        return False
+    timeout = _env_float("ZOE_WHISPER_WARMUP_TIMEOUT_S", 45.0)
+    tmp_path = ""
+    started = time.monotonic()
+    try:
+        # Offload all sync I/O to a worker thread so this coroutine is pure async I/O.
+        tmp_path = await asyncio.to_thread(_create_warmup_wav_path)
+        await asyncio.to_thread(_write_warmup_silence_wav, tmp_path)
+        await asyncio.wait_for(_run_faster_whisper_worker(tmp_path), timeout=timeout)
+        logger.info("faster-whisper worker warmup completed in %.2fs", time.monotonic() - started)
+        return True
+    except asyncio.CancelledError:
+        await _reset_faster_whisper_worker()
+        raise
+    except Exception as exc:
+        await _reset_faster_whisper_worker()
+        logger.warning("faster-whisper worker warmup failed: %s", exc)
+        return False
+    finally:
+        if tmp_path:
+            try:
+                # ``os.unlink`` is sync but tiny; safe to run inline.
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
+async def _run_faster_whisper_in_process(wav_path: str) -> str:
+    """Transcribe using the faster-whisper Python library in the API worker."""
     model = await _get_faster_whisper_model()
     if model is None:
         raise RuntimeError("faster-whisper not available; install with: pip install faster-whisper")
@@ -1579,6 +2355,7 @@ async def _run_faster_whisper(wav_path: str) -> str:
                 segments, _info = model.transcribe(
                     wav_path,
                     language=lang,
+                    beam_size=int(os.environ.get("ZOE_WHISPER_BEAM_SIZE", "5")),
                     vad_filter=True,
                     vad_parameters={
                         "threshold": vad_threshold,
@@ -1603,6 +2380,15 @@ async def _run_faster_whisper(wav_path: str) -> str:
         timeout=timeout,
     )
     return text
+
+
+async def _run_faster_whisper(wav_path: str) -> str:
+    """Transcribe using faster-whisper when whisper.cpp is unavailable."""
+    if _use_in_process_faster_whisper():
+        return await _run_faster_whisper_in_process(wav_path)
+    if _use_persistent_faster_whisper_worker():
+        return await _run_faster_whisper_worker(wav_path)
+    return await _run_faster_whisper_subprocess(wav_path)
 
 
 
@@ -1677,7 +2463,8 @@ def _log_voice_stt_sample(
             "stt_seconds": round(stt_seconds, 3) if stt_seconds is not None else None,
             "transcript": transcript,
             "transcript_chars": len(transcript or ""),
-            "model": (os.environ.get("ZOE_WHISPER_MODEL") or "base.en").strip(),
+            # Actual backend that produced this transcript (was hardcoded base.en).
+            "model": _stt_backend_var.get() or (os.environ.get("ZOE_STT_BACKEND") or "moonshine").strip(),
             "device": (os.environ.get("ZOE_WHISPER_DEVICE") or "").strip(),
             "compute_type": (os.environ.get("ZOE_WHISPER_COMPUTE_TYPE") or "").strip(),
             "vad_threshold": _env_float("ZOE_WHISPER_VAD_THRESHOLD", 0.50),
@@ -1694,16 +2481,132 @@ def _log_voice_stt_sample(
         logger.debug("voice STT audit log failed: %s", exc)
 
 
+# --- Moonshine ONNX STT (edge real-time; faster on short commands, CPU-only so
+# it never competes with the brain's GPU). Model + tokenizer are cached once. ---
+_moonshine_model = None  # moonshine_voice v2 Transcriber
+_moonshine_lock = threading.Lock()
+
+
+def _ensure_moonshine():
+    """Lazily build the Moonshine v2 transcriber (MEDIUM_STREAMING by default —
+    accurate on real room audio, ~0.5s/clip). Locked so a concurrent first call
+    can't race the model load."""
+    global _moonshine_model
+    if _moonshine_model is not None:
+        return _moonshine_model
+    with _moonshine_lock:
+        if _moonshine_model is None:
+            import moonshine_voice as mv
+            from moonshine_voice.transcriber import Transcriber
+
+            archname = (os.environ.get("ZOE_MOONSHINE_ARCH") or "MEDIUM_STREAMING").strip()
+            arch = getattr(mv.ModelArch, archname, mv.ModelArch.MEDIUM_STREAMING)
+            model_path, resolved_arch = mv.get_model_for_language("en", arch)
+            _moonshine_model = Transcriber(model_path, resolved_arch)
+    return _moonshine_model
+
+
+async def _run_moonshine(wav_path: str) -> str:
+    from moonshine_voice.utils import load_wav_file
+
+    def _work() -> str:
+        tr = _ensure_moonshine()
+        audio, sr = load_wav_file(wav_path)
+        out = tr.transcribe_without_streaming(audio, sr)
+        text = getattr(out, "text", None)
+        if not (isinstance(text, str) and text.strip()):
+            try:
+                text = " ".join(line.text for line in out.lines)
+            except Exception:
+                text = str(out)
+        return (text or "").strip()
+
+    return await asyncio.get_running_loop().run_in_executor(None, _work)
+
+
+async def warm_moonshine() -> bool:
+    """Pre-load the Moonshine STT model+tokenizer so the first panel turn isn't
+    cold (saves the ~1-2s ONNX session load on the first utterance)."""
+    if (os.environ.get("ZOE_STT_BACKEND") or "moonshine").strip().lower() != "moonshine":
+        logger.info("Moonshine warmup skipped; ZOE_STT_BACKEND is not moonshine")
+        return False
+    started = time.monotonic()
+    try:
+        await asyncio.get_running_loop().run_in_executor(None, _ensure_moonshine)
+        logger.info("Moonshine STT warmup completed in %.2fs", time.monotonic() - started)
+        return True
+    except Exception as exc:
+        logger.warning("Moonshine STT warmup failed (non-fatal): %s", exc)
+        return False
+
+
+async def _maybe_capture_stt(wav_path: str, primary: str) -> None:
+    """Diagnostic A/B: when ZOE_VOICE_SAVE_AUDIO is set, save the real utterance
+    and log the primary (Moonshine) result alongside whisper's, so we can tell —
+    on the user's actual room audio — which is more accurate and whether the
+    pre-roll is corrupting it. Logs at WARNING so it's visible past the level."""
+    if (os.environ.get("ZOE_VOICE_SAVE_AUDIO") or "").strip().lower() not in ("1", "true", "yes", "on"):
+        return
+    try:
+        import shutil
+        import time as _t
+
+        d = os.environ.get("ZOE_VOICE_SAMPLE_DIR") or "/home/zoe/.zoe-voice-samples"
+        os.makedirs(d, exist_ok=True)
+        dst = os.path.join(d, f"{_t.strftime('%H%M%S')}_{int(_t.time()*1000)%1000:03d}.wav")
+        # Copy synchronously (fast) before the caller unlinks the original.
+        shutil.copyfile(wav_path, dst)
+    except Exception as exc:
+        logger.warning("STT capture failed: %s", exc)
+        return
+
+    # Run the whisper A/B on the COPY fire-and-forget, so it never adds latency to
+    # the live transcription path (the whole point of the Moonshine v2 win).
+    async def _ab() -> None:
+        try:
+            alt = await _run_faster_whisper(dst)
+        except Exception as exc:
+            alt = f"<whisper err: {exc}>"
+        logger.warning("STT_AB file=%s moonshine=%r whisper=%r", dst, (primary or "")[:90], (alt or "")[:90])
+
+    _spawn_bg(_ab())
+
+
 async def _transcribe_audio(wav_path: str) -> str:
+    text = await _transcribe_audio_impl(wav_path)
+    await _maybe_capture_stt(wav_path, text)
+    return text
+
+
+# Records which backend produced the transcript for the current turn, so the STT
+# audit log reflects reality instead of a hardcoded "base.en". A ContextVar (not a
+# module global) keeps this per-asyncio-task, so overlapping voice turns / an A/B
+# capture running beside a live turn can't clobber each other's value.
+_stt_backend_var: contextvars.ContextVar[str] = contextvars.ContextVar("stt_backend", default="")
+
+
+async def _transcribe_audio_impl(wav_path: str) -> str:
     """
     Transcription waterfall:
+    0. Moonshine ONNX (default; edge real-time, CPU) — falls through on error
     1. whisper.cpp CLI (if binary + ggml model configured)
     2. faster-whisper Python (auto-downloaded model, GPU/CPU)
     """
+    if (os.environ.get("ZOE_STT_BACKEND") or "moonshine").strip().lower() == "moonshine":
+        try:
+            text = await _run_moonshine(wav_path)
+            if text:
+                _stt_backend_var.set("moonshine:" + (os.environ.get("ZOE_MOONSHINE_ARCH") or "v2").strip())
+                return text
+            logger.warning("Moonshine STT returned empty; falling back to whisper")
+        except Exception as exc:
+            logger.warning("Moonshine STT failed (%s); falling back to whisper", exc)
     if _whisper_cpp_binary():
         model = (os.environ.get("ZOE_WHISPER_MODEL") or "").strip()
         if model and os.path.isfile(model):
+            _stt_backend_var.set("whisper.cpp:" + os.path.basename(model))
             return await _run_whisper_cpp(wav_path)
+    _stt_backend_var.set("faster-whisper:" + (os.environ.get("ZOE_WHISPER_MODEL") or "base.en").strip())
     return await _run_faster_whisper(wav_path)
 
 
@@ -1881,9 +2784,9 @@ async def _schedule_voice_chat_save(
     try:
         from chat import _save_chat_message as _svc  # lazy — avoids circular import
         if user_text:
-            asyncio.ensure_future(_svc(session_id, "user", user_text))
+            _spawn_bg(_svc(session_id, "user", user_text))
         if reply:
-            asyncio.ensure_future(_svc(session_id, "assistant", reply))
+            _spawn_bg(_svc(session_id, "assistant", reply))
     except Exception:
         pass
 
@@ -1922,7 +2825,7 @@ async def _run_voice_memory_passes(
             ),
             return_exceptions=True,
         )
-        asyncio.ensure_future(_detect_suggestions(
+        _spawn_bg(_detect_suggestions(
             user_text,
             user_id=user_id,
             session_id=session_id,
@@ -1998,6 +2901,24 @@ async def voice_command(
     _quick_intent_name: Optional[str] = None
     if not text:
         raise HTTPException(status_code=400, detail="text is required")
+    normalized_text = _normalize_voice_command_text(text)
+    if normalized_text != text:
+        logger.info("voice/command normalized transcript %r -> %r", text[:80], normalized_text[:80])
+        text = normalized_text
+
+    # Tier-1 semantic router (SHADOW by default): log what it would classify this
+    # utterance as, so we can validate routing accuracy on live traffic before it
+    # ever changes behavior. Logged at WARNING so it's visible past the log level.
+    _router_decision: Optional[dict] = None
+    try:
+        import semantic_router as _sr
+        if _sr.is_enabled():
+            _rr = _sr.route(text)
+            _router_decision = _rr
+            logger.warning("ROUTER_SHADOW text=%r -> routed=%s (best=%s %.2f) %.1fms scores=%s",
+                           text[:70], _rr["routed"], _rr["domain"], _rr["score"], _rr["ms"], _rr["scores"])
+    except Exception as _rexc:
+        logger.debug("semantic router shadow failed: %s", _rexc)
 
     # Classify identity source for Pass 3 observability (Pass 1 is measurement-only).
     try:
@@ -2060,7 +2981,7 @@ async def voice_command(
     if text and effective_user not in ("guest", "voice-daemon", ""):
         try:
             from chat import _save_chat_message as _svc_user_turn
-            asyncio.ensure_future(_svc_user_turn(session_id, "user", text))
+            _spawn_bg(_svc_user_turn(session_id, "user", text))
         except Exception:
             pass
 
@@ -2287,7 +3208,7 @@ async def voice_command(
                 except Exception:
                     pass
                 await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
-                asyncio.ensure_future(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
+                _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
                 return {"ok": True, "panel_id": panel_id, "reply": reply_text,
                         "audio_base64": audio_b64_conf, "content_type": ct_conf}
             elif _contains_decision_keyword(lc, _CANCEL_KEYWORDS):
@@ -2322,6 +3243,199 @@ async def voice_command(
         await _bc.broadcast("all", "voice:thinking", {"panel_id": panel_id})
     except Exception:
         pass
+
+    _voice_processing_ack_sent = False
+    if not stream:
+        try:
+            from pi_hybrid_production import (
+                PiHybridProductionConfig,
+                pi_hybrid_production_eligible,
+                processing_cue_packet,
+                try_pi_hybrid_production,
+            )
+
+            _pi_hybrid_config = PiHybridProductionConfig.from_env()
+            _pi_hybrid_eligible, _pi_hybrid_reason = pi_hybrid_production_eligible(text, config=_pi_hybrid_config)
+            if _pi_hybrid_eligible:
+                _pi_cue = await processing_cue_packet(text=text)
+                _ack_text = str(_pi_cue.get("text") or "").strip()
+                if _ack_text:
+                    try:
+                        from push import broadcaster as _bc_pi_hybrid
+
+                        await _bc_pi_hybrid.broadcast("all", "voice:responding", {
+                            "panel_id": panel_id,
+                            "text": _ack_text,
+                            "processing_ack": True,
+                            "source": "pi_hybrid_production",
+                        })
+                        _voice_processing_ack_sent = True
+                    except Exception:
+                        pass
+                _pi_hybrid = await try_pi_hybrid_production(
+                    text,
+                    user_id=effective_user,
+                    context_turns="",
+                    config=_pi_hybrid_config,
+                )
+                if _pi_hybrid.get("accepted") and _pi_hybrid.get("response_text"):
+                    reply_text = str(_pi_hybrid.get("response_text") or "")
+                    if str(_pi_hybrid.get("intent") or "") == "list_show":
+                        reply_text = _cap_voice_list_show_reply(reply_text)
+                    _pi_audio = await synthesize({"text": reply_text}, caller=caller)
+                    try:
+                        from push import broadcaster as _bc_pi_done
+
+                        await _bc_pi_done.broadcast("all", "voice:responding", {
+                            "panel_id": panel_id,
+                            "text": reply_text[:200],
+                            "pi_hybrid": True,
+                        })
+                        if str(_pi_hybrid.get("intent") or "") == "weather":
+                            await _broadcast_weather_ui(panel_id, reply_text, turn_key=_turn_key)
+                        await _bc_pi_done.broadcast("all", "voice:done", {"panel_id": panel_id})
+                    except Exception:
+                        pass
+                    await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
+                    _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
+                    return {
+                        "ok": True,
+                        "panel_id": panel_id,
+                        "reply": reply_text,
+                        "audio_base64": base64.b64encode(_pi_audio.body).decode("ascii"),
+                        "content_type": _pi_audio.media_type,
+                        "intent": str(_pi_hybrid.get("intent") or "pi_hybrid"),
+                        "pi_hybrid": {
+                            "accepted": True,
+                            "reason": _pi_hybrid.get("reason"),
+                            "intent_group": _pi_hybrid.get("intent_group"),
+                            "agreement_kind": _pi_hybrid.get("agreement_kind"),
+                            "processing_cue": {"available": bool(_pi_cue.get("available")), "text": _ack_text},
+                        },
+                    }
+            elif _pi_hybrid_config.enabled:
+                logger.debug("voice/command Pi hybrid production skipped: %s", _pi_hybrid_reason)
+        except Exception as _pi_hybrid_exc:
+            logger.debug("voice/command Pi hybrid failed open to existing voice route: %s", _pi_hybrid_exc)
+
+    if not stream and not _voice_processing_ack_sent:
+        try:
+            from pi_hybrid_production import processing_cue_packet
+            from push import broadcaster as _bc_voice_fallback
+
+            _fallback_cue = await processing_cue_packet(text=text)
+            _fallback_ack_text = str(_fallback_cue.get("text") or "").strip()
+            if _fallback_ack_text:
+                await _bc_voice_fallback.broadcast("all", "voice:responding", {
+                    "panel_id": panel_id,
+                    "text": _fallback_ack_text,
+                    "processing_ack": True,
+                    "source": "voice_command_fallback",
+                })
+        except Exception as _fallback_ack_exc:
+            logger.debug("voice/command fallback processing acknowledgement failed: %s", _fallback_ack_exc)
+
+    # Skybridge-first touch prototype: supported visual domains render as cards
+    # on the single Skybridge surface instead of navigating to domain pages.
+    try:
+        from skybridge_service import resolve_skybridge_request
+
+        _voice_entry = _VOICE_SESSIONS.get(panel_id, {})
+        _skybridge_context = _voice_entry.get("skybridge_context") or {}
+        _skybridge_user = _scope_identity_user or "guest"
+        _sky_t0 = time.monotonic()
+        _skybridge_result = await resolve_skybridge_request(
+            text,
+            _skybridge_user,
+            context=_skybridge_context,
+            db=db,
+        )
+        _sky_t_resolve = time.monotonic() - _sky_t0
+        if _skybridge_result and _skybridge_result.get("auth_required"):
+            _intent = _skybridge_result.get("intent") or {}
+            try:
+                from guest_policy import record_policy_decision as _record_guest_policy
+                _record_guest_policy(
+                    "auth_required",
+                    surface="voice",
+                    resource="skybridge",
+                    action=f"{_intent.get('domain', 'unknown')}:{_intent.get('action', 'show')}",
+                )
+            except Exception as _policy_exc:
+                logger.warning("voice/command skybridge auth policy record failed: %s", _policy_exc)
+            try:
+                return await _request_voice_identity_challenge(
+                    panel_id=panel_id,
+                    text=text,
+                    session_id=session_id,
+                    caller=caller,
+                    reason="Skybridge needs to know who is speaking before showing personal data.",
+                )
+            except Exception as _auth_exc:
+                logger.warning("voice/command skybridge auth challenge failed: %s", _auth_exc)
+                _auth_fail_phrase = "Authentication is required before I can show that. I could not open the touch panel authentication screen just now."
+                try:
+                    _auth_fail_audio = await synthesize({"text": _auth_fail_phrase}, caller=caller)
+                    _auth_fail_b64 = base64.b64encode(_auth_fail_audio.body).decode("ascii")
+                    _auth_fail_type = _auth_fail_audio.media_type
+                except Exception:
+                    _auth_fail_b64 = None
+                    _auth_fail_type = "audio/wav"
+                return {
+                    "ok": True,
+                    "panel_id": panel_id,
+                    "reply": _auth_fail_phrase,
+                    "status": "auth_unavailable",
+                    "audio_base64": _auth_fail_b64,
+                    "content_type": _auth_fail_type,
+                }
+        if _skybridge_result and _skybridge_result.get("handled"):
+            _VOICE_SESSIONS.setdefault(panel_id, {})["skybridge_context"] = (
+                _skybridge_result.get("skybridge_context") or {}
+            )
+            _skybridge_reply = str(_skybridge_result.get("spoken_summary") or "Showing that in Skybridge.")
+            _bcast_t0 = time.monotonic()
+            await _broadcast_skybridge_ui(
+                panel_id,
+                _skybridge_result,
+                utterance=text,
+                turn_key=_turn_key,
+            )
+            _bcast_dt = time.monotonic() - _bcast_t0
+            _synth_t0 = time.monotonic()
+            # In stream mode, /turn_stream synthesizes the reply sentence-by-
+            # sentence for fast first-audio, so skip the blocking full synth here
+            # and hand back just the text (audio_base64=None).
+            _skybridge_audio_b64: Optional[str] = None
+            _skybridge_ct = "audio/wav"
+            if not stream:
+                _skybridge_audio = await synthesize({"text": _skybridge_reply}, caller=caller)
+                _skybridge_audio_b64 = base64.b64encode(_skybridge_audio.body).decode("ascii")
+                _skybridge_ct = _skybridge_audio.media_type
+            logger.info("SKYBRIDGE TIMING resolve=%.2fs broadcast=%.2fs synth=%.2fs stream=%s reply=%r",
+                        _sky_t_resolve, _bcast_dt, time.monotonic() - _synth_t0, stream, _skybridge_reply[:50])
+            try:
+                from push import broadcaster as _bc_sky
+                await _bc_sky.broadcast("all", "voice:responding", {"panel_id": panel_id, "text": _skybridge_reply[:200]})
+                await _bc_sky.broadcast("all", "voice:done", {"panel_id": panel_id})
+            except Exception:
+                pass
+            await _schedule_voice_chat_save(session_id, text, _skybridge_reply, _skybridge_user)
+            _spawn_bg(_run_voice_memory_passes(text, _skybridge_reply, _skybridge_user, session_id))
+            return {
+                "ok": True,
+                "panel_id": panel_id,
+                "reply": _skybridge_reply,
+                "audio_base64": _skybridge_audio_b64,
+                "content_type": _skybridge_ct,
+                "intent": f"skybridge:{(_skybridge_result.get('intent') or {}).get('domain', 'unknown')}",
+                "skybridge": True,
+            }
+        _VOICE_SESSIONS.setdefault(panel_id, {})["skybridge_context"] = {}
+    except Exception as _skybridge_exc:
+        # Surfaced at warning (was debug): when this fires the turn falls through to
+        # the legacy intent path, which is the silent bounce-to-domain-page behavior.
+        logger.warning("voice/command skybridge fast path failed (non-fatal): %s", _skybridge_exc)
 
     # Fallback audio used when any part of the pipeline fails — panel never goes silent.
     _FALLBACK_PHRASE = "Sorry, something went wrong. Please try again."
@@ -2377,6 +3491,8 @@ async def voice_command(
                     _quick_intent = None
             except Exception:
                 pass
+
+
         if _quick_intent and _quick_intent.name == "people_introduce":
             try:
                 intro_name = (_quick_intent.slots or {}).get("name", "").strip()
@@ -2396,7 +3512,7 @@ async def voice_command(
                     }
                     _intro_audio = await synthesize({"text": reply_text}, caller=caller)
                     await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
-                    asyncio.ensure_future(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
+                    _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
                     return {
                         "ok": True,
                         "panel_id": panel_id,
@@ -2485,7 +3601,7 @@ async def voice_command(
                     )
                     _list_audio = await synthesize({"text": reply_text}, caller=caller)
                     await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
-                    asyncio.ensure_future(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
+                    _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
                     return {
                         "ok": True,
                         "panel_id": panel_id,
@@ -2537,7 +3653,7 @@ async def voice_command(
                     )
                     _cal_audio = await synthesize({"text": reply_text}, caller=caller)
                     await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
-                    asyncio.ensure_future(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
+                    _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
                     return {
                         "ok": True,
                         "panel_id": panel_id,
@@ -2566,7 +3682,7 @@ async def voice_command(
                     await _broadcast_reminder_ui(panel_id=panel_id, summary=reply_text, turn_key=_turn_key)
                     _rem_audio = await synthesize({"text": reply_text}, caller=caller)
                     await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
-                    asyncio.ensure_future(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
+                    _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
                     return {
                         "ok": True,
                         "panel_id": panel_id,
@@ -2700,7 +3816,7 @@ async def voice_command(
                     action=_pub_intent.name,
                 )
                 await _schedule_voice_chat_save(session_id, text, _pub_reply, effective_user)
-                asyncio.ensure_future(_run_voice_memory_passes(text, _pub_reply, effective_user, session_id))
+                _spawn_bg(_run_voice_memory_passes(text, _pub_reply, effective_user, session_id))
                 return {
                     "ok": True, "panel_id": panel_id,
                     "reply": _pub_reply,
@@ -2725,7 +3841,7 @@ async def voice_command(
                 await _broadcast_weather_ui(panel_id, _weather_fb_reply, turn_key=_turn_key)
                 _weather_fb_audio = await synthesize({"text": _weather_fb_reply}, caller=caller)
                 await _schedule_voice_chat_save(session_id, text, _weather_fb_reply, effective_user)
-                asyncio.ensure_future(_run_voice_memory_passes(text, _weather_fb_reply, effective_user, session_id))
+                _spawn_bg(_run_voice_memory_passes(text, _weather_fb_reply, effective_user, session_id))
                 return {
                     "ok": True,
                     "panel_id": panel_id,
@@ -2736,6 +3852,53 @@ async def voice_command(
                 }
     except Exception as _weather_fb_exc:
         logger.warning("voice/command weather fallback failed: %s", _weather_fb_exc)
+
+    # ── Tier-1.5: router → domain-expert dispatch ────────────────────────────
+    # Every deterministic fast-path above MISSED. If the semantic router was
+    # confident about a domain, fulfill it via the existing handlers instead of
+    # dropping to the slow general brain. Shadow by default (logs, returns None);
+    # only ZOE_EXPERT_MODE=active + an allow-listed domain actually fulfills.
+    try:
+        import expert_dispatch as _xd
+        if _xd.is_enabled() and _router_decision and _router_decision.get("domain") not in (None, "chat"):
+            _xresult = await _xd.dispatch(
+                _router_decision["domain"], text,
+                {"user_id": effective_user, "session_id": session_id, "db": db,
+                 "score": _router_decision.get("score", 0.0), "panel_id": panel_id},
+            )
+            if _xresult is not None:
+                reply_text = _xresult.reply
+                _ui = (_xresult.ui or {}).get("kind")
+                try:
+                    if _ui == "weather":
+                        await _broadcast_weather_ui(panel_id, reply_text, turn_key=_turn_key)
+                    elif _ui == "calendar":
+                        await _broadcast_calendar_ui(panel_id, reply_text, turn_key=_turn_key)
+                    elif _ui == "reminder":
+                        await _broadcast_reminder_ui(panel_id=panel_id, summary=reply_text, turn_key=_turn_key)
+                except Exception:
+                    pass
+                _xaudio_b64: Optional[str] = None
+                _xct = "audio/wav"
+                if not stream:
+                    _xaudio = await synthesize({"text": reply_text}, caller=caller)
+                    _xaudio_b64 = base64.b64encode(_xaudio.body).decode("ascii")
+                    _xct = _xaudio.media_type
+                try:
+                    from push import broadcaster as _bc_xd
+                    await _bc_xd.broadcast("all", "voice:responding", {"panel_id": panel_id, "text": reply_text[:200]})
+                    await _bc_xd.broadcast("all", "voice:done", {"panel_id": panel_id})
+                except Exception:
+                    pass
+                await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
+                _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
+                return {
+                    "ok": True, "panel_id": panel_id, "reply": reply_text,
+                    "audio_base64": _xaudio_b64, "content_type": _xct,
+                    "intent": f"expert:{_xresult.domain}:{_xresult.intent}",
+                }
+    except Exception as _xd_exc:
+        logger.warning("voice/command expert dispatch failed (non-fatal): %s", _xd_exc)
 
     # ── Pass 3 B3/B4: scope gate + PIN challenge ─────────────────────────────
     # Check if this utterance needs a known user. If so, and we have none,
@@ -2780,78 +3943,13 @@ async def voice_command(
                     resource="scope_gate",
                     action=_scope_action,
                 )
-                import uuid as _uuid_mod
-                _pending_id = _uuid_mod.uuid4().hex
-                _pending_payload = {
-                    "pending_id": _pending_id,
-                    "transcript": text,
-                    "session_id": session_id,
-                    "expire_at": time.monotonic() + 120,
-                }
-                _PENDING_VOICE_IDENT[panel_id] = {
-                    **_pending_payload,
-                }
-                _pin_phrase = "Please authenticate on the touch panel. Choose your profile and enter your PIN to continue."
-                _pin_audio_resp = await synthesize({"text": _pin_phrase}, caller=caller)
-                _pin_b64 = base64.b64encode(_pin_audio_resp.body).decode("ascii")
-                _challenge_id = None
-                try:
-                    from routers.panel_auth import create_pin_challenge_internal
-                    from database import get_db as _get_db
-                    async for _db in _get_db():
-                        _challenge = await create_pin_challenge_internal(
-                            panel_id=panel_id,
-                            user_id=None,
-                            action_context={
-                                "kind": "voice_turn",
-                                "pending_id": _pending_id,
-                                "panel_id": panel_id,
-                                # Durable replay fallback if process-local in-memory maps are lost.
-                                "pending_transcript": text,
-                                "pending_session_id": session_id,
-                            },
-                            db=_db,
-                        )
-                        _challenge_id = (_challenge or {}).get("challenge_id")
-                        break
-                except Exception as _challenge_exc:
-                    logger.warning("voice/command PIN challenge failed: %s", _challenge_exc)
-                if not _challenge_id:
-                    _fail_phrase = "I could not open the authentication screen just now. Please open the touch login page and try again."
-                    _fail_audio = await synthesize({"text": _fail_phrase}, caller=caller)
-                    return {
-                        "ok": True,
-                        "panel_id": panel_id,
-                        "reply": _fail_phrase,
-                        "status": "auth_unavailable",
-                        "audio_base64": base64.b64encode(_fail_audio.body).decode("ascii"),
-                        "content_type": _fail_audio.media_type,
-                    }
-
-                _requested = await _request_auth_ui(
+                return await _request_voice_identity_challenge(
                     panel_id=panel_id,
-                    challenge_id=_challenge_id,
+                    text=text,
+                    session_id=session_id,
+                    caller=caller,
                     reason="Voice command needs identity. Enter your PIN to continue.",
                 )
-                if not _requested:
-                    logger.warning(
-                        "voice/command auth challenge created but panel auth action was not delivered: panel=%s challenge=%s",
-                        panel_id,
-                        _challenge_id,
-                    )
-                try:
-                    from voice_metrics import voice_turn_count
-                    voice_turn_count.labels(outcome="ok", path="awaiting_pin").inc()
-                except Exception:
-                    pass
-                return {
-                    "ok": True,
-                    "panel_id": panel_id,
-                    "reply": _pin_phrase,
-                    "status": "awaiting_pin",
-                    "audio_base64": _pin_b64,
-                    "content_type": _pin_audio_resp.media_type,
-                }
             _record_guest_policy(
                 "guest_allowed" if not _ident_for_scope else "auth_ok",
                 surface="voice",
@@ -2882,7 +3980,7 @@ async def voice_command(
         #   * Streaming tokens are accumulated so that Pass 2b can hand the
         #     sentence-buffered stream to Kokoro.create_stream() and bring
         #     first-audio-byte latency down further.
-        from zoe_agent import run_zoe_agent_streaming
+        from brain_dispatch import brain_streaming  # zoe-core by default
 
         voice_timeout = float(os.environ.get("ZOE_VOICE_CHAT_TIMEOUT_S", "20"))
         try:
@@ -2897,6 +3995,8 @@ async def voice_command(
             async def _generate_voice_stream():
                 from push import broadcaster as _bc_stream
                 import json as _json
+
+                nonlocal _t_first_token
 
                 chunk_index = 0
                 token_buf = ""
@@ -2978,8 +4078,36 @@ async def voice_command(
                     async def _emit_line(line: dict):
                         yield (_json.dumps(line) + "\n").encode()
 
+                    try:
+                        from voice_presence import processing_ack_event
+
+                        ack_event = processing_ack_event()
+                        if ack_event:
+                            ack_text = str(ack_event.get("text") or "").strip()
+                            if ack_text:
+                                await _bc_stream.broadcast("all", "voice:responding", {
+                                    "panel_id": panel_id,
+                                    "text": ack_text,
+                                    "processing_ack": True,
+                                })
+                            if ack_event.get("audio_base64"):
+                                header = _json.dumps({
+                                    "chunk": chunk_index,
+                                    "text": ack_text[:80],
+                                    "provider": str(ack_event.get("audio_source") or "cached-processing-ack"),
+                                    "processing_ack": True,
+                                })
+                                yield (header + "\n").encode()
+                                yield str(ack_event["audio_base64"]).encode() + b"\n"
+                                chunk_index += 1
+                            else:
+                                async for out_line in _emit_line({"processing_ack": True, "text": ack_text, "panel_id": panel_id}):
+                                    yield out_line
+                    except Exception as ack_exc:
+                        logger.debug("voice/command stream processing acknowledgement failed: %s", ack_exc)
+
                     _voice_history = await _load_voice_history(session_id, limit=3)
-                    async for delta in run_zoe_agent_streaming(
+                    async for delta in brain_streaming(
                         text, session_id, user_id=effective_user,
                         voice_mode=True, history=_voice_history or None
                     ):
@@ -2991,7 +4119,7 @@ async def voice_command(
                                 logger.info("voice/command stream escalation -> Hermes background=%s reason=%s", is_bg, reason or "unspecified")
                                 if is_bg:
                                     from background_runner import enqueue_background_task
-                                    asyncio.ensure_future(enqueue_background_task(hermes_prompt, effective_user, session_id))
+                                    _spawn_bg(enqueue_background_task(hermes_prompt, effective_user, session_id))
                                     delta = "I'll work on that in the background and let you know when it's done."
                                 else:
                                     # Voice foreground turns should answer aloud when possible;
@@ -3080,7 +4208,7 @@ async def voice_command(
 
         async def _stream_collect() -> None:
             nonlocal _t_first_token
-            async for delta in run_zoe_agent_streaming(
+            async for delta in brain_streaming(
                 text,
                 session_id,
                 user_id=effective_user,
@@ -3096,7 +4224,7 @@ async def voice_command(
                         logger.info("voice/command escalation -> Hermes background=%s reason=%s", is_bg, reason or "unspecified")
                         if is_bg:
                             from background_runner import enqueue_background_task
-                            asyncio.ensure_future(enqueue_background_task(hermes_prompt, effective_user, session_id))
+                            _spawn_bg(enqueue_background_task(hermes_prompt, effective_user, session_id))
                             delta = "I'll work on that in the background and let you know when it's done."
                         else:
                             # Voice foreground turns should answer aloud when possible;
@@ -3321,7 +4449,7 @@ async def voice_command(
     # handles both regex and LLM extraction passes in the background.
     if reply_text and effective_user and effective_user not in ("guest", "voice-daemon"):
         await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
-        asyncio.ensure_future(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
+        _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
 
     return {
         "ok": True,
@@ -3457,15 +4585,184 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth),
     return result
 
 
+@router.post("/turn_stream")
+async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice_auth), db=Depends(get_db)):
+    """Streaming variant of /turn: STT, then stream brain→sentence→TTS audio
+    chunks as they are produced, so the panel starts speaking the answer ~1.3s
+    in instead of waiting for the whole reply to synthesize.
+
+    Wire format (media type application/x-zoe-audio-stream):
+      line 1:        {"transcript": "..."}
+      per chunk:     {"chunk": N, "text": "...", "provider": "..."}\n<base64 wav>\n
+      final:         {"done": true, "reply": "...", "panel_id": "..."}
+    Reuses voice_command(stream=True) for the LLM+TTS pipeline.
+    """
+    b64 = str((payload or {}).get("audio_base64") or "").strip()
+    panel_id = str((payload or {}).get("panel_id", caller.get("panel_id") or "unknown"))
+    if not b64:
+        raise HTTPException(status_code=400, detail="audio_base64 is required")
+
+    t_turn_start = time.monotonic()
+    try:
+        raw = base64.b64decode(b64, validate=True)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="invalid base64 audio") from exc
+    t_upload = time.monotonic() - t_turn_start
+    suffix = ".wav" if (len(raw) >= 4 and raw[:4] == b"RIFF") else ".raw"
+
+    # ── STT (Moonshine, same waterfall as /turn) ──
+    t_stt_start = time.monotonic()
+    duration_s: float | None = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp.write(raw)
+            wav_path = tmp.name
+        duration_s = _wav_duration_seconds(wav_path) if suffix == ".wav" else None
+        try:
+            transcript = await _transcribe_audio(wav_path)
+        finally:
+            try:
+                os.unlink(wav_path)
+            except OSError:
+                pass
+    except Exception as exc:
+        logger.error("voice/turn_stream STT failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Transcription failed: {exc}") from exc
+
+    t_stt = time.monotonic() - t_stt_start
+    try:
+        from voice_metrics import voice_stage_seconds
+        voice_stage_seconds.labels(stage="upload").observe(t_upload)
+        voice_stage_seconds.labels(stage="stt").observe(t_stt)
+    except Exception:
+        pass
+    transcript = (transcript or "").strip()
+    _log_voice_stt_sample(
+        route="turn_stream",
+        panel_id=panel_id,
+        audio_bytes=len(raw),
+        suffix=suffix,
+        transcript=transcript,
+        duration_seconds=duration_s,
+        stt_seconds=t_stt,
+    )
+
+    import json as _json
+
+    if not transcript:
+        try:
+            from voice_metrics import voice_turn_count
+            voice_turn_count.labels(outcome="empty_transcript", path="turn_stream").inc()
+        except Exception:
+            pass
+        async def _empty():
+            yield (_json.dumps({"transcript": "", "done": True, "reply": ""}) + "\n").encode()
+        return StreamingResponse(
+            _empty(), media_type="application/x-zoe-audio-stream", headers={"Cache-Control": "no-cache"}
+        )
+
+    logger.info("voice/turn_stream panel=%s STT=%.2fs transcript=%r", panel_id, t_stt, transcript[:80])
+    try:
+        from push import broadcaster as _bc_t
+        await _bc_t.broadcast("all", "voice:transcript", {"panel_id": panel_id, "text": transcript})
+    except Exception:
+        pass
+
+    command_payload = {
+        "text": transcript,
+        "panel_id": panel_id,
+        "_t_turn_start": t_turn_start,
+    }
+    if (payload or {}).get("identified_user_id"):
+        command_payload["identified_user_id"] = payload["identified_user_id"]
+
+    # Delegate LLM + per-sentence TTS to the existing streaming pipeline.
+    # (voice_command's stream generator records the downstream llm_first_token /
+    # tts_first_byte / total stage metrics + a path="command" turn count.)
+    sub = await voice_command(command_payload, caller=caller, stream=True, db=db)
+    try:
+        from voice_metrics import voice_turn_count
+        voice_turn_count.labels(outcome="ok", path="turn_stream").inc()
+    except Exception:
+        pass
+
+    async def _wrapped():
+        # Lead with the transcript so the panel can show/log what was heard
+        # before the first audio chunk arrives.
+        yield (_json.dumps({"transcript": transcript}) + "\n").encode()
+        if hasattr(sub, "body_iterator"):
+            async for chunk in sub.body_iterator:
+                yield chunk
+            return
+        # voice_command returns a plain dict (not a StreamingResponse) on the
+        # skybridge / confirmation-dialog / pi-direct paths regardless of the
+        # stream flag. Those already hold the full reply + synthesized audio, so
+        # forward it as a one-shot full_audio frame the panel plays via its
+        # robust player (handles wav AND mp3) instead of crashing on the missing
+        # body_iterator.
+        result = sub if isinstance(sub, dict) else {}
+        reply_text = str(result.get("reply") or "")
+        audio_b64 = result.get("audio_base64")
+        if audio_b64:
+            # Pre-synthesized (confirmation / pi-direct paths) — one-shot frame.
+            yield (_json.dumps({
+                "full_audio": str(audio_b64),
+                "content_type": result.get("content_type") or "audio/wav",
+                "reply": reply_text[:200],
+            }) + "\n").encode()
+        elif reply_text:
+            # Skybridge fast-path returned text only (stream mode) — synthesize it
+            # sentence-by-sentence so the panel starts speaking in ~0.6s instead of
+            # waiting for the whole reply to synthesize.
+            _chunk = 0
+            for _sentence in _split_sentences(reply_text):
+                _sentence = _sentence.strip()
+                if not _sentence:
+                    continue
+                _provider = "kokoro-sidecar"
+                try:
+                    _wav = await _synthesize_kokoro_sidecar(_sentence)
+                except Exception:
+                    _wav = None
+                if not _wav:
+                    # Sidecar down — use the full synth fallback chain (kokoro-onnx
+                    # -> edge-tts -> espeak) so the panel is never left silent.
+                    try:
+                        _resp = await synthesize({"text": _sentence}, caller=caller)
+                        _wav = _resp.body
+                        _provider = _resp.headers.get("X-Zoe-TTS-Provider", "fallback")
+                    except Exception:
+                        _wav = None
+                if not _wav:
+                    continue
+                yield (_json.dumps({"chunk": _chunk, "text": _sentence[:80],
+                                    "provider": _provider}) + "\n").encode()
+                yield base64.b64encode(_wav) + b"\n"
+                _chunk += 1
+        yield (_json.dumps({"done": True, "reply": reply_text}) + "\n").encode()
+
+    return StreamingResponse(
+        _wrapped(), media_type="application/x-zoe-audio-stream", headers={"Cache-Control": "no-cache"}
+    )
+
+
 @router.post("/wake")
 async def voice_wake(payload: dict, caller: dict = Depends(_require_voice_auth)):
     """
     Signal from the Pi daemon that the wake word was detected.
     Used to update panel state (show orb animation, open mic indicator).
-    Returns TTS audio for the wake acknowledgement chime/phrase if configured.
+    Returns cached or fallback TTS audio for the wake acknowledgement.
     """
     panel_id = str((payload or {}).get("panel_id", caller.get("panel_id") or "unknown"))
     ack_phrase = os.environ.get("ZOE_WAKE_ACK_PHRASE", "").strip()
+    try:
+        from voice_presence import wake_ack_variant
+
+        ack_variant = wake_ack_variant()
+        ack_phrase = str(ack_variant.get("phrase") or ack_phrase).strip()
+    except Exception as exc:
+        logger.warning("voice/wake ack variant lookup failed: %s", exc)
+        ack_variant = {"audio_path": ""}
 
     logger.info("voice/wake panel=%s", panel_id)
 
@@ -3481,7 +4778,18 @@ async def voice_wake(payload: dict, caller: dict = Depends(_require_voice_auth))
 
     audio_b64: Optional[str] = None
     content_type = "audio/wav"
-    if ack_phrase:
+    try:
+        from voice_presence import wake_ack_audio_payload
+
+        cached_audio = wake_ack_audio_payload(audio_path=str(ack_variant.get("audio_path") or ""))
+    except Exception as exc:
+        logger.warning("voice/wake cached ack lookup failed: %s", exc)
+        cached_audio = None
+
+    if cached_audio:
+        audio_b64 = str(cached_audio.get("audio_base64") or "") or None
+        content_type = str(cached_audio.get("content_type") or "audio/wav")
+    elif ack_phrase:
         try:
             audio_resp = await synthesize({"text": ack_phrase}, caller=caller)
             audio_b64 = base64.b64encode(audio_resp.body).decode("ascii")
@@ -3493,6 +4801,7 @@ async def voice_wake(payload: dict, caller: dict = Depends(_require_voice_auth))
         "ok": True,
         "panel_id": panel_id,
         "state": "listening",
+        "ack_text": ack_phrase or None,
         "ack_audio_base64": audio_b64,
         "content_type": content_type,
     }
@@ -3834,6 +5143,17 @@ async def get_livekit_token(request: Request, user: dict = Depends(get_current_u
     if not api_key or not api_secret:
         raise HTTPException(status_code=503, detail="LiveKit credentials not configured")
 
+    # On-demand: spin up the LiveKit container + agent before handing back a token,
+    # so the browser's WebRTC connect succeeds.  Best-effort and bounded — never
+    # blocks token issuance if the container is slow or docker is unavailable.
+    livekit_ready: bool = True
+    try:
+        from routers.voice_livekit import ensure_livekit_started, _ondemand_enabled
+        if _ondemand_enabled():
+            livekit_ready = await ensure_livekit_started()
+    except Exception as _lk_exc:  # pragma: no cover - defensive
+        logger.warning("livekit on-demand start failed (non-fatal): %s", _lk_exc)
+
     # Derive the LiveKit URL from the browser's request host.
     # nginx passes the original Host header and X-Forwarded-Proto so we can reconstruct
     # the correct ws(s)://<browser-host>/livekit/ URL.  This works for LAN IPs, the
@@ -3891,7 +5211,7 @@ async def get_livekit_token(request: Request, user: dict = Depends(get_current_u
         except Exception:
             return False
     livekit_lan_only = not bool(os.environ.get("LIVEKIT_TURN_URL", ""))
-    livekit_available = (not livekit_lan_only) or _is_private(_cf_ip)
+    livekit_available = ((not livekit_lan_only) or _is_private(_cf_ip)) and livekit_ready
 
     logger.debug("livekit-token: user=%s url=%s origin=%s lan_ip=%s lk_avail=%s",
                  user_id, livekit_url, origin, _cf_ip, livekit_available)

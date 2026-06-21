@@ -88,6 +88,9 @@ _ROLE_TO_TYPE: dict[str, tuple[str, str]] = {
     "siblings":    ("sibling",    "family"),
     "sibling":     ("sibling",    "family"),
     "twins":       ("sibling",    "family"),
+    # The are-branch call site does ``role.rstrip("s")``, so "twins" -> "twin";
+    # keep this singular alias or "X and Y are twins" silently drops the relation.
+    "twin":        ("sibling",    "family"),
     "daughter":    ("parent",     "family"),
     "son":         ("parent",     "family"),
     "aunt":        ("aunt_uncle", "family"),

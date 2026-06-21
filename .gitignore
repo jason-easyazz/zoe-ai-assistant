@@ -1,3 +1,6 @@
+# Local checkpoint/backup snapshots (retired code, not part of runtime)
+checkpoints/
+
 # Data and databases - DO NOT TRACK DATABASE FILES
 # Databases are excluded from git. Use schema files in data/schema/ instead.
 # To initialize databases: ./scripts/setup/init_databases.sh

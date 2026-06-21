@@ -244,12 +244,19 @@ def implement_edit_safety_reason_from_log(task_id: str, phase: str, *, session: 
     for line in session.splitlines():
         if not _STEP_LINE_RE.match(line):
             continue
-        patch_match = _PATCH_PATH_RE.search(line) if _PYTHON_PATCH_RE.search(line) else None
-        if patch_match:
+        any_patch = _PATCH_PATH_RE.search(line)
+        if any_patch and _PYTHON_PATCH_RE.search(line):
             pending_python_patch = True
-            path_key = _read_path_key(patch_match.group("path"))
+            path_key = _read_path_key(any_patch.group("path"))
             patched_python_paths.add(path_key)
             post_patch_read_counts.pop(path_key, None)
+            continue
+        if any_patch:
+            # A patch/edit of another file (e.g. a .yml or .md) is productive
+            # work, not the "patch then keep reading/grepping" failure this guard
+            # targets — multi-file tasks routinely edit a .py then a config file.
+            # Allow it; the pending Python patch still requires its syntax/test
+            # check before any *exploration* (reads beyond budget / greps).
             continue
         if not pending_python_patch:
             continue
@@ -810,6 +817,46 @@ def terminate_running_workers(detail: dict[str, Any]) -> None:
             continue
         except OSError as exc:
             logger.warning("kanban_phase_budget: failed to stop worker pid=%s: %s", pid, exc)
+
+
+def dead_worker_reason(detail: dict[str, Any], *, grace_s: float | None = None) -> str | None:
+    """Detect a zombie 'running' task whose worker process is no longer alive.
+
+    A worker can die without emitting a terminal kanban signal (e.g. an
+    out-of-context/HTTP crash, OOM, or external kill), leaving its run marked
+    ``running`` with a ``worker_pid`` that no longer points at a live
+    ``hermes ... work kanban task`` process. Such a zombie holds the single lane
+    (poll_ref reports the chain as running) and blocks dispatch until something
+    reaps it. Return a reason string when a running run has a usable ``worker_pid``
+    that is definitively NOT a live worker and the run is older than a short grace
+    (so a just-started worker whose pid isn't published yet is never misjudged).
+    """
+    try:
+        grace = float(
+            grace_s if grace_s is not None
+            else os.environ.get("ZOE_KANBAN_DEAD_WORKER_GRACE_S", "180") or "180"
+        )
+    except (TypeError, ValueError):
+        grace = 180.0
+    now = time.time()
+    for run in detail.get("runs") or []:
+        if not isinstance(run, dict) or str(run.get("status") or "").lower() != "running":
+            continue
+        try:
+            pid = int(run.get("worker_pid") or 0)
+        except (TypeError, ValueError):
+            continue
+        if pid <= 100:
+            continue  # no usable pid to judge liveness — leave to other guards
+        if _is_expected_worker(pid):
+            continue  # worker still alive
+        started = _timestamp(run.get("started_at"))
+        if started is None:
+            continue  # no usable start time — treat as brand-new, don't reap yet
+        if (now - started) < grace:
+            continue  # within grace; pid may simply not be published yet
+        return f"WORKER_DIED: running worker pid {pid} is no longer alive (zombie running task)"
+    return None
 
 
 def _timestamp(value: Any) -> float | None:

@@ -6,7 +6,7 @@ import re
 from collections import defaultdict
 from typing import Any
 
-from multica_ticket_contract import parse_ticket_block
+from multica_ticket_contract import parse_ticket_block, validate_ticket_contract
 from zoe_evolution_execution_gate import evaluate_execution_gate
 
 _CARD_UPGRADE_RE = re.compile(r"(?i)^(card-upgrade)\s*:\s*phase\s*(\d+)")
@@ -57,6 +57,10 @@ def ticket_is_dispatch_approved(
     if not metadata.get("acceptance_criteria") or not metadata.get("evidence_expectations"):
         return False
     if str(metadata.get("zoe_kind") or "") == "parent":
+        return False
+    # Fail closed on live-checkout path references: dispatching them would only
+    # trip the runtime WORKTREE_PATH_VIOLATION guard after budget is burned.
+    if not validate_ticket_contract(issue.get("description") or "")["ok"]:
         return False
     source = str(metadata.get("source") or "").lower()
     if "smoke" in source or "e2e" in source:

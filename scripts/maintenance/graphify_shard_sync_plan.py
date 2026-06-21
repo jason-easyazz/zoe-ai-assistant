@@ -114,8 +114,8 @@ def build_shard_sync_plan(status: Mapping[str, Any]) -> ShardSyncPlan:
     required_next_steps = (
         "run shard matrix with --artifact-dir when artifact_capture_ready is false",
         "validate each artifact directory has graph.json and GRAPH_REPORT.md when clustering is enabled",
-        "merge graph JSON with deterministic namespace/conflict handling and provenance per shard",
-        "run cluster/report generation on the merged graph in a temporary output directory",
+        "run graphify_shard_merge_validate.py over captured artifacts for deterministic merge/provenance/conflict checks",
+        "run cluster/report generation on the validated merged graph in a temporary output directory",
         "compare merged report against current inventory before any graphify-out replacement PR",
     )
     return ShardSyncPlan(

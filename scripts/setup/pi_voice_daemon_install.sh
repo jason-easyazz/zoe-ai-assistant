@@ -115,6 +115,8 @@ WAKEWORD_DEBUG=0
 VERIFY_SSL=true
 # Optional TTS ack phrase when wake word fires ("" to disable)
 ZOE_WAKE_ACK_PHRASE=
+# Optional phrase bank. Quote pipe-separated values if enabled.
+# ZOE_WAKE_ACK_PHRASES="Yes Jason.|Hi Jason.|Good morning Jason."
 EOF
     echo "    IMPORTANT: Edit $ENV_FILE and set DEVICE_TOKEN before starting."
 else

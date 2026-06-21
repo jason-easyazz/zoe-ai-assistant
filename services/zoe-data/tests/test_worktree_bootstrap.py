@@ -246,6 +246,121 @@ def test_kanban_db_path_default_board(monkeypatch):
     assert path.parent.name == ".hermes"
 
 
+def _commit_on_worktree(wt: Path, name: str) -> None:
+    (wt / name).write_text("change\n", encoding="utf-8")
+    subprocess.run(["git", "add", name], cwd=wt, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", name], cwd=wt, check=True, capture_output=True)
+
+
+def test_remove_task_worktree_removes_merged_worktree(git_repo):
+    wt = wb.ensure_worktree("t_merged")
+    # Fresh wt/<id> off main with no new commits is an ancestor of main → merged.
+    assert wb.remove_task_worktree("t_merged", consult_pr=False) is True
+    assert not wt.exists()
+    branches = subprocess.run(
+        ["git", "branch", "--list", "wt/t_merged"],
+        cwd=git_repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert "wt/t_merged" not in branches
+
+
+def test_remove_task_worktree_keeps_unmerged_worktree(git_repo):
+    wt = wb.ensure_worktree("t_ahead")
+    _commit_on_worktree(wt, "feature.txt")  # now ahead of main → not merged
+    assert wb.remove_task_worktree("t_ahead", consult_pr=False) is False
+    assert wt.exists()
+
+
+def test_remove_task_worktree_keeps_dirty_worktree(git_repo):
+    wt = wb.ensure_worktree("t_dirty")
+    (wt / "scratch.txt").write_text("uncommitted\n", encoding="utf-8")  # dirty
+    assert wb.remove_task_worktree("t_dirty", consult_pr=False) is False
+    assert wt.exists()
+
+
+def test_remove_task_worktree_noop_when_not_registered(git_repo):
+    assert wb.remove_task_worktree("t_absent", consult_pr=False) is False
+
+
+def test_remove_task_worktree_uses_pr_merge_for_squash(git_repo, monkeypatch):
+    wt = wb.ensure_worktree("t_squash")
+    _commit_on_worktree(wt, "squash.txt")  # ahead of main, not an ancestor
+    # Simulate a squash-merged PR: not a git ancestor, but gh reports MERGED.
+    monkeypatch.setattr(wb, "_pr_is_merged", lambda branch, *, cwd: True)
+    assert wb.remove_task_worktree("t_squash", consult_pr=True) is True
+    assert not wt.exists()
+    # Without consulting the PR, the same branch must be kept.
+    wt2 = wb.ensure_worktree("t_squash2")
+    _commit_on_worktree(wt2, "squash2.txt")
+    assert wb.remove_task_worktree("t_squash2", consult_pr=False) is False
+    assert wt2.exists()
+
+
+def test_prune_merged_worktrees_removes_merged_keeps_others(git_repo):
+    merged = wb.ensure_worktree("t_sweep_merged")
+    ahead = wb.ensure_worktree("t_sweep_ahead")
+    _commit_on_worktree(ahead, "ahead.txt")
+    dirty = wb.ensure_worktree("t_sweep_dirty")
+    (dirty / "scratch.txt").write_text("x\n", encoding="utf-8")
+
+    results = wb.prune_merged_worktrees(min_age_days=0, consult_pr=False)
+    decisions = {r["worktree"]: r["decision"] for r in results}
+
+    assert decisions[str(merged.resolve())] == "removed"
+    assert not merged.exists()
+    assert decisions[str(ahead.resolve())] == "skip:branch not merged"
+    assert ahead.exists()
+    assert decisions[str(dirty.resolve())] == "skip:dirty"
+    assert dirty.exists()
+    # Never touches the live checkout.
+    assert decisions[str(git_repo.resolve())] == "skip:live checkout"
+
+
+def test_prune_merged_worktrees_respects_min_age(git_repo):
+    wt = wb.ensure_worktree("t_recent")
+    # Recent commit (just now) with a 7-day idle floor → kept.
+    results = wb.prune_merged_worktrees(min_age_days=7, consult_pr=False)
+    decisions = {r["worktree"]: r["decision"] for r in results}
+    assert decisions[str(wt.resolve())].startswith("skip:too recent")
+    assert wt.exists()
+
+
+def test_prune_classifies_detached_head_before_dirty(git_repo):
+    wt = wb.ensure_worktree("t_detach")
+    _commit_on_worktree(wt, "extra.txt")
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=wt, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    subprocess.run(["git", "checkout", "--detach", head], cwd=wt, check=True, capture_output=True)
+
+    results = wb.prune_merged_worktrees(min_age_days=0, consult_pr=False)
+    decisions = {r["worktree"]: r["decision"] for r in results}
+    assert decisions[str(wt.resolve())] == "skip:detached HEAD"
+    assert wt.exists()
+
+
+def test_remove_task_worktree_skips_fetch_when_base_ref_passed(git_repo, monkeypatch):
+    wb.ensure_worktree("t_nofetch")
+
+    def _no_fetch(repo, base_branch):
+        raise AssertionError("_base_ref should not be called when base_ref is provided")
+
+    monkeypatch.setattr(wb, "_base_ref", _no_fetch)
+    # Fresh wt branch off main is an ancestor of main → merged with the passed ref.
+    assert wb.remove_task_worktree("t_nofetch", base_ref="main", consult_pr=False) is True
+
+
+def test_prune_merged_worktrees_dry_run_reports_without_removing(git_repo):
+    wt = wb.ensure_worktree("t_dryrun")
+    results = wb.prune_merged_worktrees(min_age_days=0, execute=False, consult_pr=False)
+    decisions = {r["worktree"]: r["decision"] for r in results}
+    assert decisions[str(wt.resolve())] == "would-remove"
+    assert wt.exists()
+
+
 def test_pin_kanban_workspace_falls_back_without_worktree_kind(tmp_path, monkeypatch):
     import sqlite3
 

@@ -53,7 +53,7 @@
     const AUTH_CHALLENGE_TTL_MS = 10 * 60 * 1000;
 
     const AUTO_HOME_TIMEOUT_S = Number(window.ZOE_AUTO_HOME_TIMEOUT_S || 20);
-    const HOME_PATH = '/touch/dashboard.html';
+    const HOME_PATH = '/touch/skybridge.html';
 
     function isHomePath(path) {
         try {
@@ -95,6 +95,20 @@
         return normalized === 'voice' || normalized.startsWith('voice:') || normalized.startsWith('voice_');
     }
 
+    function isExpiredSession(session) {
+        if (!session || !session.expires_at) return false;
+        const expiresAt = new Date(session.expires_at);
+        if (Number.isNaN(expiresAt.getTime())) return false;
+        return new Date() >= expiresAt;
+    }
+
+    function isGuestSession(session) {
+        if (!session) return false;
+        const role = String(session.role || session.user_info?.role || '').toLowerCase();
+        const userId = String(session.user_id || session.user_info?.user_id || '').toLowerCase();
+        return role === 'guest' || userId === 'guest';
+    }
+
     function getSession() {
         try {
             if (window.zoeAuth && typeof window.zoeAuth.getCurrentSession === 'function') {
@@ -105,6 +119,19 @@
         } catch (e) {
             return null;
         }
+    }
+
+    function getDataApiSession() {
+        const session = getSession();
+        if (!session || !session.session_id) return null;
+        if (isExpiredSession(session)) {
+            try { localStorage.removeItem('zoe_session'); } catch (_) {}
+            return null;
+        }
+        // Zoe Data already maps missing X-Session-ID to guest. Sending an
+        // auth-service guest session makes Data reject kiosk bind/poll calls.
+        if (isGuestSession(session)) return null;
+        return session;
     }
 
     function getPanelId() {
@@ -164,7 +191,7 @@
     }
 
     async function api(path, options) {
-        const session = getSession();
+        const session = getDataApiSession();
         const headers = Object.assign({ 'Content-Type': 'application/json' }, options && options.headers ? options.headers : {});
         if (session && session.session_id) {
             headers['X-Session-ID'] = session.session_id;
@@ -601,6 +628,113 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
         showBar: function (_text) { /* no-op */ },
     };
 
+    function sanitizeSkybridgeHtml(html) {
+        const template = document.createElement('template');
+        template.innerHTML = String(html || '');
+        template.content.querySelectorAll('script, iframe, object, embed, link, meta, style').forEach((node) => {
+            node.remove();
+        });
+        template.content.querySelectorAll('*').forEach((node) => {
+            Array.from(node.attributes || []).forEach((attr) => {
+                const name = String(attr.name || '').toLowerCase();
+                const value = String(attr.value || '').trim().toLowerCase();
+                if (name.startsWith('on')) {
+                    node.removeAttribute(attr.name);
+                    return;
+                }
+                if ((name === 'href' || name === 'src' || name === 'xlink:href') && /^(javascript|data):/.test(value)) {
+                    node.removeAttribute(attr.name);
+                }
+            });
+        });
+        return template.innerHTML;
+    }
+
+    function buildTouchLoginRoute(panelId) {
+        return '/touch/index.html' + (panelId ? '?panel_id=' + encodeURIComponent(panelId) : '');
+    }
+
+    function renderSkybridgeAuthChallenge(payload) {
+        const cardRoot = document.getElementById('skyCards');
+        if (!cardRoot || !window.SkybridgeRenderer || typeof window.SkybridgeRenderer.render !== 'function') {
+            return false;
+        }
+        const challengeId = String(payload.challenge_id || '').trim();
+        if (!challengeId) return false;
+        const panelId = payload.panel_id || state.panelId || getPanelId();
+        const actionContext = payload.action_context || payload.reason || 'Enter PIN';
+        try {
+            sessionStorage.setItem('zoe_panel_auth_challenge', JSON.stringify({
+                challenge_id: challengeId,
+                panel_id: panelId,
+                action_context: actionContext,
+            }));
+            sessionStorage.setItem('zoe_redirect_after_login', window.location.pathname + window.location.search);
+        } catch (_) {
+            // Non-fatal: the Continue action will still open the login page.
+        }
+        const card = {
+            component: 'auth_challenge',
+            props: {
+                id: 'auth-' + challengeId,
+                title: payload.title || 'Confirm it is you',
+                body: payload.message || payload.body || 'Zoe needs to know who is speaking before showing or changing personal data.',
+                domain: payload.domain || 'Private data',
+                action: payload.intent_action || payload.action || 'Continue',
+                actions: [{
+                    type: 'auth',
+                    label: payload.cta || 'Continue',
+                    route: buildTouchLoginRoute(panelId),
+                    challenge_id: challengeId,
+                    action_context: actionContext,
+                }],
+            },
+        };
+        return renderSkybridgeCardPayload({
+            cards: [card],
+            data: { summary: payload.summary || 'Please authenticate on the touch panel to continue.' },
+        });
+    }
+
+    function renderSkybridgeCardPayload(payload) {
+        const result = payload && payload.result;
+        const cards = (
+            result && Array.isArray(result.cards) ? result.cards :
+            Array.isArray(payload && payload.cards) ? payload.cards :
+            payload && payload.card ? [payload.card] : []
+        ).filter(Boolean);
+        const cardRoot = document.getElementById('skyCards');
+        if (!cardRoot || !window.SkybridgeRenderer || typeof window.SkybridgeRenderer.render !== 'function' || !cards.length) {
+            return false;
+        }
+        cardRoot.innerHTML = '';
+        cards.forEach((card, index) => {
+            const wrap = document.createElement('div');
+            wrap.className = 'sky-card-shell';
+            wrap.style.animationDelay = `${Math.min(index * 90, 360)}ms`;
+            wrap.innerHTML = sanitizeSkybridgeHtml(window.SkybridgeRenderer.render(card));
+            cardRoot.appendChild(wrap);
+            try {
+                const node = wrap.firstElementChild;
+                if (window.SkybridgeHydrateAuthCard && node) window.SkybridgeHydrateAuthCard(node, card);
+            } catch (_) {}
+        });
+        try {
+            document.body.classList.remove('sky-empty');
+            document.body.classList.add('sky-has-cards');
+            const copy = document.getElementById('skyListeningCopy');
+            const summary = (result && result.spoken_summary) || (payload && payload.data && payload.data.summary) || '';
+            if (copy && summary) copy.textContent = summary;
+            const title = document.getElementById('skyContextTitle');
+            if (title) title.textContent = 'Skybridge';
+            const detail = document.getElementById('skyContextDetail');
+            if (detail && summary) detail.textContent = summary;
+        } catch (_) {
+            // Non-fatal; the cards are already rendered.
+        }
+        return true;
+    }
+
     function setOrbMode(mode) {
         // Drive the floating orb (orb-loader.js) if present
         const orb = document.getElementById('zoeOrb') || document.querySelector('.zoe-orb');
@@ -642,7 +776,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
             'settings':   _page('settings.html'),
             'smart home': _page('smart-home.html'),
             'smarthome':  _page('smart-home.html'),
-            'home':       _page('dashboard.html'),
+            'home':       _page('skybridge.html'),
             'dashboard':  _page('dashboard.html'),
             'people':     _page('people.html'),
             'memories':   _page('memories.html'),
@@ -1149,6 +1283,9 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                         return { status: 'skipped', error_code: 'duplicate_challenge' };
                     }
                     rememberAuthChallenge(challengeId);
+                    if (renderSkybridgeAuthChallenge(payload)) {
+                        return { status: 'success' };
+                    }
                     redirectToTouchLogin({
                         challenge_id: challengeId,
                         action_context: payload.action_context || payload.reason || 'Enter PIN'
@@ -1224,6 +1361,9 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                 // Ignore cards targeting a different panel.
                 if (payload.panel_id && payload.panel_id !== state.panelId) {
                     return { status: 'skipped', error_code: 'wrong_panel' };
+                }
+                if (renderSkybridgeCardPayload(payload)) {
+                    return { status: 'success' };
                 }
                 const cardType = payload.type || 'answer';
                 const cardData = payload.data || {};
@@ -1319,8 +1459,9 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
             error_code: result.error_code || null,
             error_message: result.error_message || null,
             ui_context: buildContext(),
+            panel_id: state.panelId,
         });
-        const session = getSession();
+        const session = getDataApiSession();
         const headers = { 'Content-Type': 'application/json' };
         if (session && session.session_id) headers['X-Session-ID'] = session.session_id;
         try {
@@ -2213,7 +2354,14 @@ body.light-mode .zaf-btn-cancel { background: rgba(0,0,0,0.07); color: rgba(26,2
         return false;
     }
 
-    function init() {
+    async function init() {
+        if (window.zoeAuthReady && typeof window.zoeAuthReady.then === 'function') {
+            try {
+                await window.zoeAuthReady;
+            } catch (_) {
+                // Auth bootstrap is best-effort; continue so the panel can retry.
+            }
+        }
         state.panelId = getPanelId();
         const session = getSession();
         state.sessionId = session && session.session_id ? session.session_id : null;

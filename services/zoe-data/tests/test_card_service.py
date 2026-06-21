@@ -194,6 +194,23 @@ def test_card_service_build_shopping_list_card():
     assert card["content"]["item_count"] == 2
 
 
+def test_card_service_build_shopping_list_card_accepts_float_string_counts():
+    service = CardService()
+    card = service.build_shopping_list_card(
+        {
+            "list_name": "Groceries",
+            "items": ["milk"],
+            "item_count": "3.0",
+            "open_count": "2.0",
+            "completed_count": "1.0",
+        }
+    )
+
+    assert card["content"]["item_count"] == 3
+    assert card["content"]["open_count"] == 2
+    assert card["content"]["completed_count"] == 1
+
+
 def test_card_service_build_shopping_item_editor_card():
     service = CardService()
     card = service.build_shopping_item_editor_card({"list_name": "Groceries", "item": "milk", "quantity": "2"})

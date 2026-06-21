@@ -32,7 +32,7 @@ OPENCLAW_AGENT_TIMEOUT_S = float(os.environ.get("OPENCLAW_AGENT_TIMEOUT_S", "900
 
 _ZOE_SELF_COMPACT_DEFAULT = (
     "Zoe is a personal AI companion (3-tier: Zoe Agent/Gemma4 :11434, Hermes/GPT-5.4 :8642, "
-    "OpenClaw/Codex :18789). Tools: calendar, reminders, lists, notes, people, weather, "
+    "OpenClaw/Gemma4 :18789). Tools: calendar, reminders, lists, notes, people, weather, "
     "Home Assistant, memory (MemPalace semantic + SQLite portrait), push notifications, "
     "panel display (show_map, show_chart, show_image), web_search (DDG). "
     "OpenClaw has full Playwright browser + bash exec + skills. "

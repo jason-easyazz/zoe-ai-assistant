@@ -1,7 +1,7 @@
 # Zoe Touch Pi Production Rollout (2026-03-23)
 
 ## Scope Completed
-- Baseline audit on `zoe-touch` (`192.168.1.61`) via SSH.
+- Baseline audit on `zoe-touch` (`<TOUCH_PANEL_IP>`) via SSH.
 - Kiosk hardening (boot-safe start, single startup path, watchdog timer).
 - Audio reliability defaults for Jabra USB device.
 - Real panel bind/state-sync/action/ack validation against UI orchestrator.
@@ -26,7 +26,7 @@
   - Uses kiosk URL from config.
   - Keeps display awake and cursor hidden.
 - Updated `/opt/TouchKio/config.json` URL to:
-  - `https://192.168.1.218/touch/dashboard.html?panel_id=zoe-touch-pi&kiosk=1`
+  - `https://<ZOE_SERVER_IP>/touch/dashboard.html?panel_id=zoe-touch-pi&kiosk=1`
 - Disabled duplicate desktop autostart launch:
   - `~/.config/autostart/zoe-kiosk.desktop` set `X-GNOME-Autostart-enabled=false`
 - Added watchdog:
@@ -69,7 +69,7 @@
 
 ## Important Routing Finding (Fixed in Runtime Config)
 - `zoe.the411.life` from panel was blocked by Cloudflare Access (HTTP 302 to Access login).
-- Panel now targets LAN endpoint `192.168.1.218`, which is reachable and returns `200`.
+- Panel now targets LAN endpoint `<ZOE_SERVER_IP>`, which is reachable and returns `200`.
 
 ## Operational Status
 - `zoe-kiosk.service`: active/enabled

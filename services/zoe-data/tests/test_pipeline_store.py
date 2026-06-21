@@ -998,7 +998,9 @@ async def test_sync_pipeline_keeps_normal_implementation_route(isolated_store):
 
 
 @pytest.mark.asyncio
-async def test_sync_pipeline_gate_blocks_verify_without_test(isolated_store):
+async def test_sync_pipeline_gate_blocks_verify_without_test(isolated_store, monkeypatch):
+    monkeypatch.setenv("ZOE_PIPELINE_VERIFY_EVIDENCE_RETRY_LIMIT", "1")
+    monkeypatch.setenv("ZOE_PIPELINE_HARNESS_VERIFY_TESTS", "false")  # isolate retry behavior
     await store.bootstrap_state("multica:verify-gate")
 
     async def fetch_detail(task_id: str):
@@ -1014,8 +1016,340 @@ async def test_sync_pipeline_gate_blocks_verify_without_test(isolated_store):
         "verify": {"id": "t_verify", "status": "done"},
     }
     state = await store.sync_pipeline_from_chain("multica:verify-gate", phases, fetch_detail)
+    # First time verify completes with validator+pr but no `test` evidence, the
+    # gate re-arms verify to todo (bounded retry) rather than terminally stranding,
+    # so the re-dispatched worker can supply the missing focused-pytest evidence.
     assert state.phase == "verify"
-    assert any("gate_blocked" in line for line in isolated_store.read_text(encoding="utf-8").splitlines())
+    assert state.status == "todo"
+    lines = isolated_store.read_text(encoding="utf-8").splitlines()
+    assert any("verify_evidence_retry" in line for line in lines)
+    assert not any("gate_blocked" in line for line in lines)
+
+
+@pytest.mark.asyncio
+async def test_sync_pipeline_gate_blocks_verify_after_retry_budget(isolated_store, monkeypatch):
+    monkeypatch.setenv("ZOE_PIPELINE_VERIFY_EVIDENCE_RETRY_LIMIT", "1")
+    monkeypatch.setenv("ZOE_PIPELINE_HARNESS_VERIFY_TESTS", "false")  # isolate gate behavior
+    # Once verify has been re-armed past the retry budget, a still-missing `test`
+    # gate becomes a terminal block (no infinite retry loop).
+    seeded = PipelineState(
+        task_ref="multica:verify-budget",
+        phase="verify",
+        status="running",
+        attempts={"implement": 1, "verify": 2},  # already beyond the default limit (1)
+    )
+    store.save_state(seeded, event="seed")
+
+    async def fetch_detail(task_id: str):
+        if task_id == "t_impl":
+            return {
+                "latest_summary": "TOOLS_USED=graphify\nPR_URL=https://github.com/o/r/pull/2",
+                "comments": [],
+            }
+        return {"latest_summary": "VALIDATORS=pass", "comments": []}
+
+    phases = {
+        "implement": {"id": "t_impl", "status": "done"},
+        "verify": {"id": "t_verify", "status": "done"},
+    }
+    state = await store.sync_pipeline_from_chain("multica:verify-budget", phases, fetch_detail)
+    assert state.phase == "verify"
+    assert state.status == "blocked"
+    lines = isolated_store.read_text(encoding="utf-8").splitlines()
+    assert any("gate_blocked" in line for line in lines)
+
+
+def _patch_focused_runner(monkeypatch, *, ran: bool, passed: bool):
+    import pipeline_focused_tests as pft
+
+    def _fake(pr_url, *, repo_root=None):
+        return pft.FocusedTestResult(
+            ran=ran,
+            passed=passed,
+            summary=f"focused pytest: {'pass' if passed else 'fail'}",
+            content_hash="hh" if ran else "",
+            test_paths=("services/zoe-data/tests/test_x.py",) if ran else (),
+        )
+
+    monkeypatch.setattr(pft, "run_focused_pr_tests", _fake)
+
+
+@pytest.mark.asyncio
+async def test_harness_verify_completes_done_row_missing_agent_test(isolated_store, monkeypatch):
+    # Verify worker completed without `test` evidence, but the harness runs the
+    # PR's focused tests itself and they pass -> verify completes -> review.
+    _patch_focused_runner(monkeypatch, ran=True, passed=True)
+    await store.bootstrap_state("multica:hv-done")
+
+    async def fetch_detail(task_id: str):
+        if task_id == "t_impl":
+            return {
+                "latest_summary": "TOOLS_USED=graphify\nPR_URL=https://github.com/o/r/pull/9",
+                "comments": [],
+            }
+        return {"latest_summary": "VALIDATORS=pass", "comments": []}
+
+    phases = {
+        "implement": {"id": "t_impl", "status": "done"},
+        "verify": {"id": "t_verify", "status": "done"},
+    }
+    state = await store.sync_pipeline_from_chain("multica:hv-done", phases, fetch_detail)
+    assert state.phase == "review"
+    assert any(e.kind == "test" and e.passed and e.metadata.get("source") == "harness" for e in state.evidence)
+
+
+@pytest.mark.asyncio
+async def test_harness_verify_overrides_spurious_block(isolated_store, monkeypatch):
+    # Verify worker spuriously BLOCKED ("no PR to test"), but the harness focused
+    # tests pass -> the objective run overrides the block -> verify -> review.
+    _patch_focused_runner(monkeypatch, ran=True, passed=True)
+    await store.bootstrap_state("multica:hv-block")
+
+    async def fetch_detail(task_id: str):
+        if task_id == "t_impl":
+            return {
+                "latest_summary": "TOOLS_USED=graphify\nPR_URL=https://github.com/o/r/pull/10",
+                "comments": [],
+            }
+        return {
+            "latest_summary": "BLOCKER=verification requires the actual PR",
+            "comments": [],
+        }
+
+    phases = {
+        "implement": {"id": "t_impl", "status": "done"},
+        "verify": {"id": "t_verify", "status": "blocked"},
+    }
+    state = await store.sync_pipeline_from_chain("multica:hv-block", phases, fetch_detail)
+    assert state.phase == "review"
+
+
+@pytest.mark.asyncio
+async def test_harness_verify_failing_tests_do_not_complete(isolated_store, monkeypatch):
+    # Harness ran the PR's tests and they FAILED -> verify must not complete.
+    _patch_focused_runner(monkeypatch, ran=True, passed=False)
+    monkeypatch.setenv("ZOE_PIPELINE_VERIFY_EVIDENCE_RETRY_LIMIT", "0")
+    await store.bootstrap_state("multica:hv-fail")
+
+    async def fetch_detail(task_id: str):
+        if task_id == "t_impl":
+            return {
+                "latest_summary": "TOOLS_USED=graphify\nPR_URL=https://github.com/o/r/pull/11",
+                "comments": [],
+            }
+        return {"latest_summary": "VALIDATORS=pass", "comments": []}
+
+    phases = {
+        "implement": {"id": "t_impl", "status": "done"},
+        "verify": {"id": "t_verify", "status": "done"},
+    }
+    state = await store.sync_pipeline_from_chain("multica:hv-fail", phases, fetch_detail)
+    assert state.phase == "verify"
+    assert state.status != "review"
+    # A failing test evidence item was recorded (passed False) for diagnosis.
+    assert any(e.kind == "test" and e.passed is False for e in state.evidence)
+
+
+def _patch_review_ready(monkeypatch, *, ready: bool):
+    import pipeline_review as prv
+    from pipeline_review import ReviewReadiness
+
+    monkeypatch.setattr(
+        prv,
+        "assess_pr_review_ready",
+        lambda pr_url, *, repo_root=None: ReviewReadiness(ready, "test"),
+    )
+
+
+def _review_chain_fetch_detail():
+    async def fetch_detail(task_id: str):
+        if task_id == "t_impl":
+            return {
+                "latest_summary": "TOOLS_USED=graphify\nPR_URL=https://github.com/o/r/pull/20",
+                "comments": [],
+            }
+        if task_id == "t_verify":
+            return {
+                "latest_summary": "TESTS=pytest 5 passed\nVALIDATORS=validate_structure pass",
+                "comments": [],
+            }
+        return {"latest_summary": "", "comments": []}  # review row
+
+    return fetch_detail
+
+
+@pytest.mark.asyncio
+async def test_harness_review_approves_when_pr_objectively_ready(isolated_store, monkeypatch):
+    # Deterministic review: PR objectively ready (CI green + 0 unresolved) -> the
+    # harness writes human evidence and review completes -> closeout, regardless
+    # of the (here, no-op) review agent signal.
+    monkeypatch.setenv("ZOE_PIPELINE_HARNESS_VERIFY_TESTS", "false")  # isolate the review path
+    _patch_review_ready(monkeypatch, ready=True)
+    await store.bootstrap_state("multica:hr-ok")
+
+    phases = {
+        "implement": {"id": "t_impl", "status": "done"},
+        "verify": {"id": "t_verify", "status": "done"},
+        "review": {"id": "t_review", "status": "done"},
+    }
+    state = await store.sync_pipeline_from_chain("multica:hr-ok", phases, _review_chain_fetch_detail())
+    assert state.phase == "closeout"
+    assert any(
+        e.kind == "human" and e.passed and e.metadata.get("source") == "harness"
+        for e in state.evidence
+    )
+
+
+@pytest.mark.asyncio
+async def test_harness_review_does_not_approve_when_not_ready(isolated_store, monkeypatch):
+    # PR not objectively ready (e.g. unresolved threads) -> no harness approval;
+    # review does not advance to closeout.
+    monkeypatch.setenv("ZOE_PIPELINE_HARNESS_VERIFY_TESTS", "false")
+    _patch_review_ready(monkeypatch, ready=False)
+    await store.bootstrap_state("multica:hr-no")
+
+    phases = {
+        "implement": {"id": "t_impl", "status": "done"},
+        "verify": {"id": "t_verify", "status": "done"},
+        "review": {"id": "t_review", "status": "done"},
+    }
+    state = await store.sync_pipeline_from_chain("multica:hr-no", phases, _review_chain_fetch_detail())
+    assert state.phase == "review"
+    assert not any(e.kind == "human" and e.metadata.get("source") == "harness" for e in state.evidence)
+
+
+@pytest.mark.asyncio
+async def test_harness_review_disabled_by_env_does_not_approve(isolated_store, monkeypatch):
+    # Kill switch: ZOE_PIPELINE_HARNESS_REVIEW_APPROVE=false -> no harness approval
+    # even when the PR is objectively ready; review must not advance to closeout.
+    monkeypatch.setenv("ZOE_PIPELINE_HARNESS_VERIFY_TESTS", "false")
+    monkeypatch.setenv("ZOE_PIPELINE_HARNESS_REVIEW_APPROVE", "false")
+    _patch_review_ready(monkeypatch, ready=True)  # ready, but the gate is disabled
+    await store.bootstrap_state("multica:hr-off")
+
+    phases = {
+        "implement": {"id": "t_impl", "status": "done"},
+        "verify": {"id": "t_verify", "status": "done"},
+        "review": {"id": "t_review", "status": "done"},
+    }
+    state = await store.sync_pipeline_from_chain("multica:hr-off", phases, _review_chain_fetch_detail())
+    assert state.phase == "review"
+    assert not any(e.kind == "human" and e.metadata.get("source") == "harness" for e in state.evidence)
+
+
+def _patch_closeout_merge(monkeypatch, *, merged: bool):
+    import pipeline_closeout as pco
+    from pipeline_closeout import CloseoutResult
+
+    monkeypatch.setattr(
+        pco,
+        "run_closeout_merge",
+        lambda pr_url, *, repo_root=None: CloseoutResult(
+            merged, "sha123" if merged else None, "merged" if merged else "not ready"
+        ),
+    )
+
+
+def _seed_closeout_state(task_ref: str, *, agent_greptile: bool = False):
+    pr = "https://github.com/o/r/pull/30"
+    evidence = [
+        EvidenceItem(kind="pr", summary=pr, artifact=pr, passed=True, metadata={"phase": "implement"}),
+    ]
+    if agent_greptile:
+        # Greptile evidence as the closeout AGENT would record it (source != harness,
+        # no merge_sha) — recorded without an actual merge.
+        evidence.append(
+            EvidenceItem(
+                kind="greptile",
+                summary="greptile loop done",
+                passed=True,
+                metadata={"source": "skills", "phase": "closeout"},
+            )
+        )
+    state = PipelineState(
+        task_ref=task_ref,
+        phase="closeout",
+        status="running",
+        attempts={"implement": 1, "verify": 1, "review": 1, "closeout": 1},
+        evidence=evidence,
+    )
+    store.save_state(state, event="seed")
+
+
+async def _noop_fetch_detail(task_id: str):
+    return {"latest_summary": "", "comments": []}
+
+
+@pytest.mark.asyncio
+async def test_harness_closeout_merges_and_completes(isolated_store, monkeypatch):
+    # Deterministic closeout: the harness runs the greploop guard; when the PR
+    # merges, greptile evidence is recorded and closeout completes -> retro.
+    _patch_closeout_merge(monkeypatch, merged=True)
+    _seed_closeout_state("multica:co-ok")
+
+    phases = {"closeout": {"id": "t_co", "status": "done"}}
+    state = await store.sync_pipeline_from_chain("multica:co-ok", phases, _noop_fetch_detail)
+    assert state.phase == "retro"
+    assert any(
+        e.kind == "greptile" and e.passed and e.metadata.get("source") == "harness"
+        and e.metadata.get("merge_sha") == "sha123"
+        for e in state.evidence
+    )
+
+
+@pytest.mark.asyncio
+async def test_harness_closeout_does_not_complete_when_not_merged(isolated_store, monkeypatch):
+    _patch_closeout_merge(monkeypatch, merged=False)
+    _seed_closeout_state("multica:co-no")
+
+    phases = {"closeout": {"id": "t_co", "status": "done"}}
+    state = await store.sync_pipeline_from_chain("multica:co-no", phases, _noop_fetch_detail)
+    assert state.phase == "closeout"
+    assert not any(e.kind == "greptile" and e.metadata.get("source") == "harness" for e in state.evidence)
+
+
+@pytest.mark.asyncio
+async def test_harness_closeout_ignores_agent_greptile_without_real_merge(isolated_store, monkeypatch):
+    # Regression for the #679 bypass: the closeout AGENT recorded greptile evidence
+    # (source='skills') but there was NO actual merge. Closeout must NOT advance to
+    # retro on that unverified claim — it must hold pending a harness-confirmed merge.
+    _patch_closeout_merge(monkeypatch, merged=False)
+    _seed_closeout_state("multica:co-agent", agent_greptile=True)
+
+    phases = {"closeout": {"id": "t_co", "status": "done"}}
+    state = await store.sync_pipeline_from_chain("multica:co-agent", phases, _noop_fetch_detail)
+    assert state.phase == "closeout"  # did NOT false-complete to retro on agent greptile
+    assert not any(
+        e.kind == "greptile" and e.metadata.get("source") == "harness" for e in state.evidence
+    )
+
+
+@pytest.mark.asyncio
+async def test_harness_closeout_merges_even_with_agent_greptile_present(isolated_store, monkeypatch):
+    # The harness merge runs regardless of an agent greptile item; on a real merge
+    # closeout completes -> retro (authoritative harness merge, not the agent claim).
+    _patch_closeout_merge(monkeypatch, merged=True)
+    _seed_closeout_state("multica:co-agent-ok", agent_greptile=True)
+
+    phases = {"closeout": {"id": "t_co", "status": "done"}}
+    state = await store.sync_pipeline_from_chain("multica:co-agent-ok", phases, _noop_fetch_detail)
+    assert state.phase == "retro"
+    assert any(
+        e.kind == "greptile" and e.metadata.get("source") == "harness" and e.metadata.get("merge_sha") == "sha123"
+        for e in state.evidence
+    )
+
+
+@pytest.mark.asyncio
+async def test_harness_closeout_disabled_by_env(isolated_store, monkeypatch):
+    monkeypatch.setenv("ZOE_PIPELINE_HARNESS_CLOSEOUT_MERGE", "false")
+    _patch_closeout_merge(monkeypatch, merged=True)  # would merge, but gate disabled
+    _seed_closeout_state("multica:co-off")
+
+    phases = {"closeout": {"id": "t_co", "status": "done"}}
+    state = await store.sync_pipeline_from_chain("multica:co-off", phases, _noop_fetch_detail)
+    assert state.phase == "closeout"
+    assert not any(e.kind == "greptile" and e.metadata.get("source") == "harness" for e in state.evidence)
 
 
 @pytest.mark.asyncio
@@ -1075,6 +1409,56 @@ async def test_sync_pipeline_recovers_audit_protocol_only_block(isolated_store):
     assert "audit_protocol_recovered" in isolated_store.read_text(encoding="utf-8")
 
 
+@pytest.mark.asyncio
+async def test_already_covered_run_converges_instead_of_review_implement_loop(isolated_store):
+    # Regression: an already-covered run (implementation proven unnecessary) used
+    # to bounce review -> implement forever, because review's no-PR request_changes
+    # is not "protocol-only" and so was never recovered. It must now converge.
+    ref = "multica:already-covered-converge"
+    await store.bootstrap_state(ref, issue={"metadata": {"evidence_profile": "code"}})
+
+    async def fetch_impl(_task_id):
+        return {
+            "latest_summary": "BLOCKER=ALREADY_COVERED: focused tests passed; no PR required",
+            "comments": [],
+        }
+
+    # 1) implement proves the work already covered -> skip to verify, audit profile.
+    state = await store.sync_pipeline_from_chain(
+        ref,
+        {"implement": {"id": "t_impl", "status": "blocked",
+                       "block_reason": "ALREADY_COVERED: focused tests passed; no PR required"}},
+        fetch_impl,
+    )
+    assert state.phase == "verify"
+    assert state.evidence_profile == "audit"
+    assert _run_is_already_covered_marker(state)
+
+    async def fetch_plain(_task_id):
+        return {"latest_summary": "", "comments": []}
+
+    # 2) verify completes for the audit no-op run.
+    state = await store.sync_pipeline_from_chain(
+        ref, {"verify": {"id": "t_verify", "status": "done"}}, fetch_plain
+    )
+    assert state.phase == "review", f"expected verify to advance to review, got {state.phase!r}"
+
+    # 3) review on an already-covered run has no PR -> normally request_changes ->
+    # implement (the loop). With the fix it recovers to complete and moves forward.
+    state = await store.sync_pipeline_from_chain(
+        ref,
+        {"review": {"id": "t_review", "status": "blocked", "block_reason": "no PR to review"}},
+        fetch_plain,
+    )
+    assert state.phase != "implement", "already-covered run must not loop back to implement"
+    assert store.PHASE_ORDER.index(state.phase) >= store.PHASE_ORDER.index("review")
+
+
+def _run_is_already_covered_marker(state) -> bool:
+    return any(
+        r.outcome == "skip_implementation" and "ALREADY_COVERED" in str(getattr(r, "reason", "") or "").upper()
+        for r in state.history
+    )
 
 
 @pytest.mark.asyncio

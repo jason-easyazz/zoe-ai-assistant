@@ -247,6 +247,12 @@
                 this.emit({ type: 'transcript', role: msg.role || 'zoe', text: msg.text || '' });
             } else if (type === 'audio') {
                 this.playAudio(msg.audio_base64, msg.content_type || 'audio/wav');
+            } else if (type === 'cards') {
+                this.emit({ type: 'cards', result: msg.result || msg });
+            } else if (type === 'card') {
+                this.emit({ type: 'card', card: msg.card || msg.data || msg, replace: !!msg.replace });
+            } else if (type === 'skybridge_context') {
+                this.emit({ type: 'skybridge_context', context: msg.context || {} });
             } else if (type === 'agui' || type === 'ui_component') {
                 this.emit({ type: 'card', card: msg.data || msg });
             } else if (type === 'done') {

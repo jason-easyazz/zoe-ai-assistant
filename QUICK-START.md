@@ -21,7 +21,7 @@ XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user restart zoe-data.service
 
 ## Use Zoe
 
-1. Open the web UI: `http://localhost:8090`
+1. Open the web UI: `https://localhost` (or `http://localhost`)
 2. Check the data API: `http://localhost:8000/health`
 3. Check auth: `http://localhost:8002/health`
 

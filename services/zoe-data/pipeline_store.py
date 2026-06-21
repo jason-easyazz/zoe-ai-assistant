@@ -451,6 +451,160 @@ async def _append_harness_validators(state: PipelineState, phase: PipelinePhase)
     return with_evidence(state, validator_evidence_item(result, phase=phase))
 
 
+def _harness_verify_tests_enabled() -> bool:
+    return (
+        os.environ.get("ZOE_PIPELINE_HARNESS_VERIFY_TESTS", "true") or "true"
+    ).strip().lower() not in {"0", "false", "no"}
+
+
+def _pr_url_from_state(state: PipelineState) -> str:
+    for item in reversed(state.evidence):
+        if item.kind == "pr" and getattr(item, "artifact", None):
+            return str(item.artifact).strip()
+    return ""
+
+
+async def _append_harness_focused_tests(state: PipelineState, phase: PipelinePhase) -> PipelineState:
+    """Run the PR's focused tests harness-side and append `test` evidence.
+
+    Makes verify deterministic: the harness runs the PR's changed test files
+    itself instead of trusting the verify worker to do it. No-ops (returns state
+    unchanged) when disabled, when passing test evidence already exists, when
+    there is no PR to test, or when the runner cannot find/run focused tests
+    (fail-open: the existing agent-driven flow then applies).
+    """
+    if not _harness_verify_tests_enabled():
+        return state
+    if any(
+        item.kind == "test" and item.passed is True and item.metadata.get("phase") == phase
+        for item in state.evidence
+    ):
+        return state
+    pr_url = _pr_url_from_state(state)
+    if not pr_url:
+        return state
+    from pipeline_focused_tests import focused_test_evidence_item, run_focused_pr_tests
+
+    result = await _run_io(partial(run_focused_pr_tests, pr_url))
+    if not result.ran:
+        return state
+    return with_evidence(state, focused_test_evidence_item(result, phase=phase))
+
+
+def _harness_review_approve_enabled() -> bool:
+    return (
+        os.environ.get("ZOE_PIPELINE_HARNESS_REVIEW_APPROVE", "true") or "true"
+    ).strip().lower() not in {"0", "false", "no"}
+
+
+async def _append_harness_review_approval(state: PipelineState, phase: PipelinePhase) -> PipelineState:
+    """Append objective `human` review-approval evidence when the PR passes review.
+
+    Makes review deterministic: rather than trusting the zoe-reviewer agent (which
+    can spuriously block "no code/evidence" or complete with an empty verdict), the
+    harness approves review from objective signals — PR OPEN + all required CI
+    checks green, on top of the verify phase having already run the PR's focused
+    tests. Greptile threads/confidence are owned by the closeout greploop merge
+    gate, NOT review (gating them here deadlocks, since a fresh PR has open Greptile
+    threads at review time). No-ops (returns state unchanged) when disabled, when
+    human evidence already exists, when there is no PR, or when the PR is not
+    objectively review-ready (fail-open: the agent-driven flow then applies).
+    """
+    if not _harness_review_approve_enabled():
+        return state
+    if any(item.kind == "human" and item.passed is True for item in state.evidence):
+        return state
+    pr_url = _pr_url_from_state(state)
+    if not pr_url:
+        return state
+    from pipeline_evidence import EvidenceItem
+    from pipeline_review import assess_pr_review_ready
+
+    readiness = await _run_io(partial(assess_pr_review_ready, pr_url))
+    if not readiness.ready:
+        return state
+    return with_evidence(
+        state,
+        EvidenceItem(
+            kind="human",
+            summary=("harness review approval: " + readiness.reason)[:500],
+            passed=True,
+            metadata={
+                "source": "harness",
+                "phase": "review",
+                "approver": "harness",
+                "merge_readiness": "merge_ready",
+            },
+        ),
+    )
+
+
+def _harness_closeout_merge_enabled() -> bool:
+    return (
+        os.environ.get("ZOE_PIPELINE_HARNESS_CLOSEOUT_MERGE", "true") or "true"
+    ).strip().lower() not in {"0", "false", "no"}
+
+
+def _is_harness_closeout_merge_evidence(item: Any) -> bool:
+    """True for the harness's OWN confirmed-merge closeout evidence.
+
+    Single source of truth for both the _append_harness_closeout_merge idempotency
+    guard and the sync_pipeline_from_chain closeout-completion check, so the two
+    cannot drift if the evidence schema evolves.
+    """
+    md = getattr(item, "metadata", {}) or {}
+    return (
+        getattr(item, "kind", "") == "greptile"
+        and getattr(item, "passed", None) is True
+        and md.get("phase") == "closeout"
+        and md.get("source") == "harness"
+        and bool(md.get("merge_sha"))
+    )
+
+
+async def _append_harness_closeout_merge(state: PipelineState, phase: PipelinePhase) -> PipelineState:
+    """Run the greploop merge guard harness-side and append `greptile` evidence on merge.
+
+    Makes closeout deterministic: rather than trusting the closeout agent worker to
+    invoke the greploop guard (it can bail "no valid PR URL"), the harness runs the
+    proven guard CLI itself (which owns confidence/threads/squash-merge safety) and,
+    when the PR ends up MERGED, records the closeout `greptile` evidence with the
+    merge SHA. No-ops (returns state unchanged) when disabled, when closeout greptile
+    evidence already exists, when there is no PR, or when the guard did not merge
+    (fail-open: the agent-driven closeout flow then applies and can retry next cycle).
+    """
+    if not _harness_closeout_merge_enabled():
+        return state
+    # Idempotent only on the harness's OWN confirmed-merge evidence. We must NOT
+    # skip just because the closeout agent recorded a greptile item (source!=
+    # "harness"): that agent evidence can be written WITHOUT an actual merge, and
+    # skipping here is exactly what let closeout false-complete (PR left open).
+    if any(_is_harness_closeout_merge_evidence(item) for item in state.evidence):
+        return state
+    pr_url = _pr_url_from_state(state)
+    if not pr_url:
+        return state
+    from pipeline_closeout import run_closeout_merge
+
+    result = await _run_io(partial(run_closeout_merge, pr_url))
+    if not result.merged:
+        return state
+    return with_evidence(
+        state,
+        EvidenceItem(
+            kind="greptile",
+            summary=("harness closeout merge: " + result.reason)[:500],
+            artifact=pr_url,
+            passed=True,
+            metadata={
+                "source": "harness",
+                "phase": phase,
+                "merge_sha": result.merge_sha,
+            },
+        ),
+    )
+
+
 def _protocol_only_block(detail: dict[str, Any]) -> bool:
     """True when Hermes only failed the terminal protocol for a no-op phase."""
     protocol_seen = False
@@ -486,6 +640,25 @@ def _protocol_only_block(detail: dict[str, Any]) -> bool:
                 return False
             protocol_seen = protocol_seen or verdict is True
     return protocol_seen
+
+
+def _run_is_already_covered(state: PipelineState) -> bool:
+    """True when this run already proved no code change is needed.
+
+    When ``implement`` finds the work already covered it records a
+    ``skip_implementation`` transition carrying an ``ALREADY_COVERED`` reason and
+    flips the run to the ``audit`` profile. History is append-only — unlike
+    ``evidence``, which ``transition`` clears on ``request_changes`` /
+    ``verification_failed`` — so it is the reliable marker across the loop-back
+    transitions. Such a run has nothing left to implement/verify/review/merge, so
+    its downstream no-op phases must converge to ``complete`` instead of bouncing
+    review -> implement forever.
+    """
+    return any(
+        record.outcome == "skip_implementation"
+        and "ALREADY_COVERED" in str(getattr(record, "reason", "") or "").upper()
+        for record in state.history
+    )
 
 
 def _append_audit_protocol_recovery_evidence(state: PipelineState, phase: PipelinePhase) -> PipelineState:
@@ -694,10 +867,76 @@ async def _sync_pipeline_from_chain_once(
 
         if phase == "implement" and row_status in {"done", "archived"}:
             state = await _append_harness_validators(state, "implement")
-        if phase == "verify" and row_status in {"done", "archived"}:
-            state = await _append_harness_validators(state, "verify")
 
-        outcome = infer_outcome(phase, row_status, detail)  # type: ignore[arg-type]
+        verify_harness_complete = False
+        if phase == "verify" and row_status in _TERMINAL:
+            # Deterministic verify: run the PR's validators + focused tests
+            # harness-side so a verify worker that skipped the tests (completed
+            # without `test` evidence) or spuriously blocked ("no PR to test")
+            # cannot strand the chain. When the objective harness run satisfies
+            # the evidence gate, complete verify regardless of the agent's
+            # terminal signal; otherwise fall through to the agent-derived outcome.
+            state = await _append_harness_validators(state, "verify")
+            state = await _append_harness_focused_tests(state, "verify")
+            if can_complete_phase(state):
+                verify_harness_complete = True
+
+        review_harness_complete = False
+        if phase == "review" and row_status in _TERMINAL:
+            # Deterministic review: the zoe-reviewer agent can spuriously block
+            # ("cannot review without code/evidence") even with the PR_URL in its
+            # handoff. Approve review from objective signals instead — PR open +
+            # CI green + zero unresolved Greptile threads, on top of the verify
+            # phase having already run the PR's focused tests. When that satisfies
+            # the evidence gate, complete review regardless of the agent's signal;
+            # otherwise fall through to the agent-derived outcome.
+            state = await _append_harness_review_approval(state, "review")
+            if can_complete_phase(state):
+                review_harness_complete = True
+
+        closeout_harness_complete = False
+        closeout_merge_pending = False
+        # Only the real-PR closeout path requires a harness-confirmed merge. The
+        # audit / no-code closeout (no PR evidence, audit profile) has nothing to
+        # merge and completes on its recorded evidence as before.
+        if (
+            phase == "closeout"
+            and row_status in _TERMINAL
+            and _harness_closeout_merge_enabled()
+            and getattr(state, "evidence_profile", "") != "audit"
+            and _pr_url_from_state(state)
+        ):
+            # Deterministic, AUTHORITATIVE closeout: run the proven greploop guard
+            # CLI harness-side (regardless of any agent greptile claim) and complete
+            # closeout ONLY on a harness-confirmed merge (source="harness" greptile +
+            # merge_sha). An agent greptile item can be recorded without an actual
+            # merge, so it must NOT advance closeout->retro (that left PRs open). If
+            # the harness hasn't merged yet, hold closeout (retry next cycle) rather
+            # than completing on the agent's unverified evidence.
+            state = await _append_harness_closeout_merge(state, "closeout")
+            harness_merged = any(
+                _is_harness_closeout_merge_evidence(e) for e in state.evidence
+            )
+            if harness_merged and can_complete_phase(state):
+                closeout_harness_complete = True
+            elif not harness_merged:
+                # Only the NOT-merged case suppresses completion (so an agent's
+                # unverified greptile claim can't advance closeout). If the harness
+                # DID merge but the gate is somehow unsatisfied, fall through to the
+                # normal outcome path so the appended merge evidence is persisted
+                # (gate_block) rather than discarded by a bare continue.
+                closeout_merge_pending = True
+
+        outcome = (
+            "complete"
+            if (verify_harness_complete or review_harness_complete or closeout_harness_complete)
+            else infer_outcome(phase, row_status, detail)  # type: ignore[arg-type]
+        )
+        if closeout_merge_pending and outcome == "complete":
+            # The PR is not actually merged yet; do not advance closeout->retro on
+            # agent-claimed greptile evidence. Leave closeout pending so the harness
+            # merge retries on the next poll cycle.
+            continue
         if not outcome:
             continue
         if (
@@ -709,8 +948,12 @@ async def _sync_pipeline_from_chain_once(
         if (
             state.evidence_profile == "audit"
             and outcome in {"block", "verification_failed", "request_changes", "merge_blocked"}
-            and _protocol_only_block(detail)
+            and (_protocol_only_block(detail) or _run_is_already_covered(state))
         ):
+            # An already-covered run has no diff to verify/review/merge, so a
+            # no-op downstream block (e.g. review request_changes with no PR) is
+            # recovered to completion. Without this it bounces review -> implement
+            # forever, never reaching a terminal handoff and holding the lane.
             state = _append_audit_protocol_recovery_evidence(state, phase)  # type: ignore[arg-type]
             if can_complete_phase(state):
                 state = await _run_io(
@@ -857,6 +1100,40 @@ async def _sync_pipeline_from_chain_once(
                     "can_complete_phase returned False with no diagnosable gate reason "
                     f"(phase={state.phase!r}, evidence={[item.kind for item in state.evidence]!r})"
                 )
+            # Bounded auto-retry for the verify quality gate: a verify worker that
+            # produced validator (+pr) evidence but skipped the focused pytest
+            # leaves `test` evidence missing. Rather than terminally stranding the
+            # chain (which strands the whole ticket on a single under-compliant
+            # run), re-arm verify to todo — keeping the evidence already gathered —
+            # so it re-dispatches under the hardened "you MUST run the PR's focused
+            # tests" prompt. Bounded by verify attempts so it cannot loop.
+            try:
+                _verify_evidence_retry_limit = int(
+                    os.environ.get("ZOE_PIPELINE_VERIFY_EVIDENCE_RETRY_LIMIT", "1") or "1"
+                )
+            except ValueError:
+                _verify_evidence_retry_limit = 1
+            if (
+                state.phase == "verify"
+                and not validator_hash_mismatch
+                and extra["missing"] == ["test"]
+                and state.attempts.get("verify", 0) <= _verify_evidence_retry_limit
+            ):
+                retry_reason = (
+                    "VERIFY_EVIDENCE_RETRY: verify completed without `test` evidence "
+                    "(focused pytest not run); re-arming verify to require it"
+                )
+                state = transition(state, "retry_evidence", reason=retry_reason)
+                state = await _run_io(
+                    partial(
+                        save_state,
+                        state,
+                        event="verify_evidence_retry",
+                        extra=extra,
+                        allow_stale_evidence_merge=True,
+                    )
+                )
+                return state
             state, _should_abort = record_block_fingerprint(
                 state,
                 block_fingerprint(phase, block_reason),  # type: ignore[arg-type]

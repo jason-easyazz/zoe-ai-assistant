@@ -1,0 +1,22 @@
+{"case_id":"eval_weather_umbrella","text":"will I need an umbrella later","expected_intent":"weather","intent_group":"weather","route_class":"fallback","source":"synthetic"}
+{"case_id":"eval_reminder_invoice","text":"remind me to pay the invoice tomorrow","expected_intent":"reminder_create","intent_group":"reminders","route_class":"extraction_failed","source":"intent_miss"}
+{"case_id":"eval_list_groceries","text":"put milk on the grocery list","expected_intent":"list_add","intent_group":"lists","route_class":"extraction_failed","source":"known_failure"}
+{"case_id":"eval_timer_pasta","text":"set a pasta timer for eleven minutes","expected_intent":"timer_create","intent_group":"timers","route_class":"fallback","source":"synthetic"}
+{"case_id":"eval_calc_split","text":"what is 144 divided by 12","expected_intent":"calculate","intent_group":"calculations","route_class":"fallback","source":"synthetic"}
+{"case_id":"eval_briefing_morning","text":"give me my morning briefing","expected_intent":"daily_briefing","intent_group":"daily_briefing","route_class":"fallback","source":"synthetic"}
+{"case_id":"eval_negative_breakfast_service","text":"I like the breakfast service here","expected_intent":null,"intent_group":"chat","route_class":"fallback","source":"known_failure","negative":true}
+{"case_id":"eval_negative_weather_movie","text":"the weather in that movie felt dramatic","expected_intent":null,"intent_group":"chat","route_class":"fallback","source":"known_failure","negative":true}
+{"case_id":"eval_reminder_stretch","text":"remind me to stretch after lunch","expected_intent":"reminder_create","intent_group":"reminders","route_class":"extraction_failed","source":"synthetic"}
+{"case_id":"eval_reminder_today","text":"what reminders do I have today","expected_intent":"reminder_list","intent_group":"reminders","route_class":"fallback","source":"synthetic"}
+{"case_id":"eval_list_show_packing","text":"show me my packing list","expected_intent":"list_show","intent_group":"lists","route_class":"deterministic","source":"synthetic"}
+{"case_id":"eval_list_add_tomatoes","text":"add tomatoes to the shopping list","expected_intent":"list_add","intent_group":"lists","route_class":"extraction_failed","source":"synthetic"}
+{"case_id":"eval_list_remove_milk","text":"remove milk from the grocery list","expected_intent":"list_remove","intent_group":"lists","route_class":"extraction_failed","source":"synthetic"}
+{"case_id":"eval_list_remove_done","text":"take batteries off my errands list","expected_intent":"list_remove","intent_group":"lists","route_class":"extraction_failed","source":"synthetic"}
+{"case_id":"eval_timer_tea","text":"start a tea timer for four minutes","expected_intent":"timer_create","intent_group":"timers","route_class":"fallback","source":"synthetic"}
+{"case_id":"eval_timer_laundry","text":"set a laundry timer for 45 minutes","expected_intent":"timer_create","intent_group":"timers","route_class":"fallback","source":"synthetic"}
+{"case_id":"eval_calc_percent","text":"what is 15 percent of eighty","expected_intent":"calculate","intent_group":"calculations","route_class":"fallback","source":"synthetic"}
+{"case_id":"eval_calc_addition","text":"add 38 and 47","expected_intent":"calculate","intent_group":"calculations","route_class":"fallback","source":"synthetic"}
+{"case_id":"eval_briefing_evening","text":"what is left on my day","expected_intent":"daily_briefing","intent_group":"daily_briefing","route_class":"fallback","source":"synthetic"}
+{"case_id":"eval_briefing_schedule","text":"tell me what is coming up today","expected_intent":"daily_briefing","intent_group":"daily_briefing","route_class":"fallback","source":"synthetic"}
+{"case_id":"eval_negative_timer_story","text":"that timer scene in the movie was tense","expected_intent":null,"intent_group":"chat","route_class":"fallback","source":"synthetic","negative":true}
+{"case_id":"eval_negative_shopping_memory","text":"I used to like shopping with grandma","expected_intent":null,"intent_group":"chat","route_class":"fallback","source":"synthetic","negative":true}

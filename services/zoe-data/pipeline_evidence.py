@@ -27,6 +27,7 @@ TransitionOutcome = Literal[
     "request_changes",
     "verification_failed",
     "merge_blocked",
+    "retry_evidence",
 ]
 
 PHASE_ORDER: tuple[PipelinePhase, ...] = (
@@ -326,6 +327,20 @@ def transition(state: PipelineState, outcome: TransitionOutcome, *, reason: str 
             raise ValueError("merge_blocked is only valid from closeout")
         next_phase = "closeout"
         next_status = "blocked"
+    elif outcome == "retry_evidence":
+        # Bounded re-arm of the verify phase to todo WITHOUT clearing evidence.
+        # Used when verify completed but the evidence gate is missing a required
+        # kind it should have produced (the focused pytest -> `test` evidence).
+        # Preserving the evidence means the re-dispatched worker only needs to
+        # supply the missing kind rather than redo everything. The caller is
+        # responsible for bounding this by attempt count so it cannot loop.
+        # Restricted to verify (the only intended call-site) so a stray caller
+        # cannot silently re-arm an earlier phase, mirroring request_changes /
+        # verification_failed phase guards.
+        if state.phase != "verify":
+            raise ValueError("retry_evidence is only valid from verify")
+        next_phase = state.phase
+        next_status = "todo"
     elif outcome == "complete":
         if not can_complete_phase(state):
             missing = ", ".join(sorted(missing_required_evidence(state)))

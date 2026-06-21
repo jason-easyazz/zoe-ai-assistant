@@ -11,6 +11,7 @@ Usage:
 import os
 import sys
 import json
+import subprocess
 from pathlib import Path
 from typing import List, Dict, Set, Tuple
 import fnmatch
@@ -52,8 +53,27 @@ def get_all_project_files() -> Set[str]:
             if filename == '.env' or (filename.startswith('.env.') and filename != '.env.example'):
                 continue
             files.add(relative_path)
-    
-    return files
+
+    # Drop git-ignored files (local-only artifacts like settings.local.json are
+    # not part of the tracked repo and shouldn't be flagged as manifest orphans).
+    return files - get_gitignored_files(files)
+
+
+def get_gitignored_files(candidates: Set[str]) -> Set[str]:
+    """Return the subset of candidates that git ignores (batched, one call)."""
+    if not candidates:
+        return set()
+    try:
+        result = subprocess.run(
+            ['git', 'check-ignore', '--stdin'],
+            input='\n'.join(candidates),
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+        )
+    except (FileNotFoundError, OSError):
+        return set()  # git unavailable -- fall back to flagging nothing extra
+    return {line for line in result.stdout.splitlines() if line}
 
 def matches_pattern(filepath: str, pattern: str) -> bool:
     """Check if filepath matches a glob pattern."""
