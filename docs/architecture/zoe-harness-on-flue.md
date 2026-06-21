@@ -131,6 +131,44 @@ bad fit, the Apache-2.0 license means we can fall back to bare Pi — but we do 
 
 ---
 
+## 2b. Model & hardware portability (the core design lever)
+
+There is **no separate dev box.** Flue installs on the **same live Jetson Orin NX (16GB)** that
+already runs the voice brain (local **Gemma E4B on llama.cpp `:11434`**), **Kokoro TTS**,
+`zoe-data`, and **Moonshine STT**. What makes installing the harness *here* safe — without it
+ever competing with the live voice turn for the GPU — is Flue's **per-agent model
+configuration.** This is the single design lever the whole single-box plan leans on, so it is
+written out explicitly.
+
+- **Flue sets models PER AGENT** — `registerProvider(...)` declares a provider once, and each
+  agent (or workflow step) carries its own `provider/model` string. **The harness logic is
+  written once; the compute it runs on is a swappable *setting*, not a code change.** Pointing
+  an agent at a different brain is a config edit, not a rewrite.
+- **NOW (single-box safety):** the **voice brain stays on local Gemma E4B (`:11434`)**,
+  untouched. The **harness agents are pointed at a DIFFERENT model** (a cloud / dev model via a
+  distinct provider) so they **never contend for the live GPU slot** that serves real-time
+  voice. Two providers coexist; the live path and the harness path never share a model endpoint.
+- **TRAJECTORY (why this is future-proof):** Orin NX *now* → **DGX Spark** / better-smaller
+  local models *later*. As local compute grows or local models get good enough, the harness
+  **goes fully local via a one-line provider swap** — point the harness agents at the local
+  provider instead of the cloud one. **Zero harness-code change**; the pipeline is identical,
+  only the model string moves.
+- **Per-agent = per-phase economics.** Because the model is per-agent, each *phase* can run the
+  model that fits it: a **cheap/fast model for scout/triage**, a **stronger model for
+  implementer/reviewer**. Cost and quality are tuned per phase, not globally.
+
+**Honest footnotes (these are real trade-offs, not glossed over):**
+
+- **Cloud-during-dev is not local-first.** Running harness agents on a cloud/dev model while we
+  build is **acceptable for the build phase** (it keeps load off the live GPU and de-risks the
+  pipeline first), but it is *not* the local-first end state. The **local end state is reached
+  via the swap** above, not abandoned.
+- **Cloud tokens cost money.** The harness loops — `scout → implement → verify`, with retries —
+  are **token-heavy** by nature. Running them on a paid API during the build burns API tokens;
+  budget for it, and treat the eventual local swap as the cost-retirement path too.
+
+---
+
 ## 3. Non-negotiable guardrails
 
 These are constraints on the decision, not open questions.
@@ -160,14 +198,29 @@ for a real-time response.
 lab.** This is the standing hard guardrail — no prod migration on hope. Each retirement
 milestone below is independently gated by lab proof.
 
-### 3.3 Jetson resource reality
+### 3.3 Single-box safety (one Jetson, harness isolated from the live path)
 
-Production target is an **Orin NX (16GB)** already running **Gemma + Kokoro TTS**. The model
-and TTS are the RAM pressure, **not Flue**. Therefore:
+There is **no separate dev box.** The harness is installed on the **same live Orin NX (16GB)**
+that already runs **Gemma E4B (`:11434`) + Kokoro TTS + `zoe-data` + Moonshine STT**. Installing
+it *here* is made safe by keeping it strictly off the live path:
 
-- Use Flue's **`local()` sandbox** — **no container daemon** on the Jetson.
-- Treat the model + Kokoro (Kokoro's ~2.3GB included) as the binding resource budget; the Node
-  harness is comparatively cheap but is **still a second runtime** (see Risks).
+- **Harness runs OFF the live voice turn.** It is its **own process, normally stopped**, started
+  only to run a workflow. It is never in the request path of a voice interaction.
+- **Different model from the voice brain.** Per §2b, harness agents point at a **cloud/dev model
+  on a separate provider**, so they **never compete for the live GPU slot** that serves Gemma
+  E4B for voice. The model is the binding resource; keeping the two on different endpoints is
+  what removes the contention.
+- **Real sandbox for agent-authored code — NOT Flue's in-process `local()`.** Code the harness
+  *authors and runs* must execute under a **true isolation boundary (bubblewrap / rootless
+  container)**, not Flue's in-process `local()`. `local()` shares the host process and is fine
+  for orchestration, but it is **not an isolation boundary** for code Zoe wrote — on a box that
+  is also serving live voice, untrusted self-authored code must be sandboxed for real.
+- **The deterministic fast path needs no LLM, so common voice stays instant regardless.** The
+  real-time path (**`detect_intent` → `semantic_router` → `expert_dispatch`**, §3.1) calls **no
+  LLM at all** for the common cases, so whatever the harness is doing — even mid-run — the usual
+  voice turn is unaffected. RAM budget: the model + Kokoro (Kokoro's ~2.3GB included) remain the
+  binding resource; the Node harness is comparatively cheap but is **still a second runtime**
+  (see Risks) and is killable without taking Zoe down.
 
 ### 3.4 Version discipline
 
@@ -219,21 +272,28 @@ Flue** — they constrain *how* we build, not *what* we build on. Cited briefly 
 ## 5. Integration & retirement plan
 
 Concrete, **phased, and each phase independently lab-gated** (§3.2). Order matters: prove the
-substrate on a dev box first, then channels, then pipeline, then retire the old harnesses, then
-unlock self-authoring. **Nothing in any phase touches the Jetson production path until it passes
-the Samantha tests.**
+substrate **on the single Jetson box, isolated from the live path**, first, then channels, then
+pipeline, then retire the old harnesses, then unlock self-authoring. **Nothing in any phase
+touches the Jetson production path until it passes the Samantha tests.**
 
-### Phase 0 — Lab spike on a DEV BOX (PR #737, `labs/flue-harness-spike/`)
+### Phase 0 — Lab spike on the Jetson, isolated from the live path (PR #737, `labs/flue-harness-spike/`)
 
-Run the spike on a **development box, NOT the Jetson** — we are validating Flue's API surface,
-not its Orin footprint yet.
+There is **no dev box** — the spike runs **on the Jetson itself**, but **isolated from the live
+voice path** (own process, normally stopped) and with the **harness pointed at a separate
+cloud/dev model** (per §2b) so it never competes with the voice brain on `:11434`. We are
+validating Flue's API surface *and* confirming the install is safe to sit alongside the live
+voice box.
 
 - **Verify Flue's real API signatures** (durable workflows, subagents, `local()`, channels) at
   the pinned beta version against actual code, not docs.
-- **Run a `scout → implement → verify → openPR` loop on a real issue** against a **local
-  llama.cpp** model end-to-end.
-- **Acceptance = the Samantha tests.** If the spike can't close the loop on a real issue, the
-  decision returns for re-evaluation (the only condition under which this ADR reopens).
+- **Run a `scout → implement → verify → openPR` loop on a real issue** end-to-end, with the
+  **harness agents on a configurable (cloud/dev) model** while the **voice brain stays on local
+  Gemma E4B (`:11434`), untouched.**
+- **Acceptance:** running the harness on the Jetson with **harness-on-dev-model** shows **no
+  voice-latency regression**, measured by the **#735 latency probe**, *and* the loop closes on a
+  real issue (the Samantha tests). The no-regression bar **replaces** the old "run it on a dev
+  box" criterion. If either bar fails, the decision returns for re-evaluation (the only
+  condition under which this ADR reopens).
 
 ### Phase 1 — Telegram channel onto Flue
 
@@ -285,10 +345,11 @@ not its Orin footprint yet.
 
 ## 7. Open questions / next step
 
-**Next step: the Phase 0 lab spike** (§5, **PR #737 / `labs/flue-harness-spike/`**) — on a **dev
-box**, verify Flue's real API signatures and run a `scout → implement → verify → openPR` loop on a
-real issue against local llama.cpp, judged by the **Samantha tests**. That spike resolves the
-remaining open questions:
+**Next step: the Phase 0 lab spike** (§5, **PR #737 / `labs/flue-harness-spike/`**) — **on the
+Jetson itself, isolated from the live path** with the **harness on a separate cloud/dev model**
+(§2b) — verify Flue's real API signatures and run a `scout → implement → verify → openPR` loop on
+a real issue, judged by the **#735 latency probe (no voice-latency regression)** and the
+**Samantha tests**. That spike resolves the remaining open questions:
 
 - Exact `@earendil-works/pi-*` version the Flue beta pins vs. Zoe's brain (~0.79) — confirm a
   single shared version, or document the bridge if they differ.
