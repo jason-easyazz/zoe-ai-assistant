@@ -922,23 +922,46 @@ async def _resolve_weather(intent: SkybridgeIntent, user_id: str, db: Any) -> di
     prefs = _row_to_prefs(row)
     fallback = await _get_system_default_location(db)
     lat, lon, city, country = _resolve_location(prefs, fallback=fallback)
-    current = await _get_current(lat, lon, city, country)
+    # Voice replies must feel instant: prefer the warm cache (kept fresh by the panel's
+    # periodic /weather/current + /forecast polls); only pay the ~1s live API when cold.
+    from routers.weather import _weather_cache as _wc
+    current = _wc.get("current") or {}
+    # Only trust the shared warm caches (current AND forecast) when the cached
+    # reading is for THIS user's resolved city — the cache is one flat slot across
+    # users, so a Perth refresh must not feed a Sydney user. `is None` so a
+    # legitimate 0° reading isn't treated as missing.
+    _cached_city = str(current.get("city") or "").strip().lower()
+    _cache_ok = current.get("temp") is not None and not (
+        city and _cached_city and _cached_city != str(city).strip().lower()
+    )
+    if not _cache_ok:
+        current = await _get_current(lat, lon, city, country)
     current = {k: v for k, v in current.items() if not str(k).startswith("_")}
-    forecast = {}
+    # Forecast shares the same flat cache slot — only reuse it when current was a
+    # trusted same-city hit, else fetch live for the right location.
+    forecast = (_wc.get("forecast") if _cache_ok else None) or await _get_forecast(lat, lon)
+
+    def _say_num(n) -> str:
+        s = str(n)
+        return s.replace(".", " point ") if "." in s else s
+
     if intent.action == "forecast":
-        forecast = await _get_forecast(lat, lon)
         card = card_service.build_weather_forecast_card(
             {"current": current, "forecast": forecast, "location": {"city": city, "country": country}}
         )
         spoken = f"Here is the forecast for {city}."
     else:
-        forecast = await _get_forecast(lat, lon)
         card = card_service.build_weather_current_card(
             {"current": current, "forecast": forecast, "location": {"city": city, "country": country}}
         )
         temp = current.get("temp")
         desc = current.get("description") or "current conditions"
-        spoken = f"It is {temp} degrees in {city} with {desc}." if temp is not None else f"Here is the weather for {city}."
+        # Speak naturally: "18.3" → "18 point 3" (bare decimals get mangled to "18 3"),
+        # and join the condition with "and" rather than the robotic "with".
+        spoken = (
+            f"It's {_say_num(temp)} degrees and {desc} in {city}."
+            if temp is not None else f"Here is the weather for {city}."
+        )
     return {
         "handled": True,
         "intent": {"domain": "weather", "action": intent.action},

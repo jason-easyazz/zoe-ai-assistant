@@ -85,4 +85,11 @@ async def test_greeting_wellbeing_executes_without_open_domain_agent():
     response = await execute_intent(intent)
 
     assert response.startswith(("Hi", "Good"))
-    assert "help" in response.lower() or "do for you" in response.lower()
+    # The greeting has time-of-day variants (morning/afternoon/evening/night), each
+    # of which offers assistance in slightly different words. Assert against the full
+    # family so the test is deterministic regardless of wall-clock time.
+    offers_assistance = any(
+        phrase in response.lower()
+        for phrase in ("help", "do for you", "what do you need", "what do you want")
+    )
+    assert offers_assistance, response

@@ -1237,6 +1237,121 @@ async def test_harness_review_disabled_by_env_does_not_approve(isolated_store, m
     assert not any(e.kind == "human" and e.metadata.get("source") == "harness" for e in state.evidence)
 
 
+def _patch_closeout_merge(monkeypatch, *, merged: bool):
+    import pipeline_closeout as pco
+    from pipeline_closeout import CloseoutResult
+
+    monkeypatch.setattr(
+        pco,
+        "run_closeout_merge",
+        lambda pr_url, *, repo_root=None: CloseoutResult(
+            merged, "sha123" if merged else None, "merged" if merged else "not ready"
+        ),
+    )
+
+
+def _seed_closeout_state(task_ref: str, *, agent_greptile: bool = False):
+    pr = "https://github.com/o/r/pull/30"
+    evidence = [
+        EvidenceItem(kind="pr", summary=pr, artifact=pr, passed=True, metadata={"phase": "implement"}),
+    ]
+    if agent_greptile:
+        # Greptile evidence as the closeout AGENT would record it (source != harness,
+        # no merge_sha) — recorded without an actual merge.
+        evidence.append(
+            EvidenceItem(
+                kind="greptile",
+                summary="greptile loop done",
+                passed=True,
+                metadata={"source": "skills", "phase": "closeout"},
+            )
+        )
+    state = PipelineState(
+        task_ref=task_ref,
+        phase="closeout",
+        status="running",
+        attempts={"implement": 1, "verify": 1, "review": 1, "closeout": 1},
+        evidence=evidence,
+    )
+    store.save_state(state, event="seed")
+
+
+async def _noop_fetch_detail(task_id: str):
+    return {"latest_summary": "", "comments": []}
+
+
+@pytest.mark.asyncio
+async def test_harness_closeout_merges_and_completes(isolated_store, monkeypatch):
+    # Deterministic closeout: the harness runs the greploop guard; when the PR
+    # merges, greptile evidence is recorded and closeout completes -> retro.
+    _patch_closeout_merge(monkeypatch, merged=True)
+    _seed_closeout_state("multica:co-ok")
+
+    phases = {"closeout": {"id": "t_co", "status": "done"}}
+    state = await store.sync_pipeline_from_chain("multica:co-ok", phases, _noop_fetch_detail)
+    assert state.phase == "retro"
+    assert any(
+        e.kind == "greptile" and e.passed and e.metadata.get("source") == "harness"
+        and e.metadata.get("merge_sha") == "sha123"
+        for e in state.evidence
+    )
+
+
+@pytest.mark.asyncio
+async def test_harness_closeout_does_not_complete_when_not_merged(isolated_store, monkeypatch):
+    _patch_closeout_merge(monkeypatch, merged=False)
+    _seed_closeout_state("multica:co-no")
+
+    phases = {"closeout": {"id": "t_co", "status": "done"}}
+    state = await store.sync_pipeline_from_chain("multica:co-no", phases, _noop_fetch_detail)
+    assert state.phase == "closeout"
+    assert not any(e.kind == "greptile" and e.metadata.get("source") == "harness" for e in state.evidence)
+
+
+@pytest.mark.asyncio
+async def test_harness_closeout_ignores_agent_greptile_without_real_merge(isolated_store, monkeypatch):
+    # Regression for the #679 bypass: the closeout AGENT recorded greptile evidence
+    # (source='skills') but there was NO actual merge. Closeout must NOT advance to
+    # retro on that unverified claim — it must hold pending a harness-confirmed merge.
+    _patch_closeout_merge(monkeypatch, merged=False)
+    _seed_closeout_state("multica:co-agent", agent_greptile=True)
+
+    phases = {"closeout": {"id": "t_co", "status": "done"}}
+    state = await store.sync_pipeline_from_chain("multica:co-agent", phases, _noop_fetch_detail)
+    assert state.phase == "closeout"  # did NOT false-complete to retro on agent greptile
+    assert not any(
+        e.kind == "greptile" and e.metadata.get("source") == "harness" for e in state.evidence
+    )
+
+
+@pytest.mark.asyncio
+async def test_harness_closeout_merges_even_with_agent_greptile_present(isolated_store, monkeypatch):
+    # The harness merge runs regardless of an agent greptile item; on a real merge
+    # closeout completes -> retro (authoritative harness merge, not the agent claim).
+    _patch_closeout_merge(monkeypatch, merged=True)
+    _seed_closeout_state("multica:co-agent-ok", agent_greptile=True)
+
+    phases = {"closeout": {"id": "t_co", "status": "done"}}
+    state = await store.sync_pipeline_from_chain("multica:co-agent-ok", phases, _noop_fetch_detail)
+    assert state.phase == "retro"
+    assert any(
+        e.kind == "greptile" and e.metadata.get("source") == "harness" and e.metadata.get("merge_sha") == "sha123"
+        for e in state.evidence
+    )
+
+
+@pytest.mark.asyncio
+async def test_harness_closeout_disabled_by_env(isolated_store, monkeypatch):
+    monkeypatch.setenv("ZOE_PIPELINE_HARNESS_CLOSEOUT_MERGE", "false")
+    _patch_closeout_merge(monkeypatch, merged=True)  # would merge, but gate disabled
+    _seed_closeout_state("multica:co-off")
+
+    phases = {"closeout": {"id": "t_co", "status": "done"}}
+    state = await store.sync_pipeline_from_chain("multica:co-off", phases, _noop_fetch_detail)
+    assert state.phase == "closeout"
+    assert not any(e.kind == "greptile" and e.metadata.get("source") == "harness" for e in state.evidence)
+
+
 @pytest.mark.asyncio
 async def test_sync_pipeline_audit_only_verify_skips_test_gate(isolated_store):
     await store.bootstrap_state("multica:audit-gate")

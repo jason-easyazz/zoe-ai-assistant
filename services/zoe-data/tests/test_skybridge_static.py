@@ -192,7 +192,7 @@ def test_livekit_voice_router_accepts_text_commands():
 
     assert "async def _run_text_pipeline" in router
     assert "elif msg_type == \"text\"" in router
-    assert "run_zoe_agent(message, session_id, user_id, voice_mode=True)" in router
+    assert "brain_oneshot(message, session_id, user_id, voice_mode=True)" in router
 
 
 def test_skybridge_renderer_keeps_button_actions_functional():
@@ -267,7 +267,8 @@ def test_skybridge_auth_and_voice_bus_contracts_are_wired():
     assert '"type": "cards", "result": skybridge_result' in main
     assert '"type": "skybridge_context", "context": skybridge_context' in main
     assert '"type": "transcript", "role": "assistant", "text": spoken_summary' in main
-    assert 'skybridge_context = {}\n\n            # ── Streaming LLM' in main
+    assert 'skybridge_context = {}\n\n            # ── Instant intent fast-path' in main
+    assert "# ── Streaming LLM + per-sentence TTS" in main
 
 
 def test_skybridge_touch_executor_card_shell_spans_panel_grid():

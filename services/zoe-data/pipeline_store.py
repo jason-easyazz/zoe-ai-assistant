@@ -539,6 +539,72 @@ async def _append_harness_review_approval(state: PipelineState, phase: PipelineP
     )
 
 
+def _harness_closeout_merge_enabled() -> bool:
+    return (
+        os.environ.get("ZOE_PIPELINE_HARNESS_CLOSEOUT_MERGE", "true") or "true"
+    ).strip().lower() not in {"0", "false", "no"}
+
+
+def _is_harness_closeout_merge_evidence(item: Any) -> bool:
+    """True for the harness's OWN confirmed-merge closeout evidence.
+
+    Single source of truth for both the _append_harness_closeout_merge idempotency
+    guard and the sync_pipeline_from_chain closeout-completion check, so the two
+    cannot drift if the evidence schema evolves.
+    """
+    md = getattr(item, "metadata", {}) or {}
+    return (
+        getattr(item, "kind", "") == "greptile"
+        and getattr(item, "passed", None) is True
+        and md.get("phase") == "closeout"
+        and md.get("source") == "harness"
+        and bool(md.get("merge_sha"))
+    )
+
+
+async def _append_harness_closeout_merge(state: PipelineState, phase: PipelinePhase) -> PipelineState:
+    """Run the greploop merge guard harness-side and append `greptile` evidence on merge.
+
+    Makes closeout deterministic: rather than trusting the closeout agent worker to
+    invoke the greploop guard (it can bail "no valid PR URL"), the harness runs the
+    proven guard CLI itself (which owns confidence/threads/squash-merge safety) and,
+    when the PR ends up MERGED, records the closeout `greptile` evidence with the
+    merge SHA. No-ops (returns state unchanged) when disabled, when closeout greptile
+    evidence already exists, when there is no PR, or when the guard did not merge
+    (fail-open: the agent-driven closeout flow then applies and can retry next cycle).
+    """
+    if not _harness_closeout_merge_enabled():
+        return state
+    # Idempotent only on the harness's OWN confirmed-merge evidence. We must NOT
+    # skip just because the closeout agent recorded a greptile item (source!=
+    # "harness"): that agent evidence can be written WITHOUT an actual merge, and
+    # skipping here is exactly what let closeout false-complete (PR left open).
+    if any(_is_harness_closeout_merge_evidence(item) for item in state.evidence):
+        return state
+    pr_url = _pr_url_from_state(state)
+    if not pr_url:
+        return state
+    from pipeline_closeout import run_closeout_merge
+
+    result = await _run_io(partial(run_closeout_merge, pr_url))
+    if not result.merged:
+        return state
+    return with_evidence(
+        state,
+        EvidenceItem(
+            kind="greptile",
+            summary=("harness closeout merge: " + result.reason)[:500],
+            artifact=pr_url,
+            passed=True,
+            metadata={
+                "source": "harness",
+                "phase": phase,
+                "merge_sha": result.merge_sha,
+            },
+        ),
+    )
+
+
 def _protocol_only_block(detail: dict[str, Any]) -> bool:
     """True when Hermes only failed the terminal protocol for a no-op phase."""
     protocol_seen = False
@@ -828,11 +894,49 @@ async def _sync_pipeline_from_chain_once(
             if can_complete_phase(state):
                 review_harness_complete = True
 
+        closeout_harness_complete = False
+        closeout_merge_pending = False
+        # Only the real-PR closeout path requires a harness-confirmed merge. The
+        # audit / no-code closeout (no PR evidence, audit profile) has nothing to
+        # merge and completes on its recorded evidence as before.
+        if (
+            phase == "closeout"
+            and row_status in _TERMINAL
+            and _harness_closeout_merge_enabled()
+            and getattr(state, "evidence_profile", "") != "audit"
+            and _pr_url_from_state(state)
+        ):
+            # Deterministic, AUTHORITATIVE closeout: run the proven greploop guard
+            # CLI harness-side (regardless of any agent greptile claim) and complete
+            # closeout ONLY on a harness-confirmed merge (source="harness" greptile +
+            # merge_sha). An agent greptile item can be recorded without an actual
+            # merge, so it must NOT advance closeout->retro (that left PRs open). If
+            # the harness hasn't merged yet, hold closeout (retry next cycle) rather
+            # than completing on the agent's unverified evidence.
+            state = await _append_harness_closeout_merge(state, "closeout")
+            harness_merged = any(
+                _is_harness_closeout_merge_evidence(e) for e in state.evidence
+            )
+            if harness_merged and can_complete_phase(state):
+                closeout_harness_complete = True
+            elif not harness_merged:
+                # Only the NOT-merged case suppresses completion (so an agent's
+                # unverified greptile claim can't advance closeout). If the harness
+                # DID merge but the gate is somehow unsatisfied, fall through to the
+                # normal outcome path so the appended merge evidence is persisted
+                # (gate_block) rather than discarded by a bare continue.
+                closeout_merge_pending = True
+
         outcome = (
             "complete"
-            if (verify_harness_complete or review_harness_complete)
+            if (verify_harness_complete or review_harness_complete or closeout_harness_complete)
             else infer_outcome(phase, row_status, detail)  # type: ignore[arg-type]
         )
+        if closeout_merge_pending and outcome == "complete":
+            # The PR is not actually merged yet; do not advance closeout->retro on
+            # agent-claimed greptile evidence. Leave closeout pending so the harness
+            # merge retries on the next poll cycle.
+            continue
         if not outcome:
             continue
         if (

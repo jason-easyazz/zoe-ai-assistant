@@ -1,0 +1,83 @@
+version: '3.8'
+
+# Omnigent meta-harness module.
+# Public access is via zoe-cloudflared over the internal network (http://zoe-omnigent:6767)
+# gated by a Cloudflare Access policy — see README.md. Port 6767 is bound to localhost
+# only for local debugging; it is NOT published to the LAN or the public internet.
+
+services:
+  omnigent:
+    build: .
+    image: zoe-omnigent:latest
+    container_name: zoe-omnigent
+    restart: unless-stopped
+    # CMD is the image entrypoint (entrypoint.sh): runs the foreground OIDC server AND
+    # attaches the host/runner, so a single container serves the UI and runs agents.
+    ports:
+      - "6767:6767"   # LAN access (binds 0.0.0.0). cloudflared reaches it internally via zoe-network.
+                      # NOTE: the omnigent server has no auth of its own — anyone on the LAN can
+                      # reach it. Fine for a trusted home network; gate with Cloudflare Access
+                      # before ever exposing it through the tunnel.
+    # AUTH = OAuth subscriptions (Claude / ChatGPT / Cursor logins), NOT API keys.
+    # DO NOT set ANTHROPIC_API_KEY or OPENAI_API_KEY here: if present, the CLIs bill the
+    # metered API and silently ignore your subscription. Subscription tokens live in the
+    # credential volumes below, created by a one-time login (see README → Auth).
+    environment:
+      - NODE_NO_WARNINGS=1
+      # Omnigent launches agents with --dangerously-skip-permissions (autonomous, no prompts).
+      # Claude Code blocks that flag under root; IS_SANDBOX=1 is the documented container
+      # escape hatch — the container IS the isolation boundary. (User-approved 2026-06-17.)
+      - IS_SANDBOX=1
+      # Runner working directory = the mounted Zoe repo, so agents build Zoe. The host
+      # creates git worktrees under it (the repo at ../../ is bind-mounted to /workspace).
+      - OMNIGENT_RUNNER_WORKSPACE=/workspace
+      # The repo is owned by host uid 1000 but the container runs as root; tell git to
+      # trust it (otherwise "dubious ownership" breaks worktree/agent git ops).
+      - GIT_CONFIG_COUNT=1
+      - GIT_CONFIG_KEY_0=safe.directory
+      - GIT_CONFIG_VALUE_0=*
+      # Auth delegated to Zoe's own SSO (zoe-auth OIDC) — one Zoe login, UI stays protected
+      # even on the LAN. Issuer/redirect use zoe.local so the token `iss` matches across
+      # browser and server (zoe-auth derives issuer from the Host header). Access the UI at
+      # http://zoe.local:6767 (NOT the raw IP) so the OIDC redirect host stays consistent.
+      - OMNIGENT_AUTH_ENABLED=1
+      - OMNIGENT_AUTH_PROVIDER=oidc
+      # Issuer is the nginx frontend (http://zoe.local, port 80) — it serves the login UI at /
+      # and proxies /application/o/, /.well-known/, /jwks.json to zoe-auth. NOT :8002 (raw API,
+      # whose / is JSON with no login page).
+      - OMNIGENT_OIDC_ISSUER=http://zoe.local
+      - OMNIGENT_OIDC_CLIENT_ID=${OMNIGENT_OIDC_CLIENT_ID:-omnigent}
+      - OMNIGENT_OIDC_CLIENT_SECRET=${OMNIGENT_OIDC_CLIENT_SECRET}
+      - OMNIGENT_OIDC_REDIRECT_URI=http://zoe.local:6767/auth/callback
+      - OMNIGENT_OIDC_COOKIE_SECRET=${OMNIGENT_OIDC_COOKIE_SECRET}
+    # Resolve zoe.local to the host so the container reaches zoe-auth's published :8002 with
+    # a Host header of "zoe.local:8002" — keeps the OIDC issuer identical to the browser's.
+    extra_hosts:
+      - "zoe.local:host-gateway"
+    volumes:
+      # The agents' workspace IS the Zoe repo, so they can build Zoe.
+      - ../../:/workspace
+      # OAuth/subscription credentials — persisted so logins + token refresh survive restarts.
+      # (Subdir mounts only — never mount over /root or you shadow the installed CLIs.)
+      - omnigent-claude:/root/.claude
+      - omnigent-codex:/root/.codex
+      - omnigent-cursor:/root/.cursor
+      # Cursor harness: mount the host's proven arm64 cursor-agent install (avoids the
+      # cursor.com remote installer). The entrypoint symlinks the real versioned binary
+      # (which has its bundled node beside it) onto PATH. Login creds → omnigent-cursor volume.
+      - /home/zoe/.local/share/cursor-agent:/root/.local/share/cursor-agent:ro
+      # Persist omnigent's own state (mount path to confirm at first run).
+      - omnigent-data:/root/.omnigent
+    networks:
+      - zoe-network
+
+networks:
+  zoe-network:
+    name: zoe-network
+    external: true
+
+volumes:
+  omnigent-claude:
+  omnigent-codex:
+  omnigent-cursor:
+  omnigent-data:

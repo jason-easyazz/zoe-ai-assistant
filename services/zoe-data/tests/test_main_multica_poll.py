@@ -59,6 +59,29 @@ def test_poll_dispatches_ready_work_only_when_runtime_pause_is_inactive():
     assert active_branch < backfill < paused_branch
 
 
+def test_multica_poll_interval_throttles_when_paused():
+    from main import _multica_poll_interval_s
+
+    # Normal cadence while dispatch is active...
+    assert _multica_poll_interval_s(False, active_s=30.0, paused_s=300.0) == 30.0
+    # ...and the throttled cadence while it's paused.
+    assert _multica_poll_interval_s(True, active_s=30.0, paused_s=300.0) == 300.0
+    # A misconfigured 0/negative paused interval is floored at the active cadence
+    # so the paused path can never become a tighter spin loop than active.
+    assert _multica_poll_interval_s(True, active_s=30.0, paused_s=0.0) == 30.0
+    assert _multica_poll_interval_s(True, active_s=30.0, paused_s=-5.0) == 30.0
+
+
+def test_multica_poll_loop_routes_sleep_through_paused_interval_helper():
+    # Guard the wiring: the loop must derive its sleep from the helper (re-checking
+    # dispatch_is_paused each cycle) and honour ZOE_MULTICA_PAUSED_POLL_S, so a
+    # paused pipeline stops running the expensive per-issue reconcile every 30s.
+    source = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
+    assert "_multica_poll_interval_s(" in source
+    assert "ZOE_MULTICA_PAUSED_POLL_S" in source
+    assert "await asyncio.sleep(30)" not in source  # no hardcoded poll cadence
+
+
 def test_poll_dispatch_backfills_ready_blocked_pipeline_before_todo():
     source = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
     blocked_fetch = source.index('blocked_issues = await client.list_issues(status="blocked")')
