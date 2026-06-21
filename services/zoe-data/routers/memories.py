@@ -297,6 +297,28 @@ def _build_memory_prompt_packet(
     return {"packet": "## What I know about you\n" + "\n".join(lines), "refs": refs, "count": len(refs)}
 
 
+# Keyword gate for the per-turn semantic search (ported from zoe_agent.py so this
+# endpoint doesn't import the legacy brain). Facts always load; the ONNX+Chroma
+# semantic search only fires when the message looks like a recall/personal-fact
+# query — most turns don't, and the embed+query is the endpoint's main cost.
+_MEMORY_TRIGGER_WORDS = frozenset({
+    "remember", "recall", "did i", "have i", "last time", "before",
+    "you said", "we talked", "my name", "my preference", "i told you",
+    "favourite", "favorite", "prefer", "like", "usually", "always", "never", "often",
+    "who is", "what is my", "what do i", "what's my", "family", "remind me",
+    "do i have", "my favourite", "my favorite", "my usual", "i usually", "i like",
+    "i prefer", "i love", "i hate", "i enjoy", "do you know my",
+    "born", "age", "years old", "my age", "how old", "my birthday", "birthday",
+    "my full name", "called", "known as", "allerg", "condition", "medical",
+})
+
+
+def _message_needs_memory(message: str) -> bool:
+    """True only when the message likely benefits from MemPalace semantic search."""
+    low = (message or "").lower()
+    return any(kw in low for kw in _MEMORY_TRIGGER_WORDS)
+
+
 @router.get("/for-prompt")
 async def memory_for_prompt(
     user_id: str = Query(..., min_length=1),
@@ -316,9 +338,12 @@ async def memory_for_prompt(
     if not user_id or is_guest_memory_user(user_id):
         return {"packet": "", "refs": [], "count": 0, "user_scoped": False}
     svc = _svc()
+    # Facts (cheap metadata read) always run. The semantic search is an ONNX embed
+    # + Chroma query — keyword-gate it so it only fires on recall-ish turns instead
+    # of every turn (the Pi memory extension calls this endpoint on every turn).
     facts = await svc.load_for_prompt(user_id, limit=limit)
     hits: list[MemoryRef] = []
-    if message.strip():
+    if message.strip() and _message_needs_memory(message):
         try:
             hits = await svc.search(message, user_id=user_id, limit=6)
         except Exception:
