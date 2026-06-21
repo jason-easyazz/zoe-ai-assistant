@@ -74,6 +74,8 @@ services:
     - HA_OIDC_CLIENT_SECRET=${HA_OIDC_CLIENT_SECRET:-}
     - MULTICA_OIDC_CLIENT_ID=${MULTICA_OIDC_CLIENT_ID:-multica}
     - MULTICA_OIDC_CLIENT_SECRET=${MULTICA_OIDC_CLIENT_SECRET:-}
+    - OMNIGENT_OIDC_CLIENT_ID=${OMNIGENT_OIDC_CLIENT_ID:-omnigent}
+    - OMNIGENT_OIDC_CLIENT_SECRET=${OMNIGENT_OIDC_CLIENT_SECRET:-}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
       interval: 30s

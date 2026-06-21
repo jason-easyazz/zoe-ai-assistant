@@ -199,6 +199,15 @@ def _normalize_chat_intent_text(raw: str) -> str:
     """Lowercase, Unicode-normalize, collapse whitespace, strip STT filler artifacts."""
     s = unicodedata.normalize("NFKC", (raw or "").strip()).lower()
     s = re.sub(r"\s+", " ", s).strip()
+    # Strip a leading wake word the panel sometimes leaves in the transcript
+    # ("hey zoe, what's the weather" → "what's the weather"). Without this, every
+    # $-anchored fast-path regex misses and the whole turn falls through to the
+    # slow brain path — the dominant cause of "voice feels slow" on common commands.
+    # [\s,.!?:;-]* also eats trailing punctuation, since some STT models render
+    # the wake word as its own sentence ("Zoe. What's the weather").
+    s = re.sub(r"^(?:hey|hi|hello|ok|okay|yo|hiya)\s+zoe\b[\s,.!?:;-]*", "", s)
+    s = re.sub(r"^zoe\b[\s,.!?:;-]*", "", s)
+    s = re.sub(r"\s+", " ", s).strip()
     # Replace "^and" → "add" ONLY when followed by a list-add phrasing ("X to [list-type] list").
     # STT frequently mishears "add" as "and" for Australian accents (e.g. "add bread" → "and bread").
     # The lookahead prevents regressions: "and turn on the lights" is NOT affected.
@@ -320,15 +329,18 @@ def openclaw_user_message(intent: Optional[Intent], user_text: str) -> str:
 
 _TIME_QUERY_RE = re.compile(
     r"^(what'?s?\s+the\s+time|what\s+time\s+is\s+it(\s+(right\s+now|now))?"
-    r"|tell\s+me\s+the\s+time|current\s+time|time\s+now|time\s+please|what\s+time\s+is\s+it)\??$",
+    r"|tell\s+me\s+the\s+time|current\s+time|time\s+now|time\s+please|what\s+time\s+is\s+it"
+    r"|do\s+you\s+have\s+the\s+time|(?:can\s+you\s+)?give\s+me\s+the\s+time"
+    r"|what\s+hour\s+is\s+it)\??$",
     re.IGNORECASE,
 )
 
 _DATE_QUERY_RE = re.compile(
     r"^(what'?s?\s+today'?s?\s+date|what\s+(is\s+)?the\s+date(\s+today)?"
-    r"|what\s+day\s+(is\s+it|of\s+the\s+week(\s+is\s+it)?)|today'?s?\s+date"
+    r"|what\s+day\s+(is\s+it(\s+today)?|of\s+the\s+week(\s+is\s+it)?)|today'?s?\s+date"
     r"|what\s+year\s+is\s+it(\s+now)?|what\s+month\s+is\s+it(\s+now)?"
-    r"|day\s+of\s+the\s+week|what'?s?\s+the\s+date(\s+today)?)\??$",
+    r"|day\s+of\s+the\s+week|what'?s?\s+the\s+date(\s+today)?"
+    r"|(?:show\s+me|tell\s+me)\s+(?:the\s+|today'?s?\s+)?date|what'?s?\s+today)\??$",
     re.IGNORECASE,
 )
 
@@ -472,12 +484,35 @@ _LETS_TALK_RE = re.compile(
 # Placed after lets_talk so "let's chat" doesn't become a greeting.
 # good_morning/good_evening are kept as separate intents for the daily-briefing flow.
 _GREETING_RE = re.compile(
-    r"^(?:hello|hi|hey|howdy|heya|greetings|yo)(?:\s+(?:there|zoe|there\s+zoe))?\s*[!.,]?\s*$"
-    r"|^(?:hello|hi|hey|howdy|heya|yo)(?:\s+(?:there|zoe|there\s+zoe))?\s+how\s+are\s+you(?:\s+today)?\s*[!.,?]?\s*$"
+    r"^(?:hello|hi|hey|howdy|heya|hiya|greetings|yo|g'?day)(?:\s+(?:there|zoe|there\s+zoe))?\s*[!.,]?\s*$"
+    r"|^(?:hello|hi|hey|howdy|heya|hiya|yo)(?:\s+(?:there|zoe|there\s+zoe))?\s+how\s+are\s+you(?:\s+today)?\s*[!.,?]?\s*$"
     r"|^sup(?:\s+zoe)?\s*\??$"
     r"|^what'?s\s+up(?:\s+zoe)?\s*\??\s*$"
     r"|^how\s+are\s+you(?:\s+today)?(?:\s+zoe)?\s*\??\s*$"
+    r"|^how'?s\s+it\s+going(?:\s+zoe)?\s*\??\s*$"
     r"|^good\s+(?:afternoon|night)(?:\s+zoe)?\s*[!.,]?\s*$",
+    re.IGNORECASE,
+)
+
+# Social acknowledgements ("thanks", "got it") and presence checks ("are you
+# there?") — instant canned replies so they never wake the ~2-4s brain. All
+# anchored ^...$ so they can't swallow a real request ("okay add milk" won't match).
+_THANKS_RE = re.compile(
+    r"^(?:thanks?|thank\s+you|thank\s+u|thx|ty|cheers|much\s+appreciated)"
+    r"(?:\s+(?:so\s+much|a\s+lot|very\s+much|heaps))?(?:\s+zoe)?\s*[!.,]*$",
+    re.IGNORECASE,
+)
+_ACK_RE = re.compile(
+    r"^(?:got\s+it|gotcha|understood|makes\s+sense|good\s+to\s+know|noted|fair\s+enough)\s*[!.,]*$"
+    r"|^(?:ok|okay|okey|k|alright|cool|nice|great|perfect|awesome|lovely|sweet|sounds\s+good)\s*[!.,]*$"
+    r"|^(?:no\s+(?:problem|worries)|all\s+good)\s*[!.,]*$",
+    re.IGNORECASE,
+)
+_STATUS_CHECK_RE = re.compile(
+    r"^(?:are\s+you\s+|you\s+)?(?:there|listening|awake|around|still\s+(?:there|listening|awake|with\s+me))\s*\??$"
+    r"|^(?:can\s+you\s+)?hear\s+me(?:\s+(?:ok|okay|now))?\s*\??$"
+    r"|^(?:are\s+you\s+)?(?:still\s+)?(?:working|online|up|ready)\s*\??$"
+    r"|^zoe\s*\??$",
     re.IGNORECASE,
 )
 
@@ -655,6 +690,14 @@ def detect_intent(
 
     if re.match(r"^ping\.?$", t):
         return Intent("greeting", {})
+
+    # Social acknowledgements & presence checks — instant, no brain.
+    if _THANKS_RE.match(t):
+        return Intent("acknowledgement", {"kind": "thanks"})
+    if _ACK_RE.match(t):
+        return Intent("acknowledgement", {"kind": "ack"})
+    if _STATUS_CHECK_RE.match(t):
+        return Intent("status_check", {})
 
     if re.match(r"^what lists do i have\??$", t):
         return Intent("list_show", {})
@@ -1936,6 +1979,88 @@ async def _execute_list_show_direct(intent: Intent, user_id: str) -> Optional[st
         return None
 
 
+def _say_clock(hhmm: str) -> str:
+    """'15:00' → '3 PM', '09:30' → '9:30 AM'. Empty/garbage → ''."""
+    try:
+        h, m = (hhmm or "").split(":")[:2]
+        h = int(h); m = int(m)
+        ap = "AM" if h < 12 else "PM"
+        h12 = h % 12 or 12
+        return f"{h12}:{m:02d} {ap}" if m else f"{h12} {ap}"
+    except Exception:
+        return ""
+
+
+async def _execute_calendar_show_direct(intent: Intent, user_id: str) -> Optional[str]:
+    """Read the calendar straight from the events table so 'what's on my calendar'
+    works even when the mcporter MCP subprocess is down (the source of the
+    calendar 'hit and miss'). Mirrors the qualifier→date-range logic in
+    _build_command's calendar_show branch."""
+    from datetime import date, timedelta
+    slots = intent.slots or {}
+    qualifier = str(slots.get("qualifier", "")).strip().lower()
+    today_d = date.today()
+    if qualifier in ("today", "today's", ""):
+        start = end = today_d
+        scope = "today"
+    elif qualifier == "tomorrow":
+        start = end = today_d + timedelta(days=1)
+        scope = "tomorrow"
+    elif qualifier in ("this week", "this week's"):
+        start = today_d - timedelta(days=today_d.weekday())
+        end = today_d + timedelta(days=6 - today_d.weekday())
+        scope = "this week"
+    elif qualifier in ("this month", "this month's"):
+        import calendar as cal_mod
+        _, last = cal_mod.monthrange(today_d.year, today_d.month)
+        start = today_d.replace(day=1); end = today_d.replace(day=last)
+        scope = "this month"
+    else:
+        start = today_d; end = today_d + timedelta(days=7)
+        scope = "in the next week"
+    try:
+        from database import get_db_ctx
+        async with get_db_ctx() as db:
+            cursor = await db.execute(
+                "SELECT title, start_date, start_time, all_day FROM events"
+                " WHERE (user_id=? OR visibility='family') AND deleted=0"
+                " AND start_date BETWEEN ? AND ?"
+                " ORDER BY start_date, COALESCE(NULLIF(start_time,''),'99:99')",
+                (user_id, start.isoformat(), end.isoformat()),
+            )
+            rows = [dict(r) for r in await cursor.fetchall()]
+    except Exception as exc:
+        logger.warning("calendar_show direct execution unavailable; falling back to mcporter: %s", exc)
+        return None
+
+    if not rows:
+        return f"You've got nothing on {scope}."
+    single_day = start == end
+    parts: list[str] = []
+    seen: set = set()
+    for r in rows:
+        title = (r.get("title") or "something").strip()
+        st = str(r.get("start_time") or "")
+        sd = str(r.get("start_date") or "")
+        dedup = (title.lower(), sd, st)
+        if dedup in seen:  # identical duplicate event rows → say once
+            continue
+        seen.add(dedup)
+        when = "" if r.get("all_day") else _say_clock(st)
+        day = "" if single_day else _spoken_day(sd)
+        # "today"/"tomorrow" read better without "on" ("at 9 AM today" not "...on today").
+        day_phrase = day if day in ("today", "tomorrow") else (f"on {day}" if day else "")
+        bits = [title]
+        if when:
+            bits.append(f"at {when}")
+        if day_phrase:
+            bits.append(day_phrase)
+        parts.append(" ".join(bits))
+    n = len(parts)
+    lead = f"You've got {n} thing{'s' if n != 1 else ''} on {scope}: "
+    return lead + ("; ".join(parts) if n > 1 else parts[0]) + "."
+
+
 async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optional[str]:
     if intent.name == "lets_talk":
         # Navigation is handled by _broadcast_intent_nav via _INTENT_PANEL_NAV in chat.py.
@@ -1982,6 +2107,17 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
         now = datetime.now()
         spoken_day = _spoken_day_ordinal(now.day)
         return f"Today is {now.strftime('%A')}, {now.strftime('%B')} {spoken_day}."
+
+    # Social acknowledgements & presence checks — instant canned replies (no LLM).
+    if intent.name == "acknowledgement":
+        import random
+        if intent.slots.get("kind") == "thanks":
+            return random.choice(["You're welcome!", "Anytime.", "Happy to help.", "No worries."])
+        return random.choice(["Got it.", "Sure thing.", "Okay.", "No problem."])
+
+    if intent.name == "status_check":
+        import random
+        return random.choice(["I'm here.", "Still here.", "Listening.", "Ready when you are."])
 
     if intent.name == "time_planning_clarification":
         if intent.slots.get("kind") == "time_math":
@@ -2503,10 +2639,19 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
     # Weather should not depend on mcporter command availability.
     # Route directly to the weather backend helpers for deterministic voice UX.
     if intent.name == "weather":
-        return await _execute_weather_direct(user_id=user_id, forecast=bool(intent.slots.get("forecast")))
+        return await _execute_weather_direct(
+            user_id=user_id,
+            forecast=bool(intent.slots.get("forecast")),
+            advice=str(intent.slots.get("advice") or ""),
+        )
 
     if intent.name == "list_show":
         direct_result = await _execute_list_show_direct(intent, user_id)
+        if direct_result:
+            return direct_result
+
+    if intent.name == "calendar_show":
+        direct_result = await _execute_calendar_show_direct(intent, user_id)
         if direct_result:
             return direct_result
 
@@ -2647,15 +2792,34 @@ async def _daily_briefing_reminders(user_id: str) -> Optional[dict]:
     return None
 
 
-async def _execute_weather_direct(user_id: str, forecast: bool = False) -> Optional[str]:
+def _spoken_day(raw: str) -> str:
+    """'2026-06-22' → 'Monday' (today→'today', tomorrow→'tomorrow'); raw on miss."""
+    try:
+        import datetime as _dt
+        d = _dt.date.fromisoformat(str(raw)[:10])
+        today = _dt.date.today()
+        if d == today:
+            return "today"
+        if d == today + _dt.timedelta(days=1):
+            return "tomorrow"
+        return d.strftime("%A")
+    except Exception:
+        return str(raw)
+
+
+async def _execute_weather_direct(user_id: str, forecast: bool = False,
+                                  advice: str = "") -> Optional[str]:
     """Direct weather path used by voice fast-intent execution.
 
     This bypasses mcporter so household voice weather works even if external
     command tooling is unavailable.
+
+    `advice` ("rain"|"warmth") returns a DIRECT yes/no answer to questions like
+    "do I need an umbrella" / "should I take a jacket" instead of a forecast dump.
     """
     try:
         from database import get_db
-        from routers.weather import _row_to_prefs, _resolve_location, _get_current, _get_forecast
+        from routers.weather import _row_to_prefs, _resolve_location, _get_current, _get_forecast, _weather_cache
         async for db in get_db():
             cursor = await db.execute(
                 "SELECT * FROM weather_preferences WHERE user_id = ?",
@@ -2663,31 +2827,96 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False) -> Optio
             )
             prefs = _row_to_prefs(await cursor.fetchone())
             lat, lon, city, country = _resolve_location(prefs)
-            current = await _get_current(lat, lon, city, country)
+            # Voice replies should be instant: prefer the warm cache (kept fresh by the
+            # panel's periodic /weather/current poll) and only pay the ~1s live API call
+            # when it's cold. The panel UI route still always fetches live, so this does
+            # not affect on-screen freshness.
+            current = _weather_cache.get("current") or {}
+            # Only trust the shared warm cache when it holds a reading for THIS
+            # user's resolved city (the cache is one flat slot across users) and
+            # has a real temp (`is None` so a legit 0° isn't treated as missing).
+            _cached_city = str(current.get("city") or "").strip().lower()
+            if current.get("temp") is None or (
+                city and _cached_city and _cached_city != str(city).strip().lower()
+            ):
+                current = await _get_current(lat, lon, city, country)
             city_name = current.get("city") or city or "your area"
+            # Speak numbers naturally: "18.3" → "18 point 3" (bare decimals get
+            # mangled to "18 3" by TTS), and avoid markdown/°C which also mangle.
+            def _say_num(n) -> str:
+                try:
+                    f = float(n)
+                    if f == int(f):
+                        return str(int(f))  # 21.0 → "21", not "21 point 0"
+                except (TypeError, ValueError):
+                    pass
+                s = str(n)
+                return s.replace(".", " point ") if "." in s else s
+            # Direct advice answer ("do I need a jacket / umbrella") — reason over
+            # today's forecast + current conditions and lead with yes/no.
+            if advice:
+                cur_desc = str(current.get("description", "")).lower()
+                cur_temp = current.get("temp")
+                today_hi = None
+                today_desc = cur_desc
+                try:
+                    f = await _get_forecast(lat, lon)
+                    d0 = (f.get("daily") or [{}])[0]
+                    today_hi = d0.get("high")
+                    today_desc = (str(d0.get("description", "")) or cur_desc).lower()
+                except Exception:
+                    pass
+                wet_words = ("rain", "shower", "drizzle", "thunder", "storm", "sleet", "snow")
+                is_wet = any(w in cur_desc or w in today_desc for w in wet_words)
+                cond_desc = (current.get("description") or "").strip()
+                cond_part = f" — it's {cond_desc}" if cond_desc else ""
+                if advice == "rain":
+                    if is_wet:
+                        return f"Yes, take an umbrella{cond_part} in {city_name}."
+                    return f"No, you shouldn't need an umbrella{cond_part} in {city_name}."
+                # warmth / jacket
+                ref = None
+                for v in (today_hi, cur_temp):
+                    try:
+                        ref = float(v); break
+                    except Exception:
+                        continue
+                cold = (ref is not None and ref < 16)
+                if cold or is_wet:
+                    why = []
+                    if ref is not None:
+                        why.append(f"it's around {_say_num(round(ref))} degrees")
+                    if is_wet:
+                        why.append("and wet" if why else "it's wet")
+                    reason = (", " + " ".join(why)) if why else ""
+                    return f"Yes, I'd take a jacket{reason} in {city_name}."
+                temp_part = f" — it's around {_say_num(round(ref))} degrees" if ref is not None else ""
+                return f"No, you should be fine without a jacket{temp_part} in {city_name}."
             if forecast:
                 f = await _get_forecast(lat, lon)
                 daily = f.get("daily", [])[:5]
                 if not daily:
                     return f"I couldn't get the forecast for {city_name} right now."
-                lines = [f"Forecast for {city_name}:"]
+                lines = [f"Here's the forecast for {city_name}."]
                 for item in daily:
-                    day = item.get("day", "?")
+                    day = _spoken_day(item.get("day", "?"))
                     hi = item.get("high", "?")
                     lo = item.get("low", "?")
                     desc = item.get("description", "unknown")
-                    lines.append(f"  - {day}: {hi}°C/{lo}°C, {desc}")
-                return "\n".join(lines)
+                    lines.append(f"{day}, a high of {_say_num(hi)} and a low of {_say_num(lo)} degrees, {desc}.")
+                return " ".join(lines)
             temp = current.get("temp")
             desc = current.get("description", "")
             feels = current.get("feels_like")
             if temp is None:
                 return f"I couldn't get the weather for {city_name} right now."
-            msg = f"It's {temp}°C in {city_name} ({desc})"
+            # Speak naturally: "18.3°C (overcast)" → "18 point 3 degrees and overcast".
+            desc_part = f" and {desc}" if desc else ""
+            msg = f"It's {_say_num(temp)} degrees{desc_part} in {city_name}"
             if feels is not None:
                 try:
                     if abs(float(feels) - float(temp)) > 2:
-                        msg += f", feels like {feels}°C"
+                        msg += f", and it feels like {_say_num(feels)} degrees"
                 except Exception:
                     pass
             return msg + "."

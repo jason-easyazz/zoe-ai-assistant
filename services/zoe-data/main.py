@@ -107,6 +107,22 @@ def _bounded_blocked_resume_window(
     return window, (start + budget) % count
 
 
+def _multica_poll_interval_s(paused: bool, *, active_s: float, paused_s: float) -> float:
+    """Cadence for the Multica poll loop.
+
+    Throttle to ``paused_s`` while dispatch is paused — the per-issue chain
+    reconcile (worktree + git ops) is expensive and pointless when nothing is
+    being dispatched — and use the normal ``active_s`` otherwise.
+
+    Floors the paused cadence at ``active_s`` so a misconfigured
+    ``ZOE_MULTICA_PAUSED_POLL_S`` of 0 or a negative value can't turn the paused
+    path into a tight spin loop that burns *more* CPU than the active cadence.
+    """
+    if not paused:
+        return active_s
+    return max(paused_s, active_s)
+
+
 async def _poll_chain_guarded(ref: str, *, issue: dict | None, timeout: float) -> dict:
     """Poll a chain without letting one dead ref wedge the whole poll loop.
 
@@ -674,9 +690,17 @@ async def lifespan(app: FastAPI):
     _zoe_update_bg_task = start_zoe_update_background_tasks()
 
     try:
-        from routers.voice_tts import warm_faster_whisper_worker
+        from routers.voice_tts import warm_faster_whisper_worker, warm_moonshine
+        asyncio.create_task(warm_moonshine(), name="moonshine_warmup")
         asyncio.create_task(warm_faster_whisper_worker(), name="faster_whisper_warmup")
-        logger.info("Voice STT worker warmup scheduled")
+        logger.info("Voice STT worker warmup scheduled (moonshine + whisper)")
+        try:
+            import semantic_router as _sr
+            if _sr.is_enabled():
+                asyncio.create_task(asyncio.to_thread(_sr.warm), name="semantic_router_warmup")
+                logger.info("Semantic router (Tier-1) warmup scheduled — mode=%s", _sr.mode())
+        except Exception as _sr_exc:
+            logger.warning("Semantic router warmup scheduling failed (non-fatal): %s", _sr_exc)
     except Exception as _voice_warmup_exc:
         logger.warning("Voice STT worker warmup scheduling failed (non-fatal): %s", _voice_warmup_exc)
 
@@ -783,9 +807,45 @@ async def lifespan(app: FastAPI):
                 os.environ.get("ZOE_WORKTREE_PRUNE_INTERVAL_S"),
             )
             _prune_interval_s = 86400.0
+        # Cadence when dispatch is paused. The per-issue chain reconcile below
+        # (poll_ref → worktree+git ops) costs ~30s CPU and a multi-GB transient
+        # allocation each pass; running it every 30s while nothing is being
+        # dispatched is pure waste. Poll every 30s when active, every
+        # ZOE_MULTICA_PAUSED_POLL_S (default 300s) when paused.
+        try:
+            _paused_poll_s = float(os.environ.get("ZOE_MULTICA_PAUSED_POLL_S", "300") or "300")
+        except ValueError:
+            logger.warning(
+                "multica_poll: invalid ZOE_MULTICA_PAUSED_POLL_S=%r; using 300",
+                os.environ.get("ZOE_MULTICA_PAUSED_POLL_S"),
+            )
+            _paused_poll_s = 300.0
+        _ACTIVE_POLL_S = 30.0
+        _pause_check_warned = False
         while True:
             try:
-                await asyncio.sleep(30)
+                # Re-checked inside the cycle, so a resume still takes effect
+                # promptly on the next pass.
+                try:
+                    from multica_dispatch_control import dispatch_is_paused as _dispatch_is_paused
+                    _poll_interval = _multica_poll_interval_s(
+                        _dispatch_is_paused(), active_s=_ACTIVE_POLL_S, paused_s=_paused_poll_s
+                    )
+                    _pause_check_warned = False
+                except Exception as _pause_exc:
+                    # A pause-check failure must not silently disable the throttle
+                    # forever with no trace. Warn once (then debug), and fall back
+                    # to the active cadence until it recovers.
+                    if not _pause_check_warned:
+                        logger.warning(
+                            "multica_poll: pause check failed (%s); using active poll "
+                            "cadence until it recovers", _pause_exc,
+                        )
+                        _pause_check_warned = True
+                    else:
+                        logger.debug("multica_poll: pause check still failing: %s", _pause_exc)
+                    _poll_interval = _ACTIVE_POLL_S
+                await asyncio.sleep(_poll_interval)
                 from multica_client import MULClient  # type: ignore[import]
                 client = MULClient()
                 if not client.is_configured():
@@ -1408,6 +1468,17 @@ async def root_health():
     }
 
 
+@app.get("/api/router/classify")
+async def router_classify(text: str, _: None = Depends(require_internal_token)):
+    """Tier-1 semantic router test endpoint: classify an utterance into a domain.
+    Internal-token gated (like /metrics) — it exposes per-domain scores, the
+    active mode and the threshold, which could be used to calibrate utterances
+    to influence routing if the service were LAN-exposed."""
+    import semantic_router as _sr
+    return {"enabled": _sr.is_enabled(), "mode": _sr.mode(),
+            "threshold": _sr.threshold(), **_sr.route(text)}
+
+
 @app.get("/api/settings")
 async def app_settings():
     """Public settings consumed by frontend widgets (e.g. music widget HA deep-link)."""
@@ -1782,6 +1853,13 @@ async def _resolve_voice_cards(message_text: str, user_id: str, context: dict | 
         return {"handled": False, "cards": [], "spoken_summary": ""}
 
 
+# Read-only intents the voice WS may answer instantly (no writes → cannot
+# double-execute a skybridge-card action). Kept narrow on purpose.
+_VOICE_INSTANT_INTENTS = frozenset({
+    "calculate", "time_query", "date_query", "greeting", "acknowledgement", "status_check",
+})
+
+
 @app.websocket("/ws/voice/")
 async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
     """Local voice session WebSocket for voice.html.
@@ -1888,6 +1966,44 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
                 continue
             skybridge_context = {}
 
+            # ── Instant intent fast-path ────────────────────────────────────────
+            # Side-effect-free commands the card path doesn't cover (calc, clock,
+            # greeting, acknowledgement, presence check) — answer + speak without
+            # waking the ~2-4s brain. Restricted to READ-ONLY intents so it can
+            # never double-execute a write the skybridge path already handled.
+            #
+            # Detect+execute is wrapped so a FAILURE THERE (before any send) falls
+            # through to the brain. But once we have a reply and start sending, we
+            # are committed: TTS is best-effort and we never fall through (avoids a
+            # duplicate transcript if the brain path also ran).
+            _fp_reply = None
+            try:
+                from intent_router import detect_intent as _fp_detect, execute_intent as _fp_exec
+                _fp_intent = _fp_detect(message_text, log_miss=False, user_id=user_id)
+                if _fp_intent is not None and _fp_intent.name in _VOICE_INSTANT_INTENTS:
+                    _fp_reply = await _fp_exec(_fp_intent, user_id=user_id)
+            except Exception as _fp_exc:
+                logger.debug("voice instant fast-path detect/execute skipped: %s", _fp_exc)
+                _fp_reply = None
+            if _fp_reply:
+                import base64 as _b64fp
+                await websocket.send_json({"type": "state", "state": "responding"})
+                await websocket.send_json({"type": "transcript", "role": "zoe", "text": _fp_reply})
+                try:
+                    from routers.voice_tts import _synthesize_kokoro_sidecar as _fp_tts
+                    _fp_wav = await _fp_tts(_fp_reply)
+                    if _fp_wav:
+                        await websocket.send_json({
+                            "type": "audio",
+                            "audio_base64": _b64fp.b64encode(_fp_wav).decode("ascii"),
+                            "content_type": "audio/wav",
+                        })
+                except Exception as _fp_tts_exc:
+                    logger.debug("voice fast-path TTS failed (text already sent): %s", _fp_tts_exc)
+                await websocket.send_json({"type": "state", "state": "ambient"})
+                await websocket.send_json({"type": "done"})
+                continue
+
             # ── Streaming LLM + per-sentence TTS ────────────────────────────────
             # Track LLM output and TTS output separately so fallback only re-runs
             # what actually failed (avoids double-transcript if LLM works but TTS is down).
@@ -1895,14 +2011,14 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
             _stream_tts_ok = False   # True if at least one audio chunk was sent
             try:
                 import base64 as _b64
-                from zoe_agent import run_zoe_agent_streaming  # type: ignore
+                from brain_dispatch import brain_streaming  # zoe-core by default
                 from routers.voice_tts import _extract_complete_sentences, _synthesize_kokoro_sidecar  # type: ignore
 
                 token_buf = ""
                 full_reply: list[str] = []
                 tts_started = False
 
-                async for delta in run_zoe_agent_streaming(
+                async for delta in brain_streaming(
                     message_text, ws_session_id, user_id=user_id, voice_mode=True
                 ):
                     if _ws_cancelled[0]:
@@ -1951,9 +2067,9 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
                     # LLM streaming failed entirely → full single-shot fallback
                     try:
                         import base64 as _b64
-                        from zoe_agent import run_zoe_agent  # type: ignore
+                        from brain_dispatch import brain_oneshot  # zoe-core by default
                         from routers.voice_tts import synthesize as _synth  # type: ignore
-                        _fallback_response = await run_zoe_agent(
+                        _fallback_response = await brain_oneshot(
                             message_text, ws_session_id, user_id, voice_mode=True
                         )
                         await websocket.send_json({"type": "state", "state": "responding"})

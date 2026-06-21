@@ -1602,6 +1602,235 @@ async def merge_pr_when_ready(
         }
 
 
+# --- Local serial merge queue ------------------------------------------------
+#
+# A locally-driven merge queue that processes one labelled, ready PR per cycle.
+# When a ready PR is only behind the base branch, it is rebased forward (linear,
+# NOT a merge-update commit, so Greptile re-reviews the fresh head) and the cycle
+# stops; a later cycle merges it once green. This reproduces the GitHub
+# merge-queue "test against the combined state" guarantee using ordinary PR
+# commits, so it does NOT depend on Greptile posting checks on merge_group refs.
+#
+# Loop contract (Job/Inputs/Allowed/Forbidden/Output/Evaluation):
+#   JOB: advance or merge exactly one labelled, ready PR per cycle.
+#   INPUTS: open, non-draft PRs carrying MERGE_QUEUE_LABEL; their Greptile/CI/
+#     thread state via assess_merge_readiness.
+#   ALLOWED: linear rebase + force-push of a queue-labelled branch in a disposable
+#     worktree; squash-merge via merge_pr_when_ready (gh pr merge --squash).
+#   FORBIDDEN: NEVER --admin; NEVER force-merge or bypass branch protection; NEVER
+#     merge a PR not assessed READY; NEVER act on PRs lacking the queue label;
+#     NEVER resolve rebase conflicts automatically (abort + report); NEVER touch
+#     the live checkout (rebase happens in a throwaway worktree); at most one
+#     rebase OR one merge per cycle; disabled unless explicitly enabled.
+#   OUTPUT: at most one PR merged or one branch advanced per cycle; a structured
+#     report of the action and any skipped PRs.
+#   EVALUATION: never merges a red/behind/unreviewed PR; the queue drains serially
+#     across cycles; main's required checks always pass post-merge.
+
+MERGE_QUEUE_LABEL = os.environ.get("ZOE_MERGE_QUEUE_LABEL", "auto-merge")
+MERGE_QUEUE_KILL_FILE = STATE_ROOT / "merge_queue.disabled"
+MERGE_QUEUE_MAX_CANDIDATES = int(os.environ.get("ZOE_MERGE_QUEUE_MAX_CANDIDATES", "50"))
+
+
+def _merge_queue_enabled() -> bool:
+    """Disabled by default. Requires ZOE_MERGE_QUEUE_ENABLED truthy AND no kill file."""
+    enabled = str(os.environ.get("ZOE_MERGE_QUEUE_ENABLED", "")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    return enabled and not MERGE_QUEUE_KILL_FILE.exists()
+
+
+def _merge_queue_candidates(*, repo: str = DEFAULT_REPO) -> list[dict[str, Any]] | None:
+    """Open, non-draft PRs carrying the queue label, oldest-first (FIFO).
+
+    Returns ``None`` (not ``[]``) when the ``gh pr list`` call fails, so a broken
+    gh (auth/rate-limit/network) is never mistaken for an empty queue.
+    """
+    proc = _run_gh(
+        [
+            "pr",
+            "list",
+            "--state",
+            "open",
+            "--label",
+            MERGE_QUEUE_LABEL,
+            "--limit",
+            str(MERGE_QUEUE_MAX_CANDIDATES),
+            "--json",
+            "number,isDraft,headRefName,createdAt",
+        ],
+        repo=repo,
+    )
+    if proc.returncode != 0:
+        return None  # signal failure — never conflate a broken gh with "no PRs"
+    try:
+        rows = json.loads(proc.stdout or "[]")
+    except json.JSONDecodeError:
+        return None
+    candidates = [
+        {
+            "number": int(row.get("number")),
+            "branch": str(row.get("headRefName") or ""),
+            "created_at": str(row.get("createdAt") or ""),
+        }
+        for row in rows
+        if isinstance(row, dict) and row.get("number") is not None and not row.get("isDraft")
+    ]
+    candidates.sort(key=lambda c: (c["created_at"], c["number"]))
+    return candidates
+
+
+def _blocked_only_behind(assessment: dict[str, Any]) -> bool:
+    """True iff the PR's sole obstacle is being behind the base branch.
+
+    Greptile must be clear (no review running, no unresolved threads, confidence
+    met, no actionable findings) and the merge state must be exactly BEHIND. Any
+    Greptile/CI/thread blocker means a rebase would not unblock it.
+    """
+    gh = assessment.get("gh") or {}
+    if str(gh.get("mergeStateStatus") or "").upper() != "BEHIND":
+        return False
+    blockers = assessment.get("blockers") or []
+    if not blockers:
+        return False
+    return all(str(blocker) == "GH_NOT_MERGEABLE" for blocker in blockers)
+
+
+def _rebase_pr_branch(
+    pr_number: int,
+    branch: str,
+    *,
+    repo: str = DEFAULT_REPO,
+    default_branch: str = DEFAULT_BASE_BRANCH,
+) -> dict[str, Any]:
+    """Rebase a PR branch linearly onto the base branch and force-push.
+
+    Runs in a disposable worktree so the live checkout is never touched. Linear
+    rebase (not a merge commit) keeps Greptile reviewing the new head. On
+    conflict, abort and report — conflicts are never resolved automatically.
+    """
+    if not branch:
+        return {"ok": False, "pr": pr_number, "error": "NO_BRANCH"}
+    fetch = _run_git(["fetch", "origin", default_branch, branch], check=False)
+    if fetch.returncode != 0:
+        return {"ok": False, "pr": pr_number, "error": "FETCH_FAILED", "detail": (fetch.stderr or "").strip()[:500]}
+    tmp = STATE_ROOT / f"mq-rebase-{branch.replace('/', '_')}"
+    _run_git(["worktree", "remove", "--force", str(tmp)], check=False)
+    add = _run_git(
+        ["worktree", "add", "--force", "--detach", str(tmp), f"origin/{branch}"], check=False
+    )
+    if add.returncode != 0:
+        return {"ok": False, "pr": pr_number, "error": "WORKTREE_FAILED", "detail": (add.stderr or "").strip()[:500]}
+    try:
+        rebase = _run_git(["-C", str(tmp), "rebase", f"origin/{default_branch}"], check=False)
+        if rebase.returncode != 0:
+            _run_git(["-C", str(tmp), "rebase", "--abort"], check=False)
+            return {
+                "ok": False,
+                "pr": pr_number,
+                "error": "REBASE_CONFLICT",
+                "detail": (rebase.stdout or rebase.stderr or "").strip()[:500],
+            }
+        push = _run_git(
+            ["-C", str(tmp), "push", "--force-with-lease", "origin", f"HEAD:{branch}"],
+            check=False,
+        )
+        if push.returncode != 0:
+            return {"ok": False, "pr": pr_number, "error": "PUSH_FAILED", "detail": (push.stderr or "").strip()[:500]}
+        return {"ok": True, "pr": pr_number, "branch": branch}
+    finally:
+        _run_git(["worktree", "remove", "--force", str(tmp)], check=False)
+
+
+async def run_merge_queue(
+    *,
+    repo: str = DEFAULT_REPO,
+    default_branch: str = DEFAULT_BASE_BRANCH,
+    target_confidence: int = 5,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Run one serial merge-queue cycle: advance or merge exactly one labelled PR.
+
+    Strictly serial and safe: at most one rebase OR one merge per call. Disabled
+    unless ``ZOE_MERGE_QUEUE_ENABLED`` is truthy and no kill file exists. With
+    ``dry_run`` it decides but performs no mutation (and ignores the enable gate so
+    it can be inspected safely).
+    """
+    if not dry_run and not _merge_queue_enabled():
+        return {
+            "ok": True,
+            "action": "disabled",
+            "detail": "set ZOE_MERGE_QUEUE_ENABLED=1 and remove the kill file to enable",
+        }
+    candidates = _merge_queue_candidates(repo=repo)
+    if candidates is None:
+        return {
+            "ok": False,
+            "action": "list_failed",
+            "detail": "gh pr list failed (auth/rate-limit/network); not treating as idle",
+        }
+    if not candidates:
+        return {"ok": True, "action": "idle", "checked": 0, "skipped": []}
+    skipped: list[dict[str, Any]] = []
+    for cand in candidates:
+        pr_number = cand["number"]
+        assessment = await assess_merge_readiness(
+            pr_number,
+            target_confidence=target_confidence,
+            repo=repo,
+            default_branch=default_branch,
+        )
+        if assessment.get("ready"):
+            if dry_run:
+                return {
+                    "ok": True,
+                    "action": "would_merge",
+                    "pr": pr_number,
+                    "skipped": skipped,
+                    "checked": len(candidates),
+                }
+            merge = await merge_pr_when_ready(
+                pr_number,
+                target_confidence=target_confidence,
+                repo=repo,
+                default_branch=default_branch,
+            )
+            return {
+                "ok": bool(merge.get("ok")),
+                "action": "merged" if merge.get("ok") else "merge_attempt_failed",
+                "pr": pr_number,
+                "merge": merge,
+                "skipped": skipped,
+                "checked": len(candidates),
+            }
+        if _blocked_only_behind(assessment):
+            if dry_run:
+                return {
+                    "ok": True,
+                    "action": "would_rebase",
+                    "pr": pr_number,
+                    "branch": cand["branch"],
+                    "skipped": skipped,
+                    "checked": len(candidates),
+                }
+            rebase = _rebase_pr_branch(
+                pr_number, cand["branch"], repo=repo, default_branch=default_branch
+            )
+            return {
+                "ok": bool(rebase.get("ok")),
+                "action": "rebased" if rebase.get("ok") else "rebase_failed",
+                "pr": pr_number,
+                "rebase": rebase,
+                "skipped": skipped,
+                "checked": len(candidates),
+            }
+        skipped.append({"pr": pr_number, "blockers": assessment.get("blockers")})
+    return {"ok": True, "action": "idle", "checked": len(candidates), "skipped": skipped}
+
+
 async def run_guard_once(
     pr_number: int, *, packet_only: bool = False, target_confidence: int = 5
 ) -> dict[str, Any]:
