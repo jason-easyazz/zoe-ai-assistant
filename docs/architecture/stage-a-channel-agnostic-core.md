@@ -64,7 +64,7 @@ differ. The touch panel and skybridge are *not* channels — they are a **render
 |--------|-------------|-----------|------------|-----------------------------------|
 | **Web chat** | `routers/chat.py` `/api/chat/` (stream + non-stream) | text | SSE / dict, AG-UI events | **Yes** — `fast_path.resolve` (Tier-1.5) via #742; Tier-0 still inline |
 | **Voice (panel + Jabra)** | `routers/voice_tts.py` `/voice/command`, `/voice/turn` | STT (Moonshine/whisper) | Kokoro TTS + panel cards/forms | **Yes** — skybridge → public-intent → `fast_path.resolve` → brain |
-| **LiveKit (real-time WebRTC)** | `routers/voice_livekit.py` `_run_pipeline` / `_run_text_pipeline` | STT (reuses `_transcribe_audio`) | Kokoro TTS over WebRTC data | **NO — straight to `brain_oneshot`**, skips Tier-0/1/1.5 **and** skybridge |
+| **LiveKit (real-time WebRTC)** | `routers/voice_livekit.py` `_run_pipeline` / `_run_text_pipeline` | STT (reuses `_transcribe_audio`) | Kokoro TTS over WebRTC data | **NO — straight to `brain_oneshot`** (intentional: conversation mode — see §4.5, core is opt-in/off-by-default here) |
 | **Telegram** | today via OpenClaw (`routers/openclaw.py`); next via Flue `@flue/telegram` | text | text | **No** — not wired to the core yet |
 | **WhatsApp** | `_WHATSAPP_FLOW` inside `chat.py` | text | text/dict | Inherits chat's core (it's a chat sub-flow) |
 | **Touch panel** *(surface, not a channel)* | WebSocket push + skybridge `/resolve` endpoint | n/a | cards / forms / nav / audio | Renders voice's & chat's outcomes; has its own skybridge resolver |
@@ -182,17 +182,38 @@ underscore API.
   on `None`, forwards to the brain. **Not wired to Flue yet** — that's Phase 1 proper. Included
   here only to prove the core is genuinely channel-agnostic.
 
-### 4.5 `routers/voice_livekit.py` (`_run_pipeline` / `_run_text_pipeline`) — closes a real gap
-LiveKit today does **STT → `brain_oneshot` → TTS** with **no fast tiers and no skybridge**, so
-every real-time utterance pays the full LLM cost — the same gap #742 fixed for chat.
-- Insert `outcome = await fast_tiers.resolve(transcript, user_id, session_id)` **before** the
-  `brain_oneshot` call. On a hit, render `outcome.reply` straight to TTS (LiveKit already reuses
-  `voice_tts.synthesize`); on `None`, fall through to `brain_oneshot` unchanged.
-- This is a **pure win** (no behavior to preserve — LiveKit had no fast path), but it is gated the
-  same way: a LiveKit smoke test ("what time is it", "show shopping list") must return sub-second
-  via the core and a chat-style query must still reach the brain.
-- Skybridge cards are **not** added to LiveKit here (LiveKit is audio-only, no panel surface); it
-  consumes the spoken `reply` only.
+### 4.5 `routers/voice_livekit.py` — OPT-IN and conversation-safe (NOT default-on)
+LiveKit today does **STT → `brain_oneshot` → TTS** with no fast tiers. It is tempting to wire the
+core in the same way as the panel, but **LiveKit is a *conversation* mode, not a *command* mode**,
+and that changes the calculus. The code is built for dialogue: energy-VAD end-of-speech (~600ms),
+push-to-talk, COOLDOWN turn-taking, and `brain_oneshot → run_zoe_core(session_id=…)` so **the brain
+holds conversational continuity and Zoe's personality** across turns.
+
+**Mechanics vs. quality:**
+- The fast path does **NOT** touch the conversational plumbing — VAD, barge-in/PTT, turn-taking and
+  cooldown are all *upstream* of the LLM step; the core only substitutes the "produce a reply" box.
+- It **CAN** degrade conversational *quality*: expert replies are terse, templated, and largely
+  **stateless**, so a contextual dialogue turn ("what about Saturday?", "yeah, add that one") that
+  the router mis-catches would get a robotic, context-blind answer mid-conversation.
+
+The cost/benefit **flips** from command mode: on LiveKit the latency win matters less (you're already
+in a flowing exchange) and tone/context consistency matters more. So:
+- **Brain-first stays the default.** The brain is what makes LiveKit feel like a real person; the
+  core does not displace it by default.
+- Fast-path interception is **opt-in via a per-channel flag, OFF by default**, and even when on it is
+  **narrow**: only unambiguous, *context-free* reads (time/date/weather/"what's on my list") at a
+  **high** confidence threshold; anything conversational or context-dependent flows to the brain.
+- **Preferred long-term (Option B):** rather than *replacing* the brain with a templated reply, hand
+  the deterministic result to the brain as context so it phrases the answer **in Zoe's voice** —
+  keeps the conversational tone, trades back the latency that conversation mode can afford. Decision
+  deferred to implementation.
+- **Gate = conversation-quality review, not just a latency smoke test** (see §5, gate 3).
+- Skybridge cards are not added to LiveKit (audio-only, no panel); it would consume the spoken
+  `reply` only.
+
+**Net rule:** command-mode channels (web chat, voice panel) adopt the core aggressively;
+conversation-mode (LiveKit) adopts it conservatively or not at all. **Same core, per-channel
+aggressiveness** — the `run_tier0` flag plus a per-channel enable/threshold knob carry this.
 
 ### 4.6 Touch panel & skybridge — what does *not* change
 - **Touch panel is a rendering surface, not a channel.** `fast_tiers` returns a `reply` + optional
@@ -222,9 +243,12 @@ every real-time utterance pays the full LLM cost — the same gap #742 fixed for
    the same routing + spoken text as pre-change. Any divergence blocks the merge.
 2. **Chat latency probe unchanged.** `zoe_latency_probe.py` — `show shopping list` stays <60ms,
    `what time is it` Tier-0, no regression vs the saved baseline.
-3. **LiveKit smoke test (new behavior).** A read ("what time is it", "show shopping list") returns
-   sub-second via the core; a chat-style query still reaches `brain_oneshot`. (LiveKit had no fast
-   path before, so this is additive — verified by the `test_voice_livekit_*` suite + a live turn.)
+3. **LiveKit conversation-quality gate.** Because LiveKit is a conversation, not a command
+   box, the bar is **not** just latency. With fast-path interception OFF (default), a multi-turn
+   dialogue must behave exactly as today. With it opt-in ON, a live multi-turn conversation —
+   including contextual follow-ups ("what about Saturday?", "yeah add that") — must stay coherent
+   and in-voice, and only unambiguous context-free reads may short-circuit. Reviewed by a human on a
+   live call, not just `test_voice_livekit_*`. If tone/continuity regresses, interception stays OFF.
 4. **Unit tests.** Existing `test_fast_path.py`, `test_voice_routing.py`, `test_fastpath_coverage.py`
    green; add `test_fast_tiers.py` covering the Tier-0 read shortcut + the write/None deferral.
 5. **Greptile + validate + GitGuardian** green; threads resolved.
