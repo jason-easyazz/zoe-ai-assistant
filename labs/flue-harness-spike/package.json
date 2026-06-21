@@ -1,0 +1,27 @@
+{
+  "name": "flue-harness-spike",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Lab-only spike: evaluate Flue as Zoe's autonomous-harness substrate (scout -> implement -> verify -> openPR). NOT wired into production.",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "check:llm": "node --experimental-strip-types src/checkLlm.ts",
+    "spike": "node --experimental-strip-types src/index.ts"
+  },
+  "dependencies": {
+    "@flue/runtime": "0.4.0",
+    "@flue/sdk": "0.4.0"
+  },
+  "optionalDependencies": {
+    "@flue/telegram": "0.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.10.2",
+    "typescript": "5.7.2"
+  }
+}
