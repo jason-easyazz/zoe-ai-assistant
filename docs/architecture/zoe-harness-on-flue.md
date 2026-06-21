@@ -241,6 +241,34 @@ authors about herself — skills, tools, playbook/guardrail entries — must the
   duplicate commits, stable file paths). Self-evolution that only lives in a sandbox is lost on
   restart — it does not count.
 
+### 3.6 Tools: connect to Zoe's MCP servers, don't merge
+
+MCP is a **client/server protocol** — it exists precisely so N clients use M tool-servers without
+merging anything. So we do **not** "merge Zoe's MCP into Flue's MCP." Flue is an MCP **client**
+(it bundles `@modelcontextprotocol/sdk`); Zoe already owns the **server** side. We just wire them.
+
+Zoe's existing MCP servers (built once, reused everywhere):
+
+- **`services/zoe-data/mcp_server.py`** — a **stdio** MCP server exposing Zoe's domain tools
+  (calendar, lists, transactions, HA media, even Greptile-comment fetching). Its docstring already
+  says it's "for **Hermes and local agent integrations**" — i.e. it was built to be the harness's
+  tool server.
+- **`.mcp.json`** — the code-intel bus (**Serena + codebase-memory + graphify**), the
+  self-evolution toolchain for editing Zoe's own code (write-gated through the PR harness).
+
+Wiring:
+
+- **Register those servers in Flue's MCP config**; the harness agents inherit every tool. No
+  rewrite, no merge. The same servers serve the Flue harness, the Pi brain, and Claude/Cursor —
+  one tool defined once, every MCP-speaking client consumes it. This *is* the "fleet of plug-ins"
+  leverage.
+- **Transport:** `mcp_server.py` is **stdio** today (fine when each client spawns its own
+  instance). For one shared always-on instance feeding multiple clients, expose it over
+  **HTTP/SSE** — a small change, still not a merge.
+- **Keep the real-time voice fast path OFF MCP.** The deterministic tiers read Postgres *directly*
+  for sub-second speed; MCP is the harness/brain tier only (same independence principle as §3.1,
+  applied to tools).
+
 ---
 
 ## 4. Best practices to adopt regardless of substrate
