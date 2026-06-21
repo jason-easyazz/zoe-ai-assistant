@@ -3,6 +3,22 @@
 Multica is the operator-visible source of truth. Zoe owns deterministic phase
 control and the append-only journal; Hermes executes one bounded phase at a time.
 
+The Hermes worker that runs the `implement` phase loads the `zoe-engineering`
+skill (`~/.hermes/skills/zoe-engineering/SKILL.md` plus profile copies). That
+skill's **Harness Operating Model** section mirrors this guide: stay in the task
+worktree, terminal protocol (`kanban_complete`/`kanban_block`), one small PR per
+implement task. Keep the two in sync.
+
+> **Dispatch architecture.** The Hermes gateway (`hermes gateway run`, systemd
+> `hermes-agent.service`) is the *executor*: it spawns `work kanban task <id>`
+> worker subprocesses for **ready, assigned** tasks already on the Hermes Kanban
+> board (`kanban.dispatch_in_gateway: true` — required; disabling it stops all
+> worker execution). The gateway has **no Multica integration** — it never pulls
+> issues directly. The Zoe adapter (`services/zoe-data/executors/kanban_adapter.py`,
+> `created_by=zoe-bridge`) is the **only** authorized creator of engineering tasks
+> and emits worktree-isolated phase tasks. Gateway `kanban.auto_decompose` is kept
+> **false** so the gateway never auto-creates/fans-out tickets out of band.
+
 ## Required Setup
 
 - `ZOE_MULTICA=true`
@@ -90,6 +106,56 @@ Expected journal phase progression (one Kanban task exists at a time):
 - `closeout` (`zoe-planner`) — Greptile grep loop, squash merge when ready, Multica status update.
 - `retro` (`zoe-planner`) — learnings + optional follow-up issue; pipeline completes when retro finishes.
 - Engineering mode: `ZOE_ENGINEERING_MODE=interactive|overnight|quality-escalation` (or issue metadata) adjusts worker runtime and cost preference.
+
+### Worktree isolation (every task runs in its own checkout)
+
+Each phase task runs in an **isolated git worktree**, never the live checkout
+(`/home/zoe/assistant`):
+
+- The Zoe adapter pins `workspace_kind=worktree` and a `workspace_path` of
+  `~/.worktrees/<kanban_task_id>` on the Kanban row at dispatch (override root with
+  `ZOE_WORKTREE_ROOT`). `worktree_bootstrap.py` creates the worktree from
+  `origin/main` (fresh base), on branch `wt/<task_id>`.
+- The only phase that runs in the live checkout is `retro` (`workspace_kind=dir`,
+  `dir:<repo_root>`) — it is read-only orchestration/learning work, so it does not
+  spawn a phantom worktree after closeout has already merged.
+- Workers must run **all** git/test/validator/patch/PR commands from their
+  `workspace_path`. A single command that references `/home/zoe/assistant` trips the
+  `WORKTREE_PATH_VIOLATION` guard and ends the run. The worker prompts and the
+  `zoe-engineering` skill enforce this.
+
+### Budget and safety guards (kanban_adapter.py)
+
+The implement/verify/review/closeout prompts and `poll()` enforce fail-closed guards.
+A worker blocks (`kanban_block`) with a `BLOCKER=` fingerprint rather than drifting:
+
+| Guard / `BLOCKER` | Phase | What it prevents |
+|-------------------|-------|------------------|
+| `IMPLEMENT_HANDOFF_DRIFT` | implement | Burning the pre-edit explore budget hunting context instead of using the scout handoff; classified with `IMPLEMENT_BUDGET`. |
+| `WORKTREE_PATH_VIOLATION` | all except `retro` | Any command run against the live checkout (`/home/zoe/assistant`) instead of the task `workspace_path`. (`retro` is exempt — it runs read-only in the live checkout via `workspace_kind=dir`.) |
+| `IMPLEMENT_EDIT_SAFETY` | implement | Committing/continuing with a malformed or unsafe edit; the worker blocks instead. |
+| `ITERATION_BUDGET` | all | Exceeding the per-phase turn/iteration budget; the run blocks instead of looping. |
+
+### Evidence gate (fail-closed advancement)
+
+`poll()` advances the journal only when `pipeline_evidence` requirements pass.
+Crucially, **implement must record a `pr` evidence item** (a `PR_URL=` on a pushed
+branch) before verify/review can run. Missing the `pr` evidence blocks advancement.
+Audit/doc-only tickets opt out with `AUDIT_ONLY=1` (blank `PR_URL`) or
+`evidence_profile: audit`.
+
+### Capture-on-exit (unshipped-diff salvage)
+
+If an implement worker finishes a complete diff but runs out of turns before
+`git commit`/`push`/`gh pr create`, the adapter's
+`_maybe_recover_unshipped_diff` salvages it: it commits the worktree diff,
+pushes branch `wt/<task_id>`, and opens a PR so the chain advances to verify
+instead of a fresh-worktree resume discarding the work and re-spending. Hard
+safety gates: it operates **only** inside the task's own `wt/<task_id>` branch
+(never `main`/`master`, never the live checkout, never `--force`) and never opens
+an empty PR. A sibling recovery, `_maybe_recover_pushed_pr`, handles the case
+where the worker pushed but lost the `PR_URL` handoff. Workers should still
+push + open the PR themselves; salvage is a backstop, not the plan.
 
 ### Hard-ticket split policy
 
