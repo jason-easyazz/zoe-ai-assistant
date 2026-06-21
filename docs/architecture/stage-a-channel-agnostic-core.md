@@ -166,6 +166,28 @@ routes score within a small margin (e.g. < 0.05) the utterance is ambiguous — 
 the brain handle it rather than guessing a domain. This is a standard semantic-router safeguard
 (§8.2) and belongs in `semantic_router` next to the threshold.
 
+### 3.4 Conversation-continuity guarantee (the property that makes it feel like one assistant)
+
+**Every fast-tier turn MUST be persisted to the same `chat_messages` history the brain reads**, so a
+follow-up that lands on the brain has the fast answer in context. Without this, "what's on my list?"
+(fast) → "why so much?" (brain) would hit a brain with no memory of the list it just read.
+
+This already holds in the live code and must be preserved by the migration:
+- **Fast-path branches save both turns** before returning — voice skybridge/public-intent/expert
+  via `_schedule_voice_chat_save` (`voice_tts.py` ~L3211/L3600/L3677); chat via `_save_chat_message`
+  (the #742 branches).
+- **The brain loads from the same table** — chat `SELECT … FROM chat_messages` → `history=…`
+  (`chat.py` ~L2366); voice `_load_voice_history(session_id)` reads `chat_messages`. One shared
+  transcript, so the brain can't tell a prior fast answer from one of its own.
+
+Edge cases:
+- **Parallel mode (LiveKit, §8.3) is the deliberate exception and is still safe:** the fast reply
+  is `add_to_chat_ctx=False`, but the brain answered the *same* turn concurrently and **its** reply
+  is persisted — so memory has an authoritative version; no blind spot.
+- **Persist-before-next-turn:** the save is backgrounded; human follow-up latency (seconds) ≫ a DB
+  write (ms), and voice awaits the save before responding. Acceptable, but a verification check
+  ("fast turn then immediate brain follow-up sees the fast answer") belongs in §5.
+
 ---
 
 ## 4. The migration, file by file (behavior-preserving)
@@ -265,9 +287,13 @@ aggressiveness** — the `run_tier0` flag plus a per-channel enable/threshold kn
    including contextual follow-ups ("what about Saturday?", "yeah add that") — must stay coherent
    and in-voice, and only unambiguous context-free reads may short-circuit. Reviewed by a human on a
    live call, not just `test_voice_livekit_*`. If tone/continuity regresses, interception stays OFF.
-4. **Unit tests.** Existing `test_fast_path.py`, `test_voice_routing.py`, `test_fastpath_coverage.py`
+4. **Continuity check (§3.4).** A fast-tier turn followed immediately by a brain follow-up must show
+   the brain has the fast answer in context — e.g. "what's on my list?" (fast) → "why so much?"
+   (brain) resolves correctly. Verifies the fast turn was persisted to the shared `chat_messages`
+   history before the next turn loads it.
+5. **Unit tests.** Existing `test_fast_path.py`, `test_voice_routing.py`, `test_fastpath_coverage.py`
    green; add `test_fast_tiers.py` covering the Tier-0 read shortcut + the write/None deferral.
-5. **Greptile + validate + GitGuardian** green; threads resolved.
+6. **Greptile + validate + GitGuardian** green; threads resolved.
 
 ---
 
