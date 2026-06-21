@@ -62,6 +62,22 @@ _TIMEOUT_S = float(os.environ.get("ZOE_CORE_TIMEOUT_S", "180"))
 # the worst case to ~idle seconds instead of the full _TIMEOUT_S hang.
 _IDLE_TIMEOUT_S = float(os.environ.get("ZOE_CORE_IDLE_TIMEOUT_S", "20"))
 _MAX_WORKERS = int(os.environ.get("ZOE_CORE_MAX_WORKERS", "4"))
+# Cap on concurrent brain turns. llama-server runs a single generation slot
+# (--parallel 1), so letting many turns run at once only thrashes: N Pi
+# subprocesses spawn + N prompt-prefills contend for one GPU slot on a
+# memory-pressured Jetson, and some turns come back empty. Bounding concurrency
+# to a small number lets each turn complete reliably (it queues instead of
+# failing). Single-request latency is unaffected (the semaphore is uncontended).
+_MAX_CONCURRENCY = max(1, int(os.environ.get("ZOE_CORE_MAX_CONCURRENCY", "2")))
+_BRAIN_SEM: "asyncio.Semaphore | None" = None
+
+
+def _brain_sem() -> "asyncio.Semaphore":
+    """Lazily create the concurrency semaphore bound to the running loop."""
+    global _BRAIN_SEM
+    if _BRAIN_SEM is None:
+        _BRAIN_SEM = asyncio.Semaphore(_MAX_CONCURRENCY)
+    return _BRAIN_SEM
 
 
 def _rpc_command() -> list[str]:
@@ -259,11 +275,19 @@ async def _worker_for(user_id: str, session_id: str) -> _ZoeCoreWorker:
             worker = _ZoeCoreWorker(key[0])
             _WORKERS[key] = worker
         _WORKERS.move_to_end(key)
-        # Evict least-recently-used over the cap.
+        # Evict least-recently-used over the cap, but NEVER evict a worker that's
+        # mid-turn (its lock is held) — resetting an in-flight stream is what made
+        # concurrent turns come back empty. Skip busy/just-fetched workers; if that
+        # leaves us briefly over the cap, that's fine (they're reclaimed next call).
         evicted: list[_ZoeCoreWorker] = []
-        while len(_WORKERS) > _MAX_WORKERS:
-            _, old = _WORKERS.popitem(last=False)
-            evicted.append(old)
+        for k in list(_WORKERS.keys()):
+            if len(_WORKERS) <= _MAX_WORKERS:
+                break
+            w = _WORKERS[k]
+            if w is worker or w._lock.locked():
+                continue
+            del _WORKERS[k]
+            evicted.append(w)
     for old in evicted:
         try:
             await old.reset()
@@ -323,9 +347,32 @@ async def run_zoe_core_streaming(
     composed = _compose_message(
         message, history=history, db_memory_context=db_memory_context, portrait=portrait
     )
-    worker = await _worker_for(user_id, session_id)
-    async for delta in worker.stream(composed, timeout_s=_TIMEOUT_S):
-        yield delta
+    # Bound concurrent brain turns (see _MAX_CONCURRENCY). Acquire BEFORE creating
+    # the worker so subprocess spawns are bounded too, not just generations.
+    async with _brain_sem():
+        worker = await _worker_for(user_id, session_id)
+        async for delta in worker.stream(composed, timeout_s=_TIMEOUT_S):
+            yield delta
+
+
+async def _reset_worker_for(user_id: str, session_id: str) -> None:
+    """Reset the worker for a key so the next turn re-spawns its subprocess fresh.
+
+    Used by the retry path: when a turn comes back empty under load, the worker's
+    subprocess may be in a bad state — `reset()` terminates it. The worker object
+    INTENTIONALLY stays registered in `_WORKERS` (it is restartable by design): the
+    retry's `_worker_for` returns the same object and `_ensure_started` re-spawns
+    the subprocess because `proc is None`. This preserves the (user, session) →
+    worker identity and LRU position across the reset.
+    """
+    key = ((user_id or "").strip(), session_id or "default")
+    async with _WORKERS_LOCK:
+        worker = _WORKERS.get(key)
+    if worker is not None:
+        try:
+            await worker.reset()
+        except Exception:  # noqa: BLE001 - best-effort
+            logger.debug("zoe-core: worker reset failed for %s", key, exc_info=True)
 
 
 async def run_zoe_core(
@@ -339,15 +386,37 @@ async def run_zoe_core(
     max_tokens_override: int = 0,  # accepted for run_zoe_agent compatibility; honored in Phase 4
     voice_mode: bool = False,
 ) -> str:
-    """Non-streaming brain turn — collects the stream into one string."""
-    chunks: list[str] = []
-    async for delta in run_zoe_core_streaming(
-        message, session_id, user_id,
-        history=history, db_memory_context=db_memory_context,
-        portrait=portrait, voice_mode=voice_mode,
-    ):
-        chunks.append(delta)
-    return "".join(chunks).strip()
+    """Non-streaming brain turn — collects the stream into one string.
+
+    Retries once on a transient empty/failed turn: under load a worker's
+    subprocess can thrash and return no text. We re-spawn the session's worker and
+    try a second time, so a momentarily-overloaded brain doesn't surface a blank
+    answer. A genuinely-empty answer on both attempts returns ""; a failure on both
+    attempts re-raises so the caller's fallback applies.
+    """
+    last_exc: "Exception | None" = None
+    for attempt in (1, 2):
+        chunks: list[str] = []
+        try:
+            async for delta in run_zoe_core_streaming(
+                message, session_id, user_id,
+                history=history, db_memory_context=db_memory_context,
+                portrait=portrait, voice_mode=voice_mode,
+            ):
+                chunks.append(delta)
+            last_exc = None
+        except Exception as exc:  # noqa: BLE001 - retry transient brain failures once
+            last_exc = exc
+            logger.warning("zoe-core turn failed (attempt %d/2): %s", attempt, exc)
+        result = "".join(chunks).strip()
+        if result:
+            return result
+        # Empty or failed turn. On the first attempt, reset the worker and retry.
+        if attempt == 1:
+            await _reset_worker_for(user_id, session_id)
+    if last_exc is not None:
+        raise last_exc
+    return ""
 
 
 async def shutdown_workers() -> None:
