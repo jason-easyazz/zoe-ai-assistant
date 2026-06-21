@@ -87,7 +87,8 @@
     "training": "training/**/*",
     "graphify_out": "graphify-out/**/*",
     "cursor_rules": ".cursor/**/*",
-    "greptile": ".greptile/**/*"
+    "greptile": ".greptile/**/*",
+    "serena": ".serena/**/*"
   },
   "approved_root_files": [
     "README.md",
