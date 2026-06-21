@@ -1,11 +1,11 @@
 ---
-description: Zoe agentic development workflow with Graphify, opensrc, Hermes, Greptile, and verification
+description: Zoe agentic development workflow with codebase-memory, opensrc, Hermes, Greptile, and verification
 alwaysApply: true
 ---
 
 # Agentic Workflow
 
-For Zoe architecture or cross-module work, start with Graphify: read `graphify-out/GRAPH_REPORT.md` or use the `graphify` MCP tools before broad source searches. Rebuild only with the safe full extract command in `graphify.mdc`; do not use `graphify update .` or Graphify hooks.
+For Zoe architecture or cross-module work, start with the codebase-memory MCP (re-indexed on demand) for code-graph and architecture context before broad source searches. Graphify is retired; do not rely on any `graphify-out/` artifact.
 
 For third-party libraries, prefer `opensrc` or upstream docs before guessing API behavior. Keep external source caches outside the repo, under `~/.opensrc/repos/`. Treat new package adoption cautiously: prefer mature packages, check source/maintenance history, and avoid adding dependencies for code less than about 14 days old unless the user explicitly accepts the risk.
 
