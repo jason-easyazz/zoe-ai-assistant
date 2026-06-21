@@ -458,7 +458,12 @@ async def _lookup_evolution_resources(client: MULClient) -> tuple[str | None, st
             projects_resp = await http.get(f"{base}/api/projects", headers=headers, params=params)
             if projects_resp.status_code == 200:
                 projects = projects_resp.json()
-                items = projects if isinstance(projects, list) else projects.get("projects", [])
+                if isinstance(projects, list):
+                    items = projects
+                elif isinstance(projects, dict):
+                    items = projects.get("projects", [])
+                else:
+                    items = []
                 for p in items:
                     project_id = p.get("id")
                     if p.get("title") == "Self-Improvement Engine" and project_id:

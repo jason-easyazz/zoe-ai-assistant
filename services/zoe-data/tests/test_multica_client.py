@@ -195,6 +195,55 @@ async def test_lookup_evolution_resources_skips_matching_rows_without_ids(monkey
     assert project_id == "project-1"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("projects_body", [None, "oops", 42])
+async def test_lookup_evolution_resources_tolerates_non_listdict_projects_body(
+    monkeypatch, projects_body
+):
+    """A null/non-list/non-dict projects 200 body must not raise AttributeError."""
+
+    class FakeResponse:
+        status_code = 200
+
+        def __init__(self, payload):
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    class FakeHttpClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url, **kwargs):
+            if url.endswith("/api/agents"):
+                return FakeResponse(None)
+            if url.endswith("/api/projects"):
+                return FakeResponse(projects_body)
+            return FakeResponse([])
+
+    monkeypatch.setenv("MULTICA_BASE_URL", "https://multica.example")
+    monkeypatch.setenv("MULTICA_API_TOKEN", "token-1")
+    monkeypatch.setenv("MULTICA_WORKSPACE_ID", "workspace-1")
+    monkeypatch.setattr(multica_client.httpx, "AsyncClient", lambda **_kwargs: FakeHttpClient())
+    multica_client._cached_self_imp_agent_id = None
+    multica_client._cached_self_imp_project_id = None
+
+    try:
+        agent_id, project_id = await multica_client._lookup_evolution_resources(
+            multica_client.MULClient()
+        )
+    finally:
+        multica_client._cached_self_imp_agent_id = None
+        multica_client._cached_self_imp_project_id = None
+
+    assert agent_id is None
+    assert project_id is None
+
+
 def test_get_multica_client_refreshes_cached_client_when_env_changes(monkeypatch):
     original_client = multica_client._client
     original_agent_id = multica_client._cached_self_imp_agent_id
