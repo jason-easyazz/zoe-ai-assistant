@@ -53,6 +53,15 @@ _SHOW_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Question/fragment cue: when a write-domain utterance has no create verb, this
+# prevents defaulting to a bogus CREATE (misheard "what's on my calendar today" →
+# don't add an event). These fall to the brain instead.
+_QUESTIONISH_RE = re.compile(
+    r"\bwhat\b|\bwhen\b|\bwhere\b|\bwho\b|\bwhich\b|\bis\s+there\b|\bare\s+there\b|"
+    r"\bdo\s+i\b|\bdid\s+i\b|\bhave\s+i\b|\babout\s+(this|my|the)\b|\?\s*$",
+    re.IGNORECASE,
+)
+
 # Read intents = idempotent, safe to run even while validating. Write intents
 # mutate, so they stay shadow until explicitly allow-listed.
 _READ_DOMAINS = {"weather", "time", "people"}
@@ -233,15 +242,20 @@ def _plan(domain: str, text: str):
     }
     if domain in table:
         create_intent, show_intent = table[domain]
-        # Explicit show cue → read. Otherwise default to CREATE: the router was
-        # already confident this is a calendar/lists/reminders request, and
-        # statements like "dentist on my calendar tomorrow" or "milk to the
-        # shopping list" carry no create verb yet are clearly adds (they were
-        # silently lost to the brain before). The forced-tool slot extractor
-        # then validates — if it can't extract a real item/title, dispatch
-        # returns None and we fall back to the brain.
+        # Explicit show cue → read; explicit create cue → write.
         if _SHOW_RE.search(text):
             return (show_intent, {}, "read")
+        if _CREATE_RE.search(text):
+            return (create_intent, {}, "write")
+        # No explicit cue. If it reads like a QUESTION or conversational fragment
+        # ("what's on...", a garbled "what? ... today", "about this week"), do NOT
+        # invent a create — that regression turned misheard SHOW queries into bogus
+        # events. Defer to the brain instead.
+        if _QUESTIONISH_RE.search(text):
+            return None
+        # Otherwise it's a bare statement with an addable noun ("milk on the
+        # shopping list", "dentist tomorrow") → default to CREATE. The forced-tool
+        # slot extractor still validates: no real item/title → None → brain.
         return (create_intent, {}, "write")
     if domain == "timers":
         return ("timer_create", {}, "write") if _CREATE_RE.search(text) else None
@@ -257,8 +271,10 @@ _EXPERT_PROMPTS = {
 
 
 _QUESTION_RE = re.compile(
-    r"\b(what'?s|what\s+is|who'?s|who\s+is|when'?s|when\s+is|where'?s|where\s+is|"
-    r"does|do\s+i|did|how\s+old|tell\s+me\b(?!.*\bremember\b)|remind\s+me\s+what)\b",
+    r"\b(what'?s|what\s+is|what\s+are|what\s+was|what\s+were|who'?s|who\s+is|who\s+are|"
+    r"when'?s|when\s+is|when\s+are|where'?s|where\s+is|where\s+are|whose|which|"
+    r"does|do\s+i|did|how\s+old|how\s+many|how\s+much|tell\s+me\b(?!.*\bremember\b)|"
+    r"remind\s+me\s+what)\b",
     re.IGNORECASE,
 )
 
@@ -302,11 +318,32 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
 
 async def _run_expert(domain: str, text: str, user_id: str, session_id: str) -> Optional[str]:
     facts = ""
+    # Query-RELEVANT retrieval first. A generic top-N (load_for_prompt) buries the
+    # one fact that answers the question once a user has dozens of memories — which
+    # is exactly why "what's my mum's name" missed despite "My mum's name is Janice"
+    # sitting in the store. Semantic search keyed to the question surfaces it.
     try:
-        from zoe_agent import _mempalace_load_user_facts
-        facts = await _mempalace_load_user_facts(user_id, limit=20)
-    except Exception:
-        pass
+        from memory_service import get_memory_service
+        rows = await get_memory_service().search(text, user_id=user_id, limit=8)
+        seen: set[str] = set()
+        lines: list[str] = []
+        for r in rows or []:
+            t = (getattr(r, "text", "") or "").strip()
+            key = t.lower()
+            if t and key not in seen:
+                seen.add(key)
+                lines.append(f"- {t[:200]}")
+        if lines:
+            facts = "## Relevant things you've told me:\n" + "\n".join(lines)
+    except Exception as exc:
+        logger.debug("recall search failed (%s) → top-N fallback", exc)
+    # Fallback: generic top-N (covers anything search didn't return).
+    if not facts:
+        try:
+            from zoe_agent import _mempalace_load_user_facts
+            facts = await _mempalace_load_user_facts(user_id, limit=20)
+        except Exception:
+            pass
     if domain == "memory" and not facts:
         return None
     composed = f"{_EXPERT_PROMPTS.get(domain, '')}\n\nUser asked: {text}"
