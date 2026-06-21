@@ -192,6 +192,21 @@ async def dispatch(domain: str, text: str, ctx: dict[str, Any]) -> Optional[Disp
     return DispatchResult(domain=domain, reply=reply, intent=intent_name, ui=_ui_for(domain))
 
 
+def _calendar_qualifier(text: str) -> str:
+    """Parse a date scope from a calendar query so 'tomorrow'/'this week' aren't
+    lost when the show-intent comes through without slots (→ defaulted to today)."""
+    low = (text or "").lower()
+    if "tomorrow" in low:
+        return "tomorrow"
+    if "this month" in low:
+        return "this month"
+    if "this week" in low or "the week" in low or "weekend" in low:
+        return "this week"
+    if "today" in low or "tonight" in low:
+        return "today"
+    return ""
+
+
 def _plan(domain: str, text: str):
     """Return (intent_name, regex_slots, kind) or None. kind in {read,write,expert}.
     Pure/cheap: regex + a create-signal heuristic; NO slot extraction here."""
@@ -233,7 +248,10 @@ def _plan(domain: str, text: str):
     }.get(domain, ())
     if det and det.name in domain_intents and "raw" not in (det.slots or {}):
         kind = "read" if det.name.endswith(("_show", "_list", "_status")) else "write"
-        return (det.name, det.slots, kind)
+        slots = dict(det.slots or {})
+        if det.name == "calendar_show" and not slots.get("qualifier"):
+            slots["qualifier"] = _calendar_qualifier(text)
+        return (det.name, slots, kind)
 
     table = {
         "lists": ("list_add", "list_show"),
@@ -244,7 +262,8 @@ def _plan(domain: str, text: str):
         create_intent, show_intent = table[domain]
         # Explicit show cue → read; explicit create cue → write.
         if _SHOW_RE.search(text):
-            return (show_intent, {}, "read")
+            slots = {"qualifier": _calendar_qualifier(text)} if show_intent == "calendar_show" else {}
+            return (show_intent, slots, "read")
         if _CREATE_RE.search(text):
             return (create_intent, {}, "write")
         # No explicit cue. If it reads like a QUESTION or conversational fragment

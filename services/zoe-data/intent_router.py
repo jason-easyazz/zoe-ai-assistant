@@ -1979,6 +1979,88 @@ async def _execute_list_show_direct(intent: Intent, user_id: str) -> Optional[st
         return None
 
 
+def _say_clock(hhmm: str) -> str:
+    """'15:00' → '3 PM', '09:30' → '9:30 AM'. Empty/garbage → ''."""
+    try:
+        h, m = (hhmm or "").split(":")[:2]
+        h = int(h); m = int(m)
+        ap = "AM" if h < 12 else "PM"
+        h12 = h % 12 or 12
+        return f"{h12}:{m:02d} {ap}" if m else f"{h12} {ap}"
+    except Exception:
+        return ""
+
+
+async def _execute_calendar_show_direct(intent: Intent, user_id: str) -> Optional[str]:
+    """Read the calendar straight from the events table so 'what's on my calendar'
+    works even when the mcporter MCP subprocess is down (the source of the
+    calendar 'hit and miss'). Mirrors the qualifier→date-range logic in
+    _build_command's calendar_show branch."""
+    from datetime import date, timedelta
+    slots = intent.slots or {}
+    qualifier = str(slots.get("qualifier", "")).strip().lower()
+    today_d = date.today()
+    if qualifier in ("today", "today's", ""):
+        start = end = today_d
+        scope = "today"
+    elif qualifier == "tomorrow":
+        start = end = today_d + timedelta(days=1)
+        scope = "tomorrow"
+    elif qualifier in ("this week", "this week's"):
+        start = today_d - timedelta(days=today_d.weekday())
+        end = today_d + timedelta(days=6 - today_d.weekday())
+        scope = "this week"
+    elif qualifier in ("this month", "this month's"):
+        import calendar as cal_mod
+        _, last = cal_mod.monthrange(today_d.year, today_d.month)
+        start = today_d.replace(day=1); end = today_d.replace(day=last)
+        scope = "this month"
+    else:
+        start = today_d; end = today_d + timedelta(days=7)
+        scope = "in the next week"
+    try:
+        from database import get_db_ctx
+        async with get_db_ctx() as db:
+            cursor = await db.execute(
+                "SELECT title, start_date, start_time, all_day FROM events"
+                " WHERE (user_id=? OR visibility='family') AND deleted=0"
+                " AND start_date BETWEEN ? AND ?"
+                " ORDER BY start_date, COALESCE(NULLIF(start_time,''),'99:99')",
+                (user_id, start.isoformat(), end.isoformat()),
+            )
+            rows = [dict(r) for r in await cursor.fetchall()]
+    except Exception as exc:
+        logger.warning("calendar_show direct execution unavailable; falling back to mcporter: %s", exc)
+        return None
+
+    if not rows:
+        return f"You've got nothing on {scope}."
+    single_day = start == end
+    parts: list[str] = []
+    seen: set = set()
+    for r in rows:
+        title = (r.get("title") or "something").strip()
+        st = str(r.get("start_time") or "")
+        sd = str(r.get("start_date") or "")
+        dedup = (title.lower(), sd, st)
+        if dedup in seen:  # identical duplicate event rows → say once
+            continue
+        seen.add(dedup)
+        when = "" if r.get("all_day") else _say_clock(st)
+        day = "" if single_day else _spoken_day(sd)
+        # "today"/"tomorrow" read better without "on" ("at 9 AM today" not "...on today").
+        day_phrase = day if day in ("today", "tomorrow") else (f"on {day}" if day else "")
+        bits = [title]
+        if when:
+            bits.append(f"at {when}")
+        if day_phrase:
+            bits.append(day_phrase)
+        parts.append(" ".join(bits))
+    n = len(parts)
+    lead = f"You've got {n} thing{'s' if n != 1 else ''} on {scope}: "
+    return lead + ("; ".join(parts) if n > 1 else parts[0]) + "."
+
+
 async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optional[str]:
     if intent.name == "lets_talk":
         # Navigation is handled by _broadcast_intent_nav via _INTENT_PANEL_NAV in chat.py.
@@ -2565,6 +2647,11 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
 
     if intent.name == "list_show":
         direct_result = await _execute_list_show_direct(intent, user_id)
+        if direct_result:
+            return direct_result
+
+    if intent.name == "calendar_show":
+        direct_result = await _execute_calendar_show_direct(intent, user_id)
         if direct_result:
             return direct_result
 
