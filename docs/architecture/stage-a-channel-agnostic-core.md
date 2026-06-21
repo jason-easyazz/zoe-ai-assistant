@@ -77,24 +77,38 @@ async def resolve(
       Tier-1.5 expert_dispatch.dispatch (the current fast_path body)
     Returns a renderable TurnOutcome, or None → caller falls to its brain lane.
     Never raises; any internal error returns None (a turn is never broken by the core).
+    REQUIRED: the error path must log via logger.warning(...) before returning None
+    (mirror the existing fast_path.py L72-73) so routing failures stay visible in
+    production instead of silently degrading to the brain.
     """
 ```
 
 ### 3.2 Return type
 
+**Do NOT introduce a new renamed type.** `expert_dispatch.DispatchResult` already carries
+`domain / reply / intent / ui` and is what every current `fast_path` consumer reads via `.reply`.
+Renaming `reply`→`text` would force a churn edit at every call site for no functional gain. Instead,
+**`TurnOutcome` IS `DispatchResult` with one added field** — keep `reply` as the canonical text and
+add `tier` for provenance:
+
 ```python
 @dataclass
-class TurnOutcome:
-    text: str                  # the spoken/printed answer (what every channel renders)
-    domain: str = ""           # "lists" | "weather" | "time" | "people" | …
-    intent: str = ""           # "list_show" | "time_query" | …
-    tier: str = ""             # "tier0" | "tier1.5" — provenance, for metrics/debug
-    ui: dict | None = None     # optional structured hint (kind=weather/list/…); channels MAY use it
+class DispatchResult:          # existing type, in expert_dispatch.py
+    domain: str
+    reply: str                 # the spoken/printed answer — UNCHANGED field name
+    intent: str = ""
+    ui: dict | None = None
+    source: str = "expert_dispatch"
+    meta: dict = field(default_factory=dict)
+    tier: str = ""             # NEW: "tier0" | "tier1.5" — provenance, for metrics/debug
+
+# fast_tiers re-exports it under a channel-neutral alias so callers can read either:
+TurnOutcome = DispatchResult
 ```
 
-`expert_dispatch.DispatchResult` already carries `domain/reply/intent/ui` — `TurnOutcome` is the
-same shape with `reply`→`text` and an added `tier`. The Tier-0 branch wraps
-`execute_intent`'s string into the same `TurnOutcome`.
+The Tier-0 branch wraps `execute_intent`'s string into the same `DispatchResult(reply=..., tier="tier0")`.
+Calling convention stays **byte-identical**: existing code keeps reading `.reply`; only the optional
+`.tier` is new.
 
 ### 3.3 Tier-0 read-only shortcut (the new bit)
 
@@ -104,9 +118,13 @@ do we short-circuit into a `TurnOutcome(tier="tier0")`. For **write / form / pan
 intents, `resolve` returns control (returns `None` or skips Tier-0) so the channel's existing
 handlers own them — voice still shows its forms, chat still emits its AG-UI/action-form cards.
 
-The read-vs-write classification already exists in `expert_dispatch._plan` (`kind in {read,write,
-expert}`) and `intent_router` intent names (`*_show/_list/_status` = read). Stage A reuses that
-classifier; it does **not** invent a new one.
+The read-vs-write split is **already encoded in the public `expert_dispatch.dispatch(..., write_ok)`
+contract** (a `write_ok=False` call returns `None` for write intents — exactly #742's behavior) and
+in `intent_router` intent names (`*_show/_list/_status` = read). Stage A reuses that **public**
+surface; it does **not** depend on the package-private `_plan` helper. If a shared read/write
+classifier is needed directly, promote `_plan`'s classification to a named public function
+(`expert_dispatch.classify(domain, text) -> kind`) as part of Stage A rather than reaching into the
+underscore API.
 
 ---
 
@@ -127,7 +145,7 @@ classifier; it does **not** invent a new one.
   `TextMessage*`/`RunFinished` + `_record_run_state("completed")` (the #742 fix).
 
 ### 4.3 `routers/voice_tts.py` (`voice_command`)
-- Replace the `fast_path.resolve(...)` call with `fast_tiers.resolve(..., extra_ctx={"db","panel_id"})`.
+- Replace the `fast_path.resolve(...)` call with `fast_tiers.resolve(..., extra_ctx={"db": db, "panel_id": panel_id})`.
 - Voice's **public-intent fast-path** (`detect_intent`+`execute_intent`, ~L3542) is the same Tier-0
   shortcut `fast_tiers` now does — fold it in **only if** replay stays byte-identical; otherwise
   leave voice's richer version (policy/scope gates) in place and let `run_tier0=False` for voice.
