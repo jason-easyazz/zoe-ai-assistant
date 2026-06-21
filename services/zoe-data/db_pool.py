@@ -12,11 +12,40 @@ New code should use db.fetch(), db.fetchrow(), db.execute() directly.
 Old code using cursor = await db.execute() + cursor.fetchall() still works.
 """
 import asyncpg
+import logging
 import os
 import re
 from contextlib import asynccontextmanager
 
+logger = logging.getLogger(__name__)
+
 _pool: asyncpg.Pool | None = None
+
+
+async def _release_safely(pool: "asyncpg.Pool", conn: "asyncpg.Connection") -> None:
+    """Return `conn` to `pool`, tolerating the request-cancellation teardown race.
+
+    When a request is cancelled mid-query (client disconnect / timeout) the
+    dependency generator is closed while an operation is still in flight on the
+    connection. asyncpg's `PoolConnectionHolder.release` then fails its reset with
+    `InterfaceError('another operation is in progress')` — but it has ALREADY
+    terminated the connection and freed the holder before re-raising, so the pool
+    stays healthy and a fresh connection is created on the next acquire. We only
+    need to swallow the re-raised exception so it doesn't bubble out of the
+    dependency teardown as an unretrieved-task error (the log spam this fixes).
+    """
+    try:
+        await pool.release(conn)
+    except asyncpg.InterfaceError as exc:
+        # The known teardown race ONLY: request cancelled mid-query → asyncpg's
+        # reset fails with 'another operation is in progress'. asyncpg has already
+        # terminated the connection and freed the holder, so the pool is healthy.
+        logger.debug("db_pool: connection release raced after cancellation (%s)", exc)
+    except Exception:
+        # Any OTHER release failure (closed pool, wrong pool, internal error) is a
+        # real pool-health signal — surface it loudly rather than hiding it, but
+        # still don't let it break the dependency teardown.
+        logger.warning("db_pool: unexpected error releasing connection", exc_info=True)
 
 
 async def init_pool() -> None:
@@ -197,19 +226,22 @@ async def get_db() -> AsyncpgCompat:
     Supports both aiosqlite cursor API (legacy code) and asyncpg native API.
     """
     pool = get_pool()
-    async with pool.acquire() as conn:
+    conn = await pool.acquire()
+    try:
+        yield AsyncpgCompat(conn)
+    except Exception:
+        # Handler raised: roll back any open transaction so the connection returns
+        # clean (best-effort; the rollback itself may race and is ignored).
         try:
-            yield AsyncpgCompat(conn)
+            if conn.is_in_transaction():
+                await conn.execute("ROLLBACK")
         except Exception:
-            # On abrupt cancellation or early return asyncpg raises InterfaceError
-            # ("another operation is in progress") during generator cleanup.
-            # Roll back any open transaction so the connection returns cleanly to the pool.
-            try:
-                if conn.is_in_transaction():
-                    await conn.execute("ROLLBACK")
-            except Exception:
-                pass
-            raise
+            pass
+        raise
+    finally:
+        # Release through the cancellation-tolerant wrapper so a mid-query teardown
+        # race doesn't bubble out of the dependency as an unretrieved-task error.
+        await _release_safely(pool, conn)
 
 
 @asynccontextmanager
@@ -221,8 +253,11 @@ async def get_db_ctx():
             rows = await db.fetch("SELECT * FROM users")
     """
     pool = get_pool()
-    async with pool.acquire() as conn:
+    conn = await pool.acquire()
+    try:
         yield AsyncpgCompat(conn)
+    finally:
+        await _release_safely(pool, conn)
 
 
 def _adapt_params(sql: str, params) -> tuple[str, list]:
