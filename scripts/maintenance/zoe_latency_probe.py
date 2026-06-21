@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import statistics
 import time
 import urllib.error
@@ -118,7 +119,11 @@ def sample_voice_command(base_url: str, token: str, panel_id: str, timeout: floa
 def summarize(samples: list[Sample]) -> dict[str, Any]:
     groups: dict[str, list[Sample]] = {}
     for sample in samples:
-        key = sample.name.split(".", 1)[0]
+        # Group repeated samples of the SAME metric (chat.1, chat.2 → "chat") but
+        # keep distinct endpoints separate — only a trailing numeric suffix is
+        # stripped, so "voice.livekit_health" and "voice.command" don't collapse
+        # into one "voice" bucket (which mixed two unrelated endpoints' latencies).
+        key = re.sub(r"\.\d+$", "", sample.name)
         groups.setdefault(key, []).append(sample)
     summary: dict[str, Any] = {}
     for key, items in groups.items():
@@ -173,9 +178,12 @@ def main() -> int:
     parser.add_argument("--update-baseline", action="store_true", help="Save this run as the new comparison baseline.")
     parser.add_argument("--warn-ratio", type=float, default=float(os.environ.get("ZOE_LATENCY_WARN_RATIO", "1.5")))
     parser.add_argument("--warn-ms", type=float, default=float(os.environ.get("ZOE_LATENCY_WARN_MS", "500")))
-    parser.add_argument("--voice-token", default=os.environ.get("ZOE_DEVICE_TOKEN") or os.environ.get("DEVICE_TOKEN") or "")
     parser.add_argument("--panel-id", default=os.environ.get("ZOE_PANEL_ID", "post-merge-probe"))
     args = parser.parse_args()
+
+    # Device token is read from the environment ONLY (never a CLI flag) so it
+    # can't leak into `ps aux` / process listings on a shared host.
+    voice_token = os.environ.get("ZOE_DEVICE_TOKEN") or os.environ.get("DEVICE_TOKEN") or ""
 
     samples: list[Sample] = []
     samples.append(sample_http_get("health", f"{args.base_url}/health", min(args.timeout, 8)))
@@ -186,8 +194,8 @@ def main() -> int:
     for idx in range(max(1, args.samples)):
         samples.append(sample_chat(args.base_url, chat_prompts[idx % len(chat_prompts)], args.timeout, idx + 1))
 
-    if args.voice_token:
-        samples.append(sample_voice_command(args.base_url, args.voice_token, args.panel_id, args.timeout))
+    if voice_token:
+        samples.append(sample_voice_command(args.base_url, voice_token, args.panel_id, args.timeout))
     else:
         samples.append(Sample("voice.command", True, 0.0, None, "skipped: set ZOE_DEVICE_TOKEN to measure authenticated voice command"))
 
