@@ -723,8 +723,11 @@ def _gh_open_prs_with_running_greptile(*, repo: str = DEFAULT_REPO) -> set[int] 
     local guard state dir. Returns ``None`` when the GitHub query fails so the caller
     can fall back to local state only.
     """
+    # Known ceiling: caps active-review counting at 500 open PRs. If the repo ever
+    # exceeds this, in-flight Greptile checks beyond the first 500 are invisible to
+    # the capacity guard and the active-review limit could be over-triggered.
     proc = _run_gh(
-        ["pr", "list", "--state", "open", "--limit", "200", "--json", "number,statusCheckRollup"],
+        ["pr", "list", "--state", "open", "--limit", "500", "--json", "number,statusCheckRollup"],
         repo=repo,
     )
     if proc.returncode != 0:
@@ -1920,7 +1923,10 @@ async def run_guard_once(
         if not actionable_findings:
             # P2c: bound re-triggers for a clean-but-sub-confidence (or not-yet-complete)
             # review so the guard escalates to Hermes instead of looping forever.
-            retrigger_key = f"{pr_head_sha}:{confidence}"
+            # Anchor the key to the head SHA only: confidence can fluctuate between
+            # polls (ping-pong scores) and must NOT reset the bound. The head SHA
+            # changes only when real new commits land, which correctly resets it.
+            retrigger_key = pr_head_sha
             if state.get("no_findings_retrigger_key") == retrigger_key:
                 state["no_findings_retrigger_count"] = int(state.get("no_findings_retrigger_count") or 0) + 1
             else:

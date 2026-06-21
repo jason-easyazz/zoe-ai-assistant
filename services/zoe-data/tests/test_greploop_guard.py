@@ -2764,6 +2764,49 @@ async def test_run_guard_once_escalates_after_no_findings_retrigger_limit(tmp_pa
     assert greploop_guard.read_guard_state(66)["terminal_state"] == "ESCALATE_HERMES"
 
 
+async def test_no_findings_retrigger_bound_survives_confidence_fluctuation(tmp_path, monkeypatch):
+    # Greptile review-thread fix: the re-trigger counter is anchored to the head
+    # SHA only. A confidence score that ping-pongs between polls (same head) must
+    # NOT reset the counter, otherwise NO_FINDINGS_RETRIGGER_LIMIT never bounds it.
+    scores = iter([4, 3, 4, 3])
+
+    async def fake_status(**_kwargs):
+        return {
+            "confidenceScore": next(scores, 3),
+            "reviewIsRunning": False,
+            "headSha": "abc",
+            "reviewCompleteness": "Summary-only review below confidence target",
+        }
+
+    async def fake_comments(**_kwargs):
+        return {"findings": []}
+
+    async def fake_trigger(**_kwargs):
+        return {"triggered": True}
+
+    monkeypatch.setattr(greploop_guard, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(greploop_guard, "NO_FINDINGS_RETRIGGER_LIMIT", 2)
+    monkeypatch.setattr(greploop_guard, "HEAD_STABILITY_WINDOW_SECONDS", 0)
+    monkeypatch.setattr("greptile_client.get_pr_status", fake_status)
+    monkeypatch.setattr("greptile_client.list_pr_comments", fake_comments)
+    monkeypatch.setattr("greptile_client.trigger_review", fake_trigger)
+    monkeypatch.setattr(
+        greploop_guard,
+        "_gh_pr_observation",
+        lambda pr, repo=greploop_guard.DEFAULT_REPO: {"ok": True, "state": "OPEN", "statusCheckRollup": []},
+    )
+
+    first = await greploop_guard.run_guard_once(66)
+    assert first["state"] == "WAITING_GREPTILE"
+    second = await greploop_guard.run_guard_once(66)
+    assert second["state"] == "WAITING_GREPTILE"
+    # Confidence has fluctuated 4->3->4 across the three polls; the bound must
+    # still fire on the third because the head SHA never moved.
+    third = await greploop_guard.run_guard_once(66)
+    assert third["state"] == "ESCALATE_HERMES"
+    assert greploop_guard.read_guard_state(66)["terminal_state"] == "ESCALATE_HERMES"
+
+
 # ---------------------------------------------------------------------------
 # P1 — head-stability gating before (re)trigger
 # ---------------------------------------------------------------------------
