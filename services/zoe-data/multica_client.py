@@ -44,7 +44,7 @@ def get_engineering_multica_agent_id() -> str:
         if reg_id:
             _cached_engineering_agent_id = reg_id
             return reg_id
-    except Exception as exc:
+    except (ImportError, OSError, ValueError, TypeError) as exc:
         logger.debug("get_engineering_multica_agent_id: registry lookup failed: %s", exc)
     return _DEFAULT_HERMES_MULTICA_AGENT_ID
 
@@ -122,7 +122,7 @@ class MULClient:
                 resp = await client.post(url, json=payload, headers=self._headers())
                 resp.raise_for_status()
                 return resp.json()
-        except Exception as exc:
+        except (httpx.HTTPError, ValueError, TypeError) as exc:
             logger.warning("Multica create_issue failed: %s", exc)
             return {"error": str(exc)}
 
@@ -136,7 +136,7 @@ class MULClient:
                 resp = await client.get(url, headers=self._headers())
                 resp.raise_for_status()
                 return resp.json()
-        except Exception as exc:
+        except (httpx.HTTPError, ValueError, TypeError) as exc:
             logger.warning("Multica get_issue(%s) failed: %s", issue_id, exc)
             return {}
 
@@ -185,8 +185,10 @@ class MULClient:
                 resp = await client.get(url, params=params, headers=self._headers())
                 resp.raise_for_status()
                 data = resp.json()
-                return data if isinstance(data, list) else data.get("issues", [])
-        except Exception as exc:
+                if isinstance(data, list):
+                    return data
+                return data.get("issues", []) if isinstance(data, dict) else []
+        except (httpx.HTTPError, ValueError, TypeError) as exc:
             logger.warning("Multica list_issues failed: %s", exc)
             return []
 
@@ -206,7 +208,7 @@ class MULClient:
                 resp = await client.put(url, json=payload, headers=self._headers())
                 resp.raise_for_status()
                 return resp.json()
-        except Exception as exc:
+        except (httpx.HTTPError, ValueError, TypeError) as exc:
             logger.warning("Multica update_issue(%s) failed: %s", issue_id, exc)
             return {}
 
@@ -219,8 +221,10 @@ class MULClient:
                 resp = await client.get(f"{self._base}/api/labels", headers=self._headers())
                 resp.raise_for_status()
                 data = resp.json()
-                return data if isinstance(data, list) else data.get("labels", [])
-        except Exception as exc:
+                if isinstance(data, list):
+                    return data
+                return data.get("labels", []) if isinstance(data, dict) else []
+        except (httpx.HTTPError, ValueError, TypeError) as exc:
             logger.warning("Multica list_labels failed: %s", exc)
             return []
 
@@ -245,7 +249,7 @@ class MULClient:
                 )
                 resp.raise_for_status()
                 return resp.json()
-        except Exception as exc:
+        except (httpx.HTTPError, ValueError, TypeError) as exc:
             logger.warning("Multica ensure_label(%s) failed: %s", wanted, exc)
             return {}
 
@@ -264,7 +268,7 @@ class MULClient:
                 )
                 resp.raise_for_status()
                 return resp.json() if resp.content else {"ok": True}
-        except Exception as exc:
+        except (httpx.HTTPError, ValueError, TypeError) as exc:
             logger.warning("Multica attach_label(%s, %s) failed: %s", issue_id, label_name, exc)
             return {}
 
@@ -277,8 +281,10 @@ class MULClient:
                 resp = await client.get(f"{self._base}/api/projects", headers=self._headers())
                 resp.raise_for_status()
                 data = resp.json()
-                return data if isinstance(data, list) else data.get("projects", [])
-        except Exception as exc:
+                if isinstance(data, list):
+                    return data
+                return data.get("projects", []) if isinstance(data, dict) else []
+        except (httpx.HTTPError, ValueError, TypeError) as exc:
             logger.warning("Multica list_projects failed: %s", exc)
             return []
 
@@ -299,7 +305,7 @@ class MULClient:
                 )
                 resp.raise_for_status()
                 return resp.json()
-        except Exception as exc:
+        except (httpx.HTTPError, ValueError, TypeError) as exc:
             logger.warning("Multica ensure_project(%s) failed: %s", wanted, exc)
             return {}
 
@@ -443,20 +449,27 @@ async def _lookup_evolution_resources(client: MULClient) -> tuple[str | None, st
                 agents = agents_resp.json()
                 if isinstance(agents, list):
                     for a in agents:
-                        if a.get("name") == "Self-Improvement Agent":
-                            _cached_self_imp_agent_id = a["id"]
+                        agent_id = a.get("id")
+                        if a.get("name") == "Self-Improvement Agent" and agent_id:
+                            _cached_self_imp_agent_id = agent_id
                             break
 
             # Find Self-Improvement Engine project
             projects_resp = await http.get(f"{base}/api/projects", headers=headers, params=params)
             if projects_resp.status_code == 200:
                 projects = projects_resp.json()
-                items = projects if isinstance(projects, list) else projects.get("projects", [])
+                if isinstance(projects, list):
+                    items = projects
+                elif isinstance(projects, dict):
+                    items = projects.get("projects", [])
+                else:
+                    items = []
                 for p in items:
-                    if p.get("title") == "Self-Improvement Engine":
-                        _cached_self_imp_project_id = p["id"]
+                    project_id = p.get("id")
+                    if p.get("title") == "Self-Improvement Engine" and project_id:
+                        _cached_self_imp_project_id = project_id
                         break
-    except Exception as exc:
+    except (httpx.HTTPError, ValueError, TypeError) as exc:
         logger.warning("Multica: resource lookup failed: %s", exc)
 
     return _cached_self_imp_agent_id, _cached_self_imp_project_id
@@ -517,7 +530,7 @@ async def sync_evolution_proposal_to_multica(
             source=f"evolution_proposal:{proposal_id}",
             metadata=contract_metadata,
         )
-    except Exception as exc:
+    except (ImportError, KeyError, TypeError, ValueError) as exc:
         logger.warning(
             "sync_evolution_proposal_to_multica: failed to build contract metadata for %s: %s",
             proposal_id,
@@ -549,7 +562,9 @@ async def sync_evolution_proposal_to_multica(
             )
             resp.raise_for_status()
             issue = resp.json()
-            issue_id: str = issue.get("id", "")
+            issue_id: str = issue.get("id", "") if isinstance(issue, dict) else ""
+            if not issue_id:
+                return None
 
             # Attach label (defaults to "evolution-proposal"; user-reported issues use "user-feedback")
             labels_resp = await http.get(
@@ -563,8 +578,9 @@ async def sync_evolution_proposal_to_multica(
                     label_id: str | None = None
                     for lbl in labels:
                         if lbl.get("name") == label_name:
-                            label_id = lbl["id"]
-                            break
+                            label_id = lbl.get("id")
+                            if label_id:
+                                break
                     if label_id is None:
                         # Create label on first use
                         try:
@@ -575,8 +591,9 @@ async def sync_evolution_proposal_to_multica(
                                 params=params,
                             )
                             if create_resp.status_code in (200, 201):
-                                label_id = create_resp.json().get("id")
-                        except Exception:
+                                resp_body = create_resp.json()
+                                label_id = resp_body.get("id") if isinstance(resp_body, dict) else None
+                        except (httpx.HTTPError, ValueError, TypeError):
                             pass
                     if label_id:
                         await http.post(
@@ -592,7 +609,7 @@ async def sync_evolution_proposal_to_multica(
             )
             return issue_id or None
 
-    except Exception as exc:
+    except (httpx.HTTPError, ValueError, TypeError) as exc:
         logger.warning("Multica sync_evolution_proposal failed: %s", exc)
         return None
 

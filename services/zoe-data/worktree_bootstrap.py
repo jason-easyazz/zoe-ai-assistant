@@ -134,6 +134,34 @@ def _worktree_registered(repo: Path, wt_path: Path) -> bool:
     return False
 
 
+def _current_branch(path: Path) -> str:
+    result = _run_git(
+        ["git", "branch", "--show-current"],
+        cwd=str(path),
+        timeout=30,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"cannot inspect worktree branch for {path}: "
+            f"{(result.stderr or result.stdout or '').strip() or 'unknown error'}"
+        )
+    return result.stdout.strip()
+
+
+def _working_tree_clean(path: Path) -> bool:
+    result = _run_git(
+        ["git", "status", "--porcelain"],
+        cwd=str(path),
+        timeout=30,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"cannot inspect worktree status for {path}: "
+            f"{(result.stderr or result.stdout or '').strip() or 'unknown error'}"
+        )
+    return not result.stdout.strip()
+
+
 def _base_ref(repo: Path, base_branch: str) -> str:
     """Prefer the remote base branch so task worktrees do not start from stale local main."""
     fetch_result = _run_git(["git", "fetch", "origin", base_branch], cwd=str(repo), timeout=120)
@@ -163,6 +191,15 @@ def ensure_worktree(task_id: str, *, base_branch: str = "main") -> Path:
     branch = worktree_branch(task_id)
     repo = Path(zoe_repo_root())
     if _worktree_registered(repo, wt_path):
+        actual_branch = _current_branch(wt_path)
+        if actual_branch != branch:
+            raise RuntimeError(
+                f"existing worktree {wt_path} is on {actual_branch!r}, expected fresh task branch {branch!r}"
+            )
+        if not _working_tree_clean(wt_path):
+            raise RuntimeError(
+                f"existing worktree {wt_path} has uncommitted changes; refusing to reuse stale ticket branch"
+            )
         return wt_path
 
     base_ref = _base_ref(repo, base_branch)

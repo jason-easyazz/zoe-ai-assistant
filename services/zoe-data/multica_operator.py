@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from typing import Any
 
 from multica_client import get_engineering_multica_agent_id, get_multica_client
@@ -15,16 +17,44 @@ from multica_ticket_contract import (
 
 async def find_issue(reference: str) -> dict[str, Any]:
     client = get_multica_client()
-    if hasattr(client, "resolve_issue"):
-        return await client.resolve_issue(reference)
-    # Best-effort compatibility for older test/fake clients; real clients should expose resolve_issue.
-    issues = await client.list_issues()
-    if not issues:
+    resolve_issue = getattr(client, "resolve_issue", None)
+    if callable(resolve_issue):
+        return await resolve_issue(reference)
+    wanted = str(reference or "").strip().lower()
+    if not wanted:
         return {}
-    wanted = str(reference).strip().lower()
-    for issue in issues:
-        if str(issue.get("identifier") or "").lower() == wanted or str(issue.get("id") or "").lower() == wanted:
-            return issue
+
+    async def _list_visible(status: str | None) -> list[dict[str, Any]]:
+        kwargs: dict[str, Any] = {"limit": 1000}
+        if status:
+            kwargs["status"] = status
+        try:
+            result = await client.list_issues(**kwargs)
+        except TypeError:
+            if status:
+                return []
+            try:
+                result = await client.list_issues()
+            except Exception:
+                return []
+        except Exception:
+            return []
+        return [issue for issue in (result or []) if isinstance(issue, dict)]
+
+    visible_statuses = [None, "backlog", "todo", "in_progress", "blocked", "in_review", "done", "cancelled"]
+    pages = await asyncio.gather(*(_list_visible(status) for status in visible_statuses))
+    seen: set[str] = set()
+    for page in pages:
+        for issue in page:
+            issue_id = str(issue.get("id") or "").lower()
+            if issue_id in seen:
+                continue
+            seen.add(issue_id)
+            if wanted in {
+                issue_id,
+                str(issue.get("identifier") or "").lower(),
+            }:
+                return issue
     return {}
 
 
