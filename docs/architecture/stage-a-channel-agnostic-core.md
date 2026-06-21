@@ -152,7 +152,7 @@ underscore API.
   *(Decision deferred to implementation; replay is the arbiter.)*
 
 ### 4.4 New: `channels/telegram_adapter` (skeleton only, lab)
-- A thin adapter that calls `fast_tiers.resolve(text, user, session)`; renders `outcome.text` or,
+- A thin adapter that calls `fast_tiers.resolve(text, user, session)`; renders `outcome.reply` or,
   on `None`, forwards to the brain. **Not wired to Flue yet** — that's Phase 1 proper. Included
   here only to prove the core is genuinely channel-agnostic.
 
