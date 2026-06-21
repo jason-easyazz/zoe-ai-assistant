@@ -380,6 +380,36 @@ async def _send_data(local_participant, payload: dict) -> None:
         logger.debug("LiveKit data send error: %s", exc)
 
 
+def _livekit_fast_tiers_enabled() -> bool:
+    """LiveKit's opt-in deterministic fast tier — OFF unless explicitly enabled.
+
+    LiveKit is conversation-mode (plan §4.5): brain-first is the default so it
+    keeps feeling like a real person. Enabling this answers only the unambiguous
+    factual subset via the shared core.
+    """
+    return os.environ.get("ZOE_LIVEKIT_FAST_TIERS", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+async def _maybe_fast_tier(transcript: str, user_id: str, session_id: str) -> Optional[str]:
+    """Return a sub-second fast-tier reply for `transcript`, or None → the brain.
+
+    Returns None (defer to the brain) when the fast tier is disabled, finds no
+    confident match, or errors — so a conversational/contextual turn always reaches
+    the brain. Never raises.
+    """
+    if not _livekit_fast_tiers_enabled():
+        return None
+    try:
+        import fast_tiers
+
+        result = await fast_tiers.resolve(transcript, user_id, session_id, channel="livekit")
+        if result is not None and getattr(result, "reply", ""):
+            return result.reply
+    except Exception as exc:  # never let the fast tier break a turn
+        logger.debug("LiveKit fast-tier resolve failed (non-fatal): %s", exc)
+    return None
+
+
 async def _run_pipeline(local_participant, frames: list[bytes], user_id: str, session_id: str) -> None:
     """STT → LLM → TTS pipeline, called once end-of-speech is detected."""
     pipeline_started = time.monotonic()
@@ -433,22 +463,39 @@ async def _run_pipeline(local_participant, frames: list[bytes], user_id: str, se
     except Exception as exc:
         logger.debug("LiveKit processing acknowledgement failed: %s", exc)
 
-    # ── LLM ──────────────────────────────────────────────────────────────────
+    # ── Deterministic fast tier (opt-in, OFF by default) ─────────────────────
+    # LiveKit is a *conversation* mode (plan §4.5/§8.3): brain-first is the default
+    # so it keeps feeling like a real person. Only when ZOE_LIVEKIT_FAST_TIERS is
+    # enabled does the shared core answer the unambiguous factual subset; logic
+    # lives in `_maybe_fast_tier` (unit-tested). Its own latency is tracked under
+    # the "fast_tier" stage so "llm" is never mislabelled as ~0ms.
+    fast_started = time.monotonic()
+    _fast_reply = await _maybe_fast_tier(transcript, user_id, session_id)
+    if _fast_reply is not None:
+        _VOICE_HEALTH["stage_latency_ms"]["fast_tier"] = round(
+            (time.monotonic() - fast_started) * 1000, 1
+        )
+
+    # ── LLM (skipped when the fast tier answered) ────────────────────────────
     response = "Sorry, I had trouble with that."
     llm_ok = True
-    stage_started = time.monotonic()
-    _health_update(last_stage="llm")
-    try:
-        from brain_dispatch import brain_oneshot
-        response = await brain_oneshot(transcript, session_id, user_id, voice_mode=True)
-    except Exception as exc:
-        llm_ok = False
-        _VOICE_HEALTH["pipeline_failures"] += 1
-        _health_update(last_stage="llm_failed", last_error=str(exc)[:240])
-        logger.error("LiveKit LLM error: %s", exc)
-    _VOICE_HEALTH["stage_latency_ms"]["llm"] = round(
-        (time.monotonic() - stage_started) * 1000, 1
-    )
+    if _fast_reply is not None:
+        response = _fast_reply
+        _health_update(last_stage="fast_tier")
+    else:
+        stage_started = time.monotonic()
+        _health_update(last_stage="llm")
+        try:
+            from brain_dispatch import brain_oneshot
+            response = await brain_oneshot(transcript, session_id, user_id, voice_mode=True)
+        except Exception as exc:
+            llm_ok = False
+            _VOICE_HEALTH["pipeline_failures"] += 1
+            _health_update(last_stage="llm_failed", last_error=str(exc)[:240])
+            logger.error("LiveKit LLM error: %s", exc)
+        _VOICE_HEALTH["stage_latency_ms"]["llm"] = round(
+            (time.monotonic() - stage_started) * 1000, 1
+        )
 
     await _send_data(local_participant, {"type": "state", "state": "responding"})
     await _send_data(local_participant, {"type": "transcript", "role": "zoe", "text": response})

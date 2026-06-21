@@ -92,6 +92,10 @@ class DispatchResult:
     ui: Optional[dict] = None
     source: str = "expert_dispatch"
     meta: dict = field(default_factory=dict)
+    # Provenance of the answer: "tier0" (regex shortcut) or "tier1.5" (expert
+    # dispatch). Set by fast_tiers; lets a channel recognise a fast-tier reply
+    # (e.g. LiveKit's add_to_chat_ctx=False rule). Metadata only — never rendered.
+    tier: str = ""
 
 
 def is_enabled() -> bool:
