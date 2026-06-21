@@ -14,7 +14,7 @@ This file defines the active project layout so the repo stays easy to navigate.
 
 - `scripts/setup/touchscreen/` - Raspberry Pi touchscreen installer and templates
 - `scripts/setup/` - deployment/service setup scripts
-- `docs/guides/TOUCHSCREEN_DEVICE_STACK_192.168.1.61.md` - touchscreen device source of truth
+- `docs/guides/TOUCHSCREEN_DEVICE_STACK.md` - touchscreen device source of truth
 
 ## Archived/Retired Runtime Trees
 

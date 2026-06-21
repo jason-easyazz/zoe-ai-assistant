@@ -15,6 +15,12 @@
     let skybridgeContext = {};
     let authProfiles = [];
     let authHydrationSequence = 0;
+    let idleTimer = null;
+    let clockTicker = null;
+
+    const queryParams = new URLSearchParams(location.search);
+    const configuredIdleMs = Number(queryParams.get('idle_ms') || localStorage.getItem('skybridge_idle_return_ms') || 75000);
+    const CARD_IDLE_MS = Number.isFinite(configuredIdleMs) ? Math.max(15000, configuredIdleMs) : 75000;
 
     const colors = {
         ambient: ['#5fc6ff', '#66d19e'],
@@ -27,6 +33,7 @@
         cacheEls();
         bindEvents();
         startOrb();
+        startClockTicker();
         renderHome();
         loadBackendStatus();
         setMode(mode);
@@ -58,6 +65,7 @@
         els.transcript = document.getElementById('skyTranscript');
         els.copy = document.getElementById('skyListeningCopy');
         els.form = document.getElementById('skyCommandForm');
+        els.commandCopy = document.getElementById('skyCommandCopy');
         els.input = document.getElementById('skyCommandInput');
         els.mic = document.getElementById('skyMicBtn');
         els.home = document.getElementById('skyHomeBtn');
@@ -67,6 +75,11 @@
         els.voiceTitle = document.getElementById('skyVoiceTitle');
         els.voiceDetail = document.getElementById('skyVoiceDetail');
         els.voiceAction = document.getElementById('skyVoiceAction');
+        els.ambientClock = document.getElementById('skyAmbientClock');
+        els.ambientClockHour = document.getElementById('skyAmbientClockHour');
+        els.ambientClockMinute = document.getElementById('skyAmbientClockMinute');
+        els.ambientClockMeridiem = document.getElementById('skyAmbientClockMeridiem');
+        els.ambientClockDate = document.getElementById('skyAmbientClockDate');
         els.canvas = document.getElementById('skyOrb');
         els.ctx = els.canvas.getContext('2d');
     }
@@ -93,6 +106,9 @@
         els.orbButton.addEventListener('click', toggleVoiceCapture);
         els.voiceAction.addEventListener('click', toggleVoiceCapture);
         els.home.addEventListener('click', () => renderHome({ showCards: true }));
+        ['pointerdown', 'keydown', 'touchstart'].forEach(type => {
+            document.addEventListener(type, noteUserActivity, { passive: true });
+        });
         els.cards.addEventListener('click', event => {
             const btn = event.target.closest('button[data-sky-action]');
             if (!btn) return;
@@ -179,6 +195,7 @@
             addTranscript(event.role, event.text);
         } else if (event.type === 'card') {
             addCard(event.card, true);
+            scheduleIdleReturn();
         } else if (event.type === 'cards') {
             renderSkybridgeResult(event.result || event);
         } else if (event.type === 'skybridge_context') {
@@ -201,7 +218,7 @@
             return;
         }
         currentUtterance = 'Heard: ' + query;
-        els.copy.textContent = currentUtterance;
+        setVoiceLayerText(currentUtterance);
         addTranscript('user', query);
         setState('thinking');
         const resolved = await resolveCommand(query);
@@ -267,7 +284,7 @@
         skybridgeContext = data.skybridge_context || skybridgeContext || {};
         setContext(contextLabelFor(intent), data.spoken_summary || 'Showing live data.');
         currentUtterance = data.spoken_summary || currentUtterance;
-        els.copy.textContent = currentUtterance;
+        setVoiceLayerText(currentUtterance);
         cards.forEach((card, index) => addCard(card, false, index * 90));
         if (!cards.length) {
             addCard({
@@ -279,6 +296,7 @@
                 }
             }, true);
         }
+        scheduleIdleReturn();
     }
 
     async function retireRenderedVoiceCards(data) {
@@ -331,6 +349,7 @@
             return;
         }
         clearCards();
+        scheduleIdleReturn();
         const top = matches[0];
         if (top.kind === 'setting') {
             setContext('Settings', top.title + ' is active for follow-up commands.');
@@ -354,15 +373,19 @@
 
     function renderHome(options) {
         const showCards = options && options.showCards;
+        clearIdleTimer();
         document.body.classList.add('sky-empty');
+        document.body.classList.add('sky-ambient-clock');
         commandFallbackOpen = false;
         document.body.classList.remove('sky-command-open');
+        document.body.classList.remove('sky-typing-fallback');
         syncVoiceFallbackState();
         currentUtterance = '';
         skybridgeContext = {};
         setContext('Listening', 'The surface will build itself when Zoe understands what you need.');
         clearCards();
-        els.copy.textContent = 'Listening. Ask Zoe for anything.';
+        setVoiceLayerText('Listening. Ask Zoe for anything.');
+        updateAllClocks();
         if (showCards && window.SkybridgeCapabilities && typeof window.SkybridgeCapabilities.getHomeCards === 'function') {
             setContext('Skybridge home', 'Start with voice, then keep the useful cards in reach.');
             window.SkybridgeCapabilities.getHomeCards().forEach((card, index) => {
@@ -377,11 +400,13 @@
         cardSequence = 0;
         els.cards.innerHTML = '';
         document.body.classList.add('sky-empty');
+        document.body.classList.add('sky-ambient-clock');
         requestAnimationFrame(resizeOrb);
     }
 
     function addCard(card, prepend, delayMs) {
         document.body.classList.remove('sky-empty');
+        document.body.classList.remove('sky-ambient-clock');
         requestAnimationFrame(resizeOrb);
         const wrapper = document.createElement('div');
         wrapper.innerHTML = window.SkybridgeRenderer.render(card);
@@ -395,9 +420,85 @@
             els.cards.appendChild(node);
         }
         hydrateAuthCard(node, card);
+        updateAllClocks();
+        scheduleIdleReturn();
         while (els.cards.children.length > 8) {
             els.cards.removeChild(els.cards.lastElementChild);
         }
+    }
+
+    function clearIdleTimer() {
+        if (idleTimer) {
+            clearTimeout(idleTimer);
+            idleTimer = null;
+        }
+    }
+
+    function noteUserActivity() {
+        if (!document.body.classList.contains('sky-empty')) {
+            scheduleIdleReturn();
+        }
+    }
+
+    function scheduleIdleReturn() {
+        clearIdleTimer();
+        if (document.body.classList.contains('sky-empty')) return;
+        idleTimer = setTimeout(returnToAmbientClock, CARD_IDLE_MS);
+    }
+
+    function returnToAmbientClock() {
+        idleTimer = null;
+        const voiceBusy = voice && (voice.isRecording || voice.speaking || voice.serverBusy);
+        if (voiceBusy || orbState === 'listening' || orbState === 'thinking' || orbState === 'responding') {
+            scheduleIdleReturn();
+            return;
+        }
+        renderHome({ idle: true });
+        setStatus('Ambient');
+    }
+
+    function startClockTicker() {
+        updateAllClocks();
+        clockTicker = setInterval(updateAllClocks, 1000);
+    }
+
+    function clockParts(timezone) {
+        const options = timezone ? { timeZone: timezone } : {};
+        const now = new Date();
+        const timeParts = new Intl.DateTimeFormat(undefined, Object.assign({
+            hour: 'numeric',
+            minute: '2-digit',
+            hour12: true
+        }, options)).formatToParts(now);
+        const dateLabel = new Intl.DateTimeFormat(undefined, Object.assign({
+            weekday: 'long',
+            day: 'numeric',
+            month: 'long'
+        }, options)).format(now);
+        return {
+            hour: (timeParts.find(part => part.type === 'hour') || {}).value || '',
+            minute: (timeParts.find(part => part.type === 'minute') || {}).value || '',
+            meridiem: (timeParts.find(part => part.type === 'dayPeriod') || {}).value || '',
+            date: dateLabel
+        };
+    }
+
+    function updateClockElement(root, timezone) {
+        if (!root) return;
+        const parts = clockParts(timezone || root.dataset.timezone || '');
+        const hour = root.querySelector('[data-clock-hour]');
+        const minute = root.querySelector('[data-clock-minute]');
+        const meridiem = root.querySelector('[data-clock-meridiem]');
+        const dateLabel = root.querySelector('[data-clock-date]');
+        if (hour) hour.textContent = parts.hour;
+        if (minute) minute.textContent = parts.minute;
+        if (meridiem) meridiem.textContent = parts.meridiem;
+        if (dateLabel) dateLabel.textContent = parts.date;
+    }
+
+    function updateAllClocks() {
+        if (els.ambientClock) updateClockElement(els.ambientClock);
+        document.querySelectorAll('.sky-live-clock').forEach(node => updateClockElement(node));
     }
 
     async function hydrateAuthCard(node, card) {
@@ -449,18 +550,17 @@
             return;
         }
         const baseAction = props.actions && props.actions[0] ? props.actions[0] : {};
+        const panelId = currentPanelId({});
         target.innerHTML = profiles.map(profile => {
             const name = window.SkybridgeRenderer.escapeHtml(profile.username || profile.name || profile.user_id);
-            const role = window.SkybridgeRenderer.escapeHtml(profile.role || (profile.user_id === defaultUserId ? 'Default profile' : 'Profile'));
             const avatar = window.SkybridgeRenderer.escapeHtml(authInitials(profile));
             const userId = window.SkybridgeRenderer.escapeHtml(profile.user_id);
+            const route = window.SkybridgeRenderer.escapeHtml(buildLoginRoute(panelId, profile.user_id));
             const selected = profile.user_id === defaultUserId ? ' is-default' : '';
             const challengeId = window.SkybridgeRenderer.escapeHtml(baseAction.challenge_id || '');
             const actionContext = window.SkybridgeRenderer.escapeHtml(baseAction.action_context || 'Enter PIN');
-            return '<button type="button" class="sky-auth-profile' + selected + '" data-sky-action="auth" data-route="" data-challenge-id="' + challengeId + '" data-action-context="' + actionContext + '" data-user-id="' + userId + '" data-user-name="' + name + '" data-user-avatar="' + avatar + '">' +
-                '<span class="sky-auth-avatar">' + avatar + '</span>' +
-                '<span class="sky-auth-person"><strong>' + name + '</strong><small>' + role + '</small></span>' +
-                '<span class="sky-auth-enter">PIN</span>' +
+            return '<button type="button" class="sky-auth-profile' + selected + '" aria-label="Sign in as ' + name + '" data-sky-action="auth" data-route="' + route + '" data-challenge-id="' + challengeId + '" data-action-context="' + actionContext + '" data-user-id="' + userId + '" data-user-name="' + name + '" data-user-avatar="' + avatar + '">' +
+                '<span class="sky-auth-person"><strong>' + name + '</strong></span>' +
                 '</button>';
         }).join('');
     }
@@ -501,7 +601,7 @@
     function addTranscript(role, text) {
         if (!text) return;
         currentUtterance = (role === 'user' ? 'Heard: ' : 'Zoe: ') + text;
-        els.copy.textContent = currentUtterance;
+        setVoiceLayerText(currentUtterance);
         const line = document.createElement('div');
         line.className = 'sky-line';
         line.innerHTML = '<strong>' + (role === 'user' ? 'You' : 'Zoe') + ':</strong> ' + window.SkybridgeRenderer.escapeHtml(text);
@@ -523,16 +623,16 @@
         if (transportNotice && (document.body.classList.contains('sky-empty') || currentUtterance)) return;
         if (!document.body.classList.contains('sky-empty')) {
             const previous = currentUtterance;
-            els.copy.textContent = 'Notice: ' + text;
+            setVoiceLayerText('Notice: ' + text);
             if (previous) {
                 setTimeout(() => {
                     if (!document.body.classList.contains('sky-empty') && currentUtterance === previous) {
-                        els.copy.textContent = previous;
+                        setVoiceLayerText(previous);
                     }
                 }, 4500);
             }
         } else {
-            els.copy.textContent = text;
+            setVoiceLayerText(text);
         }
     }
 
@@ -549,7 +649,7 @@
             responding: 'Zoe is speaking. You can interrupt when needed.'
         };
         if (document.body.classList.contains('sky-empty') || !currentUtterance) {
-            els.copy.textContent = copy[state] || copy.ambient;
+            setVoiceLayerText(copy[state] || copy.ambient);
         }
         setStatus(state.charAt(0).toUpperCase() + state.slice(1));
         updateVoiceControl(state);
@@ -567,10 +667,17 @@
     function openCommandFallback(message) {
         commandFallbackOpen = true;
         document.body.classList.add('sky-command-open');
+        document.body.classList.add('sky-typing-fallback');
         document.body.classList.toggle('sky-voice-fallback', !canUseMicrophone());
         if (message) els.input.placeholder = message;
         updateVoiceHint('Type to Zoe', message || 'Voice is unavailable here. The same resolver will render cards from typed requests.', 'Type');
         requestAnimationFrame(() => els.input.focus({ preventScroll: true }));
+    }
+
+    function setVoiceLayerText(text) {
+        const value = text || 'Listening';
+        els.copy.textContent = value;
+        if (els.commandCopy) els.commandCopy.textContent = value;
     }
 
     function getMicGuidance() {
@@ -712,6 +819,8 @@
 
     window.addEventListener('beforeunload', () => {
         if (animationFrame) cancelAnimationFrame(animationFrame);
+        if (clockTicker) clearInterval(clockTicker);
+        clearIdleTimer();
         if (voice) voice.stop();
     });
 

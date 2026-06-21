@@ -85,6 +85,12 @@ def test_intent_public_time_query() -> None:
     assert d.intent_name == "time_query"
 
 
+def test_intent_time_planning_clarification_is_public() -> None:
+    d = classify("what is the best time to leave", _FakeIntent("time_planning_clarification"))
+    assert d.scope == "public"
+    assert d.intent_name == "time_planning_clarification"
+
+
 def test_intent_weather_is_public() -> None:
     d = classify("any idea what it'll do today", _FakeIntent("weather"))
     assert d.scope == "public"

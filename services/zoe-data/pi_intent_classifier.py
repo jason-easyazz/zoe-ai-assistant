@@ -14,13 +14,14 @@ import logging
 import glob
 import os
 import re
-import shutil
 import time
 import uuid
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any, Mapping
 
 from pi_runtime_probe import probe_pi_runtime
+from zoe_pi_promotion import LOW_RISK_PI_INTENT_GROUPS, intent_group_for_intent
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,9 @@ PI_INTENT_EXECUTE_THRESHOLD = 0.78
 PI_INTENT_HINT_THRESHOLD = 0.55
 PI_INTENT_DEFAULT_TIMEOUT_S = 4.0
 PI_INTENT_MAX_WORDS = 32
+PI_RUNTIME_PROBE_CACHE_TTL_S = 5.0
+PI_INTENT_PREFILTER_ENABLED = True
+_RUNTIME_PROBE_CACHE_MAX_ENTRIES = 32
 
 _ALLOWED_EXECUTABLE_INTENTS = {
     "time_query",
@@ -80,7 +84,56 @@ _TASK_LANES = {
     "chat": set(),
 }
 
+_LOW_RISK_PI_INTENT_CANDIDATES = frozenset(
+    intent for intents in LOW_RISK_PI_INTENT_GROUPS.values() for intent in intents
+)
+_PI_PROMPT_TASK_LANES = {"fast_tool": sorted(_LOW_RISK_PI_INTENT_CANDIDATES), "chat": []}
+
 _SECRET_ENV_MARKERS = ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENROUTER_API_KEY")
+_PI_CLASSIFIER_BASE_FLAGS = (
+    "--no-tools",
+    "--no-extensions",
+    "--no-skills",
+    "--no-prompt-templates",
+    "--no-themes",
+    "--no-context-files",
+    "--thinking",
+    "off",
+)
+_PI_CLASSIFIER_SYSTEM_PROMPT = (
+    "You are Zoe's offline intent classifier. Classify only; do not answer the user. "
+    "Return exactly one compact JSON object with keys intent, slots, confidence, task_lane, reason. "
+    "Use intent null and task_lane chat for casual chat, advice, research, or uncertain requests. "
+    "Only choose from the low-risk candidate intents in the user prompt. "
+    "Never create intents outside that candidate set."
+)
+
+_LOW_RISK_TASK_SIGNAL_RE = re.compile(
+    r"\b("
+    r"rain|umbrella|forecast|weather|jacket|temperature|temp|storm|windy|humid|"
+    r"remember|remind|reminders?|due|todo|"
+    r"list|shopping|groceries|"
+    r"timer|alarm|minute|minutes|hour|hours|"
+    r"calculate|math|multiplied|divided|percent|"
+    r"briefing|agenda"
+    r")\b",
+    re.I,
+)
+_LOW_RISK_TASK_PHRASE_RE = re.compile(
+    r"("
+    r"\bwhat(?:'s| is) my day\b|"
+    r"\bmy day looking\b|"
+    r"\bleft on my day\b|"
+    r"\bwhat(?:'s| is) coming up today\b|"
+    r"\bwhat(?:'s| is) on (?:my |the )?(?:shopping )?list\b|"
+    r"\b(?:add|remove)\b.+\b(?:list|shopping|grocer(?:y|ies)|reminder|todo)\b|"
+    r"\b(?:is it|will it be)\s+(?:hot|cold)\b|"
+    r"\b(?:hot|cold)\s+(?:today|tonight|tomorrow|outside)\b|"
+    r"\b\d+\s*(?:\+|-|x|×|\*|/|÷|plus|minus|times)\s*\d+\b|"
+    r"\badd\s+\d+\s+and\s+\d+\b"
+    r")",
+    re.I,
+)
 
 
 @dataclass(frozen=True)
@@ -95,6 +148,8 @@ class PiIntentClassifierConfig:
     offline_only: bool = True
     no_approve: bool = True
     transport: str = "print"
+    prefilter_enabled: bool = PI_INTENT_PREFILTER_ENABLED
+    runtime_probe_cache_ttl_seconds: float = PI_RUNTIME_PROBE_CACHE_TTL_S
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "PiIntentClassifierConfig":
@@ -111,6 +166,12 @@ class PiIntentClassifierConfig:
             offline_only=_env_bool(values.get("ZOE_PI_OFFLINE_ONLY"), default=True),
             no_approve=_env_bool(values.get("ZOE_PI_INTENT_NO_APPROVE"), default=True),
             transport=(values.get("ZOE_PI_INTENT_TRANSPORT") or "print").strip().lower() or "print",
+            prefilter_enabled=_env_bool(values.get("ZOE_PI_INTENT_PREFILTER_ENABLED"), default=PI_INTENT_PREFILTER_ENABLED),
+            runtime_probe_cache_ttl_seconds=float(
+                values.get("ZOE_PI_INTENT_RUNTIME_PROBE_CACHE_TTL_SECONDS")
+                or values.get("ZOE_PI_RUNTIME_PROBE_CACHE_TTL_SECONDS")
+                or PI_RUNTIME_PROBE_CACHE_TTL_S
+            ),
         )
 
     def validate(self) -> None:
@@ -120,6 +181,8 @@ class PiIntentClassifierConfig:
             raise ValueError("ZOE_PI_INTENT_MAX_WORDS must be positive")
         if self.offline_only and self.provider.lower() not in {"ollama", "local", "llama", "llamacpp"}:
             raise ValueError("Pi intent classification requires a local/offline provider")
+        if self.runtime_probe_cache_ttl_seconds < 0:
+            raise ValueError("ZOE_PI_INTENT_RUNTIME_PROBE_CACHE_TTL_SECONDS must be zero or positive")
         if self.transport not in {"print", "rpc"}:
             raise ValueError("ZOE_PI_INTENT_TRANSPORT must be print or rpc")
 
@@ -136,6 +199,8 @@ class PiIntentClassifierConfig:
             "offline_only": self.offline_only,
             "no_approve": self.no_approve,
             "transport": self.transport,
+            "prefilter_enabled": self.prefilter_enabled,
+            "runtime_probe_cache_ttl_seconds": self.runtime_probe_cache_ttl_seconds,
         }
 
 
@@ -169,7 +234,7 @@ class PiIntentClassification:
 
 def pi_intent_status(env: Mapping[str, str] | None = None) -> dict[str, Any]:
     config = PiIntentClassifierConfig.from_env(env)
-    status = {"config": _safe_config_dict(config)}
+    status = {"config": _safe_config_dict(config), "promotion": pi_intent_promotion_status(env)}
     if not config.enabled:
         status.update({"ok": False, "status": "disabled", "reason": "ZOE_PI_INTENT_ENABLED is false"})
         return status
@@ -186,6 +251,34 @@ def pi_intent_status(env: Mapping[str, str] | None = None) -> dict[str, Any]:
     return status
 
 
+def pi_intent_promotion_status(env: Mapping[str, str] | None = None) -> dict[str, Any]:
+    values = env if env is not None else os.environ
+    requested_groups, active_groups, ignored_groups = _pi_intent_promotion_groups(
+        values.get("ZOE_PI_INTENT_PROMOTED_GROUPS") or ""
+    )
+    auto_promote_requested = _env_bool(values.get("ZOE_PI_INTENT_AUTO_PROMOTE"), default=False)
+    return {
+        "auto_promote_requested": auto_promote_requested,
+        "auto_promote_status": "evidence_only" if not auto_promote_requested else "requires_explicit_apply_path",
+        "auto_promote_reason": (
+            "ZOE_PI_INTENT_AUTO_PROMOTE is false; reports remain recommendations only"
+            if not auto_promote_requested
+            else "auto-promote is requested but this runtime only exposes guarded promotion actions"
+        ),
+        "requested_groups": list(requested_groups),
+        "active_groups": list(active_groups),
+        "ignored_groups": list(ignored_groups),
+        "allowlisted_groups": sorted(LOW_RISK_PI_INTENT_GROUPS),
+    }
+
+
+def pi_intent_is_promoted(intent: str | None, env: Mapping[str, str] | None = None) -> bool:
+    group = intent_group_for_intent(intent)
+    if not group:
+        return False
+    return group in set(pi_intent_promotion_status(env)["active_groups"])
+
+
 async def classify_with_pi_intent_governor(
     text: str,
     *,
@@ -199,9 +292,12 @@ async def classify_with_pi_intent_governor(
         return None
     if len((text or "").split()) > active_config.max_words:
         return None
+    if active_config.prefilter_enabled and not pi_intent_prefilter_allows(text):
+        logger.debug("Pi intent governor skipped: no low-risk task signal")
+        return None
 
     runtime_env = _runtime_probe_env(env, active_config)
-    probe = probe_pi_runtime(runtime_env)
+    probe = _probe_pi_runtime_cached(runtime_env, ttl_seconds=active_config.runtime_probe_cache_ttl_seconds)
     if not probe.ok:
         logger.debug("Pi intent governor unavailable: %s", probe.to_dict())
         return None
@@ -258,23 +354,25 @@ async def _classify_with_pi_rpc(
         logger.debug("Pi RPC intent governor failed: %s", exc)
         return None
     latency_ms = (time.perf_counter() - start) * 1000
-    return _parse_pi_classification(raw, latency_ms=latency_ms)
+    parsed = _parse_pi_classification(raw, latency_ms=latency_ms)
+    if parsed is None:
+        text = raw.strip().lstrip("` \n").rstrip("` \n")
+        if _extract_first_json_object(text) is None:
+            await worker.reset()
+            logger.debug("Pi RPC intent governor returned unparsable output; worker reset")
+    return parsed
 
 
 def _classification_prompt(text: str, *, context_turns: str = "") -> str:
-    lanes = {lane: sorted(intents) for lane, intents in _TASK_LANES.items() if intents}
     return (
-        "You are Zoe's fast ambiguous-intent governor. Classify only; do not answer the user.\n"
-        "Return exactly one compact JSON object and no markdown.\n"
-        "Schema: {\"intent\": string|null, \"slots\": object, \"confidence\": number, \"task_lane\": \"fast_tool\"|\"governed_agent\"|\"chat\", \"reason\": string}.\n"
-        f"Executable intents: {sorted(_ALLOWED_EXECUTABLE_INTENTS)}\n"
-        f"Task lanes: {json.dumps(lanes, sort_keys=True)}\n"
-        "Use chat/null when this is normal conversation, advice, research, or the request needs more context.\n"
-        "Use governed_agent for self-extension, complaints, or missing capability requests.\n"
-        "Never create memory-write intents from ambiguous phrasing; only deterministic Zoe rules may write memory.\n"
-        "Short weather examples: 'rain later', 'umbrella later', and 'need a jacket tonight' are weather with task_lane fast_tool.\n"
-        "Short reminder examples: 'anything due today' and 'what do I need to do' are reminder_list if no other domain is named.\n"
-        "Keep confidence below 0.78 unless the route is obvious.\n"
+        "Schema: {\"intent\": string|null, \"slots\": object, \"confidence\": number, "
+        "\"task_lane\": \"fast_tool\"|\"chat\", \"reason\": string}.\n"
+        f"Low-risk candidate intents: {sorted(_LOW_RISK_PI_INTENT_CANDIDATES)}\n"
+        f"Task lanes: {json.dumps(_PI_PROMPT_TASK_LANES, sort_keys=True)}\n"
+        "Hints: rain/umbrella/jacket=>weather; reminders/due/todo=>reminder_list; "
+        "add numbers/percent/divided/times=>calculate; day/agenda/coming up=>daily_briefing; "
+        "timer/alarm=>timer_create. "
+        "Keep confidence below 0.78 unless obvious.\n"
         f"Recent context: {_sanitize_prompt_value(context_turns) or '(none)'}\n"
         f"User message: {_sanitize_prompt_value(text)}\n"
         "JSON:"
@@ -286,6 +384,9 @@ def _pi_command(config: PiIntentClassifierConfig, prompt: str) -> list[str]:
         config.command,
         "-p",
         "--no-session",
+        *_PI_CLASSIFIER_BASE_FLAGS,
+        "--system-prompt",
+        _PI_CLASSIFIER_SYSTEM_PROMPT,
         "--provider",
         config.provider,
         "--model",
@@ -303,6 +404,9 @@ def _pi_rpc_command(config: PiIntentClassifierConfig) -> list[str]:
         "--mode",
         "rpc",
         "--no-session",
+        *_PI_CLASSIFIER_BASE_FLAGS,
+        "--system-prompt",
+        _PI_CLASSIFIER_SYSTEM_PROMPT,
         "--provider",
         config.provider,
         "--model",
@@ -341,7 +445,7 @@ class _PiRpcIntentWorker:
                 payload = json.dumps({"id": request_id, "type": "prompt", "message": prompt}, separators=(",", ":"))
                 self.proc.stdin.write((payload + "\n").encode())
                 await self.proc.stdin.drain()
-                return await asyncio.wait_for(self._read_turn(), timeout=timeout_seconds)
+                return await asyncio.wait_for(self._read_turn(request_id), timeout=timeout_seconds)
             except BaseException:
                 await self._reset_process_locked()
                 raise
@@ -373,9 +477,10 @@ class _PiRpcIntentWorker:
             env=self.env,
         )
 
-    async def _read_turn(self) -> str:
+    async def _read_turn(self, request_id: str) -> str:
         assert self.proc is not None and self.proc.stdout is not None
         latest_text = ""
+        prompt_accepted = False
         while True:
             line = await self.proc.stdout.readline()
             if not line:
@@ -384,9 +489,20 @@ class _PiRpcIntentWorker:
                 event = json.loads(line.decode(errors="replace"))
             except json.JSONDecodeError:
                 continue
+            if _rpc_response_matches_request(event, request_id):
+                if not event.get("success"):
+                    raise RuntimeError(str(event.get("error") or "Pi RPC prompt failed"))
+                prompt_accepted = True
+                continue
+            if not prompt_accepted:
+                continue
+            if not _rpc_event_matches_request(event, request_id):
+                continue
             text = _assistant_text_from_rpc_event(event)
             if text:
                 latest_text = text
+            if event.get("type") == "turn_end" and latest_text:
+                return latest_text
             if event.get("type") == "agent_end":
                 return latest_text
 
@@ -401,6 +517,23 @@ def _rpc_worker_for(config: PiIntentClassifierConfig, env: Mapping[str, str]) ->
         worker = _PiRpcIntentWorker(config, env)
         _RPC_WORKERS[key] = worker
     return worker
+
+
+def _rpc_event_matches_request(event: Mapping[str, Any], request_id: str) -> bool:
+    event_ids = [event.get("id"), event.get("request_id"), event.get("requestId")]
+    turn = event.get("turn")
+    if isinstance(turn, Mapping):
+        event_ids.extend([turn.get("id"), turn.get("request_id"), turn.get("requestId")])
+    present_ids = [str(value) for value in event_ids if value is not None]
+    return not present_ids or request_id in present_ids
+
+
+def _rpc_response_matches_request(event: Mapping[str, Any], request_id: str) -> bool:
+    return (
+        event.get("type") == "response"
+        and event.get("command") == "prompt"
+        and str(event.get("id") or "") == request_id
+    )
 
 
 def _assistant_text_from_rpc_event(event: Mapping[str, Any]) -> str:
@@ -488,6 +621,50 @@ def _task_lane_for_intent(intent: str | None) -> str:
     return "chat"
 
 
+_RUNTIME_PROBE_CACHE: dict[tuple[str, ...], tuple[float, Any]] = {}
+
+
+def _probe_pi_runtime_cached(runtime_env: Mapping[str, str], *, ttl_seconds: float):
+    if ttl_seconds <= 0:
+        return probe_pi_runtime(runtime_env)
+    key = _runtime_probe_cache_key(runtime_env)
+    now = time.monotonic()
+    cached = _RUNTIME_PROBE_CACHE.get(key)
+    if cached and now - cached[0] <= ttl_seconds:
+        return cached[1]
+    _evict_runtime_probe_cache(now=now, ttl_seconds=ttl_seconds, incoming_key=key)
+    probe = probe_pi_runtime(runtime_env)
+    _RUNTIME_PROBE_CACHE[key] = (now, probe)
+    return probe
+
+
+def _evict_runtime_probe_cache(*, now: float, ttl_seconds: float, incoming_key: tuple[str, ...]) -> None:
+    expired_keys = [key for key, (cached_at, _probe) in _RUNTIME_PROBE_CACHE.items() if now - cached_at > ttl_seconds]
+    for key in expired_keys:
+        _RUNTIME_PROBE_CACHE.pop(key, None)
+    if incoming_key in _RUNTIME_PROBE_CACHE or len(_RUNTIME_PROBE_CACHE) < _RUNTIME_PROBE_CACHE_MAX_ENTRIES:
+        return
+    oldest_key = min(_RUNTIME_PROBE_CACHE, key=lambda key: _RUNTIME_PROBE_CACHE[key][0])
+    _RUNTIME_PROBE_CACHE.pop(oldest_key, None)
+
+
+def _runtime_probe_cache_key(runtime_env: Mapping[str, str]) -> tuple[str, ...]:
+    fields = (
+        "ZOE_PI_ENABLED",
+        "ZOE_PI_ALLOW_EXECUTION",
+        "ZOE_PI_OFFLINE_ONLY",
+        "ZOE_PI_LOCAL_MODEL_REQUIRED",
+        "ZOE_PI_LOCAL_MODEL_CONFIGURED",
+        "ZOE_PI_COMMAND",
+        "ZOE_PI_CWD",
+        "ZOE_PI_AGENT_DIR",
+        "ZOE_PI_TIMEOUT_SECONDS",
+        "PATH",
+        "HOME",
+    )
+    return tuple(str(runtime_env.get(field) or "") for field in fields)
+
+
 def _runtime_probe_env(env: Mapping[str, str] | None, config: PiIntentClassifierConfig) -> dict[str, str]:
     values = dict(os.environ if env is None else env)
     values.update(
@@ -502,7 +679,9 @@ def _runtime_probe_env(env: Mapping[str, str] | None, config: PiIntentClassifier
     )
     values["ZOE_PI_ALLOW_EXECUTION"] = values.get("ZOE_PI_ALLOW_EXECUTION", "false")
     values["ZOE_PI_LOCAL_MODEL_CONFIGURED"] = values.get("ZOE_PI_LOCAL_MODEL_CONFIGURED", "false")
-    values["PATH"] = _path_with_node(values.get("PATH", ""))
+    values["PATH"] = _path_with_node(
+        values.get("PATH", ""), pi_command=config.command, discover_runtime_bins=env is None
+    )
     return values
 
 
@@ -515,19 +694,24 @@ def _pi_subprocess_env(env: Mapping[str, str]) -> dict[str, str]:
     return values
 
 
-def _path_with_node(path: str) -> str:
+def _path_with_node(path: str, *, pi_command: str, discover_runtime_bins: bool) -> str:
     parts = [part for part in path.split(os.pathsep) if part]
-    joined = os.pathsep.join(parts)
-    if shutil.which("node", path=joined) and shutil.which("npm", path=joined):
-        return joined
-    node_bin = os.environ.get("ZOE_NVM_NODE_BIN") or _discover_nvm_node_bin()
+    if not discover_runtime_bins:
+        return os.pathsep.join(parts)
+    configured_node_bin = os.environ.get("ZOE_NVM_NODE_BIN")
+    node_bin = configured_node_bin if _nvm_bin_has_runtime(configured_node_bin, pi_command=pi_command) else None
+    node_bin = node_bin or _discover_nvm_node_bin(pi_command=pi_command)
     if node_bin and node_bin not in parts:
         parts.append(node_bin)
     return os.pathsep.join(parts)
 
 
-def _discover_nvm_node_bin() -> str | None:
-    candidates = [path for path in glob.glob(os.path.expanduser("~/.nvm/versions/node/*/bin")) if os.path.isdir(path)]
+def _discover_nvm_node_bin(*, pi_command: str) -> str | None:
+    candidates = [
+        path
+        for path in glob.glob(os.path.expanduser("~/.nvm/versions/node/*/bin"))
+        if _nvm_bin_has_runtime(path, pi_command=pi_command)
+    ]
     if not candidates:
         return None
 
@@ -539,6 +723,16 @@ def _discover_nvm_node_bin() -> str | None:
             return (0,)
 
     return sorted(candidates, key=version_key)[-1]
+
+
+def _nvm_bin_has_runtime(path: str | None, *, pi_command: str) -> bool:
+    return bool(
+        path
+        and os.path.isdir(path)
+        and os.path.exists(os.path.join(path, "node"))
+        and os.path.exists(os.path.join(path, "npm"))
+        and os.path.exists(os.path.join(path, pi_command))
+    )
 
 
 def _sanitize_prompt_value(value: str) -> str:
@@ -560,6 +754,20 @@ def _bounded_float(value: Any, *, default: float) -> float:
     return min(1.0, max(0.0, parsed))
 
 
+@lru_cache(maxsize=16)
+def _pi_intent_promotion_groups(value: str) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    requested_groups = tuple(_csv_env(value))
+    active_groups = tuple(group for group in requested_groups if group in LOW_RISK_PI_INTENT_GROUPS)
+    ignored_groups = tuple(group for group in requested_groups if group not in LOW_RISK_PI_INTENT_GROUPS)
+    return requested_groups, active_groups, ignored_groups
+
+
+def _csv_env(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return sorted({item.strip() for item in value.split(",") if item.strip()})
+
+
 def _env_bool(value: str | None, *, default: bool) -> bool:
     if value is None or str(value).strip() == "":
         return default
@@ -571,11 +779,19 @@ def _env_bool(value: str | None, *, default: bool) -> bool:
     raise ValueError(f"Unrecognized boolean env var value: {value!r}")
 
 
+def pi_intent_prefilter_allows(text: str) -> bool:
+    normalized = str(text or "")
+    return bool(_LOW_RISK_TASK_SIGNAL_RE.search(normalized) or _LOW_RISK_TASK_PHRASE_RE.search(normalized))
+
+
 __all__ = [
     "PI_INTENT_EXECUTE_THRESHOLD",
     "PI_INTENT_HINT_THRESHOLD",
     "PiIntentClassification",
     "PiIntentClassifierConfig",
+    "pi_intent_is_promoted",
+    "pi_intent_promotion_status",
     "classify_with_pi_intent_governor",
     "pi_intent_status",
+    "pi_intent_prefilter_allows",
 ]

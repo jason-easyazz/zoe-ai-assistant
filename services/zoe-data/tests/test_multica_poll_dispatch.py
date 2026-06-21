@@ -5,6 +5,8 @@ from multica_poll_dispatch import (
     chain_is_active,
     chain_is_running,
     chain_needs_dispatch,
+    chain_needs_reconcile,
+    chain_poll_failed,
     is_stale_in_progress,
 )
 import executors.kanban_adapter as ka
@@ -15,6 +17,52 @@ _NOW = dt.datetime(2026, 6, 14, 12, 0, tzinfo=dt.timezone.utc)
 
 def _aged(hours):
     return (_NOW - dt.timedelta(hours=hours)).isoformat()
+
+
+def test_chain_poll_failed_detects_sentinels_but_not_real_status():
+    # The timeout/error sentinels from _poll_chain_guarded — a failed poll, NOT a
+    # real "inactive" state. Previously these silently stranded in-progress chains.
+    assert chain_poll_failed({"found": False, "status": "poll_timeout", "timed_out": True}) is True
+    assert chain_poll_failed({"found": False, "status": "poll_error", "error": "boom"}) is True
+    assert chain_poll_failed({}) is True
+    # Real statuses are NOT poll failures.
+    assert chain_poll_failed({"status": "partial", "phases": {"implement": "done"}}) is False
+    assert chain_poll_failed({"status": "running"}) is False
+    assert chain_poll_failed({"found": False, "status": "not_found"}) is False
+
+
+def test_resolve_chain_for_dispatch_repolls_only_on_sentinel():
+    """The re-poll recovery (main._resolve_chain_for_dispatch) that stops a poll
+    timeout/error sentinel from stranding an in-progress chain: a sentinel triggers
+    ONE fresh re-poll with a longer (>=60s) timeout, then the backfill decides on
+    the resolved chain; a real chain is returned unchanged with no extra poll."""
+    import asyncio
+
+    from main import _resolve_chain_for_dispatch
+
+    calls = []
+
+    async def _repoll(ref, *, issue=None, timeout=None):
+        calls.append(timeout)
+        return {"found": True, "status": "partial", "phases": {"implement": "done"}}
+
+    sentinel = {"found": False, "status": "poll_timeout", "timed_out": True}
+    out = asyncio.run(
+        _resolve_chain_for_dispatch(
+            sentinel, ref="multica:x", issue={"id": "x"}, poll_guarded=_repoll, poll_timeout=20.0
+        )
+    )
+    assert out["status"] == "partial"
+    assert len(calls) == 1 and calls[0] >= 60.0
+
+    real = {"found": True, "status": "partial", "phases": {"implement": "done"}}
+    out2 = asyncio.run(
+        _resolve_chain_for_dispatch(
+            real, ref="multica:y", issue={"id": "y"}, poll_guarded=_repoll, poll_timeout=20.0
+        )
+    )
+    assert out2 is real
+    assert len(calls) == 1  # no second poll for a real chain
 
 
 def test_chain_needs_dispatch_not_found():
@@ -29,6 +77,35 @@ def test_chain_needs_dispatch_running_blocked_done():
     assert chain_needs_dispatch({"found": True, "status": "running"}) is False
     assert chain_needs_dispatch({"found": True, "status": "blocked"}) is False
     assert chain_needs_dispatch({"found": True, "status": "done"}) is False
+
+
+def test_chain_needs_reconcile_partial_non_terminal():
+    # A partial (regressed, ready-to-dispatch) chain needs board reconciliation.
+    assert chain_needs_reconcile({"found": True, "status": "partial"}) is True
+
+
+def test_chain_needs_reconcile_suppressed_by_terminal_flags():
+    assert (
+        chain_needs_reconcile(
+            {"found": True, "status": "partial", "pipeline": {"terminal_block": True}}
+        )
+        is False
+    )
+    assert (
+        chain_needs_reconcile(
+            {"found": True, "status": "partial", "pipeline": {"fingerprint_abort": True}}
+        )
+        is False
+    )
+
+
+def test_chain_needs_reconcile_non_partial_statuses():
+    # running/blocked/done/not_found are handled by their own branches.
+    assert chain_needs_reconcile({"found": True, "status": "running"}) is False
+    assert chain_needs_reconcile({"found": True, "status": "blocked"}) is False
+    assert chain_needs_reconcile({"found": True, "status": "done"}) is False
+    assert chain_needs_reconcile({"found": False, "status": "not_found"}) is False
+    assert chain_needs_reconcile({}) is False
 
 
 def test_chain_needs_dispatch_for_operator_resumed_blocked_executor_row():

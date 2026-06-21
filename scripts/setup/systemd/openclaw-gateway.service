@@ -1,0 +1,29 @@
+# OpenClaw agent gateway (Gemma 4 E2B + browser fallback), port 18789.
+# Requires the `openclaw` npm package installed globally (see README).
+[Unit]
+Description=OpenClaw Gateway (agent fallback, port 18789)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Adjust the node path if you are not using nvm.
+ExecStart=%h/.nvm/current/bin/node %h/.nvm/current/lib/node_modules/openclaw/dist/index.js gateway run --force --port 18789
+Restart=always
+RestartSec=5
+KillMode=process
+Environment=HOME=%h
+Environment=TMPDIR=/tmp
+Environment=OPENCLAW_GATEWAY_PORT=18789
+Environment=NODE_COMPILE_CACHE=%h/.cache/node-compile
+# OPENCLAW_GATEWAY_TOKEN and other secrets live in .env files (never inline them here).
+EnvironmentFile=-%h/assistant/.env
+EnvironmentFile=-%h/assistant/.env.openclaw-secrets
+
+# Light hardening (user-service compatible).
+NoNewPrivileges=true
+RestrictRealtime=true
+# Note: SystemCallErrorNumber is intentionally omitted -- it is a no-op without a
+# matching SystemCallFilter, which is too aggressive for the Node/openclaw runtime.
+
+[Install]
+WantedBy=default.target

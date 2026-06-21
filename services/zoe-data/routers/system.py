@@ -4,12 +4,13 @@ import json
 import logging
 import os
 import re
+import time
 from typing import Any, Literal, Optional
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
-from auth import get_current_user, require_admin, get_a2a_caller
+from auth import get_current_user, require_admin, get_a2a_caller, require_internal_token
 from database import get_db
 from hermes_http import hermes_auth_headers
 from openclaw_maintenance import (
@@ -32,6 +33,54 @@ from system_updates import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/system", tags=["system"])
+
+
+def _pi_hybrid_production_public_status() -> dict[str, Any]:
+    """Minimal non-admin summary for the live Pi hybrid production lane."""
+    status = _pi_hybrid_production_status()
+    return {
+        "report_kind": "zoe_pi_hybrid_production_summary",
+        "ok": bool(status.get("ok")),
+        "status": status.get("status") or "unknown",
+        "details_endpoint": "/api/system/pi-intent/production-status",
+    }
+
+
+def _pi_hybrid_production_status() -> dict[str, Any]:
+    """Read-only status for the live Pi hybrid production lane."""
+    try:
+        from pi_hybrid_production import PiHybridProductionConfig
+
+        config = PiHybridProductionConfig.from_env()
+        config_dict = config.to_dict()
+    except ValueError as exc:
+        return {
+            "report_kind": "zoe_pi_hybrid_production_status",
+            "ok": False,
+            "status": "invalid_config",
+            "error": str(exc),
+        }
+    except Exception as exc:
+        return {
+            "report_kind": "zoe_pi_hybrid_production_status",
+            "ok": False,
+            "status": "unavailable",
+            "error": exc.__class__.__name__,
+        }
+
+    enabled_groups = config_dict.get("groups") or []
+    return {
+        "report_kind": "zoe_pi_hybrid_production_status",
+        "ok": bool(config.enabled and enabled_groups),
+        "status": "enabled_no_groups" if config.enabled and not enabled_groups else "enabled" if config.enabled else "disabled",
+        "route": "pi_intent_buffer_plus_zoe_safe_fulfillment",
+        "surfaces": ["chat_non_stream", "chat_stream", "voice_non_stream"],
+        "config": config_dict,
+        "notes": [
+            "Production Pi hybrid is separate from shadow/promotion evidence status.",
+            "Only allowlisted low-risk groups can be enabled here.",
+        ],
+    }
 
 
 @router.get("/platform")
@@ -162,6 +211,7 @@ async def get_system_status(
             "pending_actions": ui_actions_pending,
             "online_panels_30s": panels_online,
         },
+        "pi_hybrid_production": _pi_hybrid_production_public_status(),
     }
 
 
@@ -179,6 +229,150 @@ async def get_pi_intent_status(user: dict = Depends(require_admin)):
     from pi_intent_classifier import pi_intent_status
 
     return pi_intent_status()
+
+
+@router.get("/pi-intent/shadow-status")
+async def get_pi_intent_shadow_status(user: dict = Depends(require_admin)):
+    """Read-only status for Zoe's disabled-by-default Pi-vs-Zoe shadow evidence."""
+    from pi_intent_shadow import pi_intent_shadow_status
+
+    return pi_intent_shadow_status()
+
+
+@router.get("/pi-intent/hybrid-buffer-status")
+async def get_pi_hybrid_buffer_status(user: dict = Depends(require_admin)):
+    """Read-only readiness for Zoe's instant-buffer + Pi evidence mode."""
+    from pi_hybrid_buffer import pi_hybrid_buffer_status
+
+    return pi_hybrid_buffer_status()
+
+
+@router.get("/pi-intent/production-status")
+async def get_pi_hybrid_production_status(user: dict = Depends(require_admin)):
+    """Read-only status for Zoe's live Pi hybrid production lane."""
+
+    return _pi_hybrid_production_status()
+
+
+@router.get("/pi-intent/readiness-report")
+async def get_pi_readiness_report(user: dict = Depends(require_admin)):
+    """Read-only operator report for Pi hybrid promotion readiness."""
+    from pi_readiness_report import pi_readiness_report
+
+    return pi_readiness_report()
+
+
+class PiIntentShadowLabelRequest(BaseModel):
+    text_hash: str
+    outcome_label: Optional[str] = None
+    negative: bool = False
+    source: Literal["admin_review", "operator_override"] = "admin_review"
+
+
+@router.post("/pi-intent/shadow-labels")
+async def post_pi_intent_shadow_label(payload: PiIntentShadowLabelRequest, user: dict = Depends(require_admin)):
+    """Append one trusted admin label for an existing Pi shadow record."""
+    from pi_intent_shadow import append_pi_intent_shadow_label
+
+    try:
+        return append_pi_intent_shadow_label(
+            text_hash=payload.text_hash,
+            outcome_label=payload.outcome_label,
+            negative=payload.negative,
+            source=payload.source,
+            reviewed_by=str(user.get("user_id") or "admin"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+class PiHybridProductionLabelRequest(BaseModel):
+    text_hash: str
+    outcome_label: Optional[str] = None
+    negative: bool = False
+    source: Literal["admin_review", "operator_override"] = "admin_review"
+    route_class: Optional[Literal["deterministic", "fallback", "extraction_failed"]] = None
+    baseline_kind: Optional[
+        Literal[
+            "operator_extraction_failed_override",
+            "operator_fallback_override",
+            "router",
+            "router_extraction_failed_not_comparable",
+            "router_only_not_comparable",
+            "zoe_agent_extraction_failed_baseline",
+            "zoe_agent_extraction_failed_error",
+            "zoe_agent_extraction_failed_timeout",
+            "zoe_agent_fallback_baseline",
+            "zoe_agent_fallback_error",
+            "zoe_agent_fallback_timeout",
+        ]
+    ] = None
+    baseline_comparable: Optional[bool] = None
+    zoe_latency_ms: Optional[float] = None
+
+
+@router.get("/pi-intent/production-label-queue")
+async def get_pi_hybrid_production_label_queue(
+    group: list[str] | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    include_labeled: bool = Query(default=False),
+    include_rejected: bool = Query(default=False),
+    user: dict = Depends(require_admin),
+):
+    """Read-only queue of sanitized production Pi records awaiting labels."""
+    from pi_intent_evidence import (
+        apply_pi_hybrid_production_labels,
+        build_pi_hybrid_production_label_queue,
+        load_pi_hybrid_production_labels,
+        load_pi_hybrid_production_records,
+    )
+
+    evidence_path = os.environ.get("ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_PATH") or "~/.zoe/data/pi-hybrid-production-evidence.jsonl"
+    labels_path = os.environ.get("ZOE_PI_HYBRID_PRODUCTION_LABELS_PATH") or "~/.zoe/data/pi-hybrid-production-labels.jsonl"
+    try:
+        records = load_pi_hybrid_production_records(evidence_path, limit=max(limit * 10, 500))
+        labels = load_pi_hybrid_production_labels(labels_path)
+        labeled_records = apply_pi_hybrid_production_labels(records, labels)
+        payload = build_pi_hybrid_production_label_queue(
+            labeled_records,
+            groups=group,
+            include_labeled=include_labeled,
+            include_rejected=include_rejected,
+            limit=limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    payload["summary"]["path"] = os.path.expanduser(evidence_path)
+    payload["summary"]["labels_path"] = os.path.expanduser(labels_path)
+    return payload
+
+
+@router.post("/pi-intent/production-labels")
+async def post_pi_hybrid_production_label(
+    payload: PiHybridProductionLabelRequest,
+    user: dict = Depends(require_admin),
+):
+    """Append one trusted admin label for an existing Pi hybrid production record."""
+    from pi_intent_evidence import append_pi_hybrid_production_label
+
+    try:
+        return append_pi_hybrid_production_label(
+            text_hash=payload.text_hash,
+            outcome_label=payload.outcome_label,
+            negative=payload.negative,
+            source=payload.source,
+            reviewed_by=str(user.get("user_id") or "admin"),
+            route_class=payload.route_class,
+            baseline_kind=payload.baseline_kind,
+            baseline_comparable=payload.baseline_comparable,
+            zoe_latency_ms=payload.zoe_latency_ms,
+            evidence_path=os.environ.get("ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_PATH")
+            or "~/.zoe/data/pi-hybrid-production-evidence.jsonl",
+            labels_path=os.environ.get("ZOE_PI_HYBRID_PRODUCTION_LABELS_PATH")
+            or "~/.zoe/data/pi-hybrid-production-labels.jsonl",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _load_skills_and_cron():
@@ -744,7 +938,7 @@ def _build_agent_card() -> dict:
         {
             "tier": 2,
             "name": "openclaw",
-            "model": "Codex",
+            "model": "Gemma 4 E2B",
             "browser": True,
             "status": "online" if _RUNTIME_HEALTH.get("openclaw") else "offline",
         },
@@ -1039,9 +1233,9 @@ async def list_engineering_workflow_tasks(
 @_agent_card_router.get("/engineering/guard/{pr_number}")
 async def get_engineering_guard(pr_number: int, user: dict = Depends(require_admin)):
     """PR-keyed Greptile grep-loop guard state."""
-    from greploop_guard import read_guard_state
+    from greploop_guard import read_observed_guard_state
 
-    return {"ok": True, "pr_number": pr_number, "state": read_guard_state(pr_number)}
+    return {"ok": True, "pr_number": pr_number, "state": read_observed_guard_state(pr_number)}
 
 
 @_agent_card_router.post("/engineering/guard/{pr_number}/once")
@@ -1230,7 +1424,7 @@ async def get_agent_runtimes():
             },
             "openclaw": {
                 "port": 18789,
-                "description": "OpenClaw Gateway (Codex mini, browser/exec)",
+                "description": "OpenClaw Gateway (Gemma 4 E2B, browser/exec)",
                 "online": _RUNTIME_HEALTH.get("openclaw", False),
             },
         },
@@ -2160,3 +2354,171 @@ async def _persist_alsa_state() -> None:
         await asyncio.wait_for(proc.communicate(), timeout=5.0)
     except Exception as exc:
         logger.debug("alsactl store failed (non-fatal): %s", exc)
+
+
+# ─── Internal intent dispatch (zoe-core Pi brain → existing fulfillment) ──────
+
+# Allowlist = the capabilities the zoe-core abilities registry exposes. The
+# brain-side permission envelope gates writes before this is called; this
+# allowlist is defense-in-depth so the endpoint can't run arbitrary intents.
+_DISPATCHABLE_INTENTS = frozenset({
+    "calendar_create", "calendar_show",
+    "list_add", "list_remove", "list_show",
+    "reminder_create", "reminder_list", "timer_create",
+    "note_create", "note_search",
+    "journal_create", "journal_prompt", "journal_streak",
+    "people_create", "people_relate", "people_search",
+    "music_play", "music_control", "music_volume", "music_setup", "set_volume",
+    "smart_home", "weather", "daily_briefing", "time_query", "date_query", "calculate",
+})
+
+
+class _IntentDispatchBody(BaseModel):
+    user_id: str
+    intent: str
+    slots: dict[str, Any] = {}
+
+
+@router.post("/intent-dispatch")
+async def intent_dispatch(body: _IntentDispatchBody, _: None = Depends(require_internal_token)):
+    """Run one allowlisted intent for a user via the existing fulfillment path.
+
+    Internal/service endpoint (loopback or X-Internal-Token) — how the zoe-core
+    Pi brain's tools execute capabilities, reusing intent_router.execute_intent
+    (the same dispatch the live chat path uses). Fails closed on unknown user or
+    non-allowlisted intent.
+    """
+    intent_name = (body.intent or "").strip()
+    user_id = (body.user_id or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id required")
+    if intent_name not in _DISPATCHABLE_INTENTS:
+        raise HTTPException(status_code=400, detail=f"intent not dispatchable: {intent_name}")
+    try:
+        from intent_router import Intent, execute_intent
+
+        result = await execute_intent(
+            Intent(name=intent_name, slots=dict(body.slots or {})), user_id=user_id
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("intent-dispatch failed intent=%s: %s", intent_name, exc)
+        raise HTTPException(status_code=500, detail="intent execution failed") from exc
+    return {"intent": intent_name, "ok": result is not None, "result": result or ""}
+
+
+# Synchronous delegation targets the zoe-core brain may invoke in-turn. Hermes
+# only: it owns web browsing / Telegram / the harness, and returns a completion
+# we can fold into the chat answer. OpenClaw stays explicit-opt-in (see the
+# async A2A /api/agent/delegate endpoint), so it is intentionally NOT here.
+_SYNC_DELEGATE_TARGETS = frozenset({"hermes"})
+
+
+class _DelegateSyncBody(BaseModel):
+    user_id: str
+    task: str
+    target: str = "hermes"
+
+
+@router.post("/delegate-sync")
+async def delegate_sync(body: _DelegateSyncBody, _: None = Depends(require_internal_token)):
+    """Synchronously delegate one task to a peer agent and return its completion.
+
+    Internal/service endpoint — how the zoe-core Pi brain delegates work it can't
+    do natively yet (web research, complex tasks) to Hermes and folds the answer
+    into its turn, the synchronous parity of the legacy __ESCALATE_HERMES__ path.
+    Fails closed on unknown user or non-allowlisted target.
+    """
+    user_id = (body.user_id or "").strip()
+    task = (body.task or "").strip()
+    target = (body.target or "hermes").strip().lower()
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id required")
+    if not task:
+        raise HTTPException(status_code=400, detail="task required")
+    if target not in _SYNC_DELEGATE_TARGETS:
+        raise HTTPException(status_code=400, detail=f"target not sync-delegatable: {target}")
+    try:
+        # Lazy import: routers.chat owns the Hermes client; importing at module
+        # load would be circular (chat imports system-side helpers too).
+        from routers.chat import _hermes_completion, _mempalace_load_user_facts, _safe_load_portrait
+
+        # Attach the same user context the legacy __ESCALATE_HERMES__ path sent,
+        # so delegated answers stay personalized (preferences + memory), not generic.
+        portrait, facts = await asyncio.gather(
+            _safe_load_portrait(user_id),
+            _mempalace_load_user_facts(user_id),
+        )
+        result = await _hermes_completion(
+            task,
+            session_id=f"delegate-{user_id}",
+            user_id=user_id,
+            portrait=portrait or "",
+            facts=facts or "",
+        )
+    except Exception as exc:
+        logger.warning("delegate-sync failed target=%s: %s", target, exc)
+        raise HTTPException(status_code=502, detail="delegation failed") from exc
+    return {"target": target, "ok": bool(result), "result": result or ""}
+
+
+# ─── On-demand STT warm (keep faster-whisper hot via an external timer) ───────
+
+# Startup warmup (ZOE_WHISPER_WARMUP) destabilized the service — it could block
+# the :8000 bind and crash-loop. So warming is triggered post-startup instead:
+# an external timer POSTs here to load (and keep loaded) the persistent
+# faster-whisper worker by running one tiny silent transcription through it.
+
+
+@router.post("/whisper-warm")
+async def whisper_warm(_: None = Depends(require_internal_token)):
+    """Warm (and keep warm) the persistent faster-whisper STT worker on demand.
+
+    Internal/service endpoint (loopback or X-Internal-Token) — meant to be hit
+    by an external timer so STT stays hot without any warmup work during app
+    startup. Runs one tiny silent transcription through the persistent worker,
+    which loads the model in the worker subprocess if cold, else reuses it.
+
+    Best-effort: a warm failure is logged and returned as ``ok: false`` with
+    HTTP 200 — it must never 500 or raise.
+    """
+    # Lazy import: voice_tts pulls in heavy STT/TTS deps and imports back from
+    # system-side helpers; importing at module load would risk an import cycle.
+    from routers.voice_tts import (
+        _create_warmup_wav_path,
+        _reset_faster_whisper_worker,
+        _run_faster_whisper_worker,
+        _write_warmup_silence_wav,
+    )
+
+    try:
+        timeout_s = float(os.environ.get("ZOE_WHISPER_WARMUP_TIMEOUT_S", "45"))
+    except (TypeError, ValueError):
+        timeout_s = 45.0
+
+    wav_path = ""
+    started = time.monotonic()
+    try:
+        # Offload sync file I/O to a worker thread so the event loop never blocks.
+        wav_path = await asyncio.to_thread(_create_warmup_wav_path)
+        await asyncio.to_thread(_write_warmup_silence_wav, wav_path)
+        # Bound the worker call: a hung/deadlocked subprocess must not hang the
+        # request (the 30s keepwarm timer would otherwise pile up coroutines).
+        await asyncio.wait_for(_run_faster_whisper_worker(wav_path), timeout=timeout_s)
+        latency_ms = int((time.monotonic() - started) * 1000)
+        return {"ok": True, "warmed": True, "latency_ms": latency_ms}
+    except Exception as exc:
+        # Reset the persistent worker so a broken/hung one is torn down and the
+        # NEXT warm starts fresh — otherwise every subsequent ping reuses the
+        # broken worker and the model never recovers without a service restart.
+        try:
+            await _reset_faster_whisper_worker()
+        except Exception:  # noqa: BLE001 - best-effort teardown
+            logger.warning("whisper-warm: worker reset after failure also failed", exc_info=True)
+        logger.warning("whisper-warm failed: %s", exc)
+        return {"ok": False, "warmed": False, "error": exc.__class__.__name__}
+    finally:
+        if wav_path:
+            try:
+                os.unlink(wav_path)
+            except OSError:
+                pass

@@ -86,6 +86,192 @@ _VOICE_HEALTH: dict = {
 _INITIAL_VOICE_HEALTH = copy.deepcopy(_VOICE_HEALTH)
 _agent_running = False
 
+# ── On-demand lifecycle ───────────────────────────────────────────────────────
+# When ZOE_LIVEKIT_ONDEMAND=true (default) the LiveKit container is left stopped
+# at boot and started on the first /livekit-token request, then stopped again
+# after ZOE_LIVEKIT_IDLE_TIMEOUT_S of no participants.  This keeps the ~560MB
+# WebRTC server out of memory except while a voice page is actually in use.
+_CONTAINER_NAME = os.environ.get("ZOE_LIVEKIT_CONTAINER", "livekit").strip() or "livekit"
+_agent_task: Optional["asyncio.Task"] = None
+_idle_task: Optional["asyncio.Task"] = None
+_lifecycle_lock: Optional["asyncio.Lock"] = None
+_last_activity: float = 0.0
+_active_participant_sids: set = set()
+
+
+def _ondemand_enabled() -> bool:
+    return os.environ.get("ZOE_LIVEKIT_ONDEMAND", "true").strip().lower() == "true"
+
+
+def _idle_timeout_s() -> float:
+    try:
+        return float(os.environ.get("ZOE_LIVEKIT_IDLE_TIMEOUT_S", "300"))
+    except (TypeError, ValueError):
+        return 300.0
+
+
+def _get_lifecycle_lock() -> "asyncio.Lock":
+    global _lifecycle_lock
+    if _lifecycle_lock is None:
+        _lifecycle_lock = asyncio.Lock()
+    return _lifecycle_lock
+
+
+def note_voice_activity() -> None:
+    """Mark that voice is in use, so the idle reaper holds off."""
+    global _last_activity
+    _last_activity = time.monotonic()
+
+
+async def _docker_cmd(*args: str, timeout: float = 20.0) -> tuple:
+    """Run `docker <args>` off the event loop; returns (returncode, combined_output)."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "docker", *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+    except Exception as exc:  # docker not on PATH, etc.
+        return 127, str(exc)
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        return 124, "timeout"
+    return proc.returncode or 0, (out or b"").decode(errors="replace").strip()
+
+
+async def _container_running() -> bool:
+    rc, out = await _docker_cmd("inspect", "-f", "{{.State.Running}}", _CONTAINER_NAME, timeout=10)
+    return rc == 0 and out.strip() == "true"
+
+
+async def _wait_port(host: str, port: int, timeout: float) -> bool:
+    """Poll a TCP port until it accepts connections or the timeout elapses."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            _, writer = await asyncio.wait_for(
+                asyncio.open_connection(host, port), timeout=1.0
+            )
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
+            return True
+        except Exception:
+            await asyncio.sleep(0.25)
+    return False
+
+
+async def ensure_livekit_started(wait_ready: float = 8.0) -> bool:
+    """Start the LiveKit container + agent on demand. Returns True if :7880 is reachable.
+
+    Idempotent and safe to call on every /livekit-token request.  No-op (just a
+    reachability probe) when on-demand mode is disabled — boot already started the
+    always-on agent in that case.
+    """
+    note_voice_activity()
+    if not os.environ.get("LIVEKIT_API_KEY", "").strip():
+        return False
+    if not _ondemand_enabled():
+        return await _wait_port("127.0.0.1", 7880, 1.0)
+
+    global _agent_task, _idle_task
+    async with _get_lifecycle_lock():
+        if not await _container_running():
+            logger.info("LiveKit on-demand: starting container '%s'", _CONTAINER_NAME)
+            rc, out = await _docker_cmd("start", _CONTAINER_NAME, timeout=20)
+            if rc != 0:
+                logger.warning(
+                    "LiveKit on-demand: docker start '%s' failed rc=%s out=%s",
+                    _CONTAINER_NAME, rc, out,
+                )
+                return False
+        if _agent_task is None or _agent_task.done():
+            _agent_task = asyncio.create_task(_agent_loop(), name="livekit_agent")
+            logger.info("LiveKit on-demand: agent task started")
+        if _idle_task is None or _idle_task.done():
+            _idle_task = asyncio.create_task(_idle_monitor(), name="livekit_idle_monitor")
+    ready = await _wait_port("127.0.0.1", 7880, wait_ready)
+    note_voice_activity()
+    return ready
+
+
+async def stop_livekit_ondemand(reason: str = "idle") -> None:
+    """Cancel the agent loop and stop the LiveKit container."""
+    global _agent_task, _idle_task
+    async with _get_lifecycle_lock():
+        task = _agent_task
+        _agent_task = None
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await asyncio.wait_for(task, timeout=8.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
+            except Exception:
+                pass
+        # Tear the idle monitor down too, so a later ensure_livekit_started()
+        # recreates it. Skip when we're being called *from* the monitor itself
+        # (the normal _reap_if_idle path) — that task returns naturally and must
+        # not cancel itself mid-await.
+        idle = _idle_task
+        if idle is not None and idle is not asyncio.current_task() and not idle.done():
+            idle.cancel()
+            _idle_task = None
+        _active_participant_sids.clear()
+        logger.info("LiveKit on-demand: stopping container '%s' (reason=%s)", _CONTAINER_NAME, reason)
+        await _docker_cmd("stop", _CONTAINER_NAME, timeout=30)
+        _health_update(status="stopped", connected=False)
+
+
+_IDLE_CHECK_INTERVAL_S = 30.0
+
+
+async def _reap_if_idle() -> bool:
+    """One idle-check tick.  Returns True when the monitor should stop looping
+    (either it reaped the container or the container is already gone)."""
+    if not _ondemand_enabled():
+        return False
+    idle_for = time.monotonic() - _last_activity
+    if _active_participant_sids or idle_for < _idle_timeout_s():
+        return False
+    if await _container_running():
+        # Re-check after the await: _container_running() yields to the event loop,
+        # and a /livekit-token request could have started the container + bumped
+        # activity (or a participant could have connected) in that window. Don't
+        # reap a now-active room.
+        idle_for = time.monotonic() - _last_activity
+        if _active_participant_sids or idle_for < _idle_timeout_s():
+            return False
+        logger.info(
+            "LiveKit on-demand: idle %.0fs (no participants) → stopping", idle_for
+        )
+        await stop_livekit_ondemand(reason="idle")
+    return True
+
+
+async def _idle_monitor() -> None:
+    """Reap the LiveKit container after ZOE_LIVEKIT_IDLE_TIMEOUT_S of no participants.
+
+    Runs only while a container is up; exits after stopping it (ensure_livekit_started
+    restarts the monitor on the next request).
+    """
+    while True:
+        try:
+            await asyncio.sleep(_IDLE_CHECK_INTERVAL_S)
+            if await _reap_if_idle():
+                return
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:
+            logger.debug("LiveKit idle monitor error (non-fatal): %s", exc)
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -108,7 +294,17 @@ def _record_voice_connected() -> None:
 
 
 def get_voice_health() -> dict:
-    return copy.deepcopy(_VOICE_HEALTH)
+    health = copy.deepcopy(_VOICE_HEALTH)
+    idle_age = (time.monotonic() - _last_activity) if _last_activity else None
+    health["ondemand"] = {
+        "enabled": _ondemand_enabled(),
+        "idle_timeout_s": _idle_timeout_s(),
+        "idle_age_s": round(idle_age, 1) if idle_age is not None else None,
+        "active_participants": sorted(_active_participant_sids),
+        "agent_task_running": _agent_task is not None and not _agent_task.done(),
+        "idle_monitor_running": _idle_task is not None and not _idle_task.done(),
+    }
+    return health
 
 
 def reset_voice_health_for_tests() -> None:
@@ -224,14 +420,27 @@ async def _run_pipeline(local_participant, frames: list[bytes], user_id: str, se
 
     await _send_data(local_participant, {"type": "transcript", "role": "user", "text": transcript})
 
+    try:
+        from voice_presence import processing_ack_event
+
+        ack_event = processing_ack_event()
+        if ack_event:
+            ack_text = str(ack_event.get("text") or "").strip()
+            if ack_text:
+                await _send_data(local_participant, {"type": "transcript", "role": "zoe", "text": ack_text})
+            if ack_event.get("audio_base64"):
+                await _send_data(local_participant, ack_event)
+    except Exception as exc:
+        logger.debug("LiveKit processing acknowledgement failed: %s", exc)
+
     # ── LLM ──────────────────────────────────────────────────────────────────
     response = "Sorry, I had trouble with that."
     llm_ok = True
     stage_started = time.monotonic()
     _health_update(last_stage="llm")
     try:
-        from zoe_agent import run_zoe_agent
-        response = await run_zoe_agent(transcript, session_id, user_id, voice_mode=True)
+        from brain_dispatch import brain_oneshot
+        response = await brain_oneshot(transcript, session_id, user_id, voice_mode=True)
     except Exception as exc:
         llm_ok = False
         _VOICE_HEALTH["pipeline_failures"] += 1
@@ -290,8 +499,8 @@ async def _run_text_pipeline(local_participant, message: str, user_id: str, sess
     stage_started = time.monotonic()
     _health_update(last_stage="llm", last_error=None)
     try:
-        from zoe_agent import run_zoe_agent
-        response = await run_zoe_agent(message, session_id, user_id, voice_mode=True)
+        from brain_dispatch import brain_oneshot
+        response = await brain_oneshot(message, session_id, user_id, voice_mode=True)
     except Exception as exc:
         llm_ok = False
         _VOICE_HEALTH["pipeline_failures"] += 1
@@ -467,10 +676,17 @@ def _build_room_handlers(room, participant_state: dict, audio_tasks: dict) -> No
     def on_participant_connected(participant) -> None:
         logger.info("LiveKit: participant joined %s (%s)", participant.identity, participant.sid[:8])
         participant_state[participant.sid] = _make_participant_state(participant.sid)
+        # Only real (non-agent) participants hold the idle reaper open.  The
+        # agent's own identity must never count, or the container never reaps.
+        if getattr(participant, "identity", None) != _AGENT_IDENTITY:
+            _active_participant_sids.add(participant.sid)
+        note_voice_activity()
 
     @room.on("participant_disconnected")
     def on_participant_disconnected(participant) -> None:
         logger.info("LiveKit: participant left %s", participant.identity)
+        _active_participant_sids.discard(participant.sid)
+        note_voice_activity()
         participant_state.pop(participant.sid, None)
         task = audio_tasks.pop(participant.sid, None)
         if task and not task.done():
@@ -679,6 +895,9 @@ async def _agent_loop() -> None:
                     connected=False,
                     last_disconnected_at=_utc_now(),
                 )
+                # Room torn down → drop stale participant tracking so the idle
+                # reaper isn't held open by sids that can no longer disconnect.
+                _active_participant_sids.clear()
             for task in list(audio_tasks.values()):
                 if not task.done():
                     task.cancel()
@@ -700,6 +919,20 @@ async def start_livekit_agent() -> None:
     if not api_key:
         _health_update(status="disabled", connected=False, last_error="LIVEKIT_API_KEY not set")
         logger.info("LIVEKIT_API_KEY not set — LiveKit agent not started")
+        return
+    if _ondemand_enabled():
+        # On-demand mode: leave the container stopped; ensure_livekit_started()
+        # spins it up (and the agent loop) on the first /livekit-token request.
+        # Start the idle monitor now so a container left running across a service
+        # restart (orphaned, with no agent/monitor) still gets reaped.
+        global _idle_task
+        note_voice_activity()
+        _health_update(status="stopped", connected=False, last_error=None)
+        if _idle_task is None or _idle_task.done():
+            _idle_task = asyncio.create_task(_idle_monitor(), name="livekit_idle_monitor")
+        logger.info(
+            "LiveKit on-demand mode: agent will start on first /livekit-token request"
+        )
         return
     if _agent_running:
         logger.warning("LiveKit voice agent already running; duplicate start ignored")
@@ -790,8 +1023,8 @@ async def livekit_audio(
         return JSONResponse({"ok": True, "cancelled": True})
 
     try:
-        from zoe_agent import run_zoe_agent
-        response_text = await run_zoe_agent(transcript, sid, user_id, voice_mode=True)
+        from brain_dispatch import brain_oneshot
+        response_text = await brain_oneshot(transcript, sid, user_id, voice_mode=True)
     except Exception as exc:
         logger.error("LiveKit HTTP LLM error: %s", exc)
         response_text = "Sorry, I had trouble processing that."

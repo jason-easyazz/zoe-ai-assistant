@@ -351,3 +351,44 @@ async def test_panel_ssh_exec_subprocess_error_returns_tool_error(monkeypatch):
         "error": "SSH exec failed: ssh unavailable",
         "panel_id": "zoe-touch-pi",
     }
+
+
+def test_greptile_trigger_review_schema_exposes_force_flag():
+    tool = _tool("greptile_trigger_review")
+
+    assert tool is not None
+    force = tool["inputSchema"]["properties"].get("force")
+    assert force == {
+        "type": "boolean",
+        "default": False,
+        "description": "Bypass same-head trigger cooldown.",
+    }
+
+
+@pytest.mark.asyncio
+async def test_greptile_trigger_review_uses_guard_dedupe(monkeypatch):
+    calls = []
+
+    async def fake_trigger_review_with_guard_lock(**kwargs):
+        calls.append(kwargs)
+        return {"success": True, "triggered": False, "skipped": True, "reason": "recently_triggered_for_head"}
+
+    monkeypatch.setattr("greploop_guard.trigger_review_with_guard_lock", fake_trigger_review_with_guard_lock)
+
+    result = await mcp_server._execute_tool(
+        db=None,
+        name="greptile_trigger_review",
+        args={"pr_number": 610, "branch": "codex/example", "force": True},
+    )
+
+    assert result["triggered"] is False
+    assert result["reason"] == "recently_triggered_for_head"
+    assert calls == [
+        {
+            "repo": "jason-easyazz/zoe-ai-assistant",
+            "pr_number": 610,
+            "default_branch": "main",
+            "branch": "codex/example",
+            "force": True,
+        }
+    ]

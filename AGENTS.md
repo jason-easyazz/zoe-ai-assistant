@@ -18,7 +18,8 @@ Use `opensrc` for third-party library source before guessing API behavior.
 
 Rules:
 - Keep the global source cache outside the repo at `~/.opensrc/repos/`.
-- Prefer `opensrc path pypi:<package>` or `opensrc path owner/repo` to locate already-fetched source.
+- Prefer `opensrc path pypi:<package>@<version>` or `opensrc path owner/repo` to locate already-fetched source.
+- Pin the version to the one Zoe actually installs (for example `opensrc path pypi:chromadb@0.6.3`). A bare package name resolves to the latest published version (e.g. bare `chromadb` is 1.5.9), which can be a major-version mismatch from the running stack and will mislead you.
 - Search package source directly when debugging integrations, for example:
   `rg "class FastAPI" "$(opensrc path pypi:fastapi)"`
 - When source context informs an implementation, report the package files, examples, or tests that were used.
@@ -71,8 +72,21 @@ Trunk-based development off protected `main`. No permanent `develop` or `staging
 - One branch per issue or Multica task, created from fresh `origin/main`.
 - Naming: `codex/<slug>` (agent work), `feature/<slug>`, `fix/<slug>`, `verify/<slug>` (throwaway validation).
 - Use a dedicated git worktree under `~/.worktrees/<slug>` for development; do not switch the live checkout (`/home/zoe/assistant`) to feature branches for agent work.
-- Branches die at merge: remote branches auto-delete (`delete_branch_on_merge`); remove the local worktree when done.
-- Prune stale worktrees with `scripts/maintenance/prune_worktrees.sh` (dry-run first, `--execute` after operator review). Never prune dirty, locked, or unmerged worktrees.
+- Branches die at merge: remote branches auto-delete (`delete_branch_on_merge`); local task worktrees are reclaimed automatically — see below.
+- Automatic cleanup (Multica owns its worktrees):
+  - On chain completion, the harness removes each task's worktree + `wt/<id>` branch once merged (`worktree_bootstrap.remove_task_worktree`, called from `kanban_adapter`).
+  - A daily safety-net sweep in the Multica poll loop reclaims orphaned merged worktrees (`worktree_bootstrap.prune_merged_worktrees`). Interval via `ZOE_WORKTREE_PRUNE_INTERVAL_S` (default 86400).
+  - Both detect **squash-merged** branches via `gh pr view` (not just git-ancestor merges) and never touch dirty, locked, unmerged, or the live checkout.
+- Manual prune still available: `scripts/maintenance/prune_worktrees.sh` (dry-run first, `--execute` after operator review).
+
+## Skill & extension safety
+
+Third-party skills and extensions run with the agent's privileges. Treat them as untrusted code.
+
+- Before installing any third-party skill, Pi/OpenClaw extension, or code-bearing MCP server into a Zoe agent runtime — and before promoting a self-authored skill from the lab to a live agent — scan it: `skillspector scan <dir|file|git-url>` (installed at `~/.local/bin/skillspector`).
+- The static stage needs no credentials but is deliberately conservative: it flags legitimately powerful, process-spawning extensions as HIGH/CRITICAL. Do not treat the raw static score as a verdict — use the optional LLM stage (`SKILLSPECTOR_PROVIDER=...`) plus human judgement for promotion decisions.
+- Do not egress internal Zoe skill content to an external LLM provider for scanning without operator consent; prefer static scans, or a local/NV provider, for internal skills.
+- Record the scan outcome (or a deliberate waiver) when adopting a new skill or extension.
 
 # DOX framework
 
@@ -83,6 +97,15 @@ Trunk-based development off protected `main`. No permanent `develop` or `staging
 
 - AGENTS.md files are binding work contracts for their subtrees
 - Work products, source materials, instructions, records, assets, and durable docs must stay understandable from the nearest applicable AGENTS.md plus every parent AGENTS.md above it
+
+## Knowledge vs. Records (OKF)
+
+DOX governs two kinds of document; do not conflate them.
+
+- **Contracts** — `AGENTS.md` files. Prescriptive, binding, prose. They change only through the deliberate DOX pass below — never by an autonomous loop.
+- **Records / knowledge** — curated facts, schemas, learned insights, and durable reference (e.g. the graphify wiki, memory exports, tool/topology notes). Write these as **Open Knowledge Format (OKF)** bundles: a directory of markdown files with YAML frontmatter (required `type`), an `index.md` per directory, and cross-links via relative markdown links.
+- Register every OKF bundle in the nearest owning AGENTS.md's Child DOX Index so the DOX walk discovers it. An OKF bundle stays inside DOX governance; it is not a parallel system.
+- The autonomous memory/knowledge loop may freely create, update, and lint OKF records. It must never edit an AGENTS.md contract — contract changes go through the DOX pass and human review.
 
 ## Read Before Editing
 
@@ -122,11 +145,13 @@ Update parent docs when parent-level structure, ownership, workflow, or child in
 - Create a child AGENTS.md when a folder becomes a durable boundary with its own purpose, rules, responsibilities, workflow, materials, or quality standards
 - Work Guidance must reflect the current standards of the project or user instructions; if there are no specific standards or instructions yet, leave it empty
 - Verification must reflect an existing check; if no verification framework exists yet, leave it empty and update it when one exists
+- A subtree that owns an autonomous loop or agent MUST state a Forbidden list (what the agent must never do, e.g. paths/actions out of scope). It is the most load-bearing part of the contract; omit it only when nothing is autonomous in the subtree
 
 Default section order:
 - Purpose
 - Ownership
 - Local Contracts
+- Forbidden
 - Work Guidance
 - Verification
 - Child DOX Index

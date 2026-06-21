@@ -42,6 +42,26 @@ class FakeDb:
         if "FROM lists" in sql:
             if "WHERE id = $1" in sql:
                 return [row for row in self.lists if row.get("id") == args[1]]
+            if "lower(name) = lower($2)" in sql:
+                user_id = args[1]
+                name = str(args[2]).lower()
+                return [row for row in self.lists if row.get("user_id") == user_id and str(row.get("name", "")).lower() == name]
+            if "list_type = $2" in sql:
+                user_id = args[1]
+                list_type = args[2]
+                rows = [
+                    row for row in self.lists
+                    if row.get("list_type") == list_type
+                    and (row.get("visibility") == "family" or row.get("user_id") == user_id)
+                    and not row.get("deleted")
+                ]
+                return sorted(
+                    rows,
+                    key=lambda row: (
+                        0 if row.get("user_id") == user_id else 1,
+                        -(row.get("updated_at") or 0),
+                    ),
+                )
             return self.lists
         if "FROM list_items" in sql:
             self.list_item_fetch_count += 1
@@ -151,14 +171,70 @@ class GuardedGuestDb(FakeDb):
 def test_classify_calendar_and_weather_requests():
     assert classify_skybridge_intent("show my calendar").domain == "calendar"
     assert classify_skybridge_intent("show me the weather").domain == "weather"
+    assert classify_skybridge_intent("show me the clock").domain == "clock"
+    assert classify_skybridge_intent("what time is it").domain == "clock"
     assert classify_skybridge_intent("what is happening this week").domain == "calendar"
     assert classify_skybridge_intent("show my shopping list").domain == "lists"
     assert classify_skybridge_intent("what's on my shopping list").domain == "lists"
     assert classify_skybridge_intent("whats on my grocery list").domain == "lists"
+    work_add = classify_skybridge_intent("add bread to the work list")
+    assert work_add.action == "add_item"
+    assert work_add.item_text == "bread"
+    assert work_add.list_type == "work"
+    assert classify_skybridge_intent("show my lists").action == "overview"
+    assert classify_skybridge_intent("new list").action == "create_list"
+    list_context = {"intent": {"domain": "lists", "action": "show", "list_type": "shopping"}, "cards": []}
+    contextual_create = classify_skybridge_intent("add a personal list", list_context)
+    assert contextual_create.action == "create_list"
+    assert contextual_create.list_type == "personal"
+    assert classify_skybridge_intent("add dentist at 2pm", list_context) is None
+    ambiguous_list_add = classify_skybridge_intent("add bread to the project list", list_context)
+    assert ambiguous_list_add.action != "add_item"
+    calendar_destination = classify_skybridge_intent("add a meeting to my calendar", list_context)
+    contacts_destination = classify_skybridge_intent("add Sarah to my contacts", list_context)
+    assert calendar_destination.action != "add_item"
+    assert contacts_destination.action != "add_item"
+    assert classify_skybridge_intent("create a work list called Projects").list_name == "Projects"
     assert classify_skybridge_intent("show my contacts").domain == "people"
     assert classify_skybridge_intent("find Sarah").domain == "people"
     assert classify_skybridge_intent("what is there to do this week") is None
     assert classify_skybridge_intent("open settings") is None
+
+
+def test_clock_timezone_prefers_env(monkeypatch):
+    monkeypatch.setenv("ZOE_SKYBRIDGE_TIMEZONE", "Australia/Melbourne")
+    monkeypatch.setenv("TZ", "UTC")
+
+    assert skybridge_service._default_clock_timezone() == "Australia/Melbourne"
+
+
+def test_clock_timezone_uses_host_timezone_before_utc(monkeypatch):
+    monkeypatch.delenv("ZOE_SKYBRIDGE_TIMEZONE", raising=False)
+    monkeypatch.setenv("TZ", "Europe/London")
+
+    assert skybridge_service._default_clock_timezone() == "Europe/London"
+
+
+def test_clock_timezone_falls_back_to_utc(monkeypatch):
+    monkeypatch.delenv("ZOE_SKYBRIDGE_TIMEZONE", raising=False)
+    monkeypatch.setattr(skybridge_service, "_host_clock_timezone", lambda: None)
+
+    assert skybridge_service._default_clock_timezone() == "UTC"
+
+
+@pytest.mark.asyncio
+async def test_clock_request_returns_public_live_clock_card():
+    result = await resolve_skybridge_request("show me the clock", "guest", db=GuardedGuestDb())
+
+    assert result["handled"] is True
+    assert result["intent"]["domain"] == "clock"
+    assert result["intent"]["action"] == "show"
+    assert result["cards"][0]["component"] == "status"
+    props = result["cards"][0]["props"]
+    assert props["source"] == "clock_show"
+    assert props["timezone"]
+    assert props["iso"]
+    assert "auth_required" not in result
 
 
 def test_classify_skybridge_action_requests():
@@ -438,7 +514,11 @@ async def test_calendar_explicit_date_queries_requested_day(monkeypatch):
     assert result["intent"]["range"] == "17 June 2026"
     assert db.fetch_args[2] == "2026-06-17"
     assert db.fetch_args[3] == "2026-06-17"
-    assert result["cards"][0]["content"]["qualifier"] == "17 June 2026"
+    content = result["cards"][0]["content"]
+    assert content["qualifier"] == "17 June 2026"
+    assert content["date"] == "2026-06-17"
+    assert content["start_date"] == "2026-06-17"
+    assert content["end_date"] == "2026-06-17"
 
 
 @pytest.mark.asyncio
@@ -457,6 +537,9 @@ async def test_calendar_happening_this_week_queries_range(monkeypatch):
     assert result["intent"]["range"] == "this week"
     assert db.fetch_args[2] == "2026-06-11"
     assert db.fetch_args[3] == (date(2026, 6, 11) + timedelta(days=7)).isoformat()
+    content = result["cards"][0]["content"]
+    assert content["start_date"] == "2026-06-11"
+    assert content["end_date"] == "2026-06-18"
 
 
 @pytest.mark.asyncio
@@ -557,7 +640,189 @@ async def test_list_add_item_persists_and_refreshes_list_card():
     assert result["intent"]["action"] == "add_item"
     assert result["actions"][0]["domain"] == "lists"
     assert result["cards"][0]["content"]["items"][0]["text"] == "bread"
+    assert result["cards"][0]["content"]["items"][0]["recent"] is True
+    assert result["cards"][0]["content"]["recent_item_id"] == result["intent"]["item_id"]
     assert result["skybridge_context"]["cards"][0]["content"]["items"][0]["text"] == "bread"
+
+
+@pytest.mark.asyncio
+async def test_contextual_list_add_uses_visible_list_card():
+    list_row = {
+        "id": "work-list",
+        "user_id": "jason",
+        "name": "Work",
+        "list_type": "work",
+        "description": "Work tasks",
+        "visibility": "personal",
+    }
+    db = FakeDb(lists=[list_row], items_by_list={"work-list": []})
+    context = {
+        "intent": {"domain": "lists", "action": "show", "list_type": "work"},
+        "cards": [{"content": {"source": "list_show", "list_id": "work-list", "list_type": "work"}}],
+    }
+
+    result = await resolve_skybridge_request("add send proposal", "jason", context=context, db=db)
+
+    assert result["handled"] is True
+    assert result["intent"]["action"] == "add_item"
+    assert result["intent"]["list_type"] == "work"
+    assert result["cards"][0]["content"]["list_name"] == "Work"
+    assert result["cards"][0]["content"]["items"][0]["text"] == "send proposal"
+    assert result["cards"][0]["content"]["items"][0]["recent"] is True
+
+
+@pytest.mark.asyncio
+async def test_list_add_item_is_visible_when_list_is_already_long():
+    list_row = {
+        "id": "list-1",
+        "user_id": "family-admin",
+        "name": "Groceries",
+        "list_type": "shopping",
+        "description": "Weekly shop",
+        "visibility": "family",
+    }
+    existing_items = [
+        {"id": f"old-{index}", "list_id": "list-1", "text": f"old item {index}", "completed": False}
+        for index in range(30)
+    ]
+    db = FakeDb(lists=[list_row], items_by_list={"list-1": existing_items})
+
+    result = await resolve_skybridge_request("add bread to the shopping list", "family-admin", db=db)
+
+    first_item = result["cards"][0]["content"]["items"][0]
+    assert first_item["text"] == "bread"
+    assert first_item["recent"] is True
+    assert first_item["id"] == result["intent"]["item_id"]
+
+
+@pytest.mark.asyncio
+async def test_list_add_uses_existing_same_type_list_with_custom_name():
+    rows = [
+        {
+            "id": "groceries-list",
+            "user_id": "jason",
+            "name": "Groceries",
+            "list_type": "shopping",
+            "visibility": "family",
+            "deleted": 0,
+            "updated_at": 10,
+        },
+    ]
+    db = FakeDb(lists=rows, items_by_list={"groceries-list": []})
+
+    result = await resolve_skybridge_request("add apples to the shopping list", "jason", db=db)
+
+    assert result["handled"] is True
+    assert result["actions"][0]["list_id"] == "groceries-list"
+    assert db.items_by_list["groceries-list"][0]["text"] == "apples"
+    assert not any(item["name"] == "Shopping" and item["id"] != "groceries-list" for item in db.lists)
+
+
+@pytest.mark.asyncio
+async def test_list_add_prefers_speaking_users_default_list_over_shared_lists():
+    rows = [
+        {
+            "id": "guest-shopping",
+            "user_id": "guest",
+            "name": "Shopping",
+            "list_type": "shopping",
+            "visibility": "family",
+            "deleted": 0,
+        },
+        {
+            "id": "jason-shopping",
+            "user_id": "jason",
+            "name": "Shopping",
+            "list_type": "shopping",
+            "visibility": "family",
+            "deleted": 0,
+        },
+    ]
+    db = FakeDb(lists=rows, items_by_list={"guest-shopping": [], "jason-shopping": []})
+
+    result = await resolve_skybridge_request("add mangoes to the shopping list", "jason", db=db)
+
+    assert result["handled"] is True
+    assert result["actions"][0]["list_id"] == "jason-shopping"
+    assert db.items_by_list["jason-shopping"][0]["text"] == "mangoes"
+    assert db.items_by_list["guest-shopping"] == []
+
+
+@pytest.mark.asyncio
+async def test_lists_request_seeds_default_lists_and_returns_switcher_actions():
+    db = FakeDb(lists=[], items_by_list={})
+
+    result = await resolve_skybridge_request("show my lists", "jason", db=db)
+
+    assert result["handled"] is True
+    names = {item["name"] for item in result["cards"][0]["content"]["lists"]}
+    assert {"Shopping", "Work", "Personal"}.issubset(names)
+    actions = result["cards"][0]["content"]["actions"]
+    assert any(action["label"] == "New list" for action in actions)
+    assert db.commits >= 1
+
+
+@pytest.mark.asyncio
+async def test_new_list_without_name_returns_action_form_prompt():
+    result = await resolve_skybridge_request("new list", "jason", db=FakeDb())
+
+    assert result["handled"] is True
+    assert result["intent"]["action"] == "create_list"
+    assert result["cards"][0]["component"] == "action_form"
+    assert result["cards"][0]["props"]["actions"] == []
+    assert "What should I name" in result["spoken_summary"]
+
+
+@pytest.mark.asyncio
+async def test_new_named_work_list_is_created_and_displayed():
+    db = FakeDb(lists=[], items_by_list={})
+
+    result = await resolve_skybridge_request("create a work list called Projects", "jason", db=db)
+
+    assert result["handled"] is True
+    assert result["intent"]["action"] == "create_list"
+    assert result["intent"]["list_type"] == "work"
+    assert result["intent"]["list_name"] == "Projects"
+    assert any(item["name"] == "Projects" and item["list_type"] == "work" for item in db.lists)
+    assert result["cards"][0]["content"]["list_name"] == "Projects"
+
+
+@pytest.mark.asyncio
+async def test_create_existing_list_reports_existing_not_created():
+    db = FakeDb(
+        lists=[
+            {
+                "id": "existing-projects",
+                "user_id": "jason",
+                "name": "Projects",
+                "list_type": "work",
+                "visibility": "personal",
+                "deleted": 0,
+            }
+        ],
+        items_by_list={"existing-projects": []},
+    )
+
+    result = await resolve_skybridge_request("create a work list called Projects", "jason", db=db)
+
+    assert result["handled"] is True
+    assert result["spoken_summary"] == "You already have a Projects list."
+    assert result["actions"][0]["type"] == "existing"
+    assert len([item for item in db.lists if item["name"] == "Projects"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_new_list_prompt_accepts_bare_name_followup():
+    context = {"intent": {"domain": "lists", "action": "create_list", "list_type": "personal"}, "cards": []}
+    db = FakeDb(lists=[], items_by_list={})
+
+    result = await resolve_skybridge_request("Camping", "jason", context=context, db=db)
+
+    assert result["handled"] is True
+    assert result["intent"]["action"] == "create_list"
+    assert result["intent"]["list_name"] == "Camping"
+    assert result["intent"]["list_type"] == "personal"
+    assert any(item["name"] == "Camping" and item["list_type"] == "personal" for item in db.lists)
 
 
 @pytest.mark.asyncio
@@ -605,9 +870,10 @@ async def test_lists_request_returns_overview_for_multiple_lists():
     card = result["cards"][0]
     assert card["content"]["source"] == "list_show"
     assert card["content"]["items"] == []
-    assert card["content"]["lists"][0]["items"] == []
+    assert card["content"]["lists"][0]["items"][0]["text"] == "Milk"
     assert card["content"]["lists"][0]["open_count"] == 1
     assert card["content"]["lists"][1]["completed_count"] == 1
+    assert card["content"]["actions"][-1]["label"] == "New list"
     assert db.list_item_fetch_count == 1
 
 

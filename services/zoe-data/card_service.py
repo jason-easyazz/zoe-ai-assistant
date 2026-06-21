@@ -24,14 +24,18 @@ def build_calendar_timeline_content(slots: dict[str, Any] | None = None) -> dict
     events = slots.get("events") or []
     if not isinstance(events, list):
         events = [events]
-    return {
+    content = {
         "title": f"Calendar for {qualifier}",
-        "summary": "Showing calendar",
+        "summary": _text(slots.get("summary"), "Showing calendar"),
         "qualifier": qualifier,
         "events": events,
         "view": "timeline",
         "source": "calendar_show",
     }
+    for key in ("date", "start_date", "end_date"):
+        if slots.get(key):
+            content[key] = slots[key]
+    return content
 
 
 def build_weather_current_content(slots: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -114,14 +118,25 @@ def list_items(slots: dict[str, Any] | None = None) -> list[str]:
     return [_text(item) for item in items if _text(item)]
 
 
+def _slot_int(value: Any, fallback: int) -> int:
+    if value is None:
+        return fallback
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return fallback
+
+
 def build_shopping_list_content(slots: dict[str, Any] | None = None) -> dict[str, Any]:
     """Build canonical content for a shopping/list view card."""
     slots = slots or {}
     list_name = _text(slots.get("list_name") or slots.get("name") or slots.get("list_type"), "Shopping")
     raw_items = slots.get("items") or []
     items = raw_items if isinstance(raw_items, list) else list_items(slots)
-    open_count = sum(1 for item in items if not (isinstance(item, dict) and item.get("completed")))
-    completed_count = max(0, len(items) - open_count)
+    fallback_open_count = sum(1 for item in items if not (isinstance(item, dict) and item.get("completed")))
+    item_count = _slot_int(slots.get("item_count"), len(items))
+    open_count = _slot_int(slots.get("open_count"), fallback_open_count)
+    completed_count = _slot_int(slots.get("completed_count"), max(0, item_count - open_count))
     return {
         "title": f"{list_name} List",
         "summary": _text(slots.get("summary"), "Showing list"),
@@ -130,11 +145,12 @@ def build_shopping_list_content(slots: dict[str, Any] | None = None) -> dict[str
         "list_type": _text(slots.get("list_type"), "shopping"),
         "lists": slots.get("lists") or [],
         "items": items,
-        "item_count": len(items),
+        "item_count": item_count,
         "open_count": open_count,
         "completed_count": completed_count,
         "view": "list",
         "source": "list_show",
+        "actions": slots.get("actions") or [],
     }
 
 

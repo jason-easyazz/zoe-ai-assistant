@@ -1,0 +1,514 @@
+#!/usr/bin/env python3
+"""Run or report Pi-vs-Zoe intent promotion evidence.
+
+Default mode is side-effect free and prints the built-in eval fixture plus an
+empty policy report. Use --demo for deterministic promotion-gate smoke data, or
+--run-pi to compare Zoe's current router with the configured local Pi runtime.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import os
+import shlex
+import sys
+import time
+import uuid
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Any
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "services" / "zoe-data"))
+
+DEFAULT_ENV_FILES = (
+    ROOT / ".env",
+    ROOT / "services" / "zoe-data" / ".env",
+    Path("/home/zoe/assistant/.env"),
+    Path("/home/zoe/assistant/services/zoe-data/.env"),
+)
+
+from zoe_pi_promotion import (  # noqa: E402
+    DEFAULT_PI_INTENT_EVAL_CASES,
+    LOW_RISK_PI_INTENT_GROUPS,
+    PiIntentEvalCase,
+    PiPromotionPolicy,
+    PiRouteSample,
+    eval_cases_to_dict,
+    load_pi_intent_eval_cases,
+    merge_pi_intent_eval_cases,
+    summarize_eval_case_sources,
+    summarize_pi_promotion,
+)
+
+
+@contextmanager
+def _temporary_env(updates: dict[str, str | None]):
+    old_values = {key: os.environ.get(key) for key in updates}
+    try:
+        for key, value in updates.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        yield
+    finally:
+        for key, value in old_values.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def load_zoe_env(env_files: list[str] | None = None) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for env_file in [*DEFAULT_ENV_FILES, *(env_files or [])]:
+        path = Path(env_file).expanduser()
+        if path.exists():
+            values.update(_parse_env_file(path))
+    values.update(os.environ)
+    return values
+
+
+def _parse_env_file(path: Path) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, raw_value = line.split("=", 1)
+        key = key.strip()
+        if key.startswith("export "):
+            key = key[len("export ") :].strip()
+        if not key or key.startswith("#"):
+            continue
+        try:
+            parts = shlex.split(raw_value, comments=True, posix=True)
+        except ValueError:
+            parts = [raw_value.strip().strip('"').strip("'")]
+        parsed[key] = parts[0] if parts else ""
+    return parsed
+
+
+def _demo_samples() -> list[PiRouteSample]:
+    samples: list[PiRouteSample] = []
+    for index in range(30):
+        samples.append(
+            PiRouteSample(
+                case_id=f"demo_weather_{index}",
+                intent_group="weather",
+                expected_intent="weather",
+                zoe_intent="reminder_list" if index < 20 else "weather",
+                pi_intent="weather",
+                zoe_latency_ms=850,
+                pi_latency_ms=320,
+                pi_confidence=0.9,
+                pi_transport="rpc",
+                metadata={"source": "synthetic"},
+            )
+        )
+    return samples
+
+
+async def _run_zoe_baseline(
+    case: PiIntentEvalCase,
+    *,
+    fallback_baseline_latency_ms: float | None = None,
+    extraction_failed_baseline_latency_ms: float | None = None,
+    measure_zoe_agent_baseline: bool = False,
+    zoe_agent_baseline_timeout_seconds: float = 30.0,
+    zoe_agent_baseline_max_tokens: int = 256,
+) -> dict[str, Any]:
+    with _temporary_env({"ZOE_PI_INTENT_ENABLED": "false", "ZOE_PI_INTENT_SHADOW_ENABLED": "false"}):
+        from intent_router import detect_and_extract_intent
+
+        start = time.perf_counter()
+        intent = await detect_and_extract_intent(case.text)
+        router_latency_ms = (time.perf_counter() - start) * 1000
+
+    latency_ms = router_latency_ms
+    baseline_kind = "router"
+    baseline_comparable = True
+    baseline_timed_out = False
+    baseline_response_chars: int | None = None
+    baseline_error: str | None = None
+    agent_baseline: dict[str, Any] | None = None
+    if intent is not None:
+        # A current router hit is Zoe's comparable baseline, even when the
+        # fixture came from an older fallback/extraction-failure trace.
+        pass
+    elif case.route_class == "fallback":
+        if fallback_baseline_latency_ms is not None:
+            latency_ms = fallback_baseline_latency_ms
+            baseline_kind = "operator_fallback_override"
+        elif measure_zoe_agent_baseline:
+            agent_baseline = await _run_zoe_agent_baseline(
+                case,
+                timeout_seconds=zoe_agent_baseline_timeout_seconds,
+                max_tokens=zoe_agent_baseline_max_tokens,
+            )
+        else:
+            baseline_kind = "router_only_not_comparable"
+            baseline_comparable = False
+    elif case.route_class == "extraction_failed":
+        if extraction_failed_baseline_latency_ms is not None:
+            latency_ms = extraction_failed_baseline_latency_ms
+            baseline_kind = "operator_extraction_failed_override"
+        elif measure_zoe_agent_baseline:
+            agent_baseline = await _run_zoe_agent_baseline(
+                case,
+                timeout_seconds=zoe_agent_baseline_timeout_seconds,
+                max_tokens=zoe_agent_baseline_max_tokens,
+            )
+        else:
+            baseline_kind = "router_only_not_comparable"
+            baseline_comparable = False
+
+    if agent_baseline is not None:
+        latency_ms = agent_baseline["latency_ms"]
+        baseline_kind = agent_baseline["baseline_kind"]
+        baseline_comparable = agent_baseline["baseline_comparable"]
+        baseline_timed_out = agent_baseline["timed_out"]
+        baseline_response_chars = agent_baseline["response_chars"]
+        baseline_error = agent_baseline.get("error")
+
+    return {
+        "intent": intent.name if intent else None,
+        "confidence": getattr(intent, "confidence", None) if intent else None,
+        "latency_ms": latency_ms,
+        "router_latency_ms": router_latency_ms,
+        "baseline_kind": baseline_kind,
+        "baseline_comparable": baseline_comparable,
+        "baseline_timed_out": baseline_timed_out,
+        "baseline_response_chars": baseline_response_chars,
+        "baseline_error": baseline_error,
+        "correct": (intent.name if intent else None) == case.expected_intent,
+    }
+
+
+async def _run_zoe_agent_baseline(
+    case: PiIntentEvalCase,
+    *,
+    timeout_seconds: float,
+    max_tokens: int,
+) -> dict[str, Any]:
+    from zoe_agent import run_zoe_agent
+
+    session_id = f"pi-eval-baseline-{case.case_id}-{uuid.uuid4().hex[:8]}"
+    start = time.perf_counter()
+    try:
+        with _temporary_env({"ZOE_PI_INTENT_ENABLED": "false", "ZOE_PI_INTENT_SHADOW_ENABLED": "false"}):
+            response = await asyncio.wait_for(
+                run_zoe_agent(
+                    case.text,
+                    session_id,
+                    "pi-eval",
+                    history=[],
+                    db_memory_context="",
+                    portrait="",
+                    max_tokens_override=max_tokens,
+                ),
+                timeout=timeout_seconds,
+            )
+        latency_ms = (time.perf_counter() - start) * 1000
+        return {
+            "latency_ms": latency_ms,
+            "baseline_kind": f"zoe_agent_{case.route_class}_baseline",
+            "baseline_comparable": True,
+            "timed_out": False,
+            "response_chars": len(response or ""),
+            "error": None,
+        }
+    except asyncio.TimeoutError:
+        latency_ms = (time.perf_counter() - start) * 1000
+        return {
+            "latency_ms": latency_ms,
+            "baseline_kind": f"zoe_agent_{case.route_class}_timeout",
+            "baseline_comparable": False,
+            "timed_out": True,
+            "response_chars": 0,
+            "error": "TimeoutError",
+        }
+    except Exception as exc:
+        latency_ms = (time.perf_counter() - start) * 1000
+        return {
+            "latency_ms": latency_ms,
+            "baseline_kind": f"zoe_agent_{case.route_class}_error",
+            "baseline_comparable": False,
+            "timed_out": False,
+            "response_chars": 0,
+            "error": exc.__class__.__name__,
+        }
+
+async def _run_pi(case: PiIntentEvalCase, *, transport: str, enable_execution: bool, local_model_configured: bool) -> dict[str, Any]:
+    prefilter_enabled = os.environ.get("ZOE_PI_INTENT_PREFILTER_ENABLED", "true")
+    updates = {
+        "ZOE_PI_INTENT_ENABLED": "true",
+        "ZOE_PI_INTENT_TRANSPORT": transport,
+        "ZOE_PI_ALLOW_EXECUTION": "true" if enable_execution else "false",
+        "ZOE_PI_LOCAL_MODEL_CONFIGURED": "true" if local_model_configured else "false",
+        "ZOE_PI_INTENT_PREFILTER_ENABLED": prefilter_enabled,
+        "ZOE_PI_INTENT_SHADOW_ENABLED": "false",
+    }
+    with _temporary_env(updates):
+        from pi_intent_classifier import classify_with_pi_intent_governor
+
+        timeout_seconds = float(os.environ.get("ZOE_PI_INTENT_TIMEOUT_SECONDS") or 4.0)
+        start = time.perf_counter()
+        result = await classify_with_pi_intent_governor(case.text)
+        latency_ms = (time.perf_counter() - start) * 1000
+    timed_out = result is None and latency_ms >= (timeout_seconds * 1000 * 0.95)
+    return {
+        "intent": result.intent if result else None,
+        "confidence": result.confidence if result else 0.0,
+        "latency_ms": latency_ms,
+        "correct": (result.intent if result else None) == case.expected_intent,
+        "prefilter_enabled": prefilter_enabled,
+        "timed_out": timed_out,
+    }
+
+
+async def _run_cases(
+    cases: list[PiIntentEvalCase],
+    *,
+    transport: str,
+    enable_execution: bool,
+    local_model_configured: bool,
+    fallback_baseline_latency_ms: float | None = None,
+    extraction_failed_baseline_latency_ms: float | None = None,
+    measure_zoe_agent_baseline: bool = False,
+    zoe_agent_baseline_timeout_seconds: float = 30.0,
+    zoe_agent_baseline_max_tokens: int = 256,
+) -> tuple[list[dict[str, Any]], list[PiRouteSample]]:
+    comparisons: list[dict[str, Any]] = []
+    samples: list[PiRouteSample] = []
+    for case in cases:
+        case.validate()
+        zoe = await _run_zoe_baseline(
+            case,
+            fallback_baseline_latency_ms=fallback_baseline_latency_ms,
+            extraction_failed_baseline_latency_ms=extraction_failed_baseline_latency_ms,
+            measure_zoe_agent_baseline=measure_zoe_agent_baseline,
+            zoe_agent_baseline_timeout_seconds=zoe_agent_baseline_timeout_seconds,
+            zoe_agent_baseline_max_tokens=zoe_agent_baseline_max_tokens,
+        )
+        pi = await _run_pi(
+            case,
+            transport=transport,
+            enable_execution=enable_execution,
+            local_model_configured=local_model_configured,
+        )
+        comparisons.append({"case": case.to_dict(), "zoe": zoe, "pi": pi})
+        if not case.negative and case.intent_group != "chat":
+            samples.append(
+                PiRouteSample(
+                    case_id=case.case_id,
+                    intent_group=case.intent_group,
+                    expected_intent=case.expected_intent,
+                    zoe_intent=zoe["intent"],
+                    pi_intent=pi["intent"],
+                    zoe_latency_ms=float(zoe["latency_ms"]),
+                    pi_latency_ms=float(pi["latency_ms"]),
+                    pi_confidence=float(pi["confidence"] or 0),
+                    pi_transport=transport,
+                    route_class=case.route_class,
+                    timed_out=bool(pi["timed_out"]),
+                    metadata={
+                        "source": case.source,
+                        "baseline_kind": zoe["baseline_kind"],
+                        "baseline_comparable": zoe["baseline_comparable"],
+                        "baseline_timed_out": zoe["baseline_timed_out"],
+                        "baseline_response_chars": zoe["baseline_response_chars"],
+                        "baseline_error": zoe["baseline_error"],
+                        "router_latency_ms": zoe["router_latency_ms"],
+                    },
+                )
+            )
+    return comparisons, samples
+
+
+def build_eval_readiness(promotion_report: dict[str, Any]) -> dict[str, Any]:
+    """Condense a promotion report into the operator decision for this eval run."""
+    raw_actions = promotion_report.get("promotion_actions")
+    actions = raw_actions if isinstance(raw_actions, dict) else {}
+    raw_candidates = promotion_report.get("candidate_wins")
+    candidate_wins = raw_candidates if isinstance(raw_candidates, dict) else {}
+    promote_groups = list(actions.get("promote_groups") or promotion_report.get("promotable_groups") or [])
+    rollback_groups = list(actions.get("rollback_groups") or promotion_report.get("rollback_groups") or [])
+    candidate_groups = list(candidate_wins.get("groups") or [])
+    if rollback_groups:
+        state = "rollback_required"
+    elif promote_groups:
+        state = "promotion_apply_ready"
+    elif candidate_groups:
+        state = "collect_more_evidence"
+    else:
+        state = "keep_shadow"
+    return {
+        "state": state,
+        "summary": {
+            "candidate_win_groups": candidate_groups,
+            "promotion_ready_groups": list(candidate_wins.get("promotion_ready_groups") or []),
+            "blocked_candidate_groups": list(candidate_wins.get("blocked_groups") or []),
+            "promote_groups": promote_groups,
+            "rollback_groups": rollback_groups,
+            "requires_operator_apply": bool(actions.get("requires_operator_apply")),
+        },
+        "next_actions": _eval_next_actions(
+            state, actions, candidate_wins, promote_groups=promote_groups, rollback_groups=rollback_groups
+        ),
+    }
+
+
+def _eval_next_actions(
+    state: str,
+    actions: dict[str, Any],
+    candidate_wins: dict[str, Any],
+    *,
+    promote_groups: list[Any],
+    rollback_groups: list[Any],
+) -> list[dict[str, Any]]:
+    next_actions: list[dict[str, Any]] = []
+    if rollback_groups:
+        next_actions.append(
+            {"kind": "rollback", "priority": "p0", "groups": rollback_groups, "env": dict(actions.get("env") or {})}
+        )
+    if promote_groups:
+        next_actions.append(
+            {"kind": "apply_promotion", "priority": "p1", "groups": promote_groups, "env": dict(actions.get("env") or {})}
+        )
+    for item in candidate_wins.get("details") or []:
+        if not isinstance(item, dict) or item.get("status") != "needs_more_evidence":
+            continue
+        blockers = set(str(blocker) for blocker in item.get("promotion_blockers") or [])
+        evidence_blockers = {"insufficient_samples", "insufficient_real_source_samples"}
+        if blockers and not blockers <= evidence_blockers:
+            continue
+        unique_deficit = int(item.get("unique_case_deficit") or item.get("sample_deficit") or 0)
+        real_source_deficit = int(item.get("real_source_sample_deficit") or 0)
+        if unique_deficit <= 0 and real_source_deficit <= 0:
+            continue
+        action = {
+            "kind": "collect_labeled_evidence",
+            "priority": "p1",
+            "intent_group": item.get("intent_group"),
+            "needed_unique_cases": unique_deficit,
+        }
+        if real_source_deficit > 0:
+            action["needed_real_source_cases"] = real_source_deficit
+        next_actions.append(action)
+    if not next_actions and state == "collect_more_evidence":
+        next_actions.append(
+            {
+                "kind": "review_candidate_evidence",
+                "priority": "p1",
+                "groups": list(candidate_wins.get("groups") or []),
+            }
+        )
+    if not next_actions and state == "keep_shadow":
+        next_actions.append({"kind": "continue_shadow_mode", "priority": "p2"})
+    return next_actions
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Report Pi intent promotion gates")
+    parser.add_argument("--demo", action="store_true", help="Include deterministic demo samples for policy smoke testing")
+    parser.add_argument("--run-pi", action="store_true", help="Run configured local Pi against built-in eval cases")
+    parser.add_argument("--transport", choices=["print", "rpc"], default="rpc")
+    parser.add_argument("--allow-execution", action="store_true", help="Temporarily set ZOE_PI_ALLOW_EXECUTION=true")
+    parser.add_argument("--local-model-configured", action="store_true", help="Temporarily set ZOE_PI_LOCAL_MODEL_CONFIGURED=true")
+    parser.add_argument(
+        "--fallback-baseline-latency-ms",
+        type=float,
+        default=None,
+        help="Measured Zoe fallback/agent latency to use for fallback route-class speed comparisons",
+    )
+    parser.add_argument(
+        "--extraction-failed-baseline-latency-ms",
+        type=float,
+        default=None,
+        help="Measured Zoe fallback latency after deterministic slot extraction fails",
+    )
+    parser.add_argument(
+        "--measure-zoe-agent-baseline",
+        action="store_true",
+        help="Measure comparable Zoe Agent fallback latency for fallback/extraction_failed route classes",
+    )
+    parser.add_argument(
+        "--zoe-agent-baseline-timeout-seconds",
+        type=float,
+        default=30.0,
+        help="Timeout for each measured Zoe Agent fallback baseline case",
+    )
+    parser.add_argument(
+        "--zoe-agent-baseline-max-tokens",
+        type=int,
+        default=256,
+        help="max_tokens_override passed to Zoe Agent when measuring comparable fallback baselines",
+    )
+    parser.add_argument("--min-samples", type=int, default=30)
+    parser.add_argument(
+        "--cases-file",
+        action="append",
+        default=[],
+        help="JSON or JSONL eval cases file. Repeat to combine datasets.",
+    )
+    parser.add_argument("--no-default-cases", action="store_true", help="Use only --cases-file datasets")
+    parser.add_argument("--env-file", action="append", default=[], help="Additional Zoe env file to load before measuring; shell env wins")
+    parser.add_argument("--output", "-o", help="Optional JSON output path; defaults to stdout")
+    parser.add_argument(
+        "--promoted-group",
+        action="append",
+        choices=sorted(LOW_RISK_PI_INTENT_GROUPS),
+        default=[],
+        help="Intent group currently promoted through Pi; repeat for multiple groups",
+    )
+    args = parser.parse_args(argv)
+
+    policy = PiPromotionPolicy(min_samples=args.min_samples)
+    loaded_case_groups = [load_pi_intent_eval_cases(path) for path in args.cases_file]
+    base_cases = [] if args.no_default_cases else list(DEFAULT_PI_INTENT_EVAL_CASES)
+    eval_cases = merge_pi_intent_eval_cases(base_cases, *loaded_case_groups)
+    comparisons: list[dict[str, Any]] = []
+    samples: list[PiRouteSample] = []
+    if args.demo:
+        samples.extend(_demo_samples())
+    if args.run_pi:
+        with _temporary_env(load_zoe_env(args.env_file)):
+            comparisons, measured_samples = asyncio.run(
+                _run_cases(
+                    eval_cases,
+                    transport=args.transport,
+                    enable_execution=args.allow_execution,
+                    local_model_configured=args.local_model_configured,
+                    fallback_baseline_latency_ms=args.fallback_baseline_latency_ms,
+                    extraction_failed_baseline_latency_ms=args.extraction_failed_baseline_latency_ms,
+                    measure_zoe_agent_baseline=args.measure_zoe_agent_baseline,
+                    zoe_agent_baseline_timeout_seconds=args.zoe_agent_baseline_timeout_seconds,
+                    zoe_agent_baseline_max_tokens=args.zoe_agent_baseline_max_tokens,
+                )
+            )
+        samples.extend(measured_samples)
+    promotion_report = summarize_pi_promotion(samples, policy=policy, promoted_groups=args.promoted_group)
+    payload = {
+        "eval_case_files": args.cases_file,
+        "eval_cases": eval_cases_to_dict(eval_cases),
+        "eval_case_source_counts": summarize_eval_case_sources(eval_cases),
+        "comparisons": comparisons,
+        "promotion_report": promotion_report,
+        "readiness": build_eval_readiness(promotion_report),
+    }
+    text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    if args.output:
+        target = Path(args.output).expanduser()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+    else:
+        print(text, end="")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

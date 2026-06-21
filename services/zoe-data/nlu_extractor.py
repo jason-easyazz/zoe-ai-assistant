@@ -168,6 +168,25 @@ _PEOPLE_SCHEMA = {
     },
 }
 
+_PEOPLE_FACT_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "people_fact",
+        "description": "Extract a fact the user is teaching about a person they know.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "person": {"type": "string", "description": "Person's name if given, else the relationship word e.g. 'mum','dad'"},
+                "relationship": {"type": "string", "enum": ["mother", "father", "sister", "brother", "son", "daughter", "wife", "husband", "partner", "friend", "colleague", "family", "other"]},
+                "attribute": {"type": "string", "description": "what the fact is about, e.g. 'name','birthday','likes','hobby','job'"},
+                "value": {"type": "string", "description": "the fact value, e.g. 'Janice','NCIS','teacher'"},
+                "date": {"type": "string", "description": "YYYY-MM-DD if a date is stated, else empty"},
+            },
+            "required": ["attribute", "value"],
+        },
+    },
+}
+
 _TRANSACTION_SCHEMA = {
     "type": "function",
     "function": {
@@ -261,6 +280,20 @@ async def _extract_people(text: str) -> Optional[dict]:
     }
 
 
+async def _extract_people_fact(text: str) -> Optional[dict]:
+    args = await _call_with_tool(text, _PEOPLE_FACT_SCHEMA)
+    if not args:
+        return None
+    raw_date = (args.get("date") or "").strip()
+    return {
+        "person": (args.get("person") or "").strip(),
+        "relationship": (args.get("relationship") or "").strip(),
+        "attribute": (args.get("attribute") or "").strip().lower(),
+        "value": (args.get("value") or "").strip(),
+        "date": _normalize_date(raw_date) if raw_date else "",
+    }
+
+
 async def _extract_transaction(text: str) -> Optional[dict]:
     args = await _call_with_tool(text, _TRANSACTION_SCHEMA)
     if not args:
@@ -286,6 +319,7 @@ _EXTRACTORS = {
     "list_add": _extract_list_add,
     "note_create": _extract_note,
     "people_create": _extract_people,
+    "people_fact": _extract_people_fact,
     "transaction_create": _extract_transaction,
     "journal_create": _extract_journal,
 }

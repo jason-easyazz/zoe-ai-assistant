@@ -1,4 +1,5 @@
 """Tests for the Hermes Kanban executor adapter (CLI mocked)."""
+import asyncio
 import json
 from pathlib import Path
 
@@ -297,6 +298,53 @@ async def test_dispatch_review_includes_audit_pipeline_handoff():
 
 
 @pytest.mark.asyncio
+async def test_dispatch_verify_injects_pr_url_from_implement_evidence():
+    """Normal (real-PR) verify handoff must carry the implement phase's PR_URL
+    from the authoritative pipeline evidence, so the verify worker does not race
+    the async Multica pr_url write, block 'awaiting PR evidence', and bounce the
+    chain back to implement."""
+    from pipeline_evidence import EvidenceItem, PipelineState
+    from pipeline_store import save_state
+
+    pr = "https://github.com/jason-easyazz/zoe-ai-assistant/pull/600"
+    state = PipelineState(
+        task_ref="multica:uuid-normal-verify",
+        phase="verify",
+        status="todo",
+        attempts={"implement": 1},
+        evidence=[
+            EvidenceItem(
+                kind="pr",
+                summary=pr,
+                artifact=pr,
+                passed=True,
+                metadata={"source": "handoff", "phase": "implement"},
+            )
+        ],
+    )
+    save_state(state, event="transition")
+    a = _FakeAdapter()
+
+    result = await a.dispatch(
+        {
+            "id": "uuid-normal-verify",
+            "identifier": "ZOE-NORMAL",
+            "title": "Add focused tests",
+            "description": "Original ticket body.",
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["phase"] == "verify"
+    create = [c for c in a.calls if c[0] == "create"][0]
+    body = create[create.index("--body") + 1]
+    assert "Zoe pipeline handoff (authoritative):" in body
+    assert f"PR_URL={pr}" in body
+    assert "AUDIT_ONLY" not in body  # normal path, not the audit handoff
+    assert body.index(f"PR_URL={pr}") < body.index("Original ticket body")
+
+
+@pytest.mark.asyncio
 async def test_dispatch_does_not_parent_recovered_phase_to_blocked_prior_row():
     from pipeline_evidence import EvidenceItem, PipelineState
     from pipeline_store import save_state
@@ -470,6 +518,48 @@ async def test_dispatch_after_scout_evidence_creates_next_phase():
     assert creates[0][creates[0].index("--idempotency-key") + 1] == "multica:uuid-next:implement"
     assert "--parent" in creates[0]
     assert creates[0][creates[0].index("--parent") + 1] == "t_scout"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_after_implement_evidence_creates_verify():
+    """Regression: when implement is done the chain must auto-advance — dispatch
+    creates the verify phase. This is the autonomous implement→verify→…→closeout
+    path; if it regresses, chains strand at implement and never self-close-out.
+    """
+    from pipeline_store import bootstrap_state, save_state
+    from pipeline_evidence import EvidenceItem, transition, with_evidence
+
+    state = await bootstrap_state("multica:uuid-impl-verify", start_phase="implement")
+    state = with_evidence(state, EvidenceItem(kind="tool", summary="graphify", passed=True))
+    state = with_evidence(
+        state,
+        EvidenceItem(
+            kind="pr",
+            summary="https://github.com/o/r/pull/1",
+            artifact="https://github.com/o/r/pull/1",
+            passed=True,
+        ),
+    )
+    state = with_evidence(state, EvidenceItem(kind="test", summary="pytest passed", passed=True))
+    state = transition(state, "complete")
+    assert state.phase == "verify"
+    save_state(state, event="transition", extra={"row_phase": "implement"})
+
+    rows = [_row("implement", "done", chain_version="v4", issue_id="uuid-impl-verify")]
+    a = _FakeAdapter(list_rows=rows)
+    result = await a.dispatch({"id": "uuid-impl-verify", "identifier": "ZOE-IV", "title": "Fix thing"})
+
+    creates = [c for c in a.calls if c[0] == "create"]
+    assert result["phase"] == "verify"
+    assert set(result["chain"]) == {"verify"}
+    assert len(creates) == 1
+    assert (
+        creates[0][creates[0].index("--idempotency-key") + 1]
+        == "multica:uuid-impl-verify:verify"
+    )
+    # verify must be parented to the completed implement row for chain ordering.
+    assert "--parent" in creates[0]
+    assert creates[0][creates[0].index("--parent") + 1] == "t_implement"
 
 
 @pytest.mark.asyncio
@@ -1117,6 +1207,20 @@ async def test_implement_body_mentions_scope_split_packet():
 
 
 @pytest.mark.asyncio
+async def test_implement_body_requires_shipping_a_pr_not_blocking_for_review():
+    body = ka.KanbanAdapter()._build_body(
+        "implement",
+        {"id": "uuid-1", "identifier": "ZOE-9", "title": "Fix thing", "description": ""},
+        "ZOE-9",
+    )
+    # The worker must ship a PR on completion, not present a finished diff and
+    # block "for review" (observed failure mode with conservative models).
+    assert "COMPLETION MEANS YOU SHIP A PR" in body
+    assert "block for review" in body
+    assert "PROTOCOL VIOLATION" in body
+
+
+@pytest.mark.asyncio
 async def test_retro_body_prefers_cheap_summary_models():
     body = ka.KanbanAdapter()._build_body(
         "retro",
@@ -1396,8 +1500,6 @@ async def test_poll_recovers_pr_after_push_then_api_interruption(tmp_path, monke
             self.worktree_commands.append(args)
             if args[:3] == ["git", "branch", "--show-current"]:
                 return "wt/t_implement"
-            if args[:3] == ["git", "rev-parse", "--abbrev-ref"]:
-                return "origin/release"
             if args[:3] == ["gh", "pr", "view"]:
                 raise ka.KanbanCLIError("no pull request found")
             if args[:3] == ["gh", "pr", "create"]:
@@ -1421,7 +1523,10 @@ async def test_poll_recovers_pr_after_push_then_api_interruption(tmp_path, monke
     complete = next(call for call in a.calls if call[0] == "complete")
     assert "PR_URL=https://github.com/jason-easyazz/zoe-ai-assistant/pull/999" in "\n".join(complete)
     create_cmd = next(cmd for cmd in a.worktree_commands if cmd[:3] == ["gh", "pr", "create"])
-    assert create_cmd[create_cmd.index("--base") + 1] == "release"
+    # No --base is passed: gh defaults to the repo's default branch. Deriving the
+    # base from HEAD@{upstream} is wrong after `git push -u` (upstream == the task
+    # branch itself), which would make head == base and fail.
+    assert "--base" not in create_cmd
 
 
 @pytest.mark.asyncio
@@ -1658,8 +1763,6 @@ async def test_poll_creates_pr_when_pr_view_returns_no_url(tmp_path, monkeypatch
             self.worktree_commands.append(args)
             if args[:3] == ["git", "branch", "--show-current"]:
                 return "wt/t_implement"
-            if args[:3] == ["git", "rev-parse", "--abbrev-ref"]:
-                return "origin/main"
             if args[:3] == ["gh", "pr", "view"]:
                 return "null"
             if args[:3] == ["gh", "pr", "create"]:
@@ -4767,7 +4870,10 @@ def test_closeout_body_uses_supported_greploop_launcher():
     )
 
     assert "scripts/maintenance/run_greploop_guard.sh --pr N --merge-when-ready" in body
+    assert "scripts/maintenance/run_greploop_guard.sh --pr N --once" in body
+    assert "Do not call Greptile trigger-review directly" in body
     assert "python3 scripts/maintenance/greploop_guard.py" not in body
+    assert "trigger-review jason-easyazz/zoe-ai-assistant" not in body
 
 
 def test_audit_no_pr_phases_have_bounded_completion_path():
@@ -5014,7 +5120,14 @@ def test_implement_body_requires_pinned_worktree_before_git_or_pr_commands():
     assert "File reads must use paths under that" in body
     assert "never absolute live-checkout paths" in body
     assert "BLOCKER=WORKTREE_PATH_VIOLATION" in body
-    assert "do not read from or `cd` into" in body
+    # The live checkout must be off-limits for every command shape, including the
+    # `git -C <liveroot>` orientation form that previously slipped past the guard.
+    assert "NEVER touch the live checkout" in body
+    # Anchor to the actual live root so a future edit dropping the negative
+    # example is caught — a bare "git -C" would also match the positive
+    # own-worktree orientation example in the prompt.
+    assert f"git -C {ka.zoe_repo_root()}" in body
+    assert "git worktree list" in body
     assert body.index("BLOCKER=WORKTREE_PATH_VIOLATION") < body.index("git push -u origin HEAD")
 
 
@@ -5520,3 +5633,334 @@ def test_audit_no_pr_phases_do_not_preload_broad_skills():
     assert _phase_plan_entry("verify", code_clause_issue)[2] == ("zoe-engineering",)
     assert _phase_plan_entry("closeout", code_smoke_issue)[2] == ("github-greptile-loop",)
     assert _phase_plan_entry("closeout", code_clause_issue)[2] == ("github-greptile-loop",)
+
+
+# ---------------------------------------------------------------------------
+# Capture-on-exit: salvage a finished implement diff the worker never shipped
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_recover_unshipped_diff_commits_pushes_and_opens_pr(tmp_path, monkeypatch):
+    """Worker left a dirty worktree (no commit/push): salvage -> commit+push+PR+done."""
+    monkeypatch.setattr(ka, "latest_log_session", lambda *a, **k: "no PR handed off here")
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    row = {
+        "id": "t_implement",
+        "status": "blocked",
+        "title": "ZOE-9 fix thing",
+        "workspace_path": str(wt),
+    }
+
+    class _A(_FakeAdapter):
+        def __init__(self):
+            super().__init__()
+            self.wt_cmds = []
+
+        async def _run_worktree_command(self, args, *, cwd, timeout=45.0):
+            self.wt_cmds.append(args)
+            if args[:3] == ["git", "branch", "--show-current"]:
+                return "wt/t_implement"
+            if args[:3] == ["git", "status", "--porcelain"]:
+                return " M services/zoe-data/routers/voice_tts.py"
+            if args[:2] == ["git", "add"]:
+                return ""
+            if args[:2] == ["git", "commit"]:
+                return ""
+            if args[:3] == ["git", "rev-list", "--count"]:
+                return "1"
+            if args[:2] == ["git", "push"]:
+                return ""
+            if args[:3] == ["gh", "pr", "view"]:
+                raise ka.KanbanCLIError("no pull request found")
+            if args[:3] == ["gh", "pr", "create"]:
+                return "https://github.com/jason-easyazz/zoe-ai-assistant/pull/777"
+            raise AssertionError(args)
+
+    a = _A()
+    pr = await a._maybe_recover_unshipped_diff(
+        "t_implement", "implement", row, issue={"identifier": "ZOE-9", "title": "fix thing"}
+    )
+
+    assert pr == "https://github.com/jason-easyazz/zoe-ai-assistant/pull/777"
+    assert row["status"] == "done"
+    assert any(c[:2] == ["git", "commit"] for c in a.wt_cmds)
+    push = next(c for c in a.wt_cmds if c[:2] == ["git", "push"])
+    assert "--force" not in push and push == ["git", "push", "-u", "origin", "wt/t_implement"]
+    complete = next(c for c in a.calls if c[0] == "complete")
+    assert "PR_URL=https://github.com/jason-easyazz/zoe-ai-assistant/pull/777" in "\n".join(complete)
+
+
+@pytest.mark.asyncio
+async def test_recover_unshipped_diff_refuses_non_task_branch(tmp_path, monkeypatch):
+    """Hard safety gate: never commit/push when not on the task's own wt/ branch."""
+    monkeypatch.setattr(ka, "latest_log_session", lambda *a, **k: "no pr")
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    row = {"id": "t_implement", "status": "blocked", "workspace_path": str(wt)}
+
+    class _A(_FakeAdapter):
+        def __init__(self):
+            super().__init__()
+            self.wt_cmds = []
+
+        async def _run_worktree_command(self, args, *, cwd, timeout=45.0):
+            self.wt_cmds.append(args)
+            if args[:3] == ["git", "branch", "--show-current"]:
+                return "main"  # not wt/t_implement -> must bail before any mutation
+            raise AssertionError(f"must not mutate on non-task branch: {args!r}")
+
+    a = _A()
+    pr = await a._maybe_recover_unshipped_diff("t_implement", "implement", row)
+
+    assert pr is None
+    assert row["status"] == "blocked"
+    assert not any(c[:2] in (["git", "add"], ["git", "commit"], ["git", "push"]) for c in a.wt_cmds)
+
+
+@pytest.mark.asyncio
+async def test_recover_unshipped_diff_skips_when_nothing_to_ship(tmp_path, monkeypatch):
+    """Clean worktree with no unpushed commits must not open an empty PR."""
+    monkeypatch.setattr(ka, "latest_log_session", lambda *a, **k: "no pr")
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    row = {"id": "t_implement", "status": "blocked", "workspace_path": str(wt)}
+
+    class _A(_FakeAdapter):
+        def __init__(self):
+            super().__init__()
+            self.wt_cmds = []
+
+        async def _run_worktree_command(self, args, *, cwd, timeout=45.0):
+            self.wt_cmds.append(args)
+            if args[:3] == ["git", "branch", "--show-current"]:
+                return "wt/t_implement"
+            if args[:3] == ["git", "status", "--porcelain"]:
+                return ""  # clean
+            if args[:3] == ["git", "rev-list", "--count"]:
+                return "0"  # nothing unpushed
+            raise AssertionError(f"must not push/PR with nothing to ship: {args!r}")
+
+    a = _A()
+    pr = await a._maybe_recover_unshipped_diff("t_implement", "implement", row)
+
+    assert pr is None
+    assert not any(c[:2] == ["git", "push"] for c in a.wt_cmds)
+    assert not any(c[:3] == ["gh", "pr", "create"] for c in a.wt_cmds)
+
+
+@pytest.mark.asyncio
+async def test_recover_unshipped_diff_skips_when_pr_already_handed_off(monkeypatch):
+    """If the worker already reported a PR_URL, leave it to the normal flow."""
+    monkeypatch.setattr(
+        ka, "latest_log_session", lambda *a, **k: "PR_URL=https://github.com/o/r/pull/5\n"
+    )
+    row = {"id": "t_implement", "status": "blocked"}
+
+    class _A(_FakeAdapter):
+        async def _run_worktree_command(self, args, *, cwd, timeout=45.0):
+            raise AssertionError(f"must not touch the worktree when a PR exists: {args!r}")
+
+    a = _A()
+    assert await a._maybe_recover_unshipped_diff("t_implement", "implement", row) is None
+
+
+# ---------------------------------------------------------------------------
+# _maybe_auto_block_dead_worker — adapter glue that reaps zombie running tasks
+# ---------------------------------------------------------------------------
+
+
+def _dead_detail():
+    # past-grace running run; liveness is decided by the mocked _is_expected_worker
+    return {"runs": [{"status": "running", "worker_pid": 987654, "started_at": "2000-01-01T00:00:00+00:00"}]}
+
+
+def test_auto_block_dead_worker_blocks_zombie(monkeypatch):
+    monkeypatch.setattr(ka, "_REAP_DEAD_WORKERS", True)
+    monkeypatch.setattr(kb, "_is_expected_worker", lambda pid: False)  # worker dead
+    adapter = ka.KanbanAdapter()
+    calls: list[list[str]] = []
+
+    async def fake_run(args, *, expect_json=False):
+        calls.append(args)
+        return ""
+
+    adapter._run = fake_run  # type: ignore[assignment]
+    row = {"status": "running"}
+    out = asyncio.run(adapter._maybe_auto_block_dead_worker("t_verify", "verify", row, _dead_detail()))
+
+    assert out is True
+    assert calls and calls[0][0] == "block" and calls[0][1] == "t_verify"
+    assert calls[0][2].startswith("BLOCKER=WORKER_DIED")
+    assert row["status"] == "blocked"
+    assert row["block_reason"].startswith("BLOCKER=WORKER_DIED")
+
+
+def test_auto_block_dead_worker_noop_when_worker_alive(monkeypatch):
+    monkeypatch.setattr(ka, "_REAP_DEAD_WORKERS", True)
+    monkeypatch.setattr(kb, "_is_expected_worker", lambda pid: True)  # worker alive
+    adapter = ka.KanbanAdapter()
+
+    async def fake_run(args, *, expect_json=False):  # pragma: no cover - must not run
+        raise AssertionError("must not block a live worker")
+
+    adapter._run = fake_run  # type: ignore[assignment]
+    row = {"status": "running"}
+    assert asyncio.run(adapter._maybe_auto_block_dead_worker("t", "verify", row, _dead_detail())) is False
+    assert row["status"] == "running"
+
+
+def test_auto_block_dead_worker_noop_when_row_not_running(monkeypatch):
+    monkeypatch.setattr(ka, "_REAP_DEAD_WORKERS", True)
+    monkeypatch.setattr(kb, "_is_expected_worker", lambda pid: False)
+    adapter = ka.KanbanAdapter()
+
+    async def fake_run(args, *, expect_json=False):  # pragma: no cover
+        raise AssertionError("row not running -> no block")
+
+    adapter._run = fake_run  # type: ignore[assignment]
+    row = {"status": "todo"}
+    assert asyncio.run(adapter._maybe_auto_block_dead_worker("t", "verify", row, _dead_detail())) is False
+
+
+def test_auto_block_dead_worker_respects_kill_switch(monkeypatch):
+    monkeypatch.setattr(ka, "_REAP_DEAD_WORKERS", False)  # disabled
+    monkeypatch.setattr(kb, "_is_expected_worker", lambda pid: False)
+    adapter = ka.KanbanAdapter()
+
+    async def fake_run(args, *, expect_json=False):  # pragma: no cover
+        raise AssertionError("reaper disabled -> no block")
+
+    adapter._run = fake_run  # type: ignore[assignment]
+    row = {"status": "running"}
+    assert asyncio.run(adapter._maybe_auto_block_dead_worker("t", "verify", row, _dead_detail())) is False
+    assert row["status"] == "running"
+
+
+def test_auto_block_dead_worker_swallows_cli_error(monkeypatch):
+    monkeypatch.setattr(ka, "_REAP_DEAD_WORKERS", True)
+    monkeypatch.setattr(kb, "_is_expected_worker", lambda pid: False)
+    adapter = ka.KanbanAdapter()
+
+    async def fake_run(args, *, expect_json=False):
+        raise ka.KanbanCLIError("block failed")
+
+    adapter._run = fake_run  # type: ignore[assignment]
+    row = {"status": "running"}
+    # CLI failure -> returns False, row left untouched (next poll retries)
+    assert asyncio.run(adapter._maybe_auto_block_dead_worker("t", "verify", row, _dead_detail())) is False
+    assert row["status"] == "running"
+
+
+# ---------------------------------------------------------------------------
+# _maybe_converge_noop_implement — no-op implement (empty worktree) -> ALREADY_COVERED
+# ---------------------------------------------------------------------------
+
+
+def _noop_adapter(monkeypatch, tmp_path, *, dirty="", unpushed="0", branch="wt/t_x", log=""):
+    import worktree_bootstrap as wb
+    wt = tmp_path / "wt"
+    wt.mkdir(exist_ok=True)
+    monkeypatch.setattr(ka, "_CONVERGE_NOOP_IMPLEMENT", True)
+    monkeypatch.setattr(ka, "latest_log_session", lambda task_id, max_lines=120: log)
+    monkeypatch.setattr(wb, "worktree_branch", lambda task_id: "wt/t_x")
+    monkeypatch.setattr(wb, "worktree_path", lambda task_id: str(wt))
+    adapter = ka.KanbanAdapter()
+    calls = {"run": [], "wt": []}
+
+    async def fake_run(args, *, expect_json=False):
+        calls["run"].append(args)
+        return ""
+
+    async def fake_wt(args, *, cwd, timeout=45.0):
+        calls["wt"].append(args)
+        if args[:3] == ["git", "branch", "--show-current"]:
+            return branch
+        if args[:2] == ["git", "status"]:
+            return dirty
+        if args[:3] == ["git", "rev-list", "--count"]:
+            return unpushed
+        raise AssertionError(args)
+
+    adapter._run = fake_run  # type: ignore[assignment]
+    adapter._run_worktree_command = fake_wt  # type: ignore[assignment]
+    return adapter, calls, str(wt)
+
+
+def _gate_row(wt, reason="BLOCKER=GATE_BLOCKED: missing required evidence pr"):
+    return {"status": "blocked", "block_reason": reason, "workspace_path": wt}
+
+
+def test_converge_noop_implement_blocks_already_covered(monkeypatch, tmp_path):
+    a, calls, wt = _noop_adapter(monkeypatch, tmp_path)  # clean tree, nothing unpushed
+    row = _gate_row(wt)
+    out = asyncio.run(a._maybe_converge_noop_implement("t_x", "implement", row, detail={}))
+    assert out is True
+    assert calls["run"] and calls["run"][0][0] == "block" and calls["run"][0][1] == "t_x"
+    assert "ALREADY_COVERED" in calls["run"][0][2]
+    assert "ALREADY_COVERED" in row["block_reason"]
+
+
+def test_converge_noop_implement_noop_when_dirty(monkeypatch, tmp_path):
+    # A dirty tree means there IS a diff -> unshipped-diff salvage owns it, not this.
+    a, calls, wt = _noop_adapter(monkeypatch, tmp_path, dirty=" M file.py")
+    row = _gate_row(wt)
+    assert asyncio.run(a._maybe_converge_noop_implement("t_x", "implement", row, detail={})) is False
+    assert not calls["run"]
+
+
+def test_converge_noop_implement_noop_when_unpushed_commits(monkeypatch, tmp_path):
+    a, calls, wt = _noop_adapter(monkeypatch, tmp_path, unpushed="2")
+    row = _gate_row(wt)
+    assert asyncio.run(a._maybe_converge_noop_implement("t_x", "implement", row, detail={})) is False
+    assert not calls["run"]
+
+
+def test_converge_noop_implement_ignores_real_blockers(monkeypatch, tmp_path):
+    a, calls, wt = _noop_adapter(monkeypatch, tmp_path)
+    row = _gate_row(wt, reason="BLOCKER=TEST_ENVIRONMENT: import error")
+    assert asyncio.run(a._maybe_converge_noop_implement("t_x", "implement", row, detail={})) is False
+    assert not calls["run"]
+
+
+def test_converge_noop_implement_skips_when_pr_in_log(monkeypatch, tmp_path):
+    a, calls, wt = _noop_adapter(monkeypatch, tmp_path, log="PR_URL=https://x/pull/1")
+    row = _gate_row(wt)
+    assert asyncio.run(a._maybe_converge_noop_implement("t_x", "implement", row, detail={})) is False
+    assert not calls["run"]
+
+
+def test_converge_noop_implement_respects_kill_switch(monkeypatch, tmp_path):
+    a, calls, wt = _noop_adapter(monkeypatch, tmp_path)
+    monkeypatch.setattr(ka, "_CONVERGE_NOOP_IMPLEMENT", False)
+    row = _gate_row(wt)
+    assert asyncio.run(a._maybe_converge_noop_implement("t_x", "implement", row, detail={})) is False
+    assert not calls["run"]
+
+
+def test_converge_noop_implement_noop_when_not_blocked(monkeypatch, tmp_path):
+    a, calls, wt = _noop_adapter(monkeypatch, tmp_path)
+    row = {"status": "running", "block_reason": "", "workspace_path": wt}
+    assert asyncio.run(a._maybe_converge_noop_implement("t_x", "implement", row, detail={})) is False
+    assert asyncio.run(a._maybe_converge_noop_implement("t_x", "verify", _gate_row(wt), detail={})) is False
+    assert not calls["run"]
+
+
+@pytest.mark.parametrize("branch", ["main", "master", "wt/other_task"])
+def test_converge_noop_implement_noop_wrong_branch(monkeypatch, tmp_path, branch):
+    # Safety gate: never converge on main/master or a different task's worktree
+    # branch — a regression here would converge on the wrong branch.
+    a, calls, wt = _noop_adapter(monkeypatch, tmp_path, branch=branch)
+    row = _gate_row(wt)
+    assert asyncio.run(a._maybe_converge_noop_implement("t_x", "implement", row, detail={})) is False
+    assert not calls["run"]
+
+
+def test_converge_noop_implement_ignores_pr_substring_in_other_words(monkeypatch, tmp_path):
+    # "pr" must match as a whole word: a missing-evidence reason naming e.g.
+    # "prior_result" must NOT trip the missing-PR convergence.
+    a, calls, wt = _noop_adapter(monkeypatch, tmp_path)
+    row = _gate_row(wt, reason="BLOCKER=GATE_BLOCKED: missing required evidence prior_result")
+    assert asyncio.run(a._maybe_converge_noop_implement("t_x", "implement", row, detail={})) is False
+    assert not calls["run"]

@@ -59,6 +59,29 @@ def test_poll_dispatches_ready_work_only_when_runtime_pause_is_inactive():
     assert active_branch < backfill < paused_branch
 
 
+def test_multica_poll_interval_throttles_when_paused():
+    from main import _multica_poll_interval_s
+
+    # Normal cadence while dispatch is active...
+    assert _multica_poll_interval_s(False, active_s=30.0, paused_s=300.0) == 30.0
+    # ...and the throttled cadence while it's paused.
+    assert _multica_poll_interval_s(True, active_s=30.0, paused_s=300.0) == 300.0
+    # A misconfigured 0/negative paused interval is floored at the active cadence
+    # so the paused path can never become a tighter spin loop than active.
+    assert _multica_poll_interval_s(True, active_s=30.0, paused_s=0.0) == 30.0
+    assert _multica_poll_interval_s(True, active_s=30.0, paused_s=-5.0) == 30.0
+
+
+def test_multica_poll_loop_routes_sleep_through_paused_interval_helper():
+    # Guard the wiring: the loop must derive its sleep from the helper (re-checking
+    # dispatch_is_paused each cycle) and honour ZOE_MULTICA_PAUSED_POLL_S, so a
+    # paused pipeline stops running the expensive per-issue reconcile every 30s.
+    source = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
+    assert "_multica_poll_interval_s(" in source
+    assert "ZOE_MULTICA_PAUSED_POLL_S" in source
+    assert "await asyncio.sleep(30)" not in source  # no hardcoded poll cadence
+
+
 def test_poll_dispatch_backfills_ready_blocked_pipeline_before_todo():
     source = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
     blocked_fetch = source.index('blocked_issues = await client.list_issues(status="blocked")')
@@ -93,10 +116,13 @@ def test_poll_loop_keeps_blocked_broadcast_out_of_running_branch():
     source = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
     blocked_branch = source.index('elif chain.get("found") and chain.get("status") == "blocked"')
     running_branch = source.index('elif chain.get("found") and chain.get("status") == "running"')
-    inner_except = source.index("except Exception as _inner_exc", running_branch)
+    # The running branch proper ends where the partial-divergence reconcile
+    # branch begins (which legitimately uses clear_blocker), so bound the segment
+    # there rather than at the inner except.
+    partial_branch = source.index("chain_needs_reconcile(chain)", running_branch)
 
     blocked_segment = source[blocked_branch:running_branch]
-    running_segment = source[running_branch:inner_except]
+    running_segment = source[running_branch:partial_branch]
 
     assert "blocker = await _record_blocked_multica_chain" in blocked_segment
     assert '"multica_task_blocked"' in blocked_segment
@@ -781,6 +807,88 @@ async def test_poll_chain_guarded_returns_sentinel_on_error(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_reconcile_branch_skips_on_poll_timeout_sentinel(monkeypatch):
+    """The status-reconciliation pass in _multica_poll_loop now polls via
+    _poll_chain_guarded instead of raw poll_ref. A hung executor yields a
+    found=False sentinel, so none of the reconcile terminal handlers (done /
+    blocked / running) fire and the loop continues to the next issue rather than
+    hanging. This mirrors the exact guard expressions used at that call site."""
+    import asyncio
+
+    import executor_registry
+    from main import _poll_chain_guarded
+
+    async def _hang(*_args, **_kwargs):
+        await asyncio.sleep(10)
+
+    monkeypatch.setattr(executor_registry, "poll_ref", _hang)
+    chain = await _poll_chain_guarded("multica:dead", issue={"id": "dead"}, timeout=0.01)
+
+    # The reconcile branch only acts when chain["found"] is truthy; the sentinel
+    # must therefore fall through every terminal handler.
+    assert chain.get("found") is False
+    assert not (chain.get("found") and chain.get("status") == "done")
+    assert not (chain.get("found") and chain.get("status") == "blocked")
+    assert not (chain.get("found") and chain.get("status") == "running")
+
+
+class _RecordingClient:
+    def __init__(self):
+        self.calls = []
+
+    async def record_progress(self, issue_id, **kwargs):
+        self.calls.append((issue_id, kwargs))
+
+
+@pytest.mark.asyncio
+async def test_reconcile_diverged_board_status_converges_in_review_partial():
+    """A found, non-terminal partial chain whose board is in_review is converged
+    back to in_progress (status + clear_blocker) so it re-dispatches next cycle."""
+    from main import _reconcile_diverged_board_status
+
+    client = _RecordingClient()
+    issue = {"id": "x", "status": "in_review"}
+    chain = {"found": True, "status": "partial", "pipeline": {}}
+
+    did = await _reconcile_diverged_board_status(client, "x", issue, chain)
+
+    assert did is True
+    assert len(client.calls) == 1
+    _id, kwargs = client.calls[0]
+    assert _id == "x"
+    assert kwargs.get("status") == "in_progress"
+    assert kwargs.get("clear_blocker") is True
+
+
+@pytest.mark.asyncio
+async def test_reconcile_diverged_board_status_noop_when_already_in_progress():
+    from main import _reconcile_diverged_board_status
+
+    client = _RecordingClient()
+    issue = {"id": "x", "status": "in_progress"}
+    chain = {"found": True, "status": "partial"}
+
+    did = await _reconcile_diverged_board_status(client, "x", issue, chain)
+
+    assert did is False
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_reconcile_diverged_board_status_noop_for_terminal_or_nonpartial():
+    from main import _reconcile_diverged_board_status
+
+    client = _RecordingClient()
+    # terminal-flagged partial -> belongs to the blocked branch, not reconcile
+    terminal = {"found": True, "status": "partial", "pipeline": {"terminal_block": True}}
+    assert await _reconcile_diverged_board_status(client, "x", {"id": "x", "status": "in_review"}, terminal) is False
+    # running chain is not a reconcile candidate
+    running = {"found": True, "status": "running"}
+    assert await _reconcile_diverged_board_status(client, "x", {"id": "x", "status": "in_review"}, running) is False
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
 async def test_poll_chain_guarded_passes_through_live_result(monkeypatch):
     import executor_registry
     from main import _poll_chain_guarded
@@ -791,6 +899,36 @@ async def test_poll_chain_guarded_passes_through_live_result(monkeypatch):
     monkeypatch.setattr(executor_registry, "poll_ref", _ok)
     chain = await _poll_chain_guarded("multica:live", issue={"id": "live"}, timeout=1.0)
     assert chain == {"found": True, "status": "running", "ref": "multica:live"}
+
+
+@pytest.mark.asyncio
+async def test_resolve_chain_for_dispatch_repolls_only_on_sentinel():
+    """A poll sentinel triggers ONE fresh re-poll (longer timeout); a real chain
+    is returned unchanged with no extra poll. This is the recovery that stops a
+    transient poll timeout/error from stranding an in-progress chain past implement."""
+    from main import _resolve_chain_for_dispatch
+
+    calls = []
+
+    async def _repoll(ref, *, issue=None, timeout=None):
+        calls.append({"ref": ref, "timeout": timeout})
+        return {"found": True, "status": "partial", "phases": {"implement": "done"}}
+
+    # Sentinel -> re-polls with a longer (>= 60s) timeout and returns the fresh result.
+    sentinel = {"found": False, "status": "poll_timeout", "timed_out": True}
+    out = await _resolve_chain_for_dispatch(
+        sentinel, ref="multica:x", issue={"id": "x"}, poll_guarded=_repoll, poll_timeout=20.0
+    )
+    assert out["status"] == "partial"
+    assert len(calls) == 1 and calls[0]["timeout"] >= 60.0
+
+    # Real (non-sentinel) chain -> returned as-is, no extra poll.
+    real = {"found": True, "status": "partial", "phases": {"implement": "done"}}
+    out2 = await _resolve_chain_for_dispatch(
+        real, ref="multica:y", issue={"id": "y"}, poll_guarded=_repoll, poll_timeout=20.0
+    )
+    assert out2 is real
+    assert len(calls) == 1  # not called again
 
 
 @pytest.mark.asyncio

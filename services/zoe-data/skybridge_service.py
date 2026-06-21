@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import os
 import re
 import uuid
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from calendar_utils import row_to_event
 from card_service import card_service
@@ -26,6 +29,7 @@ class SkybridgeIntent:
     context: str = ""
     circle: str = ""
     item_text: str = ""
+    list_name: str = ""
     target_time: str = ""
     title: str = ""
     target_text: str = ""
@@ -62,6 +66,11 @@ MONTHS = {
 }
 MONTH_PATTERN = "|".join(sorted(MONTHS, key=len, reverse=True))
 LIST_TYPES = ("shopping", "personal", "work", "bucket", "tasks")
+DEFAULT_USER_LISTS = (
+    ("shopping", "Shopping", "Shared groceries and household shopping.", "family"),
+    ("work", "Work", "Work tasks and follow-ups.", "personal"),
+    ("personal", "Personal", "Personal todos and errands.", "personal"),
+)
 LIST_TYPE_ALIASES = {
     "shopping": "shopping",
     "groceries": "shopping",
@@ -79,8 +88,51 @@ PEOPLE_CONTEXTS = ("personal", "work")
 PEOPLE_CIRCLES = ("inner", "circle", "public")
 
 
+def _host_clock_timezone() -> str | None:
+    tz_env = (os.environ.get("TZ") or "").strip()
+    if tz_env and not tz_env.startswith(":"):
+        return tz_env
+
+    try:
+        timezone_file = Path("/etc/timezone")
+        if timezone_file.exists():
+            timezone_name = timezone_file.read_text(encoding="utf-8").strip()
+            if timezone_name:
+                return timezone_name
+    except OSError:
+        pass
+
+    try:
+        localtime = Path("/etc/localtime")
+        if localtime.is_symlink():
+            target = str(localtime.resolve())
+            marker = "/zoneinfo/"
+            if marker in target:
+                timezone_name = target.split(marker, 1)[1]
+                if timezone_name:
+                    return timezone_name
+    except OSError:
+        pass
+
+    return None
+
+
+def _default_clock_timezone() -> str:
+    return os.environ.get("ZOE_SKYBRIDGE_TIMEZONE") or _host_clock_timezone() or "UTC"
+
+
 def _today() -> date:
     return date.today()
+
+
+def _clock_now(timezone_name: str | None = None) -> tuple[datetime, str]:
+    name = timezone_name or _default_clock_timezone()
+    try:
+        tz = ZoneInfo(name)
+    except ZoneInfoNotFoundError:
+        name = "UTC"
+        tz = ZoneInfo("UTC")
+    return datetime.now(tz), name
 
 
 async def _get_current(lat, lon, city, country):
@@ -164,11 +216,70 @@ def _list_type_from_text(text: str) -> str:
     return ""
 
 
+def _default_list_name(list_type: str) -> str:
+    for default_type, name, _description, _visibility in DEFAULT_USER_LISTS:
+        if default_type == list_type:
+            return name
+    return (list_type or "List").replace("_", " ").title()
+
+
+def _list_type_for_name(name: str, explicit_type: str = "") -> str:
+    if explicit_type:
+        return explicit_type
+    text = f" {name.lower()} "
+    detected = _list_type_from_text(text)
+    if detected:
+        return detected
+    return "personal"
+
+
+def _list_create_from_text(message: str, context: dict[str, Any] | None = None) -> tuple[str, str] | None:
+    if _context_domain(context) == "lists" and _context_action(context) == "create_list":
+        candidate = _clean_action_text(message)
+        if re.fullmatch(r"[a-z0-9][a-z0-9 '&-]{1,48}", candidate, flags=re.IGNORECASE):
+            return candidate[:48].strip(), _list_type_for_name(candidate, _context_list_type(context))
+    if not re.search(r"\b(?:new|create|make|add)\s+(?:a\s+|my\s+)?(?:new\s+)?(?:shopping|grocery|groceries|personal|work|task|todo|tasks|todos)?\s*list\b", message, re.IGNORECASE):
+        if _context_domain(context) != "lists" or not re.search(r"\b(?:call|name)\s+(?:it\s+)?", message, re.IGNORECASE):
+            return None
+    list_type = _list_type_from_text(f" {message.lower()} ")
+    name = ""
+    patterns = (
+        r"\b(?:called|named|name it|call it)\s+(?P<name>[a-z0-9][a-z0-9 '&-]{1,48})\b",
+        r"\b(?:new|create|make|add)\s+(?:a\s+|my\s+)?(?:new\s+)?(?P<name>[a-z0-9][a-z0-9 '&-]{1,48})\s+list\b",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, message, re.IGNORECASE)
+        if match:
+            name = _clean_action_text(match.group("name"))
+            break
+    if name.lower() in {"shopping", "grocery", "groceries", "personal", "work", "task", "tasks", "todo", "todos", "new"}:
+        name = _default_list_name(_list_type_for_name(name, list_type))
+    if not name and re.search(r"\b(?:new|create|make|add)\b", message, re.IGNORECASE):
+        return "", list_type or "personal"
+    if not name:
+        return None
+    return name[:48].strip(), _list_type_for_name(name, list_type)
+
+
 def _context_domain(context: dict[str, Any] | None) -> str:
     if not isinstance(context, dict):
         return ""
     intent = context.get("intent") if isinstance(context.get("intent"), dict) else {}
     return str(intent.get("domain") or context.get("domain") or "").strip().lower()
+
+
+def _context_action(context: dict[str, Any] | None) -> str:
+    if not isinstance(context, dict):
+        return ""
+    intent = context.get("intent") if isinstance(context.get("intent"), dict) else {}
+    return str(intent.get("action") or "").strip().lower()
+
+
+def _context_list_type(context: dict[str, Any] | None) -> str:
+    if not isinstance(context, dict):
+        return ""
+    intent = context.get("intent") if isinstance(context.get("intent"), dict) else {}
+    return str(intent.get("list_type") or "").strip().lower()
 
 
 def _context_cards(context: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -262,7 +373,7 @@ def _clean_action_text(value: str) -> str:
 
 def _list_add_from_text(message: str) -> tuple[str, str] | None:
     match = re.search(
-        r"\badd\s+(?P<item>.+?)\s+to\s+(?:the\s+|my\s+)?(?P<list>shopping list|grocery list|groceries|list|task list|todo list|tasks|todos)\b",
+        r"\badd\s+(?P<item>.+?)\s+to\s+(?:the\s+|my\s+)?(?P<list>shopping list|grocery list|groceries|work list|personal list|list|task list|todo list|tasks|todos)\b",
         message,
         re.IGNORECASE,
     )
@@ -271,6 +382,23 @@ def _list_add_from_text(message: str) -> tuple[str, str] | None:
     item = _clean_action_text(match.group("item"))
     list_phrase = f" {match.group('list').lower()} "
     list_type = _list_type_from_text(list_phrase) or ("shopping" if "grocery" in list_phrase else "")
+    return item, list_type or "shopping"
+
+
+def _contextual_list_add_from_text(message: str, context: dict[str, Any] | None) -> tuple[str, str] | None:
+    if _context_domain(context) != "lists":
+        return None
+    match = re.search(r"\badd\s+(?P<item>.+?)\s*$", message, re.IGNORECASE)
+    if not match:
+        return None
+    if re.search(r"\b(?:at|for)\s+\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)?\b", message, re.IGNORECASE):
+        return None
+    if re.search(r"\bto\s+", message, re.IGNORECASE):
+        return None
+    item = _clean_action_text(match.group("item"))
+    if not item or item.lower() in {"item", "something", "this", "that"}:
+        return None
+    _list_id, list_type = _context_list_hint(context)
     return item, list_type or "shopping"
 
 
@@ -393,18 +521,35 @@ def classify_skybridge_intent(message: str, context: dict[str, Any] | None = Non
     if list_add:
         item, list_type = list_add
         return SkybridgeIntent(domain="lists", action="add_item", item_text=item, list_type=list_type)
+    list_create = _list_create_from_text(raw_message, context)
+    if list_create:
+        list_name, list_type = list_create
+        return SkybridgeIntent(domain="lists", action="create_list", list_name=list_name, list_type=list_type)
+    contextual_list_add = _contextual_list_add_from_text(raw_message, context)
+    if contextual_list_add:
+        item, list_type = contextual_list_add
+        return SkybridgeIntent(domain="lists", action="add_item", item_text=item, list_type=list_type)
     calendar_create = _calendar_create_from_text(raw_message, context)
     if calendar_create:
         title, target_time = calendar_create
         parsed_range = _calendar_date_from_text(text, _today())
         start = parsed_range[1] if parsed_range else _context_calendar_date(context)
         return SkybridgeIntent(domain="calendar", action="create_event", title=title, target_time=target_time, range_label=start.isoformat(), start_date=start, end_date=start)
+    if (
+        " clock " in text
+        or re.search(r"\bwhat(?:'s| is)?\s+the\s+time\b", text)
+        or re.search(r"\bwhat\s+time\s+is\s+it\b", text)
+        or re.search(r"\bshow\s+(?:me\s+)?(?:the\s+)?time\b", text)
+        or re.search(r"\bcurrent\s+time\b", text)
+    ):
+        return SkybridgeIntent(domain="clock", action="show")
     if any(term in text for term in (" weather", " forecast", " temperature", " rain", " windy", " wind ")):
         action = "forecast" if any(term in text for term in ("forecast", "tomorrow", "week", "next few days")) else "current"
         return SkybridgeIntent(domain="weather", action=action)
     if any(term in text for term in (" list", " lists", " shopping", " groceries", " grocery", " tasks", " todos")):
         list_type = _list_type_from_text(text)
-        return SkybridgeIntent(domain="lists", action="show", list_type=list_type)
+        action = "overview" if re.search(r"\blists\b", text) else "show"
+        return SkybridgeIntent(domain="lists", action=action, list_type=list_type)
     if any(
         term in text
         for term in (
@@ -459,6 +604,9 @@ async def resolve_skybridge_request(
     if skybridge_intent_requires_identity(intent) and _is_guest_user(user_id):
         return _attach_skybridge_context(_auth_required_result(intent))
 
+    if intent.domain == "clock":
+        return _attach_skybridge_context(_resolve_clock(intent))
+
     if db is not None:
         return _attach_skybridge_context(await _resolve_with_db(intent, user_id, db, context=context))
 
@@ -485,6 +633,8 @@ def skybridge_intent_requires_identity(intent: SkybridgeIntent | None) -> bool:
 
 
 async def _resolve_with_db(intent: SkybridgeIntent, user_id: str, db: Any, *, context: dict[str, Any] | None = None) -> dict[str, Any]:
+    if intent.domain == "clock":
+        return _resolve_clock(intent)
     if intent.domain == "calendar":
         if intent.action == "create_event":
             return await _resolve_calendar_create(intent, user_id, db)
@@ -496,12 +646,40 @@ async def _resolve_with_db(intent: SkybridgeIntent, user_id: str, db: Any, *, co
     if intent.domain == "lists":
         if intent.action == "add_item":
             return await _resolve_list_add_item(intent, user_id, db, context)
+        if intent.action == "create_list":
+            return await _resolve_list_create(intent, user_id, db)
         return await _resolve_lists(intent, user_id, db)
     if intent.domain == "people":
         if intent.action == "remember_fact":
             return await _resolve_people_remember_fact(intent, user_id, db)
         return await _resolve_people(intent, user_id, db)
     return {"handled": False, "intent": None, "spoken_summary": "", "cards": []}
+
+
+def _resolve_clock(intent: SkybridgeIntent) -> dict[str, Any]:
+    now, timezone_name = _clock_now()
+    hour_str = str(now.hour % 12 or 12)
+    spoken = f"It is {hour_str}:{now.strftime('%M %p')}."
+    return {
+        "handled": True,
+        "intent": {"domain": "clock", "action": intent.action, "timezone": timezone_name},
+        "spoken_summary": spoken,
+        "cards": [{
+            "component": "status",
+            "props": {
+                "source": "clock_show",
+                "title": "Clock",
+                "summary": spoken,
+                "timezone": timezone_name,
+                "iso": now.isoformat(),
+                "hour": hour_str,
+                "minute": now.strftime("%M"),
+                "meridiem": now.strftime("%p"),
+                "weekday": now.strftime("%A"),
+                "date_label": now.strftime("%d %B"),
+            },
+        }],
+    }
 
 
 async def _maybe_commit(db: Any) -> None:
@@ -537,6 +715,7 @@ def _intent_dict(intent: SkybridgeIntent) -> dict[str, Any]:
         "domain": intent.domain,
         "action": intent.action,
         "list_type": intent.list_type,
+        "list_name": intent.list_name,
         "target_time": intent.target_time,
     }
 
@@ -743,23 +922,46 @@ async def _resolve_weather(intent: SkybridgeIntent, user_id: str, db: Any) -> di
     prefs = _row_to_prefs(row)
     fallback = await _get_system_default_location(db)
     lat, lon, city, country = _resolve_location(prefs, fallback=fallback)
-    current = await _get_current(lat, lon, city, country)
+    # Voice replies must feel instant: prefer the warm cache (kept fresh by the panel's
+    # periodic /weather/current + /forecast polls); only pay the ~1s live API when cold.
+    from routers.weather import _weather_cache as _wc
+    current = _wc.get("current") or {}
+    # Only trust the shared warm caches (current AND forecast) when the cached
+    # reading is for THIS user's resolved city — the cache is one flat slot across
+    # users, so a Perth refresh must not feed a Sydney user. `is None` so a
+    # legitimate 0° reading isn't treated as missing.
+    _cached_city = str(current.get("city") or "").strip().lower()
+    _cache_ok = current.get("temp") is not None and not (
+        city and _cached_city and _cached_city != str(city).strip().lower()
+    )
+    if not _cache_ok:
+        current = await _get_current(lat, lon, city, country)
     current = {k: v for k, v in current.items() if not str(k).startswith("_")}
-    forecast = {}
+    # Forecast shares the same flat cache slot — only reuse it when current was a
+    # trusted same-city hit, else fetch live for the right location.
+    forecast = (_wc.get("forecast") if _cache_ok else None) or await _get_forecast(lat, lon)
+
+    def _say_num(n) -> str:
+        s = str(n)
+        return s.replace(".", " point ") if "." in s else s
+
     if intent.action == "forecast":
-        forecast = await _get_forecast(lat, lon)
         card = card_service.build_weather_forecast_card(
             {"current": current, "forecast": forecast, "location": {"city": city, "country": country}}
         )
         spoken = f"Here is the forecast for {city}."
     else:
-        forecast = await _get_forecast(lat, lon)
         card = card_service.build_weather_current_card(
             {"current": current, "forecast": forecast, "location": {"city": city, "country": country}}
         )
         temp = current.get("temp")
         desc = current.get("description") or "current conditions"
-        spoken = f"It is {temp} degrees in {city} with {desc}." if temp is not None else f"Here is the weather for {city}."
+        # Speak naturally: "18.3" → "18 point 3" (bare decimals get mangled to "18 3"),
+        # and join the condition with "and" rather than the robotic "with".
+        spoken = (
+            f"It's {_say_num(temp)} degrees and {desc} in {city}."
+            if temp is not None else f"Here is the weather for {city}."
+        )
     return {
         "handled": True,
         "intent": {"domain": "weather", "action": intent.action},
@@ -786,33 +988,8 @@ async def _resolve_lists(intent: SkybridgeIntent, user_id: str, db: Any) -> dict
             "cards": [card_service.convert_emit(card, target_major=1)],
         }
 
-    list_type = intent.list_type
-    if list_type:
-        rows = await db.fetch(
-            """
-            SELECT id, user_id, name, list_type, description, visibility, created_at, updated_at
-            FROM lists
-            WHERE list_type = $2 AND deleted = 0
-              AND (visibility = 'family' OR user_id = $1)
-            ORDER BY updated_at DESC
-            LIMIT 8
-            """,
-            user_id,
-            list_type,
-        )
-    else:
-        rows = await db.fetch(
-            """
-            SELECT id, user_id, name, list_type, description, visibility, created_at, updated_at
-            FROM lists
-            WHERE deleted = 0
-              AND (visibility = 'family' OR user_id = $1)
-            ORDER BY updated_at DESC
-            LIMIT 8
-            """,
-            user_id,
-        )
-    lists = [dict(row) for row in rows]
+    await _ensure_default_lists(user_id, db)
+    lists = await _fetch_list_catalog(user_id, db)
     list_ids = [list_row["id"] for list_row in lists]
     items_by_list: dict[Any, list[dict[str, Any]]] = {list_id: [] for list_id in list_ids}
     if list_ids:
@@ -829,20 +1006,22 @@ async def _resolve_lists(intent: SkybridgeIntent, user_id: str, db: Any) -> dict
         for item_row in item_rows:
             item = dict(item_row)
             bucket = items_by_list.setdefault(item.get("list_id"), [])
-            if len(bucket) < 24:
-                bucket.append(item)
+            bucket.append(item)
 
-    selected = lists[0] if len(lists) == 1 else None
     for list_row in lists:
         items = items_by_list.get(list_row["id"], [])
-        list_row["items"] = items if selected else []
+        list_row["items"] = items[:24]
         list_row["item_count"] = len(items)
         list_row["open_count"] = sum(1 for item in items if not item.get("completed"))
         list_row["completed_count"] = len(items) - list_row["open_count"]
 
+    list_type = intent.list_type
+    selected = None if intent.action == "overview" else _select_list(lists, list_type, intent.list_name)
     items = selected.get("items", []) if selected else []
     list_name = selected.get("name") if selected else (list_type.title() if list_type else "Lists")
     summary_count = len(items) if selected else sum(item.get("item_count", 0) for item in lists)
+    open_count = selected.get("open_count", 0) if selected else sum(item.get("open_count", 0) for item in lists)
+    completed_count = selected.get("completed_count", 0) if selected else sum(item.get("completed_count", 0) for item in lists)
     spoken = f"{list_name} has {summary_count} item{'s' if summary_count != 1 else ''}."
     card = card_service.build_shopping_list_card(
         {
@@ -851,7 +1030,11 @@ async def _resolve_lists(intent: SkybridgeIntent, user_id: str, db: Any) -> dict
             "list_type": selected.get("list_type") if selected else (list_type or "all"),
             "lists": lists,
             "items": items,
+            "item_count": summary_count,
+            "open_count": open_count,
+            "completed_count": completed_count,
             "summary": spoken,
+            "actions": _list_card_actions(lists, selected),
         }
     )
     return {
@@ -860,6 +1043,152 @@ async def _resolve_lists(intent: SkybridgeIntent, user_id: str, db: Any) -> dict
         "spoken_summary": spoken,
         "cards": [card_service.convert_emit(card, target_major=1)],
     }
+
+
+async def _ensure_default_lists(user_id: str, db: Any) -> None:
+    rows = await db.fetch(
+        """
+        SELECT list_type, name
+        FROM lists
+        WHERE user_id = $1 AND deleted = 0
+        """,
+        user_id,
+    )
+    existing_rows = [dict(row) for row in rows]
+    existing_types = {str(row.get("list_type") or "").strip().lower() for row in existing_rows}
+    for list_type, name, description, visibility in DEFAULT_USER_LISTS:
+        if list_type in existing_types:
+            continue
+        await db.execute(
+            """
+            INSERT INTO lists (id, user_id, name, list_type, description, visibility)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (user_id, lower(name)) WHERE deleted = 0 DO NOTHING
+            """,
+            str(uuid.uuid4()),
+            user_id,
+            name,
+            list_type,
+            description,
+            visibility,
+        )
+    await _maybe_commit(db)
+
+
+async def _fetch_list_catalog(user_id: str, db: Any) -> list[dict[str, Any]]:
+    rows = await db.fetch(
+        """
+        SELECT id, user_id, name, list_type, description, visibility, created_at, updated_at
+        FROM lists
+        WHERE deleted = 0
+          AND (user_id = $1 OR visibility = 'family')
+        ORDER BY
+          CASE WHEN user_id = $1 THEN 0 ELSE 1 END,
+          CASE list_type WHEN 'shopping' THEN 0 WHEN 'work' THEN 1 WHEN 'personal' THEN 2 WHEN 'tasks' THEN 3 ELSE 4 END,
+          updated_at DESC
+        LIMIT 18
+        """,
+        user_id,
+    )
+    catalog: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for row in rows:
+        item = dict(row)
+        if item.get("user_id") != user_id and item.get("list_type") != "shopping":
+            continue
+        key = (str(item.get("list_type") or ""), str(item.get("name") or "").strip().lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        catalog.append(item)
+    return catalog
+
+
+def _select_list(lists: list[dict[str, Any]], list_type: str = "", list_name: str = "") -> dict[str, Any] | None:
+    if list_name:
+        wanted = list_name.strip().lower()
+        for item in lists:
+            if str(item.get("name") or "").strip().lower() == wanted:
+                return item
+    if list_type:
+        for item in lists:
+            if item.get("list_type") == list_type:
+                return item
+    if len(lists) == 1:
+        return lists[0]
+    return None
+
+
+def _list_card_actions(lists: list[dict[str, Any]], selected: dict[str, Any] | None) -> list[dict[str, str]]:
+    actions = []
+    for item in lists[:5]:
+        name = str(item.get("name") or _default_list_name(str(item.get("list_type") or "list")))
+        actions.append({"type": "query", "label": name, "query": f"show my {name} list"})
+    actions.append({"type": "query", "label": "New list", "query": "new list"})
+    return actions
+
+
+def _new_list_prompt_card(list_type: str) -> dict[str, Any]:
+    label = _default_list_name(list_type or "personal")
+    return {
+        "component": "action_form",
+        "props": {
+            "title": "New list",
+            "summary": "What should I name it?",
+            "source": "list_create",
+            "form_id": "list_create",
+            "fields": [
+                {"label": "List type", "name": "list_type", "value": label},
+                {"label": "Name", "name": "name", "value": "Say or type the list name"},
+            ],
+            "actions": [],
+        },
+    }
+
+
+async def _resolve_list_create(intent: SkybridgeIntent, user_id: str, db: Any) -> dict[str, Any]:
+    if not intent.list_name:
+        return {
+            "handled": True,
+            "intent": _intent_dict(intent),
+            "spoken_summary": "What should I name the new list?",
+            "cards": [_new_list_prompt_card(intent.list_type or "personal")],
+            "actions": [],
+        }
+    await _ensure_default_lists(user_id, db)
+    list_type = intent.list_type or _list_type_for_name(intent.list_name)
+    existing = await db.fetch(
+        """
+        SELECT id, name, list_type
+        FROM lists
+        WHERE user_id = $1 AND deleted = 0 AND lower(name) = lower($2)
+        LIMIT 1
+        """,
+        user_id,
+        intent.list_name,
+    )
+    created = False
+    if not existing:
+        status = await db.execute(
+            """
+            INSERT INTO lists (id, user_id, name, list_type, description, visibility)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (user_id, lower(name)) WHERE deleted = 0 DO NOTHING
+            """,
+            str(uuid.uuid4()),
+            user_id,
+            intent.list_name,
+            list_type,
+            "",
+            "personal" if list_type in {"work", "personal", "tasks"} else "family",
+        )
+        created = str(status).endswith(" 1")
+        await _maybe_commit(db)
+    result = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type, list_name=intent.list_name), user_id, db)
+    result["intent"] = {"domain": "lists", "action": "create_list", "list_type": list_type, "list_name": intent.list_name}
+    result["spoken_summary"] = f"Created {intent.list_name}." if created else f"You already have a {intent.list_name} list."
+    result["actions"] = [{"type": "created" if created else "existing", "domain": "lists", "list_name": intent.list_name, "list_type": list_type}]
+    return result
 
 
 async def _find_or_create_list(intent: SkybridgeIntent, user_id: str, db: Any, context: dict[str, Any] | None) -> tuple[str, str] | None:
@@ -887,7 +1216,9 @@ async def _find_or_create_list(intent: SkybridgeIntent, user_id: str, db: Any, c
         FROM lists
         WHERE list_type = $2 AND deleted = 0
           AND (visibility = 'family' OR user_id = $1)
-        ORDER BY updated_at DESC
+        ORDER BY
+          CASE WHEN user_id = $1 THEN 0 ELSE 1 END,
+          updated_at DESC
         LIMIT 1
         """,
         user_id,
@@ -902,15 +1233,29 @@ async def _find_or_create_list(intent: SkybridgeIntent, user_id: str, db: Any, c
         """
         INSERT INTO lists (id, user_id, name, list_type, description, visibility)
         VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (user_id, lower(name)) WHERE deleted = 0 DO NOTHING
         """,
         list_id,
         user_id,
         list_name,
         list_type,
         "",
-        "family",
+        "family" if list_type == "shopping" else "personal",
     )
     await _maybe_commit(db)
+    rows = await db.fetch(
+        """
+        SELECT id, name, list_type
+        FROM lists
+        WHERE user_id = $1 AND deleted = 0 AND lower(name) = lower($2)
+        LIMIT 1
+        """,
+        user_id,
+        list_name,
+    )
+    if rows:
+        row = dict(rows[0])
+        return str(row["id"]), str(row.get("list_type") or list_type)
     return list_id, list_type
 
 
@@ -931,6 +1276,7 @@ async def _resolve_list_add_item(intent: SkybridgeIntent, user_id: str, db: Any,
             "cards": [_status_card("What should I add?", "Say the item and the list, for example: add bread to the shopping list.")],
             "actions": [],
         }
+    await _ensure_default_lists(user_id, db)
     list_target = await _find_or_create_list(intent, user_id, db, context)
     if not list_target:
         return {
@@ -958,6 +1304,30 @@ async def _resolve_list_add_item(intent: SkybridgeIntent, user_id: str, db: Any,
     )
     await _maybe_commit(db)
     refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type), user_id, db)
+    card_content = refreshed.get("cards", [{}])[0].get("content", {}) if refreshed.get("cards") else {}
+    items = card_content.get("items")
+    if isinstance(items, list):
+        found_recent = False
+        for item in items:
+            if isinstance(item, dict) and str(item.get("id") or "") == item_id:
+                item["recent"] = True
+                found_recent = True
+        if not found_recent:
+            items.insert(
+                0,
+                {
+                    "id": item_id,
+                    "list_id": list_id,
+                    "text": intent.item_text,
+                    "completed": False,
+                    "priority": "normal",
+                    "category": "",
+                    "quantity": "",
+                    "recent": True,
+                },
+            )
+        items.sort(key=lambda row: 0 if isinstance(row, dict) and str(row.get("id") or "") == item_id else 1)
+        card_content["recent_item_id"] = item_id
     refreshed["intent"] = {"domain": "lists", "action": "add_item", "list_type": list_type, "item_id": item_id}
     refreshed["spoken_summary"] = f"Added {intent.item_text} to the {list_type} list."
     refreshed["actions"] = [{"type": "created", "domain": "lists", "id": item_id, "list_id": list_id}]

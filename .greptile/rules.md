@@ -16,7 +16,7 @@ Greptile should review Zoe as a local-first, multi-user assistant with a host-ru
 
 - Production chat API is `services/zoe-data/routers/chat.py`; do not fork it.
 - Natural-language understanding belongs in `intent_router.py`, Zoe Agent, Hermes, or OpenClaw, not broad ad hoc branches in `chat.py`.
-- `services/zoe-core/` is retired and should not receive new production features.
+- `services/zoe-core/` is Zoe's Pi-agent core (the reasoning/orchestration brain on Gemma 4) — new core features belong here. It orchestrates and delegates; it must not absorb `zoe-data`/`zoe-auth`/`zoe-database` code or become a monolith. The OLD `zoe-core` Docker monolith (replaced by `zoe-data`) is retired and archived under `docs/archive/retired-services/zoe-core/`; do not revive that legacy tree.
 - Host `llama-server`, Hermes, OpenClaw, and Multica are local services; avoid Docker-only assumptions in core code.
 
 ## Data Safety

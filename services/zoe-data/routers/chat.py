@@ -51,6 +51,7 @@ _ACTION_FORM_INTENTS: frozenset[str] = frozenset({
     "calendar_create",
     "list_add",
     "list_show",
+    "timer_create",
 })
 
 
@@ -213,13 +214,24 @@ def _intent_action_form_payload(intent, panel_id: str | None = None) -> dict | N
             **({"panel_id": panel_id} if panel_id else {}),
         }
 
+    if name == "timer_create":
+        return {
+            "panel_type": "timer",
+            "title": "New Timer",
+            "data": {
+                "minutes": slots.get("minutes") or slots.get("duration") or 5,
+                "label": slots.get("label") or "Timer",
+            },
+            **({"panel_id": panel_id} if panel_id else {}),
+        }
+
     return None
 
 
 async def _broadcast_intent_nav(intent, panel_id: str | None = None) -> None:
     """Broadcast UI actions to the touch panel when an intent is detected.
 
-    For action-form intents (calendar_create, list_add/show), a full-screen
+    For action-form intents (calendar_create, list_add/show, timer_create), a full-screen
     interactive form overlay is shown instead of navigating to a detail page.
     For all other intents, the classic panel_navigate + panel_open_form flow runs.
     A show_card is always emitted so the dashboard overlay shows intent-specific info.
@@ -307,6 +319,7 @@ from zoe_agent import (
     _mempalace_load_user_facts, _mempalace_add, _fire_memory_capture,
     _build_memory_context,
 )
+from zoe_core_client import run_zoe_core, run_zoe_core_streaming
 from auth import get_current_user
 from database import get_db
 from ui_orchestrator import enqueue_ui_action
@@ -456,6 +469,36 @@ _MEMORY_AUTO_INGEST = os.environ.get("MEMORY_AUTO_INGEST", "false").lower() == "
 _ZOE_AGENT_MODE    = os.environ.get("HERMES_FAST_PATH", "true").lower() != "true"
 _JETSON_AGENT_MODE = os.environ.get("JETSON_AGENT_MODE", "false").lower() == "true"
 _USE_ZOE_AGENT = _ZOE_AGENT_MODE or _JETSON_AGENT_MODE
+
+# Production cutover: the brain is now zoe-core (Pi full-agent on local Gemma).
+# Defaults ON. ZOE_USE_CORE_BRAIN=false falls back to the legacy zoe_agent brain
+# during the validation window (removed once every avenue is proven).
+_USE_ZOE_CORE = os.environ.get("ZOE_USE_CORE_BRAIN", "true").lower() == "true"
+# "Use a local brain" = either the new zoe-core (Pi) or the legacy zoe_agent.
+# When set, the local brain takes the slot that would otherwise fall to OpenClaw.
+_USE_LOCAL_BRAIN = _USE_ZOE_AGENT or _USE_ZOE_CORE
+
+
+def _brain_streaming(message, session_id, user_id="", **kwargs):
+    """Brain streaming dispatch — zoe-core (Pi) by default, legacy on fallback.
+
+    user_id defaults to "" (not a real identity) to preserve the fail-closed
+    multi-user guarantee (#692): an omitted user must never inherit another
+    user's identity/memory. All call sites pass it explicitly.
+    """
+    if _USE_ZOE_CORE:
+        return run_zoe_core_streaming(message, session_id, user_id, **kwargs)
+    return run_zoe_agent_streaming(message, session_id, user_id, **kwargs)
+
+
+async def _brain_oneshot(message, session_id, user_id="", **kwargs):
+    """Brain non-streaming dispatch — zoe-core (Pi) by default, legacy on fallback.
+
+    See _brain_streaming on the fail-closed user_id default.
+    """
+    if _USE_ZOE_CORE:
+        return await run_zoe_core(message, session_id, user_id, **kwargs)
+    return await run_zoe_agent(message, session_id, user_id, **kwargs)
 _GUARDED_AUTO = (
     os.environ.get("OPENCLAW_GUARDED_AUTO", "true").lower() == "true"
     and not _USE_ZOE_AGENT
@@ -473,6 +516,114 @@ _BROWSER_BROKER = create_default_browser_broker(_OPENCLAW_GW)
 _frustration_tracker: dict[str, list[tuple[str, float]]] = {}
 _FRUSTRATION_WINDOW_S = 1800  # 30 minute session window
 _FRUSTRATION_THRESHOLD = 3    # same message N times = frustration signal
+
+
+def _chat_pi_context_turns(context: object | None) -> str:
+    if context is None:
+        return ""
+    last_text = str(getattr(context, "last_text", "") or "").strip()
+    last_intent = str(getattr(context, "last_intent", "") or "").strip()
+    if not last_text:
+        return ""
+    return f"previous={last_text!r}; previous_intent={last_intent}"
+
+
+async def _run_chat_pi_hybrid_lane(
+    message_for_processing: str,
+    *,
+    user_id: str,
+    session_id: str,
+    context: object | None = None,
+    request_text: str | None = None,
+    run_id: str | None = None,
+    record_run_state: bool = False,
+    panel_id: str | None = None,
+) -> dict:
+    """Run the production Pi hybrid lane once and persist accepted chat output."""
+    try:
+        from pi_hybrid_production import (
+            PiHybridProductionConfig,
+            pi_hybrid_production_eligible,
+            processing_cue_packet,
+            try_pi_hybrid_production,
+        )
+
+        config = PiHybridProductionConfig.from_env()
+        eligible, reason = pi_hybrid_production_eligible(message_for_processing, config=config)
+        if not eligible:
+            if config.enabled:
+                logger.debug("Pi hybrid production skipped: %s", reason)
+            return {"attempted": False, "reason": reason, "config_enabled": config.enabled}
+
+        cue = await processing_cue_packet(text=message_for_processing)
+        decision = await try_pi_hybrid_production(
+            message_for_processing,
+            user_id=user_id,
+            context_turns=_chat_pi_context_turns(context),
+            config=config,
+        )
+        response_text = str(decision.get("response_text") or "")
+        action_form = decision.get("action_form") if isinstance(decision.get("action_form"), dict) else None
+        accepted = bool(decision.get("accepted") and (response_text or action_form))
+        payload = {
+            "attempted": True,
+            "cue": cue,
+            "decision": decision,
+            "accepted": accepted,
+            "response_text": response_text,
+            "action_form": action_form,
+        }
+        if not accepted:
+            return payload
+
+        intent_name = str(decision.get("intent") or "pi_hybrid")
+        if action_form and panel_id and intent_name in _INTENT_PANEL_NAV:
+            try:
+                from intent_router import Intent
+
+                asyncio.ensure_future(_broadcast_intent_nav(
+                    Intent(intent_name, dict(action_form.get("prefill") or {}), 1.0),
+                    panel_id=panel_id,
+                ))
+            except Exception as exc:
+                logger.debug("Pi hybrid action form broadcast skipped: %s", exc)
+        if not action_form:
+            asyncio.ensure_future(chat_inject_background(
+                message_for_processing,
+                response_text,
+                intent_name,
+                user_id,
+                session_id,
+            ))
+            asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, response_text))
+        if response_text:
+            await _save_chat_message(session_id, "assistant", response_text)
+        if record_run_state:
+            active_run_id = run_id or new_run_ids()[0]
+            await _record_run_state(
+                active_run_id,
+                session_id,
+                user_id,
+                mode="chat",
+                status="completed",
+                request_text=request_text or message_for_processing,
+                response_text=response_text,
+                metadata={
+                    "pi_hybrid": {
+                        "accepted": True,
+                        "reason": decision.get("reason"),
+                        "intent": decision.get("intent"),
+                        "intent_group": decision.get("intent_group"),
+                        "agreement_kind": decision.get("agreement_kind"),
+                        "execution_scope": decision.get("execution_scope"),
+                        "action_form": bool(action_form),
+                    }
+                },
+            )
+        return payload
+    except Exception as exc:
+        logger.debug("Pi hybrid production path failed open to Zoe route: %s", exc)
+        return {"attempted": False, "reason": "exception", "error": exc.__class__.__name__}
 
 
 def _normalize_for_frustration(text: str) -> str:
@@ -955,8 +1106,14 @@ async def _save_chat_message(session_id: str, role: str, content: str) -> None:
     clean_content = (content or "").strip()
     if not clean_content:
         return
+    # Use the context-managed pool acquire (deterministic release). The bare
+    # `async for db in get_db(): ... break` form leaves the generator suspended
+    # at the yield when broken out of, so the connection isn't returned to the
+    # pool until GC — under fire-and-forget concurrency that produced the
+    # asyncpg "another operation is in progress" errors that dropped saves.
     try:
-        async for db in get_db():
+        from db_pool import get_db_ctx
+        async with get_db_ctx() as db:
             await db.execute(
                 "INSERT INTO chat_messages (id, session_id, role, content) "
                 "VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
@@ -964,7 +1121,6 @@ async def _save_chat_message(session_id: str, role: str, content: str) -> None:
             )
             await _touch_chat_session(db, session_id=session_id, content=clean_content)
             await db.commit()
-            break
     except Exception as _sme:
         logger.debug("_save_chat_message failed (non-fatal): %s", _sme)
 
@@ -1494,6 +1650,7 @@ async def chat_stream_generator(
     *,
     force_openclaw: bool = False,
     force_agent: str = "auto",
+    req_panel_id: str | None = None,
 ):
     user_id = user["user_id"]
     user_role = user.get("role")
@@ -1764,6 +1921,67 @@ async def chat_stream_generator(
             use_intent_fast_path = False
 
         _chat_ctx = _CHAT_CONTEXTS.get(session_id) or _CC()
+        if use_intent_fast_path:
+            _pi_hybrid = await _run_chat_pi_hybrid_lane(
+                message_for_processing,
+                user_id=user_id,
+                session_id=session_id,
+                context=_chat_ctx,
+                request_text=message,
+                run_id=run_id,
+                record_run_state=True,
+                panel_id=req_panel_id,
+            )
+            if _pi_hybrid.get("attempted"):
+                _pi_cue = _pi_hybrid.get("cue") or {}
+                if _pi_cue.get("available"):
+                    yield emit(CustomEvent(name="zoe.pi_hybrid_cue", value={
+                        "text": _pi_cue.get("text") or "",
+                        "event": _pi_cue.get("event"),
+                        "source": "pi_hybrid_production",
+                    }))
+                yield emit(StateSnapshotEvent(
+                    type=EventType.STATE_SNAPSHOT,
+                    snapshot={
+                        "status": "generating",
+                        "phase": "pi_hybrid",
+                        "model": "Zoe",
+                        "detail": _pi_cue.get("text") or "Checking...",
+                    },
+                ))
+                _pi_decision = _pi_hybrid.get("decision") or {}
+                yield emit(CustomEvent(name="zoe.pi_hybrid_decision", value={
+                    "accepted": _pi_decision.get("accepted"),
+                    "reason": _pi_decision.get("reason"),
+                    "intent": _pi_decision.get("intent"),
+                    "intent_group": _pi_decision.get("intent_group"),
+                    "agreement_kind": _pi_decision.get("agreement_kind"),
+                    "production_route_change": _pi_decision.get("production_route_change"),
+                    "lab_result": _pi_decision.get("lab_result"),
+                    "execution_scope": _pi_decision.get("execution_scope"),
+                    "action_form": _pi_hybrid.get("action_form"),
+                }))
+                if _pi_hybrid.get("accepted"):
+                    action_form = _pi_hybrid.get("action_form") or {}
+                    if action_form:
+                        component = action_form.get("component")
+                        prefill = action_form.get("prefill") or {}
+                        if component:
+                            yield emit(CustomEvent(
+                                name="zoe.ui_component",
+                                value={"component": component, "props": prefill},
+                            ))
+                    response_text = str(_pi_hybrid.get("response_text") or "")
+                    yield emit(TextMessageStartEvent(
+                        type=EventType.TEXT_MESSAGE_START,
+                        message_id=assistant_message_id,
+                        role="assistant",
+                    ))
+                    async for line in iter_text_message_chunks(enc, recorder, assistant_message_id, response_text):
+                        yield line
+                    yield emit(TextMessageEndEvent(type=EventType.TEXT_MESSAGE_END, message_id=assistant_message_id))
+                    yield emit(RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id=session_id, run_id=run_id))
+                    return
         intent = await detect_and_extract_intent(
             message_for_processing, user_id, context=_chat_ctx
         ) if use_intent_fast_path else None
@@ -1971,22 +2189,22 @@ async def chat_stream_generator(
                 # Delegation intents go through Hermes/Multica by default.
                 # OpenClaw is only used for explicit /openclaw or force_agent=openclaw requests.
                 _force_openclaw_here = force_openclaw
-                if _USE_ZOE_AGENT and not _force_openclaw_here:
+                if _USE_LOCAL_BRAIN and not _force_openclaw_here:
                     yield emit(
                         StateSnapshotEvent(
                             type=EventType.STATE_SNAPSHOT,
                             snapshot={
                                 "status": "generating",
                                 "phase": "zoe_agent",
-                                "model": "Zoe (Zoe Agent fallback)",
+                                "model": "Zoe",
                                 "detail": "Thinking…",
                             },
                         )
                     )
                     task = asyncio.create_task(
-                        run_zoe_agent(message_for_processing, session_id, user_id)
+                        _brain_oneshot(message_for_processing, session_id, user_id)
                     )
-                    async for hb in _iter_openclaw_heartbeats(emit, task, phase_label="Zoe Agent"):
+                    async for hb in _iter_openclaw_heartbeats(emit, task, phase_label="Zoe"):
                         yield hb
                     response_text = await task
                 else:
@@ -2044,7 +2262,7 @@ async def chat_stream_generator(
                     yield line
         else:
             logger.info("intent_outcome=no_match fast_path=%s", bool(use_intent_fast_path))
-            if _USE_ZOE_AGENT:
+            if _USE_LOCAL_BRAIN:
                 # ── Zoe Agent: Gemma 4 E2B with MemPalace + tools — true SSE streaming ──
                 tier_label = "Jetson" if _JETSON_AGENT_MODE else "Pi"
                 yield emit(
@@ -2053,7 +2271,7 @@ async def chat_stream_generator(
                         snapshot={
                             "status": "generating",
                             "phase": "zoe_agent",
-                            "model": f"Zoe ({tier_label} Agent)",
+                            "model": "Zoe",
                             "detail": "Thinking…",
                         },
                     )
@@ -2107,7 +2325,7 @@ async def chat_stream_generator(
                         f"[Intent hint: {_tier05_hint.name}, confidence {_tier05_hint.confidence:.2f}, "
                         f"slots {_tier05_hint.slots}] "
                     ) + expanded_msg
-                async for chunk in run_zoe_agent_streaming(
+                async for chunk in _brain_streaming(
                     expanded_msg,
                     session_id,
                     user_id,
@@ -2858,6 +3076,7 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
                     user,
                     force_openclaw=force_openclaw,
                     force_agent=force_agent,
+                    req_panel_id=req_panel_id,
                 ):
                     yield chunk
             finally:
@@ -2951,6 +3170,38 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
             force_openclaw = True
             use_intent_fast_path = False
 
+        if use_intent_fast_path:
+            _pi_hybrid = await _run_chat_pi_hybrid_lane(
+                message_for_processing,
+                user_id=user_id,
+                session_id=session_id,
+                context=_CHAT_CONTEXTS.get(session_id),
+                request_text=message,
+                record_run_state=True,
+                panel_id=req_panel_id,
+            )
+            if _pi_hybrid.get("accepted"):
+                _pi_cue = _pi_hybrid.get("cue") or {}
+                _pi_decision = _pi_hybrid.get("decision") or {}
+                return {
+                    "response": _pi_hybrid.get("response_text") or "",
+                    "session_id": session_id,
+                    "processing_cue": {
+                        "available": bool(_pi_cue.get("available")),
+                        "text": _pi_cue.get("text") or "",
+                        "event": _pi_cue.get("event"),
+                    },
+                    "pi_hybrid": {
+                        "accepted": True,
+                        "reason": _pi_decision.get("reason"),
+                        "intent": _pi_decision.get("intent"),
+                        "intent_group": _pi_decision.get("intent_group"),
+                        "agreement_kind": _pi_decision.get("agreement_kind"),
+                        "execution_scope": _pi_decision.get("execution_scope"),
+                        "action_form": _pi_hybrid.get("action_form"),
+                    },
+                }
+
         intent = await detect_and_extract_intent(message_for_processing, user_id) if use_intent_fast_path else None
         # Save original message before appending voice suffix; run_zoe_agent needs the
         # clean text so _check_fast_response (greetings/acks) still matches correctly.
@@ -2991,11 +3242,11 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
                 _build_memory_context(message_for_processing, user_id=user_id),
             )
             ns_full_mem = "\n\n".join(filter(None, [ns_portrait, ns_db_memory, ns_semantic]))
-            if _USE_ZOE_AGENT:
+            if _USE_LOCAL_BRAIN:
                 # Use original (pre-suffix) message for agent so fast-path checks work
                 _agent_msg = _original_message_for_agent if is_voice_mode else message_for_processing
                 expanded_msg = openclaw_user_message(intent, _agent_msg) if intent else _agent_msg
-                response_text = await run_zoe_agent(
+                response_text = await _brain_oneshot(
                     expanded_msg, session_id, user_id,
                     portrait=ns_portrait,
                     db_memory_context=None,

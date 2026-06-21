@@ -46,7 +46,12 @@ evidence and a future sharded sync implementation. It consumes a
 malformed shard evidence, and distinguishes `artifact_capture_ready` from
 `artifact_sync_ready` so copied per-shard `graphify-out` artifacts do not imply
 that deterministic graph merge handling, merged cluster/report generation, and
-inventory reconciliation are already proven.
+inventory reconciliation are already proven. `graphify_shard_merge_validate.py`
+now performs the first no-write merge gate over captured shard artifacts: it
+loads each shard `graph.json`, adds per-node/link shard provenance, rejects
+conflicting duplicate nodes and missing link endpoints, writes deterministic
+merged graph JSON only to an operator-supplied output path, and still leaves
+committed `graphify-out` untouched.
 
 Acceptance is fail-closed. The status JSON is rejected when Graphify times out,
 exits nonzero, omits `graphify-out/graph.json`, writes an empty graph, emits
@@ -139,6 +144,12 @@ Current evidence:
   this artifact evidence returned `artifact_capture_ready=true`,
   `artifact_report_ready=false`, and `artifact_sync_ready=false` because the run
   was non-clustered and no merged graph/report has been produced.
+- The shard merge validator is now covered by fixture tests for clean merges,
+  duplicate identical node provenance, deterministic ordering independent of
+  shard status order, conflicting duplicate node rejection, missing endpoint
+  rejection, and CLI output writing. This proves the merge gate contract without
+  replacing committed `graphify-out`; the next Graphify PR still needs temporary
+  merged cluster/report generation and inventory reconciliation.
 
 ## Refresh 2026-06-09 Foundation Pass
 

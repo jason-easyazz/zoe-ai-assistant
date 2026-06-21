@@ -1,0 +1,184 @@
+"""Structured JSON logging middleware for Zoe services.
+
+This module provides JSON-formatted logging with structured fields for better
+integration with log aggregation systems like Loki, CloudWatch, and Datadog.
+"""
+
+import logging
+import time
+import uuid
+from typing import Any, Dict, Optional
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from contextvars import ContextVar
+
+logger = logging.getLogger(__name__)
+
+# python-json-logger is an optional dependency. The formatter moved modules in
+# 3.1 (``pythonjsonlogger.json``) from the legacy ``pythonjsonlogger.jsonlogger``.
+# Support both, and degrade to standard logging if the package is absent so that
+# importing this module (and the service) never hard-fails on a missing optional.
+try:
+    from pythonjsonlogger.json import JsonFormatter as _JsonFormatter
+except ImportError:
+    try:
+        from pythonjsonlogger.jsonlogger import JsonFormatter as _JsonFormatter
+    except ImportError:
+        _JsonFormatter = None
+
+_JSON_LOGGING_AVAILABLE = _JsonFormatter is not None
+_FormatterBase = _JsonFormatter if _JSON_LOGGING_AVAILABLE else logging.Formatter
+
+# Context variable for request-scoped logging metadata
+_request_metadata_ctx: ContextVar[Optional[Dict[str, Any]]] = ContextVar("request_metadata", default=None)
+
+
+class ZoeJsonFormatter(_FormatterBase):
+    """JSON log formatter for Zoe services with structured fields."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Remove the default timestamp field since we add our own ISO format.
+        # ``_skip_fields`` shape varies across versions; guard defensively.
+        skip = getattr(self, "_skip_fields", None)
+        try:
+            if skip is not None and "timestamp" in skip:
+                skip.pop("timestamp", None) if isinstance(skip, dict) else skip.remove("timestamp")
+        except (KeyError, ValueError):
+            pass
+
+    def add_fields(self, log_record: Dict[str, Any], record: logging.LogRecord, message_dict: Dict[str, Any]) -> None:
+        """Add structured fields to the log record."""
+        super().add_fields(log_record, record, message_dict)
+        
+        # Add standard Zoe logging fields
+        log_record["timestamp"] = self.formatTime(record)
+        log_record["level"] = record.levelname
+        log_record["logger_name"] = record.name
+        
+        # Add request metadata if available
+        metadata = _request_metadata_ctx.get()
+        if metadata:
+            log_record.update(metadata)
+        
+        # Ensure request_id is always present
+        if "request_id" not in log_record:
+            log_record["request_id"] = getattr(record, "request_id", "background")
+
+
+def setup_json_logging(extra_filters=None) -> None:
+    """Configure JSON logging for Zoe services.
+    
+    Args:
+        extra_filters: Optional list of logging.Filter instances to add to the handler.
+    """
+    if not _JSON_LOGGING_AVAILABLE:
+        # Optional dependency missing — keep standard logging rather than crash.
+        logging.getLogger().setLevel(logging.INFO)
+        logger.warning(
+            "python-json-logger not installed; falling back to standard logging"
+        )
+        return
+
+    # Remove existing handlers to avoid duplicate logs
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+
+    # Create JSON formatter
+    formatter = ZoeJsonFormatter(
+        "%(timestamp)s %(level)s %(logger_name)s %(request_id)s %(message)s",
+        rename_fields={
+            "timestamp": "timestamp",
+            "level": "level",
+            "logger_name": "logger_name",
+            "message": "message"
+        }
+    )
+    
+    # Add console handler for JSON output
+    handler = logging.StreamHandler()
+    handler.setFormatter(formatter)
+    if extra_filters:
+        for f in extra_filters:
+            handler.addFilter(f)
+    root_logger.addHandler(handler)
+    
+    # Set default level
+    root_logger.setLevel(logging.INFO)
+
+
+class StructuredLoggingMiddleware(BaseHTTPMiddleware):
+    """Middleware that adds structured logging with request context."""
+    
+    async def dispatch(self, request: Request, call_next):
+        # Use the inbound correlation header when present, otherwise mint a unique
+        # ID so every request is independently traceable (a shared sentinel would
+        # collapse all unannotated requests onto one request_id).
+        request_id = (
+            request.headers.get("X-Request-ID") or
+            request.headers.get("X-Correlation-ID") or
+            uuid.uuid4().hex
+        )
+
+        metadata = {
+            "request_id": request_id,
+            "method": request.method,
+            "path": request.url.path,
+            "user_agent": request.headers.get("user-agent", ""),
+            # Whether the caller presented a bearer credential. Resolving the
+            # actual subject requires auth wiring not available here, so we record
+            # a truthful boolean rather than a misleading fake user id.
+            "authenticated": request.headers.get("authorization", "").startswith("Bearer "),
+        }
+        
+        # Set request metadata context
+        token = _request_metadata_ctx.set(metadata)
+        
+        t0 = time.monotonic()
+        try:
+            response = await call_next(request)
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
+            
+            # Add response headers
+            response.headers["X-Request-ID"] = request_id
+            
+            # Add response metadata. Keep duration numeric so log aggregators
+            # (Loki/Datadog) can run range queries on it.
+            metadata["status_code"] = response.status_code
+            metadata["duration_ms"] = elapsed_ms
+            
+            # Log the request completion
+            logger = logging.getLogger(__name__)
+            logger.info(
+                "Request completed",
+                extra=metadata,
+            )
+            
+            return response
+        finally:
+            _request_metadata_ctx.reset(token)
+
+
+def get_request_metadata() -> Dict[str, Any]:
+    """Get current request metadata for logging context."""
+    return _request_metadata_ctx.get() or {}
+
+
+def log_with_context(level: str, message: str, **extra_fields) -> None:
+    """Log a message with request context and additional structured fields."""
+    logger = logging.getLogger()
+    
+    # Get current request metadata
+    metadata = get_request_metadata()
+    
+    # Merge with additional fields
+    log_fields = {**metadata, **extra_fields}
+
+    # Resolve the level; fall back to INFO for anything unrecognised so a typo
+    # ("warn", "WARNING") never silently drops the log line.
+    level_value = logging.getLevelName(level.upper())
+    if not isinstance(level_value, int):
+        logger.warning("log_with_context: unknown level %r; defaulting to info", level)
+        level_value = logging.INFO
+    logger.log(level_value, message, extra=log_fields)

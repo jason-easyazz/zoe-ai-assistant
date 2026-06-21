@@ -1,11 +1,12 @@
 {
   "strictness": 2,
-  "commentTypes": ["logic", "style"],
+  "commentTypes": ["logic", "syntax"],
   "excludeBranches": ["draft", "wip"],
   "triggerOnDrafts": false,
   "triggerOnUpdates": true,
   "statusCheck": true,
   "statusCommentsEnabled": true,
+  "updateExistingSummaryComment": true,
   "summarySection": {
     "included": true,
     "collapsible": true,

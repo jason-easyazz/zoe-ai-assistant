@@ -1,4 +1,4 @@
-# Touchscreen Config Bundle (`192.168.1.61`)
+# Touchscreen Config Bundle (`<TOUCH_PANEL_IP>`)
 
 This directory stores version-controlled templates for the Zoe touchscreen kiosk (`zoe-touch`).
 
@@ -16,9 +16,9 @@ This directory stores version-controlled templates for the Zoe touchscreen kiosk
 
 ```bash
 scripts/setup/touchscreen/install_touchscreen.sh \
-  --host 192.168.1.61 \
+  --host <TOUCH_PANEL_IP> \
   --user zoe \
-  --server-url https://192.168.1.218 \
+  --server-url https://<ZOE_SERVER_IP> \
   --panel-id zoe-touch-pi
 ```
 
@@ -31,7 +31,7 @@ scripts/setup/touchscreen/install_touchscreen.sh --ssh-key ~/.ssh/zoe_pi_key
 ### Option B: manual file copy/install
 
 ```bash
-PI_HOST=192.168.1.61
+PI_HOST=<TOUCH_PANEL_IP>
 PI_USER=zoe
 
 scp scripts/setup/touchscreen/config.json "${PI_USER}@${PI_HOST}:/tmp/config.json"

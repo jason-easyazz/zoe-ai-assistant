@@ -57,14 +57,12 @@ def test_implement_requires_tool_evidence_before_complete():
 
     assert can_complete_phase(state) is False
     assert missing_required_evidence(state) == {"pr", "tool"}
-    with pytest.raises(ValueError, match="implement is missing required evidence: pr, tool"):
+    with pytest.raises(ValueError, match="missing required evidence"):
         transition(state, "complete")
 
-    state = with_evidence(
-        state,
-        EvidenceItem(kind="tool", summary="graphify query ran", passed=True),
-        EvidenceItem(kind="pr", summary="PR URL recorded", passed=True),
-    )
+    state = with_evidence(state, EvidenceItem(kind="tool", summary="graphify query ran", passed=True))
+    assert missing_required_evidence(state) == {"pr"}
+    state = with_evidence(state, EvidenceItem(kind="pr", summary="opened PR for implement", passed=True))
     next_state = transition(state, "complete")
 
     assert next_state.phase == "verify"
@@ -128,6 +126,32 @@ def test_loop_back_outcomes_are_phase_scoped():
     assert next_state.phase == "implement"
     assert next_state.status == "todo"
     assert next_state.history[-1].reason == "pytest failed"
+
+
+def test_retry_evidence_rearms_phase_to_todo_keeping_evidence():
+    # verify completed with validator+pr evidence but no `test` evidence.
+    state = PipelineState(
+        task_ref="multica:1",
+        phase="verify",
+        status="running",
+        attempts={"verify": 1},
+        evidence=[
+            EvidenceItem(kind="validator", summary="validate_structure passed", passed=True),
+            EvidenceItem(kind="pr", summary="https://github.com/o/r/pull/1", artifact="https://github.com/o/r/pull/1", passed=True),
+        ],
+    )
+    next_state = transition(state, "retry_evidence", reason="needs pytest")
+
+    # Re-armed to the SAME phase as todo, evidence preserved, attempts untouched
+    # (the increment happens on the next start).
+    assert next_state.phase == "verify"
+    assert next_state.status == "todo"
+    assert [e.kind for e in next_state.evidence] == ["validator", "pr"]
+    assert next_state.attempts == {"verify": 1}
+    assert next_state.history[-1].outcome == "retry_evidence"
+    assert next_state.history[-1].reason == "needs pytest"
+    # Still cannot complete until the missing `test` evidence arrives.
+    assert can_complete_phase(next_state) is False
 
 
 def test_start_records_attempts_per_phase():

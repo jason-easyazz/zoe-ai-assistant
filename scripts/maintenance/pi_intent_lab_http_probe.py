@@ -1,0 +1,516 @@
+#!/usr/bin/env python3
+"""Probe the admin Pi intent lab endpoint over HTTP.
+
+This measures the production-like FastAPI path for cue -> Pi -> optional safe
+fulfillment. It is observation evidence only; it does not promote routes.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import statistics
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+from typing import Any, Callable, Iterable, Mapping, Sequence
+
+
+DEFAULT_CASES = (
+    {
+        "case_id": "weather_jacket",
+        "text": "need a jacket tonight",
+        "expected_intent": "weather",
+        "intent_group": "weather",
+        "source": "synthetic",
+    },
+    {
+        "case_id": "weather_rain",
+        "text": "rain later",
+        "expected_intent": "weather",
+        "intent_group": "weather",
+        "source": "synthetic",
+    },
+)
+
+DEFAULT_NATURAL_CUE_MAX_MS = 250.0
+DEFAULT_NATURAL_FINAL_MAX_MS = 4500.0
+
+
+def run_probe(
+    cases: Sequence[Mapping[str, Any]],
+    *,
+    base_url: str,
+    repeat: int,
+    run_pi: bool,
+    include_safe_fulfillment: bool,
+    allow_pi_execution: bool,
+    local_model_configured: bool,
+    timeout_seconds: float,
+    request_timeout_seconds: float | None = None,
+    session_id: str | None = None,
+    device_token: str | None = None,
+    wake_ack_text: str = "",
+    natural_cue_max_ms: float = DEFAULT_NATURAL_CUE_MAX_MS,
+    natural_final_max_ms: float = DEFAULT_NATURAL_FINAL_MAX_MS,
+    post_json: Callable[[str, Mapping[str, Any], float], Mapping[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    observations: list[dict[str, Any]] = []
+    active_repeat = max(1, repeat)
+    endpoint = _endpoint_url(base_url)
+    auth_headers = _auth_headers(session_id=session_id, device_token=device_token)
+    if post_json is not None and auth_headers:
+        raise ValueError("session_id/device_token require the default HTTP sender")
+    if request_timeout_seconds is not None and request_timeout_seconds >= timeout_seconds:
+        raise ValueError("request_timeout_seconds must be less than timeout_seconds")
+
+    def send(url: str, payload: Mapping[str, Any], timeout: float) -> Mapping[str, Any]:
+        if post_json is not None:
+            return post_json(url, payload, timeout)
+        return _post_json(url, payload, timeout, headers=auth_headers)
+
+    for repeat_index in range(1, active_repeat + 1):
+        for raw_case in cases:
+            case = _normalise_case(raw_case)
+            payload = {
+                "text": case["text"],
+                "run_pi": run_pi,
+                "allow_pi_execution": allow_pi_execution,
+                "local_model_configured": local_model_configured,
+                "include_hybrid_status": False,
+                "include_safe_fulfillment": include_safe_fulfillment,
+            }
+            if request_timeout_seconds is not None:
+                payload["request_timeout_seconds"] = request_timeout_seconds
+            started = time.perf_counter()
+            error = None
+            result: Mapping[str, Any] | None = None
+            try:
+                result = send(endpoint, payload, timeout_seconds)
+            except Exception as exc:
+                error = f"{type(exc).__name__}: {exc}"
+            http_latency_ms = (time.perf_counter() - started) * 1000
+            observations.append(
+                _observation(
+                    case,
+                    repeat_index=repeat_index,
+                    result=result,
+                    http_latency_ms=http_latency_ms,
+                    error=error,
+                    wake_ack_text=wake_ack_text,
+                    natural_cue_max_ms=natural_cue_max_ms,
+                    natural_final_max_ms=natural_final_max_ms,
+                )
+            )
+    return observations
+
+
+def build_report(
+    cases: Sequence[Mapping[str, Any]],
+    observations: Sequence[Mapping[str, Any]],
+    *,
+    base_url: str,
+    repeat: int,
+    run_pi: bool,
+    include_safe_fulfillment: bool,
+    include_observations: bool = False,
+    wake_ack_text: str = "",
+    natural_cue_max_ms: float = DEFAULT_NATURAL_CUE_MAX_MS,
+    natural_final_max_ms: float = DEFAULT_NATURAL_FINAL_MAX_MS,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "report_kind": "pi_intent_lab_http_probe",
+        "note": (
+            "HTTP probe of the admin Pi intent lab endpoint. Measures production-like FastAPI startup path; "
+            "results are observation evidence, not promotion samples."
+        ),
+        "base_url": base_url.rstrip("/"),
+        "repeat": max(1, repeat),
+        "unique_case_count": len({_normalise_case(case)["case_id"] for case in cases}),
+        "observation_count": len(observations),
+        "pi_ran": run_pi,
+        "safe_fulfillment_enabled": include_safe_fulfillment,
+        "safe_fulfillment_side_effects": "read_only_external_only" if include_safe_fulfillment else "none",
+        "conversation_contract": {
+            "strategy": "wake_ack_then_processing_cue_then_pi_final",
+            "wake_ack_configured": bool(str(wake_ack_text or "").strip()),
+            "wake_ack_text_preview": _preview(str(wake_ack_text or "").strip(), limit=80),
+            "processing_cue_source": "pi_intent_lab_simulated_hybrid_flow",
+            "natural_cue_max_ms": natural_cue_max_ms,
+            "natural_final_max_ms": natural_final_max_ms,
+            "production_route_change": False,
+        },
+        "summary": {
+            "overall": _stats(observations),
+            "by_intent_group": _breakdown(observations, lambda item: str(item.get("intent_group") or "unknown")),
+            "by_source": _breakdown(observations, lambda item: str(item.get("source") or "unknown")),
+        },
+    }
+    if include_observations:
+        payload["observations"] = list(observations)
+    return payload
+
+
+def _post_json(
+    url: str,
+    payload: Mapping[str, Any],
+    timeout_seconds: float,
+    *,
+    headers: Mapping[str, str] | None = None,
+) -> Mapping[str, Any]:
+    data = json.dumps(payload).encode("utf-8")
+    request_headers = {"Content-Type": "application/json"}
+    request_headers.update(headers or {})
+    request = urllib.request.Request(
+        url,
+        data=data,
+        headers=request_headers,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            raw = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"HTTP {exc.code}: {body[:300]}") from exc
+    return json.loads(raw)
+
+
+def _auth_headers(*, session_id: str | None, device_token: str | None) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    if session_id:
+        headers["X-Session-ID"] = session_id
+    if device_token:
+        headers["X-Device-Token"] = device_token
+    return headers
+
+
+def _observation(
+    case: Mapping[str, str],
+    *,
+    repeat_index: int,
+    result: Mapping[str, Any] | None,
+    http_latency_ms: float,
+    error: str | None,
+    wake_ack_text: str = "",
+    natural_cue_max_ms: float = DEFAULT_NATURAL_CUE_MAX_MS,
+    natural_final_max_ms: float = DEFAULT_NATURAL_FINAL_MAX_MS,
+) -> dict[str, Any]:
+    if result is None:
+        conversation_flow = _conversation_flow(
+            wake_ack_text=wake_ack_text,
+            processing_cue_text="",
+            final_response_preview="",
+            cue_latency_ms=None,
+            final_completion_latency_ms=None,
+            request_error=error,
+            natural_cue_max_ms=natural_cue_max_ms,
+            natural_final_max_ms=natural_final_max_ms,
+        )
+        return {
+            "case_id": case["case_id"],
+            "repeat_index": repeat_index,
+            "intent_group": case["intent_group"],
+            "source": case["source"],
+            "expected_intent": case["expected_intent"],
+            "http_latency_ms": http_latency_ms,
+            "request_error": error,
+            "natural_flow_candidate": False,
+            "conversation_flow": conversation_flow,
+        }
+    pi = result.get("pi") or {}
+    safe = result.get("safe_fulfillment") or {}
+    flow = result.get("simulated_hybrid_flow") or {}
+    expected = case["expected_intent"]
+    safe_success = bool(
+        safe.get("attempted")
+        and safe.get("allowed")
+        and not safe.get("timed_out")
+        and not safe.get("error")
+        and int(safe.get("response_chars") or 0) > 0
+    )
+    cue_latency_ms = _float_or_none(flow.get("cue_latency_ms"))
+    final_completion_latency_ms = _float_or_none(flow.get("final_completion_latency_ms"))
+    response_preview = safe.get("response_preview") or ""
+    conversation_flow = _conversation_flow(
+        wake_ack_text=wake_ack_text,
+        processing_cue_text=str(flow.get("cue_text") or ""),
+        final_response_preview=response_preview,
+        cue_latency_ms=cue_latency_ms,
+        final_completion_latency_ms=final_completion_latency_ms,
+        request_error=error,
+        natural_cue_max_ms=natural_cue_max_ms,
+        natural_final_max_ms=natural_final_max_ms,
+    )
+    return {
+        "case_id": case["case_id"],
+        "repeat_index": repeat_index,
+        "intent_group": case["intent_group"],
+        "source": case["source"],
+        "expected_intent": expected,
+        "http_latency_ms": http_latency_ms,
+        "request_error": error,
+        "contract_side_effects": (result.get("contract") or {}).get("side_effects"),
+        "zoe_router_intent": (result.get("zoe_router") or {}).get("intent"),
+        "pi_intent": pi.get("intent"),
+        "pi_correct": pi.get("intent") == expected,
+        "pi_confidence": _float_or_none(pi.get("confidence")),
+        "pi_latency_ms": _float_or_none(pi.get("latency_ms")),
+        "pi_timed_out": bool(pi.get("timed_out")),
+        "pi_error": pi.get("error"),
+        "cue_latency_ms": cue_latency_ms,
+        "safe_fulfillment_attempted": bool(safe.get("attempted")),
+        "safe_fulfillment_allowed": bool(safe.get("allowed")),
+        "safe_fulfillment_success": safe_success,
+        "safe_fulfillment_latency_ms": _float_or_none(safe.get("latency_ms")),
+        "safe_fulfillment_error": safe.get("error"),
+        "safe_fulfillment_timed_out": bool(safe.get("timed_out")),
+        "final_completion_latency_ms": final_completion_latency_ms,
+        "natural_flow_candidate": bool(conversation_flow["natural_flow_candidate"]),
+        "conversation_flow": conversation_flow,
+        "response_preview": response_preview,
+    }
+
+
+def _conversation_flow(
+    *,
+    wake_ack_text: str,
+    processing_cue_text: str,
+    final_response_preview: str,
+    cue_latency_ms: float | None,
+    final_completion_latency_ms: float | None,
+    request_error: str | None,
+    natural_cue_max_ms: float,
+    natural_final_max_ms: float,
+) -> dict[str, Any]:
+    wake_text = str(wake_ack_text or "").strip()
+    cue_text = str(processing_cue_text or "").strip()
+    final_text = str(final_response_preview or "").strip()
+    events: list[dict[str, Any]] = []
+    if wake_text:
+        events.append({"offset_ms": 0.0, "role": "zoe", "phase": "wake_ack", "text": wake_text})
+    if cue_text and cue_latency_ms is not None:
+        events.append({"offset_ms": cue_latency_ms, "role": "zoe", "phase": "processing_cue", "text": cue_text})
+    if final_text and final_completion_latency_ms is not None:
+        events.append(
+            {
+                "offset_ms": final_completion_latency_ms,
+                "role": "zoe",
+                "phase": "final_answer",
+                "text": final_text,
+            }
+        )
+    cue_within_budget = bool(cue_text) and cue_latency_ms is not None and cue_latency_ms <= natural_cue_max_ms
+    final_within_budget = (
+        bool(final_text) and final_completion_latency_ms is not None and final_completion_latency_ms <= natural_final_max_ms
+    )
+    processing_cue_available = bool(cue_text)
+    return {
+        "strategy": "wake_ack_then_processing_cue_then_pi_final",
+        "events": events,
+        "wake_ack_available": bool(wake_text),
+        "processing_cue_available": processing_cue_available,
+        "final_response_available": bool(final_text),
+        "cue_within_budget": cue_within_budget,
+        "final_within_budget": final_within_budget,
+        "perceived_final_gap_ms": final_completion_latency_ms,
+        "natural_flow_candidate": bool(
+            not request_error and processing_cue_available and cue_within_budget and final_within_budget and final_text
+        ),
+        "production_route_change": False,
+    }
+
+
+def _breakdown(
+    observations: Sequence[Mapping[str, Any]],
+    key_fn: Callable[[Mapping[str, Any]], str],
+) -> dict[str, dict[str, Any]]:
+    grouped: dict[str, list[Mapping[str, Any]]] = {}
+    for item in observations:
+        grouped.setdefault(key_fn(item), []).append(item)
+    return {key: _stats(values) for key, values in sorted(grouped.items())}
+
+
+def _stats(observations: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    if not observations:
+        return {
+            "observation_count": 0,
+            "unique_case_count": 0,
+            "request_error_rate": None,
+            "pi_accuracy": None,
+            "pi_timeout_rate": None,
+            "natural_flow_rate": None,
+            "safe_fulfillment_success_rate": None,
+            "conversation_final_available_rate": None,
+            "cue_within_budget_rate": None,
+            "final_within_budget_rate": None,
+            "http_latency_ms": _latency_stats([]),
+            "cue_latency_ms": _latency_stats([]),
+            "pi_latency_ms": _latency_stats([]),
+            "safe_fulfillment_latency_ms": _latency_stats([]),
+            "final_completion_latency_ms": _latency_stats([]),
+        }
+    return {
+        "conversation_final_available_rate": _rate(_flow_bool(item, "final_response_available") for item in observations),
+        "observation_count": len(observations),
+        "unique_case_count": len({str(item.get("case_id")) for item in observations}),
+        "request_error_rate": _rate(bool(item.get("request_error")) for item in observations),
+        "pi_accuracy": _rate(bool(item.get("pi_correct")) for item in observations if item.get("pi_intent") is not None),
+        "pi_timeout_rate": _rate(bool(item.get("pi_timed_out")) for item in observations if item.get("pi_intent") is not None),
+        "natural_flow_rate": _rate(bool(item.get("natural_flow_candidate")) for item in observations),
+        "safe_fulfillment_success_rate": _rate(bool(item.get("safe_fulfillment_success")) for item in observations),
+        "cue_within_budget_rate": _rate(_flow_bool(item, "cue_within_budget") for item in observations),
+        "final_within_budget_rate": _rate(_flow_bool(item, "final_within_budget") for item in observations),
+        "http_latency_ms": _latency_stats(_floats(item.get("http_latency_ms") for item in observations)),
+        "cue_latency_ms": _latency_stats(_floats(item.get("cue_latency_ms") for item in observations)),
+        "pi_latency_ms": _latency_stats(_floats(item.get("pi_latency_ms") for item in observations)),
+        "safe_fulfillment_latency_ms": _latency_stats(
+            _floats(item.get("safe_fulfillment_latency_ms") for item in observations)
+        ),
+        "final_completion_latency_ms": _latency_stats(
+            _floats(item.get("final_completion_latency_ms") for item in observations)
+        ),
+    }
+
+
+def _flow_bool(item: Mapping[str, Any], key: str) -> bool:
+    flow = item.get("conversation_flow")
+    if not isinstance(flow, Mapping):
+        return False
+    return bool(flow.get(key))
+
+
+def _latency_stats(values: Sequence[float]) -> dict[str, float | None]:
+    if not values:
+        return {"avg": None, "p50": None, "p95": None, "min": None, "max": None}
+    ordered = sorted(values)
+    return {
+        "avg": sum(ordered) / len(ordered),
+        "p50": statistics.median(ordered),
+        "p95": _percentile(ordered, 95),
+        "min": ordered[0],
+        "max": ordered[-1],
+    }
+
+
+def _percentile(ordered_values: Sequence[float], percentile: int) -> float | None:
+    if not ordered_values:
+        return None
+    rank = max(1, math.ceil((percentile / 100) * len(ordered_values)))
+    return ordered_values[min(rank - 1, len(ordered_values) - 1)]
+
+
+def _rate(values: Iterable[bool]) -> float | None:
+    items = list(values)
+    if not items:
+        return None
+    return sum(1 for item in items if item) / len(items)
+
+
+def _floats(values: Iterable[Any]) -> list[float]:
+    floats: list[float] = []
+    for value in values:
+        if isinstance(value, (int, float)):
+            floats.append(float(value))
+    return floats
+
+
+def _float_or_none(value: Any) -> float | None:
+    return float(value) if isinstance(value, (int, float)) else None
+
+
+def _preview(text: str, *, limit: int) -> str:
+    clean = " ".join(str(text or "").split())
+    return clean if len(clean) <= limit else clean[: limit - 1].rstrip() + "..."
+
+
+def _endpoint_url(base_url: str) -> str:
+    return base_url.rstrip("/") + "/api/pi-intent-lab/compare"
+
+
+def _normalise_case(raw: Mapping[str, Any]) -> dict[str, str]:
+    return {
+        "case_id": str(raw.get("case_id") or raw.get("id") or raw.get("text") or "case"),
+        "text": str(raw.get("text") or ""),
+        "expected_intent": str(raw.get("expected_intent") or ""),
+        "intent_group": str(raw.get("intent_group") or raw.get("expected_intent") or "unknown"),
+        "source": str(raw.get("source") or "synthetic"),
+    }
+
+
+def _load_cases(paths: Sequence[str], *, no_default_cases: bool) -> list[dict[str, str]]:
+    cases: list[dict[str, str]] = [] if no_default_cases else [_normalise_case(item) for item in DEFAULT_CASES]
+    for path in paths:
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+        rows = raw if isinstance(raw, list) else [raw]
+        cases.extend(_normalise_case(item) for item in rows)
+    return cases
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Probe /api/pi-intent-lab/compare over HTTP")
+    parser.add_argument("--base-url", default="http://127.0.0.1:8000")
+    parser.add_argument("--cases-file", action="append", default=[])
+    parser.add_argument("--no-default-cases", action="store_true")
+    parser.add_argument("--repeat", type=int, default=1)
+    parser.add_argument("--run-pi", action="store_true")
+    parser.add_argument("--allow-pi-execution", action="store_true")
+    parser.add_argument("--local-model-configured", action="store_true")
+    parser.add_argument("--include-safe-fulfillment", action="store_true")
+    parser.add_argument("--timeout-seconds", type=float, default=12.0)
+    parser.add_argument(
+        "--request-timeout-seconds",
+        type=float,
+        default=10.0,
+        help="Server-side lab timeout; must be lower than --timeout-seconds so 504s are observable.",
+    )
+    parser.add_argument("--session-id")
+    parser.add_argument("--device-token")
+    parser.add_argument("--include-observations", action="store_true")
+    parser.add_argument("--wake-ack-text", default="")
+    parser.add_argument("--natural-cue-max-ms", type=float, default=DEFAULT_NATURAL_CUE_MAX_MS)
+    parser.add_argument("--natural-final-max-ms", type=float, default=DEFAULT_NATURAL_FINAL_MAX_MS)
+    args = parser.parse_args(argv)
+
+    cases = _load_cases(args.cases_file, no_default_cases=args.no_default_cases)
+    observations = run_probe(
+        cases,
+        base_url=args.base_url,
+        repeat=args.repeat,
+        run_pi=args.run_pi,
+        include_safe_fulfillment=args.include_safe_fulfillment,
+        allow_pi_execution=args.allow_pi_execution,
+        local_model_configured=args.local_model_configured,
+        timeout_seconds=args.timeout_seconds,
+        request_timeout_seconds=args.request_timeout_seconds,
+        session_id=args.session_id,
+        device_token=args.device_token,
+        wake_ack_text=args.wake_ack_text,
+        natural_cue_max_ms=args.natural_cue_max_ms,
+        natural_final_max_ms=args.natural_final_max_ms,
+    )
+    print(
+        json.dumps(
+            build_report(
+                cases,
+                observations,
+                base_url=args.base_url,
+                repeat=args.repeat,
+                run_pi=args.run_pi,
+                include_safe_fulfillment=args.include_safe_fulfillment,
+                include_observations=args.include_observations,
+                wake_ack_text=args.wake_ack_text,
+                natural_cue_max_ms=args.natural_cue_max_ms,
+                natural_final_max_ms=args.natural_final_max_ms,
+            ),
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
