@@ -39,6 +39,9 @@ def _wire(monkeypatch, calls, *, pi_out="PR_URL=https://github.com/o/r/pull/9",
         calls.append("pi")
         return 0, pi_out
     monkeypatch.setattr(pe, "run_pi_implement", fake_pi)
+    # Keep the suite hermetic ("no real git/gh"): a pi_out without a PR_URL=
+    # sentinel would otherwise fall through to the real `gh pr list` subprocess.
+    monkeypatch.setattr(pe, "_gh_pr_for_branch", lambda b, w: None)
     monkeypatch.setattr(pe, "_worktree_has_commits", lambda b, w: has_commits)
     monkeypatch.setattr(pe, "_executor_open_pr",
                         lambda b, w: "https://github.com/o/r/pull/77")
