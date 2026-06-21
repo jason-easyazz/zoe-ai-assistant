@@ -36,8 +36,16 @@ async def _release_safely(pool: "asyncpg.Pool", conn: "asyncpg.Connection") -> N
     """
     try:
         await pool.release(conn)
-    except Exception as exc:  # noqa: BLE001 - teardown race; connection already terminated by asyncpg
+    except asyncpg.InterfaceError as exc:
+        # The known teardown race ONLY: request cancelled mid-query → asyncpg's
+        # reset fails with 'another operation is in progress'. asyncpg has already
+        # terminated the connection and freed the holder, so the pool is healthy.
         logger.debug("db_pool: connection release raced after cancellation (%s)", exc)
+    except Exception:
+        # Any OTHER release failure (closed pool, wrong pool, internal error) is a
+        # real pool-health signal — surface it loudly rather than hiding it, but
+        # still don't let it break the dependency teardown.
+        logger.warning("db_pool: unexpected error releasing connection", exc_info=True)
 
 
 async def init_pool() -> None:
