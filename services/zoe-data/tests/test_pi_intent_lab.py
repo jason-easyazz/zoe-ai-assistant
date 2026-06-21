@@ -34,6 +34,11 @@ class _Intent:
         self.confidence = confidence
 
 
+
+
+def _disable_pi_lab_resource_guard(monkeypatch):
+    monkeypatch.setenv("ZOE_PI_LAB_RESOURCE_GUARD_ENABLED", "0")
+
 def _install_fake_intent_router(
     monkeypatch,
     *,
@@ -882,6 +887,7 @@ async def test_lab_await_speculative_timeout_cancels_shielded_task():
     )
 
     assert result["timed_out"] is True
+    assert result["validated_by_pi"] is False
     assert result["speculative_safe_fulfillment"] == "timed_out"
     await asyncio.wait_for(cancelled.wait(), timeout=1.0)
     assert task.cancelled()
@@ -1003,6 +1009,7 @@ def test_pi_intent_lab_endpoint_falls_back_to_admin_session_when_internal_token_
 
 
 def test_pi_intent_lab_endpoint_returns_comparison(monkeypatch):
+    _disable_pi_lab_resource_guard(monkeypatch)
     _install_fake_intent_router(monkeypatch, raw=_Intent("weather"), extracted=_Intent("weather"))
     _install_fake_pi_classifier(
         monkeypatch,
@@ -1167,6 +1174,7 @@ def test_pi_intent_lab_hybrid_stream_emits_resource_pressure_after_cue(monkeypat
     assert events[1]["production_route_change"] is False
 
 def test_pi_intent_lab_endpoint_times_out_stuck_comparison(monkeypatch):
+    _disable_pi_lab_resource_guard(monkeypatch)
     import routers.pi_intent_lab as route_module
 
     async def stuck_comparison(*args, **kwargs):
@@ -1186,6 +1194,7 @@ def test_pi_intent_lab_endpoint_times_out_stuck_comparison(monkeypatch):
 
 
 def test_pi_intent_lab_hybrid_stream_emits_cue_then_final(monkeypatch):
+    _disable_pi_lab_resource_guard(monkeypatch)
     import routers.pi_intent_lab as route_module
 
     async def fake_compare(text, **kwargs):
@@ -1237,6 +1246,7 @@ def test_pi_intent_lab_hybrid_stream_emits_cue_then_final(monkeypatch):
 
 
 def test_pi_intent_lab_hybrid_stream_times_out_as_final_error(monkeypatch):
+    _disable_pi_lab_resource_guard(monkeypatch)
     import routers.pi_intent_lab as route_module
 
     async def stuck_compare(*args, **kwargs):
@@ -1280,6 +1290,7 @@ def test_pi_intent_lab_hybrid_stream_is_admin_scoped(monkeypatch):
 
 
 def test_pi_intent_lab_hybrid_stream_emits_packet_when_cue_builder_fails(monkeypatch):
+    _disable_pi_lab_resource_guard(monkeypatch)
     import routers.pi_intent_lab as route_module
 
     async def fake_compare(text, **kwargs):
@@ -1312,6 +1323,7 @@ def test_pi_intent_lab_hybrid_stream_emits_packet_when_cue_builder_fails(monkeyp
 
 
 def test_pi_intent_lab_hybrid_stream_unexpected_compare_error_terminates_cleanly(monkeypatch):
+    _disable_pi_lab_resource_guard(monkeypatch)
     import routers.pi_intent_lab as route_module
 
     async def broken_compare(*args, **kwargs):

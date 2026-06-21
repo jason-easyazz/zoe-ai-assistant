@@ -152,6 +152,29 @@ def test_record_pi_hybrid_production_evidence_writes_compact_sanitized_jsonl(tmp
 
 
 
+def test_record_pi_hybrid_production_evidence_prunes_to_configured_limit(tmp_path):
+    path = tmp_path / "production.jsonl"
+
+    for index in range(3):
+        decision = _production_decision()
+        decision["intent"] = f"weather-{index}"
+        record_pi_hybrid_production_evidence(
+            f"will it rain later {index}",
+            user_id="jason",
+            decision=decision,
+            env={
+                "ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_ENABLED": "true",
+                "ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_PATH": str(path),
+                "ZOE_PI_HYBRID_PRODUCTION_EVIDENCE_MAX_RECORDS": "2",
+            },
+        )
+
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+    assert len(rows) == 2
+    assert [row["intent"] for row in rows] == ["weather-1", "weather-2"]
+
+
 
 def test_build_pi_hybrid_production_label_queue_prioritizes_unlabeled_accepted_records():
     payload = build_pi_hybrid_production_label_queue(
