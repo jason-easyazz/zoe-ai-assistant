@@ -26,6 +26,7 @@ async def resolve(
     *,
     router_decision: Optional[dict] = None,
     extra_ctx: Optional[dict] = None,
+    allow_writes: bool = True,
 ):
     """Run the embedding router + Tier-1.5 expert dispatch for `text`.
 
@@ -36,6 +37,10 @@ async def resolve(
     re-embedding when the caller already routed for its own shadow logging.
     `extra_ctx` is merged into the dispatch context (e.g. voice passes db/panel_id)
     so callers can keep their existing context shape byte-for-byte.
+
+    `allow_writes=False` keeps the read/recall fast path but defers WRITE intents
+    (create/add) to the brain — used by chat, where a write needs LLM slot
+    extraction anyway, so fast-pathing it buys nothing and risks double work.
     """
     try:
         import expert_dispatch as _xd
@@ -63,7 +68,7 @@ async def resolve(
             "session_id": session_id,
             "score": float(rr.get("score") or 0.0),
         })
-        return await _xd.dispatch(domain, text, ctx)
+        return await _xd.dispatch(domain, text, ctx, write_ok=allow_writes)
     except Exception as exc:  # never let the fast path break a turn
         logger.warning("fast_path.resolve failed (non-fatal): %s", exc)
         return None
