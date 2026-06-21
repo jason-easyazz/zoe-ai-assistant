@@ -3366,6 +3366,12 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
                 "I could not complete live browsing just now, so I prepared a deterministic "
                 "research brief with source links and evidence placeholders."
             )
+        # Never hand the user a blank turn. Under heavy concurrent load the local
+        # brain can occasionally return no text (Pi-RPC subprocess thrash); surface
+        # a graceful retry prompt instead of an empty response.
+        if not (response_text or "").strip():
+            logger.warning("chat non-stream: empty brain response, using fallback (session=%s)", session_id)
+            response_text = "Sorry, I didn't catch that — could you say it again?"
         clean_text, actions = _extract_ui_actions(response_text)
         resp = {"response": clean_text, "session_id": session_id}
         ui_commands = [a for a in actions if "command" in a]
