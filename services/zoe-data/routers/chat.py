@@ -1927,10 +1927,10 @@ async def chat_stream_generator(
             # of the Pi-hybrid/brain lane below. Threshold-gated in expert_dispatch —
             # only confident matches short-circuit; otherwise None → hybrid unchanged.
             try:
-                import fast_path as _fast_path
+                import fast_tiers as _fast_path
                 _fp_res = await _fast_path.resolve(
                     message_for_processing, user_id, session_id,
-                    allow_writes=False,
+                    channel="chat",
                 )
             except Exception as _fp_exc:  # never let the fast path break a turn
                 logger.debug("chat_stream fast_path resolve failed (non-fatal): %s", _fp_exc)
@@ -3216,10 +3216,10 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
             # turn on the brain and return a different reply than we injected).
             _fp_res = None
             try:
-                import fast_path as _fast_path
+                import fast_tiers as _fast_path
                 _fp_res = await _fast_path.resolve(
                     message_for_processing, user_id, session_id,
-                    allow_writes=False,
+                    channel="chat",
                 )
             except Exception as _fp_exc:  # never let the fast path break a turn
                 logger.debug("chat fast_path resolve failed (non-fatal): %s", _fp_exc)

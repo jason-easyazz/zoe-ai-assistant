@@ -1,74 +1,14 @@
-"""Channel-agnostic Tier-1/1.5 fast path: embedding router → expert dispatch.
+"""Back-compat shim — the channel-agnostic fast path moved to `fast_tiers` (Stage A).
 
-Voice, chat, and any future channel bridge (Telegram, etc.) call `resolve()` to
-get a sub-second answer for calendar / lists / weather / time / people / memory
-WITHOUT going to the LLM brain. It returns a `DispatchResult` (reply + domain +
-intent + ui) or `None` (→ the caller falls through to the brain).
-
-This is the single shared implementation, so every channel inherits the exact
-same fast path; the channel layer only *renders* the result (TTS for voice, text
-for chat/Telegram). Keeping this here — and free of any heavy framework — is the
-"fast-path stays independent" guardrail: a channel/brain/harness outage never
-takes the sub-second tiers down.
+`fast_path.resolve` is now `fast_tiers.resolve`. Existing callers
+(`import fast_path; await fast_path.resolve(text, user, session, allow_writes=…)`)
+keep working unchanged: `resolve` added keyword-only `channel`/`run_tier0` params
+with safe defaults, so the old call shape is fully compatible. New code should
+import `fast_tiers` directly and pass a `channel` tag. This shim stays for one
+release, then callers migrate off it.
 """
 from __future__ import annotations
 
-import logging
-from typing import Any, Optional
+from fast_tiers import resolve  # noqa: F401
 
-logger = logging.getLogger(__name__)
-
-
-async def resolve(
-    text: str,
-    user_id: str,
-    session_id: str,
-    *,
-    router_decision: Optional[dict] = None,
-    extra_ctx: Optional[dict] = None,
-    allow_writes: bool = True,
-):
-    """Run the embedding router + Tier-1.5 expert dispatch for `text`.
-
-    Returns the expert `DispatchResult` (has `.reply`, `.domain`, `.intent`, `.ui`)
-    or `None` when nothing confident matches (caller should fall to the brain).
-
-    Pass a precomputed `router_decision` (from `semantic_router.route`) to avoid
-    re-embedding when the caller already routed for its own shadow logging.
-    `extra_ctx` is merged into the dispatch context (e.g. voice passes db/panel_id)
-    so callers can keep their existing context shape byte-for-byte.
-
-    `allow_writes=False` keeps the read/recall fast path but defers WRITE intents
-    (create/add) to the brain — used by chat, where a write needs LLM slot
-    extraction anyway, so fast-pathing it buys nothing and risks double work.
-    """
-    try:
-        import expert_dispatch as _xd
-
-        if not _xd.is_enabled():
-            return None
-        rr = router_decision
-        if rr is None:
-            import semantic_router as _sr
-
-            # Respect the router's own enable flag — if it's off, don't route
-            # (fall through to the brain) rather than silently embedding anyway.
-            if not _sr.is_enabled():
-                return None
-            rr = _sr.route(text)
-        domain = rr.get("domain") if rr else None
-        if domain in (None, "chat"):
-            return None
-        # Base fields are authoritative: build the ctx from extra_ctx FIRST, then
-        # set user_id/session_id/score, so a caller's extra_ctx can never silently
-        # overwrite them.
-        ctx: dict[str, Any] = dict(extra_ctx or {})
-        ctx.update({
-            "user_id": user_id,
-            "session_id": session_id,
-            "score": float(rr.get("score") or 0.0),
-        })
-        return await _xd.dispatch(domain, text, ctx, write_ok=allow_writes)
-    except Exception as exc:  # never let the fast path break a turn
-        logger.warning("fast_path.resolve failed (non-fatal): %s", exc)
-        return None
+__all__ = ["resolve"]

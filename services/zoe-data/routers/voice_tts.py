@@ -3641,12 +3641,15 @@ async def voice_command(
     # dropping to the slow general brain. Shadow by default (logs, returns None);
     # only ZOE_EXPERT_MODE=active + an allow-listed domain actually fulfills.
     try:
-        import fast_path as _fp
-        # Channel-agnostic Tier-1.5 core (shared with chat/Telegram). Reuse the
-        # router decision already computed for the shadow log, and keep the dispatch
-        # ctx byte-identical by passing db/panel_id through extra_ctx.
+        import fast_tiers as _fp
+        # Channel-agnostic deterministic core (shared with chat/LiveKit/Telegram).
+        # channel="voice" keeps run_tier0=False — voice already ran its own richer
+        # public-intent Tier-0 (policy/scope gates) above — so this stays the
+        # byte-identical Tier-1/1.5 path. Reuse the router decision from the shadow
+        # log and keep the dispatch ctx identical via extra_ctx (db/panel_id).
         _xresult = await _fp.resolve(
             text, effective_user, session_id,
+            channel="voice",
             router_decision=_router_decision,
             extra_ctx={"db": db, "panel_id": panel_id},
         )

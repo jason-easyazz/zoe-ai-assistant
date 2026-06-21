@@ -433,19 +433,40 @@ async def _run_pipeline(local_participant, frames: list[bytes], user_id: str, se
     except Exception as exc:
         logger.debug("LiveKit processing acknowledgement failed: %s", exc)
 
-    # ── LLM ──────────────────────────────────────────────────────────────────
+    # ── Deterministic fast tier (opt-in, OFF by default) ─────────────────────
+    # LiveKit is a *conversation* mode (plan §4.5/§8.3): brain-first is the default
+    # so it keeps feeling like a real person. Only when ZOE_LIVEKIT_FAST_TIERS is
+    # explicitly enabled do we answer the unambiguous, context-free factual subset
+    # (time/weather/lists) sub-second via the shared core; everything else still
+    # flows to the brain. The documented production form is parallel fast+brain
+    # (§8.3) — this gated replacement is the conservative first step.
+    _fast_reply: Optional[str] = None
+    if os.environ.get("ZOE_LIVEKIT_FAST_TIERS", "0").strip().lower() in ("1", "true", "yes", "on"):
+        try:
+            import fast_tiers
+            _ft = await fast_tiers.resolve(transcript, user_id, session_id, channel="livekit")
+            if _ft is not None and getattr(_ft, "reply", ""):
+                _fast_reply = _ft.reply
+        except Exception as exc:
+            logger.debug("LiveKit fast-tier resolve failed (non-fatal): %s", exc)
+
+    # ── LLM (skipped when the fast tier answered) ────────────────────────────
     response = "Sorry, I had trouble with that."
     llm_ok = True
     stage_started = time.monotonic()
-    _health_update(last_stage="llm")
-    try:
-        from brain_dispatch import brain_oneshot
-        response = await brain_oneshot(transcript, session_id, user_id, voice_mode=True)
-    except Exception as exc:
-        llm_ok = False
-        _VOICE_HEALTH["pipeline_failures"] += 1
-        _health_update(last_stage="llm_failed", last_error=str(exc)[:240])
-        logger.error("LiveKit LLM error: %s", exc)
+    if _fast_reply is not None:
+        response = _fast_reply
+        _health_update(last_stage="fast_tier")
+    else:
+        _health_update(last_stage="llm")
+        try:
+            from brain_dispatch import brain_oneshot
+            response = await brain_oneshot(transcript, session_id, user_id, voice_mode=True)
+        except Exception as exc:
+            llm_ok = False
+            _VOICE_HEALTH["pipeline_failures"] += 1
+            _health_update(last_stage="llm_failed", last_error=str(exc)[:240])
+            logger.error("LiveKit LLM error: %s", exc)
     _VOICE_HEALTH["stage_latency_ms"]["llm"] = round(
         (time.monotonic() - stage_started) * 1000, 1
     )
