@@ -9,7 +9,6 @@
 # - `.cursor/rules/chat-router.mdc`
 # - `.cursor/rules/module-boundaries.mdc`
 # - `.cursor/rules/chat-voice-first-features.mdc`
-# - `.cursor/rules/graphify.mdc`
 #
 # Zoe AI Assistant Development Rules
 # These rules ensure safe, maintainable, and efficient code

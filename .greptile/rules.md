@@ -35,9 +35,9 @@ For new user-facing features, check for:
 - `/api/<feature>/status` for integrations.
 - Settings or feature-page controls where users can configure the feature without leaving Zoe.
 
-## Graphify And Context
+## Code Intelligence And Context
 
-Use `graphify-out/GRAPH_REPORT.md` as map context when fresh, but treat it as stale if its "Built from commit" differs from `git rev-parse HEAD`. Do not ask contributors to run `graphify update .` or install Graphify hooks; this repo uses the safe full extract and `cluster-only . --no-viz` report-refresh commands documented in `.cursor/rules/graphify.mdc`.
+Code intelligence is provided by the codebase-memory MCP (re-indexed on demand); graphify is retired. Use the codebase-memory MCP for architecture and code-graph context instead of any `graphify-out/` artifact — the old `graphify-out/GRAPH_REPORT.md` map is no longer committed or maintained.
 
 For SDK, framework, MCP, or package integrations, expect the implementation to be checked against `opensrc` or upstream source before relying on uncertain docs. Call out guessed APIs, unexplained replacement dependencies, or new packages less than 14 days old without explicit operator approval.
 
