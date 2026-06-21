@@ -3641,44 +3641,46 @@ async def voice_command(
     # dropping to the slow general brain. Shadow by default (logs, returns None);
     # only ZOE_EXPERT_MODE=active + an allow-listed domain actually fulfills.
     try:
-        import expert_dispatch as _xd
-        if _xd.is_enabled() and _router_decision and _router_decision.get("domain") not in (None, "chat"):
-            _xresult = await _xd.dispatch(
-                _router_decision["domain"], text,
-                {"user_id": effective_user, "session_id": session_id, "db": db,
-                 "score": _router_decision.get("score", 0.0), "panel_id": panel_id},
-            )
-            if _xresult is not None:
-                reply_text = _xresult.reply
-                _ui = (_xresult.ui or {}).get("kind")
-                try:
-                    if _ui == "weather":
-                        await _broadcast_weather_ui(panel_id, reply_text, turn_key=_turn_key)
-                    elif _ui == "calendar":
-                        await _broadcast_calendar_ui(panel_id, reply_text, turn_key=_turn_key)
-                    elif _ui == "reminder":
-                        await _broadcast_reminder_ui(panel_id=panel_id, summary=reply_text, turn_key=_turn_key)
-                except Exception:
-                    pass
-                _xaudio_b64: Optional[str] = None
-                _xct = "audio/wav"
-                if not stream:
-                    _xaudio = await synthesize({"text": reply_text}, caller=caller)
-                    _xaudio_b64 = base64.b64encode(_xaudio.body).decode("ascii")
-                    _xct = _xaudio.media_type
-                try:
-                    from push import broadcaster as _bc_xd
-                    await _bc_xd.broadcast("all", "voice:responding", {"panel_id": panel_id, "text": reply_text[:200]})
-                    await _bc_xd.broadcast("all", "voice:done", {"panel_id": panel_id})
-                except Exception:
-                    pass
-                await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
-                _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
-                return {
-                    "ok": True, "panel_id": panel_id, "reply": reply_text,
-                    "audio_base64": _xaudio_b64, "content_type": _xct,
-                    "intent": f"expert:{_xresult.domain}:{_xresult.intent}",
-                }
+        import fast_path as _fp
+        # Channel-agnostic Tier-1.5 core (shared with chat/Telegram). Reuse the
+        # router decision already computed for the shadow log, and keep the dispatch
+        # ctx byte-identical by passing db/panel_id through extra_ctx.
+        _xresult = await _fp.resolve(
+            text, effective_user, session_id,
+            router_decision=_router_decision,
+            extra_ctx={"db": db, "panel_id": panel_id},
+        )
+        if _xresult is not None:
+            reply_text = _xresult.reply
+            _ui = (_xresult.ui or {}).get("kind")
+            try:
+                if _ui == "weather":
+                    await _broadcast_weather_ui(panel_id, reply_text, turn_key=_turn_key)
+                elif _ui == "calendar":
+                    await _broadcast_calendar_ui(panel_id, reply_text, turn_key=_turn_key)
+                elif _ui == "reminder":
+                    await _broadcast_reminder_ui(panel_id=panel_id, summary=reply_text, turn_key=_turn_key)
+            except Exception:
+                pass
+            _xaudio_b64: Optional[str] = None
+            _xct = "audio/wav"
+            if not stream:
+                _xaudio = await synthesize({"text": reply_text}, caller=caller)
+                _xaudio_b64 = base64.b64encode(_xaudio.body).decode("ascii")
+                _xct = _xaudio.media_type
+            try:
+                from push import broadcaster as _bc_xd
+                await _bc_xd.broadcast("all", "voice:responding", {"panel_id": panel_id, "text": reply_text[:200]})
+                await _bc_xd.broadcast("all", "voice:done", {"panel_id": panel_id})
+            except Exception:
+                pass
+            await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
+            _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
+            return {
+                "ok": True, "panel_id": panel_id, "reply": reply_text,
+                "audio_base64": _xaudio_b64, "content_type": _xct,
+                "intent": f"expert:{_xresult.domain}:{_xresult.intent}",
+            }
     except Exception as _xd_exc:
         logger.warning("voice/command expert dispatch failed (non-fatal): %s", _xd_exc)
 
