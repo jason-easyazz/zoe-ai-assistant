@@ -16,13 +16,15 @@ import statistics
 import time
 import urllib.error
 import urllib.request
-import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 DEFAULT_BASELINE = Path.home() / ".cache" / "zoe" / "latency_baseline.json"
 DEFAULT_RESULTS = Path.home() / ".cache" / "zoe" / "latency_last.json"
+# Below this absolute delta a high ratio is treated as noise (e.g. 1ms→3ms) so a
+# proportional regression only warns once it's also meaningfully large in ms.
+RATIO_FLOOR_MS = 25.0
 
 
 @dataclass
@@ -85,7 +87,9 @@ def sample_http_get(name: str, url: str, timeout: float) -> Sample:
 
 
 def sample_chat(base_url: str, prompt: str, timeout: float, index: int) -> Sample:
-    session_id = f"post-merge-latency-{uuid.uuid4().hex[:8]}"
+    # Reuse a STABLE session id so repeated probe runs don't accumulate orphaned
+    # chat_sessions rows in Postgres (one reused row instead of N-per-run).
+    session_id = os.environ.get("ZOE_LATENCY_SESSION_ID", "zoe-latency-probe")
     status, body, elapsed_ms, error = request_json(
         "POST",
         f"{base_url}/api/chat/?stream=false",
@@ -163,8 +167,14 @@ def compare(summary: dict[str, Any], baseline: dict[str, Any], warn_ratio: float
             continue
         delta = current_ms - base_ms
         ratio = current_ms / base_ms
-        if ratio >= warn_ratio and delta >= warn_ms:
-            warnings.append(f"{key} median {current_ms:.1f}ms vs baseline {base_ms:.1f}ms ({ratio:.2f}x)")
+        # Warn on EITHER a proportional regression that's also non-trivial in ms
+        # (catches fast endpoints: 10ms→100ms is 10x / +90ms — the old AND-with-
+        # 500ms gate silently missed these) OR any large absolute regression.
+        if (ratio >= warn_ratio and delta >= RATIO_FLOOR_MS) or (delta >= warn_ms):
+            warnings.append(
+                f"{key} median {current_ms:.1f}ms vs baseline {base_ms:.1f}ms "
+                f"({ratio:.2f}x, +{delta:.1f}ms)"
+            )
     return warnings
 
 
