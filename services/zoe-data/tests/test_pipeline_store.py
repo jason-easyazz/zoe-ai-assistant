@@ -1410,7 +1410,7 @@ async def test_sync_pipeline_recovers_audit_protocol_only_block(isolated_store):
 
 
 @pytest.mark.asyncio
-async def test_already_covered_run_converges_instead_of_review_implement_loop(isolated_store):
+async def test_already_covered_run_converges_instead_of_review_implement_loop(isolated_store, monkeypatch):
     # Regression: an already-covered run (implementation proven unnecessary) used
     # to bounce review -> implement forever, because review's no-PR request_changes
     # is not "protocol-only" and so was never recovered. It must now converge.
@@ -1437,7 +1437,18 @@ async def test_already_covered_run_converges_instead_of_review_implement_loop(is
     async def fetch_plain(_task_id):
         return {"latest_summary": "", "comments": []}
 
-    # 2) verify completes for the audit no-op run.
+    # Force the harness validators to FAIL so the verify gate cannot be satisfied
+    # the normal way. An already-covered run has no diff for validators to pass on,
+    # so this pins the audit no-op recovery path rather than passing trivially in
+    # environments where the repo validators happen to succeed.
+    from pipeline_validators import ValidatorRunResult
+
+    monkeypatch.setattr(
+        "pipeline_validators.run_repo_validators",
+        lambda: ValidatorRunResult(exit_code=1, summary="no diff", content_hash="deadbeef", passed=False),
+    )
+
+    # 2) verify converges for the audit no-op run despite failing validators.
     state = await store.sync_pipeline_from_chain(
         ref, {"verify": {"id": "t_verify", "status": "done"}}, fetch_plain
     )

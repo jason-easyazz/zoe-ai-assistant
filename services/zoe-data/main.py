@@ -690,9 +690,17 @@ async def lifespan(app: FastAPI):
     _zoe_update_bg_task = start_zoe_update_background_tasks()
 
     try:
-        from routers.voice_tts import warm_faster_whisper_worker
+        from routers.voice_tts import warm_faster_whisper_worker, warm_moonshine
+        asyncio.create_task(warm_moonshine(), name="moonshine_warmup")
         asyncio.create_task(warm_faster_whisper_worker(), name="faster_whisper_warmup")
-        logger.info("Voice STT worker warmup scheduled")
+        logger.info("Voice STT worker warmup scheduled (moonshine + whisper)")
+        try:
+            import semantic_router as _sr
+            if _sr.is_enabled():
+                asyncio.create_task(asyncio.to_thread(_sr.warm), name="semantic_router_warmup")
+                logger.info("Semantic router (Tier-1) warmup scheduled — mode=%s", _sr.mode())
+        except Exception as _sr_exc:
+            logger.warning("Semantic router warmup scheduling failed (non-fatal): %s", _sr_exc)
     except Exception as _voice_warmup_exc:
         logger.warning("Voice STT worker warmup scheduling failed (non-fatal): %s", _voice_warmup_exc)
 
@@ -1458,6 +1466,17 @@ async def root_health():
         "version": "1.0.0",
         "memory_capture": _memory_capture_health,
     }
+
+
+@app.get("/api/router/classify")
+async def router_classify(text: str, _: None = Depends(require_internal_token)):
+    """Tier-1 semantic router test endpoint: classify an utterance into a domain.
+    Internal-token gated (like /metrics) — it exposes per-domain scores, the
+    active mode and the threshold, which could be used to calibrate utterances
+    to influence routing if the service were LAN-exposed."""
+    import semantic_router as _sr
+    return {"enabled": _sr.is_enabled(), "mode": _sr.mode(),
+            "threshold": _sr.threshold(), **_sr.route(text)}
 
 
 @app.get("/api/settings")
