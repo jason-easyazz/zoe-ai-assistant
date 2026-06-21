@@ -1106,8 +1106,14 @@ async def _save_chat_message(session_id: str, role: str, content: str) -> None:
     clean_content = (content or "").strip()
     if not clean_content:
         return
+    # Use the context-managed pool acquire (deterministic release). The bare
+    # `async for db in get_db(): ... break` form leaves the generator suspended
+    # at the yield when broken out of, so the connection isn't returned to the
+    # pool until GC — under fire-and-forget concurrency that produced the
+    # asyncpg "another operation is in progress" errors that dropped saves.
     try:
-        async for db in get_db():
+        from db_pool import get_db_ctx
+        async with get_db_ctx() as db:
             await db.execute(
                 "INSERT INTO chat_messages (id, session_id, role, content) "
                 "VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
@@ -1115,7 +1121,6 @@ async def _save_chat_message(session_id: str, role: str, content: str) -> None:
             )
             await _touch_chat_session(db, session_id=session_id, content=clean_content)
             await db.commit()
-            break
     except Exception as _sme:
         logger.debug("_save_chat_message failed (non-fatal): %s", _sme)
 

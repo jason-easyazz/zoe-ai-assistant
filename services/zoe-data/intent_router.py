@@ -1979,6 +1979,88 @@ async def _execute_list_show_direct(intent: Intent, user_id: str) -> Optional[st
         return None
 
 
+def _say_clock(hhmm: str) -> str:
+    """'15:00' → '3 PM', '09:30' → '9:30 AM'. Empty/garbage → ''."""
+    try:
+        h, m = (hhmm or "").split(":")[:2]
+        h = int(h); m = int(m)
+        ap = "AM" if h < 12 else "PM"
+        h12 = h % 12 or 12
+        return f"{h12}:{m:02d} {ap}" if m else f"{h12} {ap}"
+    except Exception:
+        return ""
+
+
+async def _execute_calendar_show_direct(intent: Intent, user_id: str) -> Optional[str]:
+    """Read the calendar straight from the events table so 'what's on my calendar'
+    works even when the mcporter MCP subprocess is down (the source of the
+    calendar 'hit and miss'). Mirrors the qualifier→date-range logic in
+    _build_command's calendar_show branch."""
+    from datetime import date, timedelta
+    slots = intent.slots or {}
+    qualifier = str(slots.get("qualifier", "")).strip().lower()
+    today_d = date.today()
+    if qualifier in ("today", "today's", ""):
+        start = end = today_d
+        scope = "today"
+    elif qualifier == "tomorrow":
+        start = end = today_d + timedelta(days=1)
+        scope = "tomorrow"
+    elif qualifier in ("this week", "this week's"):
+        start = today_d - timedelta(days=today_d.weekday())
+        end = today_d + timedelta(days=6 - today_d.weekday())
+        scope = "this week"
+    elif qualifier in ("this month", "this month's"):
+        import calendar as cal_mod
+        _, last = cal_mod.monthrange(today_d.year, today_d.month)
+        start = today_d.replace(day=1); end = today_d.replace(day=last)
+        scope = "this month"
+    else:
+        start = today_d; end = today_d + timedelta(days=7)
+        scope = "in the next week"
+    try:
+        from database import get_db_ctx
+        async with get_db_ctx() as db:
+            cursor = await db.execute(
+                "SELECT title, start_date, start_time, all_day FROM events"
+                " WHERE (user_id=? OR visibility='family') AND deleted=0"
+                " AND start_date BETWEEN ? AND ?"
+                " ORDER BY start_date, COALESCE(NULLIF(start_time,''),'99:99')",
+                (user_id, start.isoformat(), end.isoformat()),
+            )
+            rows = [dict(r) for r in await cursor.fetchall()]
+    except Exception as exc:
+        logger.warning("calendar_show direct execution unavailable; falling back to mcporter: %s", exc)
+        return None
+
+    if not rows:
+        return f"You've got nothing on {scope}."
+    single_day = start == end
+    parts: list[str] = []
+    seen: set = set()
+    for r in rows:
+        title = (r.get("title") or "something").strip()
+        st = str(r.get("start_time") or "")
+        sd = str(r.get("start_date") or "")
+        dedup = (title.lower(), sd, st)
+        if dedup in seen:  # identical duplicate event rows → say once
+            continue
+        seen.add(dedup)
+        when = "" if r.get("all_day") else _say_clock(st)
+        day = "" if single_day else _spoken_day(sd)
+        # "today"/"tomorrow" read better without "on" ("at 9 AM today" not "...on today").
+        day_phrase = day if day in ("today", "tomorrow") else (f"on {day}" if day else "")
+        bits = [title]
+        if when:
+            bits.append(f"at {when}")
+        if day_phrase:
+            bits.append(day_phrase)
+        parts.append(" ".join(bits))
+    n = len(parts)
+    lead = f"You've got {n} thing{'s' if n != 1 else ''} on {scope}: "
+    return lead + ("; ".join(parts) if n > 1 else parts[0]) + "."
+
+
 async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optional[str]:
     if intent.name == "lets_talk":
         # Navigation is handled by _broadcast_intent_nav via _INTENT_PANEL_NAV in chat.py.
@@ -2557,10 +2639,19 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
     # Weather should not depend on mcporter command availability.
     # Route directly to the weather backend helpers for deterministic voice UX.
     if intent.name == "weather":
-        return await _execute_weather_direct(user_id=user_id, forecast=bool(intent.slots.get("forecast")))
+        return await _execute_weather_direct(
+            user_id=user_id,
+            forecast=bool(intent.slots.get("forecast")),
+            advice=str(intent.slots.get("advice") or ""),
+        )
 
     if intent.name == "list_show":
         direct_result = await _execute_list_show_direct(intent, user_id)
+        if direct_result:
+            return direct_result
+
+    if intent.name == "calendar_show":
+        direct_result = await _execute_calendar_show_direct(intent, user_id)
         if direct_result:
             return direct_result
 
@@ -2701,11 +2792,30 @@ async def _daily_briefing_reminders(user_id: str) -> Optional[dict]:
     return None
 
 
-async def _execute_weather_direct(user_id: str, forecast: bool = False) -> Optional[str]:
+def _spoken_day(raw: str) -> str:
+    """'2026-06-22' → 'Monday' (today→'today', tomorrow→'tomorrow'); raw on miss."""
+    try:
+        import datetime as _dt
+        d = _dt.date.fromisoformat(str(raw)[:10])
+        today = _dt.date.today()
+        if d == today:
+            return "today"
+        if d == today + _dt.timedelta(days=1):
+            return "tomorrow"
+        return d.strftime("%A")
+    except Exception:
+        return str(raw)
+
+
+async def _execute_weather_direct(user_id: str, forecast: bool = False,
+                                  advice: str = "") -> Optional[str]:
     """Direct weather path used by voice fast-intent execution.
 
     This bypasses mcporter so household voice weather works even if external
     command tooling is unavailable.
+
+    `advice` ("rain"|"warmth") returns a DIRECT yes/no answer to questions like
+    "do I need an umbrella" / "should I take a jacket" instead of a forecast dump.
     """
     try:
         from database import get_db
@@ -2734,8 +2844,54 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False) -> Optio
             # Speak numbers naturally: "18.3" → "18 point 3" (bare decimals get
             # mangled to "18 3" by TTS), and avoid markdown/°C which also mangle.
             def _say_num(n) -> str:
+                try:
+                    f = float(n)
+                    if f == int(f):
+                        return str(int(f))  # 21.0 → "21", not "21 point 0"
+                except (TypeError, ValueError):
+                    pass
                 s = str(n)
                 return s.replace(".", " point ") if "." in s else s
+            # Direct advice answer ("do I need a jacket / umbrella") — reason over
+            # today's forecast + current conditions and lead with yes/no.
+            if advice:
+                cur_desc = str(current.get("description", "")).lower()
+                cur_temp = current.get("temp")
+                today_hi = None
+                today_desc = cur_desc
+                try:
+                    f = await _get_forecast(lat, lon)
+                    d0 = (f.get("daily") or [{}])[0]
+                    today_hi = d0.get("high")
+                    today_desc = (str(d0.get("description", "")) or cur_desc).lower()
+                except Exception:
+                    pass
+                wet_words = ("rain", "shower", "drizzle", "thunder", "storm", "sleet", "snow")
+                is_wet = any(w in cur_desc or w in today_desc for w in wet_words)
+                cond_desc = (current.get("description") or "").strip()
+                cond_part = f" — it's {cond_desc}" if cond_desc else ""
+                if advice == "rain":
+                    if is_wet:
+                        return f"Yes, take an umbrella{cond_part} in {city_name}."
+                    return f"No, you shouldn't need an umbrella{cond_part} in {city_name}."
+                # warmth / jacket
+                ref = None
+                for v in (today_hi, cur_temp):
+                    try:
+                        ref = float(v); break
+                    except Exception:
+                        continue
+                cold = (ref is not None and ref < 16)
+                if cold or is_wet:
+                    why = []
+                    if ref is not None:
+                        why.append(f"it's around {_say_num(round(ref))} degrees")
+                    if is_wet:
+                        why.append("and wet" if why else "it's wet")
+                    reason = (", " + " ".join(why)) if why else ""
+                    return f"Yes, I'd take a jacket{reason} in {city_name}."
+                temp_part = f" — it's around {_say_num(round(ref))} degrees" if ref is not None else ""
+                return f"No, you should be fine without a jacket{temp_part} in {city_name}."
             if forecast:
                 f = await _get_forecast(lat, lon)
                 daily = f.get("daily", [])[:5]
@@ -2743,7 +2899,7 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False) -> Optio
                     return f"I couldn't get the forecast for {city_name} right now."
                 lines = [f"Here's the forecast for {city_name}."]
                 for item in daily:
-                    day = item.get("day", "?")
+                    day = _spoken_day(item.get("day", "?"))
                     hi = item.get("high", "?")
                     lo = item.get("low", "?")
                     desc = item.get("description", "unknown")

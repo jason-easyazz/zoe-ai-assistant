@@ -885,7 +885,6 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
                 with _tts_process_lock:
                     _tts_process = None
             return True
-        log.warning("turn_stream failed (%s) — falling back to blocking turn", exc)
         if aplay is not None:
             try:
                 aplay.kill()
@@ -893,6 +892,14 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
                 pass
             with _tts_process_lock:
                 _tts_process = None
+        # If the server already sent the transcript, it PROCESSED this turn
+        # (including any write — add to list, create event). Re-POSTing via the
+        # blocking turn would execute it a SECOND time (the duplicate-writes bug).
+        # Only re-POST when we got nothing back (connection died before any reply).
+        if transcript:
+            log.warning("turn_stream failed after server processed it (%s) — NOT re-POSTing (avoid duplicate write)", exc)
+            return False
+        log.warning("turn_stream failed with no server response (%s) — falling back to blocking turn", exc)
         return _do_single_turn(pa, wav, prompt_on_empty=prompt_on_empty)
 
     # Drain playback (respecting barge-in) once the stream ends.
