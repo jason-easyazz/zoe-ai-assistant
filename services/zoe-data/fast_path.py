@@ -46,17 +46,23 @@ async def resolve(
         if rr is None:
             import semantic_router as _sr
 
+            # Respect the router's own enable flag — if it's off, don't route
+            # (fall through to the brain) rather than silently embedding anyway.
+            if not _sr.is_enabled():
+                return None
             rr = _sr.route(text)
         domain = rr.get("domain") if rr else None
         if domain in (None, "chat"):
             return None
-        ctx: dict[str, Any] = {
+        # Base fields are authoritative: build the ctx from extra_ctx FIRST, then
+        # set user_id/session_id/score, so a caller's extra_ctx can never silently
+        # overwrite them.
+        ctx: dict[str, Any] = dict(extra_ctx or {})
+        ctx.update({
             "user_id": user_id,
             "session_id": session_id,
             "score": float(rr.get("score") or 0.0),
-        }
-        if extra_ctx:
-            ctx.update(extra_ctx)
+        })
         return await _xd.dispatch(domain, text, ctx)
     except Exception as exc:  # never let the fast path break a turn
         logger.warning("fast_path.resolve failed (non-fatal): %s", exc)
