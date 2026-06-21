@@ -6,7 +6,6 @@ from agent_sync import (
     _build_zoe_self_md,
     _build_zoe_why,
     _patch_hermes_soul,
-    _trigger_graphify_rebuild,
 )
 
 
@@ -64,18 +63,3 @@ def test_patch_soul_block_is_idempotent_per_marker(tmp_path):
     assert "the411.life" in text  # ZOE_WHY block survived the ZOE_SELF re-patch
 
 
-def test_graphify_rebuild_is_opt_in_by_default(monkeypatch):
-    monkeypatch.delenv("ZOE_AGENT_SYNC_REBUILD_GRAPH", raising=False)
-
-    assert _trigger_graphify_rebuild().startswith("skipped (set ZOE_AGENT_SYNC_REBUILD_GRAPH=true")
-
-
-def test_graphify_rebuild_opt_in_env_is_recognized(monkeypatch):
-    monkeypatch.setenv("ZOE_AGENT_SYNC_REBUILD_GRAPH", "true")
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setattr(agent_sync, "_GRAPHIFY_BIN", Path("/missing/graphify"))
-
-    result = _trigger_graphify_rebuild()
-
-    assert not result.startswith("skipped (set ZOE_AGENT_SYNC_REBUILD_GRAPH=true")
-    assert result == "skipped (graphify not found at /missing/graphify)"
