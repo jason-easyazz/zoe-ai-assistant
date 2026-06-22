@@ -4533,6 +4533,44 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
     )
 
 
+def _brain_prewarm_on_wake_enabled() -> bool:
+    return os.environ.get("ZOE_BRAIN_PREWARM_ON_WAKE", "1").strip().lower() in ("1", "true", "yes", "on")
+
+
+async def _prewarm_brain_for_panel(panel_id: str) -> None:
+    """On wake-word, spawn the panel's likely (user, session) brain worker so the
+    first turn doesn't pay the Pi subprocess cold-start. Fully best-effort and
+    backgrounded — must never delay or break the wake acknowledgement.
+
+    Resolves the user the same way voice_command will (bound > recent > default);
+    if the user is unknown the worker key would miss the real turn, so we skip
+    rather than spawn a wasted process.
+    """
+    try:
+        if not _brain_prewarm_on_wake_enabled():
+            return
+        session_id = _get_or_create_voice_session(panel_id)
+        user_id = (_VOICE_SESSIONS.get(panel_id) or {}).get("bound_user_id") or ""
+        if not user_id:
+            try:
+                from db_pool import get_db_ctx
+                async with get_db_ctx() as db:
+                    user_id = (
+                        await _resolve_recent_panel_session_user(panel_id, db)
+                        or await _resolve_panel_default_user(panel_id, db)
+                        or ""
+                    )
+            except Exception:
+                user_id = ""
+        if not user_id:
+            return
+        import zoe_core_client
+        warmed = await zoe_core_client.prewarm(user_id, session_id)
+        logger.debug("voice/wake brain prewarm panel=%s user=%s warmed=%s", panel_id, user_id, warmed)
+    except Exception as exc:  # never let prewarm affect the wake path
+        logger.debug("voice/wake brain prewarm failed (non-fatal): %s", exc)
+
+
 @router.post("/wake")
 async def voice_wake(payload: dict, caller: dict = Depends(_require_voice_auth)):
     """
@@ -4562,6 +4600,13 @@ async def voice_wake(payload: dict, caller: dict = Depends(_require_voice_auth))
         })
     except Exception as exc:
         logger.warning("voice/wake broadcast failed: %s", exc)
+
+    # Start the brain worker now (non-blocking) so it's warm by the time the user
+    # finishes speaking — hides the first-turn-of-session subprocess cold start.
+    try:
+        asyncio.ensure_future(_prewarm_brain_for_panel(panel_id))
+    except Exception as exc:
+        logger.debug("voice/wake prewarm dispatch failed (non-fatal): %s", exc)
 
     audio_b64: Optional[str] = None
     content_type = "audio/wav"

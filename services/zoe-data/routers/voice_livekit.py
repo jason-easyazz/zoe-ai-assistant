@@ -410,6 +410,19 @@ async def _maybe_fast_tier(transcript: str, user_id: str, session_id: str) -> Op
     return None
 
 
+async def _prewarm_brain(user_id: str, session_id: str) -> None:
+    """Spawn the brain worker on speech-start (VAD IDLE→LISTENING) so it's warm by
+    end-of-speech — LiveKit's analogue of the panel's wake-word prewarm. Best-effort.
+    """
+    if os.environ.get("ZOE_BRAIN_PREWARM_ON_WAKE", "1").strip().lower() not in ("1", "true", "yes", "on"):
+        return
+    try:
+        import zoe_core_client
+        await zoe_core_client.prewarm(user_id or "guest", session_id or "default")
+    except Exception as exc:
+        logger.debug("LiveKit brain prewarm failed (non-fatal): %s", exc)
+
+
 async def _run_pipeline(local_participant, frames: list[bytes], user_id: str, session_id: str) -> None:
     """STT → LLM → TTS pipeline, called once end-of-speech is detected."""
     pipeline_started = time.monotonic()
@@ -638,6 +651,8 @@ async def _collect_audio_stream(
                         ps["silence_count"] = 0
                         logger.debug("LiveKit VAD [%s]: IDLE → LISTENING (energy=%.0f)", sid[:8], energy)
                         await _send_data(local_participant, {"type": "state", "state": "listening"})
+                        # Warm the brain worker now so it's ready by end-of-speech.
+                        asyncio.ensure_future(_prewarm_brain(ps.get("user_id") or "guest", ps.get("session_id") or ""))
                 else:
                     ps["speech_count"] = 0
                     ps["frames"] = []  # discard sub-threshold noise

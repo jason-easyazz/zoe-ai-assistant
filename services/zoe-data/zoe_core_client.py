@@ -296,6 +296,27 @@ async def _worker_for(user_id: str, session_id: str) -> _ZoeCoreWorker:
     return worker
 
 
+async def prewarm(user_id: str, session_id: str) -> bool:
+    """Spawn the (user, session) worker's Pi subprocess ahead of the turn.
+
+    Called on wake-word so the first real turn of a session doesn't pay the
+    ~2-3s subprocess boot — the worker is the same one the turn will use, so this
+    just moves the inevitable spawn earlier (into the wake → end-of-speech window).
+    Best-effort and never raises. Returns True if a live subprocess is ready.
+    """
+    try:
+        worker = await _worker_for(user_id, session_id)
+        # Take the worker lock so we don't race a real turn's _ensure_started; if a
+        # turn already holds it the worker is started anyway and this is a fast no-op.
+        async with worker._lock:
+            await worker._ensure_started()
+            worker.last_used = time.monotonic()
+        return bool(worker.proc and worker.proc.returncode is None)
+    except Exception as exc:  # noqa: BLE001 - prewarm is best-effort, never break wake
+        logger.debug("zoe-core prewarm failed (non-fatal): %s", exc)
+        return False
+
+
 def _compose_message(
     message: str,
     *,
