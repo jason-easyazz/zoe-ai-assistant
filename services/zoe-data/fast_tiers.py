@@ -43,9 +43,13 @@ _TIER0_DOMAIN = {
 # voice keeps run_tier0=False because it has its own richer public-intent Tier-0
 # (policy/scope gates) ahead of this call; folding that in is a later, replay-gated
 # step. chat/telegram run the shared Tier-0 read shortcut.
+# `defer_domains` lists domains that this channel must NOT fast-path — they fall
+# straight to the brain. voice defers people/memory: on-device that path was both
+# slow (2-4s recall/store) and wrong (it mis-stored recall *questions* as facts),
+# so the brain — now given the user's facts + portrait — owns recall and chat.
 CHANNEL_PROFILES: dict[str, dict[str, Any]] = {
     "chat":     {"run_tier0": True,  "allow_writes": False},
-    "voice":    {"run_tier0": False, "allow_writes": True},
+    "voice":    {"run_tier0": False, "allow_writes": True, "defer_domains": {"people", "memory"}},
     "livekit":  {"run_tier0": True,  "allow_writes": True},
     "telegram": {"run_tier0": True,  "allow_writes": True},
 }
@@ -148,6 +152,12 @@ async def resolve(
             rr = _sr.route(text)
         domain = rr.get("domain") if rr else None
         if domain in (None, "chat"):
+            return None
+
+        # Channel-level defer list: this domain is intentionally not fast-pathed on
+        # this channel (e.g. voice defers people/memory to the brain). Skip Tier-1.5.
+        if domain in prof.get("defer_domains", ()):  # type: ignore[arg-type]
+            logger.info("fast_tiers defer domain=%s (channel=%s) → brain", domain, channel)
             return None
 
         # Ambiguity margin — if the top two domains are within MARGIN, treat as

@@ -101,6 +101,30 @@ async def _load_voice_history(session_id: str, limit: int = 3) -> list[dict]:
     return []
 
 
+async def _voice_brain_memory(user_id: str) -> tuple[Optional[str], Optional[str]]:
+    """Load (db_memory_context, portrait) for a voice brain turn.
+
+    Voice no longer fast-paths people/memory recall (it was slow and mis-stored
+    questions as facts), so the brain must answer recall itself. Unlike chat —
+    where the memory.ts extension injects the for-prompt packet — the voice path
+    calls the brain directly, so we inject the user's facts + portrait here or the
+    brain would have no memory to recall from. Reuses the same builders as chat;
+    best-effort (guest-safe / never raises)."""
+    db_memory: Optional[str] = None
+    portrait: Optional[str] = None
+    try:
+        from zoe_agent import _mempalace_load_user_facts
+        db_memory = (await _mempalace_load_user_facts(user_id)) or None
+    except Exception as exc:
+        logger.debug("voice brain memory load failed (non-fatal): %s", exc)
+    try:
+        from user_portrait import load_portrait
+        portrait = (await load_portrait(user_id)) or None
+    except Exception as exc:
+        logger.debug("voice brain portrait load failed (non-fatal): %s", exc)
+    return db_memory, portrait
+
+
 _VOICE_ESCALATION_MARKERS = ("__ESCALATE__:", "__ESCALATE_BG__:", "__ESCALATE_HERMES__:")
 
 
@@ -3946,9 +3970,11 @@ async def voice_command(
                         logger.debug("voice/command stream processing acknowledgement failed: %s", ack_exc)
 
                     _voice_history = await _load_voice_history(session_id, limit=3)
+                    _v_db_memory, _v_portrait = await _voice_brain_memory(effective_user)
                     async for delta in brain_streaming(
                         text, session_id, user_id=effective_user,
-                        voice_mode=True, history=_voice_history or None
+                        voice_mode=True, history=_voice_history or None,
+                        db_memory_context=_v_db_memory, portrait=_v_portrait,
                     ):
                         if not delta:
                             continue
@@ -4044,6 +4070,7 @@ async def voice_command(
         collected: list[str] = []
 
         _voice_history_nc = await _load_voice_history(session_id, limit=3)
+        _v_db_memory_nc, _v_portrait_nc = await _voice_brain_memory(effective_user)
 
         async def _stream_collect() -> None:
             nonlocal _t_first_token
@@ -4053,6 +4080,8 @@ async def voice_command(
                 user_id=effective_user,
                 voice_mode=True,
                 history=_voice_history_nc or None,
+                db_memory_context=_v_db_memory_nc,
+                portrait=_v_portrait_nc,
             ):
                 if not delta:
                     continue

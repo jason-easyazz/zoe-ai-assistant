@@ -81,6 +81,36 @@ def test_voice_profile_write_ok_true_and_tier0_skipped(monkeypatch):
     assert seen["write_ok"] is True
 
 
+def test_voice_defers_people_and_memory_to_brain(monkeypatch):
+    # On voice, people/memory must NOT be fast-pathed (slow + mis-stored questions
+    # as facts on-device) — resolve() returns None so the turn falls to the brain.
+    _enable(monkeypatch)
+
+    async def _dispatch_must_not_run(domain, text, ctx, *, write_ok=True):
+        raise AssertionError(f"expert_dispatch ran for deferred domain {domain!r}")
+
+    monkeypatch.setattr(expert_dispatch, "dispatch", _dispatch_must_not_run)
+    _detect_must_not_run(monkeypatch)
+    for domain in ("people", "memory"):
+        out = _run(fast_tiers.resolve("do you remember my mum's name", "u", "s",
+                                      channel="voice",
+                                      router_decision={"domain": domain, "score": 0.95}))
+        assert out is None, f"voice should defer {domain} to the brain"
+
+
+def test_other_channels_still_fast_path_people(monkeypatch):
+    # The defer list is voice-scoped: telegram still fast-paths people.
+    _enable(monkeypatch)
+
+    async def _fake_dispatch(domain, text, ctx, *, write_ok=True):
+        return expert_dispatch.DispatchResult(domain=domain, reply="recalled")
+
+    monkeypatch.setattr(expert_dispatch, "dispatch", _fake_dispatch)
+    out = _run(fast_tiers.resolve("what is my dad's name", "u", "s", channel="telegram",
+                                  router_decision={"domain": "people", "score": 0.95}))
+    assert out is not None and out.domain == "people"
+
+
 def test_explicit_kwargs_override_profile(monkeypatch):
     _enable(monkeypatch)
     seen = {}
