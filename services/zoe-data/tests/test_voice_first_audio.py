@@ -7,6 +7,17 @@ a full sentence — without splitting decimals ('twelve point four') mid-number.
 import routers.voice_tts as v
 
 
+def test_flag_default_on_and_togglable(monkeypatch):
+    monkeypatch.delenv("ZOE_VOICE_FAST_FIRST_AUDIO", raising=False)
+    assert v._fast_first_audio_enabled() is True   # default on
+    for off in ("0", "false", "no", "off"):
+        monkeypatch.setenv("ZOE_VOICE_FAST_FIRST_AUDIO", off)
+        assert v._fast_first_audio_enabled() is False, off
+    for on in ("1", "true", "YES"):
+        monkeypatch.setenv("ZOE_VOICE_FAST_FIRST_AUDIO", on)
+        assert v._fast_first_audio_enabled() is True, on
+
+
 def test_breaks_on_first_clause_comma():
     unit, rest = v._extract_first_unit("It's twelve degrees and clear, with a light breeze.")
     assert unit == "It's twelve degrees and clear,"
