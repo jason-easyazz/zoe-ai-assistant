@@ -351,11 +351,13 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
         r"\b(do|did|does|can|could|would|will)\s+(you|ya)\s+"
         r"(remember|recall|recollect|know|have)\b", low))
     is_question = asks_recall or bool(_QUESTION_RE.search(text)) or text.rstrip().endswith("?")
-    # Imperative teach only: a command to store. 'remember' counts when it is NOT
-    # preceded by 'you' (so "do you remember" is excluded from the store signal).
-    imperative_store = bool(
-        re.search(r"\b(note that|don'?t forget|make a note|keep in mind)\b", low)
-    ) or bool(re.search(r"(?<!you )\bremember\b", low))
+    # Imperative teach only: a command to store, never a recall question. The
+    # asks_recall guard covers the "do you / do ya remember…?" forms (any pronoun);
+    # the lookbehinds also stop a bare "you/ya remember…" from reading as a command.
+    imperative_store = (not asks_recall) and (
+        bool(re.search(r"\b(note that|don'?t forget|make a note|keep in mind)\b", low))
+        or bool(re.search(r"(?<!you )(?<!ya )\bremember\b", low))
+    )
     if is_question and not imperative_store:
         return await _run_expert(domain, text, user_id, session_id)
     # Statement → store the fact.

@@ -47,6 +47,7 @@ def spy(monkeypatch):
     "Do you remember what my mum's name is?",   # the on-device failure
     "do you recall my dad's name",
     "can you remember where I work",
+    "can ya remember where I work",             # 'ya' colloquial — must not store
     "what is my dad's name?",
     "what's my mum's name",
     "who is my sister",
@@ -66,6 +67,7 @@ def test_recall_questions_are_not_stored(spy, domain, q):
     "remember that my mum likes NCIS",
     "note that my lucky number is 47",
     "don't forget my sister's birthday is in May",
+    "keep in mind my dentist is on Tuesday",
 ])
 def test_statements_are_stored(spy, s):
     svc, recalled = spy
