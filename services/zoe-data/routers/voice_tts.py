@@ -458,6 +458,20 @@ async def _synthesize_kokoro_sidecar(text: str) -> Optional[bytes]:
             logger.debug("kokoro-sidecar HTTP %s", r.status_code)
             return None
         return r.content
+    except httpx.TransportError as exc:
+        # A pooled client does NOT auto-close on a transport error the way the old
+        # per-call `async with` did, so a timed-out / reset connection would be
+        # re-checked-out for the next sentence and fail again. Recycle the pooled
+        # client so the next call reconnects cleanly.
+        global _KOKORO_HTTP
+        logger.debug("kokoro-sidecar transport error, recycling pooled client: %s", exc)
+        try:
+            if _KOKORO_HTTP is not None:
+                await _KOKORO_HTTP.aclose()
+        except Exception:
+            pass
+        _KOKORO_HTTP = None
+        return None
     except Exception as exc:
         logger.debug("kokoro-sidecar unavailable: %s", exc)
         return None
@@ -4614,7 +4628,11 @@ async def _prewarm_brain_for_panel(panel_id: str) -> None:
             panel_id, user_id, warmed, _ms,
         )
     except Exception as exc:  # never let prewarm affect the wake path
-        logger.warning("voice/wake brain prewarm failed (non-fatal): %s", exc)
+        # debug, not warning: a boot-time race (wake fires before zoe-core is up)
+        # would otherwise warn on every turn until the core settles. The INFO
+        # success line above (with spawn_ms) is the real signal — its ABSENCE
+        # already tells us prewarm isn't completing.
+        logger.debug("voice/wake brain prewarm failed (non-fatal): %s", exc)
 
 
 @router.post("/wake")
