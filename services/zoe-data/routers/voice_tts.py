@@ -420,6 +420,23 @@ def _clean_for_speech(text: str) -> str:
     return t
 
 
+# Pooled client for the Kokoro sidecar, reused across sentences so each spoken
+# sentence doesn't pay a fresh TCP/connection setup (the sidecar is hit once per
+# sentence on the streaming voice path — per-call AsyncClient added fixed latency
+# to every inter-sentence boundary).
+_KOKORO_HTTP: "Optional[httpx.AsyncClient]" = None
+
+
+def _kokoro_http_client() -> "httpx.AsyncClient":
+    global _KOKORO_HTTP
+    if _KOKORO_HTTP is None or _KOKORO_HTTP.is_closed:
+        _KOKORO_HTTP = httpx.AsyncClient(
+            timeout=15.0,
+            limits=httpx.Limits(max_keepalive_connections=4, keepalive_expiry=60.0),
+        )
+    return _KOKORO_HTTP
+
+
 async def _synthesize_kokoro_sidecar(text: str) -> Optional[bytes]:
     """Synthesize via Kokoro PyTorch sidecar (GPU, natural af_sky voice).
 
@@ -432,15 +449,29 @@ async def _synthesize_kokoro_sidecar(text: str) -> Optional[bytes]:
     sidecar_url = os.environ.get("ZOE_KOKORO_SIDECAR_URL", "http://127.0.0.1:10201").rstrip("/")
     voice = os.environ.get("ZOE_KOKORO_VOICE", "af_sky").strip() or "af_sky"
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            r = await client.post(
-                f"{sidecar_url}/synthesize",
-                json={"text": text, "voice": voice},
-            )
-            if r.status_code >= 400 or not r.content:
-                logger.debug("kokoro-sidecar HTTP %s", r.status_code)
-                return None
-            return r.content
+        client = _kokoro_http_client()
+        r = await client.post(
+            f"{sidecar_url}/synthesize",
+            json={"text": text, "voice": voice},
+        )
+        if r.status_code >= 400 or not r.content:
+            logger.debug("kokoro-sidecar HTTP %s", r.status_code)
+            return None
+        return r.content
+    except httpx.TransportError as exc:
+        # A pooled client does NOT auto-close on a transport error the way the old
+        # per-call `async with` did, so a timed-out / reset connection would be
+        # re-checked-out for the next sentence and fail again. Recycle the pooled
+        # client so the next call reconnects cleanly.
+        global _KOKORO_HTTP
+        logger.debug("kokoro-sidecar transport error, recycling pooled client: %s", exc)
+        try:
+            if _KOKORO_HTTP is not None:
+                await _KOKORO_HTTP.aclose()
+        except Exception:
+            pass
+        _KOKORO_HTTP = None
+        return None
     except Exception as exc:
         logger.debug("kokoro-sidecar unavailable: %s", exc)
         return None
@@ -4586,9 +4617,21 @@ async def _prewarm_brain_for_panel(panel_id: str) -> None:
         if not user_id:
             return
         import zoe_core_client
+        _t0 = time.monotonic()
         warmed = await zoe_core_client.prewarm(user_id, session_id)
-        logger.debug("voice/wake brain prewarm panel=%s user=%s warmed=%s", panel_id, user_id, warmed)
+        _ms = int((time.monotonic() - _t0) * 1000)
+        # INFO (not debug): the only way to know on-device whether the spawn
+        # actually overlaps the speech window — if this logs AFTER the turn's
+        # first token, prewarm bought nothing and the cost is elsewhere (prefill).
+        logger.info(
+            "voice/wake brain prewarm panel=%s user=%s warmed=%s spawn_ms=%d",
+            panel_id, user_id, warmed, _ms,
+        )
     except Exception as exc:  # never let prewarm affect the wake path
+        # debug, not warning: a boot-time race (wake fires before zoe-core is up)
+        # would otherwise warn on every turn until the core settles. The INFO
+        # success line above (with spawn_ms) is the real signal — its ABSENCE
+        # already tells us prewarm isn't completing.
         logger.debug("voice/wake brain prewarm failed (non-fatal): %s", exc)
 
 
