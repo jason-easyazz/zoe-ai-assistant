@@ -613,6 +613,38 @@ def _extract_complete_sentences(buffer: str) -> tuple[list[str], str]:
     return complete, buffer[last_end:]
 
 
+_FIRST_UNIT_MIN_CHARS = 12  # don't synthesize a tiny stub like "So,"
+_FIRST_UNIT_SOFT_CAP = 40   # flush at a word boundary by here even without punctuation
+
+
+def _fast_first_audio_enabled() -> bool:
+    return os.environ.get("ZOE_VOICE_FAST_FIRST_AUDIO", "1").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _extract_first_unit(buffer: str) -> tuple[Optional[str], str]:
+    """Pull the FIRST speakable unit out of a streaming buffer as early as possible.
+
+    Time-to-first-audio dominates how fast a voice reply *feels*. Waiting for a full
+    sentence (`.!?`) before the first synth adds ~1-2s of silence at 22 tok/s. For
+    the first chunk only, break on the first clause boundary (, ; : — or sentence
+    end) once we have a few words, or at a word boundary by the soft cap — so audio
+    starts almost immediately. Punctuation must be followed by space/end so decimals
+    ('twelve point four') and 'a.m.' don't split. Returns (unit|None, remainder)."""
+    stripped = buffer.lstrip()
+    if len(stripped) < _FIRST_UNIT_MIN_CHARS:
+        return None, buffer
+    m = re.search(r"(.{%d,}?[,;:.!?—–])(?:\s|$)" % _FIRST_UNIT_MIN_CHARS, buffer, re.DOTALL)
+    if m:
+        return m.group(1).strip(), buffer[m.end():]
+    # No clause break yet but the buffer is getting long — flush at a word boundary
+    # so the first audio doesn't stall behind a long opening clause.
+    if len(buffer) >= _FIRST_UNIT_SOFT_CAP:
+        cut = buffer.rfind(" ", _FIRST_UNIT_MIN_CHARS, _FIRST_UNIT_SOFT_CAP)
+        if cut > 0:
+            return buffer[:cut].strip(), buffer[cut:]
+    return None, buffer
+
+
 def _skybridge_only() -> bool:
     """When set, voice never navigates the panel to legacy domain pages.
 
@@ -4015,6 +4047,13 @@ async def voice_command(
                             except Exception:
                                 pass
                         token_buf += delta
+                        # Snap the FIRST audio out on a short clause so the reply
+                        # starts almost immediately instead of after a full sentence.
+                        if _t_first_audio is None and _fast_first_audio_enabled():
+                            first_unit, token_buf = _extract_first_unit(token_buf)
+                            if first_unit:
+                                async for out_chunk in _emit_sentence(first_unit):
+                                    yield out_chunk
                         ready, token_buf = _extract_complete_sentences(token_buf)
                         for sentence in ready:
                             async for out_chunk in _emit_sentence(sentence):
