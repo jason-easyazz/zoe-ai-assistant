@@ -4603,10 +4603,18 @@ async def _prewarm_brain_for_panel(panel_id: str) -> None:
         if not user_id:
             return
         import zoe_core_client
+        _t0 = time.monotonic()
         warmed = await zoe_core_client.prewarm(user_id, session_id)
-        logger.debug("voice/wake brain prewarm panel=%s user=%s warmed=%s", panel_id, user_id, warmed)
+        _ms = int((time.monotonic() - _t0) * 1000)
+        # INFO (not debug): the only way to know on-device whether the spawn
+        # actually overlaps the speech window — if this logs AFTER the turn's
+        # first token, prewarm bought nothing and the cost is elsewhere (prefill).
+        logger.info(
+            "voice/wake brain prewarm panel=%s user=%s warmed=%s spawn_ms=%d",
+            panel_id, user_id, warmed, _ms,
+        )
     except Exception as exc:  # never let prewarm affect the wake path
-        logger.debug("voice/wake brain prewarm failed (non-fatal): %s", exc)
+        logger.warning("voice/wake brain prewarm failed (non-fatal): %s", exc)
 
 
 @router.post("/wake")
