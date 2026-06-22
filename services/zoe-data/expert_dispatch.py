@@ -340,9 +340,25 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
     text = (text or "").strip()
     if not text:
         return None
-    # Question → recall (unless it's an explicit "remember that …").
-    explicit_store = bool(re.search(r"\b(remember|note that|don'?t forget|make a note)\b", text, re.IGNORECASE))
-    if _QUESTION_RE.search(text) and not explicit_store:
+    # STORE (imperative teach) vs RECALL (a question). The tricky case: "Do you
+    # remember what my mum's name is?" is a RECALL question that happens to contain
+    # the word 'remember' — it must not be mistaken for the imperative "remember
+    # that …", or the question itself gets stored verbatim as a fact (observed
+    # on-device). _QUESTION_RE also didn't know the "do YOU remember/recall/know"
+    # form (only "do i"), so such questions slipped straight through to store.
+    low = text.lower()
+    asks_recall = bool(re.search(
+        r"\b(do|did|does|can|could|would|will)\s+(you|ya)\s+"
+        r"(remember|recall|recollect|know|have)\b", low))
+    is_question = asks_recall or bool(_QUESTION_RE.search(text)) or text.rstrip().endswith("?")
+    # Imperative teach only: a command to store, never a recall question. The
+    # asks_recall guard covers the "do you / do ya remember…?" forms (any pronoun);
+    # the lookbehinds also stop a bare "you/ya remember…" from reading as a command.
+    imperative_store = (not asks_recall) and (
+        bool(re.search(r"\b(note that|don'?t forget|make a note|keep in mind)\b", low))
+        or bool(re.search(r"(?<!you )(?<!ya )\bremember\b", low))
+    )
+    if is_question and not imperative_store:
         return await _run_expert(domain, text, user_id, session_id)
     # Statement → store the fact.
     # Idempotency: ingest dedups on user_turn_id, but the voice path rarely
