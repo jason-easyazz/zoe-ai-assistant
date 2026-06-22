@@ -317,19 +317,35 @@ async def prewarm(user_id: str, session_id: str) -> bool:
         return False
 
 
+# Per-turn brevity directive for voice. The Pi brain is a separate subprocess that
+# never sees `voice_mode` directly, and SOUL has no voice rule — so without this the
+# panel path got NO brevity signal and over-answered. Injected here so EVERY voice
+# caller (panel, LiveKit, chat voice-mode) is covered in one place.
+_VOICE_BREVITY = (
+    "[VOICE MODE] Answer in 1-2 short spoken sentences — this is read aloud. "
+    "No markdown, lists, headers, or code. Numbers in spoken form "
+    "(e.g. 'twenty-four degrees'). If asked for more than 3 items, give the first 3 "
+    "and offer to continue. Be warm but brief."
+)
+
+
 def _compose_message(
     message: str,
     *,
     history: list[dict] | None,
     db_memory_context: str | None,
     portrait: str | None,
+    voice_mode: bool = False,
 ) -> str:
     """Prepend any caller-supplied context the extensions don't already inject.
 
     Soul + per-turn memory packet come from the extensions; we only fold in the
-    extras chat.py passes (recent history, portrait, precomputed memory context).
+    extras chat.py passes (recent history, portrait, precomputed memory context),
+    and — for voice turns — a brevity directive so spoken replies stay short.
     """
     parts: list[str] = []
+    if voice_mode:
+        parts.append(_VOICE_BREVITY)
     if portrait:
         parts.append(f"[About you]\n{portrait.strip()}")
     if db_memory_context:
@@ -366,7 +382,8 @@ async def run_zoe_core_streaming(
     fallback handling applies (we never silently swallow a brain failure).
     """
     composed = _compose_message(
-        message, history=history, db_memory_context=db_memory_context, portrait=portrait
+        message, history=history, db_memory_context=db_memory_context,
+        portrait=portrait, voice_mode=voice_mode,
     )
     # Bound concurrent brain turns (see _MAX_CONCURRENCY). Acquire BEFORE creating
     # the worker so subprocess spawns are bounded too, not just generations.
