@@ -569,6 +569,18 @@ def _skybridge_only() -> bool:
     return os.environ.get("ZOE_SKYBRIDGE_ONLY", "").strip().lower() in ("1", "true", "yes", "on")
 
 
+def _status_card(title: str, summary: str) -> dict:
+    """A panel-renderable card for the voice domain summaries.
+
+    The panel's renderSkybridgeCardPayload only renders a card when the payload
+    carries `card`/`cards` (the {type,data} shape alone falls back to plain text).
+    A `status` card with NO specialized `source` renders a safe generic title+body
+    card (a `source` like weather_current would call renderWeather, which needs
+    structured props we don't have here and would render blank).
+    """
+    return {"component": "status", "props": {"title": title, "body": (summary or "")[:300], "level": "info"}}
+
+
 async def _broadcast_weather_ui(
     panel_id: str,
     summary: str = "Fetching weather...",
@@ -587,12 +599,15 @@ async def _broadcast_weather_ui(
             "panel_id": panel_id,
         },
     }
+    _wcard = _status_card("Weather", summary)
     card_action = {
         "id": f"voice_weather_card_{panel_id}_{delivery_key}",
         "action_type": "show_card",
         "payload": {
             "type": "weather",
             "data": {"summary": summary[:200]},
+            "card": _wcard,
+            "cards": [_wcard],
             "panel_id": panel_id,
         },
     }
@@ -687,12 +702,15 @@ async def _broadcast_calendar_ui(
             "panel_id": panel_id,
         },
     }
+    _ccard = _status_card("Calendar", summary)
     card_action = {
         "id": f"voice_calendar_card_{panel_id}_{delivery_key}",
         "action_type": "show_card",
         "payload": {
             "type": "calendar",
             "data": {"summary": summary[:200]},
+            "card": _ccard,
+            "cards": [_ccard],
             "panel_id": panel_id,
         },
     }
@@ -1080,12 +1098,15 @@ async def _broadcast_reminder_ui(
             "panel_id": panel_id,
         },
     }
+    _rcard = _status_card("Reminder", summary)
     card_action = {
         "id": f"voice_reminder_card_{panel_id}_{delivery_key}",
         "action_type": "show_card",
         "payload": {
             "type": "reminder",
             "data": {"summary": summary[:200]},
+            "card": _rcard,
+            "cards": [_rcard],
             "panel_id": panel_id,
         },
     }
