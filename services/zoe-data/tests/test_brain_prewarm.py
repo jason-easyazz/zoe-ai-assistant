@@ -27,6 +27,9 @@ class _FakeWorker:
         self._fail = fail
 
     async def _ensure_started(self):
+        # Model the real guard: no-op when a live subprocess already exists.
+        if self.proc is not None and self.proc.returncode is None:
+            return
         self.started += 1
         if self._fail:
             raise RuntimeError("spawn failed")
@@ -45,8 +48,8 @@ def test_prewarm_starts_the_worker(monkeypatch):
     assert w.started == 1 and w.proc is not None
 
 
-def test_prewarm_idempotent_via_ensure_started(monkeypatch):
-    # _ensure_started is a no-op when already running; prewarm twice still fine.
+def test_prewarm_idempotent_when_already_running(monkeypatch):
+    # Worker already has a live subprocess → prewarm is a no-op (no second spawn).
     w = _FakeWorker()
     w.proc = _FakeProc()
 
@@ -54,6 +57,7 @@ def test_prewarm_idempotent_via_ensure_started(monkeypatch):
         return w
     monkeypatch.setattr(zc, "_worker_for", _fake_worker_for)
     assert _run(zc.prewarm("u", "s")) is True
+    assert w.started == 0  # _ensure_started's guard skipped the spawn
 
 
 def test_prewarm_swallows_errors(monkeypatch):
