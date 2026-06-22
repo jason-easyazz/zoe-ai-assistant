@@ -49,7 +49,7 @@ _TIER0_DOMAIN = {
 # so the brain — now given the user's facts + portrait — owns recall and chat.
 CHANNEL_PROFILES: dict[str, dict[str, Any]] = {
     "chat":     {"run_tier0": True,  "allow_writes": False},
-    "voice":    {"run_tier0": False, "allow_writes": True, "defer_domains": {"people", "memory"}},
+    "voice":    {"run_tier0": False, "allow_writes": True, "defer_domains": frozenset({"people", "memory"})},
     "livekit":  {"run_tier0": True,  "allow_writes": True},
     "telegram": {"run_tier0": True,  "allow_writes": True},
 }

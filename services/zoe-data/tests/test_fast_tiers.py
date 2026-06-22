@@ -106,6 +106,9 @@ def test_other_channels_still_fast_path_people(monkeypatch):
         return expert_dispatch.DispatchResult(domain=domain, reply="recalled")
 
     monkeypatch.setattr(expert_dispatch, "dispatch", _fake_dispatch)
+    # telegram runs Tier-0, so stub detect_intent to miss deterministically (don't
+    # rely on the live implementation not matching) → falls through to dispatch.
+    _stub_detect(monkeypatch, None)
     out = _run(fast_tiers.resolve("what is my dad's name", "u", "s", channel="telegram",
                                   router_decision={"domain": "people", "score": 0.95}))
     assert out is not None and out.domain == "people"
