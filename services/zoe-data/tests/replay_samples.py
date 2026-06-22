@@ -90,6 +90,8 @@ def _classify(transcript: str, reply: str, outcome: str) -> str:
         return "CANT_DO"
     if "extractor empty" in outcome:
         return "CANT_DO"
+    if outcome == "brain" and not reply:
+        return "CANT_DO"  # brain ran but produced no spoken text → couldn't answer
     if outcome == "→ brain":  # fast path deferred; brain not run — not a confirmed OK
         return "DEFERRED"
     return "OK"
