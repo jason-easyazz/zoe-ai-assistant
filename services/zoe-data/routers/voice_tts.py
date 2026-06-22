@@ -420,6 +420,23 @@ def _clean_for_speech(text: str) -> str:
     return t
 
 
+# Pooled client for the Kokoro sidecar, reused across sentences so each spoken
+# sentence doesn't pay a fresh TCP/connection setup (the sidecar is hit once per
+# sentence on the streaming voice path — per-call AsyncClient added fixed latency
+# to every inter-sentence boundary).
+_KOKORO_HTTP: "Optional[httpx.AsyncClient]" = None
+
+
+def _kokoro_http_client() -> "httpx.AsyncClient":
+    global _KOKORO_HTTP
+    if _KOKORO_HTTP is None or _KOKORO_HTTP.is_closed:
+        _KOKORO_HTTP = httpx.AsyncClient(
+            timeout=15.0,
+            limits=httpx.Limits(max_keepalive_connections=4, keepalive_expiry=60.0),
+        )
+    return _KOKORO_HTTP
+
+
 async def _synthesize_kokoro_sidecar(text: str) -> Optional[bytes]:
     """Synthesize via Kokoro PyTorch sidecar (GPU, natural af_sky voice).
 
@@ -432,15 +449,15 @@ async def _synthesize_kokoro_sidecar(text: str) -> Optional[bytes]:
     sidecar_url = os.environ.get("ZOE_KOKORO_SIDECAR_URL", "http://127.0.0.1:10201").rstrip("/")
     voice = os.environ.get("ZOE_KOKORO_VOICE", "af_sky").strip() or "af_sky"
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            r = await client.post(
-                f"{sidecar_url}/synthesize",
-                json={"text": text, "voice": voice},
-            )
-            if r.status_code >= 400 or not r.content:
-                logger.debug("kokoro-sidecar HTTP %s", r.status_code)
-                return None
-            return r.content
+        client = _kokoro_http_client()
+        r = await client.post(
+            f"{sidecar_url}/synthesize",
+            json={"text": text, "voice": voice},
+        )
+        if r.status_code >= 400 or not r.content:
+            logger.debug("kokoro-sidecar HTTP %s", r.status_code)
+            return None
+        return r.content
     except Exception as exc:
         logger.debug("kokoro-sidecar unavailable: %s", exc)
         return None
