@@ -68,7 +68,7 @@ def test_voice_brain_memory_injected():
 
 # ── 5. NO STORE-QUESTION: recall questions are answered, never stored (#756) ─
 # Regressed on-device: "Do you remember my mum's name?" got saved as a fact.
-def test_recall_question_is_not_stored():
+def test_recall_question_is_not_stored(monkeypatch):
     import expert_dispatch as xd
     ingested: list[str] = []
 
@@ -79,20 +79,14 @@ def test_recall_question_is_not_stored():
             return []
 
     import memory_service
-    _orig = memory_service.get_memory_service
-    memory_service.get_memory_service = lambda: _Svc()
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: _Svc())
     recalled: list[str] = []
 
     async def _fake_recall(domain, text, user_id, session_id):
         recalled.append(text)
         return "RECALLED"
 
-    _orig_re = xd._run_expert
-    xd._run_expert = _fake_recall
-    try:
-        out = asyncio.run(xd.store_fact("people", "Do you remember what my mum's name is?", "jason"))
-    finally:
-        memory_service.get_memory_service = _orig
-        xd._run_expert = _orig_re
+    monkeypatch.setattr(xd, "_run_expert", _fake_recall)
+    out = asyncio.run(xd.store_fact("people", "Do you remember what my mum's name is?", "jason"))
     assert ingested == [], "a recall QUESTION was stored as a fact again"
     assert out == "RECALLED"
