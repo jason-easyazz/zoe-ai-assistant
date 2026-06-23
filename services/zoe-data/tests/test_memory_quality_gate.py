@@ -127,7 +127,9 @@ class _FakeSvc:
 
     async def ingest(self, text, **kw):
         self.ingested.append((text, kw))
-        return object()
+        # Mirror MemoryService.ingest: return a ref with a distinct id so the
+        # supersede path can tell the new row apart from the archived old one.
+        return _Row("new", text)
 
     async def search(self, *a, **k):
         return self._search_rows
