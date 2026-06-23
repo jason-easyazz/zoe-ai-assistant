@@ -365,13 +365,18 @@ async def _ingest_or_supersede(svc, text: str, *, user_id: str, source: str,
         old_id = None
 
     metadata = {"supersedes": old_id} if old_id else None
-    await svc.ingest(
+    ref = await svc.ingest(
         text, user_id=user_id, source=source,
         session_id=session_id, user_turn_id=user_turn_id,
         memory_type=memory_type, confidence=confidence, status="approved",
         tags=tags, metadata=metadata,
     )
-    if old_id:
+    new_id = getattr(ref, "id", None)
+    # Only archive the old row if the ingest actually wrote a DISTINCT new row.
+    # ingest dedups on a text-derived mem_id, so a near-identical value can map to
+    # the same id as old_id (or be dropped, ref=None) — archiving then would delete
+    # the only copy of the fact. Guard against that.
+    if old_id and new_id and new_id != old_id:
         try:
             await svc.review(old_id, decision="archive", actor=source,
                              note="superseded by newer conversational fact")
@@ -418,8 +423,11 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
     # Write-quality gate (mem0-style): even past the store-vs-recall split, drop
     # candidates that aren't shaped like a storable personal fact (interrogative
     # leftovers, LLM meta-rambling, empty/too-short). Conservative — leans ACCEPT.
-    from memory_quality import is_storable_fact
-    storable, reason = is_storable_fact(text)
+    try:
+        from memory_quality import is_storable_fact
+        storable, reason = is_storable_fact(text)
+    except Exception:
+        storable, reason = True, ""  # gate unavailable → degrade to plain store
     if not storable:
         _record_quality_reject("voice_fact", reason, text)
         # Not a fact → treat as a recall/conversational turn so the user still

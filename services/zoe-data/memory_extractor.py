@@ -241,7 +241,10 @@ async def extract_and_ingest(
     base_turn_id = hashlib.sha1(user_message.encode("utf-8", "ignore")).hexdigest()[:16]
     status = "approved" if auto_approve else "pending"
 
-    from memory_quality import is_storable_fact
+    try:
+        from memory_quality import is_storable_fact
+    except Exception:
+        is_storable_fact = lambda _t: (True, "")  # gate unavailable → degrade to plain store
 
     for idx, c in enumerate(candidates):
         # Write-quality gate (mem0-style): drop candidates that aren't shaped
