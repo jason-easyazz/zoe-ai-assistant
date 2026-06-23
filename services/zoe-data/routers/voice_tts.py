@@ -101,20 +101,99 @@ async def _load_voice_history(session_id: str, limit: int = 3) -> list[dict]:
     return []
 
 
-async def _voice_brain_memory(user_id: str) -> tuple[Optional[str], Optional[str]]:
+# Query-relevant recall packet sizing. A handful of the most relevant facts is
+# enough for the brain to answer a recall question; sending the whole metadata
+# dump (~1264 chars) is both slow and noisy. Keep this lean — it sits on the
+# brain-turn critical path.
+_VOICE_RECALL_SEARCH_LIMIT = 8   # one semantic search; re-ranked by hotness
+_VOICE_RECALL_MAX_FACTS = 6      # facts that actually make it into the block
+_VOICE_RECALL_FACT_CHARS = 160   # per-fact truncation so one long memory can't bloat it
+
+
+async def _voice_recall_packet(text: str, user_id: str) -> Optional[str]:
+    """Build a COMPACT, QUERY-RELEVANT "[What you remember]" block for a voice
+    brain turn from the turn TEXT.
+
+    Replaces the query-blind metadata dump on the read path: one
+    `MemoryService.search` call (semantic + hotness re-ranking), deduped and
+    truncated to a few hundred chars of only the facts relevant to what was asked.
+    Falls back to the full for-prompt dump when search returns nothing (e.g. a
+    chit-chat turn with no recall intent, or an embedder hiccup) so recall never
+    silently degrades. Best-effort: guest-safe and never raises."""
+    query = (text or "").strip()
+    if not query:
+        # No turn text (e.g. prewarm) — warm/return the fallback dump instead so
+        # the underlying facts cache stays primed.
+        return await _voice_recall_fallback(user_id)
+    try:
+        from memory_service import get_memory_service, is_guest_memory_user
+        if is_guest_memory_user(user_id):
+            return None
+        svc = get_memory_service()
+        refs = await svc.search(query, user_id=user_id, limit=_VOICE_RECALL_SEARCH_LIMIT)
+    except Exception as exc:
+        logger.debug("voice recall search failed (non-fatal): %s", exc)
+        refs = None
+
+    if not refs:
+        # Search found nothing relevant — fall back to the for-prompt dump so a
+        # recall question still has facts to draw on.
+        return await _voice_recall_fallback(user_id)
+
+    seen: set[str] = set()
+    lines: list[str] = []
+    for ref in refs:
+        fact = (getattr(ref, "text", "") or "").strip()
+        if not fact:
+            continue
+        line = fact[:_VOICE_RECALL_FACT_CHARS].strip()
+        # Dedup on the TRUNCATED line that actually gets emitted — two long facts
+        # identical in their first _VOICE_RECALL_FACT_CHARS chars would otherwise
+        # produce duplicate output lines.
+        key = re.sub(r"\s+", " ", line.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        lines.append("- " + line)
+        if len(lines) >= _VOICE_RECALL_MAX_FACTS:
+            break
+    if not lines:
+        return await _voice_recall_fallback(user_id)
+    return "[What you remember]\n" + "\n".join(lines)
+
+
+async def _voice_recall_fallback(user_id: str) -> Optional[str]:
+    """Full for-prompt metadata dump (the previous behaviour). Used when the
+    query-relevant search yields nothing, and to warm the facts cache on prewarm.
+    Best-effort / never raises."""
+    try:
+        from zoe_agent import _mempalace_load_user_facts
+        return (await _mempalace_load_user_facts(user_id)) or None
+    except Exception as exc:
+        logger.debug("voice recall fallback load failed (non-fatal): %s", exc)
+        return None
+
+
+async def _voice_brain_memory(
+    user_id: str, text: Optional[str] = None
+) -> tuple[Optional[str], Optional[str]]:
     """Load (db_memory_context, portrait) for a voice brain turn.
 
     Voice no longer fast-paths people/memory recall (it was slow and mis-stored
     questions as facts), so the brain must answer recall itself. Unlike chat —
     where the memory.ts extension injects the for-prompt packet — the voice path
     calls the brain directly, so we inject the user's facts + portrait here or the
-    brain would have no memory to recall from. Reuses the same builders as chat;
-    best-effort (guest-safe / never raises)."""
+    brain would have no memory to recall from.
+
+    When `text` (the turn transcript) is given, db_memory is a COMPACT
+    query-relevant recall packet built from that text (token-efficient; only the
+    facts relevant to what was asked). When `text` is None — the wake prewarm
+    path — it falls back to the full for-prompt dump, which also warms the shared
+    facts cache for the real turn. Best-effort (guest-safe / never raises)."""
     db_memory: Optional[str] = None
     portrait: Optional[str] = None
     try:
-        from zoe_agent import _mempalace_load_user_facts
-        db_memory = (await _mempalace_load_user_facts(user_id)) or None
+        db_memory = await _voice_recall_packet(text or "", user_id)
     except Exception as exc:
         logger.debug("voice brain memory load failed (non-fatal): %s", exc)
     try:
@@ -4034,7 +4113,7 @@ async def voice_command(
                         logger.debug("voice/command stream processing acknowledgement failed: %s", ack_exc)
 
                     _voice_history = await _load_voice_history(session_id, limit=3)
-                    _v_db_memory, _v_portrait = await _voice_brain_memory(effective_user)
+                    _v_db_memory, _v_portrait = await _voice_brain_memory(effective_user, text)
                     _v_domain_ctx = await _voice_domain_context(_router_decision, effective_user)
                     async for delta in brain_streaming(
                         text, session_id, user_id=effective_user,
@@ -4143,7 +4222,7 @@ async def voice_command(
         collected: list[str] = []
 
         _voice_history_nc = await _load_voice_history(session_id, limit=3)
-        _v_db_memory_nc, _v_portrait_nc = await _voice_brain_memory(effective_user)
+        _v_db_memory_nc, _v_portrait_nc = await _voice_brain_memory(effective_user, text)
         _v_domain_ctx_nc = await _voice_domain_context(_router_decision, effective_user)
         _v_db_memory_nc = _merge_brain_context(_v_db_memory_nc, _v_domain_ctx_nc)
 
