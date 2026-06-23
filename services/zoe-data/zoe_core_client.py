@@ -31,7 +31,7 @@ import time
 import uuid
 from collections import OrderedDict
 from pathlib import Path
-from typing import AsyncIterator, Mapping
+from typing import Any, AsyncIterator, Mapping
 
 from pi_intent_classifier import (
     _assistant_text_from_rpc_event,
@@ -120,6 +120,104 @@ def _worker_env(user_id: str) -> dict[str, str]:
         env["ZOE_INTERNAL_TOKEN"] = token
     env.setdefault("ZOE_CORE_ALLOW_WRITES", "true")
     return env
+
+
+def _toolcall_block_from_amev(amev: Mapping) -> "Mapping | None":
+    """Pull the toolCall block out of a toolcall_start amev frame.
+
+    Schema (verified live): amev.partial.content[contentIndex] == {type:"toolCall",
+    id, name, arguments, ...}. We index by contentIndex when present; otherwise we
+    scan partial.content for the first toolCall block. Returns None (skip the
+    sentinel) on any missing/odd shape rather than raising.
+    """
+    partial = amev.get("partial")
+    if not isinstance(partial, Mapping):
+        return None
+    content = partial.get("content")
+    if not isinstance(content, (list, tuple)):
+        return None
+    idx = amev.get("contentIndex")
+    if isinstance(idx, int) and 0 <= idx < len(content):
+        block = content[idx]
+        if isinstance(block, Mapping) and block.get("type") == "toolCall":
+            return block
+    for block in content:
+        if isinstance(block, Mapping) and block.get("type") == "toolCall":
+            return block
+    return None
+
+
+def _tool_args_sentinels(event: Mapping) -> "list[str]":
+    """Build __TOOL__ phase=args sentinels from a message_end event.
+
+    Schema: event.message.content == [{type:"toolCall", id, name, arguments:{...}}].
+    Emits one sentinel per toolCall block carrying the FULL arguments. Defensive:
+    skips blocks missing id/name, never raises.
+    """
+    out: list[str] = []
+    message = event.get("message")
+    if not isinstance(message, Mapping):
+        return out
+    content = message.get("content")
+    if not isinstance(content, (list, tuple)):
+        return out
+    for block in content:
+        if not isinstance(block, Mapping) or block.get("type") != "toolCall":
+            continue
+        tc_id = block.get("id")
+        tc_name = block.get("name")
+        if not tc_id or not tc_name:
+            continue
+        out.append(
+            "__TOOL__:" + json.dumps({
+                "phase": "args",
+                "id": str(tc_id),
+                "name": str(tc_name),
+                "args": block.get("arguments") or {},
+            })
+        )
+    return out
+
+
+def _tool_result_sentinel(event: Mapping) -> "str | None":
+    """Build a __TOOL__ phase=result sentinel from a tool_execution_end event.
+
+    The result field's exact shape was not pinned in the captured schema, so we
+    probe the likely carriers in order — top-level ``result``/``output``, then a
+    nested ``result.content``/``result.text`` — and stringify whatever we find.
+    The tool-call id is read from ``id``/``toolCallId``/``callId`` if present.
+    Returns None when nothing useful is carried (so we don't emit an empty card).
+    """
+    tc_id = event.get("id") or event.get("toolCallId") or event.get("callId")
+    result: Any = None
+    for key in ("result", "output", "content"):
+        if event.get(key) is not None:
+            result = event[key]
+            break
+    if isinstance(result, Mapping):
+        # Unwrap a nested {content|text|output: ...} result envelope.
+        for key in ("content", "text", "output", "result"):
+            if result.get(key) is not None:
+                result = result[key]
+                break
+    if result is None and tc_id is None:
+        return None
+    payload: dict[str, Any] = {"phase": "result"}
+    if tc_id is not None:
+        payload["id"] = str(tc_id)
+    if result is not None:
+        payload["result"] = result if isinstance(result, str) else _stringify(result)
+    return "__TOOL__:" + json.dumps(payload)
+
+
+def _stringify(value: Any) -> str:
+    """Best-effort compact string for a tool result of unknown shape."""
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return str(value)
 
 
 class _ZoeCoreWorker:
@@ -229,16 +327,45 @@ class _ZoeCoreWorker:
             # terminal handling below instead of being skipped by the `continue`
             # (which would hang the turn for the full idle timeout).
             if etype == "message_update" and isinstance(amev, Mapping):
-                if amev.get("type") == "text_delta":
+                amev_type = amev.get("type")
+                if amev_type == "text_delta":
                     delta = str(amev.get("delta") or "")
                     if delta:
                         emitted += delta
                         streamed_any = True
                         yield delta
+                # Surface "what Zoe is doing" as sentinel markers so chat.py can map
+                # them to AG-UI tool/step events. These are NOT spoken text — they
+                # ride alongside the text stream and are parsed (and stripped) by the
+                # sentinel handlers in chat.py. Be defensive: a malformed frame skips
+                # its sentinel rather than crashing the turn.
+                elif amev_type == "thinking":
+                    thinking = str(amev.get("thinking") or "")
+                    if thinking:
+                        yield "__THINKING__:" + thinking
+                elif amev_type == "toolcall_start":
+                    tc = _toolcall_block_from_amev(amev)
+                    if tc is not None:
+                        tc_id = tc.get("id")
+                        tc_name = tc.get("name")
+                        if tc_id and tc_name:
+                            yield "__TOOL__:" + json.dumps(
+                                {"phase": "start", "id": str(tc_id), "name": str(tc_name)}
+                            )
                 # Every message_update (text_start/delta/end, thinking, toolcall) is
                 # fully handled here — never fall through to the message-field path,
                 # which re-emits the first chunk (the "YouYou" double-emit).
                 continue
+            # ── Tool activity surfacing (top-level event types, NOT under amev) ──
+            # message_end carries the COMPLETE tool-call args; tool_execution_end
+            # carries the result. Both are mapped to __TOOL__ sentinels for chat.py.
+            if etype == "message_end":
+                for sentinel in _tool_args_sentinels(event):
+                    yield sentinel
+            elif etype == "tool_execution_end":
+                sentinel = _tool_result_sentinel(event)
+                if sentinel is not None:
+                    yield sentinel
             # Only fall back to the whole-message field when NOTHING has streamed
             # for this turn yet. Once text_delta chunks have streamed, a terminal
             # message/text_end/agent_end event re-delivers the COMPLETE message;
