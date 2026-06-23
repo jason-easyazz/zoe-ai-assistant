@@ -14,9 +14,15 @@ Greptile should review Zoe as a local-first, multi-user assistant with a host-ru
 
 ## Architecture
 
+- **`docs/CANONICAL.md` is the live/dead authority.** It declares the locked rocks
+  (brain = Gemma 4 E4B-QAT+MTP, STT = Moonshine, TTS = Kokoro) and which systems are
+  canonical vs retired. Flag any change that swaps a rock, extends/resurrects a retired
+  system, or re-introduces a `docs/archive` graveyard. The rocks are enforced by
+  `services/zoe-data/tests/test_canonical_invariants.py` — a swap must update that test
+  too, in the same PR, on purpose.
 - Production chat API is `services/zoe-data/routers/chat.py`; do not fork it.
 - Natural-language understanding belongs in `intent_router.py`, Zoe Agent, Hermes, or OpenClaw, not broad ad hoc branches in `chat.py`.
-- `services/zoe-core/` is Zoe's Pi-agent core (the reasoning/orchestration brain on Gemma 4) — new core features belong here. It orchestrates and delegates; it must not absorb `zoe-data`/`zoe-auth`/`zoe-database` code or become a monolith. The OLD `zoe-core` Docker monolith (replaced by `zoe-data`) is retired and archived under `docs/archive/retired-services/zoe-core/`; do not revive that legacy tree.
+- `services/zoe-core/` is Zoe's Pi-agent core (the reasoning/orchestration brain on Gemma 4) — new core features belong here. It orchestrates and delegates; it must not absorb `zoe-data`/`zoe-auth`/`zoe-database` code or become a monolith. The OLD `zoe-core` Docker monolith (replaced by `zoe-data`) is retired — do not revive it (it lives only in git history now, not in the tree).
 - Host `llama-server`, Hermes, OpenClaw, and Multica are local services; avoid Docker-only assumptions in core code.
 
 ## Data Safety

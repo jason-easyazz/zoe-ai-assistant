@@ -1,0 +1,86 @@
+---
+type: canonical-declaration
+audience: human-first (Jason) + all agents — READ FIRST, with VISION
+status: LOCKED — changing anything here is a deliberate act, not a drive-by edit
+---
+# Zoe — Canonical Systems (the locked-in truth) 🔒
+
+> **What is actually live, and what is settled.** If a system isn't listed here as
+> canonical, it is **not load-bearing** — do not extend it, build on it, or resurrect
+> it. Retired systems are **removed**, not kept around to distract.
+>
+> This is the antidote to drift: we kept re-deciding the models and voice because the
+> repo never said, in one place, *what was locked*. Now it does. Read this with
+> [`VISION.md`](VISION.md) (the why). The rocks below are enforced by a CI test
+> (`services/zoe-data/tests/test_canonical_invariants.py`) — you cannot quietly swap one.
+
+## ⚓ The Rocks — settled, do not swap (only optimise *around* them)
+
+These are fixed. They have been re-litigated enough times that they are now **locked**.
+Changing one means editing this file **and** the lock-in test, in a PR, on purpose.
+
+| Role | Canonical choice | Where it actually lives |
+|---|---|---|
+| **Brain (LLM)** | **Gemma 4 E4B-QAT + MTP drafter** | host-native `llama-server` on `:11434` → `~/models/gemma4-e4b-qat/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf` (+ `mtp-gemma-4-E4B-it.gguf`) |
+| **STT** | **Moonshine v2 Medium** | `services/zoe-data` (`warm_moonshine` warmup on startup) |
+| **TTS** | **Kokoro** (ONNX, GPU) | `/api/voice/synthesize` waterfall: Kokoro → Edge TTS → espeak-ng |
+
+<!-- LOCKED-ROCKS: machine-readable; the CI test parses this block. Do not edit casually. -->
+```yaml
+rocks:
+  brain:
+    family: "Gemma 4"
+    variant: "E4B-QAT"
+    drafter: "MTP"
+    serving: "host-native llama-server :11434"
+  stt:
+    name: "Moonshine v2 Medium"
+    loader_marker: "warm_moonshine"
+  tts:
+    name: "Kokoro"
+```
+
+## 🟢 Canonical live systems — the spine
+
+The Pi-as-brain path and the services it depends on. These are real and load-bearing.
+
+- **`services/zoe-core`** — the **Pi agent** = Zoe's brain (TypeScript coding-agent + `extensions/memory.ts`, the single memory seam).
+- **`services/zoe-data`** — FastAPI app (`:8000`): voice/chat path, memory router, Skybridge.
+- **`zoe-database`** — PostgreSQL (asyncpg, `$1` placeholders). Relational + temporal memory.
+- **Chroma / MemPalace** — vector store for memory (raw-first).
+- **`llama-server`** (host-native, `:11434`) — serves the brain rock above.
+- **`services/zoe-ui`** — the touch/web UI + Skybridge front-end.
+- **`zoe-auth`**, **`zoe-cloudflared`** — auth + edge tunnel (infra).
+
+## 🧩 Live modules (don't mistake these for dead)
+
+Running as containers today — **keep**:
+- `modules/zoe-music` → `zoe-music-assistant`
+- `modules/questionable-decisions` → `zoe-qd-game`
+- `modules/orbit` → `zoe-orbit` (wired in `docker-compose.modules.yml`)
+
+## 🟡 Needs a per-item decision (NOT declared dead — ask Jason)
+
+Present in `modules/` but with **no live container and no in-tree referrers**. Candidates
+for retirement, but only after Jason confirms — some may be paused, not abandoned:
+- `modules/agent-zero`, `modules/jag-board`, `modules/omnigent`
+
+## 🔴 Retired — do not resurrect
+
+- **`docs/archive/`** — removed from the working tree (2026-06-24). Every byte is still
+  in git history; recover with `git log -- docs/archive` if ever needed. Do **not**
+  re-add it to the tree.
+- **Dockerized `zoe-llamacpp`** — retired; the brain is host-native `llama-server`.
+- **wyoming-piper TTS** — retired (replaced by Kokoro to reclaim ~2 GB RAM).
+- **whisper as *primary* STT** — superseded by Moonshine (a faster-whisper worker may
+  exist as a secondary/fallback, but Moonshine is the rock).
+
+## 📏 The rule (how this stays locked)
+
+1. **Not listed here = not load-bearing.** Don't build on, extend, or cite retired systems.
+2. **Swapping a rock is deliberate.** Edit this file *and* `test_canonical_invariants.py`
+   in a reviewed PR — never a silent config change.
+3. **Retire by removing, not hoarding.** When something is superseded, delete it from the
+   tree (git keeps history) and move its row to *Retired* here. No `docs/archive` graveyard.
+4. **When in doubt, ask.** A "dead-looking" system may be live (two `modules/` were) —
+   verify with `docker ps` + referrer search before touching it.
