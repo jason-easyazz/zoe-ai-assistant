@@ -201,7 +201,35 @@ async def _voice_brain_memory(
         portrait = (await load_portrait(user_id)) or None
     except Exception as exc:
         logger.debug("voice brain portrait load failed (non-fatal): %s", exc)
+    # The user's NAME is identity (who they authenticated as), NOT a memory fact —
+    # so "what's my name" is answered from auth, never from recall. Ground every
+    # brain turn in who's speaking by prepending it to the [About you] block.
+    identity = await _voice_user_identity(user_id)
+    if identity:
+        line = f"You are speaking with {identity} (the signed-in user)."
+        portrait = f"{line}\n{portrait}" if portrait else line
     return db_memory, portrait
+
+
+async def _voice_user_identity(user_id: str) -> Optional[str]:
+    """The signed-in user's display name from the identity (users) table — NOT a
+    memory fact. Memory is per-user and the user authenticates as themselves, so
+    their name is known from auth. Skips guest/daemon/admin. Best-effort/never raises."""
+    if not user_id or user_id in ("guest", "voice-daemon", "family-admin", ""):
+        return None
+    try:
+        from db_pool import get_db_ctx
+        async with get_db_ctx() as db:
+            # db_pool is asyncpg → $1 placeholder + fetchrow (the aiosqlite '?'
+            # cursor style fails silently here).
+            row = await db.fetchrow("SELECT name FROM users WHERE id = $1", user_id)
+        name = ((row["name"] if row else "") or "").strip()
+        if name and name.islower():   # "jason" -> "Jason" for natural read-back
+            name = name.title()
+        return name or None
+    except Exception as exc:
+        logger.debug("voice identity load failed (non-fatal): %s", exc)
+        return None
 
 
 _VOICE_BRAIN_DOMAIN_CONTEXT = {
