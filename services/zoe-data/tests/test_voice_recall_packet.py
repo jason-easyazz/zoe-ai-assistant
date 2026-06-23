@@ -123,6 +123,16 @@ def test_guest_user_returns_none(monkeypatch):
     assert block is None
 
 
+def test_guest_prewarm_empty_text_is_guest_safe(monkeypatch):
+    # The wake-prewarm path calls with empty text. A guest must still leak nothing:
+    # the is_guest_memory_user guard runs before search, and _voice_brain_memory
+    # must return no db_memory for a guest on the empty-text path.
+    _patch_search(monkeypatch, [_Ref("should not be read")])
+    assert _run(v._voice_recall_packet("", "guest")) is None
+    db_memory, _portrait = _run(v._voice_brain_memory("guest", None))
+    assert db_memory is None
+
+
 def test_voice_brain_memory_uses_query_relevant_packet(monkeypatch):
     # The public entry point used by voice_command must thread the turn text into
     # the query-relevant packet.

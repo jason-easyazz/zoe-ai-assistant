@@ -146,11 +146,15 @@ async def _voice_recall_packet(text: str, user_id: str) -> Optional[str]:
         fact = (getattr(ref, "text", "") or "").strip()
         if not fact:
             continue
-        key = re.sub(r"\s+", " ", fact.lower())
+        line = fact[:_VOICE_RECALL_FACT_CHARS].strip()
+        # Dedup on the TRUNCATED line that actually gets emitted — two long facts
+        # identical in their first _VOICE_RECALL_FACT_CHARS chars would otherwise
+        # produce duplicate output lines.
+        key = re.sub(r"\s+", " ", line.lower())
         if key in seen:
             continue
         seen.add(key)
-        lines.append("- " + fact[:_VOICE_RECALL_FACT_CHARS].strip())
+        lines.append("- " + line)
         if len(lines) >= _VOICE_RECALL_MAX_FACTS:
             break
     if not lines:
