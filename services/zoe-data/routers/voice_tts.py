@@ -4722,7 +4722,16 @@ async def _prewarm_brain_for_panel(panel_id: str) -> None:
             return
         import zoe_core_client
         _t0 = time.monotonic()
-        warmed = await zoe_core_client.prewarm(user_id, session_id)
+        # Warm the brain worker (subprocess spawn) AND the user's facts cache
+        # concurrently, during the speech window. The cold facts read is ~1.4s and
+        # otherwise lands on the turn's critical path before the brain's first token;
+        # warming it here (cache TTL now outlives wake→turn) hides it on the first turn.
+        _pw = await asyncio.gather(
+            zoe_core_client.prewarm(user_id, session_id),
+            _voice_brain_memory(user_id),
+            return_exceptions=True,
+        )
+        warmed = _pw[0] if not isinstance(_pw[0], BaseException) else False
         _ms = int((time.monotonic() - _t0) * 1000)
         # INFO (not debug): the only way to know on-device whether the spawn
         # actually overlaps the speech window — if this logs AFTER the turn's
