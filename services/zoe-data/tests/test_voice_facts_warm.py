@@ -13,11 +13,20 @@ import pytest
 import routers.voice_tts as v
 
 
-def test_facts_cache_ttl_survives_wake_to_turn():
-    import zoe_agent
-    # Must outlive wake → speak → STT (several seconds) or the warm is pointless and
-    # every turn re-pays the cold read. Writes invalidate the cache, so long is safe.
-    assert zoe_agent._USER_FACTS_TTL_S >= 30, "facts cache TTL too short to survive to the turn"
+def test_facts_cache_ttl_default_survives_wake_to_turn():
+    # Check the SOURCE default, not the import-time value — a stray
+    # PI_USER_FACTS_CACHE_TTL_S in the test env (e.g. the old 2s operator default)
+    # would otherwise make zoe_agent load short and fail this spuriously. The default
+    # must outlive wake → speak → STT or the warm is pointless. (.env must not
+    # override it shorter; verified it doesn't.)
+    import os
+    import re
+    src = open(os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "zoe_agent.py"
+    ), encoding="utf-8").read()
+    m = re.search(r'PI_USER_FACTS_CACHE_TTL_S",\s*"([\d.]+)"', src)
+    assert m, "PI_USER_FACTS_CACHE_TTL_S default literal not found"
+    assert float(m.group(1)) >= 30, "facts cache default TTL too short to survive to the turn"
 
 
 def test_wake_prewarm_warms_facts_cache(monkeypatch):
