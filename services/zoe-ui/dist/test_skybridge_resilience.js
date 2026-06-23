@@ -14,10 +14,13 @@ const src = fs.readFileSync(path.join(__dirname, 'touch/js/skybridge.js'), 'utf8
 function extract(name) {
   const start = src.indexOf('function ' + name + '(');
   assert(start >= 0, 'missing function ' + name);
-  let i = src.indexOf('{', start), depth = 0;
-  for (let j = i; j < src.length; j++) {
+  let depth = 0;
+  for (let j = src.indexOf('{', start); j < src.length; j++) {
     if (src[j] === '{') depth++;
-    else if (src[j] === '}') { depth--; if (depth === 0) return src.slice(start, j + 1); }
+    else if (src[j] === '}') {
+      depth--;
+      if (depth === 0) return src.slice(start, j + 1);
+    }
   }
   throw new Error('unbalanced braces for ' + name);
 }
@@ -35,17 +38,22 @@ function advance(ms) {
   due.forEach(t => t.fn());
 }
 const STALL_WATCHDOG_MS = 25000;
+const MAX_STALL_DEFERRALS = 3;
 let stallWatchdog = null;
+let stallDeferrals = 0;
 let orbState = 'ambient';
 const console = { warn() {} };
 const document = { body: { style: { opacity: '' } } };
 let voice = { isRecording: false, speaking: false, serverBusy: false };
 let setStateCalls = [];
-function setState(s) { setStateCalls.push(s); orbState = s; if (s === 'ambient') clearStallWatchdog(); else armStallWatchdog(); }
+function setState(s) { setStateCalls.push(s); orbState = s; if (s === 'ambient') { stallDeferrals = 0; clearStallWatchdog(); } else armStallWatchdog(); }
 
+// Fail loudly if extraction captured a broken span (e.g. a future brace-in-string
+// edit) instead of silently eval-ing wrong code and passing.
+try { new Function(body); } catch (e) { throw new Error('extracted watchdog source did not parse: ' + e.message); }
 eval(body); // defines clearStallWatchdog / armStallWatchdog / recoverToAmbient in this scope
 
-function reset() { now = 0; timers = []; stallWatchdog = null; orbState = 'ambient'; document.body.style.opacity = ''; voice = { isRecording: false, speaking: false, serverBusy: false }; setStateCalls = []; }
+function reset() { now = 0; timers = []; stallWatchdog = null; stallDeferrals = 0; orbState = 'ambient'; document.body.style.opacity = ''; voice = { isRecording: false, speaking: false, serverBusy: false }; setStateCalls = []; }
 
 let pass = 0;
 function ok(label, cond) { assert(cond, 'FAIL: ' + label); console_log('  ok  - ' + label); pass++; }
@@ -92,5 +100,12 @@ setState('ambient');
 ok('ambient clears the watchdog', stallWatchdog === null);
 advance(STALL_WATCHDOG_MS + 1);
 ok('no spurious recovery after a clean turn', setStateCalls.filter(s => s === 'ambient').length === 1);
+
+// 6) a STUCK voice flag (e.g. socket crash leaving speaking=true) must not block
+//    recovery forever — recover unconditionally after MAX_STALL_DEFERRALS.
+reset();
+setState('thinking'); voice.speaking = true; // never cleared
+for (let k = 0; k <= MAX_STALL_DEFERRALS; k++) advance(STALL_WATCHDOG_MS + 1);
+ok('stuck voice flag still recovers after max deferrals', orbState === 'ambient');
 
 console_log('\n' + pass + ' checks passed');

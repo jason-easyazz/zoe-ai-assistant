@@ -18,9 +18,13 @@
     let idleTimer = null;
     let clockTicker = null;
     let stallWatchdog = null;
+    let stallDeferrals = 0;
     // Force-recover the panel if a turn goes silent for this long (re-armed on
     // every inbound event, so it only fires on a genuine stall, not a slow turn).
     const STALL_WATCHDOG_MS = 25000;
+    // Cap consecutive recovery deferrals (active mic/TTS) so a stuck voice flag
+    // can't permanently block the watchdog.
+    const MAX_STALL_DEFERRALS = 3;
 
     const queryParams = new URLSearchParams(location.search);
     const configuredIdleMs = Number(queryParams.get('idle_ms') || localStorage.getItem('skybridge_idle_return_ms') || 75000);
@@ -482,8 +486,15 @@
     }
 
     function recoverToAmbient(reason) {
-        // Genuine mic/TTS activity isn't a hang — give it another window.
-        if (voice && (voice.isRecording || voice.speaking)) { armStallWatchdog(); return; }
+        // Genuine mic/TTS activity isn't a hang — defer. But a stale voice flag
+        // (socket crash leaving isRecording/speaking stuck true) must not suppress
+        // the last-resort recovery forever: allow a few deferrals, then recover.
+        if (stallDeferrals < MAX_STALL_DEFERRALS && voice && (voice.isRecording || voice.speaking)) {
+            stallDeferrals++;
+            armStallWatchdog();
+            return;
+        }
+        stallDeferrals = 0;
         clearStallWatchdog();
         try { console.warn('[skybridge] recovering to ambient:', reason); } catch (_) {}
         // Never leave the UI invisible from an interrupted page-fade (touch-menu _nav).
@@ -690,7 +701,7 @@
         updateVoiceControl(state);
         // Arm the watchdog while a server-dependent turn is in flight; clear it
         // once we're back at rest.
-        if (state === 'ambient') clearStallWatchdog();
+        if (state === 'ambient') { stallDeferrals = 0; clearStallWatchdog(); }
         else armStallWatchdog();
     }
 
