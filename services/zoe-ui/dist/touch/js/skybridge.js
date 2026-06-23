@@ -17,6 +17,10 @@
     let authHydrationSequence = 0;
     let idleTimer = null;
     let clockTicker = null;
+    let stallWatchdog = null;
+    // Force-recover the panel if a turn goes silent for this long (re-armed on
+    // every inbound event, so it only fires on a genuine stall, not a slow turn).
+    const STALL_WATCHDOG_MS = 25000;
 
     const queryParams = new URLSearchParams(location.search);
     const configuredIdleMs = Number(queryParams.get('idle_ms') || localStorage.getItem('skybridge_idle_return_ms') || 75000);
@@ -186,6 +190,9 @@
     }
 
     function handleVoiceEvent(event) {
+        // Any inbound activity during an active turn proves the pipeline is alive
+        // — re-arm the stall watchdog so it only fires on real silence.
+        if (event && event.type !== 'ready' && orbState !== 'ambient') armStallWatchdog();
         if (event.type === 'ready') {
             setStatus('Ready on ' + event.mode);
         } else if (event.type === 'state') {
@@ -457,6 +464,34 @@
         setStatus('Ambient');
     }
 
+    // ── Turn resilience ─────────────────────────────────────────────────────
+    // A hung brain / dropped-but-open socket / interrupted page-fade could leave
+    // the panel stuck — spinning in "thinking" forever, or invisible (body left
+    // at opacity 0 by an aborted nav). These guarantee the panel always returns
+    // to a usable ambient state and is never left invisible.
+    function clearStallWatchdog() {
+        if (stallWatchdog) { clearTimeout(stallWatchdog); stallWatchdog = null; }
+    }
+
+    function armStallWatchdog() {
+        clearStallWatchdog();
+        stallWatchdog = setTimeout(function () {
+            stallWatchdog = null;
+            recoverToAmbient('stall-watchdog');
+        }, STALL_WATCHDOG_MS);
+    }
+
+    function recoverToAmbient(reason) {
+        // Genuine mic/TTS activity isn't a hang — give it another window.
+        if (voice && (voice.isRecording || voice.speaking)) { armStallWatchdog(); return; }
+        clearStallWatchdog();
+        try { console.warn('[skybridge] recovering to ambient:', reason); } catch (_) {}
+        // Never leave the UI invisible from an interrupted page-fade (touch-menu _nav).
+        if (document.body.style.opacity !== '') document.body.style.opacity = '';
+        if (voice) { try { voice.serverBusy = false; } catch (_) {} }
+        if (orbState !== 'ambient') setState('ambient');
+    }
+
     function startClockTicker() {
         updateAllClocks();
         clockTicker = setInterval(updateAllClocks, 1000);
@@ -653,6 +688,10 @@
         }
         setStatus(state.charAt(0).toUpperCase() + state.slice(1));
         updateVoiceControl(state);
+        // Arm the watchdog while a server-dependent turn is in flight; clear it
+        // once we're back at rest.
+        if (state === 'ambient') clearStallWatchdog();
+        else armStallWatchdog();
     }
 
     function canUseMicrophone() {

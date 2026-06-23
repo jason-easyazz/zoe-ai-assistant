@@ -526,6 +526,9 @@ html.dark-mode .ztm-ctx-item { color: rgba(255,255,255,0.88); border-bottom-colo
         document.body.style.transition = 'opacity 0.22s';
         document.body.style.opacity = '0';
         setTimeout(() => { window.location.href = target; }, 210);
+        // Failsafe: if the navigation doesn't actually unload this page (same-URL,
+        // blocked, or cancelled), never leave the UI stuck invisible.
+        setTimeout(() => { document.body.style.opacity = ''; }, 1500);
     }
 
     function _normalizeTouchPath(input) {
