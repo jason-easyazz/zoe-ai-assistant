@@ -30,8 +30,10 @@ git -C "$LIVE" pull --ff-only origin main
 echo "▶ restarting $SERVICE…"
 systemctl --user restart "$SERVICE"
 
+PORT="${ZOE_PORT:-8000}"
+code=""   # init before the loop so `set -u` can't trip if it never runs
 for _ in $(seq 1 45); do
-    code="$(curl -s -o /dev/null -w '%{http_code}' -m 3 http://127.0.0.1:8000/health || true)"
+    code="$(curl -s -o /dev/null -w '%{http_code}' -m 3 "http://127.0.0.1:${PORT}/health" || true)"
     [[ "$code" == "200" ]] && break
     sleep 2
 done
