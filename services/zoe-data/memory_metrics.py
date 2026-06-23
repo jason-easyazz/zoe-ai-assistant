@@ -57,6 +57,20 @@ memory_contradiction_count = Counter(
     "Facts superseded by the nightly contradiction pass.",
     registry=REGISTRY,
 )
+memory_quality_reject_count = Counter(
+    "zoe_memory_quality_reject_count",
+    "Conversational write candidates rejected by the write-quality gate, "
+    "labelled by source and the reason that matched.",
+    ["source", "reason"],
+    registry=REGISTRY,
+)
+memory_supersede_count = Counter(
+    "zoe_memory_supersede_count",
+    "Conversational writes that updated/superseded an existing same-attribute "
+    "fact instead of adding a near-duplicate, labelled by source.",
+    ["source"],
+    registry=REGISTRY,
+)
 agent_prompt_fact_count = Histogram(
     "zoe_agent_prompt_facts",
     "Number of memory facts injected into the agent system prompt per turn.",
@@ -164,6 +178,8 @@ __all__ = [
     "memory_dedup_skip_count",
     "memory_pii_reject_count",
     "memory_contradiction_count",
+    "memory_quality_reject_count",
+    "memory_supersede_count",
     "agent_prompt_fact_count",
     "mempalace_collection_size",
     "chat_feedback_count",
