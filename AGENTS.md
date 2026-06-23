@@ -1,3 +1,12 @@
+# Command Center — READ THESE FIRST (every agent: Claude Code, Codex, Omnigent, Hermes)
+
+- **[docs/PLANS.md](docs/PLANS.md)** — what we're building + status. Before starting work, check it; after finishing a step, update it.
+- **[docs/IDEAS.md](docs/IDEAS.md)** — the pin-it-so-we-don't-lose-it board. When Jason says *"pin this / put a pin in it / remember this idea"*, add a one-line entry there. Never drop an idea on the floor.
+
+**Tool discipline (these get skipped — don't skip them):** use **Serena** + **codebase-memory** (MCP, see `.mcp.json`) for code navigation/edits over raw grep; **opensrc** (`opensrc path …`) for third-party source before guessing; the **Greptile loop** to drive PRs to merge; follow the **DOX** doc conventions below. Detail for each is in the sections that follow.
+
+---
+
 ## graphify
 
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
