@@ -1,41 +1,67 @@
 #!/usr/bin/env python3
-"""Replay saved room-audio WAVs through Zoe's real voice pipeline — offline.
+"""Replay saved room-audio WAVs through Zoe's REAL voice pipeline — offline.
 
-Why: every fix used to need a manual re-test on the panel. The voice path saves
-the actual captured utterances (ZOE_VOICE_SAVE_AUDIO=1 →
-/home/zoe/.zoe-voice-samples). This harness feeds those exact WAVs back through
-the REAL stages so a fix can be validated/regressed without speaking a word:
+Every fix used to need a manual re-test on the panel. The voice path saves the
+actual captured utterances (ZOE_VOICE_SAVE_AUDIO=1 → /home/zoe/.zoe-voice-samples).
+This harness feeds those exact WAVs back through the SAME stages the live panel
+runs so a fix can be validated/regressed without speaking a word, and reports
+**what was said (STT) vs what actually happens** (route → reply/action):
 
-    STT (Moonshine v2)  →  semantic_router  →  Tier-0 detect_intent
-                        →  expert_dispatch plan  →  reply  →  _clean_for_speech
+    STT (Moonshine v2) → semantic_router → fast_tiers.resolve(channel="voice")
+                       → (Gemma brain with the user's memory, on fall-through)
 
-By default it runs DRY: reads (weather/time/recall) are executed (side-effect
-free), writes (calendar/lists/reminders) are only PLANNED + slot-extracted so we
-can see what WOULD be created without mutating the DB on every run. Pass
---execute to actually fulfil writes.
+It mirrors LIVE voice: the voice channel profile (run_tier0=False, margin check,
+defer_domains={people,memory}) and the real user, so people/memory recall + chat
+go to the brain exactly as they do on the panel — not the old raw expert path.
+
+Each turn is classified so capability gaps are obvious:
+  OK       fast path or brain answered
+  CANT_DO  asked for something Zoe couldn't fulfil (extractor empty, "I don't
+           have that on file", "I can't…") — these are bugs to fix
+  EMPTY    STT heard nothing (silence / clipped capture)
+  ERROR    a stage raised
+
+By default DRY: reads/recall run (side-effect free), writes are only PLANNED
+(allow_writes=False → deferred) so the DB isn't mutated. --execute fulfils writes.
+--brain actually runs the Gemma brain on fall-through (slower; needed to test
+recall end-to-end). Default user is 'jason' so memory recall has facts.
 
 Usage:
-    python3 tests/replay_samples.py                 # all samples, dry
-    python3 tests/replay_samples.py --since 0928    # only files named >= 0928xx
-    python3 tests/replay_samples.py --last 26       # newest N
-    python3 tests/replay_samples.py --execute       # really run writes
-    python3 tests/replay_samples.py --json out.json # machine-readable dump
+    python3 tests/replay_samples.py                  # all samples, dry, no brain
+    python3 tests/replay_samples.py --brain          # run the brain on fall-through
+    python3 tests/replay_samples.py --last 30        # newest N
+    python3 tests/replay_samples.py --since 0928     # files named >= 0928xx
+    python3 tests/replay_samples.py --execute        # really run writes
+    python3 tests/replay_samples.py --json out.json  # machine-readable dump
 """
 import argparse
 import asyncio
 import glob
 import json
 import os
+import re
 import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 
+# Replies that mean "I couldn't do what you asked" — a capability gap to fix.
+# Targeted at capability DISCLAIMERS (no access / not on file / can't act), NOT
+# conversational hedges like "I don't have one perfect answer" (meaning-of-life).
+_CANT_DO_RE = re.compile(
+    r"don'?t (?:\w+\s+){0,2}have access to|can'?t access|no access to (?:your|the)|"
+    r"\bnot on file\b|don'?t have (?:it|that|your \w+) on file|"
+    r"can'?t (?:tell you|find|create|add|set|schedule|do that|help with that)|"
+    r"couldn'?t (?:find|create|add|set|schedule)|\bunable to\b|"
+    r"you'?ll have to (?:check|do).{0,30}?yourself",
+    re.IGNORECASE,
+)
+
 
 def _load_env() -> None:
-    """Load .env the way the service does (no secrets printed)."""
     p = os.path.join(ROOT, ".env")
     if not os.path.exists(p):
         return
@@ -55,104 +81,141 @@ def _select(sample_dir: str, args) -> list[str]:
     return files
 
 
+def _classify(transcript: str, reply: str, outcome: str) -> str:
+    if not transcript:
+        return "EMPTY"
+    if outcome.startswith("<"):
+        return "ERROR"
+    if reply and _CANT_DO_RE.search(reply):
+        return "CANT_DO"
+    if "extractor empty" in outcome:
+        return "CANT_DO"
+    if outcome == "brain" and not reply:
+        return "CANT_DO"  # brain ran but produced no spoken text → couldn't answer
+    if outcome == "→ brain":  # fast path deferred; brain not run — not a confirmed OK
+        return "DEFERRED"
+    return "OK"
+
+
 async def _run(args) -> int:
     _load_env()
-    # Router/expert must be loadable; plan needs no "active" mode, but be explicit.
     os.environ.setdefault("ZOE_ROUTER_ENABLED", "1")
 
     from db_pool import init_pool
     await init_pool()
 
     import semantic_router as sr
-    import expert_dispatch as xd
+    import fast_tiers as ft
     import intent_router as ir
-    from routers.voice_tts import _transcribe_audio_impl, _clean_for_speech
-    from nlu_extractor import extract_slots_for_intent
+    from routers.voice_tts import (
+        _transcribe_audio_impl, _clean_for_speech, _voice_brain_memory,
+        _voice_domain_context, _merge_brain_context,
+    )
 
     sr.warm()
 
+    user = args.user
     sample_dir = os.environ.get("ZOE_VOICE_SAMPLE_DIR") or "/home/zoe/.zoe-voice-samples"
     files = _select(sample_dir, args)
     if not files:
         print(f"no samples in {sample_dir}", file=sys.stderr)
         return 1
 
-    print(f"Replaying {len(files)} sample(s) from {sample_dir}"
-          f"{' [EXECUTE writes]' if args.execute else ' [dry]'}\n")
-    rows = []
+    print(f"Replaying {len(files)} sample(s) from {sample_dir} as user={user}"
+          f"{' [EXECUTE writes]' if args.execute else ' [dry]'}"
+          f"{' [+brain]' if args.brain else ''}\n")
+
+    rows: list[dict] = []
+    counts: dict[str, int] = {}
     for f in files:
         name = os.path.basename(f)
         rec: dict = {"file": name}
+
+        t = time.monotonic()
         try:
             transcript = (await _transcribe_audio_impl(f) or "").strip()
         except Exception as exc:
-            transcript = f"<STT error: {exc}>"
+            transcript = ""
+            rec["stt_error"] = str(exc)
+        rec["stt_ms"] = int((time.monotonic() - t) * 1000)
         rec["transcript"] = transcript
 
-        rr = sr.route(transcript) if transcript else {"domain": "chat", "score": 0.0, "routed": "chat"}
-        rec["router"] = {"domain": rr.get("domain"), "score": rr.get("score"), "routed": rr.get("routed")}
+        rr = sr.route(transcript) if transcript else {"domain": "chat", "score": 0.0, "scores": {}}
+        rec["router"] = {"domain": rr.get("domain"), "score": rr.get("score")}
         try:
             det = ir.detect_intent(transcript, log_miss=False)
             rec["tier0"] = det.name if det else None
         except Exception:
             rec["tier0"] = None
 
-        domain = rr.get("domain")
         reply = None
         outcome = "→ brain"
-        try:
-            if domain and domain != "chat":
-                plan = xd._plan(domain, transcript)
-                if plan:
-                    intent_name, _slots, kind = plan
-                    rec["plan"] = {"intent": intent_name, "kind": kind}
-                    if kind == "read":
-                        ctx = {"user_id": "guest", "session_id": "replay", "score": rr.get("score", 0.0)}
-                        res = await xd.dispatch(domain, transcript, ctx)
-                        if res:
-                            reply, outcome = res.reply, f"expert:{domain}:{res.intent}"
-                    elif kind == "expert":
-                        ctx = {"user_id": "guest", "session_id": "replay", "score": rr.get("score", 0.0)}
-                        res = await xd.dispatch(domain, transcript, ctx)
-                        if res:
-                            reply, outcome = res.reply, f"expert:{domain}:{res.intent}"
-                        else:
-                            outcome = f"expert:{domain}:{intent_name} (store/none)"
-                    else:  # write
-                        if args.execute:
-                            ctx = {"user_id": "guest", "session_id": "replay", "score": rr.get("score", 0.0)}
-                            res = await xd.dispatch(domain, transcript, ctx)
-                            if res:
-                                reply, outcome = res.reply, f"WROTE {domain}:{res.intent}"
-                            else:
-                                outcome = f"write {intent_name} → extractor empty → brain"
-                        else:
-                            ex = await extract_slots_for_intent(intent_name, transcript)
-                            rec["would_create"] = ex
-                            outcome = f"would-create {intent_name} {ex}" if ex else \
-                                      f"write {intent_name} → extractor empty → brain"
-        except Exception as exc:
-            outcome = f"<dispatch error: {exc}>"
+        if transcript:
+            t = time.monotonic()
+            try:
+                # Mirror live voice: channel="voice" (margin + defer people/memory),
+                # real router decision, dry keeps allow_writes off so writes defer.
+                res = await ft.resolve(
+                    transcript, user, "replay", channel="voice",
+                    router_decision=rr, allow_writes=bool(args.execute),
+                    extra_ctx={"panel_id": "replay"},
+                )
+            except Exception as exc:
+                res = None
+                outcome = f"<resolve error: {exc}>"
+            rec["resolve_ms"] = int((time.monotonic() - t) * 1000)
+            if res is not None:
+                reply = res.reply
+                outcome = f"{res.tier or 'tier1.5'}:{res.domain}:{res.intent}"
+            elif args.brain and not outcome.startswith("<"):
+                t = time.monotonic()
+                try:
+                    from brain_dispatch import brain_oneshot
+                    db_mem, portrait = await _voice_brain_memory(user)
+                    # Mirror live: inject calendar/lists/reminders context on deferral
+                    # (#760) so a calendar follow-up isn't wrongly answered "I don't
+                    # have access". The harness must match the live brain turn exactly.
+                    domain_ctx = await _voice_domain_context(rr, user)
+                    db_mem = _merge_brain_context(db_mem, domain_ctx)
+                    reply = (await brain_oneshot(
+                        transcript, "replay", user_id=user, voice_mode=True,
+                        db_memory_context=db_mem, portrait=portrait,
+                    ) or "").strip()
+                    outcome = "brain"
+                except Exception as exc:
+                    outcome = f"<brain error: {exc}>"
+                rec["brain_ms"] = int((time.monotonic() - t) * 1000)
+
         rec["outcome"] = outcome
         if reply:
             rec["reply"] = reply
             rec["spoken"] = _clean_for_speech(reply)
+        verdict = _classify(transcript, reply or "", outcome)
+        rec["verdict"] = verdict
+        counts[verdict] = counts.get(verdict, 0) + 1
         rows.append(rec)
 
-        # Human-readable line block
-        print(f"● {name}")
+        flag = {"OK": "  ", "CANT_DO": "✗ ", "EMPTY": "··", "ERROR": "!!"}.get(verdict, "  ")
+        print(f"{flag}● {name}  [{verdict}]  stt={rec['stt_ms']}ms")
         print(f"    heard : {transcript!r}")
         print(f"    route : {rr.get('domain')} ({rr.get('score')})   tier0={rec['tier0']}")
-        if "plan" in rec:
-            print(f"    plan  : {rec['plan']['intent']} [{rec['plan']['kind']}]")
         print(f"    => {outcome}")
         if reply:
-            print(f"    spoken: {rec['spoken']!r}")
+            print(f"    spoken: {rec.get('spoken')!r}")
         print()
 
+    total = len(rows)
+    print("─" * 60)
+    print(f"{total} samples:  " + "  ".join(f"{k}={v}" for k, v in sorted(counts.items())))
+    cant = [r for r in rows if r["verdict"] == "CANT_DO"]
+    if cant:
+        print(f"\n⚠ {len(cant)} couldn't-do (fix these):")
+        for r in cant:
+            print(f"    {r['file']}: {r['transcript']!r} → {r['outcome']}")
+
     if args.json:
-        json.dump(rows, open(args.json, "w"), indent=2)
-        print(f"wrote {args.json}")
+        json.dump({"counts": counts, "rows": rows}, open(args.json, "w"), indent=2)
+        print(f"\nwrote {args.json}")
     return 0
 
 
@@ -160,6 +223,8 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--since", help="only files whose name sorts >= this (e.g. 0928)")
     ap.add_argument("--last", type=int, help="only the newest N samples")
+    ap.add_argument("--user", default="jason", help="user_id to replay as (memory recall)")
+    ap.add_argument("--brain", action="store_true", help="run the Gemma brain on fall-through")
     ap.add_argument("--execute", action="store_true", help="actually fulfil writes (mutates DB)")
     ap.add_argument("--json", help="also dump machine-readable results here")
     args = ap.parse_args()

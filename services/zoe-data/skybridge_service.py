@@ -1713,11 +1713,13 @@ async def _resolve_list_remove_item(intent: SkybridgeIntent, user_id: str, db: A
         if not matches:
             body = f"I could not find \"{intent.item_text}\" on that list. Say the exact item to remove."
             spoken = f"I could not find {intent.item_text} on that list."
+            status = "not_found"
         else:
             options = ", ".join(str(match.get("text") or "") for match in matches[:5])
             body = f"More than one item matches \"{intent.item_text}\" ({options}). Say the exact item to remove."
             spoken = f"More than one item matches {intent.item_text}. Which one should I remove?"
-        refreshed["intent"] = {"domain": "lists", "action": "remove_item", "list_type": list_type, "status": "ambiguous"}
+            status = "ambiguous"
+        refreshed["intent"] = {"domain": "lists", "action": "remove_item", "list_type": list_type, "status": status}
         refreshed["spoken_summary"] = spoken
         refreshed["cards"] = [_status_card("Which item should I remove?", body)] + list(refreshed.get("cards") or [])
         refreshed["actions"] = []
@@ -1725,7 +1727,7 @@ async def _resolve_list_remove_item(intent: SkybridgeIntent, user_id: str, db: A
     target_item = matches[0]
     item_id = str(target_item.get("id") or "")
     remove_result = await db.execute(
-        "UPDATE list_items SET deleted = 1, updated_at = NOW() WHERE id = $1 AND list_id = $2",
+        "UPDATE list_items SET deleted = 1, updated_at = NOW() WHERE id = $1 AND list_id = $2 AND deleted = 0",
         item_id,
         list_id,
     )

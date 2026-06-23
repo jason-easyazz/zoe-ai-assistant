@@ -101,20 +101,99 @@ async def _load_voice_history(session_id: str, limit: int = 3) -> list[dict]:
     return []
 
 
-async def _voice_brain_memory(user_id: str) -> tuple[Optional[str], Optional[str]]:
+# Query-relevant recall packet sizing. A handful of the most relevant facts is
+# enough for the brain to answer a recall question; sending the whole metadata
+# dump (~1264 chars) is both slow and noisy. Keep this lean — it sits on the
+# brain-turn critical path.
+_VOICE_RECALL_SEARCH_LIMIT = 8   # one semantic search; re-ranked by hotness
+_VOICE_RECALL_MAX_FACTS = 6      # facts that actually make it into the block
+_VOICE_RECALL_FACT_CHARS = 160   # per-fact truncation so one long memory can't bloat it
+
+
+async def _voice_recall_packet(text: str, user_id: str) -> Optional[str]:
+    """Build a COMPACT, QUERY-RELEVANT "[What you remember]" block for a voice
+    brain turn from the turn TEXT.
+
+    Replaces the query-blind metadata dump on the read path: one
+    `MemoryService.search` call (semantic + hotness re-ranking), deduped and
+    truncated to a few hundred chars of only the facts relevant to what was asked.
+    Falls back to the full for-prompt dump when search returns nothing (e.g. a
+    chit-chat turn with no recall intent, or an embedder hiccup) so recall never
+    silently degrades. Best-effort: guest-safe and never raises."""
+    query = (text or "").strip()
+    if not query:
+        # No turn text (e.g. prewarm) — warm/return the fallback dump instead so
+        # the underlying facts cache stays primed.
+        return await _voice_recall_fallback(user_id)
+    try:
+        from memory_service import get_memory_service, is_guest_memory_user
+        if is_guest_memory_user(user_id):
+            return None
+        svc = get_memory_service()
+        refs = await svc.search(query, user_id=user_id, limit=_VOICE_RECALL_SEARCH_LIMIT)
+    except Exception as exc:
+        logger.debug("voice recall search failed (non-fatal): %s", exc)
+        refs = None
+
+    if not refs:
+        # Search found nothing relevant — fall back to the for-prompt dump so a
+        # recall question still has facts to draw on.
+        return await _voice_recall_fallback(user_id)
+
+    seen: set[str] = set()
+    lines: list[str] = []
+    for ref in refs:
+        fact = (getattr(ref, "text", "") or "").strip()
+        if not fact:
+            continue
+        line = fact[:_VOICE_RECALL_FACT_CHARS].strip()
+        # Dedup on the TRUNCATED line that actually gets emitted — two long facts
+        # identical in their first _VOICE_RECALL_FACT_CHARS chars would otherwise
+        # produce duplicate output lines.
+        key = re.sub(r"\s+", " ", line.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        lines.append("- " + line)
+        if len(lines) >= _VOICE_RECALL_MAX_FACTS:
+            break
+    if not lines:
+        return await _voice_recall_fallback(user_id)
+    return "[What you remember]\n" + "\n".join(lines)
+
+
+async def _voice_recall_fallback(user_id: str) -> Optional[str]:
+    """Full for-prompt metadata dump (the previous behaviour). Used when the
+    query-relevant search yields nothing, and to warm the facts cache on prewarm.
+    Best-effort / never raises."""
+    try:
+        from zoe_agent import _mempalace_load_user_facts
+        return (await _mempalace_load_user_facts(user_id)) or None
+    except Exception as exc:
+        logger.debug("voice recall fallback load failed (non-fatal): %s", exc)
+        return None
+
+
+async def _voice_brain_memory(
+    user_id: str, text: Optional[str] = None
+) -> tuple[Optional[str], Optional[str]]:
     """Load (db_memory_context, portrait) for a voice brain turn.
 
     Voice no longer fast-paths people/memory recall (it was slow and mis-stored
     questions as facts), so the brain must answer recall itself. Unlike chat —
     where the memory.ts extension injects the for-prompt packet — the voice path
     calls the brain directly, so we inject the user's facts + portrait here or the
-    brain would have no memory to recall from. Reuses the same builders as chat;
-    best-effort (guest-safe / never raises)."""
+    brain would have no memory to recall from.
+
+    When `text` (the turn transcript) is given, db_memory is a COMPACT
+    query-relevant recall packet built from that text (token-efficient; only the
+    facts relevant to what was asked). When `text` is None — the wake prewarm
+    path — it falls back to the full for-prompt dump, which also warms the shared
+    facts cache for the real turn. Best-effort (guest-safe / never raises)."""
     db_memory: Optional[str] = None
     portrait: Optional[str] = None
     try:
-        from zoe_agent import _mempalace_load_user_facts
-        db_memory = (await _mempalace_load_user_facts(user_id)) or None
+        db_memory = await _voice_recall_packet(text or "", user_id)
     except Exception as exc:
         logger.debug("voice brain memory load failed (non-fatal): %s", exc)
     try:
@@ -122,7 +201,67 @@ async def _voice_brain_memory(user_id: str) -> tuple[Optional[str], Optional[str
         portrait = (await load_portrait(user_id)) or None
     except Exception as exc:
         logger.debug("voice brain portrait load failed (non-fatal): %s", exc)
+    # The user's NAME is identity (who they authenticated as), NOT a memory fact —
+    # so "what's my name" is answered from auth, never from recall. Ground every
+    # brain turn in who's speaking by prepending it to the [About you] block.
+    identity = await _voice_user_identity(user_id)
+    if identity:
+        line = f"You are speaking with {identity} (the signed-in user)."
+        portrait = f"{line}\n{portrait}" if portrait else line
     return db_memory, portrait
+
+
+async def _voice_user_identity(user_id: str) -> Optional[str]:
+    """The signed-in user's display name from the identity (users) table — NOT a
+    memory fact. Memory is per-user and the user authenticates as themselves, so
+    their name is known from auth. Skips guest/daemon/admin. Best-effort/never raises."""
+    if not user_id or user_id in ("guest", "voice-daemon", "family-admin", ""):
+        return None
+    try:
+        from db_pool import get_db_ctx
+        async with get_db_ctx() as db:
+            # db_pool is asyncpg → $1 placeholder + fetchrow (the aiosqlite '?'
+            # cursor style fails silently here).
+            row = await db.fetchrow("SELECT name FROM users WHERE id = $1", user_id)
+        name = ((row["name"] if row else "") or "").strip()
+        if name and name.islower():   # "jason" -> "Jason" for natural read-back
+            name = name.title()
+        return name or None
+    except Exception as exc:
+        logger.debug("voice identity load failed (non-fatal): %s", exc)
+        return None
+
+
+_VOICE_BRAIN_DOMAIN_CONTEXT = {
+    "calendar": ("calendar_show", {"qualifier": "this week"}, "Your calendar this week"),
+    "lists": ("list_show", {}, "Your lists"),
+    "reminders": ("reminder_list", {}, "Your reminders"),
+}
+
+
+async def _voice_domain_context(router_decision: Optional[dict], user_id: str) -> Optional[str]:
+    """When a calendar/lists/reminders turn DEFERS to the brain (ambiguous fragment,
+    follow-up), hand the brain that domain's current data so it answers instead of
+    saying 'I don't have access to your calendar'. Scoped to those domains only —
+    chat/people brain turns (the common case) pay nothing, preserving the fast path.
+    Reuses the same read intents the fast path uses. Best-effort / never raises."""
+    domain = (router_decision or {}).get("domain")
+    spec = _VOICE_BRAIN_DOMAIN_CONTEXT.get(domain or "")
+    if not spec:
+        return None
+    intent_name, slots, label = spec
+    try:
+        from intent_router import Intent, execute_intent
+        summary = (await execute_intent(Intent(intent_name, dict(slots)), user_id) or "").strip()
+        return f"[{label}]\n{summary}" if summary else None
+    except Exception as exc:
+        logger.debug("voice domain context (%s) failed (non-fatal): %s", domain, exc)
+        return None
+
+
+def _merge_brain_context(db_memory: Optional[str], domain_ctx: Optional[str]) -> Optional[str]:
+    parts = [p for p in (db_memory, domain_ctx) if p]
+    return "\n\n".join(parts) if parts else None
 
 
 _VOICE_ESCALATION_MARKERS = ("__ESCALATE__:", "__ESCALATE_BG__:", "__ESCALATE_HERMES__:")
@@ -611,6 +750,38 @@ def _extract_complete_sentences(buffer: str) -> tuple[list[str], str]:
             complete.append(sentence)
         last_end = m.end()
     return complete, buffer[last_end:]
+
+
+_FIRST_UNIT_MIN_CHARS = 12  # don't synthesize a tiny stub like "So,"
+_FIRST_UNIT_SOFT_CAP = 40   # flush at a word boundary by here even without punctuation
+
+
+def _fast_first_audio_enabled() -> bool:
+    return os.environ.get("ZOE_VOICE_FAST_FIRST_AUDIO", "1").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _extract_first_unit(buffer: str) -> tuple[Optional[str], str]:
+    """Pull the FIRST speakable unit out of a streaming buffer as early as possible.
+
+    Time-to-first-audio dominates how fast a voice reply *feels*. Waiting for a full
+    sentence (`.!?`) before the first synth adds ~1-2s of silence at 22 tok/s. For
+    the first chunk only, break on the first clause boundary (, ; : — or sentence
+    end) once we have a few words, or at a word boundary by the soft cap — so audio
+    starts almost immediately. Punctuation must be followed by space/end so decimals
+    ('twelve point four') and 'a.m.' don't split. Returns (unit|None, remainder)."""
+    stripped = buffer.lstrip()
+    if len(stripped) < _FIRST_UNIT_MIN_CHARS:
+        return None, buffer
+    m = re.search(r"(.{%d,}?[,;:.!?—–])(?:\s|$)" % _FIRST_UNIT_MIN_CHARS, buffer, re.DOTALL)
+    if m:
+        return m.group(1).strip(), buffer[m.end():]
+    # No clause break yet but the buffer is getting long — flush at a word boundary
+    # so the first audio doesn't stall behind a long opening clause.
+    if len(buffer) >= _FIRST_UNIT_SOFT_CAP:
+        cut = buffer.rfind(" ", _FIRST_UNIT_MIN_CHARS, _FIRST_UNIT_SOFT_CAP)
+        if cut > 0:
+            return buffer[:cut].strip(), buffer[cut:]
+    return None, buffer
 
 
 def _skybridge_only() -> bool:
@@ -3970,11 +4141,13 @@ async def voice_command(
                         logger.debug("voice/command stream processing acknowledgement failed: %s", ack_exc)
 
                     _voice_history = await _load_voice_history(session_id, limit=3)
-                    _v_db_memory, _v_portrait = await _voice_brain_memory(effective_user)
+                    _v_db_memory, _v_portrait = await _voice_brain_memory(effective_user, text)
+                    _v_domain_ctx = await _voice_domain_context(_router_decision, effective_user)
                     async for delta in brain_streaming(
                         text, session_id, user_id=effective_user,
                         voice_mode=True, history=_voice_history or None,
-                        db_memory_context=_v_db_memory, portrait=_v_portrait,
+                        db_memory_context=_merge_brain_context(_v_db_memory, _v_domain_ctx),
+                        portrait=_v_portrait,
                     ):
                         if not delta:
                             continue
@@ -4015,6 +4188,13 @@ async def voice_command(
                             except Exception:
                                 pass
                         token_buf += delta
+                        # Snap the FIRST audio out on a short clause so the reply
+                        # starts almost immediately instead of after a full sentence.
+                        if _t_first_audio is None and _fast_first_audio_enabled():
+                            first_unit, token_buf = _extract_first_unit(token_buf)
+                            if first_unit:
+                                async for out_chunk in _emit_sentence(first_unit):
+                                    yield out_chunk
                         ready, token_buf = _extract_complete_sentences(token_buf)
                         for sentence in ready:
                             async for out_chunk in _emit_sentence(sentence):
@@ -4070,7 +4250,9 @@ async def voice_command(
         collected: list[str] = []
 
         _voice_history_nc = await _load_voice_history(session_id, limit=3)
-        _v_db_memory_nc, _v_portrait_nc = await _voice_brain_memory(effective_user)
+        _v_db_memory_nc, _v_portrait_nc = await _voice_brain_memory(effective_user, text)
+        _v_domain_ctx_nc = await _voice_domain_context(_router_decision, effective_user)
+        _v_db_memory_nc = _merge_brain_context(_v_db_memory_nc, _v_domain_ctx_nc)
 
         async def _stream_collect() -> None:
             nonlocal _t_first_token
@@ -4647,7 +4829,16 @@ async def _prewarm_brain_for_panel(panel_id: str) -> None:
             return
         import zoe_core_client
         _t0 = time.monotonic()
-        warmed = await zoe_core_client.prewarm(user_id, session_id)
+        # Warm the brain worker (subprocess spawn) AND the user's facts cache
+        # concurrently, during the speech window. The cold facts read is ~1.4s and
+        # otherwise lands on the turn's critical path before the brain's first token;
+        # warming it here (cache TTL now outlives wake→turn) hides it on the first turn.
+        _pw = await asyncio.gather(
+            zoe_core_client.prewarm(user_id, session_id),
+            _voice_brain_memory(user_id),
+            return_exceptions=True,
+        )
+        warmed = _pw[0] if not isinstance(_pw[0], BaseException) else False
         _ms = int((time.monotonic() - _t0) * 1000)
         # INFO (not debug): the only way to know on-device whether the spawn
         # actually overlaps the speech window — if this logs AFTER the turn's

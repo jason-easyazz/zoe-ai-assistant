@@ -1281,7 +1281,8 @@ async def test_list_remove_item_missing_target_returns_confirmation():
 
     result = await resolve_skybridge_request("take caviar off the shopping list", "family-admin", context=context, db=db)
 
-    assert result["intent"].get("status") == "ambiguous"
+    # Zero matches must be distinguishable from a multi-match ambiguity.
+    assert result["intent"].get("status") == "not_found"
     assert result["actions"] == []
     assert db.items_by_list["list-1"] == items
 
