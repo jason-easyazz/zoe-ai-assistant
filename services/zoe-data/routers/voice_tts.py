@@ -125,6 +125,38 @@ async def _voice_brain_memory(user_id: str) -> tuple[Optional[str], Optional[str
     return db_memory, portrait
 
 
+_VOICE_BRAIN_DOMAIN_CONTEXT = {
+    "calendar": ("calendar_show", {"qualifier": "this week"}, "Your calendar this week"),
+    "lists": ("list_show", {}, "Your lists"),
+    "reminders": ("reminder_list", {}, "Your reminders"),
+}
+
+
+async def _voice_domain_context(router_decision: Optional[dict], user_id: str) -> Optional[str]:
+    """When a calendar/lists/reminders turn DEFERS to the brain (ambiguous fragment,
+    follow-up), hand the brain that domain's current data so it answers instead of
+    saying 'I don't have access to your calendar'. Scoped to those domains only —
+    chat/people brain turns (the common case) pay nothing, preserving the fast path.
+    Reuses the same read intents the fast path uses. Best-effort / never raises."""
+    domain = (router_decision or {}).get("domain")
+    spec = _VOICE_BRAIN_DOMAIN_CONTEXT.get(domain or "")
+    if not spec:
+        return None
+    intent_name, slots, label = spec
+    try:
+        from intent_router import Intent, execute_intent
+        summary = (await execute_intent(Intent(intent_name, dict(slots)), user_id) or "").strip()
+        return f"[{label}]\n{summary}" if summary else None
+    except Exception as exc:
+        logger.debug("voice domain context (%s) failed (non-fatal): %s", domain, exc)
+        return None
+
+
+def _merge_brain_context(db_memory: Optional[str], domain_ctx: Optional[str]) -> Optional[str]:
+    parts = [p for p in (db_memory, domain_ctx) if p]
+    return "\n\n".join(parts) if parts else None
+
+
 _VOICE_ESCALATION_MARKERS = ("__ESCALATE__:", "__ESCALATE_BG__:", "__ESCALATE_HERMES__:")
 
 
@@ -4003,10 +4035,12 @@ async def voice_command(
 
                     _voice_history = await _load_voice_history(session_id, limit=3)
                     _v_db_memory, _v_portrait = await _voice_brain_memory(effective_user)
+                    _v_domain_ctx = await _voice_domain_context(_router_decision, effective_user)
                     async for delta in brain_streaming(
                         text, session_id, user_id=effective_user,
                         voice_mode=True, history=_voice_history or None,
-                        db_memory_context=_v_db_memory, portrait=_v_portrait,
+                        db_memory_context=_merge_brain_context(_v_db_memory, _v_domain_ctx),
+                        portrait=_v_portrait,
                     ):
                         if not delta:
                             continue
@@ -4110,6 +4144,8 @@ async def voice_command(
 
         _voice_history_nc = await _load_voice_history(session_id, limit=3)
         _v_db_memory_nc, _v_portrait_nc = await _voice_brain_memory(effective_user)
+        _v_domain_ctx_nc = await _voice_domain_context(_router_decision, effective_user)
+        _v_db_memory_nc = _merge_brain_context(_v_db_memory_nc, _v_domain_ctx_nc)
 
         async def _stream_collect() -> None:
             nonlocal _t_first_token
