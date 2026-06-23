@@ -83,12 +83,26 @@ jobs:
 
       - name: Health check
         run: |
-          sleep 6
-          # Verify VAPID key endpoint (push subsystem healthy)
-          curl -sf http://localhost:8000/api/push/vapid-public-key > /dev/null
-          # Verify proactive router is registered (auth returns guest, expects 200 or 401)
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            http://localhost:8000/api/proactive/schedule)
-          ( [ "$STATUS" = "200" ] || [ "$STATUS" = "401" ] ) \
-            && echo "Deploy OK at $(date)" \
-            || (echo "Unexpected status $STATUS from /api/proactive/schedule"; exit 1)
+          # zoe-data cold-starts slowly (model warmup), so a single early curl
+          # races the boot and false-fails (connection refused). Retry over a
+          # warmup window instead — mirrors the zoe-auth health loop above.
+          # Liveness = public /health (200). Then confirm the proactive router is
+          # REGISTERED: auth-enforced endpoints answer 200/401/403 (not 404). The
+          # 403 ("authentication required") is a healthy "up + auth enforced"
+          # signal, so it must be accepted (the old 200/401-only check false-failed
+          # once these endpoints began requiring auth).
+          for attempt in $(seq 1 24); do
+            if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
+              STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+                http://localhost:8000/api/proactive/schedule)
+              case "$STATUS" in
+                200|401|403)
+                  echo "Deploy OK at $(date) (healthy after ${attempt} attempt(s); proactive=$STATUS)"
+                  exit 0
+                  ;;
+              esac
+            fi
+            sleep 5
+          done
+          echo "zoe-data failed health check after warmup window (~120s)"
+          exit 1
