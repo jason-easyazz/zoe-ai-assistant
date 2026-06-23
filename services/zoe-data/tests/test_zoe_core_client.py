@@ -295,3 +295,170 @@ async def test_terminal_event_carrying_assistant_field_still_terminates():
         _agent_end(assistantMessageEvent={"type": "text_delta", "delta": "x"}),
     ])
     assert out == ["Answer"]  # terminates cleanly; the stray "x" is not emitted
+
+
+# ── Unit tests for _read_turn: tool-activity / thinking sentinels ─────────────
+# These feed the verified Pi RPC tool-turn frames (captured live 2026-06-23) into
+# _read_turn and assert the __TOOL__/__THINKING__ sentinels surface in order while
+# the text stream is untouched. No `pi` binary or model needed.
+
+
+def _thinking(text, rid="req-1"):
+    return {"type": "message_update", "id": rid,
+            "assistantMessageEvent": {"type": "thinking", "thinking": text}}
+
+
+def _toolcall_start(tc_id, name, rid="req-1", content_index=0):
+    return {"type": "message_update", "id": rid,
+            "assistantMessageEvent": {
+                "type": "toolcall_start",
+                "contentIndex": content_index,
+                "partial": {"content": [
+                    {"type": "toolCall", "id": tc_id, "name": name,
+                     "arguments": {}, "partialArgs": "", "streamIndex": 0}
+                ]},
+            }}
+
+
+def _toolcall_end(rid="req-1"):
+    return {"type": "message_update", "id": rid,
+            "assistantMessageEvent": {"type": "toolcall_end"}}
+
+
+def _message_end_toolcall(tc_id, name, arguments, rid="req-1"):
+    return {"type": "message_end", "id": rid,
+            "message": {"role": "assistant",
+                        "content": [{"type": "toolCall", "id": tc_id,
+                                     "name": name, "arguments": arguments}]}}
+
+
+def _tool_exec_start(tc_id, rid="req-1"):
+    # tool id rides under toolCallId, NOT top-level id (top-level id is the RPC
+    # request id and would be rejected by the request matcher otherwise).
+    return {"type": "tool_execution_start", "requestId": rid, "toolCallId": tc_id}
+
+
+def _tool_exec_end(rid="req-1", tc_id=None, result=None, **extra):
+    ev = {"type": "tool_execution_end", "requestId": rid}
+    if tc_id is not None:
+        ev["toolCallId"] = tc_id
+    if result is not None:
+        ev["result"] = result
+    ev.update(extra)
+    return ev
+
+
+def _parse_tool(sentinel):
+    assert sentinel.startswith("__TOOL__:"), sentinel
+    return json.loads(sentinel[len("__TOOL__:"):])
+
+
+@pytest.mark.asyncio
+async def test_thinking_emits_sentinel_without_disturbing_text():
+    """A thinking frame yields a __THINKING__ sentinel; text deltas stream as-is."""
+    out = await _run_read_turn([
+        _accept(), _thinking("let me check the list"),
+        _delta("Sure"), _delta(", one sec"), _agent_end(),
+    ])
+    assert out == ["__THINKING__:let me check the list", "Sure", ", one sec"]
+
+
+@pytest.mark.asyncio
+async def test_toolcall_start_emits_start_sentinel():
+    """toolcall_start yields a phase=start sentinel reading id/name from the
+    partial.content[contentIndex] toolCall block."""
+    out = await _run_read_turn([
+        _accept(),
+        _toolcall_start("tc-1", "list_add"),
+        _toolcall_end(),
+        _agent_end(),
+    ])
+    tools = [_parse_tool(s) for s in out if s.startswith("__TOOL__:")]
+    assert tools == [{"phase": "start", "id": "tc-1", "name": "list_add"}]
+
+
+@pytest.mark.asyncio
+async def test_message_end_toolcall_emits_args_sentinel_with_full_args():
+    """message_end carrying a toolCall block yields a phase=args sentinel with the
+    FULL arguments (the cleanest source of complete args)."""
+    out = await _run_read_turn([
+        _accept(),
+        _message_end_toolcall("tc-1", "list_add", {"item": "bread", "list": "shopping"}),
+        _agent_end(),
+    ])
+    tools = [_parse_tool(s) for s in out if s.startswith("__TOOL__:")]
+    assert tools == [{
+        "phase": "args", "id": "tc-1", "name": "list_add",
+        "args": {"item": "bread", "list": "shopping"},
+    }]
+
+
+@pytest.mark.asyncio
+async def test_tool_execution_end_emits_result_sentinel():
+    """tool_execution_end yields a phase=result sentinel with the result text."""
+    out = await _run_read_turn([
+        _accept(),
+        _tool_exec_end(tc_id="tc-1", result="Added bread."),
+        _agent_end(),
+    ])
+    tools = [_parse_tool(s) for s in out if s.startswith("__TOOL__:")]
+    assert tools == [{"phase": "result", "id": "tc-1", "result": "Added bread."}]
+
+
+@pytest.mark.asyncio
+async def test_tool_execution_end_nested_result_content():
+    """A nested {result:{content:...}} envelope is unwrapped to a string result."""
+    out = await _run_read_turn([
+        _accept(),
+        _tool_exec_end(tc_id="tc-2", result={"content": "Hermes web result: sunny, 24."}),
+        _agent_end(),
+    ])
+    tools = [_parse_tool(s) for s in out if s.startswith("__TOOL__:")]
+    assert tools == [{"phase": "result", "id": "tc-2",
+                      "result": "Hermes web result: sunny, 24."}]
+
+
+@pytest.mark.asyncio
+async def test_full_tool_turn_then_text_reply_in_order():
+    """End-to-end tool turn: thinking → start → end → (message_end args) →
+    tool_execution_end result → then a SECOND turn streams the text reply. The
+    bare turn_end after the tool turn must NOT terminate; the text still streams."""
+    out = await _run_read_turn([
+        _accept(),
+        _thinking("checking the weather"),
+        _toolcall_start("tc-9", "web_search"),
+        _toolcall_end(),
+        _message_end_toolcall("tc-9", "web_search", {"query": "weekend weather"}),
+        _tool_exec_start("tc-9"),
+        _tool_exec_end(tc_id="tc-9", result="Saturday is sunny, 24 degrees."),
+        {"type": "turn_end", "id": "req-1"},  # bare turn_end — must NOT terminate
+        _delta("It'll be"), _delta(" sunny, 24°."),
+        _agent_end(),
+    ])
+    # Text deltas survive unchanged.
+    text = [c for c in out if not c.startswith("__TOOL__:") and not c.startswith("__THINKING__:")]
+    assert text == ["It'll be", " sunny, 24°."]
+    # Tool/thinking sentinels surface in capture order.
+    thinking = [c for c in out if c.startswith("__THINKING__:")]
+    assert thinking == ["__THINKING__:checking the weather"]
+    phases = [_parse_tool(c)["phase"] for c in out if c.startswith("__TOOL__:")]
+    assert phases == ["start", "args", "result"]
+
+
+@pytest.mark.asyncio
+async def test_malformed_tool_frames_never_crash_and_skip_sentinel():
+    """Defensive: a toolcall_start missing its content / a message_end with no
+    toolCall block / a tool_execution_end with nothing useful emit NO sentinel
+    but never crash the turn — text still streams."""
+    out = await _run_read_turn([
+        _accept(),
+        {"type": "message_update", "id": "req-1",
+         "assistantMessageEvent": {"type": "toolcall_start"}},  # no partial/content
+        {"type": "message_end", "id": "req-1",
+         "message": {"role": "assistant", "content": [{"type": "text", "text": "hi"}]}},
+        _tool_exec_end(),  # no id, no result
+        _delta("ok"),
+        _agent_end(),
+    ])
+    assert [c for c in out if c.startswith("__TOOL__:")] == []
+    assert "ok" in out

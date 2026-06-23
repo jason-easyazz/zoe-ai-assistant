@@ -1790,7 +1790,59 @@
 
         /* UI Component Catalog Styles */
         .ui-component { margin: 12px 0; }
-        
+
+        /* Generic interactive component card (zoe.component) */
+        .zoe-component-card {
+            border: 1px solid rgba(123,97,255,0.16);
+            border-radius: 14px;
+            background: var(--clr-glass-bg-2, rgba(255,255,255,0.55));
+            backdrop-filter: blur(18px);
+            padding: 14px 16px;
+            box-shadow: 0 2px 10px rgba(15,23,42,0.04);
+        }
+        .zoe-component-card .zc-header {
+            display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 8px;
+        }
+        .zoe-component-card .zc-kind {
+            font-size: 9.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+            color: var(--clr-primary); background: rgba(123,97,255,0.10);
+            padding: 2px 8px; border-radius: 999px;
+        }
+        .zoe-component-card .zc-title { font-size: 14px; font-weight: 700; color: var(--clr-text-1, #1e293b); }
+        .zoe-component-card .zc-body { font-size: 13px; line-height: 1.5; color: var(--clr-text-2); margin: 4px 0 8px; }
+        .zoe-component-card .zc-body p:first-child { margin-top: 0; }
+        .zoe-component-card .zc-body p:last-child { margin-bottom: 0; }
+        .zoe-component-card .zc-list { list-style: none; padding: 0; margin: 6px 0; display: flex; flex-direction: column; gap: 4px; }
+        .zoe-component-card .zc-list-item { display: flex; align-items: baseline; gap: 7px; font-size: 13px; color: var(--clr-text-2); }
+        .zoe-component-card .zc-list-item.done .zc-list-label { text-decoration: line-through; opacity: 0.6; }
+        .zoe-component-card .zc-dot { color: var(--clr-primary); }
+        .zoe-component-card .zc-check { color: #10b981; font-weight: 700; }
+        .zoe-component-card .zc-list-sub { font-size: 11px; color: var(--clr-text-3); margin-left: 4px; }
+        .zoe-component-card .zc-events { display: flex; flex-direction: column; gap: 6px; margin: 6px 0; }
+        .zoe-component-card .zc-event {
+            display: flex; flex-direction: column; gap: 1px;
+            padding: 7px 10px; border-left: 3px solid var(--clr-primary);
+            background: rgba(123,97,255,0.05); border-radius: 0 8px 8px 0;
+        }
+        .zoe-component-card .zc-event-when { font-size: 11px; font-weight: 700; color: var(--clr-primary); }
+        .zoe-component-card .zc-event-title { font-size: 13px; color: var(--clr-text-1, #1e293b); }
+        .zoe-component-card .zc-event-loc { font-size: 11px; color: var(--clr-text-3); }
+        .zoe-component-card .zc-kvs { display: flex; flex-direction: column; gap: 3px; margin: 6px 0; }
+        .zoe-component-card .zc-kv { display: flex; gap: 8px; font-size: 12px; }
+        .zoe-component-card .zc-kv-k { color: var(--clr-text-3); text-transform: capitalize; min-width: 90px; }
+        .zoe-component-card .zc-kv-v { color: var(--clr-text-2); word-break: break-word; }
+        .zoe-component-card .zc-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+        .zoe-component-card .zc-action {
+            font-size: 12.5px; font-weight: 600; padding: 7px 14px; border-radius: 9px;
+            cursor: pointer; border: 1px solid rgba(100,116,139,0.22);
+            background: rgba(255,255,255,0.7); color: var(--clr-text-1, #1e293b);
+            transition: transform 0.12s, box-shadow 0.12s, background 0.12s;
+        }
+        .zoe-component-card .zc-action:hover { transform: translateY(-1px); box-shadow: 0 2px 8px rgba(15,23,42,0.08); }
+        .zoe-component-card .zc-action.primary { background: var(--clr-primary, #7b61ff); color: #fff; border-color: transparent; }
+        .zoe-component-card .zc-action.warn { background: rgba(239,68,68,0.10); color: #b91c1c; border-color: rgba(239,68,68,0.3); }
+
+
         .qr-wrapper { 
             display: flex; flex-direction: column; align-items: center; 
             background: white; border-radius: 16px; padding: 20px;
@@ -2359,6 +2411,26 @@
         }
         .trace-chevron { font-size: 12px; transition: transform 0.18s ease; }
         .trace-disclosure[open] .trace-chevron { transform: rotate(90deg); }
+        .trace-summary-status {
+            font-weight: 500;
+            color: var(--clr-text-3);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 240px;
+        }
+        .trace-summary-status.running { color: var(--clr-primary); }
+        .trace-summary-status.running::after {
+            content: '';
+            display: inline-block;
+            width: 5px; height: 5px;
+            margin-left: 5px;
+            border-radius: 50%;
+            background: var(--clr-primary);
+            animation: traceStatusPulse 1.1s ease-in-out infinite;
+            vertical-align: middle;
+        }
+        @keyframes traceStatusPulse { 0%,100% { opacity: 0.3; } 50% { opacity: 1; } }
         .trace-body { margin-top: 7px; display: flex; flex-direction: column; gap: 6px; }
         .run-meta-badge {
             align-self: flex-start;
@@ -2809,7 +2881,8 @@
             disclosure.innerHTML =
                 '<summary>' +
                     '<span class="trace-chevron">›</span>' +
-                    '<span class="trace-summary-label">Details</span>' +
+                    '<span class="trace-summary-label">Activity</span>' +
+                    '<span class="trace-summary-status"></span>' +
                 '</summary>' +
                 '<div class="trace-body">' +
                     '<div class="trace-meta"></div>' +
@@ -2828,6 +2901,49 @@
                 ctx.group.appendChild(disclosure);
             }
             return disclosure;
+        }
+
+        // —— Activity timeline summary (DeerFlow-style live status) ——
+        // Friendly verb for a tool name, used in the live "Zoe is doing X…" line.
+        function activityToolVerb(name) {
+            const verbs = {
+                web_search: 'Searching the web', browse: 'Reading a page',
+                bash: 'Running a command', ha_control: 'Controlling a device',
+                mempalace_search: 'Checking memory', mempalace_add: 'Saving to memory',
+                escalate_to_openclaw: 'Escalating to OpenClaw',
+                show_map: 'Preparing a map', show_chart: 'Drawing a chart',
+                action_menu: 'Preparing options', list_openclaw_plugins: 'Listing plugins',
+            };
+            return verbs[name] || ('Using ' + String(name || 'a tool'));
+        }
+
+        // Pure helper (also unit-tested): build the collapsed activity summary text.
+        function buildActivitySummaryText(toolCount, done) {
+            if (!toolCount) return done ? '' : 'Working…';
+            const noun = toolCount === 1 ? 'step' : 'steps';
+            return done ? (toolCount + ' ' + noun) : (toolCount + ' ' + noun + ' running…');
+        }
+
+        // Reflect live progress (or a sealed summary) onto the trace disclosure header.
+        function updateActivitySummary(ctx, opts) {
+            opts = opts || {};
+            if (!ctx || !ctx.traceDisclosureEl) return;
+            const statusEl = ctx.traceDisclosureEl.querySelector('.trace-summary-status');
+            if (!statusEl) return;
+            const toolCount = ctx.toolTraceEl
+                ? ctx.toolTraceEl.querySelectorAll('.tool-call-card[data-tool-call-id]').length
+                : 0;
+            if (opts.live) {
+                statusEl.textContent = '· ' + opts.live;
+                statusEl.classList.add('running');
+            } else if (opts.done) {
+                statusEl.textContent = '· ' + buildActivitySummaryText(toolCount, true);
+                statusEl.classList.remove('running');
+                // Tidy up: collapse the disclosure to its summary when the run ends.
+                ctx.traceDisclosureEl.open = false;
+            } else {
+                statusEl.textContent = toolCount ? ('· ' + buildActivitySummaryText(toolCount, false)) : '';
+            }
         }
 
         function ensureToolCallCard(ctx, toolCallId, toolCallName) {
@@ -3141,6 +3257,7 @@
                     }
                 }
                 updateAgentStep(_tcId, _toolName, 'running');
+                updateActivitySummary(ctx, { live: activityToolVerb(_toolName) + '…' });
                 scrollToBottom();
                 return;
             }
@@ -3187,6 +3304,7 @@
                 }
                 const _resName = data.toolCallName || data.tool_call_name || _resId || '';
                 updateAgentStep(_resId, _resName, 'complete');
+                updateActivitySummary(ctx, {});
                 if (thinkingIndicator && thinkingIndicator.parentNode) {
                     thinkingIndicator.className = 'activity-indicator thinking';
                     const ic = thinkingIndicator.querySelector('span:first-child');
@@ -3241,6 +3359,9 @@
                 enhanceCodeBlocks(contentEl);
                 if (ctx.reasoningPanel) ctx.reasoningPanel.classList.remove('reasoning-thinking');
 
+                // Collapse the activity timeline to a tidy summary
+                updateActivitySummary(ctx, { done: true });
+
                 // Remove thinking indicator if never cleared by text chunks
                 if (thinkingIndicator && thinkingIndicator.parentNode) {
                     thinkingIndicator.remove();
@@ -3292,6 +3413,12 @@
                 // Append to group (below the bubble), NOT contentEl — RUN_FINISHED
                 // replaces contentEl.innerHTML which would wipe anything inside it.
                 renderChatComponent(data.value || {}, null, group);
+                return;
+            }
+            if (t === 'CUSTOM' && data.name === 'zoe.component') {
+                // Generic interactive component card. Mount to the group (not
+                // contentEl) so it survives the RUN_FINISHED innerHTML replace.
+                renderZoeComponent(data.value || {}, group);
                 return;
             }
             if (t === 'CUSTOM' && data.name === 'zoe.chatgpt_connect') {
@@ -4366,6 +4493,169 @@
             scrollToBottom();
         }
         
+        // ——————————————————————————————————————————————————————————————
+        // Generic interactive component (CUSTOM zoe.component)
+        // Shape: { component, props, actions?: [{label, kind?, query?, intent?, args?}] }
+        // Renders title/body + known list/calendar-ish fields generically, plus
+        // action buttons. All text is escaped; action payloads are NEVER injected
+        // as HTML — they're stored in a registry and dispatched by data-index.
+        // ——————————————————————————————————————————————————————————————
+
+        // Escape into an HTML-attribute-safe string (no markup, no <br>).
+        function escapeAttr(text) {
+            return String(text == null ? '' : text)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
+        // Pretty-print a scalar/primitive prop value as escaped text.
+        function zoeComponentScalar(v) {
+            if (v == null) return '';
+            if (typeof v === 'object') {
+                try { return escapeHtml(JSON.stringify(v)); } catch (e) { return ''; }
+            }
+            return escapeHtml(String(v));
+        }
+
+        // Build the inner HTML for a generic zoe.component. Pure + unit-tested:
+        // returns { html, actions } where actions is the validated action list.
+        function buildZoeComponentHtml(value) {
+            value = value || {};
+            const props = (value.props && typeof value.props === 'object') ? value.props : {};
+            const compName = String(value.component || 'component');
+            const actions = Array.isArray(value.actions) ? value.actions : [];
+
+            let parts = [];
+
+            // Header: title (+ small component-type label)
+            const title = props.title || props.heading || props.name;
+            parts.push('<div class="zc-header">');
+            parts.push('<span class="zc-kind">' + escapeHtml(compName.replace(/_/g, ' ')) + '</span>');
+            if (title) parts.push('<span class="zc-title">' + escapeHtml(String(title)) + '</span>');
+            parts.push('</div>');
+
+            // Body: prefer markdown (sanitized), else plain body/text/message/subtitle
+            const bodyText = props.body || props.text || props.message || props.subtitle || props.description;
+            if (bodyText != null) {
+                parts.push('<div class="zc-body">' + renderMarkdown(String(bodyText)) + '</div>');
+            }
+
+            // List-ish fields: items / list / entries (array of strings or {label/title/text})
+            const listField = props.items || props.list || props.entries;
+            if (Array.isArray(listField) && listField.length) {
+                parts.push('<ul class="zc-list">');
+                for (const it of listField) {
+                    let label, sub, done = false;
+                    if (it && typeof it === 'object') {
+                        label = it.label || it.title || it.text || it.name || '';
+                        sub = it.detail || it.note || it.subtitle || '';
+                        done = !!(it.done || it.checked || it.completed);
+                    } else {
+                        label = it;
+                    }
+                    parts.push('<li class="zc-list-item' + (done ? ' done' : '') + '">' +
+                        (done ? '<span class="zc-check">✓</span>' : '<span class="zc-dot">•</span>') +
+                        '<span class="zc-list-label">' + escapeHtml(String(label)) + '</span>' +
+                        (sub ? '<span class="zc-list-sub">' + escapeHtml(String(sub)) + '</span>' : '') +
+                        '</li>');
+                }
+                parts.push('</ul>');
+            }
+
+            // Calendar-ish field: events (array of {title/summary, start/when/time, location?})
+            const events = props.events || props.calendar;
+            if (Array.isArray(events) && events.length) {
+                parts.push('<div class="zc-events">');
+                for (const ev of events) {
+                    const evObj = (ev && typeof ev === 'object') ? ev : { title: ev };
+                    const evTitle = evObj.title || evObj.summary || evObj.name || '';
+                    const evWhen = evObj.start || evObj.when || evObj.time || evObj.date || '';
+                    const evLoc = evObj.location || evObj.where || '';
+                    parts.push('<div class="zc-event">' +
+                        '<span class="zc-event-when">' + escapeHtml(String(evWhen)) + '</span>' +
+                        '<span class="zc-event-title">' + escapeHtml(String(evTitle)) + '</span>' +
+                        (evLoc ? '<span class="zc-event-loc">📍 ' + escapeHtml(String(evLoc)) + '</span>' : '') +
+                        '</div>');
+                }
+                parts.push('</div>');
+            }
+
+            // Generic remaining scalar fields (skip ones we already handled / objects/arrays)
+            const handled = new Set(['title','heading','name','body','text','message','subtitle',
+                'description','items','list','entries','events','calendar']);
+            const kvRows = [];
+            for (const k of Object.keys(props)) {
+                if (handled.has(k)) continue;
+                const v = props[k];
+                if (v == null || Array.isArray(v)) continue;
+                kvRows.push('<div class="zc-kv"><span class="zc-kv-k">' + escapeHtml(k.replace(/_/g, ' ')) +
+                    '</span><span class="zc-kv-v">' + zoeComponentScalar(v) + '</span></div>');
+            }
+            if (kvRows.length) parts.push('<div class="zc-kvs">' + kvRows.join('') + '</div>');
+
+            // Action buttons — payload referenced by index only, never inlined as HTML.
+            if (actions.length) {
+                let btns = [];
+                for (let i = 0; i < actions.length; i++) {
+                    const a = actions[i] || {};
+                    const kind = (a.kind === 'primary' || a.kind === 'warn') ? a.kind : 'normal';
+                    btns.push('<button type="button" class="zc-action ' + kind + '" data-zc-action="' + i + '">' +
+                        escapeHtml(String(a.label == null ? 'Action' : a.label)) + '</button>');
+                }
+                parts.push('<div class="zc-actions">' + btns.join('') + '</div>');
+            }
+
+            return { html: parts.join(''), actions: actions };
+        }
+
+        // Dispatch a clicked component action through the existing chat send path.
+        // - query  → submit that text as a new chat turn (reuses tryPrompt → sendMessage)
+        // - intent → no dedicated backend action endpoint exists, so fall back to a
+        //            natural-language turn describing the intent (+ optional args).
+        function runZoeComponentAction(action) {
+            if (!action || typeof action !== 'object') return;
+            if (isStreaming) {
+                showNotification('Zoe is still responding — try again in a moment.', 'info');
+                return;
+            }
+            let text = '';
+            if (action.query) {
+                text = String(action.query);
+            } else if (action.intent) {
+                text = String(action.intent);
+                if (action.args && typeof action.args === 'object') {
+                    try { text += ' ' + JSON.stringify(action.args); } catch (e) { /* ignore */ }
+                }
+            }
+            if (!text.trim()) return;
+            // Reuse the page's existing send path (sets #chatInput + sendMessage()).
+            tryPrompt(text);
+        }
+
+        // Mount a generic component card into the message group (survives RUN_FINISHED).
+        function renderZoeComponent(value, messageGroup) {
+            const built = buildZoeComponentHtml(value);
+            const container = document.createElement('div');
+            container.className = 'ui-component zoe-component-card';
+            container.innerHTML = built.html;
+
+            // Wire action buttons via a registry (no payload in the DOM).
+            container.querySelectorAll('.zc-action[data-zc-action]').forEach((btn) => {
+                const idx = parseInt(btn.getAttribute('data-zc-action'), 10);
+                const action = built.actions[idx];
+                btn.addEventListener('click', () => runZoeComponentAction(action));
+            });
+
+            if (messageGroup) {
+                messageGroup.appendChild(container);
+                // Keep the trace disclosure last, like renderChatComponent does.
+                const trace = messageGroup.querySelector('.trace-disclosure');
+                if (trace) messageGroup.appendChild(trace);
+            }
+            scrollToBottom();
+            return container;
+        }
+
         function renderQRCode(container, props) {
             container.className += ' qr-component';
             const canvas = document.createElement('canvas');
