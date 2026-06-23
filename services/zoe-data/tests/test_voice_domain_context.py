@@ -22,6 +22,12 @@ def test_no_context_for_non_domain_turns(domain):
     assert out is None
 
 
+def test_none_router_decision():
+    # Test the actual call pattern when semantic router is disabled
+    out = _run(v._voice_domain_context(None, "jason"))
+    assert out is None
+
+
 def test_calendar_context_injected(monkeypatch):
     import intent_router as ir
     seen = {}
