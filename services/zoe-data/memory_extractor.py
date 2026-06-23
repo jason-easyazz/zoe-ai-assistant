@@ -10,9 +10,23 @@ persist them through MemoryService. It is intentionally lightweight:
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 from dataclasses import dataclass
 from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+
+def _record_quality_reject(source: str, reason: str, text: str) -> None:
+    """Log + count a write-quality reject so dropped candidates are auditable."""
+    logger.info("MEMORY_QUALITY_REJECT source=%s reason=%s text=%r",
+                source, reason, (text or "")[:120])
+    try:
+        from memory_metrics import memory_quality_reject_count
+        memory_quality_reject_count.labels(source=source, reason=reason).inc()
+    except Exception:
+        pass
 
 
 @dataclass(frozen=True)
@@ -227,7 +241,17 @@ async def extract_and_ingest(
     base_turn_id = hashlib.sha1(user_message.encode("utf-8", "ignore")).hexdigest()[:16]
     status = "approved" if auto_approve else "pending"
 
+    from memory_quality import is_storable_fact
+
     for idx, c in enumerate(candidates):
+        # Write-quality gate (mem0-style): drop candidates that aren't shaped
+        # like a storable personal fact before they reach the store. Conservative
+        # — the regex templates already produce structured text, so this only
+        # catches genuine non-facts (interrogatives / meta) that slip through.
+        storable, reason = is_storable_fact(c.text)
+        if not storable:
+            _record_quality_reject(source, reason, c.text)
+            continue
         user_turn_id = f"{base_turn_id}-{idx}"
         ref = await svc.ingest(
             c.text,
