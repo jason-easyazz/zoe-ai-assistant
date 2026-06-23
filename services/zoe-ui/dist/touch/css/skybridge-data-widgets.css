@@ -419,6 +419,20 @@ body:not(.sky-empty) .sky-list-items.is-list-detail {
     align-content: start;
 }
 
+/* Tap-to-edit: list item and calendar event rows are now <button> elements.
+   Reset the native button chrome so they look identical to the old <div> rows. */
+button.sky-list-item-row,
+button.sky-event-row {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 100%;
+    margin: 0;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
 body:not(.sky-empty) .sky-list-item-row,
 body:not(.sky-empty) .sky-list-overview-row,
 body:not(.sky-empty) .sky-person-card {

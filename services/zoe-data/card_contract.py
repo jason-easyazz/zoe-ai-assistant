@@ -177,3 +177,71 @@ def reserved_field_names(fields: dict[str, Any]) -> list[str]:
         for name in fields
         if any(str(name).startswith(prefix) for prefix in RESERVED_PREFIXES)
     )
+
+
+# ── Interactive component contract ──────────────────────────────────────────
+# A "component" is a renderer-agnostic interactive payload the brain (or the
+# fast path) emits and chat/touch/orb render identically: a display `component`
+# + `props`, plus optional `actions` that re-enter Zoe's abilities. An action is
+# either a natural-language re-dispatch (`query`) or a typed intent dispatch
+# (`intent` + `args`). Actions are ALWAYS re-validated server-side before
+# execution — the client payload is never trusted to perform the action itself.
+
+ALLOWED_ACTION_KINDS = {"primary", "normal", "warn"}
+
+
+def validate_component_action(action: Any) -> dict[str, Any]:
+    """Validate one interactive component action.
+
+    Requires `label` and at least one of `query` (NL re-dispatch) or `intent`
+    (typed dispatch, with optional `args`). `kind` styles the control.
+    """
+    if not isinstance(action, dict):
+        raise CardContractError("component action must be an object")
+    label = _required_text(action.get("label"), "action.label")
+    kind = str(action.get("kind") or "normal")
+    if kind not in ALLOWED_ACTION_KINDS:
+        raise CardContractError(
+            f"action.kind must be one of: {', '.join(sorted(ALLOWED_ACTION_KINDS))}"
+        )
+    query = str(action.get("query") or "").strip()
+    intent = str(action.get("intent") or "").strip()
+    if not query and not intent:
+        raise CardContractError("component action requires 'query' or 'intent'")
+    normalized: dict[str, Any] = {"label": label, "kind": kind}
+    if query:
+        normalized["query"] = query
+    if intent:
+        normalized["intent"] = intent
+        args = action.get("args")
+        if args is None:
+            args = action.get("slots") or {}
+        if not isinstance(args, dict):
+            raise CardContractError("component action args must be an object")
+        normalized["args"] = deepcopy(args)
+    return normalized
+
+
+def validate_component(payload: Any) -> dict[str, Any]:
+    """Validate and normalize an interactive component payload.
+
+    Shape: ``{component: str, props: dict, actions?: [action]}``. This is the
+    renderer-agnostic envelope carried in the AG-UI ``zoe.component`` CUSTOM
+    event and the Skybridge ``{component, props}`` card shape.
+    """
+    if not isinstance(payload, dict):
+        raise CardContractError("component must be an object")
+    component = _required_text(payload.get("component"), "component")
+    props = payload.get("props")
+    if props is None:
+        props = {}
+    if not isinstance(props, dict):
+        raise CardContractError("component props must be an object")
+    raw_actions = payload.get("actions") or []
+    if not isinstance(raw_actions, list):
+        raise CardContractError("component actions must be a list")
+    actions = [validate_component_action(a) for a in raw_actions]
+    normalized: dict[str, Any] = {"component": component, "props": deepcopy(props)}
+    if actions:
+        normalized["actions"] = actions
+    return normalized
