@@ -1385,6 +1385,26 @@ async def _mempalace_add(
     """
     if not summary or not summary.strip():
         return False
+    # Write-quality gate (mem0-style): reject conversational candidates that
+    # aren't shaped like a storable personal fact (interrogatives, LLM meta-
+    # rambling, empty/too-short) before they pollute the store. Conservative —
+    # leans ACCEPT. Background path, never blocks a voice reply.
+    try:
+        from memory_quality import is_storable_fact
+        storable, reason = is_storable_fact(summary)
+        if not storable:
+            logger.info("MEMORY_QUALITY_REJECT source=%s reason=%s text=%r",
+                        added_by or "zoe_agent", reason, summary[:120])
+            try:
+                from memory_metrics import memory_quality_reject_count
+                memory_quality_reject_count.labels(
+                    source=added_by or "zoe_agent", reason=reason).inc()
+            except Exception:
+                pass
+            return False
+    except Exception:
+        # If the gate itself errors, fall through and store — never lose a fact.
+        pass
     try:
         from memory_service import get_memory_service, MemoryServiceError
         svc = get_memory_service()
