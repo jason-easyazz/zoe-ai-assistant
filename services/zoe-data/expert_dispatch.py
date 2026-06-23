@@ -330,6 +330,66 @@ def _echo_fact(text: str) -> str:
     return t.strip()
 
 
+def _record_quality_reject(source: str, reason: str, text: str) -> None:
+    """Log + count a write-quality reject so we can audit what's being dropped."""
+    logger.info("MEMORY_QUALITY_REJECT source=%s reason=%s text=%r",
+                source, reason, (text or "")[:120])
+    try:
+        from memory_metrics import memory_quality_reject_count
+        memory_quality_reject_count.labels(source=source, reason=reason).inc()
+    except Exception:
+        pass
+
+
+async def _ingest_or_supersede(svc, text: str, *, user_id: str, source: str,
+                               session_id: Optional[str], user_turn_id: Optional[str],
+                               memory_type: str, confidence: float,
+                               tags: list[str]) -> None:
+    """Ingest a conversational fact, superseding a same-attribute existing row.
+
+    Best-effort and OFF the voice hot path (callers already run this in the
+    background). Uses MemoryService.search to find a near-duplicate / same-
+    attribute fact; if found, archives the old row and ingests the new value
+    with a `supersedes` link rather than adding a duplicate. Any failure in the
+    dedup step degrades to a plain ingest so we never lose a real fact."""
+    old_id: Optional[str] = None
+    try:
+        from memory_quality import classify_against_existing
+        rows = await svc.search(text, user_id=user_id, limit=3)
+        existing = [(getattr(r, "id", ""), getattr(r, "text", "") or "") for r in (rows or [])]
+        action, match_id = classify_against_existing(text, existing)
+        if action == "update" and match_id:
+            old_id = match_id
+    except Exception as exc:
+        logger.debug("near-dedup check failed (%s) → plain ingest", exc)
+        old_id = None
+
+    metadata = {"supersedes": old_id} if old_id else None
+    ref = await svc.ingest(
+        text, user_id=user_id, source=source,
+        session_id=session_id, user_turn_id=user_turn_id,
+        memory_type=memory_type, confidence=confidence, status="approved",
+        tags=tags, metadata=metadata,
+    )
+    new_id = getattr(ref, "id", None)
+    # Only archive the old row if the ingest actually wrote a DISTINCT new row.
+    # ingest dedups on a text-derived mem_id, so a near-identical value can map to
+    # the same id as old_id (or be dropped, ref=None) — archiving then would delete
+    # the only copy of the fact. Guard against that.
+    if old_id and new_id and new_id != old_id:
+        try:
+            await svc.review(old_id, decision="archive", actor=source,
+                             note="superseded by newer conversational fact")
+            from memory_metrics import memory_supersede_count
+            memory_supersede_count.labels(source=source).inc()
+            logger.info("MEMORY_SUPERSEDE source=%s old=%s new=%r",
+                        source, old_id, text[:80])
+        except Exception as exc:
+            # New row is already stored; failing to archive the old one just
+            # leaves a (harmless) near-dup — don't lose the new fact over it.
+            logger.debug("supersede archive failed (%s); new row kept", exc)
+
+
 async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
                      user_turn_id: Optional[str] = None) -> Optional[str]:
     """people/memory: STORE a taught fact (statement) or RECALL one (question).
@@ -360,6 +420,19 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
     )
     if is_question and not imperative_store:
         return await _run_expert(domain, text, user_id, session_id)
+    # Write-quality gate (mem0-style): even past the store-vs-recall split, drop
+    # candidates that aren't shaped like a storable personal fact (interrogative
+    # leftovers, LLM meta-rambling, empty/too-short). Conservative — leans ACCEPT.
+    try:
+        from memory_quality import is_storable_fact
+        storable, reason = is_storable_fact(text)
+    except Exception:
+        storable, reason = True, ""  # gate unavailable → degrade to plain store
+    if not storable:
+        _record_quality_reject("voice_fact", reason, text)
+        # Not a fact → treat as a recall/conversational turn so the user still
+        # gets a useful reply instead of a bogus "Got it, I'll remember …".
+        return await _run_expert(domain, text, user_id, session_id)
     # Statement → store the fact.
     # Idempotency: ingest dedups on user_turn_id, but the voice path rarely
     # supplies one, so the same spoken fact got stored 3-4× (which then polluted
@@ -371,11 +444,15 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
         user_turn_id = "fact-" + hashlib.sha1(f"{user_id}|{norm}".encode()).hexdigest()[:16]
     try:
         from memory_service import get_memory_service
-        await get_memory_service().ingest(
-            text, user_id=user_id, source="voice_fact",
+        svc = get_memory_service()
+        # Near-dedup / supersession (best-effort, background path only): if a
+        # high-similarity same-attribute fact already exists ("my dad's name is
+        # Neil" vs an earlier value), UPDATE/supersede it instead of stacking a
+        # duplicate/contradiction. Falls through to a plain ingest on any error.
+        await _ingest_or_supersede(
+            svc, text, user_id=user_id, source="voice_fact",
             session_id=session_id or None, user_turn_id=user_turn_id,
-            memory_type="fact", confidence=0.85, status="approved",
-            tags=["voice", "self"],
+            memory_type="fact", confidence=0.85, tags=["voice", "self"],
         )
     except Exception as exc:
         logger.warning("store_fact ingest failed (%s) → brain", exc)
