@@ -30,6 +30,8 @@ from ag_ui.core import (
 )
 from ag_ui.encoder import EventEncoder
 
+from card_contract import validate_component
+
 
 class AgRunRecorder:
     """Records JSON payloads actually sent on the wire (for persistence / tests)."""
@@ -104,3 +106,14 @@ async def iter_openclaw_text_chunks(
 def new_run_ids() -> tuple[str, str]:
     """Returns (run_id, assistant_message_id)."""
     return uuid.uuid4().hex, uuid.uuid4().hex[:12]
+
+
+def component_custom_event(component: dict[str, Any]) -> CustomEvent:
+    """Build a canonical AG-UI CUSTOM event carrying an interactive component.
+
+    Validates the component against the contract first, so a malformed payload
+    fails loudly server-side rather than rendering blank on the client. The
+    frontend mounts `zoe.component` payloads as interactive components.
+    """
+    validated = validate_component(component)
+    return CustomEvent(type=EventType.CUSTOM, name="zoe.component", value=validated)
