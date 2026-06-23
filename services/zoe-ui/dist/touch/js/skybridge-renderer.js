@@ -158,11 +158,15 @@
             const title = item.title || item.name || 'Calendar event';
             const category = calendarCategoryClass(item.category);
             const detail = [item.location].filter(Boolean).join(' · ');
+            // Tap-to-edit: each event row opens the existing calendar event editor card
+            // through /api/skybridge/resolve. Including the time disambiguates same-title events.
+            const startTime = String(item.start_time || '').slice(0, 5);
+            const editQuery = 'edit ' + title + (startTime ? ' at ' + startTime : '');
             return [
-                '<div class="sky-event-row sky-calendar-event ' + escapeHtml(category) + '">',
+                '<button type="button" class="sky-event-row sky-calendar-event ' + escapeHtml(category) + '" data-sky-action="query" data-query="' + escapeHtml(editQuery) + '">',
                 '<div class="sky-calendar-time"><span>' + escapeHtml(formatEventTime(item)) + '</span>' + (index === 0 ? '<b>Next</b>' : '') + '</div>',
                 '<div class="sky-calendar-event-main"><strong>' + escapeHtml(title) + '</strong>' + (detail ? '<em>' + escapeHtml(detail) + '</em>' : '') + '</div>',
-                '</div>'
+                '</button>'
             ].join('');
         }).join('');
         const empty = [
@@ -411,7 +415,12 @@
         return '<div class="sky-list-switcher">' + tabs + '<button type="button" class="sky-list-tab new-list" data-sky-action="query" data-query="new list"><span>New list</span></button></div>';
     }
 
-    function renderListItemRow(item, index) {
+    function listEditQuery(title, listType) {
+        const type = String(listType || 'shopping').trim() || 'shopping';
+        return 'edit ' + title + ' on the ' + type + ' list';
+    }
+
+    function renderListItemRow(item, index, listType) {
         const isObject = typeof item === 'object' && item;
         const title = isObject ? (item.text || item.title || item.label || 'List item') : String(item || 'List item');
         const completed = !!(isObject && item.completed);
@@ -419,12 +428,14 @@
         const detail = isObject ? [item.quantity, item.category, item.assigned_to].filter(Boolean).join(' · ') : '';
         const priorityValue = isObject && item.priority ? String(item.priority).trim().toLowerCase() : '';
         const priority = priorityValue && priorityValue !== 'normal' ? '<b>' + escapeHtml(item.priority) + '</b>' : '';
+        // Tap-to-edit: each row is a query button that opens the existing item editor card
+        // through /api/skybridge/resolve (mutation -> authoritative re-read -> refresh).
         return [
-            '<div class="sky-list-item-row' + (completed ? ' is-done' : '') + (recent ? ' is-recent' : '') + '">',
+            '<button type="button" class="sky-list-item-row' + (completed ? ' is-done' : '') + (recent ? ' is-recent' : '') + '" data-sky-action="query" data-query="' + escapeHtml(listEditQuery(title, listType)) + '">',
             '<div class="sky-list-check" aria-hidden="true">' + (completed ? '✓' : '') + '</div>',
             '<div class="sky-list-item-main"><strong>' + escapeHtml(title) + '</strong>' + (detail ? '<em>' + escapeHtml(detail) + '</em>' : '') + '</div>',
             priority ? '<div class="sky-list-item-meta">' + priority + '</div>' : '',
-            '</div>'
+            '</button>'
         ].join('');
     }
 
@@ -452,7 +463,7 @@
         const accent = listAccentClass(listType);
         const selectedId = props.list_id && props.list_id !== 'lists-overview' ? props.list_id : '';
         const visibleItems = items.slice(0, 16);
-        const rows = visibleItems.map(renderListItemRow).join('');
+        const rows = visibleItems.map((item, index) => renderListItemRow(item, index, listType)).join('');
         const overviewRows = !items.length && lists.length ? '<div class="sky-list-columns">' + lists.slice(0, 6).map(renderListColumn).join('') + '</div>' : '';
         const itemsClass = 'sky-list-items ' + (rows ? 'is-list-detail' : 'is-list-overview');
         const empty = [

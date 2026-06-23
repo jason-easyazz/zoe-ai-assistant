@@ -329,7 +329,7 @@
     }
 
     function isDataQuery(query) {
-        return /\b(calendar|schedule|events|appointments|agenda|weather|forecast|temperature|rain|windy|wind|list|shopping|groceries|grocery|tasks|todos|people|contacts|person|profile|remember|change|move|reschedule|add)\b/i.test(query || '');
+        return /\b(calendar|schedule|events|appointments|agenda|weather|forecast|temperature|rain|windy|wind|list|shopping|groceries|grocery|tasks|todos|people|contacts|person|profile|remember|change|move|reschedule|add|remove|take|delete|drop|edit)\b/i.test(query || '');
     }
 
     function projectCards(query) {
