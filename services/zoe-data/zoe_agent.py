@@ -1321,7 +1321,11 @@ def _model_name() -> str:
 # the per-user entry so newly added facts surface on the next turn.
 
 _USER_FACTS_CACHE: dict[str, tuple[float, str]] = {}
-_USER_FACTS_TTL_S: float = float(os.environ.get("PI_USER_FACTS_CACHE_TTL_S", "2.0"))
+# The cold Chroma read is ~1.4s and sits on the voice brain turn's critical path.
+# A 2s TTL expired during the wake→speak→STT gap, so every turn re-paid it. Fact
+# WRITES invalidate the cache immediately (_invalidate_user_facts_cache), so a long
+# TTL stays fresh while letting the wake-time warm survive until the turn fires.
+_USER_FACTS_TTL_S: float = float(os.environ.get("PI_USER_FACTS_CACHE_TTL_S", "120.0"))
 
 
 def _invalidate_user_facts_cache(user_id: str) -> None:
