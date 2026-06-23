@@ -1321,7 +1321,11 @@ def _model_name() -> str:
 # the per-user entry so newly added facts surface on the next turn.
 
 _USER_FACTS_CACHE: dict[str, tuple[float, str]] = {}
-_USER_FACTS_TTL_S: float = float(os.environ.get("PI_USER_FACTS_CACHE_TTL_S", "2.0"))
+# The cold Chroma read is ~1.4s and sits on the voice brain turn's critical path.
+# A 2s TTL expired during the wake→speak→STT gap, so every turn re-paid it. Fact
+# WRITES invalidate the cache immediately (_invalidate_user_facts_cache), so a long
+# TTL stays fresh while letting the wake-time warm survive until the turn fires.
+_USER_FACTS_TTL_S: float = float(os.environ.get("PI_USER_FACTS_CACHE_TTL_S", "120.0"))
 
 
 def _invalidate_user_facts_cache(user_id: str) -> None:
@@ -1381,6 +1385,26 @@ async def _mempalace_add(
     """
     if not summary or not summary.strip():
         return False
+    # Write-quality gate (mem0-style): reject conversational candidates that
+    # aren't shaped like a storable personal fact (interrogatives, LLM meta-
+    # rambling, empty/too-short) before they pollute the store. Conservative —
+    # leans ACCEPT. Background path, never blocks a voice reply.
+    try:
+        from memory_quality import is_storable_fact
+        storable, reason = is_storable_fact(summary)
+        if not storable:
+            logger.info("MEMORY_QUALITY_REJECT source=%s reason=%s text=%r",
+                        added_by or "zoe_agent", reason, summary[:120])
+            try:
+                from memory_metrics import memory_quality_reject_count
+                memory_quality_reject_count.labels(
+                    source=added_by or "zoe_agent", reason=reason).inc()
+            except Exception:
+                pass
+            return False
+    except Exception:
+        # If the gate itself errors, fall through and store — never lose a fact.
+        pass
     try:
         from memory_service import get_memory_service, MemoryServiceError
         svc = get_memory_service()
