@@ -38,4 +38,12 @@ for _ in $(seq 1 45); do
     sleep 2
 done
 echo "▶ health=$code  (live = main @ $(git -C "$LIVE" rev-parse --short HEAD))"
-[[ "$code" == "200" ]] || { echo "✗ health check failed" >&2; exit 1; }
+if [[ "$code" != "200" ]]; then
+    # The new commit is unhealthy — roll the live tree back to the pre-pull tip
+    # (git records it in ORIG_HEAD) and restart, so a bad main can't leave the
+    # service down on a broken commit.
+    echo "✗ health check failed — rolling back to $(git -C "$LIVE" rev-parse --short ORIG_HEAD)" >&2
+    git -C "$LIVE" reset --hard ORIG_HEAD
+    systemctl --user restart "$SERVICE"
+    exit 1
+fi
