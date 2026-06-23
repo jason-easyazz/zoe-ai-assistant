@@ -107,7 +107,10 @@ async def _run(args) -> int:
     import semantic_router as sr
     import fast_tiers as ft
     import intent_router as ir
-    from routers.voice_tts import _transcribe_audio_impl, _clean_for_speech, _voice_brain_memory
+    from routers.voice_tts import (
+        _transcribe_audio_impl, _clean_for_speech, _voice_brain_memory,
+        _voice_domain_context, _merge_brain_context,
+    )
 
     sr.warm()
 
@@ -169,6 +172,11 @@ async def _run(args) -> int:
                 try:
                     from brain_dispatch import brain_oneshot
                     db_mem, portrait = await _voice_brain_memory(user)
+                    # Mirror live: inject calendar/lists/reminders context on deferral
+                    # (#760) so a calendar follow-up isn't wrongly answered "I don't
+                    # have access". The harness must match the live brain turn exactly.
+                    domain_ctx = await _voice_domain_context(rr, user)
+                    db_mem = _merge_brain_context(db_mem, domain_ctx)
                     reply = (await brain_oneshot(
                         transcript, "replay", user_id=user, voice_mode=True,
                         db_memory_context=db_mem, portrait=portrait,
