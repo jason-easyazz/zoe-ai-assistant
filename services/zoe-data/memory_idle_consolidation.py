@@ -18,11 +18,63 @@ background loop). Reuses the existing Gemma extractor + write-quality gate.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
+from collections import Counter
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+
+_GUEST_USERS = ("guest", "voice-daemon", "")
+
+
+def _is_real_user(user_id: Any) -> bool:
+    """True only for a concrete, non-guest identity."""
+    return bool(user_id) and str(user_id).strip() not in _GUEST_USERS
+
+
+def _user_from_metadata(meta: Any) -> Optional[str]:
+    """Extract a user_id from a chat_messages.metadata value (text JSON or dict)."""
+    if not meta:
+        return None
+    if isinstance(meta, str):
+        try:
+            meta = json.loads(meta)
+        except (ValueError, TypeError):
+            return None
+    if isinstance(meta, dict):
+        uid = meta.get("user_id")
+        return str(uid) if _is_real_user(uid) else None
+    return None
+
+
+def _resolve_owner(rows: list, session_user_id: Any = None) -> Optional[str]:
+    """Resolve the conversation owner from the per-turn metadata.
+
+    Auth is recorded per-turn in chat_messages.metadata {"user_id": ...} even
+    though chat_sessions.user_id stays 'guest'. Pick the most-recent non-guest
+    user, breaking ties by frequency. Falls back to the session user_id only
+    when it is itself a real (non-guest) identity. Returns None when no real
+    user can be resolved — caller skips the session.
+    """
+    counts: Counter = Counter()
+    most_recent: Optional[str] = None
+    # rows arrive oldest→newest, so the last real user seen wins recency.
+    for r in rows:
+        uid = _user_from_metadata(r["metadata"] if "metadata" in r else None)
+        if uid:
+            counts[uid] += 1
+            most_recent = uid
+    if most_recent:
+        # If one user dominates by count, prefer them; else use most recent.
+        top, n = counts.most_common(1)[0]
+        if n > counts.get(most_recent, 0):
+            return top
+        return most_recent
+    if _is_real_user(session_user_id):
+        return str(session_user_id)
+    return None
 
 
 def _enabled() -> bool:
@@ -63,29 +115,55 @@ async def _ensure_state_table(conn) -> None:
 async def find_idle_sessions(conn) -> list[dict]:
     """Sessions that have gone idle and carry NEW turns since the last consolidation.
 
-    Joins chat_sessions for the owning user_id (skips guest/unknown). created_at is
-    stored as text → cast to timestamptz for the time math.
+    The owning user is resolved from the per-turn message metadata (auth is recorded
+    per-turn even though chat_sessions.user_id stays 'guest'), falling back to a real
+    chat_sessions.user_id only when present. Sessions with no resolvable real user are
+    skipped. created_at is stored as text → cast to timestamptz for the time math.
     """
     rows = await conn.fetch(
         """
-        SELECT m.session_id AS session_id,
-               s.user_id    AS user_id,
-               max(m.created_at::timestamptz) AS last_at,
-               count(*)     AS n
-        FROM chat_messages m
-        JOIN chat_sessions s ON s.id = m.session_id
-        LEFT JOIN memory_consolidation_state st ON st.session_id = m.session_id
-        WHERE m.created_at::timestamptz > now() - ($1::int * interval '1 second')
-          AND (st.last_consolidated_at IS NULL
-               OR m.created_at::timestamptz > st.last_consolidated_at)
-          AND s.user_id IS NOT NULL AND s.user_id NOT IN ('guest', '')
-        GROUP BY m.session_id, s.user_id
-        HAVING max(m.created_at::timestamptz) < now() - ($2::int * interval '1 second')
-           AND count(*) >= $3::int
+        WITH candidate AS (
+            SELECT m.session_id AS session_id,
+                   max(m.created_at::timestamptz) AS last_at,
+                   count(*)     AS n
+            FROM chat_messages m
+            LEFT JOIN memory_consolidation_state st ON st.session_id = m.session_id
+            WHERE m.created_at::timestamptz > now() - ($1::int * interval '1 second')
+              AND (st.last_consolidated_at IS NULL
+                   OR m.created_at::timestamptz > st.last_consolidated_at)
+            GROUP BY m.session_id
+            HAVING max(m.created_at::timestamptz) < now() - ($2::int * interval '1 second')
+               AND count(*) >= $3::int
+        )
+        SELECT c.session_id AS session_id,
+               s.user_id    AS session_user_id,
+               c.last_at    AS last_at,
+               c.n          AS n,
+               (
+                   SELECT array_agg(m2.metadata ORDER BY m2.created_at::timestamptz)
+                   FROM chat_messages m2
+                   WHERE m2.session_id = c.session_id
+                     AND m2.metadata IS NOT NULL
+               ) AS metas
+        FROM candidate c
+        LEFT JOIN chat_sessions s ON s.id = c.session_id
         """,
         LOOKBACK_SECONDS, IDLE_SECONDS, MIN_TURNS,
     )
-    return [dict(r) for r in rows]
+    out: list[dict] = []
+    for r in rows:
+        metas = r["metas"] or []
+        meta_rows = [{"metadata": m} for m in metas]
+        owner = _resolve_owner(meta_rows, r["session_user_id"])
+        if not owner:
+            continue  # no real user → don't know whose memory to write
+        out.append({
+            "session_id": r["session_id"],
+            "user_id": owner,
+            "last_at": r["last_at"],
+            "n": r["n"],
+        })
+    return out
 
 
 def _fact_text(item: Any) -> str:
@@ -101,7 +179,7 @@ async def consolidate_session(conn, session_id: str, user_id: str,
     Returns the number of facts stored. Best-effort; never raises out."""
     rows = await conn.fetch(
         """
-        SELECT role, content, created_at::timestamptz AS at
+        SELECT role, content, metadata, created_at::timestamptz AS at
         FROM chat_messages
         WHERE session_id = $1
           AND ($2::timestamptz IS NULL OR created_at::timestamptz > $2)
@@ -111,6 +189,16 @@ async def consolidate_session(conn, session_id: str, user_id: str,
     )
     if len(rows) < MIN_TURNS:
         return 0
+
+    # Re-resolve the owner from per-turn metadata (the session's user_id is the
+    # caller's fallback). Skip if no real user can be determined — we must never
+    # write one user's facts under 'guest' or someone else.
+    owner = _resolve_owner(rows, user_id)
+    if not owner:
+        logger.debug("idle consolidation: no real user for session=%s — skipped", session_id)
+        return 0
+    user_id = owner
+
     transcript = "\n".join(f"{r['role']}: {r['content']}" for r in rows if r["content"])
 
     from memory_digest import _extract_facts_with_gemma
