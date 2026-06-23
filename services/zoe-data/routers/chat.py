@@ -484,6 +484,61 @@ _USE_LOCAL_BRAIN = _USE_ZOE_AGENT or _USE_ZOE_CORE
 _CHAT_INJECT_DB_MEMORY = os.environ.get("ZOE_CHAT_INJECT_DB_MEMORY", "0").strip().lower() in ("1", "true", "yes", "on")
 
 
+def brain_tool_sentinel_events(sentinel, *, assistant_message_id, tool_names):
+    """Map a brain ``__TOOL__:`` sentinel to canonical AG-UI tool/step events.
+
+    The Pi brain (zoe_core_client._read_turn) surfaces tool activity as JSON
+    sentinels with phases start / args / result. We translate each phase to the
+    same event shapes the intent path emits (StepStarted+ToolCallStart, then
+    ToolCallArgs+ToolCallEnd, then ToolCallResult+StepFinished) so a brain turn
+    that calls a tool produces TOOL_CALL_START → ARGS → END → RESULT (+STEP_*) in
+    order. ``tool_names`` is a caller-owned dict tracking id→name across the
+    stream so the result phase (which often omits the name) can finish the step
+    under the same name it started. Yields AG-UI event objects; the caller emits
+    them. Malformed sentinels yield nothing (logged, never raise).
+    """
+    try:
+        tc = json.loads(sentinel[len("__TOOL__:"):])
+    except Exception as exc:  # noqa: BLE001 - malformed sentinel must not break the turn
+        logger.debug("__TOOL__ parse error (non-fatal): %s", exc)
+        return
+    phase = tc.get("phase")
+    tc_id = str(tc.get("id") or "")
+    tc_name = str(tc.get("name") or "")
+    if phase == "start" and tc_id and tc_name:
+        tool_names[tc_id] = tc_name
+        yield StepStartedEvent(type=EventType.STEP_STARTED, step_name=tc_name)
+        yield ToolCallStartEvent(
+            type=EventType.TOOL_CALL_START,
+            tool_call_id=tc_id,
+            tool_call_name=tc_name,
+            parent_message_id=assistant_message_id,
+        )
+    elif phase == "args" and tc_id:
+        if tc_name:
+            tool_names.setdefault(tc_id, tc_name)
+        yield ToolCallArgsEvent(
+            type=EventType.TOOL_CALL_ARGS,
+            tool_call_id=tc_id,
+            delta=json.dumps(tc.get("args") or {}),
+        )
+        yield ToolCallEndEvent(type=EventType.TOOL_CALL_END, tool_call_id=tc_id)
+    elif phase == "result" and tc_id:
+        yield ToolCallResultEvent(
+            type=EventType.TOOL_CALL_RESULT,
+            message_id=assistant_message_id,
+            tool_call_id=tc_id,
+            content=str(tc.get("result", "")),
+            role="tool",
+        )
+        # The result sentinel often omits the name, so resolve via the id→name map
+        # (set at start/args), then any inline name, then the id as a last resort.
+        yield StepFinishedEvent(
+            type=EventType.STEP_FINISHED,
+            step_name=tool_names.get(tc_id) or tc_name or tc_id,
+        )
+
+
 def _brain_streaming(message, session_id, user_id="", **kwargs):
     """Brain streaming dispatch — zoe-core (Pi) by default, legacy on fallback.
 
@@ -2364,6 +2419,10 @@ async def chat_stream_generator(
                         f"[Intent hint: {_tier05_hint.name}, confidence {_tier05_hint.confidence:.2f}, "
                         f"slots {_tier05_hint.slots}] "
                     ) + expanded_msg
+                # Tracks tool_call_id → tool name across the brain stream so the
+                # result/finish events can re-use the name the start event paired
+                # with (the brain's result sentinel may omit it).
+                _brain_tool_names: dict[str, str] = {}
                 async for chunk in _brain_streaming(
                     expanded_msg,
                     session_id,
@@ -2451,6 +2510,18 @@ async def chat_stream_generator(
                             yield emit(CustomEvent(name="zoe.ui_component", value=comp))
                         except Exception as _uie:
                             logger.debug("__UI__ parse error (non-fatal): %s", _uie)
+                        continue
+                    if chunk.startswith("__TOOL__:"):
+                        # Brain tool activity — map the sentinel phases the Pi brain
+                        # surfaces (start/args/result) onto canonical AG-UI tool/step
+                        # events so the chat UI can show "what Zoe is doing". Shared
+                        # with the contract test via brain_tool_sentinel_events().
+                        for _tool_ev in brain_tool_sentinel_events(
+                            chunk,
+                            assistant_message_id=assistant_message_id,
+                            tool_names=_brain_tool_names,
+                        ):
+                            yield emit(_tool_ev)
                         continue
                     full_response += chunk
                     yield recorder.emit(
