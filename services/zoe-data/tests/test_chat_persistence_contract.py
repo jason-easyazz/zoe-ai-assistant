@@ -22,7 +22,11 @@ class _FakeDb:
 
 
 def _patch_db_ctx(monkeypatch, db):
-    """_save_chat_message acquires via db_pool.get_db_ctx() — patch that."""
+    """_save_chat_message acquires via db_pool.get_db_ctx() — patch that.
+
+    Uses monkeypatch.setitem/setattr so both the sys.modules entry and the
+    get_db_ctx attribute are restored on teardown (no cross-test leak).
+    """
     import sys
     import types
 
@@ -34,8 +38,8 @@ def _patch_db_ctx(monkeypatch, db):
             return False
 
     fake_db_pool = sys.modules.get("db_pool") or types.ModuleType("db_pool")
-    fake_db_pool.get_db_ctx = lambda: _Ctx()
-    sys.modules["db_pool"] = fake_db_pool
+    monkeypatch.setattr(fake_db_pool, "get_db_ctx", lambda: _Ctx(), raising=False)
+    monkeypatch.setitem(sys.modules, "db_pool", fake_db_pool)
 
 
 @pytest.mark.asyncio

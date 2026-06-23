@@ -201,8 +201,16 @@ async def consolidate_session(conn, session_id: str, user_id: str,
 
     transcript = "\n".join(f"{r['role']}: {r['content']}" for r in rows if r["content"])
 
-    from memory_digest import _extract_facts_with_gemma
-    facts = await _extract_facts_with_gemma(transcript)
+    try:
+        from memory_digest import _extract_facts_with_gemma
+        facts = await _extract_facts_with_gemma(transcript)
+    except Exception as exc:
+        # Honour the "never raises out" contract: a Gemma failure (OOM/timeout/
+        # import) must not abort the whole sweep — leave the watermark un-advanced
+        # so this session is retried next pass, and move on.
+        logger.warning("idle consolidation: fact extraction failed session=%s: %s",
+                       session_id, exc)
+        return 0
 
     stored = 0
     try:

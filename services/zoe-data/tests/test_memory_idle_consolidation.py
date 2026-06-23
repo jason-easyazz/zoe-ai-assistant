@@ -94,7 +94,7 @@ def test_consolidate_skips_too_few_turns(monkeypatch):
 
 # ── Increment 1b: per-turn user is persisted + resolved from metadata ──────────
 
-def test_saved_message_carries_user_id_in_metadata():
+def test_saved_message_carries_user_id_in_metadata(monkeypatch):
     """_save_chat_message stamps the resolved user into chat_messages.metadata as
     JSON {"user_id": ...}; guest/empty users leave metadata NULL."""
     import json as _json
@@ -122,8 +122,8 @@ def test_saved_message_carries_user_id_in_metadata():
             return False
 
     fake_db_pool = sys.modules.get("db_pool") or types.ModuleType("db_pool")
-    fake_db_pool.get_db_ctx = lambda: _Ctx()
-    sys.modules["db_pool"] = fake_db_pool
+    monkeypatch.setattr(fake_db_pool, "get_db_ctx", lambda: _Ctx(), raising=False)
+    monkeypatch.setitem(sys.modules, "db_pool", fake_db_pool)
 
     from routers.chat import _save_chat_message
 
