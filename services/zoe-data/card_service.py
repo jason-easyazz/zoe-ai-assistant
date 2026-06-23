@@ -80,9 +80,10 @@ def build_calendar_event_editor_content(slots: dict[str, Any] | None = None) -> 
     """Build canonical content for a calendar event editor card."""
     slots = slots or {}
     title = _text(slots.get("title") or slots.get("event"), "New event")
+    event_id = _text(slots.get("event_id"))
     return {
         "form_id": "calendar_event_editor",
-        "title": "New Calendar Event",
+        "title": "Edit Calendar Event" if event_id else "New Calendar Event",
         "fields": [
             {"name": "title", "label": "Title", "type": "text", "value": title},
             {"name": "date", "label": "Date", "type": "date", "value": _text(slots.get("date"))},
@@ -100,6 +101,8 @@ def build_calendar_event_editor_content(slots: dict[str, Any] | None = None) -> 
             "notes": _text(slots.get("notes")),
             "category": _text(slots.get("category"), "general"),
         },
+        "event_id": _text(slots.get("event_id")),
+        "actions": slots.get("actions") or [],
         "source": "calendar_create",
     }
 
@@ -195,9 +198,10 @@ def build_shopping_item_editor_content(slots: dict[str, Any] | None = None) -> d
     list_name = _text(slots.get("list_name") or slots.get("list_type"), "Shopping")
     normalized_items = list_items(slots)
     item = normalized_items[0] if normalized_items else ""
+    item_id = _text(slots.get("item_id"))
     return {
         "form_id": "shopping_item_editor",
-        "title": "Add List Item",
+        "title": "Edit List Item" if item_id else "Add List Item",
         "fields": [
             {"name": "item", "label": "Item", "type": "text", "value": item},
             {"name": "list_name", "label": "List", "type": "text", "value": list_name},
@@ -211,6 +215,8 @@ def build_shopping_item_editor_content(slots: dict[str, Any] | None = None) -> d
             "quantity": _text(slots.get("quantity")),
             "notes": _text(slots.get("notes")),
         },
+        "item_id": item_id,
+        "actions": slots.get("actions") or [],
         "source": "list_add",
     }
 

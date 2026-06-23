@@ -38,7 +38,7 @@ class FakeDb:
         self.fetch_args = args
         sql = str(args[0])
         if "FROM events" in sql:
-            return self.events
+            return [event for event in self.events if not event.get("deleted")]
         if "FROM lists" in sql:
             if "WHERE id = $1" in sql:
                 return [row for row in self.lists if row.get("id") == args[1]]
@@ -130,6 +130,28 @@ class FakeDb:
             }
             self.items_by_list.setdefault(args[2], []).append(item)
             return "INSERT 0 1"
+        if "UPDATE list_items SET deleted" in sql:
+            item_id = args[1]
+            list_id = args[2]
+            removed = 0
+            for item in self.items_by_list.get(list_id, []):
+                if item.get("id") == item_id and not item.get("deleted"):
+                    item["deleted"] = True
+                    removed += 1
+            # Drop soft-deleted rows so the authoritative re-read no longer sees them.
+            self.items_by_list[list_id] = [
+                item for item in self.items_by_list.get(list_id, []) if not item.get("deleted")
+            ]
+            return f"UPDATE {removed}"
+        if "UPDATE events SET deleted" in sql:
+            event_id = args[1]
+            user_id = args[2]
+            removed = 0
+            for event in self.events:
+                if event.get("id") == event_id and event.get("user_id") == user_id and not event.get("deleted"):
+                    event["deleted"] = True
+                    removed += 1
+            return f"UPDATE {removed}"
         if "INSERT INTO people" in sql:
             self.people.append(
                 {
@@ -1153,3 +1175,247 @@ async def test_weather_forecast_request_returns_forecast_card(monkeypatch):
     assert result["intent"] == {"domain": "weather", "action": "forecast"}
     assert card["content"]["source"] == "weather_forecast"
     assert card["content"]["forecast"]["daily"][0]["description"] == "cloudy"
+
+
+# ---------------------------------------------------------------------------
+# Task A: list remove by voice
+# ---------------------------------------------------------------------------
+
+
+def test_classify_list_remove_requests():
+    explicit = classify_skybridge_intent("take milk off the shopping list")
+    assert explicit.domain == "lists"
+    assert explicit.action == "remove_item"
+    assert explicit.item_text == "milk"
+    assert explicit.list_type == "shopping"
+
+    delete_phrase = classify_skybridge_intent("remove bread from my grocery list")
+    assert delete_phrase.action == "remove_item"
+    assert delete_phrase.item_text == "bread"
+    assert delete_phrase.list_type == "shopping"
+
+    work = classify_skybridge_intent("delete proposal from the work list")
+    assert work.action == "remove_item"
+    assert work.list_type == "work"
+
+    list_context = {"intent": {"domain": "lists", "action": "show", "list_type": "shopping"}, "cards": []}
+    contextual = classify_skybridge_intent("remove eggs", list_context)
+    assert contextual.action == "remove_item"
+    assert contextual.item_text == "eggs"
+
+    # Adding still wins over removing when the verb is "add".
+    assert classify_skybridge_intent("add bread to the shopping list").action == "add_item"
+
+
+@pytest.mark.asyncio
+async def test_list_remove_item_removes_and_refreshes_card():
+    list_row = {
+        "id": "list-1",
+        "user_id": "family-admin",
+        "name": "Groceries",
+        "list_type": "shopping",
+        "description": "Weekly shop",
+        "visibility": "family",
+    }
+    items = [
+        {"id": "item-1", "list_id": "list-1", "text": "Milk", "completed": False},
+        {"id": "item-2", "list_id": "list-1", "text": "Bread", "completed": False},
+    ]
+    db = FakeDb(lists=[list_row], items_by_list={"list-1": items})
+    context = {"intent": {"domain": "lists"}, "cards": [{"content": {"source": "list_show", "list_id": "list-1", "list_type": "shopping"}}]}
+
+    result = await resolve_skybridge_request("take milk off the shopping list", "family-admin", context=context, db=db)
+
+    assert result["handled"] is True
+    assert result["intent"]["action"] == "remove_item"
+    assert result["actions"][0]["type"] == "deleted"
+    assert result["actions"][0]["id"] == "item-1"
+    # Authoritative re-read: removed item is gone, the other remains.
+    texts = [item["text"] for item in result["cards"][0]["content"]["items"]]
+    assert "Milk" not in texts
+    assert "Bread" in texts
+    assert "milk" in result["spoken_summary"].lower()
+
+
+@pytest.mark.asyncio
+async def test_list_remove_item_ambiguous_returns_confirmation():
+    list_row = {
+        "id": "list-1",
+        "user_id": "family-admin",
+        "name": "Groceries",
+        "list_type": "shopping",
+        "description": "Weekly shop",
+        "visibility": "family",
+    }
+    items = [
+        {"id": "item-1", "list_id": "list-1", "text": "almond milk", "completed": False},
+        {"id": "item-2", "list_id": "list-1", "text": "oat milk", "completed": False},
+    ]
+    db = FakeDb(lists=[list_row], items_by_list={"list-1": items})
+    context = {"intent": {"domain": "lists"}, "cards": [{"content": {"source": "list_show", "list_id": "list-1", "list_type": "shopping"}}]}
+
+    result = await resolve_skybridge_request("take milk off the shopping list", "family-admin", context=context, db=db)
+
+    assert result["handled"] is True
+    assert result["intent"].get("status") == "ambiguous"
+    # No mutation should have run: both items survive.
+    assert db.items_by_list["list-1"] == items
+    assert result["actions"] == []
+    # A confirmation/status card is surfaced before the list card.
+    assert result["cards"][0]["props"]["title"] == "Which item should I remove?"
+
+
+@pytest.mark.asyncio
+async def test_list_remove_item_missing_target_returns_confirmation():
+    list_row = {
+        "id": "list-1",
+        "user_id": "family-admin",
+        "name": "Groceries",
+        "list_type": "shopping",
+        "description": "Weekly shop",
+        "visibility": "family",
+    }
+    items = [{"id": "item-1", "list_id": "list-1", "text": "Bread", "completed": False}]
+    db = FakeDb(lists=[list_row], items_by_list={"list-1": items})
+    context = {"intent": {"domain": "lists"}, "cards": [{"content": {"source": "list_show", "list_id": "list-1", "list_type": "shopping"}}]}
+
+    result = await resolve_skybridge_request("take caviar off the shopping list", "family-admin", context=context, db=db)
+
+    # Zero matches must be distinguishable from a multi-match ambiguity.
+    assert result["intent"].get("status") == "not_found"
+    assert result["actions"] == []
+    assert db.items_by_list["list-1"] == items
+
+
+# ---------------------------------------------------------------------------
+# Task B: readback enumeration in spoken_summary
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_show_spoken_summary_enumerates_items():
+    list_row = {
+        "id": "list-1",
+        "user_id": "family-admin",
+        "name": "Shopping",
+        "list_type": "shopping",
+        "description": "Weekly shop",
+        "visibility": "family",
+    }
+    items = [
+        {"id": "i1", "list_id": "list-1", "text": "bread", "completed": False},
+        {"id": "i2", "list_id": "list-1", "text": "milk", "completed": False},
+        {"id": "i3", "list_id": "list-1", "text": "eggs", "completed": False},
+    ]
+    db = FakeDb(lists=[list_row], items_by_list={"list-1": items})
+
+    result = await resolve_skybridge_request("show my shopping list", "family-admin", db=db)
+
+    spoken = result["spoken_summary"]
+    assert "bread" in spoken
+    assert "milk" in spoken
+    assert "eggs" in spoken
+    # Oxford-free 'and' before the last item, and a spoken count.
+    assert "bread, milk and eggs" in spoken
+    assert "three things" in spoken
+
+
+def test_enumerate_items_caps_with_and_more():
+    items = [{"text": name} for name in ["a", "b", "c", "d", "e", "f", "g"]]
+    spoken = skybridge_service._enumerate_items_for_speech("Shopping", items, cap=5)
+    assert "...and 2 more" in spoken
+    assert "seven things" in spoken
+
+
+# ---------------------------------------------------------------------------
+# Task C: tap-to-edit opens the existing editor cards
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_edit_opens_item_editor_card():
+    list_row = {
+        "id": "list-1",
+        "user_id": "family-admin",
+        "name": "Groceries",
+        "list_type": "shopping",
+        "description": "Weekly shop",
+        "visibility": "family",
+    }
+    items = [{"id": "item-1", "list_id": "list-1", "text": "Bread", "completed": False, "quantity": "1"}]
+    db = FakeDb(lists=[list_row], items_by_list={"list-1": items})
+    context = {"intent": {"domain": "lists"}, "cards": [{"content": {"source": "list_show", "list_id": "list-1", "list_type": "shopping"}}]}
+
+    result = await resolve_skybridge_request("edit bread on the shopping list", "family-admin", context=context, db=db)
+
+    assert result["handled"] is True
+    assert result["intent"]["action"] == "edit_item"
+    card = result["cards"][0]
+    assert card["card_type"] == "action_form"
+    assert card["content"]["form_id"] == "shopping_item_editor"
+    assert card["content"]["item_id"] == "item-1"
+    # The editor's remove action routes back through the existing remove_item utterance.
+    queries = [a.get("query", "") for a in card["content"]["actions"]]
+    assert any("take Bread off the shopping list" == q for q in queries)
+    # No mutation happened just from opening the editor.
+    assert db.items_by_list["list-1"] == items
+
+
+@pytest.mark.asyncio
+async def test_calendar_edit_opens_event_editor_card():
+    event = {
+        "id": "event-1",
+        "user_id": "family-admin",
+        "title": "Dentist",
+        "start_date": date.today().isoformat(),
+        "start_time": "15:00",
+        "end_time": "15:30",
+        "location": "Clinic",
+        "category": "health",
+        "visibility": "family",
+        "deleted": False,
+    }
+    db = FakeDb(events=[event])
+    context = {
+        "intent": {"domain": "calendar", "action": "show"},
+        "cards": [{"content": {"source": "calendar_show", "start_date": date.today().isoformat(), "events": [event]}}],
+    }
+
+    result = await resolve_skybridge_request("edit Dentist at 15:00", "family-admin", context=context, db=db)
+
+    assert result["handled"] is True
+    assert result["intent"]["action"] == "edit_event"
+    card = result["cards"][0]
+    assert card["card_type"] == "action_form"
+    assert card["content"]["form_id"] == "calendar_event_editor"
+    assert card["content"]["event_id"] == "event-1"
+    assert card["content"]["title"] == "Edit Calendar Event"
+    queries = [a.get("query", "") for a in card["content"]["actions"]]
+    assert any("delete Dentist from my calendar" == q for q in queries)
+
+
+@pytest.mark.asyncio
+async def test_calendar_delete_event_removes_and_refreshes():
+    event = {
+        "id": "event-1",
+        "user_id": "family-admin",
+        "title": "Dentist",
+        "start_date": date.today().isoformat(),
+        "start_time": "15:00",
+        "end_time": "15:30",
+        "visibility": "family",
+        "deleted": False,
+    }
+    db = FakeDb(events=[event])
+    context = {
+        "intent": {"domain": "calendar", "action": "show"},
+        "cards": [{"content": {"source": "calendar_show", "start_date": date.today().isoformat(), "events": [event]}}],
+    }
+
+    result = await resolve_skybridge_request("delete Dentist from my calendar", "family-admin", context=context, db=db)
+
+    assert result["handled"] is True
+    assert result["intent"]["action"] == "delete_event"
+    assert result["actions"][0]["type"] == "deleted"
+    # Authoritative re-read: the event is gone from the refreshed calendar card.
+    assert result["cards"][0]["content"]["events"] == []
