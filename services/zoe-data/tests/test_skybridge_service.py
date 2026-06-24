@@ -11,6 +11,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import skybridge_service  # noqa: E402
+from card_contract import validate_component  # noqa: E402
 from skybridge_service import classify_skybridge_intent, resolve_skybridge_request  # noqa: E402
 
 
@@ -572,8 +573,9 @@ async def test_guest_calendar_request_does_not_fetch_family_events():
     assert result["auth_required"] is True
     assert result["actions"][0]["type"] == "auth_required"
     assert result["cards"][0]["component"] == "auth_challenge"
-    assert result["cards"][0]["props"]["actions"][0]["type"] == "auth"
-    assert result["cards"][0]["props"]["actions"][0]["route"] == ""
+    # auth_challenge renders a client-built profile picker (hideActions); the card
+    # itself carries no props.actions and conforms to the component contract.
+    validate_component(result["cards"][0])
 
 
 @pytest.mark.asyncio
@@ -907,8 +909,9 @@ async def test_guest_lists_request_does_not_fetch_private_lists():
     assert result["auth_required"] is True
     assert result["actions"][0]["domain"] == "lists"
     assert result["cards"][0]["component"] == "auth_challenge"
-    assert result["cards"][0]["props"]["actions"][0]["type"] == "auth"
-    assert result["cards"][0]["props"]["actions"][0]["route"] == ""
+    # auth_challenge renders a client-built profile picker (hideActions); the card
+    # itself carries no props.actions and conforms to the component contract.
+    validate_component(result["cards"][0])
 
 
 @pytest.mark.asyncio
@@ -966,8 +969,9 @@ async def test_guest_people_request_does_not_fetch_private_people():
     assert result["auth_required"] is True
     assert result["actions"][0]["domain"] == "people"
     assert result["cards"][0]["component"] == "auth_challenge"
-    assert result["cards"][0]["props"]["actions"][0]["type"] == "auth"
-    assert result["cards"][0]["props"]["actions"][0]["route"] == ""
+    # auth_challenge renders a client-built profile picker (hideActions); the card
+    # itself carries no props.actions and conforms to the component contract.
+    validate_component(result["cards"][0])
 
 
 @pytest.mark.asyncio
@@ -1419,3 +1423,77 @@ async def test_calendar_delete_event_removes_and_refreshes():
     assert result["actions"][0]["type"] == "deleted"
     # Authoritative re-read: the event is gone from the refreshed calendar card.
     assert result["cards"][0]["content"]["events"] == []
+
+
+def test_convergence_gate_is_nonfatal_and_nonmutating():
+    """Increment 2: the validation gate logs divergence but never raises, drops, or
+    mutates a card (so it can't break the live panel)."""
+    from skybridge_service import _card_as_component, _validate_cards_for_convergence
+
+    cards = [
+        {"component": "status", "props": {"title": "ok"}},                      # conforms
+        {"component": "auth_challenge", "props": {"actions": [{"label": "Jason", "user_id": "u1"}]}},  # diverges
+        {"card_type": "generic", "content": {"title": "envelope"}},             # card_service envelope, conforms
+        "not-a-dict",                                                           # garbage
+    ]
+    import copy
+    snapshot = copy.deepcopy(cards)
+    _validate_cards_for_convergence(cards)  # must not raise
+    assert cards == snapshot                # must not mutate/drop
+
+    # _card_as_component maps both producer shapes to the canonical component
+    assert _card_as_component({"component": "status", "props": {"x": 1}}) == {"component": "status", "props": {"x": 1}}
+    assert _card_as_component({"card_type": "generic", "content": {"title": "t"}}) == {"component": "generic", "props": {"title": "t"}}
+
+
+def test_convergence_gate_logs_divergence(caplog):
+    """Increment 2 — the observability side: a non-conforming card (action lacks
+    query/intent/route) must actually emit the measurement log, not just be silently
+    tolerated. This is what lets us track the producers down to zero divergence."""
+    import logging
+    from skybridge_service import _validate_cards_for_convergence
+
+    diverging = [{"component": "auth_challenge", "props": {"actions": [{"label": "Jason", "user_id": "u1"}]}}]
+    with caplog.at_level(logging.INFO, logger="skybridge_service"):
+        _validate_cards_for_convergence(diverging)
+    assert any("non-conforming [convergence]" in r.message and "auth_challenge" in r.message
+               for r in caplog.records), "expected the gate to log the divergent auth_challenge card"
+
+    # A conforming card emits no divergence log.
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="skybridge_service"):
+        _validate_cards_for_convergence([{"component": "status", "props": {"title": "ok"}}])
+    assert not any("non-conforming [convergence]" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_all_producers_conform_zero_divergence(caplog):
+    """Increment 3 — convergence proof: the real resolver paths (incl. the
+    auth_challenge that used to diverge) now emit ZERO non-conforming cards through
+    the gate. Migrating auth_challenge was the last producer to fix; if any future
+    change reintroduces a non-conforming card on these paths, this fails loudly."""
+    import logging
+
+    # Capture the gate exactly as it runs inside resolve_skybridge_request, which
+    # calls _attach_skybridge_context -> _validate_cards_for_convergence on the way
+    # out. Wrapping caplog around the resolver calls themselves observes the real
+    # production pass (not a re-run), so the proof matches the live path.
+    with caplog.at_level(logging.INFO, logger="skybridge_service"):
+        results = await _gather_real_results()
+
+    assert results, "expected the representative resolvers to produce handled results"
+    diverged = [r.message for r in caplog.records if "non-conforming [convergence]" in r.message]
+    assert diverged == [], f"producers must all conform; gate flagged: {diverged}"
+
+
+async def _gather_real_results():
+    """Drive a representative spread of resolvers, including the auth-required
+    (auth_challenge) path that was the final divergent producer."""
+    results = []
+    # auth_challenge (guest hitting personal data) — the migrated producer
+    results.append(await resolve_skybridge_request("show my calendar", "guest", db=GuardedGuestDb()))
+    results.append(await resolve_skybridge_request("show my shopping list", "guest", db=GuardedGuestDb()))
+    results.append(await resolve_skybridge_request("show my contacts", "guest", db=GuardedGuestDb()))
+    # clock (no auth, no db)
+    results.append(await resolve_skybridge_request("what time is it", "guest", db=FakeDb()))
+    return [r for r in results if r and r.get("handled")]
