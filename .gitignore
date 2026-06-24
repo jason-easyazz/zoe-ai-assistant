@@ -15,9 +15,6 @@ data/*.db-wal
 services/zoe-auth/*.db
 services/zoe-auth/*.db-shm
 services/zoe-auth/*.db-wal
-modules/orbit/data/*.db
-modules/orbit/data/*.db-shm
-modules/orbit/data/*.db-wal
 
 
 # Wyoming voice models (large; install via scripts/setup)
@@ -250,11 +247,6 @@ data/**/*.key
 # Vendor/Library files (large, versioned separately)
 services/zoe-ui/dist/lib/livekit/
 
-# Game / pub modules — keep local only; omit from GitHub pushes
-modules/jag-board/
-modules/questionable-decisions/
-modules/questionable-decisions-v1-backup/
-tests/unit/test_jag_board_game_store.py
 
 # Runtime SQLite caches
 data/touch_cache/
