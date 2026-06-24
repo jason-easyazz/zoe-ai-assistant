@@ -75,7 +75,9 @@ Running as containers today — **keep**:
   `docker-compose.modules.yml` (not running). Tracked in git → `git log --all -- modules/orbit`.
 - **`modules/agent-zero`** — retired 2026-06-24, no longer used. In git history.
 - **`modules/jag-board`** — retired from the repo 2026-06-24. Was **gitignored** (never in
-  git), so it is **preserved off-repo** at `~/zoe-archives/jag-board` rather than deleted.
+  the Zoe repo), so it is **preserved in its own private repo**
+  (`github.com/jason-easyazz/jag-board`) + a local copy at `~/zoe-archives/jag-board`.
+  Not migrated to the internet game server — kept for possible future use.
 - **`modules/questionable-decisions`** (`zoe-qd-game`) — retired 2026-06-24; moved to an
   internet server (the authoritative copy now lives there).
 - **Dockerized `zoe-llamacpp`** — retired; the brain is host-native `llama-server`.
