@@ -1,0 +1,18 @@
+{
+  "_comment": "Container-relative MCP config for the zoe-omnigent container (audit fix #4). docker-compose.module.yml bind-mounts THIS file over /workspace/.mcp.json (read-only), so Claude Code with --project /workspace auto-loads it — no manual copy. Code-intel binaries are bind-mounted READ-ONLY at identical host paths, so /home/zoe/.local/bin/... resolves verbatim. serena's --project is /workspace (where the repo is mounted), unlike the committed repo-root .mcp.json which targets host path /home/zoe/assistant. opensrc is a CLI (on PATH via the bin mount + PATH env), not an MCP server, so it is intentionally not listed here.",
+  "mcpServers": {
+    "serena": {
+      "command": "/home/zoe/.local/bin/serena",
+      "args": [
+        "start-mcp-server",
+        "--context", "claude-code",
+        "--project", "/workspace",
+        "--transport", "stdio",
+        "--enable-web-dashboard", "false"
+      ]
+    },
+    "codebase-memory": {
+      "command": "/home/zoe/.local/bin/codebase-memory-mcp"
+    }
+  }
+}
