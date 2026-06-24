@@ -1,6 +1,6 @@
 {
   "version": "2.0",
-  "updated": "2025-12-25",
+  "updated": "2026-06-24",
   "description": "Zoe AI Assistant file manifest - defines approved files and patterns",
   "critical_files": {
     "css": [
@@ -87,6 +87,7 @@
     "training": "training/**/*",
     "graphify_out": "graphify-out/**/*",
     "cursor_rules": ".cursor/**/*",
+    "codex_config": ".codex/**/*",
     "greptile": ".greptile/**/*",
     "serena": ".serena/**/*"
   },
@@ -115,6 +116,8 @@
     ".cursorrules",
     ".graphifyignore",
     "AGENTS.md",
+    "CLAUDE.md",
+    ".mcp.json",
     "RESTART_SERVICES.sh",
     "warmup_models.py",
     "home-profile.json",
