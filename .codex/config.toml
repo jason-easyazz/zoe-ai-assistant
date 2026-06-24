@@ -1,0 +1,9 @@
+# Repo-local Codex config — version-controlled so a clean checkout has code-intel.
+# Registers the same MCP servers as the root .mcp.json (Claude Code's), for Codex.
+
+[mcp_servers.serena]
+command = "/home/zoe/.local/bin/serena"
+args = ["start-mcp-server", "--context", "codex", "--project", "/home/zoe/assistant", "--transport", "stdio", "--enable-web-dashboard", "false"]
+
+[mcp_servers.codebase-memory]
+command = "/home/zoe/.local/bin/codebase-memory-mcp"
