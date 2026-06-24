@@ -133,3 +133,22 @@ actually load*, adoption is uneven:
 
 *This audit changed no agent configuration. All fixes above are recommendations for a
 follow-up PR.*
+
+---
+
+## Fix #4 follow-up — enforce tool use (landed)
+
+Added a non-optional **Start-of-task checklist** to root `AGENTS.md` (marker
+`<!-- start-of-task-checklist -->`, right after the command-center block): MUST-do bullets
+for codebase-memory/Serena over raw grep, `opensrc` before guessing an API, the Greptile
+PR loop, the DOX `AGENTS.md` chain, and the fixed rocks / retire-by-removing discipline
+(cross-linked to `docs/VISION.md` principle 1).
+
+**Entrypoint → hub references verified this session:**
+
+| Agent | Pointer to `AGENTS.md` hub | Status |
+|---|---|---|
+| Claude Code | `CLAUDE.md` → `@AGENTS.md` | ✅ wired |
+| Codex | reads `AGENTS.md` natively from cwd; `.codex/config.toml` present | ✅ wired |
+| Cursor | `.cursor/rules/session-bootstrap.mdc` ("First, read the repo's `AGENTS.md`") | ✅ wired |
+| Omnigent | repo bind-mounted at `/workspace`; in-container Claude now reads the tracked `CLAUDE.md`→`@AGENTS.md`. Container code-intel wiring (Serena/codebase-memory/opensrc baked or mounted) is a separate in-flight task — **not touched here** (docs/pointer only). | ⏳ pointer ✅, container config pending |
