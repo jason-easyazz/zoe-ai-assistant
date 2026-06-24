@@ -12,6 +12,7 @@ THE production Zoe API: FastAPI app served by host uvicorn on port 8000. Owns ch
 - Memory: `hindsight_memory.py`, `hindsight_retain_candidates.py`, `conversation_context.py`.
 - Memory ops: Ingest (`memory_digest.py` dreaming), Query (`memory_service.py` search), and Lint (`memory_lint.py`) — the report-only scan for contradictions/stale/orphan/duplicate rows.
 - Streaming/UI protocol: `ag_ui_stream.py`, `card_service.py`, `card_contract.py`.
+- Local LLM endpoint: `gemma_endpoint.py` — `gemma_base()` resolves `GEMMA_SERVER_URL` to a `/v1`-free base. Modules that append `/v1/chat/completions` MUST build the URL via this helper (the live unit sets the value WITH `/v1`; appending again 404s). `zoe_agent`/`memory_digest` own their own convention.
 - Engineering loop: `greptile_client.py` and `background_runner.py`. The Greploop guard script is NOT here — it lives at `scripts/maintenance/greploop_guard.py` (see `scripts/AGENTS.md`).
 
 ## Local Contracts
