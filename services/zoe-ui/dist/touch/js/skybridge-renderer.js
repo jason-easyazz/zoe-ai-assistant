@@ -185,6 +185,55 @@
         return ['tasks', 'all'].indexOf(category) >= 0 ? 'general' : category;
     }
 
+    // Best-effort epoch (ms) for an event start, so we can compute a live
+    // "in 2h" / "in 25 min" countdown from now. Mirrors calendarEventSortKey's
+    // date/time parsing but returns the actual timestamp (or NaN).
+    function calendarEventStartMs(item) {
+        const datePart = String(item.start_date || item.date || '').slice(0, 10);
+        const timePart = item.all_day ? '00:00' : String(item.start_time || '00:00').slice(0, 5);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(datePart)) return NaN;
+        return Date.parse(datePart + 'T' + timePart);
+    }
+
+    // A calm, human relative phrase from now → the event start. Returns '' when
+    // we can't compute one (no parseable date) so the hero can fall back cleanly.
+    function calendarCountdown(item, nowMs) {
+        if (item.all_day) {
+            const startDay = String(item.start_date || item.date || '').slice(0, 10);
+            if (/^\d{4}-\d{2}-\d{2}$/.test(startDay)) {
+                const today = new Date(nowMs);
+                const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+                const startMs = Date.parse(startDay + 'T00:00:00');
+                if (Number.isFinite(startMs)) {
+                    const dDays = Math.round((startMs - todayStart) / 86400000);
+                    if (dDays <= 0) return 'All day';
+                    if (dDays === 1) return 'All day · tomorrow';
+                    if (dDays < 7) return 'All day · ' + new Date(startMs).toLocaleDateString(undefined, { weekday: 'long' });
+                }
+            }
+            return 'All day';
+        }
+        const startMs = calendarEventStartMs(item);
+        if (!Number.isFinite(startMs)) return '';
+        const diffMin = Math.round((startMs - nowMs) / 60000);
+        if (diffMin <= -60) {
+            const h = Math.round(-diffMin / 60);
+            return h + 'h ago';
+        }
+        if (diffMin < 0) return Math.abs(diffMin) + ' min ago';
+        if (diffMin === 0) return 'Now';
+        if (diffMin < 60) return 'in ' + diffMin + ' min';
+        const hours = diffMin / 60;
+        if (hours < 24) {
+            const h = Math.floor(hours);
+            const m = diffMin - h * 60;
+            return 'in ' + h + 'h' + (m ? ' ' + m + 'm' : '');
+        }
+        const days = Math.round(hours / 24);
+        if (days === 1) return 'Tomorrow';
+        return 'in ' + days + ' days';
+    }
+
     // Custom filled calendar glyph (design system §5: filled/dimensional, never line
     // icons). Self-contained <svg> with a unique gradient id so it can live inside a
     // single rendered card without depending on the shared sprite.
@@ -208,48 +257,93 @@
         ].join('');
     }
 
+    // Build a tap-to-edit query for an event row (opens the calendar editor card
+    // via /api/skybridge/resolve). Including the time disambiguates same-title events.
+    function calendarEditQuery(item, title) {
+        const startTime = String(item.start_time || '').slice(0, 5);
+        return 'edit ' + title + (startTime ? ' at ' + startTime : '');
+    }
+
     function renderCalendar(props) {
         const events = Array.isArray(props.events) ? props.events : [];
-        const visibleEvents = events.slice().sort((a, b) => calendarEventSortKey(a) - calendarEventSortKey(b)).slice(0, 8);
-        const dateMeta = formatCalendarDate(props.date || props.start_date || (visibleEvents[0] && visibleEvents[0].start_date));
+        const sorted = events.slice().sort((a, b) => calendarEventSortKey(a) - calendarEventSortKey(b)).slice(0, 8);
+        const dateMeta = formatCalendarDate(props.date || props.start_date || (sorted[0] && sorted[0].start_date));
         const qualifier = String(props.qualifier || 'today').trim();
         const countLabel = events.length + ' ' + (events.length === 1 ? 'event' : 'events') + (qualifier ? ' ' + qualifier : '');
+        const nowMs = Date.now();
 
-        const rows = visibleEvents.map((item, index) => {
+        // The hero is the soonest UPCOMING event by wall-clock — not simply sorted[0],
+        // because an all-day event sorts at 00:00 and would otherwise hijack the hero
+        // ahead of a timed meeting later today. Prefer the first event whose start is
+        // still in the future; fall back to the first sorted event (e.g. all past, or
+        // only all-day) so the card never collapses to an empty agenda.
+        let heroIndex = sorted.findIndex(item => {
+            if (item.all_day) return false;
+            const ms = calendarEventStartMs(item);
+            return Number.isFinite(ms) && ms >= nowMs;
+        });
+        if (heroIndex < 0) heroIndex = 0;
+        const heroEvent = sorted[heroIndex] || null;
+        const restEvents = sorted.filter((_, i) => i !== heroIndex);
+
+        let heroBlock = '';
+        if (heroEvent) {
+            const title = heroEvent.title || heroEvent.name || 'Calendar event';
+            const category = calendarCategoryClass(heroEvent.category);
+            const detail = [heroEvent.location].filter(Boolean).join(' · ');
+            const countdown = calendarCountdown(heroEvent, nowMs);
+            const isPast = (function () {
+                const ms = calendarEventStartMs(heroEvent);
+                return Number.isFinite(ms) && ms < nowMs && !heroEvent.all_day;
+            })();
+            heroBlock = [
+                '<button type="button" class="cal-hero sky-accent-' + escapeHtml(category) + (isPast ? ' is-past' : '') + '" data-sky-action="query" data-query="' + escapeHtml(calendarEditQuery(heroEvent, title)) + '">',
+                '<span class="cal-hero-rail" aria-hidden="true"></span>',
+                '<span class="cal-hero-kicker">' + escapeHtml(isPast ? 'Earlier' : 'Up next') + '</span>',
+                '<span class="cal-hero-time">' + escapeHtml(formatEventTime(heroEvent)) +
+                    (countdown ? '<b class="cal-hero-rel">' + escapeHtml(countdown) + '</b>' : '') + '</span>',
+                '<span class="cal-hero-title">' + escapeHtml(title) + '</span>',
+                detail ? '<span class="cal-hero-loc">' + escapeHtml(detail) + '</span>' : '',
+                '</button>'
+            ].join('');
+        }
+
+        const rows = restEvents.map(item => {
             const title = item.title || item.name || 'Calendar event';
             const category = calendarCategoryClass(item.category);
             const detail = [item.location].filter(Boolean).join(' · ');
-            // Tap-to-edit: each event row opens the existing calendar event editor card
-            // through /api/skybridge/resolve. Including the time disambiguates same-title events.
-            const startTime = String(item.start_time || '').slice(0, 5);
-            const editQuery = 'edit ' + title + (startTime ? ' at ' + startTime : '');
+            const start = String(item.start_time || '').slice(0, 5) || (item.all_day ? 'All day' : '—');
             return [
-                '<button type="button" class="calendar-event sky-accent-' + escapeHtml(category) + (index === 0 ? ' is-next' : '') + '" data-sky-action="query" data-query="' + escapeHtml(editQuery) + '">',
-                '<span class="calendar-event-dot" aria-hidden="true"></span>',
-                '<span class="calendar-event-time">' + escapeHtml(formatEventTime(item)) + (index === 0 ? '<b>Next</b>' : '') + '</span>',
-                '<span class="calendar-event-body"><strong>' + escapeHtml(title) + '</strong>' + (detail ? '<em>' + escapeHtml(detail) + '</em>' : '') + '</span>',
+                '<button type="button" class="cal-row sky-accent-' + escapeHtml(category) + '" data-sky-action="query" data-query="' + escapeHtml(calendarEditQuery(item, title)) + '">',
+                '<span class="cal-row-time tnum">' + escapeHtml(start) + '</span>',
+                '<span class="cal-row-marker" aria-hidden="true"></span>',
+                '<span class="cal-row-body"><strong>' + escapeHtml(title) + '</strong>' + (detail ? '<em>' + escapeHtml(detail) + '</em>' : '') + '</span>',
                 '</button>'
             ].join('');
         }).join('');
 
+        const timeline = restEvents.length
+            ? '<div class="cal-timeline">' + rows + '</div>'
+            : (heroEvent ? '<div class="cal-rest-empty">Nothing else scheduled</div>' : '');
+
         const empty = [
-            '<div class="calendar-empty">',
-            '<span class="calendar-empty-mark" aria-hidden="true"></span>',
+            '<div class="cal-empty">',
+            '<span class="cal-empty-mark" aria-hidden="true">' + calendarGlyphSvg() + '</span>',
             '<strong>Nothing scheduled</strong>',
-            '<span>Your calendar is clear ' + escapeHtml(qualifier || 'for now') + '.</span>',
+            '<span>Your day is clear ' + escapeHtml(qualifier || 'for now') + '.</span>',
             '</div>'
         ].join('');
 
         const body = [
-            '<div class="calendar-card-scene">',
-            '<header class="calendar-header">',
-            '<div class="calendar-glyph-wrap" aria-hidden="true">' + calendarGlyphSvg() + '</div>',
-            '<div class="calendar-heading">',
-            '<h3 class="calendar-day"><span>' + escapeHtml(dateMeta.weekday) + '</span> ' + escapeHtml(dateMeta.monthDay) + '</h3>',
-            '<p class="calendar-count">' + escapeHtml(countLabel) + '</p>',
+            '<div class="cal-scene">',
+            '<header class="cal-head">',
+            '<div class="cal-head-day">',
+            '<span class="cal-head-weekday">' + escapeHtml(dateMeta.weekday) + '</span>',
+            '<span class="cal-head-date">' + escapeHtml(dateMeta.monthDay) + '</span>',
             '</div>',
+            '<span class="cal-head-count">' + escapeHtml(countLabel) + '</span>',
             '</header>',
-            '<div class="calendar-agenda">' + (rows || empty) + '</div>',
+            heroEvent ? ('<div class="cal-body">' + heroBlock + timeline + '</div>') : empty,
             '</div>'
         ].join('');
         return cardFrame(Object.assign({ status: 'Calendar', icon: 'C' }, props), body, { wide: true, tone: 'calendar-card', hideHeader: true, hideStatus: true });
@@ -557,10 +651,10 @@
             const accent = listAccentClass(list.list_type);
             const selected = selectedId && String(list.id || '') === String(selectedId) ? ' is-active' : '';
             const count = Array.isArray(list.items) ? list.items.length : null;
-            const countTag = count != null ? '<i class="sky-list-tab-count" aria-hidden="true">' + escapeHtml(count) + '</i>' : '';
-            return '<button type="button" class="sky-list-tab ' + escapeHtml(accent) + selected + '" data-sky-action="query" data-query="' + escapeHtml(listQuery(list)) + '"><span>' + escapeHtml(listLabel(list)) + '</span>' + countTag + '</button>';
+            const countTag = count != null ? '<i class="lst-tab-count" aria-hidden="true">' + escapeHtml(count) + '</i>' : '';
+            return '<button type="button" class="lst-tab lst-a-' + escapeHtml(accent) + selected + '" data-sky-action="query" data-query="' + escapeHtml(listQuery(list)) + '"><span class="lst-tab-dot" aria-hidden="true"></span><span class="lst-tab-name">' + escapeHtml(listLabel(list)) + '</span>' + countTag + '</button>';
         }).join('');
-        return '<div class="sky-list-switcher" role="tablist">' + tabs + '<button type="button" class="sky-list-tab new-list" data-sky-action="query" data-query="new list"><span>+ New</span></button></div>';
+        return '<div class="lst-switcher" role="tablist">' + tabs + '<button type="button" class="lst-tab lst-tab-new" data-sky-action="query" data-query="new list"><span class="lst-tab-name">+ New</span></button></div>';
     }
 
     function listEditQuery(title, listType) {
@@ -570,30 +664,64 @@
 
     // Custom filled check glyph (NOT a thin line icon — see design-system §5/§12).
     // Card-local so it does not depend on the shared sprite shipping a list glyph.
-    const LIST_CHECK_SVG = '<svg class="sky-list-check-mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.6 16.2 5.4 12l-1.5 1.5 5.7 5.7L21 7.5 19.5 6z"/></svg>';
+    const LIST_CHECK_SVG = '<svg class="lst-check-mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.6 16.2 5.4 12l-1.5 1.5 5.7 5.7L21 7.5 19.5 6z"/></svg>';
 
-    function renderListItemRow(item, index, listType) {
+    // Category → design-system accent token (colour with intent, §4). Falls back to
+    // the list's own accent so an uncategorised row still reads as part of the list.
+    function listCategoryAccent(category, fallbackAccent) {
+        const cat = String(category || '').trim();
+        if (!cat) return fallbackAccent || 'general';
+        return listAccentClass(cat);
+    }
+
+    // Hero progress ring (§8 progress-border pattern): pathLength=100 so the
+    // dash-offset is just the *remaining* percent. Accent gradient + soft glow.
+    var listRingSeq = 0;
+    function listProgressRing(done, total) {
+        const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+        const offset = (100 - pct).toFixed(2);
+        const gid = 'lstRingG' + (++listRingSeq);
+        return [
+            '<svg class="lst-ring" viewBox="0 0 120 120" aria-hidden="true">',
+            '<defs><linearGradient id="' + gid + '" x1="0" y1="0" x2="1" y2="1">',
+            '<stop offset="0" stop-color="var(--lst-ring-a, #5be3b0)"/>',
+            '<stop offset="1" stop-color="var(--lst-ring-b, #37c0e6)"/>',
+            '</linearGradient></defs>',
+            '<circle class="lst-ring-track" cx="60" cy="60" r="52" pathLength="100"></circle>',
+            '<circle class="lst-ring-fill" cx="60" cy="60" r="52" pathLength="100" stroke="url(#' + gid + ')" stroke-dasharray="100" stroke-dashoffset="' + offset + '"></circle>',
+            '</svg>',
+            '<div class="lst-ring-center">',
+            '<div class="lst-ring-pct tnum">' + pct + '<i>%</i></div>',
+            '<div class="lst-ring-sub tnum">' + done + ' of ' + total + '</div>',
+            '</div>'
+        ].join('');
+    }
+
+    function renderListItemRow(item, index, listType, fallbackAccent) {
         const isObject = typeof item === 'object' && item;
         const title = isObject ? (item.text || item.title || item.label || 'List item') : String(item || 'List item');
         const completed = !!(isObject && item.completed);
         const recent = !!(isObject && item.recent);
         const quantity = isObject && item.quantity != null && String(item.quantity).trim() !== '' ? String(item.quantity).trim() : '';
+        const category = isObject && item.category ? String(item.category).trim() : '';
+        const catAccent = listCategoryAccent(category, fallbackAccent);
         // Secondary line: category / assignee (quantity is promoted to its own metric).
         const detail = isObject ? [item.category, item.assigned_to].filter(Boolean).join(' · ') : '';
         const priorityValue = isObject && item.priority ? String(item.priority).trim().toLowerCase() : '';
         const priority = priorityValue && priorityValue !== 'normal'
-            ? '<span class="sky-list-flag pr-' + escapeHtml(safeClassTokens(priorityValue) || 'set') + '">' + escapeHtml(item.priority) + '</span>'
+            ? '<span class="lst-flag pr-' + escapeHtml(safeClassTokens(priorityValue) || 'set') + '" aria-label="Priority ' + escapeHtml(item.priority) + '"><span class="lst-flag-dot" aria-hidden="true"></span>' + escapeHtml(item.priority) + '</span>'
             : '';
         const qtyMetric = quantity
-            ? '<div class="sky-list-qty" aria-label="Quantity ' + escapeHtml(quantity) + '"><strong>' + escapeHtml(quantity) + '</strong></div>'
+            ? '<div class="lst-qty" aria-label="Quantity ' + escapeHtml(quantity) + '"><strong>' + escapeHtml(quantity) + '</strong></div>'
             : '';
         // Tap-to-edit: each row is a query button that opens the existing item editor card
         // through /api/skybridge/resolve (mutation -> authoritative re-read -> refresh).
         return [
-            '<button type="button" class="sky-list-item-row' + (completed ? ' is-done' : '') + (recent ? ' is-recent' : '') + '" data-sky-action="query" data-query="' + escapeHtml(listEditQuery(title, listType)) + '">',
-            '<span class="sky-list-check" aria-hidden="true">' + (completed ? LIST_CHECK_SVG : '') + '</span>',
-            '<div class="sky-list-item-main"><strong>' + escapeHtml(title) + '</strong>' + (detail ? '<em>' + escapeHtml(detail) + '</em>' : '') + '</div>',
-            '<div class="sky-list-item-meta">' + priority + qtyMetric + '</div>',
+            '<button type="button" class="lst-row lst-a-' + escapeHtml(catAccent) + (completed ? ' is-done' : '') + (recent ? ' is-recent' : '') + '" data-sky-action="query" data-query="' + escapeHtml(listEditQuery(title, listType)) + '">',
+            '<span class="lst-rail" aria-hidden="true"></span>',
+            '<span class="lst-check" aria-hidden="true">' + LIST_CHECK_SVG + '</span>',
+            '<div class="lst-main"><strong>' + escapeHtml(title) + '</strong>' + (detail ? '<em>' + escapeHtml(detail) + '</em>' : '') + '</div>',
+            '<div class="lst-meta">' + priority + qtyMetric + '</div>',
             '</button>'
         ].join('');
     }
@@ -601,19 +729,53 @@
     function renderListColumn(list) {
         const items = Array.isArray(list.items) ? list.items : [];
         const accent = listAccentClass(list.list_type);
-        const preview = items.slice(0, 5).map((item) => {
+        const done = items.filter(it => typeof it === 'object' && it && it.completed).length;
+        const pct = items.length ? Math.round((done / items.length) * 100) : 0;
+        const preview = items.slice(0, 4).map((item) => {
             const obj = typeof item === 'object' && item;
             const title = obj ? (item.text || item.title || item.label || 'Item') : String(item || 'Item');
-            const done = !!(obj && item.completed);
-            return '<li' + (done ? ' class="is-done"' : '') + '><span class="sky-list-dot" aria-hidden="true"></span><strong>' + escapeHtml(title) + '</strong></li>';
+            const isDone = !!(obj && item.completed);
+            return '<li' + (isDone ? ' class="is-done"' : '') + '><span class="lst-dot" aria-hidden="true"></span><strong>' + escapeHtml(title) + '</strong></li>';
         }).join('');
         const countLabel = items.length === 1 ? '1 item' : items.length + ' items';
         return [
-            '<button type="button" class="sky-list-column ' + escapeHtml(accent) + '" data-sky-action="query" data-query="' + escapeHtml(listQuery(list)) + '">',
-            '<span class="sky-list-column-head"><strong>' + escapeHtml(listLabel(list)) + '</strong><em>' + escapeHtml(countLabel) + '</em></span>',
-            preview ? '<ul>' + preview + '</ul>' : '<p class="sky-list-column-empty">No items yet</p>',
+            '<button type="button" class="lst-col lst-a-' + escapeHtml(accent) + '" data-sky-action="query" data-query="' + escapeHtml(listQuery(list)) + '">',
+            '<span class="lst-col-head"><strong>' + escapeHtml(listLabel(list)) + '</strong><em>' + escapeHtml(countLabel) + '</em></span>',
+            '<span class="lst-col-bar" aria-hidden="true"><i style="width:' + pct + '%"></i></span>',
+            preview ? '<ul>' + preview + '</ul>' : '<p class="lst-col-empty">No items yet</p>',
             '</button>'
         ].join('');
+    }
+
+    // List-type → identity (glyph + tint class + ring gradient). Warm for
+    // shopping/cooking, cool for work/tasks, etc. (§4 colour with intent).
+    function listIdentity(accent) {
+        const map = {
+            shopping:  { glyph: 'cart',  tint: 'warm' },
+            household: { glyph: 'home',  tint: 'warm' },
+            family:    { glyph: 'home',  tint: 'warm' },
+            work:      { glyph: 'check', tint: 'cool' },
+            tasks:     { glyph: 'check', tint: 'cool' },
+            health:    { glyph: 'heart', tint: 'mint' },
+            medical:   { glyph: 'heart', tint: 'mint' },
+            routine:   { glyph: 'check', tint: 'cool' },
+            social:    { glyph: 'star',  tint: 'violet' },
+            personal:  { glyph: 'star',  tint: 'violet' },
+            bucket:    { glyph: 'star',  tint: 'violet' }
+        };
+        return map[accent] || { glyph: 'check', tint: 'neutral' };
+    }
+
+    // Card-local filled identity glyphs (filled/dimensional, never line icons §5).
+    function listIdentityGlyph(name) {
+        const glyphs = {
+            cart:  '<path d="M3 4h2.2l2 11.2A2 2 0 0 0 9.2 17h8.2a2 2 0 0 0 2-1.6l1.5-7.4H6.4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="9.5" cy="20.5" r="1.6"/><circle cx="17.5" cy="20.5" r="1.6"/>',
+            check: '<path d="M9.6 16.8 5 12.2l-1.7 1.7 6.3 6.3L21.5 8.3 19.8 6.6z"/>',
+            home:  '<path d="M12 3 3 10.5V21h6v-6h6v6h6V10.5z"/>',
+            heart: '<path d="M12 21s-7.5-4.7-9.7-9C1 9.2 2.4 5.8 5.6 5.2 8 4.8 10.4 6.3 12 8.4c1.6-2.1 4-3.6 6.4-3.2 3.2.6 4.6 4 3.3 6.8C19.5 16.3 12 21 12 21z"/>',
+            star:  '<path d="M12 2.5 14.9 9l7 .6-5.3 4.6 1.6 6.9L12 17.5 5.8 21l1.6-6.9L2.1 9.6l7-.6z"/>'
+        };
+        return '<svg class="lst-id-glyph" viewBox="0 0 24 24" aria-hidden="true">' + (glyphs[name] || glyphs.check) + '</svg>';
     }
 
     function renderZoeList(props) {
@@ -623,20 +785,23 @@
         const accent = listAccentClass(listType);
         const selectedId = props.list_id && props.list_id !== 'lists-overview' ? props.list_id : '';
         const visibleItems = items.slice(0, 16);
-        const rows = visibleItems.map((item, index) => renderListItemRow(item, index, listType)).join('');
-        const overviewRows = !items.length && lists.length ? '<div class="sky-list-columns">' + lists.slice(0, 6).map(renderListColumn).join('') + '</div>' : '';
-        const itemsClass = 'sky-list-items ' + (rows ? 'is-list-detail' : 'is-list-overview');
+        const rows = visibleItems.map((item, index) => renderListItemRow(item, index, listType, accent)).join('');
+        const overviewCols = !items.length && lists.length ? '<div class="lst-cols">' + lists.slice(0, 6).map(renderListColumn).join('') + '</div>' : '';
         const empty = [
-            '<div class="sky-empty-data sky-list-empty">',
+            '<div class="sky-empty-data lst-empty">',
             '<strong>No items in ' + escapeHtml(props.list_name || 'this list') + '</strong>',
             '<span>Zoe did not find active items for this request.</span>',
             '</div>'
         ].join('');
-        const isOverview = !rows && !!overviewRows;
+        const isOverview = !rows && !!overviewCols;
         const headerTitle = isOverview
             ? 'Lists'
             : (props.list_name || (selectedId && listLabel(lists.find(l => String(l.id || '') === String(selectedId)) || {})) || 'List');
-        const totalDone = visibleItems.filter(it => typeof it === 'object' && it && it.completed).length;
+        // Progress is over the WHOLE list (not just the visible slice) so the hero %
+        // is honest even when more than 16 items exist.
+        const totalDone = items.filter(it => typeof it === 'object' && it && it.completed).length;
+        const ident = listIdentity(accent);
+
         let countLabel;
         if (isOverview) {
             countLabel = lists.length === 1 ? '1 list' : lists.length + ' lists';
@@ -646,17 +811,42 @@
             const noun = items.length === 1 ? 'item' : 'items';
             countLabel = totalDone ? totalDone + ' of ' + items.length + ' ' + noun + ' done' : items.length + ' ' + noun;
         }
+
+        // HERO: progress ring for a detail view; a count badge for the overview.
+        const hero = isOverview
+            ? [
+                '<div class="lst-hero lst-hero-overview">',
+                '<div class="lst-id-badge">' + listIdentityGlyph(ident.glyph) + '</div>',
+                '<div class="lst-hero-meta"><div class="lst-hero-num tnum">' + lists.length + '</div><div class="lst-hero-sub">' + escapeHtml(lists.length === 1 ? 'list' : 'lists') + '</div></div>',
+                '</div>'
+              ].join('')
+            : [
+                '<div class="lst-hero">',
+                '<div class="lst-ring-wrap">' + listProgressRing(totalDone, items.length || 0) + '</div>',
+                '<div class="lst-hero-meta"><div class="lst-id-badge">' + listIdentityGlyph(ident.glyph) + '</div><div class="lst-hero-sub">' + escapeHtml(totalDone + (items.length ? ' of ' + items.length : '') + ' done') + '</div></div>',
+                '</div>'
+              ].join('');
+
         const header = [
-            '<header class="sky-list-header">',
-            '<div class="sky-list-heading"><span class="sky-list-kicker">' + (isOverview ? 'Your lists' : 'List') + '</span><h3 class="sky-list-name">' + escapeHtml(headerTitle) + '</h3></div>',
-            '<span class="sky-list-count">' + escapeHtml(countLabel) + '</span>',
+            '<header class="lst-header">',
+            '<div class="lst-heading"><span class="lst-kicker">' + (isOverview ? 'Your lists' : 'List') + '</span><h3 class="lst-name">' + escapeHtml(headerTitle) + '</h3></div>',
+            '<span class="lst-count">' + escapeHtml(countLabel) + '</span>',
             '</header>'
         ].join('');
-        const body = [
-            '<div class="sky-list-scene ' + escapeHtml(accent) + '">',
+
+        const itemsClass = 'lst-items ' + (rows ? 'is-detail' : 'is-overview');
+        const sidePanel = [
+            '<div class="lst-side">',
             header,
             lists.length ? renderListSwitcher(lists, selectedId) : '',
-            '<div class="' + itemsClass + '">' + (rows || overviewRows || empty) + '</div>',
+            '<div class="' + itemsClass + '">' + (rows || overviewCols || empty) + '</div>',
+            '</div>'
+        ].join('');
+
+        const body = [
+            '<div class="lst-scene lst-a-' + escapeHtml(accent) + ' lst-tint-' + ident.tint + '">',
+            hero,
+            sidePanel,
             '</div>'
         ].join('');
         return cardFrame(Object.assign({ status: 'Lists', icon: 'L' }, props), body, { wide: true, tone: 'zoe-list-card ' + accent, hideHeader: true, hideStatus: true, hideActions: true });
@@ -679,6 +869,35 @@
 
     function personAccentClass(person) {
         return accentClass(person.context || person.circle || 'personal', 'personal');
+    }
+
+    // Closeness: inner circle is "your people" — surface them first, then order by
+    // connection health so the warmest relationships lead. Returns 0 (inner) | 1.
+    function personCircleRank(person) {
+        var c = String((person && person.circle) || '').toLowerCase();
+        if (c === 'inner' || c === 'close' || c === 'family') return 0;
+        return 1;
+    }
+    // Short, human circle label for the small relationship/closeness tag.
+    function personCircleLabel(person) {
+        var c = String((person && person.circle) || '').toLowerCase();
+        if (c === 'inner' || c === 'close') return 'Inner circle';
+        if (c === 'outer' || c === 'wider') return 'Wider circle';
+        if (c) return c.charAt(0).toUpperCase() + c.slice(1);
+        return personCircleRank(person) === 0 ? 'Inner circle' : 'Wider circle';
+    }
+    // Stable closeness order: inner first, then higher connection-health first.
+    function peopleByCloseness(list) {
+        return list
+            .map(function (p, i) { return { p: p, i: i }; })
+            .sort(function (a, b) {
+                var ra = personCircleRank(a.p), rb = personCircleRank(b.p);
+                if (ra !== rb) return ra - rb;
+                var ha = healthPercent(a.p.health_score), hb = healthPercent(b.p.health_score);
+                if (ha !== hb) return hb - ha;
+                return a.i - b.i;
+            })
+            .map(function (x) { return x.p; });
     }
 
     function renderPeopleDirectory(props) {
@@ -711,24 +930,48 @@
             chip('social', 'other', otherCount, false)
         ].join('');
 
-        const tiles = people.slice(0, 12).map(person => {
+        // Order by closeness (inner circle first, warmest connection first) so the
+        // card reads as "your people", not an alphabetical contacts dump. The
+        // closest few get a larger hero row; the rest flow into a calmer grid.
+        const ordered = peopleByCloseness(people).slice(0, 12);
+        const innerLead = ordered.filter(p => personCircleRank(p) === 0);
+        const heroCount = Math.min(innerLead.length, ordered.length >= 4 ? 3 : 0);
+        const heroPeople = ordered.slice(0, heroCount);
+        const restPeople = ordered.slice(heroCount);
+
+        // Shared tile builder. `hero` enlarges the avatar/type and shows a richer
+        // closeness tag; both variants carry the accent + connection health bar.
+        const tileHtml = function (person, hero) {
             const health = healthPercent(person.health_score);
             const accent = personAccentClass(person);
             const name = person.name || 'Person';
+            const cls = 'people-tile people-accent-' + escapeHtml(accent) + (hero ? ' people-tile--hero' : '');
             return [
-                '<button type="button" class="people-tile people-accent-' + escapeHtml(accent) + '" data-sky-action="query" data-query="' + escapeHtml('find ' + name) + '" aria-label="' + escapeHtml(name + ', ' + personSubline(person) + ', connection ' + health + ' percent') + '">',
+                '<button type="button" class="' + cls + '" data-sky-action="query" data-query="' + escapeHtml('find ' + name) + '" aria-label="' + escapeHtml(name + ', ' + personSubline(person) + ', connection ' + health + ' percent') + '">',
+                '<span class="people-tile-tint" aria-hidden="true"></span>',
                 '<span class="people-tile-avatar" aria-hidden="true">' + initialsFor(person.name) + '</span>',
                 '<span class="people-tile-id">',
+                '<span class="people-circle-pill">' + escapeHtml(personCircleLabel(person)) + '</span>',
                 '<strong class="people-tile-name">' + escapeHtml(name) + '</strong>',
                 '<span class="people-tile-rel">' + escapeHtml(personSubline(person)) + '</span>',
                 '</span>',
                 '<span class="people-tile-health">',
                 '<span class="people-health-track"><i class="people-health-fill" style="width:' + health + '%"></i></span>',
-                '<span class="people-health-pct">' + health + '</span>',
+                '<span class="people-health-pct tnum">' + health + '</span>',
                 '</span>',
                 '</button>'
             ].join('');
-        }).join('');
+        };
+
+        const heroRow = heroPeople.length
+            ? '<div class="people-hero"><p class="people-section-label">Closest to you</p><div class="people-hero-row">'
+                + heroPeople.map(p => tileHtml(p, true)).join('') + '</div></div>'
+            : '';
+        const restGrid = restPeople.length
+            ? (heroPeople.length ? '<p class="people-section-label people-section-label--rest">More people</p>' : '')
+                + '<div class="people-grid">' + restPeople.map(p => tileHtml(p, false)).join('') + '</div>'
+            : '';
+        const tiles = heroRow + restGrid;
 
         const empty = [
             '<div class="people-empty">',
@@ -750,7 +993,7 @@
             '</div>',
             '<div class="people-chips">' + chips + '</div>',
             '</header>',
-            tiles ? ('<div class="people-grid">' + tiles + '</div>') : empty,
+            tiles ? ('<div class="people-body">' + tiles + '</div>') : empty,
             '</div>'
         ].join('');
         return cardFrame(Object.assign({ status: 'People', icon: 'P' }, props), body, { wide: true, tone: 'people-card', hideHeader: true, hideStatus: true });
@@ -772,8 +1015,10 @@
         const body = [
             '<div class="people-scene people-profile">',
             '<header class="people-profile-hero">',
+            '<span class="people-tile-tint" aria-hidden="true"></span>',
             '<span class="people-tile-avatar people-profile-avatar" aria-hidden="true">' + initialsFor(name) + '</span>',
             '<div class="people-profile-id">',
+            '<span class="people-circle-pill">' + escapeHtml(personCircleLabel(person)) + '</span>',
             '<p class="people-eyebrow">' + escapeHtml(personSubline(person)) + '</p>',
             '<h3 class="people-title">' + escapeHtml(name) + '</h3>',
             '<div class="people-tile-health people-profile-healthrow">',
