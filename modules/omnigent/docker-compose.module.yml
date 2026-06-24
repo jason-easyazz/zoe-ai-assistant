@@ -36,6 +36,13 @@ services:
       - GIT_CONFIG_COUNT=1
       - GIT_CONFIG_KEY_0=safe.directory
       - GIT_CONFIG_VALUE_0=*
+      # Put the host code-intel binaries (mounted read-only below at their REAL host paths)
+      # on PATH so `opensrc`/`serena`/`codebase-memory-mcp` resolve as bare commands inside
+      # the container, matching the host. The mounts use identical host paths so the existing
+      # root .mcp.json (and .codex/config.toml), which reference /home/zoe/.local/bin/...,
+      # resolve unchanged inside the container.
+      - PATH=/home/zoe/.local/bin:/root/.local/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
+      - OPENSRC_HOME=/home/zoe/.opensrc
       # Auth delegated to Zoe's own SSO (zoe-auth OIDC) — one Zoe login, UI stays protected
       # even on the LAN. Issuer/redirect use zoe.local so the token `iss` matches across
       # browser and server (zoe-auth derives issuer from the Host header). Access the UI at
@@ -57,6 +64,12 @@ services:
     volumes:
       # The agents' workspace IS the Zoe repo, so they can build Zoe.
       - ../../:/workspace
+      # Activate the container-relative MCP config: Claude Code (--project /workspace)
+      # auto-loads /workspace/.mcp.json. The committed repo-root .mcp.json uses the HOST
+      # path (--project /home/zoe/assistant), which is NOT where the repo is mounted here,
+      # so serena would point at a missing path. Shadow it with this container config
+      # (serena --project /workspace) so the MCP servers actually resolve in-container.
+      - ./.mcp.json:/workspace/.mcp.json:ro
       # OAuth/subscription credentials — persisted so logins + token refresh survive restarts.
       # (Subdir mounts only — never mount over /root or you shadow the installed CLIs.)
       - omnigent-claude:/root/.claude
@@ -66,6 +79,27 @@ services:
       # cursor.com remote installer). The entrypoint symlinks the real versioned binary
       # (which has its bundled node beside it) onto PATH. Login creds → omnigent-cursor volume.
       - /home/zoe/.local/share/cursor-agent:/root/.local/share/cursor-agent:ro
+      # ── Code-intel tooling (audit fix #4) ──────────────────────────────────────
+      # Serena, codebase-memory, and opensrc live on the HOST only; the repo is mounted
+      # but the tools were entirely absent from this container, so the MCP servers wired
+      # in the root .mcp.json (host paths /home/zoe/.local/bin/...) could never resolve.
+      # Mount them READ-ONLY at their IDENTICAL host paths so those absolute paths resolve
+      # verbatim — no .mcp.json rewriting needed. (Low-risk mount approach, not an image
+      # rebuild.) Read-only: the container must not mutate the host's tool installs.
+      #
+      #   - /home/zoe/.local/bin            : launchers (serena, codebase-memory-mcp, opensrc).
+      #                                       codebase-memory-mcp is a static aarch64 ELF; serena
+      #                                       and opensrc are symlinks resolved by the mounts below.
+      #   - /home/zoe/.local/share/uv       : serena's venv (tools/serena-agent) + its uv-managed
+      #                                       CPython (python/cpython-3.13-...), both reached via
+      #                                       serena's shebang/symlink chain.
+      #   - /home/zoe/.cursor-server/.../opensrc : the real opensrc aarch64 binary the
+      #                                       /home/zoe/.local/bin/opensrc symlink points to.
+      #   - /home/zoe/.opensrc              : opensrc's third-party source cache (repos/, sources.json).
+      - /home/zoe/.local/bin:/home/zoe/.local/bin:ro
+      - /home/zoe/.local/share/uv:/home/zoe/.local/share/uv:ro
+      - /home/zoe/.cursor-server/bin/linux-arm64/lib/node_modules/opensrc:/home/zoe/.cursor-server/bin/linux-arm64/lib/node_modules/opensrc:ro
+      - /home/zoe/.opensrc:/home/zoe/.opensrc:ro
       # Persist omnigent's own state (mount path to confirm at first run).
       - omnigent-data:/root/.omnigent
     networks:
