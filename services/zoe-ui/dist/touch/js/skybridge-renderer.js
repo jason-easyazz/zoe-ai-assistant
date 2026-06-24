@@ -82,6 +82,41 @@
         return cardFrame(props, bodyHtml, { wide: true, tone: 'auth-challenge', hideHeader: true, hideStatus: true, hideActions: true });
     }
 
+    function renderTimer(props) {
+        const dur = Math.max(1, parseInt(props.duration_seconds) || 0);
+        const expires = parseInt(props.expires_at_ms) || (Date.now() + dur * 1000);
+        const remaining = Math.max(0, Math.round((expires - Date.now()) / 1000));
+        const frac = Math.max(0, Math.min(1, remaining / dur));
+        const mm = String(Math.floor(remaining / 60)).padStart(2, '0');
+        const ss = String(remaining % 60).padStart(2, '0');
+        const label = props.label || props.title || 'Timer';
+        const id = escapeHtml(props.timer_id || props.id || '');
+        const expired = props.status === 'expired' || remaining <= 0;
+        const lowClass = (!expired && frac <= 0.15) ? ' is-low' : '';
+        // The fill is the card's border: a rounded-rect stroke whose visible length
+        // tracks the time left (pathLength=100 → offset is just the spent percent).
+        const offset = (100 * (1 - frac)).toFixed(2);
+        const ring = [
+            '<svg class="sky-timer-ring" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">',
+            '<rect class="sky-timer-ring-track" x="2" y="2" width="96" height="96" rx="9" ry="9" pathLength="100"></rect>',
+            '<rect class="sky-timer-ring-fill" x="2" y="2" width="96" height="96" rx="9" ry="9" pathLength="100" stroke-dasharray="100" stroke-dashoffset="' + offset + '"></rect>',
+            '</svg>'
+        ].join('');
+        const body = [
+            '<div class="sky-timer' + (expired ? ' is-expired' : '') + lowClass + '" data-timer-id="' + id + '"',
+                ' data-timer-expires="' + expires + '" data-timer-duration="' + dur + '"',
+                ' data-timer-status="' + (expired ? 'expired' : 'running') + '">',
+            ring,
+            '<button type="button" class="sky-timer-x" data-timer-cancel="' + id + '" aria-label="' + (expired ? 'Dismiss timer' : 'Cancel timer') + '">✕</button>',
+            '<div class="sky-timer-center">',
+            '<div class="sky-timer-digits">' + (expired ? "Time's up" : mm + ':' + ss) + '</div>',
+            '<div class="sky-timer-label">' + escapeHtml(label) + '</div>',
+            '</div>',
+            '</div>'
+        ].join('');
+        return cardFrame(props, body, { tone: 'timer' + (expired ? ' sky-timer-ringing' : ''), hideHeader: true, hideStatus: true });
+    }
+
     function renderStatus(props) {
         if (props.source === 'calendar_show') return renderCalendar(props);
         if (props.source === 'weather_current' || props.source === 'weather_forecast') return renderWeather(props);
@@ -679,6 +714,7 @@
         smart_home: renderList,
         research_report: renderList,
         auth_challenge: renderAuthChallenge,
+        timer: renderTimer,
         stream_text: renderStatus,
         unsupported_contract: renderUnsupportedContract
     };

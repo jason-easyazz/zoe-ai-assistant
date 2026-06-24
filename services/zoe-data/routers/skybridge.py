@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends
 
 from auth import get_current_user
 from database import get_db
-from skybridge_service import resolve_skybridge_request
+from skybridge_service import active_timers_for, cancel_timer_by_id, resolve_skybridge_request
 
 
 router = APIRouter(prefix="/api/skybridge", tags=["skybridge"])
@@ -60,3 +60,17 @@ async def resolve_skybridge_command(
     if not isinstance(context, dict):
         context = None
     return await resolve_skybridge_request(message, user.get("user_id", "voice-guest"), context=context, db=db)
+
+
+@router.get("/timers")
+async def list_skybridge_timers(user: dict = Depends(get_current_user)):
+    """Active timers for this user — lets the panel resume countdowns after a reload."""
+    return {"timers": active_timers_for(user.get("user_id", "voice-guest"))}
+
+
+@router.post("/timers/cancel")
+async def cancel_skybridge_timer(payload: dict, user: dict = Depends(get_current_user)):
+    """Cancel one timer by id (the panel's per-card tap-cancel)."""
+    timer_id = str((payload or {}).get("timer_id") or "").strip()
+    cancelled = cancel_timer_by_id(user.get("user_id", "voice-guest"), timer_id)
+    return {"ok": bool(cancelled), "timer_id": timer_id}
