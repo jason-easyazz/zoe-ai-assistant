@@ -23,10 +23,14 @@ GATING: the whole module SKIPS unless `ZOE_LIVE_TESTS=1` AND the model server he
 endpoint (http://127.0.0.1:11434/health) answers ok. CI never sets the flag / has no
 model server, so CI never runs this and never touches a database.
 
-IDLE TIMING: we set `ZOE_IDLE_CONSOLIDATION_IDLE_S=30` *before importing the engine*
-(its idle/lookback constants are read at import time) so the "is it idle yet?" test
-is fast (default is 180s). Documented here so a future reader doesn't think 30s is
-the production value.
+IDLE TIMING: the engine binds its idle window (`IDLE_SECONDS`, default 180s) ONCE at
+its own import time, and a sibling live suite imports the engine during collection
+before this file — so we cannot reliably shrink the window from here. Instead every
+backdating decision reads the engine's *actual* runtime `IDLE_SECONDS` via
+`_idle_seconds()`, which is correct regardless of import order and the prod value, and
+leaks no env mutation into other tests. (To run this file fast in isolation, export
+`ZOE_IDLE_CONSOLIDATION_IDLE_S=30` before pytest; the test still backdates relative to
+whatever the engine actually bound.)
 
     ZOE_LIVE_TESTS=1 python -m pytest \
         services/zoe-data/tests/samantha_live/test_live_isolation.py -v -s
@@ -61,22 +65,26 @@ pytestmark = pytest.mark.skipif(
     reason="live-only: needs ZOE_LIVE_TESTS=1 and the model server on :11434",
 )
 
-# Fast idle window for the timing test — MUST be set before the engine imports its
-# IDLE_SECONDS/LOOKBACK constants (read once at module import). 30s, not the prod 180s.
-# Guarded by _LIVE: this module is still imported during CI *collection* (to read the
-# skip mark), and an unguarded setdefault would leak ZOE_IDLE_CONSOLIDATION_IDLE_S=30
-# into the process env, changing the engine's IDLE_SECONDS for any test collected after
-# this one. Default to 30 here so the constant is defined even when skipped.
-_IDLE_S = 30
+# Idle-window handling. The engine binds IDLE_SECONDS/LOOKBACK ONCE at its own import
+# time, and a sibling live suite (test_live_core.py) imports it at module scope during
+# collection — which, alphabetically, runs before this file. So we must NOT assume we
+# can shrink the window via os.environ here: by the time pytest collects us the constant
+# may already be the prod default. Instead, every backdating decision reads the engine's
+# *actual* runtime `IDLE_SECONDS` (see `_idle_seconds()`), which is correct regardless of
+# import order and avoids leaking an env mutation into other tests.
 if _LIVE:
-    os.environ.setdefault("ZOE_IDLE_CONSOLIDATION_IDLE_S", "30")
-    _IDLE_S = int(os.environ["ZOE_IDLE_CONSOLIDATION_IDLE_S"])
-
     # Load the live service env (POSTGRES_URL etc.). The worktree has no .env of its
     # own; this is a live-integration suite, so it reads the live tree's config.
     from dotenv import load_dotenv
 
     load_dotenv("/home/zoe/assistant/services/zoe-data/.env")
+
+
+def _idle_seconds() -> int:
+    """The engine's effective idle window at runtime (whatever it bound at import)."""
+    import memory_idle_consolidation as mic
+
+    return int(mic.IDLE_SECONDS)
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +142,14 @@ async def _facts_text(svc, user_id: str) -> list[str]:
 async def live_env():
     import db_pool
 
+    # The asyncpg pool is process-global. A sibling live suite (test_live_dedup.py) runs
+    # its own persistent event loop and binds the pool to THAT loop; pytest-asyncio gives
+    # this suite a fresh loop per test. Reusing a pool bound to a foreign/closed loop
+    # raises "RuntimeError: Event loop is closed". So always start from a clean pool bound
+    # to OUR running loop: drop any pre-existing global (its loop may be closed, so don't
+    # await .close() on it — just detach), then init fresh. Teardown nulls it again so the
+    # next suite re-inits on its own loop.
+    db_pool._pool = None
     await db_pool.init_pool()
     from db_pool import get_db_ctx
     from memory_service import get_memory_service
@@ -181,7 +197,8 @@ async def live_env():
                 raise
             except Exception as exc:  # pragma: no cover
                 print(f"[teardown] verify-empty({u}) failed: {exc}")
-        # 4) release the asyncpg pool so the suite doesn't leave live connections open.
+        # 4) release the asyncpg pool we created (resets the global to None) so we leave
+        #    no live connections open and the next suite re-inits on its own loop.
         try:
             await db_pool.close_pool()
         except Exception as exc:  # pragma: no cover
@@ -206,8 +223,9 @@ async def test_owner_resolved_from_per_turn_metadata(live_env):
         ("user", "Yes, I really do like teal a lot."),
     ]
     async with get_db_ctx() as db:
-        # backdate > idle so it is selectable
-        await _seed_session(db, session_id=sid, owner=user_a, turns=turns, age_s=_IDLE_S + 60)
+        # backdate > the engine's actual idle window so it is selectable
+        await _seed_session(db, session_id=sid, owner=user_a, turns=turns,
+                            age_s=_idle_seconds() + 60)
 
     # find_idle_sessions is READ-ONLY — it must resolve owner=user_a (NOT 'guest').
     async with get_db_ctx() as db:
@@ -249,7 +267,7 @@ async def test_cross_user_isolation_no_leak(live_env):
 
     async with get_db_ctx() as db:
         await _seed_session(
-            db, session_id=sid_a, owner=user_a, age_s=_IDLE_S + 60,
+            db, session_id=sid_a, owner=user_a, age_s=_idle_seconds() + 60,
             turns=[
                 ("user", "My favourite colour is teal."),
                 ("assistant", "Noted — teal."),
@@ -257,7 +275,7 @@ async def test_cross_user_isolation_no_leak(live_env):
             ],
         )
         await _seed_session(
-            db, session_id=sid_b, owner=user_b, age_s=_IDLE_S + 60,
+            db, session_id=sid_b, owner=user_b, age_s=_idle_seconds() + 60,
             turns=[
                 ("user", "My favourite colour is crimson."),
                 ("assistant", "Got it — crimson."),
@@ -295,7 +313,7 @@ async def test_guest_only_session_is_skipped(live_env):
     async with get_db_ctx() as db:
         # owner=None → NO per-turn metadata; chat_sessions.user_id stays 'guest'.
         await _seed_session(
-            db, session_id=sid, owner=None, age_s=_IDLE_S + 60,
+            db, session_id=sid, owner=None, age_s=_idle_seconds() + 60,
             turns=[
                 ("user", "My favourite colour is chartreuse."),
                 ("assistant", "Chartreuse, noted."),
@@ -327,11 +345,15 @@ async def test_idle_timing_gate(live_env):
 
     sid = f"sess_timing_{uuid.uuid4().hex[:8]}"
     live_env["session_ids"].append(sid)
+    idle_s = _idle_seconds()
+    # "fresh" = comfortably inside the idle window (a third of it, capped at 10s) so the
+    # not-yet-idle assertion holds whatever the engine's window is.
+    fresh_s = max(1, min(10, idle_s // 3))
 
-    # Seed with the last turn only ~10s old → NOT yet idle (idle window is _IDLE_S=30).
+    # Seed with the last turn only `fresh_s`s old → NOT yet idle.
     async with get_db_ctx() as db:
         await _seed_session(
-            db, session_id=sid, owner=user_a, age_s=10,
+            db, session_id=sid, owner=user_a, age_s=fresh_s,
             turns=[
                 ("user", "I drive a blue hatchback."),
                 ("assistant", "Blue hatchback, noted."),
@@ -341,14 +363,14 @@ async def test_idle_timing_gate(live_env):
     async with get_db_ctx() as db:
         idle = await find_idle_sessions(db)
     assert not [s for s in idle if s["session_id"] == sid], (
-        f"session idle for only ~10s must NOT be selected (idle window {_IDLE_S}s)"
+        f"session idle for only ~{fresh_s}s must NOT be selected (idle window {idle_s}s)"
     )
 
     # Backdate it past the idle window → now it should appear.
     async with get_db_ctx() as db:
-        await _set_session_age(db, sid, _IDLE_S + 60)
+        await _set_session_age(db, sid, idle_s + 60)
     async with get_db_ctx() as db:
         idle = await find_idle_sessions(db)
     mine = [s for s in idle if s["session_id"] == sid]
-    assert mine, f"session backdated > {_IDLE_S}s should now be selected as idle"
+    assert mine, f"session backdated > {idle_s}s should now be selected as idle"
     assert mine[0]["user_id"] == user_a
