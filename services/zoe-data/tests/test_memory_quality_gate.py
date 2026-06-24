@@ -102,17 +102,113 @@ def test_same_attribute_different_value_supersedes():
     assert action == "update" and mid == "old"
 
 
-def test_near_exact_duplicate_supersedes():
+def test_near_exact_duplicate_of_equal_fact_skips():
+    # Same fact, no new information → keep the existing row, write nothing
+    # (don't churn the store by archiving + re-adding an identical value).
     action, mid = classify_against_existing(
         "my dad's name is Neil",
         [("old", "My dad's name is Neil.")],
     )
-    assert action == "update" and mid == "old"
+    assert action == "skip" and mid == "old"
 
 
 def test_empty_existing_adds():
     action, mid = classify_against_existing("my dad's name is Neil", [])
     assert action == "add" and mid is None
+
+
+# --- consolidation near-duplicate dedup (the Neil repro) ----------------------
+# The idle-consolidation engine distils a THIRD-person restatement of a fact the
+# user already taught in FIRST person. Same attribute, same value, but the
+# existing row is richer (it spells the name) → keep existing, store NOTHING.
+
+def test_distilled_third_person_dup_of_richer_existing_is_skipped():
+    action, mid = classify_against_existing(
+        "User's father's name is Neil.",
+        [("approved", "My dad's name is Neil, spelled N-E-I-L.")],
+    )
+    assert action == "skip" and mid == "approved", (
+        "distilled near-dup of a richer fact must NOT create a 2nd row"
+    )
+
+
+def test_distilled_richer_fact_supersedes_sparser_existing():
+    # The reverse direction: the new distilled fact carries MORE detail than the
+    # stored one → supersede the sparse row instead of keeping both.
+    action, mid = classify_against_existing(
+        "My dad's name is Neil, spelled N-E-I-L.",
+        [("sparse", "User's father's name is Neil.")],
+    )
+    assert action == "update" and mid == "sparse"
+
+
+def test_same_attribute_corrected_value_supersedes():
+    # Same attribute (father's name) but a genuinely different value → this is a
+    # correction, supersede the stale row rather than keeping a contradiction.
+    action, mid = classify_against_existing(
+        "User's father's name is Tom",
+        [("stale", "My dad's name is Neil")],
+    )
+    assert action == "update" and mid == "stale"
+
+
+def test_genuinely_new_fact_is_added():
+    action, mid = classify_against_existing(
+        "My favourite colour is blue",
+        [("approved", "My dad's name is Neil, spelled N-E-I-L.")],
+    )
+    assert action == "add" and mid is None
+
+
+def test_unrelated_facts_are_kept_separate():
+    # Different attributes must never be merged, even when search returns them.
+    action, mid = classify_against_existing(
+        "User's mother's name is Sandra",
+        [("dad", "My dad's name is Neil")],
+    )
+    assert action == "add" and mid is None
+
+
+# --- correction must never be silently dropped as a "skip" --------------------
+# A value change to a same-attribute fact is a correction → supersede the stale
+# row, never skip it. Regression guards for the synonym-leak / near-dup paths.
+
+def test_first_person_value_correction_supersedes_not_skips():
+    # "dad" canonicalises to "father" in both the key AND the value tokens, so it
+    # must NOT leak in as a fake shared value and mask the Neil→Tom correction.
+    action, mid = classify_against_existing(
+        "My dad's name is Tom",
+        [("old", "My dad's name is Neil")],
+    )
+    assert action == "update" and mid == "old"
+
+
+def test_near_identical_value_correction_supersedes_not_skips():
+    # High text similarity (Jo vs Joe ≈ 0.97) must still be read as a value
+    # correction, not phrasing-only noise → supersede.
+    action, mid = classify_against_existing(
+        "my dad's name is Joe",
+        [("old", "my dad's name is Jo")],
+    )
+    assert action == "update" and mid == "old"
+
+
+def test_phrasing_only_duplicate_skips():
+    # Same value, only punctuation differs → keep the existing row, write nothing.
+    action, mid = classify_against_existing(
+        "My dad's name is Neil",
+        [("old", "My dad's name is Neil.")],
+    )
+    assert action == "skip" and mid == "old"
+
+
+def test_generic_statement_is_not_an_attribute_assertion():
+    # The optional-subject regex must NOT treat any "X is Y" clause as a personal
+    # attribute → no spurious same-attribute match.
+    assert classify_against_existing(
+        "The weather is nice today",
+        [("w", "The weather is cold today")],
+    ) == ("add", None)
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +281,20 @@ def test_store_fact_supersedes_existing_same_attribute(monkeypatch):
     assert (kw.get("metadata") or {}).get("supersedes") == "old"
     assert svc.archived == ["old"]
     assert out and out.startswith("Got it")
+
+
+def test_ingest_or_supersede_skips_dup_of_richer_existing(monkeypatch):
+    # The consolidation path: a sparser distilled restatement of a richer stored
+    # fact must write NOTHING and must NOT archive the existing row.
+    svc = _FakeSvc(search_rows=[_Row("approved", "My dad's name is Neil, spelled N-E-I-L.")])
+    _run(expert_dispatch._ingest_or_supersede(
+        svc, "User's father's name is Neil.",
+        user_id="jason", source="idle_consolidation",
+        session_id="s1", user_turn_id="t1",
+        memory_type="fact", confidence=0.8, tags=["idle"],
+    ))
+    assert svc.ingested == [], "near-dup of a richer fact must not be stored"
+    assert svc.archived == [], "the richer existing row must be kept"
 
 
 def test_extract_and_ingest_drops_rejected(monkeypatch):
