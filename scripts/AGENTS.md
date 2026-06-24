@@ -8,6 +8,7 @@ Operational scripting for Zoe hosts: setup, maintenance, deployment, migrations,
 
 - `setup/` — host/platform provisioning, including `setup/jetson/` systemd unit templates.
 - `maintenance/` — recurring operational jobs: `graphify_openrouter_cli.py` (repo-owned OpenRouter Graphify launcher), `graphify_local_refresh.py` / `graphify_local_probe.py` (offline local probes; not sufficient for full-corpus scheduled refresh), `prune_worktrees.sh` (stale worktree cleanup), `greploop_guard.py` (Greptile fix-packet loop), `zoe-memory-lint.py` (report-only memory Lint CLI — prints contradictions/stale/orphan/duplicate findings, never mutates stored memory), triage generators, and `pi_intent_probe.py` for local Pi/Gemma ambiguous-intent timing evidence.
+- `perf/` — speed-regression harness: `measure_speed.py` (brain TTFT + gen tok/s probe vs the live llama-server) and `measure_voice.py` (voice e2e latency + said-vs-did correctness, wrapping `services/zoe-data/tests/replay_samples.py`). Both are read-only and gated behind `ZOE_PERF=1`; see `perf/README.md` for the before/after workflow and the captured baseline.
 - `deploy/`, `migrations/`, `testing/`, `train/`, `utilities/`, `preview/` — task-specific script groups.
 
 ## Local Contracts
