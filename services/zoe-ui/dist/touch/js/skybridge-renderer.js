@@ -188,14 +188,18 @@
     // Custom filled calendar glyph (design system §5: filled/dimensional, never line
     // icons). Self-contained <svg> with a unique gradient id so it can live inside a
     // single rendered card without depending on the shared sprite.
+    var calGlyphSeq = 0;
     function calendarGlyphSvg() {
+        // Unique gradient id per render so multiple calendar cards don't collide on
+        // a shared element id (invalid HTML).
+        var gid = 'calCardG' + (++calGlyphSeq);
         return [
             '<svg class="calendar-glyph" viewBox="0 0 32 32" aria-hidden="true">',
-            '<defs><linearGradient id="calCardG" x1="0" y1="0" x2="0" y2="1">',
+            '<defs><linearGradient id="' + gid + '" x1="0" y1="0" x2="0" y2="1">',
             '<stop offset="0" stop-color="rgba(255,255,255,.95)"/>',
             '<stop offset="1" stop-color="rgba(228,236,250,.86)"/>',
             '</linearGradient></defs>',
-            '<rect x="3" y="6" width="26" height="23" rx="5" fill="url(#calCardG)"/>',
+            '<rect x="3" y="6" width="26" height="23" rx="5" fill="url(#' + gid + ')"/>',
             '<rect x="3" y="6" width="26" height="7" rx="5" fill="rgba(var(--calendar-glyph-accent,90,224,224),.92)"/>',
             '<rect x="9" y="2.5" width="2.8" height="7" rx="1.4" fill="rgba(var(--calendar-glyph-accent,90,224,224),.92)"/>',
             '<rect x="20.2" y="2.5" width="2.8" height="7" rx="1.4" fill="rgba(var(--calendar-glyph-accent,90,224,224),.92)"/>',
