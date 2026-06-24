@@ -51,6 +51,8 @@
   window.SkybridgeTheme = {
     apply: apply,
     getMode: mode,
-    setMode: function (m) { try { localStorage.setItem(KEY, m); } catch (e) {} apply(); }
+    setMode: function (m) { try { localStorage.setItem(KEY, m); } catch (e) {} apply(); },
+    // Local sunrise/sunset for today (the clock card surfaces these).
+    sunTimes: function () { return sunTimes(new Date()); }
   };
 })();

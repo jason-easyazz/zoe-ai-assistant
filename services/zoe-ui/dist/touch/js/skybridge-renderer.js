@@ -463,18 +463,73 @@
         return { hour, minute, dayPeriod, date };
     }
 
+    function clockGreeting(timezone) {
+        var h;
+        try {
+            h = parseInt(new Intl.DateTimeFormat('en-US', { hour: 'numeric', hour12: false, timeZone: timezone || undefined }).format(new Date()), 10);
+        } catch (e) { h = NaN; }
+        if (!isFinite(h)) h = new Date().getHours();
+        if (h < 5) return 'Good night';
+        if (h < 12) return 'Good morning';
+        if (h < 17) return 'Good afternoon';
+        if (h < 21) return 'Good evening';
+        return 'Good night';
+    }
+    function clockUserName() {
+        try {
+            var c = JSON.parse(sessionStorage.getItem('zoe_panel_auth_challenge') || '{}');
+            var n = c.selected_username || '';
+            return n && n.toLowerCase() !== 'guest' ? n : '';
+        } catch (e) { return ''; }
+    }
+    function fmtClockTime(d) {
+        try { return d ? new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit', hour12: true }).format(d) : ''; } catch (e) { return ''; }
+    }
+    // Small filled sun-on-horizon glyph for the sunrise/sunset rows (up = sunrise).
+    function horizonGlyph(up, color) {
+        var arrow = up
+            ? '<path d="M12 12.5V7M9.4 9.6 12 7l2.6 2.6" stroke="' + color + '" stroke-width="1.7" fill="none" stroke-linecap="round" stroke-linejoin="round"/>'
+            : '<path d="M12 7v5.5M9.4 9.9 12 12.5l2.6-2.6" stroke="' + color + '" stroke-width="1.7" fill="none" stroke-linecap="round" stroke-linejoin="round"/>';
+        return '<svg width="17" height="17" viewBox="0 0 24 24" aria-hidden="true">'
+            + '<path d="M7.5 18a4.5 4.5 0 0 1 9 0z" fill="' + color + '" opacity=".95"/>'
+            + '<line x1="3.5" y1="18" x2="20.5" y2="18" stroke="' + color + '" stroke-width="1.7" stroke-linecap="round"/>'
+            + arrow + '</svg>';
+    }
+
     function renderClock(props) {
         const timezone = props.timezone || '';
         const parts = clockParts(timezone);
         const dateText = parts.date || [props.weekday, props.date_label].filter(Boolean).join(', ');
-        // Re-skin only: preserve .sky-clock-scene/.sky-live-clock + the data-clock-*
-        // spans so updateAllClocks() in skybridge.js keeps the numerals ticking live.
+        const name = clockUserName();
+        const greet = clockGreeting(timezone) + (name ? ', ' + name : '');
+        let sun = null;
+        try { sun = (window.SkybridgeTheme && window.SkybridgeTheme.sunTimes) ? window.SkybridgeTheme.sunTimes() : null; } catch (e) {}
+        const sunRows = sun ? [
+            '<div class="clock-sun-row"><span class="clock-sun-lbl">' + horizonGlyph(false, '#ff9a6b') + 'Sunset</span><span class="tnum clock-sun-t">' + escapeHtml(fmtClockTime(sun.set)) + '</span></div>',
+            '<div class="clock-sun-row"><span class="clock-sun-lbl">' + horizonGlyph(true, '#ffce70') + 'Sunrise</span><span class="tnum clock-sun-t">' + escapeHtml(fmtClockTime(sun.rise)) + '</span></div>'
+        ].join('') : '';
+        // Stars + both glyphs are always in the DOM; CSS shows the right ones per
+        // [data-theme], so a live sunrise/sunset theme flip (60s tick) updates them
+        // without a re-render.
+        const stars = '<span class="clock-star" style="top:18%;left:9%"></span><span class="clock-star" style="top:30%;left:24%"></span><span class="clock-star" style="top:14%;left:40%"></span><span class="clock-star" style="top:40%;left:15%"></span>';
+        // Keep .sky-clock-scene/.sky-live-clock + the data-clock-* spans so
+        // updateAllClocks() keeps the numerals ticking live.
+        // New class names (clock-*) sidestep the legacy clock CSS entirely; only
+        // .sky-live-clock + the data-clock-* attributes are kept (all the live
+        // updater needs).
         const body = [
-            '<div class="sky-clock-scene sky-live-clock" data-timezone="' + escapeHtml(timezone) + '">',
-            '<div class="sky-clock-main">',
-            '<p class="sky-clock-kicker">Local time</p>',
-            '<div class="sky-clock-time"><span class="sky-clock-h" data-clock-hour>' + escapeHtml(parts.hour || props.hour || '') + '</span><i class="sky-clock-colon">:</i><span class="sky-clock-m" data-clock-minute>' + escapeHtml(parts.minute || props.minute || '') + '</span><b class="sky-clock-mer" data-clock-meridiem>' + escapeHtml(parts.dayPeriod || props.meridiem || '') + '</b></div>',
-            '<div class="sky-clock-date" data-clock-date>' + escapeHtml(dateText) + '</div>',
+            '<div class="clock-scene sky-live-clock" data-timezone="' + escapeHtml(timezone) + '">',
+            stars,
+            '<div class="clock-main">',
+            '<div class="clock-greet">' + escapeHtml(greet) + '</div>',
+            '<div class="clock-time"><span class="clock-h" data-clock-hour>' + escapeHtml(parts.hour || props.hour || '') + '</span><i class="clock-colon">:</i><span class="clock-m" data-clock-minute>' + escapeHtml(parts.minute || props.minute || '') + '</span><b class="clock-mer" data-clock-meridiem>' + escapeHtml(parts.dayPeriod || props.meridiem || '') + '</b></div>',
+            '<div class="clock-date" data-clock-date>' + escapeHtml(dateText) + '</div>',
+            '</div>',
+            '<div class="clock-div"></div>',
+            '<div class="clock-side">',
+            '<span class="clock-glyph clock-glyph-night">' + glyphSvg('i-moon', 86) + '</span>',
+            '<span class="clock-glyph clock-glyph-day">' + glyphSvg('i-sun', 86) + '</span>',
+            sunRows ? '<div class="clock-sun">' + sunRows + '</div>' : '',
             '</div>',
             '</div>'
         ].join('');
