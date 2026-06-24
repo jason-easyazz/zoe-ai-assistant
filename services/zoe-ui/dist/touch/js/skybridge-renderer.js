@@ -410,9 +410,11 @@
         const tabs = (Array.isArray(lists) ? lists : []).slice(0, 6).map(list => {
             const accent = listAccentClass(list.list_type);
             const selected = selectedId && String(list.id || '') === String(selectedId) ? ' is-active' : '';
-            return '<button type="button" class="sky-list-tab ' + escapeHtml(accent) + selected + '" data-sky-action="query" data-query="' + escapeHtml(listQuery(list)) + '"><span>' + escapeHtml(listLabel(list)) + '</span></button>';
+            const count = Array.isArray(list.items) ? list.items.length : null;
+            const countTag = count != null ? '<i class="sky-list-tab-count" aria-hidden="true">' + escapeHtml(count) + '</i>' : '';
+            return '<button type="button" class="sky-list-tab ' + escapeHtml(accent) + selected + '" data-sky-action="query" data-query="' + escapeHtml(listQuery(list)) + '"><span>' + escapeHtml(listLabel(list)) + '</span>' + countTag + '</button>';
         }).join('');
-        return '<div class="sky-list-switcher">' + tabs + '<button type="button" class="sky-list-tab new-list" data-sky-action="query" data-query="new list"><span>New list</span></button></div>';
+        return '<div class="sky-list-switcher" role="tablist">' + tabs + '<button type="button" class="sky-list-tab new-list" data-sky-action="query" data-query="new list"><span>+ New</span></button></div>';
     }
 
     function listEditQuery(title, listType) {
@@ -420,21 +422,32 @@
         return 'edit ' + title + ' on the ' + type + ' list';
     }
 
+    // Custom filled check glyph (NOT a thin line icon — see design-system §5/§12).
+    // Card-local so it does not depend on the shared sprite shipping a list glyph.
+    const LIST_CHECK_SVG = '<svg class="sky-list-check-mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.6 16.2 5.4 12l-1.5 1.5 5.7 5.7L21 7.5 19.5 6z"/></svg>';
+
     function renderListItemRow(item, index, listType) {
         const isObject = typeof item === 'object' && item;
         const title = isObject ? (item.text || item.title || item.label || 'List item') : String(item || 'List item');
         const completed = !!(isObject && item.completed);
         const recent = !!(isObject && item.recent);
-        const detail = isObject ? [item.quantity, item.category, item.assigned_to].filter(Boolean).join(' · ') : '';
+        const quantity = isObject && item.quantity != null && String(item.quantity).trim() !== '' ? String(item.quantity).trim() : '';
+        // Secondary line: category / assignee (quantity is promoted to its own metric).
+        const detail = isObject ? [item.category, item.assigned_to].filter(Boolean).join(' · ') : '';
         const priorityValue = isObject && item.priority ? String(item.priority).trim().toLowerCase() : '';
-        const priority = priorityValue && priorityValue !== 'normal' ? '<b>' + escapeHtml(item.priority) + '</b>' : '';
+        const priority = priorityValue && priorityValue !== 'normal'
+            ? '<span class="sky-list-flag pr-' + escapeHtml(safeClassTokens(priorityValue) || 'set') + '">' + escapeHtml(item.priority) + '</span>'
+            : '';
+        const qtyMetric = quantity
+            ? '<div class="sky-list-qty" aria-label="Quantity ' + escapeHtml(quantity) + '"><strong>' + escapeHtml(quantity) + '</strong></div>'
+            : '';
         // Tap-to-edit: each row is a query button that opens the existing item editor card
         // through /api/skybridge/resolve (mutation -> authoritative re-read -> refresh).
         return [
             '<button type="button" class="sky-list-item-row' + (completed ? ' is-done' : '') + (recent ? ' is-recent' : '') + '" data-sky-action="query" data-query="' + escapeHtml(listEditQuery(title, listType)) + '">',
-            '<div class="sky-list-check" aria-hidden="true">' + (completed ? '✓' : '') + '</div>',
+            '<span class="sky-list-check" aria-hidden="true">' + (completed ? LIST_CHECK_SVG : '') + '</span>',
             '<div class="sky-list-item-main"><strong>' + escapeHtml(title) + '</strong>' + (detail ? '<em>' + escapeHtml(detail) + '</em>' : '') + '</div>',
-            priority ? '<div class="sky-list-item-meta">' + priority + '</div>' : '',
+            '<div class="sky-list-item-meta">' + priority + qtyMetric + '</div>',
             '</button>'
         ].join('');
     }
@@ -442,17 +455,18 @@
     function renderListColumn(list) {
         const items = Array.isArray(list.items) ? list.items : [];
         const accent = listAccentClass(list.list_type);
-        const preview = items.slice(0, 4).map((item) => {
-            const title = typeof item === 'object' && item ? (item.text || item.title || item.label || 'Item') : String(item || 'Item');
-            return '<li><strong>' + escapeHtml(title) + '</strong></li>';
+        const preview = items.slice(0, 5).map((item) => {
+            const obj = typeof item === 'object' && item;
+            const title = obj ? (item.text || item.title || item.label || 'Item') : String(item || 'Item');
+            const done = !!(obj && item.completed);
+            return '<li' + (done ? ' class="is-done"' : '') + '><span class="sky-list-dot" aria-hidden="true"></span><strong>' + escapeHtml(title) + '</strong></li>';
         }).join('');
+        const countLabel = items.length === 1 ? '1 item' : items.length + ' items';
         return [
-            '<div class="sky-list-column ' + escapeHtml(accent) + '">',
-            '<button type="button" class="sky-list-column-head" data-sky-action="query" data-query="' + escapeHtml(listQuery(list)) + '">',
-            '<strong>' + escapeHtml(listLabel(list)) + '</strong>',
-            '</button>',
-            preview ? '<ul>' + preview + '</ul>' : '<p>No items</p>',
-            '</div>'
+            '<button type="button" class="sky-list-column ' + escapeHtml(accent) + '" data-sky-action="query" data-query="' + escapeHtml(listQuery(list)) + '">',
+            '<span class="sky-list-column-head"><strong>' + escapeHtml(listLabel(list)) + '</strong><em>' + escapeHtml(countLabel) + '</em></span>',
+            preview ? '<ul>' + preview + '</ul>' : '<p class="sky-list-column-empty">No items yet</p>',
+            '</button>'
         ].join('');
     }
 
@@ -472,9 +486,30 @@
             '<span>Zoe did not find active items for this request.</span>',
             '</div>'
         ].join('');
+        const isOverview = !rows && !!overviewRows;
+        const headerTitle = isOverview
+            ? 'Lists'
+            : (props.list_name || (selectedId && listLabel(lists.find(l => String(l.id || '') === String(selectedId)) || {})) || 'List');
+        const totalDone = visibleItems.filter(it => typeof it === 'object' && it && it.completed).length;
+        let countLabel;
+        if (isOverview) {
+            countLabel = lists.length === 1 ? '1 list' : lists.length + ' lists';
+        } else if (!items.length) {
+            countLabel = 'Empty';
+        } else {
+            const noun = items.length === 1 ? 'item' : 'items';
+            countLabel = totalDone ? totalDone + ' of ' + items.length + ' ' + noun + ' done' : items.length + ' ' + noun;
+        }
+        const header = [
+            '<header class="sky-list-header">',
+            '<div class="sky-list-heading"><span class="sky-list-kicker">' + (isOverview ? 'Your lists' : 'List') + '</span><h3 class="sky-list-name">' + escapeHtml(headerTitle) + '</h3></div>',
+            '<span class="sky-list-count">' + escapeHtml(countLabel) + '</span>',
+            '</header>'
+        ].join('');
         const body = [
             '<div class="sky-list-scene ' + escapeHtml(accent) + '">',
-            renderListSwitcher(lists, selectedId),
+            header,
+            lists.length ? renderListSwitcher(lists, selectedId) : '',
             '<div class="' + itemsClass + '">' + (rows || overviewRows || empty) + '</div>',
             '</div>'
         ].join('');
