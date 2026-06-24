@@ -105,14 +105,16 @@ memory unprompted; its understanding of the user evolves.
 - [x] Deep dive + architecture decided (memory `project-mempalace-deep-dive`)
 - [x] Memory P1 read-packet, P2 write-gate, P3 junk cleanup (shipped earlier)
 - [x] **1a** — idle consolidation engine (branch `feat/memory-idle-consolidation`, flag off, 5 tests green, SQL lab-validated)
-- [ ] **1b** — persist per-turn user  ← **NEXT**
-- [ ] **1c** — lab-prove + Samantha same-day test + prod enable
+- [x] **1b** — persist per-turn user (chat+voice `_save_chat_message` stamps `metadata.user_id`; consolidation resolves owner from per-turn metadata over a guest session; tests green; SQL lab-proven a guest-owned session resolves to `jason`)
+- [ ] **1c** — lab-prove + Samantha same-day test + prod enable  ← **NEXT**
 - [ ] **2a** hybrid retrieval · [ ] **2b** compose Postgres+Chroma packet · [ ] **2c** voice mirror
 - [ ] **3a** reflection · [ ] **3b** importance · [ ] **3c** proactive surfacing
 - [ ] (carry-over) identity deploy `#768` — FF-deploy when the tooling/classifier outage clears
 
 ## 7. NEXT ACTION (always exactly one)
-→ **Increment 1b.** In a fresh worktree off `origin/main` (or continue `feat/memory-idle-consolidation`):
-persist `effective_user` into `chat_messages.metadata` at `_save_chat_message` (chat + voice callers);
-update `memory_idle_consolidation` to resolve the user from message metadata; lab-verify a sweep
-consolidates a real jason idle session into clean facts. Then advance to 1c. Update §6/§7 when done.
+→ **Increment 1c (lab-prove + Samantha same-day test + prod enable).** The per-turn user is now
+persisted (1b) so consolidation knows whose memory to write. Next: enable the flag in a worktree
+(`ZOE_IDLE_CONSOLIDATION_ENABLED=1`, short `ZOE_IDLE_CONSOLIDATION_IDLE_S`), run a live exchange,
+let it go idle, and confirm a full `run_idle_consolidation_sweep()` consolidates a real jason idle
+session into clean facts through the write-quality gate. Run the same-day Samantha test (told in the
+morning → recalled in the afternoon), then enable the flag in prod. Update §6/§7 when done.
