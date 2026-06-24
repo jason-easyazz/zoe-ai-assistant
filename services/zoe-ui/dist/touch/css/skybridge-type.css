@@ -1,0 +1,38 @@
+/*
+ * Self-hosted Inter (the SF Pro stand-in). woff2 lives next to this file so the
+ * kiosk never depends on the network. Weights match the type tokens:
+ * 300 thin (hero numerals), 400 regular, 500 medium, 600 semibold (clock/labels).
+ */
+/* Apply Inter panel-wide (cards, controls, the lot). */
+body, .sky-card, .sky-premium-card, button, input {
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+}
+
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+  src: url("./fonts/inter-300.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./fonts/inter-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("./fonts/inter-500.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("./fonts/inter-600.woff2") format("woff2");
+}

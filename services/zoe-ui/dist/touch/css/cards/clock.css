@@ -1,0 +1,175 @@
+/* clock card — re-skin to docs/architecture/skybridge-design-system.md.
+   Owns ONLY the .clock-card styling so cards can be re-skinned independently.
+   Use the tokens (--sky-*, --card-*, --text-*), the .sky-material glass, the
+   glyph sprite (<use href="#i-*">), and provide both default (dark) + light
+   ([data-theme="light"] ...) treatments. Fill the stage at panel scale.
+
+   Design: a centred hero time numeral (tabular-nums, ~140px) with a quiet
+   "LOCAL TIME" micro-label above and the weekday + date caption below. Every
+   token is consumed via var(--token, <spec value>) so the card renders to the
+   design system even before skybridge-tokens.css lands, and inherits the real
+   token set the moment it does. All sizing is in base rules (NOT behind a
+   media query) so the scene keeps real height at panel scale — the prior
+   ~38px collapse was caused by sizing living only in @media (max-height:760px). */
+
+/* ---- Card frame: the one glass recipe (§2) ------------------------------ */
+.clock-card {
+  /* .sky-material glass — gradient + blur + hairline + cast shadow + top highlight */
+  background:
+    var(--sky-material-bg,
+      linear-gradient(157deg, rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0.035)));
+  -webkit-backdrop-filter: var(--sky-material-blur, blur(26px) saturate(140%));
+  backdrop-filter: var(--sky-material-blur, blur(26px) saturate(140%));
+  border: 1px solid var(--sky-hairline, rgba(255, 255, 255, 0.14));
+  box-shadow: var(--sky-elevation,
+    0 26px 60px -18px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.22));
+  border-radius: var(--sky-radius-xl, 38px);
+
+  /* Fill the stage at panel scale (§9): the card spans #skyCards, never a
+     narrow centred column. Real height in base rules so it cannot collapse. */
+  box-sizing: border-box;
+  width: 100%;
+  min-height: var(--clock-card-min-h, 360px);
+  padding: var(--sky-space-12, 46px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  color: var(--text-primary, var(--sky-ink-0, rgba(255, 255, 255, 0.96)));
+}
+
+/* ---- Scene: centred content primitive (§8) ------------------------------ */
+.clock-card .sky-clock-scene {
+  width: 100%;
+  min-height: var(--clock-scene-min-h, 264px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.clock-card .sky-clock-main {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sky-space-5, 20px);
+}
+
+/* ---- Micro-label (§3): 12px / 600 / 2.5px tracking / uppercase ---------- */
+.clock-card .sky-clock-kicker {
+  margin: 0;
+  font-size: var(--sky-text-micro, 12px);
+  font-weight: 600;
+  letter-spacing: 2.5px;
+  text-transform: uppercase;
+  color: var(--text-tertiary, var(--sky-ink-3, rgba(255, 255, 255, 0.5)));
+}
+
+/* ---- Hero time numeral (§3, §9): big, tabular, fill the stage ----------- */
+.clock-card .sky-clock-time {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 0;
+  font-size: var(--sky-text-clock-hero, 140px);
+  font-weight: 600;
+  line-height: 0.92;
+  letter-spacing: -1px; /* negative tracking on the largest numerals only */
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  color: var(--text-primary, var(--sky-ink-0, rgba(255, 255, 255, 0.96)));
+}
+
+.clock-card .sky-clock-h,
+.clock-card .sky-clock-m {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Colon: slightly recessed + nudged off the baseline so it reads as a
+   separator rather than a digit. Cheap, transform-only liveness (§7). */
+.clock-card .sky-clock-colon {
+  font-style: normal;
+  margin: 0 0.06em;
+  color: var(--text-secondary, var(--sky-ink-1, rgba(255, 255, 255, 0.72)));
+  transform: translateY(-0.06em);
+  animation: clock-colon-pulse 2s var(--sky-ease-standard, ease-in-out) infinite;
+}
+
+@keyframes clock-colon-pulse {
+  0%, 45% { opacity: 1; }
+  55%, 100% { opacity: 0.45; }
+}
+
+/* Meridiem: small accent-tinted note riding the baseline of the numeral. */
+.clock-card .sky-clock-mer {
+  font-style: normal;
+  font-weight: 600;
+  font-size: var(--sky-text-heading, 0.24em);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  margin-left: 0.22em;
+  align-self: center;
+  padding: 0.32em 0.7em;
+  border-radius: var(--sky-radius-pill, 999px);
+  background: var(--sky-accent-calm-soft, rgba(94, 234, 212, 0.14));
+  color: var(--sky-accent-calm-ink, rgba(153, 246, 228, 0.95));
+}
+
+/* ---- Date caption (§3, §11): weekday + date below the hero --------------- */
+.clock-card .sky-clock-date {
+  font-size: var(--sky-text-heading, 22px);
+  font-weight: 400;
+  letter-spacing: 0.2px;
+  color: var(--text-secondary, var(--sky-ink-1, rgba(255, 255, 255, 0.7)));
+}
+
+/* ---- Light treatment (§4, §10): dark ink on bright glass ----------------- */
+[data-theme="light"] .clock-card {
+  background:
+    var(--sky-material-bg,
+      linear-gradient(157deg, rgba(255, 255, 255, 0.66), rgba(255, 255, 255, 0.42)));
+  border-color: var(--sky-hairline, rgba(20, 50, 80, 0.16));
+  box-shadow: var(--sky-elevation,
+    0 26px 60px -18px rgba(20, 50, 80, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.6));
+  color: var(--text-primary, #16324d);
+}
+
+[data-theme="light"] .clock-card .sky-clock-kicker {
+  color: var(--text-tertiary, rgba(58, 94, 128, 0.7));
+}
+
+[data-theme="light"] .clock-card .sky-clock-time {
+  color: var(--text-primary, #16324d);
+}
+
+[data-theme="light"] .clock-card .sky-clock-colon {
+  color: var(--text-secondary, #3a5e80);
+}
+
+[data-theme="light"] .clock-card .sky-clock-mer {
+  background: var(--sky-accent-calm-soft, rgba(13, 148, 136, 0.14));
+  color: var(--sky-accent-calm-ink, #0f766e);
+}
+
+[data-theme="light"] .clock-card .sky-clock-date {
+  color: var(--text-secondary, #3a5e80);
+}
+
+/* ---- Motion safety (§7) -------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .clock-card .sky-clock-colon {
+    animation: none;
+  }
+}
+
+/* ---- Larger panels: let the hero grow to truly fill the stage (§9).
+   This only ADDS scale on tall panels; base rules already give full height. */
+@media (min-height: 700px) {
+  .clock-card {
+    min-height: var(--clock-card-min-h-lg, 420px);
+  }
+  .clock-card .sky-clock-time {
+    font-size: var(--sky-text-clock-hero-lg, 168px);
+  }
+}
