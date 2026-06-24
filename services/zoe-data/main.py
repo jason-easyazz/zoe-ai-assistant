@@ -687,6 +687,13 @@ async def lifespan(app: FastAPI):
     _openclaw_bg_task = start_openclaw_background_tasks()
     _digest_bg_task = start_memory_digest_background()
     _consolidation_bg_task = start_memory_consolidation_background()
+    # Idle-triggered "live → idle → store" consolidation (self-gates on
+    # ZOE_IDLE_CONSOLIDATION_ENABLED; off by default until lab-proven).
+    try:
+        from memory_idle_consolidation import start_idle_consolidation_loop
+        asyncio.create_task(start_idle_consolidation_loop(), name="memory_idle_consolidation")
+    except Exception as _exc:
+        logger.warning("idle consolidation loop not started: %s", _exc)
     _zoe_update_bg_task = start_zoe_update_background_tasks()
 
     try:
