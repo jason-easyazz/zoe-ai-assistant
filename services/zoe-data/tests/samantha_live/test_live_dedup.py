@@ -158,11 +158,25 @@ async def _full_teardown(demo_user: str, session_ids: list[str]) -> int:
 
 # ── fixture: isolated demo user with guaranteed teardown ───────────────────────
 
+_EVENT_LOOP = None
+
+
+def _loop():
+    """One explicit event loop reused across setup/teardown so the asyncpg pool is
+    created and consumed on the same loop. `_loop()` is deprecated
+    from sync contexts (3.10+) and raises on 3.12+, so don't rely on it."""
+    global _EVENT_LOOP
+    if _EVENT_LOOP is None or _EVENT_LOOP.is_closed():
+        _EVENT_LOOP = asyncio.new_event_loop()
+        asyncio.set_event_loop(_EVENT_LOOP)
+    return _EVENT_LOOP
+
+
 @pytest.fixture
 def demo_env():
     """Yields (demo_user, register_session) and tears EVERYTHING down after,
     asserting the demo user has 0 facts left."""
-    asyncio.get_event_loop().run_until_complete(_ensure_pool())
+    _loop().run_until_complete(_ensure_pool())
     demo_user = _demo_user()
     sessions: list[str] = []
 
@@ -172,7 +186,7 @@ def demo_env():
     try:
         yield demo_user, register
     finally:
-        loop = asyncio.get_event_loop()
+        loop = _loop()
         removed = loop.run_until_complete(_full_teardown(demo_user, sessions))
         left = loop.run_until_complete(_approved(demo_user))
         print(f"\n[teardown] user={demo_user} removed={removed} remaining={len(left)}")
@@ -180,7 +194,7 @@ def demo_env():
 
 
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return _loop().run_until_complete(coro)
 
 
 # ── Scenario 1: skip duplicate (richer kept, not two rows) ─────────────────────
