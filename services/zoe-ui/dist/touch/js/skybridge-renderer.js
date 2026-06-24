@@ -185,6 +185,51 @@
         return ['tasks', 'all'].indexOf(category) >= 0 ? 'general' : category;
     }
 
+    // Best-effort epoch (ms) for an event start, so we can compute a live
+    // "in 2h" / "in 25 min" countdown from now. Mirrors calendarEventSortKey's
+    // date/time parsing but returns the actual timestamp (or NaN).
+    function calendarEventStartMs(item) {
+        const datePart = String(item.start_date || item.date || '').slice(0, 10);
+        const timePart = item.all_day ? '00:00' : String(item.start_time || '00:00').slice(0, 5);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(datePart)) return NaN;
+        return Date.parse(datePart + 'T' + timePart);
+    }
+
+    // A calm, human relative phrase from now → the event start. Returns '' when
+    // we can't compute one (no parseable date) so the hero can fall back cleanly.
+    function calendarCountdown(item, nowMs) {
+        if (item.all_day) {
+            const startDay = String(item.start_date || item.date || '').slice(0, 10);
+            if (/^\d{4}-\d{2}-\d{2}$/.test(startDay)) {
+                const today = new Date(nowMs);
+                const todayKey = today.getFullYear() + '-' +
+                    String(today.getMonth() + 1).padStart(2, '0') + '-' +
+                    String(today.getDate()).padStart(2, '0');
+                if (startDay === todayKey) return 'All day';
+            }
+            return 'All day';
+        }
+        const startMs = calendarEventStartMs(item);
+        if (!Number.isFinite(startMs)) return '';
+        const diffMin = Math.round((startMs - nowMs) / 60000);
+        if (diffMin <= -60) {
+            const h = Math.round(-diffMin / 60);
+            return h + (h === 1 ? 'h ago' : 'h ago');
+        }
+        if (diffMin < 0) return Math.abs(diffMin) + ' min ago';
+        if (diffMin === 0) return 'Now';
+        if (diffMin < 60) return 'in ' + diffMin + ' min';
+        const hours = diffMin / 60;
+        if (hours < 24) {
+            const h = Math.floor(hours);
+            const m = diffMin - h * 60;
+            return 'in ' + h + 'h' + (m ? ' ' + m + 'm' : '');
+        }
+        const days = Math.round(hours / 24);
+        if (days === 1) return 'Tomorrow';
+        return 'in ' + days + ' days';
+    }
+
     // Custom filled calendar glyph (design system §5: filled/dimensional, never line
     // icons). Self-contained <svg> with a unique gradient id so it can live inside a
     // single rendered card without depending on the shared sprite.
@@ -208,48 +253,93 @@
         ].join('');
     }
 
+    // Build a tap-to-edit query for an event row (opens the calendar editor card
+    // via /api/skybridge/resolve). Including the time disambiguates same-title events.
+    function calendarEditQuery(item, title) {
+        const startTime = String(item.start_time || '').slice(0, 5);
+        return 'edit ' + title + (startTime ? ' at ' + startTime : '');
+    }
+
     function renderCalendar(props) {
         const events = Array.isArray(props.events) ? props.events : [];
-        const visibleEvents = events.slice().sort((a, b) => calendarEventSortKey(a) - calendarEventSortKey(b)).slice(0, 8);
-        const dateMeta = formatCalendarDate(props.date || props.start_date || (visibleEvents[0] && visibleEvents[0].start_date));
+        const sorted = events.slice().sort((a, b) => calendarEventSortKey(a) - calendarEventSortKey(b)).slice(0, 8);
+        const dateMeta = formatCalendarDate(props.date || props.start_date || (sorted[0] && sorted[0].start_date));
         const qualifier = String(props.qualifier || 'today').trim();
         const countLabel = events.length + ' ' + (events.length === 1 ? 'event' : 'events') + (qualifier ? ' ' + qualifier : '');
+        const nowMs = Date.now();
 
-        const rows = visibleEvents.map((item, index) => {
+        // The hero is the soonest UPCOMING event by wall-clock — not simply sorted[0],
+        // because an all-day event sorts at 00:00 and would otherwise hijack the hero
+        // ahead of a timed meeting later today. Prefer the first event whose start is
+        // still in the future; fall back to the first sorted event (e.g. all past, or
+        // only all-day) so the card never collapses to an empty agenda.
+        let heroIndex = sorted.findIndex(item => {
+            if (item.all_day) return false;
+            const ms = calendarEventStartMs(item);
+            return Number.isFinite(ms) && ms >= nowMs;
+        });
+        if (heroIndex < 0) heroIndex = 0;
+        const heroEvent = sorted[heroIndex] || null;
+        const restEvents = sorted.filter((_, i) => i !== heroIndex);
+
+        let heroBlock = '';
+        if (heroEvent) {
+            const title = heroEvent.title || heroEvent.name || 'Calendar event';
+            const category = calendarCategoryClass(heroEvent.category);
+            const detail = [heroEvent.location].filter(Boolean).join(' · ');
+            const countdown = calendarCountdown(heroEvent, nowMs);
+            const isPast = (function () {
+                const ms = calendarEventStartMs(heroEvent);
+                return Number.isFinite(ms) && ms < nowMs && !heroEvent.all_day;
+            })();
+            heroBlock = [
+                '<button type="button" class="cal-hero sky-accent-' + escapeHtml(category) + (isPast ? ' is-past' : '') + '" data-sky-action="query" data-query="' + escapeHtml(calendarEditQuery(heroEvent, title)) + '">',
+                '<span class="cal-hero-rail" aria-hidden="true"></span>',
+                '<span class="cal-hero-kicker">' + escapeHtml(isPast ? 'Earlier' : 'Up next') + '</span>',
+                '<span class="cal-hero-time">' + escapeHtml(formatEventTime(heroEvent)) +
+                    (countdown ? '<b class="cal-hero-rel">' + escapeHtml(countdown) + '</b>' : '') + '</span>',
+                '<span class="cal-hero-title">' + escapeHtml(title) + '</span>',
+                detail ? '<span class="cal-hero-loc">' + escapeHtml(detail) + '</span>' : '',
+                '</button>'
+            ].join('');
+        }
+
+        const rows = restEvents.map(item => {
             const title = item.title || item.name || 'Calendar event';
             const category = calendarCategoryClass(item.category);
             const detail = [item.location].filter(Boolean).join(' · ');
-            // Tap-to-edit: each event row opens the existing calendar event editor card
-            // through /api/skybridge/resolve. Including the time disambiguates same-title events.
-            const startTime = String(item.start_time || '').slice(0, 5);
-            const editQuery = 'edit ' + title + (startTime ? ' at ' + startTime : '');
+            const start = String(item.start_time || '').slice(0, 5) || (item.all_day ? 'All day' : '—');
             return [
-                '<button type="button" class="calendar-event sky-accent-' + escapeHtml(category) + (index === 0 ? ' is-next' : '') + '" data-sky-action="query" data-query="' + escapeHtml(editQuery) + '">',
-                '<span class="calendar-event-dot" aria-hidden="true"></span>',
-                '<span class="calendar-event-time">' + escapeHtml(formatEventTime(item)) + (index === 0 ? '<b>Next</b>' : '') + '</span>',
-                '<span class="calendar-event-body"><strong>' + escapeHtml(title) + '</strong>' + (detail ? '<em>' + escapeHtml(detail) + '</em>' : '') + '</span>',
+                '<button type="button" class="cal-row sky-accent-' + escapeHtml(category) + '" data-sky-action="query" data-query="' + escapeHtml(calendarEditQuery(item, title)) + '">',
+                '<span class="cal-row-time tnum">' + escapeHtml(start) + '</span>',
+                '<span class="cal-row-marker" aria-hidden="true"></span>',
+                '<span class="cal-row-body"><strong>' + escapeHtml(title) + '</strong>' + (detail ? '<em>' + escapeHtml(detail) + '</em>' : '') + '</span>',
                 '</button>'
             ].join('');
         }).join('');
 
+        const timeline = restEvents.length
+            ? '<div class="cal-timeline">' + rows + '</div>'
+            : (heroEvent ? '<div class="cal-rest-empty">Nothing else scheduled</div>' : '');
+
         const empty = [
-            '<div class="calendar-empty">',
-            '<span class="calendar-empty-mark" aria-hidden="true"></span>',
+            '<div class="cal-empty">',
+            '<span class="cal-empty-mark" aria-hidden="true">' + calendarGlyphSvg() + '</span>',
             '<strong>Nothing scheduled</strong>',
-            '<span>Your calendar is clear ' + escapeHtml(qualifier || 'for now') + '.</span>',
+            '<span>Your day is clear ' + escapeHtml(qualifier || 'for now') + '.</span>',
             '</div>'
         ].join('');
 
         const body = [
-            '<div class="calendar-card-scene">',
-            '<header class="calendar-header">',
-            '<div class="calendar-glyph-wrap" aria-hidden="true">' + calendarGlyphSvg() + '</div>',
-            '<div class="calendar-heading">',
-            '<h3 class="calendar-day"><span>' + escapeHtml(dateMeta.weekday) + '</span> ' + escapeHtml(dateMeta.monthDay) + '</h3>',
-            '<p class="calendar-count">' + escapeHtml(countLabel) + '</p>',
+            '<div class="cal-scene">',
+            '<header class="cal-head">',
+            '<div class="cal-head-day">',
+            '<span class="cal-head-weekday">' + escapeHtml(dateMeta.weekday) + '</span>',
+            '<span class="cal-head-date">' + escapeHtml(dateMeta.monthDay) + '</span>',
             '</div>',
+            '<span class="cal-head-count">' + escapeHtml(countLabel) + '</span>',
             '</header>',
-            '<div class="calendar-agenda">' + (rows || empty) + '</div>',
+            heroEvent ? ('<div class="cal-body">' + heroBlock + timeline + '</div>') : empty,
             '</div>'
         ].join('');
         return cardFrame(Object.assign({ status: 'Calendar', icon: 'C' }, props), body, { wide: true, tone: 'calendar-card', hideHeader: true, hideStatus: true });
