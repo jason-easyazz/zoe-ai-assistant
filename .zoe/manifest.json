@@ -87,6 +87,7 @@
     "training": "training/**/*",
     "graphify_out": "graphify-out/**/*",
     "cursor_rules": ".cursor/**/*",
+    "codex_config": ".codex/**/*",
     "greptile": ".greptile/**/*",
     "serena": ".serena/**/*"
   },
