@@ -1,0 +1,17 @@
+/* Timer card — the running countdown + border-progress ring is defined inline in
+   skybridge.html (shipped in #789). This partial adds the design-system light-mode
+   treatment so the timer adapts with the sun-driven panel theme. The warm progress
+   gradient reads on both themes, so only the surface + ink + track flip. */
+
+:root[data-theme="light"] .sky-card.timer {
+  background: linear-gradient(157deg, rgba(255,255,255,0.74), rgba(255,255,255,0.52)) !important;
+  box-shadow: 0 22px 50px -20px rgba(40,70,110,0.35), inset 0 1px 0 rgba(255,255,255,0.6) !important;
+}
+:root[data-theme="light"] .sky-timer-digits { color: #16324d; }
+:root[data-theme="light"] .sky-timer-label { color: #3a5e80; }
+:root[data-theme="light"] .sky-timer-ring-track { stroke: rgba(20,50,80,0.14); }
+:root[data-theme="light"] .sky-timer-x {
+  border-color: rgba(20,50,80,0.18);
+  background: rgba(20,50,80,0.05);
+  color: #3a5e80;
+}

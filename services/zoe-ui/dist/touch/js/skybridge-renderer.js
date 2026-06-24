@@ -185,10 +185,36 @@
         return ['tasks', 'all'].indexOf(category) >= 0 ? 'general' : category;
     }
 
+    // Custom filled calendar glyph (design system §5: filled/dimensional, never line
+    // icons). Self-contained <svg> with a unique gradient id so it can live inside a
+    // single rendered card without depending on the shared sprite.
+    var calGlyphSeq = 0;
+    function calendarGlyphSvg() {
+        // Unique gradient id per render so multiple calendar cards don't collide on
+        // a shared element id (invalid HTML).
+        var gid = 'calCardG' + (++calGlyphSeq);
+        return [
+            '<svg class="calendar-glyph" viewBox="0 0 32 32" aria-hidden="true">',
+            '<defs><linearGradient id="' + gid + '" x1="0" y1="0" x2="0" y2="1">',
+            '<stop offset="0" stop-color="rgba(255,255,255,.95)"/>',
+            '<stop offset="1" stop-color="rgba(228,236,250,.86)"/>',
+            '</linearGradient></defs>',
+            '<rect x="3" y="6" width="26" height="23" rx="5" fill="url(#' + gid + ')"/>',
+            '<rect x="3" y="6" width="26" height="7" rx="5" fill="rgba(var(--calendar-glyph-accent,90,224,224),.92)"/>',
+            '<rect x="9" y="2.5" width="2.8" height="7" rx="1.4" fill="rgba(var(--calendar-glyph-accent,90,224,224),.92)"/>',
+            '<rect x="20.2" y="2.5" width="2.8" height="7" rx="1.4" fill="rgba(var(--calendar-glyph-accent,90,224,224),.92)"/>',
+            '<g fill="rgba(22,50,77,.34)"><rect x="8" y="17" width="4" height="4" rx="1.2"/><rect x="14" y="17" width="4" height="4" rx="1.2"/><rect x="20" y="17" width="4" height="4" rx="1.2"/><rect x="8" y="23" width="4" height="4" rx="1.2"/><rect x="14" y="23" width="4" height="4" rx="1.2"/></g>',
+            '</svg>'
+        ].join('');
+    }
+
     function renderCalendar(props) {
         const events = Array.isArray(props.events) ? props.events : [];
         const visibleEvents = events.slice().sort((a, b) => calendarEventSortKey(a) - calendarEventSortKey(b)).slice(0, 8);
         const dateMeta = formatCalendarDate(props.date || props.start_date || (visibleEvents[0] && visibleEvents[0].start_date));
+        const qualifier = String(props.qualifier || 'today').trim();
+        const countLabel = events.length + ' ' + (events.length === 1 ? 'event' : 'events') + (qualifier ? ' ' + qualifier : '');
+
         const rows = visibleEvents.map((item, index) => {
             const title = item.title || item.name || 'Calendar event';
             const category = calendarCategoryClass(item.category);
@@ -198,26 +224,32 @@
             const startTime = String(item.start_time || '').slice(0, 5);
             const editQuery = 'edit ' + title + (startTime ? ' at ' + startTime : '');
             return [
-                '<button type="button" class="sky-event-row sky-calendar-event ' + escapeHtml(category) + '" data-sky-action="query" data-query="' + escapeHtml(editQuery) + '">',
-                '<div class="sky-calendar-time"><span>' + escapeHtml(formatEventTime(item)) + '</span>' + (index === 0 ? '<b>Next</b>' : '') + '</div>',
-                '<div class="sky-calendar-event-main"><strong>' + escapeHtml(title) + '</strong>' + (detail ? '<em>' + escapeHtml(detail) + '</em>' : '') + '</div>',
+                '<button type="button" class="calendar-event sky-accent-' + escapeHtml(category) + (index === 0 ? ' is-next' : '') + '" data-sky-action="query" data-query="' + escapeHtml(editQuery) + '">',
+                '<span class="calendar-event-dot" aria-hidden="true"></span>',
+                '<span class="calendar-event-time">' + escapeHtml(formatEventTime(item)) + (index === 0 ? '<b>Next</b>' : '') + '</span>',
+                '<span class="calendar-event-body"><strong>' + escapeHtml(title) + '</strong>' + (detail ? '<em>' + escapeHtml(detail) + '</em>' : '') + '</span>',
                 '</button>'
             ].join('');
         }).join('');
+
         const empty = [
-            '<div class="sky-empty-data sky-calendar-empty">',
-            '<div class="sky-calendar-empty-mark" aria-hidden="true"></div>',
-            '<strong>No events ' + escapeHtml(props.qualifier || 'today') + '</strong>',
-            '<span>Your calendar is clear for this range.</span>',
+            '<div class="calendar-empty">',
+            '<span class="calendar-empty-mark" aria-hidden="true"></span>',
+            '<strong>Nothing scheduled</strong>',
+            '<span>Your calendar is clear ' + escapeHtml(qualifier || 'for now') + '.</span>',
             '</div>'
         ].join('');
+
         const body = [
-            '<div class="sky-calendar-scene">',
-            '<div class="sky-calendar-summary">',
-            '<div class="sky-calendar-date"><span>' + escapeHtml(dateMeta.weekday) + '</span><strong>' + escapeHtml(dateMeta.monthDay) + '</strong></div>',
-            '<div class="sky-widget-metric"><strong>' + escapeHtml(events.length) + '</strong><span>' + escapeHtml(events.length === 1 ? 'event' : 'events') + ' ' + escapeHtml(props.qualifier || '') + '</span></div>',
+            '<div class="calendar-card-scene">',
+            '<header class="calendar-header">',
+            '<div class="calendar-glyph-wrap" aria-hidden="true">' + calendarGlyphSvg() + '</div>',
+            '<div class="calendar-heading">',
+            '<h3 class="calendar-day"><span>' + escapeHtml(dateMeta.weekday) + '</span> ' + escapeHtml(dateMeta.monthDay) + '</h3>',
+            '<p class="calendar-count">' + escapeHtml(countLabel) + '</p>',
             '</div>',
-            '<div class="sky-calendar-agenda"><div class="sky-calendar-rail" aria-hidden="true"></div><div class="sky-data-list">' + (rows || empty) + '</div></div>',
+            '</header>',
+            '<div class="calendar-agenda">' + (rows || empty) + '</div>',
             '</div>'
         ].join('');
         return cardFrame(Object.assign({ status: 'Calendar', icon: 'C' }, props), body, { wide: true, tone: 'calendar-card', hideHeader: true, hideStatus: true });
@@ -336,60 +368,80 @@
         return null;
     }
 
+    // Design system: condition → theme class + crafted glyph (sun/moon by panel
+    // theme for "clear"). See docs/architecture/skybridge-design-system.md §4/§5.
+    function weatherCondClass(text) {
+        const t = String(text || '').toLowerCase();
+        if (/storm|thunder|lightning/.test(t)) return 'storm';
+        if (/rain|drizzle|shower|sleet/.test(t)) return 'rain';
+        if (/cloud|overcast|fog|mist|haze/.test(t)) return 'cloudy';
+        return 'clear';
+    }
+    function panelIsDark() {
+        return !(typeof document !== 'undefined' && document.documentElement &&
+                 document.documentElement.getAttribute('data-theme') === 'light');
+    }
+    function weatherGlyphId(text, dark) {
+        const c = weatherCondClass(text);
+        if (c === 'storm') return 'i-storm';
+        if (c === 'rain') return 'i-rain';
+        if (c === 'cloudy') return 'i-cloud';
+        return dark ? 'i-moon' : 'i-sun';
+    }
+    function glyphSvg(id, size) {
+        return '<svg class="sky-glyph" width="' + size + '" height="' + size + '" aria-hidden="true"><use href="#' + id + '"></use></svg>';
+    }
+
     function renderWeather(props) {
         const current = props.current || {};
         const forecast = props.forecast || {};
         const daily = Array.isArray(forecast.daily) ? forecast.daily : [];
         const hourly = Array.isArray(forecast.hourly) ? forecast.hourly : [];
         const location = props.location || {};
-        const place = [location.city || current.city || props.city, location.country || current.country || props.country].filter(Boolean).join(', ') || 'Current location';
-        const description = current.description || current.condition || props.description || 'Current conditions';
-        const dailyRows = daily.slice(0, 5).map((item, index) => {
+        const place = [location.city || current.city || props.city].filter(Boolean).join(', ') || 'Current location';
+        const description = current.description || current.condition || props.description || '';
+        const dark = panelIsDark();
+        const cond = weatherCondClass(description);
+        const temp = formatTemp(weatherValue(current, ['temp', 'temperature', 'temperature_c', 'temp_c', 'current_temp']));
+        const feels = formatTemp(weatherValue(current, ['feels_like', 'feels_like_c', 'apparent_temperature']));
+        const hi = daily[0] && daily[0].high != null ? formatTemp(daily[0].high) : '';
+        const lo = daily[0] && daily[0].low != null ? formatTemp(daily[0].low) : '';
+        const humidity = current.humidity == null ? '' : current.humidity + '%';
+        const wind = formatWind(current.wind_speed);
+
+        const hourTiles = hourly.slice(0, 6).map((item, i) => {
+            const label = i === 0 ? 'Now' : formatHourLabel(item.time || item.day || '');
+            const g = weatherGlyphId(item.description || item.condition || description, dark);
+            const t = formatTemp(weatherValue(item, ['temp', 'temperature', 'temperature_c', 'temp_c', 'high']));
+            return '<div class="wx-hc"><span class="wx-ht">' + escapeHtml(label) + '</span>' + glyphSvg(g, 44) + '<span class="wx-hv tnum">' + escapeHtml(t) + '</span></div>';
+        }).join('');
+
+        const dayRows = daily.slice(1, 5).map(item => {
             const label = formatForecastShort(item.day || item.time || '');
+            const g = weatherGlyphId(item.description || item.condition || '', dark);
             const high = item.high != null ? formatTemp(item.high) : formatTemp(item.temp);
             const low = item.low != null ? formatTemp(item.low) : '';
-            const band = forecastTempBand(item);
-            const condition = item.description || item.condition || '';
-            return [
-                '<div class="sky-weather-day-row' + (index === 0 ? ' is-primary' : '') + '">',
-                '<div class="sky-weather-day-label"><span>' + escapeHtml(index === 0 ? 'Today' : label) + '</span><b aria-hidden="true">' + escapeHtml(weatherEmoji(item)) + '</b></div>',
-                '<div class="sky-weather-day-main"><strong>' + escapeHtml(condition || description) + '</strong><div class="sky-weather-temp-band" aria-hidden="true"><i style="left: ' + band.left + '%; width: ' + band.width + '%;"></i></div></div>',
-                '<div class="sky-weather-day-temp"><strong>' + escapeHtml(high) + '</strong>' + (low ? '<small>' + escapeHtml(low) + '</small>' : '') + '</div>',
-                '</div>'
-            ].join('');
+            return '<div class="wx-drow"><span class="wx-sld">' + escapeHtml(label) + '</span>' + glyphSvg(g, 46) + '<span class="wx-dt tnum"><b>' + escapeHtml(high) + '</b> <span class="wx-lo">' + escapeHtml(low) + '</span></span></div>';
         }).join('');
-        const hourlyTiles = hourly.slice(0, 8).map((item, index) => {
-            const label = index === 0 ? 'Now' : formatHourLabel(item.time || item.day || '');
-            return [
-                '<div class="sky-weather-hour-tile">',
-                '<span>' + escapeHtml(label) + '</span>',
-                '<b aria-hidden="true">' + escapeHtml(weatherEmoji(item)) + '</b>',
-                '<strong>' + escapeHtml(formatTemp(weatherValue(item, ['temp', 'temperature', 'temperature_c', 'temp_c', 'high']))) + '</strong>',
-                '</div>'
-            ].join('');
-        }).join('');
-        const dayList = dailyRows;
-        const meta = [
-            ['🌡', 'Feels ' + formatTemp(weatherValue(current, ['feels_like', 'feels_like_c', 'apparent_temperature']))],
-            ['💧', current.humidity == null ? 'Humidity --' : current.humidity + '% humidity'],
-            ['💨', formatWind(current.wind_speed)]
-        ].map(pair => '<div class="sky-weather-pill"><span>' + escapeHtml(pair[0]) + '</span>' + escapeHtml(pair[1]) + '</div>').join('');
+
+        const detail = [
+            (hi || lo) ? 'H ' + hi + ' L ' + lo : '',
+            humidity ? 'Humidity ' + humidity : '',
+            wind || ''
+        ].filter(Boolean).map(escapeHtml).join('<br>');
+
         const body = [
-            '<div class="sky-weather-scene">',
-            '<div class="sky-weather-main">',
-            '<div class="sky-weather-location">📍 ' + escapeHtml(place) + '</div>',
-            '<div class="sky-weather-hero"><div class="sky-weather-temp">' + escapeHtml(formatTemp(weatherValue(current, ['temp', 'temperature', 'temperature_c', 'temp_c', 'current_temp']))) + '</div><div class="sky-weather-icon" aria-hidden="true">' + escapeHtml(weatherEmoji(current)) + '</div></div>',
-            '<div class="sky-weather-condition">' + escapeHtml(description) + '</div>',
-            '<div class="sky-weather-meta">' + meta + '</div>',
+            '<div class="wx-card">',
+            '<div class="wx-main">',
+            '<div class="wx-head"><div><div class="wx-place">' + escapeHtml(place) + '</div><div class="wx-cond">' + escapeHtml(description) + (feels ? ' · feels ' + escapeHtml(feels) : '') + '</div></div>' + glyphSvg(weatherGlyphId(description, dark), 84) + '</div>',
+            '<div class="wx-hero"><div class="wx-temp tnum">' + escapeHtml(temp) + '</div><div class="wx-detail tnum">' + detail + '</div></div>',
+            hourTiles ? '<div class="wx-hr">' + hourTiles + '</div>' : '',
             '</div>',
-            '<div class="sky-weather-forecast">',
-            '<div class="sky-weather-forecast-head"><h4>' + escapeHtml(props.source === 'weather_forecast' ? 'Forecast' : 'Next up') + '</h4><span>' + escapeHtml(daily.length ? daily.length + ' days' : hourly.length + ' hours') + '</span></div>',
-            hourlyTiles ? '<div class="sky-weather-hour-strip">' + hourlyTiles + '</div>' : '',
-            dayList ? '<div class="sky-weather-day-list">' + dayList + '</div>' : (!hourlyTiles ? '<div class="sky-weather-day-list"><div class="sky-empty-data">No forecast data available yet.</div></div>' : ''),
-            '</div>',
+            dayRows ? '<div class="wx-div"></div><div class="wx-side"><div class="wx-nd">Next days</div>' + dayRows + '</div>' : '',
             '</div>'
         ].join('');
-        return cardFrame(Object.assign({ status: 'Weather', icon: 'W' }, props), body, { wide: true, tone: 'weather-card ' + weatherClass(props, current) });
+        return cardFrame(Object.assign({ status: 'Weather', icon: 'W' }, props), body,
+            { wide: true, tone: 'weather-card wx-' + cond, hideHeader: true, hideStatus: true, hideActions: true });
     }
 
     function clockParts(timezone) {
@@ -414,11 +466,15 @@
     function renderClock(props) {
         const timezone = props.timezone || '';
         const parts = clockParts(timezone);
+        const dateText = parts.date || [props.weekday, props.date_label].filter(Boolean).join(', ');
+        // Re-skin only: preserve .sky-clock-scene/.sky-live-clock + the data-clock-*
+        // spans so updateAllClocks() in skybridge.js keeps the numerals ticking live.
         const body = [
             '<div class="sky-clock-scene sky-live-clock" data-timezone="' + escapeHtml(timezone) + '">',
             '<div class="sky-clock-main">',
-            '<div class="sky-clock-time"><span data-clock-hour>' + escapeHtml(parts.hour || props.hour || '') + '</span><i>:</i><span data-clock-minute>' + escapeHtml(parts.minute || props.minute || '') + '</span><b data-clock-meridiem>' + escapeHtml(parts.dayPeriod || props.meridiem || '') + '</b></div>',
-            '<div class="sky-clock-date" data-clock-date>' + escapeHtml(parts.date || [props.weekday, props.date_label].filter(Boolean).join(', ')) + '</div>',
+            '<p class="sky-clock-kicker">Local time</p>',
+            '<div class="sky-clock-time"><span class="sky-clock-h" data-clock-hour>' + escapeHtml(parts.hour || props.hour || '') + '</span><i class="sky-clock-colon">:</i><span class="sky-clock-m" data-clock-minute>' + escapeHtml(parts.minute || props.minute || '') + '</span><b class="sky-clock-mer" data-clock-meridiem>' + escapeHtml(parts.dayPeriod || props.meridiem || '') + '</b></div>',
+            '<div class="sky-clock-date" data-clock-date>' + escapeHtml(dateText) + '</div>',
             '</div>',
             '</div>'
         ].join('');
@@ -445,9 +501,11 @@
         const tabs = (Array.isArray(lists) ? lists : []).slice(0, 6).map(list => {
             const accent = listAccentClass(list.list_type);
             const selected = selectedId && String(list.id || '') === String(selectedId) ? ' is-active' : '';
-            return '<button type="button" class="sky-list-tab ' + escapeHtml(accent) + selected + '" data-sky-action="query" data-query="' + escapeHtml(listQuery(list)) + '"><span>' + escapeHtml(listLabel(list)) + '</span></button>';
+            const count = Array.isArray(list.items) ? list.items.length : null;
+            const countTag = count != null ? '<i class="sky-list-tab-count" aria-hidden="true">' + escapeHtml(count) + '</i>' : '';
+            return '<button type="button" class="sky-list-tab ' + escapeHtml(accent) + selected + '" data-sky-action="query" data-query="' + escapeHtml(listQuery(list)) + '"><span>' + escapeHtml(listLabel(list)) + '</span>' + countTag + '</button>';
         }).join('');
-        return '<div class="sky-list-switcher">' + tabs + '<button type="button" class="sky-list-tab new-list" data-sky-action="query" data-query="new list"><span>New list</span></button></div>';
+        return '<div class="sky-list-switcher" role="tablist">' + tabs + '<button type="button" class="sky-list-tab new-list" data-sky-action="query" data-query="new list"><span>+ New</span></button></div>';
     }
 
     function listEditQuery(title, listType) {
@@ -455,21 +513,32 @@
         return 'edit ' + title + ' on the ' + type + ' list';
     }
 
+    // Custom filled check glyph (NOT a thin line icon — see design-system §5/§12).
+    // Card-local so it does not depend on the shared sprite shipping a list glyph.
+    const LIST_CHECK_SVG = '<svg class="sky-list-check-mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.6 16.2 5.4 12l-1.5 1.5 5.7 5.7L21 7.5 19.5 6z"/></svg>';
+
     function renderListItemRow(item, index, listType) {
         const isObject = typeof item === 'object' && item;
         const title = isObject ? (item.text || item.title || item.label || 'List item') : String(item || 'List item');
         const completed = !!(isObject && item.completed);
         const recent = !!(isObject && item.recent);
-        const detail = isObject ? [item.quantity, item.category, item.assigned_to].filter(Boolean).join(' · ') : '';
+        const quantity = isObject && item.quantity != null && String(item.quantity).trim() !== '' ? String(item.quantity).trim() : '';
+        // Secondary line: category / assignee (quantity is promoted to its own metric).
+        const detail = isObject ? [item.category, item.assigned_to].filter(Boolean).join(' · ') : '';
         const priorityValue = isObject && item.priority ? String(item.priority).trim().toLowerCase() : '';
-        const priority = priorityValue && priorityValue !== 'normal' ? '<b>' + escapeHtml(item.priority) + '</b>' : '';
+        const priority = priorityValue && priorityValue !== 'normal'
+            ? '<span class="sky-list-flag pr-' + escapeHtml(safeClassTokens(priorityValue) || 'set') + '">' + escapeHtml(item.priority) + '</span>'
+            : '';
+        const qtyMetric = quantity
+            ? '<div class="sky-list-qty" aria-label="Quantity ' + escapeHtml(quantity) + '"><strong>' + escapeHtml(quantity) + '</strong></div>'
+            : '';
         // Tap-to-edit: each row is a query button that opens the existing item editor card
         // through /api/skybridge/resolve (mutation -> authoritative re-read -> refresh).
         return [
             '<button type="button" class="sky-list-item-row' + (completed ? ' is-done' : '') + (recent ? ' is-recent' : '') + '" data-sky-action="query" data-query="' + escapeHtml(listEditQuery(title, listType)) + '">',
-            '<div class="sky-list-check" aria-hidden="true">' + (completed ? '✓' : '') + '</div>',
+            '<span class="sky-list-check" aria-hidden="true">' + (completed ? LIST_CHECK_SVG : '') + '</span>',
             '<div class="sky-list-item-main"><strong>' + escapeHtml(title) + '</strong>' + (detail ? '<em>' + escapeHtml(detail) + '</em>' : '') + '</div>',
-            priority ? '<div class="sky-list-item-meta">' + priority + '</div>' : '',
+            '<div class="sky-list-item-meta">' + priority + qtyMetric + '</div>',
             '</button>'
         ].join('');
     }
@@ -477,17 +546,18 @@
     function renderListColumn(list) {
         const items = Array.isArray(list.items) ? list.items : [];
         const accent = listAccentClass(list.list_type);
-        const preview = items.slice(0, 4).map((item) => {
-            const title = typeof item === 'object' && item ? (item.text || item.title || item.label || 'Item') : String(item || 'Item');
-            return '<li><strong>' + escapeHtml(title) + '</strong></li>';
+        const preview = items.slice(0, 5).map((item) => {
+            const obj = typeof item === 'object' && item;
+            const title = obj ? (item.text || item.title || item.label || 'Item') : String(item || 'Item');
+            const done = !!(obj && item.completed);
+            return '<li' + (done ? ' class="is-done"' : '') + '><span class="sky-list-dot" aria-hidden="true"></span><strong>' + escapeHtml(title) + '</strong></li>';
         }).join('');
+        const countLabel = items.length === 1 ? '1 item' : items.length + ' items';
         return [
-            '<div class="sky-list-column ' + escapeHtml(accent) + '">',
-            '<button type="button" class="sky-list-column-head" data-sky-action="query" data-query="' + escapeHtml(listQuery(list)) + '">',
-            '<strong>' + escapeHtml(listLabel(list)) + '</strong>',
-            '</button>',
-            preview ? '<ul>' + preview + '</ul>' : '<p>No items</p>',
-            '</div>'
+            '<button type="button" class="sky-list-column ' + escapeHtml(accent) + '" data-sky-action="query" data-query="' + escapeHtml(listQuery(list)) + '">',
+            '<span class="sky-list-column-head"><strong>' + escapeHtml(listLabel(list)) + '</strong><em>' + escapeHtml(countLabel) + '</em></span>',
+            preview ? '<ul>' + preview + '</ul>' : '<p class="sky-list-column-empty">No items yet</p>',
+            '</button>'
         ].join('');
     }
 
@@ -507,9 +577,30 @@
             '<span>Zoe did not find active items for this request.</span>',
             '</div>'
         ].join('');
+        const isOverview = !rows && !!overviewRows;
+        const headerTitle = isOverview
+            ? 'Lists'
+            : (props.list_name || (selectedId && listLabel(lists.find(l => String(l.id || '') === String(selectedId)) || {})) || 'List');
+        const totalDone = visibleItems.filter(it => typeof it === 'object' && it && it.completed).length;
+        let countLabel;
+        if (isOverview) {
+            countLabel = lists.length === 1 ? '1 list' : lists.length + ' lists';
+        } else if (!items.length) {
+            countLabel = 'Empty';
+        } else {
+            const noun = items.length === 1 ? 'item' : 'items';
+            countLabel = totalDone ? totalDone + ' of ' + items.length + ' ' + noun + ' done' : items.length + ' ' + noun;
+        }
+        const header = [
+            '<header class="sky-list-header">',
+            '<div class="sky-list-heading"><span class="sky-list-kicker">' + (isOverview ? 'Your lists' : 'List') + '</span><h3 class="sky-list-name">' + escapeHtml(headerTitle) + '</h3></div>',
+            '<span class="sky-list-count">' + escapeHtml(countLabel) + '</span>',
+            '</header>'
+        ].join('');
         const body = [
             '<div class="sky-list-scene ' + escapeHtml(accent) + '">',
-            renderListSwitcher(lists, selectedId),
+            header,
+            lists.length ? renderListSwitcher(lists, selectedId) : '',
             '<div class="' + itemsClass + '">' + (rows || overviewRows || empty) + '</div>',
             '</div>'
         ].join('');
@@ -536,66 +627,112 @@
     }
 
     function renderPeopleDirectory(props) {
+        // Re-skin to docs/architecture/skybridge-design-system.md §8/§11 (people =
+        // header + a grid of metric stacks: avatar, name, relationship, accent-
+        // gradient health bar). Data contract is unchanged — re-skin only.
         const people = Array.isArray(props.people) ? props.people : [];
+        const total = props.count == null ? people.length : props.count;
         const workCount = people.filter(person => personAccentClass(person) === 'work').length;
         const personalCount = people.filter(person => personAccentClass(person) === 'personal').length;
         const otherCount = Math.max(0, people.length - workCount - personalCount);
-        const rows = people.slice(0, 12).map(person => {
+
+        // Quiet segmented filter chips (count + circle); active = current filter.
+        const activeFilter = accentClass(props.circle || props.context || '', '');
+        const chip = function (accent, label, value, alwaysShow) {
+            if (!value && !alwaysShow) return '';
+            const active = accent && accent === activeFilter ? ' is-active' : '';
+            return [
+                '<span class="people-chip people-accent-' + escapeHtml(accent || 'all') + active + '">',
+                '<i class="people-chip-dot" aria-hidden="true"></i>',
+                '<strong>' + escapeHtml(value) + '</strong>',
+                '<span>' + escapeHtml(label) + '</span>',
+                '</span>'
+            ].join('');
+        };
+        const chips = [
+            chip('', 'all', total, true),
+            chip('personal', 'personal', personalCount, false),
+            chip('work', 'work', workCount, false),
+            chip('social', 'other', otherCount, false)
+        ].join('');
+
+        const tiles = people.slice(0, 12).map(person => {
             const health = healthPercent(person.health_score);
             const accent = personAccentClass(person);
+            const name = person.name || 'Person';
             return [
-                '<button type="button" class="sky-person-card sky-accent-' + escapeHtml(accent) + '" data-sky-action="query" data-query="' + escapeHtml('find ' + (person.name || 'person')) + '">',
-                '<div class="sky-person-avatar" aria-hidden="true">' + initialsFor(person.name) + '</div>',
-                '<div class="sky-person-main"><strong>' + escapeHtml(person.name || 'Person') + '</strong><em>' + escapeHtml(personSubline(person)) + '</em></div>',
-                '<div class="sky-person-health" aria-label="Connection score ' + health + '"><i style="width:' + health + '%"></i><span>' + health + '</span></div>',
+                '<button type="button" class="people-tile people-accent-' + escapeHtml(accent) + '" data-sky-action="query" data-query="' + escapeHtml('find ' + name) + '" aria-label="' + escapeHtml(name + ', ' + personSubline(person) + ', connection ' + health + ' percent') + '">',
+                '<span class="people-tile-avatar" aria-hidden="true">' + initialsFor(person.name) + '</span>',
+                '<span class="people-tile-id">',
+                '<strong class="people-tile-name">' + escapeHtml(name) + '</strong>',
+                '<span class="people-tile-rel">' + escapeHtml(personSubline(person)) + '</span>',
+                '</span>',
+                '<span class="people-tile-health">',
+                '<span class="people-health-track"><i class="people-health-fill" style="width:' + health + '%"></i></span>',
+                '<span class="people-health-pct">' + health + '</span>',
+                '</span>',
                 '</button>'
             ].join('');
         }).join('');
-        const empty = '<div class="sky-empty-data sky-people-empty"><strong>No matching people</strong><span>Zoe did not find contacts for this request.</span></div>';
+
+        const empty = [
+            '<div class="people-empty">',
+            '<span class="people-empty-glyph" aria-hidden="true">' + initialsFor(props.title || 'People') + '</span>',
+            '<strong>No matching people</strong>',
+            '<span>Zoe did not find contacts for this request.</span>',
+            '</div>'
+        ].join('');
+
         const body = [
-            '<div class="sky-people-scene">',
-            '<div class="sky-people-toolbar">',
-            '<div class="sky-people-title"><span>People</span><strong>' + escapeHtml(props.title || 'People') + '</strong></div>',
-            '<div class="sky-people-chips">',
-            '<span class="sky-accent-personal">' + escapeHtml(personalCount) + ' personal</span>',
-            '<span class="sky-accent-work">' + escapeHtml(workCount) + ' work</span>',
-            otherCount ? '<span>' + escapeHtml(otherCount) + ' other</span>' : '',
-            '<span>' + escapeHtml(props.count == null ? people.length : props.count) + ' found</span>',
+            '<div class="people-scene">',
+            '<header class="people-header">',
+            '<div class="people-heading">',
+            '<p class="people-eyebrow">People</p>',
+            '<h3 class="people-title">' + escapeHtml(props.title || 'People') + '</h3>',
+            (props.query || props.context || props.circle)
+                ? '<p class="people-context">' + escapeHtml([props.query, props.context, props.circle].filter(Boolean).join(' · ')) + '</p>'
+                : '',
             '</div>',
-            '</div>',
-            '<div class="sky-people-filter-row">',
-            props.query ? '<span>Search ' + escapeHtml(props.query) + '</span>' : '',
-            props.context ? '<span>' + escapeHtml(props.context) + '</span>' : '',
-            props.circle ? '<span>' + escapeHtml(props.circle) + '</span>' : '',
-            '</div>',
-            '<div class="sky-people-grid">' + (rows || empty) + '</div>',
+            '<div class="people-chips">' + chips + '</div>',
+            '</header>',
+            tiles ? ('<div class="people-grid">' + tiles + '</div>') : empty,
             '</div>'
         ].join('');
         return cardFrame(Object.assign({ status: 'People', icon: 'P' }, props), body, { wide: true, tone: 'people-card', hideHeader: true, hideStatus: true });
     }
 
     function renderPersonProfile(props) {
+        // Sibling of renderPeopleDirectory — same avatar + accent-gradient health
+        // language (design-system §11), scaled up to a single-contact hero.
         const person = props.person || {};
         const health = healthPercent(person.health_score);
         const accent = personAccentClass(person);
+        const name = person.name || props.title || 'Person';
         const contactRows = [
             ['Phone', person.phone],
             ['Email', person.email],
             ['Birthday', person.birthday],
             ['Last contact', person.last_contacted_at]
-        ].filter(pair => pair[1]).map(pair => '<div><span>' + escapeHtml(pair[0]) + '</span><strong>' + escapeHtml(pair[1]) + '</strong></div>').join('');
+        ].filter(pair => pair[1]).map(pair => '<div class="people-detail"><span>' + escapeHtml(pair[0]) + '</span><strong>' + escapeHtml(pair[1]) + '</strong></div>').join('');
         const body = [
-            '<div class="sky-profile-scene">',
-            '<div class="sky-profile-hero">',
-            '<div class="sky-profile-avatar" aria-hidden="true">' + initialsFor(person.name || props.title) + '</div>',
-            '<div class="sky-profile-title"><span>' + escapeHtml(personSubline(person)) + '</span><h3>' + escapeHtml(person.name || props.title || 'Person') + '</h3></div>',
-            '<div class="sky-profile-health"><strong>' + health + '</strong><span>connection</span><i style="height:' + health + '%"></i></div>',
+            '<div class="people-scene people-profile">',
+            '<header class="people-profile-hero">',
+            '<span class="people-tile-avatar people-profile-avatar" aria-hidden="true">' + initialsFor(name) + '</span>',
+            '<div class="people-profile-id">',
+            '<p class="people-eyebrow">' + escapeHtml(personSubline(person)) + '</p>',
+            '<h3 class="people-title">' + escapeHtml(name) + '</h3>',
+            '<div class="people-tile-health people-profile-healthrow">',
+            '<span class="people-health-track"><i class="people-health-fill" style="width:' + health + '%"></i></span>',
+            '<span class="people-health-pct">' + health + '</span>',
+            '<span class="people-health-label">connection</span>',
             '</div>',
-            contactRows ? '<div class="sky-profile-grid">' + contactRows + '</div>' : '',
-            person.notes ? '<p class="sky-profile-notes">' + escapeHtml(person.notes) + '</p>' : '',
+            '</div>',
+            '</header>',
+            contactRows ? '<div class="people-detail-grid">' + contactRows + '</div>' : '',
+            person.notes ? '<p class="people-notes">' + escapeHtml(person.notes) + '</p>' : '',
             '</div>'
         ].join('');
-        return cardFrame(Object.assign({ status: 'Person', icon: 'P' }, props), body, { wide: true, tone: 'person-profile-card sky-accent-' + accent, hideHeader: true, hideStatus: true });
+        return cardFrame(Object.assign({ status: 'Person', icon: 'P' }, props), body, { wide: true, tone: 'people-card people-profile-card people-accent-' + accent, hideHeader: true, hideStatus: true });
     }
 
 

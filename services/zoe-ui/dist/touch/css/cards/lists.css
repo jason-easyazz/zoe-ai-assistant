@@ -1,0 +1,534 @@
+/* lists card — re-skin to docs/architecture/skybridge-design-system.md.
+   Owns ONLY the .zoe-list-card styling so cards can be re-skinned independently.
+   Uses the design tokens (--sky-*) with safe fallbacks so the card renders
+   correctly today and adopts skybridge-tokens.css the moment it lands.
+   .sky-material glass (§2), Inter type scale (§3), 4px spacing scale (§6),
+   filled check glyph from the renderer (§5/§12), generous "fill the stage"
+   layout (§8/§9), and BOTH dark (default) + light ([data-theme="light"]).
+
+   Foundation note: this branch ships the spec + stubs but no committed
+   skybridge-tokens.css and the glyph sprite has no list/check symbol. To stay
+   within "touch only my card", the check is rendered as a card-local FILLED svg
+   and all tokens carry fallbacks. No shared/foundation file was changed. */
+
+.zoe-list-card.sky-card {
+  /* the one glass recipe (§2) — tokenised with fallback */
+  background:
+    var(--sky-card-bg,
+      linear-gradient(157deg, rgba(255,255,255,.11), rgba(255,255,255,.035)));
+  backdrop-filter: blur(26px) saturate(140%);
+  -webkit-backdrop-filter: blur(26px) saturate(140%);
+  border: 1px solid var(--sky-hairline, rgba(255,255,255,.14));
+  box-shadow:
+    var(--sky-elev,
+      0 26px 60px -18px rgba(0,0,0,.6)),
+    inset 0 1px 0 var(--sky-top-highlight, rgba(255,255,255,.22));
+  border-radius: var(--sky-radius-xl, 38px);
+
+  /* fill the stage (§9) */
+  width: 100%;
+  box-sizing: border-box;
+  padding: var(--sky-space-11, 44px) var(--sky-space-12, 48px);
+  color: var(--sky-ink-0, #ffffff);
+  font-family: var(--sky-font, "Inter", system-ui, -apple-system, "Segoe UI", sans-serif);
+  -webkit-font-smoothing: antialiased;
+}
+
+.zoe-list-card .sky-list-scene {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sky-space-6, 24px);
+  min-height: 0;
+}
+
+/* ── Header: list name + item count ─────────────────────────────────── */
+.zoe-list-card .sky-list-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--sky-space-4, 16px);
+}
+
+.zoe-list-card .sky-list-heading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sky-space-2, 8px);
+  min-width: 0;
+}
+
+.zoe-list-card .sky-list-kicker {
+  font-size: var(--sky-text-micro, 12px);
+  font-weight: 600;
+  letter-spacing: 2.5px;
+  text-transform: uppercase;
+  color: var(--sky-ink-3, rgba(255,255,255,.46));
+}
+
+.zoe-list-card .sky-list-name {
+  margin: 0;
+  font-size: var(--sky-text-title, 28px);
+  font-weight: 600;
+  line-height: 1.05;
+  letter-spacing: -0.4px;
+  color: var(--sky-ink-0, #ffffff);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.zoe-list-card .sky-list-count {
+  flex: 0 0 auto;
+  font-size: var(--sky-text-label, 14px);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--sky-ink-2, rgba(255,255,255,.66));
+  padding: var(--sky-space-2, 8px) var(--sky-space-4, 16px);
+  border-radius: var(--sky-radius-pill, 999px);
+  background: var(--sky-fill-1, rgba(255,255,255,.06));
+  border: 1px solid var(--sky-hairline, rgba(255,255,255,.1));
+  white-space: nowrap;
+}
+
+/* ── Category tabs: a quiet segmented control ───────────────────────── */
+.zoe-list-card .sky-list-switcher {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sky-space-1, 6px);
+  padding: var(--sky-space-1, 6px);
+  border-radius: var(--sky-radius-md, 20px);
+  background: var(--sky-fill-1, rgba(255,255,255,.05));
+  border: 1px solid var(--sky-hairline, rgba(255,255,255,.08));
+}
+
+.zoe-list-card .sky-list-tab {
+  appearance: none;
+  border: 0;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sky-space-2, 8px);
+  padding: var(--sky-space-2, 9px) var(--sky-space-4, 18px);
+  border-radius: var(--sky-radius-sm, 14px);
+  background: transparent;
+  color: var(--sky-ink-2, rgba(255,255,255,.6));
+  font-family: inherit;
+  font-size: var(--sky-text-label, 14px);
+  font-weight: 500;
+  letter-spacing: -0.1px;
+  transition:
+    background var(--sky-dur-fast, 160ms) var(--sky-ease-standard, ease),
+    color var(--sky-dur-fast, 160ms) var(--sky-ease-standard, ease),
+    transform var(--sky-dur-fast, 160ms) var(--sky-ease-standard, ease);
+}
+
+.zoe-list-card .sky-list-tab:hover {
+  color: var(--sky-ink-0, #fff);
+  background: var(--sky-fill-2, rgba(255,255,255,.07));
+}
+
+.zoe-list-card .sky-list-tab:active { transform: scale(0.97); }
+
+.zoe-list-card .sky-list-tab.is-active {
+  color: var(--sky-ink-0, #fff);
+  background: var(--sky-fill-3, rgba(255,255,255,.14));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.18), 0 4px 14px -6px rgba(0,0,0,.5);
+}
+
+.zoe-list-card .sky-list-tab-count {
+  font-style: normal;
+  font-size: var(--sky-text-caption, 12px);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--sky-radius-pill, 999px);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--sky-fill-2, rgba(255,255,255,.1));
+  color: var(--sky-ink-2, rgba(255,255,255,.7));
+}
+
+.zoe-list-card .sky-list-tab.new-list {
+  color: var(--sky-ink-3, rgba(255,255,255,.5));
+}
+
+/* ── Item rows ──────────────────────────────────────────────────────── */
+.zoe-list-card .sky-list-items {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sky-space-2, 8px);
+}
+
+.zoe-list-card .sky-list-item-row {
+  appearance: none;
+  width: 100%;
+  cursor: pointer;
+  border: 1px solid var(--sky-hairline, rgba(255,255,255,.07));
+  border-radius: var(--sky-radius-md, 20px);
+  background: var(--sky-fill-1, rgba(255,255,255,.045));
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: var(--sky-space-4, 16px);
+  padding: var(--sky-space-4, 18px) var(--sky-space-5, 22px);
+  transition:
+    background var(--sky-dur-fast, 160ms) var(--sky-ease-standard, ease),
+    transform var(--sky-dur-fast, 160ms) var(--sky-ease-standard, ease),
+    border-color var(--sky-dur-fast, 160ms) var(--sky-ease-standard, ease);
+}
+
+.zoe-list-card .sky-list-item-row:hover {
+  background: var(--sky-fill-2, rgba(255,255,255,.08));
+  border-color: var(--sky-hairline-strong, rgba(255,255,255,.16));
+}
+
+.zoe-list-card .sky-list-item-row:active { transform: scale(0.992); }
+
+/* completed check (filled glyph from renderer) */
+.zoe-list-card .sky-list-check {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--sky-hairline-strong, rgba(255,255,255,.22));
+  background: transparent;
+  transition: border-color var(--sky-dur-fast, 160ms) var(--sky-ease-standard, ease),
+              background var(--sky-dur-fast, 160ms) var(--sky-ease-standard, ease);
+}
+
+.zoe-list-card .sky-list-check-mark {
+  width: 18px;
+  height: 18px;
+  fill: #ffffff;
+}
+
+.zoe-list-card .sky-list-item-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.zoe-list-card .sky-list-item-main strong {
+  font-size: var(--sky-text-body, 17px);
+  font-weight: 500;
+  letter-spacing: -0.1px;
+  color: var(--sky-ink-0, #fff);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.zoe-list-card .sky-list-item-main em {
+  font-style: normal;
+  font-size: var(--sky-text-caption, 13px);
+  font-weight: 400;
+  color: var(--sky-ink-3, rgba(255,255,255,.48));
+}
+
+.zoe-list-card .sky-list-item-meta {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sky-space-3, 12px);
+}
+
+/* quantity metric (§8 metric) */
+.zoe-list-card .sky-list-qty {
+  min-width: 40px;
+  padding: var(--sky-space-1, 6px) var(--sky-space-3, 12px);
+  border-radius: var(--sky-radius-sm, 12px);
+  background: var(--sky-fill-2, rgba(255,255,255,.08));
+  text-align: center;
+}
+
+.zoe-list-card .sky-list-qty strong {
+  font-size: var(--sky-text-label, 15px);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--sky-ink-1, rgba(255,255,255,.86));
+}
+
+/* priority flag — colour with intent (§4), not decoration */
+.zoe-list-card .sky-list-flag {
+  font-size: var(--sky-text-micro, 11px);
+  font-weight: 600;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  padding: 5px 10px;
+  border-radius: var(--sky-radius-pill, 999px);
+  color: #fff;
+  background: var(--sky-accent-amber, linear-gradient(120deg, #ffb24d, #ff7a59));
+}
+
+.zoe-list-card .sky-list-flag.pr-high,
+.zoe-list-card .sky-list-flag.pr-urgent {
+  background: var(--sky-accent-red, linear-gradient(120deg, #ff6a6a, #d6356b));
+}
+
+.zoe-list-card .sky-list-flag.pr-low {
+  background: var(--sky-fill-3, rgba(255,255,255,.16));
+  color: var(--sky-ink-2, rgba(255,255,255,.66));
+}
+
+/* ── Completed / de-emphasised state ────────────────────────────────── */
+.zoe-list-card .sky-list-item-row.is-done {
+  background: var(--sky-fill-0, rgba(255,255,255,.02));
+  border-color: transparent;
+}
+
+.zoe-list-card .sky-list-item-row.is-done .sky-list-check {
+  border-color: transparent;
+  background: var(--sky-accent-mint, linear-gradient(135deg, #5ee7c4, #36c6e0));
+}
+
+.zoe-list-card .sky-list-item-row.is-done .sky-list-item-main strong {
+  color: var(--sky-ink-3, rgba(255,255,255,.4));
+  text-decoration: line-through;
+  text-decoration-color: var(--sky-ink-4, rgba(255,255,255,.26));
+}
+
+.zoe-list-card .sky-list-item-row.is-done .sky-list-item-main em,
+.zoe-list-card .sky-list-item-row.is-done .sky-list-qty strong {
+  color: var(--sky-ink-4, rgba(255,255,255,.3));
+}
+
+.zoe-list-card .sky-list-item-row.is-done .sky-list-qty {
+  background: var(--sky-fill-1, rgba(255,255,255,.04));
+}
+
+/* recent add — a quiet liveness cue */
+.zoe-list-card .sky-list-item-row.is-recent {
+  border-color: var(--sky-accent-mint-edge, rgba(94,231,196,.4));
+}
+
+/* ── Overview (multiple lists, no single list selected) ─────────────── */
+.zoe-list-card .sky-list-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: var(--sky-space-4, 16px);
+}
+
+.zoe-list-card .sky-list-column {
+  appearance: none;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  color: inherit;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sky-space-3, 12px);
+  padding: var(--sky-space-5, 22px);
+  border-radius: var(--sky-radius-lg, 28px);
+  background: var(--sky-fill-1, rgba(255,255,255,.05));
+  border: 1px solid var(--sky-hairline, rgba(255,255,255,.09));
+  transition: background var(--sky-dur-fast, 160ms) var(--sky-ease-standard, ease),
+              transform var(--sky-dur-fast, 160ms) var(--sky-ease-standard, ease);
+}
+
+.zoe-list-card .sky-list-column:hover { background: var(--sky-fill-2, rgba(255,255,255,.08)); }
+.zoe-list-card .sky-list-column:active { transform: scale(0.99); }
+
+.zoe-list-card .sky-list-column-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sky-space-3, 12px);
+}
+
+.zoe-list-card .sky-list-column-head strong {
+  font-size: var(--sky-text-heading, 20px);
+  font-weight: 600;
+  letter-spacing: -0.2px;
+  color: var(--sky-ink-0, #fff);
+}
+
+.zoe-list-card .sky-list-column-head em {
+  font-style: normal;
+  font-size: var(--sky-text-caption, 13px);
+  font-variant-numeric: tabular-nums;
+  color: var(--sky-ink-3, rgba(255,255,255,.46));
+}
+
+.zoe-list-card .sky-list-column ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sky-space-2, 8px);
+}
+
+.zoe-list-card .sky-list-column li {
+  display: flex;
+  align-items: center;
+  gap: var(--sky-space-3, 10px);
+  font-size: var(--sky-text-body, 15px);
+  color: var(--sky-ink-1, rgba(255,255,255,.8));
+}
+
+.zoe-list-card .sky-list-column li strong {
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.zoe-list-card .sky-list-column li.is-done strong {
+  color: var(--sky-ink-3, rgba(255,255,255,.4));
+  text-decoration: line-through;
+}
+
+.zoe-list-card .sky-list-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--sky-accent-mint-solid, #5ee7c4);
+}
+
+.zoe-list-card .sky-list-column li.is-done .sky-list-dot {
+  background: var(--sky-ink-4, rgba(255,255,255,.26));
+}
+
+.zoe-list-card .sky-list-column-empty {
+  margin: 0;
+  font-size: var(--sky-text-caption, 13px);
+  color: var(--sky-ink-3, rgba(255,255,255,.42));
+}
+
+/* ── Empty state ────────────────────────────────────────────────────── */
+.zoe-list-card .sky-list-empty {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sky-space-2, 8px);
+  padding: var(--sky-space-8, 36px) var(--sky-space-6, 24px);
+  text-align: center;
+  border-radius: var(--sky-radius-lg, 28px);
+  background: var(--sky-fill-1, rgba(255,255,255,.04));
+  border: 1px dashed var(--sky-hairline-strong, rgba(255,255,255,.16));
+}
+
+.zoe-list-card .sky-list-empty strong {
+  font-size: var(--sky-text-heading, 20px);
+  font-weight: 600;
+  color: var(--sky-ink-1, rgba(255,255,255,.82));
+}
+
+.zoe-list-card .sky-list-empty span {
+  font-size: var(--sky-text-body, 15px);
+  color: var(--sky-ink-3, rgba(255,255,255,.46));
+}
+
+/* ── Motion safety (§7) ─────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .zoe-list-card .sky-list-tab,
+  .zoe-list-card .sky-list-item-row,
+  .zoe-list-card .sky-list-column,
+  .zoe-list-card .sky-list-check { transition: none; }
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   LIGHT THEME (§4/§10) — dark ink on bright glass, hairlines darken.
+   ════════════════════════════════════════════════════════════════════ */
+[data-theme="light"] .zoe-list-card.sky-card {
+  background:
+    var(--sky-card-bg,
+      linear-gradient(157deg, rgba(255,255,255,.72), rgba(255,255,255,.5)));
+  border-color: var(--sky-hairline, rgba(20,50,80,.16));
+  box-shadow:
+    var(--sky-elev, 0 26px 60px -18px rgba(20,50,80,.28)),
+    inset 0 1px 0 var(--sky-top-highlight, rgba(255,255,255,.7));
+  color: var(--sky-ink-0, #16324d);
+}
+
+[data-theme="light"] .zoe-list-card .sky-list-kicker { color: var(--sky-ink-3, #6f88a3); }
+[data-theme="light"] .zoe-list-card .sky-list-name { color: var(--sky-ink-0, #16324d); }
+
+[data-theme="light"] .zoe-list-card .sky-list-count {
+  color: var(--sky-ink-2, #3a5e80);
+  background: var(--sky-fill-1, rgba(20,50,80,.05));
+  border-color: var(--sky-hairline, rgba(20,50,80,.12));
+}
+
+[data-theme="light"] .zoe-list-card .sky-list-switcher {
+  background: var(--sky-fill-1, rgba(20,50,80,.045));
+  border-color: var(--sky-hairline, rgba(20,50,80,.1));
+}
+
+[data-theme="light"] .zoe-list-card .sky-list-tab { color: var(--sky-ink-2, #3a5e80); }
+[data-theme="light"] .zoe-list-card .sky-list-tab:hover {
+  color: var(--sky-ink-0, #16324d);
+  background: var(--sky-fill-2, rgba(20,50,80,.06));
+}
+[data-theme="light"] .zoe-list-card .sky-list-tab.is-active {
+  color: var(--sky-ink-0, #16324d);
+  background: var(--sky-fill-3, rgba(255,255,255,.92));
+  box-shadow: 0 6px 16px -8px rgba(20,50,80,.3);
+}
+[data-theme="light"] .zoe-list-card .sky-list-tab-count {
+  background: var(--sky-fill-2, rgba(20,50,80,.08));
+  color: var(--sky-ink-2, #3a5e80);
+}
+
+[data-theme="light"] .zoe-list-card .sky-list-item-row {
+  background: var(--sky-fill-1, rgba(255,255,255,.5));
+  border-color: var(--sky-hairline, rgba(20,50,80,.1));
+}
+[data-theme="light"] .zoe-list-card .sky-list-item-row:hover {
+  background: var(--sky-fill-2, rgba(255,255,255,.78));
+  border-color: var(--sky-hairline-strong, rgba(20,50,80,.18));
+}
+
+[data-theme="light"] .zoe-list-card .sky-list-check {
+  border-color: var(--sky-hairline-strong, rgba(20,50,80,.28));
+}
+[data-theme="light"] .zoe-list-card .sky-list-check-mark { fill: #ffffff; }
+
+[data-theme="light"] .zoe-list-card .sky-list-item-main strong { color: var(--sky-ink-0, #16324d); }
+[data-theme="light"] .zoe-list-card .sky-list-item-main em { color: var(--sky-ink-3, #6f88a3); }
+
+[data-theme="light"] .zoe-list-card .sky-list-qty {
+  background: var(--sky-fill-2, rgba(20,50,80,.07));
+}
+[data-theme="light"] .zoe-list-card .sky-list-qty strong { color: var(--sky-ink-1, #2a4d6e); }
+
+[data-theme="light"] .zoe-list-card .sky-list-item-row.is-done {
+  background: var(--sky-fill-0, rgba(20,50,80,.02));
+}
+[data-theme="light"] .zoe-list-card .sky-list-item-row.is-done .sky-list-item-main strong {
+  color: var(--sky-ink-3, #8aa0b6);
+  text-decoration-color: var(--sky-ink-4, rgba(20,50,80,.3));
+}
+[data-theme="light"] .zoe-list-card .sky-list-item-row.is-done .sky-list-item-main em,
+[data-theme="light"] .zoe-list-card .sky-list-item-row.is-done .sky-list-qty strong {
+  color: var(--sky-ink-4, #a7b8c8);
+}
+
+[data-theme="light"] .zoe-list-card .sky-list-column {
+  background: var(--sky-fill-1, rgba(255,255,255,.52));
+  border-color: var(--sky-hairline, rgba(20,50,80,.1));
+}
+[data-theme="light"] .zoe-list-card .sky-list-column:hover {
+  background: var(--sky-fill-2, rgba(255,255,255,.8));
+}
+[data-theme="light"] .zoe-list-card .sky-list-column-head strong { color: var(--sky-ink-0, #16324d); }
+[data-theme="light"] .zoe-list-card .sky-list-column-head em { color: var(--sky-ink-3, #6f88a3); }
+[data-theme="light"] .zoe-list-card .sky-list-column li { color: var(--sky-ink-1, #2a4d6e); }
+[data-theme="light"] .zoe-list-card .sky-list-column li.is-done strong { color: var(--sky-ink-3, #8aa0b6); }
+[data-theme="light"] .zoe-list-card .sky-list-column-empty { color: var(--sky-ink-3, #8aa0b6); }
+
+[data-theme="light"] .zoe-list-card .sky-list-empty {
+  background: var(--sky-fill-1, rgba(20,50,80,.03));
+  border-color: var(--sky-hairline-strong, rgba(20,50,80,.18));
+}
+[data-theme="light"] .zoe-list-card .sky-list-empty strong { color: var(--sky-ink-1, #2a4d6e); }
+[data-theme="light"] .zoe-list-card .sky-list-empty span { color: var(--sky-ink-3, #6f88a3); }
