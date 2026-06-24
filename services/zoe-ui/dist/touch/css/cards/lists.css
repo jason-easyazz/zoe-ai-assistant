@@ -650,6 +650,14 @@ body:not(.sky-empty) .sky-card.zoe-list-card.sky-premium-card {
    LIGHT THEME (§4/§10) — dark ink on bright glass, hairlines darken.
    ════════════════════════════════════════════════════════════════════ */
 [data-theme="light"] .sky-card.zoe-list-card {
+  /* The --sky-ink-* scale is white at :root and the global light theme only
+     flips --text-*, so re-point the ink scale to dark ink for this card in
+     light mode — otherwise every var(--sky-ink-N) below renders white-on-white. */
+  --sky-ink-0: #16324d;
+  --sky-ink-1: #2a4d6e;
+  --sky-ink-2: #3a5e80;
+  --sky-ink-3: #6a86a2;
+  --sky-ink-4: #9fb2c4;
   color: var(--sky-ink-0, #16324d) !important;
   background:
     linear-gradient(157deg, rgba(255,255,255,.72), rgba(255,255,255,.5)) !important;
