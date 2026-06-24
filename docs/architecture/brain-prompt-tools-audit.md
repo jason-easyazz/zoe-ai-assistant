@@ -197,7 +197,11 @@ verbatim duplicate, not information.
 2. **Phase 2:** trim `_load_zoe_self_summary()` (−1,239 tok). Validate capability-gap
    answers still surface builder skills / Hermes.
 3. **Phase 3:** apply the 8 leaner tool schemas (−568 tok) and the voice-set trim.
-   Re-run `tests/replay_samples.py` (said-vs-did diff) — a regression there blocks.
+   Re-run the live voice replay harness `services/zoe-data/tests/replay_samples.py`
+   (replays Jason's `~/.zoe-voice-samples` corpus, said-vs-did diff) — a regression
+   there blocks. If a chat-side equivalent doesn't exist yet, the gate is a manual
+   routing check: a fixed set of prompts (one per skill group + the discovery
+   fallback) must produce identical tool-selection before/after.
 
 Acceptance bar: the voice replay corpus and a chat routing set must show identical
 tool-selection and identical said-vs-did behavior before/after each phase.
