@@ -64,6 +64,12 @@ services:
     volumes:
       # The agents' workspace IS the Zoe repo, so they can build Zoe.
       - ../../:/workspace
+      # Activate the container-relative MCP config: Claude Code (--project /workspace)
+      # auto-loads /workspace/.mcp.json. The committed repo-root .mcp.json uses the HOST
+      # path (--project /home/zoe/assistant), which is NOT where the repo is mounted here,
+      # so serena would point at a missing path. Shadow it with this container config
+      # (serena --project /workspace) so the MCP servers actually resolve in-container.
+      - ./.mcp.json:/workspace/.mcp.json:ro
       # OAuth/subscription credentials — persisted so logins + token refresh survive restarts.
       # (Subdir mounts only — never mount over /root or you shadow the installed CLIs.)
       - omnigent-claude:/root/.claude
