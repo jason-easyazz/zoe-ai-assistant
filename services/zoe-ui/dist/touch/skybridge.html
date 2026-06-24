@@ -4913,11 +4913,12 @@
            the orb panel's glow. During the dark hours (after sunset / deep sleep)
            suppress ALL of them so the standby screen is genuinely black, not just
            the body bg. (Daytime keeps a faint ambient; active states keep the orb.) */
-        :root[data-rest-dim="night"], :root[data-rest-dim="deep"] {
+        :root[data-rest-dim="night"]:has(body.sky-empty.sky-ambient-clock),
+        :root[data-rest-dim="deep"]:has(body.sky-empty.sky-ambient-clock) {
             background-image: none !important;
             background-color: #05070e !important;
         }
-        :root[data-rest-dim="deep"] { background-color: #03040a !important; }
+        :root[data-rest-dim="deep"]:has(body.sky-empty.sky-ambient-clock) { background-color: #03040a !important; }
         :root[data-rest-dim="night"] body.sky-empty.sky-ambient-clock::before,
         :root[data-rest-dim="deep"]  body.sky-empty.sky-ambient-clock::before,
         :root[data-rest-dim="night"] body.sky-empty.sky-ambient-clock::after,
