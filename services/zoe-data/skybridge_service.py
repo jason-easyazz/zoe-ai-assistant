@@ -107,6 +107,15 @@ class _TimerStore:
         self._prune(owner)
         return target
 
+    def cancel_by_id(self, owner: str, timer_id: str) -> dict[str, Any] | None:
+        self._prune(owner)
+        timers = self._by_owner.get(owner, [])
+        target = next((t for t in timers if t["timer_id"] == timer_id), None)
+        if target is not None:
+            timers.remove(target)
+            self._prune(owner)
+        return target
+
 
 _timers = _TimerStore()
 
@@ -180,7 +189,6 @@ def _timer_card(timer: dict[str, Any], *, status: str = "running") -> dict[str, 
             "status": status,
             "duration_seconds": int(timer["duration_seconds"]),
             "expires_at_ms": int(timer["expires_at"] * 1000),
-            "actions": [{"label": "Cancel timer", "query": "cancel the timer"}],
         },
     }
 
@@ -188,6 +196,11 @@ def _timer_card(timer: dict[str, Any], *, status: str = "running") -> dict[str, 
 def active_timers_for(owner: str) -> list[dict[str, Any]]:
     """Public helper for the reload-resume endpoint: the panel's authoritative set."""
     return [_timer_card(t)["props"] for t in _timers.list(owner or "guest")]
+
+
+def cancel_timer_by_id(owner: str, timer_id: str) -> dict[str, Any] | None:
+    """Cancel a specific timer (used by the panel's per-card tap-cancel)."""
+    return _timers.cancel_by_id(owner or "guest", timer_id)
 
 
 def _resolve_timer(intent: SkybridgeIntent, user_id: str) -> dict[str, Any]:
@@ -203,10 +216,16 @@ def _resolve_timer(intent: SkybridgeIntent, user_id: str) -> dict[str, Any]:
                 "actions": [],
             }
         named = "" if cancelled["label"].lower() == "timer" else f"{cancelled['label']} "
+        remaining = _timers.list(owner)
+        # Show the timers that are still running; only fall back to a status card
+        # when the last one was cancelled.
+        cards = [_timer_card(t) for t in remaining] or [
+            _status_card("Timer cancelled", f"Your {named}timer was stopped.")
+        ]
         return {
             "handled": True, "intent": _intent_dict(intent),
             "spoken_summary": f"Cancelled your {named}timer.",
-            "cards": [_status_card("Timer cancelled", f"Your {named}timer was stopped.")],
+            "cards": cards,
             "actions": [],
             "timer_cancelled_id": cancelled["timer_id"],
         }
@@ -234,10 +253,14 @@ def _resolve_timer(intent: SkybridgeIntent, user_id: str) -> dict[str, Any]:
     seconds = max(1, min(int(intent.duration_seconds or 300), MAX_TIMER_SECONDS))
     timer = _timers.create(owner, intent.title or "Timer", seconds)
     named = "" if timer["label"].lower() == "timer" else f"{timer['label']} "
+    # Return every running timer so a second/third one appears alongside the rest
+    # instead of replacing them — a kitchen runs several at once.
+    cards = [_timer_card(t) for t in _timers.list(owner)]
+    extra = "" if len(cards) <= 1 else f" That makes {len(cards)} timers running."
     return {
         "handled": True, "intent": _intent_dict(intent),
-        "spoken_summary": f"Your {named}timer is set for {_format_duration(seconds)}.",
-        "cards": [_timer_card(timer)],
+        "spoken_summary": f"Your {named}timer is set for {_format_duration(seconds)}.{extra}",
+        "cards": cards,
         "actions": [],
     }
 

@@ -318,6 +318,71 @@
             background: rgba(255,255,255,0.05);
         }
 
+        /* ── Clock card ──
+           Every clock-card sizing rule lived inside other @media blocks that
+           weren't winning, so the "what time is it" card collapsed to a bare
+           ~38px bar (scene height 0) — verified on the 1280x720 panel. These base
+           rules give the card real height and center the live time; they override
+           the stale rules (hence !important) and de-overlap the date. */
+        body:not(.sky-empty) .clock-card.sky-premium-card {
+            min-height: 320px !important;
+            height: auto !important;
+            max-height: none !important;
+            overflow: visible !important;
+        }
+        body:not(.sky-empty) .clock-card .sky-clock-scene {
+            min-height: 280px !important;
+            height: auto !important;
+            position: static !important;
+            display: flex !important;
+            flex-direction: column !important;
+            align-items: center !important;
+            justify-content: center !important;
+            gap: 6px !important;
+        }
+        body:not(.sky-empty) .clock-card .sky-clock-main {
+            position: static !important;
+            display: flex !important;
+            flex-direction: column !important;
+            align-items: center !important;
+            gap: 8px !important;
+        }
+        body:not(.sky-empty) .clock-card .sky-clock-time {
+            position: static !important;
+            display: flex !important;
+            align-items: baseline !important;
+            justify-content: center !important;
+            gap: 4px !important;
+        }
+        body:not(.sky-empty) .clock-card .sky-clock-time span {
+            position: static !important;
+            font-size: 110px !important;
+            line-height: 1 !important;
+            font-weight: 700 !important;
+            color: #fff !important;
+        }
+        body:not(.sky-empty) .clock-card .sky-clock-time i {
+            position: static !important;
+            font-size: 96px !important;
+            font-style: normal !important;
+            color: rgba(255,255,255,0.4) !important;
+            transform: translateY(-8px) !important;
+        }
+        body:not(.sky-empty) .clock-card .sky-clock-time b {
+            position: static !important;
+            font-size: 34px !important;
+            font-weight: 600 !important;
+            color: rgba(255,255,255,0.72) !important;
+            align-self: flex-end !important;
+            margin-bottom: 16px !important;
+        }
+        body:not(.sky-empty) .clock-card .sky-clock-date {
+            position: static !important;
+            font-size: 24px !important;
+            color: rgba(255,255,255,0.66) !important;
+            text-align: center !important;
+        }
+
         /* ── Timer card ── */
         .sky-timer {
             display: flex;
@@ -359,6 +424,19 @@
             transition: width 0.95s linear;
         }
         .sky-card.timer .sky-widget-glyph { color: #f59e0b; }
+        /* Timers sit side by side so several can run at once (eggs + pasta + oven). */
+        .sky-card.timer { grid-column: span 6; }
+        .sky-timer-cancel {
+            margin-top: 4px;
+            border: 1px solid var(--sky-border);
+            background: rgba(255,255,255,0.05);
+            color: rgba(255,255,255,0.75);
+            border-radius: 999px;
+            padding: 7px 18px;
+            font-size: 13px;
+            cursor: pointer;
+        }
+        .sky-timer-cancel:active { background: rgba(255,255,255,0.12); }
         .sky-card.timer.sky-timer-ringing {
             animation: skyTimerPulse 0.8s ease-in-out infinite;
             border-color: rgba(248,113,113,0.6);

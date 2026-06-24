@@ -14,10 +14,21 @@ from card_contract import validate_component  # noqa: E402
 from skybridge_service import (  # noqa: E402
     _parse_timer_duration,
     _parse_timer_label,
+    _timers,
     _TimerStore,
+    active_timers_for,
+    cancel_timer_by_id,
     classify_skybridge_intent,
     resolve_skybridge_request,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_timer_store():
+    # The store is a process-global singleton; reset it around every test.
+    _timers._by_owner.clear()
+    yield
+    _timers._by_owner.clear()
 
 
 def _t(text: str) -> str:
@@ -102,6 +113,40 @@ async def test_resolve_create_returns_conforming_running_card():
 async def test_resolve_bare_timer_defaults_to_five_minutes():
     result = await resolve_skybridge_request("set a timer", "guest")
     assert result["cards"][0]["props"]["duration_seconds"] == 300
+
+
+@pytest.mark.asyncio
+async def test_multiple_timers_all_returned():
+    user = "kitchen"
+    first = await resolve_skybridge_request("set a 10 minute timer for pasta", user)
+    assert len(first["cards"]) == 1
+    second = await resolve_skybridge_request("set a 3 minute timer for eggs", user)
+    # creating a second timer returns BOTH, soonest first
+    labels = [c["props"]["label"] for c in second["cards"]]
+    assert labels == ["Eggs", "Pasta"]
+    assert "2 timers running" in second["spoken_summary"]
+    assert len(active_timers_for(user)) == 2
+
+
+@pytest.mark.asyncio
+async def test_cancel_one_keeps_the_others():
+    user = "kitchen2"
+    await resolve_skybridge_request("set a 10 minute timer for pasta", user)
+    await resolve_skybridge_request("set a 3 minute timer for eggs", user)
+    # bare cancel removes the soonest (eggs); pasta keeps running and is shown
+    result = await resolve_skybridge_request("cancel the timer", user)
+    assert result["timer_cancelled_id"]
+    remaining = [c["props"]["label"] for c in result["cards"]]
+    assert remaining == ["Pasta"]
+    assert "eggs" in result["spoken_summary"].lower()
+
+
+def test_cancel_by_id_helper():
+    user = "byid"
+    t = _timers.create(user, "Oven", 600)
+    assert cancel_timer_by_id(user, "nope") is None
+    assert cancel_timer_by_id(user, t["timer_id"])["label"] == "Oven"
+    assert active_timers_for(user) == []
 
 
 @pytest.mark.asyncio

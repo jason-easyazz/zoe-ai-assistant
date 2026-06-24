@@ -98,6 +98,7 @@
             '<div class="sky-timer-digits">' + (expired ? "Time's up" : mm + ':' + ss) + '</div>',
             '<div class="sky-timer-label">' + escapeHtml(label) + '</div>',
             '<div class="sky-timer-bar-wrap"><div class="sky-timer-bar" style="width:' + pct.toFixed(1) + '%"></div></div>',
+            '<button type="button" class="sky-timer-cancel" data-timer-cancel="' + escapeHtml(props.timer_id || props.id || '') + '">' + (expired ? 'Dismiss' : 'Cancel') + '</button>',
             '</div>'
         ].join('');
         return cardFrame(props, body, { tone: 'timer' + (expired ? ' sky-timer-ringing' : ''), hideStatus: true });

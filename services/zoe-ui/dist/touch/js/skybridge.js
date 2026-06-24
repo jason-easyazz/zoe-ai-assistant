@@ -127,6 +127,12 @@
             if (event.target.closest('.sky-card.sky-timer-ringing') && acknowledgeRingingTimers()) {
                 return;
             }
+            // Per-timer Cancel button → cancel just that one (others keep running).
+            const cancelBtn = event.target.closest('[data-timer-cancel]');
+            if (cancelBtn) {
+                cancelTimerLocal(cancelBtn.dataset.timerCancel);
+                return;
+            }
             const btn = event.target.closest('button[data-sky-action]');
             if (!btn) return;
             let route = btn.dataset.route;
@@ -577,16 +583,28 @@
         ringing.forEach(t => removeTimer(t.id));
         return true;
     }
+    function cancelTimerLocal(id) {
+        if (!id) return;
+        removeTimer(id);   // immediate on the panel (the firing authority)
+        try {
+            fetch('/api/skybridge/timers/cancel', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ timer_id: id })
+            });   // best-effort server sync so spoken "how long left" stays accurate
+        } catch (_) {}
+    }
+
     function restoreTimers() {
         let arr = [];
         try { arr = JSON.parse(localStorage.getItem(TIMERS_KEY) || '[]') || []; } catch (_) {}
         const now = Date.now();
-        arr.forEach(t => { if (t && t.id && +t.expires > now) registerTimer(t.id, t.label, t.expires, t.duration); });
-        if (activeTimers.size) {
-            const soonest = [...activeTimers.values()].sort((a, b) => a.expires - b.expires)[0];
-            addCard({ component: 'timer', props: { timer_id: soonest.id, label: soonest.label, title: soonest.label,
-                duration_seconds: soonest.duration, expires_at_ms: soonest.expires, status: 'running' } }, false);
-        }
+        arr.filter(t => t && t.id && +t.expires > now)
+            .sort((a, b) => a.expires - b.expires)
+            .forEach(t => {   // resume every still-running timer, not just the soonest
+                registerTimer(t.id, t.label, t.expires, t.duration);
+                addCard({ component: 'timer', props: { timer_id: t.id, label: t.label, title: t.label,
+                    duration_seconds: t.duration, expires_at_ms: t.expires, status: 'running' } }, false);
+            });
     }
 
     function noteUserActivity() {
