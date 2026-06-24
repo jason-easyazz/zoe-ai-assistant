@@ -34,9 +34,17 @@
 
   function isDay() { var now = new Date(), t = sunTimes(now); return now >= t.rise && now < t.set; }
   function mode() { try { return localStorage.getItem(KEY) || 'auto'; } catch (e) { return 'auto'; } }
+  // Resting/idle-screen dimming so the standby clock never lights up the room:
+  // deep = sleep hours (22:00–06:00), then night (after sunset) / day.
+  function restDim() {
+    var h = new Date().getHours();
+    if (h >= 22 || h < 6) return 'deep';
+    return isDay() ? 'day' : 'night';
+  }
   function apply() {
     var m = mode(), theme = (m === 'light' || m === 'dark') ? m : (isDay() ? 'light' : 'dark');
     document.documentElement.setAttribute('data-theme', theme);
+    document.documentElement.setAttribute('data-rest-dim', restDim());
   }
   apply();
   setInterval(apply, 60000);

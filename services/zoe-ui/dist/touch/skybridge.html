@@ -4860,64 +4860,85 @@
            `.sky-ambient-clock` rule with position:fixed/opacity:0 wrongly matched
            the body and faded the whole UI invisible. Targeting #skyAmbientClock
            keeps these on the element only. */
+        /* Resting clock — the idle/standby screen. Deliberately SIMPLE + DARK so
+           it never lights up the room (esp. at night). The rich ambient clock
+           CARD is a separate on-demand surface. Vertically centred, elegant Inter,
+           and dimmed by time of day via a brightness filter (see #skyAmbientClock
+           dim rules + skybridge-theme.js data-rest-dim). */
         #skyAmbientClock {
             position: fixed;
-            top: clamp(54px, 7.5vh, 84px);
+            top: 50%;
             left: 50%;
-            transform: translateX(-50%);
+            transform: translate(-50%, -50%);
             z-index: 2;
             display: grid;
             justify-items: center;
-            gap: 8px;
+            gap: clamp(8px, 1.4vh, 18px);
             opacity: 0;
             pointer-events: none;
-            transition: opacity 420ms ease, transform 420ms ease;
-            color: rgba(255,255,255,0.76);
+            transition: opacity 600ms ease, transform 600ms ease, filter 1200ms ease;
+            color: rgba(255,255,255,0.8);
             text-shadow: 0 18px 70px rgba(0,0,0,0.55);
+            filter: brightness(0.82);   /* default (day) — overridden by data-rest-dim */
         }
 
         body.sky-empty.sky-ambient-clock #skyAmbientClock {
             opacity: 1;
-            transform: translateX(-50%) translateY(0);
+            transform: translate(-50%, -50%);
         }
-
         body:not(.sky-empty) #skyAmbientClock {
             opacity: 0;
-            transform: translateX(-50%) translateY(-10px);
+            transform: translate(-50%, calc(-50% - 10px));
+        }
+
+        /* Time-of-day dimming — room-safe. day: bright-ish; evening/night: softer;
+           deep night (sleep hours): barely a night-light. */
+        :root[data-rest-dim="day"]   #skyAmbientClock { filter: brightness(0.9); }
+        :root[data-rest-dim="night"] #skyAmbientClock { filter: brightness(0.6); }
+        :root[data-rest-dim="deep"]  #skyAmbientClock { filter: brightness(0.34); }
+
+        /* Resting screen background — flatten the body glow toward pure dark so the
+           idle screen stays room-safe (returns when a card shows). Deep darker. */
+        body.sky-empty.sky-ambient-clock {
+            background-color: #05070e !important;
+            background-image: none !important;
+        }
+        :root[data-rest-dim="deep"] body.sky-empty.sky-ambient-clock {
+            background-color: #03040a !important;
+            background-image: none !important;
         }
 
         .sky-ambient-time {
             display: flex;
             align-items: baseline;
-            gap: clamp(8px, 1.2vw, 16px);
+            gap: clamp(6px, 1vw, 12px);
+            font-family: "Inter", -apple-system, system-ui, sans-serif;
             font-variant-numeric: tabular-nums;
-            font-weight: 850;
-            letter-spacing: 0;
-            line-height: 0.86;
-            color: rgba(255,255,255,0.82);
+            font-weight: 500;
+            letter-spacing: -2px;
+            line-height: 0.84;
+            color: rgba(255,255,255,0.92);
         }
-
-        .sky-ambient-time span {
-            font-size: clamp(124px, 18vw, 214px);
-        }
-
+        .sky-ambient-time span { font-size: clamp(120px, 17vw, 208px); }
         .sky-ambient-time i {
             font-style: normal;
-            font-size: clamp(100px, 14vw, 170px);
-            opacity: 0.5;
+            font-size: clamp(96px, 13vw, 162px);
+            opacity: 0.32;
+            transform: translateY(-0.06em);
         }
-
         .sky-ambient-time b {
-            margin-left: 6px;
-            font-size: clamp(30px, 3.7vw, 44px);
-            opacity: 0.56;
-            text-transform: uppercase;
-        }
-
-        .sky-ambient-date {
-            color: rgba(255,255,255,0.5);
+            margin-left: clamp(8px, 1vw, 14px);
             font-size: clamp(28px, 3.4vw, 42px);
-            font-weight: 800;
+            font-weight: 500;
+            opacity: 0.6;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .sky-ambient-date {
+            color: rgba(255,255,255,0.52);
+            font-size: clamp(24px, 2.9vw, 36px);
+            font-weight: 400;
+            letter-spacing: 0.4px;
         }
     </style>
 
