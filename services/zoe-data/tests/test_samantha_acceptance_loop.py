@@ -176,14 +176,20 @@ def test_guest_only_session_stores_nothing(monkeypatch):
     called = {"extract": False}
 
     import memory_digest
+    import memory_service
 
     async def _fake_extract(_t):
         called["extract"] = True
         return [{"fact": "should never be stored"}]
 
     monkeypatch.setattr(memory_digest, "_extract_facts_with_gemma", _fake_extract)
+    # Wire the store into the engine so an *accidental* store write (e.g. if the
+    # no-owner guard regressed) would actually land in store.rows and be caught by
+    # the recall assertion below — otherwise that assertion is vacuously true.
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: store)
 
     stored = _run(mic.consolidate_session(_FakeConn(turns), "sess-guest", "guest"))
     assert stored == 0
     assert called["extract"] is False, "must skip before extraction when no real owner"
+    assert store.rows == [], "no fact may be written for a guest-only session"
     assert store.recall("jason") == []
