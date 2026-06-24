@@ -681,6 +681,35 @@
         return accentClass(person.context || person.circle || 'personal', 'personal');
     }
 
+    // Closeness: inner circle is "your people" — surface them first, then order by
+    // connection health so the warmest relationships lead. Returns 0 (inner) | 1.
+    function personCircleRank(person) {
+        var c = String((person && person.circle) || '').toLowerCase();
+        if (c === 'inner' || c === 'close' || c === 'family') return 0;
+        return 1;
+    }
+    // Short, human circle label for the small relationship/closeness tag.
+    function personCircleLabel(person) {
+        var c = String((person && person.circle) || '').toLowerCase();
+        if (c === 'inner' || c === 'close') return 'Inner circle';
+        if (c === 'outer' || c === 'wider') return 'Wider circle';
+        if (c) return c.charAt(0).toUpperCase() + c.slice(1);
+        return personCircleRank(person) === 0 ? 'Inner circle' : 'Wider circle';
+    }
+    // Stable closeness order: inner first, then higher connection-health first.
+    function peopleByCloseness(list) {
+        return list
+            .map(function (p, i) { return { p: p, i: i }; })
+            .sort(function (a, b) {
+                var ra = personCircleRank(a.p), rb = personCircleRank(b.p);
+                if (ra !== rb) return ra - rb;
+                var ha = healthPercent(a.p.health_score), hb = healthPercent(b.p.health_score);
+                if (ha !== hb) return hb - ha;
+                return a.i - b.i;
+            })
+            .map(function (x) { return x.p; });
+    }
+
     function renderPeopleDirectory(props) {
         // Re-skin to docs/architecture/skybridge-design-system.md §8/§11 (people =
         // header + a grid of metric stacks: avatar, name, relationship, accent-
@@ -711,24 +740,48 @@
             chip('social', 'other', otherCount, false)
         ].join('');
 
-        const tiles = people.slice(0, 12).map(person => {
+        // Order by closeness (inner circle first, warmest connection first) so the
+        // card reads as "your people", not an alphabetical contacts dump. The
+        // closest few get a larger hero row; the rest flow into a calmer grid.
+        const ordered = peopleByCloseness(people).slice(0, 12);
+        const innerLead = ordered.filter(p => personCircleRank(p) === 0);
+        const heroCount = Math.min(innerLead.length, ordered.length >= 4 ? 3 : 0);
+        const heroPeople = ordered.slice(0, heroCount);
+        const restPeople = ordered.slice(heroCount);
+
+        // Shared tile builder. `hero` enlarges the avatar/type and shows a richer
+        // closeness tag; both variants carry the accent + connection health bar.
+        const tileHtml = function (person, hero) {
             const health = healthPercent(person.health_score);
             const accent = personAccentClass(person);
             const name = person.name || 'Person';
+            const cls = 'people-tile people-accent-' + escapeHtml(accent) + (hero ? ' people-tile--hero' : '');
             return [
-                '<button type="button" class="people-tile people-accent-' + escapeHtml(accent) + '" data-sky-action="query" data-query="' + escapeHtml('find ' + name) + '" aria-label="' + escapeHtml(name + ', ' + personSubline(person) + ', connection ' + health + ' percent') + '">',
+                '<button type="button" class="' + cls + '" data-sky-action="query" data-query="' + escapeHtml('find ' + name) + '" aria-label="' + escapeHtml(name + ', ' + personSubline(person) + ', connection ' + health + ' percent') + '">',
+                '<span class="people-tile-tint" aria-hidden="true"></span>',
                 '<span class="people-tile-avatar" aria-hidden="true">' + initialsFor(person.name) + '</span>',
                 '<span class="people-tile-id">',
+                '<span class="people-circle-pill">' + escapeHtml(personCircleLabel(person)) + '</span>',
                 '<strong class="people-tile-name">' + escapeHtml(name) + '</strong>',
                 '<span class="people-tile-rel">' + escapeHtml(personSubline(person)) + '</span>',
                 '</span>',
                 '<span class="people-tile-health">',
                 '<span class="people-health-track"><i class="people-health-fill" style="width:' + health + '%"></i></span>',
-                '<span class="people-health-pct">' + health + '</span>',
+                '<span class="people-health-pct tnum">' + health + '</span>',
                 '</span>',
                 '</button>'
             ].join('');
-        }).join('');
+        };
+
+        const heroRow = heroPeople.length
+            ? '<div class="people-hero"><p class="people-section-label">Closest to you</p><div class="people-hero-row">'
+                + heroPeople.map(p => tileHtml(p, true)).join('') + '</div></div>'
+            : '';
+        const restGrid = restPeople.length
+            ? (heroPeople.length ? '<p class="people-section-label people-section-label--rest">More people</p>' : '')
+                + '<div class="people-grid">' + restPeople.map(p => tileHtml(p, false)).join('') + '</div>'
+            : '';
+        const tiles = heroRow + restGrid;
 
         const empty = [
             '<div class="people-empty">',
@@ -750,7 +803,7 @@
             '</div>',
             '<div class="people-chips">' + chips + '</div>',
             '</header>',
-            tiles ? ('<div class="people-grid">' + tiles + '</div>') : empty,
+            tiles ? ('<div class="people-body">' + tiles + '</div>') : empty,
             '</div>'
         ].join('');
         return cardFrame(Object.assign({ status: 'People', icon: 'P' }, props), body, { wide: true, tone: 'people-card', hideHeader: true, hideStatus: true });
@@ -772,8 +825,10 @@
         const body = [
             '<div class="people-scene people-profile">',
             '<header class="people-profile-hero">',
+            '<span class="people-tile-tint" aria-hidden="true"></span>',
             '<span class="people-tile-avatar people-profile-avatar" aria-hidden="true">' + initialsFor(name) + '</span>',
             '<div class="people-profile-id">',
+            '<span class="people-circle-pill">' + escapeHtml(personCircleLabel(person)) + '</span>',
             '<p class="people-eyebrow">' + escapeHtml(personSubline(person)) + '</p>',
             '<h3 class="people-title">' + escapeHtml(name) + '</h3>',
             '<div class="people-tile-health people-profile-healthrow">',
