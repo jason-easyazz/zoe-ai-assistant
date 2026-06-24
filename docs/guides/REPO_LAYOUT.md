@@ -8,7 +8,7 @@ This file defines the active project layout so the repo stays easy to navigate.
 - `services/zoe-ui` - web/touch UI assets and nginx-served frontend
 - `services/zoe-auth` - authentication service
 - `services/homeassistant-mcp-bridge` - Home Assistant bridge service
-- `modules/orbit` - active module service
+- `modules/` - optional add-on modules (see `modules/AGENTS.md` + `docs/CANONICAL.md`)
 
 ## Device/Deployment Setup
 

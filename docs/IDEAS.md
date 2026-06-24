@@ -33,6 +33,12 @@ Detail/AI notes go under each entry. Move the status as it progresses.
 
 ## 💡 Ideas
 
+### Zoe intelligently controls Music Assistant — 🔬 exploring
+- **Core:** we installed **Music Assistant** (`:8095`); replace the old `modules/zoe-music`
+  with Zoe driving MA intelligently (natural-language play/queue/control). Keep `zoe-music`
+  running until proven — no music gap. Source: Jason, 2026-06-24.
+- **Plan:** [PLANS.md](PLANS.md) → "Zoe intelligently controls Music Assistant."
+
 ### A richer "Pinterest-style" ideas surface inside Zoe — 💡 pinned
 - **Core:** this file is v1. The real idea is a **visual board in Zoe** to save links/videos/ideas, browse for inspiration, and let agents read/append it. Originally planned a Zoe section for exactly this.
 - **Next:** research whether an existing open-source project already does this well (visual idea/link board, local, agent-accessible) before building. Source: Jason, 2026-06-23.

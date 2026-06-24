@@ -55,21 +55,29 @@ The Pi-as-brain path and the services it depends on. These are real and load-bea
 ## 🧩 Live modules (don't mistake these for dead)
 
 Running as containers today — **keep**:
-- `modules/zoe-music` → `zoe-music-assistant`
-- `modules/questionable-decisions` → `zoe-qd-game`
-- `modules/orbit` → `zoe-orbit` (wired in `docker-compose.modules.yml`)
+- `modules/zoe-music` → `zoe-music-assistant` — **being replaced** (see below); keep
+  running until Zoe can drive Music Assistant.
+- `modules/omnigent` → `zoe-omnigent` (remote-coding agent).
 
-## 🟡 Needs a per-item decision (NOT declared dead — ask Jason)
+## 🟠 Being replaced — keep until the replacement is proven
 
-Present in `modules/` but with **no live container and no in-tree referrers**. Candidates
-for retirement, but only after Jason confirms — some may be paused, not abandoned:
-- `modules/agent-zero`, `modules/jag-board`, `modules/omnigent`
+- **`modules/zoe-music`** → migrating to **Music Assistant** (host service on `:8095`,
+  proxied at `/modules/music-assistant/`). The goal is *Zoe intelligently controls
+  Music Assistant*. Don't pull `zoe-music` until that's built and lab-proven (no music
+  gap). Tracked in [`PLANS.md`](PLANS.md) / [`IDEAS.md`](IDEAS.md).
 
 ## 🔴 Retired — do not resurrect
 
 - **`docs/archive/`** — removed from the working tree (2026-06-24). Every byte is still
   in git history; recover with `git log -- docs/archive` if ever needed. Do **not**
   re-add it to the tree.
+- **`modules/orbit`** (social-interaction platform) — retired 2026-06-24. Was wired in
+  `docker-compose.modules.yml` (not running). Tracked in git → `git log --all -- modules/orbit`.
+- **`modules/agent-zero`** — retired 2026-06-24, no longer used. In git history.
+- **`modules/jag-board`** — retired from the repo 2026-06-24. Was **gitignored** (never in
+  git), so it is **preserved off-repo** at `~/zoe-archives/jag-board` rather than deleted.
+- **`modules/questionable-decisions`** (`zoe-qd-game`) — retired 2026-06-24; moved to an
+  internet server (the authoritative copy now lives there).
 - **Dockerized `zoe-llamacpp`** — retired; the brain is host-native `llama-server`.
 - **wyoming-piper TTS** — retired (replaced by Kokoro to reclaim ~2 GB RAM).
 - **whisper as *primary* STT** — superseded by Moonshine (a faster-whisper worker may

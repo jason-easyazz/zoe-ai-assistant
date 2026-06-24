@@ -26,6 +26,11 @@ a link to the detail + where it's up to. Mark ✅ when done so nothing lingers h
 - **Goal:** Omnigent + Claude Code + Codex all set up correctly and **actually using** the repo's tools (Serena, codebase-memory, opensrc, Greptile/greploop, Dox), with a shared command center (this) so ideas/plans don't scatter.
 - **Detail:** see Backlog below. The tools mostly *exist*; the gap is **adoption + verification**, not setup-from-scratch.
 
+### Zoe intelligently controls Music Assistant
+- **Goal:** retire the old `modules/zoe-music` module and have Zoe drive **Music Assistant** (host service `:8095`, proxied `/modules/music-assistant/`) with intelligence — natural-language play/queue/control, aware of context.
+- **Why now:** Music Assistant is installed; `zoe-music` is the old start. **Guardrail:** keep `zoe-music` running until the MA control path is built + lab-proven — no music gap (lab-prove-before-prod). Retire `modules/zoe-music` (live `zoe-music-assistant`) only after.
+- **Status:** 📝 planned (pinned 2026-06-24).
+
 ---
 
 ## 🗂️ Backlog — pinned & sequenced (from Jason, 2026-06-23)
