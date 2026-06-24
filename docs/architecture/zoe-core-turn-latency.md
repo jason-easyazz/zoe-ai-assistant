@@ -137,6 +137,19 @@ token-by-token, and `--ctx-size` is already 8192 with `--cache-reuse` + MTP.
   channel deliberately deferred these once; this must be **replay-gated over a larger
   corpus** with said-vs-did diffing before it lands, and Jason should review the tone of
   the Tier-0 replies for the read intents.
+- **Interaction with the upstream voice gate (must verify before implementing):**
+  `run_tier0=False` for voice is deliberate because the voice channel runs **its own
+  richer public-intent Tier-0 *before* `fast_tiers.resolve()`** — `voice_tts.py`
+  (~L3893–3994) does the public-intent detection plus a **B3/B4 scope gate + PIN
+  challenge** (`_can_use_voice_intent`, `resource="scope_gate"`). That upstream gate, not
+  the shared `fast_tiers` Tier-0, is the real policy/scope guard. Confirmed present as of
+  this doc (HEAD 687fd21). An implementer of P1 must re-verify that upstream gate is still
+  intact and decide the ordering: either (a) wire the deterministic read answer into the
+  *existing* upstream voice Tier-0 (preferred — keeps the scope gate authoritative), or
+  (b) flip `run_tier0=True` only for the idempotent read intents *and* confirm the
+  upstream gate still runs first so a scoped/unsafe read can't bypass it. Do **not** flip
+  the flag blind on the assumption that `fast_tiers` Tier-0 carries the scope check — it
+  does not.
 - **Test gate:** `measure_voice.py` over the full `~/.zoe-voice-samples` corpus — require
   zero CANT_DO/ERROR delta and confirm the brain-turn count drops without said-vs-did
   regressions.
@@ -165,7 +178,10 @@ token-by-token, and `--ctx-size` is already 8192 with `--cache-reuse` + MTP.
 - Do **not** remove the second LLM call on tool turns — it is required to answer from live
   data. There is no redundant round-trip to cut.
 - Do **not** swap the model, MTP drafter, or STT (rocks).
-- Do **not** flip `run_tier0` for voice without a full-corpus replay gate + Jason review.
+- Do **not** flip `run_tier0` for voice without (a) a full-corpus replay gate + Jason
+  review **and** (b) confirming the upstream voice public-intent Tier-0 + scope gate
+  (`voice_tts.py` ~L3893–3994) still runs first — the shared `fast_tiers` Tier-0 does
+  **not** carry the scope/PIN check.
 
 ## Decision
 P1 is the highest-value, behavior-sensitive change and is **proposed, not shipped** here:
