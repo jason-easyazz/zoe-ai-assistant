@@ -100,8 +100,15 @@ body:not(.sky-empty) .sky-card.clock-card.sky-premium-card {
   justify-content: center;
   gap: 24px;
 }
-.clock-card .clock-side > svg { filter: drop-shadow(0 0 16px rgba(255,206,112,0.4)); }
-:root[data-theme="light"] .clock-card .clock-side > svg { filter: drop-shadow(0 0 18px rgba(255,180,60,0.5)); }
+.clock-card .clock-glyph { display: block; line-height: 0; }
+.clock-card .clock-glyph svg { filter: drop-shadow(0 0 16px rgba(255,206,112,0.4)); }
+/* Show moon by night / sun by day via CSS, so a live theme flip (sunrise/sunset)
+   swaps them with no re-render. */
+.clock-card .clock-glyph-day { display: none; }
+:root[data-theme="light"] .clock-card .clock-glyph-night { display: none; }
+:root[data-theme="light"] .clock-card .clock-glyph-day { display: block; }
+:root[data-theme="light"] .clock-card .clock-glyph svg { filter: drop-shadow(0 0 18px rgba(255,180,60,0.5)); }
+:root[data-theme="light"] .clock-card .clock-star { display: none; }
 .clock-card .clock-sun { width: 100%; display: flex; flex-direction: column; gap: 14px; }
 .clock-card .clock-sun-row { display: flex; align-items: center; justify-content: space-between; font-size: 16px; }
 .clock-card .clock-sun-lbl { display: flex; align-items: center; gap: 9px; color: rgba(255,255,255,0.72); }
@@ -117,3 +124,4 @@ body:not(.sky-empty) .sky-card.clock-card.sky-premium-card {
   animation: skyTwinkle 3s ease-in-out infinite;
 }
 @keyframes skyTwinkle { 0%,100% { opacity: 0.25; } 50% { opacity: 0.85; } }
+@media (prefers-reduced-motion: reduce) { .clock-card .clock-star { animation: none; } }

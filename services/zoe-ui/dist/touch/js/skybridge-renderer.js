@@ -463,8 +463,12 @@
         return { hour, minute, dayPeriod, date };
     }
 
-    function clockGreeting() {
-        var h = new Date().getHours();
+    function clockGreeting(timezone) {
+        var h;
+        try {
+            h = parseInt(new Intl.DateTimeFormat('en-US', { hour: 'numeric', hour12: false, timeZone: timezone || undefined }).format(new Date()), 10);
+        } catch (e) { h = NaN; }
+        if (!isFinite(h)) h = new Date().getHours();
         if (h < 5) return 'Good night';
         if (h < 12) return 'Good morning';
         if (h < 17) return 'Good afternoon';
@@ -496,18 +500,18 @@
         const timezone = props.timezone || '';
         const parts = clockParts(timezone);
         const dateText = parts.date || [props.weekday, props.date_label].filter(Boolean).join(', ');
-        const dark = panelIsDark();
         const name = clockUserName();
-        const greet = clockGreeting() + (name ? ', ' + name : '');
+        const greet = clockGreeting(timezone) + (name ? ', ' + name : '');
         let sun = null;
         try { sun = (window.SkybridgeTheme && window.SkybridgeTheme.sunTimes) ? window.SkybridgeTheme.sunTimes() : null; } catch (e) {}
         const sunRows = sun ? [
             '<div class="clock-sun-row"><span class="clock-sun-lbl">' + horizonGlyph(false, '#ff9a6b') + 'Sunset</span><span class="tnum clock-sun-t">' + escapeHtml(fmtClockTime(sun.set)) + '</span></div>',
             '<div class="clock-sun-row"><span class="clock-sun-lbl">' + horizonGlyph(true, '#ffce70') + 'Sunrise</span><span class="tnum clock-sun-t">' + escapeHtml(fmtClockTime(sun.rise)) + '</span></div>'
         ].join('') : '';
-        const stars = dark
-            ? '<span class="clock-star" style="top:18%;left:9%"></span><span class="clock-star" style="top:30%;left:24%"></span><span class="clock-star" style="top:14%;left:40%"></span><span class="clock-star" style="top:40%;left:15%"></span>'
-            : '';
+        // Stars + both glyphs are always in the DOM; CSS shows the right ones per
+        // [data-theme], so a live sunrise/sunset theme flip (60s tick) updates them
+        // without a re-render.
+        const stars = '<span class="clock-star" style="top:18%;left:9%"></span><span class="clock-star" style="top:30%;left:24%"></span><span class="clock-star" style="top:14%;left:40%"></span><span class="clock-star" style="top:40%;left:15%"></span>';
         // Keep .sky-clock-scene/.sky-live-clock + the data-clock-* spans so
         // updateAllClocks() keeps the numerals ticking live.
         // New class names (clock-*) sidestep the legacy clock CSS entirely; only
@@ -523,7 +527,8 @@
             '</div>',
             '<div class="clock-div"></div>',
             '<div class="clock-side">',
-            glyphSvg(dark ? 'i-moon' : 'i-sun', 86),
+            '<span class="clock-glyph clock-glyph-night">' + glyphSvg('i-moon', 86) + '</span>',
+            '<span class="clock-glyph clock-glyph-day">' + glyphSvg('i-sun', 86) + '</span>',
             sunRows ? '<div class="clock-sun">' + sunRows + '</div>' : '',
             '</div>',
             '</div>'
