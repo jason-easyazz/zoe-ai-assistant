@@ -1,5 +1,425 @@
-/* people card — re-skin to docs/architecture/skybridge-design-system.md.
-   Owns ONLY the .people-card styling so cards can be re-skinned independently.
-   Use the tokens (--sky-*, --card-*, --text-*), the .sky-material glass, the
-   glyph sprite (<use href="#i-*">), and provide both default (dark) + light
-   ([data-theme="light"] ...) treatments. Fill the stage at panel scale. */
+/* people card — re-skinned to docs/architecture/skybridge-design-system.md.
+   Owns ONLY .people-card styling so cards re-skin independently.
+
+   NOTE on tokens: the spec's shared css/skybridge-tokens.css (the --sky-ink-* /
+   --sky-space-* / --sky-text-* ramp + .sky-material glass) is documented but NOT
+   yet committed on claude/design-foundation (skybridge.html links it but the file
+   is absent). So the design-system primitives this card needs are declared locally
+   below, scoped to .people-card, matching the spec's recipes (§2 glass, §3 type,
+   §4 colour, §6 spacing/radius). When the shared file lands these can collapse to
+   var(--sky-*) references. Both dark (default) + light ([data-theme="light"])
+   treatments are provided. Fills the stage at panel scale (responsive tile grid). */
+
+.people-card {
+  /* --- spacing scale (§6, 4px) --- */
+  --people-s2: 8px;
+  --people-s3: 12px;
+  --people-s4: 16px;
+  --people-s5: 20px;
+  --people-s6: 24px;
+  --people-s8: 32px;
+  /* --- radius (§6) --- */
+  --people-r-sm: 12px;
+  --people-r-md: 20px;
+  --people-r-lg: 28px;
+  --people-r-xl: 38px;
+  /* --- neutral ramp (§4) — dark default: white → 26% white --- */
+  --people-ink-0: #f6f8fb;
+  --people-ink-1: rgba(246, 248, 251, 0.74);
+  --people-ink-2: rgba(246, 248, 251, 0.52);
+  --people-ink-3: rgba(246, 248, 251, 0.34);
+  --people-hairline: rgba(255, 255, 255, 0.12);
+  --people-tile-bg: rgba(255, 255, 255, 0.05);
+  --people-tile-bg-hi: rgba(255, 255, 255, 0.085);
+  --people-track: rgba(255, 255, 255, 0.12);
+  /* --- one accent per tile; mint→cyan is the calm default (§4) --- */
+  --people-accent-a: #5ee0c2;
+  --people-accent-b: #4cc8ff;
+  --people-accent-soft: rgba(94, 224, 194, 0.16);
+
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  color: var(--people-ink-0);
+}
+
+/* The card frame already supplies the glass (.sky-premium-card). Let the people
+   scene fill it and breathe at panel scale (§9 fill the stage). */
+.people-card .people-scene {
+  display: flex;
+  flex-direction: column;
+  gap: var(--people-s6);
+  width: 100%;
+  height: 100%;
+  padding: clamp(var(--people-s5), 2.4vw, 46px);
+  box-sizing: border-box;
+}
+
+/* ---------------------------------------------------------------- header ---- */
+.people-card .people-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--people-s5);
+  flex-wrap: wrap;
+}
+
+.people-card .people-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.people-card .people-eyebrow {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 2.5px;
+  text-transform: uppercase;
+  color: var(--people-ink-2);
+}
+
+.people-card .people-title {
+  margin: 0;
+  font-size: clamp(24px, 2.6vw, 30px);
+  font-weight: 600;
+  letter-spacing: -0.4px;
+  line-height: 1.05;
+  color: var(--people-ink-0);
+}
+
+.people-card .people-context {
+  margin: 2px 0 0;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--people-ink-2);
+}
+
+/* quiet segmented filter chips (count over label, accent dot) */
+.people-card .people-chips {
+  display: flex;
+  align-items: stretch;
+  gap: var(--people-s2);
+  flex-wrap: wrap;
+}
+
+.people-card .people-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--people-s2);
+  padding: var(--people-s2) var(--people-s4);
+  border-radius: var(--people-r-sm);
+  background: var(--people-tile-bg);
+  border: 1px solid var(--people-hairline);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.people-card .people-chip strong {
+  font-size: 16px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--people-ink-0);
+}
+
+.people-card .people-chip > span {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--people-ink-2);
+}
+
+.people-card .people-chip-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--people-accent-a), var(--people-accent-b));
+  box-shadow: 0 0 0 3px var(--people-accent-soft);
+}
+
+.people-card .people-chip.is-active {
+  background: var(--people-accent-soft);
+  border-color: color-mix(in srgb, var(--people-accent-a) 50%, transparent);
+}
+
+/* ------------------------------------------------------------------ grid ---- */
+.people-card .people-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: var(--people-s4);
+  align-content: start;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.people-card .people-tile {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  align-items: center;
+  column-gap: var(--people-s4);
+  row-gap: var(--people-s3);
+  padding: var(--people-s5);
+  border-radius: var(--people-r-md);
+  background: var(--people-tile-bg);
+  border: 1px solid var(--people-hairline);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  transition: transform 180ms cubic-bezier(0.32, 0.72, 0, 1),
+              background 180ms ease, border-color 180ms ease;
+}
+
+.people-card .people-tile:hover {
+  background: var(--people-tile-bg-hi);
+  border-color: color-mix(in srgb, var(--people-accent-a) 30%, var(--people-hairline));
+}
+
+.people-card .people-tile:active {
+  transform: scale(0.985);
+}
+
+.people-card .people-tile:focus-visible {
+  outline: 2px solid var(--people-accent-b);
+  outline-offset: 2px;
+}
+
+/* avatar — initials in an accent-tinted disc */
+.people-card .people-tile-avatar {
+  grid-row: 1 / span 2;
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: var(--people-ink-0);
+  background:
+    radial-gradient(120% 120% at 30% 22%,
+      color-mix(in srgb, var(--people-accent-a) 42%, transparent),
+      color-mix(in srgb, var(--people-accent-b) 22%, transparent));
+  border: 1px solid color-mix(in srgb, var(--people-accent-a) 38%, var(--people-hairline));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+
+.people-card .people-tile-id {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.people-card .people-tile-name {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.2px;
+  color: var(--people-ink-0);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.people-card .people-tile-rel {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--people-ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* thin health bar — accent gradient fill on a quiet track */
+.people-card .people-tile-health {
+  grid-column: 2;
+  display: flex;
+  align-items: center;
+  gap: var(--people-s3);
+}
+
+.people-card .people-health-track {
+  position: relative;
+  flex: 1 1 auto;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--people-track);
+  overflow: hidden;
+}
+
+.people-card .people-health-fill {
+  display: block;
+  height: 100%;
+  min-width: 5px;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--people-accent-a), var(--people-accent-b));
+  transition: width 420ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.people-card .people-health-pct {
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--people-ink-1);
+  min-width: 2.2ch;
+  text-align: right;
+}
+
+.people-card .people-health-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--people-ink-2);
+}
+
+/* ----------------------------------------------------------- accent map ---- */
+/* Colour with intent (§4/§11): the circle/context drives the accent gradient. */
+.people-card .people-accent-personal { --people-accent-a: #5ee0c2; --people-accent-b: #4cc8ff; --people-accent-soft: rgba(94, 224, 194, 0.16); }
+.people-card .people-accent-work     { --people-accent-a: #7aa2ff; --people-accent-b: #9b8cff; --people-accent-soft: rgba(122, 162, 255, 0.16); }
+.people-card .people-accent-family   { --people-accent-a: #ffb27a; --people-accent-b: #ff7bbd; --people-accent-soft: rgba(255, 178, 122, 0.16); }
+.people-card .people-accent-social   { --people-accent-a: #ffd36b; --people-accent-b: #ff9f5a; --people-accent-soft: rgba(255, 211, 107, 0.16); }
+.people-card .people-accent-health,
+.people-card .people-accent-medical  { --people-accent-a: #ff8e8e; --people-accent-b: #ff6f9c; --people-accent-soft: rgba(255, 142, 142, 0.16); }
+.people-card .people-accent-all,
+.people-card .people-accent-general,
+.people-card .people-accent-household,
+.people-card .people-accent-routine  { --people-accent-a: #5ee0c2; --people-accent-b: #4cc8ff; --people-accent-soft: rgba(94, 224, 194, 0.16); }
+
+/* --------------------------------------------------------------- empty ----- */
+.people-card .people-empty {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--people-s3);
+  text-align: center;
+  padding: var(--people-s8);
+}
+
+.people-card .people-empty-glyph {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--people-ink-2);
+  background: var(--people-tile-bg);
+  border: 1px solid var(--people-hairline);
+}
+
+.people-card .people-empty strong {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--people-ink-0);
+}
+
+.people-card .people-empty span {
+  font-size: 14px;
+  color: var(--people-ink-2);
+  max-width: 38ch;
+}
+
+/* ------------------------------------------------------------- profile ----- */
+.people-card.people-profile-card .people-profile-hero {
+  display: flex;
+  align-items: center;
+  gap: var(--people-s6);
+}
+
+.people-card .people-profile-avatar {
+  width: 96px;
+  height: 96px;
+  font-size: 34px;
+  flex: 0 0 auto;
+}
+
+.people-card .people-profile-id {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.people-card.people-profile-card .people-profile-id .people-title {
+  font-size: clamp(28px, 3.4vw, 40px);
+}
+
+.people-card .people-profile-healthrow {
+  margin-top: var(--people-s2);
+  max-width: 360px;
+}
+
+.people-card .people-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--people-s3);
+}
+
+.people-card .people-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: var(--people-s4);
+  border-radius: var(--people-r-sm);
+  background: var(--people-tile-bg);
+  border: 1px solid var(--people-hairline);
+}
+
+.people-card .people-detail span {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--people-ink-2);
+}
+
+.people-card .people-detail strong {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--people-ink-0);
+}
+
+.people-card .people-notes {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--people-ink-1);
+}
+
+/* ========================================================== LIGHT THEME ==== */
+/* §10: one variable flips the token set. Dark ink → deep slate text on bright
+   surfaces; hairlines darken (§4 light values). Accent gradients stay. */
+[data-theme="light"] .people-card {
+  --people-ink-0: #16324d;
+  --people-ink-1: #3a5e80;
+  --people-ink-2: #5a7898;
+  --people-ink-3: #8aa2bb;
+  --people-hairline: rgba(20, 50, 80, 0.14);
+  --people-tile-bg: rgba(20, 50, 80, 0.045);
+  --people-tile-bg-hi: rgba(20, 50, 80, 0.075);
+  --people-track: rgba(20, 50, 80, 0.14);
+}
+
+[data-theme="light"] .people-card .people-tile {
+  box-shadow: 0 1px 2px rgba(20, 50, 80, 0.06);
+}
+
+[data-theme="light"] .people-card .people-tile-avatar {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4);
+}
+
+[data-theme="light"] .people-card .people-chip-dot {
+  box-shadow: 0 0 0 3px var(--people-accent-soft);
+}
+
+/* ----------------------------------------------------------- motion safe --- */
+@media (prefers-reduced-motion: reduce) {
+  .people-card .people-tile,
+  .people-card .people-health-fill {
+    transition: none;
+  }
+}

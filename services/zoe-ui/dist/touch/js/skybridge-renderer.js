@@ -588,66 +588,112 @@
     }
 
     function renderPeopleDirectory(props) {
+        // Re-skin to docs/architecture/skybridge-design-system.md §8/§11 (people =
+        // header + a grid of metric stacks: avatar, name, relationship, accent-
+        // gradient health bar). Data contract is unchanged — re-skin only.
         const people = Array.isArray(props.people) ? props.people : [];
+        const total = props.count == null ? people.length : props.count;
         const workCount = people.filter(person => personAccentClass(person) === 'work').length;
         const personalCount = people.filter(person => personAccentClass(person) === 'personal').length;
         const otherCount = Math.max(0, people.length - workCount - personalCount);
-        const rows = people.slice(0, 12).map(person => {
+
+        // Quiet segmented filter chips (count + circle); active = current filter.
+        const activeFilter = accentClass(props.circle || props.context || '', '');
+        const chip = function (accent, label, value, alwaysShow) {
+            if (!value && !alwaysShow) return '';
+            const active = accent && accent === activeFilter ? ' is-active' : '';
+            return [
+                '<span class="people-chip people-accent-' + escapeHtml(accent || 'all') + active + '">',
+                '<i class="people-chip-dot" aria-hidden="true"></i>',
+                '<strong>' + escapeHtml(value) + '</strong>',
+                '<span>' + escapeHtml(label) + '</span>',
+                '</span>'
+            ].join('');
+        };
+        const chips = [
+            chip('', 'all', total, true),
+            chip('personal', 'personal', personalCount, false),
+            chip('work', 'work', workCount, false),
+            chip('social', 'other', otherCount, false)
+        ].join('');
+
+        const tiles = people.slice(0, 12).map(person => {
             const health = healthPercent(person.health_score);
             const accent = personAccentClass(person);
+            const name = person.name || 'Person';
             return [
-                '<button type="button" class="sky-person-card sky-accent-' + escapeHtml(accent) + '" data-sky-action="query" data-query="' + escapeHtml('find ' + (person.name || 'person')) + '">',
-                '<div class="sky-person-avatar" aria-hidden="true">' + initialsFor(person.name) + '</div>',
-                '<div class="sky-person-main"><strong>' + escapeHtml(person.name || 'Person') + '</strong><em>' + escapeHtml(personSubline(person)) + '</em></div>',
-                '<div class="sky-person-health" aria-label="Connection score ' + health + '"><i style="width:' + health + '%"></i><span>' + health + '</span></div>',
+                '<button type="button" class="people-tile people-accent-' + escapeHtml(accent) + '" data-sky-action="query" data-query="' + escapeHtml('find ' + name) + '" aria-label="' + escapeHtml(name + ', ' + personSubline(person) + ', connection ' + health + ' percent') + '">',
+                '<span class="people-tile-avatar" aria-hidden="true">' + initialsFor(person.name) + '</span>',
+                '<span class="people-tile-id">',
+                '<strong class="people-tile-name">' + escapeHtml(name) + '</strong>',
+                '<span class="people-tile-rel">' + escapeHtml(personSubline(person)) + '</span>',
+                '</span>',
+                '<span class="people-tile-health">',
+                '<span class="people-health-track"><i class="people-health-fill" style="width:' + health + '%"></i></span>',
+                '<span class="people-health-pct">' + health + '</span>',
+                '</span>',
                 '</button>'
             ].join('');
         }).join('');
-        const empty = '<div class="sky-empty-data sky-people-empty"><strong>No matching people</strong><span>Zoe did not find contacts for this request.</span></div>';
+
+        const empty = [
+            '<div class="people-empty">',
+            '<span class="people-empty-glyph" aria-hidden="true">' + initialsFor(props.title || 'People') + '</span>',
+            '<strong>No matching people</strong>',
+            '<span>Zoe did not find contacts for this request.</span>',
+            '</div>'
+        ].join('');
+
         const body = [
-            '<div class="sky-people-scene">',
-            '<div class="sky-people-toolbar">',
-            '<div class="sky-people-title"><span>People</span><strong>' + escapeHtml(props.title || 'People') + '</strong></div>',
-            '<div class="sky-people-chips">',
-            '<span class="sky-accent-personal">' + escapeHtml(personalCount) + ' personal</span>',
-            '<span class="sky-accent-work">' + escapeHtml(workCount) + ' work</span>',
-            otherCount ? '<span>' + escapeHtml(otherCount) + ' other</span>' : '',
-            '<span>' + escapeHtml(props.count == null ? people.length : props.count) + ' found</span>',
+            '<div class="people-scene">',
+            '<header class="people-header">',
+            '<div class="people-heading">',
+            '<p class="people-eyebrow">People</p>',
+            '<h3 class="people-title">' + escapeHtml(props.title || 'People') + '</h3>',
+            (props.query || props.context || props.circle)
+                ? '<p class="people-context">' + escapeHtml([props.query, props.context, props.circle].filter(Boolean).join(' · ')) + '</p>'
+                : '',
             '</div>',
-            '</div>',
-            '<div class="sky-people-filter-row">',
-            props.query ? '<span>Search ' + escapeHtml(props.query) + '</span>' : '',
-            props.context ? '<span>' + escapeHtml(props.context) + '</span>' : '',
-            props.circle ? '<span>' + escapeHtml(props.circle) + '</span>' : '',
-            '</div>',
-            '<div class="sky-people-grid">' + (rows || empty) + '</div>',
+            '<div class="people-chips">' + chips + '</div>',
+            '</header>',
+            tiles ? ('<div class="people-grid">' + tiles + '</div>') : empty,
             '</div>'
         ].join('');
         return cardFrame(Object.assign({ status: 'People', icon: 'P' }, props), body, { wide: true, tone: 'people-card', hideHeader: true, hideStatus: true });
     }
 
     function renderPersonProfile(props) {
+        // Sibling of renderPeopleDirectory — same avatar + accent-gradient health
+        // language (design-system §11), scaled up to a single-contact hero.
         const person = props.person || {};
         const health = healthPercent(person.health_score);
         const accent = personAccentClass(person);
+        const name = person.name || props.title || 'Person';
         const contactRows = [
             ['Phone', person.phone],
             ['Email', person.email],
             ['Birthday', person.birthday],
             ['Last contact', person.last_contacted_at]
-        ].filter(pair => pair[1]).map(pair => '<div><span>' + escapeHtml(pair[0]) + '</span><strong>' + escapeHtml(pair[1]) + '</strong></div>').join('');
+        ].filter(pair => pair[1]).map(pair => '<div class="people-detail"><span>' + escapeHtml(pair[0]) + '</span><strong>' + escapeHtml(pair[1]) + '</strong></div>').join('');
         const body = [
-            '<div class="sky-profile-scene">',
-            '<div class="sky-profile-hero">',
-            '<div class="sky-profile-avatar" aria-hidden="true">' + initialsFor(person.name || props.title) + '</div>',
-            '<div class="sky-profile-title"><span>' + escapeHtml(personSubline(person)) + '</span><h3>' + escapeHtml(person.name || props.title || 'Person') + '</h3></div>',
-            '<div class="sky-profile-health"><strong>' + health + '</strong><span>connection</span><i style="height:' + health + '%"></i></div>',
+            '<div class="people-scene people-profile">',
+            '<header class="people-profile-hero">',
+            '<span class="people-tile-avatar people-profile-avatar" aria-hidden="true">' + initialsFor(name) + '</span>',
+            '<div class="people-profile-id">',
+            '<p class="people-eyebrow">' + escapeHtml(personSubline(person)) + '</p>',
+            '<h3 class="people-title">' + escapeHtml(name) + '</h3>',
+            '<div class="people-tile-health people-profile-healthrow">',
+            '<span class="people-health-track"><i class="people-health-fill" style="width:' + health + '%"></i></span>',
+            '<span class="people-health-pct">' + health + '</span>',
+            '<span class="people-health-label">connection</span>',
             '</div>',
-            contactRows ? '<div class="sky-profile-grid">' + contactRows + '</div>' : '',
-            person.notes ? '<p class="sky-profile-notes">' + escapeHtml(person.notes) + '</p>' : '',
+            '</div>',
+            '</header>',
+            contactRows ? '<div class="people-detail-grid">' + contactRows + '</div>' : '',
+            person.notes ? '<p class="people-notes">' + escapeHtml(person.notes) + '</p>' : '',
             '</div>'
         ].join('');
-        return cardFrame(Object.assign({ status: 'Person', icon: 'P' }, props), body, { wide: true, tone: 'person-profile-card sky-accent-' + accent, hideHeader: true, hideStatus: true });
+        return cardFrame(Object.assign({ status: 'Person', icon: 'P' }, props), body, { wide: true, tone: 'people-card people-profile-card people-accent-' + accent, hideHeader: true, hideStatus: true });
     }
 
 
