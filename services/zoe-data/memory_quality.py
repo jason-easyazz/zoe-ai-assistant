@@ -173,20 +173,54 @@ def is_storable_fact(text: str) -> tuple[bool, str]:
 # Near-dedup / supersession (mem0 ADD vs UPDATE idea)
 # ---------------------------------------------------------------------------
 
-# Pull the attribute being asserted from "my <attr> is/are/was <value>" or
-# "<subject>'s <attr> is <value>" so we can tell "my dad's name is Neil" from
-# "my dad's name is spelt N-E-I-L" (same attribute → supersede, not add).
+# Pull the attribute being asserted from "my <attr> is/are/was <value>",
+# "user's <attr> is <value>", or "<subject>'s <attr> is <value>" so we can tell
+# "my dad's name is Neil" from "my dad's name is spelt N-E-I-L" (same attribute).
+# The leading subject ("my", "the user's", "Neil's") is optional so that a
+# distilled third-person fact ("User's father's name is Neil") keys to the same
+# attribute as the first-person original ("My dad's name is Neil"). The subject
+# itself is stripped from the key by _attribute_key.
 _ATTR_RE = re.compile(
-    r"\bmy\s+([a-z][a-z '`-]*?)\s+(?:is|are|was|were|=|:)\b",
+    r"(?:\b(?:my|your|our|the\s+user'?s?|user'?s?)\s+)?"
+    r"\b([a-z][a-z '`-]*?)\s+(?:is|are|was|were|=|:)\b",
     re.IGNORECASE,
 )
+
+# Relation/attribute synonyms — distillation rephrases ("dad"→"father",
+# "mum"→"mother"), which must NOT defeat same-attribute detection. Map each
+# variant onto a single canonical token.
+_ATTR_SYNONYMS = {
+    "dad": "father", "daddy": "father", "father": "father", "papa": "father",
+    "mum": "mother", "mom": "mother", "mommy": "mother", "mummy": "mother",
+    "mother": "mother", "mama": "mother",
+    "wife": "spouse", "husband": "spouse", "spouse": "spouse", "partner": "spouse",
+    "kid": "child", "kids": "child", "children": "child", "child": "child",
+    "son": "child", "daughter": "child",
+}
+# Subject/filler tokens that carry no attribute meaning — dropped from the key so
+# "user's father's name" and "my dad's name" reduce to the same key ("father name").
+_ATTR_STOPWORDS = {
+    "s", "the", "a", "an", "user", "users", "my", "your", "our", "his", "her",
+    "their", "of",
+}
+# Additional filler dropped when comparing the VALUE of two facts (copulas,
+# articles) so "name is Neil" vs "name is Tom" share no value token and read as
+# a correction, not the same value.
+_VALUE_STOPWORDS = _ATTR_STOPWORDS | {
+    "is", "are", "was", "were", "be", "been", "am",
+    "and", "or", "to", "in", "on", "at", "it", "that", "this",
+}
 
 # How similar two candidate texts must be to count as "the same fact" for the
 # skip-near-exact-duplicate path. High, to stay conservative.
 _NEAR_DUP_RATIO = 0.92
 # Lower bar for "same attribute, different value" supersession — we additionally
 # require the extracted attribute keys to match, so this can be looser.
-_SUPERSEDE_RATIO = 0.55
+_SUPERSEDE_RATIO = 0.45
+# When two same-attribute facts assert the SAME core value (e.g. both say the
+# name is "Neil"), the only difference is detail/phrasing. We then keep whichever
+# carries more information and drop the other — never accumulate both.
+_RICHNESS_MARGIN = 4  # min extra meaningful chars to call one fact "richer"
 
 
 def _normalize(text: str) -> str:
@@ -194,17 +228,36 @@ def _normalize(text: str) -> str:
 
 
 def _attribute_key(text: str) -> Optional[str]:
-    """Best-effort: the attribute a 'my X is Y' statement is about ('dad name').
+    """Best-effort: the attribute a 'X is Y' statement is about ('father name').
 
-    Returns None when the text isn't an attribute assertion (then we fall back
-    to pure similarity for the dedup decision)."""
+    Handles first- and third-person framings ("my dad's name is …", "user's
+    father's name is …", "her mum's name is …") and canonicalises relation
+    synonyms (dad/father, mum/mother) so distilled rephrasings still key to the
+    same attribute. Returns None when the text isn't an attribute assertion
+    (then we fall back to pure similarity for the dedup decision)."""
     m = _ATTR_RE.search(text or "")
     if not m:
         return None
     attr = re.sub(r"[^a-z ]+", " ", m.group(1).lower())
-    # collapse "dad 's name" → "dad name", drop possessive noise words
-    tokens = [t for t in attr.split() if t not in {"s", "the", "a", "an"}]
+    # collapse possessive/subject noise ("dad 's name" → "dad name", drop "user")
+    tokens = [t for t in attr.split() if t not in _ATTR_STOPWORDS]
+    tokens = [_ATTR_SYNONYMS.get(t, t) for t in tokens]
     return " ".join(tokens).strip() or None
+
+
+def _value_tokens(text: str) -> set[str]:
+    """The salient (non-stopword) value tokens of a fact — used to tell whether
+    two same-attribute facts assert the same underlying value ("Neil") or a
+    genuinely different/updated one."""
+    norm = _normalize(text)
+    return {t for t in re.findall(r"[a-z0-9]+", norm) if t not in _VALUE_STOPWORDS}
+
+
+def _information(text: str) -> int:
+    """A cheap proxy for how much information a fact carries: the count of
+    salient (non-stopword) characters. The richer fact (e.g. the one that also
+    spells the name) wins so we never replace detail with a sparser restatement."""
+    return sum(len(t) for t in _value_tokens(text))
 
 
 def _similarity(a: str, b: str) -> float:
@@ -221,42 +274,73 @@ def classify_against_existing(
     (e.g. ``MemoryService.search(text, user_id, limit≈3)``). Returns:
 
       * ("add",    None)    — no close match; store as new.
-      * ("update", mem_id)  — a near-exact duplicate OR a same-attribute,
-                              different-value fact → supersede ``mem_id``
-                              instead of adding a duplicate/contradiction.
-      * ("skip",   mem_id)  — defensively unused today; reserved.
+      * ("update", mem_id)  — the candidate is the SAME fact as ``mem_id`` but
+                              genuinely richer / more current → supersede it.
+      * ("skip",   mem_id)  — the candidate is a near-duplicate of an existing
+                              fact that is at least as informative (e.g. the
+                              existing one already spells the name) → keep the
+                              existing row, store nothing.
 
-    Conservative: only returns "update" when we are confident the existing row
-    is the same fact (high text similarity) or unambiguously the same attribute
-    (matching attribute key + moderate similarity). Anything else → "add".
+    Conservative on both merge directions:
+      * Only returns "update"/"skip" when we're confident it's the SAME fact —
+        a near-exact text duplicate, or a same-attribute assertion with the
+        same core value. A same-attribute fact with a DIFFERENT value is an
+        update; matching attribute + matching value collapses to skip/update by
+        richness.
+      * Genuinely distinct facts (different attribute, or a different value that
+        doesn't read as a correction) → "add"; when unsure, keep both.
     """
     if not existing:
         return "add", None
 
     cand_attr = _attribute_key(text)
-    best_dup: tuple[float, Optional[str]] = (0.0, None)
-    best_attr: tuple[float, Optional[str]] = (0.0, None)
+    cand_vals = _value_tokens(text)
+    best_dup: tuple[float, Optional[str], str] = (0.0, None, "")
+    best_attr: tuple[float, Optional[str], str] = (0.0, None, "")
 
     for mem_id, mem_text in existing:
         if not mem_text:
             continue
         sim = _similarity(text, mem_text)
         if sim > best_dup[0]:
-            best_dup = (sim, mem_id)
+            best_dup = (sim, mem_id, mem_text)
         if cand_attr and _attribute_key(mem_text) == cand_attr and sim > best_attr[0]:
-            best_attr = (sim, mem_id)
+            best_attr = (sim, mem_id, mem_text)
 
-    # 1) Near-exact duplicate → supersede the old row (collapses repeats beyond
-    #    the exact-idempotency check MemoryService already does).
+    # 1) Near-exact duplicate → keep the richer copy. Skip when the existing row
+    #    is at least as informative; only supersede if the candidate adds detail.
     if best_dup[0] >= _NEAR_DUP_RATIO and best_dup[1]:
-        return "update", best_dup[1]
+        return _merge_decision(text, best_dup[2], best_dup[1])
 
-    # 2) Same attribute, different value ("dad's name is Neil" vs "…spelt
-    #    N-E-I-L") → supersede rather than accumulate contradictions.
+    # 2) Same attribute → it's the same fact. If they assert the same core value
+    #    ("name is Neil" both ways) keep the richer one; if the value genuinely
+    #    differs, supersede the stale row rather than accumulate contradictions.
     if best_attr[1] and best_attr[0] >= _SUPERSEDE_RATIO:
+        existing_vals = _value_tokens(best_attr[2])
+        # Shared salient value tokens (beyond the attribute itself) → same value.
+        shared_value = bool((cand_vals & existing_vals) - set(cand_attr.split()))
+        if shared_value:
+            return _merge_decision(text, best_attr[2], best_attr[1])
+        # Different value for the same attribute → treat as a correction/update.
         return "update", best_attr[1]
 
     return "add", None
+
+
+def _merge_decision(
+    candidate: str, existing_text: str, existing_id: str,
+) -> tuple[str, Optional[str]]:
+    """Same fact, two phrasings: keep whichever carries more information.
+
+    SKIP (store nothing) when the existing row is at least as rich — this is the
+    common consolidation case where a distilled restatement ("User's father's
+    name is Neil") is a sparser echo of a richer stored fact ("My dad's name is
+    Neil, spelled N-E-I-L"). UPDATE only when the candidate is meaningfully
+    richer, so corrections that also add detail still land.
+    """
+    if _information(candidate) > _information(existing_text) + _RICHNESS_MARGIN:
+        return "update", existing_id
+    return "skip", existing_id
 
 
 __all__ = ["is_storable_fact", "classify_against_existing"]
