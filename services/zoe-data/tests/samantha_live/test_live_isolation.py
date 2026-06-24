@@ -9,223 +9,73 @@ resolved from per-turn metadata (1b) and not the 'guest' session row, that a pur
 guest conversation silently writes NOTHING to anyone's memory, and that the idle
 window actually gates selection.
 
+Loop/pool discipline, the live gate, env loading, seeding, the consolidate driver
+and two-user teardown all live in ``conftest.py`` (one session loop + one asyncpg
+pool for the whole suite, so the three live files run green *together* — that is
+the fix for the cross-file "Event loop is closed"). This file only declares
+scenarios.
+
 SAFETY (non-negotiable — this writes to the live memory store):
   * DEMO users only — "demo_isoA_<rand>" / "demo_isoB_<rand>". NEVER "jason" / a real
     identity is ever used as an owner or seeded into metadata.
-  * Drives consolidation via `consolidate_session(conn, sid, owner, None)` DIRECTLY.
-    NEVER calls `run_idle_consolidation_sweep()` — that would scan and touch REAL
-    user conversations on the live box.
-  * Teardown deletes BOTH demo users' memory (`svc.delete_user(..., actor=...)`) and
-    every seeded chat row, then asserts both demo users have 0 facts. The fixture
-    tears down even on failure.
+  * Drives consolidation via `consolidate(sid, owner)` DIRECTLY. NEVER calls
+    `run_idle_consolidation_sweep()` — that would scan and touch REAL user
+    conversations on the live box.
+  * Teardown (conftest) deletes BOTH demo users' memory and every seeded chat row,
+    then asserts both demo users have 0 facts. It runs even on failure.
 
-GATING: the whole module SKIPS unless `ZOE_LIVE_TESTS=1` AND the model server health
-endpoint (http://127.0.0.1:11434/health) answers ok. CI never sets the flag / has no
-model server, so CI never runs this and never touches a database.
-
-IDLE TIMING: the engine binds its idle window (`IDLE_SECONDS`, default 180s) ONCE at
-its own import time, and a sibling live suite imports the engine during collection
-before this file — so we cannot reliably shrink the window from here. Instead every
-backdating decision reads the engine's *actual* runtime `IDLE_SECONDS` via
-`_idle_seconds()`, which is correct regardless of import order and the prod value, and
-leaks no env mutation into other tests. (To run this file fast in isolation, export
-`ZOE_IDLE_CONSOLIDATION_IDLE_S=30` before pytest; the test still backdates relative to
-whatever the engine actually bound.)
+IDLE TIMING: the engine binds its idle window (`IDLE_SECONDS`) ONCE at its own
+import time. The conftest sets `ZOE_IDLE_CONSOLIDATION_IDLE_S=30` before any test
+module imports the engine, so the window is small and deterministic. Every
+backdating decision still reads the engine's *actual* runtime `IDLE_SECONDS` via
+`idle_seconds()`, so the tests are correct regardless of the bound value.
 
     ZOE_LIVE_TESTS=1 python -m pytest \
         services/zoe-data/tests/samantha_live/test_live_isolation.py -v -s
 """
 from __future__ import annotations
 
-import json
-import os
 import uuid
-from datetime import datetime, timedelta, timezone
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Module-level gate: only run on a live box with the model server up.
-# ---------------------------------------------------------------------------
-_LIVE = os.environ.get("ZOE_LIVE_TESTS") == "1"
-
-
-def _model_server_ok() -> bool:
-    try:
-        import urllib.request
-
-        with urllib.request.urlopen("http://127.0.0.1:11434/health", timeout=3) as r:
-            return r.status == 200
-    except Exception:
-        return False
-
-
-pytestmark = pytest.mark.skipif(
-    not (_LIVE and _model_server_ok()),
-    reason="live-only: needs ZOE_LIVE_TESTS=1 and the model server on :11434",
+from conftest import (
+    consolidate,
+    idle_seconds,
+    seed_session,
+    set_session_age,
+    texts,
 )
 
-# Idle-window handling. The engine binds IDLE_SECONDS/LOOKBACK ONCE at its own import
-# time, and a sibling live suite (test_live_core.py) imports it at module scope during
-# collection — which, alphabetically, runs before this file. So we must NOT assume we
-# can shrink the window via os.environ here: by the time pytest collects us the constant
-# may already be the prod default. Instead, every backdating decision reads the engine's
-# *actual* runtime `IDLE_SECONDS` (see `_idle_seconds()`), which is correct regardless of
-# import order and avoids leaking an env mutation into other tests.
-if _LIVE:
-    # Load the live service env (POSTGRES_URL etc.). The worktree has no .env of its
-    # own; this is a live-integration suite, so it reads the live tree's config.
-    from dotenv import load_dotenv
-
-    load_dotenv("/home/zoe/assistant/services/zoe-data/.env")
-
-
-def _idle_seconds() -> int:
-    """The engine's effective idle window at runtime (whatever it bound at import)."""
-    import memory_idle_consolidation as mic
-
-    return int(mic.IDLE_SECONDS)
-
-
-# ---------------------------------------------------------------------------
-# Seeding helpers
-# ---------------------------------------------------------------------------
-async def _seed_session(db, *, session_id: str, owner: str | None, turns, age_s: int):
-    """Seed a GUEST chat_sessions row + its chat_messages.
-
-    chat_sessions.user_id is always 'guest' (mirrors prod: auth is per-turn). Each
-    turn's metadata carries {"user_id": owner} when `owner` is a real user, or NULL
-    when `owner is None` (pure-guest turn). All turns are backdated to `age_s` seconds
-    ago so the engine sees the session as idle by exactly that amount.
-    """
-    now = datetime.now(timezone.utc)
-    created = (now - timedelta(seconds=age_s)).isoformat()
-    # chat_sessions.created_at/updated_at also backdated so nothing looks "fresh".
-    await db.execute(
-        "INSERT INTO chat_sessions (id, user_id, title, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING",
-        (session_id, "guest", "demo-iso", created, created),
-    )
-    meta = json.dumps({"user_id": owner}) if owner else None
-    for role, content in turns:
-        await db.execute(
-            "INSERT INTO chat_messages (id, session_id, role, content, metadata, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
-            (uuid.uuid4().hex, session_id, role, content, meta, created),
-        )
-    await db.commit()
-
-
-async def _set_session_age(db, session_id: str, age_s: int):
-    """Re-backdate every turn (and the session) of an already-seeded session."""
-    created = (datetime.now(timezone.utc) - timedelta(seconds=age_s)).isoformat()
-    await db.execute(
-        "UPDATE chat_messages SET created_at = ? WHERE session_id = ?",
-        (created, session_id),
-    )
-    await db.execute(
-        "UPDATE chat_sessions SET created_at = ?, updated_at = ? WHERE id = ?",
-        (created, created, session_id),
-    )
-    await db.commit()
+# Run every test in this file on the suite's single session-scoped event loop so
+# the shared asyncpg pool (created on that loop by conftest._live_pool) is never
+# consumed from a foreign/closed loop. See conftest.py for the full rationale.
+pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 
 async def _facts_text(svc, user_id: str) -> list[str]:
-    refs = await svc.load_for_prompt(user_id, limit=50)
-    return [(r.text or "").lower() for r in refs]
-
-
-# ---------------------------------------------------------------------------
-# Fixture: two demo users + full teardown (facts AND seeded chat rows).
-# ---------------------------------------------------------------------------
-@pytest.fixture
-async def live_env():
-    import db_pool
-
-    # The asyncpg pool is process-global. A sibling live suite (test_live_dedup.py) runs
-    # its own persistent event loop and binds the pool to THAT loop; pytest-asyncio gives
-    # this suite a fresh loop per test. Reusing a pool bound to a foreign/closed loop
-    # raises "RuntimeError: Event loop is closed". So always start from a clean pool bound
-    # to OUR running loop: drop any pre-existing global (its loop may be closed, so don't
-    # await .close() on it — just detach), then init fresh. Teardown nulls it again so the
-    # next suite re-inits on its own loop.
-    db_pool._pool = None
-    await db_pool.init_pool()
-    from db_pool import get_db_ctx
-    from memory_service import get_memory_service
-
-    svc = get_memory_service()
-    rand = uuid.uuid4().hex[:8]
-    user_a = f"demo_isoA_{rand}"
-    user_b = f"demo_isoB_{rand}"
-    session_ids: list[str] = []
-
-    env = {
-        "svc": svc,
-        "get_db_ctx": get_db_ctx,
-        "user_a": user_a,
-        "user_b": user_b,
-        "session_ids": session_ids,  # tests append every session they seed
-    }
-    try:
-        yield env
-    finally:
-        # 1) wipe both demo users' memory; 2) delete every seeded chat row.
-        for u in (user_a, user_b):
-            try:
-                await svc.delete_user(u, actor="samantha_live_isolation_test")
-            except Exception as exc:  # pragma: no cover - teardown best-effort
-                print(f"[teardown] delete_user({u}) failed: {exc}")
-        try:
-            async with get_db_ctx() as db:
-                for sid in session_ids:
-                    await db.execute("DELETE FROM chat_messages WHERE session_id = ?", (sid,))
-                    await db.execute("DELETE FROM chat_sessions WHERE id = ?", (sid,))
-                    await db.execute(
-                        "DELETE FROM memory_consolidation_state WHERE session_id = ?", (sid,)
-                    )
-                await db.commit()
-        except Exception as exc:  # pragma: no cover
-            print(f"[teardown] chat-row cleanup failed: {exc}")
-        # 3) verify both demo users are empty again — a non-empty user here means the
-        #    test leaked memory it could not clean (loud failure surface).
-        for u in (user_a, user_b):
-            try:
-                leftover = await _facts_text(svc, u)
-                assert not leftover, f"teardown left {len(leftover)} facts for {u}: {leftover}"
-            except AssertionError:
-                raise
-            except Exception as exc:  # pragma: no cover
-                print(f"[teardown] verify-empty({u}) failed: {exc}")
-        # 4) release the asyncpg pool we created (resets the global to None) so we leave
-        #    no live connections open and the next suite re-inits on its own loop.
-        try:
-            await db_pool.close_pool()
-        except Exception as exc:  # pragma: no cover
-            print(f"[teardown] close_pool failed: {exc}")
+    return texts(await svc.load_for_prompt(user_id, limit=50))
 
 
 # ---------------------------------------------------------------------------
 # Scenario 1 — owner resolution (1b): owner comes from per-turn metadata, not 'guest'.
 # ---------------------------------------------------------------------------
-@pytest.mark.asyncio
-async def test_owner_resolved_from_per_turn_metadata(live_env):
-    svc = live_env["svc"]
-    get_db_ctx = live_env["get_db_ctx"]
-    user_a = live_env["user_a"]
-    from memory_idle_consolidation import consolidate_session, find_idle_sessions
+async def test_owner_resolved_from_per_turn_metadata(two_user_env):
+    svc = two_user_env["svc"]
+    get_db_ctx = two_user_env["get_db_ctx"]
+    user_a = two_user_env["user_a"]
+    from memory_idle_consolidation import find_idle_sessions
 
     sid = f"sess_isoA_{uuid.uuid4().hex[:8]}"
-    live_env["session_ids"].append(sid)
+    two_user_env["session_ids"].append(sid)
     turns = [
         ("user", "By the way, my favourite colour is teal."),
         ("assistant", "Teal is a lovely choice."),
         ("user", "Yes, I really do like teal a lot."),
     ]
-    async with get_db_ctx() as db:
-        # backdate > the engine's actual idle window so it is selectable
-        await _seed_session(db, session_id=sid, owner=user_a, turns=turns,
-                            age_s=_idle_seconds() + 60)
+    # backdate > the engine's actual idle window so it is selectable
+    await seed_session(user_a, turns, session_id=sid, age_s=idle_seconds() + 60,
+                       title="demo-iso")
 
     # find_idle_sessions is READ-ONLY — it must resolve owner=user_a (NOT 'guest').
     async with get_db_ctx() as db:
@@ -238,8 +88,7 @@ async def test_owner_resolved_from_per_turn_metadata(live_env):
     )
 
     # Now consolidate and confirm the fact lands under user_a.
-    async with get_db_ctx() as db:
-        stored = await consolidate_session(db, sid, user_a, None)
+    stored = await consolidate(sid, user_a)
     assert stored > 0, "expected at least one durable fact extracted from the exchange"
 
     facts_a = await _facts_text(svc, user_a)
@@ -254,38 +103,33 @@ async def test_owner_resolved_from_per_turn_metadata(live_env):
 # ---------------------------------------------------------------------------
 # Scenario 2 — cross-user isolation: A's facts never reach B and vice-versa.
 # ---------------------------------------------------------------------------
-@pytest.mark.asyncio
-async def test_cross_user_isolation_no_leak(live_env):
-    svc = live_env["svc"]
-    get_db_ctx = live_env["get_db_ctx"]
-    user_a, user_b = live_env["user_a"], live_env["user_b"]
-    from memory_idle_consolidation import consolidate_session
+async def test_cross_user_isolation_no_leak(two_user_env):
+    svc = two_user_env["svc"]
+    user_a, user_b = two_user_env["user_a"], two_user_env["user_b"]
 
     sid_a = f"sess_isoA2_{uuid.uuid4().hex[:8]}"
     sid_b = f"sess_isoB2_{uuid.uuid4().hex[:8]}"
-    live_env["session_ids"] += [sid_a, sid_b]
+    two_user_env["session_ids"] += [sid_a, sid_b]
 
-    async with get_db_ctx() as db:
-        await _seed_session(
-            db, session_id=sid_a, owner=user_a, age_s=_idle_seconds() + 60,
-            turns=[
-                ("user", "My favourite colour is teal."),
-                ("assistant", "Noted — teal."),
-                ("user", "Teal, definitely."),
-            ],
-        )
-        await _seed_session(
-            db, session_id=sid_b, owner=user_b, age_s=_idle_seconds() + 60,
-            turns=[
-                ("user", "My favourite colour is crimson."),
-                ("assistant", "Got it — crimson."),
-                ("user", "Crimson, for sure."),
-            ],
-        )
+    await seed_session(
+        user_a, session_id=sid_a, age_s=idle_seconds() + 60, title="demo-iso",
+        turns=[
+            ("user", "My favourite colour is teal."),
+            ("assistant", "Noted — teal."),
+            ("user", "Teal, definitely."),
+        ],
+    )
+    await seed_session(
+        user_b, session_id=sid_b, age_s=idle_seconds() + 60, title="demo-iso",
+        turns=[
+            ("user", "My favourite colour is crimson."),
+            ("assistant", "Got it — crimson."),
+            ("user", "Crimson, for sure."),
+        ],
+    )
 
-    async with get_db_ctx() as db:
-        await consolidate_session(db, sid_a, user_a, None)
-        await consolidate_session(db, sid_b, user_b, None)
+    await consolidate(sid_a, user_a)
+    await consolidate(sid_b, user_b)
 
     facts_a = await _facts_text(svc, user_a)
     facts_b = await _facts_text(svc, user_b)
@@ -303,23 +147,21 @@ async def test_cross_user_isolation_no_leak(live_env):
 # ---------------------------------------------------------------------------
 # Scenario 3 — pure-guest session writes NOTHING (no resolvable owner).
 # ---------------------------------------------------------------------------
-@pytest.mark.asyncio
-async def test_guest_only_session_is_skipped(live_env):
-    get_db_ctx = live_env["get_db_ctx"]
-    from memory_idle_consolidation import consolidate_session, find_idle_sessions
+async def test_guest_only_session_is_skipped(two_user_env):
+    get_db_ctx = two_user_env["get_db_ctx"]
+    from memory_idle_consolidation import find_idle_sessions
 
     sid = f"sess_guest_{uuid.uuid4().hex[:8]}"
-    live_env["session_ids"].append(sid)
-    async with get_db_ctx() as db:
-        # owner=None → NO per-turn metadata; chat_sessions.user_id stays 'guest'.
-        await _seed_session(
-            db, session_id=sid, owner=None, age_s=_idle_seconds() + 60,
-            turns=[
-                ("user", "My favourite colour is chartreuse."),
-                ("assistant", "Chartreuse, noted."),
-                ("user", "Yes chartreuse."),
-            ],
-        )
+    two_user_env["session_ids"].append(sid)
+    # owner=None → NO per-turn metadata; chat_sessions.user_id stays 'guest'.
+    await seed_session(
+        None, session_id=sid, age_s=idle_seconds() + 60, title="demo-iso",
+        turns=[
+            ("user", "My favourite colour is chartreuse."),
+            ("assistant", "Chartreuse, noted."),
+            ("user", "Yes chartreuse."),
+        ],
+    )
 
     # It must NOT appear in find_idle_sessions (no real owner to write to)...
     async with get_db_ctx() as db:
@@ -329,37 +171,34 @@ async def test_guest_only_session_is_skipped(live_env):
     )
 
     # ...and even if forced, consolidating with the guest fallback stores nothing.
-    async with get_db_ctx() as db:
-        stored = await consolidate_session(db, sid, "guest", None)
+    stored = await consolidate(sid, "guest")
     assert stored == 0, "guest conversations must not silently write memory for anyone"
 
 
 # ---------------------------------------------------------------------------
 # Scenario 4 — idle timing: fresh session not selected; backdated one is.
 # ---------------------------------------------------------------------------
-@pytest.mark.asyncio
-async def test_idle_timing_gate(live_env):
-    get_db_ctx = live_env["get_db_ctx"]
-    user_a = live_env["user_a"]
+async def test_idle_timing_gate(two_user_env):
+    get_db_ctx = two_user_env["get_db_ctx"]
+    user_a = two_user_env["user_a"]
     from memory_idle_consolidation import find_idle_sessions
 
     sid = f"sess_timing_{uuid.uuid4().hex[:8]}"
-    live_env["session_ids"].append(sid)
-    idle_s = _idle_seconds()
+    two_user_env["session_ids"].append(sid)
+    idle_s = idle_seconds()
     # "fresh" = comfortably inside the idle window (a third of it, capped at 10s) so the
     # not-yet-idle assertion holds whatever the engine's window is.
     fresh_s = max(1, min(10, idle_s // 3))
 
     # Seed with the last turn only `fresh_s`s old → NOT yet idle.
-    async with get_db_ctx() as db:
-        await _seed_session(
-            db, session_id=sid, owner=user_a, age_s=fresh_s,
-            turns=[
-                ("user", "I drive a blue hatchback."),
-                ("assistant", "Blue hatchback, noted."),
-                ("user", "Yep, blue."),
-            ],
-        )
+    await seed_session(
+        user_a, session_id=sid, age_s=fresh_s, title="demo-iso",
+        turns=[
+            ("user", "I drive a blue hatchback."),
+            ("assistant", "Blue hatchback, noted."),
+            ("user", "Yep, blue."),
+        ],
+    )
     async with get_db_ctx() as db:
         idle = await find_idle_sessions(db)
     assert not [s for s in idle if s["session_id"] == sid], (
@@ -367,8 +206,7 @@ async def test_idle_timing_gate(live_env):
     )
 
     # Backdate it past the idle window → now it should appear.
-    async with get_db_ctx() as db:
-        await _set_session_age(db, sid, idle_s + 60)
+    await set_session_age(sid, idle_s + 60)
     async with get_db_ctx() as db:
         idle = await find_idle_sessions(db)
     mine = [s for s in idle if s["session_id"] == sid]
