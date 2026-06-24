@@ -1419,3 +1419,24 @@ async def test_calendar_delete_event_removes_and_refreshes():
     assert result["actions"][0]["type"] == "deleted"
     # Authoritative re-read: the event is gone from the refreshed calendar card.
     assert result["cards"][0]["content"]["events"] == []
+
+
+def test_convergence_gate_is_nonfatal_and_nonmutating():
+    """Increment 2: the validation gate logs divergence but never raises, drops, or
+    mutates a card (so it can't break the live panel)."""
+    from skybridge_service import _card_as_component, _validate_cards_for_convergence
+
+    cards = [
+        {"component": "status", "props": {"title": "ok"}},                      # conforms
+        {"component": "auth_challenge", "props": {"actions": [{"label": "Jason", "user_id": "u1"}]}},  # diverges
+        {"card_type": "generic", "content": {"title": "envelope"}},             # card_service envelope, conforms
+        "not-a-dict",                                                           # garbage
+    ]
+    import copy
+    snapshot = copy.deepcopy(cards)
+    _validate_cards_for_convergence(cards)  # must not raise
+    assert cards == snapshot                # must not mutate/drop
+
+    # _card_as_component maps both producer shapes to the canonical component
+    assert _card_as_component({"component": "status", "props": {"x": 1}}) == {"component": "status", "props": {"x": 1}}
+    assert _card_as_component({"card_type": "generic", "content": {"title": "t"}}) == {"component": "generic", "props": {"title": "t"}}
