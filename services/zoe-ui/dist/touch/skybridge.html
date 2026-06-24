@@ -1039,6 +1039,17 @@
             z-index: 3;
         }
 
+        /* Standby = ambient clock, not summoned: the CLOCK owns the screen.
+           The orb body + halo appear only when Zoe is summoned (a sky-state-* is
+           set), then shrink to the base when showing results. The canvas orb is
+           already hidden in this mode; hide the orb glow + halo too so they don't
+           sit on top of the clock (they were left visible — the panel was always
+           faded to opacity:0 before, so this overlap was never seen). */
+        body.sky-empty.sky-ambient-clock:not(.sky-state-listening):not(.sky-state-thinking):not(.sky-state-responding) .sky-orb-panel::before,
+        body.sky-empty.sky-ambient-clock:not(.sky-state-listening):not(.sky-state-thinking):not(.sky-state-responding) .sky-orb-panel::after {
+            opacity: 0;
+        }
+
         .sky-listening-copy {
             position: fixed;
             left: 50%;
@@ -4677,7 +4688,12 @@
 
         }
 
-        .sky-ambient-clock {
+        /* Scope the clock-element styles to its ID. `sky-ambient-clock` is ALSO
+           a <body> state-flag (skybridge.js adds it to body), so a bare
+           `.sky-ambient-clock` rule with position:fixed/opacity:0 wrongly matched
+           the body and faded the whole UI invisible. Targeting #skyAmbientClock
+           keeps these on the element only. */
+        #skyAmbientClock {
             position: fixed;
             top: clamp(54px, 7.5vh, 84px);
             left: 50%;
@@ -4693,12 +4709,12 @@
             text-shadow: 0 18px 70px rgba(0,0,0,0.55);
         }
 
-        body.sky-empty.sky-ambient-clock .sky-ambient-clock {
+        body.sky-empty.sky-ambient-clock #skyAmbientClock {
             opacity: 1;
             transform: translateX(-50%) translateY(0);
         }
 
-        body:not(.sky-empty) .sky-ambient-clock {
+        body:not(.sky-empty) #skyAmbientClock {
             opacity: 0;
             transform: translateX(-50%) translateY(-10px);
         }
