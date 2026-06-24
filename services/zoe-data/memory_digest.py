@@ -22,7 +22,24 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-_GEMMA_URL = os.environ.get("GEMMA_SERVER_URL", "http://127.0.0.1:11434")
+
+def _normalize_gemma_base(raw: str) -> str:
+    """Base URL for the local llama-server, WITHOUT a trailing /v1.
+
+    Call sites here append `/v1/chat/completions`. But `GEMMA_SERVER_URL` is shared
+    with other modules (e.g. zoe_agent) whose convention INCLUDES `/v1` — and the
+    live systemd unit sets it that way. Without this strip, this module produces
+    `/v1/v1/chat/completions` → 404 and silently breaks extraction/consolidation.
+    Normalize so the appends below are correct regardless of whether the env value
+    ends in /v1.
+    """
+    base = (raw or "").strip().rstrip("/")
+    if base.endswith("/v1"):
+        base = base[: -len("/v1")].rstrip("/")
+    return base or "http://127.0.0.1:11434"
+
+
+_GEMMA_URL = _normalize_gemma_base(os.environ.get("GEMMA_SERVER_URL", "http://127.0.0.1:11434"))
 _ZOE_TIMEZONE = os.environ.get("ZOE_TIMEZONE", "Australia/Perth")
 
 _EXTRACTION_PROMPT = """\
