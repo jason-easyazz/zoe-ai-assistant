@@ -20,4 +20,4 @@ Run focused: `pytest services/zoe-data/tests/test_<area>.py` from the repo root 
 
 ## Child DOX Index
 
-No child AGENTS.md files.
+- [samantha_live/AGENTS.md](samantha_live/AGENTS.md) — LIVE-integration durability proofs for the memory engine (real Gemma + real store); gated off CI, demo-user only.
