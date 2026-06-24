@@ -24,16 +24,6 @@
     <title>Zoe Skybridge</title>
     <link rel="stylesheet" href="/touch/css/touch-adapter.css">
     <link rel="stylesheet" href="/touch/css/skybridge-data-widgets.css?v=skybridge-panel-session-2">
-    <!-- Design system: tokens + self-hosted Inter, then per-card re-skins.
-         See docs/architecture/skybridge-design-system.md -->
-    <link rel="stylesheet" href="/touch/css/skybridge-ds.css?v=ds1">
-    <link rel="stylesheet" href="/touch/css/skybridge-type.css?v=ds1">
-    <link rel="stylesheet" href="/touch/css/cards/weather.css?v=ds1">
-    <link rel="stylesheet" href="/touch/css/cards/timer.css?v=ds1">
-    <link rel="stylesheet" href="/touch/css/cards/clock.css?v=ds1">
-    <link rel="stylesheet" href="/touch/css/cards/calendar.css?v=ds1">
-    <link rel="stylesheet" href="/touch/css/cards/lists.css?v=ds1">
-    <link rel="stylesheet" href="/touch/css/cards/people.css?v=ds1">
     <script src="/lib/livekit/livekit-client.umd.min.js" onerror="console.warn('LiveKit client not loaded')"></script>
     <style>
         :root {
@@ -5197,7 +5187,16 @@
             }
         }
     </style>
-
+    <!-- Design system loaded LAST so tokens + per-card re-skins win over the
+         legacy inline card CSS above. See docs/architecture/skybridge-design-system.md -->
+    <link rel="stylesheet" href="/touch/css/skybridge-ds.css?v=ds1">
+    <link rel="stylesheet" href="/touch/css/skybridge-type.css?v=ds1">
+    <link rel="stylesheet" href="/touch/css/cards/weather.css?v=ds1">
+    <link rel="stylesheet" href="/touch/css/cards/timer.css?v=ds1">
+    <link rel="stylesheet" href="/touch/css/cards/clock.css?v=ds1">
+    <link rel="stylesheet" href="/touch/css/cards/calendar.css?v=ds1">
+    <link rel="stylesheet" href="/touch/css/cards/lists.css?v=ds1">
+    <link rel="stylesheet" href="/touch/css/cards/people.css?v=ds1">
 </head>
 <body>
 <!-- Skybridge glyph sprite (design system §5). Cards: <svg><use href="#i-*"/></svg> -->
