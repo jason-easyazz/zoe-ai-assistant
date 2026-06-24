@@ -5,7 +5,7 @@ existing cards to this; the generative engine (later) composes new cards from th
 same primitives so **Zoe-authored cards are Apple-quality by default**. If a value
 isn't here, it's a bug in the system, not a per-card decision.
 
-Implemented by: `css/skybridge-tokens.css` (tokens + `.sky-material`),
+Implemented by: `css/skybridge-ds.css` (tokens + `.sky-material`),
 `css/skybridge-type.css` + `css/fonts/` (self-hosted Inter), `css/skybridge-glyphs.svg`
 (the glyph sprite). Validated on the real 1280×720 panel via CDP.
 

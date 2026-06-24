@@ -301,60 +301,80 @@
         return null;
     }
 
+    // Design system: condition → theme class + crafted glyph (sun/moon by panel
+    // theme for "clear"). See docs/architecture/skybridge-design-system.md §4/§5.
+    function weatherCondClass(text) {
+        const t = String(text || '').toLowerCase();
+        if (/storm|thunder|lightning/.test(t)) return 'storm';
+        if (/rain|drizzle|shower|sleet/.test(t)) return 'rain';
+        if (/cloud|overcast|fog|mist|haze/.test(t)) return 'cloudy';
+        return 'clear';
+    }
+    function panelIsDark() {
+        return !(typeof document !== 'undefined' && document.documentElement &&
+                 document.documentElement.getAttribute('data-theme') === 'light');
+    }
+    function weatherGlyphId(text, dark) {
+        const c = weatherCondClass(text);
+        if (c === 'storm') return 'i-storm';
+        if (c === 'rain') return 'i-rain';
+        if (c === 'cloudy') return 'i-cloud';
+        return dark ? 'i-moon' : 'i-sun';
+    }
+    function glyphSvg(id, size) {
+        return '<svg class="sky-glyph" width="' + size + '" height="' + size + '" aria-hidden="true"><use href="#' + id + '"></use></svg>';
+    }
+
     function renderWeather(props) {
         const current = props.current || {};
         const forecast = props.forecast || {};
         const daily = Array.isArray(forecast.daily) ? forecast.daily : [];
         const hourly = Array.isArray(forecast.hourly) ? forecast.hourly : [];
         const location = props.location || {};
-        const place = [location.city || current.city || props.city, location.country || current.country || props.country].filter(Boolean).join(', ') || 'Current location';
-        const description = current.description || current.condition || props.description || 'Current conditions';
-        const dailyRows = daily.slice(0, 5).map((item, index) => {
+        const place = [location.city || current.city || props.city].filter(Boolean).join(', ') || 'Current location';
+        const description = current.description || current.condition || props.description || '';
+        const dark = panelIsDark();
+        const cond = weatherCondClass(description);
+        const temp = formatTemp(weatherValue(current, ['temp', 'temperature', 'temperature_c', 'temp_c', 'current_temp']));
+        const feels = formatTemp(weatherValue(current, ['feels_like', 'feels_like_c', 'apparent_temperature']));
+        const hi = daily[0] && daily[0].high != null ? formatTemp(daily[0].high) : '';
+        const lo = daily[0] && daily[0].low != null ? formatTemp(daily[0].low) : '';
+        const humidity = current.humidity == null ? '' : current.humidity + '%';
+        const wind = formatWind(current.wind_speed);
+
+        const hourTiles = hourly.slice(0, 6).map((item, i) => {
+            const label = i === 0 ? 'Now' : formatHourLabel(item.time || item.day || '');
+            const g = weatherGlyphId(item.description || item.condition || description, dark);
+            const t = formatTemp(weatherValue(item, ['temp', 'temperature', 'temperature_c', 'temp_c', 'high']));
+            return '<div class="wx-hc"><span class="wx-ht">' + escapeHtml(label) + '</span>' + glyphSvg(g, 44) + '<span class="wx-hv tnum">' + escapeHtml(t) + '</span></div>';
+        }).join('');
+
+        const dayRows = daily.slice(1, 5).map(item => {
             const label = formatForecastShort(item.day || item.time || '');
+            const g = weatherGlyphId(item.description || item.condition || '', dark);
             const high = item.high != null ? formatTemp(item.high) : formatTemp(item.temp);
             const low = item.low != null ? formatTemp(item.low) : '';
-            const band = forecastTempBand(item);
-            const condition = item.description || item.condition || '';
-            return [
-                '<div class="sky-weather-day-row' + (index === 0 ? ' is-primary' : '') + '">',
-                '<div class="sky-weather-day-label"><span>' + escapeHtml(index === 0 ? 'Today' : label) + '</span><b aria-hidden="true">' + escapeHtml(weatherEmoji(item)) + '</b></div>',
-                '<div class="sky-weather-day-main"><strong>' + escapeHtml(condition || description) + '</strong><div class="sky-weather-temp-band" aria-hidden="true"><i style="left: ' + band.left + '%; width: ' + band.width + '%;"></i></div></div>',
-                '<div class="sky-weather-day-temp"><strong>' + escapeHtml(high) + '</strong>' + (low ? '<small>' + escapeHtml(low) + '</small>' : '') + '</div>',
-                '</div>'
-            ].join('');
+            return '<div class="wx-drow"><span class="wx-sld">' + escapeHtml(label) + '</span>' + glyphSvg(g, 46) + '<span class="wx-dt tnum"><b>' + escapeHtml(high) + '</b> <span class="wx-lo">' + escapeHtml(low) + '</span></span></div>';
         }).join('');
-        const hourlyTiles = hourly.slice(0, 8).map((item, index) => {
-            const label = index === 0 ? 'Now' : formatHourLabel(item.time || item.day || '');
-            return [
-                '<div class="sky-weather-hour-tile">',
-                '<span>' + escapeHtml(label) + '</span>',
-                '<b aria-hidden="true">' + escapeHtml(weatherEmoji(item)) + '</b>',
-                '<strong>' + escapeHtml(formatTemp(weatherValue(item, ['temp', 'temperature', 'temperature_c', 'temp_c', 'high']))) + '</strong>',
-                '</div>'
-            ].join('');
-        }).join('');
-        const dayList = dailyRows;
-        const meta = [
-            ['🌡', 'Feels ' + formatTemp(weatherValue(current, ['feels_like', 'feels_like_c', 'apparent_temperature']))],
-            ['💧', current.humidity == null ? 'Humidity --' : current.humidity + '% humidity'],
-            ['💨', formatWind(current.wind_speed)]
-        ].map(pair => '<div class="sky-weather-pill"><span>' + escapeHtml(pair[0]) + '</span>' + escapeHtml(pair[1]) + '</div>').join('');
+
+        const detail = [
+            (hi || lo) ? 'H ' + hi + ' L ' + lo : '',
+            humidity ? 'Humidity ' + humidity : '',
+            wind || ''
+        ].filter(Boolean).map(escapeHtml).join('<br>');
+
         const body = [
-            '<div class="sky-weather-scene">',
-            '<div class="sky-weather-main">',
-            '<div class="sky-weather-location">📍 ' + escapeHtml(place) + '</div>',
-            '<div class="sky-weather-hero"><div class="sky-weather-temp">' + escapeHtml(formatTemp(weatherValue(current, ['temp', 'temperature', 'temperature_c', 'temp_c', 'current_temp']))) + '</div><div class="sky-weather-icon" aria-hidden="true">' + escapeHtml(weatherEmoji(current)) + '</div></div>',
-            '<div class="sky-weather-condition">' + escapeHtml(description) + '</div>',
-            '<div class="sky-weather-meta">' + meta + '</div>',
+            '<div class="wx-card">',
+            '<div class="wx-main">',
+            '<div class="wx-head"><div><div class="wx-place">' + escapeHtml(place) + '</div><div class="wx-cond">' + escapeHtml(description) + (feels ? ' · feels ' + escapeHtml(feels) : '') + '</div></div>' + glyphSvg(weatherGlyphId(description, dark), 84) + '</div>',
+            '<div class="wx-hero"><div class="wx-temp tnum">' + escapeHtml(temp) + '</div><div class="wx-detail tnum">' + detail + '</div></div>',
+            hourTiles ? '<div class="wx-hr">' + hourTiles + '</div>' : '',
             '</div>',
-            '<div class="sky-weather-forecast">',
-            '<div class="sky-weather-forecast-head"><h4>' + escapeHtml(props.source === 'weather_forecast' ? 'Forecast' : 'Next up') + '</h4><span>' + escapeHtml(daily.length ? daily.length + ' days' : hourly.length + ' hours') + '</span></div>',
-            hourlyTiles ? '<div class="sky-weather-hour-strip">' + hourlyTiles + '</div>' : '',
-            dayList ? '<div class="sky-weather-day-list">' + dayList + '</div>' : (!hourlyTiles ? '<div class="sky-weather-day-list"><div class="sky-empty-data">No forecast data available yet.</div></div>' : ''),
-            '</div>',
+            dayRows ? '<div class="wx-div"></div><div class="wx-side"><div class="wx-nd">Next days</div>' + dayRows + '</div>' : '',
             '</div>'
         ].join('');
-        return cardFrame(Object.assign({ status: 'Weather', icon: 'W' }, props), body, { wide: true, tone: 'weather-card ' + weatherClass(props, current) });
+        return cardFrame(Object.assign({ status: 'Weather', icon: 'W' }, props), body,
+            { wide: true, tone: 'weather-card wx-' + cond, hideHeader: true, hideStatus: true, hideActions: true });
     }
 
     function clockParts(timezone) {

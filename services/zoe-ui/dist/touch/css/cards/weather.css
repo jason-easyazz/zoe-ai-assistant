@@ -1,5 +1,48 @@
-/* weather card — re-skin to docs/architecture/skybridge-design-system.md.
-   Owns ONLY the .weather-card styling so cards can be re-skinned independently.
-   Use the tokens (--sky-*, --card-*, --text-*), the .sky-material glass, the
-   glyph sprite (<use href="#i-*">), and provide both default (dark) + light
-   ([data-theme="light"] ...) treatments. Fill the stage at panel scale. */
+/* Weather card — reference re-skin (docs/architecture/skybridge-design-system.md).
+   Condition → gradient (--wx-*), light/dark by panel theme, crafted glyphs,
+   hero temp + hourly strip + a divider with the next-days forecast. Fills the
+   stage at panel scale. Owns only .weather-card; uses tokens + the glyph sprite. */
+
+.sky-card.weather-card {
+  grid-column: 1 / -1 !important;
+  display: flex !important;
+  min-height: 500px !important;
+  height: auto !important;
+  max-height: none !important;
+  overflow: hidden !important;
+  padding: 0 !important;
+  border: none !important;
+  border-radius: var(--sky-radius-xl) !important;
+  color: #fff;
+  box-shadow: 0 44px 96px -32px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.2) !important;
+}
+
+/* condition gradients: dark = night (default), light = day */
+.sky-card.weather-card.wx-clear  { background: var(--wx-clear-night) !important; }
+.sky-card.weather-card.wx-cloudy { background: var(--wx-cloudy) !important; }
+.sky-card.weather-card.wx-rain   { background: var(--wx-rain) !important; }
+.sky-card.weather-card.wx-storm  { background: var(--wx-storm) !important; }
+:root[data-theme="light"] .sky-card.weather-card { color: #16324d; }
+:root[data-theme="light"] .sky-card.weather-card.wx-clear { background: var(--wx-clear-day) !important; }
+
+.weather-card .wx-card { display: flex; width: 100%; }
+.weather-card .wx-main { flex: 1.7; padding: 46px 52px; display: flex; flex-direction: column; justify-content: space-between; }
+.weather-card .wx-side { flex: 0 0 300px; padding: 46px 38px; display: flex; flex-direction: column; justify-content: space-between; }
+.weather-card .wx-div { width: 1px; margin: 46px 0; background: rgba(255,255,255,0.16); }
+:root[data-theme="light"] .weather-card .wx-div { background: rgba(20,50,80,0.16); }
+
+.weather-card .wx-head { display: flex; justify-content: space-between; align-items: flex-start; }
+.weather-card .wx-place { font-size: 30px; font-weight: 600; }
+.weather-card .wx-cond { font-size: 20px; opacity: 0.74; margin-top: 6px; }
+.weather-card .wx-hero { display: flex; align-items: flex-start; gap: 22px; }
+.weather-card .wx-temp { font-size: 158px; font-weight: 300; line-height: 0.8; letter-spacing: -2px; }
+.weather-card .wx-detail { font-size: 20px; opacity: 0.85; margin-top: 14px; line-height: 1.7; }
+.weather-card .wx-hr { display: flex; justify-content: space-between; gap: 8px; }
+.weather-card .wx-hc { display: flex; flex-direction: column; align-items: center; gap: 13px; flex: 1; }
+.weather-card .wx-ht { font-size: 17px; opacity: 0.72; }
+.weather-card .wx-hv { font-size: 24px; font-weight: 500; }
+.weather-card .wx-nd { font-size: 15px; font-weight: 600; letter-spacing: 2px; text-transform: uppercase; opacity: 0.55; }
+.weather-card .wx-drow { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.weather-card .wx-sld { font-size: 21px; width: 56px; font-weight: 500; }
+.weather-card .wx-dt { font-size: 21px; } .weather-card .wx-dt b { font-weight: 600; } .weather-card .wx-lo { opacity: 0.6; }
+.weather-card .sky-glyph { display: block; }
