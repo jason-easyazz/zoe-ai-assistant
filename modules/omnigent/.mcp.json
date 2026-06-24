@@ -1,0 +1,18 @@
+{
+  "_comment": "Container-relative MCP config for the zoe-omnigent container (audit fix #4). The code-intel binaries are bind-mounted READ-ONLY at their identical host paths by docker-compose.module.yml, so /home/zoe/.local/bin/... resolves verbatim inside the container. The repo is mounted at /workspace (NOT /home/zoe/assistant), so serena's --project points there. Copy this to /workspace/.mcp.json inside the container if the host's root .mcp.json (which uses --project /home/zoe/assistant) is not present or not desired; otherwise the mounted root .mcp.json already resolves.",
+  "mcpServers": {
+    "serena": {
+      "command": "/home/zoe/.local/bin/serena",
+      "args": [
+        "start-mcp-server",
+        "--context", "claude-code",
+        "--project", "/workspace",
+        "--transport", "stdio",
+        "--enable-web-dashboard", "false"
+      ]
+    },
+    "codebase-memory": {
+      "command": "/home/zoe/.local/bin/codebase-memory-mcp"
+    }
+  }
+}
