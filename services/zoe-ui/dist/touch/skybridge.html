@@ -383,76 +383,106 @@
             text-align: center !important;
         }
 
-        /* ── Timer card ── */
-        .sky-timer {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 14px;
-            padding: 22px 8px 10px;
-        }
-        .sky-timer-digits {
-            font-size: 72px;
-            line-height: 1;
-            font-weight: 700;
-            letter-spacing: 3px;
-            font-variant-numeric: tabular-nums;
-            color: #fff;
-        }
-        .sky-timer[data-timer-status="expired"] .sky-timer-digits {
-            color: #f87171;
-            font-size: 44px;
-            letter-spacing: 1px;
-        }
-        .sky-timer-label {
-            font-size: 15px;
-            color: rgba(255,255,255,0.66);
-            text-transform: uppercase;
-            letter-spacing: 1.5px;
-        }
-        .sky-timer-bar-wrap {
-            width: 86%;
-            height: 6px;
-            border-radius: 999px;
-            background: rgba(255,255,255,0.12);
-            overflow: hidden;
-        }
-        .sky-timer-bar {
-            height: 100%;
-            border-radius: 999px;
-            background: linear-gradient(90deg, #34d399, #f59e0b);
-            transition: width 0.95s linear;
-        }
-        .sky-card.timer .sky-widget-glyph { color: #f59e0b; }
-        /* Timers sit side by side so several can run at once (eggs + pasta + oven).
-           Force compact auto height so the stack's premium-card sizing rules don't
-           inflate a timer to full height and clip its bar/cancel. */
+        /* ── Timer card ──
+           Square-ish tile: time centered, label as a small note beneath, and the
+           progress is the card's BORDER — a rounded-rect SVG stroke that depletes
+           as the time runs out. Several tile side by side (eggs + pasta + oven). */
         body:not(.sky-empty) .sky-card.timer {
             grid-column: span 6 !important;
+            justify-self: center !important;
+            align-self: start !important;
+            width: min(340px, 100%) !important;
+            aspect-ratio: 1.12 / 1;
             height: auto !important;
             min-height: 0 !important;
             max-height: none !important;
-            align-self: start !important;
+            position: relative !important;
             overflow: visible !important;
+            padding: 0 !important;
+            border-color: transparent !important;   /* the SVG ring is the border */
         }
-        .sky-timer-cancel {
-            margin-top: 4px;
-            border: 1px solid var(--sky-border);
-            background: rgba(255,255,255,0.05);
-            color: rgba(255,255,255,0.75);
-            border-radius: 999px;
-            padding: 7px 18px;
+        .sky-timer {
+            position: absolute;
+            inset: 0;
+        }
+        .sky-timer-ring {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+        .sky-timer-ring-track,
+        .sky-timer-ring-fill {
+            fill: none;
+            stroke-width: 4px;
+            vector-effect: non-scaling-stroke;
+        }
+        .sky-timer-ring-track { stroke: rgba(255,255,255,0.12); }
+        .sky-timer-ring-fill {
+            stroke: #34d399;
+            stroke-linecap: round;
+            transition: stroke-dashoffset 0.95s linear, stroke 0.4s ease;
+        }
+        .sky-timer.is-low .sky-timer-ring-fill { stroke: #f59e0b; }
+        .sky-timer.is-expired .sky-timer-ring-fill { stroke: #f87171; stroke-dashoffset: 0 !important; }
+        .sky-timer-center {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            text-align: center;
+            width: 100%;
+        }
+        .sky-timer-digits {
+            font-size: 66px;
+            line-height: 1;
+            font-weight: 700;
+            letter-spacing: 2px;
+            font-variant-numeric: tabular-nums;
+            color: #fff;
+        }
+        .sky-timer.is-expired .sky-timer-digits {
+            font-size: 38px;
+            letter-spacing: 1px;
+            color: #f87171;
+        }
+        .sky-timer-label {
             font-size: 13px;
-            cursor: pointer;
+            color: rgba(255,255,255,0.58);
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            max-width: 80%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
-        .sky-timer-cancel:active { background: rgba(255,255,255,0.12); }
+        .sky-timer-x {
+            position: absolute;
+            top: 12px;
+            right: 14px;
+            width: 30px;
+            height: 30px;
+            border-radius: 999px;
+            border: 1px solid var(--sky-border);
+            background: rgba(255,255,255,0.06);
+            color: rgba(255,255,255,0.55);
+            font-size: 13px;
+            line-height: 1;
+            cursor: pointer;
+            z-index: 2;
+        }
+        .sky-timer-x:active { background: rgba(255,255,255,0.16); }
         .sky-card.timer.sky-timer-ringing {
-            animation: skyTimerPulse 0.8s ease-in-out infinite;
-            border-color: rgba(248,113,113,0.6);
+            animation: skyTimerPulse 0.85s ease-in-out infinite;
         }
         @keyframes skyTimerPulse {
             0%, 100% { box-shadow: 0 0 0 0 rgba(248,113,113,0.0); }
-            50% { box-shadow: 0 0 44px 6px rgba(248,113,113,0.55); }
+            50% { box-shadow: 0 0 48px 8px rgba(248,113,113,0.5); }
         }
 
         .sky-card-body {

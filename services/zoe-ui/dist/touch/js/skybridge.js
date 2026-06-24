@@ -523,9 +523,13 @@
             const el = els.cards.querySelector(_timerSel(t.id));
             if (el) {
                 const digits = el.querySelector('.sky-timer-digits');
-                const bar = el.querySelector('.sky-timer-bar');
+                const fill = el.querySelector('.sky-timer-ring-fill');
                 if (digits && !t.ringing) digits.textContent = _fmtClock(remaining);
-                if (bar && t.duration) bar.style.width = Math.max(0, Math.min(100, (remaining / t.duration) * 100)).toFixed(1) + '%';
+                if (fill && t.duration && !t.ringing) {
+                    const frac = Math.max(0, Math.min(1, remaining / t.duration));
+                    fill.setAttribute('stroke-dashoffset', (100 * (1 - frac)).toFixed(2));
+                    el.classList.toggle('is-low', frac <= 0.15);
+                }
             }
             if (remaining <= 0 && !t.ringing) fireTimer(t, el);
         });
