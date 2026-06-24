@@ -12,10 +12,10 @@ This conftest owns the ONE piece of discipline that lets the three live files
 
 The fix is a single loop + single pool for the entire session:
 
-  * ``pytest_collection_modifyitems`` tags every async test in this directory
-    with ``@pytest.mark.asyncio(loop_scope="session")`` so they ALL run on one
-    pytest-asyncio session-scoped loop (no per-file loop juggling).
-  * ``_live_pool`` (session-scoped, autouse) initialises ``db_pool`` once on that
+  * Each live test file sets ``pytestmark = pytest.mark.asyncio(loop_scope="session")``
+    so every async test runs on ONE pytest-asyncio session-scoped loop (no per-file
+    loop juggling).
+  * The session-scoped autouse pool fixture initialises ``db_pool`` once on that
     session loop and closes it once at session end. Individual tests/fixtures
     must NOT create, null, or close the pool themselves.
 
@@ -67,7 +67,8 @@ def _brain_healthy() -> bool:
         return False
 
 
-_LIVE = _LIVE_ENABLED and _brain_healthy()
+_BRAIN_OK = _brain_healthy()  # one blocking /health probe at import; reused below
+_LIVE = _LIVE_ENABLED and _BRAIN_OK
 
 # How we keep CI from running (or even collecting) these. A conftest is NOT a
 # test module, so `pytest.skip(allow_module_level=True)` here is a hard import
@@ -78,7 +79,7 @@ _LIVE = _LIVE_ENABLED and _brain_healthy()
 _SKIP_REASON: str | None = None
 if not _LIVE_ENABLED:
     _SKIP_REASON = "Samantha live tests require ZOE_LIVE_TESTS=1"
-elif not _brain_healthy():
+elif not _BRAIN_OK:
     _SKIP_REASON = "local Gemma brain (127.0.0.1:11434) not reachable"
 
 
@@ -213,10 +214,13 @@ async def seed_session(
             (sid, "guest", title, created, created),
         )
         for role, content in turns:
+            # Mirror the real chat path: per-turn owner metadata is stamped on USER
+            # turns only; assistant turns carry NULL metadata (what _resolve_owner sees).
+            turn_meta = meta if role == "user" else None
             await db.execute(
                 "INSERT INTO chat_messages (id, session_id, role, content, metadata, created_at) "
                 "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
-                (uuid.uuid4().hex, sid, role, content, meta, created),
+                (uuid.uuid4().hex, sid, role, content, turn_meta, created),
             )
         await db.commit()
     return sid
