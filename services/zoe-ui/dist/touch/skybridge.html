@@ -424,8 +424,17 @@
             transition: width 0.95s linear;
         }
         .sky-card.timer .sky-widget-glyph { color: #f59e0b; }
-        /* Timers sit side by side so several can run at once (eggs + pasta + oven). */
-        .sky-card.timer { grid-column: span 6; }
+        /* Timers sit side by side so several can run at once (eggs + pasta + oven).
+           Force compact auto height so the stack's premium-card sizing rules don't
+           inflate a timer to full height and clip its bar/cancel. */
+        body:not(.sky-empty) .sky-card.timer {
+            grid-column: span 6 !important;
+            height: auto !important;
+            min-height: 0 !important;
+            max-height: none !important;
+            align-self: start !important;
+            overflow: visible !important;
+        }
         .sky-timer-cancel {
             margin-top: 4px;
             border: 1px solid var(--sky-border);
