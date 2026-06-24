@@ -82,6 +82,27 @@
         return cardFrame(props, bodyHtml, { wide: true, tone: 'auth-challenge', hideHeader: true, hideStatus: true, hideActions: true });
     }
 
+    function renderTimer(props) {
+        const dur = Math.max(1, parseInt(props.duration_seconds) || 0);
+        const expires = parseInt(props.expires_at_ms) || (Date.now() + dur * 1000);
+        const remaining = Math.max(0, Math.round((expires - Date.now()) / 1000));
+        const mm = String(Math.floor(remaining / 60)).padStart(2, '0');
+        const ss = String(remaining % 60).padStart(2, '0');
+        const pct = Math.max(0, Math.min(100, (remaining / dur) * 100));
+        const label = props.label || props.title || 'Timer';
+        const expired = props.status === 'expired' || remaining <= 0;
+        const body = [
+            '<div class="sky-timer" data-timer-id="' + escapeHtml(props.timer_id || props.id || '') + '"',
+                ' data-timer-expires="' + expires + '" data-timer-duration="' + dur + '"',
+                ' data-timer-status="' + (expired ? 'expired' : 'running') + '">',
+            '<div class="sky-timer-digits">' + (expired ? "Time's up" : mm + ':' + ss) + '</div>',
+            '<div class="sky-timer-label">' + escapeHtml(label) + '</div>',
+            '<div class="sky-timer-bar-wrap"><div class="sky-timer-bar" style="width:' + pct.toFixed(1) + '%"></div></div>',
+            '</div>'
+        ].join('');
+        return cardFrame(props, body, { tone: 'timer' + (expired ? ' sky-timer-ringing' : ''), hideStatus: true });
+    }
+
     function renderStatus(props) {
         if (props.source === 'calendar_show') return renderCalendar(props);
         if (props.source === 'weather_current' || props.source === 'weather_forecast') return renderWeather(props);
@@ -679,6 +700,7 @@
         smart_home: renderList,
         research_report: renderList,
         auth_challenge: renderAuthChallenge,
+        timer: renderTimer,
         stream_text: renderStatus,
         unsupported_contract: renderUnsupportedContract
     };

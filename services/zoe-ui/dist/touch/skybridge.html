@@ -318,6 +318,56 @@
             background: rgba(255,255,255,0.05);
         }
 
+        /* ── Timer card ── */
+        .sky-timer {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 14px;
+            padding: 22px 8px 10px;
+        }
+        .sky-timer-digits {
+            font-size: 72px;
+            line-height: 1;
+            font-weight: 700;
+            letter-spacing: 3px;
+            font-variant-numeric: tabular-nums;
+            color: #fff;
+        }
+        .sky-timer[data-timer-status="expired"] .sky-timer-digits {
+            color: #f87171;
+            font-size: 44px;
+            letter-spacing: 1px;
+        }
+        .sky-timer-label {
+            font-size: 15px;
+            color: rgba(255,255,255,0.66);
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+        }
+        .sky-timer-bar-wrap {
+            width: 86%;
+            height: 6px;
+            border-radius: 999px;
+            background: rgba(255,255,255,0.12);
+            overflow: hidden;
+        }
+        .sky-timer-bar {
+            height: 100%;
+            border-radius: 999px;
+            background: linear-gradient(90deg, #34d399, #f59e0b);
+            transition: width 0.95s linear;
+        }
+        .sky-card.timer .sky-widget-glyph { color: #f59e0b; }
+        .sky-card.timer.sky-timer-ringing {
+            animation: skyTimerPulse 0.8s ease-in-out infinite;
+            border-color: rgba(248,113,113,0.6);
+        }
+        @keyframes skyTimerPulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(248,113,113,0.0); }
+            50% { box-shadow: 0 0 44px 6px rgba(248,113,113,0.55); }
+        }
+
         .sky-card-body {
             color: rgba(246,248,251,0.78);
             font-size: 14px;

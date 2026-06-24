@@ -17,6 +17,10 @@
     let authHydrationSequence = 0;
     let idleTimer = null;
     let clockTicker = null;
+    const activeTimers = new Map();   // id -> {id,label,expires,duration,ringing}
+    let timerTickHandle = null;
+    let audioCtx = null;
+    let alarmTimer = null;
     let stallWatchdog = null;
     let stallDeferrals = 0;
     // Force-recover the panel if a turn goes silent for this long (re-armed on
@@ -43,6 +47,7 @@
         startOrb();
         startClockTicker();
         renderHome();
+        restoreTimers();   // a reload resumes any still-running countdown
         loadBackendStatus();
         setMode(mode);
         syncVoiceFallbackState();
@@ -118,6 +123,10 @@
             document.addEventListener(type, noteUserActivity, { passive: true });
         });
         els.cards.addEventListener('click', event => {
+            // Tapping anywhere on a ringing timer silences + dismisses it.
+            if (event.target.closest('.sky-card.sky-timer-ringing') && acknowledgeRingingTimers()) {
+                return;
+            }
             const btn = event.target.closest('button[data-sky-action]');
             if (!btn) return;
             let route = btn.dataset.route;
@@ -289,6 +298,7 @@
 
     function renderSkybridgeResult(data) {
         if (!data) return;
+        if (data.timer_cancelled_id) removeTimer(data.timer_cancelled_id);
         clearCards();
         const intent = data.intent || {};
         const cards = Array.isArray(data.cards) ? data.cards : [];
@@ -431,6 +441,7 @@
             els.cards.appendChild(node);
         }
         hydrateAuthCard(node, card);
+        registerTimerCard(node, card);
         updateAllClocks();
         scheduleIdleReturn();
         while (els.cards.children.length > 8) {
@@ -445,6 +456,139 @@
         }
     }
 
+    // ── Timers ──────────────────────────────────────────────────────────────
+    // A real countdown engine: timers live in this JS map (authoritative for
+    // firing), tick the on-screen card, persist to localStorage so a reload
+    // resumes, and ring an audible alarm at zero — even if another card is up.
+    const TIMERS_KEY = 'sky_active_timers';
+
+    function _timerSel(id) {
+        const safe = (window.CSS && CSS.escape) ? CSS.escape(id) : id;
+        return '.sky-timer[data-timer-id="' + safe + '"]';
+    }
+    function _fmtClock(secs) {
+        secs = Math.max(0, secs);
+        return String(Math.floor(secs / 60)).padStart(2, '0') + ':' + String(secs % 60).padStart(2, '0');
+    }
+    function persistTimers() {
+        try {
+            localStorage.setItem(TIMERS_KEY, JSON.stringify([...activeTimers.values()]
+                .map(t => ({ id: t.id, label: t.label, expires: t.expires, duration: t.duration }))));
+        } catch (_) {}
+    }
+    function ensureTimerTicking() {
+        if (timerTickHandle == null && activeTimers.size) timerTickHandle = setInterval(timerTick, 250);
+    }
+    function registerTimer(id, label, expires, duration) {
+        if (!id || !(+expires)) return;
+        const existing = activeTimers.get(id);
+        activeTimers.set(id, {
+            id, label: label || 'Timer', expires: +expires, duration: +duration || 0,
+            ringing: existing ? existing.ringing : false
+        });
+        persistTimers();
+        ensureTimerTicking();
+    }
+    function registerTimerCard(node, card) {
+        const type = card && (card.component || card.card_type);
+        const props = (card && (card.props || card.content)) || {};
+        if (type !== 'timer' && props.source !== 'timer') return;
+        const el = node.querySelector('.sky-timer');
+        const id = (el && el.dataset.timerId) || props.timer_id || props.id;
+        const expires = (el && +el.dataset.timerExpires) || +props.expires_at_ms;
+        if (id && expires) registerTimer(id, props.label || props.title, expires, props.duration_seconds);
+    }
+    function removeTimer(id) {
+        if (!id || !activeTimers.has(id)) return;
+        const t = activeTimers.get(id);
+        activeTimers.delete(id);
+        persistTimers();
+        if (t && t.ringing) stopAlarm();
+        const el = els.cards.querySelector(_timerSel(id));
+        const card = el && el.closest('.sky-card');
+        if (card) card.remove();
+        if (!activeTimers.size && timerTickHandle != null) { clearInterval(timerTickHandle); timerTickHandle = null; }
+        if (!els.cards.children.length) clearCards();
+    }
+    function timerTick() {
+        const now = Date.now();
+        activeTimers.forEach(t => {
+            const remaining = Math.max(0, Math.ceil((t.expires - now) / 1000));
+            const el = els.cards.querySelector(_timerSel(t.id));
+            if (el) {
+                const digits = el.querySelector('.sky-timer-digits');
+                const bar = el.querySelector('.sky-timer-bar');
+                if (digits && !t.ringing) digits.textContent = _fmtClock(remaining);
+                if (bar && t.duration) bar.style.width = Math.max(0, Math.min(100, (remaining / t.duration) * 100)).toFixed(1) + '%';
+            }
+            if (remaining <= 0 && !t.ringing) fireTimer(t, el);
+        });
+        if (!activeTimers.size && timerTickHandle != null) { clearInterval(timerTickHandle); timerTickHandle = null; }
+    }
+    function fireTimer(t, el) {
+        t.ringing = true;
+        persistTimers();
+        let card = el && el.closest('.sky-card');
+        if (!card) {   // rang while its card wasn't on screen — surface a ringing one
+            addCard({ component: 'timer', props: { timer_id: t.id, label: t.label, title: t.label,
+                duration_seconds: t.duration, expires_at_ms: t.expires, status: 'expired' } }, true);
+            const found = els.cards.querySelector(_timerSel(t.id));
+            card = found && found.closest('.sky-card');
+        }
+        if (card) {
+            card.classList.add('sky-timer-ringing');
+            const inner = card.querySelector('.sky-timer');
+            if (inner) inner.dataset.timerStatus = 'expired';
+            const digits = card.querySelector('.sky-timer-digits');
+            if (digits) digits.textContent = "Time's up";
+        }
+        const named = (t.label && t.label.toLowerCase() !== 'timer') ? t.label + ' timer' : 'Timer';
+        setVoiceLayerText(named + " — time's up!");
+        startAlarm();
+        clearIdleTimer();   // keep the ringing card up
+    }
+    function startAlarm() {
+        stopAlarm();
+        let count = 0;
+        const beep = () => {
+            try {
+                audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+                if (audioCtx.state === 'suspended') audioCtx.resume();
+                const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+                o.type = 'sine'; o.frequency.value = 880;
+                g.gain.setValueAtTime(0.0001, audioCtx.currentTime);
+                g.gain.exponentialRampToValueAtTime(0.4, audioCtx.currentTime + 0.02);
+                g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.35);
+                o.connect(g); g.connect(audioCtx.destination);
+                o.start(); o.stop(audioCtx.currentTime + 0.36);
+            } catch (_) {}
+            if (++count >= 40) stopAlarm();   // ~30s safety cap
+        };
+        beep();
+        alarmTimer = setInterval(beep, 750);
+    }
+    function stopAlarm() {
+        if (alarmTimer != null) { clearInterval(alarmTimer); alarmTimer = null; }
+    }
+    function acknowledgeRingingTimers() {
+        const ringing = [...activeTimers.values()].filter(t => t.ringing);
+        if (!ringing.length) return false;
+        stopAlarm();
+        ringing.forEach(t => removeTimer(t.id));
+        return true;
+    }
+    function restoreTimers() {
+        let arr = [];
+        try { arr = JSON.parse(localStorage.getItem(TIMERS_KEY) || '[]') || []; } catch (_) {}
+        const now = Date.now();
+        arr.forEach(t => { if (t && t.id && +t.expires > now) registerTimer(t.id, t.label, t.expires, t.duration); });
+        if (activeTimers.size) {
+            const soonest = [...activeTimers.values()].sort((a, b) => a.expires - b.expires)[0];
+            addCard({ component: 'timer', props: { timer_id: soonest.id, label: soonest.label, title: soonest.label,
+                duration_seconds: soonest.duration, expires_at_ms: soonest.expires, status: 'running' } }, false);
+        }
+    }
+
     function noteUserActivity() {
         if (!document.body.classList.contains('sky-empty')) {
             scheduleIdleReturn();
@@ -454,6 +598,7 @@
     function scheduleIdleReturn() {
         clearIdleTimer();
         if (document.body.classList.contains('sky-empty')) return;
+        if (activeTimers.size) return;   // a running timer keeps its card on screen
         idleTimer = setTimeout(returnToAmbientClock, CARD_IDLE_MS);
     }
 

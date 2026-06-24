@@ -2644,10 +2644,13 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
     # page opens and the timer/recipe widget is pre-filled.  The text response is spoken
     # by the voice daemon; the panel action is dispatched by _broadcast_intent_nav in chat.py.
     if intent.name == "timer_create":
+        # Note: on the touch panel, Skybridge owns timers end-to-end (real
+        # countdown card + alarm) and is consulted before this fast-path, so this
+        # branch is the spoken line for the chat/other surfaces.
         mins = intent.slots.get("minutes", 5)
         label = intent.slots.get("label", "Timer")
-        mins_str = f"{mins} minute" if int(mins) == 1 else f"{mins} minute"
-        return f"Starting a {mins_str} timer for {label}."
+        named = "" if str(label).strip().lower() in ("", "timer") else f" for {label}"
+        return f"Starting a {mins} minute timer{named}."
 
     if intent.name == "recipe_search":
         query = intent.slots.get("query", "")

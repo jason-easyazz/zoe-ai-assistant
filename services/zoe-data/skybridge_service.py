@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -40,6 +41,205 @@ class SkybridgeIntent:
     person_name: str = ""
     fact_text: str = ""
     birthday: str = ""
+    duration_seconds: int = 0
+
+
+# ── Timers ───────────────────────────────────────────────────────────────────
+# A REAL countdown timer (not the old speak-only stub). The store is the
+# authoritative source for spoken "how long left" / "cancel" queries; the panel
+# ticks and rings from the absolute expires_at so firing is immediate and
+# survives a reload. In-memory is intentional: timers are short-lived and the
+# panel persists its own copy, so a service restart losing one is acceptable.
+
+_WORD_NUMBERS = {
+    "a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11,
+    "twelve": 12, "fifteen": 15, "twenty": 20, "thirty": 30, "forty": 40,
+    "fifty": 50, "sixty": 60, "ninety": 90,
+}
+
+MAX_TIMER_SECONDS = 24 * 3600
+
+
+class _TimerStore:
+    """Process-local registry of active countdown timers, keyed by owner."""
+
+    def __init__(self) -> None:
+        self._by_owner: dict[str, list[dict[str, Any]]] = {}
+
+    def _prune(self, owner: str) -> None:
+        now = time.time()
+        live = [t for t in self._by_owner.get(owner, []) if t["expires_at"] > now]
+        if live:
+            self._by_owner[owner] = live
+        else:
+            self._by_owner.pop(owner, None)
+
+    def create(self, owner: str, label: str, seconds: int) -> dict[str, Any]:
+        self._prune(owner)
+        now = time.time()
+        timer = {
+            "timer_id": uuid.uuid4().hex[:12],
+            "label": (label or "Timer").strip() or "Timer",
+            "duration_seconds": int(seconds),
+            "created_at": now,
+            "expires_at": now + int(seconds),
+        }
+        self._by_owner.setdefault(owner, []).append(timer)
+        return timer
+
+    def list(self, owner: str) -> list[dict[str, Any]]:
+        self._prune(owner)
+        return sorted(self._by_owner.get(owner, []), key=lambda t: t["expires_at"])
+
+    def cancel(self, owner: str, label: str | None = None) -> dict[str, Any] | None:
+        self._prune(owner)
+        timers = self._by_owner.get(owner, [])
+        if not timers:
+            return None
+        target = None
+        if label:
+            wanted = label.strip().lower()
+            target = next((t for t in timers if t["label"].lower() == wanted), None)
+        if target is None:  # no name (or no match) → cancel the soonest-expiring
+            target = min(timers, key=lambda t: t["expires_at"])
+        timers.remove(target)
+        self._prune(owner)
+        return target
+
+
+_timers = _TimerStore()
+
+
+def _unit_to_seconds(unit: str) -> int:
+    u = unit.lower()
+    if u.startswith("h"):
+        return 3600
+    if u.startswith("m"):
+        return 60
+    return 1
+
+
+def _parse_timer_duration(text: str) -> int:
+    """Total seconds from a timer phrase (digits or number-words), else 0."""
+    num = r"\d+|" + "|".join(re.escape(w) for w in _WORD_NUMBERS)
+    pattern = re.compile(r"\b(" + num + r")\s*(hours?|hrs?|minutes?|mins?|seconds?|secs?)\b")
+    total = 0
+    found = False
+    for value, unit in pattern.findall(text):
+        n = int(value) if value.isdigit() else _WORD_NUMBERS.get(value, 0)
+        total += n * _unit_to_seconds(unit)
+        found = True
+    if found:
+        return total
+    short = re.search(r"\b(\d+)\s*([hms])\b", text)
+    if short:
+        return int(short.group(1)) * _unit_to_seconds(short.group(2))
+    return 0
+
+
+def _parse_timer_label(text: str) -> str:
+    """Extract an optional timer name ('for the eggs', 'called pasta'); never a
+    duration ('for 5 minutes')."""
+    m = re.search(r"\b(?:called|named|for)\s+(?:the\s+)?(.+?)\s*$", text.strip())
+    if not m:
+        return ""
+    cand = m.group(1).strip().strip(".!?")
+    if not cand or re.search(r"\d", cand):
+        return ""
+    if re.search(r"\b(hours?|hrs?|minutes?|mins?|seconds?|secs?|timer)\b", cand):
+        return ""
+    if cand in _WORD_NUMBERS:
+        return ""
+    return cand.title()
+
+
+def _format_duration(seconds: float) -> str:
+    seconds = max(0, int(round(seconds)))
+    minutes, secs = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    parts = []
+    if hours:
+        parts.append(f"{hours} hour" + ("s" if hours != 1 else ""))
+    if minutes:
+        parts.append(f"{minutes} minute" + ("s" if minutes != 1 else ""))
+    if secs and not hours:
+        parts.append(f"{secs} second" + ("s" if secs != 1 else ""))
+    return " and ".join(parts) if parts else "0 seconds"
+
+
+def _timer_card(timer: dict[str, Any], *, status: str = "running") -> dict[str, Any]:
+    return {
+        "component": "timer",
+        "props": {
+            "id": timer["timer_id"],
+            "timer_id": timer["timer_id"],
+            "title": timer["label"],
+            "label": timer["label"],
+            "source": "timer",
+            "status": status,
+            "duration_seconds": int(timer["duration_seconds"]),
+            "expires_at_ms": int(timer["expires_at"] * 1000),
+            "actions": [{"label": "Cancel timer", "query": "cancel the timer"}],
+        },
+    }
+
+
+def active_timers_for(owner: str) -> list[dict[str, Any]]:
+    """Public helper for the reload-resume endpoint: the panel's authoritative set."""
+    return [_timer_card(t)["props"] for t in _timers.list(owner or "guest")]
+
+
+def _resolve_timer(intent: SkybridgeIntent, user_id: str) -> dict[str, Any]:
+    owner = (user_id or "guest")
+
+    if intent.action == "cancel":
+        cancelled = _timers.cancel(owner, intent.title or None)
+        if not cancelled:
+            return {
+                "handled": True, "intent": _intent_dict(intent),
+                "spoken_summary": "You have no timers running.",
+                "cards": [_status_card("No timers", "There are no active timers to cancel.")],
+                "actions": [],
+            }
+        named = "" if cancelled["label"].lower() == "timer" else f"{cancelled['label']} "
+        return {
+            "handled": True, "intent": _intent_dict(intent),
+            "spoken_summary": f"Cancelled your {named}timer.",
+            "cards": [_status_card("Timer cancelled", f"Your {named}timer was stopped.")],
+            "actions": [],
+            "timer_cancelled_id": cancelled["timer_id"],
+        }
+
+    if intent.action == "status":
+        timers = _timers.list(owner)
+        if not timers:
+            return {
+                "handled": True, "intent": _intent_dict(intent),
+                "spoken_summary": "You have no timers running.",
+                "cards": [_status_card("No timers", "Ask me to set a timer to get started.")],
+                "actions": [],
+            }
+        soonest = timers[0]
+        remaining = soonest["expires_at"] - time.time()
+        named = "" if soonest["label"].lower() == "timer" else f"{soonest['label']} "
+        return {
+            "handled": True, "intent": _intent_dict(intent),
+            "spoken_summary": f"Your {named}timer has {_format_duration(remaining)} left.",
+            "cards": [_timer_card(t) for t in timers],
+            "actions": [],
+        }
+
+    # create
+    seconds = max(1, min(int(intent.duration_seconds or 300), MAX_TIMER_SECONDS))
+    timer = _timers.create(owner, intent.title or "Timer", seconds)
+    named = "" if timer["label"].lower() == "timer" else f"{timer['label']} "
+    return {
+        "handled": True, "intent": _intent_dict(intent),
+        "spoken_summary": f"Your {named}timer is set for {_format_duration(seconds)}.",
+        "cards": [_timer_card(timer)],
+        "actions": [],
+    }
 
 
 MONTHS = {
@@ -631,6 +831,15 @@ def classify_skybridge_intent(message: str, context: dict[str, Any] | None = Non
     if person_fact:
         name, fact, birthday = person_fact
         return SkybridgeIntent(domain="people", action="remember_fact", person_name=name, fact_text=fact, birthday=birthday)
+    # Timers claim the phrase early so "set a 5 minute timer" isn't misread as a
+    # calendar event ("set ... at a time").
+    if re.search(r"\btimer\b|\bcountdown\b", text):
+        if re.search(r"\b(cancel|stop|clear|delete|dismiss|reset|turn off)\b", text):
+            return SkybridgeIntent(domain="timer", action="cancel", title=_parse_timer_label(text))
+        if re.search(r"\b(how (?:long|much)|left|remaining|status|check on|still going)\b", text):
+            return SkybridgeIntent(domain="timer", action="status")
+        seconds = _parse_timer_duration(text) or 300  # bare "set a timer" → 5 min
+        return SkybridgeIntent(domain="timer", action="create", title=_parse_timer_label(text), duration_seconds=seconds)
     calendar_update = _calendar_update_from_text(raw_message, context)
     if calendar_update:
         target, target_time = calendar_update
@@ -742,6 +951,9 @@ async def resolve_skybridge_request(
 
     if intent.domain == "clock":
         return _attach_skybridge_context(_resolve_clock(intent))
+
+    if intent.domain == "timer":
+        return _attach_skybridge_context(_resolve_timer(intent, user_id))
 
     if db is not None:
         return _attach_skybridge_context(await _resolve_with_db(intent, user_id, db, context=context))
