@@ -598,17 +598,21 @@
         } catch (_) {}
     }
 
+    function renderActiveTimers() {
+        clearCards();
+        [...activeTimers.values()].sort((a, b) => a.expires - b.expires).forEach(t => {
+            addCard({ component: 'timer', props: { timer_id: t.id, label: t.label, title: t.label,
+                duration_seconds: t.duration, expires_at_ms: t.expires, status: t.ringing ? 'expired' : 'running' } }, false);
+        });
+    }
+
     function restoreTimers() {
         let arr = [];
         try { arr = JSON.parse(localStorage.getItem(TIMERS_KEY) || '[]') || []; } catch (_) {}
         const now = Date.now();
-        arr.filter(t => t && t.id && +t.expires > now)
-            .sort((a, b) => a.expires - b.expires)
-            .forEach(t => {   // resume every still-running timer, not just the soonest
-                registerTimer(t.id, t.label, t.expires, t.duration);
-                addCard({ component: 'timer', props: { timer_id: t.id, label: t.label, title: t.label,
-                    duration_seconds: t.duration, expires_at_ms: t.expires, status: 'running' } }, false);
-            });
+        // resume every still-running timer, not just the soonest
+        arr.filter(t => t && t.id && +t.expires > now).forEach(t => registerTimer(t.id, t.label, t.expires, t.duration));
+        if (activeTimers.size) renderActiveTimers();
     }
 
     function noteUserActivity() {
@@ -620,7 +624,12 @@
     function scheduleIdleReturn() {
         clearIdleTimer();
         if (document.body.classList.contains('sky-empty')) return;
-        if (activeTimers.size) return;   // a running timer keeps its card on screen
+        // Keep the screen up only when the *only* thing showing is running timers —
+        // a countdown shouldn't auto-dismiss. Any other card (weather, calendar…)
+        // still idles back normally even while a timer runs in the background.
+        const cards = [].slice.call(els.cards.children);
+        const hasNonTimer = cards.some(function (c) { return !c.querySelector('.sky-timer'); });
+        if (cards.length && !hasNonTimer) return;
         idleTimer = setTimeout(returnToAmbientClock, CARD_IDLE_MS);
     }
 
@@ -629,6 +638,13 @@
         const voiceBusy = voice && (voice.isRecording || voice.speaking || voice.serverBusy);
         if (voiceBusy || orbState === 'listening' || orbState === 'thinking' || orbState === 'responding') {
             scheduleIdleReturn();
+            return;
+        }
+        // If timers are still running, fall back to showing them rather than a bare
+        // ambient clock, so the countdown returns to view once the other card idles.
+        if (activeTimers.size) {
+            renderActiveTimers();
+            setStatus('Ambient');
             return;
         }
         renderHome({ idle: true });

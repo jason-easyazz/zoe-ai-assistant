@@ -23,7 +23,7 @@ function extract(name) {
 
 const FN_NAMES = ['_timerSel', '_fmtClock', 'persistTimers', 'ensureTimerTicking',
   'registerTimer', 'removeTimer', 'timerTick', 'fireTimer', 'startAlarm', 'stopAlarm',
-  'acknowledgeRingingTimers', 'restoreTimers'];
+  'acknowledgeRingingTimers', 'renderActiveTimers', 'restoreTimers'];
 const body = FN_NAMES.map(extract).join('\n');
 
 // ---- harness scope (names referenced by the extracted functions) ----
@@ -114,6 +114,35 @@ store['sky_active_timers'] = JSON.stringify([
 restoreTimers();
 ok('restore keeps only the live timer', activeTimers.size === 1 && activeTimers.has('live'));
 ok('restore re-shows the running card', addCardCalls.some(c => c.props.timer_id === 'live' && c.props.status === 'running'));
+
+// ── idle-return guard: timers persist, but other cards still auto-dismiss ──
+(function testIdleGuard() {
+  const idleBody = ['clearIdleTimer', 'scheduleIdleReturn'].map(extract).join('\n');
+  let idleTimer = null;
+  const bodyClasses = new Set();
+  const document = { body: { classList: { contains: c => bodyClasses.has(c) } } };
+  let children = [];
+  const els = { cards: { get children() { return children; } } };
+  const CARD_IDLE_MS = 9000;
+  function returnToAmbientClock() {}
+  function setTimeout(fn, ms) { return { fn, ms }; }
+  function clearTimeout() {}
+  const node = isTimer => ({ querySelector: () => (isTimer ? {} : null) });
+  try { new Function(idleBody); } catch (e) { throw new Error('idle source did not parse: ' + e.message); }
+  eval(idleBody);
+
+  children = [node(true), node(true)]; idleTimer = null; bodyClasses.clear();
+  scheduleIdleReturn();
+  ok('timers-only does not schedule idle return', idleTimer === null);
+
+  children = [node(false)]; idleTimer = null;
+  scheduleIdleReturn();
+  ok('a non-timer card still schedules idle return (Greptile)', idleTimer !== null);
+
+  children = []; idleTimer = null; bodyClasses.add('sky-empty');
+  scheduleIdleReturn();
+  ok('empty stage schedules nothing', idleTimer === null);
+})();
 
 global.Date.now = realDateNow;
 process.stdout.write('\n' + pass + ' checks passed\n');
