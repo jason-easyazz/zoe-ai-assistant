@@ -1,0 +1,19 @@
+# /etc/systemd/system/zoe-kiosk.service
+[Unit]
+Description=Zoe Kiosk Display
+After=graphical.target
+Wants=graphical.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+Environment=DISPLAY=:0
+ExecStart=/opt/TouchKio/start-kiosk.sh
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=graphical.target
