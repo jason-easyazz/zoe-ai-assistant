@@ -1,62 +1,223 @@
-/* lists card — re-skin to docs/architecture/skybridge-design-system.md.
-   Owns ONLY the .zoe-list-card styling so cards can be re-skinned independently.
-   Uses the design tokens (--sky-*) with safe fallbacks so the card renders
-   correctly today and adopts skybridge-tokens.css the moment it lands.
-   .sky-material glass (§2), Inter type scale (§3), 4px spacing scale (§6),
-   filled check glyph from the renderer (§5/§12), generous "fill the stage"
-   layout (§8/§9), and BOTH dark (default) + light ([data-theme="light"]).
+/* Lists card — elevated re-skin to docs/architecture/skybridge-design-system.md,
+   matched to the weather reference bar (hero, gradient identity, custom filled
+   glyphs, full dark + light, fills the stage at panel scale).
 
-   Foundation note: this branch ships the spec + stubs but no committed
-   skybridge-tokens.css and the glyph sprite has no list/check symbol. To stay
-   within "touch only my card", the check is rendered as a card-local FILLED svg
-   and all tokens carry fallbacks. No shared/foundation file was changed. */
+   Layout strategy (mirrors weather.css): the renderer emits NEW `lst-*` inner
+   class names so the legacy `.zoe-list-card .sky-list-*` grid rules in
+   skybridge.html / skybridge-data-widgets.css simply don't match. The CARD
+   itself is forced to flex with a high-specificity
+   `body:not(.sky-empty) .sky-card.zoe-list-card.sky-premium-card` selector so it
+   beats the (0,3,1)!important legacy card rules. Inner `lst-*` elements need no
+   `!important` because nothing else targets them.
 
-.zoe-list-card.sky-card {
-  /* the one glass recipe (§2) — tokenised with fallback */
+   Hero progress ring (§8), list-type identity tint (§4), category-coloured rows
+   (§4 colour with intent), satisfying completed state (§11), light + dark (§10).
+   Tokens (--sky-*) with safe fallbacks; no shared/foundation file is touched. */
+
+/* ── Card frame: own surface + flex, escape the legacy grid ──────────── */
+.sky-card.zoe-list-card {
+  display: flex !important;
+  overflow: hidden !important;
+  padding: 0 !important;
+  border-radius: var(--sky-radius-xl, 38px) !important;
+  color: var(--sky-ink-0, #fff);
   background:
-    var(--sky-card-bg,
-      linear-gradient(157deg, rgba(255,255,255,.11), rgba(255,255,255,.035)));
-  backdrop-filter: blur(26px) saturate(140%);
-  -webkit-backdrop-filter: blur(26px) saturate(140%);
-  border: 1px solid var(--sky-hairline, rgba(255,255,255,.14));
+    linear-gradient(157deg, rgba(255,255,255,.11), rgba(255,255,255,.035)) !important;
+  border: 1px solid var(--sky-hairline, rgba(255,255,255,.14)) !important;
   box-shadow:
-    var(--sky-elev,
-      0 26px 60px -18px rgba(0,0,0,.6)),
-    inset 0 1px 0 var(--sky-top-highlight, rgba(255,255,255,.22));
-  border-radius: var(--sky-radius-xl, 38px);
-
-  /* fill the stage (§9) */
-  width: 100%;
-  box-sizing: border-box;
-  padding: var(--sky-space-11, 44px) var(--sky-space-12, 48px);
-  color: var(--sky-ink-0, #ffffff);
+    0 26px 60px -18px rgba(0,0,0,.6),
+    inset 0 1px 0 rgba(255,255,255,.22) !important;
   font-family: var(--sky-font, "Inter", system-ui, -apple-system, "Segoe UI", sans-serif);
   -webkit-font-smoothing: antialiased;
 }
 
-.zoe-list-card .sky-list-scene {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sky-space-6, 24px);
-  min-height: 0;
+/* Beat the legacy (0,3,1)!important card rules in skybridge.html (height/grid). */
+body:not(.sky-empty) .sky-card.zoe-list-card.sky-premium-card {
+  display: flex !important;
+  align-content: stretch !important;
+  padding: 0 !important;
+  overflow: hidden !important;
 }
 
-/* ── Header: list name + item count ─────────────────────────────────── */
-.zoe-list-card .sky-list-header {
+/* ── Scene: hero rail (left) + content panel (right) ─────────────────── */
+.zoe-list-card .lst-scene {
+  display: flex;
+  width: 100%;
+  min-height: 0;
+  /* the identity tint wash (set per list-type below) over the glass */
+  background: var(--lst-wash, transparent);
+}
+
+/* List-type identity tint — a calm gradient wash + the ring/rail accent pair.
+   Warm = shopping/household, cool = work/tasks, mint = health, violet = social. */
+.zoe-list-card .lst-tint-warm {
+  --lst-wash: radial-gradient(120% 90% at 12% 0%, rgba(245,177,60,.16), transparent 60%);
+  --lst-ring-a: #f5b13c; --lst-ring-b: #ff7a59; --lst-accent: #f5b13c;
+}
+.zoe-list-card .lst-tint-cool {
+  --lst-wash: radial-gradient(120% 90% at 12% 0%, rgba(106,166,255,.16), transparent 60%);
+  --lst-ring-a: #6aa6ff; --lst-ring-b: #37c0e6; --lst-accent: #6aa6ff;
+}
+.zoe-list-card .lst-tint-mint {
+  --lst-wash: radial-gradient(120% 90% at 12% 0%, rgba(91,227,176,.16), transparent 60%);
+  --lst-ring-a: #5be3b0; --lst-ring-b: #37c0e6; --lst-accent: #5be3b0;
+}
+.zoe-list-card .lst-tint-violet {
+  --lst-wash: radial-gradient(120% 90% at 12% 0%, rgba(155,140,255,.18), transparent 60%);
+  --lst-ring-a: #9b8cff; --lst-ring-b: #6aa6ff; --lst-accent: #9b8cff;
+}
+.zoe-list-card .lst-tint-neutral {
+  --lst-wash: radial-gradient(120% 90% at 12% 0%, rgba(91,227,176,.12), transparent 60%);
+  --lst-ring-a: #5be3b0; --lst-ring-b: #37c0e6; --lst-accent: #5be3b0;
+}
+
+/* ── HERO (left): progress ring + identity glyph ─────────────────────── */
+.zoe-list-card .lst-hero {
+  flex: 0 0 320px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sky-space-6, 24px);
+  padding: var(--sky-space-10, 40px) var(--sky-space-8, 32px);
+  border-right: 1px solid var(--sky-hairline, rgba(255,255,255,.12));
+}
+
+.zoe-list-card .lst-ring-wrap {
+  position: relative;
+  width: 220px;
+  height: 220px;
+}
+
+.zoe-list-card .lst-ring {
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+  overflow: visible;
+}
+
+.zoe-list-card .lst-ring-track {
+  fill: none;
+  stroke: var(--sky-fill-3, rgba(255,255,255,.12));
+  stroke-width: 11;
+}
+
+.zoe-list-card .lst-ring-fill {
+  fill: none;
+  stroke-width: 11;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 10px rgba(255,255,255,.18));
+  transition: stroke-dashoffset var(--sky-dur-slow, 560ms) var(--sky-ease-spring, ease);
+  animation: lst-ring-glow 2.5s var(--sky-ease-standard, ease-in-out) infinite;
+}
+
+@keyframes lst-ring-glow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .82; }
+}
+
+.zoe-list-card .lst-ring-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+}
+
+.zoe-list-card .lst-ring-pct {
+  font-size: 60px;
+  font-weight: 300;
+  line-height: 0.9;
+  letter-spacing: -2px;
+  font-variant-numeric: tabular-nums;
+  color: var(--sky-ink-0, #fff);
+}
+.zoe-list-card .lst-ring-pct i {
+  font-style: normal;
+  font-size: 26px;
+  font-weight: 400;
+  letter-spacing: 0;
+  color: var(--sky-ink-2, rgba(255,255,255,.6));
+  margin-left: 2px;
+}
+
+.zoe-list-card .lst-ring-sub,
+.zoe-list-card .lst-hero-sub {
+  font-size: var(--sky-text-label, 14px);
+  font-weight: 500;
+  letter-spacing: .3px;
+  color: var(--sky-ink-2, rgba(255,255,255,.62));
+}
+
+.zoe-list-card .lst-hero-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sky-space-3, 12px);
+}
+
+/* identity badge — a filled glyph in a tinted glass disc */
+.zoe-list-card .lst-id-badge {
+  width: 60px;
+  height: 60px;
+  border-radius: var(--sky-radius-pill, 999px);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    linear-gradient(135deg,
+      color-mix(in srgb, var(--lst-accent, #5be3b0) 28%, transparent),
+      color-mix(in srgb, var(--lst-accent, #5be3b0) 6%, transparent));
+  border: 1px solid color-mix(in srgb, var(--lst-accent, #5be3b0) 34%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.2);
+  color: var(--lst-accent, #5be3b0);
+}
+
+.zoe-list-card .lst-id-glyph {
+  width: 30px;
+  height: 30px;
+  fill: currentColor;
+}
+
+/* overview hero variant — count badge instead of a ring */
+.zoe-list-card .lst-hero-overview .lst-id-badge { width: 96px; height: 96px; }
+.zoe-list-card .lst-hero-overview .lst-id-glyph { width: 46px; height: 46px; }
+.zoe-list-card .lst-hero-num {
+  font-size: 76px;
+  font-weight: 300;
+  line-height: 0.9;
+  letter-spacing: -2px;
+  font-variant-numeric: tabular-nums;
+  color: var(--sky-ink-0, #fff);
+}
+
+/* ── SIDE (right): header + tabs + rows ──────────────────────────────── */
+.zoe-list-card .lst-side {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sky-space-5, 20px);
+  padding: var(--sky-space-10, 40px) var(--sky-space-10, 40px);
+}
+
+.zoe-list-card .lst-header {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
   gap: var(--sky-space-4, 16px);
 }
 
-.zoe-list-card .sky-list-heading {
+.zoe-list-card .lst-heading {
   display: flex;
   flex-direction: column;
   gap: var(--sky-space-2, 8px);
   min-width: 0;
 }
 
-.zoe-list-card .sky-list-kicker {
+.zoe-list-card .lst-kicker {
   font-size: var(--sky-text-micro, 12px);
   font-weight: 600;
   letter-spacing: 2.5px;
@@ -64,19 +225,19 @@
   color: var(--sky-ink-3, rgba(255,255,255,.46));
 }
 
-.zoe-list-card .sky-list-name {
+.zoe-list-card .lst-name {
   margin: 0;
   font-size: var(--sky-text-title, 28px);
   font-weight: 600;
   line-height: 1.05;
   letter-spacing: -0.4px;
-  color: var(--sky-ink-0, #ffffff);
+  color: var(--sky-ink-0, #fff);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.zoe-list-card .sky-list-count {
+.zoe-list-card .lst-count {
   flex: 0 0 auto;
   font-size: var(--sky-text-label, 14px);
   font-weight: 500;
@@ -89,26 +250,26 @@
   white-space: nowrap;
 }
 
-/* ── Category tabs: a quiet segmented control ───────────────────────── */
-.zoe-list-card .sky-list-switcher {
+/* ── Tabs: quiet segmented control with a category dot ───────────────── */
+.zoe-list-card .lst-switcher {
   display: flex;
   flex-wrap: wrap;
   gap: var(--sky-space-1, 6px);
   padding: var(--sky-space-1, 6px);
-  border-radius: var(--sky-radius-md, 20px);
+  border-radius: var(--sky-radius-md, 18px);
   background: var(--sky-fill-1, rgba(255,255,255,.05));
   border: 1px solid var(--sky-hairline, rgba(255,255,255,.08));
 }
 
-.zoe-list-card .sky-list-tab {
+.zoe-list-card .lst-tab {
   appearance: none;
   border: 0;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   gap: var(--sky-space-2, 8px);
-  padding: var(--sky-space-2, 9px) var(--sky-space-4, 18px);
-  border-radius: var(--sky-radius-sm, 14px);
+  padding: var(--sky-space-2, 9px) var(--sky-space-4, 16px);
+  border-radius: var(--sky-radius-sm, 13px);
   background: transparent;
   color: var(--sky-ink-2, rgba(255,255,255,.6));
   font-family: inherit;
@@ -116,25 +277,44 @@
   font-weight: 500;
   letter-spacing: -0.1px;
   transition:
-    background var(--sky-dur-fast, 160ms) var(--sky-ease-standard, ease),
-    color var(--sky-dur-fast, 160ms) var(--sky-ease-standard, ease),
-    transform var(--sky-dur-fast, 160ms) var(--sky-ease-standard, ease);
+    background var(--sky-dur-fast, 180ms) var(--sky-ease-standard, ease),
+    color var(--sky-dur-fast, 180ms) var(--sky-ease-standard, ease),
+    transform var(--sky-dur-fast, 180ms) var(--sky-ease-standard, ease);
 }
 
-.zoe-list-card .sky-list-tab:hover {
+.zoe-list-card .lst-tab-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--lst-tab-accent, var(--sky-accent-mint, #5be3b0));
+  flex: 0 0 auto;
+}
+.zoe-list-card .lst-tab.lst-a-shopping  { --lst-tab-accent: #f5b13c; }
+.zoe-list-card .lst-tab.lst-a-household,
+.zoe-list-card .lst-tab.lst-a-family    { --lst-tab-accent: #ff9a6b; }
+.zoe-list-card .lst-tab.lst-a-work,
+.zoe-list-card .lst-tab.lst-a-tasks,
+.zoe-list-card .lst-tab.lst-a-routine   { --lst-tab-accent: #6aa6ff; }
+.zoe-list-card .lst-tab.lst-a-health,
+.zoe-list-card .lst-tab.lst-a-medical   { --lst-tab-accent: #5be3b0; }
+.zoe-list-card .lst-tab.lst-a-social,
+.zoe-list-card .lst-tab.lst-a-personal,
+.zoe-list-card .lst-tab.lst-a-bucket    { --lst-tab-accent: #9b8cff; }
+
+.zoe-list-card .lst-tab:hover {
   color: var(--sky-ink-0, #fff);
   background: var(--sky-fill-2, rgba(255,255,255,.07));
 }
-
-.zoe-list-card .sky-list-tab:active { transform: scale(0.97); }
-
-.zoe-list-card .sky-list-tab.is-active {
+.zoe-list-card .lst-tab:active { transform: scale(0.97); }
+.zoe-list-card .lst-tab.is-active {
   color: var(--sky-ink-0, #fff);
   background: var(--sky-fill-3, rgba(255,255,255,.14));
   box-shadow: inset 0 1px 0 rgba(255,255,255,.18), 0 4px 14px -6px rgba(0,0,0,.5);
 }
+.zoe-list-card .lst-tab-new { color: var(--sky-ink-3, rgba(255,255,255,.5)); }
+.zoe-list-card .lst-tab-new .lst-tab-dot { display: none; }
 
-.zoe-list-card .sky-list-tab-count {
+.zoe-list-card .lst-tab-count {
   font-style: normal;
   font-size: var(--sky-text-caption, 12px);
   font-weight: 600;
@@ -150,74 +330,100 @@
   color: var(--sky-ink-2, rgba(255,255,255,.7));
 }
 
-.zoe-list-card .sky-list-tab.new-list {
-  color: var(--sky-ink-3, rgba(255,255,255,.5));
-}
-
-/* ── Item rows ──────────────────────────────────────────────────────── */
-.zoe-list-card .sky-list-items {
+/* ── Item rows: category rail + filled check + qty/priority meta ─────── */
+.zoe-list-card .lst-items {
   display: flex;
   flex-direction: column;
   gap: var(--sky-space-2, 8px);
+  min-height: 0;
+  overflow: hidden;
+  flex: 1 1 auto;
 }
 
-.zoe-list-card .sky-list-item-row {
+.zoe-list-card .lst-row {
+  position: relative;
   appearance: none;
   width: 100%;
   cursor: pointer;
-  border: 1px solid var(--sky-hairline, rgba(255,255,255,.07));
-  border-radius: var(--sky-radius-md, 20px);
-  background: var(--sky-fill-1, rgba(255,255,255,.045));
+  border: 1px solid var(--sky-hairline, rgba(255,255,255,.08));
+  border-radius: var(--sky-radius-md, 18px);
+  background: var(--sky-fill-1, rgba(255,255,255,.05));
   color: inherit;
   font-family: inherit;
   text-align: left;
   display: flex;
   align-items: center;
   gap: var(--sky-space-4, 16px);
-  padding: var(--sky-space-4, 18px) var(--sky-space-5, 22px);
+  padding: var(--sky-space-4, 16px) var(--sky-space-5, 20px) var(--sky-space-4, 16px) var(--sky-space-6, 24px);
+  overflow: hidden;
   transition:
-    background var(--sky-dur-fast, 160ms) var(--sky-ease-standard, ease),
-    transform var(--sky-dur-fast, 160ms) var(--sky-ease-standard, ease),
-    border-color var(--sky-dur-fast, 160ms) var(--sky-ease-standard, ease);
+    background var(--sky-dur-fast, 180ms) var(--sky-ease-standard, ease),
+    transform var(--sky-dur-fast, 180ms) var(--sky-ease-standard, ease),
+    border-color var(--sky-dur-fast, 180ms) var(--sky-ease-standard, ease);
 }
 
-.zoe-list-card .sky-list-item-row:hover {
-  background: var(--sky-fill-2, rgba(255,255,255,.08));
-  border-color: var(--sky-hairline-strong, rgba(255,255,255,.16));
+/* category rail — a coloured spine on the row's leading edge (colour w/ intent) */
+.zoe-list-card .lst-rail {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 5px;
+  background: var(--lst-row-accent, var(--sky-accent-mint, #5be3b0));
 }
 
-.zoe-list-card .sky-list-item-row:active { transform: scale(0.992); }
+/* category → accent (used by the rail, check fill, qty pill tint) */
+.zoe-list-card .lst-a-shopping  { --lst-row-accent: #f5b13c; }
+.zoe-list-card .lst-a-household,
+.zoe-list-card .lst-a-family    { --lst-row-accent: #ff9a6b; }
+.zoe-list-card .lst-a-work,
+.zoe-list-card .lst-a-tasks,
+.zoe-list-card .lst-a-routine   { --lst-row-accent: #6aa6ff; }
+.zoe-list-card .lst-a-health,
+.zoe-list-card .lst-a-medical   { --lst-row-accent: #5be3b0; }
+.zoe-list-card .lst-a-social,
+.zoe-list-card .lst-a-personal,
+.zoe-list-card .lst-a-bucket    { --lst-row-accent: #9b8cff; }
+.zoe-list-card .lst-a-general,
+.zoe-list-card .lst-a-all       { --lst-row-accent: #5be3b0; }
 
-/* completed check (filled glyph from renderer) */
-.zoe-list-card .sky-list-check {
+.zoe-list-card .lst-row:hover {
+  background: var(--sky-fill-2, rgba(255,255,255,.09));
+  border-color: var(--sky-hairline-strong, rgba(255,255,255,.18));
+}
+.zoe-list-card .lst-row:active { transform: scale(0.992); }
+
+/* completed check — empty ring by default, fills with the row accent when done */
+.zoe-list-card .lst-check {
   flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   border-radius: 50%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 2px solid var(--sky-hairline-strong, rgba(255,255,255,.22));
+  border: 2px solid var(--sky-hairline-strong, rgba(255,255,255,.24));
   background: transparent;
-  transition: border-color var(--sky-dur-fast, 160ms) var(--sky-ease-standard, ease),
-              background var(--sky-dur-fast, 160ms) var(--sky-ease-standard, ease);
+  transition: border-color var(--sky-dur-fast, 180ms) var(--sky-ease-standard, ease),
+              background var(--sky-dur-fast, 180ms) var(--sky-ease-standard, ease);
 }
 
-.zoe-list-card .sky-list-check-mark {
+.zoe-list-card .lst-check-mark {
   width: 18px;
   height: 18px;
-  fill: #ffffff;
+  fill: #fff;
+  opacity: 0;
+  transform: scale(.4);
+  transition: opacity var(--sky-dur-fast, 180ms) var(--sky-ease-spring, ease),
+              transform var(--sky-dur-fast, 180ms) var(--sky-ease-spring, ease);
 }
 
-.zoe-list-card .sky-list-item-main {
+.zoe-list-card .lst-main {
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 3px;
 }
-
-.zoe-list-card .sky-list-item-main strong {
+.zoe-list-card .lst-main strong {
   font-size: var(--sky-text-body, 17px);
   font-weight: 500;
   letter-spacing: -0.1px;
@@ -226,98 +432,108 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
-.zoe-list-card .sky-list-item-main em {
+.zoe-list-card .lst-main em {
   font-style: normal;
   font-size: var(--sky-text-caption, 13px);
   font-weight: 400;
-  color: var(--sky-ink-3, rgba(255,255,255,.48));
+  color: var(--sky-ink-3, rgba(255,255,255,.5));
 }
 
-.zoe-list-card .sky-list-item-meta {
+.zoe-list-card .lst-meta {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: var(--sky-space-3, 12px);
 }
 
-/* quantity metric (§8 metric) */
-.zoe-list-card .sky-list-qty {
+/* quantity metric (§8 metric stack) */
+.zoe-list-card .lst-qty {
   min-width: 40px;
   padding: var(--sky-space-1, 6px) var(--sky-space-3, 12px);
   border-radius: var(--sky-radius-sm, 12px);
-  background: var(--sky-fill-2, rgba(255,255,255,.08));
+  background: color-mix(in srgb, var(--lst-row-accent, #5be3b0) 16%, rgba(255,255,255,.06));
   text-align: center;
 }
-
-.zoe-list-card .sky-list-qty strong {
+.zoe-list-card .lst-qty strong {
   font-size: var(--sky-text-label, 15px);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
-  color: var(--sky-ink-1, rgba(255,255,255,.86));
+  color: var(--sky-ink-1, rgba(255,255,255,.9));
 }
 
-/* priority flag — colour with intent (§4), not decoration */
-.zoe-list-card .sky-list-flag {
+/* priority flag — elegant: a dot + small caps, colour-coded by urgency */
+.zoe-list-card .lst-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: var(--sky-text-micro, 11px);
   font-weight: 600;
-  letter-spacing: 1.4px;
+  letter-spacing: 1.2px;
   text-transform: uppercase;
-  padding: 5px 10px;
+  padding: 5px 11px 5px 9px;
   border-radius: var(--sky-radius-pill, 999px);
+  color: var(--sky-ink-1, rgba(255,255,255,.86));
+  background: var(--sky-fill-2, rgba(255,255,255,.08));
+  border: 1px solid var(--sky-hairline, rgba(255,255,255,.12));
+}
+.zoe-list-card .lst-flag-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--sky-accent-amber, #f5b13c);
+}
+.zoe-list-card .lst-flag.pr-high,
+.zoe-list-card .lst-flag.pr-urgent {
   color: #fff;
-  background: var(--sky-accent-amber, linear-gradient(120deg, #ffb24d, #ff7a59));
+  background: linear-gradient(120deg, #ff6a6a, #d6356b);
+  border-color: transparent;
 }
-
-.zoe-list-card .sky-list-flag.pr-high,
-.zoe-list-card .sky-list-flag.pr-urgent {
-  background: var(--sky-accent-red, linear-gradient(120deg, #ff6a6a, #d6356b));
-}
-
-.zoe-list-card .sky-list-flag.pr-low {
-  background: var(--sky-fill-3, rgba(255,255,255,.16));
+.zoe-list-card .lst-flag.pr-high .lst-flag-dot,
+.zoe-list-card .lst-flag.pr-urgent .lst-flag-dot { background: rgba(255,255,255,.9); }
+.zoe-list-card .lst-flag.pr-low {
   color: var(--sky-ink-2, rgba(255,255,255,.66));
 }
+.zoe-list-card .lst-flag.pr-low .lst-flag-dot { background: var(--sky-ink-3, rgba(255,255,255,.4)); }
 
-/* ── Completed / de-emphasised state ────────────────────────────────── */
-.zoe-list-card .sky-list-item-row.is-done {
+/* ── Satisfying completed state ──────────────────────────────────────── */
+.zoe-list-card .lst-row.is-done {
   background: var(--sky-fill-0, rgba(255,255,255,.02));
   border-color: transparent;
 }
-
-.zoe-list-card .sky-list-item-row.is-done .sky-list-check {
+.zoe-list-card .lst-row.is-done .lst-rail { opacity: .3; }
+.zoe-list-card .lst-row.is-done .lst-check {
   border-color: transparent;
-  background: var(--sky-accent-mint, linear-gradient(135deg, #5ee7c4, #36c6e0));
+  background: linear-gradient(135deg, var(--lst-row-accent, #5be3b0), color-mix(in srgb, var(--lst-row-accent, #5be3b0) 60%, #37c0e6));
+  box-shadow: 0 4px 12px -4px color-mix(in srgb, var(--lst-row-accent, #5be3b0) 60%, transparent);
 }
-
-.zoe-list-card .sky-list-item-row.is-done .sky-list-item-main strong {
-  color: var(--sky-ink-3, rgba(255,255,255,.4));
+.zoe-list-card .lst-row.is-done .lst-check-mark { opacity: 1; transform: scale(1); }
+.zoe-list-card .lst-row.is-done .lst-main strong {
+  color: var(--sky-ink-3, rgba(255,255,255,.42));
   text-decoration: line-through;
-  text-decoration-color: var(--sky-ink-4, rgba(255,255,255,.26));
+  text-decoration-color: var(--sky-ink-4, rgba(255,255,255,.3));
 }
-
-.zoe-list-card .sky-list-item-row.is-done .sky-list-item-main em,
-.zoe-list-card .sky-list-item-row.is-done .sky-list-qty strong {
-  color: var(--sky-ink-4, rgba(255,255,255,.3));
+.zoe-list-card .lst-row.is-done .lst-main em,
+.zoe-list-card .lst-row.is-done .lst-qty strong {
+  color: var(--sky-ink-4, rgba(255,255,255,.32));
 }
-
-.zoe-list-card .sky-list-item-row.is-done .sky-list-qty {
+.zoe-list-card .lst-row.is-done .lst-qty {
   background: var(--sky-fill-1, rgba(255,255,255,.04));
 }
 
 /* recent add — a quiet liveness cue */
-.zoe-list-card .sky-list-item-row.is-recent {
-  border-color: var(--sky-accent-mint-edge, rgba(94,231,196,.4));
+.zoe-list-card .lst-row.is-recent {
+  border-color: color-mix(in srgb, var(--lst-row-accent, #5be3b0) 50%, transparent);
 }
 
-/* ── Overview (multiple lists, no single list selected) ─────────────── */
-.zoe-list-card .sky-list-columns {
+/* ── Overview (multiple lists, no single list selected) ──────────────── */
+.zoe-list-card .lst-cols {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: var(--sky-space-4, 16px);
+  align-content: start;
+  overflow: hidden;
+  flex: 1 1 auto;
 }
 
-.zoe-list-card .sky-list-column {
+.zoe-list-card .lst-col {
   appearance: none;
   cursor: pointer;
   text-align: left;
@@ -326,209 +542,215 @@
   display: flex;
   flex-direction: column;
   gap: var(--sky-space-3, 12px);
-  padding: var(--sky-space-5, 22px);
-  border-radius: var(--sky-radius-lg, 28px);
+  padding: var(--sky-space-5, 20px);
+  border-radius: var(--sky-radius-lg, 24px);
   background: var(--sky-fill-1, rgba(255,255,255,.05));
   border: 1px solid var(--sky-hairline, rgba(255,255,255,.09));
-  transition: background var(--sky-dur-fast, 160ms) var(--sky-ease-standard, ease),
-              transform var(--sky-dur-fast, 160ms) var(--sky-ease-standard, ease);
+  transition: background var(--sky-dur-fast, 180ms) var(--sky-ease-standard, ease),
+              transform var(--sky-dur-fast, 180ms) var(--sky-ease-standard, ease);
 }
+.zoe-list-card .lst-col:hover { background: var(--sky-fill-2, rgba(255,255,255,.08)); }
+.zoe-list-card .lst-col:active { transform: scale(0.99); }
 
-.zoe-list-card .sky-list-column:hover { background: var(--sky-fill-2, rgba(255,255,255,.08)); }
-.zoe-list-card .sky-list-column:active { transform: scale(0.99); }
-
-.zoe-list-card .sky-list-column-head {
+.zoe-list-card .lst-col-head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: var(--sky-space-3, 12px);
 }
-
-.zoe-list-card .sky-list-column-head strong {
+.zoe-list-card .lst-col-head strong {
   font-size: var(--sky-text-heading, 20px);
   font-weight: 600;
   letter-spacing: -0.2px;
   color: var(--sky-ink-0, #fff);
 }
-
-.zoe-list-card .sky-list-column-head em {
+.zoe-list-card .lst-col-head em {
   font-style: normal;
   font-size: var(--sky-text-caption, 13px);
   font-variant-numeric: tabular-nums;
   color: var(--sky-ink-3, rgba(255,255,255,.46));
 }
 
-.zoe-list-card .sky-list-column ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--sky-space-2, 8px);
+/* per-list progress meter (the bold meter alternative to a ring, §8) */
+.zoe-list-card .lst-col-bar {
+  display: block;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--sky-fill-3, rgba(255,255,255,.12));
+  overflow: hidden;
+}
+.zoe-list-card .lst-col-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--lst-row-accent, #5be3b0), color-mix(in srgb, var(--lst-row-accent, #5be3b0) 55%, #37c0e6));
 }
 
-.zoe-list-card .sky-list-column li {
-  display: flex;
-  align-items: center;
-  gap: var(--sky-space-3, 10px);
+.zoe-list-card .lst-col ul {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: var(--sky-space-2, 8px);
+}
+.zoe-list-card .lst-col li {
+  display: flex; align-items: center; gap: var(--sky-space-3, 10px);
   font-size: var(--sky-text-body, 15px);
   color: var(--sky-ink-1, rgba(255,255,255,.8));
 }
-
-.zoe-list-card .sky-list-column li strong {
-  font-weight: 400;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.zoe-list-card .lst-col li strong {
+  font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-
-.zoe-list-card .sky-list-column li.is-done strong {
+.zoe-list-card .lst-col li.is-done strong {
   color: var(--sky-ink-3, rgba(255,255,255,.4));
   text-decoration: line-through;
 }
-
-.zoe-list-card .sky-list-dot {
-  flex: 0 0 auto;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--sky-accent-mint-solid, #5ee7c4);
+.zoe-list-card .lst-dot {
+  flex: 0 0 auto; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--lst-row-accent, #5be3b0);
 }
-
-.zoe-list-card .sky-list-column li.is-done .sky-list-dot {
-  background: var(--sky-ink-4, rgba(255,255,255,.26));
-}
-
-.zoe-list-card .sky-list-column-empty {
-  margin: 0;
-  font-size: var(--sky-text-caption, 13px);
+.zoe-list-card .lst-col li.is-done .lst-dot { background: var(--sky-ink-4, rgba(255,255,255,.26)); }
+.zoe-list-card .lst-col-empty {
+  margin: 0; font-size: var(--sky-text-caption, 13px);
   color: var(--sky-ink-3, rgba(255,255,255,.42));
 }
 
-/* ── Empty state ────────────────────────────────────────────────────── */
-.zoe-list-card .sky-list-empty {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sky-space-2, 8px);
+/* ── Empty state ─────────────────────────────────────────────────────── */
+.zoe-list-card .lst-empty {
+  display: flex; flex-direction: column; gap: var(--sky-space-2, 8px);
   padding: var(--sky-space-8, 36px) var(--sky-space-6, 24px);
   text-align: center;
-  border-radius: var(--sky-radius-lg, 28px);
+  border-radius: var(--sky-radius-lg, 24px);
   background: var(--sky-fill-1, rgba(255,255,255,.04));
   border: 1px dashed var(--sky-hairline-strong, rgba(255,255,255,.16));
 }
-
-.zoe-list-card .sky-list-empty strong {
-  font-size: var(--sky-text-heading, 20px);
-  font-weight: 600;
+.zoe-list-card .lst-empty strong {
+  font-size: var(--sky-text-heading, 20px); font-weight: 600;
   color: var(--sky-ink-1, rgba(255,255,255,.82));
 }
-
-.zoe-list-card .sky-list-empty span {
-  font-size: var(--sky-text-body, 15px);
-  color: var(--sky-ink-3, rgba(255,255,255,.46));
+.zoe-list-card .lst-empty span {
+  font-size: var(--sky-text-body, 15px); color: var(--sky-ink-3, rgba(255,255,255,.46));
 }
 
-/* ── Motion safety (§7) ─────────────────────────────────────────────── */
+/* ── Motion safety (§7) ──────────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
-  .zoe-list-card .sky-list-tab,
-  .zoe-list-card .sky-list-item-row,
-  .zoe-list-card .sky-list-column,
-  .zoe-list-card .sky-list-check { transition: none; }
+  .zoe-list-card .lst-tab,
+  .zoe-list-card .lst-row,
+  .zoe-list-card .lst-col,
+  .zoe-list-card .lst-check,
+  .zoe-list-card .lst-check-mark,
+  .zoe-list-card .lst-ring-fill { transition: none; animation: none; }
+}
+
+/* Panel-scale sizing — fill the stage, keep the hero readable (§9). */
+@media (min-width: 900px) {
+  .zoe-list-card .lst-hero { flex-basis: 340px; }
+  .zoe-list-card .lst-ring-wrap { width: 240px; height: 240px; }
+  .zoe-list-card .lst-ring-pct { font-size: 66px; }
 }
 
 /* ════════════════════════════════════════════════════════════════════
    LIGHT THEME (§4/§10) — dark ink on bright glass, hairlines darken.
    ════════════════════════════════════════════════════════════════════ */
-[data-theme="light"] .zoe-list-card.sky-card {
+[data-theme="light"] .sky-card.zoe-list-card {
+  /* The --sky-ink-* scale is white at :root and the global light theme only
+     flips --text-*, so re-point the ink scale to dark ink for this card in
+     light mode — otherwise every var(--sky-ink-N) below renders white-on-white. */
+  --sky-ink-0: #16324d;
+  --sky-ink-1: #2a4d6e;
+  --sky-ink-2: #3a5e80;
+  --sky-ink-3: #6a86a2;
+  --sky-ink-4: #9fb2c4;
+  color: var(--sky-ink-0, #16324d) !important;
   background:
-    var(--sky-card-bg,
-      linear-gradient(157deg, rgba(255,255,255,.72), rgba(255,255,255,.5)));
-  border-color: var(--sky-hairline, rgba(20,50,80,.16));
+    linear-gradient(157deg, rgba(255,255,255,.72), rgba(255,255,255,.5)) !important;
+  border-color: var(--sky-hairline, rgba(20,50,80,.16)) !important;
   box-shadow:
-    var(--sky-elev, 0 26px 60px -18px rgba(20,50,80,.28)),
-    inset 0 1px 0 var(--sky-top-highlight, rgba(255,255,255,.7));
-  color: var(--sky-ink-0, #16324d);
+    0 26px 60px -18px rgba(20,50,80,.28),
+    inset 0 1px 0 rgba(255,255,255,.7) !important;
 }
 
-[data-theme="light"] .zoe-list-card .sky-list-kicker { color: var(--sky-ink-3, #6f88a3); }
-[data-theme="light"] .zoe-list-card .sky-list-name { color: var(--sky-ink-0, #16324d); }
+[data-theme="light"] .zoe-list-card .lst-hero { border-right-color: rgba(20,50,80,.14); }
+[data-theme="light"] .zoe-list-card .lst-ring-track { stroke: rgba(20,50,80,.12); }
+[data-theme="light"] .zoe-list-card .lst-ring-fill { filter: drop-shadow(0 0 8px rgba(20,50,80,.14)); }
+[data-theme="light"] .zoe-list-card .lst-ring-pct { color: var(--sky-ink-0, #16324d); }
+[data-theme="light"] .zoe-list-card .lst-ring-pct i { color: var(--sky-ink-2, #3a5e80); }
+[data-theme="light"] .zoe-list-card .lst-ring-sub,
+[data-theme="light"] .zoe-list-card .lst-hero-sub { color: var(--sky-ink-2, #3a5e80); }
+[data-theme="light"] .zoe-list-card .lst-hero-num { color: var(--sky-ink-0, #16324d); }
+[data-theme="light"] .zoe-list-card .lst-id-badge { box-shadow: inset 0 1px 0 rgba(255,255,255,.6); }
 
-[data-theme="light"] .zoe-list-card .sky-list-count {
+[data-theme="light"] .zoe-list-card .lst-kicker { color: var(--sky-ink-3, #6f88a3); }
+[data-theme="light"] .zoe-list-card .lst-name { color: var(--sky-ink-0, #16324d); }
+[data-theme="light"] .zoe-list-card .lst-count {
   color: var(--sky-ink-2, #3a5e80);
   background: var(--sky-fill-1, rgba(20,50,80,.05));
   border-color: var(--sky-hairline, rgba(20,50,80,.12));
 }
 
-[data-theme="light"] .zoe-list-card .sky-list-switcher {
+[data-theme="light"] .zoe-list-card .lst-switcher {
   background: var(--sky-fill-1, rgba(20,50,80,.045));
   border-color: var(--sky-hairline, rgba(20,50,80,.1));
 }
-
-[data-theme="light"] .zoe-list-card .sky-list-tab { color: var(--sky-ink-2, #3a5e80); }
-[data-theme="light"] .zoe-list-card .sky-list-tab:hover {
+[data-theme="light"] .zoe-list-card .lst-tab { color: var(--sky-ink-2, #3a5e80); }
+[data-theme="light"] .zoe-list-card .lst-tab:hover {
   color: var(--sky-ink-0, #16324d);
   background: var(--sky-fill-2, rgba(20,50,80,.06));
 }
-[data-theme="light"] .zoe-list-card .sky-list-tab.is-active {
+[data-theme="light"] .zoe-list-card .lst-tab.is-active {
   color: var(--sky-ink-0, #16324d);
   background: var(--sky-fill-3, rgba(255,255,255,.92));
   box-shadow: 0 6px 16px -8px rgba(20,50,80,.3);
 }
-[data-theme="light"] .zoe-list-card .sky-list-tab-count {
+[data-theme="light"] .zoe-list-card .lst-tab-count {
   background: var(--sky-fill-2, rgba(20,50,80,.08));
   color: var(--sky-ink-2, #3a5e80);
 }
 
-[data-theme="light"] .zoe-list-card .sky-list-item-row {
-  background: var(--sky-fill-1, rgba(255,255,255,.5));
+[data-theme="light"] .zoe-list-card .lst-row {
+  background: var(--sky-fill-1, rgba(255,255,255,.55));
   border-color: var(--sky-hairline, rgba(20,50,80,.1));
 }
-[data-theme="light"] .zoe-list-card .sky-list-item-row:hover {
-  background: var(--sky-fill-2, rgba(255,255,255,.78));
+[data-theme="light"] .zoe-list-card .lst-row:hover {
+  background: var(--sky-fill-2, rgba(255,255,255,.82));
   border-color: var(--sky-hairline-strong, rgba(20,50,80,.18));
 }
-
-[data-theme="light"] .zoe-list-card .sky-list-check {
-  border-color: var(--sky-hairline-strong, rgba(20,50,80,.28));
+[data-theme="light"] .zoe-list-card .lst-check {
+  border-color: var(--sky-hairline-strong, rgba(20,50,80,.3));
 }
-[data-theme="light"] .zoe-list-card .sky-list-check-mark { fill: #ffffff; }
-
-[data-theme="light"] .zoe-list-card .sky-list-item-main strong { color: var(--sky-ink-0, #16324d); }
-[data-theme="light"] .zoe-list-card .sky-list-item-main em { color: var(--sky-ink-3, #6f88a3); }
-
-[data-theme="light"] .zoe-list-card .sky-list-qty {
+[data-theme="light"] .zoe-list-card .lst-main strong { color: var(--sky-ink-0, #16324d); }
+[data-theme="light"] .zoe-list-card .lst-main em { color: var(--sky-ink-3, #6f88a3); }
+[data-theme="light"] .zoe-list-card .lst-qty strong { color: var(--sky-ink-1, #2a4d6e); }
+[data-theme="light"] .zoe-list-card .lst-flag {
+  color: var(--sky-ink-1, #2a4d6e);
   background: var(--sky-fill-2, rgba(20,50,80,.07));
+  border-color: var(--sky-hairline, rgba(20,50,80,.12));
 }
-[data-theme="light"] .zoe-list-card .sky-list-qty strong { color: var(--sky-ink-1, #2a4d6e); }
 
-[data-theme="light"] .zoe-list-card .sky-list-item-row.is-done {
+[data-theme="light"] .zoe-list-card .lst-row.is-done {
   background: var(--sky-fill-0, rgba(20,50,80,.02));
 }
-[data-theme="light"] .zoe-list-card .sky-list-item-row.is-done .sky-list-item-main strong {
+[data-theme="light"] .zoe-list-card .lst-row.is-done .lst-main strong {
   color: var(--sky-ink-3, #8aa0b6);
   text-decoration-color: var(--sky-ink-4, rgba(20,50,80,.3));
 }
-[data-theme="light"] .zoe-list-card .sky-list-item-row.is-done .sky-list-item-main em,
-[data-theme="light"] .zoe-list-card .sky-list-item-row.is-done .sky-list-qty strong {
+[data-theme="light"] .zoe-list-card .lst-row.is-done .lst-main em,
+[data-theme="light"] .zoe-list-card .lst-row.is-done .lst-qty strong {
   color: var(--sky-ink-4, #a7b8c8);
 }
 
-[data-theme="light"] .zoe-list-card .sky-list-column {
-  background: var(--sky-fill-1, rgba(255,255,255,.52));
+[data-theme="light"] .zoe-list-card .lst-col {
+  background: var(--sky-fill-1, rgba(255,255,255,.55));
   border-color: var(--sky-hairline, rgba(20,50,80,.1));
 }
-[data-theme="light"] .zoe-list-card .sky-list-column:hover {
-  background: var(--sky-fill-2, rgba(255,255,255,.8));
-}
-[data-theme="light"] .zoe-list-card .sky-list-column-head strong { color: var(--sky-ink-0, #16324d); }
-[data-theme="light"] .zoe-list-card .sky-list-column-head em { color: var(--sky-ink-3, #6f88a3); }
-[data-theme="light"] .zoe-list-card .sky-list-column li { color: var(--sky-ink-1, #2a4d6e); }
-[data-theme="light"] .zoe-list-card .sky-list-column li.is-done strong { color: var(--sky-ink-3, #8aa0b6); }
-[data-theme="light"] .zoe-list-card .sky-list-column-empty { color: var(--sky-ink-3, #8aa0b6); }
+[data-theme="light"] .zoe-list-card .lst-col:hover { background: var(--sky-fill-2, rgba(255,255,255,.82)); }
+[data-theme="light"] .zoe-list-card .lst-col-head strong { color: var(--sky-ink-0, #16324d); }
+[data-theme="light"] .zoe-list-card .lst-col-head em { color: var(--sky-ink-3, #6f88a3); }
+[data-theme="light"] .zoe-list-card .lst-col-bar { background: rgba(20,50,80,.1); }
+[data-theme="light"] .zoe-list-card .lst-col li { color: var(--sky-ink-1, #2a4d6e); }
+[data-theme="light"] .zoe-list-card .lst-col li.is-done strong { color: var(--sky-ink-3, #8aa0b6); }
+[data-theme="light"] .zoe-list-card .lst-col-empty { color: var(--sky-ink-3, #8aa0b6); }
 
-[data-theme="light"] .zoe-list-card .sky-list-empty {
+[data-theme="light"] .zoe-list-card .lst-empty {
   background: var(--sky-fill-1, rgba(20,50,80,.03));
   border-color: var(--sky-hairline-strong, rgba(20,50,80,.18));
 }
-[data-theme="light"] .zoe-list-card .sky-list-empty strong { color: var(--sky-ink-1, #2a4d6e); }
-[data-theme="light"] .zoe-list-card .sky-list-empty span { color: var(--sky-ink-3, #6f88a3); }
+[data-theme="light"] .zoe-list-card .lst-empty strong { color: var(--sky-ink-1, #2a4d6e); }
+[data-theme="light"] .zoe-list-card .lst-empty span { color: var(--sky-ink-3, #6f88a3); }
