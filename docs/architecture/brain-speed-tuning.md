@@ -88,10 +88,18 @@ local:global** ratio, so only the global layers hold full-length KV; local layer
 ~1024 tokens. That is why Gemma's KV footprint grows far slower than a dense model's.
 
 Order-of-magnitude per-token full-attention KV (f16):
-`layers × 2(K+V) × kv_heads × head_dim × 2B ≈ 35 × 2 × 2 × 256 × 2 ≈ 143 KB/token`
-**if every layer were global**. With 5:1 SWA most layers are window-capped, so the
-*effective* KV at long ctx is a fraction of that — empirically Gemma 3/4 KV is ~15% of a
-global-only model at long context.
+`layers × 2(K+V) × kv_heads × head_dim × 2B ≈ 35 × 2 × 2 × 256 × 2 ≈ 71,680 B ≈ 70 KB/token`
+**if every layer were global** and the E4B text tower really has 2 KV heads. (If the
+tower turns out to use ~4 KV heads — the exact `num_key_value_heads` for the E4B text
+tower was not pinned down from the public config, so **confirm it from the loaded GGUF
+metadata before trusting the absolute number** — this doubles to ~140 KB/token.) With 5:1
+SWA most layers are window-capped, so the *effective* KV at long ctx is a fraction of that
+— empirically Gemma 3/4 KV is ~15% of a global-only model at long context.
+
+> **Treat the table below as relative deltas, not absolute MiB.** The only number that
+> matters for go/no-go is the **measured** `KV buffer` line in the server startup log at
+> ctx 8192 + q8_0-K (see Verification); re-derive the ~1.7 GB headroom check against that,
+> not against this back-of-envelope.
 
 Practical envelope (estimate — **measure on the Orin**, see Verification):
 
@@ -301,8 +309,8 @@ Secondary / track-only:
 4. **MTP still works:** confirm `--spec-type mtp` loads and acceptance stats appear; diff
    gen tok/s before/after.
 5. **Behavioural regression:** replay Jason's `~/.zoe-voice-samples` corpus
-   (`tests/replay_samples.py`) — said-vs-did must be unchanged. Re-running the prompt-order
-   change (#2) especially must not alter tool selection.
+   (`services/zoe-data/tests/replay_samples.py`) — said-vs-did must be unchanged.
+   Re-running the prompt-order change (#2) especially must not alter tool selection.
 
 ## Sources
 
