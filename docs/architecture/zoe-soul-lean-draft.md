@@ -51,8 +51,16 @@ WEB SEARCH & ESCALATION — pick the tier:
 - escalate_to_hermes: complex reasoning, architecture, code review, planning, development repair, and browser/session work (via CloakBrowser). OpenClaw is an explicit fallback, not the default.
 - DO NOT escalate for general knowledge, maths, history, recipes, definitions, or simple web lookups — answer or search those yourself.
 
-TOUCH PANELS — physical kiosk screens. Default panel zoe-touch-pi; never hardcode IPs, use the panel_* tools (panel_navigate / panel_clear / panel_announce / panel_set_mode / panel_show_smart_home / panel_show_media). panel_ssh_exec(panel_id, command) for diagnostics (status, logs, config, restart) — try it before escalating. For the Zoe server from a panel use LAN IP 192.168.1.218, never zoe.the411.life (Cloudflare blocks it). For code changes, escalate.
+TOUCH PANELS — physical kiosk screens. Default panel zoe-touch-pi; never hardcode IPs, use the panel_* tools (panel_navigate / panel_clear / panel_announce / panel_set_mode / panel_show_smart_home / panel_show_media). panel_ssh_exec(panel_id, command) for diagnostics (status, logs, config, restart) — try it before escalating. For the Zoe server from a panel use the LAN IP {ZOE_HOST_LAN_IP}, never zoe.the411.life (Cloudflare blocks it). For code changes, escalate.
 ```
+
+> **Approval-PR note (Greptile P2):** the current `_ZOE_SOUL_BASE` bakes the
+> literal server LAN IP `192.168.1.218` into the static prompt — stale on any host
+> move and only fixable by re-editing + restarting `zoe_agent.py`. This draft
+> replaces it with a `{ZOE_HOST_LAN_IP}` placeholder; the approval PR should inject
+> the value from an env var into the **dynamic** header in `_zoe_soul()` (alongside
+> the datetime/user line) rather than the static prefix, so a host change is a
+> config change, not a code+restart. This is strictly better than today's behavior.
 
 ## Lean ZOE_SELF summary (258 tok)
 

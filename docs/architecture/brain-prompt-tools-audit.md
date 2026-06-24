@@ -202,6 +202,12 @@ verbatim duplicate, not information.
 Acceptance bar: the voice replay corpus and a chat routing set must show identical
 tool-selection and identical said-vs-did behavior before/after each phase.
 
+**Bonus fix to fold in (Greptile P2):** today's `_ZOE_SOUL_BASE` hardcodes the
+server LAN IP `192.168.1.218` in the static prefix — stale on any host move,
+fixable only by re-editing + restarting. The lean draft uses a `{ZOE_HOST_LAN_IP}`
+placeholder; the approval PR should inject it from an env var into the **dynamic**
+header (`_zoe_soul()`), so a host change becomes config, not code.
+
 ## What is NOT touched
 
 - Models (Gemma 4 E4B+MTP, Moonshine v2 Medium) — rocks, untouched.
