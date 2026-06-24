@@ -4677,7 +4677,12 @@
 
         }
 
-        .sky-ambient-clock {
+        /* Scope the clock-element styles to its ID. `sky-ambient-clock` is ALSO
+           a <body> state-flag (skybridge.js adds it to body), so a bare
+           `.sky-ambient-clock` rule with position:fixed/opacity:0 wrongly matched
+           the body and faded the whole UI invisible. Targeting #skyAmbientClock
+           keeps these on the element only. */
+        #skyAmbientClock {
             position: fixed;
             top: clamp(54px, 7.5vh, 84px);
             left: 50%;
@@ -4693,12 +4698,12 @@
             text-shadow: 0 18px 70px rgba(0,0,0,0.55);
         }
 
-        body.sky-empty.sky-ambient-clock .sky-ambient-clock {
+        body.sky-empty.sky-ambient-clock #skyAmbientClock {
             opacity: 1;
             transform: translateX(-50%) translateY(0);
         }
 
-        body:not(.sky-empty) .sky-ambient-clock {
+        body:not(.sky-empty) #skyAmbientClock {
             opacity: 0;
             transform: translateX(-50%) translateY(-10px);
         }
