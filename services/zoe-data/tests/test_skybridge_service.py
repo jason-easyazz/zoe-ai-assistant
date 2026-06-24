@@ -1474,12 +1474,14 @@ async def test_all_producers_conform_zero_divergence(caplog):
     change reintroduces a non-conforming card on these paths, this fails loudly."""
     import logging
 
-    cases = await _gather_real_results()
+    # Capture the gate exactly as it runs inside resolve_skybridge_request, which
+    # calls _attach_skybridge_context -> _validate_cards_for_convergence on the way
+    # out. Wrapping caplog around the resolver calls themselves observes the real
+    # production pass (not a re-run), so the proof matches the live path.
     with caplog.at_level(logging.INFO, logger="skybridge_service"):
-        for result in cases:
-            # _attach_skybridge_context runs the gate on the way out of resolve.
-            skybridge_service._attach_skybridge_context(result)
+        results = await _gather_real_results()
 
+    assert results, "expected the representative resolvers to produce handled results"
     diverged = [r.message for r in caplog.records if "non-conforming [convergence]" in r.message]
     assert diverged == [], f"producers must all conform; gate flagged: {diverged}"
 
