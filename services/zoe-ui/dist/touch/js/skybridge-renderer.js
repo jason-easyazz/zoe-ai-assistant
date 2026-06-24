@@ -379,11 +379,15 @@
     function renderClock(props) {
         const timezone = props.timezone || '';
         const parts = clockParts(timezone);
+        const dateText = parts.date || [props.weekday, props.date_label].filter(Boolean).join(', ');
+        // Re-skin only: preserve .sky-clock-scene/.sky-live-clock + the data-clock-*
+        // spans so updateAllClocks() in skybridge.js keeps the numerals ticking live.
         const body = [
             '<div class="sky-clock-scene sky-live-clock" data-timezone="' + escapeHtml(timezone) + '">',
             '<div class="sky-clock-main">',
-            '<div class="sky-clock-time"><span data-clock-hour>' + escapeHtml(parts.hour || props.hour || '') + '</span><i>:</i><span data-clock-minute>' + escapeHtml(parts.minute || props.minute || '') + '</span><b data-clock-meridiem>' + escapeHtml(parts.dayPeriod || props.meridiem || '') + '</b></div>',
-            '<div class="sky-clock-date" data-clock-date>' + escapeHtml(parts.date || [props.weekday, props.date_label].filter(Boolean).join(', ')) + '</div>',
+            '<p class="sky-clock-kicker">Local time</p>',
+            '<div class="sky-clock-time"><span class="sky-clock-h" data-clock-hour>' + escapeHtml(parts.hour || props.hour || '') + '</span><i class="sky-clock-colon">:</i><span class="sky-clock-m" data-clock-minute>' + escapeHtml(parts.minute || props.minute || '') + '</span><b class="sky-clock-mer" data-clock-meridiem>' + escapeHtml(parts.dayPeriod || props.meridiem || '') + '</b></div>',
+            '<div class="sky-clock-date" data-clock-date>' + escapeHtml(dateText) + '</div>',
             '</div>',
             '</div>'
         ].join('');
