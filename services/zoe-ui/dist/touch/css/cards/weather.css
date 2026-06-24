@@ -46,6 +46,10 @@
 .weather-card .wx-sld { font-size: 21px; width: 56px; font-weight: 500; }
 .weather-card .wx-dt { font-size: 21px; } .weather-card .wx-dt b { font-weight: 600; } .weather-card .wx-lo { opacity: 0.6; }
 .weather-card .sky-glyph { display: block; }
+/* Belt-and-suspenders: the confirmed glow was on the element's own background
+   (overridden below), but also suppress any legacy decorative pseudo-elements so
+   a glow can't reappear via ::before/::after. */
+.sky-card.weather-card::before, .sky-card.weather-card::after { content: none !important; background: none !important; }
 /* The legacy `body:not(.sky-empty) .weather-card.sky-premium-card` rule (0,3,1
    !important) injected a sun-glow background + a 370px height that beat the
    re-skin's `.sky-card.weather-card.wx-*` (0,3,0). Override with a higher-
