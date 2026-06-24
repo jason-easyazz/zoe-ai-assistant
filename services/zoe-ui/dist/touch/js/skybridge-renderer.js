@@ -202,10 +202,14 @@
             const startDay = String(item.start_date || item.date || '').slice(0, 10);
             if (/^\d{4}-\d{2}-\d{2}$/.test(startDay)) {
                 const today = new Date(nowMs);
-                const todayKey = today.getFullYear() + '-' +
-                    String(today.getMonth() + 1).padStart(2, '0') + '-' +
-                    String(today.getDate()).padStart(2, '0');
-                if (startDay === todayKey) return 'All day';
+                const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+                const startMs = Date.parse(startDay + 'T00:00:00');
+                if (Number.isFinite(startMs)) {
+                    const dDays = Math.round((startMs - todayStart) / 86400000);
+                    if (dDays <= 0) return 'All day';
+                    if (dDays === 1) return 'All day · tomorrow';
+                    if (dDays < 7) return 'All day · ' + new Date(startMs).toLocaleDateString(undefined, { weekday: 'long' });
+                }
             }
             return 'All day';
         }
@@ -214,7 +218,7 @@
         const diffMin = Math.round((startMs - nowMs) / 60000);
         if (diffMin <= -60) {
             const h = Math.round(-diffMin / 60);
-            return h + (h === 1 ? 'h ago' : 'h ago');
+            return h + 'h ago';
         }
         if (diffMin < 0) return Math.abs(diffMin) + ' min ago';
         if (diffMin === 0) return 'Now';
