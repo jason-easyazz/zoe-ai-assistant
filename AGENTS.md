@@ -6,9 +6,22 @@
 
 **Tool discipline (these get skipped — don't skip them):** use **Serena** + **codebase-memory** (MCP, see `.mcp.json`) for code navigation/edits over raw grep; **opensrc** (`opensrc path …`) for third-party source before guessing; the **Greptile loop** to drive PRs to merge; follow the **DOX** doc conventions below. Detail for each is in the sections that follow.
 
+<!-- start-of-task-checklist -->
+## Start-of-task checklist (non-optional)
+
+Before any code task, you MUST — do not fall back to raw grep/guessing:
+
+- **Navigate + edit code via the MCP bus, not raw grep/Read/Edit.** Use **codebase-memory** for who-calls-what / architecture / seams and **Serena** for symbol read + symbolic edits. Reach for `grep`/`Read` only when the bus genuinely can't answer.
+- **Use `opensrc` for any third-party API before guessing** — `opensrc path pypi:<pkg>@<version>` (pin the installed version). Never invent library behaviour from memory.
+- **Drive every PR to merge with the Greptile loop** — reply to + RESOLVE each Greptile thread, follow up until it actually merges; squash only, never `--admin`/`--force`.
+- **Follow the DOX `AGENTS.md` chain** — read the root plus every nested `AGENTS.md` on the path to files you touch, and do the closeout DOX pass after editing (see *DOX framework* below).
+- **Honour the rocks.** Gemma 4 E4B+MTP (brain) and Moonshine v2 Medium (STT) are fixed — optimise *around* them, never propose swapping (see `docs/VISION.md` principle 1). **Retire by removing** (git keeps history); don't hoard `_old`/`_v2`/archive copies.
+
 ---
 
 ## graphify
+
+> **Superseded — graphify is retired.** Per the Start-of-task checklist above, use the **codebase-memory** MCP for who-calls-what / architecture and **Serena** for symbol read + edits. The notes below are kept only for the still-committed `graphify-out/` artifacts; do not reach for graphify over the MCP bus. (Full reconciliation tracked as audit fix #7.)
 
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
 

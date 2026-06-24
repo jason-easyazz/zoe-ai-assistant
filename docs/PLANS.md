@@ -20,11 +20,11 @@ a link to the detail + where it's up to. Mark ✅ when done so nothing lingers h
 ### Samantha-grade memory
 - **Goal:** local, fast, **no-nightly** companion memory — tell it in the morning, reference it in the afternoon; recalls the emotional thread; feels like Samantha.
 - **Detail / executable plan:** [`docs/architecture/zoe-memory-samantha-buildplan.md`](architecture/zoe-memory-samantha-buildplan.md) (has the NEXT ACTION pointer + checklist).
-- **Now:** Increment 1a (idle-consolidation engine) merged behind a flag → **NEXT: 1b** (persist the per-turn user so consolidation knows whose memory to write).
+- **Now:** 1a (idle-consolidation engine, #771) ✅ + 1b (per-turn user, #775) ✅ **merged** behind the `ZOE_IDLE_CONSOLIDATION_ENABLED` flag → **NEXT: 1c** — lab-prove the live→idle→store→recall loop against the Samantha acceptance bar, then enable the flag in prod (🔨 in progress).
 
 ### Agent + tooling readiness (for Jason to work on Zoe remotely)
-- **Goal:** Omnigent + Claude Code + Codex all set up correctly and **actually using** the repo's tools (Serena, codebase-memory, opensrc, Greptile/greploop, Dox), with a shared command center (this) so ideas/plans don't scatter.
-- **Detail:** see Backlog below. The tools mostly *exist*; the gap is **adoption + verification**, not setup-from-scratch.
+- **Goal:** Omnigent + Claude Code + Codex + Cursor all set up correctly and **actually using** the repo's tools (Serena, codebase-memory, opensrc, Greptile/greploop, Dox), with a shared command center (this) so ideas/plans don't scatter.
+- **Now:** audit ✅ (#774, `docs/agent-setup-audit.md`); opensrc populated ✅ (#773); **Claude Code** wired ✅ (#787 — `CLAUDE.md`+committed `.mcp.json`), **Codex** ✅ (#788 — `.codex/config.toml`), **Cursor** ✅ (#786 — fixed `.cursor/mcp.json`). **Remaining (🔨 in progress):** Omnigent container code-intel + tool-use enforcement (AGENTS.md start-of-task checklist).
 
 ### Touch / Chat UI — "window into Zoe" (foundation-first)
 - **Goal:** the touch panel + chat page become a real window into Zoe — type/speak anything, get working interactive components (not prose). DeerFlow-grade, dynamic from basic (calendar) to advanced (Pi builds something new).
@@ -36,17 +36,21 @@ a link to the detail + where it's up to. Mark ✅ when done so nothing lingers h
 ## 🗂️ Backlog — pinned & sequenced (from Jason, 2026-06-23)
 *Agent/tooling readiness for remote work. Each is a tracked item; do them in order, don't bounce.*
 
-- [ ] **1. Audit Omnigent** — is it set up correctly for remote coding-on-Zoe? (`zoe-omnigent` container is up.)
-- [ ] **2. Audit Claude Code** — does it load repo rules? (CLAUDE.md → AGENTS.md; `.mcp.json` wires Serena + codebase-memory — confirm they load + are used.)
-- [ ] **3. Audit Codex** — does it read `AGENTS.md` (its native convention) + get the tools?
-- [ ] **4. Enforce tool use across ALL agents** — Serena, codebase-memory, opensrc, Greptile/greploop, Dox keep getting **skipped** even though configured. Make AGENTS.md rules salient/enforced + verify each agent entrypoint references them. (Even Claude in the app skips them — noted in memory.)
-- [ ] **5. Populate opensrc with our reference repos** — has ag-ui-protocol, chroma, fastapi, livekit, browser-use…; **missing**: Skybridge, llama.cpp, Serena, codebase-memory, Dox, Pi agent, hermes, openclaw, Open Knowledge Framework. Add them so agents read real source, not guesses.
-- [ ] **6. Verify the Dox `AGENTS.md` system is actually referenced by each agent** (Q7) + complete the repo rules so they're consistent and loaded.
-- [x] **7. Stand up this command center** — `docs/IDEAS.md` (ideas board) + `docs/PLANS.md` (this) + wire into `AGENTS.md`. ✅
-- [ ] **8. Research a richer ideas-board surface** (see IDEAS.md) — maybe an existing project fits.
+- [x] **1. Audit Omnigent** ✅ — done in #774. Fix (bake/mount Serena+codebase-memory+opensrc into the container) 🔨 in progress.
+- [x] **2. Audit + wire Claude Code** ✅ — #774 audit; #787 added `CLAUDE.md`→`@AGENTS.md` and committed the previously-ignored `.mcp.json` (Serena + codebase-memory).
+- [x] **3. Audit + wire Codex** ✅ — #774 audit; #788 added repo-local `.codex/config.toml` registering both MCP servers (Codex reads `AGENTS.md` natively).
+- [ ] **4. Enforce tool use across ALL agents** 🔨 in progress — AGENTS.md "start-of-task checklist" making code-intel/opensrc/Greptile/DOX non-optional + verifying each entrypoint references the hub.
+- [x] **5. Populate opensrc with our reference repos** ✅ — #773 (llama.cpp, Serena, codebase-memory, OKF; confirmed ag-ui, MemPalace; mapped internal sources).
+- [ ] **6. Verify the Dox `AGENTS.md` system is referenced by each agent** — folded into #4 (Cursor pointer ✅ #786; Claude ✅ #787; Codex native ✅; Omnigent pending the container fix).
+- [x] **7. Stand up this command center** ✅ — `docs/IDEAS.md` + `docs/PLANS.md` + wired into `AGENTS.md` (landed via the VISION train).
+- [ ] **8. Research a richer ideas-board surface** (see IDEAS.md) — 📝 not started.
 
 ---
 
 ## ✅ Done
+- **Repo cleanup + lock-in (2026-06-24):** purged `docs/archive` (84MB→1.9MB) + a 69MB untracked backup; added `docs/CANONICAL.md` (single live/dead authority) + `test_canonical_invariants.py` (CI fails if a rock is swapped) + wired CANONICAL into AGENTS.md READ-FIRST; fixed manifest E2B→E4B drift. (#777)
+- **Module retirement (2026-06-24):** retired `orbit`/`agent-zero`/`jag-board`/`questionable-decisions` (code + nginx/UI/compose wiring); `jag-board` + `questionable-decisions` preserved (private repos + local archive); `zoe-music` kept, pinned for Music Assistant migration. (#779)
+- **Agent-readiness wave (2026-06-24):** opensrc repos (#773), agent audit (#774), Claude Code (#787) / Codex (#788) / Cursor (#786) all wired to load the rules + code-intel MCP.
+- **Samantha memory 1a + 1b (2026-06-24):** idle-consolidation engine (#771) + per-turn user (#775), behind a flag.
 - **Voice + memory hardening (2026-06-23):** capture/first-audio/recall fixes, write-quality gate, junk cleanup, identity-from-auth. (See PR history; memory `project-mempalace-deep-dive`.)
-- **Command center stood up** (this doc + IDEAS.md).
+- **Command center stood up** (this doc + IDEAS.md + VISION.md).
