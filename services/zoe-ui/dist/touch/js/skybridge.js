@@ -12,6 +12,7 @@
     let currentUtterance = '';
     let voiceStartedByUser = false;
     let commandFallbackOpen = false;
+    let voiceErrorFallback = false;
     let skybridgeContext = {};
     let authProfiles = [];
     let authHydrationSequence = 0;
@@ -105,6 +106,11 @@
             event.preventDefault();
             submitCommand(els.input.value);
             els.input.value = '';
+            // The user has committed their message and the input is empty again,
+            // so if we deferred a voice recovery while they were typing (a 'ready'
+            // arrived mid-message), do it now — otherwise no further 'ready' fires
+            // and the panel stays stuck in the typing fallback.
+            recoverFromVoiceError();
         });
         els.input.addEventListener('focus', () => {
             if (!commandFallbackOpen) {
@@ -214,6 +220,11 @@
         if (event && event.type !== 'ready' && orbState !== 'ambient') armStallWatchdog();
         if (event.type === 'ready') {
             setStatus('Ready on ' + event.mode);
+            // Voice transport just (re)connected. If we'd dropped into the typing
+            // fallback purely because voice errored/disconnected, recover to voice
+            // instead of leaving the panel stuck on "Type here while voice
+            // reconnects..." after the socket is already back.
+            recoverFromVoiceError();
         } else if (event.type === 'state') {
             setState(event.state || 'ambient');
         } else if (event.type === 'transcript') {
@@ -229,6 +240,7 @@
         } else if (event.type === 'error') {
             showError(event.message);
             if (/voice disconnected|transport unavailable|livekit unavailable|websocket|microphone|permission/i.test(event.message || '')) {
+                voiceErrorFallback = true;
                 openCommandFallback('Type here while voice reconnects...');
             }
         } else if (event.type === 'done') {
@@ -404,6 +416,7 @@
         document.body.classList.add('sky-empty');
         document.body.classList.add('sky-ambient-clock');
         commandFallbackOpen = false;
+        voiceErrorFallback = false;
         document.body.classList.remove('sky-command-open');
         document.body.classList.remove('sky-typing-fallback');
         syncVoiceFallbackState();
@@ -895,6 +908,24 @@
 
     function syncVoiceFallbackState() {
         document.body.classList.toggle('sky-voice-fallback', !canUseMicrophone());
+    }
+
+    // Voice came back after an error-driven typing fallback. Quietly return the
+    // panel to voice mode — but only when it's safe: the mic must actually be
+    // usable, and we must not be yanking the keyboard away from a user who has
+    // started typing a message. Cards/context on screen are left untouched.
+    function recoverFromVoiceError() {
+        if (!voiceErrorFallback) return;
+        if (!canUseMicrophone()) return;
+        if (els.input && els.input.value.trim()) return;
+        voiceErrorFallback = false;
+        commandFallbackOpen = false;
+        if (els.input) els.input.placeholder = '';
+        document.body.classList.remove('sky-command-open');
+        document.body.classList.remove('sky-typing-fallback');
+        syncVoiceFallbackState();
+        // Leave the status line as the caller set it (e.g. "Ready on local") — it
+        // carries the transport mode; don't clobber it with a generic message.
     }
 
     function openCommandFallback(message) {
