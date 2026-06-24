@@ -18,6 +18,7 @@ background loop). Reuses the existing Gemma extractor + write-quality gate.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 from typing import Any, Optional
@@ -47,7 +48,16 @@ CHECK_INTERVAL = _int_env("ZOE_IDLE_CONSOLIDATION_CHECK_S", 60)
 MIN_TURNS = _int_env("ZOE_IDLE_CONSOLIDATION_MIN_TURNS", 2)
 
 
+# Run the bootstrap DDL once per process, not on every 60s sweep. (The table is a
+# local watermark store; if a future increment needs to evolve its schema, do that
+# through the migration framework, not this CREATE-IF-NOT-EXISTS.)
+_state_table_ready = False
+
+
 async def _ensure_state_table(conn) -> None:
+    global _state_table_ready
+    if _state_table_ready:
+        return
     await conn.execute(
         """
         CREATE TABLE IF NOT EXISTS memory_consolidation_state (
@@ -58,6 +68,7 @@ async def _ensure_state_table(conn) -> None:
         )
         """
     )
+    _state_table_ready = True
 
 
 async def find_idle_sessions(conn) -> list[dict]:
@@ -136,10 +147,13 @@ async def consolidate_session(conn, session_id: str, user_id: str,
             ok = True
         if not ok:
             continue
+        # Stable dedup id so a re-run of the same session before the watermark
+        # advances collapses to one row (mirrors the voice path's hash behaviour).
+        turn_id = "idle:" + hashlib.sha1(f"{session_id}:{text}".encode("utf-8")).hexdigest()[:16]
         try:
             await _ingest_or_supersede(
                 svc, text, user_id=user_id, source="idle_consolidation",
-                session_id=session_id, user_turn_id=None,
+                session_id=session_id, user_turn_id=turn_id,
                 memory_type="fact", confidence=0.8, tags=["idle", "self"],
             )
             stored += 1
@@ -172,25 +186,39 @@ async def run_idle_consolidation_sweep() -> dict:
         await _ensure_state_table(conn)
         sessions = await find_idle_sessions(conn)
         for s in sessions:
-            since = await conn.fetchval(
-                "SELECT last_consolidated_at FROM memory_consolidation_state WHERE session_id=$1",
-                s["session_id"],
-            )
-            stored = await consolidate_session(conn, s["session_id"], s["user_id"], since)
-            result["sessions"] += 1
-            result["stored"] += stored
+            # Isolate per-session failures: a Gemma OOM/timeout or a watermark write
+            # error on one session must not abort the rest of the batch. The failing
+            # session's watermark is left un-advanced, so it retries next sweep.
+            try:
+                since = await conn.fetchval(
+                    "SELECT last_consolidated_at FROM memory_consolidation_state WHERE session_id=$1",
+                    s["session_id"],
+                )
+                stored = await consolidate_session(conn, s["session_id"], s["user_id"], since)
+                result["sessions"] += 1
+                result["stored"] += stored
+            except Exception as exc:
+                logger.warning("idle consolidation: session %s failed (skipping): %s",
+                               s.get("session_id"), exc)
     return result
 
 
 async def start_idle_consolidation_loop() -> None:
     """Background loop: every CHECK_INTERVAL, consolidate any newly-idle conversation.
-    Self-gates on the enable flag so it's a no-op (and logs once) when disabled."""
-    if not _enabled():
-        logger.info("idle consolidation disabled (ZOE_IDLE_CONSOLIDATION_ENABLED=0)")
-        return
-    logger.info("idle consolidation loop started (idle=%ds check=%ds lookback=%ds)",
-                IDLE_SECONDS, CHECK_INTERVAL, LOOKBACK_SECONDS)
+    Self-gates on the enable flag EACH iteration so the task persists and picks up a
+    dynamically-flipped ZOE_IDLE_CONSOLIDATION_ENABLED without a service restart."""
+    logged_disabled = False
     while True:
+        if not _enabled():
+            if not logged_disabled:
+                logger.info("idle consolidation disabled (ZOE_IDLE_CONSOLIDATION_ENABLED=0); loop idling")
+                logged_disabled = True
+            await asyncio.sleep(CHECK_INTERVAL)
+            continue
+        if logged_disabled:
+            logger.info("idle consolidation re-enabled (idle=%ds check=%ds lookback=%ds)",
+                        IDLE_SECONDS, CHECK_INTERVAL, LOOKBACK_SECONDS)
+            logged_disabled = False
         try:
             res = await run_idle_consolidation_sweep()
             if res.get("sessions"):
