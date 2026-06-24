@@ -85,3 +85,45 @@ built-in accounts mode. Wiring:
 - Tunnel: add `omnigent.<domain>` ingress to `config/cloudflared-config.yml` →
   `http://zoe-omnigent:6767`, plus the `https://omnigent.<domain>/auth/callback` redirect URI in
   the zoe-auth `omnigent` client. Cloudflare Access optional now that OIDC gates the UI.
+
+## Code-intel tooling (Serena / codebase-memory / opensrc)
+The container has the Zoe repo at `/workspace` but originally **none** of the code-intel
+tooling, so the MCP servers wired in the repo's `.mcp.json` (host paths
+`/home/zoe/.local/bin/...`) could not resolve inside it (audit fix #4,
+`docs/agent-setup-audit.md`).
+
+**Approach: mount, don't rebuild.** The compose mounts the host's tool installs **read-only
+at their identical host paths**, so the absolute paths in the root `.mcp.json` and
+`.codex/config.toml` resolve verbatim:
+
+| Mount (host → container, ro) | Provides |
+|---|---|
+| `/home/zoe/.local/bin` | `serena`, `codebase-memory-mcp`, `opensrc` launchers |
+| `/home/zoe/.local/share/uv` | serena's venv (`tools/serena-agent`) + its uv-managed CPython |
+| `/home/zoe/.cursor-server/.../opensrc` | the real `opensrc` aarch64 binary the symlink targets |
+| `/home/zoe/.opensrc` | opensrc's source cache |
+
+`PATH` is prepended with `/home/zoe/.local/bin` so the tools resolve as bare commands too.
+`codebase-memory-mcp` is a self-contained static aarch64 ELF; `serena` and `opensrc` are
+symlinks whose targets are covered by the mounts above.
+
+**Container `.mcp.json`:** the root `.mcp.json` pins serena to `--project /home/zoe/assistant`,
+but inside the container the repo lives at `/workspace`. Use the tracked container-relative
+`modules/omnigent/.mcp.json` (serena `--project /workspace`) for Claude-in-container — copy it
+to `/workspace/.mcp.json` (or to the agent's cwd) if the host root `.mcp.json` is not the one
+that should be active inside the container.
+
+**Repo rules:** the repo-root `CLAUDE.md` (tracked, `@AGENTS.md`-includes the hub) is visible
+at `/workspace/CLAUDE.md`, so Claude-in-container reads the rules.
+
+**Apply (operator, one-time):** these mounts change the container definition, so a
+`docker compose ... up -d` recreate is required to pick them up — the running container was
+intentionally NOT recreated by the change:
+```bash
+docker compose --env-file ../../.env -f docker-compose.module.yml up -d   # recreates with mounts
+docker exec zoe-omnigent serena --help >/dev/null && echo serena-ok
+docker exec zoe-omnigent codebase-memory-mcp --help >/dev/null && echo cbm-ok
+docker exec zoe-omnigent opensrc --version
+```
+Verified against the exact base image (`python:3.12-slim-bookworm`) in a throwaway `--rm`
+container: all three resolve and run with only these mounts (no image rebuild).
