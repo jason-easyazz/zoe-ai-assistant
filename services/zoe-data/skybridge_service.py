@@ -917,7 +917,6 @@ def _auth_required_result(intent: SkybridgeIntent) -> dict[str, Any]:
                 "body": body,
                 "domain": domain,
                 "action": intent.action,
-                "actions": [{"type": "auth", "label": "Sign in", "route": ""}],
             },
         }],
         "actions": [{"type": "auth_required", "domain": intent.domain, "action": intent.action}],
