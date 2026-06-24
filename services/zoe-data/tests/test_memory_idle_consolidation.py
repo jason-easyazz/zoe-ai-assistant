@@ -98,10 +98,7 @@ def test_saved_message_carries_user_id_in_metadata(monkeypatch):
     """_save_chat_message stamps the resolved user into chat_messages.metadata as
     JSON {"user_id": ...}; guest/empty users leave metadata NULL."""
     import json as _json
-    import sys
-    import types
 
-    # Stub db_pool so chat._save_chat_message can run without a real Postgres pool.
     captured = []
 
     class _FakeDB:
@@ -121,11 +118,14 @@ def test_saved_message_carries_user_id_in_metadata(monkeypatch):
         async def __aexit__(self, *a):
             return False
 
-    fake_db_pool = sys.modules.get("db_pool") or types.ModuleType("db_pool")
-    monkeypatch.setattr(fake_db_pool, "get_db_ctx", lambda: _Ctx(), raising=False)
-    monkeypatch.setitem(sys.modules, "db_pool", fake_db_pool)
-
+    # Import the real module chain FIRST (routers.chat -> database -> db_pool), then
+    # patch only get_db_ctx on the already-loaded real db_pool. Replacing the whole
+    # db_pool module in sys.modules *before* this import shadowed `database`'s
+    # `from db_pool import get_db` and broke the import chain.
+    import db_pool
     from routers.chat import _save_chat_message
+
+    monkeypatch.setattr(db_pool, "get_db_ctx", lambda: _Ctx())
 
     # Real user → metadata holds the user_id.
     captured.clear()

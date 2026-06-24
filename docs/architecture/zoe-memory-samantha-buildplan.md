@@ -51,20 +51,26 @@ memory unprompted; its understanding of the user evolves.
 
 ## 4. Increments (sequenced; each = PR + flag + Samantha gate)
 ### Increment 1 — idle "live → idle → store" consolidation
-- **1a ✅ DONE** — engine `memory_idle_consolidation.py` (+ tests, `main.py` loop),
-  flag `ZOE_IDLE_CONSOLIDATION_ENABLED` (off). Branch `feat/memory-idle-consolidation`.
-- **1b ← NEXT** — *persist the effective user on each turn.* Conversations currently
-  store `chat_sessions.user_id='guest'` even when authenticated, so consolidation
-  can't resolve the owner. Fix: in `routers/chat.py:_save_chat_message` store the
-  user_id into `chat_messages.metadata` (JSON) at write time; callers
-  (`chat.py` ~660 and voice `_schedule_voice_chat_save` in `voice_tts.py`) pass the
-  resolved `effective_user`. Update `memory_idle_consolidation.find_idle_sessions` /
-  `consolidate_session` to resolve the user from message metadata (fallback to
-  `chat_sessions.user_id` when present and non-guest). **Verify:** lab sweep finds a
-  real (jason) idle session and consolidates clean facts.
-- **1c** — *lab-prove + gate + prod-enable.* Enable the flag in the worktree; replay
-  a morning→afternoon exchange; confirm afternoon cross-session recall. Add a
-  same-day-cross-session case to the zoe-core Samantha tests. Then enable the prod flag.
+- **1a ✅ DONE (PR #771)** — engine `memory_idle_consolidation.py` (+ tests, `main.py`
+  loop), flag `ZOE_IDLE_CONSOLIDATION_ENABLED` (off). Branch `feat/memory-idle-consolidation`.
+- **1b ✅ DONE (PR #775)** — *persist the effective user on each turn.* Conversations
+  stored `chat_sessions.user_id='guest'` even when authenticated, so consolidation
+  couldn't resolve the owner. Fixed: `routers/chat.py:_save_chat_message` stamps the
+  resolved user into `chat_messages.metadata` (JSON `{"user_id": ...}`) at write time;
+  chat + voice callers pass the resolved `effective_user`; guest/empty leaves metadata
+  NULL. `memory_idle_consolidation._resolve_owner` resolves the owner from per-turn
+  metadata (most-recent non-guest, freq tie-break), falling back to a real
+  `chat_sessions.user_id` only. Sessions with no resolvable real user are skipped.
+- **1c ← NEXT** — *lab-prove + gate + prod-enable.* The merged 1a+1b code is gated OFF
+  behind `ZOE_IDLE_CONSOLIDATION_ENABLED`. This increment proves the full loop and
+  preps (does NOT execute) the prod enable. Steps: (1) self-contained CI acceptance
+  test `tests/test_samantha_acceptance_loop.py` exercising live→idle→store→recall
+  against the merged engine (Gemma extractor + DB mocked, real gate + real ingest/recall
+  path); (2) the lab-enable runbook in §8 (flip the flag in a worktree against real
+  Postgres/Chroma/Gemma, replay a morning→afternoon exchange, confirm afternoon
+  cross-session recall, run the zoe-core integration Samantha tests); (3) the prod-enable
+  runbook in §8 — what to flip, what to watch, what still needs the live box. **The prod
+  flag stays OFF; Jason blesses the prod enable.**
 - **DoD:** a fact told now is consolidated within minutes of idle and recalled in a
   later session, with junk gated out.
 
@@ -104,17 +110,67 @@ memory unprompted; its understanding of the user evolves.
 ## 6. Status / where am I
 - [x] Deep dive + architecture decided (memory `project-mempalace-deep-dive`)
 - [x] Memory P1 read-packet, P2 write-gate, P3 junk cleanup (shipped earlier)
-- [x] **1a** — idle consolidation engine (branch `feat/memory-idle-consolidation`, flag off, 5 tests green, SQL lab-validated)
-- [x] **1b** — persist per-turn user (chat+voice `_save_chat_message` stamps `metadata.user_id`; consolidation resolves owner from per-turn metadata over a guest session; tests green; SQL lab-proven a guest-owned session resolves to `jason`)
-- [ ] **1c** — lab-prove + Samantha same-day test + prod enable  ← **NEXT**
+- [x] **1a** — idle consolidation engine (**PR #771** merged; branch `feat/memory-idle-consolidation`, flag off, tests green, SQL lab-validated)
+- [x] **1b** — persist per-turn user (**PR #775** merged; chat+voice `_save_chat_message` stamps `metadata.user_id`; consolidation resolves owner from per-turn metadata over a guest session; SQL lab-proven a guest-owned session resolves to `jason`)
+- [~] **1c** — lab-prove + Samantha same-day test + prod-enable prep  ← **NEXT** (CI acceptance test added; lab-enable + prod-enable runbooks documented in §8; prod flag NOT flipped — awaits Jason + a run on the live box)
 - [ ] **2a** hybrid retrieval · [ ] **2b** compose Postgres+Chroma packet · [ ] **2c** voice mirror
 - [ ] **3a** reflection · [ ] **3b** importance · [ ] **3c** proactive surfacing
 - [ ] (carry-over) identity deploy `#768` — FF-deploy when the tooling/classifier outage clears
 
 ## 7. NEXT ACTION (always exactly one)
-→ **Increment 1c (lab-prove + Samantha same-day test + prod enable).** The per-turn user is now
-persisted (1b) so consolidation knows whose memory to write. Next: enable the flag in a worktree
-(`ZOE_IDLE_CONSOLIDATION_ENABLED=1`, short `ZOE_IDLE_CONSOLIDATION_IDLE_S`), run a live exchange,
-let it go idle, and confirm a full `run_idle_consolidation_sweep()` consolidates a real jason idle
-session into clean facts through the write-quality gate. Run the same-day Samantha test (told in the
-morning → recalled in the afternoon), then enable the flag in prod. Update §6/§7 when done.
+→ **Run the §8 lab-enable runbook on the live box, then (with Jason's blessing) the prod-enable
+runbook.** The merged 1a+1b code is proven in CI by `services/zoe-data/tests/test_samantha_acceptance_loop.py`
+(live→idle→store→recall, Gemma + DB mocked, real gate + ingest/recall) — that test does NOT need the
+live box and is the regression bar. What remains can only be done ON the Orin (it needs real
+Postgres/Chroma/Gemma): set `ZOE_IDLE_CONSOLIDATION_ENABLED=1` + a short `ZOE_IDLE_CONSOLIDATION_IDLE_S`
+in a worktree, replay a morning→afternoon exchange, confirm afternoon cross-session recall via
+`/api/memories/for-prompt`, and run the zoe-core integration Samantha tests. Only after that passes,
+flip the prod flag per §8 and watch the `MEMORY_IDLE_CONSOLIDATE` log line + memory-store growth.
+**Do not flip the prod flag without Jason.** When 1c lands as proven-in-prod, move to **2a (hybrid
+retrieval)**. Update §6/§7 after each step.
+
+## 8. Increment 1c — enable runbooks
+
+### 8.1 What is already proven (no live box needed)
+- `test_samantha_acceptance_loop.py` drives the merged engine end to end: a short morning
+  conversation → `run_idle_consolidation_sweep()` (flag ON) finds the idle session, resolves the
+  owner from per-turn metadata, extracts facts (Gemma stubbed), passes them through the **real**
+  `memory_quality.is_storable_fact` gate, ingests via a fake MemoryService, and a later "afternoon"
+  recall surfaces the durable fact while the gated junk (a question) is absent. Run:
+  `python -m pytest services/zoe-data/tests/test_samantha_acceptance_loop.py services/zoe-data/tests/test_memory_idle_consolidation.py -v`.
+
+### 8.2 Lab-enable (on the Orin, in a worktree — NOT prod)
+1. `git worktree add --detach /home/zoe/.worktrees/mem-1c origin/main`; symlink the live `.env`.
+2. Export, scoped to that worktree's process only (do not edit the live service env):
+   `ZOE_IDLE_CONSOLIDATION_ENABLED=1`, `ZOE_IDLE_CONSOLIDATION_IDLE_S=30`,
+   `ZOE_IDLE_CONSOLIDATION_CHECK_S=15`, `ZOE_IDLE_CONSOLIDATION_LOOKBACK_S=3600`.
+3. Have an authenticated (jason) chat/voice exchange that states a durable fact ("my dad's name is
+   Neil"). Wait > `IDLE_S`. Call `run_idle_consolidation_sweep()` (or let the loop run) against the
+   real Postgres/Chroma/Gemma.
+4. **Confirm:** the sweep returns `sessions>=1, stored>=1`; the `MEMORY_IDLE_CONSOLIDATE` log line
+   names `user=jason`; `memory_consolidation_state` has a row; the fact appears in a later session's
+   `/api/memories/for-prompt` packet for jason and NOT junk/questions.
+5. Run the zoe-core integration Samantha tests with the live model up:
+   `python -m pytest services/zoe-core/test/test_samantha_acceptance.py -v` (these skip without
+   `pi` + the model server — that is expected off the box).
+
+### 8.3 Prod-enable (only after 8.2 passes AND Jason blesses it)
+- The flag is read **per-sweep** (`start_idle_consolidation_loop` re-checks `_enabled()` every
+  iteration), so enabling needs no code change and no restart of the loop task itself — but the
+  process must have the env var. Set `ZOE_IDLE_CONSOLIDATION_ENABLED=1` in the live service env
+  (the systemd unit / `.env` the zoe-data process reads) and restart via
+  `scripts/maintenance/deploy_live.sh` (rolls back on a failed health check). Leave
+  `IDLE_S`/`LOOKBACK_S` at defaults (180s / 3600s) for prod.
+- **Watch (first hour):** `journalctl -u <zoe-data unit> | grep MEMORY_IDLE_CONSOLIDATE` for
+  per-session stored counts and the resolved user; the `idle consolidation sweep:` summary line;
+  no growth in error/warn lines from the sweep; memory-store row count for jason rising only with
+  *clean* facts (spot-check `/api/memories/for-prompt`). The engine is best-effort and never
+  blocks a turn, so the hot path is unaffected; a Gemma OOM/timeout leaves the watermark
+  un-advanced and retries next sweep.
+- **Rollback:** set the flag back to `0` and redeploy; the loop idles harmlessly. No data
+  migration to undo — only thin distilled facts were added, which the existing memory tooling
+  can review/forget.
+- **What still needs the live box to fully prove (cannot be done in CI):** real Gemma extraction
+  quality (do the facts come out clean and owner-attributed?), real Chroma recall ranking of the
+  consolidated fact, and end-to-end latency that the sweep never touches the hot path under real
+  load. These are the 8.2 checks; they gate the 8.3 enable.
