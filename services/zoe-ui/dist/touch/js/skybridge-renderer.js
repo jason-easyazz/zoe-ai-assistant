@@ -150,10 +150,32 @@
         return ['tasks', 'all'].indexOf(category) >= 0 ? 'general' : category;
     }
 
+    // Custom filled calendar glyph (design system §5: filled/dimensional, never line
+    // icons). Self-contained <svg> with a unique gradient id so it can live inside a
+    // single rendered card without depending on the shared sprite.
+    function calendarGlyphSvg() {
+        return [
+            '<svg class="calendar-glyph" viewBox="0 0 32 32" aria-hidden="true">',
+            '<defs><linearGradient id="calCardG" x1="0" y1="0" x2="0" y2="1">',
+            '<stop offset="0" stop-color="rgba(255,255,255,.95)"/>',
+            '<stop offset="1" stop-color="rgba(228,236,250,.86)"/>',
+            '</linearGradient></defs>',
+            '<rect x="3" y="6" width="26" height="23" rx="5" fill="url(#calCardG)"/>',
+            '<rect x="3" y="6" width="26" height="7" rx="5" fill="rgba(var(--calendar-glyph-accent,90,224,224),.92)"/>',
+            '<rect x="9" y="2.5" width="2.8" height="7" rx="1.4" fill="rgba(var(--calendar-glyph-accent,90,224,224),.92)"/>',
+            '<rect x="20.2" y="2.5" width="2.8" height="7" rx="1.4" fill="rgba(var(--calendar-glyph-accent,90,224,224),.92)"/>',
+            '<g fill="rgba(22,50,77,.34)"><rect x="8" y="17" width="4" height="4" rx="1.2"/><rect x="14" y="17" width="4" height="4" rx="1.2"/><rect x="20" y="17" width="4" height="4" rx="1.2"/><rect x="8" y="23" width="4" height="4" rx="1.2"/><rect x="14" y="23" width="4" height="4" rx="1.2"/></g>',
+            '</svg>'
+        ].join('');
+    }
+
     function renderCalendar(props) {
         const events = Array.isArray(props.events) ? props.events : [];
         const visibleEvents = events.slice().sort((a, b) => calendarEventSortKey(a) - calendarEventSortKey(b)).slice(0, 8);
         const dateMeta = formatCalendarDate(props.date || props.start_date || (visibleEvents[0] && visibleEvents[0].start_date));
+        const qualifier = String(props.qualifier || 'today').trim();
+        const countLabel = events.length + ' ' + (events.length === 1 ? 'event' : 'events') + (qualifier ? ' ' + qualifier : '');
+
         const rows = visibleEvents.map((item, index) => {
             const title = item.title || item.name || 'Calendar event';
             const category = calendarCategoryClass(item.category);
@@ -163,26 +185,32 @@
             const startTime = String(item.start_time || '').slice(0, 5);
             const editQuery = 'edit ' + title + (startTime ? ' at ' + startTime : '');
             return [
-                '<button type="button" class="sky-event-row sky-calendar-event ' + escapeHtml(category) + '" data-sky-action="query" data-query="' + escapeHtml(editQuery) + '">',
-                '<div class="sky-calendar-time"><span>' + escapeHtml(formatEventTime(item)) + '</span>' + (index === 0 ? '<b>Next</b>' : '') + '</div>',
-                '<div class="sky-calendar-event-main"><strong>' + escapeHtml(title) + '</strong>' + (detail ? '<em>' + escapeHtml(detail) + '</em>' : '') + '</div>',
+                '<button type="button" class="calendar-event sky-accent-' + escapeHtml(category) + (index === 0 ? ' is-next' : '') + '" data-sky-action="query" data-query="' + escapeHtml(editQuery) + '">',
+                '<span class="calendar-event-dot" aria-hidden="true"></span>',
+                '<span class="calendar-event-time">' + escapeHtml(formatEventTime(item)) + (index === 0 ? '<b>Next</b>' : '') + '</span>',
+                '<span class="calendar-event-body"><strong>' + escapeHtml(title) + '</strong>' + (detail ? '<em>' + escapeHtml(detail) + '</em>' : '') + '</span>',
                 '</button>'
             ].join('');
         }).join('');
+
         const empty = [
-            '<div class="sky-empty-data sky-calendar-empty">',
-            '<div class="sky-calendar-empty-mark" aria-hidden="true"></div>',
-            '<strong>No events ' + escapeHtml(props.qualifier || 'today') + '</strong>',
-            '<span>Your calendar is clear for this range.</span>',
+            '<div class="calendar-empty">',
+            '<span class="calendar-empty-mark" aria-hidden="true"></span>',
+            '<strong>Nothing scheduled</strong>',
+            '<span>Your calendar is clear ' + escapeHtml(qualifier || 'for now') + '.</span>',
             '</div>'
         ].join('');
+
         const body = [
-            '<div class="sky-calendar-scene">',
-            '<div class="sky-calendar-summary">',
-            '<div class="sky-calendar-date"><span>' + escapeHtml(dateMeta.weekday) + '</span><strong>' + escapeHtml(dateMeta.monthDay) + '</strong></div>',
-            '<div class="sky-widget-metric"><strong>' + escapeHtml(events.length) + '</strong><span>' + escapeHtml(events.length === 1 ? 'event' : 'events') + ' ' + escapeHtml(props.qualifier || '') + '</span></div>',
+            '<div class="calendar-card-scene">',
+            '<header class="calendar-header">',
+            '<div class="calendar-glyph-wrap" aria-hidden="true">' + calendarGlyphSvg() + '</div>',
+            '<div class="calendar-heading">',
+            '<h3 class="calendar-day"><span>' + escapeHtml(dateMeta.weekday) + '</span> ' + escapeHtml(dateMeta.monthDay) + '</h3>',
+            '<p class="calendar-count">' + escapeHtml(countLabel) + '</p>',
             '</div>',
-            '<div class="sky-calendar-agenda"><div class="sky-calendar-rail" aria-hidden="true"></div><div class="sky-data-list">' + (rows || empty) + '</div></div>',
+            '</header>',
+            '<div class="calendar-agenda">' + (rows || empty) + '</div>',
             '</div>'
         ].join('');
         return cardFrame(Object.assign({ status: 'Calendar', icon: 'C' }, props), body, { wide: true, tone: 'calendar-card', hideHeader: true, hideStatus: true });
