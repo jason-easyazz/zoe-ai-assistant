@@ -173,3 +173,43 @@
     font-size: var(--sky-text-clock-hero-lg, 168px);
   }
 }
+
+/* The legacy clock CSS (skybridge-data-widgets.css) targets
+   `body:not(.sky-empty) .clock-card.sky-premium-card` (0,3,1 !important) and was
+   compressing the re-skin + absolutely-positioning the kicker over the time.
+   Re-assert the centred column layout with a higher-specificity selector. */
+body:not(.sky-empty) .sky-card.clock-card.sky-premium-card {
+  min-height: 420px !important;
+  height: auto !important;
+  max-height: none !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  overflow: hidden !important;
+}
+body:not(.sky-empty) .sky-card.clock-card .sky-clock-scene {
+  position: static !important;
+  inset: auto !important;
+  height: auto !important;
+  min-height: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 8px !important;
+}
+body:not(.sky-empty) .sky-card.clock-card .sky-clock-main {
+  position: static !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  gap: 10px !important;
+}
+body:not(.sky-empty) .sky-card.clock-card .sky-clock-kicker,
+body:not(.sky-empty) .sky-card.clock-card .sky-clock-time,
+body:not(.sky-empty) .sky-card.clock-card .sky-clock-date {
+  position: static !important;
+}
+/* The legacy clock CSS squishes the "LOCAL TIME" kicker into the time row; drop it
+   for a clean centred clock (the time + date carry it). */
+body:not(.sky-empty) .sky-card.clock-card .sky-clock-kicker { display: none !important; }
