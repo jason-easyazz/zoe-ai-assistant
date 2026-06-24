@@ -1440,3 +1440,23 @@ def test_convergence_gate_is_nonfatal_and_nonmutating():
     # _card_as_component maps both producer shapes to the canonical component
     assert _card_as_component({"component": "status", "props": {"x": 1}}) == {"component": "status", "props": {"x": 1}}
     assert _card_as_component({"card_type": "generic", "content": {"title": "t"}}) == {"component": "generic", "props": {"title": "t"}}
+
+
+def test_convergence_gate_logs_divergence(caplog):
+    """Increment 2 — the observability side: a non-conforming card (action lacks
+    query/intent/route) must actually emit the measurement log, not just be silently
+    tolerated. This is what lets us track the producers down to zero divergence."""
+    import logging
+    from skybridge_service import _validate_cards_for_convergence
+
+    diverging = [{"component": "auth_challenge", "props": {"actions": [{"label": "Jason", "user_id": "u1"}]}}]
+    with caplog.at_level(logging.INFO, logger="skybridge_service"):
+        _validate_cards_for_convergence(diverging)
+    assert any("non-conforming [convergence]" in r.message and "auth_challenge" in r.message
+               for r in caplog.records), "expected the gate to log the divergent auth_challenge card"
+
+    # A conforming card emits no divergence log.
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="skybridge_service"):
+        _validate_cards_for_convergence([{"component": "status", "props": {"title": "ok"}}])
+    assert not any("non-conforming [convergence]" in r.message for r in caplog.records)

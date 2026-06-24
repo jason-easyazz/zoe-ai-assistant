@@ -775,8 +775,8 @@ def _validate_cards_for_convergence(cards: Any) -> None:
         except CardContractError as exc:
             comp = card.get("component") or card.get("card_type") if isinstance(card, dict) else "?"
             logger.info("skybridge card non-conforming [convergence]: %s | component=%s", exc, comp)
-        except Exception:  # measurement must never break a turn
-            pass
+        except Exception:  # measurement must never break a turn — but stay auditable
+            logger.warning("convergence gate hit an unexpected error (non-fatal)", exc_info=True)
 
 
 def _attach_skybridge_context(result: dict[str, Any]) -> dict[str, Any]:
