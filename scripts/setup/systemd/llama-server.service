@@ -21,6 +21,9 @@ After=network.target
 [Service]
 Type=simple
 LimitMEMLOCK=infinity
+# The ExecStartPost health probe waits up to 120s for model+draft load; raise the
+# start timeout above it so systemd doesn't kill the unit at the 90s default first.
+TimeoutStartSec=180
 # Point LD_LIBRARY_PATH at the directory of your llama.cpp build.
 Environment=LD_LIBRARY_PATH=%h/llama.cpp/build-jetson-new/bin
 # The endpoint is unauthenticated. Default to loopback; the live Zoe host binds
