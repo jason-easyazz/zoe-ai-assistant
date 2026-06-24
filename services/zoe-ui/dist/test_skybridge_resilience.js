@@ -108,4 +108,68 @@ setState('thinking'); voice.speaking = true; // never cleared
 for (let k = 0; k <= MAX_STALL_DEFERRALS; k++) advance(STALL_WATCHDOG_MS + 1);
 ok('stuck voice flag still recovers after max deferrals', orbState === 'ambient');
 
+// ---- voice-error typing-fallback auto-recovery ----
+// The panel drops into a typing fallback when voice errors/disconnects. Once the
+// socket reconnects (handleVoiceEvent 'ready'), it must return to voice instead of
+// latching on "Type here while voice reconnects..." forever.
+(function testFallbackRecovery() {
+  const recoverSrc = extract('recoverFromVoiceError');
+  try { new Function(recoverSrc); } catch (e) { throw new Error('recoverFromVoiceError did not parse: ' + e.message); }
+
+  let voiceErrorFallback = false;
+  let commandFallbackOpen = false;
+  let micOk = true;
+  const classes = new Set();
+  const els = { input: { value: '', placeholder: '' } };
+  const document = { body: { classList: {
+    add: c => classes.add(c), remove: c => classes.delete(c),
+    contains: c => classes.has(c), toggle: (c, on) => { on ? classes.add(c) : classes.delete(c); }
+  } } };
+  function canUseMicrophone() { return micOk; }
+  function syncVoiceFallbackState() {}
+  function setStatus() {}
+  eval(recoverSrc); // defines recoverFromVoiceError closing over the shims above
+
+  function enterErrorFallback() {
+    voiceErrorFallback = true; commandFallbackOpen = true;
+    classes.add('sky-command-open'); classes.add('sky-typing-fallback');
+    els.input.placeholder = 'Type here while voice reconnects...';
+  }
+
+  // a) voice back, mic ok, input empty → recover to voice
+  classes.clear(); micOk = true; els.input.value = ''; enterErrorFallback();
+  recoverFromVoiceError();
+  ok('reconnect clears the stale typing fallback',
+     !classes.has('sky-typing-fallback') && !classes.has('sky-command-open') && voiceErrorFallback === false);
+
+  // b) user has started typing → don't yank the keyboard away
+  classes.clear(); micOk = true; enterErrorFallback(); els.input.value = 'add milk to the list';
+  recoverFromVoiceError();
+  ok('does not interrupt a half-typed message',
+     classes.has('sky-typing-fallback') && voiceErrorFallback === true);
+
+  // b2) deferred while typing, then the user submits (input cleared) → recover.
+  //     Mirrors the form-submit handler calling recoverFromVoiceError() after it
+  //     clears the input, so the panel doesn't latch in the fallback forever.
+  classes.clear(); micOk = true; enterErrorFallback(); els.input.value = 'add milk to the list';
+  recoverFromVoiceError();                       // 'ready' fired mid-typing → deferred
+  ok('stays in fallback while still typing', classes.has('sky-typing-fallback'));
+  els.input.value = '';                          // submit handler clears the input
+  recoverFromVoiceError();                       // submit handler retries
+  ok('recovers after the message is submitted',
+     !classes.has('sky-typing-fallback') && voiceErrorFallback === false);
+
+  // c) mic genuinely unavailable → keep typing as the primary input
+  classes.clear(); micOk = false; els.input.value = ''; enterErrorFallback();
+  recoverFromVoiceError();
+  ok('keeps typing fallback when the mic is unusable',
+     classes.has('sky-typing-fallback') && voiceErrorFallback === true);
+
+  // d) a deliberately-opened command bar (not a voice error) is left alone
+  classes.clear(); micOk = true; els.input.value = '';
+  voiceErrorFallback = false; commandFallbackOpen = true; classes.add('sky-command-open');
+  recoverFromVoiceError();
+  ok('leaves a user-opened command bar open', classes.has('sky-command-open'));
+})();
+
 console_log('\n' + pass + ' checks passed');
