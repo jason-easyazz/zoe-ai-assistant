@@ -8,13 +8,13 @@ Falls back to the raw trigger message on any failure.
 from __future__ import annotations
 
 import logging
-import os
 
 import httpx
 
+from gemma_endpoint import gemma_base
+
 log = logging.getLogger(__name__)
 
-_LLM_BASE = os.environ.get("GEMMA_SERVER_URL", "http://localhost:11434")
 _TIMEOUT = 12.0
 _MAX_TOKENS = 80
 
@@ -44,7 +44,7 @@ async def compose_message(trigger_type: str, context: dict, fallback: str) -> st
     }
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            r = await client.post(f"{_LLM_BASE}/v1/chat/completions", json=payload)
+            r = await client.post(f"{gemma_base()}/v1/chat/completions", json=payload)
             r.raise_for_status()
             msg = r.json()["choices"][0]["message"]["content"].strip()
             return msg or fallback

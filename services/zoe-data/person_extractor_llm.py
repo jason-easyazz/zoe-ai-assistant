@@ -8,9 +8,9 @@ import os
 
 import httpx
 
-logger = logging.getLogger(__name__)
+from gemma_endpoint import gemma_base
 
-_GEMMA_URL = os.environ.get("GEMMA_SERVER_URL", "http://127.0.0.1:11434")
+logger = logging.getLogger(__name__)
 _MODEL = os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E2B-it-Q4_K_M.gguf")
 
 _EXTRACTION_PROMPT = """\
@@ -49,7 +49,7 @@ async def process_text_llm(
 
     try:
         async with httpx.AsyncClient(timeout=25.0) as client:
-            resp = await client.post(f"{_GEMMA_URL}/v1/chat/completions", json=payload)
+            resp = await client.post(f"{gemma_base()}/v1/chat/completions", json=payload)
             resp.raise_for_status()
             raw = resp.json()["choices"][0]["message"]["content"].strip()
     except Exception as exc:

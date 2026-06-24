@@ -11,14 +11,14 @@ so callers fall through to the Zoe Agent.
 import datetime
 import json
 import logging
-import os
 from typing import Optional
 
 import httpx
 
+from gemma_endpoint import gemma_base
+
 logger = logging.getLogger(__name__)
 
-_GEMMA_URL: str = os.environ.get("GEMMA_SERVER_URL", "http://127.0.0.1:11434/v1")
 _MODEL_NAME: str = "google_gemma-4-E2B-it-Q4_K_M"
 
 
@@ -54,7 +54,7 @@ async def _call_with_tool(text: str, tool_schema: dict) -> Optional[dict]:
     }
     try:
         async with httpx.AsyncClient(timeout=25.0) as client:
-            r = await client.post(f"{_GEMMA_URL}/chat/completions", json=payload)
+            r = await client.post(f"{gemma_base()}/v1/chat/completions", json=payload)
             r.raise_for_status()
         data = r.json()
         tc = (data["choices"][0]["message"].get("tool_calls") or [])
