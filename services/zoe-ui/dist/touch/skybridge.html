@@ -4908,6 +4908,33 @@
             background-image: none !important;
         }
 
+        /* Room-safe at night: the soft glow on the resting screen comes from several
+           layers — the html backdrop gradient, the body ::before/::after glows, and
+           the orb panel's glow. During the dark hours (after sunset / deep sleep)
+           suppress ALL of them so the standby screen is genuinely black, not just
+           the body bg. (Daytime keeps a faint ambient; active states keep the orb.) */
+        :root[data-rest-dim="night"]:has(body.sky-empty.sky-ambient-clock),
+        :root[data-rest-dim="deep"]:has(body.sky-empty.sky-ambient-clock) {
+            background-image: none !important;
+            background-color: #05070e !important;
+        }
+        :root[data-rest-dim="deep"]:has(body.sky-empty.sky-ambient-clock) { background-color: #03040a !important; }
+        :root[data-rest-dim="night"] body.sky-empty.sky-ambient-clock::before,
+        :root[data-rest-dim="deep"]  body.sky-empty.sky-ambient-clock::before,
+        :root[data-rest-dim="night"] body.sky-empty.sky-ambient-clock::after,
+        :root[data-rest-dim="deep"]  body.sky-empty.sky-ambient-clock::after {
+            background: none !important;
+            opacity: 0 !important;
+        }
+        :root[data-rest-dim="night"] body.sky-empty.sky-ambient-clock .sky-orb-panel::before,
+        :root[data-rest-dim="deep"]  body.sky-empty.sky-ambient-clock .sky-orb-panel::before,
+        :root[data-rest-dim="night"] body.sky-empty.sky-ambient-clock .sky-orb-panel::after,
+        :root[data-rest-dim="deep"]  body.sky-empty.sky-ambient-clock .sky-orb-panel::after,
+        :root[data-rest-dim="night"] body.sky-empty.sky-ambient-clock #skyOrb,
+        :root[data-rest-dim="deep"]  body.sky-empty.sky-ambient-clock #skyOrb {
+            opacity: 0 !important;
+        }
+
         .sky-ambient-time {
             display: flex;
             align-items: baseline;
