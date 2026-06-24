@@ -142,7 +142,7 @@ async def test_force_hermes_uses_single_chat_run_and_persists_once(monkeypatch):
     agui_runs = []
     persisted_candidates = []
 
-    async def fake_save(session_id, role, content):
+    async def fake_save(session_id, role, content, user_id=None):
         saved_messages.append((session_id, role, content))
 
     async def fake_record_run_state(*args, **kwargs):
@@ -347,7 +347,7 @@ async def test_zoe_agent_hermes_escalation_stays_in_parent_agui_run(monkeypatch)
     agui_runs = []
     persisted_candidates = []
 
-    async def fake_save(session_id, role, content):
+    async def fake_save(session_id, role, content, user_id=None):
         saved_messages.append((session_id, role, content))
 
     async def fake_record_run_state(*args, **kwargs):
