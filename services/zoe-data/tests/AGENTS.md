@@ -21,4 +21,4 @@ Run focused: `pytest services/zoe-data/tests/test_<area>.py` from the repo root 
 
 ## Child DOX Index
 
-- [samantha_live/AGENTS.md](samantha_live/AGENTS.md) — live-only (ZOE_LIVE_TESTS=1 + model server) Samantha memory integration tests: cross-user isolation, owner resolution, idle timing; demo-users-only, never runs the real sweep.
+- [samantha_live/AGENTS.md](samantha_live/AGENTS.md) — LIVE-integration proofs for the Samantha memory engine (real Gemma + real store), gated off CI, demo-users only: core loop (`test_live_core.py`), dedup/durability (`test_live_dedup.py`), and cross-user isolation / owner resolution / idle timing (`test_live_isolation.py`).
