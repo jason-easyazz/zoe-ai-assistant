@@ -53,7 +53,7 @@ async def test_chat_pi_hybrid_action_form_broadcasts_without_tool_memory_side_ef
 
     saved = []
 
-    async def fake_save(session_id, role, content):
+    async def fake_save(session_id, role, content, user_id=None):
         saved.append({"session_id": session_id, "role": role, "content": content})
 
     run_states = []

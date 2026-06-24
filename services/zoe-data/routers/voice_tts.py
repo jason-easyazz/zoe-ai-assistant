@@ -2819,9 +2819,9 @@ async def _schedule_voice_chat_save(
     try:
         from chat import _save_chat_message as _svc  # lazy — avoids circular import
         if user_text:
-            _spawn_bg(_svc(session_id, "user", user_text))
+            _spawn_bg(_svc(session_id, "user", user_text, user_id=user_id))
         if reply:
-            _spawn_bg(_svc(session_id, "assistant", reply))
+            _spawn_bg(_svc(session_id, "assistant", reply, user_id=user_id))
     except Exception:
         pass
 
@@ -3016,7 +3016,7 @@ async def voice_command(
     if text and effective_user not in ("guest", "voice-daemon", ""):
         try:
             from chat import _save_chat_message as _svc_user_turn
-            _spawn_bg(_svc_user_turn(session_id, "user", text))
+            _spawn_bg(_svc_user_turn(session_id, "user", text, user_id=effective_user))
         except Exception:
             pass
 
