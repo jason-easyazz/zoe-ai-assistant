@@ -46,6 +46,13 @@
 .weather-card .wx-sld { font-size: 21px; width: 56px; font-weight: 500; }
 .weather-card .wx-dt { font-size: 21px; } .weather-card .wx-dt b { font-weight: 600; } .weather-card .wx-lo { opacity: 0.6; }
 .weather-card .sky-glyph { display: block; }
-/* Kill legacy decorative pseudo-elements from the old weather card (a stray sun
-   glow leaked through on the re-skin). */
-.sky-card.weather-card::before, .sky-card.weather-card::after { content: none !important; background: none !important; }
+/* The legacy `body:not(.sky-empty) .weather-card.sky-premium-card` rule (0,3,1
+   !important) injected a sun-glow background + a 370px height that beat the
+   re-skin's `.sky-card.weather-card.wx-*` (0,3,0). Override with a higher-
+   specificity selector so the clean condition gradient wins. */
+body:not(.sky-empty) .sky-card.weather-card.sky-premium-card { min-height: 500px !important; }
+body:not(.sky-empty) .sky-card.weather-card.wx-clear  { background: var(--wx-clear-night) !important; }
+body:not(.sky-empty) .sky-card.weather-card.wx-cloudy { background: var(--wx-cloudy) !important; }
+body:not(.sky-empty) .sky-card.weather-card.wx-rain   { background: var(--wx-rain) !important; }
+body:not(.sky-empty) .sky-card.weather-card.wx-storm  { background: var(--wx-storm) !important; }
+:root[data-theme="light"] body:not(.sky-empty) .sky-card.weather-card.wx-clear { background: var(--wx-clear-day) !important; }
