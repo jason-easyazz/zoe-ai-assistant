@@ -63,12 +63,17 @@ pytestmark = pytest.mark.skipif(
 
 # Fast idle window for the timing test — MUST be set before the engine imports its
 # IDLE_SECONDS/LOOKBACK constants (read once at module import). 30s, not the prod 180s.
-os.environ.setdefault("ZOE_IDLE_CONSOLIDATION_IDLE_S", "30")
-_IDLE_S = int(os.environ["ZOE_IDLE_CONSOLIDATION_IDLE_S"])
-
-# Load the live service env (POSTGRES_URL etc.). The worktree has no .env of its own;
-# this is a live-integration suite, so it intentionally reads the live tree's config.
+# Guarded by _LIVE: this module is still imported during CI *collection* (to read the
+# skip mark), and an unguarded setdefault would leak ZOE_IDLE_CONSOLIDATION_IDLE_S=30
+# into the process env, changing the engine's IDLE_SECONDS for any test collected after
+# this one. Default to 30 here so the constant is defined even when skipped.
+_IDLE_S = 30
 if _LIVE:
+    os.environ.setdefault("ZOE_IDLE_CONSOLIDATION_IDLE_S", "30")
+    _IDLE_S = int(os.environ["ZOE_IDLE_CONSOLIDATION_IDLE_S"])
+
+    # Load the live service env (POSTGRES_URL etc.). The worktree has no .env of its
+    # own; this is a live-integration suite, so it reads the live tree's config.
     from dotenv import load_dotenv
 
     load_dotenv("/home/zoe/assistant/services/zoe-data/.env")
@@ -176,6 +181,11 @@ async def live_env():
                 raise
             except Exception as exc:  # pragma: no cover
                 print(f"[teardown] verify-empty({u}) failed: {exc}")
+        # 4) release the asyncpg pool so the suite doesn't leave live connections open.
+        try:
+            await db_pool.close_pool()
+        except Exception as exc:  # pragma: no cover
+            print(f"[teardown] close_pool failed: {exc}")
 
 
 # ---------------------------------------------------------------------------
