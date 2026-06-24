@@ -101,6 +101,11 @@
             event.preventDefault();
             submitCommand(els.input.value);
             els.input.value = '';
+            // The user has committed their message and the input is empty again,
+            // so if we deferred a voice recovery while they were typing (a 'ready'
+            // arrived mid-message), do it now — otherwise no further 'ready' fires
+            // and the panel stays stuck in the typing fallback.
+            recoverFromVoiceError();
         });
         els.input.addEventListener('focus', () => {
             if (!commandFallbackOpen) {
@@ -736,7 +741,8 @@
         document.body.classList.remove('sky-command-open');
         document.body.classList.remove('sky-typing-fallback');
         syncVoiceFallbackState();
-        setStatus('Voice reconnected');
+        // Leave the status line as the caller set it (e.g. "Ready on local") — it
+        // carries the transport mode; don't clobber it with a generic message.
     }
 
     function openCommandFallback(message) {

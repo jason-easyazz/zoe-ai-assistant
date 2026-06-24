@@ -148,6 +148,17 @@ ok('stuck voice flag still recovers after max deferrals', orbState === 'ambient'
   ok('does not interrupt a half-typed message',
      classes.has('sky-typing-fallback') && voiceErrorFallback === true);
 
+  // b2) deferred while typing, then the user submits (input cleared) → recover.
+  //     Mirrors the form-submit handler calling recoverFromVoiceError() after it
+  //     clears the input, so the panel doesn't latch in the fallback forever.
+  classes.clear(); micOk = true; enterErrorFallback(); els.input.value = 'add milk to the list';
+  recoverFromVoiceError();                       // 'ready' fired mid-typing → deferred
+  ok('stays in fallback while still typing', classes.has('sky-typing-fallback'));
+  els.input.value = '';                          // submit handler clears the input
+  recoverFromVoiceError();                       // submit handler retries
+  ok('recovers after the message is submitted',
+     !classes.has('sky-typing-fallback') && voiceErrorFallback === false);
+
   // c) mic genuinely unavailable → keep typing as the primary input
   classes.clear(); micOk = false; els.input.value = ''; enterErrorFallback();
   recoverFromVoiceError();
