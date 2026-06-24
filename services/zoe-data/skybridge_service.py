@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import uuid
@@ -12,9 +13,12 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from calendar_utils import row_to_event
+from card_contract import CardContractError, validate_component
 from card_service import card_service
 from database import get_db_ctx
 from people_utils import row_to_person
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -746,8 +750,38 @@ async def resolve_skybridge_request(
         return _attach_skybridge_context(await _resolve_with_db(intent, user_id, ctx_db, context=context))
 
 
+def _card_as_component(card: Any) -> dict[str, Any]:
+    """Normalize a producer's card to the canonical component shape so it can be
+    validated. Mirrors the client-side normalizeCard: a `{component, props}` card
+    passes through; a card_service envelope (`{card_type, content, ...}`) maps to
+    `{component: card_type, props: content}`."""
+    if not isinstance(card, dict):
+        raise CardContractError("card must be an object")
+    if card.get("component"):
+        return {"component": card["component"], "props": card.get("props") or {}}
+    if card.get("card_type") and isinstance(card.get("content"), dict):
+        return {"component": card["card_type"], "props": card["content"]}
+    raise CardContractError(f"card has neither 'component' nor 'card_type' (keys={sorted(card)[:6]})")
+
+
+def _validate_cards_for_convergence(cards: Any) -> None:
+    """Consolidation increment 2 — NON-FATAL measurement gate. Validate every card
+    leaving the resolver against the canonical component contract and log any that
+    don't conform, so the 4 producers can be migrated one at a time. NEVER mutates
+    or drops a card — pure measurement, zero panel risk."""
+    for card in cards or []:
+        try:
+            validate_component(_card_as_component(card))
+        except CardContractError as exc:
+            comp = card.get("component") or card.get("card_type") if isinstance(card, dict) else "?"
+            logger.info("skybridge card non-conforming [convergence]: %s | component=%s", exc, comp)
+        except Exception:  # measurement must never break a turn — but stay auditable
+            logger.warning("convergence gate hit an unexpected error (non-fatal)", exc_info=True)
+
+
 def _attach_skybridge_context(result: dict[str, Any]) -> dict[str, Any]:
     if result.get("handled"):
+        _validate_cards_for_convergence(result.get("cards"))
         result["skybridge_context"] = {
             "intent": result.get("intent") or {},
             "cards": result.get("cards") or [],
