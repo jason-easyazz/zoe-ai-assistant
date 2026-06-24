@@ -117,6 +117,20 @@ def main() -> int:
         cmd += ["--last", str(args.last)]
 
     print(f"Replaying voice corpus via {replay}\n  (dry/read-only, +brain)\n")
+    # Single outer finally so EVERY exit path (timeout, non-zero exit, parse
+    # error, success) removes the temp file — no leak on the Jetson's limited
+    # storage across repeated probes.
+    try:
+        return _run_and_report(cmd, service_dir, replay_json, args)
+    finally:
+        try:
+            os.unlink(replay_json)
+        except OSError:
+            pass
+
+
+def _run_and_report(cmd: list[str], service_dir: str, replay_json: str, args) -> int:
+    """Run the replay subprocess and aggregate its JSON. Caller owns temp cleanup."""
     try:
         proc = subprocess.run(
             cmd, cwd=service_dir, timeout=args.timeout,
@@ -139,11 +153,6 @@ def main() -> int:
     except (OSError, json.JSONDecodeError) as exc:
         print(f"could not read replay results: {exc}", file=sys.stderr)
         return 1
-    finally:
-        try:
-            os.unlink(replay_json)
-        except OSError:
-            pass
 
     rows = data.get("rows", [])
     counts = data.get("counts", {})
