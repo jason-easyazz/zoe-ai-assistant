@@ -3,6 +3,11 @@
  * kiosk never depends on the network. Weights match the type tokens:
  * 300 thin (hero numerals), 400 regular, 500 medium, 600 semibold (clock/labels).
  */
+/* Apply Inter panel-wide (cards, controls, the lot). */
+body, .sky-card, .sky-premium-card, button, input {
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+}
+
 @font-face {
   font-family: "Inter";
   font-style: normal;

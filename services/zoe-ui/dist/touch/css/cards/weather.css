@@ -1,0 +1,5 @@
+/* weather card — re-skin to docs/architecture/skybridge-design-system.md.
+   Owns ONLY the .weather-card styling so cards can be re-skinned independently.
+   Use the tokens (--sky-*, --card-*, --text-*), the .sky-material glass, the
+   glyph sprite (<use href="#i-*">), and provide both default (dark) + light
+   ([data-theme="light"] ...) treatments. Fill the stage at panel scale. */
