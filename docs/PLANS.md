@@ -26,6 +26,11 @@ a link to the detail + where it's up to. Mark ✅ when done so nothing lingers h
 - **Goal:** Omnigent + Claude Code + Codex all set up correctly and **actually using** the repo's tools (Serena, codebase-memory, opensrc, Greptile/greploop, Dox), with a shared command center (this) so ideas/plans don't scatter.
 - **Detail:** see Backlog below. The tools mostly *exist*; the gap is **adoption + verification**, not setup-from-scratch.
 
+### Touch / Chat UI — "window into Zoe" (foundation-first)
+- **Goal:** the touch panel + chat page become a real window into Zoe — type/speak anything, get working interactive components (not prose). DeerFlow-grade, dynamic from basic (calendar) to advanced (Pi builds something new).
+- **Order (foundation before features — the panel froze invisible on a hung turn; don't bolt features on a brittle shell):** **1. Resilience → 2. Consolidation → 3. Brain-serves-experience.**
+- **Now:** **1. Resilience ✅** (PR #770 merged+deployed+verified-on-panel: turn-stall watchdog, guaranteed UI recovery, + root-cause orb fix — `sky-ambient-clock` was overloaded as a body-flag AND element class, fading the whole UI). Foundations also merged: #766 (Skybridge calendar/list voice+touch loop), #767 (chat tool-activity + interactive-component renderer), #769 (deploy health-check fix). **NEXT: 2. Consolidation** — retire the legacy `dashboard.html`/dual-stack ([`skybridge-cutover-plan.md`](architecture/skybridge-cutover-plan.md), partly done), converge the **4** card producers onto the one validated component contract, tame the z-index/CSS sprawl. Then **3.** Wave A (brain tool calls → `zoe.component` cards). Component contract + `zoe.component` AG-UI event already shipped.
+
 ### Zoe intelligently controls Music Assistant
 - **Goal:** retire the old `modules/zoe-music` module and have Zoe drive **Music Assistant** (host service `:8095`, proxied `/modules/music-assistant/`) with intelligence — natural-language play/queue/control, aware of context.
 - **Why now:** Music Assistant is installed; `zoe-music` is the old start. **Guardrail:** keep `zoe-music` running until the MA control path is built + lab-proven — no music gap (lab-prove-before-prod). Retire `modules/zoe-music` (live `zoe-music-assistant`) only after.

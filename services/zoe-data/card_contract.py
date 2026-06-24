@@ -193,8 +193,11 @@ ALLOWED_ACTION_KINDS = {"primary", "normal", "warn"}
 def validate_component_action(action: Any) -> dict[str, Any]:
     """Validate one interactive component action.
 
-    Requires `label` and at least one of `query` (NL re-dispatch) or `intent`
-    (typed dispatch, with optional `args`). `kind` styles the control.
+    Requires `label` and at least one target: `query` (NL re-dispatch), `intent`
+    (typed dispatch, with optional `args`), or `route` (in-surface navigation, as
+    Skybridge cards use). `kind` styles the control. This is a SUPERSET so the one
+    contract validates both the chat `zoe.component` actions and the existing
+    Skybridge card actions.
     """
     if not isinstance(action, dict):
         raise CardContractError("component action must be an object")
@@ -206,11 +209,14 @@ def validate_component_action(action: Any) -> dict[str, Any]:
         )
     query = str(action.get("query") or "").strip()
     intent = str(action.get("intent") or "").strip()
-    if not query and not intent:
-        raise CardContractError("component action requires 'query' or 'intent'")
+    route = str(action.get("route") or "").strip()
+    if not query and not intent and not route:
+        raise CardContractError("component action requires 'query', 'intent', or 'route'")
     normalized: dict[str, Any] = {"label": label, "kind": kind}
     if query:
         normalized["query"] = query
+    if route:
+        normalized["route"] = route
     if intent:
         normalized["intent"] = intent
         args = action.get("args")
@@ -237,7 +243,13 @@ def validate_component(payload: Any) -> dict[str, Any]:
         props = {}
     if not isinstance(props, dict):
         raise CardContractError("component props must be an object")
-    raw_actions = payload.get("actions") or []
+    # Accept actions at the top level (chat zoe.component) OR nested in props
+    # (Skybridge cards put them there) — one contract, both shapes.
+    raw_actions = payload.get("actions")
+    if raw_actions is None:
+        raw_actions = props.get("actions")
+    if raw_actions is None:
+        raw_actions = []
     if not isinstance(raw_actions, list):
         raise CardContractError("component actions must be a list")
     actions = [validate_component_action(a) for a in raw_actions]
