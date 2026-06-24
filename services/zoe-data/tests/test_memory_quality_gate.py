@@ -169,6 +169,48 @@ def test_unrelated_facts_are_kept_separate():
     assert action == "add" and mid is None
 
 
+# --- correction must never be silently dropped as a "skip" --------------------
+# A value change to a same-attribute fact is a correction → supersede the stale
+# row, never skip it. Regression guards for the synonym-leak / near-dup paths.
+
+def test_first_person_value_correction_supersedes_not_skips():
+    # "dad" canonicalises to "father" in both the key AND the value tokens, so it
+    # must NOT leak in as a fake shared value and mask the Neil→Tom correction.
+    action, mid = classify_against_existing(
+        "My dad's name is Tom",
+        [("old", "My dad's name is Neil")],
+    )
+    assert action == "update" and mid == "old"
+
+
+def test_near_identical_value_correction_supersedes_not_skips():
+    # High text similarity (Jo vs Joe ≈ 0.97) must still be read as a value
+    # correction, not phrasing-only noise → supersede.
+    action, mid = classify_against_existing(
+        "my dad's name is Joe",
+        [("old", "my dad's name is Jo")],
+    )
+    assert action == "update" and mid == "old"
+
+
+def test_phrasing_only_duplicate_skips():
+    # Same value, only punctuation differs → keep the existing row, write nothing.
+    action, mid = classify_against_existing(
+        "My dad's name is Neil",
+        [("old", "My dad's name is Neil.")],
+    )
+    assert action == "skip" and mid == "old"
+
+
+def test_generic_statement_is_not_an_attribute_assertion():
+    # The optional-subject regex must NOT treat any "X is Y" clause as a personal
+    # attribute → no spurious same-attribute match.
+    assert classify_against_existing(
+        "The weather is nice today",
+        [("w", "The weather is cold today")],
+    ) == ("add", None)
+
+
 # ---------------------------------------------------------------------------
 # Write paths must not ingest rejected candidates
 # ---------------------------------------------------------------------------

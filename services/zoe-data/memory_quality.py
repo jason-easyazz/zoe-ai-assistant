@@ -176,13 +176,20 @@ def is_storable_fact(text: str) -> tuple[bool, str]:
 # Pull the attribute being asserted from "my <attr> is/are/was <value>",
 # "user's <attr> is <value>", or "<subject>'s <attr> is <value>" so we can tell
 # "my dad's name is Neil" from "my dad's name is spelt N-E-I-L" (same attribute).
-# The leading subject ("my", "the user's", "Neil's") is optional so that a
-# distilled third-person fact ("User's father's name is Neil") keys to the same
-# attribute as the first-person original ("My dad's name is Neil"). The subject
-# itself is stripped from the key by _attribute_key.
+# Match a PERSONAL attribute assertion only — not any "X is Y" clause. Two
+# shapes qualify so the first-person original and its distilled third-person
+# restatement key the same way:
+#   (a) a first/second-person possessive subject — "my/your/our <attr> is …"
+#   (b) a possessive phrase — "<owner>'s <attr> is …" ("dad's name is …",
+#       "user's father's name is …", "Neil's job is …")
+# Requiring either a personal possessive pronoun or an explicit possessive
+# marker keeps generic statements ("The weather is nice") from being read as
+# attribute assertions. The subject is stripped from the key by _attribute_key.
 _ATTR_RE = re.compile(
-    r"(?:\b(?:my|your|our|the\s+user'?s?|user'?s?)\s+)?"
-    r"\b([a-z][a-z '`-]*?)\s+(?:is|are|was|were|=|:)\b",
+    r"(?:"
+    r"\b(?:my|your|our)\s+([a-z][a-z '`-]*?)"          # (a) personal-pronoun subject
+    r"|\b[a-z][a-z]*'?s\s+([a-z][a-z '`-]*?)"           # (b) possessive owner ('s)
+    r")\s+(?:is|are|was|were|=|:)\b",
     re.IGNORECASE,
 )
 
@@ -238,7 +245,10 @@ def _attribute_key(text: str) -> Optional[str]:
     m = _ATTR_RE.search(text or "")
     if not m:
         return None
-    attr = re.sub(r"[^a-z ]+", " ", m.group(1).lower())
+    # _ATTR_RE has two alternative capture groups (pronoun-subject / possessive);
+    # exactly one matches.
+    raw = m.group(1) or m.group(2) or ""
+    attr = re.sub(r"[^a-z ]+", " ", raw.lower())
     # collapse possessive/subject noise ("dad 's name" → "dad name", drop "user")
     tokens = [t for t in attr.split() if t not in _ATTR_STOPWORDS]
     tokens = [_ATTR_SYNONYMS.get(t, t) for t in tokens]
@@ -248,9 +258,29 @@ def _attribute_key(text: str) -> Optional[str]:
 def _value_tokens(text: str) -> set[str]:
     """The salient (non-stopword) value tokens of a fact — used to tell whether
     two same-attribute facts assert the same underlying value ("Neil") or a
-    genuinely different/updated one."""
+    genuinely different/updated one.
+
+    Tokens are canonicalised through ``_ATTR_SYNONYMS`` so a relation word that
+    is ALSO part of the attribute ("dad" in "my dad's name is …") maps to the
+    same token the attribute key uses ("father") and is therefore stripped by
+    ``_value_only`` — otherwise it would leak in as a fake shared value and mask
+    a real correction (Neil → Tom)."""
     norm = _normalize(text)
-    return {t for t in re.findall(r"[a-z0-9]+", norm) if t not in _VALUE_STOPWORDS}
+    return {_ATTR_SYNONYMS.get(t, t)
+            for t in re.findall(r"[a-z0-9]+", norm) if t not in _VALUE_STOPWORDS}
+
+
+def _value_only(text: str, attr_key: Optional[str]) -> set[str]:
+    """Value tokens with the attribute-key tokens removed, so what's left is the
+    asserted VALUE ("neil" / "tom") rather than the attribute ("father name")."""
+    return _value_tokens(text) - set((attr_key or "").split())
+
+
+def _same_value(a: str, b: str, attr_key: Optional[str]) -> bool:
+    """True when two same-attribute facts assert the same underlying value (they
+    share at least one salient value token beyond the attribute itself). False
+    means the value genuinely differs → a correction, not a rephrasing."""
+    return bool(_value_only(a, attr_key) & _value_only(b, attr_key))
 
 
 def _information(text: str) -> int:
@@ -294,7 +324,6 @@ def classify_against_existing(
         return "add", None
 
     cand_attr = _attribute_key(text)
-    cand_vals = _value_tokens(text)
     best_dup: tuple[float, Optional[str], str] = (0.0, None, "")
     best_attr: tuple[float, Optional[str], str] = (0.0, None, "")
 
@@ -307,19 +336,20 @@ def classify_against_existing(
         if cand_attr and _attribute_key(mem_text) == cand_attr and sim > best_attr[0]:
             best_attr = (sim, mem_id, mem_text)
 
-    # 1) Near-exact duplicate → keep the richer copy. Skip when the existing row
-    #    is at least as informative; only supersede if the candidate adds detail.
+    # 1) Near-exact text duplicate. Two near-identical strings can still differ
+    #    only in the VALUE ("…name is Jo" vs "…name is Joe") — that's a
+    #    correction, so supersede. Only when the value matches is it pure
+    #    phrasing/detail, and we keep the richer copy.
     if best_dup[0] >= _NEAR_DUP_RATIO and best_dup[1]:
+        if cand_attr and not _same_value(text, best_dup[2], cand_attr):
+            return "update", best_dup[1]
         return _merge_decision(text, best_dup[2], best_dup[1])
 
     # 2) Same attribute → it's the same fact. If they assert the same core value
     #    ("name is Neil" both ways) keep the richer one; if the value genuinely
     #    differs, supersede the stale row rather than accumulate contradictions.
     if best_attr[1] and best_attr[0] >= _SUPERSEDE_RATIO:
-        existing_vals = _value_tokens(best_attr[2])
-        # Shared salient value tokens (beyond the attribute itself) → same value.
-        shared_value = bool((cand_vals & existing_vals) - set(cand_attr.split()))
-        if shared_value:
+        if _same_value(text, best_attr[2], cand_attr):
             return _merge_decision(text, best_attr[2], best_attr[1])
         # Different value for the same attribute → treat as a correction/update.
         return "update", best_attr[1]
