@@ -78,3 +78,33 @@ def test_slots_alias_for_args():
         {"label": "Go", "intent": "calendar.update_time", "slots": {"time": "4pm"}}
     )
     assert a["args"] == {"time": "4pm"}
+
+
+# ── superset: the one contract validates Skybridge card shapes too ──────────
+
+def test_route_action_accepted():
+    a = validate_component_action({"label": "Open weather", "route": "/touch/weather.html"})
+    assert a == {"label": "Open weather", "kind": "normal", "route": "/touch/weather.html"}
+
+
+def test_action_requires_query_intent_or_route():
+    with pytest.raises(CardContractError):
+        validate_component_action({"label": "Nothing", "kind": "normal"})
+
+
+def test_actions_nested_in_props_accepted():
+    # Skybridge cards nest actions inside props rather than at the top level.
+    out = validate_component({
+        "component": "page",
+        "props": {"title": "Weather", "actions": [{"label": "Open", "route": "/touch/weather.html"}]},
+    })
+    assert out["actions"] == [{"label": "Open", "kind": "normal", "route": "/touch/weather.html"}]
+
+
+def test_top_level_actions_take_precedence_over_props():
+    out = validate_component({
+        "component": "list",
+        "props": {"actions": [{"label": "nested", "query": "x"}]},
+        "actions": [{"label": "top", "query": "y"}],
+    })
+    assert [a["label"] for a in out["actions"]] == ["top"]
