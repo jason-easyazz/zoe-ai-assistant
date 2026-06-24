@@ -1,43 +1,56 @@
-# llama.cpp server hosting the local Zoe model (Gemma 4 E2B GGUF), port 11434.
+# llama.cpp server hosting Zoe's local voice brain — Gemma 4 E4B-QAT + MTP, port 11434.
 #
-# This unit is platform-specific. Before installing, set:
+# This mirrors the live Zoe config (the "brain" rock — see docs/CANONICAL.md). It is
+# platform-specific; before installing, set:
 #   - the llama-server binary path (built for your platform / GPU)
-#   - the --model path to your downloaded GGUF
+#   - the --model + --model-draft paths to your downloaded GGUFs
 # See HARDWARE_COMPATIBILITY.md and scripts/setup/download_gguf_models.sh.
+#
+# HARD CONSTRAINTS (proven against the cached llama.cpp source — do not "fix" these):
+#   - MTP speculative decoding (--spec-type draft-mtp) REQUIRES --flash-attn off on
+#     this build (flash-attn on crashes in fattn.cu with the MTP drafter).
+#   - With flash-attn OFF you may quantize the K cache (--cache-type-k q8_0) but the V
+#     cache MUST stay f16 — a quantized V cache + FA off throws at startup
+#     (llama-context.cpp). q8_0 on K only buys ~25-30% KV headroom so the ~3.8k-token
+#     system prompt + tools fit in an 8192 context (a smaller ctx releases the slot on
+#     overflow and the prompt KV is never cached → a cold prefill every turn).
 [Unit]
-Description=llama.cpp server for Zoe (local Gemma model, port 11434)
+Description=llama.cpp Server for Zoe (Gemma 4 E4B-QAT + MTP — live voice brain)
 After=network.target
 
 [Service]
 Type=simple
 LimitMEMLOCK=infinity
 # Point LD_LIBRARY_PATH at the directory of your llama.cpp build.
-Environment=LD_LIBRARY_PATH=%h/llama.cpp/build/bin
-# Binds to loopback only -- zoe-data reaches it on 127.0.0.1:11434. The endpoint
-# is unauthenticated, so do NOT change --host to 0.0.0.0 unless you front it with
-# auth/firewalling; that would expose the LLM to every host on your LAN.
-ExecStart=%h/llama.cpp/build/bin/llama-server \
-  --model %h/models/gemma4-e2b/gemma-4-E2B-it-Q4_K_M.gguf \
+Environment=LD_LIBRARY_PATH=%h/llama.cpp/build-jetson-new/bin
+# The endpoint is unauthenticated. Default to loopback; the live Zoe host binds
+# 0.0.0.0 ONLY because it is fronted by Cloudflare Access + host firewalling. Do NOT
+# expose 0.0.0.0 without equivalent auth/firewalling.
+ExecStart=%h/llama.cpp/build-jetson-new/bin/llama-server \
+  --model %h/models/gemma4-e4b-qat/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf \
+  --model-draft %h/models/gemma4-e4b-qat/mtp-gemma-4-E4B-it.gguf \
+  --spec-type draft-mtp \
+  --spec-draft-n-max 4 \
+  --spec-draft-p-min 0.6 \
+  --spec-draft-ngl 99 \
   --host 127.0.0.1 \
   --port 11434 \
-  --ctx-size 16384 \
-  --n-gpu-layers 99 \
-  --threads 4 \
-  --parallel 1 \
-  --batch-size 512 \
-  --ubatch-size 256 \
-  --cont-batching \
+  --ctx-size 8192 \
   --cache-type-k q8_0 \
-  --cache-type-v q8_0 \
-  --flash-attn on \
-  --temp 0.6 \
-  --top-k 40 \
-  --top-p 0.90 \
-  --repeat-penalty 1.05 \
+  --n-gpu-layers 99 \
+  --parallel 1 \
+  --cont-batching \
+  --cache-reuse 256 \
+  --flash-attn off \
+  --temp 0.7 \
+  --top-k 64 \
+  --top-p 0.95 \
   --jinja \
   --chat-template-kwargs '{"enable_thinking":false}' \
   --mlock \
   --metrics
+# Block until /health says ok (model + draft load), or fail the unit after 120s.
+ExecStartPost=/bin/bash -c 'for i in $(seq 1 120); do curl -sf http://127.0.0.1:11434/health 2>/dev/null | grep -q ok && exit 0; sleep 1; done; exit 1'
 Restart=on-failure
 RestartSec=10
 StandardOutput=journal
