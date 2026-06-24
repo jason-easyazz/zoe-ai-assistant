@@ -1022,6 +1022,17 @@
             ctx.clearRect(0, 0, w, h);
             const cx = w / 2;
             const cy = h / 2;
+            // Room-safe resting screen: while idle during the dark hours (after
+            // sunset / deep sleep), draw NO orb so the standby screen is genuinely
+            // black and doesn't light the room. The canvas is already cleared, so
+            // returning here leaves it transparent. The orb returns by day and
+            // whenever the panel is active (listening/thinking/responding).
+            const resting = document.body.classList.contains('sky-empty') &&
+                document.body.classList.contains('sky-ambient-clock');
+            if (resting && orbState === 'ambient') {
+                const restDim = document.documentElement.getAttribute('data-rest-dim');
+                if (restDim === 'deep' || restDim === 'night') return;
+            }
             const empty = document.body.classList.contains('sky-empty');
             const base = Math.min(w, h) * (empty ? 0.26 : 0.24);
             const pulse = 1 + (orbState === 'listening' ? 0.06 : orbState === 'responding' ? 0.08 : 0.025) * Math.sin(phase * 2);
