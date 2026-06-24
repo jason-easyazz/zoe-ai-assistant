@@ -62,10 +62,32 @@ if not _brain_healthy():
     )
 
 # Load the production env BEFORE importing service modules so db_pool / Chroma
-# pick up the real connection settings.
+# pick up the real connection settings. Derive the path relative to this file
+# (tests/samantha_live/ -> zoe-data/.env) so the suite is not pinned to one
+# machine's layout, and skip loudly if it is missing — load_dotenv is silent on
+# a bad path, which would leave the service modules importing against ambient
+# env vars and produce misleading results.
+from pathlib import Path  # noqa: E402
+
 from dotenv import load_dotenv  # noqa: E402
 
-load_dotenv("/home/zoe/assistant/services/zoe-data/.env")
+# Prefer the .env relative to this file (tests/samantha_live/ -> zoe-data/.env)
+# so the suite is not pinned to one machine's layout. When running from a git
+# worktree the .env may live only in the canonical checkout, so fall back to
+# that. Skip loudly if neither exists rather than silently importing against
+# ambient env vars.
+_ENV_CANDIDATES = [
+    Path(__file__).resolve().parents[2] / ".env",
+    Path("/home/zoe/assistant/services/zoe-data/.env"),
+]
+_ENV_PATH = next((p for p in _ENV_CANDIDATES if p.is_file()), None)
+if _ENV_PATH is None:
+    pytest.skip(
+        "zoe-data .env not found in "
+        f"{[str(p) for p in _ENV_CANDIDATES]} — cannot configure live deps",
+        allow_module_level=True,
+    )
+load_dotenv(_ENV_PATH)
 
 import db_pool  # noqa: E402
 from db_pool import get_db_ctx  # noqa: E402
@@ -212,7 +234,10 @@ async def test_multifact_extraction_and_junk_gate(demo_env):
     for t in recall_texts:
         print(f"    - {t}")
 
-    assert stored > 0, "expected the engine to store at least the durable facts"
+    # Exactly the 4 durable facts — anchoring to the real contract so a
+    # partial-extraction regression (e.g. job/city/allergy silently dropped) is
+    # caught, not masked by a loose "> 0" guard.
+    assert stored == 4, f"expected exactly 4 durable facts, got {stored}: {_texts(recall)}"
     assert recall, "expected durable facts to surface in recall"
 
     # --- Scenario 1: each of the ~4 durable facts is present and owner-clean.
