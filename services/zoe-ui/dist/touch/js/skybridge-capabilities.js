@@ -107,36 +107,38 @@
             .sort((a, b) => b.score - a.score || a.title.localeCompare(b.title));
     }
 
+    // The guest dashboard shown on wake: glance cards anyone at the panel can see.
+    // Instant (no fetch) cards — time + room controls; live weather is appended by
+    // the wake handler. Personal data (calendar/lists/people) still gates on tap.
     function getHomeCards() {
-        return [
-            {
-                component: 'status',
-                props: {
-                    title: 'Skybridge is ready',
-                    kicker: 'Voice-first surface',
-                    body: 'Ask for any page, setting, list, forecast, device, person, note, or system state. Cards will appear here and stay active for follow-ups.',
-                    status: 'Ready',
-                    wide: true,
-                    actions: [{ label: 'Show settings', query: 'settings' }, { label: 'Show weather', query: 'weather' }]
-                }
-            },
-            {
-                component: 'page_grid',
-                props: {
-                    title: 'Zoe pages',
-                    kicker: 'Capability map',
-                    items: pages.slice(0, 8)
-                }
-            },
-            {
-                component: 'settings_overview',
-                props: {
-                    title: 'Settings control',
-                    kicker: 'Full control with gates',
-                    items: settings.slice(0, 8)
-                }
+        var now = new Date();
+        var h24 = now.getHours();
+        var hour12 = ((h24 + 11) % 12) + 1;
+        var greeting = h24 < 12 ? 'Good morning' : (h24 < 18 ? 'Good afternoon' : 'Good evening');
+        var clockCard = {
+            component: 'status',
+            props: {
+                source: 'clock_show',
+                summary: greeting,
+                hour: String(hour12),
+                minute: ('0' + now.getMinutes()).slice(-2),
+                meridiem: h24 < 12 ? 'AM' : 'PM',
+                weekday: now.toLocaleDateString(undefined, { weekday: 'long' }),
+                date_label: now.toLocaleDateString(undefined, { day: 'numeric', month: 'long' })
             }
-        ];
+        };
+        var roomCard = {
+            component: 'status',
+            props: {
+                title: 'Room controls',
+                kicker: 'Home',
+                body: 'Lights, scenes and devices for this room.',
+                status: 'Home',
+                wide: true,
+                actions: [{ label: 'Open room controls', query: 'smart home' }]
+            }
+        };
+        return [clockCard, roomCard];
     }
 
     window.SkybridgeCapabilities = {
