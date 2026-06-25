@@ -802,6 +802,7 @@
             const challengeId = window.SkybridgeRenderer.escapeHtml(baseAction.challenge_id || '');
             const actionContext = window.SkybridgeRenderer.escapeHtml(baseAction.action_context || 'Enter PIN');
             return '<button type="button" class="sky-auth-profile' + selected + '" aria-label="Sign in as ' + name + '" data-sky-action="auth" data-route="' + route + '" data-challenge-id="' + challengeId + '" data-action-context="' + actionContext + '" data-user-id="' + userId + '" data-user-name="' + name + '" data-user-avatar="' + avatar + '">' +
+                '<span class="sky-auth-avatar" aria-hidden="true">' + avatar + '</span>' +
                 '<span class="sky-auth-person"><strong>' + name + '</strong></span>' +
                 '</button>';
         }).join('');
