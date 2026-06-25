@@ -312,6 +312,8 @@ body:not(.sky-empty) .sky-card.people-card.sky-premium-card {
 .people-card .people-tile-avatar {
   display: grid;
   place-items: center;
+  position: relative;
+  overflow: hidden;
   width: 58px;
   height: 58px;
   border-radius: 50%;
@@ -526,6 +528,18 @@ body:not(.sky-empty) .sky-card.people-card.people-profile-card.sky-premium-card 
   height: 96px;
   font-size: 34px;
   flex: 0 0 auto;
+}
+
+/* Photo layer — a real contact photo over the gradient/initials. If the URL is
+   absent or fails, this stays empty and the initials show through. */
+.people-card .people-avatar-img {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.18);
 }
 
 .people-card .people-profile-id {
