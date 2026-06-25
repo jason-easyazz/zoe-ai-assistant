@@ -45,6 +45,12 @@
     var m = mode(), theme = (m === 'light' || m === 'dark') ? m : (isDay() ? 'light' : 'dark');
     document.documentElement.setAttribute('data-theme', theme);
     document.documentElement.setAttribute('data-rest-dim', restDim());
+    // Keep the legacy `dark-mode` class in sync with the theme. Old touch-adapter
+    // rules force white text under `html.dark-mode` with !important; if that class
+    // lingers while data-theme is "light", every card's secondary text washes out
+    // to white-on-white. Toggle it so those legacy rules only fire in dark theme.
+    document.documentElement.classList.toggle('dark-mode', theme === 'dark');
+    document.documentElement.classList.toggle('light-mode', theme === 'light');
   }
   apply();
   setInterval(apply, 60000);
