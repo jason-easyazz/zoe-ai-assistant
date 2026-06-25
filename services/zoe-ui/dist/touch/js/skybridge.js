@@ -453,20 +453,38 @@
     // and the stage fills with glance cards anyone can see — time, weather, room
     // controls. Personal cards still ask for sign-in when tapped. Live weather is
     // fetched after the instant cards so the wake feels immediate.
+    // Render the condensed guest dashboard (Layout B) as a single surface — clock +
+    // weather tile + room/music/sign-in. Sets the stage directly (no clearCards,
+    // which would flash the ambient clock back) and bumps the deck token so a
+    // pending weather fetch can tell the view changed under it.
+    function renderDashboardSurface(weather) {
+        deckToken++;
+        cardSequence = 0;
+        document.body.classList.remove('sky-empty');
+        document.body.classList.remove('sky-ambient-clock');
+        document.body.classList.add('sky-has-cards');
+        els.cards.innerHTML = window.SkybridgeRenderer.render({
+            component: 'dashboard',
+            props: { guest: true, weather: weather || null }
+        });
+        requestAnimationFrame(resizeOrb);
+    }
+
     function wakeToDashboard() {
-        renderHome({ showCards: true });
-        // Capture the deck identity AFTER renderHome's clear, so if the user taps a
-        // card or speaks before weather arrives (which clears + re-renders), the
-        // token won't match and we won't append weather onto the wrong view.
+        renderDashboardSurface(null);
         const token = deckToken;
         scheduleIdleReturn();
+        // Enrich with live weather (guest-readable); re-render the surface with it,
+        // but only if the user hasn't moved on (token still current).
         fetch('/api/skybridge/resolve', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
             body: JSON.stringify({ message: 'weather' })
         }).then(res => (res.ok ? res.json() : null)).then(data => {
             if (!data || token !== deckToken || document.body.classList.contains('sky-empty')) return;
-            (Array.isArray(data.cards) ? data.cards : []).forEach(card => addCard(card, false));
+            const wxCard = (Array.isArray(data.cards) ? data.cards : [])
+                .find(c => c && c.props && /weather/.test(String(c.props.source || '')));
+            if (wxCard) renderDashboardSurface(wxCard.props);
         }).catch(() => { /* weather is best-effort on the dashboard */ });
     }
 
