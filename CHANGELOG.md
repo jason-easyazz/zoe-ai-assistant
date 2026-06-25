@@ -36,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Service dependencies** - Correct dependency ordering in docker-compose
 
 ### Removed
+- **docs/archive purge 5/13** — removed 43 retired files; git history keeps them (`git log -- docs/archive`)
 - **docs/archive purge 4/13** — removed 43 retired files; git history keeps them (`git log -- docs/archive`)
 - **docs/archive purge 3/13** — removed 43 retired files; git history keeps them (`git log -- docs/archive`)
 - **docs/archive purge 2/13** — removed 43 retired files; git history keeps them (`git log -- docs/archive`)
