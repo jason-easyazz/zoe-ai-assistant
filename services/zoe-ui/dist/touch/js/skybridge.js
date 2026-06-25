@@ -89,6 +89,7 @@
         els.input = document.getElementById('skyCommandInput');
         els.mic = document.getElementById('skyMicBtn');
         els.home = document.getElementById('skyHomeBtn');
+        els.navHome = document.getElementById('skyNavHome');
         els.orbButton = document.getElementById('skyOrbButton');
         els.orbButtonText = document.getElementById('skyOrbButtonText');
         els.voiceHint = document.getElementById('skyVoiceHint');
@@ -131,6 +132,10 @@
         els.orbButton.addEventListener('click', toggleVoiceCapture);
         els.voiceAction.addEventListener('click', toggleVoiceCapture);
         els.home.addEventListener('click', () => renderHome({ showCards: true }));
+        if (els.navHome) {
+            // Always-visible Home while a card is up → back to the dashboard hub.
+            els.navHome.addEventListener('click', () => wakeToDashboard());
+        }
         // Touch the resting panel anywhere (not a control) to wake it to the
         // dashboard — the ambient clock should be a door, not a dead end.
         document.addEventListener('click', event => {
