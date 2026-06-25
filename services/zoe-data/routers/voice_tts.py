@@ -4837,7 +4837,9 @@ async def _prewarm_brain_for_panel(panel_id: str) -> None:
         # otherwise lands on the turn's critical path before the brain's first token;
         # warming it here (cache TTL now outlives wake→turn) hides it on the first turn.
         _pw = await asyncio.gather(
-            zoe_core_client.prewarm(user_id, session_id),
+            # voice_mode=True: warm the SAME (voice-capped) worker the voice turn
+            # will use, so prewarm actually hides the cold subprocess boot.
+            zoe_core_client.prewarm(user_id, session_id, voice_mode=True),
             _voice_brain_memory(user_id),
             return_exceptions=True,
         )
