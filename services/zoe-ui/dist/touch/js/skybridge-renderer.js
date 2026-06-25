@@ -274,7 +274,7 @@
     // The calendar scene takes a living time-of-day gradient (like the clock card),
     // so the card reads as "your day" rather than a flat agenda. Phase by hour.
     function calendarDaypart(nowMs) {
-        const h = new Date(nowMs || Date.now()).getHours();
+        const h = new Date(nowMs != null ? nowMs : Date.now()).getHours();
         if (h >= 5 && h < 8) return 'dawn';
         if (h >= 8 && h < 17) return 'day';
         if (h >= 17 && h < 20) return 'dusk';
