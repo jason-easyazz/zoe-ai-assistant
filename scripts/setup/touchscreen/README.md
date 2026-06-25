@@ -2,6 +2,28 @@
 
 This directory stores version-controlled templates for the Zoe touchscreen kiosk (`zoe-touch`).
 
+## Live panel state — current source of truth (verified 2026-06-26)
+
+`config.json`, `start-kiosk.sh`, and `systemd/zoe-kiosk.service` here are now a **byte-exact
+mirror of what the `zoe-touch` panel (192.168.1.61) actually runs.** How it boots today:
+
+- systemd **`zoe-kiosk.service`** runs as user **`pi`** (`/etc/systemd/system/zoe-kiosk.service`)
+  → execs `/opt/TouchKio/start-kiosk.sh` → launches **`chromium-browser --kiosk`**.
+- It loads `config.json`'s `url` = **`/touch/skybridge.html`** (the Skybridge UI; the panel
+  was migrated off the old `dashboard.html`).
+- `start-kiosk.sh` passes **`--use-fake-ui-for-media-stream`**, which auto-grants the real
+  microphone — in `--kiosk` mode Chromium can't show the mic prompt, so `getUserMedia` used
+  to hang and the voice UI fell back to typing. Security note: the kiosk auto-grants mic to
+  whatever it loads — acceptable for a single-purpose panel meant to listen.
+
+> ⚠️ **Divergence to reconcile separately.** The deploy instructions below (Option A/B,
+> `--user zoe`, `~/.config/autostart/*.desktop`) and the provisioning helpers
+> (`install_touchscreen.sh`, `provision-server.py`, `provision.html`, `qrcode.min.js`,
+> `wifi-portal/`) describe an **earlier provisioning/autostart setup that the current panel
+> does NOT use** — it runs as `pi` via the systemd service above, and `/opt/TouchKio/` has
+> none of the provisioning files. They are kept for reference; decide whether to retire or
+> re-align them in a follow-up.
+
 ## Files
 
 - `config.json` -> `/opt/TouchKio/config.json`

@@ -1,91 +1,70 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
+set -e
 
-CONFIG_PATH="/opt/TouchKio/config.json"
-PROVISIONED="/opt/TouchKio/.provisioned"
-DEFAULT_SERVER="https://192.168.1.218"
-DEFAULT_PANEL_ID="zoe-touch-pi"
+export DISPLAY=:0
+export XDG_RUNTIME_DIR=/run/user/1000
+mkdir -p /home/pi/.config/chromium-kiosk
 
-# ── Read config ───────────────────────────────────────────────────────────────
-TOKEN=""
-SERVER_URL=""
-PANEL_ID=""
-if [[ -f "${CONFIG_PATH}" ]]; then
-  TOKEN=$(python3 -c "
-import json, pathlib
+CONFIG="/opt/TouchKio/config.json"
+DEFAULT_URL="https://zoe.the411.life/touch/dashboard.html"
+ZOE_URL=$(python3 - <<'PYC'
+import json
 try:
-    d = json.loads(pathlib.Path('${CONFIG_PATH}').read_text())
-    print(d.get('token', ''))
+    d=json.load(open('/opt/TouchKio/config.json'))
+    print(d.get('url') or 'https://zoe.the411.life/touch/dashboard.html')
 except Exception:
-    print('')
-" 2>/dev/null || echo "")
-  SERVER_URL=$(python3 -c "
-import json, pathlib
-try:
-    d = json.loads(pathlib.Path('${CONFIG_PATH}').read_text())
-    print(d.get('server_url', ''))
-except Exception:
-    print('')
-" 2>/dev/null || echo "")
-  PANEL_ID=$(python3 -c "
-import json, pathlib
-try:
-    d = json.loads(pathlib.Path('${CONFIG_PATH}').read_text())
-    print(d.get('panel_id', ''))
-except Exception:
-    print('')
-" 2>/dev/null || echo "")
-fi
+    print('https://zoe.the411.life/touch/dashboard.html')
+PYC
+)
 
-SERVER_URL="${SERVER_URL:-${DEFAULT_SERVER}}"
-PANEL_ID="${PANEL_ID:-${DEFAULT_PANEL_ID}}"
+echo "Starting Zoe Kiosk: $ZOE_URL"
 
-# ── Provisioning check ────────────────────────────────────────────────────────
-# If .provisioned exists but token is missing/empty, re-enter provision mode.
-if [[ ! -f "${PROVISIONED}" ]] || [[ -z "${TOKEN}" ]]; then
-  echo "[start-kiosk] No token or .provisioned missing — entering provision mode..."
-  python3 /opt/TouchKio/provision-server.py --mode provision &
-  KIOSK_URL="http://localhost:8888/"
-  sleep 2
-  exec /usr/bin/chromium \
-    --kiosk \
-    --no-first-run \
-    --disable-infobars \
-    --disable-session-crashed-bubble \
-    --disable-restore-session-state \
-    --noerrdialogs \
-    --touch-events=enabled \
-    --start-maximized \
-    --autoplay-policy=no-user-gesture-required \
-    --user-data-dir=/home/zoe/.config/chromium-provision \
-    --remote-debugging-port=9222 \
-    --remote-debugging-address=0.0.0.0 \
-    --ignore-certificate-errors \
-    --disable-extensions \
-    --no-sandbox \
-    "${KIOSK_URL}"
-fi
+# Wait for network
+for i in $(seq 1 30); do
+  ping -c1 -W1 192.168.1.218 >/dev/null 2>&1 && break
+  sleep 1
+done
 
-# ── Normal kiosk mode ─────────────────────────────────────────────────────────
-KIOSK_URL="${SERVER_URL}/touch/dashboard.html?panel_id=${PANEL_ID}&kiosk=1"
+# Wait for X server
+for i in $(seq 1 30); do
+  xset q >/dev/null 2>&1 && break
+  sleep 1
+done
 
-# Wait briefly for desktop and network readiness.
-sleep 5
+# Display power settings
+xset s off || true
+xset -dpms || true
+xset s noblank || true
 
-exec /usr/bin/chromium \
+# Rotation (prefer HDMI panels)
+xrandr --output HDMI-1 --rotate right 2>/dev/null || \
+xrandr --output HDMI-A-1 --rotate right 2>/dev/null || \
+xrandr --output DSI-1 --rotate left 2>/dev/null || true
+
+# Hide cursor
+pkill -f 'unclutter -idle' || true
+unclutter -idle 0.2 -root &
+
+sleep 2
+
+exec chromium-browser \
+  --remote-debugging-port=9222 \
+  --remote-debugging-address=0.0.0.0 \
+  --remote-allow-origins=* \
   --kiosk \
   --no-first-run \
   --disable-infobars \
   --disable-session-crashed-bubble \
   --disable-restore-session-state \
   --noerrdialogs \
+  --disable-features=TranslateUI,OptimizationHints,AutofillServerCommunication \
   --touch-events=enabled \
   --start-maximized \
   --autoplay-policy=no-user-gesture-required \
-  --user-data-dir=/home/zoe/.config/chromium-kiosk \
-  --remote-debugging-port=9222 \
-  --remote-debugging-address=0.0.0.0 \
+  --use-fake-ui-for-media-stream \
+  --user-data-dir=/home/pi/.config/chromium-kiosk \
   --ignore-certificate-errors \
   --disable-extensions \
   --no-sandbox \
-  "${KIOSK_URL}"
+  "$ZOE_URL"
+
