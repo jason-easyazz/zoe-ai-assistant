@@ -9,6 +9,9 @@
     let phase = 0;
     let animationFrame = null;
     let cardSequence = 0;
+    // Bumped on every deck clear so a pending async append (e.g. the dashboard's
+    // weather fetch) can detect the view changed under it and bail.
+    let deckToken = 0;
     let currentUtterance = '';
     let voiceStartedByUser = false;
     let commandFallbackOpen = false;
@@ -125,6 +128,13 @@
         els.orbButton.addEventListener('click', toggleVoiceCapture);
         els.voiceAction.addEventListener('click', toggleVoiceCapture);
         els.home.addEventListener('click', () => renderHome({ showCards: true }));
+        // Touch the resting panel anywhere (not a control) to wake it to the
+        // dashboard — the ambient clock should be a door, not a dead end.
+        document.addEventListener('click', event => {
+            if (!document.body.classList.contains('sky-empty')) return;
+            if (event.target.closest('button, a, input, textarea, label, [data-sky-action], .sky-command, .sky-orb-button')) return;
+            wakeToDashboard();
+        });
         ['pointerdown', 'keydown', 'touchstart'].forEach(type => {
             document.addEventListener(type, noteUserActivity, { passive: true });
         });
@@ -436,8 +446,30 @@
         requestAnimationFrame(resizeOrb);
     }
 
+    // Wake from rest into the guest dashboard: the orb stays present (tap/talk),
+    // and the stage fills with glance cards anyone can see — time, weather, room
+    // controls. Personal cards still ask for sign-in when tapped. Live weather is
+    // fetched after the instant cards so the wake feels immediate.
+    function wakeToDashboard() {
+        renderHome({ showCards: true });
+        // Capture the deck identity AFTER renderHome's clear, so if the user taps a
+        // card or speaks before weather arrives (which clears + re-renders), the
+        // token won't match and we won't append weather onto the wrong view.
+        const token = deckToken;
+        scheduleIdleReturn();
+        fetch('/api/skybridge/resolve', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            body: JSON.stringify({ message: 'weather' })
+        }).then(res => (res.ok ? res.json() : null)).then(data => {
+            if (!data || token !== deckToken || document.body.classList.contains('sky-empty')) return;
+            (Array.isArray(data.cards) ? data.cards : []).forEach(card => addCard(card, false));
+        }).catch(() => { /* weather is best-effort on the dashboard */ });
+    }
+
     function clearCards() {
         cardSequence = 0;
+        deckToken++;
         els.cards.innerHTML = '';
         document.body.classList.add('sky-empty');
         document.body.classList.add('sky-ambient-clock');
