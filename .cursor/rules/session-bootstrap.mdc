@@ -5,6 +5,8 @@ alwaysApply: true
 
 # Session Bootstrap
 
+First, read the repo's `AGENTS.md` — the command-center hub (VISION -> CANONICAL -> PLANS -> IDEAS, plus tool discipline) that fans out to the nested per-directory DOX files.
+
 Before non-trivial edits, report the mechanical state in a short preflight:
 
 - repo root, branch, remote, and dirty files;

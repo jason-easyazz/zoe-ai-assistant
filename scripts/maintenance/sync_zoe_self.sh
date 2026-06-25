@@ -14,6 +14,12 @@
 #   4. Updates CAPABILITIES.md with current MCP tool list
 #      → written to ~/assistant/CAPABILITIES.md
 #   5. Writes ~/.openclaw/workspace/FEDERATION_SKILLS.md with live skill counts per agent
+#
+# NOTE: the Zoe Agent system prompt does NOT inline the regenerated ZOE_SELF.md
+# (that flat name dump cost ~1,500 tok/turn — see the prefill audit). It uses the
+# curated `_ZOE_SELF_SUMMARY` constant in services/zoe-data/zoe_agent.py instead.
+# If you add a new TIER, core capability, or escalation path here, update that
+# constant by hand so the brain's self-model stays current.
 
 set -euo pipefail
 

@@ -100,7 +100,7 @@ FOLLOW_UP_LISTEN_S = float(os.environ.get("FOLLOW_UP_LISTEN_S", "5.0"))
 _FOLLOW_UP_MAX_TURNS_RAW = int(os.environ.get("FOLLOW_UP_MAX_TURNS", "5"))
 # FOLLOW_UP_MAX_TURNS counts turns AFTER the initial response.
 FOLLOW_UP_MAX_TURNS = max(0, _FOLLOW_UP_MAX_TURNS_RAW)
-FOLLOW_UP_VAD_THRESHOLD = float(os.environ.get("FOLLOW_UP_VAD_THRESHOLD", "0.45"))
+FOLLOW_UP_VAD_THRESHOLD = float(os.environ.get("FOLLOW_UP_VAD_THRESHOLD", "0.35"))
 # Note: debounce_time on oww.predict() requires a matching `threshold` dict in some openwakeword versions
 # and was crashing the daemon — post-play cooldown + oww.reset() handle repeats instead.
 # Transcripts (usually Whisper hallucinations on silence or TTS bleed) — do not send to chat.
@@ -164,7 +164,7 @@ _BARGE_QUEUE: "queue.Queue[bytes]" = None  # type: ignore  # set in main()
 _AMBIENT_QUEUE: "queue.Queue[bytes]" = None  # type: ignore  # set in main()
 # Pre-roll ring buffer so the wake->record stream-open gap does not clip the
 # START of the command (the "what's the" that went missing).
-_PREROLL: deque = deque(maxlen=int(os.environ.get("PREROLL_CHUNKS", "7")))  # ~560ms @1280/16k
+_PREROLL: deque = deque(maxlen=int(os.environ.get("PREROLL_CHUNKS", "12")))  # ~960ms @1280/16k — wide enough that the command onset survives the 2-confirm wake
 import queue as _queue_module
 
 
@@ -1077,19 +1077,23 @@ def _follow_up_listen(pa: pyaudio.PyAudio) -> bytes | None:
 
     deadline = time.monotonic() + FOLLOW_UP_LISTEN_S
     speech_detected = False
-    pre_frames: list[bytes] = []
+    # Keep a short ring of the chunks scanned BEFORE VAD fires. Silero VAD only
+    # crosses threshold a chunk or two into speech, so without this lookback the
+    # first syllable of a follow-up ("That's" → "My") is discarded — the onset
+    # clip that makes even Moonshine v2 Medium mishear. ~320ms by default.
+    lookback: deque = deque(maxlen=int(os.environ.get("FOLLOWUP_LOOKBACK_CHUNKS", "4")))
     max_prob_seen = 0.0
     chunk_count = 0
     try:
         while time.monotonic() < deadline:
             data = stream.read(CHUNK_SIZE, exception_on_overflow=False)
+            lookback.append(data)  # retain pre-trigger audio so VAD latency can't clip the onset
             prob = _vad_prob(model, np.frombuffer(data, dtype=np.int16))
             chunk_count += 1
             if prob > max_prob_seen:
                 max_prob_seen = prob
             if prob >= FOLLOW_UP_VAD_THRESHOLD:
                 speech_detected = True
-                pre_frames.append(data)
                 log.info("Follow-up speech detected (VAD=%.2f), recording...", prob)
                 break
 
@@ -1100,9 +1104,11 @@ def _follow_up_listen(pa: pyaudio.PyAudio) -> bytes | None:
             stream.close()
             return None
 
-        # Continue recording on the same stream — no mic close/reopen gap.
+        # Continue recording on the same stream — no mic close/reopen gap. Seed with
+        # the lookback ring so the recording includes the pre-VAD onset (and the
+        # trigger chunk, which is the last entry in the ring).
         log.info("Recording follow-up command (max %ds)...", RECORD_SECONDS)
-        frames = list(pre_frames)
+        frames = list(lookback)
         silent_chunks = 0
         stop_reason = "max_duration"
         max_silent = int(SILENCE_TIMEOUT_S * SAMPLE_RATE / CHUNK_SIZE)

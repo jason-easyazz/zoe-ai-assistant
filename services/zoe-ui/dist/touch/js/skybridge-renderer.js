@@ -72,14 +72,56 @@
     }
 
     function renderAuthChallenge(props) {
+        const title = escapeHtml(props.title || "Who's here?");
+        const sub = escapeHtml(props.body || props.summary || 'Tap your profile to continue.');
         const bodyHtml = [
             '<div class="sky-auth-scene sky-auth-people-only">',
+            '<div class="sky-authx-head">',
+            '<span class="sky-authx-kicker">' + escapeHtml(props.kicker || 'Sign in') + '</span>',
+            '<h2 class="sky-authx-title">' + title + '</h2>',
+            '<p class="sky-authx-sub">' + sub + '</p>',
+            '</div>',
             '<div class="sky-auth-profile-grid" data-auth-profiles aria-label="Choose your profile">',
-            '<div class="sky-auth-loading"><i></i><span>Finding people for this panel...</span></div>',
+            '<div class="sky-auth-loading"><i></i><span>Finding people for this panel…</span></div>',
             '</div>',
             '</div>'
         ].join('');
-        return cardFrame(props, bodyHtml, { wide: true, tone: 'auth-challenge', hideHeader: true, hideStatus: true, hideActions: true });
+        return cardFrame(props, bodyHtml, { wide: true, tone: 'auth-challenge sky-authx', hideHeader: true, hideStatus: true, hideActions: true });
+    }
+
+    function renderTimer(props) {
+        const dur = Math.max(1, parseInt(props.duration_seconds) || 0);
+        const expires = parseInt(props.expires_at_ms) || (Date.now() + dur * 1000);
+        const remaining = Math.max(0, Math.round((expires - Date.now()) / 1000));
+        const frac = Math.max(0, Math.min(1, remaining / dur));
+        const mm = String(Math.floor(remaining / 60)).padStart(2, '0');
+        const ss = String(remaining % 60).padStart(2, '0');
+        const label = props.label || props.title || 'Timer';
+        const id = escapeHtml(props.timer_id || props.id || '');
+        const expired = props.status === 'expired' || remaining <= 0;
+        const lowClass = (!expired && frac <= 0.15) ? ' is-low' : '';
+        // The fill is the card's border: a rounded-rect stroke whose visible length
+        // tracks the time left (pathLength=100 → offset is just the spent percent).
+        const offset = (100 * (1 - frac)).toFixed(2);
+        const ring = [
+            '<svg class="sky-timer-ring" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">',
+            '<rect class="sky-timer-ring-track" x="2" y="2" width="96" height="96" rx="9" ry="9" pathLength="100"></rect>',
+            '<rect class="sky-timer-ring-fill" x="2" y="2" width="96" height="96" rx="9" ry="9" pathLength="100" stroke-dasharray="100" stroke-dashoffset="' + offset + '"></rect>',
+            '</svg>'
+        ].join('');
+        const body = [
+            '<div class="sky-timer' + (expired ? ' is-expired' : '') + lowClass + '" data-timer-id="' + id + '"',
+                ' data-timer-expires="' + expires + '" data-timer-duration="' + dur + '"',
+                ' data-timer-status="' + (expired ? 'expired' : 'running') + '">',
+            ring,
+            '<button type="button" class="sky-timer-x" data-timer-cancel="' + id + '" aria-label="' + (expired ? 'Dismiss timer' : 'Cancel timer') + '">✕</button>',
+            '<div class="sky-timer-center">',
+            '<div class="sky-timer-digits">' + (expired ? "Time's up" : mm + ':' + ss) + '</div>',
+            '<div class="sky-timer-label">' + escapeHtml(label) + '</div>',
+            '</div>',
+            '</div>'
+        ].join('');
+        return cardFrame(props, body, { tone: 'timer' + (expired ? ' sky-timer-ringing' : ''), hideHeader: true, hideStatus: true });
     }
 
     function renderStatus(props) {
@@ -150,35 +192,175 @@
         return ['tasks', 'all'].indexOf(category) >= 0 ? 'general' : category;
     }
 
+    // Best-effort epoch (ms) for an event start, so we can compute a live
+    // "in 2h" / "in 25 min" countdown from now. Mirrors calendarEventSortKey's
+    // date/time parsing but returns the actual timestamp (or NaN).
+    function calendarEventStartMs(item) {
+        const datePart = String(item.start_date || item.date || '').slice(0, 10);
+        const timePart = item.all_day ? '00:00' : String(item.start_time || '00:00').slice(0, 5);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(datePart)) return NaN;
+        return Date.parse(datePart + 'T' + timePart);
+    }
+
+    // A calm, human relative phrase from now → the event start. Returns '' when
+    // we can't compute one (no parseable date) so the hero can fall back cleanly.
+    function calendarCountdown(item, nowMs) {
+        if (item.all_day) {
+            const startDay = String(item.start_date || item.date || '').slice(0, 10);
+            if (/^\d{4}-\d{2}-\d{2}$/.test(startDay)) {
+                const today = new Date(nowMs);
+                const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+                const startMs = Date.parse(startDay + 'T00:00:00');
+                if (Number.isFinite(startMs)) {
+                    const dDays = Math.round((startMs - todayStart) / 86400000);
+                    if (dDays <= 0) return 'All day';
+                    if (dDays === 1) return 'All day · tomorrow';
+                    if (dDays < 7) return 'All day · ' + new Date(startMs).toLocaleDateString(undefined, { weekday: 'long' });
+                }
+            }
+            return 'All day';
+        }
+        const startMs = calendarEventStartMs(item);
+        if (!Number.isFinite(startMs)) return '';
+        const diffMin = Math.round((startMs - nowMs) / 60000);
+        if (diffMin <= -60) {
+            const h = Math.round(-diffMin / 60);
+            return h + 'h ago';
+        }
+        if (diffMin < 0) return Math.abs(diffMin) + ' min ago';
+        if (diffMin === 0) return 'Now';
+        if (diffMin < 60) return 'in ' + diffMin + ' min';
+        const hours = diffMin / 60;
+        if (hours < 24) {
+            const h = Math.floor(hours);
+            const m = diffMin - h * 60;
+            return 'in ' + h + 'h' + (m ? ' ' + m + 'm' : '');
+        }
+        const days = Math.round(hours / 24);
+        if (days === 1) return 'Tomorrow';
+        return 'in ' + days + ' days';
+    }
+
+    // Custom filled calendar glyph (design system §5: filled/dimensional, never line
+    // icons). Self-contained <svg> with a unique gradient id so it can live inside a
+    // single rendered card without depending on the shared sprite.
+    var calGlyphSeq = 0;
+    function calendarGlyphSvg() {
+        // Unique gradient id per render so multiple calendar cards don't collide on
+        // a shared element id (invalid HTML).
+        var gid = 'calCardG' + (++calGlyphSeq);
+        return [
+            '<svg class="calendar-glyph" viewBox="0 0 32 32" aria-hidden="true">',
+            '<defs><linearGradient id="' + gid + '" x1="0" y1="0" x2="0" y2="1">',
+            '<stop offset="0" stop-color="rgba(255,255,255,.95)"/>',
+            '<stop offset="1" stop-color="rgba(228,236,250,.86)"/>',
+            '</linearGradient></defs>',
+            '<rect x="3" y="6" width="26" height="23" rx="5" fill="url(#' + gid + ')"/>',
+            '<rect x="3" y="6" width="26" height="7" rx="5" fill="rgba(var(--calendar-glyph-accent,90,224,224),.92)"/>',
+            '<rect x="9" y="2.5" width="2.8" height="7" rx="1.4" fill="rgba(var(--calendar-glyph-accent,90,224,224),.92)"/>',
+            '<rect x="20.2" y="2.5" width="2.8" height="7" rx="1.4" fill="rgba(var(--calendar-glyph-accent,90,224,224),.92)"/>',
+            '<g fill="rgba(22,50,77,.34)"><rect x="8" y="17" width="4" height="4" rx="1.2"/><rect x="14" y="17" width="4" height="4" rx="1.2"/><rect x="20" y="17" width="4" height="4" rx="1.2"/><rect x="8" y="23" width="4" height="4" rx="1.2"/><rect x="14" y="23" width="4" height="4" rx="1.2"/></g>',
+            '</svg>'
+        ].join('');
+    }
+
+    // Build a tap-to-edit query for an event row (opens the calendar editor card
+    // via /api/skybridge/resolve). Including the time disambiguates same-title events.
+    function calendarEditQuery(item, title) {
+        const startTime = String(item.start_time || '').slice(0, 5);
+        return 'edit ' + title + (startTime ? ' at ' + startTime : '');
+    }
+
+    // The calendar scene takes a living time-of-day gradient (like the clock card),
+    // so the card reads as "your day" rather than a flat agenda. Phase by hour.
+    function calendarDaypart(nowMs) {
+        const h = new Date(nowMs != null ? nowMs : Date.now()).getHours();
+        if (h >= 5 && h < 8) return 'dawn';
+        if (h >= 8 && h < 17) return 'day';
+        if (h >= 17 && h < 20) return 'dusk';
+        return 'night';
+    }
+
     function renderCalendar(props) {
         const events = Array.isArray(props.events) ? props.events : [];
-        const visibleEvents = events.slice().sort((a, b) => calendarEventSortKey(a) - calendarEventSortKey(b)).slice(0, 8);
-        const dateMeta = formatCalendarDate(props.date || props.start_date || (visibleEvents[0] && visibleEvents[0].start_date));
-        const rows = visibleEvents.map((item, index) => {
+        const sorted = events.slice().sort((a, b) => calendarEventSortKey(a) - calendarEventSortKey(b)).slice(0, 8);
+        const dateMeta = formatCalendarDate(props.date || props.start_date || (sorted[0] && sorted[0].start_date));
+        const qualifier = String(props.qualifier || 'today').trim();
+        const countLabel = events.length + ' ' + (events.length === 1 ? 'event' : 'events') + (qualifier ? ' ' + qualifier : '');
+        const nowMs = Date.now();
+
+        // The hero is the soonest UPCOMING event by wall-clock — not simply sorted[0],
+        // because an all-day event sorts at 00:00 and would otherwise hijack the hero
+        // ahead of a timed meeting later today. Prefer the first event whose start is
+        // still in the future; fall back to the first sorted event (e.g. all past, or
+        // only all-day) so the card never collapses to an empty agenda.
+        let heroIndex = sorted.findIndex(item => {
+            if (item.all_day) return false;
+            const ms = calendarEventStartMs(item);
+            return Number.isFinite(ms) && ms >= nowMs;
+        });
+        if (heroIndex < 0) heroIndex = 0;
+        const heroEvent = sorted[heroIndex] || null;
+        const restEvents = sorted.filter((_, i) => i !== heroIndex);
+
+        let heroBlock = '';
+        if (heroEvent) {
+            const title = heroEvent.title || heroEvent.name || 'Calendar event';
+            const category = calendarCategoryClass(heroEvent.category);
+            const detail = [heroEvent.location].filter(Boolean).join(' · ');
+            const countdown = calendarCountdown(heroEvent, nowMs);
+            const isPast = (function () {
+                const ms = calendarEventStartMs(heroEvent);
+                return Number.isFinite(ms) && ms < nowMs && !heroEvent.all_day;
+            })();
+            heroBlock = [
+                '<button type="button" class="cal-hero sky-accent-' + escapeHtml(category) + (isPast ? ' is-past' : '') + '" data-sky-action="query" data-query="' + escapeHtml(calendarEditQuery(heroEvent, title)) + '">',
+                '<span class="cal-hero-rail" aria-hidden="true"></span>',
+                '<span class="cal-hero-kicker">' + escapeHtml(isPast ? 'Earlier' : 'Up next') + '</span>',
+                '<span class="cal-hero-time"><span class="cal-hero-clock">' + escapeHtml(formatEventTime(heroEvent)) + '</span>' +
+                    (countdown ? '<b class="cal-hero-rel">' + escapeHtml(countdown) + '</b>' : '') + '</span>',
+                '<span class="cal-hero-title">' + escapeHtml(title) + '</span>',
+                detail ? '<span class="cal-hero-loc">' + escapeHtml(detail) + '</span>' : '',
+                '</button>'
+            ].join('');
+        }
+
+        const rows = restEvents.map(item => {
             const title = item.title || item.name || 'Calendar event';
             const category = calendarCategoryClass(item.category);
             const detail = [item.location].filter(Boolean).join(' · ');
+            const start = String(item.start_time || '').slice(0, 5) || (item.all_day ? 'All day' : '—');
             return [
-                '<div class="sky-event-row sky-calendar-event ' + escapeHtml(category) + '">',
-                '<div class="sky-calendar-time"><span>' + escapeHtml(formatEventTime(item)) + '</span>' + (index === 0 ? '<b>Next</b>' : '') + '</div>',
-                '<div class="sky-calendar-event-main"><strong>' + escapeHtml(title) + '</strong>' + (detail ? '<em>' + escapeHtml(detail) + '</em>' : '') + '</div>',
-                '</div>'
+                '<button type="button" class="cal-row sky-accent-' + escapeHtml(category) + '" data-sky-action="query" data-query="' + escapeHtml(calendarEditQuery(item, title)) + '">',
+                '<span class="cal-row-time tnum">' + escapeHtml(start) + '</span>',
+                '<span class="cal-row-marker" aria-hidden="true"></span>',
+                '<span class="cal-row-body"><strong>' + escapeHtml(title) + '</strong>' + (detail ? '<em>' + escapeHtml(detail) + '</em>' : '') + '</span>',
+                '</button>'
             ].join('');
         }).join('');
+
+        const timeline = restEvents.length
+            ? '<div class="cal-timeline">' + rows + '</div>'
+            : (heroEvent ? '<div class="cal-rest-empty">Nothing else scheduled</div>' : '');
+
         const empty = [
-            '<div class="sky-empty-data sky-calendar-empty">',
-            '<div class="sky-calendar-empty-mark" aria-hidden="true"></div>',
-            '<strong>No events ' + escapeHtml(props.qualifier || 'today') + '</strong>',
-            '<span>Your calendar is clear for this range.</span>',
+            '<div class="cal-empty">',
+            '<span class="cal-empty-mark" aria-hidden="true">' + calendarGlyphSvg() + '</span>',
+            '<strong>Nothing scheduled</strong>',
+            '<span>Your day is clear ' + escapeHtml(qualifier || 'for now') + '.</span>',
             '</div>'
         ].join('');
+
         const body = [
-            '<div class="sky-calendar-scene">',
-            '<div class="sky-calendar-summary">',
-            '<div class="sky-calendar-date"><span>' + escapeHtml(dateMeta.weekday) + '</span><strong>' + escapeHtml(dateMeta.monthDay) + '</strong></div>',
-            '<div class="sky-widget-metric"><strong>' + escapeHtml(events.length) + '</strong><span>' + escapeHtml(events.length === 1 ? 'event' : 'events') + ' ' + escapeHtml(props.qualifier || '') + '</span></div>',
+            '<div class="cal-scene" data-daypart="' + calendarDaypart(nowMs) + '">',
+            '<header class="cal-head">',
+            '<div class="cal-head-day">',
+            '<span class="cal-head-weekday">' + escapeHtml(dateMeta.weekday) + '</span>',
+            '<span class="cal-head-date">' + escapeHtml(dateMeta.monthDay) + '</span>',
             '</div>',
-            '<div class="sky-calendar-agenda"><div class="sky-calendar-rail" aria-hidden="true"></div><div class="sky-data-list">' + (rows || empty) + '</div></div>',
+            '<span class="cal-head-count">' + escapeHtml(countLabel) + '</span>',
+            '</header>',
+            heroEvent ? ('<div class="cal-body">' + heroBlock + timeline + '</div>') : empty,
             '</div>'
         ].join('');
         return cardFrame(Object.assign({ status: 'Calendar', icon: 'C' }, props), body, { wide: true, tone: 'calendar-card', hideHeader: true, hideStatus: true });
@@ -297,60 +479,80 @@
         return null;
     }
 
+    // Design system: condition → theme class + crafted glyph (sun/moon by panel
+    // theme for "clear"). See docs/architecture/skybridge-design-system.md §4/§5.
+    function weatherCondClass(text) {
+        const t = String(text || '').toLowerCase();
+        if (/storm|thunder|lightning/.test(t)) return 'storm';
+        if (/rain|drizzle|shower|sleet/.test(t)) return 'rain';
+        if (/cloud|overcast|fog|mist|haze/.test(t)) return 'cloudy';
+        return 'clear';
+    }
+    function panelIsDark() {
+        return !(typeof document !== 'undefined' && document.documentElement &&
+                 document.documentElement.getAttribute('data-theme') === 'light');
+    }
+    function weatherGlyphId(text, dark) {
+        const c = weatherCondClass(text);
+        if (c === 'storm') return 'i-storm';
+        if (c === 'rain') return 'i-rain';
+        if (c === 'cloudy') return 'i-cloud';
+        return dark ? 'i-moon' : 'i-sun';
+    }
+    function glyphSvg(id, size) {
+        return '<svg class="sky-glyph" width="' + size + '" height="' + size + '" aria-hidden="true"><use href="#' + id + '"></use></svg>';
+    }
+
     function renderWeather(props) {
         const current = props.current || {};
         const forecast = props.forecast || {};
         const daily = Array.isArray(forecast.daily) ? forecast.daily : [];
         const hourly = Array.isArray(forecast.hourly) ? forecast.hourly : [];
         const location = props.location || {};
-        const place = [location.city || current.city || props.city, location.country || current.country || props.country].filter(Boolean).join(', ') || 'Current location';
-        const description = current.description || current.condition || props.description || 'Current conditions';
-        const dailyRows = daily.slice(0, 5).map((item, index) => {
+        const place = [location.city || current.city || props.city].filter(Boolean).join(', ') || 'Current location';
+        const description = current.description || current.condition || props.description || '';
+        const dark = panelIsDark();
+        const cond = weatherCondClass(description);
+        const temp = formatTemp(weatherValue(current, ['temp', 'temperature', 'temperature_c', 'temp_c', 'current_temp']));
+        const feels = formatTemp(weatherValue(current, ['feels_like', 'feels_like_c', 'apparent_temperature']));
+        const hi = daily[0] && daily[0].high != null ? formatTemp(daily[0].high) : '';
+        const lo = daily[0] && daily[0].low != null ? formatTemp(daily[0].low) : '';
+        const humidity = current.humidity == null ? '' : current.humidity + '%';
+        const wind = formatWind(current.wind_speed);
+
+        const hourTiles = hourly.slice(0, 6).map((item, i) => {
+            const label = i === 0 ? 'Now' : formatHourLabel(item.time || item.day || '');
+            const g = weatherGlyphId(item.description || item.condition || description, dark);
+            const t = formatTemp(weatherValue(item, ['temp', 'temperature', 'temperature_c', 'temp_c', 'high']));
+            return '<div class="wx-hc"><span class="wx-ht">' + escapeHtml(label) + '</span>' + glyphSvg(g, 44) + '<span class="wx-hv tnum">' + escapeHtml(t) + '</span></div>';
+        }).join('');
+
+        const dayRows = daily.slice(1, 5).map(item => {
             const label = formatForecastShort(item.day || item.time || '');
+            const g = weatherGlyphId(item.description || item.condition || '', dark);
             const high = item.high != null ? formatTemp(item.high) : formatTemp(item.temp);
             const low = item.low != null ? formatTemp(item.low) : '';
-            const band = forecastTempBand(item);
-            const condition = item.description || item.condition || '';
-            return [
-                '<div class="sky-weather-day-row' + (index === 0 ? ' is-primary' : '') + '">',
-                '<div class="sky-weather-day-label"><span>' + escapeHtml(index === 0 ? 'Today' : label) + '</span><b aria-hidden="true">' + escapeHtml(weatherEmoji(item)) + '</b></div>',
-                '<div class="sky-weather-day-main"><strong>' + escapeHtml(condition || description) + '</strong><div class="sky-weather-temp-band" aria-hidden="true"><i style="left: ' + band.left + '%; width: ' + band.width + '%;"></i></div></div>',
-                '<div class="sky-weather-day-temp"><strong>' + escapeHtml(high) + '</strong>' + (low ? '<small>' + escapeHtml(low) + '</small>' : '') + '</div>',
-                '</div>'
-            ].join('');
+            return '<div class="wx-drow"><span class="wx-sld">' + escapeHtml(label) + '</span>' + glyphSvg(g, 46) + '<span class="wx-dt tnum"><b>' + escapeHtml(high) + '</b> <span class="wx-lo">' + escapeHtml(low) + '</span></span></div>';
         }).join('');
-        const hourlyTiles = hourly.slice(0, 8).map((item, index) => {
-            const label = index === 0 ? 'Now' : formatHourLabel(item.time || item.day || '');
-            return [
-                '<div class="sky-weather-hour-tile">',
-                '<span>' + escapeHtml(label) + '</span>',
-                '<b aria-hidden="true">' + escapeHtml(weatherEmoji(item)) + '</b>',
-                '<strong>' + escapeHtml(formatTemp(weatherValue(item, ['temp', 'temperature', 'temperature_c', 'temp_c', 'high']))) + '</strong>',
-                '</div>'
-            ].join('');
-        }).join('');
-        const dayList = dailyRows;
-        const meta = [
-            ['🌡', 'Feels ' + formatTemp(weatherValue(current, ['feels_like', 'feels_like_c', 'apparent_temperature']))],
-            ['💧', current.humidity == null ? 'Humidity --' : current.humidity + '% humidity'],
-            ['💨', formatWind(current.wind_speed)]
-        ].map(pair => '<div class="sky-weather-pill"><span>' + escapeHtml(pair[0]) + '</span>' + escapeHtml(pair[1]) + '</div>').join('');
+
+        const detail = [
+            (hi || lo) ? 'H ' + hi + ' L ' + lo : '',
+            humidity ? 'Humidity ' + humidity : '',
+            wind || ''
+        ].filter(Boolean).map(escapeHtml).join('<br>');
+
         const body = [
-            '<div class="sky-weather-scene">',
-            '<div class="sky-weather-main">',
-            '<div class="sky-weather-location">📍 ' + escapeHtml(place) + '</div>',
-            '<div class="sky-weather-hero"><div class="sky-weather-temp">' + escapeHtml(formatTemp(weatherValue(current, ['temp', 'temperature', 'temperature_c', 'temp_c', 'current_temp']))) + '</div><div class="sky-weather-icon" aria-hidden="true">' + escapeHtml(weatherEmoji(current)) + '</div></div>',
-            '<div class="sky-weather-condition">' + escapeHtml(description) + '</div>',
-            '<div class="sky-weather-meta">' + meta + '</div>',
+            '<div class="wx-card">',
+            '<div class="wx-main">',
+            '<div class="wx-head"><div><div class="wx-place">' + escapeHtml(place) + '</div><div class="wx-cond">' + escapeHtml(description) + (feels ? ' · feels ' + escapeHtml(feels) : '') + '</div></div>' + glyphSvg(weatherGlyphId(description, dark), 84) + '</div>',
+            '<div class="wx-hero"><div class="wx-temp tnum">' + escapeHtml(temp) + '</div><div class="wx-detail tnum">' + detail + '</div></div>',
+            hourTiles ? '<div class="wx-hr">' + hourTiles + '</div>' : '',
             '</div>',
-            '<div class="sky-weather-forecast">',
-            '<div class="sky-weather-forecast-head"><h4>' + escapeHtml(props.source === 'weather_forecast' ? 'Forecast' : 'Next up') + '</h4><span>' + escapeHtml(daily.length ? daily.length + ' days' : hourly.length + ' hours') + '</span></div>',
-            hourlyTiles ? '<div class="sky-weather-hour-strip">' + hourlyTiles + '</div>' : '',
-            dayList ? '<div class="sky-weather-day-list">' + dayList + '</div>' : (!hourlyTiles ? '<div class="sky-weather-day-list"><div class="sky-empty-data">No forecast data available yet.</div></div>' : ''),
-            '</div>',
+            dayRows ? '<div class="wx-div"></div><div class="wx-side"><div class="wx-nd">Next days</div>' + dayRows + '</div>' : '',
             '</div>'
         ].join('');
-        return cardFrame(Object.assign({ status: 'Weather', icon: 'W' }, props), body, { wide: true, tone: 'weather-card ' + weatherClass(props, current) });
+        return cardFrame(Object.assign({ status: 'Weather', icon: 'W' }, props), body,
+            { wide: true, tone: 'weather-card wx-' + cond, hideHeader: true, hideStatus: true, hideActions: true });
     }
 
     function clockParts(timezone) {
@@ -372,14 +574,73 @@
         return { hour, minute, dayPeriod, date };
     }
 
+    function clockGreeting(timezone) {
+        var h;
+        try {
+            h = parseInt(new Intl.DateTimeFormat('en-US', { hour: 'numeric', hour12: false, timeZone: timezone || undefined }).format(new Date()), 10);
+        } catch (e) { h = NaN; }
+        if (!isFinite(h)) h = new Date().getHours();
+        if (h < 5) return 'Good night';
+        if (h < 12) return 'Good morning';
+        if (h < 17) return 'Good afternoon';
+        if (h < 21) return 'Good evening';
+        return 'Good night';
+    }
+    function clockUserName() {
+        try {
+            var c = JSON.parse(sessionStorage.getItem('zoe_panel_auth_challenge') || '{}');
+            var n = c.selected_username || '';
+            return n && n.toLowerCase() !== 'guest' ? n : '';
+        } catch (e) { return ''; }
+    }
+    function fmtClockTime(d) {
+        try { return d ? new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit', hour12: true }).format(d) : ''; } catch (e) { return ''; }
+    }
+    // Small filled sun-on-horizon glyph for the sunrise/sunset rows (up = sunrise).
+    function horizonGlyph(up, color) {
+        var arrow = up
+            ? '<path d="M12 12.5V7M9.4 9.6 12 7l2.6 2.6" stroke="' + color + '" stroke-width="1.7" fill="none" stroke-linecap="round" stroke-linejoin="round"/>'
+            : '<path d="M12 7v5.5M9.4 9.9 12 12.5l2.6-2.6" stroke="' + color + '" stroke-width="1.7" fill="none" stroke-linecap="round" stroke-linejoin="round"/>';
+        return '<svg width="17" height="17" viewBox="0 0 24 24" aria-hidden="true">'
+            + '<path d="M7.5 18a4.5 4.5 0 0 1 9 0z" fill="' + color + '" opacity=".95"/>'
+            + '<line x1="3.5" y1="18" x2="20.5" y2="18" stroke="' + color + '" stroke-width="1.7" stroke-linecap="round"/>'
+            + arrow + '</svg>';
+    }
+
     function renderClock(props) {
         const timezone = props.timezone || '';
         const parts = clockParts(timezone);
+        const dateText = parts.date || [props.weekday, props.date_label].filter(Boolean).join(', ');
+        const name = clockUserName();
+        const greet = clockGreeting(timezone) + (name ? ', ' + name : '');
+        let sun = null;
+        try { sun = (window.SkybridgeTheme && window.SkybridgeTheme.sunTimes) ? window.SkybridgeTheme.sunTimes() : null; } catch (e) {}
+        const sunRows = sun ? [
+            '<div class="clock-sun-row"><span class="clock-sun-lbl">' + horizonGlyph(false, '#ff9a6b') + 'Sunset</span><span class="tnum clock-sun-t">' + escapeHtml(fmtClockTime(sun.set)) + '</span></div>',
+            '<div class="clock-sun-row"><span class="clock-sun-lbl">' + horizonGlyph(true, '#ffce70') + 'Sunrise</span><span class="tnum clock-sun-t">' + escapeHtml(fmtClockTime(sun.rise)) + '</span></div>'
+        ].join('') : '';
+        // Stars + both glyphs are always in the DOM; CSS shows the right ones per
+        // [data-theme], so a live sunrise/sunset theme flip (60s tick) updates them
+        // without a re-render.
+        const stars = '<span class="clock-star" style="top:18%;left:9%"></span><span class="clock-star" style="top:30%;left:24%"></span><span class="clock-star" style="top:14%;left:40%"></span><span class="clock-star" style="top:40%;left:15%"></span>';
+        // Keep .sky-clock-scene/.sky-live-clock + the data-clock-* spans so
+        // updateAllClocks() keeps the numerals ticking live.
+        // New class names (clock-*) sidestep the legacy clock CSS entirely; only
+        // .sky-live-clock + the data-clock-* attributes are kept (all the live
+        // updater needs).
         const body = [
-            '<div class="sky-clock-scene sky-live-clock" data-timezone="' + escapeHtml(timezone) + '">',
-            '<div class="sky-clock-main">',
-            '<div class="sky-clock-time"><span data-clock-hour>' + escapeHtml(parts.hour || props.hour || '') + '</span><i>:</i><span data-clock-minute>' + escapeHtml(parts.minute || props.minute || '') + '</span><b data-clock-meridiem>' + escapeHtml(parts.dayPeriod || props.meridiem || '') + '</b></div>',
-            '<div class="sky-clock-date" data-clock-date>' + escapeHtml(parts.date || [props.weekday, props.date_label].filter(Boolean).join(', ')) + '</div>',
+            '<div class="clock-scene sky-live-clock" data-timezone="' + escapeHtml(timezone) + '">',
+            stars,
+            '<div class="clock-main">',
+            '<div class="clock-greet">' + escapeHtml(greet) + '</div>',
+            '<div class="clock-time"><span class="clock-h" data-clock-hour>' + escapeHtml(parts.hour || props.hour || '') + '</span><i class="clock-colon">:</i><span class="clock-m" data-clock-minute>' + escapeHtml(parts.minute || props.minute || '') + '</span><b class="clock-mer" data-clock-meridiem>' + escapeHtml(parts.dayPeriod || props.meridiem || '') + '</b></div>',
+            '<div class="clock-date" data-clock-date>' + escapeHtml(dateText) + '</div>',
+            '</div>',
+            '<div class="clock-div"></div>',
+            '<div class="clock-side">',
+            '<span class="clock-glyph clock-glyph-night">' + glyphSvg('i-moon', 86) + '</span>',
+            '<span class="clock-glyph clock-glyph-day">' + glyphSvg('i-sun', 86) + '</span>',
+            sunRows ? '<div class="clock-sun">' + sunRows + '</div>' : '',
             '</div>',
             '</div>'
         ].join('');
@@ -406,43 +667,107 @@
         const tabs = (Array.isArray(lists) ? lists : []).slice(0, 6).map(list => {
             const accent = listAccentClass(list.list_type);
             const selected = selectedId && String(list.id || '') === String(selectedId) ? ' is-active' : '';
-            return '<button type="button" class="sky-list-tab ' + escapeHtml(accent) + selected + '" data-sky-action="query" data-query="' + escapeHtml(listQuery(list)) + '"><span>' + escapeHtml(listLabel(list)) + '</span></button>';
+            const count = Array.isArray(list.items) ? list.items.length : null;
+            const countTag = count != null ? '<i class="lst-tab-count" aria-hidden="true">' + escapeHtml(count) + '</i>' : '';
+            return '<button type="button" class="lst-tab lst-a-' + escapeHtml(accent) + selected + '" data-sky-action="query" data-query="' + escapeHtml(listQuery(list)) + '"><span class="lst-tab-dot" aria-hidden="true"></span><span class="lst-tab-name">' + escapeHtml(listLabel(list)) + '</span>' + countTag + '</button>';
         }).join('');
-        return '<div class="sky-list-switcher">' + tabs + '<button type="button" class="sky-list-tab new-list" data-sky-action="query" data-query="new list"><span>New list</span></button></div>';
+        return '<div class="lst-switcher" role="tablist">' + tabs + '<button type="button" class="lst-tab lst-tab-new" data-sky-action="query" data-query="new list"><span class="lst-tab-name">+ New</span></button></div>';
     }
 
-    function renderListItemRow(item, index) {
+    // The tap query for a row. Open item → tick off; done item → restore. Direction
+    // is explicit so the backend complete_item resolver never has to guess.
+    function listCheckQuery(title, listType, completed) {
+        const type = String(listType || 'shopping').trim() || 'shopping';
+        return (completed ? 'uncheck ' : 'check off ') + title + ' on the ' + type + ' list';
+    }
+
+    // Custom filled check glyph (NOT a thin line icon — see design-system §5/§12).
+    // Card-local so it does not depend on the shared sprite shipping a list glyph.
+    const LIST_CHECK_SVG = '<svg class="lst-check-mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.6 16.2 5.4 12l-1.5 1.5 5.7 5.7L21 7.5 19.5 6z"/></svg>';
+
+    // Category → design-system accent token (colour with intent, §4). Falls back to
+    // the list's own accent so an uncategorised row still reads as part of the list.
+    function listCategoryAccent(category, fallbackAccent) {
+        const cat = String(category || '').trim();
+        if (!cat) return fallbackAccent || 'general';
+        return listAccentClass(cat);
+    }
+
+    function renderListItemRow(item, index, listType, fallbackAccent) {
         const isObject = typeof item === 'object' && item;
         const title = isObject ? (item.text || item.title || item.label || 'List item') : String(item || 'List item');
         const completed = !!(isObject && item.completed);
-        const recent = !!(isObject && item.recent);
-        const detail = isObject ? [item.quantity, item.category, item.assigned_to].filter(Boolean).join(' · ') : '';
+        const quantity = isObject && item.quantity != null && String(item.quantity).trim() !== '' ? String(item.quantity).trim() : '';
+        const category = isObject && item.category ? String(item.category).trim() : '';
+        const catAccent = listCategoryAccent(category, fallbackAccent);
         const priorityValue = isObject && item.priority ? String(item.priority).trim().toLowerCase() : '';
-        const priority = priorityValue && priorityValue !== 'normal' ? '<b>' + escapeHtml(item.priority) + '</b>' : '';
+        const flagged = !completed && priorityValue && priorityValue !== 'normal' && priorityValue !== 'low';
+        const qtyTag = quantity
+            ? '<span class="lst-qty" aria-label="Quantity ' + escapeHtml(quantity) + '">' + escapeHtml(quantity) + '</span>'
+            : '';
+        // Tap = tick it off (or restore a done item). The single most common list
+        // gesture on a kiosk — routed through the real complete_item action loop
+        // (mutate -> authoritative re-read -> refreshed card). Whole row is the
+        // target so it's a comfortable fingertip hit on the 7" panel.
         return [
-            '<div class="sky-list-item-row' + (completed ? ' is-done' : '') + (recent ? ' is-recent' : '') + '">',
-            '<div class="sky-list-check" aria-hidden="true">' + (completed ? '✓' : '') + '</div>',
-            '<div class="sky-list-item-main"><strong>' + escapeHtml(title) + '</strong>' + (detail ? '<em>' + escapeHtml(detail) + '</em>' : '') + '</div>',
-            priority ? '<div class="sky-list-item-meta">' + priority + '</div>' : '',
-            '</div>'
+            '<button type="button" class="lst-row lst-a-' + escapeHtml(catAccent) + (completed ? ' is-done' : '') + (flagged ? ' is-flagged' : '') + '" data-sky-action="query" data-query="' + escapeHtml(listCheckQuery(title, listType, completed)) + '" aria-pressed="' + (completed ? 'true' : 'false') + '" aria-label="' + escapeHtml((completed ? 'Done: ' : '') + title) + '">',
+            '<span class="lst-box" aria-hidden="true">' + LIST_CHECK_SVG + '</span>',
+            '<span class="lst-text">' + escapeHtml(title) + '</span>',
+            qtyTag,
+            '</button>'
         ].join('');
     }
 
     function renderListColumn(list) {
         const items = Array.isArray(list.items) ? list.items : [];
         const accent = listAccentClass(list.list_type);
+        const done = items.filter(it => typeof it === 'object' && it && it.completed).length;
+        const pct = items.length ? Math.round((done / items.length) * 100) : 0;
         const preview = items.slice(0, 4).map((item) => {
-            const title = typeof item === 'object' && item ? (item.text || item.title || item.label || 'Item') : String(item || 'Item');
-            return '<li><strong>' + escapeHtml(title) + '</strong></li>';
+            const obj = typeof item === 'object' && item;
+            const title = obj ? (item.text || item.title || item.label || 'Item') : String(item || 'Item');
+            const isDone = !!(obj && item.completed);
+            return '<li' + (isDone ? ' class="is-done"' : '') + '><span class="lst-dot" aria-hidden="true"></span><strong>' + escapeHtml(title) + '</strong></li>';
         }).join('');
+        const countLabel = items.length === 1 ? '1 item' : items.length + ' items';
         return [
-            '<div class="sky-list-column ' + escapeHtml(accent) + '">',
-            '<button type="button" class="sky-list-column-head" data-sky-action="query" data-query="' + escapeHtml(listQuery(list)) + '">',
-            '<strong>' + escapeHtml(listLabel(list)) + '</strong>',
-            '</button>',
-            preview ? '<ul>' + preview + '</ul>' : '<p>No items</p>',
-            '</div>'
+            '<button type="button" class="lst-col lst-a-' + escapeHtml(accent) + '" data-sky-action="query" data-query="' + escapeHtml(listQuery(list)) + '">',
+            '<span class="lst-col-head"><strong>' + escapeHtml(listLabel(list)) + '</strong><em>' + escapeHtml(countLabel) + '</em></span>',
+            '<span class="lst-col-bar" aria-hidden="true"><i style="width:' + pct + '%"></i></span>',
+            preview ? '<ul>' + preview + '</ul>' : '<p class="lst-col-empty">No items yet</p>',
+            '</button>'
         ].join('');
+    }
+
+    // List-type → identity (glyph + tint class + ring gradient). Warm for
+    // shopping/cooking, cool for work/tasks, etc. (§4 colour with intent).
+    function listIdentity(accent) {
+        const map = {
+            shopping:  { glyph: 'cart',  tint: 'warm' },
+            household: { glyph: 'home',  tint: 'warm' },
+            family:    { glyph: 'home',  tint: 'warm' },
+            work:      { glyph: 'check', tint: 'cool' },
+            tasks:     { glyph: 'check', tint: 'cool' },
+            health:    { glyph: 'heart', tint: 'mint' },
+            medical:   { glyph: 'heart', tint: 'mint' },
+            routine:   { glyph: 'check', tint: 'cool' },
+            social:    { glyph: 'star',  tint: 'violet' },
+            personal:  { glyph: 'star',  tint: 'violet' },
+            bucket:    { glyph: 'star',  tint: 'violet' }
+        };
+        return map[accent] || { glyph: 'check', tint: 'neutral' };
+    }
+
+    // Card-local filled identity glyphs (filled/dimensional, never line icons §5).
+    function listIdentityGlyph(name) {
+        const glyphs = {
+            cart:  '<path d="M3 4h2.2l2 11.2A2 2 0 0 0 9.2 17h8.2a2 2 0 0 0 2-1.6l1.5-7.4H6.4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="9.5" cy="20.5" r="1.6"/><circle cx="17.5" cy="20.5" r="1.6"/>',
+            check: '<path d="M9.6 16.8 5 12.2l-1.7 1.7 6.3 6.3L21.5 8.3 19.8 6.6z"/>',
+            home:  '<path d="M12 3 3 10.5V21h6v-6h6v6h6V10.5z"/>',
+            heart: '<path d="M12 21s-7.5-4.7-9.7-9C1 9.2 2.4 5.8 5.6 5.2 8 4.8 10.4 6.3 12 8.4c1.6-2.1 4-3.6 6.4-3.2 3.2.6 4.6 4 3.3 6.8C19.5 16.3 12 21 12 21z"/>',
+            star:  '<path d="M12 2.5 14.9 9l7 .6-5.3 4.6 1.6 6.9L12 17.5 5.8 21l1.6-6.9L2.1 9.6l7-.6z"/>'
+        };
+        return '<svg class="lst-id-glyph" viewBox="0 0 24 24" aria-hidden="true">' + (glyphs[name] || glyphs.check) + '</svg>';
     }
 
     function renderZoeList(props) {
@@ -452,19 +777,63 @@
         const accent = listAccentClass(listType);
         const selectedId = props.list_id && props.list_id !== 'lists-overview' ? props.list_id : '';
         const visibleItems = items.slice(0, 16);
-        const rows = visibleItems.map(renderListItemRow).join('');
-        const overviewRows = !items.length && lists.length ? '<div class="sky-list-columns">' + lists.slice(0, 6).map(renderListColumn).join('') + '</div>' : '';
-        const itemsClass = 'sky-list-items ' + (rows ? 'is-list-detail' : 'is-list-overview');
+        const rows = visibleItems.map((item, index) => renderListItemRow(item, index, listType, accent)).join('');
+        const overviewCols = !items.length && lists.length ? '<div class="lst-cols">' + lists.slice(0, 6).map(renderListColumn).join('') + '</div>' : '';
         const empty = [
-            '<div class="sky-empty-data sky-list-empty">',
+            '<div class="sky-empty-data lst-empty">',
             '<strong>No items in ' + escapeHtml(props.list_name || 'this list') + '</strong>',
             '<span>Zoe did not find active items for this request.</span>',
             '</div>'
         ].join('');
+        const isOverview = !rows && !!overviewCols;
+        const headerTitle = isOverview
+            ? 'Lists'
+            : (props.list_name || (selectedId && listLabel(lists.find(l => String(l.id || '') === String(selectedId)) || {})) || 'List');
+        // Progress is over the WHOLE list (not just the visible slice) so the hero %
+        // is honest even when more than 16 items exist.
+        const totalDone = items.filter(it => typeof it === 'object' && it && it.completed).length;
+        const ident = listIdentity(accent);
+
+        let countLabel;
+        if (isOverview) {
+            countLabel = lists.length === 1 ? '1 list' : lists.length + ' lists';
+        } else if (!items.length) {
+            countLabel = 'Empty';
+        } else {
+            const noun = items.length === 1 ? 'item' : 'items';
+            countLabel = totalDone ? totalDone + ' of ' + items.length + ' ' + noun + ' done' : items.length + ' ' + noun;
+        }
+
+        // Compact progress: a slim bar in the list's accent (detail view only).
+        // The list itself is the hero now — no ring stealing a third of a 7" screen.
+        const openCount = Math.max(0, items.length - totalDone);
+        const pct = items.length ? Math.round((totalDone / items.length) * 100) : 0;
+        const progressBar = (!isOverview && items.length)
+            ? '<div class="lst-progress" role="img" aria-label="' + totalDone + ' of ' + items.length + ' done"><span class="lst-progress-fill" style="width:' + pct + '%"></span></div>'
+            : '';
+        // Header count: open-first ("3 left · 2 done") — the shopper's view.
+        let headCount = countLabel;
+        if (!isOverview && items.length && totalDone) {
+            headCount = openCount + ' left · ' + totalDone + ' done';
+        }
+
+        const header = [
+            '<header class="lst-header">',
+            '<div class="lst-heading">',
+            '<span class="lst-id-badge">' + listIdentityGlyph(ident.glyph) + '</span>',
+            '<div class="lst-headtext"><span class="lst-kicker">' + (isOverview ? 'Your lists' : 'List') + '</span><h3 class="lst-name">' + escapeHtml(headerTitle) + '</h3></div>',
+            '</div>',
+            '<span class="lst-count">' + escapeHtml(headCount) + '</span>',
+            '</header>'
+        ].join('');
+
+        const itemsClass = 'lst-items ' + (rows ? 'is-detail' : 'is-overview');
         const body = [
-            '<div class="sky-list-scene ' + escapeHtml(accent) + '">',
-            renderListSwitcher(lists, selectedId),
-            '<div class="' + itemsClass + '">' + (rows || overviewRows || empty) + '</div>',
+            '<div class="lst-scene lst-a-' + escapeHtml(accent) + ' lst-tint-' + ident.tint + '">',
+            header,
+            progressBar,
+            lists.length ? renderListSwitcher(lists, selectedId) : '',
+            '<div class="' + itemsClass + '">' + (rows || overviewCols || empty) + '</div>',
             '</div>'
         ].join('');
         return cardFrame(Object.assign({ status: 'Lists', icon: 'L' }, props), body, { wide: true, tone: 'zoe-list-card ' + accent, hideHeader: true, hideStatus: true, hideActions: true });
@@ -489,67 +858,192 @@
         return accentClass(person.context || person.circle || 'personal', 'personal');
     }
 
+    // Closeness: inner circle is "your people" — surface them first, then order by
+    // connection health so the warmest relationships lead. Returns 0 (inner) | 1.
+    function personCircleRank(person) {
+        var c = String((person && person.circle) || '').toLowerCase();
+        if (c === 'inner' || c === 'close' || c === 'family') return 0;
+        return 1;
+    }
+    // Short, human circle label for the small relationship/closeness tag.
+    function personCircleLabel(person) {
+        var c = String((person && person.circle) || '').toLowerCase();
+        if (c === 'inner' || c === 'close') return 'Inner circle';
+        if (c === 'outer' || c === 'wider') return 'Wider circle';
+        if (c) return c.charAt(0).toUpperCase() + c.slice(1);
+        return personCircleRank(person) === 0 ? 'Inner circle' : 'Wider circle';
+    }
+    // Avatar contents: the contact's photo over their initials. The photo is a
+    // background-image layer, so if the URL is missing or fails to load the
+    // initials simply show through (no broken-image icon). Initials stay in the
+    // DOM as the accessible/fallback label.
+    function personAvatarInner(person) {
+        var initials = initialsFor(person && person.name);
+        var raw = person && (person.photo || person.photo_url || person.avatar_url || person.image || person.picture);
+        var url = raw == null ? '' : String(raw).trim();
+        // Scheme allowlist: only https or a root-relative same-origin path. Rejects
+        // http (mixed content), file:/// (local-file read in a WebView shell), data:
+        // (large inline blobs), protocol-relative //host, and javascript:. A contact
+        // photo URL can come from a synced external source, so this stays strict.
+        var safeScheme = /^https:\/\//i.test(url) || /^\/[^/]/.test(url);
+        if (url && safeScheme) {
+            var safe = url.replace(/["'()\\]/g, '');
+            return initials + '<span class="people-avatar-img" style="background-image:url(\'' + escapeHtml(safe) + '\')" aria-hidden="true"></span>';
+        }
+        return initials;
+    }
+    // Stable closeness order: inner first, then higher connection-health first.
+    function peopleByCloseness(list) {
+        return list
+            .map(function (p, i) { return { p: p, i: i }; })
+            .sort(function (a, b) {
+                var ra = personCircleRank(a.p), rb = personCircleRank(b.p);
+                if (ra !== rb) return ra - rb;
+                var ha = healthPercent(a.p.health_score), hb = healthPercent(b.p.health_score);
+                if (ha !== hb) return hb - ha;
+                return a.i - b.i;
+            })
+            .map(function (x) { return x.p; });
+    }
+
     function renderPeopleDirectory(props) {
+        // Re-skin to docs/architecture/skybridge-design-system.md §8/§11 (people =
+        // header + a grid of metric stacks: avatar, name, relationship, accent-
+        // gradient health bar). Data contract is unchanged — re-skin only.
         const people = Array.isArray(props.people) ? props.people : [];
+        const total = props.count == null ? people.length : props.count;
         const workCount = people.filter(person => personAccentClass(person) === 'work').length;
         const personalCount = people.filter(person => personAccentClass(person) === 'personal').length;
-        const otherCount = Math.max(0, people.length - workCount - personalCount);
-        const rows = people.slice(0, 12).map(person => {
-            const health = healthPercent(person.health_score);
-            const accent = personAccentClass(person);
+
+        // Segmented filter chips (count + label). Each chip is a REAL tap target →
+        // submitCommand(query) the people resolver actually handles: the directory
+        // ("all") or a context filter the backend supports (PEOPLE_CONTEXTS =
+        // personal, work). We deliberately do NOT render an "other" chip — there is
+        // no backend filter for it, so it would be a silent no-op (same result as
+        // "all"). `active` reflects the current filter so the user sees where they are.
+        const activeFilter = accentClass(props.circle || props.context || '', '');
+        const chip = function (accent, label, value, query, alwaysShow) {
+            if (!value && !alwaysShow) return '';
+            const active = accent && accent === activeFilter ? ' is-active' : '';
             return [
-                '<button type="button" class="sky-person-card sky-accent-' + escapeHtml(accent) + '" data-sky-action="query" data-query="' + escapeHtml('find ' + (person.name || 'person')) + '">',
-                '<div class="sky-person-avatar" aria-hidden="true">' + initialsFor(person.name) + '</div>',
-                '<div class="sky-person-main"><strong>' + escapeHtml(person.name || 'Person') + '</strong><em>' + escapeHtml(personSubline(person)) + '</em></div>',
-                '<div class="sky-person-health" aria-label="Connection score ' + health + '"><i style="width:' + health + '%"></i><span>' + health + '</span></div>',
+                '<button type="button" class="people-chip people-accent-' + escapeHtml(accent || 'all') + active + '"',
+                ' data-sky-action="query" data-query="' + escapeHtml(query) + '"',
+                ' aria-label="' + escapeHtml(label + ', ' + value) + '" aria-pressed="' + (active ? 'true' : 'false') + '">',
+                '<i class="people-chip-dot" aria-hidden="true"></i>',
+                '<strong>' + escapeHtml(value) + '</strong>',
+                '<span>' + escapeHtml(label) + '</span>',
                 '</button>'
             ].join('');
-        }).join('');
-        const empty = '<div class="sky-empty-data sky-people-empty"><strong>No matching people</strong><span>Zoe did not find contacts for this request.</span></div>';
+        };
+        const chips = [
+            chip('', 'all', total, 'show people', true),
+            chip('personal', 'personal', personalCount, 'show personal contacts', false),
+            chip('work', 'work', workCount, 'show work contacts', false)
+        ].join('');
+
+        // Order by closeness (inner circle first, warmest connection first) so the
+        // card reads as "your people", not an alphabetical contacts dump. The
+        // closest few get a larger hero row; the rest flow into a calmer grid.
+        const ordered = peopleByCloseness(people).slice(0, 12);
+        const innerLead = ordered.filter(p => personCircleRank(p) === 0);
+        const heroCount = Math.min(innerLead.length, ordered.length >= 4 ? 3 : 0);
+        const heroPeople = ordered.slice(0, heroCount);
+        const restPeople = ordered.slice(heroCount);
+
+        // Shared tile builder. `hero` enlarges the avatar/type and shows a richer
+        // closeness tag; both variants carry the accent + connection health bar.
+        const tileHtml = function (person, hero) {
+            const health = healthPercent(person.health_score);
+            const accent = personAccentClass(person);
+            const name = person.name || 'Person';
+            const cls = 'people-tile people-accent-' + escapeHtml(accent) + (hero ? ' people-tile--hero' : '');
+            return [
+                '<button type="button" class="' + cls + '" data-sky-action="query" data-query="' + escapeHtml('find ' + name) + '" aria-label="' + escapeHtml(name + ', ' + personSubline(person) + ', connection ' + health + ' percent') + '">',
+                '<span class="people-tile-tint" aria-hidden="true"></span>',
+                '<span class="people-tile-avatar" aria-hidden="true">' + personAvatarInner(person) + '</span>',
+                '<span class="people-tile-id">',
+                '<span class="people-circle-pill">' + escapeHtml(personCircleLabel(person)) + '</span>',
+                '<strong class="people-tile-name">' + escapeHtml(name) + '</strong>',
+                '<span class="people-tile-rel">' + escapeHtml(personSubline(person)) + '</span>',
+                '</span>',
+                '<span class="people-tile-health" aria-hidden="true">',
+                '<span class="people-health-pct tnum">' + health + '</span>',
+                '<span class="people-health-track"><i class="people-health-fill" style="height:' + health + '%"></i></span>',
+                '</span>',
+                '</button>'
+            ].join('');
+        };
+
+        const heroRow = heroPeople.length
+            ? '<div class="people-hero"><p class="people-section-label">Closest to you</p><div class="people-hero-row">'
+                + heroPeople.map(p => tileHtml(p, true)).join('') + '</div></div>'
+            : '';
+        const restGrid = restPeople.length
+            ? (heroPeople.length ? '<p class="people-section-label people-section-label--rest">More people</p>' : '')
+                + '<div class="people-grid">' + restPeople.map(p => tileHtml(p, false)).join('') + '</div>'
+            : '';
+        const tiles = heroRow + restGrid;
+
+        const empty = [
+            '<div class="people-empty">',
+            '<span class="people-empty-glyph" aria-hidden="true">' + initialsFor(props.title || 'People') + '</span>',
+            '<strong>No matching people</strong>',
+            '<span>Zoe did not find contacts for this request.</span>',
+            '</div>'
+        ].join('');
+
         const body = [
-            '<div class="sky-people-scene">',
-            '<div class="sky-people-toolbar">',
-            '<div class="sky-people-title"><span>People</span><strong>' + escapeHtml(props.title || 'People') + '</strong></div>',
-            '<div class="sky-people-chips">',
-            '<span class="sky-accent-personal">' + escapeHtml(personalCount) + ' personal</span>',
-            '<span class="sky-accent-work">' + escapeHtml(workCount) + ' work</span>',
-            otherCount ? '<span>' + escapeHtml(otherCount) + ' other</span>' : '',
-            '<span>' + escapeHtml(props.count == null ? people.length : props.count) + ' found</span>',
+            '<div class="people-scene">',
+            '<header class="people-header">',
+            '<div class="people-heading">',
+            '<p class="people-eyebrow">People</p>',
+            '<h3 class="people-title">' + escapeHtml(props.title || 'People') + '</h3>',
+            (props.query || props.context || props.circle)
+                ? '<p class="people-context">' + escapeHtml([props.query, props.context, props.circle].filter(Boolean).join(' · ')) + '</p>'
+                : '',
             '</div>',
-            '</div>',
-            '<div class="sky-people-filter-row">',
-            props.query ? '<span>Search ' + escapeHtml(props.query) + '</span>' : '',
-            props.context ? '<span>' + escapeHtml(props.context) + '</span>' : '',
-            props.circle ? '<span>' + escapeHtml(props.circle) + '</span>' : '',
-            '</div>',
-            '<div class="sky-people-grid">' + (rows || empty) + '</div>',
+            '<div class="people-chips">' + chips + '</div>',
+            '</header>',
+            tiles ? ('<div class="people-body">' + tiles + '</div>') : empty,
             '</div>'
         ].join('');
         return cardFrame(Object.assign({ status: 'People', icon: 'P' }, props), body, { wide: true, tone: 'people-card', hideHeader: true, hideStatus: true });
     }
 
     function renderPersonProfile(props) {
+        // Sibling of renderPeopleDirectory — same avatar + accent-gradient health
+        // language (design-system §11), scaled up to a single-contact hero.
         const person = props.person || {};
         const health = healthPercent(person.health_score);
         const accent = personAccentClass(person);
+        const name = person.name || props.title || 'Person';
         const contactRows = [
             ['Phone', person.phone],
             ['Email', person.email],
             ['Birthday', person.birthday],
             ['Last contact', person.last_contacted_at]
-        ].filter(pair => pair[1]).map(pair => '<div><span>' + escapeHtml(pair[0]) + '</span><strong>' + escapeHtml(pair[1]) + '</strong></div>').join('');
+        ].filter(pair => pair[1]).map(pair => '<div class="people-detail"><span>' + escapeHtml(pair[0]) + '</span><strong>' + escapeHtml(pair[1]) + '</strong></div>').join('');
         const body = [
-            '<div class="sky-profile-scene">',
-            '<div class="sky-profile-hero">',
-            '<div class="sky-profile-avatar" aria-hidden="true">' + initialsFor(person.name || props.title) + '</div>',
-            '<div class="sky-profile-title"><span>' + escapeHtml(personSubline(person)) + '</span><h3>' + escapeHtml(person.name || props.title || 'Person') + '</h3></div>',
-            '<div class="sky-profile-health"><strong>' + health + '</strong><span>connection</span><i style="height:' + health + '%"></i></div>',
+            '<div class="people-scene people-profile">',
+            '<header class="people-profile-hero">',
+            '<span class="people-tile-tint" aria-hidden="true"></span>',
+            '<span class="people-tile-avatar people-profile-avatar" aria-hidden="true">' + personAvatarInner(person) + '</span>',
+            '<div class="people-profile-id">',
+            '<span class="people-circle-pill">' + escapeHtml(personCircleLabel(person)) + '</span>',
+            '<p class="people-eyebrow">' + escapeHtml(personSubline(person)) + '</p>',
+            '<h3 class="people-title">' + escapeHtml(name) + '</h3>',
+            '<div class="people-tile-health people-profile-healthrow">',
+            '<span class="people-health-track"><i class="people-health-fill" style="width:' + health + '%"></i></span>',
+            '<span class="people-health-pct">' + health + '</span>',
+            '<span class="people-health-label">connection</span>',
             '</div>',
-            contactRows ? '<div class="sky-profile-grid">' + contactRows + '</div>' : '',
-            person.notes ? '<p class="sky-profile-notes">' + escapeHtml(person.notes) + '</p>' : '',
+            '</div>',
+            '</header>',
+            contactRows ? '<div class="people-detail-grid">' + contactRows + '</div>' : '',
+            person.notes ? '<p class="people-notes">' + escapeHtml(person.notes) + '</p>' : '',
             '</div>'
         ].join('');
-        return cardFrame(Object.assign({ status: 'Person', icon: 'P' }, props), body, { wide: true, tone: 'person-profile-card sky-accent-' + accent, hideHeader: true, hideStatus: true });
+        return cardFrame(Object.assign({ status: 'Person', icon: 'P' }, props), body, { wide: true, tone: 'people-card people-profile-card people-accent-' + accent, hideHeader: true, hideStatus: true });
     }
 
 
@@ -668,6 +1162,7 @@
         smart_home: renderList,
         research_report: renderList,
         auth_challenge: renderAuthChallenge,
+        timer: renderTimer,
         stream_text: renderStatus,
         unsupported_contract: renderUnsupportedContract
     };

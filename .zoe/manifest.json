@@ -1,6 +1,6 @@
 {
   "version": "2.0",
-  "updated": "2025-12-25",
+  "updated": "2026-06-24",
   "description": "Zoe AI Assistant file manifest - defines approved files and patterns",
   "critical_files": {
     "css": [
@@ -87,7 +87,9 @@
     "training": "training/**/*",
     "graphify_out": "graphify-out/**/*",
     "cursor_rules": ".cursor/**/*",
-    "greptile": ".greptile/**/*"
+    "codex_config": ".codex/**/*",
+    "greptile": ".greptile/**/*",
+    "serena": ".serena/**/*"
   },
   "approved_root_files": [
     "README.md",
@@ -114,6 +116,8 @@
     ".cursorrules",
     ".graphifyignore",
     "AGENTS.md",
+    "CLAUDE.md",
+    ".mcp.json",
     "RESTART_SERVICES.sh",
     "warmup_models.py",
     "home-profile.json",
@@ -149,7 +153,7 @@
   "notes": {
     "max_root_md_files": 12,
     "llm_backend": "host-native llama-server user service (Dockerized zoe-llamacpp retired)",
-    "primary_model": "Gemma 4 E2B GGUF via llama-server",
+    "primary_model": "Gemma 4 E4B-QAT GGUF + MTP drafter via llama-server (canonical: see docs/CANONICAL.md)",
     "module_system": "Supplemental compose plus generated compose for enabled self-contained modules",
     "recent_additions": "Module system (zoe-music), MCP tool integration, voice services"
   },

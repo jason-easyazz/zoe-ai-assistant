@@ -1,0 +1,136 @@
+/*
+ * Skybridge design tokens — the single source of truth for the panel's visual
+ * language. Every card (incl. ones Zoe composes herself) inherits from these, so
+ * there is ONE place to tune spacing, type, depth and motion, and no per-card
+ * drift. Two layers, the standard pattern:
+ *   - primitive tokens  (--sky-*-N) : raw values, the palette/scale.
+ *   - semantic tokens   (--card-*, --text-*, …) : intent, what a thing is for.
+ * Apple-tuned: clarity, deference, depth. Tokens, not magic numbers.
+ */
+
+:root {
+  /* ── Typeface ──────────────────────────────────────────────────────────── */
+  /* Inter is the SF Pro stand-in; self-hosted woff2 (see skybridge-type.css) so
+     the kiosk never depends on the network. Falls back to the system stack. */
+  --sky-font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+
+  /* ── Primitive: neutral ramp (cool, near-black to white) ───────────────── */
+  --sky-ink-0:  #ffffff;
+  --sky-ink-1:  rgba(255,255,255,0.88);
+  --sky-ink-2:  rgba(255,255,255,0.62);
+  --sky-ink-3:  rgba(255,255,255,0.42);
+  --sky-ink-4:  rgba(255,255,255,0.26);
+  --sky-base-0: #0b0f1a;   /* deepest background */
+  --sky-base-1: #131a2b;   /* raised background */
+
+  /* ── Primitive: accents (each carries a 2-stop gradient for fills) ─────── */
+  --sky-accent-mint:   #5be3b0;
+  --sky-accent-cyan:   #37c0e6;
+  --sky-accent-blue:   #6aa6ff;
+  --sky-accent-violet: #9b8cff;
+  --sky-accent-amber:  #f5b13c;
+  --sky-accent-red:    #ff6b6b;
+
+  /* ── Primitive: spacing scale (4px base) ───────────────────────────────── */
+  --sky-space-1: 4px;
+  --sky-space-2: 8px;
+  --sky-space-3: 12px;
+  --sky-space-4: 16px;
+  --sky-space-5: 20px;
+  --sky-space-6: 24px;
+  --sky-space-8: 32px;
+  --sky-space-10: 40px;
+  --sky-space-12: 48px;
+
+  /* ── Primitive: radius scale ───────────────────────────────────────────── */
+  --sky-radius-sm: 12px;
+  --sky-radius-md: 20px;
+  --sky-radius-lg: 28px;
+  --sky-radius-xl: 38px;
+  --sky-radius-pill: 999px;
+
+  /* ── Primitive: type scale (size / weight / tracking) ──────────────────── */
+  --sky-text-display: 72px;   /* hero numerals (weather temp) */
+  --sky-text-clock:   62px;   /* timer / clock numerals */
+  --sky-text-title:   28px;
+  --sky-text-heading: 20px;
+  --sky-text-body:    16px;
+  --sky-text-label:   14px;
+  --sky-text-caption: 13px;
+  --sky-text-micro:   12px;   /* tracked uppercase note */
+  --sky-weight-thin:    300;
+  --sky-weight-regular: 400;
+  --sky-weight-medium:  500;
+  --sky-weight-semibold:600;
+  --sky-track-tight: -1px;
+  --sky-track-micro: 2.5px;   /* uppercase micro-label tracking */
+
+  /* ── Primitive: elevation (cast shadow + inner top highlight) ──────────── */
+  --sky-shadow-card:   0 26px 60px -18px rgba(0,0,0,0.6);
+  --sky-shadow-raised: 0 34px 80px -20px rgba(0,0,0,0.7);
+  --sky-highlight-top: inset 0 1px 0 rgba(255,255,255,0.22);
+
+  /* ── Primitive: motion ─────────────────────────────────────────────────── */
+  --sky-ease-standard: cubic-bezier(0.2, 0, 0, 1);     /* Apple-ish ease */
+  --sky-ease-spring:   cubic-bezier(0.34, 1.56, 0.64, 1);
+  --sky-dur-fast: 180ms;
+  --sky-dur-base: 320ms;
+  --sky-dur-slow: 560ms;
+
+  /* ── Semantic: text ────────────────────────────────────────────────────── */
+  --text-primary:   var(--sky-ink-0);
+  --text-secondary: var(--sky-ink-2);
+  --text-tertiary:  var(--sky-ink-3);
+
+  /* ── Semantic: card surface (the glass material) ───────────────────────── */
+  --card-surface: linear-gradient(157deg, rgba(255,255,255,0.11), rgba(255,255,255,0.035));
+  --card-blur: blur(26px) saturate(140%);
+  --card-border: 1px solid rgba(255,255,255,0.14);
+  --card-radius: var(--sky-radius-lg);
+  --card-elevation: var(--sky-shadow-card), var(--sky-highlight-top);
+  --card-pad: var(--sky-space-6);
+  --card-gap: var(--sky-space-6);
+
+  /* ── Semantic: controls ────────────────────────────────────────────────── */
+  --control-surface: rgba(255,255,255,0.06);
+  --control-border: 1px solid rgba(255,255,255,0.16);
+  --control-ink: var(--sky-ink-2);
+}
+
+/* The one shared material. Any element that should read as a floating glass card
+   gets this class instead of re-declaring background/blur/border/shadow. */
+.sky-material {
+  background: var(--card-surface);
+  -webkit-backdrop-filter: var(--card-blur);
+  backdrop-filter: var(--card-blur);
+  border: var(--card-border);
+  box-shadow: var(--card-elevation);
+}
+
+/* ── Light theme set ──────────────────────────────────────────────────────
+   Selected by the panel theme (sun-driven by default; manual override pins it):
+   set data-theme="light" on <html>. Auto flips it at local sunrise/sunset. */
+:root[data-theme="light"] {
+  --text-primary:   #16324d;
+  --text-secondary: #3a5e80;
+  --text-tertiary:  #6a86a2;
+  --card-surface: linear-gradient(157deg, rgba(255,255,255,0.72), rgba(255,255,255,0.5));
+  --card-border: 1px solid rgba(20,50,80,0.12);
+  --card-elevation: 0 22px 50px -20px rgba(40,70,110,0.35), inset 0 1px 0 rgba(255,255,255,0.6);
+  --control-surface: rgba(20,50,80,0.05);
+  --control-border: 1px solid rgba(20,50,80,0.16);
+}
+
+/* ── Condition → theme (weather-aware surfaces) ───────────────────────────
+   A surface picks its gradient + glyph (#i-*) from the current condition. */
+:root {
+  --wx-clear-night: linear-gradient(158deg, #1b2454 0%, #3a2a72 52%, #6a3470 100%);
+  --wx-clear-day:   linear-gradient(158deg, #5aa9ec 0%, #8fcdf2 50%, #dcefff 100%);
+  --wx-cloudy:      linear-gradient(158deg, #4a5570 0%, #6a7390 100%);
+  --wx-rain:        linear-gradient(158deg, #2b3a63 0%, #4a5e86 100%);
+  --wx-storm:       linear-gradient(158deg, #262d44 0%, #3d4868 100%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --sky-dur-fast: 0ms; --sky-dur-base: 0ms; --sky-dur-slow: 0ms; }
+}

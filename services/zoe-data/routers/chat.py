@@ -477,6 +477,66 @@ _USE_ZOE_CORE = os.environ.get("ZOE_USE_CORE_BRAIN", "true").lower() == "true"
 # "Use a local brain" = either the new zoe-core (Pi) or the legacy zoe_agent.
 # When set, the local brain takes the slot that would otherwise fall to OpenClaw.
 _USE_LOCAL_BRAIN = _USE_ZOE_AGENT or _USE_ZOE_CORE
+# The zoe-core Pi brain pulls memory itself every turn via the memory.ts extension
+# (/api/memories/for-prompt), so also passing db_memory_context into the brain
+# prompt double-injects the same facts (extra prefill). Default OFF (deduped);
+# set ZOE_CHAT_INJECT_DB_MEMORY=1 to restore the old double-injection if needed.
+_CHAT_INJECT_DB_MEMORY = os.environ.get("ZOE_CHAT_INJECT_DB_MEMORY", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def brain_tool_sentinel_events(sentinel, *, assistant_message_id, tool_names):
+    """Map a brain ``__TOOL__:`` sentinel to canonical AG-UI tool/step events.
+
+    The Pi brain (zoe_core_client._read_turn) surfaces tool activity as JSON
+    sentinels with phases start / args / result. We translate each phase to the
+    same event shapes the intent path emits (StepStarted+ToolCallStart, then
+    ToolCallArgs+ToolCallEnd, then ToolCallResult+StepFinished) so a brain turn
+    that calls a tool produces TOOL_CALL_START → ARGS → END → RESULT (+STEP_*) in
+    order. ``tool_names`` is a caller-owned dict tracking id→name across the
+    stream so the result phase (which often omits the name) can finish the step
+    under the same name it started. Yields AG-UI event objects; the caller emits
+    them. Malformed sentinels yield nothing (logged, never raise).
+    """
+    try:
+        tc = json.loads(sentinel[len("__TOOL__:"):])
+    except Exception as exc:  # noqa: BLE001 - malformed sentinel must not break the turn
+        logger.debug("__TOOL__ parse error (non-fatal): %s", exc)
+        return
+    phase = tc.get("phase")
+    tc_id = str(tc.get("id") or "")
+    tc_name = str(tc.get("name") or "")
+    if phase == "start" and tc_id and tc_name:
+        tool_names[tc_id] = tc_name
+        yield StepStartedEvent(type=EventType.STEP_STARTED, step_name=tc_name)
+        yield ToolCallStartEvent(
+            type=EventType.TOOL_CALL_START,
+            tool_call_id=tc_id,
+            tool_call_name=tc_name,
+            parent_message_id=assistant_message_id,
+        )
+    elif phase == "args" and tc_id:
+        if tc_name:
+            tool_names.setdefault(tc_id, tc_name)
+        yield ToolCallArgsEvent(
+            type=EventType.TOOL_CALL_ARGS,
+            tool_call_id=tc_id,
+            delta=json.dumps(tc.get("args") or {}),
+        )
+        yield ToolCallEndEvent(type=EventType.TOOL_CALL_END, tool_call_id=tc_id)
+    elif phase == "result" and tc_id:
+        yield ToolCallResultEvent(
+            type=EventType.TOOL_CALL_RESULT,
+            message_id=assistant_message_id,
+            tool_call_id=tc_id,
+            content=str(tc.get("result", "")),
+            role="tool",
+        )
+        # The result sentinel often omits the name, so resolve via the id→name map
+        # (set at start/args), then any inline name, then the id as a last resort.
+        yield StepFinishedEvent(
+            type=EventType.STEP_FINISHED,
+            step_name=tool_names.get(tc_id) or tc_name or tc_id,
+        )
 
 
 def _brain_streaming(message, session_id, user_id="", **kwargs):
@@ -597,7 +657,7 @@ async def _run_chat_pi_hybrid_lane(
             ))
             asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, response_text))
         if response_text:
-            await _save_chat_message(session_id, "assistant", response_text)
+            await _save_chat_message(session_id, "assistant", response_text, user_id=user_id)
         if record_run_state:
             active_run_id = run_id or new_run_ids()[0]
             await _record_run_state(
@@ -1096,16 +1156,26 @@ async def _ensure_user_and_chat_session(session_id: str, user_id: str) -> None:
         break
 
 
-async def _save_chat_message(session_id: str, role: str, content: str) -> None:
+async def _save_chat_message(
+    session_id: str, role: str, content: str, user_id: str | None = None
+) -> None:
     """Persist a single chat turn to chat_messages.
 
     Mirrors the OpenClaw gateway pattern: the caller sends only the new message;
     the server owns the transcript. Zoe Agent reads this table for conversation
     history on the next turn, enabling proper follow-on context.
+
+    When `user_id` is supplied (and is a real, non-guest identity) it is recorded
+    into `chat_messages.metadata` as JSON {"user_id": ...}. Auth happens per-turn
+    but `chat_sessions.user_id` stays 'guest', so idle consolidation reads this
+    per-turn user to know whose memory to write. Guest/empty users are not stored.
     """
     clean_content = (content or "").strip()
     if not clean_content:
         return
+    metadata = None
+    if user_id and user_id not in ("guest", "voice-daemon", ""):
+        metadata = json.dumps({"user_id": user_id})
     # Use the context-managed pool acquire (deterministic release). The bare
     # `async for db in get_db(): ... break` form leaves the generator suspended
     # at the yield when broken out of, so the connection isn't returned to the
@@ -1115,9 +1185,9 @@ async def _save_chat_message(session_id: str, role: str, content: str) -> None:
         from db_pool import get_db_ctx
         async with get_db_ctx() as db:
             await db.execute(
-                "INSERT INTO chat_messages (id, session_id, role, content) "
-                "VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
-                (uuid.uuid4().hex, session_id, role, clean_content),
+                "INSERT INTO chat_messages (id, session_id, role, content, metadata) "
+                "VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
+                (uuid.uuid4().hex, session_id, role, clean_content, metadata),
             )
             await _touch_chat_session(db, session_id=session_id, content=clean_content)
             await db.commit()
@@ -1657,7 +1727,7 @@ async def chat_stream_generator(
     username = user.get("username")
     await _ensure_user_and_chat_session(session_id, user_id)
     # Persist user turn immediately — enables history for Zoe Agent on the NEXT request
-    await _save_chat_message(session_id, "user", message)
+    await _save_chat_message(session_id, "user", message, user_id=user_id)
     # Frustration signal detection (non-blocking, session-scoped)
     _check_frustration(session_id, user_id, message)
     enc = EventEncoder()
@@ -1811,7 +1881,7 @@ async def chat_stream_generator(
                 )
             yield emit(TextMessageEndEvent(type=EventType.TEXT_MESSAGE_END, message_id=assistant_message_id))
             if response_text.strip():
-                asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text))
+                asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text, user_id=user_id))
                 if user_id != "guest":
                     asyncio.ensure_future(
                         _persist_memory_candidates(user_id, session_id, message_for_processing, response_text)
@@ -1863,7 +1933,7 @@ async def chat_stream_generator(
                     response_text=followup,
                     metadata={"task_class": task_class, "missing_constraints": missing},
                 )
-                await _save_chat_message(session_id, "assistant", followup)
+                await _save_chat_message(session_id, "assistant", followup, user_id=user_id)
                 return
         if "what can you do right now" in lc or lc in {"/capabilities", "capabilities", "tools"}:
             try:
@@ -1883,7 +1953,7 @@ async def chat_stream_generator(
             yield emit(TextMessageEndEvent(type=EventType.TEXT_MESSAGE_END, message_id=assistant_message_id))
             yield emit(RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id=session_id, run_id=run_id))
             await _record_run_state(run_id, session_id, user_id, mode="chat", status="completed", request_text=message, response_text=capabilities_text)
-            await _save_chat_message(session_id, "assistant", capabilities_text)
+            await _save_chat_message(session_id, "assistant", capabilities_text, user_id=user_id)
             return
 
         if _WHATSAPP_FLOW_ENABLED and is_whatsapp_connect_request(message_for_processing):
@@ -1922,6 +1992,40 @@ async def chat_stream_generator(
 
         _chat_ctx = _CHAT_CONTEXTS.get(session_id) or _CC()
         if use_intent_fast_path:
+            # Tier-1.5 channel-agnostic fast path (the SAME core voice uses): answer
+            # calendar / lists / weather / time / people / memory sub-second instead
+            # of the Pi-hybrid/brain lane below. Threshold-gated in expert_dispatch —
+            # only confident matches short-circuit; otherwise None → hybrid unchanged.
+            try:
+                import fast_tiers as _fast_path
+                _fp_res = await _fast_path.resolve(
+                    message_for_processing, user_id, session_id,
+                    channel="chat",
+                )
+            except Exception as _fp_exc:  # never let the fast path break a turn
+                logger.debug("chat_stream fast_path resolve failed (non-fatal): %s", _fp_exc)
+                _fp_res = None
+            if _fp_res is not None and getattr(_fp_res, "reply", ""):
+                _fp_reply = _fp_res.reply
+                yield emit(TextMessageStartEvent(
+                    type=EventType.TEXT_MESSAGE_START,
+                    message_id=assistant_message_id,
+                    role="assistant",
+                ))
+                async for line in iter_text_message_chunks(enc, recorder, assistant_message_id, _fp_reply):
+                    yield line
+                yield emit(TextMessageEndEvent(
+                    type=EventType.TEXT_MESSAGE_END,
+                    message_id=assistant_message_id,
+                ))
+                asyncio.ensure_future(chat_inject_background(message_for_processing, _fp_reply, f"fast:{_fp_res.domain}", user_id, session_id))
+                asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, _fp_reply))
+                asyncio.ensure_future(_save_chat_message(session_id, "assistant", _fp_reply, user_id=user_id))
+                yield emit(RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id=session_id, run_id=run_id))
+                # Close out the run row (opened status="running" at the top); every
+                # other early exit here records completed/error before returning.
+                await _record_run_state(run_id, session_id, user_id, mode=run_mode, status="completed", request_text=message, response_text=_fp_reply)
+                return
             _pi_hybrid = await _run_chat_pi_hybrid_lane(
                 message_for_processing,
                 user_id=user_id,
@@ -2066,7 +2170,7 @@ async def chat_stream_generator(
                     async for line in iter_text_message_chunks(enc, recorder, assistant_message_id, _blurb):
                         yield line
                     yield emit(TextMessageEndEvent(type=EventType.TEXT_MESSAGE_END, message_id=assistant_message_id))
-                    asyncio.ensure_future(_save_chat_message(session_id, "assistant", _blurb))
+                    asyncio.ensure_future(_save_chat_message(session_id, "assistant", _blurb, user_id=user_id))
                 return  # skip the standard execute_intent path
 
             # ── Touch Panel intents: AG-UI status cards ───────────────────────
@@ -2082,7 +2186,7 @@ async def chat_stream_generator(
                     yield line
                 yield emit(TextMessageEndEvent(type=EventType.TEXT_MESSAGE_END, message_id=assistant_message_id))
                 yield emit(RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id=session_id, run_id=run_id))
-                asyncio.ensure_future(_save_chat_message(session_id, "assistant", panel_card_md))
+                asyncio.ensure_future(_save_chat_message(session_id, "assistant", panel_card_md, user_id=user_id))
                 return
 
             # ── ChatGPT connect: full device-code OAuth flow inline ────────────
@@ -2127,7 +2231,7 @@ async def chat_stream_generator(
                             yield line
                         yield emit(TextMessageEndEvent(type=EventType.TEXT_MESSAGE_END, message_id=assistant_message_id))
                         yield emit(RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id=session_id, run_id=run_id))
-                        asyncio.ensure_future(_save_chat_message(session_id, "assistant", _card_text))
+                        asyncio.ensure_future(_save_chat_message(session_id, "assistant", _card_text, user_id=user_id))
                         return
                 except ImportError:
                     pass  # Multica not installed — fall through to standard OpenClaw path
@@ -2166,7 +2270,7 @@ async def chat_stream_generator(
                 )
                 asyncio.ensure_future(chat_inject_background(message_for_processing, result, intent.name, user_id, session_id))
                 asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, result))
-                asyncio.ensure_future(_save_chat_message(session_id, "assistant", result))
+                asyncio.ensure_future(_save_chat_message(session_id, "assistant", result, user_id=user_id))
             else:
                 if intent.name in _OPENCLAW_DELEGATION_INTENTS:
                     logger.info("Intent %s delegating to Hermes/Multica", intent.name)
@@ -2254,7 +2358,7 @@ async def chat_stream_generator(
                     asyncio.ensure_future(_queue_ui_actions_background(actions, user_id, session_id))
                 asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, response_text))
                 if response_text:
-                    asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text))
+                    asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text, user_id=user_id))
                 async for line in _stream_openclaw_assistant_ag(
                     enc, recorder, assistant_message_id, response_text,
                     intent_name=intent.name if intent else None,
@@ -2325,12 +2429,18 @@ async def chat_stream_generator(
                         f"[Intent hint: {_tier05_hint.name}, confidence {_tier05_hint.confidence:.2f}, "
                         f"slots {_tier05_hint.slots}] "
                     ) + expanded_msg
+                # Tracks tool_call_id → tool name across the brain stream so the
+                # result/finish events can re-use the name the start event paired
+                # with (the brain's result sentinel may omit it).
+                _brain_tool_names: dict[str, str] = {}
                 async for chunk in _brain_streaming(
                     expanded_msg,
                     session_id,
                     user_id,
                     history=prior_history or None,
-                    db_memory_context=pi_db_memory or None,
+                    # Deduped by default: the memory.ts extension already injects the
+                    # for-prompt packet, so don't double-inject the same facts here.
+                    db_memory_context=(pi_db_memory or None) if _CHAT_INJECT_DB_MEMORY else None,
                     portrait=pi_portrait or None,
                 ):
                     if chunk.startswith("__ESCALATE__:") or chunk.startswith("__ESCALATE_BG__:") or chunk.startswith("__ESCALATE_HERMES__:"):
@@ -2410,6 +2520,18 @@ async def chat_stream_generator(
                             yield emit(CustomEvent(name="zoe.ui_component", value=comp))
                         except Exception as _uie:
                             logger.debug("__UI__ parse error (non-fatal): %s", _uie)
+                        continue
+                    if chunk.startswith("__TOOL__:"):
+                        # Brain tool activity — map the sentinel phases the Pi brain
+                        # surfaces (start/args/result) onto canonical AG-UI tool/step
+                        # events so the chat UI can show "what Zoe is doing". Shared
+                        # with the contract test via brain_tool_sentinel_events().
+                        for _tool_ev in brain_tool_sentinel_events(
+                            chunk,
+                            assistant_message_id=assistant_message_id,
+                            tool_names=_brain_tool_names,
+                        ):
+                            yield emit(_tool_ev)
                         continue
                     full_response += chunk
                     yield recorder.emit(
@@ -2607,7 +2729,7 @@ async def chat_stream_generator(
                 asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, response_text))
                 # Persist assistant reply so Zoe Agent has context on the next turn
                 if response_text:
-                    asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text))
+                    asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text, user_id=user_id))
 
             else:
                 # Explicit OpenClaw fallback path.
@@ -2657,7 +2779,7 @@ async def chat_stream_generator(
                     asyncio.ensure_future(_queue_ui_actions_background(actions, user_id, session_id))
                 asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, response_text))
                 if response_text:
-                    asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text))
+                    asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text, user_id=user_id))
                 async for line in _stream_openclaw_assistant_ag(
                     enc, recorder, assistant_message_id, response_text
                 ):
@@ -3020,7 +3142,7 @@ async def _hermes_stream_generator(
 
     response_text = "".join(full_text)
     if response_text.strip():
-        asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text))
+        asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text, user_id=user_id))
         if user_id != "guest":
             asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message, response_text))
         asyncio.ensure_future(
@@ -3098,7 +3220,7 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
         # nightly digest would see an empty chat_messages table for any
         # voice / CLI clients that opt out of SSE.
         if message:
-            await _save_chat_message(session_id, "user", message)
+            await _save_chat_message(session_id, "user", message, user_id=user_id)
         if approval_token:
             approved = await _resolve_approval(user_id, approval_token)
             if not approved:
@@ -3138,7 +3260,7 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
             missing = missing_brief_fields(message_for_processing)
             if missing:
                 followup = _research_followup_prompt(missing)
-                await _save_chat_message(session_id, "assistant", followup)
+                await _save_chat_message(session_id, "assistant", followup, user_id=user_id)
                 return {
                     "response": followup,
                     "session_id": session_id,
@@ -3158,7 +3280,7 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
             except Exception:
                 caps_text = "Hermes is the active escalation agent. Zoe tools include calendar, lists, reminders, memory, Graphify, Multica, and CloakBrowser."
             capabilities_text = "Hermes/Zoe capabilities:\n\n" + caps_text
-            await _save_chat_message(session_id, "assistant", capabilities_text)
+            await _save_chat_message(session_id, "assistant", capabilities_text, user_id=user_id)
             return {"response": capabilities_text, "session_id": session_id}
 
         use_intent_fast_path = (not force_openclaw) and _ALL_TOOLS_ENABLED
@@ -3171,6 +3293,40 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
             use_intent_fast_path = False
 
         if use_intent_fast_path:
+            # Tier-1.5 channel-agnostic fast path (the SAME core voice uses): answer
+            # calendar / lists / weather / time / people / memory sub-second instead
+            # of paying ~5s for the Pi-hybrid/brain lane below. Threshold-gated inside
+            # expert_dispatch, so only confident matches short-circuit; everything else
+            # returns None and falls through to the hybrid lane unchanged. Non-fatal.
+            # Keep ONLY resolve() inside the try so a fast-path miss/error falls
+            # through to the hybrid lane. The success branch is OUTSIDE the try:
+            # if persistence raises it must NOT be swallowed (that would re-run the
+            # turn on the brain and return a different reply than we injected).
+            _fp_res = None
+            try:
+                import fast_tiers as _fast_path
+                _fp_res = await _fast_path.resolve(
+                    message_for_processing, user_id, session_id,
+                    channel="chat",
+                )
+            except Exception as _fp_exc:  # never let the fast path break a turn
+                logger.debug("chat fast_path resolve failed (non-fatal): %s", _fp_exc)
+                _fp_res = None
+            if _fp_res is not None and getattr(_fp_res, "reply", ""):
+                _fp_reply = _fp_res.reply
+                asyncio.ensure_future(
+                    chat_inject_background(
+                        message_for_processing, _fp_reply,
+                        f"fast:{_fp_res.domain}", user_id, session_id,
+                    )
+                )
+                asyncio.ensure_future(
+                    _persist_memory_candidates(
+                        user_id, session_id, message_for_processing, _fp_reply
+                    )
+                )
+                await _save_chat_message(session_id, "assistant", _fp_reply, user_id=user_id)
+                return {"response": _fp_reply, "session_id": session_id}
             _pi_hybrid = await _run_chat_pi_hybrid_lane(
                 message_for_processing,
                 user_id=user_id,
@@ -3225,7 +3381,7 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
                     chat_inject_background(message_for_processing, result, intent.name, user_id, session_id)
                 )
                 asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, result))
-                await _save_chat_message(session_id, "assistant", result)
+                await _save_chat_message(session_id, "assistant", result, user_id=user_id)
                 return {"response": result, "session_id": session_id}
         if _WHATSAPP_FLOW_ENABLED and is_whatsapp_connect_request(message_for_processing):
             message_for_processing = (
@@ -3235,13 +3391,26 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
 
         response_text = ""
         try:
-            # Load portrait + facts + semantic recall concurrently for all non-streaming branches
-            ns_portrait, ns_db_memory, ns_semantic = await asyncio.gather(
-                _safe_load_portrait(user_id),
-                _mempalace_load_user_facts(user_id),
-                _build_memory_context(message_for_processing, user_id=user_id),
-            )
-            ns_full_mem = "\n\n".join(filter(None, [ns_portrait, ns_db_memory, ns_semantic]))
+            # Portrait is cheap and the local brain takes it directly, so load it
+            # eagerly. Facts + semantic recall (ns_full_mem) are ONLY consumed by the
+            # Hermes/OpenClaw escalation branches and the non-local-brain path — the
+            # local Pi brain gets its memory from the memory.ts extension's
+            # /api/memories/for-prompt packet (db_memory_context=None below). So
+            # compute them LAZILY to avoid a redundant facts-load + semantic search
+            # on every non-escalating turn (the recall double-load this PR removes).
+            ns_portrait = await _safe_load_portrait(user_id)
+            _ns_full_mem_cache: "str | None" = None
+
+            async def _ns_full_mem() -> str:
+                nonlocal _ns_full_mem_cache
+                if _ns_full_mem_cache is None:
+                    _dbm, _sem = await asyncio.gather(
+                        _mempalace_load_user_facts(user_id),
+                        _build_memory_context(message_for_processing, user_id=user_id),
+                    )
+                    _ns_full_mem_cache = "\n\n".join(filter(None, [ns_portrait, _dbm, _sem]))
+                return _ns_full_mem_cache
+
             if _USE_LOCAL_BRAIN:
                 # Use original (pre-suffix) message for agent so fast-path checks work
                 _agent_msg = _original_message_for_agent if is_voice_mode else message_for_processing
@@ -3264,7 +3433,7 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
                             user_id,
                             username=user.get("username") or "",
                             portrait=ns_portrait,
-                            facts=ns_full_mem or "",
+                            facts=await _ns_full_mem() or "",
                         )
                     except Exception as _he:
                         logger.warning("Hermes non-stream escalation failed: %s", _he)
@@ -3278,7 +3447,7 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
                         user_id,
                         username=user.get("username") or "",
                         portrait=ns_portrait,
-                        facts=ns_full_mem or "",
+                        facts=await _ns_full_mem() or "",
                     )
             else:
                 oc_message = openclaw_user_message(intent, message_for_processing)
@@ -3288,7 +3457,7 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
                     user_id,
                     username=user.get("username") or "",
                     portrait=ns_portrait,
-                    facts=ns_full_mem or "",
+                    facts=await _ns_full_mem() or "",
                 )
         except Exception as exc:
             if task_class != "research":
@@ -3298,6 +3467,14 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
                 "I could not complete live browsing just now, so I prepared a deterministic "
                 "research brief with source links and evidence placeholders."
             )
+        # Never hand the user a blank turn. Under heavy concurrent load the local
+        # brain can occasionally return no text (Pi-RPC subprocess thrash); surface
+        # a graceful retry prompt instead of an empty response. Skip for research
+        # tasks — those have their own evidence-package flow below and must not feed
+        # a retry string into _build_research_package.
+        if task_class != "research" and not (response_text or "").strip():
+            logger.warning("chat non-stream: empty brain response, using fallback (session=%s)", session_id)
+            response_text = "Sorry, I didn't catch that — could you say it again?"
         clean_text, actions = _extract_ui_actions(response_text)
         resp = {"response": clean_text, "session_id": session_id}
         ui_commands = [a for a in actions if "command" in a]
@@ -3340,7 +3517,7 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
             asyncio.ensure_future(_queue_ui_actions_background(actions, user_id, session_id))
         asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, response_text))
         if response_text:
-            await _save_chat_message(session_id, "assistant", response_text)
+            await _save_chat_message(session_id, "assistant", response_text, user_id=user_id)
         return resp
 
 
