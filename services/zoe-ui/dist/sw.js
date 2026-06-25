@@ -62,24 +62,6 @@ if (workbox) {
 
     // ===== CACHING STRATEGIES =====
 
-    // Self-hosted module HTML (/modules/qd/, /modules/jag-board/): never cache as documents
-    // (avoids storing index.html under a module URL if origin misroutes).
-    workbox.routing.registerRoute(
-        ({ request, url }) => {
-            if (request.destination !== 'document') return false;
-            const p = url.pathname;
-            return (
-                p === '/modules/qd' ||
-                p.startsWith('/modules/qd/') ||
-                p === '/modules/jag-board' ||
-                p.startsWith('/modules/jag-board/') ||
-                p === '/modules/orbit' ||
-                p.startsWith('/modules/orbit/')
-            );
-        },
-        new workbox.strategies.NetworkOnly()
-    );
-
     // Skybridge is a live voice/data surface. Never serve stale HTML, auth, or runtime JS.
     workbox.routing.registerRoute(
         ({ url }) => url.pathname === '/touch/skybridge.html' || url.pathname === '/js/auth.js' || url.pathname.startsWith('/touch/js/skybridge'),
@@ -541,10 +523,10 @@ self.addEventListener('activate', (event) => {
         );
     });
 
-    // 2) Purge stale /modules/qd, /modules/jag-board and /modules/orbit
-    //    index.html entries that may have been cached before nginx began
-    //    proxying those paths. This used to live in a second activate
-    //    listener; merged here so we only register one.
+    // 2) Purge stale /modules/qd, /modules/jag-board and /modules/orbit cache
+    //    entries from existing clients. These modules were RETIRED (2026-06-24,
+    //    see docs/CANONICAL.md) — this one-shot purge drops their now-dead pages
+    //    from any service worker that cached them before removal.
     const purgeStaleModules = caches.keys().then((names) =>
         Promise.all(names.map((name) =>
             caches.open(name).then((cache) =>
