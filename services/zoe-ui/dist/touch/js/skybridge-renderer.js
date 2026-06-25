@@ -77,7 +77,7 @@
         const bodyHtml = [
             '<div class="sky-auth-scene sky-auth-people-only">',
             '<div class="sky-authx-head">',
-            '<span class="sky-authx-kicker">Sign in</span>',
+            '<span class="sky-authx-kicker">' + escapeHtml(props.kicker || 'Sign in') + '</span>',
             '<h2 class="sky-authx-title">' + title + '</h2>',
             '<p class="sky-authx-sub">' + sub + '</p>',
             '</div>',

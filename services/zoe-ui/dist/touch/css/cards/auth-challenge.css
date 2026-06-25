@@ -115,12 +115,6 @@ body:not(.sky-empty) .sky-authx .sky-auth-person strong {
   color: var(--sky-ink-0, #fff) !important;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
 }
-body:not(.sky-empty) .sky-authx .sky-auth-person small {
-  font-size: 13px !important;
-  font-weight: 400 !important;
-  text-transform: capitalize;
-  color: var(--sky-ink-3, rgba(255,255,255,.5)) !important;
-}
 /* the legacy "Enter →" pill isn't needed in the tile layout */
 body:not(.sky-empty) .sky-authx .sky-auth-enter { display: none !important; }
 
@@ -151,7 +145,6 @@ body:not(.sky-empty) .sky-authx .sky-auth-loading i {
   border-color: rgba(20,50,80,.14) !important;
   box-shadow: 0 30px 70px -22px rgba(20,50,80,.3), inset 0 1px 0 rgba(255,255,255,.7) !important;
 }
-[data-theme="light"] .sky-authx .sky-auth-person small { color: var(--sky-ink-3); }
 [data-theme="light"] .sky-authx .sky-authx-title { color: #16324d; }
 [data-theme="light"] .sky-authx .sky-authx-sub { color: #3a5e80; }
 
