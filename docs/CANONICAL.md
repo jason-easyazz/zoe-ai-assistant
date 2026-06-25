@@ -68,10 +68,10 @@ Running as containers today — **keep**:
 
 ## 🔴 Retired — do not resurrect
 
-- **`docs/archive/`** — being retired from the working tree (purge tracked separately;
-  Greptile can't review a deletion that large in one pass). Once removed, every byte
-  stays in git history — recover with `git log -- docs/archive` if ever needed. Do
-  **not** re-add it, and do not re-introduce a `docs/archive/` graveyard.
+- **`docs/archive/`** — removed from the working tree (2026-06-25). Every byte stays in
+  git history — recover with `git log -- docs/archive` if ever needed. Do **not** re-add
+  it, and do not re-introduce a `docs/archive/` graveyard. Enforced by
+  `test_no_docs_archive_graveyard` in `services/zoe-data/tests/test_canonical_invariants.py`.
 - **`modules/orbit`** (social-interaction platform) — retired 2026-06-24. Was wired in
   `docker-compose.modules.yml` (not running). Tracked in git → `git log --all -- modules/orbit`.
 - **`modules/agent-zero`** — retired 2026-06-24, no longer used. In git history.

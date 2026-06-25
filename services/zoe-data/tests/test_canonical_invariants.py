@@ -72,7 +72,11 @@ def test_moonshine_actually_loaded_in_live_startup():
         "may have been dropped (whisper is a fallback, never the primary rock)"
     )
 
-# NOTE: a `test_no_docs_archive_graveyard` assertion (docs/archive must not exist)
-# ships WITH the archive purge — see docs/CANONICAL.md. It's omitted here because the
-# purge is a separate change (Greptile can't review a deletion that large in one pass),
-# so asserting absence now would fail CI before the purge lands.
+# ── The cleanup stays clean: no archive graveyard creeps back ─────────────────
+def test_no_docs_archive_graveyard():
+    """docs/archive was removed (git history keeps it). Retire by removing, not by
+    hoarding a graveyard the whole team greps through."""
+    assert not os.path.isdir(os.path.join(REPO, "docs", "archive")), (
+        "docs/archive reappeared — retire superseded files by deleting them "
+        "(git keeps history); do not re-introduce an archive graveyard. See docs/CANONICAL.md"
+    )
