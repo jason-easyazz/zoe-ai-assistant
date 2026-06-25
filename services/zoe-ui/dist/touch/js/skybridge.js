@@ -35,8 +35,11 @@
     const MAX_STALL_DEFERRALS = 3;
 
     const queryParams = new URLSearchParams(location.search);
-    const configuredIdleMs = Number(queryParams.get('idle_ms') || localStorage.getItem('skybridge_idle_return_ms') || 75000);
-    const CARD_IDLE_MS = Number.isFinite(configuredIdleMs) ? Math.max(15000, configuredIdleMs) : 75000;
+    // How long a card stays up with no interaction before returning to the ambient
+    // clock. Touch/voice resets this, so it's the quiet-time fade. 75s was too quick
+    // to read a result you just asked for; 3 min is comfortable on a kiosk.
+    const configuredIdleMs = Number(queryParams.get('idle_ms') || localStorage.getItem('skybridge_idle_return_ms') || 180000);
+    const CARD_IDLE_MS = Number.isFinite(configuredIdleMs) ? Math.max(15000, configuredIdleMs) : 180000;
 
     const colors = {
         ambient: ['#5fc6ff', '#66d19e'],
