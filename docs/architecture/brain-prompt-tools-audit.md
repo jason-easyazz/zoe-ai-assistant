@@ -1,7 +1,7 @@
 ---
 type: proposal
-title: "Brain prefill audit — system prompt + tools (propose-only)"
-status: draft
+title: "Brain prefill audit — system prompt + tools (IMPLEMENTED)"
+status: implemented
 owner: jason
 created: 2026-06-25
 scope: services/zoe-data/zoe_agent.py
@@ -11,10 +11,17 @@ related:
 
 # Brain prefill audit — system prompt + tools
 
-> **PROPOSE-ONLY.** No change to `services/zoe-data/zoe_agent.py` lands until Jason
-> reviews and approves. This doc + [`zoe-soul-lean-draft.md`](./zoe-soul-lean-draft.md)
-> are the review artifacts. The rocks (Gemma 4 E4B+MTP brain, Moonshine v2 STT) are
-> untouched — this only trims the *text* reprocessed each turn.
+> **IMPLEMENTED** on branch `feat/lean-soul-brevity`. The lean soul, ZOE_SELF
+> summary, 8 trimmed tool schemas, and the voice tool/brevity changes all landed
+> in `services/zoe-data/zoe_agent.py`. Verified against the live voice replay
+> corpus (`~/.zoe-voice-samples`): said-vs-did unchanged (no OK→regression; two
+> samples improved EMPTY→OK). The rocks (Gemma 4 E4B+MTP brain, Moonshine v2 STT)
+> are untouched — this only trims the *text* reprocessed each turn.
+>
+> Measured deltas (cl100k_base): `_ZOE_SOUL_STATIC` 3,754→1,532 tok (−59%);
+> `_ZOE_SOUL_VOICE` 377→258; the 8 tool schemas 1,645→1,232 (−413); voice tool
+> array ~2,350→~1,568 (20→16 tools). The hardcoded panel LAN IP is now config
+> (`ZOE_HOST_LAN_IP` env, default 192.168.1.218) injected at import.
 
 ## TL;DR
 
