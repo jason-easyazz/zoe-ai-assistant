@@ -1045,7 +1045,10 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                     }
                     if (msg.type === 'panel_pin_result' && msg.data) {
                         const d = msg.data;
-                        if (panelMatches(d.panel_id)) {
+                        // Auth RESULT must be explicitly addressed to this panel — never
+                        // act on an unaddressed result (it would flash/dismiss the PIN pad
+                        // on every kiosk). Require a present id that matches an alias.
+                        if (d.panel_id && panelMatches(d.panel_id)) {
                             hidePinPad();
                             showToast(d.status === 'approved' ? 'Authorised' : 'Not authorised');
                         }
