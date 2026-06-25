@@ -13,7 +13,13 @@ def test_voice_mode_injects_brevity_directive():
         history=None, db_memory_context=None, portrait=None, voice_mode=True,
     )
     assert "[VOICE MODE]" in out
-    assert "1-2 short spoken sentences" in out
+    assert "1-2 complete sentences" in out
+    # Pin the two functionally-significant directives so a future wording tweak
+    # can't silently drop them (Greptile #820):
+    assert "Lead with the answer" in out            # the brevity behaviour
+    assert "skip preamble" in out
+    assert "use tools fully as normal" in out        # the capability guarantee — shapes
+    assert "never what you do" in out                # what she SAYS, not what she does
     # The user's message is still present and last.
     assert out.strip().endswith("what's the weather like")
 
