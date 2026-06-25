@@ -55,11 +55,11 @@ class _FakeWorker:
 
 
 def _patch_single_worker(monkeypatch, worker):
-    async def _fake_worker_for(user_id, session_id):
+    async def _fake_worker_for(user_id, session_id, *, voice_mode=False):
         return worker
     monkeypatch.setattr(zc, "_worker_for", _fake_worker_for)
 
-    async def _fake_reset(user_id, session_id):
+    async def _fake_reset(user_id, session_id, *, voice_mode=False):
         await worker.reset()
     monkeypatch.setattr(zc, "_reset_worker_for", _fake_reset)
 
@@ -110,7 +110,7 @@ def test_semaphore_bounds_concurrency(monkeypatch):
     # Each session gets its own worker; all share the concurrency tracker.
     workers = {}
 
-    async def _fake_worker_for(user_id, session_id):
+    async def _fake_worker_for(user_id, session_id, *, voice_mode=False):
         w = workers.get(session_id)
         if w is None:
             w = _FakeWorker(["ok"], on_stream=_track)

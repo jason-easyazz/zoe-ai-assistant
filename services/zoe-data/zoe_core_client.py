@@ -56,6 +56,16 @@ _PI_COMMAND = os.environ.get("ZOE_CORE_PI_COMMAND", "pi")
 _PROVIDER = os.environ.get("ZOE_CORE_PROVIDER", "local-gemma")
 _MODEL = os.environ.get("ZOE_CORE_MODEL_ID", "gemma-4-E2B-it-Q4_K_M.gguf")
 _TIMEOUT_S = float(os.environ.get("ZOE_CORE_TIMEOUT_S", "180"))
+# Generation-length cap for VOICE turns only. The provider extension
+# (provider-local-gemma.ts) registers the model's maxTokens from
+# ZOE_CORE_MODEL_MAXTOKENS at spawn (default 2048) — there is NO per-request
+# override in the Pi RPC `prompt` message, so the only safe lever is the worker's
+# spawn env. Voice replies are 1-2 spoken sentences (see _VOICE_BREVITY); a chatty
+# turn that runs to the full 2048-token budget adds a long generation tail and
+# delays first audio for nothing. We bound voice generations to this cap (~512
+# tokens ≈ far more than 2 sentences, so it never clips a real spoken answer) and
+# leave non-voice (chat) turns at the provider default. 0/negative disables the cap.
+_VOICE_MODEL_MAXTOKENS = int(os.environ.get("ZOE_CORE_VOICE_MODEL_MAXTOKENS", "512"))
 # Safety valve: once an answer has streamed and a turn has ended, if no further
 # event arrives within this idle window we assume the loop is done even if
 # agent_end was never emitted (Pi crash / lost event / older build) — bounding
@@ -107,9 +117,16 @@ def _data_url() -> str:
     )
 
 
-def _worker_env(user_id: str) -> dict[str, str]:
+def _worker_env(user_id: str, *, voice_mode: bool = False) -> dict[str, str]:
     """Env for a worker. ZOE_CORE_USER_ID is baked per worker (fail-closed:
-    a guest/empty user means the memory extension fetches nothing)."""
+    a guest/empty user means the memory extension fetches nothing).
+
+    Voice workers (voice_mode=True) bake a tighter generation cap
+    (ZOE_CORE_MODEL_MAXTOKENS = _VOICE_MODEL_MAXTOKENS) so a spoken turn can't run
+    away to the full default budget. Because this cap is fixed at spawn and a Pi
+    process is reused across a session's turns, voice and non-voice workers are
+    keyed separately (see _worker_for) so the cap never leaks onto chat turns.
+    """
     env = _pi_subprocess_env(os.environ)
     env["ZOE_DATA_URL"] = _data_url()
     env["ZOE_CORE_SOUL_PATH"] = str(_SOUL_PATH)
@@ -119,6 +136,8 @@ def _worker_env(user_id: str) -> dict[str, str]:
     if token:
         env["ZOE_INTERNAL_TOKEN"] = token
     env.setdefault("ZOE_CORE_ALLOW_WRITES", "true")
+    if voice_mode and _VOICE_MODEL_MAXTOKENS > 0:
+        env["ZOE_CORE_MODEL_MAXTOKENS"] = str(_VOICE_MODEL_MAXTOKENS)
     return env
 
 
@@ -223,9 +242,10 @@ def _stringify(value: Any) -> str:
 class _ZoeCoreWorker:
     """A persistent Pi-RPC brain process for one (user, session)."""
 
-    def __init__(self, user_id: str) -> None:
+    def __init__(self, user_id: str, *, voice_mode: bool = False) -> None:
         self.user_id = user_id
-        self.env = _worker_env(user_id)
+        self.voice_mode = voice_mode
+        self.env = _worker_env(user_id, voice_mode=voice_mode)
         self.proc: asyncio.subprocess.Process | None = None
         self._lock = asyncio.Lock()
         self.last_used = time.monotonic()
@@ -390,16 +410,21 @@ class _ZoeCoreWorker:
                 return
 
 
-_WORKERS: "OrderedDict[tuple[str, str], _ZoeCoreWorker]" = OrderedDict()
+_WORKERS: "OrderedDict[tuple[str, str, bool], _ZoeCoreWorker]" = OrderedDict()
 _WORKERS_LOCK = asyncio.Lock()
 
 
-async def _worker_for(user_id: str, session_id: str) -> _ZoeCoreWorker:
-    key = ((user_id or "").strip(), session_id or "default")
+async def _worker_for(
+    user_id: str, session_id: str, *, voice_mode: bool = False
+) -> _ZoeCoreWorker:
+    # Key on voice_mode too: the generation cap is baked into the worker's spawn
+    # env, so a voice turn and a chat turn for the same (user, session) must NOT
+    # share a process — otherwise the voice cap would leak onto chat replies.
+    key = ((user_id or "").strip(), session_id or "default", bool(voice_mode))
     async with _WORKERS_LOCK:
         worker = _WORKERS.get(key)
         if worker is None:
-            worker = _ZoeCoreWorker(key[0])
+            worker = _ZoeCoreWorker(key[0], voice_mode=key[2])
             _WORKERS[key] = worker
         _WORKERS.move_to_end(key)
         # Evict least-recently-used over the cap, but NEVER evict a worker that's
@@ -423,16 +448,20 @@ async def _worker_for(user_id: str, session_id: str) -> _ZoeCoreWorker:
     return worker
 
 
-async def prewarm(user_id: str, session_id: str) -> bool:
+async def prewarm(user_id: str, session_id: str, *, voice_mode: bool = False) -> bool:
     """Spawn the (user, session) worker's Pi subprocess ahead of the turn.
 
     Called on wake-word so the first real turn of a session doesn't pay the
     ~2-3s subprocess boot — the worker is the same one the turn will use, so this
     just moves the inevitable spawn earlier (into the wake → end-of-speech window).
     Best-effort and never raises. Returns True if a live subprocess is ready.
+
+    Pass voice_mode=True from the voice/wake path so the prewarmed worker matches
+    the (voice-capped) worker the voice turn will actually use — otherwise prewarm
+    would warm the chat worker and the voice turn would still pay the cold boot.
     """
     try:
-        worker = await _worker_for(user_id, session_id)
+        worker = await _worker_for(user_id, session_id, voice_mode=voice_mode)
         # Take the worker lock so we don't race a real turn's _ensure_started; if a
         # turn already holds it the worker is started anyway and this is a fast no-op.
         async with worker._lock:
@@ -519,12 +548,14 @@ async def run_zoe_core_streaming(
     # Bound concurrent brain turns (see _MAX_CONCURRENCY). Acquire BEFORE creating
     # the worker so subprocess spawns are bounded too, not just generations.
     async with _brain_sem():
-        worker = await _worker_for(user_id, session_id)
+        worker = await _worker_for(user_id, session_id, voice_mode=voice_mode)
         async for delta in worker.stream(composed, timeout_s=_TIMEOUT_S):
             yield delta
 
 
-async def _reset_worker_for(user_id: str, session_id: str) -> None:
+async def _reset_worker_for(
+    user_id: str, session_id: str, *, voice_mode: bool = False
+) -> None:
     """Reset the worker for a key so the next turn re-spawns its subprocess fresh.
 
     Used by the retry path: when a turn comes back empty under load, the worker's
@@ -532,9 +563,10 @@ async def _reset_worker_for(user_id: str, session_id: str) -> None:
     INTENTIONALLY stays registered in `_WORKERS` (it is restartable by design): the
     retry's `_worker_for` returns the same object and `_ensure_started` re-spawns
     the subprocess because `proc is None`. This preserves the (user, session) →
-    worker identity and LRU position across the reset.
+    worker identity and LRU position across the reset. voice_mode must match the
+    turn's worker key so the right (capped vs. default) worker is reset.
     """
-    key = ((user_id or "").strip(), session_id or "default")
+    key = ((user_id or "").strip(), session_id or "default", bool(voice_mode))
     async with _WORKERS_LOCK:
         worker = _WORKERS.get(key)
     if worker is not None:
@@ -582,7 +614,7 @@ async def run_zoe_core(
             return result
         # Empty or failed turn. On the first attempt, reset the worker and retry.
         if attempt == 1:
-            await _reset_worker_for(user_id, session_id)
+            await _reset_worker_for(user_id, session_id, voice_mode=voice_mode)
     if last_exc is not None:
         raise last_exc
     return ""

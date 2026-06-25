@@ -271,6 +271,16 @@
         return 'edit ' + title + (startTime ? ' at ' + startTime : '');
     }
 
+    // The calendar scene takes a living time-of-day gradient (like the clock card),
+    // so the card reads as "your day" rather than a flat agenda. Phase by hour.
+    function calendarDaypart(nowMs) {
+        const h = new Date(nowMs != null ? nowMs : Date.now()).getHours();
+        if (h >= 5 && h < 8) return 'dawn';
+        if (h >= 8 && h < 17) return 'day';
+        if (h >= 17 && h < 20) return 'dusk';
+        return 'night';
+    }
+
     function renderCalendar(props) {
         const events = Array.isArray(props.events) ? props.events : [];
         const sorted = events.slice().sort((a, b) => calendarEventSortKey(a) - calendarEventSortKey(b)).slice(0, 8);
@@ -342,7 +352,7 @@
         ].join('');
 
         const body = [
-            '<div class="cal-scene">',
+            '<div class="cal-scene" data-daypart="' + calendarDaypart(nowMs) + '">',
             '<header class="cal-head">',
             '<div class="cal-head-day">',
             '<span class="cal-head-weekday">' + escapeHtml(dateMeta.weekday) + '</span>',
@@ -863,6 +873,25 @@
         if (c) return c.charAt(0).toUpperCase() + c.slice(1);
         return personCircleRank(person) === 0 ? 'Inner circle' : 'Wider circle';
     }
+    // Avatar contents: the contact's photo over their initials. The photo is a
+    // background-image layer, so if the URL is missing or fails to load the
+    // initials simply show through (no broken-image icon). Initials stay in the
+    // DOM as the accessible/fallback label.
+    function personAvatarInner(person) {
+        var initials = initialsFor(person && person.name);
+        var raw = person && (person.photo || person.photo_url || person.avatar_url || person.image || person.picture);
+        var url = raw == null ? '' : String(raw).trim();
+        // Scheme allowlist: only https or a root-relative same-origin path. Rejects
+        // http (mixed content), file:/// (local-file read in a WebView shell), data:
+        // (large inline blobs), protocol-relative //host, and javascript:. A contact
+        // photo URL can come from a synced external source, so this stays strict.
+        var safeScheme = /^https:\/\//i.test(url) || /^\/[^/]/.test(url);
+        if (url && safeScheme) {
+            var safe = url.replace(/["'()\\]/g, '');
+            return initials + '<span class="people-avatar-img" style="background-image:url(\'' + escapeHtml(safe) + '\')" aria-hidden="true"></span>';
+        }
+        return initials;
+    }
     // Stable closeness order: inner first, then higher connection-health first.
     function peopleByCloseness(list) {
         return list
@@ -931,7 +960,7 @@
             return [
                 '<button type="button" class="' + cls + '" data-sky-action="query" data-query="' + escapeHtml('find ' + name) + '" aria-label="' + escapeHtml(name + ', ' + personSubline(person) + ', connection ' + health + ' percent') + '">',
                 '<span class="people-tile-tint" aria-hidden="true"></span>',
-                '<span class="people-tile-avatar" aria-hidden="true">' + initialsFor(person.name) + '</span>',
+                '<span class="people-tile-avatar" aria-hidden="true">' + personAvatarInner(person) + '</span>',
                 '<span class="people-tile-id">',
                 '<span class="people-circle-pill">' + escapeHtml(personCircleLabel(person)) + '</span>',
                 '<strong class="people-tile-name">' + escapeHtml(name) + '</strong>',
@@ -998,7 +1027,7 @@
             '<div class="people-scene people-profile">',
             '<header class="people-profile-hero">',
             '<span class="people-tile-tint" aria-hidden="true"></span>',
-            '<span class="people-tile-avatar people-profile-avatar" aria-hidden="true">' + initialsFor(name) + '</span>',
+            '<span class="people-tile-avatar people-profile-avatar" aria-hidden="true">' + personAvatarInner(person) + '</span>',
             '<div class="people-profile-id">',
             '<span class="people-circle-pill">' + escapeHtml(personCircleLabel(person)) + '</span>',
             '<p class="people-eyebrow">' + escapeHtml(personSubline(person)) + '</p>',
