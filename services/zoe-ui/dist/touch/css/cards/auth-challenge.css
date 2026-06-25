@@ -1,0 +1,161 @@
+/* Auth challenge card — the in-panel "who's here?" profile picker, brought onto
+   the design system to match the redesigned cards (glass, Inter, canonical
+   accents, finger targets, light/dark). The profile tiles are built by
+   skybridge.js renderAuthProfiles() as .sky-auth-profile / .sky-auth-avatar /
+   .sky-auth-person; we restyle them here with high specificity (+!important
+   where the legacy skybridge.html inline rules use it) so the modern look wins.
+
+   Scoped under .sky-card.auth-challenge.sky-authx so nothing else is affected. */
+
+/* ── Card frame ─────────────────────────────────────────────────────────── */
+body:not(.sky-empty) .sky-card.auth-challenge.sky-authx {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: stretch !important;
+  width: min(940px, calc(100vw - 80px)) !important;
+  padding: var(--sky-space-8, 34px) var(--sky-space-9, 38px) var(--sky-space-8, 34px) !important;
+  border-radius: var(--sky-radius-xl, 36px) !important;
+  background: linear-gradient(157deg, rgba(255,255,255,.12), rgba(255,255,255,.04)) !important;
+  border: 1px solid var(--sky-hairline, rgba(255,255,255,.14)) !important;
+  box-shadow: 0 30px 70px -22px rgba(0,0,0,.62), inset 0 1px 0 rgba(255,255,255,.22) !important;
+  color: var(--sky-ink-0, #fff);
+  font-family: var(--sky-font, "Inter", system-ui, -apple-system, "Segoe UI", sans-serif);
+  -webkit-font-smoothing: antialiased;
+}
+.sky-authx .sky-auth-scene { display: flex; flex-direction: column; gap: var(--sky-space-6, 24px); width: 100%; }
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
+.sky-authx .sky-authx-head { display: flex; flex-direction: column; gap: 6px; text-align: center; }
+.sky-authx .sky-authx-kicker {
+  font-size: var(--sky-text-micro, 12px);
+  font-weight: 600;
+  letter-spacing: 1.8px;
+  text-transform: uppercase;
+  color: var(--sky-accent-cyan, #37c0e6);
+}
+.sky-authx .sky-authx-title {
+  margin: 0;
+  font-size: var(--sky-text-title, 30px);
+  font-weight: 600;
+  letter-spacing: -0.4px;
+  color: var(--sky-ink-0, #fff);
+}
+.sky-authx .sky-authx-sub {
+  margin: 0;
+  font-size: var(--sky-text-label, 16px);
+  font-weight: 400;
+  color: var(--sky-ink-2, rgba(255,255,255,.62));
+}
+
+/* ── Profile grid + tiles (override legacy, incl. inline !important) ─────── */
+body:not(.sky-empty) .sky-authx .sky-auth-profile-grid {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)) !important;
+  gap: 16px !important;
+  min-height: 0 !important;
+  align-content: stretch !important;
+}
+body:not(.sky-empty) .sky-authx .sky-auth-profile {
+  appearance: none;
+  cursor: pointer;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 14px !important;
+  min-height: 150px !important;
+  padding: var(--sky-space-5, 20px) var(--sky-space-4, 16px) !important;
+  border-radius: var(--sky-radius-lg, 24px) !important;
+  border: 1px solid var(--sky-hairline, rgba(255,255,255,.12)) !important;
+  background: var(--sky-fill-1, rgba(255,255,255,.05)) !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.1) !important;
+  color: var(--sky-ink-0, #fff);
+  text-align: center;
+  transition: transform 180ms var(--sky-ease-spring, ease), background 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
+}
+body:not(.sky-empty) .sky-authx .sky-auth-profile:hover,
+body:not(.sky-empty) .sky-authx .sky-auth-profile:focus-visible {
+  transform: translateY(-3px);
+  background: var(--sky-fill-2, rgba(255,255,255,.09)) !important;
+  border-color: var(--sky-hairline-strong, rgba(255,255,255,.22)) !important;
+  box-shadow: 0 18px 44px -16px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.18) !important;
+}
+body:not(.sky-empty) .sky-authx .sky-auth-profile:active { transform: scale(.98); }
+body:not(.sky-empty) .sky-authx .sky-auth-profile.is-default {
+  border-color: rgba(var(--sky-accent-cyan-rgb, 55,192,230), .55) !important;
+  box-shadow: 0 0 0 1px rgba(var(--sky-accent-cyan-rgb, 55,192,230), .35) inset, 0 16px 40px -18px rgba(0,0,0,.5) !important;
+}
+
+/* ── Avatar disc — gradient, canonical accents cycled by position ───────── */
+body:not(.sky-empty) .sky-authx .sky-auth-avatar {
+  width: 72px !important;
+  height: 72px !important;
+  border-radius: 50% !important;
+  display: grid !important;
+  place-items: center !important;
+  font-size: 30px !important;
+  font-weight: 600 !important;
+  color: #fff !important;
+  background: linear-gradient(150deg, #37c0e6, #9b8cff) !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.4), 0 12px 26px -8px rgba(0,0,0,.45) !important;
+}
+/* distinct, on-palette discs so people are easy to tell apart at a glance */
+body:not(.sky-empty) .sky-authx .sky-auth-profile:nth-child(6n+2) .sky-auth-avatar { background: linear-gradient(150deg, #5be3b0, #37c0e6) !important; }
+body:not(.sky-empty) .sky-authx .sky-auth-profile:nth-child(6n+3) .sky-auth-avatar { background: linear-gradient(150deg, #f5b13c, #ff7a59) !important; }
+body:not(.sky-empty) .sky-authx .sky-auth-profile:nth-child(6n+4) .sky-auth-avatar { background: linear-gradient(150deg, #9b8cff, #6aa6ff) !important; }
+body:not(.sky-empty) .sky-authx .sky-auth-profile:nth-child(6n+5) .sky-auth-avatar { background: linear-gradient(150deg, #ff6b8a, #d4537e) !important; }
+body:not(.sky-empty) .sky-authx .sky-auth-profile:nth-child(6n+0) .sky-auth-avatar { background: linear-gradient(150deg, #6aa6ff, #37c0e6) !important; }
+
+/* ── Name ───────────────────────────────────────────────────────────────── */
+body:not(.sky-empty) .sky-authx .sky-auth-person { min-width: 0; display: flex; flex-direction: column; gap: 2px; align-items: center; }
+body:not(.sky-empty) .sky-authx .sky-auth-person strong {
+  font-size: 20px !important;
+  font-weight: 500 !important;
+  letter-spacing: -0.1px;
+  color: var(--sky-ink-0, #fff) !important;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
+}
+body:not(.sky-empty) .sky-authx .sky-auth-person small {
+  font-size: 13px !important;
+  font-weight: 400 !important;
+  text-transform: capitalize;
+  color: var(--sky-ink-3, rgba(255,255,255,.5)) !important;
+}
+/* the legacy "Enter →" pill isn't needed in the tile layout */
+body:not(.sky-empty) .sky-authx .sky-auth-enter { display: none !important; }
+
+/* ── Loading + empty states ─────────────────────────────────────────────── */
+body:not(.sky-empty) .sky-authx .sky-auth-loading,
+body:not(.sky-empty) .sky-authx .sky-auth-empty {
+  grid-column: 1 / -1;
+  min-height: 150px !important;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+  color: var(--sky-ink-2, rgba(255,255,255,.6));
+  font-size: 15px;
+}
+body:not(.sky-empty) .sky-authx .sky-auth-loading i {
+  width: 30px; height: 30px; border-radius: 50%;
+  border: 3px solid var(--sky-fill-3, rgba(255,255,255,.16));
+  border-top-color: var(--sky-accent-cyan, #37c0e6);
+  animation: sky-authx-spin 900ms linear infinite;
+}
+@keyframes sky-authx-spin { to { transform: rotate(360deg); } }
+
+/* ── Light mode (re-point the ink scale; the global light theme only flips
+      --text-*, not --sky-ink-*, so var(--sky-ink-N) text would go white-on-white) */
+[data-theme="light"] .sky-card.auth-challenge.sky-authx {
+  --sky-ink-0: #16324d; --sky-ink-1: #2a4d6e; --sky-ink-2: #3a5e80; --sky-ink-3: #6a86a2;
+  --sky-fill-1: rgba(255,255,255,.62); --sky-fill-2: rgba(255,255,255,.86); --sky-fill-3: rgba(20,50,80,.12);
+  --sky-hairline: rgba(20,50,80,.12); --sky-hairline-strong: rgba(20,50,80,.2);
+  background: linear-gradient(157deg, rgba(255,255,255,.74), rgba(255,255,255,.52)) !important;
+  border-color: rgba(20,50,80,.14) !important;
+  box-shadow: 0 30px 70px -22px rgba(20,50,80,.3), inset 0 1px 0 rgba(255,255,255,.7) !important;
+}
+[data-theme="light"] .sky-authx .sky-auth-person small { color: var(--sky-ink-3); }
+[data-theme="light"] .sky-authx .sky-authx-title { color: #16324d; }
+[data-theme="light"] .sky-authx .sky-authx-sub { color: #3a5e80; }
+
+@media (prefers-reduced-motion: reduce) {
+  body:not(.sky-empty) .sky-authx .sky-auth-profile { transition: none; }
+  body:not(.sky-empty) .sky-authx .sky-auth-loading i { animation: none; }
+}
