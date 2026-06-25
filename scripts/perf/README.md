@@ -104,11 +104,11 @@ af_sky, first speakable clause):
 | Cohort | median | p10–p90 | range |
 | --- | --- | --- | --- |
 | First unit, **cache HIT** (warmed/common phrase) | **~2–12 ms** | — | 2.3–12.4 ms |
-| First unit, **cache MISS** (a *novel* brain clause) | **~3125 ms** | 1939–3616 ms | 1771–4999 ms |
+| First unit, **cache MISS** (a *novel* brain clause) | **~1734 ms** | 1289–2294 ms | 1026–3681 ms |
 
 The sidecar phrase-caches af_sky/speed-1.0/<=240-char text, so a recurring opener
 is instant but a fresh clause pays full CPU synth — and synth is ~linear in
-characters (13-char clause ≈ 0.8–1.8 s, ~60-char clause ≈ 3 s). The default
+characters (13-char clause ≈ 1.0 s, ~60-char clause ≈ 2–3.7 s). The default
 `ZOE_KOKORO_BACKEND=onnx` runs on CPU to save the ~2.3 GB the PyTorch/CUDA build
 holds; the "~150 ms warm GPU" in code comments is the non-default `pytorch`
 backend. See `docs/architecture/tts-first-chunk-latency.md` for the full analysis

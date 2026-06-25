@@ -159,26 +159,25 @@ async def _measure(rows: list[dict], service_dir: str, args) -> int:
         print(f"sidecar at {sidecar_url} unreachable ({exc}) — skipping.", file=sys.stderr)
         return 0
 
-    # ONE pooled client, reused like the live `_kokoro_http_client`, so we time
-    # the synthesis cost — not a fresh TCP/connection setup — per call.
-    _client = httpx.AsyncClient(
-        timeout=20.0,
-        limits=httpx.Limits(max_keepalive_connections=4, keepalive_expiry=60.0),
-    )
     _voice = os.environ.get("ZOE_KOKORO_VOICE", "af_sky")
 
-    async def _timed_synth(text: str) -> dict:
+    async def _timed_synth(client, base_text: str, cache_bust: str = "") -> dict:
         """Time a SINGLE live sidecar synth and read its X-Cache verdict.
 
         This is the exact request `_synthesize_kokoro_sidecar` issues (same URL,
         same body shape: text + voice, speed omitted → 1.0). We post it directly
         so we can read the X-Cache header the live helper discards, and we time
         only this one call — no warm-up call beforehand, so a fresh first unit is
-        measured COLD, as the live path experiences it for a new brain reply."""
-        cleaned = _clean_for_speech(text)
+        measured COLD, as the live path experiences it for a new brain reply.
+
+        `cache_bust` is appended AFTER `_clean_for_speech` so the cache-busting
+        token isn't passed through speech-cleaning and synthesized as extra spoken
+        words (which would inflate short-clause timing). Keep it a single tiny
+        token so its synthesis cost is negligible vs the clause under test."""
+        cleaned = _clean_for_speech(base_text) + cache_bust
         t = time.monotonic()
         try:
-            r = await _client.post(
+            r = await client.post(
                 f"{sidecar_url}/synthesize",
                 json={"text": cleaned, "voice": _voice},
             )
@@ -194,7 +193,14 @@ async def _measure(rows: list[dict], service_dir: str, args) -> int:
     first_unit_all_ms: list[float] = []   # first-unit synth incl. cache hits (live mix)
     full_reply_ms: list[float] = []
 
-    for r in rows:
+    # ONE pooled client, reused like the live `_kokoro_http_client`, so we time the
+    # synthesis cost — not a fresh TCP/connection setup — per call. `async with`
+    # guarantees the keepalive connections close even if the loop raises.
+    async with httpx.AsyncClient(
+        timeout=20.0,
+        limits=httpx.Limits(max_keepalive_connections=4, keepalive_expiry=60.0),
+    ) as _client:
+      for idx, r in enumerate(rows):
         reply = (r.get("spoken") or r.get("reply") or "").strip()
         if not reply:
             continue
@@ -210,13 +216,15 @@ async def _measure(rows: list[dict], service_dir: str, args) -> int:
 
         # The sidecar phrase-caches af_sky / speed-1.0 / <=240ch text, so a corpus
         # phrase replayed twice serves from cache (~few ms) and masks the real synth
-        # cost a NEW brain reply pays. --cold appends a tiny per-run nonce so each
-        # text is a guaranteed cache MISS = true cold synthesis latency. Default
+        # cost a NEW brain reply pays. --cold appends a tiny per-run cache-bust token
+        # (after speech-cleaning) so each text is a guaranteed cache MISS = true cold
+        # synthesis latency. A 2-char alpha token keeps the added spoken cost
+        # negligible (digits would be read aloud as multi-word numbers). Default
         # (no --cold) measures the live mix incl. legitimate cache hits.
-        nonce = f" {int(time.time()*1000)%100000}" if args.cold else ""
-        fu = await _timed_synth(first_unit + nonce)
+        bust = f" zq{idx}" if args.cold else ""
+        fu = await _timed_synth(_client, first_unit, bust)
         # Whole-reply synth as the upper bound the first-unit split avoids.
-        full = await _timed_synth(reply + nonce)
+        full = await _timed_synth(_client, reply, bust)
 
         cache_verdict = fu["cache"]
         if fu["ok"]:
@@ -243,8 +251,6 @@ async def _measure(rows: list[dict], service_dir: str, args) -> int:
         print(f"    first_unit_ms={fu['ms']} (cache={cache_verdict})  "
               f"full_reply_ms={full['ms']} ({full['bytes']}B, cache={full['cache']})")
         print()
-
-    await _client.aclose()
 
     n_hit = sum(1 for r in out_rows if r["first_unit_cache"] == "hit")
     print("═" * 64)

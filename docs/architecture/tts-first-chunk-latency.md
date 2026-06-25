@@ -49,13 +49,14 @@ First-unit synth latency = time from first clause ready to first audio bytes.
 
 | cohort | n | median | p10 | p90 | min | max |
 |---|---|---|---|---|---|---|
-| **first unit, COLD** (cache miss — a *new* clause) | 10 | **3125 ms** | 1939 | 3616 | 1771 | 4999 |
-| **first unit, COLD, repeat run** (shorter clauses) | 4 | **1634 ms** | 803 | — | 803 | 2203 |
+| **first unit, COLD** (cache miss — a *new* clause) | 10 | **1734 ms** | 1289 | 2294 | 1026 | 3681 |
 | **first unit, cache HIT** (warmed/common phrase) | — | **~2–12 ms** | — | — | 2.3 | 12.4 |
-| full reply, cold | 10 | 5039 ms | — | 7291 | 3392 | 8698 |
+| full reply, cold | 10 | 3689 ms | — | 4630 | 2309 | 5209 |
 
-The wide cold range tracks clause length: 13-char "Good morning," ≈ 0.8–1.8s, a
-~60-char opening clause ≈ 3s. Synthesis is roughly linear in characters.
+The wide cold range tracks clause length: 13-char "Good morning," ≈ 1.0s, a
+~60-char opening clause ≈ 2–3.7s. Synthesis is roughly linear in characters.
+(Cold cohort uses a tiny 2-char cache-bust token appended *after* speech-cleaning
+so the cache-buster isn't itself synthesized as spoken words.)
 
 ### The sidecar phrase cache splits reality in two
 
@@ -65,7 +66,7 @@ The wide cold range tracks clause length: 13-char "Good morning," ≈ 0.8–1.8s
 - **Common opener / cached phrase** ("I'm sorry, Jason,", "You've got nothing this
   week.", warm-list phrases) → first audio in **single-digit ms**. Effectively free.
 - **Novel brain clause** (cache miss — the usual case for a real, varied reply) →
-  **~1.6–3.1s median** on CPU before the first byte.
+  **~1.0–1.7s median** on CPU before the first byte (1.0–3.7s range).
 
 ## Headline finding: TTS first audio is on CPU, and dominates the post-brain wait
 
@@ -79,11 +80,11 @@ which is not what runs.
 Net effect on a cache-miss reply:
 
 ```
-STT ~0.7s  +  brain ~2.95s  →  [first clause ready]  +  TTS first chunk ~1.6–3.1s
+STT ~0.7s  +  brain ~2.95s  →  [first clause ready]  +  TTS first chunk ~1.0–1.7s
                                                           └── unmeasured until now ──┘
 ```
 
-The first **spoken** word can land ~1.6–3.1s *after* the brain's first clause — a
+The first **spoken** word can land ~1.0–1.7s (up to ~3.7s) *after* the brain's first clause — a
 delay comparable in size to the entire brain turn, and previously invisible because
 the only metric (`tts_first_byte`) folds it into brain time and because cached test
 phrases hide it behind instant cache hits.
