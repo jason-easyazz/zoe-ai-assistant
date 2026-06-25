@@ -149,6 +149,30 @@
         return panelId;
     }
 
+    // Does a server-addressed action belong to THIS panel? A panel can answer to
+    // more than one id over its life — a generated `panel_xxxx` captured into
+    // state.panelId at first load, plus the registered id (e.g. "zoe-touch-pi")
+    // that later lands in localStorage / the URL. Matching only state.panelId made
+    // the panel reject actions (notably panel_request_auth) addressed to its OTHER
+    // id, so auth was spoken but never shown. Match the full alias set; an
+    // empty/absent target means "any panel".
+    function panelMatches(targetPanelId) {
+        const wanted = String(targetPanelId || '').trim();
+        if (!wanted) return true;
+        const known = new Set();
+        if (state.panelId) known.add(String(state.panelId).trim());
+        try {
+            const urlId = new URLSearchParams(window.location.search).get('panel_id');
+            if (urlId) known.add(urlId.trim());
+            const lsTouch = localStorage.getItem('zoe_touch_panel_id');
+            if (lsTouch) known.add(lsTouch.trim());
+            const lsPanel = localStorage.getItem('zoe_panel_id');
+            if (lsPanel) known.add(lsPanel.trim());
+        } catch (_) {}
+        if (!known.size) return true; // unknown identity → act rather than swallow
+        return known.has(wanted);
+    }
+
     function hydrateSeenAuthChallenges() {
         const now = Date.now();
         const next = {};
@@ -1002,7 +1026,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                     if (msg.type === 'panel_pin_request' && msg.data) {
                         const d = (msg.data && msg.data.data) ? msg.data.data : msg.data;
                         const actionId = String((d && d.challenge_id) || '').trim() || ('push_pin_' + Date.now());
-                        if (!d.panel_id || d.panel_id === state.panelId) {
+                        if (panelMatches(d.panel_id)) {
                             executeAction({
                                 id: `push_pin_${actionId}`,
                                 action_type: 'panel_request_auth',
@@ -1021,7 +1045,10 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                     }
                     if (msg.type === 'panel_pin_result' && msg.data) {
                         const d = msg.data;
-                        if (d.panel_id && d.panel_id === state.panelId) {
+                        // Auth RESULT must be explicitly addressed to this panel — never
+                        // act on an unaddressed result (it would flash/dismiss the PIN pad
+                        // on every kiosk). Require a present id that matches an alias.
+                        if (d.panel_id && panelMatches(d.panel_id)) {
                             hidePinPad();
                             showToast(d.status === 'approved' ? 'Authorised' : 'Not authorised');
                         }
@@ -1029,7 +1056,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                     // Back-compat bridge: panel_state events from either legacy daemon or HA ingress.
                     if (msg.type === 'panel_state' && msg.data) {
                         const d = msg.data;
-                        if (!d.panel_id || d.panel_id === state.panelId) {
+                        if (panelMatches(d.panel_id)) {
                             if (d.state === 'listening') {
                                 setOrbMode('listening');
                                 VoiceOverlay.onListeningStarted();
@@ -1040,7 +1067,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                     // Panel-ID filter: only react to voice events from our own panel (or global ones without panel_id).
                     if (msg.type && msg.type.startsWith('voice:')) {
                         const _vPanel = msg.data && msg.data.panel_id;
-                        if (_vPanel && _vPanel !== state.panelId) {
+                        if (!panelMatches(_vPanel)) {
                             // Event belongs to a different panel — ignore entirely.
                         } else {
                             if (msg.type === 'voice:listening_started') {
@@ -1079,7 +1106,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                         // Panel-ID filter: ignore events targeting a different panel.
                         // Events with no panel_id are global and always processed.
                         const _uiActionPanel = (action && action.panel_id) || (msg.data && msg.data.panel_id);
-                        if (_uiActionPanel && _uiActionPanel !== state.panelId) {
+                        if (!panelMatches(_uiActionPanel)) {
                             // Event belongs to a different panel — ignore entirely.
                         } else if (action && action.action_type) {
                             if (!action.id) action.id = 'push_' + Date.now();
@@ -1164,7 +1191,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
             }
 
             if (actionType === 'panel_navigate' || actionType === 'panel_navigate_fullscreen') {
-                if (payload.panel_id && payload.panel_id !== state.panelId) {
+                if (!panelMatches(payload.panel_id)) {
                     return { status: 'skipped', error_code: 'wrong_panel' };
                 }
                 let url = payload.url || payload.page || payload.path;
@@ -1275,7 +1302,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
             if (actionType === 'panel_request_auth') {
                 if (payload.challenge_id) {
                     disarmAutoHomeTimer('auth-required');
-                    if (payload.panel_id && payload.panel_id !== state.panelId) {
+                    if (!panelMatches(payload.panel_id)) {
                         return { status: 'skipped', error_code: 'wrong_panel' };
                     }
                     const challengeId = String(payload.challenge_id);
@@ -1314,7 +1341,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
 
             // ── Full-screen interactive action form ────────────────────────
             if (actionType === 'panel_show_action_form') {
-                if (payload.panel_id && payload.panel_id !== state.panelId) {
+                if (!panelMatches(payload.panel_id)) {
                     return { status: 'skipped', error_code: 'wrong_panel' };
                 }
                 showActionFormOverlay(payload);
@@ -1322,7 +1349,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
             }
 
             if (actionType === 'panel_update_field') {
-                if (payload.panel_id && payload.panel_id !== state.panelId) {
+                if (!panelMatches(payload.panel_id)) {
                     return { status: 'skipped', error_code: 'wrong_panel' };
                 }
                 const ok = updateActionFormField(payload.field, payload.value != null ? String(payload.value) : '');
@@ -1332,7 +1359,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
             }
 
             if (actionType === 'panel_list_update') {
-                if (payload.panel_id && payload.panel_id !== state.panelId) {
+                if (!panelMatches(payload.panel_id)) {
                     return { status: 'skipped', error_code: 'wrong_panel' };
                 }
                 const ok = updateActionFormList(payload.op, payload.item, payload.items);
@@ -1342,7 +1369,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
             }
 
             if (actionType === 'panel_close_action_form') {
-                if (payload.panel_id && payload.panel_id !== state.panelId) {
+                if (!panelMatches(payload.panel_id)) {
                     return { status: 'skipped', error_code: 'wrong_panel' };
                 }
                 _closeActionForm();
@@ -1359,7 +1386,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
             // ── Google Home-style response card ────────────────────────────
             if (actionType === 'show_card') {
                 // Ignore cards targeting a different panel.
-                if (payload.panel_id && payload.panel_id !== state.panelId) {
+                if (!panelMatches(payload.panel_id)) {
                     return { status: 'skipped', error_code: 'wrong_panel' };
                 }
                 if (renderSkybridgeCardPayload(payload)) {
@@ -1381,7 +1408,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
             // ── Open a creation form on the current page ───────────────────
             if (actionType === 'panel_open_form') {
                 // Ignore form actions targeting a different panel.
-                if (payload.panel_id && payload.panel_id !== state.panelId) {
+                if (!panelMatches(payload.panel_id)) {
                     return { status: 'skipped', error_code: 'wrong_panel' };
                 }
                 const form = payload.form || '';
