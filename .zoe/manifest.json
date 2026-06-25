@@ -153,7 +153,7 @@
   "notes": {
     "max_root_md_files": 12,
     "llm_backend": "host-native llama-server user service (Dockerized zoe-llamacpp retired)",
-    "primary_model": "Gemma 4 E2B GGUF via llama-server",
+    "primary_model": "Gemma 4 E4B-QAT GGUF + MTP drafter via llama-server (canonical: see docs/CANONICAL.md)",
     "module_system": "Supplemental compose plus generated compose for enabled self-contained modules",
     "recent_additions": "Module system (zoe-music), MCP tool integration, voice services"
   },
