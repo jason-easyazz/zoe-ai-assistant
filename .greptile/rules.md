@@ -8,6 +8,7 @@ Greptile should review Zoe as a local-first, multi-user assistant with a host-ru
 - Call out missing tests when the change touches routing, memory, database writes, auth, agent delegation, voice, or AG-UI behavior.
 - Prefer small, surgical fixes that match existing Zoe patterns.
 - Flag PRs that are too large or bundle unrelated product decisions; recommend splitting before deep review.
+- `docs/archive/` is being retired (retire by removing — git keeps history). Flag any PR that re-introduces a `docs/archive/` graveyard or adds guidance to move files there instead of deleting them.
 - Do not suggest parallel `_new`, `_old`, `_fixed`, or backup files.
 - Treat hardcoded absolute paths outside approved Zoe roots as portability risks unless they are documented local operator paths.
 - Zoe uses a PR-first workflow with protected `main`; do not recommend direct pushes, admin bypasses, or force pushes as normal fixes.
