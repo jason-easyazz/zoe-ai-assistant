@@ -863,6 +863,19 @@
         if (c) return c.charAt(0).toUpperCase() + c.slice(1);
         return personCircleRank(person) === 0 ? 'Inner circle' : 'Wider circle';
     }
+    // Avatar contents: the contact's photo over their initials. The photo is a
+    // background-image layer, so if the URL is missing or fails to load the
+    // initials simply show through (no broken-image icon). Initials stay in the
+    // DOM as the accessible/fallback label.
+    function personAvatarInner(person) {
+        var initials = initialsFor(person && person.name);
+        var url = person && (person.photo || person.photo_url || person.avatar_url || person.image || person.picture);
+        if (url) {
+            var safe = String(url).replace(/["'()\\]/g, '');
+            return initials + '<span class="people-avatar-img" style="background-image:url(\'' + escapeHtml(safe) + '\')" aria-hidden="true"></span>';
+        }
+        return initials;
+    }
     // Stable closeness order: inner first, then higher connection-health first.
     function peopleByCloseness(list) {
         return list
@@ -931,7 +944,7 @@
             return [
                 '<button type="button" class="' + cls + '" data-sky-action="query" data-query="' + escapeHtml('find ' + name) + '" aria-label="' + escapeHtml(name + ', ' + personSubline(person) + ', connection ' + health + ' percent') + '">',
                 '<span class="people-tile-tint" aria-hidden="true"></span>',
-                '<span class="people-tile-avatar" aria-hidden="true">' + initialsFor(person.name) + '</span>',
+                '<span class="people-tile-avatar" aria-hidden="true">' + personAvatarInner(person) + '</span>',
                 '<span class="people-tile-id">',
                 '<span class="people-circle-pill">' + escapeHtml(personCircleLabel(person)) + '</span>',
                 '<strong class="people-tile-name">' + escapeHtml(name) + '</strong>',
@@ -998,7 +1011,7 @@
             '<div class="people-scene people-profile">',
             '<header class="people-profile-hero">',
             '<span class="people-tile-tint" aria-hidden="true"></span>',
-            '<span class="people-tile-avatar people-profile-avatar" aria-hidden="true">' + initialsFor(name) + '</span>',
+            '<span class="people-tile-avatar people-profile-avatar" aria-hidden="true">' + personAvatarInner(person) + '</span>',
             '<div class="people-profile-id">',
             '<span class="people-circle-pill">' + escapeHtml(personCircleLabel(person)) + '</span>',
             '<p class="people-eyebrow">' + escapeHtml(personSubline(person)) + '</p>',
