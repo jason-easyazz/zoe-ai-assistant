@@ -869,9 +869,15 @@
     // DOM as the accessible/fallback label.
     function personAvatarInner(person) {
         var initials = initialsFor(person && person.name);
-        var url = person && (person.photo || person.photo_url || person.avatar_url || person.image || person.picture);
-        if (url) {
-            var safe = String(url).replace(/["'()\\]/g, '');
+        var raw = person && (person.photo || person.photo_url || person.avatar_url || person.image || person.picture);
+        var url = raw == null ? '' : String(raw).trim();
+        // Scheme allowlist: only https or a root-relative same-origin path. Rejects
+        // http (mixed content), file:/// (local-file read in a WebView shell), data:
+        // (large inline blobs), protocol-relative //host, and javascript:. A contact
+        // photo URL can come from a synced external source, so this stays strict.
+        var safeScheme = /^https:\/\//i.test(url) || /^\/[^/]/.test(url);
+        if (url && safeScheme) {
+            var safe = url.replace(/["'()\\]/g, '');
             return initials + '<span class="people-avatar-img" style="background-image:url(\'' + escapeHtml(safe) + '\')" aria-hidden="true"></span>';
         }
         return initials;
