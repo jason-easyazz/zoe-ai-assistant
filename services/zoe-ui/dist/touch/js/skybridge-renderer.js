@@ -72,14 +72,21 @@
     }
 
     function renderAuthChallenge(props) {
+        const title = escapeHtml(props.title || "Who's here?");
+        const sub = escapeHtml(props.body || props.summary || 'Tap your profile to continue.');
         const bodyHtml = [
             '<div class="sky-auth-scene sky-auth-people-only">',
+            '<div class="sky-authx-head">',
+            '<span class="sky-authx-kicker">' + escapeHtml(props.kicker || 'Sign in') + '</span>',
+            '<h2 class="sky-authx-title">' + title + '</h2>',
+            '<p class="sky-authx-sub">' + sub + '</p>',
+            '</div>',
             '<div class="sky-auth-profile-grid" data-auth-profiles aria-label="Choose your profile">',
-            '<div class="sky-auth-loading"><i></i><span>Finding people for this panel...</span></div>',
+            '<div class="sky-auth-loading"><i></i><span>Finding people for this panel…</span></div>',
             '</div>',
             '</div>'
         ].join('');
-        return cardFrame(props, bodyHtml, { wide: true, tone: 'auth-challenge', hideHeader: true, hideStatus: true, hideActions: true });
+        return cardFrame(props, bodyHtml, { wide: true, tone: 'auth-challenge sky-authx', hideHeader: true, hideStatus: true, hideActions: true });
     }
 
     function renderTimer(props) {
