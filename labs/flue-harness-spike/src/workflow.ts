@@ -42,6 +42,7 @@ interface ScoutResult {
 interface ImplementResult {
   branch: string;
   commitSubject: string;
+  diffStat: string;
   diff: string;
 }
 interface VerifyResult {
@@ -101,15 +102,27 @@ export function buildSpikeWorkflow(deps: SpikeDeps) {
           (typeof out === 'string' ? out : out?.subject)?.trim() ||
           `spike: address issue #${cfg.targetIssue}`;
 
-        const { stdout: diff } = await exec('git', ['diff', '--stat', 'HEAD'], {
+        const { stdout: diffStat } = await exec('git', ['diff', '--stat', 'HEAD'], {
           cwd: cfg.zoeCheckout,
           maxBuffer: 16 * 1024 * 1024,
         });
-        if (!diff.trim()) {
+        if (!diffStat.trim()) {
           // Loud failure at the phase boundary — implementer produced no diff.
           throw new Error('IMPLEMENT phase produced no diff; stopping.');
         }
-        return { branch, commitSubject, diff };
+        // Capture the actual patch too — acceptance criterion #4 wants a
+        // reviewable diff, and `--stat` alone shows no code. Cap the body so a
+        // huge diff doesn't overflow GitHub's PR-body limit (~65k chars).
+        const { stdout: diffFull } = await exec('git', ['diff', 'HEAD'], {
+          cwd: cfg.zoeCheckout,
+          maxBuffer: 16 * 1024 * 1024,
+        });
+        const DIFF_CAP = 48 * 1024;
+        const diff =
+          diffFull.length > DIFF_CAP
+            ? `${diffFull.slice(0, DIFF_CAP)}\n…[diff truncated; see GitHub's native diff view]`
+            : diffFull;
+        return { branch, commitSubject, diffStat, diff };
       });
 
       // ---- PHASE 3: VERIFY ----------------------------------------------
@@ -153,7 +166,9 @@ export function buildSpikeWorkflow(deps: SpikeDeps) {
           '',
           `**Scout plan**\n\n${scouted.plan}`,
           '',
-          `**Diff (stat)**\n\n\`\`\`\n${implemented.diff}\n\`\`\``,
+          `**Diff (stat)**\n\n\`\`\`\n${implemented.diffStat}\n\`\`\``,
+          '',
+          `**Diff (patch)**\n\n<details><summary>show patch</summary>\n\n\`\`\`diff\n${implemented.diff}\n\`\`\`\n\n</details>`,
           '',
           `**Verify evidence**\n\n\`\`\`\n${verified.evidence}\n\`\`\``,
           '',
