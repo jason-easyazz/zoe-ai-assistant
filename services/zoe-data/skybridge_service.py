@@ -42,6 +42,7 @@ class SkybridgeIntent:
     fact_text: str = ""
     birthday: str = ""
     duration_seconds: int = 0
+    completed: bool | None = None
 
 
 # ── Timers ───────────────────────────────────────────────────────────────────
@@ -655,6 +656,64 @@ def _list_remove_from_text(message: str) -> tuple[str, str] | None:
     return item, list_type or "shopping"
 
 
+# Item nouns shared by the check-off parser. Kept inline (not a module constant)
+# so it sits next to the patterns that use it.
+_LIST_NOUNS_RE = (
+    r"(?P<list>shopping list|grocery list|groceries|work list|personal list|list"
+    r"|task list|todo list|tasks|todos)"
+)
+
+
+def _list_complete_from_text(message: str) -> tuple[str, str, bool] | None:
+    """Parse a check-off / un-check command (from a tapped row or voice).
+
+    Returns (item, list_type, completed) where completed=True means "tick it off".
+    Tap rows emit "check off X on the shopping list" / "uncheck X on the shopping
+    list"; this also catches natural forms ("tick off bread", "mark eggs as done",
+    "cross milk off the list"). Direction is explicit so a tap never guesses wrong.
+    """
+    on_tail = r"(?:\s+(?:on|from|in)\s+(?:the\s+|my\s+)?" + _LIST_NOUNS_RE + r")?\s*[.!]*\s*$"
+    off_tail = r"\s+off(?:\s+(?:the\s+|my\s+)?" + _LIST_NOUNS_RE + r")?\s*[.!]*\s*$"
+
+    def _finish(match: "re.Match[str]", completed: bool) -> tuple[str, str, bool] | None:
+        item = _clean_action_text(match.group("item"))
+        if not item:
+            return None
+        raw = match.groupdict().get("list")
+        if raw:
+            phrase = f" {raw.lower()} "
+            list_type = _list_type_from_text(phrase) or "shopping"
+        else:
+            list_type = "shopping"
+        return item, list_type, completed
+
+    # Restore / un-check FIRST so "uncheck X" is never read as "check X".
+    match = re.search(r"\b(?:uncheck|un-?tick|unmark|undo|put back)\s+(?P<item>.+?)" + on_tail, message, re.IGNORECASE)
+    if match:
+        result = _finish(match, False)
+        if result:
+            return result
+    # "mark X (as) done/complete".
+    match = re.search(r"\bmark\s+(?P<item>.+?)\s+(?:as\s+)?(?:done|complete|completed)\b" + on_tail, message, re.IGNORECASE)
+    if match:
+        result = _finish(match, True)
+        if result:
+            return result
+    # "check/tick/cross off X [on the LIST]".
+    match = re.search(r"\b(?:check|tick|cross)\s+off\s+(?P<item>.+?)" + on_tail, message, re.IGNORECASE)
+    if match:
+        result = _finish(match, True)
+        if result:
+            return result
+    # "check/tick/cross X off [the LIST]".
+    match = re.search(r"\b(?:check|tick|cross)\s+(?P<item>.+?)" + off_tail, message, re.IGNORECASE)
+    if match:
+        result = _finish(match, True)
+        if result:
+            return result
+    return None
+
+
 def _contextual_list_remove_from_text(message: str, context: dict[str, Any] | None) -> tuple[str, str] | None:
     if _context_domain(context) != "lists":
         return None
@@ -871,6 +930,10 @@ def classify_skybridge_intent(message: str, context: dict[str, Any] | None = Non
     if list_add:
         item, list_type = list_add
         return SkybridgeIntent(domain="lists", action="add_item", item_text=item, list_type=list_type)
+    list_complete = _list_complete_from_text(raw_message)
+    if list_complete:
+        item, list_type, completed = list_complete
+        return SkybridgeIntent(domain="lists", action="complete_item", item_text=item, list_type=list_type, completed=completed)
     list_remove = _list_remove_from_text(raw_message)
     if list_remove:
         item, list_type = list_remove
@@ -1053,6 +1116,8 @@ async def _resolve_with_db(intent: SkybridgeIntent, user_id: str, db: Any, *, co
             return await _resolve_list_add_item(intent, user_id, db, context)
         if intent.action == "remove_item":
             return await _resolve_list_remove_item(intent, user_id, db, context)
+        if intent.action == "complete_item":
+            return await _resolve_list_complete_item(intent, user_id, db, context)
         if intent.action == "edit_item":
             return await _resolve_list_edit_item(intent, user_id, db, context)
         if intent.action == "create_list":
@@ -1137,7 +1202,7 @@ def _auth_required_result(intent: SkybridgeIntent) -> dict[str, Any]:
     }
     domain = domain_labels.get(intent.domain, "this data")
     title = f"Sign in to view {domain}"
-    if intent.action in {"create_event", "update_time", "add_item", "remember_fact"}:
+    if intent.action in {"create_event", "update_time", "add_item", "complete_item", "remember_fact"}:
         title = f"Sign in to change {domain}"
     body = "Zoe needs to know who is speaking before showing or changing personal data."
     return {
@@ -2012,6 +2077,95 @@ async def _resolve_list_remove_item(intent: SkybridgeIntent, user_id: str, db: A
     refreshed["intent"] = {"domain": "lists", "action": "remove_item", "list_type": list_type, "item_id": item_id}
     refreshed["spoken_summary"] = f"Removed {item_text} from the {list_type} list."
     refreshed["actions"] = [{"type": "deleted", "domain": "lists", "id": item_id, "list_id": list_id}]
+    return refreshed
+
+
+async def _resolve_list_complete_item(intent: SkybridgeIntent, user_id: str, db: Any, context: dict[str, Any] | None) -> dict[str, Any]:
+    """Tick an item off (or restore it) — the core list gesture. Mutate, then
+    authoritative re-read → refreshed card, mirroring the add/remove loop."""
+    if user_id in {"guest", "voice-guest"}:
+        return {
+            "handled": True,
+            "intent": _intent_dict(intent),
+            "spoken_summary": "List changes are not available for guest sessions.",
+            "cards": [_status_card("Sign in to change lists", "Zoe needs to know who is speaking before editing list items.")],
+            "actions": [],
+        }
+    if not intent.item_text:
+        return {
+            "handled": True,
+            "intent": _intent_dict(intent),
+            "spoken_summary": "I did not catch which item to check off.",
+            "cards": [_status_card("Which item?", "Say the item, for example: check off milk on the shopping list.")],
+            "actions": [],
+        }
+    await _ensure_default_lists(user_id, db)
+    list_target = await _find_list_for_remove(intent, user_id, db, context)
+    if not list_target:
+        return {
+            "handled": True,
+            "intent": _intent_dict(intent),
+            "spoken_summary": "I could not find that list.",
+            "cards": [_status_card("Which list should I use?", "I could not find that list. Show your lists again or name the list to update.")],
+            "actions": [],
+        }
+    list_id, list_type = list_target
+    item_rows = await db.fetch(
+        """
+        SELECT id, list_id, text, completed
+        FROM list_items
+        WHERE list_id = $1 AND deleted = 0
+        """,
+        list_id,
+    )
+    items = [dict(row) for row in item_rows]
+    matches = _match_list_items_by_text(items, intent.item_text)
+    if len(matches) != 1:
+        # Ambiguity rule: never tick the wrong item. Ask instead of guessing.
+        refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type), user_id, db)
+        if not matches:
+            body = f"I could not find \"{intent.item_text}\" on that list. Say the exact item."
+            spoken = f"I could not find {intent.item_text} on that list."
+            status = "not_found"
+        else:
+            options = ", ".join(str(match.get("text") or "") for match in matches[:5])
+            body = f"More than one item matches \"{intent.item_text}\" ({options}). Say the exact item."
+            spoken = f"More than one item matches {intent.item_text}. Which one?"
+            status = "ambiguous"
+        refreshed["intent"] = {"domain": "lists", "action": "complete_item", "list_type": list_type, "status": status}
+        refreshed["spoken_summary"] = spoken
+        refreshed["cards"] = [_status_card("Which item?", body)] + list(refreshed.get("cards") or [])
+        refreshed["actions"] = []
+        return refreshed
+    target_item = matches[0]
+    item_id = str(target_item.get("id") or "")
+    # Explicit direction from the parser; fall back to a toggle if unset.
+    desired = intent.completed
+    if desired is None:
+        desired = not bool(target_item.get("completed"))
+    completed_val = 1 if desired else 0
+    update_result = await db.execute(
+        "UPDATE list_items SET completed = $1, updated_at = NOW() WHERE id = $2 AND list_id = $3 AND deleted = 0",
+        completed_val,
+        item_id,
+        list_id,
+    )
+    if _affected_rows(update_result) == 0:
+        refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type), user_id, db)
+        refreshed["intent"] = {"domain": "lists", "action": "complete_item", "list_type": list_type}
+        refreshed["spoken_summary"] = "I could not update that item."
+        refreshed["cards"] = [_status_card("I could not update that item", "The list item is no longer available. Show your lists again to confirm.")] + list(refreshed.get("cards") or [])
+        refreshed["actions"] = []
+        return refreshed
+    await _maybe_commit(db)
+    item_text = str(target_item.get("text") or intent.item_text)
+    refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type), user_id, db)
+    refreshed["intent"] = {"domain": "lists", "action": "complete_item", "list_type": list_type, "item_id": item_id, "completed": desired}
+    refreshed["spoken_summary"] = (
+        f"Ticked off {item_text} on the {list_type} list." if desired
+        else f"Put {item_text} back on the {list_type} list."
+    )
+    refreshed["actions"] = [{"type": "updated", "domain": "lists", "id": item_id, "list_id": list_id, "completed": desired}]
     return refreshed
 
 

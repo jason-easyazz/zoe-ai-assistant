@@ -300,7 +300,7 @@
                 '<button type="button" class="cal-hero sky-accent-' + escapeHtml(category) + (isPast ? ' is-past' : '') + '" data-sky-action="query" data-query="' + escapeHtml(calendarEditQuery(heroEvent, title)) + '">',
                 '<span class="cal-hero-rail" aria-hidden="true"></span>',
                 '<span class="cal-hero-kicker">' + escapeHtml(isPast ? 'Earlier' : 'Up next') + '</span>',
-                '<span class="cal-hero-time">' + escapeHtml(formatEventTime(heroEvent)) +
+                '<span class="cal-hero-time"><span class="cal-hero-clock">' + escapeHtml(formatEventTime(heroEvent)) + '</span>' +
                     (countdown ? '<b class="cal-hero-rel">' + escapeHtml(countdown) + '</b>' : '') + '</span>',
                 '<span class="cal-hero-title">' + escapeHtml(title) + '</span>',
                 detail ? '<span class="cal-hero-loc">' + escapeHtml(detail) + '</span>' : '',
@@ -657,9 +657,11 @@
         return '<div class="lst-switcher" role="tablist">' + tabs + '<button type="button" class="lst-tab lst-tab-new" data-sky-action="query" data-query="new list"><span class="lst-tab-name">+ New</span></button></div>';
     }
 
-    function listEditQuery(title, listType) {
+    // The tap query for a row. Open item → tick off; done item → restore. Direction
+    // is explicit so the backend complete_item resolver never has to guess.
+    function listCheckQuery(title, listType, completed) {
         const type = String(listType || 'shopping').trim() || 'shopping';
-        return 'edit ' + title + ' on the ' + type + ' list';
+        return (completed ? 'uncheck ' : 'check off ') + title + ' on the ' + type + ' list';
     }
 
     // Custom filled check glyph (NOT a thin line icon — see design-system §5/§12).
@@ -674,54 +676,27 @@
         return listAccentClass(cat);
     }
 
-    // Hero progress ring (§8 progress-border pattern): pathLength=100 so the
-    // dash-offset is just the *remaining* percent. Accent gradient + soft glow.
-    var listRingSeq = 0;
-    function listProgressRing(done, total) {
-        const pct = total > 0 ? Math.round((done / total) * 100) : 0;
-        const offset = (100 - pct).toFixed(2);
-        const gid = 'lstRingG' + (++listRingSeq);
-        return [
-            '<svg class="lst-ring" viewBox="0 0 120 120" aria-hidden="true">',
-            '<defs><linearGradient id="' + gid + '" x1="0" y1="0" x2="1" y2="1">',
-            '<stop offset="0" stop-color="var(--lst-ring-a, #5be3b0)"/>',
-            '<stop offset="1" stop-color="var(--lst-ring-b, #37c0e6)"/>',
-            '</linearGradient></defs>',
-            '<circle class="lst-ring-track" cx="60" cy="60" r="52" pathLength="100"></circle>',
-            '<circle class="lst-ring-fill" cx="60" cy="60" r="52" pathLength="100" stroke="url(#' + gid + ')" stroke-dasharray="100" stroke-dashoffset="' + offset + '"></circle>',
-            '</svg>',
-            '<div class="lst-ring-center">',
-            '<div class="lst-ring-pct tnum">' + pct + '<i>%</i></div>',
-            '<div class="lst-ring-sub tnum">' + done + ' of ' + total + '</div>',
-            '</div>'
-        ].join('');
-    }
-
     function renderListItemRow(item, index, listType, fallbackAccent) {
         const isObject = typeof item === 'object' && item;
         const title = isObject ? (item.text || item.title || item.label || 'List item') : String(item || 'List item');
         const completed = !!(isObject && item.completed);
-        const recent = !!(isObject && item.recent);
         const quantity = isObject && item.quantity != null && String(item.quantity).trim() !== '' ? String(item.quantity).trim() : '';
         const category = isObject && item.category ? String(item.category).trim() : '';
         const catAccent = listCategoryAccent(category, fallbackAccent);
-        // Secondary line: category / assignee (quantity is promoted to its own metric).
-        const detail = isObject ? [item.category, item.assigned_to].filter(Boolean).join(' · ') : '';
         const priorityValue = isObject && item.priority ? String(item.priority).trim().toLowerCase() : '';
-        const priority = priorityValue && priorityValue !== 'normal'
-            ? '<span class="lst-flag pr-' + escapeHtml(safeClassTokens(priorityValue) || 'set') + '" aria-label="Priority ' + escapeHtml(item.priority) + '"><span class="lst-flag-dot" aria-hidden="true"></span>' + escapeHtml(item.priority) + '</span>'
+        const flagged = !completed && priorityValue && priorityValue !== 'normal' && priorityValue !== 'low';
+        const qtyTag = quantity
+            ? '<span class="lst-qty" aria-label="Quantity ' + escapeHtml(quantity) + '">' + escapeHtml(quantity) + '</span>'
             : '';
-        const qtyMetric = quantity
-            ? '<div class="lst-qty" aria-label="Quantity ' + escapeHtml(quantity) + '"><strong>' + escapeHtml(quantity) + '</strong></div>'
-            : '';
-        // Tap-to-edit: each row is a query button that opens the existing item editor card
-        // through /api/skybridge/resolve (mutation -> authoritative re-read -> refresh).
+        // Tap = tick it off (or restore a done item). The single most common list
+        // gesture on a kiosk — routed through the real complete_item action loop
+        // (mutate -> authoritative re-read -> refreshed card). Whole row is the
+        // target so it's a comfortable fingertip hit on the 7" panel.
         return [
-            '<button type="button" class="lst-row lst-a-' + escapeHtml(catAccent) + (completed ? ' is-done' : '') + (recent ? ' is-recent' : '') + '" data-sky-action="query" data-query="' + escapeHtml(listEditQuery(title, listType)) + '">',
-            '<span class="lst-rail" aria-hidden="true"></span>',
-            '<span class="lst-check" aria-hidden="true">' + LIST_CHECK_SVG + '</span>',
-            '<div class="lst-main"><strong>' + escapeHtml(title) + '</strong>' + (detail ? '<em>' + escapeHtml(detail) + '</em>' : '') + '</div>',
-            '<div class="lst-meta">' + priority + qtyMetric + '</div>',
+            '<button type="button" class="lst-row lst-a-' + escapeHtml(catAccent) + (completed ? ' is-done' : '') + (flagged ? ' is-flagged' : '') + '" data-sky-action="query" data-query="' + escapeHtml(listCheckQuery(title, listType, completed)) + '" aria-pressed="' + (completed ? 'true' : 'false') + '" aria-label="' + escapeHtml((completed ? 'Done: ' : '') + title) + '">',
+            '<span class="lst-box" aria-hidden="true">' + LIST_CHECK_SVG + '</span>',
+            '<span class="lst-text">' + escapeHtml(title) + '</span>',
+            qtyTag,
             '</button>'
         ].join('');
     }
@@ -812,41 +787,36 @@
             countLabel = totalDone ? totalDone + ' of ' + items.length + ' ' + noun + ' done' : items.length + ' ' + noun;
         }
 
-        // HERO: progress ring for a detail view; a count badge for the overview.
-        const hero = isOverview
-            ? [
-                '<div class="lst-hero lst-hero-overview">',
-                '<div class="lst-id-badge">' + listIdentityGlyph(ident.glyph) + '</div>',
-                '<div class="lst-hero-meta"><div class="lst-hero-num tnum">' + lists.length + '</div><div class="lst-hero-sub">' + escapeHtml(lists.length === 1 ? 'list' : 'lists') + '</div></div>',
-                '</div>'
-              ].join('')
-            : [
-                '<div class="lst-hero">',
-                '<div class="lst-ring-wrap">' + listProgressRing(totalDone, items.length || 0) + '</div>',
-                '<div class="lst-hero-meta"><div class="lst-id-badge">' + listIdentityGlyph(ident.glyph) + '</div><div class="lst-hero-sub">' + escapeHtml(totalDone + (items.length ? ' of ' + items.length : '') + ' done') + '</div></div>',
-                '</div>'
-              ].join('');
+        // Compact progress: a slim bar in the list's accent (detail view only).
+        // The list itself is the hero now — no ring stealing a third of a 7" screen.
+        const openCount = Math.max(0, items.length - totalDone);
+        const pct = items.length ? Math.round((totalDone / items.length) * 100) : 0;
+        const progressBar = (!isOverview && items.length)
+            ? '<div class="lst-progress" role="img" aria-label="' + totalDone + ' of ' + items.length + ' done"><span class="lst-progress-fill" style="width:' + pct + '%"></span></div>'
+            : '';
+        // Header count: open-first ("3 left · 2 done") — the shopper's view.
+        let headCount = countLabel;
+        if (!isOverview && items.length && totalDone) {
+            headCount = openCount + ' left · ' + totalDone + ' done';
+        }
 
         const header = [
             '<header class="lst-header">',
-            '<div class="lst-heading"><span class="lst-kicker">' + (isOverview ? 'Your lists' : 'List') + '</span><h3 class="lst-name">' + escapeHtml(headerTitle) + '</h3></div>',
-            '<span class="lst-count">' + escapeHtml(countLabel) + '</span>',
+            '<div class="lst-heading">',
+            '<span class="lst-id-badge">' + listIdentityGlyph(ident.glyph) + '</span>',
+            '<div class="lst-headtext"><span class="lst-kicker">' + (isOverview ? 'Your lists' : 'List') + '</span><h3 class="lst-name">' + escapeHtml(headerTitle) + '</h3></div>',
+            '</div>',
+            '<span class="lst-count">' + escapeHtml(headCount) + '</span>',
             '</header>'
         ].join('');
 
         const itemsClass = 'lst-items ' + (rows ? 'is-detail' : 'is-overview');
-        const sidePanel = [
-            '<div class="lst-side">',
-            header,
-            lists.length ? renderListSwitcher(lists, selectedId) : '',
-            '<div class="' + itemsClass + '">' + (rows || overviewCols || empty) + '</div>',
-            '</div>'
-        ].join('');
-
         const body = [
             '<div class="lst-scene lst-a-' + escapeHtml(accent) + ' lst-tint-' + ident.tint + '">',
-            hero,
-            sidePanel,
+            header,
+            progressBar,
+            lists.length ? renderListSwitcher(lists, selectedId) : '',
+            '<div class="' + itemsClass + '">' + (rows || overviewCols || empty) + '</div>',
             '</div>'
         ].join('');
         return cardFrame(Object.assign({ status: 'Lists', icon: 'L' }, props), body, { wide: true, tone: 'zoe-list-card ' + accent, hideHeader: true, hideStatus: true, hideActions: true });
@@ -908,26 +878,31 @@
         const total = props.count == null ? people.length : props.count;
         const workCount = people.filter(person => personAccentClass(person) === 'work').length;
         const personalCount = people.filter(person => personAccentClass(person) === 'personal').length;
-        const otherCount = Math.max(0, people.length - workCount - personalCount);
 
-        // Quiet segmented filter chips (count + circle); active = current filter.
+        // Segmented filter chips (count + label). Each chip is a REAL tap target →
+        // submitCommand(query) the people resolver actually handles: the directory
+        // ("all") or a context filter the backend supports (PEOPLE_CONTEXTS =
+        // personal, work). We deliberately do NOT render an "other" chip — there is
+        // no backend filter for it, so it would be a silent no-op (same result as
+        // "all"). `active` reflects the current filter so the user sees where they are.
         const activeFilter = accentClass(props.circle || props.context || '', '');
-        const chip = function (accent, label, value, alwaysShow) {
+        const chip = function (accent, label, value, query, alwaysShow) {
             if (!value && !alwaysShow) return '';
             const active = accent && accent === activeFilter ? ' is-active' : '';
             return [
-                '<span class="people-chip people-accent-' + escapeHtml(accent || 'all') + active + '">',
+                '<button type="button" class="people-chip people-accent-' + escapeHtml(accent || 'all') + active + '"',
+                ' data-sky-action="query" data-query="' + escapeHtml(query) + '"',
+                ' aria-label="' + escapeHtml(label + ', ' + value) + '" aria-pressed="' + (active ? 'true' : 'false') + '">',
                 '<i class="people-chip-dot" aria-hidden="true"></i>',
                 '<strong>' + escapeHtml(value) + '</strong>',
                 '<span>' + escapeHtml(label) + '</span>',
-                '</span>'
+                '</button>'
             ].join('');
         };
         const chips = [
-            chip('', 'all', total, true),
-            chip('personal', 'personal', personalCount, false),
-            chip('work', 'work', workCount, false),
-            chip('social', 'other', otherCount, false)
+            chip('', 'all', total, 'show people', true),
+            chip('personal', 'personal', personalCount, 'show personal contacts', false),
+            chip('work', 'work', workCount, 'show work contacts', false)
         ].join('');
 
         // Order by closeness (inner circle first, warmest connection first) so the
@@ -955,9 +930,9 @@
                 '<strong class="people-tile-name">' + escapeHtml(name) + '</strong>',
                 '<span class="people-tile-rel">' + escapeHtml(personSubline(person)) + '</span>',
                 '</span>',
-                '<span class="people-tile-health">',
-                '<span class="people-health-track"><i class="people-health-fill" style="width:' + health + '%"></i></span>',
+                '<span class="people-tile-health" aria-hidden="true">',
                 '<span class="people-health-pct tnum">' + health + '</span>',
+                '<span class="people-health-track"><i class="people-health-fill" style="height:' + health + '%"></i></span>',
                 '</span>',
                 '</button>'
             ].join('');

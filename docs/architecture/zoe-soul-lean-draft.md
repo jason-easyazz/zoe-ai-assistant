@@ -1,7 +1,7 @@
 ---
 type: draft
-title: "Lean Zoe soul + ZOE_SELF summary — DRAFT for review"
-status: draft
+title: "Lean Zoe soul + ZOE_SELF summary — IMPLEMENTED"
+status: implemented
 owner: jason
 created: 2026-06-25
 scope: services/zoe-data/zoe_agent.py (_ZOE_SOUL_BASE, _load_zoe_self_summary)
