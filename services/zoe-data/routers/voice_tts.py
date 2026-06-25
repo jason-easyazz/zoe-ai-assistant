@@ -3890,10 +3890,13 @@ async def voice_command(
     try:
         import fast_tiers as _fp
         # Channel-agnostic deterministic core (shared with chat/LiveKit/Telegram).
-        # channel="voice" keeps run_tier0=False — voice already ran its own richer
-        # public-intent Tier-0 (policy/scope gates) above — so this stays the
-        # byte-identical Tier-1/1.5 path. Reuse the router decision from the shadow
-        # log and keep the dispatch ctx identical via extra_ctx (db/panel_id).
+        # channel="voice" runs the shared Tier-0 read shortcut, but only for the
+        # public/idempotent reads (weather/time/date/list/calendar); user-scoped
+        # reads are deferred (profile `tier0_defer_intents`) so the B3/B4 scope gate
+        # below stays authoritative. The richer public-intent path above already
+        # caught the household-safe reads, so Tier-0 here mainly backstops them.
+        # Reuse the router decision from the shadow log and keep the dispatch ctx
+        # identical via extra_ctx (db/panel_id).
         _xresult = await _fp.resolve(
             text, effective_user, session_id,
             channel="voice",
