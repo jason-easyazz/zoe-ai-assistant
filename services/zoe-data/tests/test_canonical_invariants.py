@@ -37,10 +37,10 @@ def _rocks() -> dict:
             if not mm:
                 continue
             indent, key, val = len(mm.group(1)), mm.group(2), mm.group(3).strip().strip('"')
+            parent = stack.get(indent - 2, out)
             if not val:
-                stack[indent] = out.setdefault(key, {})
+                stack[indent] = parent.setdefault(key, {})
             else:
-                parent = stack.get(indent - 2, out)
                 parent[key] = val
         return out["rocks"]
 
