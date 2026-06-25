@@ -878,26 +878,31 @@
         const total = props.count == null ? people.length : props.count;
         const workCount = people.filter(person => personAccentClass(person) === 'work').length;
         const personalCount = people.filter(person => personAccentClass(person) === 'personal').length;
-        const otherCount = Math.max(0, people.length - workCount - personalCount);
 
-        // Quiet segmented filter chips (count + circle); active = current filter.
+        // Segmented filter chips (count + label). Each chip is a REAL tap target →
+        // submitCommand(query) the people resolver actually handles: the directory
+        // ("all") or a context filter the backend supports (PEOPLE_CONTEXTS =
+        // personal, work). We deliberately do NOT render an "other" chip — there is
+        // no backend filter for it, so it would be a silent no-op (same result as
+        // "all"). `active` reflects the current filter so the user sees where they are.
         const activeFilter = accentClass(props.circle || props.context || '', '');
-        const chip = function (accent, label, value, alwaysShow) {
+        const chip = function (accent, label, value, query, alwaysShow) {
             if (!value && !alwaysShow) return '';
             const active = accent && accent === activeFilter ? ' is-active' : '';
             return [
-                '<span class="people-chip people-accent-' + escapeHtml(accent || 'all') + active + '">',
+                '<button type="button" class="people-chip people-accent-' + escapeHtml(accent || 'all') + active + '"',
+                ' data-sky-action="query" data-query="' + escapeHtml(query) + '"',
+                ' aria-label="' + escapeHtml(label + ', ' + value) + '" aria-pressed="' + (active ? 'true' : 'false') + '">',
                 '<i class="people-chip-dot" aria-hidden="true"></i>',
                 '<strong>' + escapeHtml(value) + '</strong>',
                 '<span>' + escapeHtml(label) + '</span>',
-                '</span>'
+                '</button>'
             ].join('');
         };
         const chips = [
-            chip('', 'all', total, true),
-            chip('personal', 'personal', personalCount, false),
-            chip('work', 'work', workCount, false),
-            chip('social', 'other', otherCount, false)
+            chip('', 'all', total, 'show people', true),
+            chip('personal', 'personal', personalCount, 'show personal contacts', false),
+            chip('work', 'work', workCount, 'show work contacts', false)
         ].join('');
 
         // Order by closeness (inner circle first, warmest connection first) so the
@@ -925,9 +930,9 @@
                 '<strong class="people-tile-name">' + escapeHtml(name) + '</strong>',
                 '<span class="people-tile-rel">' + escapeHtml(personSubline(person)) + '</span>',
                 '</span>',
-                '<span class="people-tile-health">',
-                '<span class="people-health-track"><i class="people-health-fill" style="width:' + health + '%"></i></span>',
+                '<span class="people-tile-health" aria-hidden="true">',
                 '<span class="people-health-pct tnum">' + health + '</span>',
+                '<span class="people-health-track"><i class="people-health-fill" style="height:' + health + '%"></i></span>',
                 '</span>',
                 '</button>'
             ].join('');
