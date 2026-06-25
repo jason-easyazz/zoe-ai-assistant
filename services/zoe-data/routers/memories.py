@@ -297,6 +297,13 @@ def _build_memory_prompt_packet(
     return {"packet": "## What I know about you\n" + "\n".join(lines), "refs": refs, "count": len(refs)}
 
 
+# Keyword gate for the per-turn semantic search. Single source of truth lives in
+# memory_gate (shared with zoe_agent) so the two paths can't silently diverge. The
+# ONNX+Chroma semantic search only fires when the message looks like a recall query
+# — most turns don't, and the embed+query is the endpoint's main cost.
+from memory_gate import message_needs_memory as _message_needs_memory  # noqa: E402
+
+
 @router.get("/for-prompt")
 async def memory_for_prompt(
     user_id: str = Query(..., min_length=1),
@@ -316,9 +323,12 @@ async def memory_for_prompt(
     if not user_id or is_guest_memory_user(user_id):
         return {"packet": "", "refs": [], "count": 0, "user_scoped": False}
     svc = _svc()
+    # Facts (cheap metadata read) always run. The semantic search is an ONNX embed
+    # + Chroma query — keyword-gate it so it only fires on recall-ish turns instead
+    # of every turn (the Pi memory extension calls this endpoint on every turn).
     facts = await svc.load_for_prompt(user_id, limit=limit)
     hits: list[MemoryRef] = []
-    if message.strip():
+    if message.strip() and _message_needs_memory(message):
         try:
             hits = await svc.search(message, user_id=user_id, limit=6)
         except Exception:

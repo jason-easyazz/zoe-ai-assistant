@@ -516,6 +516,13 @@ _STATUS_CHECK_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Bare wake-word used as a question ("zoe?", "hey zoe?") = a presence check.
+# This must be tested against the RAW text: _normalize_chat_intent_text strips the
+# wake word, so by the time the body runs "zoe?" has become "" and _STATUS_CHECK_RE
+# never sees it. The trailing '?' is required so a plain vocative "zoe" (or "zoe,
+# add milk", which normalizes to a real command) is NOT swallowed as a status check.
+_BARE_NAME_QUERY_RE = re.compile(r"^(?:hey\s+|ok(?:ay)?\s+)?zoe\s*\?+$", re.IGNORECASE)
+
 # Open-domain Q&A / creative — route to agent path (not brittle per-phrase intents).
 _AGENT_CHAT_RE = re.compile(
     r"^(?:tell me about|what(?:'s| is) the (?:capital|weather)|"
@@ -614,6 +621,11 @@ def detect_intent(
     user_id: str = "unknown",
 ) -> Optional[Intent]:
     t = _normalize_chat_intent_text(text)
+
+    # Bare name-as-question ("zoe?") — normalization strips the wake word to '', so
+    # catch the presence check from the raw text before the body runs.
+    if _BARE_NAME_QUERY_RE.match((text or "").strip()):
+        return Intent("status_check", {})
 
     # Full Home Assistant / automation setup → OpenClaw (execute_intent returns None; chat expands message)
     if _is_ha_full_setup_message(t):
@@ -1400,7 +1412,7 @@ def detect_intent(
             _clean = _re.sub(r'https?://\S+', '[URL]', _clean)
             with open(_MISS_PATH, "a") as _f:
                 _f.write(_json.dumps({"text": _clean, "ts": __import__("time").time()}) + "\n")
-        except Exception:
+        except (OSError, TypeError, ValueError, re.error):
             pass  # Never let logging break intent routing
         try:
             from pi_intent_evidence import record_intent_miss_evidence
@@ -1876,7 +1888,7 @@ async def _run_mcporter(cmd: str) -> Optional[str]:
     except asyncio.TimeoutError:
         logger.warning("mcporter-safe timed out")
         return None
-    except Exception as e:
+    except (OSError, UnicodeError, ValueError) as e:
         logger.error(f"mcporter error: {e}")
         return None
 
@@ -2077,18 +2089,24 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
         return await _execute_daily_briefing(user_id)
 
     if intent.name == "good_evening":
+        fallback = "Good evening! Hope your day went well. Let me know if there's anything you need."
         try:
             from proactive.composer import compose_message
-            result = await compose_message(
-                "Good evening — provide a brief, warm check-in for the end of day. "
-                "Mention any outstanding reminders or tomorrow's early events if known, "
-                "otherwise just a warm sign-off. Keep it under 3 sentences.",
-                user_id,
+            return await compose_message(
+                "good_evening",
+                {
+                    "user_id": user_id,
+                    "request": (
+                        "Provide a brief, warm end-of-day check-in. Mention outstanding "
+                        "reminders or tomorrow's early events if known; otherwise give a "
+                        "warm sign-off. Keep it under 3 sentences."
+                    ),
+                },
+                fallback,
             )
-            return result
-        except Exception as _e:
+        except (ImportError, RuntimeError, TypeError, ValueError) as _e:
             logger.warning("good_evening composer failed: %s", _e)
-            return "Good evening! Hope your day went well. Let me know if there's anything you need."
+            return fallback
 
     if intent.name == "daily_briefing":
         return await _execute_daily_briefing(user_id)
@@ -2626,10 +2644,13 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
     # page opens and the timer/recipe widget is pre-filled.  The text response is spoken
     # by the voice daemon; the panel action is dispatched by _broadcast_intent_nav in chat.py.
     if intent.name == "timer_create":
+        # Note: on the touch panel, Skybridge owns timers end-to-end (real
+        # countdown card + alarm) and is consulted before this fast-path, so this
+        # branch is the spoken line for the chat/other surfaces.
         mins = intent.slots.get("minutes", 5)
         label = intent.slots.get("label", "Timer")
-        mins_str = f"{mins} minute" if int(mins) == 1 else f"{mins} minute"
-        return f"Starting a {mins_str} timer for {label}."
+        named = "" if str(label).strip().lower() in ("", "timer") else f" for {label}"
+        return f"Starting a {mins} minute timer{named}."
 
     if intent.name == "recipe_search":
         query = intent.slots.get("query", "")

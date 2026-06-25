@@ -27,7 +27,6 @@
 - `dashboard_get_layout`
 - `dashboard_save_layout`
 - `flag_needs_human_review`
-- `graphify_search`
 - `greptile_pr_comments`
 - `greptile_pr_status`
 - `greptile_trigger_review`
@@ -157,7 +156,6 @@
 - **Self-improvement**: intent-miss review → Hermes/Multica proposal workflow (`self_improve` intent)
 - **Hermes engineering loop**: source context → small feature → cleanup pass → review/test
 - **Agent sync**: POST /api/system/agent-sync regenerates this file and all agent docs
-- **graphify_search**: MCP tool to query Zoe's knowledge-graph wiki (built by graphify)
 
 ## Escalation Guide
 1. `web_search` — current events, live prices, news after training cutoff

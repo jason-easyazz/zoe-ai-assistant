@@ -11,7 +11,8 @@ timestamp: 2026-06-18T00:00:00Z
 Descriptive map of the tools in Zoe's agent layer. See [index](index.md). For *binding rules* on each tool, the `AGENTS.md` contracts are authoritative; this page records what each tool is and how they connect.
 
 ## Knowledge & source
-- **graphify** (`~/.local/bin/graphify`, the `graphifyy` uv tool) — repo knowledge graph at `graphify-out/`. Rebuilt nightly by `scripts/maintenance/refresh_graphify.sh` (systemd `zoe-graphify-refresh.timer`), which opens an auto-merging PR so the committed graph tracks HEAD.
+- **codebase-memory** (MCP server) — repo code intelligence / code graph, re-indexed on demand. This is the maintained source of architecture and code-graph context. (Graphify is **fully retired**: `graphify-out/` is no longer committed, the `refresh_graphify.sh` / `zoe-graphify-refresh.timer` auto-refresh is removed, and the `graphify_search` MCP tool + agent-sync rebuild trigger have been deleted. Use codebase-memory for all code-graph queries.)
+- **serena** (MCP server) — LSP symbol-level navigation (find_symbol, find_referencing_symbols, rename), complements codebase-memory's graph.
 - **opensrc** (`~/.local/bin/opensrc`, vercel-labs) — third-party source cache at `~/.opensrc/`, refreshed weekly by `~/bin/refresh-opensrc.sh` (`zoe-opensrc-refresh.timer`) and pinned to Zoe's *installed* versions. Bare `opensrc path pypi:<pkg>` resolves to the latest published version, so pin versions to match the running stack.
 
 ## Agents & orchestration

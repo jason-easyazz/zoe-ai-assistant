@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -12,9 +14,12 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from calendar_utils import row_to_event
+from card_contract import CardContractError, validate_component
 from card_service import card_service
 from database import get_db_ctx
 from people_utils import row_to_person
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -36,6 +41,229 @@ class SkybridgeIntent:
     person_name: str = ""
     fact_text: str = ""
     birthday: str = ""
+    duration_seconds: int = 0
+    completed: bool | None = None
+
+
+# ── Timers ───────────────────────────────────────────────────────────────────
+# A REAL countdown timer (not the old speak-only stub). The store is the
+# authoritative source for spoken "how long left" / "cancel" queries; the panel
+# ticks and rings from the absolute expires_at so firing is immediate and
+# survives a reload. In-memory is intentional: timers are short-lived and the
+# panel persists its own copy, so a service restart losing one is acceptable.
+
+_WORD_NUMBERS = {
+    "a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11,
+    "twelve": 12, "fifteen": 15, "twenty": 20, "thirty": 30, "forty": 40,
+    "fifty": 50, "sixty": 60, "ninety": 90,
+}
+
+MAX_TIMER_SECONDS = 24 * 3600
+
+
+class _TimerStore:
+    """Process-local registry of active countdown timers, keyed by owner."""
+
+    def __init__(self) -> None:
+        self._by_owner: dict[str, list[dict[str, Any]]] = {}
+
+    def _prune(self, owner: str) -> None:
+        now = time.time()
+        live = [t for t in self._by_owner.get(owner, []) if t["expires_at"] > now]
+        if live:
+            self._by_owner[owner] = live
+        else:
+            self._by_owner.pop(owner, None)
+
+    def create(self, owner: str, label: str, seconds: int) -> dict[str, Any]:
+        self._prune(owner)
+        now = time.time()
+        timer = {
+            "timer_id": uuid.uuid4().hex[:12],
+            "label": (label or "Timer").strip() or "Timer",
+            "duration_seconds": int(seconds),
+            "created_at": now,
+            "expires_at": now + int(seconds),
+        }
+        self._by_owner.setdefault(owner, []).append(timer)
+        return timer
+
+    def list(self, owner: str) -> list[dict[str, Any]]:
+        self._prune(owner)
+        return sorted(self._by_owner.get(owner, []), key=lambda t: t["expires_at"])
+
+    def cancel(self, owner: str, label: str | None = None) -> dict[str, Any] | None:
+        self._prune(owner)
+        timers = self._by_owner.get(owner, [])
+        if not timers:
+            return None
+        target = None
+        if label:
+            wanted = label.strip().lower()
+            target = next((t for t in timers if t["label"].lower() == wanted), None)
+        if target is None:  # no name (or no match) → cancel the soonest-expiring
+            target = min(timers, key=lambda t: t["expires_at"])
+        timers.remove(target)
+        self._prune(owner)
+        return target
+
+    def cancel_by_id(self, owner: str, timer_id: str) -> dict[str, Any] | None:
+        self._prune(owner)
+        timers = self._by_owner.get(owner, [])
+        target = next((t for t in timers if t["timer_id"] == timer_id), None)
+        if target is not None:
+            timers.remove(target)
+            self._prune(owner)
+        return target
+
+
+_timers = _TimerStore()
+
+
+def _unit_to_seconds(unit: str) -> int:
+    u = unit.lower()
+    if u.startswith("h"):
+        return 3600
+    if u.startswith("m"):
+        return 60
+    return 1
+
+
+def _parse_timer_duration(text: str) -> int:
+    """Total seconds from a timer phrase (digits or number-words), else 0."""
+    num = r"\d+|" + "|".join(re.escape(w) for w in _WORD_NUMBERS)
+    pattern = re.compile(r"\b(" + num + r")\s*(hours?|hrs?|minutes?|mins?|seconds?|secs?)\b")
+    total = 0
+    found = False
+    for value, unit in pattern.findall(text):
+        n = int(value) if value.isdigit() else _WORD_NUMBERS.get(value, 0)
+        total += n * _unit_to_seconds(unit)
+        found = True
+    if found:
+        return total
+    short = re.search(r"\b(\d+)\s*([hms])\b", text)
+    if short:
+        return int(short.group(1)) * _unit_to_seconds(short.group(2))
+    return 0
+
+
+def _parse_timer_label(text: str) -> str:
+    """Extract an optional timer name ('for the eggs', 'called pasta'); never a
+    duration ('for 5 minutes')."""
+    m = re.search(r"\b(?:called|named|for)\s+(?:the\s+)?(.+?)\s*$", text.strip())
+    if not m:
+        return ""
+    cand = m.group(1).strip().strip(".!?")
+    if not cand or re.search(r"\d", cand):
+        return ""
+    if re.search(r"\b(hours?|hrs?|minutes?|mins?|seconds?|secs?|timer)\b", cand):
+        return ""
+    if cand in _WORD_NUMBERS:
+        return ""
+    return cand.title()
+
+
+def _format_duration(seconds: float) -> str:
+    seconds = max(0, int(round(seconds)))
+    minutes, secs = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    parts = []
+    if hours:
+        parts.append(f"{hours} hour" + ("s" if hours != 1 else ""))
+    if minutes:
+        parts.append(f"{minutes} minute" + ("s" if minutes != 1 else ""))
+    if secs and not hours:
+        parts.append(f"{secs} second" + ("s" if secs != 1 else ""))
+    return " and ".join(parts) if parts else "0 seconds"
+
+
+def _timer_card(timer: dict[str, Any], *, status: str = "running") -> dict[str, Any]:
+    return {
+        "component": "timer",
+        "props": {
+            "id": timer["timer_id"],
+            "timer_id": timer["timer_id"],
+            "title": timer["label"],
+            "label": timer["label"],
+            "source": "timer",
+            "status": status,
+            "duration_seconds": int(timer["duration_seconds"]),
+            "expires_at_ms": int(timer["expires_at"] * 1000),
+        },
+    }
+
+
+def active_timers_for(owner: str) -> list[dict[str, Any]]:
+    """Public helper for the reload-resume endpoint: the panel's authoritative set."""
+    return [_timer_card(t)["props"] for t in _timers.list(owner or "guest")]
+
+
+def cancel_timer_by_id(owner: str, timer_id: str) -> dict[str, Any] | None:
+    """Cancel a specific timer (used by the panel's per-card tap-cancel)."""
+    return _timers.cancel_by_id(owner or "guest", timer_id)
+
+
+def _resolve_timer(intent: SkybridgeIntent, user_id: str) -> dict[str, Any]:
+    owner = (user_id or "guest")
+
+    if intent.action == "cancel":
+        cancelled = _timers.cancel(owner, intent.title or None)
+        if not cancelled:
+            return {
+                "handled": True, "intent": _intent_dict(intent),
+                "spoken_summary": "You have no timers running.",
+                "cards": [_status_card("No timers", "There are no active timers to cancel.")],
+                "actions": [],
+            }
+        named = "" if cancelled["label"].lower() == "timer" else f"{cancelled['label']} "
+        remaining = _timers.list(owner)
+        # Show the timers that are still running; only fall back to a status card
+        # when the last one was cancelled.
+        cards = [_timer_card(t) for t in remaining] or [
+            _status_card("Timer cancelled", f"Your {named}timer was stopped.")
+        ]
+        return {
+            "handled": True, "intent": _intent_dict(intent),
+            "spoken_summary": f"Cancelled your {named}timer.",
+            "cards": cards,
+            "actions": [],
+            "timer_cancelled_id": cancelled["timer_id"],
+        }
+
+    if intent.action == "status":
+        timers = _timers.list(owner)
+        if not timers:
+            return {
+                "handled": True, "intent": _intent_dict(intent),
+                "spoken_summary": "You have no timers running.",
+                "cards": [_status_card("No timers", "Ask me to set a timer to get started.")],
+                "actions": [],
+            }
+        soonest = timers[0]
+        remaining = soonest["expires_at"] - time.time()
+        named = "" if soonest["label"].lower() == "timer" else f"{soonest['label']} "
+        return {
+            "handled": True, "intent": _intent_dict(intent),
+            "spoken_summary": f"Your {named}timer has {_format_duration(remaining)} left.",
+            "cards": [_timer_card(t) for t in timers],
+            "actions": [],
+        }
+
+    # create
+    seconds = max(1, min(int(intent.duration_seconds or 300), MAX_TIMER_SECONDS))
+    timer = _timers.create(owner, intent.title or "Timer", seconds)
+    named = "" if timer["label"].lower() == "timer" else f"{timer['label']} "
+    # Return every running timer so a second/third one appears alongside the rest
+    # instead of replacing them — a kitchen runs several at once.
+    cards = [_timer_card(t) for t in _timers.list(owner)]
+    extra = "" if len(cards) <= 1 else f" That makes {len(cards)} timers running."
+    return {
+        "handled": True, "intent": _intent_dict(intent),
+        "spoken_summary": f"Your {named}timer is set for {_format_duration(seconds)}.{extra}",
+        "cards": cards,
+        "actions": [],
+    }
 
 
 MONTHS = {
@@ -366,6 +594,33 @@ def _parse_contextual_time(text: str, target: str, context: dict[str, Any] | Non
     return f"{hour:02d}:{minute:02d}"
 
 
+def _item_display_text(item: Any) -> str:
+    if isinstance(item, dict):
+        return str(item.get("text") or item.get("title") or item.get("label") or "").strip()
+    return str(item or "").strip()
+
+
+def _enumerate_items_for_speech(list_name: str, items: list[Any], *, cap: int = 5) -> str:
+    """Build a spoken enumeration, e.g. 'You've got bread, milk and eggs — three things on the Shopping list'."""
+    names = [text for text in (_item_display_text(item) for item in items) if text]
+    total = len(names)
+    surface = (list_name or "list").strip() or "list"
+    if total == 0:
+        return f"There's nothing on the {surface} list yet."
+    word_numbers = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven", 8: "eight", 9: "nine", 10: "ten"}
+    count_word = word_numbers.get(total, str(total))
+    thing_word = "thing" if total == 1 else "things"
+    shown = names[:cap]
+    remainder = total - len(shown)
+    if remainder > 0:
+        listed = ", ".join(shown) + f" ...and {remainder} more"
+    elif len(shown) == 1:
+        listed = shown[0]
+    else:
+        listed = ", ".join(shown[:-1]) + " and " + shown[-1]
+    return f"You've got {listed} — {count_word} {thing_word} on the {surface} list."
+
+
 def _clean_action_text(value: str) -> str:
     text = re.sub(r"\s+", " ", value or "").strip(" .")
     return re.sub(r"^(?:my|the|a|an)\s+", "", text, flags=re.IGNORECASE).strip()
@@ -385,6 +640,95 @@ def _list_add_from_text(message: str) -> tuple[str, str] | None:
     return item, list_type or "shopping"
 
 
+def _list_remove_from_text(message: str) -> tuple[str, str] | None:
+    match = re.search(
+        r"\b(?:take|remove|delete|drop)\s+(?P<item>.+?)\s+(?:off|from|out of)\s+(?:the\s+|my\s+)?(?P<list>shopping list|grocery list|groceries|work list|personal list|list|task list|todo list|tasks|todos)\b",
+        message,
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    item = _clean_action_text(match.group("item"))
+    list_phrase = f" {match.group('list').lower()} "
+    list_type = _list_type_from_text(list_phrase) or ("shopping" if "grocery" in list_phrase else "")
+    if not item:
+        return None
+    return item, list_type or "shopping"
+
+
+# Item nouns shared by the check-off parser. Kept inline (not a module constant)
+# so it sits next to the patterns that use it.
+_LIST_NOUNS_RE = (
+    r"(?P<list>shopping list|grocery list|groceries|work list|personal list|list"
+    r"|task list|todo list|tasks|todos)"
+)
+
+
+def _list_complete_from_text(message: str) -> tuple[str, str, bool] | None:
+    """Parse a check-off / un-check command (from a tapped row or voice).
+
+    Returns (item, list_type, completed) where completed=True means "tick it off".
+    Tap rows emit "check off X on the shopping list" / "uncheck X on the shopping
+    list"; this also catches natural forms ("tick off bread", "mark eggs as done",
+    "cross milk off the list"). Direction is explicit so a tap never guesses wrong.
+    """
+    on_tail = r"(?:\s+(?:on|from|in)\s+(?:the\s+|my\s+)?" + _LIST_NOUNS_RE + r")?\s*[.!]*\s*$"
+    off_tail = r"\s+off(?:\s+(?:the\s+|my\s+)?" + _LIST_NOUNS_RE + r")?\s*[.!]*\s*$"
+
+    def _finish(match: "re.Match[str]", completed: bool) -> tuple[str, str, bool] | None:
+        item = _clean_action_text(match.group("item"))
+        if not item:
+            return None
+        raw = match.groupdict().get("list")
+        if raw:
+            phrase = f" {raw.lower()} "
+            list_type = _list_type_from_text(phrase) or "shopping"
+        else:
+            list_type = "shopping"
+        return item, list_type, completed
+
+    # Restore / un-check FIRST so "uncheck X" is never read as "check X".
+    match = re.search(r"\b(?:uncheck|un-?tick|unmark|undo|put back)\s+(?P<item>.+?)" + on_tail, message, re.IGNORECASE)
+    if match:
+        result = _finish(match, False)
+        if result:
+            return result
+    # "mark X (as) done/complete".
+    match = re.search(r"\bmark\s+(?P<item>.+?)\s+(?:as\s+)?(?:done|complete|completed)\b" + on_tail, message, re.IGNORECASE)
+    if match:
+        result = _finish(match, True)
+        if result:
+            return result
+    # "check/tick/cross off X [on the LIST]".
+    match = re.search(r"\b(?:check|tick|cross)\s+off\s+(?P<item>.+?)" + on_tail, message, re.IGNORECASE)
+    if match:
+        result = _finish(match, True)
+        if result:
+            return result
+    # "check/tick/cross X off [the LIST]".
+    match = re.search(r"\b(?:check|tick|cross)\s+(?P<item>.+?)" + off_tail, message, re.IGNORECASE)
+    if match:
+        result = _finish(match, True)
+        if result:
+            return result
+    return None
+
+
+def _contextual_list_remove_from_text(message: str, context: dict[str, Any] | None) -> tuple[str, str] | None:
+    if _context_domain(context) != "lists":
+        return None
+    match = re.search(r"\b(?:take|remove|delete|drop)\s+(?P<item>.+?)\s*$", message, re.IGNORECASE)
+    if not match:
+        return None
+    if re.search(r"\b(?:off|from|out of)\s+", message, re.IGNORECASE):
+        return None
+    item = _clean_action_text(match.group("item"))
+    if not item or item.lower() in {"item", "something", "this", "that", "it"}:
+        return None
+    _list_id, list_type = _context_list_hint(context)
+    return item, list_type or "shopping"
+
+
 def _contextual_list_add_from_text(message: str, context: dict[str, Any] | None) -> tuple[str, str] | None:
     if _context_domain(context) != "lists":
         return None
@@ -400,6 +744,62 @@ def _contextual_list_add_from_text(message: str, context: dict[str, Any] | None)
         return None
     _list_id, list_type = _context_list_hint(context)
     return item, list_type or "shopping"
+
+
+def _calendar_delete_from_text(message: str, context: dict[str, Any] | None) -> str | None:
+    """Parse 'delete/remove/cancel <event> from my calendar' (or contextual)."""
+    match = re.search(
+        r"\b(?:delete|remove|cancel)\s+(?P<target>.+?)\s+(?:from|off|out of)\s+(?:the\s+|my\s+)?(?:calendar|schedule|agenda)\b",
+        message,
+        re.IGNORECASE,
+    )
+    if match:
+        target = _clean_action_text(match.group("target"))
+        return target or None
+    if _context_domain(context) != "calendar":
+        return None
+    ctx_match = re.search(r"\b(?:delete|remove|cancel)\s+(?P<target>.+?)\s*$", message, re.IGNORECASE)
+    if not ctx_match:
+        return None
+    target = _clean_action_text(ctx_match.group("target"))
+    return target or None
+
+
+def _list_edit_from_text(message: str, context: dict[str, Any] | None) -> tuple[str, str] | None:
+    """Parse 'edit <item> on/from my <list>' (or contextual 'edit <item>') tap-to-edit utterances."""
+    match = re.search(
+        r"\bedit\s+(?P<item>.+?)\s+(?:on|in|from)\s+(?:the\s+|my\s+)?(?P<list>shopping list|grocery list|groceries|work list|personal list|list|task list|todo list|tasks|todos)\b",
+        message,
+        re.IGNORECASE,
+    )
+    if match:
+        item = _clean_action_text(match.group("item"))
+        list_phrase = f" {match.group('list').lower()} "
+        list_type = _list_type_from_text(list_phrase) or ("shopping" if "grocery" in list_phrase else "")
+        if item:
+            return item, list_type or "shopping"
+        return None
+    if _context_domain(context) != "lists":
+        return None
+    ctx_match = re.search(r"\bedit\s+(?P<item>.+?)\s*$", message, re.IGNORECASE)
+    if not ctx_match:
+        return None
+    item = _clean_action_text(ctx_match.group("item"))
+    if not item or item.lower() in {"item", "this", "that", "it"}:
+        return None
+    _list_id, list_type = _context_list_hint(context)
+    return item, list_type or "shopping"
+
+
+def _calendar_edit_from_text(message: str, context: dict[str, Any] | None) -> str | None:
+    """Parse 'edit <event title or time>' tap-to-edit utterances for calendar events."""
+    match = re.search(r"\bedit\s+(?P<target>.+?)\s*$", message, re.IGNORECASE)
+    if not match:
+        return None
+    if _context_domain(context) != "calendar" and not re.search(r"\b(calendar|schedule|event|appointment|meeting)\b", message, re.IGNORECASE):
+        return None
+    target = _clean_action_text(match.group("target"))
+    return target or None
 
 
 def _calendar_create_from_text(message: str, context: dict[str, Any] | None) -> tuple[str, str] | None:
@@ -513,6 +913,15 @@ def classify_skybridge_intent(message: str, context: dict[str, Any] | None = Non
     if person_fact:
         name, fact, birthday = person_fact
         return SkybridgeIntent(domain="people", action="remember_fact", person_name=name, fact_text=fact, birthday=birthday)
+    # Timers claim the phrase early so "set a 5 minute timer" isn't misread as a
+    # calendar event ("set ... at a time").
+    if re.search(r"\btimer\b|\bcountdown\b", text):
+        if re.search(r"\b(cancel|stop|clear|delete|dismiss|reset|turn off)\b", text):
+            return SkybridgeIntent(domain="timer", action="cancel", title=_parse_timer_label(text))
+        if re.search(r"\b(how (?:long|much)|left|remaining|status|check on|still going)\b", text):
+            return SkybridgeIntent(domain="timer", action="status")
+        seconds = _parse_timer_duration(text) or 300  # bare "set a timer" → 5 min
+        return SkybridgeIntent(domain="timer", action="create", title=_parse_timer_label(text), duration_seconds=seconds)
     calendar_update = _calendar_update_from_text(raw_message, context)
     if calendar_update:
         target, target_time = calendar_update
@@ -521,6 +930,17 @@ def classify_skybridge_intent(message: str, context: dict[str, Any] | None = Non
     if list_add:
         item, list_type = list_add
         return SkybridgeIntent(domain="lists", action="add_item", item_text=item, list_type=list_type)
+    list_complete = _list_complete_from_text(raw_message)
+    if list_complete:
+        item, list_type, completed = list_complete
+        return SkybridgeIntent(domain="lists", action="complete_item", item_text=item, list_type=list_type, completed=completed)
+    list_remove = _list_remove_from_text(raw_message)
+    if list_remove:
+        item, list_type = list_remove
+        return SkybridgeIntent(domain="lists", action="remove_item", item_text=item, list_type=list_type)
+    calendar_delete = _calendar_delete_from_text(raw_message, context)
+    if calendar_delete:
+        return SkybridgeIntent(domain="calendar", action="delete_event", target_text=calendar_delete)
     list_create = _list_create_from_text(raw_message, context)
     if list_create:
         list_name, list_type = list_create
@@ -529,6 +949,17 @@ def classify_skybridge_intent(message: str, context: dict[str, Any] | None = Non
     if contextual_list_add:
         item, list_type = contextual_list_add
         return SkybridgeIntent(domain="lists", action="add_item", item_text=item, list_type=list_type)
+    contextual_list_remove = _contextual_list_remove_from_text(raw_message, context)
+    if contextual_list_remove:
+        item, list_type = contextual_list_remove
+        return SkybridgeIntent(domain="lists", action="remove_item", item_text=item, list_type=list_type)
+    list_edit = _list_edit_from_text(raw_message, context)
+    if list_edit:
+        item, list_type = list_edit
+        return SkybridgeIntent(domain="lists", action="edit_item", item_text=item, list_type=list_type)
+    calendar_edit = _calendar_edit_from_text(raw_message, context)
+    if calendar_edit:
+        return SkybridgeIntent(domain="calendar", action="edit_event", target_text=calendar_edit)
     calendar_create = _calendar_create_from_text(raw_message, context)
     if calendar_create:
         title, target_time = calendar_create
@@ -607,6 +1038,9 @@ async def resolve_skybridge_request(
     if intent.domain == "clock":
         return _attach_skybridge_context(_resolve_clock(intent))
 
+    if intent.domain == "timer":
+        return _attach_skybridge_context(_resolve_timer(intent, user_id))
+
     if db is not None:
         return _attach_skybridge_context(await _resolve_with_db(intent, user_id, db, context=context))
 
@@ -614,8 +1048,38 @@ async def resolve_skybridge_request(
         return _attach_skybridge_context(await _resolve_with_db(intent, user_id, ctx_db, context=context))
 
 
+def _card_as_component(card: Any) -> dict[str, Any]:
+    """Normalize a producer's card to the canonical component shape so it can be
+    validated. Mirrors the client-side normalizeCard: a `{component, props}` card
+    passes through; a card_service envelope (`{card_type, content, ...}`) maps to
+    `{component: card_type, props: content}`."""
+    if not isinstance(card, dict):
+        raise CardContractError("card must be an object")
+    if card.get("component"):
+        return {"component": card["component"], "props": card.get("props") or {}}
+    if card.get("card_type") and isinstance(card.get("content"), dict):
+        return {"component": card["card_type"], "props": card["content"]}
+    raise CardContractError(f"card has neither 'component' nor 'card_type' (keys={sorted(card)[:6]})")
+
+
+def _validate_cards_for_convergence(cards: Any) -> None:
+    """Consolidation increment 2 — NON-FATAL measurement gate. Validate every card
+    leaving the resolver against the canonical component contract and log any that
+    don't conform, so the 4 producers can be migrated one at a time. NEVER mutates
+    or drops a card — pure measurement, zero panel risk."""
+    for card in cards or []:
+        try:
+            validate_component(_card_as_component(card))
+        except CardContractError as exc:
+            comp = card.get("component") or card.get("card_type") if isinstance(card, dict) else "?"
+            logger.info("skybridge card non-conforming [convergence]: %s | component=%s", exc, comp)
+        except Exception:  # measurement must never break a turn — but stay auditable
+            logger.warning("convergence gate hit an unexpected error (non-fatal)", exc_info=True)
+
+
 def _attach_skybridge_context(result: dict[str, Any]) -> dict[str, Any]:
     if result.get("handled"):
+        _validate_cards_for_convergence(result.get("cards"))
         result["skybridge_context"] = {
             "intent": result.get("intent") or {},
             "cards": result.get("cards") or [],
@@ -640,12 +1104,22 @@ async def _resolve_with_db(intent: SkybridgeIntent, user_id: str, db: Any, *, co
             return await _resolve_calendar_create(intent, user_id, db)
         if intent.action == "update_time":
             return await _resolve_calendar_update_time(intent, user_id, db, context)
+        if intent.action == "edit_event":
+            return await _resolve_calendar_edit_event(intent, user_id, db, context)
+        if intent.action == "delete_event":
+            return await _resolve_calendar_delete_event(intent, user_id, db, context)
         return await _resolve_calendar(intent, user_id, db)
     if intent.domain == "weather":
         return await _resolve_weather(intent, user_id, db)
     if intent.domain == "lists":
         if intent.action == "add_item":
             return await _resolve_list_add_item(intent, user_id, db, context)
+        if intent.action == "remove_item":
+            return await _resolve_list_remove_item(intent, user_id, db, context)
+        if intent.action == "complete_item":
+            return await _resolve_list_complete_item(intent, user_id, db, context)
+        if intent.action == "edit_item":
+            return await _resolve_list_edit_item(intent, user_id, db, context)
         if intent.action == "create_list":
             return await _resolve_list_create(intent, user_id, db)
         return await _resolve_lists(intent, user_id, db)
@@ -728,7 +1202,7 @@ def _auth_required_result(intent: SkybridgeIntent) -> dict[str, Any]:
     }
     domain = domain_labels.get(intent.domain, "this data")
     title = f"Sign in to view {domain}"
-    if intent.action in {"create_event", "update_time", "add_item", "remember_fact"}:
+    if intent.action in {"create_event", "update_time", "add_item", "complete_item", "remember_fact"}:
         title = f"Sign in to change {domain}"
     body = "Zoe needs to know who is speaking before showing or changing personal data."
     return {
@@ -743,7 +1217,6 @@ def _auth_required_result(intent: SkybridgeIntent) -> dict[str, Any]:
                 "body": body,
                 "domain": domain,
                 "action": intent.action,
-                "actions": [{"type": "auth", "label": "Sign in", "route": ""}],
             },
         }],
         "actions": [{"type": "auth_required", "domain": intent.domain, "action": intent.action}],
@@ -870,6 +1343,147 @@ async def _resolve_calendar_update_time(intent: SkybridgeIntent, user_id: str, d
     refreshed["intent"] = {"domain": "calendar", "action": "update_time", "event_id": event_id}
     refreshed["spoken_summary"] = f"Moved {event.get('title') or 'the event'} to {intent.target_time}."
     refreshed["actions"] = [{"type": "updated", "domain": "calendar", "id": event_id}]
+    return refreshed
+
+
+async def _resolve_calendar_edit_event(intent: SkybridgeIntent, user_id: str, db: Any, context: dict[str, Any] | None) -> dict[str, Any]:
+    """Open the existing calendar event editor card for the tapped/named event (read, not a mutation)."""
+    if user_id in {"guest", "voice-guest"}:
+        return {
+            "handled": True,
+            "intent": _intent_dict(intent),
+            "spoken_summary": "Calendar changes are not available for guest sessions.",
+            "cards": [_status_card("Sign in to change calendar", "Zoe needs to know who is speaking before editing calendar events.")],
+            "actions": [],
+        }
+    candidates = _context_events(context)
+    start = _context_calendar_date(context)
+    if not candidates:
+        rows = await db.fetch(
+            """
+            SELECT *
+            FROM events
+            WHERE (visibility = 'family' OR user_id = $1)
+              AND deleted = 0
+              AND start_date = $2
+            ORDER BY start_time
+            """,
+            user_id,
+            start.isoformat(),
+        )
+        candidates = [row_to_event(row) for row in rows]
+    if not candidates:
+        return {
+            "handled": True,
+            "intent": _intent_dict(intent),
+            "spoken_summary": "I could not find a calendar event to edit.",
+            "cards": [_status_card("Which appointment?", "I could not find a visible calendar event to edit. Show the calendar first or name the event.")],
+            "actions": [],
+        }
+    scored = sorted(((event, _score_event_for_target(event, intent.target_text)) for event in candidates), key=lambda pair: pair[1], reverse=True)
+    top_score = scored[0][1]
+    matches = [event for event, score in scored if score == top_score and score > 0]
+    if len(matches) != 1:
+        return {
+            "handled": True,
+            "intent": _intent_dict(intent),
+            "spoken_summary": "I need to know which event to edit.",
+            "cards": [_status_card("Which event should I edit?", "There is more than one possible calendar event. Say the event title to edit it.")],
+            "actions": [],
+        }
+    event = matches[0]
+    title = str(event.get("title") or "Event")
+    event_time = str(event.get("start_time") or "")[:5]
+    event_date = str(event.get("start_date") or start.isoformat())[:10]
+    actions = [
+        {"type": "query", "label": "Move to 9am", "query": f"move {title} to 9am"},
+        {"type": "query", "label": "Delete event", "query": f"delete {title} from my calendar", "kind": "warn"},
+        {"type": "query", "label": "Back to calendar", "query": "show my calendar"},
+    ]
+    card = card_service.build_calendar_event_editor_card(
+        {
+            "title": title,
+            "date": event_date,
+            "time": event_time,
+            "location": str(event.get("location") or ""),
+            "event_id": str(event.get("id") or ""),
+            "actions": actions,
+        }
+    )
+    return {
+        "handled": True,
+        "intent": {"domain": "calendar", "action": "edit_event", "event_id": event.get("id")},
+        "spoken_summary": f"Editing {title}. You can move it or delete it.",
+        "cards": [card_service.convert_emit(card, target_major=1)],
+        "actions": [],
+    }
+
+
+async def _resolve_calendar_delete_event(intent: SkybridgeIntent, user_id: str, db: Any, context: dict[str, Any] | None) -> dict[str, Any]:
+    if user_id in {"guest", "voice-guest"}:
+        return {
+            "handled": True,
+            "intent": _intent_dict(intent),
+            "spoken_summary": "Calendar changes are not available for guest sessions.",
+            "cards": [_status_card("Sign in to change calendar", "Zoe needs to know who is speaking before deleting calendar events.")],
+            "actions": [],
+        }
+    candidates = _context_events(context)
+    start = _context_calendar_date(context)
+    if not candidates:
+        rows = await db.fetch(
+            """
+            SELECT *
+            FROM events
+            WHERE (visibility = 'family' OR user_id = $1)
+              AND deleted = 0
+              AND start_date = $2
+            ORDER BY start_time
+            """,
+            user_id,
+            start.isoformat(),
+        )
+        candidates = [row_to_event(row) for row in rows]
+    if not candidates:
+        return {
+            "handled": True,
+            "intent": _intent_dict(intent),
+            "spoken_summary": "I could not find a calendar event to delete.",
+            "cards": [_status_card("Which appointment?", "I could not find a visible calendar event to delete. Show the calendar first or name the event.")],
+            "actions": [],
+        }
+    scored = sorted(((event, _score_event_for_target(event, intent.target_text)) for event in candidates), key=lambda pair: pair[1], reverse=True)
+    top_score = scored[0][1]
+    matches = [event for event, score in scored if score == top_score and score > 0]
+    if len(matches) != 1:
+        return {
+            "handled": True,
+            "intent": _intent_dict(intent),
+            "spoken_summary": "I need to know which event to delete.",
+            "cards": [_status_card("Which event should I delete?", "There is more than one possible calendar event. Say the event title to delete it.")],
+            "actions": [],
+        }
+    event = matches[0]
+    event_id = event.get("id")
+    delete_result = await db.execute(
+        "UPDATE events SET deleted = 1, updated_at = NOW() WHERE id = $1 AND user_id = $2 AND deleted = 0",
+        event_id,
+        user_id,
+    )
+    if _affected_rows(delete_result) == 0:
+        return {
+            "handled": True,
+            "intent": _intent_dict(intent),
+            "spoken_summary": "I can see that event, but I cannot delete it from this account.",
+            "cards": [_status_card("I could not delete that event", "The event is visible to the family, but this account does not own it. Ask the owner to delete it.")],
+            "actions": [],
+        }
+    await _maybe_commit(db)
+    start = date.fromisoformat(str(event.get("start_date") or start.isoformat())[:10])
+    refreshed = await _resolve_calendar(SkybridgeIntent("calendar", "show", start.isoformat(), start, start), user_id, db)
+    refreshed["intent"] = {"domain": "calendar", "action": "delete_event", "event_id": event_id}
+    refreshed["spoken_summary"] = f"Deleted {event.get('title') or 'the event'}."
+    refreshed["actions"] = [{"type": "deleted", "domain": "calendar", "id": event_id}]
     return refreshed
 
 
@@ -1022,7 +1636,11 @@ async def _resolve_lists(intent: SkybridgeIntent, user_id: str, db: Any) -> dict
     summary_count = len(items) if selected else sum(item.get("item_count", 0) for item in lists)
     open_count = selected.get("open_count", 0) if selected else sum(item.get("open_count", 0) for item in lists)
     completed_count = selected.get("completed_count", 0) if selected else sum(item.get("completed_count", 0) for item in lists)
-    spoken = f"{list_name} has {summary_count} item{'s' if summary_count != 1 else ''}."
+    if selected and items:
+        # Readback: enumerate the items so the voice half names them, not just a count.
+        spoken = _enumerate_items_for_speech(list_name, items)
+    else:
+        spoken = f"{list_name} has {summary_count} item{'s' if summary_count != 1 else ''}."
     card = card_service.build_shopping_list_card(
         {
             "list_id": selected.get("id") if selected else "lists-overview",
@@ -1332,6 +1950,295 @@ async def _resolve_list_add_item(intent: SkybridgeIntent, user_id: str, db: Any,
     refreshed["spoken_summary"] = f"Added {intent.item_text} to the {list_type} list."
     refreshed["actions"] = [{"type": "created", "domain": "lists", "id": item_id, "list_id": list_id}]
     return refreshed
+
+
+def _match_list_items_by_text(items: list[dict[str, Any]], wanted: str) -> list[dict[str, Any]]:
+    """Find list items whose text matches `wanted`, preferring exact over substring."""
+    target = wanted.strip().lower()
+    if not target:
+        return []
+    exact = [item for item in items if str(item.get("text") or "").strip().lower() == target]
+    if exact:
+        return exact
+    return [item for item in items if target in str(item.get("text") or "").strip().lower()]
+
+
+async def _find_list_for_remove(intent: SkybridgeIntent, user_id: str, db: Any, context: dict[str, Any] | None) -> tuple[str, str] | None:
+    """Locate an existing list (never create) for a removal, mirroring _find_or_create_list's lookups."""
+    hinted_id, hinted_type = _context_list_hint(context)
+    list_type = intent.list_type or hinted_type or "shopping"
+    if hinted_id:
+        rows = await db.fetch(
+            """
+            SELECT id, name, list_type
+            FROM lists
+            WHERE id = $1 AND deleted = 0
+              AND (visibility = 'family' OR user_id = $2)
+            LIMIT 1
+            """,
+            hinted_id,
+            user_id,
+        )
+        if rows:
+            row = dict(rows[0])
+            return str(row["id"]), str(row.get("list_type") or list_type)
+    rows = await db.fetch(
+        """
+        SELECT id, name, list_type
+        FROM lists
+        WHERE list_type = $2 AND deleted = 0
+          AND (visibility = 'family' OR user_id = $1)
+        ORDER BY
+          CASE WHEN user_id = $1 THEN 0 ELSE 1 END,
+          updated_at DESC
+        LIMIT 1
+        """,
+        user_id,
+        list_type,
+    )
+    if rows:
+        row = dict(rows[0])
+        return str(row["id"]), str(row.get("list_type") or list_type)
+    return None
+
+
+async def _resolve_list_remove_item(intent: SkybridgeIntent, user_id: str, db: Any, context: dict[str, Any] | None) -> dict[str, Any]:
+    if user_id in {"guest", "voice-guest"}:
+        return {
+            "handled": True,
+            "intent": _intent_dict(intent),
+            "spoken_summary": "List changes are not available for guest sessions.",
+            "cards": [_status_card("Sign in to change lists", "Zoe needs to know who is speaking before editing list items.")],
+            "actions": [],
+        }
+    if not intent.item_text:
+        return {
+            "handled": True,
+            "intent": _intent_dict(intent),
+            "spoken_summary": "I did not catch which item to remove.",
+            "cards": [_status_card("What should I remove?", "Say the item and the list, for example: take milk off the shopping list.")],
+            "actions": [],
+        }
+    await _ensure_default_lists(user_id, db)
+    list_target = await _find_list_for_remove(intent, user_id, db, context)
+    if not list_target:
+        return {
+            "handled": True,
+            "intent": _intent_dict(intent),
+            "spoken_summary": "I could not find that list.",
+            "cards": [_status_card("Which list should I use?", "I could not find that list. Show your lists again or name the list to update.")],
+            "actions": [],
+        }
+    list_id, list_type = list_target
+    item_rows = await db.fetch(
+        """
+        SELECT id, list_id, text, completed
+        FROM list_items
+        WHERE list_id = $1 AND deleted = 0
+        """,
+        list_id,
+    )
+    items = [dict(row) for row in item_rows]
+    matches = _match_list_items_by_text(items, intent.item_text)
+    if len(matches) != 1:
+        # Ambiguity rule: never delete the wrong item. Ask for clarification.
+        refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type), user_id, db)
+        if not matches:
+            body = f"I could not find \"{intent.item_text}\" on that list. Say the exact item to remove."
+            spoken = f"I could not find {intent.item_text} on that list."
+            status = "not_found"
+        else:
+            options = ", ".join(str(match.get("text") or "") for match in matches[:5])
+            body = f"More than one item matches \"{intent.item_text}\" ({options}). Say the exact item to remove."
+            spoken = f"More than one item matches {intent.item_text}. Which one should I remove?"
+            status = "ambiguous"
+        refreshed["intent"] = {"domain": "lists", "action": "remove_item", "list_type": list_type, "status": status}
+        refreshed["spoken_summary"] = spoken
+        refreshed["cards"] = [_status_card("Which item should I remove?", body)] + list(refreshed.get("cards") or [])
+        refreshed["actions"] = []
+        return refreshed
+    target_item = matches[0]
+    item_id = str(target_item.get("id") or "")
+    remove_result = await db.execute(
+        "UPDATE list_items SET deleted = 1, updated_at = NOW() WHERE id = $1 AND list_id = $2 AND deleted = 0",
+        item_id,
+        list_id,
+    )
+    if _affected_rows(remove_result) == 0:
+        refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type), user_id, db)
+        refreshed["intent"] = {"domain": "lists", "action": "remove_item", "list_type": list_type}
+        refreshed["spoken_summary"] = "I could not remove that item."
+        refreshed["cards"] = [_status_card("I could not remove that item", "The list item is no longer available. Show your lists again to confirm.")] + list(refreshed.get("cards") or [])
+        refreshed["actions"] = []
+        return refreshed
+    await _maybe_commit(db)
+    item_text = str(target_item.get("text") or intent.item_text)
+    refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type), user_id, db)
+    refreshed["intent"] = {"domain": "lists", "action": "remove_item", "list_type": list_type, "item_id": item_id}
+    refreshed["spoken_summary"] = f"Removed {item_text} from the {list_type} list."
+    refreshed["actions"] = [{"type": "deleted", "domain": "lists", "id": item_id, "list_id": list_id}]
+    return refreshed
+
+
+async def _resolve_list_complete_item(intent: SkybridgeIntent, user_id: str, db: Any, context: dict[str, Any] | None) -> dict[str, Any]:
+    """Tick an item off (or restore it) — the core list gesture. Mutate, then
+    authoritative re-read → refreshed card, mirroring the add/remove loop."""
+    if user_id in {"guest", "voice-guest"}:
+        return {
+            "handled": True,
+            "intent": _intent_dict(intent),
+            "spoken_summary": "List changes are not available for guest sessions.",
+            "cards": [_status_card("Sign in to change lists", "Zoe needs to know who is speaking before editing list items.")],
+            "actions": [],
+        }
+    if not intent.item_text:
+        return {
+            "handled": True,
+            "intent": _intent_dict(intent),
+            "spoken_summary": "I did not catch which item to check off.",
+            "cards": [_status_card("Which item?", "Say the item, for example: check off milk on the shopping list.")],
+            "actions": [],
+        }
+    await _ensure_default_lists(user_id, db)
+    list_target = await _find_list_for_remove(intent, user_id, db, context)
+    if not list_target:
+        return {
+            "handled": True,
+            "intent": _intent_dict(intent),
+            "spoken_summary": "I could not find that list.",
+            "cards": [_status_card("Which list should I use?", "I could not find that list. Show your lists again or name the list to update.")],
+            "actions": [],
+        }
+    list_id, list_type = list_target
+    item_rows = await db.fetch(
+        """
+        SELECT id, list_id, text, completed
+        FROM list_items
+        WHERE list_id = $1 AND deleted = 0
+        """,
+        list_id,
+    )
+    items = [dict(row) for row in item_rows]
+    matches = _match_list_items_by_text(items, intent.item_text)
+    if len(matches) != 1:
+        # Ambiguity rule: never tick the wrong item. Ask instead of guessing.
+        refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type), user_id, db)
+        if not matches:
+            body = f"I could not find \"{intent.item_text}\" on that list. Say the exact item."
+            spoken = f"I could not find {intent.item_text} on that list."
+            status = "not_found"
+        else:
+            options = ", ".join(str(match.get("text") or "") for match in matches[:5])
+            body = f"More than one item matches \"{intent.item_text}\" ({options}). Say the exact item."
+            spoken = f"More than one item matches {intent.item_text}. Which one?"
+            status = "ambiguous"
+        refreshed["intent"] = {"domain": "lists", "action": "complete_item", "list_type": list_type, "status": status}
+        refreshed["spoken_summary"] = spoken
+        refreshed["cards"] = [_status_card("Which item?", body)] + list(refreshed.get("cards") or [])
+        refreshed["actions"] = []
+        return refreshed
+    target_item = matches[0]
+    item_id = str(target_item.get("id") or "")
+    # Explicit direction from the parser; fall back to a toggle if unset.
+    desired = intent.completed
+    if desired is None:
+        desired = not bool(target_item.get("completed"))
+    completed_val = 1 if desired else 0
+    update_result = await db.execute(
+        "UPDATE list_items SET completed = $1, updated_at = NOW() WHERE id = $2 AND list_id = $3 AND deleted = 0",
+        completed_val,
+        item_id,
+        list_id,
+    )
+    if _affected_rows(update_result) == 0:
+        refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type), user_id, db)
+        refreshed["intent"] = {"domain": "lists", "action": "complete_item", "list_type": list_type}
+        refreshed["spoken_summary"] = "I could not update that item."
+        refreshed["cards"] = [_status_card("I could not update that item", "The list item is no longer available. Show your lists again to confirm.")] + list(refreshed.get("cards") or [])
+        refreshed["actions"] = []
+        return refreshed
+    await _maybe_commit(db)
+    item_text = str(target_item.get("text") or intent.item_text)
+    refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type), user_id, db)
+    refreshed["intent"] = {"domain": "lists", "action": "complete_item", "list_type": list_type, "item_id": item_id, "completed": desired}
+    refreshed["spoken_summary"] = (
+        f"Ticked off {item_text} on the {list_type} list." if desired
+        else f"Put {item_text} back on the {list_type} list."
+    )
+    refreshed["actions"] = [{"type": "updated", "domain": "lists", "id": item_id, "list_id": list_id, "completed": desired}]
+    return refreshed
+
+
+async def _resolve_list_edit_item(intent: SkybridgeIntent, user_id: str, db: Any, context: dict[str, Any] | None) -> dict[str, Any]:
+    """Open the existing shopping item editor card for the tapped/named item (read, not a mutation)."""
+    if user_id in {"guest", "voice-guest"}:
+        return {
+            "handled": True,
+            "intent": _intent_dict(intent),
+            "spoken_summary": "List changes are not available for guest sessions.",
+            "cards": [_status_card("Sign in to change lists", "Zoe needs to know who is speaking before editing list items.")],
+            "actions": [],
+        }
+    await _ensure_default_lists(user_id, db)
+    list_target = await _find_list_for_remove(intent, user_id, db, context)
+    if not list_target:
+        return {
+            "handled": True,
+            "intent": _intent_dict(intent),
+            "spoken_summary": "I could not find that list.",
+            "cards": [_status_card("Which list should I use?", "I could not find that list. Show your lists again or name the list to edit.")],
+            "actions": [],
+        }
+    list_id, list_type = list_target
+    item_rows = await db.fetch(
+        """
+        SELECT id, list_id, text, completed, quantity, category
+        FROM list_items
+        WHERE list_id = $1 AND deleted = 0
+        """,
+        list_id,
+    )
+    items = [dict(row) for row in item_rows]
+    matches = _match_list_items_by_text(items, intent.item_text)
+    if len(matches) != 1:
+        if not matches:
+            body = f"I could not find \"{intent.item_text}\" on that list. Say the exact item to edit."
+            spoken = f"I could not find {intent.item_text} on that list."
+        else:
+            options = ", ".join(str(match.get("text") or "") for match in matches[:5])
+            body = f"More than one item matches \"{intent.item_text}\" ({options}). Say the exact item to edit."
+            spoken = f"More than one item matches {intent.item_text}. Which one should I edit?"
+        return {
+            "handled": True,
+            "intent": {"domain": "lists", "action": "edit_item", "list_type": list_type, "status": "ambiguous"},
+            "spoken_summary": spoken,
+            "cards": [_status_card("Which item should I edit?", body)],
+            "actions": [],
+        }
+    item = matches[0]
+    item_text = str(item.get("text") or intent.item_text)
+    list_label = _default_list_name(list_type)
+    actions = [
+        {"type": "query", "label": "Remove from list", "query": f"take {item_text} off the {list_type} list", "kind": "warn"},
+        {"type": "query", "label": "Back to list", "query": f"show my {list_label} list"},
+    ]
+    card = card_service.build_shopping_item_editor_card(
+        {
+            "items": [item_text],
+            "list_name": list_label,
+            "list_type": list_type,
+            "quantity": str(item.get("quantity") or ""),
+            "item_id": str(item.get("id") or ""),
+            "actions": actions,
+        }
+    )
+    return {
+        "handled": True,
+        "intent": {"domain": "lists", "action": "edit_item", "list_type": list_type, "item_id": item.get("id")},
+        "spoken_summary": f"Editing {item_text}. You can remove it or go back to the list.",
+        "cards": [card_service.convert_emit(card, target_major=1)],
+        "actions": [],
+    }
 
 
 async def _resolve_people(intent: SkybridgeIntent, user_id: str, db: Any) -> dict[str, Any]:

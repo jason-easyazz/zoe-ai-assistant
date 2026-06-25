@@ -101,6 +101,169 @@ async def _load_voice_history(session_id: str, limit: int = 3) -> list[dict]:
     return []
 
 
+# Query-relevant recall packet sizing. A handful of the most relevant facts is
+# enough for the brain to answer a recall question; sending the whole metadata
+# dump (~1264 chars) is both slow and noisy. Keep this lean — it sits on the
+# brain-turn critical path.
+_VOICE_RECALL_SEARCH_LIMIT = 8   # one semantic search; re-ranked by hotness
+_VOICE_RECALL_MAX_FACTS = 6      # facts that actually make it into the block
+_VOICE_RECALL_FACT_CHARS = 160   # per-fact truncation so one long memory can't bloat it
+
+
+async def _voice_recall_packet(text: str, user_id: str) -> Optional[str]:
+    """Build a COMPACT, QUERY-RELEVANT "[What you remember]" block for a voice
+    brain turn from the turn TEXT.
+
+    Replaces the query-blind metadata dump on the read path: one
+    `MemoryService.search` call (semantic + hotness re-ranking), deduped and
+    truncated to a few hundred chars of only the facts relevant to what was asked.
+    Falls back to the full for-prompt dump when search returns nothing (e.g. a
+    chit-chat turn with no recall intent, or an embedder hiccup) so recall never
+    silently degrades. Best-effort: guest-safe and never raises."""
+    query = (text or "").strip()
+    if not query:
+        # No turn text (e.g. prewarm) — warm/return the fallback dump instead so
+        # the underlying facts cache stays primed.
+        return await _voice_recall_fallback(user_id)
+    try:
+        from memory_service import get_memory_service, is_guest_memory_user
+        if is_guest_memory_user(user_id):
+            return None
+        svc = get_memory_service()
+        refs = await svc.search(query, user_id=user_id, limit=_VOICE_RECALL_SEARCH_LIMIT)
+    except Exception as exc:
+        logger.debug("voice recall search failed (non-fatal): %s", exc)
+        refs = None
+
+    if not refs:
+        # Search found nothing relevant — fall back to the for-prompt dump so a
+        # recall question still has facts to draw on.
+        return await _voice_recall_fallback(user_id)
+
+    seen: set[str] = set()
+    lines: list[str] = []
+    for ref in refs:
+        fact = (getattr(ref, "text", "") or "").strip()
+        if not fact:
+            continue
+        line = fact[:_VOICE_RECALL_FACT_CHARS].strip()
+        # Dedup on the TRUNCATED line that actually gets emitted — two long facts
+        # identical in their first _VOICE_RECALL_FACT_CHARS chars would otherwise
+        # produce duplicate output lines.
+        key = re.sub(r"\s+", " ", line.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        lines.append("- " + line)
+        if len(lines) >= _VOICE_RECALL_MAX_FACTS:
+            break
+    if not lines:
+        return await _voice_recall_fallback(user_id)
+    return "[What you remember]\n" + "\n".join(lines)
+
+
+async def _voice_recall_fallback(user_id: str) -> Optional[str]:
+    """Full for-prompt metadata dump (the previous behaviour). Used when the
+    query-relevant search yields nothing, and to warm the facts cache on prewarm.
+    Best-effort / never raises."""
+    try:
+        from zoe_agent import _mempalace_load_user_facts
+        return (await _mempalace_load_user_facts(user_id)) or None
+    except Exception as exc:
+        logger.debug("voice recall fallback load failed (non-fatal): %s", exc)
+        return None
+
+
+async def _voice_brain_memory(
+    user_id: str, text: Optional[str] = None
+) -> tuple[Optional[str], Optional[str]]:
+    """Load (db_memory_context, portrait) for a voice brain turn.
+
+    Voice no longer fast-paths people/memory recall (it was slow and mis-stored
+    questions as facts), so the brain must answer recall itself. Unlike chat —
+    where the memory.ts extension injects the for-prompt packet — the voice path
+    calls the brain directly, so we inject the user's facts + portrait here or the
+    brain would have no memory to recall from.
+
+    When `text` (the turn transcript) is given, db_memory is a COMPACT
+    query-relevant recall packet built from that text (token-efficient; only the
+    facts relevant to what was asked). When `text` is None — the wake prewarm
+    path — it falls back to the full for-prompt dump, which also warms the shared
+    facts cache for the real turn. Best-effort (guest-safe / never raises)."""
+    db_memory: Optional[str] = None
+    portrait: Optional[str] = None
+    try:
+        db_memory = await _voice_recall_packet(text or "", user_id)
+    except Exception as exc:
+        logger.debug("voice brain memory load failed (non-fatal): %s", exc)
+    try:
+        from user_portrait import load_portrait
+        portrait = (await load_portrait(user_id)) or None
+    except Exception as exc:
+        logger.debug("voice brain portrait load failed (non-fatal): %s", exc)
+    # The user's NAME is identity (who they authenticated as), NOT a memory fact —
+    # so "what's my name" is answered from auth, never from recall. Ground every
+    # brain turn in who's speaking by prepending it to the [About you] block.
+    identity = await _voice_user_identity(user_id)
+    if identity:
+        line = f"You are speaking with {identity} (the signed-in user)."
+        portrait = f"{line}\n{portrait}" if portrait else line
+    return db_memory, portrait
+
+
+async def _voice_user_identity(user_id: str) -> Optional[str]:
+    """The signed-in user's display name from the identity (users) table — NOT a
+    memory fact. Memory is per-user and the user authenticates as themselves, so
+    their name is known from auth. Skips guest/daemon/admin. Best-effort/never raises."""
+    if not user_id or user_id in ("guest", "voice-daemon", "family-admin", ""):
+        return None
+    try:
+        from db_pool import get_db_ctx
+        async with get_db_ctx() as db:
+            # db_pool is asyncpg → $1 placeholder + fetchrow (the aiosqlite '?'
+            # cursor style fails silently here).
+            row = await db.fetchrow("SELECT name FROM users WHERE id = $1", user_id)
+        name = ((row["name"] if row else "") or "").strip()
+        if name and name.islower():   # "jason" -> "Jason" for natural read-back
+            name = name.title()
+        return name or None
+    except Exception as exc:
+        logger.debug("voice identity load failed (non-fatal): %s", exc)
+        return None
+
+
+_VOICE_BRAIN_DOMAIN_CONTEXT = {
+    "calendar": ("calendar_show", {"qualifier": "this week"}, "Your calendar this week"),
+    "lists": ("list_show", {}, "Your lists"),
+    "reminders": ("reminder_list", {}, "Your reminders"),
+}
+
+
+async def _voice_domain_context(router_decision: Optional[dict], user_id: str) -> Optional[str]:
+    """When a calendar/lists/reminders turn DEFERS to the brain (ambiguous fragment,
+    follow-up), hand the brain that domain's current data so it answers instead of
+    saying 'I don't have access to your calendar'. Scoped to those domains only —
+    chat/people brain turns (the common case) pay nothing, preserving the fast path.
+    Reuses the same read intents the fast path uses. Best-effort / never raises."""
+    domain = (router_decision or {}).get("domain")
+    spec = _VOICE_BRAIN_DOMAIN_CONTEXT.get(domain or "")
+    if not spec:
+        return None
+    intent_name, slots, label = spec
+    try:
+        from intent_router import Intent, execute_intent
+        summary = (await execute_intent(Intent(intent_name, dict(slots)), user_id) or "").strip()
+        return f"[{label}]\n{summary}" if summary else None
+    except Exception as exc:
+        logger.debug("voice domain context (%s) failed (non-fatal): %s", domain, exc)
+        return None
+
+
+def _merge_brain_context(db_memory: Optional[str], domain_ctx: Optional[str]) -> Optional[str]:
+    parts = [p for p in (db_memory, domain_ctx) if p]
+    return "\n\n".join(parts) if parts else None
+
+
 _VOICE_ESCALATION_MARKERS = ("__ESCALATE__:", "__ESCALATE_BG__:", "__ESCALATE_HERMES__:")
 
 
@@ -420,6 +583,23 @@ def _clean_for_speech(text: str) -> str:
     return t
 
 
+# Pooled client for the Kokoro sidecar, reused across sentences so each spoken
+# sentence doesn't pay a fresh TCP/connection setup (the sidecar is hit once per
+# sentence on the streaming voice path — per-call AsyncClient added fixed latency
+# to every inter-sentence boundary).
+_KOKORO_HTTP: "Optional[httpx.AsyncClient]" = None
+
+
+def _kokoro_http_client() -> "httpx.AsyncClient":
+    global _KOKORO_HTTP
+    if _KOKORO_HTTP is None or _KOKORO_HTTP.is_closed:
+        _KOKORO_HTTP = httpx.AsyncClient(
+            timeout=15.0,
+            limits=httpx.Limits(max_keepalive_connections=4, keepalive_expiry=60.0),
+        )
+    return _KOKORO_HTTP
+
+
 async def _synthesize_kokoro_sidecar(text: str) -> Optional[bytes]:
     """Synthesize via Kokoro PyTorch sidecar (GPU, natural af_sky voice).
 
@@ -432,15 +612,29 @@ async def _synthesize_kokoro_sidecar(text: str) -> Optional[bytes]:
     sidecar_url = os.environ.get("ZOE_KOKORO_SIDECAR_URL", "http://127.0.0.1:10201").rstrip("/")
     voice = os.environ.get("ZOE_KOKORO_VOICE", "af_sky").strip() or "af_sky"
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            r = await client.post(
-                f"{sidecar_url}/synthesize",
-                json={"text": text, "voice": voice},
-            )
-            if r.status_code >= 400 or not r.content:
-                logger.debug("kokoro-sidecar HTTP %s", r.status_code)
-                return None
-            return r.content
+        client = _kokoro_http_client()
+        r = await client.post(
+            f"{sidecar_url}/synthesize",
+            json={"text": text, "voice": voice},
+        )
+        if r.status_code >= 400 or not r.content:
+            logger.debug("kokoro-sidecar HTTP %s", r.status_code)
+            return None
+        return r.content
+    except httpx.TransportError as exc:
+        # A pooled client does NOT auto-close on a transport error the way the old
+        # per-call `async with` did, so a timed-out / reset connection would be
+        # re-checked-out for the next sentence and fail again. Recycle the pooled
+        # client so the next call reconnects cleanly.
+        global _KOKORO_HTTP
+        logger.debug("kokoro-sidecar transport error, recycling pooled client: %s", exc)
+        try:
+            if _KOKORO_HTTP is not None:
+                await _KOKORO_HTTP.aclose()
+        except Exception:
+            pass
+        _KOKORO_HTTP = None
+        return None
     except Exception as exc:
         logger.debug("kokoro-sidecar unavailable: %s", exc)
         return None
@@ -558,6 +752,38 @@ def _extract_complete_sentences(buffer: str) -> tuple[list[str], str]:
     return complete, buffer[last_end:]
 
 
+_FIRST_UNIT_MIN_CHARS = 12  # don't synthesize a tiny stub like "So,"
+_FIRST_UNIT_SOFT_CAP = 40   # flush at a word boundary by here even without punctuation
+
+
+def _fast_first_audio_enabled() -> bool:
+    return os.environ.get("ZOE_VOICE_FAST_FIRST_AUDIO", "1").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _extract_first_unit(buffer: str) -> tuple[Optional[str], str]:
+    """Pull the FIRST speakable unit out of a streaming buffer as early as possible.
+
+    Time-to-first-audio dominates how fast a voice reply *feels*. Waiting for a full
+    sentence (`.!?`) before the first synth adds ~1-2s of silence at 22 tok/s. For
+    the first chunk only, break on the first clause boundary (, ; : — or sentence
+    end) once we have a few words, or at a word boundary by the soft cap — so audio
+    starts almost immediately. Punctuation must be followed by space/end so decimals
+    ('twelve point four') and 'a.m.' don't split. Returns (unit|None, remainder)."""
+    stripped = buffer.lstrip()
+    if len(stripped) < _FIRST_UNIT_MIN_CHARS:
+        return None, buffer
+    m = re.search(r"(.{%d,}?[,;:.!?—–])(?:\s|$)" % _FIRST_UNIT_MIN_CHARS, buffer, re.DOTALL)
+    if m:
+        return m.group(1).strip(), buffer[m.end():]
+    # No clause break yet but the buffer is getting long — flush at a word boundary
+    # so the first audio doesn't stall behind a long opening clause.
+    if len(buffer) >= _FIRST_UNIT_SOFT_CAP:
+        cut = buffer.rfind(" ", _FIRST_UNIT_MIN_CHARS, _FIRST_UNIT_SOFT_CAP)
+        if cut > 0:
+            return buffer[:cut].strip(), buffer[cut:]
+    return None, buffer
+
+
 def _skybridge_only() -> bool:
     """When set, voice never navigates the panel to legacy domain pages.
 
@@ -567,6 +793,18 @@ def _skybridge_only() -> bool:
     Skybridge resolver falls through. Gating them keeps the panel on Skybridge.
     """
     return os.environ.get("ZOE_SKYBRIDGE_ONLY", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _status_card(title: str, summary: str) -> dict:
+    """A panel-renderable card for the voice domain summaries.
+
+    The panel's renderSkybridgeCardPayload only renders a card when the payload
+    carries `card`/`cards` (the {type,data} shape alone falls back to plain text).
+    A `status` card with NO specialized `source` renders a safe generic title+body
+    card (a `source` like weather_current would call renderWeather, which needs
+    structured props we don't have here and would render blank).
+    """
+    return {"component": "status", "props": {"title": title, "body": (summary or "")[:300], "level": "info"}}
 
 
 async def _broadcast_weather_ui(
@@ -587,12 +825,15 @@ async def _broadcast_weather_ui(
             "panel_id": panel_id,
         },
     }
+    _wcard = _status_card("Weather", summary)
     card_action = {
         "id": f"voice_weather_card_{panel_id}_{delivery_key}",
         "action_type": "show_card",
         "payload": {
             "type": "weather",
             "data": {"summary": summary[:200]},
+            "card": _wcard,
+            "cards": [_wcard],
             "panel_id": panel_id,
         },
     }
@@ -687,12 +928,15 @@ async def _broadcast_calendar_ui(
             "panel_id": panel_id,
         },
     }
+    _ccard = _status_card("Calendar", summary)
     card_action = {
         "id": f"voice_calendar_card_{panel_id}_{delivery_key}",
         "action_type": "show_card",
         "payload": {
             "type": "calendar",
             "data": {"summary": summary[:200]},
+            "card": _ccard,
+            "cards": [_ccard],
             "panel_id": panel_id,
         },
     }
@@ -1080,12 +1324,15 @@ async def _broadcast_reminder_ui(
             "panel_id": panel_id,
         },
     }
+    _rcard = _status_card("Reminder", summary)
     card_action = {
         "id": f"voice_reminder_card_{panel_id}_{delivery_key}",
         "action_type": "show_card",
         "payload": {
             "type": "reminder",
             "data": {"summary": summary[:200]},
+            "card": _rcard,
+            "cards": [_rcard],
             "panel_id": panel_id,
         },
     }
@@ -2572,9 +2819,9 @@ async def _schedule_voice_chat_save(
     try:
         from chat import _save_chat_message as _svc  # lazy — avoids circular import
         if user_text:
-            _spawn_bg(_svc(session_id, "user", user_text))
+            _spawn_bg(_svc(session_id, "user", user_text, user_id=user_id))
         if reply:
-            _spawn_bg(_svc(session_id, "assistant", reply))
+            _spawn_bg(_svc(session_id, "assistant", reply, user_id=user_id))
     except Exception:
         pass
 
@@ -2769,7 +3016,7 @@ async def voice_command(
     if text and effective_user not in ("guest", "voice-daemon", ""):
         try:
             from chat import _save_chat_message as _svc_user_turn
-            _spawn_bg(_svc_user_turn(session_id, "user", text))
+            _spawn_bg(_svc_user_turn(session_id, "user", text, user_id=effective_user))
         except Exception:
             pass
 
@@ -3641,44 +3888,52 @@ async def voice_command(
     # dropping to the slow general brain. Shadow by default (logs, returns None);
     # only ZOE_EXPERT_MODE=active + an allow-listed domain actually fulfills.
     try:
-        import expert_dispatch as _xd
-        if _xd.is_enabled() and _router_decision and _router_decision.get("domain") not in (None, "chat"):
-            _xresult = await _xd.dispatch(
-                _router_decision["domain"], text,
-                {"user_id": effective_user, "session_id": session_id, "db": db,
-                 "score": _router_decision.get("score", 0.0), "panel_id": panel_id},
-            )
-            if _xresult is not None:
-                reply_text = _xresult.reply
-                _ui = (_xresult.ui or {}).get("kind")
-                try:
-                    if _ui == "weather":
-                        await _broadcast_weather_ui(panel_id, reply_text, turn_key=_turn_key)
-                    elif _ui == "calendar":
-                        await _broadcast_calendar_ui(panel_id, reply_text, turn_key=_turn_key)
-                    elif _ui == "reminder":
-                        await _broadcast_reminder_ui(panel_id=panel_id, summary=reply_text, turn_key=_turn_key)
-                except Exception:
-                    pass
-                _xaudio_b64: Optional[str] = None
-                _xct = "audio/wav"
-                if not stream:
-                    _xaudio = await synthesize({"text": reply_text}, caller=caller)
-                    _xaudio_b64 = base64.b64encode(_xaudio.body).decode("ascii")
-                    _xct = _xaudio.media_type
-                try:
-                    from push import broadcaster as _bc_xd
-                    await _bc_xd.broadcast("all", "voice:responding", {"panel_id": panel_id, "text": reply_text[:200]})
-                    await _bc_xd.broadcast("all", "voice:done", {"panel_id": panel_id})
-                except Exception:
-                    pass
-                await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
-                _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
-                return {
-                    "ok": True, "panel_id": panel_id, "reply": reply_text,
-                    "audio_base64": _xaudio_b64, "content_type": _xct,
-                    "intent": f"expert:{_xresult.domain}:{_xresult.intent}",
-                }
+        import fast_tiers as _fp
+        # Channel-agnostic deterministic core (shared with chat/LiveKit/Telegram).
+        # channel="voice" runs the shared Tier-0 read shortcut, but only for the
+        # public/idempotent reads (weather/time/date/list/calendar); user-scoped
+        # reads are deferred (profile `tier0_defer_intents`) so the B3/B4 scope gate
+        # below stays authoritative. The richer public-intent path above already
+        # caught the household-safe reads, so Tier-0 here mainly backstops them.
+        # Reuse the router decision from the shadow log and keep the dispatch ctx
+        # identical via extra_ctx (db/panel_id).
+        _xresult = await _fp.resolve(
+            text, effective_user, session_id,
+            channel="voice",
+            router_decision=_router_decision,
+            extra_ctx={"db": db, "panel_id": panel_id},
+        )
+        if _xresult is not None:
+            reply_text = _xresult.reply
+            _ui = (_xresult.ui or {}).get("kind")
+            try:
+                if _ui == "weather":
+                    await _broadcast_weather_ui(panel_id, reply_text, turn_key=_turn_key)
+                elif _ui == "calendar":
+                    await _broadcast_calendar_ui(panel_id, reply_text, turn_key=_turn_key)
+                elif _ui == "reminder":
+                    await _broadcast_reminder_ui(panel_id=panel_id, summary=reply_text, turn_key=_turn_key)
+            except Exception:
+                pass
+            _xaudio_b64: Optional[str] = None
+            _xct = "audio/wav"
+            if not stream:
+                _xaudio = await synthesize({"text": reply_text}, caller=caller)
+                _xaudio_b64 = base64.b64encode(_xaudio.body).decode("ascii")
+                _xct = _xaudio.media_type
+            try:
+                from push import broadcaster as _bc_xd
+                await _bc_xd.broadcast("all", "voice:responding", {"panel_id": panel_id, "text": reply_text[:200]})
+                await _bc_xd.broadcast("all", "voice:done", {"panel_id": panel_id})
+            except Exception:
+                pass
+            await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
+            _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
+            return {
+                "ok": True, "panel_id": panel_id, "reply": reply_text,
+                "audio_base64": _xaudio_b64, "content_type": _xct,
+                "intent": f"expert:{_xresult.domain}:{_xresult.intent}",
+            }
     except Exception as _xd_exc:
         logger.warning("voice/command expert dispatch failed (non-fatal): %s", _xd_exc)
 
@@ -3889,9 +4144,13 @@ async def voice_command(
                         logger.debug("voice/command stream processing acknowledgement failed: %s", ack_exc)
 
                     _voice_history = await _load_voice_history(session_id, limit=3)
+                    _v_db_memory, _v_portrait = await _voice_brain_memory(effective_user, text)
+                    _v_domain_ctx = await _voice_domain_context(_router_decision, effective_user)
                     async for delta in brain_streaming(
                         text, session_id, user_id=effective_user,
-                        voice_mode=True, history=_voice_history or None
+                        voice_mode=True, history=_voice_history or None,
+                        db_memory_context=_merge_brain_context(_v_db_memory, _v_domain_ctx),
+                        portrait=_v_portrait,
                     ):
                         if not delta:
                             continue
@@ -3932,6 +4191,13 @@ async def voice_command(
                             except Exception:
                                 pass
                         token_buf += delta
+                        # Snap the FIRST audio out on a short clause so the reply
+                        # starts almost immediately instead of after a full sentence.
+                        if _t_first_audio is None and _fast_first_audio_enabled():
+                            first_unit, token_buf = _extract_first_unit(token_buf)
+                            if first_unit:
+                                async for out_chunk in _emit_sentence(first_unit):
+                                    yield out_chunk
                         ready, token_buf = _extract_complete_sentences(token_buf)
                         for sentence in ready:
                             async for out_chunk in _emit_sentence(sentence):
@@ -3987,6 +4253,9 @@ async def voice_command(
         collected: list[str] = []
 
         _voice_history_nc = await _load_voice_history(session_id, limit=3)
+        _v_db_memory_nc, _v_portrait_nc = await _voice_brain_memory(effective_user, text)
+        _v_domain_ctx_nc = await _voice_domain_context(_router_decision, effective_user)
+        _v_db_memory_nc = _merge_brain_context(_v_db_memory_nc, _v_domain_ctx_nc)
 
         async def _stream_collect() -> None:
             nonlocal _t_first_token
@@ -3996,6 +4265,8 @@ async def voice_command(
                 user_id=effective_user,
                 voice_mode=True,
                 history=_voice_history_nc or None,
+                db_memory_context=_v_db_memory_nc,
+                portrait=_v_portrait_nc,
             ):
                 if not delta:
                     continue
@@ -4528,6 +4799,67 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
     )
 
 
+def _brain_prewarm_on_wake_enabled() -> bool:
+    return os.environ.get("ZOE_BRAIN_PREWARM_ON_WAKE", "1").strip().lower() in ("1", "true", "yes", "on")
+
+
+async def _prewarm_brain_for_panel(panel_id: str) -> None:
+    """On wake-word, spawn the panel's likely (user, session) brain worker so the
+    first turn doesn't pay the Pi subprocess cold-start. Fully best-effort and
+    backgrounded — must never delay or break the wake acknowledgement.
+
+    Resolves the user the same way voice_command will (bound > recent > default);
+    if the user is unknown the worker key would miss the real turn, so we skip
+    rather than spawn a wasted process.
+    """
+    try:
+        if not _brain_prewarm_on_wake_enabled():
+            return
+        session_id = _get_or_create_voice_session(panel_id)
+        user_id = (_VOICE_SESSIONS.get(panel_id) or {}).get("bound_user_id") or ""
+        if not user_id:
+            try:
+                from db_pool import get_db_ctx
+                async with get_db_ctx() as db:
+                    user_id = (
+                        await _resolve_recent_panel_session_user(panel_id, db)
+                        or await _resolve_panel_default_user(panel_id, db)
+                        or ""
+                    )
+            except Exception:
+                user_id = ""
+        if not user_id:
+            return
+        import zoe_core_client
+        _t0 = time.monotonic()
+        # Warm the brain worker (subprocess spawn) AND the user's facts cache
+        # concurrently, during the speech window. The cold facts read is ~1.4s and
+        # otherwise lands on the turn's critical path before the brain's first token;
+        # warming it here (cache TTL now outlives wake→turn) hides it on the first turn.
+        _pw = await asyncio.gather(
+            # voice_mode=True: warm the SAME (voice-capped) worker the voice turn
+            # will use, so prewarm actually hides the cold subprocess boot.
+            zoe_core_client.prewarm(user_id, session_id, voice_mode=True),
+            _voice_brain_memory(user_id),
+            return_exceptions=True,
+        )
+        warmed = _pw[0] if not isinstance(_pw[0], BaseException) else False
+        _ms = int((time.monotonic() - _t0) * 1000)
+        # INFO (not debug): the only way to know on-device whether the spawn
+        # actually overlaps the speech window — if this logs AFTER the turn's
+        # first token, prewarm bought nothing and the cost is elsewhere (prefill).
+        logger.info(
+            "voice/wake brain prewarm panel=%s user=%s warmed=%s spawn_ms=%d",
+            panel_id, user_id, warmed, _ms,
+        )
+    except Exception as exc:  # never let prewarm affect the wake path
+        # debug, not warning: a boot-time race (wake fires before zoe-core is up)
+        # would otherwise warn on every turn until the core settles. The INFO
+        # success line above (with spawn_ms) is the real signal — its ABSENCE
+        # already tells us prewarm isn't completing.
+        logger.debug("voice/wake brain prewarm failed (non-fatal): %s", exc)
+
+
 @router.post("/wake")
 async def voice_wake(payload: dict, caller: dict = Depends(_require_voice_auth)):
     """
@@ -4557,6 +4889,13 @@ async def voice_wake(payload: dict, caller: dict = Depends(_require_voice_auth))
         })
     except Exception as exc:
         logger.warning("voice/wake broadcast failed: %s", exc)
+
+    # Start the brain worker now (non-blocking) so it's warm by the time the user
+    # finishes speaking — hides the first-turn-of-session subprocess cold start.
+    try:
+        asyncio.ensure_future(_prewarm_brain_for_panel(panel_id))
+    except Exception as exc:
+        logger.debug("voice/wake prewarm dispatch failed (non-fatal): %s", exc)
 
     audio_b64: Optional[str] = None
     content_type = "audio/wav"

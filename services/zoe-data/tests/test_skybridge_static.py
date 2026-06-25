@@ -339,6 +339,14 @@ def test_skybridge_renderer_supports_real_data_cards():
     assert "--sky-accent-personal: 147, 51, 234" in data_widgets_css
     assert "sky-clock-scene" in data_widgets_css
     assert "sky-live-clock" in renderer
+    # Tap-to-edit: list item and calendar event rows are query buttons that open the editor cards.
+    assert "function listEditQuery" in renderer
+    assert "edit ' + title + ' on the ' + type + ' list'" in renderer
+    assert "button type=\"button\" class=\"sky-list-item-row" in renderer
+    assert "button type=\"button\" class=\"sky-event-row sky-calendar-event " in renderer
+    assert "const editQuery = 'edit ' + title + (startTime ? ' at ' + startTime : '');" in renderer
+    assert "button.sky-list-item-row" in data_widgets_css
+    assert "button.sky-event-row" in data_widgets_css
     assert "skyAmbientClock" in html
     assert "sky-ambient-clock" in html
     assert "sky-weather-scene" in html
@@ -351,6 +359,58 @@ def test_skybridge_renderer_supports_real_data_cards():
     assert "skybridge-push-ack-1" in html
     assert "backdrop-filter: none !important" in html
     assert "No events " in renderer
+
+
+def test_skybridge_renderer_rows_carry_tap_action_and_escape(tmp_path):
+    """Render a list + calendar card through the real renderer in Node and confirm
+    each row is a data-sky-action target and that '<' injection is HTML-escaped."""
+    node = shutil.which("node") or shutil.which("nodejs")
+    if not node:
+        pytest.skip("Node.js is not installed on this host")
+    renderer_path = UI / "js" / "skybridge-renderer.js"
+    harness = tmp_path / "render_harness.cjs"
+    harness.write_text(
+        """
+const fs = require('fs');
+const vm = require('vm');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const sandbox = { window: {} };
+vm.createContext(sandbox);
+vm.runInContext(src, sandbox);
+const R = sandbox.window.SkybridgeRenderer;
+const listCard = { card_type: 'generic', schema_version: '1.0.0', card_id: 'c1', content: {
+    source: 'list_show', list_type: 'shopping', list_name: 'Shopping',
+    items: [{ id: 'i1', text: 'bread <b>x</b>', completed: false }],
+    lists: [{ id: 'l1', name: 'Shopping', list_type: 'shopping' }]
+} };
+const calCard = { card_type: 'generic', schema_version: '1.0.0', card_id: 'c2', content: {
+    source: 'calendar_show', qualifier: 'today', date: '2026-06-23',
+    events: [{ id: 'e1', title: 'Dentist <x>', start_time: '15:00', start_date: '2026-06-23' }]
+} };
+const listHtml = R.render(listCard);
+const calHtml = R.render(calCard);
+const checks = {
+    list_row_action: /sky-list-item-row[^>]*data-sky-action=\"query\"/.test(listHtml),
+    list_edit_query: listHtml.includes('data-query=\"edit bread &lt;b&gt;x&lt;/b&gt; on the shopping list\"'),
+    list_escaped: !listHtml.includes('<b>x</b>') && listHtml.includes('&lt;b&gt;x&lt;/b&gt;'),
+    cal_row_action: /sky-calendar-event[^>]*data-sky-action=\"query\"/.test(calHtml),
+    cal_edit_query: calHtml.includes('data-query=\"edit Dentist &lt;x&gt; at 15:00\"'),
+    cal_escaped: !calHtml.includes('Dentist <x>') && calHtml.includes('Dentist &lt;x&gt;')
+};
+process.stdout.write(JSON.stringify(checks));
+""",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [node, str(harness), str(renderer_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    import json
+
+    checks = json.loads(proc.stdout)
+    assert all(checks.values()), f"renderer harness failed: {checks}"
 
 
 def test_skybridge_returns_to_ambient_clock_after_card_idle():

@@ -134,6 +134,28 @@ def test_apply_say_exactly_contract_can_patch_base_router_pattern(tmp_path):
     assert "say exactly[: ]+(?:.+)" in router_path.read_text(encoding="utf-8")
 
 
+def test_apply_say_exactly_contract_is_idempotent_with_current_router_pattern(tmp_path):
+    helper = _load_helper()
+    router_path = tmp_path / "services/zoe-data/intent_router.py"
+    test_path = tmp_path / "services/zoe-data/tests/test_intent_open_domain.py"
+    router_path.parent.mkdir(parents=True)
+    test_path.parent.mkdir(parents=True)
+    router_path.write_text(
+        '    r"tell me (?:a|another) joke|make me laugh|(?:do you |have you )?(?:got|have) any jokes|know any (?:good )?jokes|"\n'
+        '    r"say exactly[: ]+.+)",\n',
+        encoding="utf-8",
+    )
+    test_path.write_text(
+        "def test_say_exactly_routes_to_open_domain_agent():\n"
+        "    assert True\n",
+        encoding="utf-8",
+    )
+
+    result = helper.apply_say_exactly_contract(tmp_path)
+
+    assert result == {"contract": "say-exactly-open-domain", "changed": [], "idempotent": True}
+
+
 def test_apply_say_exactly_contract_appends_to_existing_open_domain_test(tmp_path):
     helper = _load_helper()
     router_path = tmp_path / "services/zoe-data/intent_router.py"
@@ -320,3 +342,70 @@ def test_main_refuses_live_repo_root_without_override(tmp_path, monkeypatch):
         assert "Refusing to mutate live checkout" in str(exc)
     else:
         raise AssertionError("expected SystemExit for live-root CLI without override")
+
+
+def test_focused_checks_block_already_covered_clean_worktree(tmp_path, monkeypatch):
+    helper = _load_helper()
+    calls = []
+
+    def fake_run_checked(cmd, *, cwd):
+        calls.append(("checked", cmd, cwd))
+        return object()
+
+    def fake_run(cmd, cwd):
+        calls.append(("run", cmd, cwd))
+
+        class Result:
+            returncode = 0
+
+        return Result()
+
+    monkeypatch.setattr(helper, "_run_checked", fake_run_checked)
+    monkeypatch.setattr(helper.subprocess, "run", fake_run)
+
+    focused = helper.run_focused_checks(
+        tmp_path,
+        {"idempotent": True, "changed": []},
+        kanban_task="t_123",
+        hermes_bin="/tmp/hermes",
+    )
+
+    assert focused["terminal_action"] == "kanban_block:ALREADY_COVERED"
+    assert any(call[1][:3] == ["python3", "-m", "py_compile"] for call in calls)
+    assert any(call[1][:4] == ["python3", "-m", "pytest", "-q"] for call in calls)
+    assert ("run", ["git", "diff", "--quiet"], tmp_path) in calls
+    assert any(
+        call[1][:4] == ["/tmp/hermes", "kanban", "block", "t_123"]
+        and "BLOCKER=ALREADY_COVERED" in call[1][4]
+        for call in calls
+    )
+
+
+def test_focused_checks_do_not_block_when_helper_changed_files(tmp_path, monkeypatch):
+    helper = _load_helper()
+    calls = []
+
+    def fake_run_checked(cmd, *, cwd):
+        calls.append(("checked", cmd, cwd))
+        return object()
+
+    def fake_run(cmd, cwd):
+        calls.append(("run", cmd, cwd))
+
+        class Result:
+            returncode = 0
+
+        return Result()
+
+    monkeypatch.setattr(helper, "_run_checked", fake_run_checked)
+    monkeypatch.setattr(helper.subprocess, "run", fake_run)
+
+    focused = helper.run_focused_checks(
+        tmp_path,
+        {"idempotent": False, "changed": ["services/zoe-data/intent_router.py"]},
+        kanban_task="t_123",
+        hermes_bin="/tmp/hermes",
+    )
+
+    assert focused["terminal_action"] is None
+    assert not any(call[1][:3] == ["/tmp/hermes", "kanban", "block"] for call in calls)

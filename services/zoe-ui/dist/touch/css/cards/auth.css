@@ -1,0 +1,509 @@
+/* auth.css — sign-in / PIN entry for the standalone touch login page
+   (services/zoe-ui/dist/touch/index.html).
+
+   Goal: bring the dated login screen onto the Skybridge design system so it reads
+   as polished as the redesigned cards (weather/calendar/lists/people) AND is tuned
+   for the Raspberry Pi Touch Display 2 — 7", 1280×720 landscape, finger touch.
+
+   PRESENTATION ONLY. Every id / class / onclick hook the page's inline JS reads is
+   left untouched (profileGrid, profile-card, selected, expanded, auth-active, show,
+   authHeader, pinDots, pin-dot.filled, auth-tab.active, auth-mode.active, key-btn,
+   shift, passcodeMode/passwordMode, authSubmitBtn, …). This file only restyles.
+
+   THEME: index.html now loads skybridge-ds.css + skybridge-theme.js, so <html> gets
+   data-theme="light|dark" (sun-driven, same as the panel). We consume --text-* and
+   the glass material. The --sky-ink-* ramp is white at :root and is NOT re-pointed
+   by the DS light theme, so anything using it would go white-on-white in light mode
+   — we therefore re-point --sky-ink-* locally under [data-theme="light"] (see end).
+
+   SPECIFICITY: the page has no competing !important auth rules (its old inline block
+   is removed), so single-class selectors are enough here. We keep them scoped under
+   the page's own containers to stay self-contained. */
+
+:root {
+  /* Login backdrop — a calm night gradient in dark, a soft daylight wash in light.
+     Tuned to sit behind glass without fighting the card material. */
+  --auth-bg: radial-gradient(1100px 720px at 28% -8%, rgba(90, 224, 224, 0.16), transparent 60%),
+             radial-gradient(900px 620px at 96% 110%, rgba(155, 140, 255, 0.18), transparent 58%),
+             linear-gradient(158deg, #0b0f1a 0%, #121a2e 52%, #0d1730 100%);
+  /* Brand orb / avatar gradient — cyan → violet, the canonical general accent pair. */
+  --auth-orb: linear-gradient(135deg, #ecfeff 0%, #7ef0ee 30%, #9b8cff 72%, #ffffff 100%);
+  --auth-key-face: rgba(255, 255, 255, 0.07);
+  --auth-key-face-hi: rgba(255, 255, 255, 0.13);
+  --auth-key-stroke: rgba(255, 255, 255, 0.16);
+  --auth-key-ink: var(--text-primary);
+  --auth-dot-empty: rgba(255, 255, 255, 0.22);
+  --auth-tile: rgba(255, 255, 255, 0.05);
+  --auth-tile-hi: rgba(255, 255, 255, 0.10);
+  --auth-hairline: rgba(255, 255, 255, 0.12);
+}
+
+:root[data-theme="light"] {
+  --auth-bg: radial-gradient(1100px 720px at 26% -10%, rgba(55, 192, 230, 0.22), transparent 60%),
+             radial-gradient(900px 620px at 98% 112%, rgba(155, 140, 255, 0.20), transparent 58%),
+             linear-gradient(158deg, #dCEBFb 0%, #eaf2fb 52%, #f3f7fc 100%);
+  --auth-key-face: rgba(20, 50, 80, 0.05);
+  --auth-key-face-hi: rgba(20, 50, 80, 0.10);
+  --auth-key-stroke: rgba(20, 50, 80, 0.14);
+  --auth-dot-empty: rgba(20, 50, 80, 0.20);
+  --auth-tile: rgba(20, 50, 80, 0.045);
+  --auth-tile-hi: rgba(20, 50, 80, 0.09);
+  --auth-hairline: rgba(20, 50, 80, 0.12);
+}
+
+/* ── Page shell ───────────────────────────────────────────────────────────── */
+html, body {
+  height: 100%;
+}
+body {
+  font-family: var(--sky-font-sans);
+  background: var(--auth-bg);
+  background-attachment: fixed;
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+}
+
+.container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  position: relative;
+  z-index: 10;
+}
+
+/* ── Welcome stage (the orb the user taps to begin) ───────────────────────── */
+.welcome-stage {
+  text-align: center;
+  transition: opacity var(--sky-dur-slow) var(--sky-ease-standard),
+              transform var(--sky-dur-slow) var(--sky-ease-standard);
+}
+
+.main-orb {
+  width: clamp(190px, 26vw, 240px);
+  height: clamp(190px, 26vw, 240px);
+  border-radius: 50%;
+  margin: 0 auto 28px;
+  position: relative;
+  cursor: pointer;
+  background:
+    radial-gradient(circle at 32% 24%, rgba(255, 255, 255, 0.98), rgba(126, 240, 238, 0.92) 22%, rgba(155, 140, 255, 0.82) 60%, rgba(16, 23, 38, 0.92) 100%);
+  box-shadow:
+    0 0 70px rgba(94, 224, 224, 0.30),
+    0 26px 70px rgba(0, 0, 0, 0.40),
+    inset 0 2px 22px rgba(255, 255, 255, 0.45);
+  animation: auth-breathe 4.4s ease-in-out infinite;
+  transition: transform var(--sky-dur-slow) var(--sky-ease-spring),
+              box-shadow var(--sky-dur-slow) var(--sky-ease-standard);
+}
+.main-orb:hover { transform: scale(1.05) translateY(-12px); animation: none; }
+.main-orb:active { transform: scale(0.98); }
+
+@keyframes auth-breathe {
+  0%, 100% { transform: scale(1) translateY(0); filter: brightness(1); }
+  50% { transform: scale(1.04) translateY(-8px); filter: brightness(1.08); }
+}
+
+.welcome-text { margin-bottom: 6px; opacity: 0; animation: auth-rise var(--sky-dur-slow) var(--sky-ease-standard) 0.35s forwards; }
+.welcome-title {
+  font-size: clamp(48px, 7vw, 64px);
+  font-weight: var(--sky-weight-thin);
+  letter-spacing: var(--sky-track-tight);
+  margin-bottom: 10px;
+  background: linear-gradient(135deg, #7ef0ee 0%, #9b8cff 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.welcome-subtitle { font-size: var(--sky-text-heading); color: var(--text-secondary); font-weight: var(--sky-weight-regular); margin-bottom: 14px; }
+.welcome-hint { font-size: var(--sky-text-label); color: var(--text-tertiary); animation: auth-glow 2.4s ease-in-out infinite alternate; }
+
+@keyframes auth-glow { from { opacity: 0.45; } to { opacity: 0.9; } }
+@keyframes auth-rise { from { opacity: 0; transform: translateY(22px); } to { opacity: 1; transform: translateY(0); } }
+
+/* ── Profile selection overlay ────────────────────────────────────────────── */
+.profile-selection {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(1100px 720px at 28% -8%, rgba(90, 224, 224, 0.10), transparent 60%),
+    rgba(6, 10, 20, 0.55);
+  -webkit-backdrop-filter: blur(26px) saturate(135%);
+  backdrop-filter: blur(26px) saturate(135%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity var(--sky-dur-slow) var(--sky-ease-standard),
+              visibility var(--sky-dur-slow) var(--sky-ease-standard);
+  z-index: 20;
+}
+:root[data-theme="light"] .profile-selection { background: radial-gradient(1100px 720px at 28% -8%, rgba(55, 192, 230, 0.14), transparent 60%), rgba(225, 236, 248, 0.55); }
+.profile-selection.active { opacity: 1; visibility: visible; }
+
+.profile-container { text-align: center; width: min(96vw, 1120px); }
+.profile-title {
+  font-size: clamp(30px, 4.6vw, 42px);
+  font-weight: var(--sky-weight-thin);
+  letter-spacing: var(--sky-track-tight);
+  margin-bottom: 36px;
+  color: var(--text-primary);
+}
+
+.profile-grid {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  gap: clamp(20px, 3vw, 40px);
+  flex-wrap: wrap;
+  transition: opacity var(--sky-dur-base) var(--sky-ease-standard);
+}
+.profile-grid.expanded { display: none !important; }
+.profile-container.auth-active .profile-title,
+.profile-container.auth-active .profile-grid { display: none !important; }
+
+/* A profile = a big circular avatar + a name, finger-sized (≥ ~128px target). */
+.profile-card {
+  background: transparent;
+  border: none;
+  width: clamp(132px, 16vw, 168px);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 8px;
+  border-radius: var(--sky-radius-lg);
+  transition: transform var(--sky-dur-base) var(--sky-ease-spring);
+}
+.profile-card:hover { transform: translateY(-8px) scale(1.03); }
+.profile-card:active { transform: scale(0.97); }
+.profile-card.selected { transform: scale(1.06); }
+.profile-card.others-selected { opacity: 0.55; transform: scale(0.92); }
+
+.profile-avatar {
+  width: clamp(112px, 13vw, 132px);
+  height: clamp(112px, 13vw, 132px);
+  border-radius: 50%;
+  background: var(--auth-orb);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: clamp(40px, 5vw, 52px);
+  font-weight: var(--sky-weight-semibold);
+  color: rgba(7, 12, 24, 0.92);
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, 0.6),
+    0 18px 40px rgba(0, 0, 0, 0.30),
+    0 0 0 1px rgba(255, 255, 255, 0.12);
+  transition: box-shadow var(--sky-dur-base) var(--sky-ease-standard);
+}
+.profile-card:hover .profile-avatar,
+.profile-card.selected .profile-avatar {
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, 0.7),
+    0 24px 56px rgba(94, 224, 224, 0.28),
+    0 0 0 2px rgba(126, 240, 238, 0.5);
+}
+
+.profile-name {
+  /* Always visible — this is a finger touchscreen, there is no hover to reveal it. */
+  font-size: var(--sky-text-heading);
+  font-weight: var(--sky-weight-medium);
+  color: var(--text-primary);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 1;
+}
+.profile-role { display: none; }
+
+/* ── Auth header (appears once a profile is chosen) ───────────────────────── */
+.auth-header {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 22px;
+  height: 76px;
+  z-index: 100;
+  background: var(--card-surface);
+  border-bottom: 1px solid var(--auth-hairline);
+  -webkit-backdrop-filter: var(--card-blur);
+  backdrop-filter: var(--card-blur);
+  box-shadow: var(--sky-highlight-top);
+}
+.auth-header-left { display: flex; align-items: center; gap: 14px; min-width: 200px; }
+.auth-header-center { flex: 1; display: flex; align-items: center; justify-content: center; gap: 12px; }
+.auth-header-right { display: flex; align-items: center; }
+.auth-header-signin { display: flex; align-items: center; }
+
+.selected-user-avatar {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: var(--auth-orb);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  font-weight: var(--sky-weight-semibold);
+  color: rgba(7, 12, 24, 0.92);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6), 0 8px 20px rgba(0, 0, 0, 0.28);
+  animation: auth-breathe 4.4s ease-in-out infinite;
+}
+.selected-user-name { font-size: var(--sky-text-heading); font-weight: var(--sky-weight-medium); color: var(--text-primary); }
+.selected-user-role { font-size: var(--sky-text-caption); color: var(--text-secondary); }
+
+/* ── PIN dots / password readout in the header ────────────────────────────── */
+.pin-display-container, .password-input-container { display: flex; align-items: center; justify-content: center; width: 100%; }
+.pin-display {
+  display: inline-flex;
+  justify-content: center;
+  padding: 12px 22px;
+  border-radius: var(--sky-radius-pill);
+  background: var(--auth-tile);
+  border: 1px solid var(--auth-hairline);
+}
+.pin-dots { display: flex; gap: 16px; }
+.pin-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--auth-dot-empty);
+  transition: transform var(--sky-dur-fast) var(--sky-ease-spring),
+              background var(--sky-dur-fast) var(--sky-ease-standard),
+              box-shadow var(--sky-dur-fast) var(--sky-ease-standard);
+}
+.pin-dot.filled {
+  background: linear-gradient(135deg, #7ef0ee, #9b8cff);
+  box-shadow: 0 0 16px rgba(126, 240, 238, 0.6);
+  transform: scale(1.18);
+}
+
+.password-input {
+  width: 100%;
+  max-width: 320px;
+  padding: 12px 16px;
+  min-height: 46px;
+  border-radius: var(--sky-radius-md);
+  background: var(--auth-tile);
+  border: 1px solid var(--auth-hairline);
+  color: var(--text-primary);
+  font-size: var(--sky-text-body);
+  font-family: var(--sky-font-sans);
+}
+.password-input::placeholder { color: var(--text-tertiary); }
+.password-input:focus {
+  outline: none;
+  border-color: rgba(126, 240, 238, 0.7);
+  box-shadow: 0 0 0 3px rgba(126, 240, 238, 0.22);
+  background: var(--auth-tile-hi);
+}
+
+/* ── PIN / Password mode toggle ───────────────────────────────────────────── */
+.auth-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: var(--sky-radius-pill);
+  background: var(--auth-tile);
+  border: 1px solid var(--auth-hairline);
+}
+.auth-tab {
+  padding: 10px 20px;
+  min-height: 44px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: var(--sky-radius-pill);
+  cursor: pointer;
+  font-weight: var(--sky-weight-medium);
+  font-size: var(--sky-text-label);
+  white-space: nowrap;
+  transition: background var(--sky-dur-fast) var(--sky-ease-standard), color var(--sky-dur-fast) var(--sky-ease-standard);
+}
+.auth-tab.active {
+  background: linear-gradient(135deg, rgba(126, 240, 238, 0.28), rgba(155, 140, 255, 0.28));
+  color: var(--text-primary);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+
+.auth-submit-btn {
+  padding: 12px 26px;
+  min-height: 48px;
+  border: none;
+  border-radius: var(--sky-radius-pill);
+  background: linear-gradient(135deg, #7ef0ee 0%, #9b8cff 100%);
+  color: rgba(7, 12, 24, 0.94);
+  font-size: var(--sky-text-label);
+  font-weight: var(--sky-weight-semibold);
+  cursor: pointer;
+  box-shadow: 0 12px 28px rgba(94, 224, 224, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.5);
+  transition: transform var(--sky-dur-fast) var(--sky-ease-spring), box-shadow var(--sky-dur-fast) var(--sky-ease-standard);
+}
+.auth-submit-btn:hover { transform: translateY(-2px); box-shadow: 0 16px 34px rgba(94, 224, 224, 0.34); }
+.auth-submit-btn:active { transform: translateY(0); }
+
+.back-btn {
+  background: var(--auth-tile);
+  border: 1px solid var(--auth-hairline);
+  color: var(--text-secondary);
+  padding: 10px 18px;
+  min-height: 44px;
+  border-radius: var(--sky-radius-pill);
+  cursor: pointer;
+  font-size: var(--sky-text-label);
+  font-weight: var(--sky-weight-medium);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--sky-dur-fast) var(--sky-ease-standard);
+}
+.back-btn:hover { background: var(--auth-tile-hi); color: var(--text-primary); }
+
+/* ── Auth panel (the big interaction surface below the header) ────────────── */
+.auth-panel {
+  display: flex;
+  flex-direction: column;
+  position: fixed;
+  left: 50%;
+  top: calc(76px + (100vh - 76px) / 2);
+  transform: translate(-50%, -50%) scale(0.98);
+  opacity: 0;
+  width: min(94vw, 720px);
+  max-height: calc(100vh - 76px - 28px);
+  padding: 0;
+  border-radius: var(--sky-radius-xl);
+  background: var(--card-surface);
+  border: var(--card-border);
+  -webkit-backdrop-filter: var(--card-blur);
+  backdrop-filter: var(--card-blur);
+  box-shadow: var(--card-elevation);
+  overflow: hidden;
+  z-index: 25;
+  transition: opacity var(--sky-dur-base) var(--sky-ease-standard), transform var(--sky-dur-base) var(--sky-ease-spring);
+}
+.auth-panel.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+
+.auth-input-method {
+  flex: 1;
+  padding: clamp(16px, 3vw, 28px);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  min-height: 0;
+}
+.auth-mode { display: none; width: 100%; }
+.auth-mode.active { display: block; }
+
+/* ── PIN keypad — the primary, finger-first interaction ───────────────────── */
+.pin-keypad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: clamp(14px, 2.4vw, 22px);
+  width: min(100%, 420px);
+  margin: 0 auto;
+}
+.keypad-btn {
+  aspect-ratio: 1;
+  width: 100%;
+  min-height: 88px;
+  border: 1px solid var(--auth-key-stroke);
+  border-radius: 50%;
+  background:
+    linear-gradient(155deg, var(--auth-key-face-hi), var(--auth-key-face));
+  color: var(--auth-key-ink);
+  font-size: clamp(30px, 4vw, 38px);
+  font-weight: var(--sky-weight-medium);
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 10px 24px rgba(0, 0, 0, 0.18);
+  transition: transform var(--sky-dur-fast) var(--sky-ease-spring),
+              background var(--sky-dur-fast) var(--sky-ease-standard),
+              border-color var(--sky-dur-fast) var(--sky-ease-standard);
+}
+.keypad-btn:hover { background: linear-gradient(155deg, var(--auth-key-face-hi), var(--auth-key-face-hi)); border-color: rgba(126, 240, 238, 0.5); }
+.keypad-btn:active { transform: scale(0.93); }
+.keypad-btn.zero { grid-column: 2; }
+.keypad-btn.backspace {
+  grid-column: 3;
+  font-size: clamp(24px, 3vw, 30px);
+  background: linear-gradient(155deg, rgba(239, 68, 68, 0.22), rgba(239, 68, 68, 0.10));
+  border-color: rgba(239, 68, 68, 0.34);
+}
+.keypad-btn.backspace:hover { background: linear-gradient(155deg, rgba(239, 68, 68, 0.32), rgba(239, 68, 68, 0.16)); border-color: rgba(239, 68, 68, 0.5); }
+
+/* ── On-screen keyboard (password mode) ───────────────────────────────────── */
+.touch-keyboard {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px;
+}
+.keyboard-row { display: flex; gap: 10px; justify-content: center; }
+.key-btn {
+  flex: 1;
+  min-width: 0;
+  max-width: 86px;
+  height: 60px;
+  border: 1px solid var(--auth-key-stroke);
+  border-radius: var(--sky-radius-sm);
+  background: linear-gradient(155deg, var(--auth-key-face-hi), var(--auth-key-face));
+  color: var(--auth-key-ink);
+  font-size: var(--sky-text-heading);
+  font-weight: var(--sky-weight-medium);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  transition: transform var(--sky-dur-fast) var(--sky-ease-spring), background var(--sky-dur-fast) var(--sky-ease-standard), border-color var(--sky-dur-fast) var(--sky-ease-standard);
+}
+.key-btn:hover { border-color: rgba(126, 240, 238, 0.5); }
+.key-btn:active { transform: scale(0.94); }
+.key-btn.shift, .key-btn.backspace { max-width: 104px; }
+.key-btn.shift { background: linear-gradient(155deg, rgba(126, 240, 238, 0.24), rgba(155, 140, 255, 0.18)); border-color: rgba(126, 240, 238, 0.3); }
+.key-btn.shift.active { background: linear-gradient(155deg, rgba(126, 240, 238, 0.44), rgba(155, 140, 255, 0.34)); }
+.key-btn.backspace { background: linear-gradient(155deg, rgba(239, 68, 68, 0.22), rgba(239, 68, 68, 0.10)); border-color: rgba(239, 68, 68, 0.34); }
+.key-btn.space { flex: 3; max-width: 420px; }
+.key-btn.enter { max-width: 120px; background: linear-gradient(155deg, rgba(22, 163, 74, 0.30), rgba(22, 163, 74, 0.16)); border-color: rgba(22, 163, 74, 0.4); }
+
+.guest-btn {
+  background: var(--auth-tile);
+  border: 1px solid var(--auth-hairline);
+  color: var(--text-secondary);
+  padding: 14px 30px;
+  min-height: 52px;
+  border-radius: var(--sky-radius-pill);
+  cursor: pointer;
+  font-size: var(--sky-text-body);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+.guest-btn:hover { background: var(--auth-tile-hi); color: var(--text-primary); }
+
+/* ── Light-mode ink fix ───────────────────────────────────────────────────────
+   The DS light theme re-points --text-* but NOT the --sky-ink-* ramp (white at
+   :root). Anything reaching for var(--sky-ink-N) would read white-on-white in
+   light mode. Re-point the ramp to dark ink scoped to the login page so any
+   shared helper that uses it stays legible. (This page styles via --text-*, so
+   this is a belt-and-braces guard.) */
+:root[data-theme="light"] {
+  --sky-ink-0: #16324d;
+  --sky-ink-1: rgba(22, 50, 77, 0.88);
+  --sky-ink-2: rgba(22, 50, 77, 0.62);
+  --sky-ink-3: rgba(22, 50, 77, 0.42);
+  --sky-ink-4: rgba(22, 50, 77, 0.26);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .main-orb, .selected-user-avatar, .welcome-hint, .welcome-text { animation: none; }
+  * { transition-duration: 1ms !important; }
+}

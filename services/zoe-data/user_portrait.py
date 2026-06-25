@@ -20,9 +20,9 @@ import time
 
 import httpx
 
-logger = logging.getLogger(__name__)
+from gemma_endpoint import gemma_base
 
-_GEMMA_URL = os.environ.get("GEMMA_SERVER_URL", "http://127.0.0.1:11434")
+logger = logging.getLogger(__name__)
 _PORTRAIT_MODEL = os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E2B-it-Q4_K_M.gguf")
 
 # Maximum chars of portrait text injected into the context window each turn.
@@ -158,7 +158,7 @@ async def run_portrait_synthesis(user_id: str, db=None) -> dict:
 
 async def _call_llm_for_portrait(prompt: str) -> str:
     """Call the local LLM to generate a portrait. Returns the portrait text or ''."""
-    url = f"{_GEMMA_URL}/v1/chat/completions"
+    url = f"{gemma_base()}/v1/chat/completions"
     payload = {
         "model": _PORTRAIT_MODEL,
         "messages": [

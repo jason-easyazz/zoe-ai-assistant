@@ -1,0 +1,363 @@
+/* Lists card — function-first, tuned for the Raspberry Pi Touch Display 2
+   (7", 1280x720 landscape, finger touch). The LIST is the hero: full-width,
+   finger-sized rows you tap to tick off. No decorative progress ring — progress
+   is a quiet header line + a slim accent bar.
+
+   Consistency: the list/category accent resolves to the CANONICAL --sky-accent-*
+   tokens (defined in skybridge-data-widgets.css, shared by every card) so a
+   "health" item here is the same pink as a "health" calendar event. Never
+   hardcode a category hue.
+
+   Legacy escape: rows use NEW inner class names (lst-box/lst-text/...) so the
+   legacy .zoe-list-card grid rules don't match; the CARD is forced to flex with
+   a high-specificity selector that beats the (0,3,1)!important legacy rules. */
+
+/* ── Card frame: own glass surface + flex column, escape the legacy grid ── */
+.sky-card.zoe-list-card {
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+  padding: 0 !important;
+  border-radius: var(--sky-radius-xl, 34px) !important;
+  color: var(--sky-ink-0, #fff);
+  background: linear-gradient(157deg, rgba(255,255,255,.11), rgba(255,255,255,.035)) !important;
+  border: 1px solid var(--sky-hairline, rgba(255,255,255,.14)) !important;
+  box-shadow: 0 26px 60px -18px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.22) !important;
+  font-family: var(--sky-font, "Inter", system-ui, -apple-system, "Segoe UI", sans-serif);
+  -webkit-font-smoothing: antialiased;
+  /* Default accent (inherited); the scene/rows override via their lst-a-* class.
+     Kept at the card root so a same-specificity .lst-scene rule can't beat the
+     accent class that sits on the scene element itself. */
+  --lst-accent: var(--sky-accent-general, 90,224,224);
+}
+body:not(.sky-empty) .sky-card.zoe-list-card.sky-premium-card {
+  display: flex !important;
+  flex-direction: column !important;
+  align-content: stretch !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+}
+
+/* ── Canonical accent map: list-type / category → --sky-accent-{token} ──── */
+.zoe-list-card .lst-a-shopping  { --lst-accent: var(--sky-accent-shopping, 234,88,12); }
+.zoe-list-card .lst-a-work,
+.zoe-list-card .lst-a-tasks     { --lst-accent: var(--sky-accent-work, 37,99,235); }
+.zoe-list-card .lst-a-personal  { --lst-accent: var(--sky-accent-personal, 147,51,234); }
+.zoe-list-card .lst-a-family    { --lst-accent: var(--sky-accent-family, 147,51,234); }
+.zoe-list-card .lst-a-social    { --lst-accent: var(--sky-accent-social, 22,163,74); }
+.zoe-list-card .lst-a-bucket    { --lst-accent: var(--sky-accent-bucket, 5,150,105); }
+.zoe-list-card .lst-a-health    { --lst-accent: var(--sky-accent-health, 190,24,93); }
+.zoe-list-card .lst-a-medical   { --lst-accent: var(--sky-accent-medical, 239,68,68); }
+.zoe-list-card .lst-a-routine   { --lst-accent: var(--sky-accent-routine, 55,65,81); }
+.zoe-list-card .lst-a-household { --lst-accent: var(--sky-accent-household, 107,114,128); }
+.zoe-list-card .lst-a-general,
+.zoe-list-card .lst-a-all       { --lst-accent: var(--sky-accent-general, 90,224,224); }
+
+/* ── Scene: single column, the list fills it ────────────────────────────── */
+.zoe-list-card .lst-scene {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-height: 0;
+  flex: 1 1 auto;
+  padding: var(--sky-space-6, 24px) var(--sky-space-7, 28px) var(--sky-space-5, 20px);
+  gap: var(--sky-space-4, 16px);
+  /* a calm accent wash, top-left, very subtle (function over flair) */
+  background: radial-gradient(130% 80% at 0% 0%, rgba(var(--lst-accent), .10), transparent 58%);
+}
+
+/* ── Header: identity badge + name + count ──────────────────────────────── */
+.zoe-list-card .lst-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sky-space-4, 16px);
+}
+.zoe-list-card .lst-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--sky-space-3, 14px);
+  min-width: 0;
+}
+.zoe-list-card .lst-id-badge {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--sky-radius-md, 14px);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(var(--lst-accent), .20);
+  box-shadow: inset 0 0 0 1px rgba(var(--lst-accent), .42);
+}
+.zoe-list-card .lst-id-glyph { width: 24px; height: 24px; fill: rgb(var(--lst-accent)); }
+.zoe-list-card .lst-headtext { min-width: 0; }
+.zoe-list-card .lst-kicker {
+  display: block;
+  font-size: var(--sky-text-micro, 11px);
+  font-weight: 600;
+  letter-spacing: 1.6px;
+  text-transform: uppercase;
+  color: rgb(var(--lst-accent));
+}
+.zoe-list-card .lst-name {
+  margin: 1px 0 0;
+  font-size: var(--sky-text-title, 24px);
+  font-weight: 600;
+  letter-spacing: -0.3px;
+  color: var(--sky-ink-0, #fff);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.zoe-list-card .lst-count {
+  flex: 0 0 auto;
+  font-size: var(--sky-text-label, 15px);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--sky-ink-2, rgba(255,255,255,.62));
+}
+
+/* ── Progress: a slim accent bar (no ring) ──────────────────────────────── */
+.zoe-list-card .lst-progress {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--sky-fill-3, rgba(255,255,255,.12));
+  overflow: hidden;
+}
+.zoe-list-card .lst-progress-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: rgb(var(--lst-accent));
+  transition: width var(--sky-dur-slow, 520ms) var(--sky-ease-spring, ease);
+}
+
+/* ── List switcher (when several lists exist): horizontal pills ──────────── */
+.zoe-list-card .lst-switcher {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sky-space-2, 8px);
+}
+.zoe-list-card .lst-tab {
+  appearance: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 14px;
+  border-radius: var(--sky-radius-pill, 999px);
+  border: 1px solid var(--sky-hairline, rgba(255,255,255,.1));
+  background: var(--sky-fill-1, rgba(255,255,255,.05));
+  color: var(--sky-ink-2, rgba(255,255,255,.66));
+  font-family: inherit;
+  font-size: var(--sky-text-label, 15px);
+  font-weight: 500;
+  transition: background var(--sky-dur-fast, 180ms) ease, transform var(--sky-dur-fast, 180ms) ease;
+}
+.zoe-list-card .lst-tab-dot {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: rgb(var(--lst-accent));
+}
+.zoe-list-card .lst-tab:hover { color: var(--sky-ink-0, #fff); background: var(--sky-fill-2, rgba(255,255,255,.08)); }
+.zoe-list-card .lst-tab:active { transform: scale(0.97); }
+.zoe-list-card .lst-tab.is-active {
+  color: var(--sky-ink-0, #fff);
+  background: rgba(var(--lst-accent), .18);
+  border-color: rgba(var(--lst-accent), .42);
+}
+.zoe-list-card .lst-tab-name { font-style: normal; }
+.zoe-list-card .lst-tab-new { color: var(--sky-ink-3, rgba(255,255,255,.5)); }
+.zoe-list-card .lst-tab-new .lst-tab-dot { display: none; }
+.zoe-list-card .lst-tab-count {
+  font-style: normal;
+  font-size: var(--sky-text-caption, 12px);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  min-width: 20px; height: 20px; padding: 0 6px;
+  border-radius: 999px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--sky-fill-2, rgba(255,255,255,.1));
+  color: var(--sky-ink-2, rgba(255,255,255,.7));
+}
+
+/* ── Items: a clean, tappable list (the hero) ───────────────────────────── */
+.zoe-list-card .lst-items {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sky-space-2, 8px);
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.zoe-list-card .lst-row {
+  appearance: none;
+  width: 100%;
+  min-height: 64px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: var(--sky-space-4, 16px);
+  padding: 0 var(--sky-space-5, 20px);
+  border: 1px solid var(--sky-hairline, rgba(255,255,255,.08));
+  border-radius: var(--sky-radius-md, 16px);
+  background: var(--sky-fill-1, rgba(255,255,255,.05));
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+  transition: background var(--sky-dur-fast, 180ms) ease, transform var(--sky-dur-fast, 180ms) ease, border-color var(--sky-dur-fast, 180ms) ease;
+}
+.zoe-list-card .lst-row:hover {
+  background: var(--sky-fill-2, rgba(255,255,255,.09));
+  border-color: var(--sky-hairline-strong, rgba(255,255,255,.18));
+}
+.zoe-list-card .lst-row:active { transform: scale(0.99); }
+
+/* check box: accent ring → fills with the accent when done */
+.zoe-list-card .lst-box {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid rgba(var(--lst-accent), .55);
+  background: transparent;
+  transition: border-color var(--sky-dur-fast, 180ms) ease, background var(--sky-dur-fast, 180ms) ease;
+}
+.zoe-list-card .lst-check-mark {
+  width: 19px; height: 19px;
+  fill: #fff;
+  opacity: 0;
+  transform: scale(.4);
+  transition: opacity var(--sky-dur-fast, 180ms) var(--sky-ease-spring, ease), transform var(--sky-dur-fast, 180ms) var(--sky-ease-spring, ease);
+}
+
+.zoe-list-card .lst-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 19px;
+  font-weight: 500;
+  letter-spacing: -0.1px;
+  color: var(--sky-ink-0, #fff);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.zoe-list-card .lst-qty {
+  flex: 0 0 auto;
+  min-width: 38px;
+  padding: 5px 12px;
+  border-radius: var(--sky-radius-sm, 11px);
+  text-align: center;
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--sky-ink-1, rgba(255,255,255,.9));
+  background: color-mix(in srgb, rgb(var(--lst-accent)) 18%, rgba(255,255,255,.06));
+}
+
+/* high-priority items: a slim accent edge so they stand out without a badge */
+.zoe-list-card .lst-row.is-flagged {
+  box-shadow: inset 3px 0 0 0 rgb(var(--lst-accent));
+}
+
+/* ── Done state: fill the check, dim + strike the text ───────────────────── */
+.zoe-list-card .lst-row.is-done {
+  background: var(--sky-fill-0, rgba(255,255,255,.025));
+  border-color: transparent;
+}
+.zoe-list-card .lst-row.is-done .lst-box {
+  border-color: rgb(var(--lst-accent));
+  background: rgb(var(--lst-accent));
+}
+.zoe-list-card .lst-row.is-done .lst-check-mark { opacity: 1; transform: scale(1); }
+.zoe-list-card .lst-row.is-done .lst-text {
+  color: var(--sky-ink-3, rgba(255,255,255,.4));
+  text-decoration: line-through;
+  text-decoration-color: var(--sky-ink-4, rgba(255,255,255,.3));
+}
+.zoe-list-card .lst-row.is-done .lst-qty { color: var(--sky-ink-3, rgba(255,255,255,.4)); background: rgba(255,255,255,.05); }
+
+/* ── Overview (multiple lists, no single list selected): compact columns ─── */
+.zoe-list-card .lst-items.is-overview { overflow: visible; }
+.zoe-list-card .lst-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--sky-space-3, 12px);
+  width: 100%;
+}
+.zoe-list-card .lst-col {
+  appearance: none;
+  cursor: pointer;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: var(--sky-space-4, 16px);
+  border-radius: var(--sky-radius-md, 16px);
+  border: 1px solid var(--sky-hairline, rgba(255,255,255,.08));
+  background: var(--sky-fill-1, rgba(255,255,255,.05));
+  color: inherit;
+  font-family: inherit;
+}
+.zoe-list-card .lst-col:hover { background: var(--sky-fill-2, rgba(255,255,255,.09)); }
+.zoe-list-card .lst-col-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.zoe-list-card .lst-col-head strong { font-size: 17px; font-weight: 600; color: var(--sky-ink-0, #fff); }
+.zoe-list-card .lst-col-head em { font-style: normal; font-size: 13px; color: var(--sky-ink-3, rgba(255,255,255,.5)); }
+.zoe-list-card .lst-col-bar { height: 5px; border-radius: 999px; background: var(--sky-fill-3, rgba(255,255,255,.12)); overflow: hidden; }
+.zoe-list-card .lst-col-bar i { display: block; height: 100%; background: rgb(var(--lst-accent)); }
+.zoe-list-card .lst-col ul { list-style: none; margin: 2px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.zoe-list-card .lst-col li { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--sky-ink-1, rgba(255,255,255,.84)); }
+.zoe-list-card .lst-col li .lst-dot { width: 6px; height: 6px; border-radius: 50%; background: rgb(var(--lst-accent)); flex: 0 0 auto; }
+.zoe-list-card .lst-col li.is-done strong { color: var(--sky-ink-3, rgba(255,255,255,.45)); text-decoration: line-through; font-weight: 400; }
+.zoe-list-card .lst-col li strong { font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.zoe-list-card .lst-col-empty { font-size: 14px; color: var(--sky-ink-3, rgba(255,255,255,.45)); }
+
+/* ── Empty state ────────────────────────────────────────────────────────── */
+.zoe-list-card .lst-empty {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: var(--sky-space-8, 32px);
+  text-align: center;
+  margin: auto;
+}
+.zoe-list-card .lst-empty strong { font-size: 19px; font-weight: 600; color: var(--sky-ink-1, rgba(255,255,255,.9)); }
+.zoe-list-card .lst-empty span { font-size: 15px; color: var(--sky-ink-3, rgba(255,255,255,.5)); }
+
+@media (prefers-reduced-motion: reduce) {
+  .zoe-list-card .lst-progress-fill,
+  .zoe-list-card .lst-check-mark,
+  .zoe-list-card .lst-row { transition: none; }
+}
+
+/* ── Light mode ─────────────────────────────────────────────────────────── */
+/* The global [data-theme="light"] block re-points --text-* but NOT the
+   --sky-ink-* scale (white at :root), so re-point the ink scale for this card
+   in light mode — otherwise var(--sky-ink-N) text renders white-on-white. */
+[data-theme="light"] .sky-card.zoe-list-card {
+  --sky-ink-0: #16324d;
+  --sky-ink-1: #2a4d6e;
+  --sky-ink-2: #3a5e80;
+  --sky-ink-3: #6a86a2;
+  --sky-ink-4: #9fb2c4;
+  --sky-fill-0: rgba(20,50,80,.03);
+  --sky-fill-1: rgba(255,255,255,.6);
+  --sky-fill-2: rgba(255,255,255,.85);
+  --sky-fill-3: rgba(20,50,80,.12);
+  --sky-hairline: rgba(20,50,80,.12);
+  --sky-hairline-strong: rgba(20,50,80,.2);
+  color: var(--sky-ink-0) !important;
+  background: linear-gradient(157deg, rgba(255,255,255,.72), rgba(255,255,255,.5)) !important;
+  border-color: rgba(20,50,80,.14) !important;
+  box-shadow: 0 26px 60px -18px rgba(20,50,80,.28), inset 0 1px 0 rgba(255,255,255,.7) !important;
+}
+[data-theme="light"] .zoe-list-card .lst-row { background: var(--sky-fill-1); border-color: var(--sky-hairline); }
+[data-theme="light"] .zoe-list-card .lst-row:hover { background: var(--sky-fill-2); border-color: var(--sky-hairline-strong); }
+[data-theme="light"] .zoe-list-card .lst-row.is-done { background: var(--sky-fill-0); }
+[data-theme="light"] .zoe-list-card .lst-qty { color: var(--sky-ink-1); }
+[data-theme="light"] .zoe-list-card .lst-row.is-done .lst-check-mark { fill: #fff; }

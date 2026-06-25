@@ -110,3 +110,65 @@ async def test_find_issue_accepts_empty_issue_response(monkeypatch):
     monkeypatch.setattr(multica_operator, "get_multica_client", lambda: EmptyClient())
 
     assert await multica_operator.find_issue("ZOE-1") == {}
+
+
+@pytest.mark.asyncio
+async def test_find_issue_fallback_searches_visible_status_pages(monkeypatch):
+    calls = []
+
+    class Client:
+        async def list_issues(self, **kwargs):
+            calls.append(kwargs)
+            if kwargs.get("status") == "blocked":
+                return [{"id": "issue-2", "identifier": "ZOE-2"}]
+            return [{"id": "issue-1", "identifier": "ZOE-1"}]
+
+    monkeypatch.setattr(multica_operator, "get_multica_client", lambda: Client())
+
+    assert await multica_operator.find_issue("ZOE-2") == {"id": "issue-2", "identifier": "ZOE-2"}
+    assert {call.get("status") for call in calls} >= {None, "blocked", "todo", "done"}
+    assert all(call.get("limit") == 1000 for call in calls)
+
+
+@pytest.mark.asyncio
+async def test_find_issue_fallback_supports_legacy_list_issues_client(monkeypatch):
+    class Client:
+        async def list_issues(self):
+            return [{"id": "issue-1", "identifier": "ZOE-1"}]
+
+    monkeypatch.setattr(multica_operator, "get_multica_client", lambda: Client())
+
+    assert await multica_operator.find_issue("issue-1") == {"id": "issue-1", "identifier": "ZOE-1"}
+
+
+@pytest.mark.asyncio
+async def test_find_issue_fallback_suppresses_legacy_list_failure(monkeypatch):
+    class Client:
+        async def list_issues(self, **kwargs):
+            if kwargs:
+                raise TypeError("legacy signature")
+            raise RuntimeError("legacy list failed")
+
+    monkeypatch.setattr(multica_operator, "get_multica_client", lambda: Client())
+
+    assert await multica_operator.find_issue("issue-1") == {}
+
+
+@pytest.mark.asyncio
+async def test_good_evening_passes_context_and_fallback_to_composer(monkeypatch):
+    from proactive import composer
+
+    calls = []
+
+    async def fake_compose(trigger_type, context, fallback):
+        calls.append((trigger_type, context, fallback))
+        return "Composed evening check-in"
+
+    monkeypatch.setattr(composer, "compose_message", fake_compose)
+
+    result = await execute_intent(Intent("good_evening", {}), user_id="u1")
+
+    assert result == "Composed evening check-in"
+    assert calls[0][0] == "good_evening"
+    assert calls[0][1]["user_id"] == "u1"
+    assert "Good evening" in calls[0][2]

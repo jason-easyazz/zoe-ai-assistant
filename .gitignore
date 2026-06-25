@@ -146,6 +146,7 @@ credentials/
 !.zoe/manifest.json
 !.greptile/config.json
 !.greptile/files.json
+!.mcp.json
 !services/zoe-litellm/minimal_config.yaml
 
 # API Keys and Secrets
@@ -259,14 +260,9 @@ tests/unit/test_jag_board_game_store.py
 # Runtime SQLite caches
 data/touch_cache/
 
-# graphify — commit graph/report/html; exclude local-only runtime files
-# NOTE: the broad *.json rule above would swallow these files without explicit exceptions
-!graphify-out/graph.json
-!graphify-out/GRAPH_REPORT.md
-!graphify-out/graph.html
-graphify-out/manifest.json
-graphify-out/cost.json
-graphify-out/cache/
-graphify-out/.last_refresh_error
+# graphify — RETIRED. graphify-out/ is generated and no longer committed.
+# Code intelligence is provided by the codebase-memory MCP (re-indexed on demand).
+# Left on disk for the optional graphify_search reader, but kept out of git.
+graphify-out/
 !.cursor/mcp.json
 .cursor/tmp/

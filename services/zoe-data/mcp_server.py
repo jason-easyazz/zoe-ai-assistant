@@ -385,25 +385,6 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
-        "name": "graphify_search",
-        "description": (
-            "Search Zoe's graphify knowledge graph wiki for architecture and code information. "
-            "Useful for understanding how specific components work, finding code relationships, "
-            "or looking up capability details. Returns relevant wiki page snippets. "
-            "If the wiki hasn't been built yet, run zoe_sync_knowledge first."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Search query — e.g. 'chat router', 'memory service', 'intent_router escalation'",
-                },
-            },
-            "required": ["query"],
-        },
-    },
-    {
         "name": "a2a_delegate",
         "description": (
             "Delegate a task to a named peer agent via A2A federation. "
@@ -1836,16 +1817,6 @@ async def _execute_tool(db, name: str, args: dict):
             return result
         except Exception as exc:
             return {"error": f"Agent sync failed: {exc}"}
-
-    elif name == "graphify_search":
-        query = args.get("query", "").strip()
-        if not query:
-            return {"error": "query is required"}
-        try:
-            from agent_sync import graphify_search  # type: ignore[import]
-            return graphify_search(query)
-        except Exception as exc:
-            return {"error": f"Graphify search failed: {exc}"}
 
     elif name == "greptile_pr_status":
         try:

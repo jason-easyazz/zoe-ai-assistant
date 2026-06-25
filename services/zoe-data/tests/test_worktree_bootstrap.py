@@ -82,6 +82,27 @@ def test_ensure_worktree_is_idempotent(git_repo, monkeypatch):
     assert not any(args[:3] == ["git", "fetch", "origin"] for args in calls)
 
 
+def test_ensure_worktree_rejects_dirty_existing_task_branch(git_repo):
+    wt = wb.ensure_worktree("t_dirty")
+    (wt / "README.md").write_text("dirty\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="uncommitted changes"):
+        wb.ensure_worktree("t_dirty")
+
+
+def test_ensure_worktree_rejects_wrong_existing_task_branch(git_repo):
+    wt = wb.ensure_worktree("t_wrong_branch")
+    subprocess.run(
+        ["git", "checkout", "-b", "not-the-task-branch"],
+        cwd=wt,
+        check=True,
+        capture_output=True,
+    )
+
+    with pytest.raises(RuntimeError, match="expected fresh task branch"):
+        wb.ensure_worktree("t_wrong_branch")
+
+
 def test_ensure_worktree_rejects_invalid_task_id():
     with pytest.raises(ValueError, match="invalid characters"):
         wb.ensure_worktree("../escape")

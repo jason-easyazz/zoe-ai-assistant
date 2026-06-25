@@ -92,6 +92,10 @@ class DispatchResult:
     ui: Optional[dict] = None
     source: str = "expert_dispatch"
     meta: dict = field(default_factory=dict)
+    # Provenance of the answer: "tier0" (regex shortcut) or "tier1.5" (expert
+    # dispatch). Set by fast_tiers; lets a channel recognise a fast-tier reply
+    # (e.g. LiveKit's add_to_chat_ctx=False rule). Metadata only — never rendered.
+    tier: str = ""
 
 
 def is_enabled() -> bool:
@@ -127,8 +131,14 @@ def _ui_for(domain: str) -> Optional[dict]:
             "reminders": {"kind": "reminder"}, "weather": {"kind": "weather"}}.get(domain)
 
 
-async def dispatch(domain: str, text: str, ctx: dict[str, Any]) -> Optional[DispatchResult]:
-    """Fulfill `text` as `domain` via existing handlers, or None → brain."""
+async def dispatch(domain: str, text: str, ctx: dict[str, Any], *, write_ok: bool = True) -> Optional[DispatchResult]:
+    """Fulfill `text` as `domain` via existing handlers, or None → brain.
+
+    `write_ok=False` lets a caller take the read/recall fast path but defer any
+    WRITE intent (create/add) to the brain — used by the chat channel, where a
+    write needs LLM slot-extraction anyway (never sub-50ms) and we'd rather not
+    run that extraction speculatively only to fall through. Reads/expert-recall
+    are unaffected."""
     if not is_enabled():
         return None
     domain = (domain or "").strip().lower()
@@ -153,6 +163,12 @@ async def dispatch(domain: str, text: str, ctx: dict[str, Any]) -> Optional[Disp
         logger.info("EXPERT_MISS domain=%s score=%.2f (no plan) → brain", domain, score)
         return None
     intent_name, regex_slots, kind = plan
+
+    # Caller opted out of writes on this channel (e.g. chat): defer create/add to
+    # the brain BEFORE paying for slot extraction. Reads/expert-recall continue.
+    if kind == "write" and not write_ok:
+        logger.info("EXPERT_DEFER_WRITE domain=%s intent=%s (write_ok=False) → brain", domain, intent_name)
+        return None
 
     # 2) Decide whether we may ACT: active mode, domain allow-listed, and for
     #    WRITE/EXPERT kinds an extra opt-in (reads are always safe).
@@ -314,6 +330,84 @@ def _echo_fact(text: str) -> str:
     return t.strip()
 
 
+def _record_quality_reject(source: str, reason: str, text: str) -> None:
+    """Log + count a write-quality reject so we can audit what's being dropped."""
+    logger.info("MEMORY_QUALITY_REJECT source=%s reason=%s text=%r",
+                source, reason, (text or "")[:120])
+    try:
+        from memory_metrics import memory_quality_reject_count
+        memory_quality_reject_count.labels(source=source, reason=reason).inc()
+    except Exception:
+        pass
+
+
+async def _ingest_or_supersede(svc, text: str, *, user_id: str, source: str,
+                               session_id: Optional[str], user_turn_id: Optional[str],
+                               memory_type: str, confidence: float,
+                               tags: list[str]) -> None:
+    """Ingest a conversational fact, merging it with an equivalent existing row.
+
+    Best-effort and OFF the voice hot path (callers already run this in the
+    background). Uses MemoryService.search to find a near-duplicate / same-
+    attribute fact, then asks ``classify_against_existing`` what to do:
+
+      * "add"    — no equivalent fact; store as new.
+      * "update" — same fact, the candidate is richer/more current; archive the
+                   old row and ingest the candidate with a `supersedes` link.
+      * "skip"   — same fact, the existing row is at least as informative (e.g.
+                   it already spells the name); keep it and store NOTHING, so
+                   consolidation stops accumulating sparser near-duplicates.
+
+    Any failure in the dedup step degrades to a plain ingest so we never lose a
+    real fact."""
+    old_id: Optional[str] = None
+    try:
+        from memory_quality import classify_against_existing
+        rows = await svc.search(text, user_id=user_id, limit=3)
+        existing = [(getattr(r, "id", ""), getattr(r, "text", "") or "") for r in (rows or [])]
+        action, match_id = classify_against_existing(text, existing)
+        if action == "skip" and match_id:
+            # The existing row is at least as good — don't write a duplicate.
+            try:
+                from memory_metrics import memory_dedup_skip_count
+                memory_dedup_skip_count.inc()
+            except Exception:
+                pass
+            logger.info("MEMORY_DEDUP_SKIP source=%s kept=%s cand=%r",
+                        source, match_id, text[:80])
+            return
+        if action == "update" and match_id:
+            old_id = match_id
+    except Exception as exc:
+        logger.debug("near-dedup check failed (%s) → plain ingest", exc)
+        old_id = None
+
+    metadata = {"supersedes": old_id} if old_id else None
+    ref = await svc.ingest(
+        text, user_id=user_id, source=source,
+        session_id=session_id, user_turn_id=user_turn_id,
+        memory_type=memory_type, confidence=confidence, status="approved",
+        tags=tags, metadata=metadata,
+    )
+    new_id = getattr(ref, "id", None)
+    # Only archive the old row if the ingest actually wrote a DISTINCT new row.
+    # ingest dedups on a text-derived mem_id, so a near-identical value can map to
+    # the same id as old_id (or be dropped, ref=None) — archiving then would delete
+    # the only copy of the fact. Guard against that.
+    if old_id and new_id and new_id != old_id:
+        try:
+            await svc.review(old_id, decision="archive", actor=source,
+                             note="superseded by newer conversational fact")
+            from memory_metrics import memory_supersede_count
+            memory_supersede_count.labels(source=source).inc()
+            logger.info("MEMORY_SUPERSEDE source=%s old=%s new=%r",
+                        source, old_id, text[:80])
+        except Exception as exc:
+            # New row is already stored; failing to archive the old one just
+            # leaves a (harmless) near-dup — don't lose the new fact over it.
+            logger.debug("supersede archive failed (%s); new row kept", exc)
+
+
 async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
                      user_turn_id: Optional[str] = None) -> Optional[str]:
     """people/memory: STORE a taught fact (statement) or RECALL one (question).
@@ -324,9 +418,38 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
     text = (text or "").strip()
     if not text:
         return None
-    # Question → recall (unless it's an explicit "remember that …").
-    explicit_store = bool(re.search(r"\b(remember|note that|don'?t forget|make a note)\b", text, re.IGNORECASE))
-    if _QUESTION_RE.search(text) and not explicit_store:
+    # STORE (imperative teach) vs RECALL (a question). The tricky case: "Do you
+    # remember what my mum's name is?" is a RECALL question that happens to contain
+    # the word 'remember' — it must not be mistaken for the imperative "remember
+    # that …", or the question itself gets stored verbatim as a fact (observed
+    # on-device). _QUESTION_RE also didn't know the "do YOU remember/recall/know"
+    # form (only "do i"), so such questions slipped straight through to store.
+    low = text.lower()
+    asks_recall = bool(re.search(
+        r"\b(do|did|does|can|could|would|will)\s+(you|ya)\s+"
+        r"(remember|recall|recollect|know|have)\b", low))
+    is_question = asks_recall or bool(_QUESTION_RE.search(text)) or text.rstrip().endswith("?")
+    # Imperative teach only: a command to store, never a recall question. The
+    # asks_recall guard covers the "do you / do ya remember…?" forms (any pronoun);
+    # the lookbehinds also stop a bare "you/ya remember…" from reading as a command.
+    imperative_store = (not asks_recall) and (
+        bool(re.search(r"\b(note that|don'?t forget|make a note|keep in mind)\b", low))
+        or bool(re.search(r"(?<!you )(?<!ya )\bremember\b", low))
+    )
+    if is_question and not imperative_store:
+        return await _run_expert(domain, text, user_id, session_id)
+    # Write-quality gate (mem0-style): even past the store-vs-recall split, drop
+    # candidates that aren't shaped like a storable personal fact (interrogative
+    # leftovers, LLM meta-rambling, empty/too-short). Conservative — leans ACCEPT.
+    try:
+        from memory_quality import is_storable_fact
+        storable, reason = is_storable_fact(text)
+    except Exception:
+        storable, reason = True, ""  # gate unavailable → degrade to plain store
+    if not storable:
+        _record_quality_reject("voice_fact", reason, text)
+        # Not a fact → treat as a recall/conversational turn so the user still
+        # gets a useful reply instead of a bogus "Got it, I'll remember …".
         return await _run_expert(domain, text, user_id, session_id)
     # Statement → store the fact.
     # Idempotency: ingest dedups on user_turn_id, but the voice path rarely
@@ -339,11 +462,15 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
         user_turn_id = "fact-" + hashlib.sha1(f"{user_id}|{norm}".encode()).hexdigest()[:16]
     try:
         from memory_service import get_memory_service
-        await get_memory_service().ingest(
-            text, user_id=user_id, source="voice_fact",
+        svc = get_memory_service()
+        # Near-dedup / supersession (best-effort, background path only): if a
+        # high-similarity same-attribute fact already exists ("my dad's name is
+        # Neil" vs an earlier value), UPDATE/supersede it instead of stacking a
+        # duplicate/contradiction. Falls through to a plain ingest on any error.
+        await _ingest_or_supersede(
+            svc, text, user_id=user_id, source="voice_fact",
             session_id=session_id or None, user_turn_id=user_turn_id,
-            memory_type="fact", confidence=0.85, status="approved",
-            tags=["voice", "self"],
+            memory_type="fact", confidence=0.85, tags=["voice", "self"],
         )
     except Exception as exc:
         logger.warning("store_fact ingest failed (%s) → brain", exc)

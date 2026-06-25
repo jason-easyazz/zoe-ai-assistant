@@ -1,0 +1,474 @@
+/* Calendar card — "your day", tuned for the Raspberry Pi Touch Display 2
+   (7-inch, 1280×720 landscape, finger touch ≈ 155mm wide → a 44px target is
+   only ~5mm). docs/architecture/skybridge-design-system.md is the source of truth.
+
+   Structure: header (day + "N events") → a compact HERO "up next" event (time,
+   title, location + a live relative countdown) → a denser timeline of the rest of
+   the day where EACH row is a ≥64px finger target (≥~8mm). The hero is deliberately
+   restrained so the day's events — the real content — get the room, not a single
+   screen-hogging element. A calm twilight/daylight "today" wash gives the card its
+   own identity; category colour is used with intent (accent rail + tinted time +
+   marker), routed through the canonical --sky-accent-{category} tokens. Both dark
+   (default) + light ([data-theme="light"]) treatments, fills the stage at panel scale.
+
+   Specificity note: legacy `.sky-card` base rules (skybridge.html inline +
+   touch-adapter.css + skybridge-data-widgets.css, up to (0,3,1) !important) paint a
+   background + a ::after glow + a small min-height. To win for card-level properties
+   we use `body:not(.sky-empty) .sky-card.calendar-card.sky-premium-card` (0,4,1,
+   !important). Inner elements use NEW `cal-*` class names so they never collide.
+
+   Light-mode ink: the global [data-theme="light"] block re-points --text-* but NOT
+   the white :root --sky-ink-* scale, so this file NEVER relies on var(--sky-ink-N,
+   #fallback) — all ink is the scoped --cal-ink-* ramp, which IS re-pointed for light. */
+
+/* ====================================================================== */
+/* Card surface — the calm "today" wash (twilight by default).            */
+/* ====================================================================== */
+body:not(.sky-empty) .sky-card.calendar-card.sky-premium-card {
+  border: 1px solid rgba(255, 255, 255, 0.13) !important;
+  border-radius: var(--sky-radius-xl, 38px) !important;
+  box-shadow: 0 44px 96px -32px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.18) !important;
+  min-height: 560px !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  color: #fff;
+  /* fallback sky (overridden per daypart below) */
+  background: linear-gradient(158deg, #1c2150 0%, #2a2466 48%, #3a2a6e 100%) !important;
+}
+
+/* TIME-OF-DAY SCENE: the card "sky" shifts dawn → day → dusk → night (data-daypart
+   on .cal-scene), with a soft bloom of the next event's category at top-left. The
+   card reads as "your day", immersive like the weather/clock cards. */
+body:not(.sky-empty) .sky-card.calendar-card.sky-premium-card:has(.cal-scene[data-daypart="dawn"]) {
+  background:
+    radial-gradient(circle at 14% 8%, rgba(var(--cal-accent, 99, 102, 241), 0.26), transparent 44%),
+    linear-gradient(158deg, #1b2d5c 0%, #46376f 46%, #8a5170 78%, #c98a6e 100%) !important;
+}
+body:not(.sky-empty) .sky-card.calendar-card.sky-premium-card:has(.cal-scene[data-daypart="day"]) {
+  background:
+    radial-gradient(circle at 14% 8%, rgba(var(--cal-accent, 99, 102, 241), 0.22), transparent 44%),
+    radial-gradient(circle at 88% 2%, rgba(255, 255, 255, 0.12), transparent 38%),
+    linear-gradient(158deg, #1c3a6e 0%, #28508c 54%, #3f6aa8 100%) !important;
+}
+body:not(.sky-empty) .sky-card.calendar-card.sky-premium-card:has(.cal-scene[data-daypart="dusk"]) {
+  background:
+    radial-gradient(circle at 14% 8%, rgba(var(--cal-accent, 99, 102, 241), 0.26), transparent 44%),
+    linear-gradient(158deg, #1b2150 0%, #3a2a66 44%, #6a3a72 76%, #b9605f 100%) !important;
+}
+body:not(.sky-empty) .sky-card.calendar-card.sky-premium-card:has(.cal-scene[data-daypart="night"]) {
+  background:
+    radial-gradient(circle at 14% 8%, rgba(var(--cal-accent, 99, 102, 241), 0.24), transparent 44%),
+    linear-gradient(158deg, #0e1330 0%, #1a1f48 56%, #2a2a58 100%) !important;
+}
+
+/* Belt-and-suspenders: suppress the legacy decorative glow pseudo-elements. */
+body:not(.sky-empty) .sky-card.calendar-card::before,
+body:not(.sky-empty) .sky-card.calendar-card::after {
+  content: none !important;
+  background: none !important;
+}
+
+/* Light theme: a bright daylight wash + dark ink, regardless of daypart (light
+   theme only runs in daytime, so the day sky is the right read). */
+:root[data-theme="light"] body:not(.sky-empty) .sky-card.calendar-card.sky-premium-card,
+:root[data-theme="light"] body:not(.sky-empty) .sky-card.calendar-card.sky-premium-card:has(.cal-scene) {
+  background:
+    radial-gradient(circle at 14% 6%, rgba(var(--cal-accent, 99, 102, 241), 0.16), transparent 46%),
+    radial-gradient(circle at 88% 2%, rgba(255, 255, 255, 0.5), transparent 40%),
+    linear-gradient(158deg, #e8f1fc 0%, #d6e6f7 52%, #e9e6f8 100%) !important;
+  border-color: rgba(20, 50, 80, 0.12) !important;
+  box-shadow: 0 44px 96px -36px rgba(20, 50, 80, 0.30), inset 0 1px 0 rgba(255, 255, 255, 0.7) !important;
+  color: #16324d;
+}
+
+/* ---- Ink ramp + accent (scoped, theme-switched) --------------------- */
+.calendar-card .cal-scene {
+  --cal-ink-0: rgba(255, 255, 255, 0.97);
+  --cal-ink-1: rgba(255, 255, 255, 0.82);
+  --cal-ink-2: rgba(255, 255, 255, 0.60);
+  --cal-ink-3: rgba(255, 255, 255, 0.42);
+  --cal-hairline: rgba(255, 255, 255, 0.14);
+  --cal-row-bg: rgba(255, 255, 255, 0.06);
+  --cal-row-bg-hover: rgba(255, 255, 255, 0.12);
+  /* the card's accent = the soonest event's category colour; falls back to indigo */
+  --cal-accent: var(--sky-card-accent, var(--sky-accent-general, 99, 102, 241));
+
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  box-sizing: border-box;
+  /* tighter than desktop — give the events the pixels, not the chrome */
+  padding: 30px 34px;
+  gap: 20px;
+}
+
+/* Propagate the hero event's accent up to the scene so the card wash + glyph band
+   pick up the right category colour. .cal-hero carries the .sky-accent-* class. */
+.calendar-card .cal-scene:has(.cal-hero.sky-accent-work) { --cal-accent: var(--sky-accent-work); }
+.calendar-card .cal-scene:has(.cal-hero.sky-accent-personal) { --cal-accent: var(--sky-accent-personal); }
+.calendar-card .cal-scene:has(.cal-hero.sky-accent-family) { --cal-accent: var(--sky-accent-family); }
+.calendar-card .cal-scene:has(.cal-hero.sky-accent-bucket) { --cal-accent: var(--sky-accent-bucket); }
+.calendar-card .cal-scene:has(.cal-hero.sky-accent-social) { --cal-accent: var(--sky-accent-social); }
+.calendar-card .cal-scene:has(.cal-hero.sky-accent-shopping) { --cal-accent: var(--sky-accent-shopping); }
+.calendar-card .cal-scene:has(.cal-hero.sky-accent-health) { --cal-accent: var(--sky-accent-health); }
+.calendar-card .cal-scene:has(.cal-hero.sky-accent-medical) { --cal-accent: var(--sky-accent-medical); }
+.calendar-card .cal-scene:has(.cal-hero.sky-accent-routine) { --cal-accent: var(--sky-accent-routine); }
+.calendar-card .cal-scene:has(.cal-hero.sky-accent-household) { --cal-accent: var(--sky-accent-household); }
+.calendar-card .cal-scene:has(.cal-hero.sky-accent-general) { --cal-accent: var(--sky-accent-general); }
+
+:root[data-theme="light"] .calendar-card .cal-scene {
+  --cal-ink-0: #16324d;
+  --cal-ink-1: #1f3f5d;
+  --cal-ink-2: #3a5e80;
+  --cal-ink-3: #6a86a3;
+  --cal-hairline: rgba(20, 50, 80, 0.16);
+  --cal-row-bg: rgba(20, 50, 80, 0.05);
+  --cal-row-bg-hover: rgba(20, 50, 80, 0.10);
+}
+
+/* ====================================================================== */
+/* Header — day + "N events"                                              */
+/* ====================================================================== */
+.calendar-card .cal-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 18px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--cal-hairline);
+}
+
+.calendar-card .cal-head-day {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+}
+
+.calendar-card .cal-head-weekday {
+  font-size: 34px;
+  font-weight: 600;
+  letter-spacing: -0.6px;
+  line-height: 1;
+  color: var(--cal-ink-0);
+}
+
+.calendar-card .cal-head-date {
+  font-size: 22px;
+  font-weight: 300;
+  letter-spacing: -0.2px;
+  color: var(--cal-ink-2);
+}
+
+.calendar-card .cal-head-count {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--cal-ink-2);
+  white-space: nowrap;
+}
+
+/* ====================================================================== */
+/* Body layout — hero (restrained) + timeline (gets the room).            */
+/* ====================================================================== */
+.calendar-card .cal-body {
+  display: flex;
+  gap: 0;
+  flex: 1;
+  min-height: 0;
+}
+
+/* ---- HERO "up next" — deliberately compact so it never eats the screen */
+.calendar-card .cal-hero {
+  /* the up-next hero leads the scene, with the day's list to its right */
+  flex: 1.15 1 0;
+  min-width: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 10px;
+  margin: 0;
+  padding: 6px 30px 6px 24px;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 0.18s ease, opacity 0.18s ease;
+}
+
+.calendar-card .cal-hero:hover,
+.calendar-card .cal-hero:focus-visible {
+  transform: translateY(-2px);
+  outline: none;
+}
+.calendar-card .cal-hero:active { transform: translateY(0) scale(0.995); }
+
+.calendar-card .cal-hero.is-past { opacity: 0.62; }
+
+/* the accent rail — a bold vertical bar in the category colour (intent, §4) */
+.calendar-card .cal-hero-rail {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 6px;
+  height: 78%;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgb(var(--cal-accent)), rgba(var(--cal-accent), 0.45));
+  box-shadow: 0 0 24px 0 rgba(var(--cal-accent), 0.55);
+}
+
+.calendar-card .cal-hero-kicker {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: rgb(var(--cal-accent));
+}
+
+.calendar-card .cal-hero-time {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 14px;
+  font-size: 52px;
+  font-weight: 400;
+  line-height: 0.96;
+  letter-spacing: -1.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--cal-ink-0);
+}
+
+/* keep a time range ("09:00 - 09:30") on one line; the pill wraps below if tight */
+.calendar-card .cal-hero-clock { white-space: nowrap; }
+
+/* the live countdown — a pill in the category colour ("in 25 min", "Now") */
+.calendar-card .cal-hero-rel {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: 0;
+  padding: 7px 15px;
+  border-radius: 999px;
+  background: rgba(var(--cal-accent), 0.22);
+  color: rgb(var(--cal-accent));
+  box-shadow: inset 0 0 0 1px rgba(var(--cal-accent), 0.42);
+  white-space: nowrap;
+}
+
+.calendar-card .cal-hero-title {
+  font-size: 32px;
+  font-weight: 500;
+  line-height: 1.12;
+  letter-spacing: -0.5px;
+  color: var(--cal-ink-0);
+  max-width: 15ch;
+  /* keep the hero height honest on a small panel: at most two lines */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.calendar-card .cal-hero-loc {
+  font-size: 18px;
+  font-weight: 400;
+  color: var(--cal-ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+/* ---- Timeline (the rest of the day) — the dense, useful content ------- */
+.calendar-card .cal-timeline {
+  /* grows to take the room the hero gave up; wide enough for legible rows */
+  flex: 1.25 1 440px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-left: 30px;
+  border-left: 1px solid var(--cal-hairline);
+  overflow: hidden;
+}
+
+.calendar-card .cal-row {
+  --cal-accent: var(--sky-card-accent, var(--sky-accent-general, 99, 102, 241));
+  display: grid;
+  grid-template-columns: 72px 8px 1fr;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  margin: 0;
+  /* ≥64px finger target (≈8mm on this panel). Use explicit min-height AND enough
+     vertical padding so even a single-line row clears 64px on its own. */
+  box-sizing: border-box;
+  min-height: 68px;
+  padding: 15px 18px;
+  text-align: left;
+  border: 1px solid transparent;
+  border-radius: 18px;
+  background: var(--cal-row-bg);
+  color: inherit;
+  font-family: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
+}
+
+.calendar-card .cal-row:hover,
+.calendar-card .cal-row:focus-visible {
+  background: var(--cal-row-bg-hover);
+  border-color: rgba(var(--cal-accent), 0.5);
+  transform: translateX(2px);
+  outline: none;
+}
+.calendar-card .cal-row:active {
+  background: var(--cal-row-bg-hover);
+  transform: translateX(0) scale(0.992);
+}
+
+.calendar-card .cal-row-time {
+  font-size: 19px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.2px;
+  color: rgb(var(--cal-accent));
+}
+
+/* category marker — a filled accent pill (intent, not a faint dot) */
+.calendar-card .cal-row-marker {
+  width: 8px;
+  height: 34px;
+  border-radius: 999px;
+  background: rgb(var(--cal-accent));
+  box-shadow: 0 0 12px 0 rgba(var(--cal-accent), 0.5);
+}
+
+.calendar-card .cal-row-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.calendar-card .cal-row-body strong {
+  font-size: 19px;
+  font-weight: 500;
+  line-height: 1.15;
+  color: var(--cal-ink-0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.calendar-card .cal-row-body em {
+  font-style: normal;
+  font-size: 15px;
+  font-weight: 400;
+  color: var(--cal-ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* when the hero is the only event: a quiet note instead of an empty rail */
+.calendar-card .cal-rest-empty {
+  flex: 1.25 1 440px;
+  display: flex;
+  align-items: center;
+  padding-left: 30px;
+  border-left: 1px solid var(--cal-hairline);
+  font-size: 17px;
+  font-weight: 400;
+  color: var(--cal-ink-3);
+}
+
+/* ====================================================================== */
+/* Empty state — calm "Nothing scheduled"                                 */
+/* ====================================================================== */
+.calendar-card .cal-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  min-height: 320px;
+  text-align: center;
+}
+
+.calendar-card .cal-empty-mark {
+  width: 92px;
+  height: 92px;
+  display: grid;
+  place-items: center;
+  border-radius: 26px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--cal-hairline);
+  --calendar-glyph-accent: var(--cal-accent, 90, 224, 224);
+}
+
+:root[data-theme="light"] .calendar-card .cal-empty-mark {
+  background: rgba(20, 50, 80, 0.05);
+}
+
+.calendar-card .cal-empty-mark .calendar-glyph {
+  width: 54px;
+  height: 54px;
+  filter: drop-shadow(0 6px 14px rgba(0, 0, 0, 0.35));
+}
+
+.calendar-card .cal-empty strong {
+  font-size: 26px;
+  font-weight: 600;
+  color: var(--cal-ink-1);
+}
+
+.calendar-card .cal-empty span {
+  font-size: 17px;
+  font-weight: 400;
+  color: var(--cal-ink-3);
+}
+
+/* ====================================================================== */
+/* Responsive — stack hero over timeline only on a genuinely narrow panel. */
+/* The 7" panel is 1280px wide, so it keeps the side-by-side layout; this   */
+/* is the portrait / tiny fallback.                                         */
+/* ====================================================================== */
+@media (max-width: 760px) {
+  .calendar-card .cal-body { flex-direction: column; }
+  .calendar-card .cal-hero { padding: 6px 0 6px 22px; }
+  .calendar-card .cal-timeline,
+  .calendar-card .cal-rest-empty {
+    flex: 1 1 auto;
+    padding-left: 0;
+    padding-top: 20px;
+    border-left: 0;
+    border-top: 1px solid var(--cal-hairline);
+  }
+  .calendar-card .cal-hero-time { font-size: 44px; }
+  .calendar-card .cal-hero-title { font-size: 28px; }
+}
+
+/* Reduced motion (spec §7) — drop the hover/active transforms. */
+@media (prefers-reduced-motion: reduce) {
+  .calendar-card .cal-hero,
+  .calendar-card .cal-row {
+    transition: background 0.18s ease, border-color 0.18s ease;
+  }
+  .calendar-card .cal-hero:hover,
+  .calendar-card .cal-hero:focus-visible,
+  .calendar-card .cal-hero:active,
+  .calendar-card .cal-row:hover,
+  .calendar-card .cal-row:focus-visible,
+  .calendar-card .cal-row:active {
+    transform: none;
+  }
+}
