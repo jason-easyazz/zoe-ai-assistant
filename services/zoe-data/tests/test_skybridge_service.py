@@ -144,6 +144,16 @@ class FakeDb:
                 item for item in self.items_by_list.get(list_id, []) if not item.get("deleted")
             ]
             return f"UPDATE {removed}"
+        if "UPDATE list_items SET completed" in sql:
+            completed_val = args[1]
+            item_id = args[2]
+            list_id = args[3]
+            updated = 0
+            for item in self.items_by_list.get(list_id, []):
+                if item.get("id") == item_id and not item.get("deleted"):
+                    item["completed"] = bool(completed_val)
+                    updated += 1
+            return f"UPDATE {updated}"
         if "UPDATE events SET deleted" in sql:
             event_id = args[1]
             user_id = args[2]
@@ -202,6 +212,16 @@ def test_classify_calendar_and_weather_requests():
     assert classify_skybridge_intent("whats on my grocery list").domain == "lists"
     work_add = classify_skybridge_intent("add bread to the work list")
     assert work_add.action == "add_item"
+    # Check-off (the tap gesture + voice): explicit direction, not confused with add/remove.
+    check = classify_skybridge_intent("check off milk on the shopping list")
+    assert check.domain == "lists" and check.action == "complete_item"
+    assert check.item_text == "milk" and check.completed is True
+    uncheck = classify_skybridge_intent("uncheck milk on the shopping list")
+    assert uncheck.action == "complete_item" and uncheck.completed is False
+    assert classify_skybridge_intent("tick off bread").action == "complete_item"
+    assert classify_skybridge_intent("mark eggs as done").completed is True
+    # "take milk off the list" must still be a removal, not a check-off.
+    assert classify_skybridge_intent("take milk off the shopping list").action == "remove_item"
     assert work_add.item_text == "bread"
     assert work_add.list_type == "work"
     assert classify_skybridge_intent("show my lists").action == "overview"
@@ -612,6 +632,41 @@ async def test_lists_request_returns_real_list_items():
     assert card["content"]["items"][0]["text"] == "Milk"
     assert card["content"]["open_count"] == 1
     assert "Surface" not in str(card)
+
+
+@pytest.mark.asyncio
+async def test_list_complete_item_ticks_off_and_refreshes_card():
+    list_row = {
+        "id": "list-1",
+        "user_id": "family-admin",
+        "name": "Groceries",
+        "list_type": "shopping",
+        "description": "Weekly shop",
+        "visibility": "family",
+    }
+    item = {"id": "item-1", "list_id": "list-1", "text": "Milk", "completed": False}
+    db = FakeDb(lists=[list_row], items_by_list={"list-1": [item]})
+
+    result = await resolve_skybridge_request(
+        "check off milk on the shopping list", "family-admin", db=db
+    )
+
+    assert result["handled"] is True
+    assert result["intent"]["action"] == "complete_item"
+    assert result["intent"]["completed"] is True
+    assert item["completed"] is True  # persisted
+    assert any("UPDATE list_items SET completed" in str(call[0]) for call in db.executed)
+    card = result["cards"][0]
+    assert card["content"]["source"] == "list_show"
+    assert card["content"]["items"][0]["completed"] is True
+    assert "ticked off" in result["spoken_summary"].lower()
+
+    # And the reverse: tapping a done item restores it.
+    restore = await resolve_skybridge_request(
+        "uncheck milk on the shopping list", "family-admin", db=db
+    )
+    assert restore["intent"]["completed"] is False
+    assert item["completed"] is False
 
 
 @pytest.mark.asyncio
