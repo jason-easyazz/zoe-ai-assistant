@@ -1361,7 +1361,9 @@ async def _resolve_calendar_update_time(intent: SkybridgeIntent, user_id: str, d
     event = matches[0]
     event_id = event.get("id")
     update_result = await db.execute(
-        "UPDATE events SET start_time = $1, updated_at = NOW() WHERE id = $2 AND user_id = $3 AND deleted = 0",
+        # Giving an all-day event a time makes it a timed event — clear all_day so
+        # the row can't be both (renderers/spoken summaries would disagree).
+        "UPDATE events SET start_time = $1, all_day = 0, updated_at = NOW() WHERE id = $2 AND user_id = $3 AND deleted = 0",
         intent.target_time,
         event_id,
         user_id,
