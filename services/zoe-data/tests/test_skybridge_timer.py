@@ -68,6 +68,11 @@ def test_classify_create_cancel_status():
     assert classify_skybridge_intent("cancel the timer").action == "cancel"
     assert classify_skybridge_intent("stop my timer").action == "cancel"
     assert classify_skybridge_intent("how long left on my timer").action == "status"
+    # A passing mention of "timer" must NOT create one (the phantom-timer bug:
+    # a mis-transcribed "It's not the timer." was spinning up a 5-min timer).
+    assert classify_skybridge_intent("It's not the timer.") is None
+    assert classify_skybridge_intent("the timer went off") is None
+    assert classify_skybridge_intent("10 minute timer").action == "create"
 
 
 def test_timer_not_misread_as_calendar():
