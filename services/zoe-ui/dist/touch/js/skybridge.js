@@ -975,7 +975,7 @@
     // still just speak; this is the touch path to add without a keyboard hunt.
     function composeInInput(text, caret) {
         if (!els.input) return;
-        openCommandFallback('');
+        openCommandFallback('Type the rest, or just speak it.');
         els.input.value = text || '';
         requestAnimationFrame(() => {
             els.input.focus({ preventScroll: true });
