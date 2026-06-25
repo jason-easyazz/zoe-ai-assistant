@@ -271,6 +271,16 @@
         return 'edit ' + title + (startTime ? ' at ' + startTime : '');
     }
 
+    // The calendar scene takes a living time-of-day gradient (like the clock card),
+    // so the card reads as "your day" rather than a flat agenda. Phase by hour.
+    function calendarDaypart(nowMs) {
+        const h = new Date(nowMs || Date.now()).getHours();
+        if (h >= 5 && h < 8) return 'dawn';
+        if (h >= 8 && h < 17) return 'day';
+        if (h >= 17 && h < 20) return 'dusk';
+        return 'night';
+    }
+
     function renderCalendar(props) {
         const events = Array.isArray(props.events) ? props.events : [];
         const sorted = events.slice().sort((a, b) => calendarEventSortKey(a) - calendarEventSortKey(b)).slice(0, 8);
@@ -342,7 +352,7 @@
         ].join('');
 
         const body = [
-            '<div class="cal-scene">',
+            '<div class="cal-scene" data-daypart="' + calendarDaypart(nowMs) + '">',
             '<header class="cal-head">',
             '<div class="cal-head-day">',
             '<span class="cal-head-weekday">' + escapeHtml(dateMeta.weekday) + '</span>',
