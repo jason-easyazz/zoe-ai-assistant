@@ -154,6 +154,12 @@
             }
             const btn = event.target.closest('button[data-sky-action]');
             if (!btn) return;
+            // "+ Add item" and friends: open the composer prefilled so you can type
+            // or speak the rest (e.g. "add ⟂ to the shopping list").
+            if (btn.dataset.skyAction === 'compose') {
+                composeInInput(btn.dataset.compose || '', parseInt(btn.dataset.composeCaret, 10) || 0);
+                return;
+            }
             let route = btn.dataset.route;
             const query = btn.dataset.query;
             if (btn.dataset.skyAction === 'auth') {
@@ -962,6 +968,19 @@
         syncVoiceFallbackState();
         // Leave the status line as the caller set it (e.g. "Ready on local") — it
         // carries the transport mode; don't clobber it with a generic message.
+    }
+
+    // Open the typed composer prefilled with `text`, caret at `caret` — the rest of
+    // the phrase (the item) goes through the same resolver as voice. Voice users can
+    // still just speak; this is the touch path to add without a keyboard hunt.
+    function composeInInput(text, caret) {
+        if (!els.input) return;
+        openCommandFallback('');
+        els.input.value = text || '';
+        requestAnimationFrame(() => {
+            els.input.focus({ preventScroll: true });
+            try { els.input.setSelectionRange(caret, caret); } catch (_) {}
+        });
     }
 
     function openCommandFallback(message) {
