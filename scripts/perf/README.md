@@ -13,6 +13,7 @@ silently regress either.
 | --- | --- | --- |
 | `measure_speed.py` | Brain **TTFT** + **gen tok/s** (median over N runs), prompt-size configurable | LLM in isolation via `POST /v1/chat/completions` (`stream:true`) |
 | `measure_voice.py` | Whole voice path: **stt / resolve / brain / e2e** latency **and said-vs-did correctness** | wraps `services/zoe-data/tests/replay_samples.py` over the saved utterance corpus |
+| `measure_tts.py` | Kokoro **TTS time-to-first-audio** — synth latency of the first speakable clause (the chunk the live stream emits first), with sidecar cache hit/miss | times the live Kokoro sidecar (`:10201`) over HTTP, on the first unit from `voice_tts._extract_first_unit`; replies sourced from the replay corpus or a `--replies-file` |
 
 ## Running
 
@@ -30,6 +31,16 @@ ZOE_PERF=1 python3 scripts/perf/measure_speed.py --runs 3 --cold --prompt-tokens
 
 # Voice e2e + correctness (run on the Jetson host; needs the live service .env):
 ZOE_PERF=1 python3 scripts/perf/measure_voice.py --last 10 --json /tmp/voice.json
+
+# TTS time-to-first-audio (needs the running Kokoro sidecar on :10201).
+# --cold appends a per-run nonce so each synth is a true cache MISS (cold cost);
+# omit --cold to see the live mix incl. legitimate cache hits. Hold the harness
+# lock so it can't OOM against a sibling replay loading a second Kokoro model:
+flock /tmp/zoe-voice-harness.lock -c \
+  'ZOE_PERF=1 python3 scripts/perf/measure_tts.py --replies-file replies.txt --cold \
+     --service-dir services/zoe-data --json /tmp/tts.json'
+# or source replies live from the corpus (needs a reachable brain):
+#   ... measure_tts.py --run-replay --last 10 ...
 ```
 
 `measure_voice.py` defaults to `services/zoe-data` under the repo root. From a
@@ -86,3 +97,19 @@ Correctness: 5/5 `OK` — no `CANT_DO`/`ERROR`. (The replay brain uses
 generation, not first-token — that's why it's much larger than the isolated
 TTFT. First-audio latency in the *live* streaming voice path is bounded by the
 ~71 ms warm TTFT plus the first TTS chunk, not by full `brain_ms`.)
+
+TTS time-to-first-audio (`measure_tts.py`, Kokoro sidecar `device=cpu (onnx)`,
+af_sky, first speakable clause):
+
+| Cohort | median | p10–p90 | range |
+| --- | --- | --- | --- |
+| First unit, **cache HIT** (warmed/common phrase) | **~2–12 ms** | — | 2.3–12.4 ms |
+| First unit, **cache MISS** (a *novel* brain clause) | **~3125 ms** | 1939–3616 ms | 1771–4999 ms |
+
+The sidecar phrase-caches af_sky/speed-1.0/<=240-char text, so a recurring opener
+is instant but a fresh clause pays full CPU synth — and synth is ~linear in
+characters (13-char clause ≈ 0.8–1.8 s, ~60-char clause ≈ 3 s). The default
+`ZOE_KOKORO_BACKEND=onnx` runs on CPU to save the ~2.3 GB the PyTorch/CUDA build
+holds; the "~150 ms warm GPU" in code comments is the non-default `pytorch`
+backend. See `docs/architecture/tts-first-chunk-latency.md` for the full analysis
+and safe optimization seams (warm the openers, not just whole phrases).
