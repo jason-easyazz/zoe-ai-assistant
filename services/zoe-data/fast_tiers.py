@@ -39,17 +39,30 @@ _TIER0_DOMAIN = {
     "weather": "weather", "timer_status": "timers",
 }
 
+# Intents that must NEVER be answered by the shared Tier-0 read shortcut on the
+# VOICE channel: they are user-scoped (personal data) and the voice channel's own
+# B3/B4 scope-gate + PIN challenge (`voice_tts.py` _can_use_voice_intent /
+# resource="scope_gate") runs AFTER this resolve() call. Short-circuiting them at
+# Tier-0 would leak personal data past that gate, so they fall through to the
+# brain lane (which runs after the gate). Public/shared reads (weather, time,
+# date, lists, calendar) stay eligible — they carry no per-user data and are
+# already treated as household-safe by the voice public-intent path.
+_VOICE_TIER0_DEFER_INTENTS = frozenset({"reminder_list", "timer_status"})
+
 # Per-channel profiles — the "tag → profile" model. Explicit resolve() kwargs win.
-# voice keeps run_tier0=False because it has its own richer public-intent Tier-0
-# (policy/scope gates) ahead of this call; folding that in is a later, replay-gated
-# step. chat/telegram run the shared Tier-0 read shortcut.
+# voice runs the shared Tier-0 read shortcut for the public/idempotent reads
+# (weather/time/date/list/calendar) so they answer in ~300ms instead of paying the
+# full 2-call brain loop; user-scoped reads are deferred via `tier0_defer_intents`
+# so the voice scope gate stays authoritative. chat/telegram run the shared Tier-0.
 # `defer_domains` lists domains that this channel must NOT fast-path — they fall
 # straight to the brain. voice defers people/memory: on-device that path was both
 # slow (2-4s recall/store) and wrong (it mis-stored recall *questions* as facts),
 # so the brain — now given the user's facts + portrait — owns recall and chat.
 CHANNEL_PROFILES: dict[str, dict[str, Any]] = {
     "chat":     {"run_tier0": True,  "allow_writes": False},
-    "voice":    {"run_tier0": False, "allow_writes": True, "defer_domains": frozenset({"people", "memory"})},
+    "voice":    {"run_tier0": True,  "allow_writes": True,
+                 "defer_domains": frozenset({"people", "memory"}),
+                 "tier0_defer_intents": _VOICE_TIER0_DEFER_INTENTS},
     "livekit":  {"run_tier0": True,  "allow_writes": True},
     "telegram": {"run_tier0": True,  "allow_writes": True},
 }
@@ -71,13 +84,22 @@ def _router_margin() -> float:
         return 0.05
 
 
-async def _tier0(text: str, user_id: str):
-    """Deterministic regex read shortcut. Returns a `DispatchResult` or `None`."""
+async def _tier0(text: str, user_id: str, defer_intents: frozenset[str] = frozenset()):
+    """Deterministic regex read shortcut. Returns a `DispatchResult` or `None`.
+
+    `defer_intents` lists intent names this caller must NOT short-circuit at
+    Tier-0 (e.g. voice defers user-scoped reads so its downstream scope gate stays
+    authoritative); those fall through to the brain lane.
+    """
     try:
         from intent_router import detect_intent, execute_intent
 
         intent = detect_intent(text, log_miss=False)
         if not intent or intent.name not in _TIER0_READ_INTENTS:
+            return None
+        # Caller-deferred (e.g. user-scoped reads on voice) — don't bypass the
+        # caller's own downstream policy/scope gate; let the brain lane own it.
+        if intent.name in defer_intents:
             return None
         # A `raw` slot means the intent still needs slot extraction we don't do at
         # Tier-0 — defer rather than execute a half-formed intent.
@@ -135,8 +157,14 @@ async def resolve(
             return None
 
         # Tier-0 — deterministic regex read shortcut (opt-in per channel).
+        # `tier0_defer_intents` (from the channel profile) names read intents this
+        # channel must NOT short-circuit here — e.g. voice defers user-scoped reads
+        # so its downstream B3/B4 scope gate stays authoritative.
         if run_tier0:
-            t0 = await _tier0(text, user_id)
+            t0 = await _tier0(
+                text, user_id,
+                defer_intents=prof.get("tier0_defer_intents", frozenset()),
+            )
             if t0 is not None:
                 return t0
 
