@@ -63,22 +63,45 @@ def test_chat_profile_applies_write_ok_false(monkeypatch):
     assert seen["write_ok"] is False
 
 
-def test_voice_profile_write_ok_true_and_tier0_skipped(monkeypatch):
+def test_voice_profile_write_ok_true_and_tier0_runs_public_read(monkeypatch):
     _enable(monkeypatch)
-    seen = {}
+    # voice profile now = {run_tier0: True, allow_writes: True}. A public read
+    # intent (weather) short-circuits at Tier-0 with a finished answer; the
+    # router/dispatch path is never reached.
+    async def _dispatch_must_not_run(domain, text, ctx, *, write_ok=True):
+        raise AssertionError("dispatch should not run on a Tier-0 hit")
 
-    async def _fake_dispatch(domain, text, ctx, *, write_ok=True):
-        seen["write_ok"] = write_ok
-        return expert_dispatch.DispatchResult(domain=domain, reply="OK")
+    monkeypatch.setattr(expert_dispatch, "dispatch", _dispatch_must_not_run)
+    _stub_detect(monkeypatch, _fake_intent("weather"))
 
-    monkeypatch.setattr(expert_dispatch, "dispatch", _fake_dispatch)
-    # voice profile = {run_tier0: False, allow_writes: True}. Tier-0 must NOT run,
-    # so detect_intent (wired to raise) is never reached.
-    _detect_must_not_run(monkeypatch)
+    async def _fake_exec(intent, user_id):
+        return "It's sunny, 22 degrees."
+
+    monkeypatch.setattr(intent_router, "execute_intent", _fake_exec)
     out = _run(fast_tiers.resolve("what's the weather", "u", "s", channel="voice",
                                   router_decision={"domain": "weather", "score": 0.95}))
     assert out is not None
-    assert seen["write_ok"] is True
+    assert out.tier == "tier0"
+    assert out.intent == "weather"
+
+
+def test_voice_defers_user_scoped_reads_to_brain(monkeypatch):
+    # User-scoped reads (reminder_list, timer_status) must NOT short-circuit at
+    # Tier-0 on voice — the voice B3/B4 scope gate runs after fast_tiers, so a
+    # Tier-0 answer would bypass it. They fall through (here: to the router, which
+    # we stub to a chat domain → None → brain lane).
+    _enable(monkeypatch)
+
+    async def _execute_must_not_run(intent, user_id):
+        raise AssertionError("execute_intent must not run for a deferred read")
+
+    monkeypatch.setattr(intent_router, "execute_intent", _execute_must_not_run)
+    for intent_name in ("reminder_list", "timer_status"):
+        _stub_detect(monkeypatch, _fake_intent(intent_name))
+        out = _run(fast_tiers.resolve("what reminders do I have", "u", "s",
+                                      channel="voice",
+                                      router_decision={"domain": "chat", "score": 0.2}))
+        assert out is None, f"voice should defer user-scoped read {intent_name}"
 
 
 def test_voice_defers_people_and_memory_to_brain(monkeypatch):
@@ -90,7 +113,9 @@ def test_voice_defers_people_and_memory_to_brain(monkeypatch):
         raise AssertionError(f"expert_dispatch ran for deferred domain {domain!r}")
 
     monkeypatch.setattr(expert_dispatch, "dispatch", _dispatch_must_not_run)
-    _detect_must_not_run(monkeypatch)
+    # Tier-0 runs on voice now, but detect_intent misses on this conversational
+    # recall phrasing so it falls through to the (deferred) domain check.
+    _stub_detect(monkeypatch, None)
     for domain in ("people", "memory"):
         out = _run(fast_tiers.resolve("do you remember my mum's name", "u", "s",
                                       channel="voice",
