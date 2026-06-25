@@ -25,35 +25,57 @@
 /* Card surface — the calm "today" wash (twilight by default).            */
 /* ====================================================================== */
 body:not(.sky-empty) .sky-card.calendar-card.sky-premium-card {
-  /* twilight identity: deep indigo → violet, with a soft accent bloom at top-left
-     picked up from the next event's category (--cal-accent set on .cal-scene). */
-  background:
-    radial-gradient(circle at 14% 6%, rgba(var(--cal-accent, 99, 102, 241), 0.30), transparent 42%),
-    radial-gradient(circle at 92% 4%, rgba(120, 86, 220, 0.20), transparent 40%),
-    linear-gradient(158deg, #1c2150 0%, #2a2466 48%, #3a2a6e 100%) !important;
   border: 1px solid rgba(255, 255, 255, 0.13) !important;
   border-radius: var(--sky-radius-xl, 38px) !important;
   box-shadow: 0 44px 96px -32px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.18) !important;
-  /* fill the 720px panel usefully rather than floating at 500px */
   min-height: 560px !important;
   padding: 0 !important;
   overflow: hidden !important;
   color: #fff;
+  /* fallback sky (overridden per daypart below) */
+  background: linear-gradient(158deg, #1c2150 0%, #2a2466 48%, #3a2a6e 100%) !important;
 }
 
-/* Belt-and-suspenders: suppress the legacy decorative glow pseudo-elements so a
-   stray radial can't reappear over our own wash. */
+/* TIME-OF-DAY SCENE: the card "sky" shifts dawn → day → dusk → night (data-daypart
+   on .cal-scene), with a soft bloom of the next event's category at top-left. The
+   card reads as "your day", immersive like the weather/clock cards. */
+body:not(.sky-empty) .sky-card.calendar-card.sky-premium-card:has(.cal-scene[data-daypart="dawn"]) {
+  background:
+    radial-gradient(circle at 14% 8%, rgba(var(--cal-accent, 99, 102, 241), 0.26), transparent 44%),
+    linear-gradient(158deg, #1b2d5c 0%, #46376f 46%, #8a5170 78%, #c98a6e 100%) !important;
+}
+body:not(.sky-empty) .sky-card.calendar-card.sky-premium-card:has(.cal-scene[data-daypart="day"]) {
+  background:
+    radial-gradient(circle at 14% 8%, rgba(var(--cal-accent, 99, 102, 241), 0.22), transparent 44%),
+    radial-gradient(circle at 88% 2%, rgba(255, 255, 255, 0.12), transparent 38%),
+    linear-gradient(158deg, #1c3a6e 0%, #28508c 54%, #3f6aa8 100%) !important;
+}
+body:not(.sky-empty) .sky-card.calendar-card.sky-premium-card:has(.cal-scene[data-daypart="dusk"]) {
+  background:
+    radial-gradient(circle at 14% 8%, rgba(var(--cal-accent, 99, 102, 241), 0.26), transparent 44%),
+    linear-gradient(158deg, #1b2150 0%, #3a2a66 44%, #6a3a72 76%, #b9605f 100%) !important;
+}
+body:not(.sky-empty) .sky-card.calendar-card.sky-premium-card:has(.cal-scene[data-daypart="night"]) {
+  background:
+    radial-gradient(circle at 14% 8%, rgba(var(--cal-accent, 99, 102, 241), 0.24), transparent 44%),
+    linear-gradient(158deg, #0e1330 0%, #1a1f48 56%, #2a2a58 100%) !important;
+}
+
+/* Belt-and-suspenders: suppress the legacy decorative glow pseudo-elements. */
 body:not(.sky-empty) .sky-card.calendar-card::before,
 body:not(.sky-empty) .sky-card.calendar-card::after {
   content: none !important;
   background: none !important;
 }
 
-/* Light theme: a soft daylight wash, dark ink (spec §4/§10). */
-:root[data-theme="light"] body:not(.sky-empty) .sky-card.calendar-card.sky-premium-card {
+/* Light theme: a bright daylight wash + dark ink, regardless of daypart (light
+   theme only runs in daytime, so the day sky is the right read). */
+:root[data-theme="light"] body:not(.sky-empty) .sky-card.calendar-card.sky-premium-card,
+:root[data-theme="light"] body:not(.sky-empty) .sky-card.calendar-card.sky-premium-card:has(.cal-scene) {
   background:
-    radial-gradient(circle at 14% 6%, rgba(var(--cal-accent, 99, 102, 241), 0.18), transparent 44%),
-    linear-gradient(158deg, #eaf1fb 0%, #dbe7f7 52%, #e9e3f6 100%) !important;
+    radial-gradient(circle at 14% 6%, rgba(var(--cal-accent, 99, 102, 241), 0.16), transparent 46%),
+    radial-gradient(circle at 88% 2%, rgba(255, 255, 255, 0.5), transparent 40%),
+    linear-gradient(158deg, #e8f1fc 0%, #d6e6f7 52%, #e9e6f8 100%) !important;
   border-color: rgba(20, 50, 80, 0.12) !important;
   box-shadow: 0 44px 96px -36px rgba(20, 50, 80, 0.30), inset 0 1px 0 rgba(255, 255, 255, 0.7) !important;
   color: #16324d;
@@ -159,8 +181,8 @@ body:not(.sky-empty) .sky-card.calendar-card::after {
 
 /* ---- HERO "up next" — deliberately compact so it never eats the screen */
 .calendar-card .cal-hero {
-  /* was 1.5; the events are the content, so the hero takes the smaller share */
-  flex: 1 1 0;
+  /* the up-next hero leads the scene, with the day's list to its right */
+  flex: 1.15 1 0;
   min-width: 0;
   position: relative;
   display: flex;
@@ -215,9 +237,8 @@ body:not(.sky-empty) .sky-card.calendar-card::after {
   align-items: baseline;
   flex-wrap: wrap;
   gap: 14px;
-  /* was 64px — still a confident hero figure, but it no longer dominates */
-  font-size: 50px;
-  font-weight: 300;
+  font-size: 52px;
+  font-weight: 400;
   line-height: 0.96;
   letter-spacing: -1.5px;
   font-variant-numeric: tabular-nums;
