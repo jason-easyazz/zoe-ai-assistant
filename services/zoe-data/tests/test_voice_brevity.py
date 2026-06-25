@@ -19,7 +19,7 @@ def test_voice_mode_injects_brevity_directive():
     assert "Lead with the answer" in out            # the brevity behaviour
     assert "skip preamble" in out
     assert "use tools fully as normal" in out        # the capability guarantee — shapes
-    assert "never what you DO" in out                # what she SAYS, not what she does
+    assert "never what you do" in out                # what she SAYS, not what she does
     # The user's message is still present and last.
     assert out.strip().endswith("what's the weather like")
 
