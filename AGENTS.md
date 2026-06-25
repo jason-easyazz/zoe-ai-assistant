@@ -213,5 +213,6 @@ When the user requests a durable behavior change, record it here or in the relev
 - [docs/AGENTS.md](docs/AGENTS.md) — categorized documentation; governance charter is normative
 - [modules/AGENTS.md](modules/AGENTS.md) — optional add-on modules served under /modules/
 - [config/AGENTS.md](config/AGENTS.md) — deployment configuration and key material locations (values never documented)
+- [labs/AGENTS.md](labs/AGENTS.md) — lab-only experiments & spikes, isolated from the runtime (e.g. the Flue harness substrate spike)
 
 Not indexed (runtime/data/generated, no durable editing contracts): `backups/`, `checkpoints/`, `data/`, `models/`, `ssl/`, `graphify-out/`, `homeassistant/` (live Home Assistant runtime), `demos/`.
