@@ -193,6 +193,36 @@ body:not(.sky-empty) .sky-card.zoe-list-card.sky-premium-card {
   -webkit-overflow-scrolling: touch;
 }
 
+/* Two columns once a single list outgrows the screen (§5) — flows the rows into
+   a 2-col grid; the add-row spans the full width at the bottom. */
+.zoe-list-card .lst-items.is-2col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-auto-rows: min-content;
+  gap: var(--sky-space-2, 8px) var(--sky-space-3, 14px);
+  align-content: start;
+}
+.zoe-list-card .lst-items.is-2col .lst-add { grid-column: 1 / -1; }
+
+/* Add-item row: a calm dashed affordance in the list's accent, set apart from the
+   real items but clearly part of the same surface (§6 cohesion). */
+.zoe-list-card .lst-add {
+  border-style: dashed !important;
+  border-color: rgba(var(--lst-accent), .42) !important;
+  background: rgba(var(--lst-accent), .06) !important;
+  color: var(--sky-ink-1, rgba(255,255,255,.86));
+}
+.zoe-list-card .lst-add:hover { background: rgba(var(--lst-accent), .12) !important; }
+.zoe-list-card .lst-add .lst-add-plus {
+  border-style: solid;
+  border-color: rgba(var(--lst-accent), .55);
+  color: rgb(var(--lst-accent));
+  font-size: 22px;
+  font-weight: 400;
+  line-height: 1;
+}
+.zoe-list-card .lst-add .lst-add-label { color: rgb(var(--lst-accent)); font-weight: 500; }
+
 .zoe-list-card .lst-row {
   appearance: none;
   width: 100%;
