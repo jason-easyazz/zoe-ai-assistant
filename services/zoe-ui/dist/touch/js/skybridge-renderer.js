@@ -776,7 +776,7 @@
         const listType = props.list_type || (lists[0] && lists[0].list_type) || 'all';
         const accent = listAccentClass(listType);
         const selectedId = props.list_id && props.list_id !== 'lists-overview' ? props.list_id : '';
-        const visibleItems = items.slice(0, 16);
+        const visibleItems = items.slice(0, 24);
         const rows = visibleItems.map((item, index) => renderListItemRow(item, index, listType, accent)).join('');
         const overviewCols = !items.length && lists.length ? '<div class="lst-cols">' + lists.slice(0, 6).map(renderListColumn).join('') + '</div>' : '';
         const empty = [
@@ -827,13 +827,26 @@
             '</header>'
         ].join('');
 
-        const itemsClass = 'lst-items ' + (rows ? 'is-detail' : 'is-overview');
+        // "+ Add item" — tapping opens the composer prefilled "add ⟂ to the <type> list"
+        // (caret after "add ") so you can type or speak the item. Shown on any
+        // single-list view (incl. an empty one); not on the multi-list overview.
+        const addRow = !isOverview
+            ? '<button type="button" class="lst-row lst-add" data-sky-action="compose"' +
+              ' data-compose="add  to the ' + escapeHtml(listType) + ' list" data-compose-caret="4"' +
+              ' aria-label="Add an item to this list">' +
+              '<span class="lst-box lst-add-plus" aria-hidden="true">+</span>' +
+              '<span class="lst-text lst-add-label">Add item</span></button>'
+            : '';
+        // Flow into two columns once a single list outgrows the screen (§5).
+        const multiCol = (!isOverview && items.length > 8) ? ' is-2col' : '';
+        const itemsClass = 'lst-items ' + (rows ? 'is-detail' : 'is-overview') + multiCol;
+        const itemsInner = isOverview ? overviewCols : ((rows || empty) + addRow);
         const body = [
             '<div class="lst-scene lst-a-' + escapeHtml(accent) + ' lst-tint-' + ident.tint + '">',
             header,
             progressBar,
             lists.length ? renderListSwitcher(lists, selectedId) : '',
-            '<div class="' + itemsClass + '">' + (rows || overviewCols || empty) + '</div>',
+            '<div class="' + itemsClass + '">' + itemsInner + '</div>',
             '</div>'
         ].join('');
         return cardFrame(Object.assign({ status: 'Lists', icon: 'L' }, props), body, { wide: true, tone: 'zoe-list-card ' + accent, hideHeader: true, hideStatus: true, hideActions: true });
