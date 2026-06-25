@@ -290,11 +290,14 @@ VOICE ESCALATION: For complex tasks (research, browsing, multi-step work, code),
 # Voice-mode tool subset for recovery when intent routing misses.
 # Compact for latency: only the tools a spoken turn can actually reach. The long
 # tail (OpenClaw browser automation, capability-gap builds) goes through
-# escalate_to_hermes; memory writes are covered by the intent router. Dropped vs
-# the old 20-tool set: escalate_to_openclaw, mempalace_add, show_chart (not
-# voice-rendered), show_map (router handles place intent) — see the prefill audit.
+# escalate_to_hermes. Dropped vs the old 20-tool set: escalate_to_openclaw,
+# show_chart (not voice-rendered), show_map (router handles place intent) — see
+# the prefill audit. mempalace_add stays: _VOICE_ACTION_WORDS includes
+# remember/store/save/forget, so a missed memory-write intent must still have a
+# write path on the LLM fallback.
 _VOICE_TOOLS = [
     "mempalace_search",
+    "mempalace_add",
     "ha_control",
     "calendar_today",
     "calendar_list_events",
