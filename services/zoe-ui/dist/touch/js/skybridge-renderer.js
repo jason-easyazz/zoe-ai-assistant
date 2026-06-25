@@ -300,7 +300,7 @@
                 '<button type="button" class="cal-hero sky-accent-' + escapeHtml(category) + (isPast ? ' is-past' : '') + '" data-sky-action="query" data-query="' + escapeHtml(calendarEditQuery(heroEvent, title)) + '">',
                 '<span class="cal-hero-rail" aria-hidden="true"></span>',
                 '<span class="cal-hero-kicker">' + escapeHtml(isPast ? 'Earlier' : 'Up next') + '</span>',
-                '<span class="cal-hero-time">' + escapeHtml(formatEventTime(heroEvent)) +
+                '<span class="cal-hero-time"><span class="cal-hero-clock">' + escapeHtml(formatEventTime(heroEvent)) + '</span>' +
                     (countdown ? '<b class="cal-hero-rel">' + escapeHtml(countdown) + '</b>' : '') + '</span>',
                 '<span class="cal-hero-title">' + escapeHtml(title) + '</span>',
                 detail ? '<span class="cal-hero-loc">' + escapeHtml(detail) + '</span>' : '',
