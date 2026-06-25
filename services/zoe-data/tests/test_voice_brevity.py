@@ -13,7 +13,7 @@ def test_voice_mode_injects_brevity_directive():
         history=None, db_memory_context=None, portrait=None, voice_mode=True,
     )
     assert "[VOICE MODE]" in out
-    assert "1-2 short spoken sentences" in out
+    assert "1-2 complete sentences" in out
     # The user's message is still present and last.
     assert out.strip().endswith("what's the weather like")
 
