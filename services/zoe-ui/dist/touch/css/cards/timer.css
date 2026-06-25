@@ -3,6 +3,17 @@
    treatment so the timer adapts with the sun-driven panel theme. The warm progress
    gradient reads on both themes, so only the surface + ink + track flip. */
 
+/* FIX: a general legacy card rule forces .sky-card children to position:relative,
+   which out-specified the timer's own `.sky-timer{position:absolute;inset:0}` and
+   collapsed it to 0 height — so the digits clipped at the top of an empty card.
+   Restore the timer's fill/positioning context with a winning selector. */
+body:not(.sky-empty) .sky-card.timer .sky-timer {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+}
+
 :root[data-theme="light"] .sky-card.timer {
   background: linear-gradient(157deg, rgba(255,255,255,0.74), rgba(255,255,255,0.52)) !important;
   box-shadow: 0 22px 50px -20px rgba(40,70,110,0.35), inset 0 1px 0 rgba(255,255,255,0.6) !important;
