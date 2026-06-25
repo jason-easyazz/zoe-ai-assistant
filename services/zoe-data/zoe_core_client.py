@@ -449,10 +449,14 @@ async def prewarm(user_id: str, session_id: str) -> bool:
 # panel path got NO brevity signal and over-answered. Injected here so EVERY voice
 # caller (panel, LiveKit, chat voice-mode) is covered in one place.
 _VOICE_BREVITY = (
-    "[VOICE MODE] Answer in 1-2 short spoken sentences — this is read aloud. "
-    "No markdown, lists, headers, or code. Numbers in spoken form "
-    "(e.g. 'twenty-four degrees'). If asked for more than 3 items, give the first 3 "
-    "and offer to continue. Be warm but brief."
+    "[VOICE MODE] This is spoken aloud, so keep it warm but SHORT — reply the way "
+    "you'd actually say it out loud, in 1-2 complete sentences. Lead with the "
+    "answer; skip preamble ('Sure!', 'Of course!') and recaps. Finish your thought, "
+    "then stop — brief, never clipped. No markdown, lists, headers, or code; numbers "
+    "in spoken form (e.g. 'twenty-four degrees'). For more than 3 items, give the "
+    "first 3 and offer to continue. Think and use tools fully as normal — this only "
+    "shapes how much you SAY, never what you do. Only give a longer answer if the "
+    "user explicitly asks for detail."
 )
 
 
