@@ -488,9 +488,13 @@
             body: JSON.stringify({ message: 'weather' })
         }).then(res => (res.ok ? res.json() : null)).then(data => {
             if (!data || token !== deckToken || document.body.classList.contains('sky-empty')) return;
-            const wxCard = (Array.isArray(data.cards) ? data.cards : [])
-                .find(c => c && c.props && /weather/.test(String(c.props.source || '')));
-            if (wxCard) renderDashboardSurface(wxCard.props);
+            // The resolve card carries its data under `content` (props is created
+            // later by the renderer's normalization), so read either.
+            const wxCard = (Array.isArray(data.cards) ? data.cards : []).find(c => {
+                const src = (c && c.content && c.content.source) || (c && c.props && c.props.source) || '';
+                return /weather/.test(String(src));
+            });
+            if (wxCard) renderDashboardSurface(wxCard.content || wxCard.props);
         }).catch(() => { /* weather is best-effort on the dashboard */ });
     }
 
@@ -504,6 +508,9 @@
     }
 
     function addCard(card, prepend, delayMs) {
+        // A new card changes the deck, so invalidate any pending async render
+        // (e.g. the dashboard's weather fetch) that would otherwise overwrite it.
+        deckToken++;
         document.body.classList.remove('sky-empty');
         document.body.classList.remove('sky-ambient-clock');
         requestAnimationFrame(resizeOrb);
