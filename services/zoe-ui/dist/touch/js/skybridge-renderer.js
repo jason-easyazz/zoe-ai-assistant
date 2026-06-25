@@ -908,12 +908,13 @@
         const total = props.count == null ? people.length : props.count;
         const workCount = people.filter(person => personAccentClass(person) === 'work').length;
         const personalCount = people.filter(person => personAccentClass(person) === 'personal').length;
-        const otherCount = Math.max(0, people.length - workCount - personalCount);
 
         // Segmented filter chips (count + label). Each chip is a REAL tap target →
-        // submitCommand(query) that the people resolver handles (directory or a
-        // context filter), so no chip is a silent no-op. `active` reflects the
-        // current filter so the user sees where they are.
+        // submitCommand(query) the people resolver actually handles: the directory
+        // ("all") or a context filter the backend supports (PEOPLE_CONTEXTS =
+        // personal, work). We deliberately do NOT render an "other" chip — there is
+        // no backend filter for it, so it would be a silent no-op (same result as
+        // "all"). `active` reflects the current filter so the user sees where they are.
         const activeFilter = accentClass(props.circle || props.context || '', '');
         const chip = function (accent, label, value, query, alwaysShow) {
             if (!value && !alwaysShow) return '';
@@ -921,7 +922,7 @@
             return [
                 '<button type="button" class="people-chip people-accent-' + escapeHtml(accent || 'all') + active + '"',
                 ' data-sky-action="query" data-query="' + escapeHtml(query) + '"',
-                ' aria-label="' + escapeHtml(label + ', ' + value) + '"' + (active ? ' aria-pressed="true"' : '') + '>',
+                ' aria-label="' + escapeHtml(label + ', ' + value) + '" aria-pressed="' + (active ? 'true' : 'false') + '">',
                 '<i class="people-chip-dot" aria-hidden="true"></i>',
                 '<strong>' + escapeHtml(value) + '</strong>',
                 '<span>' + escapeHtml(label) + '</span>',
@@ -931,8 +932,7 @@
         const chips = [
             chip('', 'all', total, 'show people', true),
             chip('personal', 'personal', personalCount, 'show personal contacts', false),
-            chip('work', 'work', workCount, 'show work contacts', false),
-            chip('social', 'other', otherCount, 'show people', false)
+            chip('work', 'work', workCount, 'show work contacts', false)
         ].join('');
 
         // Order by closeness (inner circle first, warmest connection first) so the
