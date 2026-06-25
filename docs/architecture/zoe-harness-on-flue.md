@@ -228,6 +228,13 @@ it *here* is made safe by keeping it strictly off the live path:
 - **Align Pi versions** so the harness and the brain share **one `@earendil-works/pi-*` runtime**
   (currently **~0.79**). The harness and brain must not drift onto different Pi versions.
 
+> **Operator approval (new-dependency rule).** Flue 1.0 Beta shipped 2026-06-17 — under the
+> 14-day-old threshold in the project's dependency rule, which requires **explicit operator
+> approval** for such packages. That approval was given by the operator (Jason): the buy-and-fork
+> decision in §2a was his call. It is documented here so the evidence trail is explicit. The
+> licence (Apache-2.0) means we can pin/fork/vendor if upstream churns (§2a, §6), and Phase 0
+> (§5) lab-proves the pinned beta before any prod migration.
+
 ### 3.5 Durability: persist self-authored skills straight to git
 
 **Flue's `local()` sandbox files are not durable, and subagents restart fresh.** Anything Zoe

@@ -84,7 +84,7 @@ These are unanswered on purpose. Do not let code silently decide them.
 - **Personal-Zoe vs site-Zoe topology**: is "my Zoe at work" the same deployment I reach from a phone, or a separate site-Zoe that also knows me? Both are supported by the charter; neither is chosen yet.
 - **Cross-site identity sharing**: when a user has a relationship with two Zoe instances (home + work), is there a shared "you" profile, and if so, how is it synced safely?
 - **Proactive autonomy ceiling**: how aggressively may Zoe act without prompting, and how is that ceiling raised over time?
-- **Multi-expert granularity**: are experts always prompt/tool packs, or may some become real OpenClaw agent loops with deliberation mode? See section 9 for harness implications.
+- **Multi-expert granularity**: are experts always prompt/tool packs, or may some become real agent loops with deliberation mode? See section 9 for harness implications. _Partially answered:_ the **substrate** is decided — OpenClaw is retired and the autonomous-harness substrate is **Flue** (see [`docs/architecture/zoe-harness-on-flue.md`](../architecture/zoe-harness-on-flue.md)), so any expert that does become an agent loop runs as a Flue subagent, not an OpenClaw loop. Still open: **whether** experts should become agent loops at all (vs. staying prompt/tool packs).
 
 When a PR or plan lands in territory that would answer one of these, the PR or plan must say so and the charter must be updated in the same commit.
 
