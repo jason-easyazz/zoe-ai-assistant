@@ -52,7 +52,7 @@ body:not(.sky-empty) .sky-authx .sky-auth-profile-grid {
   display: grid !important;
   /* Fixed-width tiles, centred — so a single bound profile doesn't stretch to a
      full-width slab, and any count stays a tidy, evenly-sized grid. */
-  grid-template-columns: repeat(auto-fit, 196px) !important;
+  grid-template-columns: repeat(auto-fit, min(196px, 100%)) !important;
   justify-content: center !important;
   gap: 16px !important;
   min-height: 0 !important;
