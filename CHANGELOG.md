@@ -36,6 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Service dependencies** - Correct dependency ordering in docker-compose
 
 ### Removed
+- **docs/archive purge 3/13** — removed 43 retired files; git history keeps them (`git log -- docs/archive`)
+- **docs/archive purge 2/13** — removed 43 retired files; git history keeps them (`git log -- docs/archive`)
 - **vLLM support** - Migration blocked by PyTorch CUDA allocator bug (documented in docs/archive/)
 - **Ollama service** - Replaced by llama.cpp for better Jetson performance
 - **Legacy authentication** - Old auth system replaced with proper JWT/RBAC
