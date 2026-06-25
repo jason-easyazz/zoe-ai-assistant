@@ -1,4 +1,0 @@
-# Override file - cloudflared section removed
-# Base docker-compose.yml handles cloudflared with file-based credentials
-# Token-based override was broken: CLOUDFLARED_TOKEN not set, depended on retired zoe-core
-services: {}
