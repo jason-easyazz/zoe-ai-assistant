@@ -72,6 +72,7 @@ def test_classify_create_cancel_status():
     # a mis-transcribed "It's not the timer." was spinning up a 5-min timer).
     assert classify_skybridge_intent("It's not the timer.") is None
     assert classify_skybridge_intent("the timer went off") is None
+    assert classify_skybridge_intent("I don't need the timer") is None
     assert classify_skybridge_intent("10 minute timer").action == "create"
 
 

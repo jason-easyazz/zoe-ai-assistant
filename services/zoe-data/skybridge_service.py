@@ -924,7 +924,7 @@ def classify_skybridge_intent(message: str, context: dict[str, Any] | None = Non
         # Only CREATE for an explicit ask — a passing mention ("it's not the timer",
         # "the timer went off") must not spin one up. A duration or a start verb is
         # the cue; "set a timer" with no duration still defaults to 5 minutes.
-        if duration or re.search(r"\b(set|start|make|create|run|new|put|begin|need)\b", text):
+        if duration or re.search(r"\b(set|start|make|create|run|new|put|begin)\b", text):
             return SkybridgeIntent(domain="timer", action="create", title=_parse_timer_label(text), duration_seconds=duration or 300)
     calendar_update = _calendar_update_from_text(raw_message, context)
     if calendar_update:
