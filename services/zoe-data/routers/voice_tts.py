@@ -2543,7 +2543,10 @@ _WAKE_LINE_RE = re.compile(
 # only). Requires a following word (?=\S) so a bare name that IS the command stays.
 _WAKE_PREFIX_RE = re.compile(
     r"^\s*(?:hey|hi|ok|okay)?[\s,]*"
-    r"(?:zoe|zoey|joey|josie|zoie)"
+    # wake-distinctive variants only — deliberately NOT "so" (a real discourse
+    # word that legitimately starts commands, e.g. "so, add milk to the list");
+    # "so" stays line-only so an inline strip can't corrupt a real command.
+    r"(?:zoe|zoey|zoie|zoee|joey|josie|joe|sewey|zo)"
     r"[\s,.!?-]+(?=\S)",
     re.IGNORECASE,
 )
@@ -2615,10 +2618,9 @@ async def _run_moonshine(wav_path: str) -> str:
 
 async def warm_moonshine() -> bool:
     """Pre-load the Moonshine STT model+tokenizer so the first panel turn isn't
-    cold (saves the ~1-2s ONNX session load on the first utterance)."""
-    if (os.environ.get("ZOE_STT_BACKEND") or "moonshine").strip().lower() != "moonshine":
-        logger.info("Moonshine warmup skipped; ZOE_STT_BACKEND is not moonshine")
-        return False
+    cold (saves the ~1-2s ONNX session load on the first utterance). Moonshine is
+    the only live STT engine, so this ALWAYS warms regardless of ZOE_STT_BACKEND —
+    a stale whisper-era value must not skip the warmup the live path depends on."""
     started = time.monotonic()
     try:
         await asyncio.get_running_loop().run_in_executor(None, _ensure_moonshine)
@@ -2669,15 +2671,16 @@ async def _transcribe_audio_impl(wav_path: str) -> str:
     """Transcribe with Moonshine v2 — the ONLY live STT engine.
 
     Moonshine is the rock: there is no whisper fallback in the live path (it
-    cold-loaded onto a memory-starved GPU and corrupted accuracy). On a
-    Moonshine-empty result we return empty and let the caller's empty_transcript
-    handling re-prompt / no-op — we never reach for whisper here.
+    cold-loaded onto a memory-starved GPU and corrupted accuracy). A genuinely
+    empty transcription returns "" (silence — callers re-prompt / no-op). A
+    Moonshine BACKEND failure (missing model, OOM, runtime dep) RAISES, so callers
+    can tell a real failure apart from silence instead of masking it as success.
     """
     try:
         text = await _run_moonshine(wav_path)
     except Exception as exc:
-        logger.warning("Moonshine STT failed: %s", exc)
-        return ""
+        logger.warning("Moonshine STT failed (backend error, surfacing): %s", exc)
+        raise
     if text:
         _stt_backend_var.set("moonshine:" + (os.environ.get("ZOE_MOONSHINE_ARCH") or "v2").strip())
         return text

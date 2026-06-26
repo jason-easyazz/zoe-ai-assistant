@@ -533,8 +533,9 @@ def test_transcribe_audio_impl_empty_returns_empty_no_whisper(monkeypatch):
     assert asyncio.run(voice_tts._transcribe_audio_impl("/tmp/x.wav")) == ""
 
 
-def test_transcribe_audio_impl_moonshine_error_returns_empty(monkeypatch):
-    """A Moonshine exception degrades to empty (no whisper rescue)."""
+def test_transcribe_audio_impl_moonshine_error_raises(monkeypatch):
+    """A Moonshine BACKEND error RAISES so callers can tell a real failure apart
+    from silence (Greptile #854) — and whisper is never reached as a rescue."""
     from routers import voice_tts
 
     async def _moon_boom(path: str) -> str:
@@ -546,7 +547,12 @@ def test_transcribe_audio_impl_moonshine_error_returns_empty(monkeypatch):
     monkeypatch.setattr(voice_tts, "_run_moonshine", _moon_boom)
     monkeypatch.setattr(voice_tts, "_run_faster_whisper", _explode)
 
-    assert asyncio.run(voice_tts._transcribe_audio_impl("/tmp/x.wav")) == ""
+    raised = False
+    try:
+        asyncio.run(voice_tts._transcribe_audio_impl("/tmp/x.wav"))
+    except RuntimeError as exc:
+        raised = "moonshine boom" in str(exc)
+    assert raised, "Moonshine backend error must surface (raise), not be masked as silence"
 
 
 def test_maybe_capture_stt_saves_corpus_without_whisper_ab(monkeypatch, tmp_path):
