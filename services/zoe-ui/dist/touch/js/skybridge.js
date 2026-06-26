@@ -89,6 +89,7 @@
         els.input = document.getElementById('skyCommandInput');
         els.mic = document.getElementById('skyMicBtn');
         els.home = document.getElementById('skyHomeBtn');
+        els.navHome = document.getElementById('skyNavHome');
         els.orbButton = document.getElementById('skyOrbButton');
         els.orbButtonText = document.getElementById('skyOrbButtonText');
         els.voiceHint = document.getElementById('skyVoiceHint');
@@ -131,6 +132,10 @@
         els.orbButton.addEventListener('click', toggleVoiceCapture);
         els.voiceAction.addEventListener('click', toggleVoiceCapture);
         els.home.addEventListener('click', () => renderHome({ showCards: true }));
+        if (els.navHome) {
+            // Always-visible Home while a card is up → back to the dashboard hub.
+            els.navHome.addEventListener('click', () => wakeToDashboard());
+        }
         // Touch the resting panel anywhere (not a control) to wake it to the
         // dashboard — the ambient clock should be a door, not a dead end.
         document.addEventListener('click', event => {
@@ -459,20 +464,42 @@
     // and the stage fills with glance cards anyone can see — time, weather, room
     // controls. Personal cards still ask for sign-in when tapped. Live weather is
     // fetched after the instant cards so the wake feels immediate.
+    // Render the condensed guest dashboard (Layout B) as a single surface — clock +
+    // weather tile + room/music/sign-in. Sets the stage directly (no clearCards,
+    // which would flash the ambient clock back) and bumps the deck token so a
+    // pending weather fetch can tell the view changed under it.
+    function renderDashboardSurface(weather) {
+        deckToken++;
+        cardSequence = 0;
+        document.body.classList.remove('sky-empty');
+        document.body.classList.remove('sky-ambient-clock');
+        document.body.classList.add('sky-has-cards');
+        els.cards.innerHTML = window.SkybridgeRenderer.render({
+            component: 'dashboard',
+            props: { guest: true, weather: weather || null }
+        });
+        requestAnimationFrame(resizeOrb);
+    }
+
     function wakeToDashboard() {
-        renderHome({ showCards: true });
-        // Capture the deck identity AFTER renderHome's clear, so if the user taps a
-        // card or speaks before weather arrives (which clears + re-renders), the
-        // token won't match and we won't append weather onto the wrong view.
+        renderDashboardSurface(null);
         const token = deckToken;
         scheduleIdleReturn();
+        // Enrich with live weather (guest-readable); re-render the surface with it,
+        // but only if the user hasn't moved on (token still current).
         fetch('/api/skybridge/resolve', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
             body: JSON.stringify({ message: 'weather' })
         }).then(res => (res.ok ? res.json() : null)).then(data => {
             if (!data || token !== deckToken || document.body.classList.contains('sky-empty')) return;
-            (Array.isArray(data.cards) ? data.cards : []).forEach(card => addCard(card, false));
+            // The resolve card carries its data under `content` (props is created
+            // later by the renderer's normalization), so read either.
+            const wxCard = (Array.isArray(data.cards) ? data.cards : []).find(c => {
+                const src = (c && c.content && c.content.source) || (c && c.props && c.props.source) || '';
+                return /weather/.test(String(src));
+            });
+            if (wxCard) renderDashboardSurface(wxCard.content || wxCard.props);
         }).catch(() => { /* weather is best-effort on the dashboard */ });
     }
 
@@ -486,6 +513,9 @@
     }
 
     function addCard(card, prepend, delayMs) {
+        // A new card changes the deck, so invalidate any pending async render
+        // (e.g. the dashboard's weather fetch) that would otherwise overwrite it.
+        deckToken++;
         document.body.classList.remove('sky-empty');
         document.body.classList.remove('sky-ambient-clock');
         requestAnimationFrame(resizeOrb);

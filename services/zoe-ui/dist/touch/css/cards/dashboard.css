@@ -1,0 +1,138 @@
+/* Guest wake dashboard (Layout B condensed) — a big clock with a smaller weather
+   tile beside it, and room/music/sign-in controls at the base. Glass + Inter +
+   light/dark, like the rest of the cards. */
+
+.sky-card.dashboard-card {
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+  padding: 0 !important;
+  border-radius: var(--sky-radius-xl, 34px) !important;
+  color: var(--sky-ink-0, #fff);
+  background: linear-gradient(157deg, rgba(255,255,255,.10), rgba(255,255,255,.03)) !important;
+  border: 1px solid var(--sky-hairline, rgba(255,255,255,.14)) !important;
+  box-shadow: 0 26px 60px -18px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.2) !important;
+  min-height: 440px !important;
+  font-family: var(--sky-font, "Inter", system-ui, -apple-system, "Segoe UI", sans-serif);
+  -webkit-font-smoothing: antialiased;
+}
+body:not(.sky-empty) .sky-card.dashboard-card.sky-premium-card { display: flex !important; flex-direction: column !important; padding: 0 !important; }
+
+.dashboard-card .dash-scene {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sky-space-5, 20px);
+  width: 100%;
+  flex: 1 1 auto;
+  padding: var(--sky-space-7, 28px) var(--sky-space-8, 32px);
+  box-sizing: border-box;
+}
+
+/* ── Top: clock (≈⅔) + weather tile (≈⅓) ───────────────────────────────── */
+.dashboard-card .dash-top {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: var(--sky-space-5, 20px);
+  align-items: stretch;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.dashboard-card .dash-clock {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+}
+.dashboard-card .dash-greeting {
+  font-size: var(--sky-text-label, 17px);
+  font-weight: 500;
+  color: var(--sky-ink-2, rgba(255,255,255,.62));
+}
+.dashboard-card .dash-time {
+  display: flex;
+  align-items: baseline;
+  font-weight: 500;
+  letter-spacing: -2px;
+  line-height: 0.92;
+  font-size: clamp(64px, 12vw, 120px);
+  color: var(--sky-ink-0, #fff);
+}
+.dashboard-card .dash-time i { font-style: normal; opacity: .5; margin: 0 .04em; }
+.dashboard-card .dash-time b { font-weight: 500; font-size: .34em; letter-spacing: 0; margin-left: .18em; color: var(--sky-ink-2, rgba(255,255,255,.6)); }
+.dashboard-card .dash-date {
+  margin-top: 4px;
+  font-size: var(--sky-text-label, 17px);
+  font-weight: 400;
+  color: var(--sky-ink-2, rgba(255,255,255,.62));
+}
+
+/* weather tile */
+.dashboard-card .dash-weather {
+  appearance: none;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: var(--sky-radius-lg, 24px);
+  border: 1px solid var(--sky-hairline, rgba(255,255,255,.1));
+  background: var(--sky-fill-1, rgba(255,255,255,.05));
+  color: inherit;
+  font-family: inherit;
+  transition: background var(--sky-dur-fast, 180ms) ease, transform var(--sky-dur-fast, 180ms) ease;
+}
+.dashboard-card .dash-weather:hover { background: var(--sky-fill-2, rgba(255,255,255,.09)); }
+.dashboard-card .dash-weather:active { transform: scale(.985); }
+.dashboard-card .dash-wx-temp { font-size: 40px; font-weight: 500; letter-spacing: -1px; color: var(--sky-ink-0, #fff); }
+.dashboard-card .dash-wx-desc { font-size: 15px; color: var(--sky-ink-2, rgba(255,255,255,.6)); }
+.dashboard-card .dash-weather.is-loading { color: var(--sky-ink-3, rgba(255,255,255,.45)); }
+
+/* ── Base: control tiles ───────────────────────────────────────────────── */
+.dashboard-card .dash-controls {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: var(--sky-space-3, 14px);
+}
+.dashboard-card .dash-ctrl {
+  appearance: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 64px;
+  padding: 0 var(--sky-space-5, 20px);
+  border-radius: var(--sky-radius-md, 16px);
+  border: 1px solid var(--sky-hairline, rgba(255,255,255,.1));
+  background: var(--sky-fill-1, rgba(255,255,255,.05));
+  color: var(--sky-ink-0, #fff);
+  font-family: inherit;
+  transition: background var(--sky-dur-fast, 180ms) ease, transform var(--sky-dur-fast, 180ms) ease, border-color var(--sky-dur-fast, 180ms) ease;
+}
+.dashboard-card .dash-ctrl:hover { background: var(--sky-fill-2, rgba(255,255,255,.09)); border-color: var(--sky-hairline-strong, rgba(255,255,255,.2)); }
+.dashboard-card .dash-ctrl:active { transform: scale(.98); }
+.dashboard-card .dash-ctrl-glyph {
+  width: 38px; height: 38px; flex: 0 0 auto;
+  display: grid; place-items: center;
+  border-radius: 50%;
+  background: rgba(var(--sky-accent-cyan-rgb, 55,192,230), .16);
+}
+.dashboard-card .dash-ctrl-svg { width: 22px; height: 22px; fill: var(--sky-accent-cyan, #37c0e6); }
+.dashboard-card .dash-ctrl-label { font-size: 17px; font-weight: 500; }
+.dashboard-card .dash-ctrl-signin .dash-ctrl-glyph { background: rgba(155,140,255,.18); }
+.dashboard-card .dash-ctrl-signin .dash-ctrl-svg { fill: var(--sky-accent-violet, #9b8cff); }
+
+/* ── Light mode (re-point the ink scale; global light only flips --text-*) ─ */
+[data-theme="light"] .sky-card.dashboard-card {
+  --sky-ink-0: #16324d; --sky-ink-1: #2a4d6e; --sky-ink-2: #3a5e80; --sky-ink-3: #6a86a2;
+  --sky-fill-1: rgba(255,255,255,.6); --sky-fill-2: rgba(255,255,255,.85);
+  --sky-hairline: rgba(20,50,80,.12); --sky-hairline-strong: rgba(20,50,80,.2);
+  background: linear-gradient(157deg, rgba(255,255,255,.72), rgba(255,255,255,.5)) !important;
+  border-color: rgba(20,50,80,.14) !important;
+  box-shadow: 0 26px 60px -18px rgba(20,50,80,.28), inset 0 1px 0 rgba(255,255,255,.7) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dashboard-card .dash-weather, .dashboard-card .dash-ctrl { transition: none; }
+}
