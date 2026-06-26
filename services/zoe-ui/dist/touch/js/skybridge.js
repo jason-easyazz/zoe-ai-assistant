@@ -61,6 +61,14 @@
         if (typeof TouchMenu !== 'undefined') TouchMenu.init({ page: 'skybridge' });
         const initialQuery = new URLSearchParams(location.search).get('q');
         if (initialQuery) {
+            // Strip ?q from the URL before running it, so a reload doesn't re-submit
+            // the command — it can be side-effectful (e.g. "set a timer"), which
+            // otherwise regenerates on every refresh. One-shot only.
+            try {
+                const u = new URL(location.href);
+                u.searchParams.delete('q');
+                history.replaceState(null, '', u.pathname + u.search + u.hash);
+            } catch (_) {}
             setTimeout(() => submitCommand(initialQuery), 120);
         }
     }
