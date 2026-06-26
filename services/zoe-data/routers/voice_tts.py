@@ -2522,6 +2522,54 @@ _moonshine_model = None  # moonshine_voice v2 Transcriber
 _moonshine_lock = threading.Lock()
 
 
+# ── Wake-word bleed fix ──────────────────────────────────────────────────────
+# The panel sends the WHOLE captured utterance — wake word ("Hey Zoe") + pre-roll
+# included — with no wake-offset metadata. Transcribing the leading wake word
+# corrupts the command ("Hey Zoe, what time is it" -> "Hey Zoe Tom is it"). We fix
+# this server-side using Moonshine's OWN line segmentation: it naturally emits the
+# wake phrase as its own line ("Hey Zoe.") separate from the command line, so we
+# drop leading wake-only lines and, if the wake word landed inline on the command
+# line, strip just that leading prefix. This NEVER cuts the raw audio, so command
+# words can't be clipped — the guard is the replay corpus (tests/replay_samples.py).
+
+# A line that is ENTIRELY a wake-word variant (so the whole line is dropped).
+_WAKE_LINE_RE = re.compile(
+    r"^\s*(?:hey|hi|ok|okay|a|hey,)?[\s,]*"
+    r"(?:zoe|zoey|zo|joey|joe|zoie|sewey|so|josie|zoee)"
+    r"[\s,.!?]*$",
+    re.IGNORECASE,
+)
+# A leading wake prefix on a line that ALSO carries the command (strip the prefix
+# only). Requires a following word (?=\S) so a bare name that IS the command stays.
+_WAKE_PREFIX_RE = re.compile(
+    r"^\s*(?:hey|hi|ok|okay)?[\s,]*"
+    r"(?:zoe|zoey|joey|josie|zoie)"
+    r"[\s,.!?-]+(?=\S)",
+    re.IGNORECASE,
+)
+
+
+def _strip_wake_word(lines: list) -> str:
+    """Given Moonshine's per-line transcript texts (in order), drop the leading
+    wake word and return the command transcript.
+
+    Conservative by construction: it only removes whole leading wake-only lines or
+    an inline leading wake prefix, and never returns empty when there was content
+    (a clip that is *only* the wake word is left as-is for the caller to handle)."""
+    kept = [t for t in ((s or "").strip() for s in lines) if t]
+    if not kept:
+        return ""
+    # 1. Drop leading lines that are nothing but a wake word.
+    while len(kept) > 1 and _WAKE_LINE_RE.match(kept[0]):
+        kept = kept[1:]
+    # 2. If the wake word is inline on the (now) first line, strip just the prefix.
+    stripped = _WAKE_PREFIX_RE.sub("", kept[0], count=1).strip()
+    if stripped:
+        # Re-capitalise so the command doesn't start lowercase after the cut.
+        kept[0] = stripped[:1].upper() + stripped[1:]
+    return " ".join(kept).strip()
+
+
 def _ensure_moonshine():
     """Lazily build the Moonshine v2 transcriber (MEDIUM_STREAMING by default —
     accurate on real room audio, ~0.5s/clip). Locked so a concurrent first call
@@ -2548,13 +2596,19 @@ async def _run_moonshine(wav_path: str) -> str:
         tr = _ensure_moonshine()
         audio, sr = load_wav_file(wav_path)
         out = tr.transcribe_without_streaming(audio, sr)
-        text = getattr(out, "text", None)
-        if not (isinstance(text, str) and text.strip()):
-            try:
-                text = " ".join(line.text for line in out.lines)
-            except Exception:
-                text = str(out)
-        return (text or "").strip()
+        # Moonshine segments speech into lines and emits the wake phrase ("Hey Zoe.")
+        # as its own leading line. Strip the wake word from those lines so the
+        # leading "Hey Zoe" can't corrupt the command transcript (wake-word bleed).
+        lines = [getattr(ln, "text", "") or "" for ln in getattr(out, "lines", [])]
+        if lines:
+            text = _strip_wake_word(lines)
+            if text:
+                return text
+        # Fallback: some builds expose a flat .text; strip the wake prefix from it.
+        flat = getattr(out, "text", None)
+        if isinstance(flat, str) and flat.strip():
+            return _strip_wake_word([flat])
+        return ""
 
     return await asyncio.get_running_loop().run_in_executor(None, _work)
 
@@ -2576,10 +2630,10 @@ async def warm_moonshine() -> bool:
 
 
 async def _maybe_capture_stt(wav_path: str, primary: str) -> None:
-    """Diagnostic A/B: when ZOE_VOICE_SAVE_AUDIO is set, save the real utterance
-    and log the primary (Moonshine) result alongside whisper's, so we can tell —
-    on the user's actual room audio — which is more accurate and whether the
-    pre-roll is corrupting it. Logs at WARNING so it's visible past the level."""
+    """When ZOE_VOICE_SAVE_AUDIO is set, save the real utterance to the operator's
+    permanent regression corpus (~/.zoe-voice-samples) and log the Moonshine
+    transcript. This is corpus capture only — there is NO whisper A/B; whisper
+    must never run on a live turn (Moonshine is the only STT engine)."""
     if (os.environ.get("ZOE_VOICE_SAVE_AUDIO") or "").strip().lower() not in ("1", "true", "yes", "on"):
         return
     try:
@@ -2595,16 +2649,7 @@ async def _maybe_capture_stt(wav_path: str, primary: str) -> None:
         logger.warning("STT capture failed: %s", exc)
         return
 
-    # Run the whisper A/B on the COPY fire-and-forget, so it never adds latency to
-    # the live transcription path (the whole point of the Moonshine v2 win).
-    async def _ab() -> None:
-        try:
-            alt = await _run_faster_whisper(dst)
-        except Exception as exc:
-            alt = f"<whisper err: {exc}>"
-        logger.warning("STT_AB file=%s moonshine=%r whisper=%r", dst, (primary or "")[:90], (alt or "")[:90])
-
-    _spawn_bg(_ab())
+    logger.info("STT_CAPTURE file=%s moonshine=%r", dst, (primary or "")[:90])
 
 
 async def _transcribe_audio(wav_path: str) -> str:
@@ -2621,34 +2666,29 @@ _stt_backend_var: contextvars.ContextVar[str] = contextvars.ContextVar("stt_back
 
 
 async def _transcribe_audio_impl(wav_path: str) -> str:
+    """Transcribe with Moonshine v2 — the ONLY live STT engine.
+
+    Moonshine is the rock: there is no whisper fallback in the live path (it
+    cold-loaded onto a memory-starved GPU and corrupted accuracy). On a
+    Moonshine-empty result we return empty and let the caller's empty_transcript
+    handling re-prompt / no-op — we never reach for whisper here.
     """
-    Transcription waterfall:
-    0. Moonshine ONNX (default; edge real-time, CPU) — falls through on error
-    1. whisper.cpp CLI (if binary + ggml model configured)
-    2. faster-whisper Python (auto-downloaded model, GPU/CPU)
-    """
-    if (os.environ.get("ZOE_STT_BACKEND") or "moonshine").strip().lower() == "moonshine":
-        try:
-            text = await _run_moonshine(wav_path)
-            if text:
-                _stt_backend_var.set("moonshine:" + (os.environ.get("ZOE_MOONSHINE_ARCH") or "v2").strip())
-                return text
-            logger.warning("Moonshine STT returned empty; falling back to whisper")
-        except Exception as exc:
-            logger.warning("Moonshine STT failed (%s); falling back to whisper", exc)
-    if _whisper_cpp_binary():
-        model = (os.environ.get("ZOE_WHISPER_MODEL") or "").strip()
-        if model and os.path.isfile(model):
-            _stt_backend_var.set("whisper.cpp:" + os.path.basename(model))
-            return await _run_whisper_cpp(wav_path)
-    _stt_backend_var.set("faster-whisper:" + (os.environ.get("ZOE_WHISPER_MODEL") or "base.en").strip())
-    return await _run_faster_whisper(wav_path)
+    try:
+        text = await _run_moonshine(wav_path)
+    except Exception as exc:
+        logger.warning("Moonshine STT failed: %s", exc)
+        return ""
+    if text:
+        _stt_backend_var.set("moonshine:" + (os.environ.get("ZOE_MOONSHINE_ARCH") or "v2").strip())
+        return text
+    logger.info("Moonshine STT returned empty transcript")
+    return ""
 
 
 @router.post("/transcribe")
 async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_auth)):
     """
-    Transcribe base64 WAV/PCM audio using whisper.cpp on the Jetson (Pi voice daemon).
+    Transcribe base64 WAV/PCM audio using Moonshine v2 on the Jetson (Pi voice daemon).
     Request: { \"audio_base64\": \"...\", \"panel_id\": \"...\" }
     """
     b64 = str((payload or {}).get("audio_base64") or "").strip()
@@ -4946,7 +4986,7 @@ async def voice_ambient(payload: dict, caller: dict = Depends(_require_voice_aut
     if not b64:
         raise HTTPException(status_code=400, detail="audio_base64 is required")
 
-    # Transcribe via whisper.cpp.
+    # Transcribe via Moonshine — the only STT engine (no whisper anywhere).
     try:
         raw = base64.b64decode(b64, validate=True)
     except Exception as exc:
@@ -4958,7 +4998,7 @@ async def voice_ambient(payload: dict, caller: dict = Depends(_require_voice_aut
         wav_path = tmp.name
     transcript = ""
     try:
-        transcript = await _run_whisper_cpp(wav_path)
+        transcript = await _transcribe_audio_impl(wav_path)
     except Exception as exc:
         logger.debug("ambient transcription failed: %s", exc)
         return {"ok": False, "panel_id": panel_id, "transcript": ""}

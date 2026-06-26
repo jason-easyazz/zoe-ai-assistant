@@ -697,10 +697,9 @@ async def lifespan(app: FastAPI):
     _zoe_update_bg_task = start_zoe_update_background_tasks()
 
     try:
-        from routers.voice_tts import warm_faster_whisper_worker, warm_moonshine
+        from routers.voice_tts import warm_moonshine
         asyncio.create_task(warm_moonshine(), name="moonshine_warmup")
-        asyncio.create_task(warm_faster_whisper_worker(), name="faster_whisper_warmup")
-        logger.info("Voice STT worker warmup scheduled (moonshine + whisper)")
+        logger.info("Voice STT warmup scheduled (Moonshine — the only STT engine)")
         try:
             import semantic_router as _sr
             if _sr.is_enabled():
