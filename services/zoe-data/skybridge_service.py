@@ -36,6 +36,7 @@ class SkybridgeIntent:
     item_text: str = ""
     list_name: str = ""
     target_time: str = ""
+    all_day: bool = False
     title: str = ""
     target_text: str = ""
     person_name: str = ""
@@ -809,8 +810,36 @@ def _calendar_create_from_text(message: str, context: dict[str, Any] | None) -> 
     if _context_domain(context) != "calendar" and not re.search(r"\b(calendar|schedule|event|appointment|meeting)\b", message, re.IGNORECASE):
         return None
     title = _clean_action_text(match.group("title"))
+    # "add standup to my calendar at 9am" → title is "standup", not "standup to my
+    # calendar" — strip the destination tail the lazy match leaves behind.
+    title = re.sub(r"\s+(?:to|on|in|into)\s+(?:my\s+|the\s+)?calendar\s*$", "", title, flags=re.IGNORECASE).strip()
     target_time = _parse_time(match.group("time"))
     return (title, target_time) if title and target_time else None
+
+
+def _calendar_create_notime_from_text(message: str, context: dict[str, Any] | None) -> str | None:
+    """A calendar add with NO time → an all-day event. Extract the title WITHOUT the
+    trailing "to my/the calendar" so "add work to my calendar" is "work", not the
+    whole phrase (the bug Jason hit). Requires a calendar cue to avoid hijacking."""
+    if _context_domain(context) != "calendar" and not re.search(r"\bcalendar\b", message, re.IGNORECASE):
+        return None
+    match = re.search(
+        r"\b(?:add|put|schedule|create)\s+(?P<title>.+?)\s+(?:to|on|in|into)\s+(?:my\s+|the\s+)?calendar\b",
+        message,
+        re.IGNORECASE,
+    )
+    if not match:
+        match = re.search(
+            r"\b(?:add|create|new)\s+(?:a\s+)?(?:calendar\s+)?(?:event|appointment|meeting)\s+(?:called|named|titled|for)\s+(?P<title>.+?)\s*$",
+            message,
+            re.IGNORECASE,
+        )
+    if not match:
+        return None
+    title = _clean_action_text(match.group("title"))
+    # belt-and-suspenders: strip any leftover "to/on my calendar" tail
+    title = re.sub(r"\s+(?:to|on|in|into)\s+(?:my\s+|the\s+)?calendar\s*$", "", title, flags=re.IGNORECASE).strip()
+    return title or None
 
 
 def _calendar_update_from_text(message: str, context: dict[str, Any] | None) -> tuple[str, str] | None:
@@ -970,6 +999,11 @@ def classify_skybridge_intent(message: str, context: dict[str, Any] | None = Non
         parsed_range = _calendar_date_from_text(text, _today())
         start = parsed_range[1] if parsed_range else _context_calendar_date(context)
         return SkybridgeIntent(domain="calendar", action="create_event", title=title, target_time=target_time, range_label=start.isoformat(), start_date=start, end_date=start)
+    calendar_create_notime = _calendar_create_notime_from_text(raw_message, context)
+    if calendar_create_notime:
+        parsed_range = _calendar_date_from_text(text, _today())
+        start = parsed_range[1] if parsed_range else _context_calendar_date(context)
+        return SkybridgeIntent(domain="calendar", action="create_event", title=calendar_create_notime, target_time="", all_day=True, range_label=start.isoformat(), start_date=start, end_date=start)
     if (
         " clock " in text
         or re.search(r"\bwhat(?:'s| is)?\s+the\s+time\b", text)
@@ -1250,13 +1284,13 @@ async def _resolve_calendar_create(intent: SkybridgeIntent, user_id: str, db: An
         user_id,
         intent.title,
         start.isoformat(),
-        intent.target_time,
+        None if intent.all_day else intent.target_time,
         start.isoformat(),
         None,
         None,
         "general",
         None,
-        0,
+        1 if intent.all_day else 0,
         None,
         None,
         "family",
@@ -1264,7 +1298,10 @@ async def _resolve_calendar_create(intent: SkybridgeIntent, user_id: str, db: An
     await _maybe_commit(db)
     refreshed = await _resolve_calendar(SkybridgeIntent("calendar", "show", start.isoformat(), start, start), user_id, db)
     refreshed["intent"] = {"domain": "calendar", "action": "create_event", "event_id": event_id}
-    refreshed["spoken_summary"] = f"Added {intent.title} at {intent.target_time}."
+    refreshed["spoken_summary"] = (
+        f"Added {intent.title} to your calendar." if intent.all_day
+        else f"Added {intent.title} at {intent.target_time}."
+    )
     refreshed["actions"] = [{"type": "created", "domain": "calendar", "id": event_id}]
     return refreshed
 
@@ -1328,7 +1365,9 @@ async def _resolve_calendar_update_time(intent: SkybridgeIntent, user_id: str, d
     event = matches[0]
     event_id = event.get("id")
     update_result = await db.execute(
-        "UPDATE events SET start_time = $1, updated_at = NOW() WHERE id = $2 AND user_id = $3 AND deleted = 0",
+        # Giving an all-day event a time makes it a timed event — clear all_day so
+        # the row can't be both (renderers/spoken summaries would disagree).
+        "UPDATE events SET start_time = $1, all_day = 0, updated_at = NOW() WHERE id = $2 AND user_id = $3 AND deleted = 0",
         intent.target_time,
         event_id,
         user_id,
