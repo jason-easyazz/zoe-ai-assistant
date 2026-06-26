@@ -24,7 +24,7 @@ a link to the detail + where it's up to. Mark ✅ when done so nothing lingers h
 
 ### Agent + tooling readiness (for Jason to work on Zoe remotely)
 - **Goal:** Omnigent + Claude Code + Codex + Cursor all set up correctly and **actually using** the repo's tools (Serena, codebase-memory, opensrc, Greptile/greploop, Dox), with a shared command center (this) so ideas/plans don't scatter.
-- **Now:** audit ✅ (#774, `docs/agent-setup-audit.md`); opensrc populated ✅ (#773); **Claude Code** wired ✅ (#787 — `CLAUDE.md`+committed `.mcp.json`), **Codex** ✅ (#788 — `.codex/config.toml`), **Cursor** ✅ (#786 — fixed `.cursor/mcp.json`). **Remaining (🔨 in progress):** Omnigent container code-intel + tool-use enforcement (AGENTS.md start-of-task checklist).
+- **Now:** audit ✅ (#774, `docs/agent-setup-audit.md`); opensrc populated ✅ (#773); **Claude Code** wired ✅ (#787 — `CLAUDE.md`+committed `.mcp.json`), **Codex** ✅ (#788 — `.codex/config.toml`), **Cursor** ✅ (#786 — fixed `.cursor/mcp.json`); **Omnigent container code-intel** ✅ (#792 committed the mounts; **applied + verified live 2026-06-26** — recreated the container, serena+codebase-memory+opensrc all resolve in-container, harnesses launch with `--dangerously-skip-permissions` so the project MCP auto-loads); **shared knowledge bundle populated** ✅ (#855 — runtime-topology/voice-pipeline/merge-and-deploy promoted from private memory into `docs/knowledge/` so the whole fleet reads the same ground-truth). **Remaining (🔨):** tool-use enforcement verification across agents (AGENTS.md start-of-task checklist landed; confirm each harness honours it).
 
 ### Touch / Chat UI — "window into Zoe" (foundation-first)
 - **Goal:** the touch panel + chat page become a real window into Zoe — type/speak anything, get working interactive components (not prose). DeerFlow-grade, dynamic from basic (calendar) to advanced (Pi builds something new).
@@ -36,7 +36,7 @@ a link to the detail + where it's up to. Mark ✅ when done so nothing lingers h
 ## 🗂️ Backlog — pinned & sequenced (from Jason, 2026-06-23)
 *Agent/tooling readiness for remote work. Each is a tracked item; do them in order, don't bounce.*
 
-- [x] **1. Audit Omnigent** ✅ — done in #774. Fix (bake/mount Serena+codebase-memory+opensrc into the container) 🔨 in progress.
+- [x] **1. Audit Omnigent** ✅ — done in #774. Fix ✅ — #792 committed the read-only mounts + container-relative `.mcp.json`; **applied + verified live 2026-06-26** (container recreated; serena+codebase-memory+opensrc resolve in-container).
 - [x] **2. Audit + wire Claude Code** ✅ — #774 audit; #787 added `CLAUDE.md`→`@AGENTS.md` and committed the previously-ignored `.mcp.json` (Serena + codebase-memory).
 - [x] **3. Audit + wire Codex** ✅ — #774 audit; #788 added repo-local `.codex/config.toml` registering both MCP servers (Codex reads `AGENTS.md` natively).
 - [ ] **4. Enforce tool use across ALL agents** 🔨 in progress — AGENTS.md "start-of-task checklist" making code-intel/opensrc/Greptile/DOX non-optional + verifying each entrypoint references the hub.
