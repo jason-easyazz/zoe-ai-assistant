@@ -78,15 +78,33 @@ The scaffold needs a control-flow redesign before it runs; that redesign is the
 next increment (and the `scout/implement/verify` agents + GitHub/exec helpers are
 otherwise reusable).
 
-### Not yet done (needs operator input — deliberately not run autonomously)
+### Increment 1 — redesign to Flue's real model: DONE, build-clean (2026-06-27)
 
-- **No live agent run.** Running the loop needs a `HARNESS_LLM_*` endpoint + key
-  (a cloud/dev OpenAI-compatible model, kept off the `:11434` voice GPU). That
-  credential/endpoint choice is the operator's. `npm run check:llm` / `npm run
-  spike` were **not** executed.
-- **No PR opened** by the harness (the spike's success artifact) — gated on the
-  above and on explicit go-ahead, since it pushes a branch + opens a real PR.
-- **#735 voice-latency probe not yet read** under harness load (no harness ran).
+The scaffold was rebuilt to the canonical Flue shape (verified against the bundled
+`flue docs` + `@flue/runtime@1.0.0-beta.6` types). **`npm run build` (`flue build
+--target node`) and `npm run typecheck` (`tsc --noEmit`) both PASS.** Structure:
+
+- `src/app.ts` — `registerProvider('openrouter', { api: 'openai-completions',
+  baseUrl, apiKey })` + mounts `flue()`. OpenRouter is the harness model endpoint
+  (OpenAI-compatible), separate from the `:11434` voice brain.
+- `src/roles.ts` — orchestrator `defineAgent(() => ({ model, instructions,
+  subagents: [scout, verifier], sandbox: local(), cwd }))` + scout/verifier
+  `defineAgentProfile`s. Phases are **subagents**, delegated via
+  `session.task({ agent })` — the correct mapping of the `case` pattern.
+- `src/workflows/harness.ts` — `defineWorkflow({ agent, input, output, run })`;
+  `run({ harness, input, log })` drives scout → implement → verify → openPR with
+  Valibot-validated `{ issue }` input / `{ prUrl, verdict }` output. Run via
+  `flue run harness --input '{"issue": 715}'`.
+- Removed the old wrong-API files (`provider.ts`, `agents.ts`, `workflow.ts`,
+  `index.ts`, `checkLlm.ts`); `config.ts` + `github.ts` helpers were reused.
+
+### Still not done (needs the live run — operator-gated)
+
+- **No live agent run yet.** It needs `OPENROUTER_API_KEY` available to the CLI
+  (in the gitignored `.env` or exported) and accepts that a successful run opens a
+  **real PR**. The code is build-clean and ready; only the run remains.
+- **#735 voice-latency probe** to be read while the harness runs (no-regression =
+  Phase 0 acceptance, PR #736 §5).
 
 ## The Samantha tests — did the loop close?
 
@@ -119,14 +137,11 @@ otherwise reusable).
   onto **subagents / chained workflows**, not inline steps.
 
 **Notes / next steps:**
-1. **Redesign the pipeline** to Flue's real model: a top-level workflow whose bound
-   agent delegates scout → implement → verify → openPR to **subagents** (or chain
-   workflows/actions), using `defineAgent(initialize → AgentRuntimeConfig)`,
-   `registerProvider(id, registration)` from `@flue/runtime`, and
-   `invoke(workflow, req)` against a `NodeRuntime` / `createDefaultFlueApp()`.
-   The existing scout/implement/verify prompts + GitHub/exec helpers are reusable.
-2. **Operator inputs needed to actually run it:** a `HARNESS_LLM_*` cloud/dev
-   endpoint + key (off the `:11434` voice GPU), and go-ahead for the harness to
-   open a real PR.
-3. Then read the **#735 latency probe** under harness load to confirm no voice
+1. ~~Redesign the pipeline to Flue's real model.~~ **DONE (Increment 1, above)** —
+   workflow + bound orchestrator agent + scout/verifier subagents + OpenRouter
+   provider; `flue build` and `tsc` both clean.
+2. **Live run (only remaining step):** make `OPENROUTER_API_KEY` available to the
+   CLI and run `flue run harness --input '{"issue": 715}'`. A PASS verdict opens a
+   real PR — review it by hand (the harness never merges).
+3. Read the **#735 latency probe** under harness load to confirm no voice
    regression (Phase 0 acceptance, PR #736 §5).

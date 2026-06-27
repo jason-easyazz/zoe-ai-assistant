@@ -56,16 +56,21 @@ export function loadConfig(): SpikeConfig {
   }
 
   return {
-    // Voice brain — live local llama.cpp; the harness agents are NOT bound here.
-    llmBaseUrl: req('LLM_BASE_URL'),
+    // Voice brain — live local llama.cpp. The harness agents do NOT run here; it
+    // is kept for reference only and is optional (the spike no longer pings it —
+    // the connectivity check lives in FINDINGS).
+    llmBaseUrl: opt('LLM_BASE_URL', 'http://127.0.0.1:11434/v1'),
     llmModel: opt('LLM_MODEL', 'local'),
     llmApiKey: opt('LLM_API_KEY', 'not-needed'),
-    // Harness model — separate endpoint (default cloud/dev); swap to local later
-    // by changing only HARNESS_LLM_BASE_URL / HARNESS_LLM_MODEL, no code change.
-    harnessLlmProvider: opt('HARNESS_LLM_PROVIDER', 'openai'),
-    harnessLlmBaseUrl: req('HARNESS_LLM_BASE_URL'),
-    harnessLlmModel: req('HARNESS_LLM_MODEL'),
-    harnessLlmApiKey: opt('HARNESS_LLM_API_KEY', ''),
+    // Harness model — SEPARATE endpoint the agents run on (default OpenRouter, an
+    // OpenAI-compatible cloud endpoint). The provider is registered in src/app.ts
+    // as `openrouter`; model strings look like `openrouter/<model-id>`. Swap to a
+    // local endpoint later by changing only these vars — no code change.
+    harnessLlmProvider: opt('HARNESS_LLM_PROVIDER', 'openrouter'),
+    harnessLlmBaseUrl: opt('HARNESS_LLM_BASE_URL', 'https://openrouter.ai/api/v1'),
+    harnessLlmModel: opt('HARNESS_LLM_MODEL', 'openrouter/anthropic/claude-3.5-haiku'),
+    // Key read from OPENROUTER_API_KEY (the box's existing key) or HARNESS_LLM_API_KEY.
+    harnessLlmApiKey: opt('OPENROUTER_API_KEY', opt('HARNESS_LLM_API_KEY', '')),
     // Token may be empty if the box relies on an authenticated gh CLI.
     githubToken: opt('GITHUB_TOKEN', ''),
     githubRepo: req('GITHUB_REPO'),

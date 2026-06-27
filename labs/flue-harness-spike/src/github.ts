@@ -61,6 +61,29 @@ export async function commitAndPush(
   });
 }
 
+/** Capture the working-tree diff vs HEAD: a stat summary plus the full patch. */
+export async function captureDiff(
+  cfg: SpikeConfig,
+): Promise<{ stat: string; patch: string }> {
+  const stat = await run('git', ['diff', '--stat', 'HEAD'], { cwd: cfg.zoeCheckout });
+  const patch = await run('git', ['diff', 'HEAD'], { cwd: cfg.zoeCheckout });
+  return { stat, patch };
+}
+
+/** Run the configured verify command in the checkout; capture combined output. */
+export async function runVerify(cfg: SpikeConfig): Promise<{ ok: boolean; evidence: string }> {
+  try {
+    const out = await run('bash', ['-lc', cfg.verifyCmd], { cwd: cfg.zoeCheckout });
+    return { ok: true, evidence: `$ ${cfg.verifyCmd}\n${out}` };
+  } catch (err) {
+    const e = err as { stdout?: string; stderr?: string; message?: string };
+    return {
+      ok: false,
+      evidence: `$ ${cfg.verifyCmd}\n${e.stdout ?? ''}${e.stderr ?? e.message ?? 'failed'}`,
+    };
+  }
+}
+
 /**
  * Open a PR. Returns the PR URL.
  *
