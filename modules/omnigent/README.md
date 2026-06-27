@@ -70,9 +70,11 @@ runs auth-less and trusts every request as the reserved `local` user. Wiring:
   `the411.cloudflareaccess.com`.
 - **Bring up with the repo .env**:
   `docker compose --env-file ../../.env -f docker-compose.module.yml up -d`
-- **LAN `:6767` is ungated** (binds `0.0.0.0`) — a trusted-home posture. Anyone on the LAN
-  reaches Omnigent as `local`. Bind `127.0.0.1:6767` in the compose if you want to kill LAN
-  exposure and force everything through the Access-gated tunnel.
+- **The host port is `127.0.0.1:6767` only** (host-local debugging), NOT published to the LAN —
+  in header mode the server is auth-less, so a LAN-published port would let any LAN device act as
+  `local` with the mounted workspace + agent credentials. The Access-gated tunnel is unaffected:
+  cloudflared reaches Omnigent over the internal `zoe-network` (`http://zoe-omnigent:6767`), not
+  the host port. To use Omnigent on the LAN, go through the tunnel (`buildzoe.the411.life`).
 
 ### Why not OIDC over the tunnel
 Omnigent's OIDC issuer/redirect are pinned to the LAN origin `http://zoe.local:6767`. Reached
