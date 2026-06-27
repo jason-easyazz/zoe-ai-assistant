@@ -59,32 +59,41 @@ volume-only, never in the image or in env, and gate the tunnel with Cloudflare A
 some providers (device limits, ToS, session invalidation). Worth confirming per provider before
 leaning on it for unattended runs.
 
-## Server login — Zoe SSO via OIDC
-The Omnigent web UI authenticates against **zoe-auth** (Zoe's own OIDC provider), not its
-built-in accounts mode. Wiring:
-- `zoe-auth` seeds an `omnigent` OIDC client (`services/zoe-auth/oidc/startup.py`), secret in
-  repo `.env` as `OMNIGENT_OIDC_CLIENT_SECRET`.
-- Omnigent runs with `OMNIGENT_AUTH_PROVIDER=oidc`, issuer **`http://zoe.local`** (the nginx
-  frontend — it serves the login UI at `/` and proxies `/application/o/`, `/.well-known/`,
-  `/jwks.json` to zoe-auth; do NOT use `:8002`, whose `/` is JSON with no login page), redirect
-  `http://zoe.local:6767/auth/callback`. `extra_hosts: zoe.local:host-gateway` lets the
-  container reach the frontend with a Host header matching the browser, so the token `iss` aligns.
-- **Bring up with the repo .env** so the secrets interpolate:
+## Server login — Cloudflare Access (header mode)
+The Omnigent web UI is gated **externally by Cloudflare Access** on the tunnel; Omnigent itself
+runs auth-less and trusts every request as the reserved `local` user. Wiring:
+- Omnigent runs with `OMNIGENT_AUTH_PROVIDER=header` + `OMNIGENT_LOCAL_SINGLE_USER=1`. The
+  header provider resolves header-less requests to the reserved `"local"` identity
+  (`omnigent/server/auth.py`), so the runner tunnel is always accepted (no token to expire).
+- **Cloudflare Access is the gate**: `https://buildzoe.the411.life` → `zoe-cloudflared` →
+  `http://zoe-omnigent:6767` (both on `zoe-network`). Unauthenticated requests 302 to
+  `the411.cloudflareaccess.com`.
+- **Bring up with the repo .env**:
   `docker compose --env-file ../../.env -f docker-compose.module.yml up -d`
-- **Access the UI at http://zoe.local:6767** (not the raw IP) so the OIDC redirect host is
-  consistent. `/auth/login` → 302 to zoe-auth authorize (code + PKCE) → log in with your Zoe
-  identity → back to `/auth/callback`.
-- Possible first-login wrinkle: Omnigent may gate new OIDC users via
-  `OMNIGENT_OIDC_ALLOWED_DOMAINS` / invites — if login is rejected, that's the knob.
+- **The host port is `127.0.0.1:6767` only** (host-local debugging), NOT published to the LAN —
+  in header mode the server is auth-less, so a LAN-published port would let any LAN device act as
+  `local` with the mounted workspace + agent credentials. The Access-gated tunnel is unaffected:
+  cloudflared reaches Omnigent over the internal `zoe-network` (`http://zoe-omnigent:6767`), not
+  the host port. To use Omnigent on the LAN, go through the tunnel (`buildzoe.the411.life`).
+
+### Why not OIDC over the tunnel
+Omnigent's OIDC issuer/redirect are pinned to the LAN origin `http://zoe.local:6767`. Reached
+through Cloudflare (`buildzoe.the411.life`, HTTPS) the login crosses origins: the
+`__Host-ap_auth_state` cookie is set on the Cloudflare host but the OIDC callback returns to
+`http://zoe.local`, so the cookie never comes back → **`{"error":"Missing auth state cookie"}`**
+(`omnigent/server/routes/auth.py`). A single OIDC client can't straddle both origins. OIDC
+(`OMNIGENT_AUTH_PROVIDER=oidc`, the commented block in the compose) works only via the LAN
+`http://zoe.local:6767` path, where `zoe-auth` seeds the `omnigent` client
+(`services/zoe-auth/oidc/startup.py`, secret `OMNIGENT_OIDC_CLIENT_SECRET`).
 
 ## Server start / runner
 - CMD is the foreground server: `omnigent server --host 0.0.0.0 --port 6767 --no-open`
   (bare `server` is the documented Docker entrypoint; `server start` daemonizes and crash-loops).
 - Still TODO for actually running agents: register a **host** (`omnigent host`) — the server is
   only the control plane; "no hosts" until one is registered.
-- Tunnel: add `omnigent.<domain>` ingress to `config/cloudflared-config.yml` →
-  `http://zoe-omnigent:6767`, plus the `https://omnigent.<domain>/auth/callback` redirect URI in
-  the zoe-auth `omnigent` client. Cloudflare Access optional now that OIDC gates the UI.
+- Tunnel: add the `buildzoe.the411.life` ingress to `config/cloudflared-config.yml` →
+  `http://zoe-omnigent:6767`, and gate it with a **Cloudflare Access** policy (required — the
+  server is auth-less in header mode; see *Server login* above).
 
 ## Code-intel tooling (Serena / codebase-memory / opensrc)
 The container has the Zoe repo at `/workspace` but originally **none** of the code-intel
