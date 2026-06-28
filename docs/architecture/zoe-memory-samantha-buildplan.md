@@ -140,6 +140,16 @@ independent:** the two adjacent startup bugs as one small hardening PR (no new f
 
 ## 8. Increment 1c — enable runbooks
 
+> **STATUS 2026-06-27 — DO NOT RE-RUN §8.3 AS A FRESH ENABLE.** The prod flag is
+> **already ON** (`ZOE_IDLE_CONSOLIDATION_ENABLED=1` in `services/zoe-data/.env`,
+> PID-confirmed; set 2026-06-24) and the engine is healthy, so §8.3 below is kept
+> only as reference + the rollback/watch procedure — the enable/restart step is
+> **done**, not pending. §8.2's demo path is likewise proven (55 demo watermark
+> rows). **The actual open 1c item is the §7 positive control:** prove a fresh
+> authenticated turn lands in `chat_messages` *with* `metadata.user_id`, then that a
+> sweep consolidates it. Treat the enable/restart in §8.3 as a no-op unless the flag
+> has been deliberately turned OFF.
+
 ### 8.1 What is already proven (no live box needed)
 - `test_samantha_acceptance_loop.py` drives the merged engine end to end: a short morning
   conversation → `run_idle_consolidation_sweep()` (flag ON) finds the idle session, resolves the
@@ -163,13 +173,17 @@ independent:** the two adjacent startup bugs as one small hardening PR (no new f
    `python -m pytest services/zoe-core/test/test_samantha_acceptance.py -v` (these skip without
    `pi` + the model server — that is expected off the box).
 
-### 8.3 Prod-enable (only after 8.2 passes AND Jason blesses it)
+### 8.3 Prod-enable — ALREADY DONE 2026-06-24 (reference + rollback/watch only)
+- ⚠️ **The enable below already happened — do NOT perform it again as if fresh.** The flag is on
+  in `services/zoe-data/.env` and confirmed in the live process env. Re-running the enable/restart
+  does NOT prove the live capture chain; the open item is the §7 positive-control turn. This bullet
+  is retained only to document how the flag is wired and how to re-enable *if it is ever turned off*.
 - The flag is read **per-sweep** (`start_idle_consolidation_loop` re-checks `_enabled()` every
   iteration), so enabling needs no code change and no restart of the loop task itself — but the
-  process must have the env var. Set `ZOE_IDLE_CONSOLIDATION_ENABLED=1` in the live service env
-  (the systemd unit / `.env` the zoe-data process reads) and restart via
-  `scripts/maintenance/deploy_live.sh` (rolls back on a failed health check). Leave
-  `IDLE_S`/`LOOKBACK_S` at defaults (180s / 3600s) for prod.
+  process must have the env var. (To re-enable after a deliberate OFF: set
+  `ZOE_IDLE_CONSOLIDATION_ENABLED=1` in the live service env — the systemd unit / `.env` the
+  zoe-data process reads — and restart via `scripts/maintenance/deploy_live.sh`, which rolls back on
+  a failed health check. Leave `IDLE_S`/`LOOKBACK_S` at defaults 180s / 3600s for prod.)
 - **Watch (first hour):** `journalctl -u <zoe-data unit> | grep MEMORY_IDLE_CONSOLIDATE` for
   per-session stored counts and the resolved user; the `idle consolidation sweep:` summary line;
   no growth in error/warn lines from the sweep; memory-store row count for jason rising only with
