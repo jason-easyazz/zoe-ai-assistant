@@ -1526,7 +1526,7 @@ async def internal_broadcast(payload: dict, _: None = Depends(require_internal_t
 
 
 async def _session_can_subscribe_panel(panel_id: str, session_id: str | None) -> bool:
-    """Allow browser panel sockets only for sessions bound to that panel.
+    """Allow browser panel sockets only for the panel(s) bound to that session.
 
     A single physical panel answers to more than one ``panel_id`` over its life:
     a generated ``panel_xxxx`` captured from localStorage on a load without a
@@ -1535,12 +1535,15 @@ async def _session_can_subscribe_panel(panel_id: str, session_id: str | None) ->
     whichever id ``getPanelId()`` returns at that moment, so the connecting id can
     legitimately differ from the alias the bound session row was written under.
 
-    Mirrors the client-side ``panelMatches()`` alias-set fix (PR #817): accept the
-    panel-channel subscription when the resolved session user owns the bound row
-    for the *exact* requested panel_id, OR owns a panel session bound under this
-    same browser ``session_id`` (the same client, a different alias id). We never
-    blanket-accept an arbitrary panel_id — both branches require the user to own a
-    legitimately-bound session, and guest/device-token paths stay strict.
+    Authorization is scoped to the *binding*, not merely the user. We accept the
+    subscription when the connecting ``panel_id`` is:
+      (a) bound under this same browser ``session_id`` (the legitimate alias case —
+          the generated ``panel_xxxx`` and the registered ``zoe-touch-pi`` of the
+          same browser share one ``chat_session_id``); or
+      (b) bound to this user with no recorded session (legacy/device binds where
+          ``chat_session_id`` is NULL).
+    A signed-in user can therefore NOT subscribe to an arbitrary panel their
+    session isn't bound to. Guest/device-token paths stay strict.
     """
     user = await _resolve_ws_session(session_id)
     if user is None:
@@ -1551,30 +1554,34 @@ async def _session_can_subscribe_panel(panel_id: str, session_id: str | None) ->
         return False
     if role in {"admin", "agent"}:
         return True
+    if not panel_id:
+        return False
     try:
         from database import get_db
 
         async for db in get_db():
-            # Branch (a): the user owns the bound row for the exact requested id.
-            cursor = await db.execute(
-                "SELECT user_id FROM ui_panel_sessions WHERE panel_id = ? ORDER BY last_seen_at DESC LIMIT 1",
-                (panel_id,),
-            )
-            row = await cursor.fetchone()
-            if row and str(row["user_id"]) == user_id:
-                return True
-            # Branch (b): alias match — the user owns a panel session bound under
-            # this same browser session_id (a different alias id for the same
-            # client). Scoped to the user's own bound sessions, so this never
-            # accepts an arbitrary panel_id from an unrelated session.
+            # The connecting panel_id must have a bound row owned by this user that
+            # is reachable from THIS session: either bound under the same session_id
+            # (the legitimate alias case — the generated panel_xxxx and the
+            # registered zoe-touch-pi of the same browser share one chat_session_id),
+            # or bound under no session at all (legacy/device bind with a NULL
+            # chat_session_id, where ownership by user_id is the only signal).
+            # A signed-in user therefore cannot subscribe to a panel_id their
+            # session was never bound to, even when they own other panels.
             if session_id:
                 cursor = await db.execute(
-                    "SELECT 1 FROM ui_panel_sessions WHERE chat_session_id = ? AND user_id = ? LIMIT 1",
-                    (session_id, user_id),
+                    "SELECT 1 FROM ui_panel_sessions "
+                    "WHERE panel_id = ? AND user_id = ? AND chat_session_id = ? LIMIT 1",
+                    (panel_id, user_id, session_id),
                 )
                 if await cursor.fetchone():
                     return True
-            return False
+            cursor = await db.execute(
+                "SELECT 1 FROM ui_panel_sessions "
+                "WHERE panel_id = ? AND user_id = ? AND chat_session_id IS NULL LIMIT 1",
+                (panel_id, user_id),
+            )
+            return bool(await cursor.fetchone())
     except Exception as exc:
         logger.debug("push websocket panel session validation failed: %s", exc)
         return False

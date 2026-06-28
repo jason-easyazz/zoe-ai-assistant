@@ -142,6 +142,9 @@
         // generated id) made the executor bind + open the push socket under
         // `panel_xxxx` while the panel was registered as `zoe-touch-pi`, so the
         // /ws/push session guard rejected it (1008 "Invalid device token").
+        // A `?panel_id=` URL param is the authoritative current identity: it is set
+        // by provisioning / settings reassignment, so it (re)writes BOTH keys and
+        // wins. This is the path that updates a stale registered id.
         const params = new URLSearchParams(window.location.search);
         const forced = params.get('panel_id');
         if (forced && forced.trim()) {
@@ -150,19 +153,24 @@
             localStorage.setItem('zoe_touch_panel_id', id);
             return id;
         }
-        const registered = localStorage.getItem('zoe_panel_id');
-        if (registered && registered.trim()) {
-            // Keep the legacy key in sync so panelMatches() and any older readers
-            // still resolve to the registered identity.
-            localStorage.setItem('zoe_touch_panel_id', registered.trim());
-            return registered.trim();
+        // No URL param: prefer the registered id ONLY when it is still consistent
+        // with the current panel identity. After a reprovision/reassign,
+        // `zoe_touch_panel_id` is refreshed but a stale `zoe_panel_id` can linger;
+        // preferring it unconditionally (and writing it back) would resurrect the
+        // dead id. So only trust the registered id when no current generated id
+        // exists, or when the two already agree. We never write the registered id
+        // back into the legacy key here.
+        const registered = (localStorage.getItem('zoe_panel_id') || '').trim();
+        const generated = (localStorage.getItem('zoe_touch_panel_id') || '').trim();
+        if (registered && (!generated || registered === generated)) {
+            return registered;
         }
-        let panelId = localStorage.getItem('zoe_touch_panel_id');
-        if (!panelId) {
-            panelId = 'panel_' + Math.random().toString(36).slice(2, 10);
-            localStorage.setItem('zoe_touch_panel_id', panelId);
+        if (generated) {
+            return generated;
         }
-        return panelId;
+        const fresh = 'panel_' + Math.random().toString(36).slice(2, 10);
+        localStorage.setItem('zoe_touch_panel_id', fresh);
+        return fresh;
     }
 
     // Does a server-addressed action belong to THIS panel? A panel can answer to

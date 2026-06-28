@@ -4,11 +4,12 @@ Covers `main._session_can_subscribe_panel`, the guard that decides whether a
 browser push WebSocket may subscribe to a panel channel. A single physical touch
 panel answers to more than one ``panel_id`` over its life (a generated
 ``panel_xxxx`` plus the registered id e.g. ``zoe-touch-pi``); the guard must
-accept the panel's legitimate aliases without blanket-accepting arbitrary ids.
+accept the panel's legitimate aliases — those bound under the SAME browser
+``session_id`` — without authorizing a panel the session was never bound to.
 
 Regression target: a push socket connecting under a generated ``panel_xxxx`` was
-rejected (1008 / "403") because the bound ``ui_panel_sessions`` row lived under
-the registered alias. See PR for the alias-set fix mirroring #817.
+rejected (1008 / "403"); the fix authorizes panel ids bound to the connecting
+session, while refusing arbitrary ids (the security tightening from PR review).
 
 Run with:
     pytest tests/unit/test_ws_push_panel_guard.py -v
@@ -22,22 +23,50 @@ import unittest.mock as mock
 
 import pytest
 
+
 # Both services/zoe-data and services/zoe-auth expose a top-level `main` module
-# (conftest.py adds both to sys.path), so a bare `import main` is ambiguous.
-# Load the zoe-data main.py explicitly by path.
+# (conftest.py adds both to sys.path), so a bare `import main` is ambiguous, and
+# zoe-data must win over zoe-auth for sibling modules like `models`/`routers`.
+# Load zoe-data's main.py explicitly by path, and RESTORE the global import state
+# (sys.path + any modules we evict) in teardown so a mixed zoe-data/zoe-auth test
+# run isn't corrupted by collection order.
 _ZOE_DATA_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..", "services", "zoe-data")
 )
-# zoe-data must win over zoe-auth for sibling modules like `models`/`routers`.
-sys.path.insert(0, _ZOE_DATA_DIR)
-for _mod in ("models", "routers"):
-    sys.modules.pop(_mod, None)
-_spec = importlib.util.spec_from_file_location(
-    "zoe_data_main", os.path.join(_ZOE_DATA_DIR, "main.py")
-)
-main = importlib.util.module_from_spec(_spec)
-sys.modules["zoe_data_main"] = main
-_spec.loader.exec_module(main)
+_SHADOWED = ("models", "routers", "database")
+
+main = None  # populated by the autouse fixture below
+
+
+@pytest.fixture(autouse=True)
+def _load_zoe_data_main():
+    """Import zoe-data's main under an isolated sys.path/module-table, then restore."""
+    global main
+    saved_path = list(sys.path)
+    saved_modules = {name: sys.modules.get(name) for name in _SHADOWED}
+
+    sys.path.insert(0, _ZOE_DATA_DIR)
+    for name in _SHADOWED:
+        sys.modules.pop(name, None)
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "zoe_data_main", os.path.join(_ZOE_DATA_DIR, "main.py")
+        )
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["zoe_data_main"] = module
+        spec.loader.exec_module(module)
+        main = module
+        yield
+    finally:
+        main = None
+        sys.modules.pop("zoe_data_main", None)
+        # Restore evicted modules (or remove if they weren't present before).
+        for name, mod in saved_modules.items():
+            if mod is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = mod
+        sys.path[:] = saved_path
 
 
 class _FakeCursor:
@@ -49,7 +78,11 @@ class _FakeCursor:
 
 
 class _FakeDB:
-    """Async DB stub. `responses` maps a substring of the SQL to the row to return."""
+    """Async DB stub. `responses` maps a substring of the SQL to the row to return.
+
+    The first matching needle (by insertion order) wins, so place the most
+    specific needles first.
+    """
 
     def __init__(self, responses):
         self._responses = responses
@@ -78,56 +111,55 @@ def _patch_session(monkeypatch, user):
     monkeypatch.setattr(main, "_resolve_ws_session", _fake_resolve)
 
 
+# Needles matching the two guard queries. The session-bound lookup also contains
+# "AND user_id = ?", so match on the distinguishing trailing clause.
+_SESSION_BOUND = "chat_session_id = ?"
+_LEGACY_NULL = "chat_session_id IS NULL"
+
+
 @pytest.mark.asyncio
-async def test_member_exact_panel_id_accepted(monkeypatch):
-    """A member bound to the exact requested panel_id is accepted."""
+async def test_member_panel_bound_to_this_session_accepted(monkeypatch):
+    """A member connecting to a panel bound under THIS session_id is accepted."""
     _patch_session(monkeypatch, {"user_id": "u1", "role": "member"})
-    _patch_db(monkeypatch, {"WHERE panel_id = ?": {"user_id": "u1"}})
+    _patch_db(monkeypatch, {_SESSION_BOUND: (1,), _LEGACY_NULL: None})
     assert await main._session_can_subscribe_panel("zoe-touch-pi", "sess-1") is True
 
 
 @pytest.mark.asyncio
-async def test_member_alias_panel_id_accepted(monkeypatch):
-    """The bug fix: a generated alias id (no exact row) is accepted when the
-    SAME browser session owns a bound panel session under another id."""
+async def test_member_alias_bound_to_same_session_accepted(monkeypatch):
+    """The bug fix: a generated alias id bound under the SAME session is accepted."""
     _patch_session(monkeypatch, {"user_id": "u1", "role": "member"})
-    _patch_db(
-        monkeypatch,
-        {
-            # No row for the exact generated id...
-            "WHERE panel_id = ?": None,
-            # ...but the same session_id has a bound row for this user.
-            "WHERE chat_session_id = ?": (1,),
-        },
-    )
+    _patch_db(monkeypatch, {_SESSION_BOUND: (1,), _LEGACY_NULL: None})
     assert await main._session_can_subscribe_panel("panel_0e3ko5bl", "sess-1") is True
 
 
 @pytest.mark.asyncio
-async def test_member_unknown_panel_and_no_session_binding_rejected(monkeypatch):
-    """Security: an unknown panel_id with no session-owned binding is rejected."""
+async def test_member_legacy_null_session_bind_accepted(monkeypatch):
+    """A legacy/device bind (chat_session_id IS NULL) owned by the user is accepted."""
     _patch_session(monkeypatch, {"user_id": "u1", "role": "member"})
-    _patch_db(
-        monkeypatch,
-        {
-            "WHERE panel_id = ?": None,
-            "WHERE chat_session_id = ?": None,
-        },
-    )
-    assert await main._session_can_subscribe_panel("panel_attacker", "sess-1") is False
+    _patch_db(monkeypatch, {_SESSION_BOUND: None, _LEGACY_NULL: (1,)})
+    assert await main._session_can_subscribe_panel("zoe-touch-pi", "sess-1") is True
+
+
+@pytest.mark.asyncio
+async def test_member_panel_not_bound_to_this_session_rejected(monkeypatch):
+    """Security: a panel the connecting session was NEVER bound to is rejected,
+    even though the user may own other panels."""
+    _patch_session(monkeypatch, {"user_id": "u1", "role": "member"})
+    # No row for this panel_id under this session_id, and no NULL-session row.
+    _patch_db(monkeypatch, {_SESSION_BOUND: None, _LEGACY_NULL: None})
+    assert await main._session_can_subscribe_panel("panel_unrelated", "sess-1") is False
 
 
 @pytest.mark.asyncio
 async def test_member_other_users_panel_rejected(monkeypatch):
-    """A member may not subscribe to a panel bound to a DIFFERENT user."""
+    """A member may not subscribe to a panel bound to a DIFFERENT user.
+
+    The query filters on `user_id = ?`, so a row owned by u2 simply doesn't match
+    for u1 — both lookups return no row.
+    """
     _patch_session(monkeypatch, {"user_id": "u1", "role": "member"})
-    _patch_db(
-        monkeypatch,
-        {
-            "WHERE panel_id = ?": {"user_id": "u2"},  # owned by someone else
-            "WHERE chat_session_id = ?": None,
-        },
-    )
+    _patch_db(monkeypatch, {_SESSION_BOUND: None, _LEGACY_NULL: None})
     assert await main._session_can_subscribe_panel("zoe-touch-pi", "sess-1") is False
 
 
@@ -140,17 +172,23 @@ async def test_admin_accepted_without_binding(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_alias_requires_session_id(monkeypatch):
-    """Without a session_id the alias branch cannot fire — unknown id rejected."""
+async def test_no_session_id_only_legacy_null_bind_accepted(monkeypatch):
+    """Without a session_id the session-bound branch can't fire; only a legacy
+    NULL-session bind owned by the user is accepted."""
     _patch_session(monkeypatch, {"user_id": "u1", "role": "member"})
-    _patch_db(
-        monkeypatch,
-        {
-            "WHERE panel_id = ?": None,
-            "WHERE chat_session_id = ?": (1,),
-        },
-    )
+    # Even if a session-bound row existed it wouldn't apply (no session_id); a
+    # NULL-session row is the only accept path.
+    _patch_db(monkeypatch, {_SESSION_BOUND: (1,), _LEGACY_NULL: None})
     assert await main._session_can_subscribe_panel("panel_0e3ko5bl", None) is False
+    _patch_db(monkeypatch, {_SESSION_BOUND: None, _LEGACY_NULL: (1,)})
+    assert await main._session_can_subscribe_panel("zoe-touch-pi", None) is True
+
+
+@pytest.mark.asyncio
+async def test_empty_panel_id_rejected(monkeypatch):
+    """An empty panel_id is rejected before any DB lookup."""
+    _patch_session(monkeypatch, {"user_id": "u1", "role": "member"})
+    assert await main._session_can_subscribe_panel("", "sess-1") is False
 
 
 @pytest.mark.asyncio
