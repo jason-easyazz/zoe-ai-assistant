@@ -2241,7 +2241,7 @@
                     el.innerHTML = acts.map(a => {
                         const dt = a.created_at ? new Date(a.created_at).toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'}) : '';
                         return `<div style="padding:12px 0;border-bottom:1px solid rgba(255,255,255,0.1)">
-                            <div style="font-size:14px;color:#fff">${(a.description||'').replace(/</g,'&lt;')}</div>
+                            <div style="font-size:14px;color:#fff">${escapeHtml(a.description||'')}</div>
                             <div style="font-size:12px;opacity:0.5;margin-top:2px">${dt}${a.source?' · '+a.source:''}</div>
                         </div>`;
                     }).join('');
@@ -2261,8 +2261,8 @@
                         relsHtml = `<div style="margin-top:12px;font-size:12px;opacity:0.6;text-transform:uppercase;letter-spacing:0.05em">Connections</div>
                             <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">
                             ${all.map(r => `<span style="padding:6px 10px;border-radius:10px;border:1px solid rgba(255,255,255,0.2);font-size:13px;color:#fff;cursor:pointer"
-                                onclick="dpOpenCard('${r.person_id}')">
-                                ${_TIER_SYMBOLS[r.circle]||'○'} <b>${r.name.replace(/</g,'&lt;')}</b> · ${r.label}
+                                onclick="dpOpenCard(${escapeHtml(JSON.stringify(String(r.person_id)))})">
+                                ${_TIER_SYMBOLS[r.circle]||'○'} <b>${escapeHtml(r.name)}</b> · ${escapeHtml(r.label)}
                             </span>`).join('')}
                             </div>`;
                     }
