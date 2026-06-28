@@ -6,7 +6,7 @@ from .engine import (
     stop_proactive_engine,
 )
 from .session_utils import claim_pending, create_pending
-from .scheduler import register_job, cancel_job
+from .scheduler import register_job, cancel_job, CancelResult
 
 __all__ = [
     "fire_notification",
@@ -17,4 +17,5 @@ __all__ = [
     "create_pending",
     "register_job",
     "cancel_job",
+    "CancelResult",
 ]
