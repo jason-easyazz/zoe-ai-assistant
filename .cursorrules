@@ -59,7 +59,7 @@
 - Root has MAX 10 .md files (currently 6/10 - compliant)
 - Tests go in tests/{unit|integration|performance|e2e}/
 - Scripts go in scripts/{setup|maintenance|deployment|security|utilities}/
-- Docs go in docs/{guides|api|architecture|governance|archive}/
+- Docs go in docs/{guides|api|architecture|governance|developer|research|reviews|post-mortems}/
 - Tools go in tools/{audit|cleanup|validation|generators}/
 - **NEW DOCUMENTATION**: Always place in docs/{category}/, NEVER in root
 
@@ -158,7 +158,7 @@
 
 ## 🎯 GOLDEN RULES
 
-1. When in doubt, DON'T delete - move to docs/archive/ instead
+1. When in doubt, DON'T delete yet - verify ownership and references first
 2. Test BEFORE committing - one broken deployment is worse than clutter
 3. Small commits - easy to revert, easy to review
 4. Document reasoning - future you will thank present you

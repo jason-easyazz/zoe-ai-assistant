@@ -16,18 +16,18 @@ This file defines the active project layout so the repo stays easy to navigate.
 - `scripts/setup/` - deployment/service setup scripts
 - `docs/guides/TOUCHSCREEN_DEVICE_STACK.md` - touchscreen device source of truth
 
-## Archived/Retired Runtime Trees
+## Retired Runtime Trees
 
-Retired service code has been moved out of `services/` into:
+Retired service code is removed from the working tree and kept in git history:
 
-- `docs/archive/retired-services/`
+- `git log -- docs/archive/retired-services/`
 
-Legacy root-level operational artifacts have been moved into:
+Legacy root-level operational artifacts are also retained in git history:
 
-- `docs/archive/root-legacy-2026-04-21/`
+- `git log -- docs/archive/root-legacy-2026-04-21/`
 
-This keeps active paths clean while preserving legacy reference code in git history and in-repo archive paths.
+This keeps active paths clean while preserving legacy reference code in git history.
 
 ## Rule of Thumb
 
-If a service is not part of active runtime/deployment, archive it under `docs/archive/retired-services/` rather than leaving it in `services/`.
+If a service is not part of active runtime/deployment, remove it from the working tree rather than leaving it in `services/`; git history keeps the old bytes.
