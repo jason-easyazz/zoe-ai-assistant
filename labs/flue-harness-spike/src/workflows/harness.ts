@@ -28,6 +28,23 @@ import {
 
 const cfg = loadConfig();
 
+/** Cap text length so a huge log can't overflow the PR body. */
+function capText(s: string, max: number): string {
+  return s.length > max ? `${s.slice(0, max)}\n…[truncated]` : s;
+}
+
+/**
+ * Best-effort redaction of obvious secrets before verify output is published to a
+ * public PR. Masks the value after `KEY/TOKEN/SECRET/PASSWORD/AUTH...=` or `: `,
+ * and anything that looks like a bearer/sk- token. Defence-in-depth, not a
+ * guarantee — the operator still controls VERIFY_CMD.
+ */
+function redactSecrets(s: string): string {
+  return s
+    .replace(/\b([A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|AUTH)[A-Z0-9_]*)\s*[=:]\s*\S+/gi, '$1=***')
+    .replace(/\b(sk-[A-Za-z0-9-]{8,}|Bearer\s+\S+|gh[pousr]_[A-Za-z0-9]{8,})/g, '***');
+}
+
 export default defineWorkflow({
   agent: buildOrchestrator(cfg.zoeCheckout),
   input: v.object({ issue: v.optional(v.number()) }),
@@ -35,6 +52,11 @@ export default defineWorkflow({
 
   async run({ harness, input, log }) {
     const issueNumber = input?.issue ?? cfg.targetIssue;
+    if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+      throw new Error(
+        'No issue to work on. Pass --input \'{"issue": <n>}\' or set TARGET_ISSUE in .env.',
+      );
+    }
     const issue = await fetchIssue({ ...cfg, targetIssue: issueNumber });
     log.info('scouting issue', { issue: issue.number, title: issue.title });
 
@@ -73,30 +95,38 @@ export default defineWorkflow({
         )
       ).text.trim() || `spike: address issue #${issue.number}`;
 
+    // PHASE 3: verify FIRST, then capture the diff — so the reviewed/committed
+    // diff includes anything the verify command writes (formatters, snapshots,
+    // generated files). Capturing before verify would let those slip past review.
+    const verify = await runVerify(cfg);
     const diff = await captureDiff(cfg);
     if (!diff.stat.trim()) {
       throw new Error('IMPLEMENT produced no diff; stopping loudly at the phase boundary.');
     }
 
-    // PHASE 3: verify — run the check, then a subagent judges the evidence.
-    const verify = await runVerify(cfg);
+    // Redact obvious secrets and cap size before any verify output is published.
+    const safeEvidence = capText(redactSecrets(verify.evidence), 8 * 1024);
     const verdict = (
       await session.task(
         [
           `Diff (stat):\n${diff.stat}`,
           '',
           `Verify command exit ok: ${verify.ok}`,
-          `Verify output:\n${verify.evidence}`,
+          `Verify output:\n${safeEvidence}`,
           '',
           'PASS or FAIL?',
         ].join('\n'),
         { agent: 'verifier' },
       )
     ).text.trim();
-    log.info('verifier verdict', { verdict: verdict.slice(0, 80) });
+    log.info('verifier verdict', { verdict: verdict.slice(0, 80), verifyOk: verify.ok });
 
-    if (!/^PASS/i.test(verdict)) {
-      throw new Error(`VERIFY did not pass; not opening a PR.\nVerdict: ${verdict}`);
+    // Gate on BOTH the actual verify exit code AND the model verdict — a mistaken
+    // or prompt-influenced "PASS" must not publish code that failed the command.
+    if (!verify.ok || !/^PASS/i.test(verdict)) {
+      throw new Error(
+        `VERIFY did not pass; not opening a PR.\nVerify command ok: ${verify.ok}\nVerdict: ${verdict}`,
+      );
     }
 
     // PHASE 4: openPR (deterministic; never merges).
@@ -114,7 +144,7 @@ export default defineWorkflow({
       '',
       `**Diff (patch)**\n\n<details><summary>show patch</summary>\n\n\`\`\`diff\n${cappedPatch}\n\`\`\`\n\n</details>`,
       '',
-      `**Verify evidence**\n\n\`\`\`\n${verify.evidence}\n\`\`\``,
+      `**Verify evidence**\n\n\`\`\`\n${safeEvidence}\n\`\`\``,
       '',
       `**Verifier verdict**\n\n${verdict}`,
       '',

@@ -49,9 +49,12 @@ function opt(name: string, fallback: string): string {
 }
 
 export function loadConfig(): SpikeConfig {
-  const issueRaw = req('TARGET_ISSUE');
+  // Optional: the issue can instead come from `flue run harness --input '{"issue":N}'`.
+  // 0 means "unset" — the workflow resolves input.issue ?? cfg.targetIssue and
+  // fails loudly there if neither is provided.
+  const issueRaw = opt('TARGET_ISSUE', '0');
   const targetIssue = Number.parseInt(issueRaw, 10);
-  if (!Number.isInteger(targetIssue) || targetIssue <= 0) {
+  if (issueRaw !== '0' && (!Number.isInteger(targetIssue) || targetIssue <= 0)) {
     throw new Error(`TARGET_ISSUE must be a positive integer, got "${issueRaw}"`);
   }
 
