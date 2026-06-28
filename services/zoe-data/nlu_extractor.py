@@ -19,7 +19,7 @@ from gemma_endpoint import gemma_base
 
 logger = logging.getLogger(__name__)
 
-_MODEL_NAME: str = "google_gemma-4-E2B-it-Q4_K_M"
+_MODEL_NAME: str = "gemma-4-E4B-it-qat-UD-Q4_K_XL"
 
 
 def _today_prefix() -> str:

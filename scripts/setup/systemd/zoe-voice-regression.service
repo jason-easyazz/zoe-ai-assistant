@@ -1,0 +1,23 @@
+# Zoe voice regression + speed probe — replays Jason's real-voice corpus through the
+# LIVE voice path and compares vs a saved baseline (function OK-rate + per-stage speed).
+# Install (operator): cp to ~/.config/systemd/user/, then
+#   systemctl --user daemon-reload && systemctl --user enable --now zoe-voice-regression.timer
+# The probe self-guards: it SKIPS when available memory is low (never OOMs the live box)
+# and runs the harness under flock /tmp/zoe-voice-harness.lock (no concurrent Kokoro load).
+[Unit]
+Description=Zoe voice regression + speed probe (real-voice corpus vs baseline)
+After=network-online.target zoe-data.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/assistant
+# DB + service env so the replay harness (full STT→brain pipeline) can reach Postgres etc.
+EnvironmentFile=-%h/assistant/services/zoe-data/.env
+EnvironmentFile=-%h/.hermes/.env
+Environment=HOME=%h
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# systemd does not create parent dirs for append: log targets — ensure it exists.
+ExecStartPre=/usr/bin/mkdir -p %h/.zoe-logs
+ExecStart=/usr/bin/python3 %h/assistant/scripts/maintenance/voice_regression_probe.py --samples 20
+StandardOutput=append:%h/.zoe-logs/voice-regression.log
+StandardError=append:%h/.zoe-logs/voice-regression.log

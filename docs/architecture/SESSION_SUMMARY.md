@@ -85,7 +85,6 @@ zoe-litellm                ✅ Up and running
 zoe-core-test              ✅ Healthy
 zoe-mcp-server             ✅ Healthy
 mem-agent                  ✅ Healthy
-n8n-mcp-bridge             ✅ Healthy
 homeassistant-mcp-bridge   ✅ Healthy
 zoe-ollama                 ✅ Healthy
 ```

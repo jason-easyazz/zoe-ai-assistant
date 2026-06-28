@@ -11,7 +11,7 @@ import httpx
 from gemma_endpoint import gemma_base
 
 logger = logging.getLogger(__name__)
-_MODEL = os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E2B-it-Q4_K_M.gguf")
+_MODEL = os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf")
 
 _EXTRACTION_PROMPT = """\
 Extract person-related facts from the text. Return ONLY a JSON array.

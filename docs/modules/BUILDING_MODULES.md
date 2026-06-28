@@ -7,7 +7,7 @@
 
 ## Overview
 
-Zoe modules are self-contained services that extend Zoe's capabilities. They follow the **MCP (Model Context Protocol) pattern** used by Home Assistant and N8N bridges.
+Zoe modules are self-contained services that extend Zoe's capabilities. They follow the **MCP (Model Context Protocol) pattern** used by the Home Assistant bridge. (The n8n bridge and n8n itself were retired in March 2026 — OpenClaw cron/skills/exec covers automation; only the n8n SSO code path under zoe-auth remains.)
 
 **Key benefits:**
 - Isolated development (work on music without breaking calendar)
@@ -375,7 +375,6 @@ else:
 - 8002: zoe-auth
 - 8003: zoe-mcp-server
 - 8007: homeassistant-mcp-bridge
-- 8009: n8n-mcp-bridge
 - 8010: zoe-code-execution
 - 8100: zoe-music
 - 9001: zoe-whisper
@@ -482,7 +481,7 @@ module:
 - Optional for users
 
 **Integration Modules** (external services):
-- Home Assistant, N8N, Matrix, Notion, etc.
+- Home Assistant, Matrix, Notion, etc.
 - Bridge to external APIs
 - Use `-mcp-bridge` suffix
 

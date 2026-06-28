@@ -145,7 +145,6 @@ graph LR
     Music --> Spotify[Spotify API]
     
     MCP --> HA[homeassistant-mcp-bridge]
-    MCP --> N8N[n8n-mcp-bridge]
 ```
 
 **Flow**:

@@ -23,7 +23,7 @@ import httpx
 from gemma_endpoint import gemma_base
 
 logger = logging.getLogger(__name__)
-_PORTRAIT_MODEL = os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E2B-it-Q4_K_M.gguf")
+_PORTRAIT_MODEL = os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf")
 
 # Maximum chars of portrait text injected into the context window each turn.
 # ~600 chars ≈ ~150 tokens — meaningful but within budget for Gemma on Jetson.

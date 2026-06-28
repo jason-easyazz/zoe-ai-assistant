@@ -40,11 +40,6 @@ CRITICAL_FILES = {
         'services/zoe-ui/dist/js/zoe-orb.js',
         'services/zoe-ui/dist/js/journal-api.js',
         'services/zoe-ui/dist/js/journal-ui-enhancements.js',
-        'services/zoe-ui/dist/js/_archive/memory-graph.js',
-        'services/zoe-ui/dist/js/_archive/memory-search.js',
-        'services/zoe-ui/dist/js/_archive/memory-timeline.js',
-        'services/zoe-ui/dist/js/_archive/settings.js',
-        'services/zoe-ui/dist/js/_archive/wikilink-parser.js',
     ],
     'widgets': [
         'services/zoe-ui/dist/js/widgets/core/events.js',
