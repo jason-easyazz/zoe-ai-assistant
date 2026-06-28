@@ -381,18 +381,6 @@ async def login_passcode(request: PasscodeLoginRequest, http_request: Request):
         ip_address = http_request.client.host if http_request.client else None
         user_id: Optional[str] = None
 
-        # Throttle: pair hard-block short-circuit, then per-IP progressive backoff
-        # (the pair block is also re-checked inside verify_passcode).
-        _pc_identity = request.user_id or request.username
-        if rate_limiter.is_hard_blocked("passcode", ip_address, _pc_identity):
-            return AuthResponse(
-                success=False,
-                error_message="Too many attempts. Please try again later."
-            )
-        delay = rate_limiter.delay_for("passcode", ip_address, _pc_identity)
-        if delay:
-            await asyncio.sleep(delay)
-
         # Resolve user_id: accept either username (web login) or user_id (panel/voice).
         with auth_db.get_connection() as conn:
             if request.user_id:
@@ -426,6 +414,19 @@ async def login_passcode(request: PasscodeLoginRequest, http_request: Request):
                         error_message="Invalid credentials"
                     )
                 user_id = row[0]
+
+        # Throttle keyed on the resolved user_id — the SAME identity that
+        # verify_passcode records failures under — so the pair hard-block and
+        # progressive backoff actually feed back into this route. Pair hard-block
+        # short-circuits first; the block is also re-checked inside verify_passcode.
+        if rate_limiter.is_hard_blocked("passcode", ip_address, user_id):
+            return AuthResponse(
+                success=False,
+                error_message="Too many attempts. Please try again later."
+            )
+        delay = rate_limiter.delay_for("passcode", ip_address, user_id)
+        if delay:
+            await asyncio.sleep(delay)
 
         # Verify passcode
         passcode_result = passcode_manager.verify_passcode(user_id, request.passcode, ip_address)
