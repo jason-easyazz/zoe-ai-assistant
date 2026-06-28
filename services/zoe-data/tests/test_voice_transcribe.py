@@ -615,6 +615,44 @@ def test_prepare_audio_empty_is_noop():
     assert list(out_audio) == []
 
 
+def test_prepare_audio_resample_needs_no_scipy(monkeypatch):
+    """The off-rate resample must be numpy-only — scipy is NOT a declared
+    zoe-data runtime dependency, so importing it would break the live path on a
+    deployment that installs only requirements.txt (Greptile #886)."""
+    import builtins
+    import numpy as np
+    from routers import voice_tts
+
+    real_import = builtins.__import__
+
+    def _no_scipy(name, *args, **kwargs):
+        if name == "scipy" or name.startswith("scipy."):
+            raise ModuleNotFoundError("No module named 'scipy' (blocked by test)")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _no_scipy)
+
+    tone = (0.2 * np.sin(np.linspace(0, 20, 48000))).astype(np.float32)
+    out_audio, out_sr = voice_tts._prepare_audio_for_moonshine(tone.tolist(), 48000)
+
+    assert out_sr == 16000
+    assert abs(len(out_audio) - 16000) <= 2
+
+
+def test_prepare_audio_unknown_rate_not_coerced_to_16k():
+    """A falsey/invalid native rate must NOT be silently relabelled 16 kHz — that
+    would make malformed audio look valid to Moonshine (Greptile #886). The rate
+    is handed back unchanged so the caller can surface the bad metadata."""
+    from routers import voice_tts
+
+    audio = [0.1, -0.1, 0.2, -0.2]
+    for bad in (0, None):
+        out_audio, out_sr = voice_tts._prepare_audio_for_moonshine(audio, bad)
+        # Not relabelled as the valid 16 kHz rate.
+        assert out_sr != 16000
+        assert list(out_audio) == audio
+
+
 def test_maybe_capture_stt_saves_corpus_without_whisper_ab(monkeypatch, tmp_path):
     """Corpus capture still saves the WAV, but fires NO whisper A/B."""
     from routers import voice_tts
