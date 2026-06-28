@@ -1373,7 +1373,7 @@ async def lifespan(app: FastAPI):
         pass
     try:
         from zoe_core_client import shutdown_workers
-        await asyncio.wait_for(shutdown_workers(), timeout=5.0)
+        await shutdown_workers(reset_timeout_s=2.0)
     except asyncio.TimeoutError:
         logger.warning("zoe-core worker shutdown timed out (non-fatal)")
     except Exception:
