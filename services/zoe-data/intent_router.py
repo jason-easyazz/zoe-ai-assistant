@@ -1400,11 +1400,11 @@ def detect_intent(
 
     if log_miss:
         logger.info("intent_miss: %s", text)
-        # Write to intent-misses file for weekly self-review (PII stripped)
-        import re as _re, json as _json, pathlib as _pathlib
-        _MISS_PATH = _pathlib.Path.home() / "training" / "data" / "intent-misses.jsonl"
-        _MISS_PATH.parent.mkdir(parents=True, exist_ok=True)
         try:
+            # Write to intent-misses file for weekly self-review (PII stripped)
+            import re as _re, json as _json, pathlib as _pathlib
+            _MISS_PATH = _pathlib.Path.home() / "training" / "data" / "intent-misses.jsonl"
+            _MISS_PATH.parent.mkdir(parents=True, exist_ok=True)
             # Strip names, numbers, emails, URLs before writing
             _clean = _re.sub(r'\b[A-Z][a-z]+ [A-Z][a-z]+\b', '[NAME]', text)
             _clean = _re.sub(r'\b\d[\d\s\-]{6,}\b', '[NUMBER]', _clean)
@@ -1412,7 +1412,7 @@ def detect_intent(
             _clean = _re.sub(r'https?://\S+', '[URL]', _clean)
             with open(_MISS_PATH, "a") as _f:
                 _f.write(_json.dumps({"text": _clean, "ts": __import__("time").time()}) + "\n")
-        except (OSError, TypeError, ValueError, re.error):
+        except Exception:
             pass  # Never let logging break intent routing
         try:
             from pi_intent_evidence import record_intent_miss_evidence
@@ -3695,22 +3695,66 @@ async def _execute_smart_home_intent(intent: Intent, user_id: str) -> Optional[s
 
 
 def _execute_calculate(intent: Intent) -> str:
-    """Safe arithmetic evaluator — only pure numeric expressions are passed to eval (ZOE-10)."""
+    """Safe arithmetic evaluator for bounded numeric expressions (ZOE-10)."""
     expr_raw = intent.slots.get("expression", "").strip()
     display = intent.slots.get("display", expr_raw)
     if not expr_raw:
         return "What would you like me to calculate?"
 
-    # Strip everything that isn't a digit, operator, decimal point, or parens.
-    # This is the critical safety gate — no letters means no code injection.
-    import re as _re
-    safe = _re.sub(r"[^\d\s\+\-\*\/\.\(\)\%]", "", expr_raw).strip()
-    if not safe or _re.search(r"[a-zA-Z_]", safe):
+    import ast as _ast
+    import operator as _operator
+
+    safe = expr_raw.strip()
+    if (
+        not safe
+        or len(safe) > 80
+        or not re.fullmatch(r"[\d\s\+\-\*\/\.\(\)\%]+", safe)
+        or "**" in safe
+    ):
         return f"I can only handle numeric expressions. Try something like \"what is 2 + 2\"."
 
+    binary_ops = {
+        _ast.Add: _operator.add,
+        _ast.Sub: _operator.sub,
+        _ast.Mult: _operator.mul,
+        _ast.Div: _operator.truediv,
+        _ast.Mod: _operator.mod,
+    }
+    unary_ops = {
+        _ast.UAdd: _operator.pos,
+        _ast.USub: _operator.neg,
+    }
+    max_nodes = 64
+    max_abs_value = 1_000_000_000_000
+    seen_nodes = 0
+
+    def _check_bound(value):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError("non-numeric result")
+        if abs(value) > max_abs_value:
+            raise ValueError("result too large")
+        return value
+
+    def _eval_node(node):
+        nonlocal seen_nodes
+        seen_nodes += 1
+        if seen_nodes > max_nodes:
+            raise ValueError("expression too complex")
+        if isinstance(node, _ast.Expression):
+            return _eval_node(node.body)
+        if isinstance(node, _ast.Constant):
+            return _check_bound(node.value)
+        if isinstance(node, _ast.BinOp) and type(node.op) in binary_ops:
+            left = _eval_node(node.left)
+            right = _eval_node(node.right)
+            return _check_bound(binary_ops[type(node.op)](left, right))
+        if isinstance(node, _ast.UnaryOp) and type(node.op) in unary_ops:
+            return _check_bound(unary_ops[type(node.op)](_eval_node(node.operand)))
+        raise ValueError("unsupported expression")
+
     try:
-        # Restricted eval: no builtins, no globals
-        result = eval(safe, {"__builtins__": {}}, {})  # noqa: S307
+        parsed = _ast.parse(safe, mode="eval")
+        result = _eval_node(parsed)
         if isinstance(result, float):
             # Show integer when result is whole
             result = int(result) if result == int(result) else round(result, 6)
