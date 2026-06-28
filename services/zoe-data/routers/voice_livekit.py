@@ -633,10 +633,15 @@ async def _collect_audio_stream(
     """
     global _force_aiortc
     audio_stream = None
+    # Are we draining a native livekit-ffi track (vs the aiortc stand-in)? This makes
+    # the native→aiortc fallback one-way: only a NATIVE failure forces a switch, so an
+    # aiortc-track error can never force a redundant fallback or flap the backend.
+    is_native = None  # resolved once the backend/track type is known
     try:
         # Support both livekit.rtc tracks (livekit-ffi) and aiortc tracks
         from livekit_aiortc import _RemoteAudioTrack as _AiortcTrack, make_audio_stream
-        if isinstance(track, _AiortcTrack):
+        is_native = not isinstance(track, _AiortcTrack)
+        if not is_native:
             audio_stream = make_audio_stream(track, sample_rate=16000, num_channels=1)
         else:
             # Native livekit-ffi AudioStream. On a half-broken FFI backend (e.g. the
@@ -721,9 +726,20 @@ async def _collect_audio_stream(
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        # Raised from debug → warning: a swallowed AudioStream/backend failure here
-        # is exactly how the agent ends up connected but deaf, so make it visible.
-        logger.warning("LiveKit audio stream error for %s: %s", sid, exc)
+        # A native AudioStream that fails DURING iteration/use (not just construction)
+        # leaves the room connected but DEAF. Treat it exactly like the ctor crash:
+        # force the one-way, sticky native→aiortc switch and let the agent loop
+        # reconnect. Guarded on is_native so an aiortc-track failure never forces a
+        # redundant fallback (the switch is idempotent and cannot flap/loop). Raised
+        # from debug → warning either way so the backend failure is visible.
+        if is_native and not _force_aiortc:
+            _force_aiortc = True
+            logger.warning(
+                "LiveKit native audio stream failed mid-use for %s (%s) — "
+                "switching to the aiortc backend", sid, exc,
+            )
+        else:
+            logger.warning("LiveKit audio stream error for %s: %s", sid, exc)
     finally:
         # The native AudioStream owns an FFI queue subscription + an internal asyncio
         # task; without aclose() each participant disconnect / track re-subscribe /
@@ -926,112 +942,122 @@ async def _agent_loop() -> None:
     # stop_livekit_ondemand cancels it on teardown.
     if _cooldown_task is not None and not _cooldown_task.done():
         _cooldown_task.cancel()
-    _cooldown_task = asyncio.ensure_future(_cooldown_watchdog(participant_state))
+    cooldown_task = asyncio.ensure_future(_cooldown_watchdog(participant_state))
+    _cooldown_task = cooldown_task
 
-    while True:
-        room = None
-        try:
-            token = _mint_agent_token()
+    try:
+        while True:
+            room = None
+            try:
+                token = _mint_agent_token()
 
-            if use_aiortc:
-                # ── aiortc backend (pure Python, no livekit-ffi) ──────────
-                from livekit_aiortc import make_room, _ConnState
-                room = make_room()
-                _build_room_handlers(room, participant_state, audio_tasks)
-                logger.info("LiveKit agent connecting via aiortc backend to %s room=%s",
-                            _LIVEKIT_INTERNAL_URL, _ROOM_NAME)
-                _health_update(status="connecting", backend="aiortc", connected=False)
-                await room.connect(_LIVEKIT_INTERNAL_URL, token)
-                logger.info("LiveKit agent connected (aiortc) as '%s'", _AGENT_IDENTITY)
-                _record_voice_connected()
-                backoff = 2.0
+                if use_aiortc:
+                    # ── aiortc backend (pure Python, no livekit-ffi) ──────────
+                    from livekit_aiortc import make_room, _ConnState
+                    room = make_room()
+                    _build_room_handlers(room, participant_state, audio_tasks)
+                    logger.info("LiveKit agent connecting via aiortc backend to %s room=%s",
+                                _LIVEKIT_INTERNAL_URL, _ROOM_NAME)
+                    _health_update(status="connecting", backend="aiortc", connected=False)
+                    await room.connect(_LIVEKIT_INTERNAL_URL, token)
+                    logger.info("LiveKit agent connected (aiortc) as '%s'", _AGENT_IDENTITY)
+                    _record_voice_connected()
+                    backoff = 2.0
 
-                for p in room.remote_participants.values():
-                    if p.sid not in participant_state:
-                        participant_state[p.sid] = _make_participant_state(p.sid)
+                    for p in room.remote_participants.values():
+                        if p.sid not in participant_state:
+                            participant_state[p.sid] = _make_participant_state(p.sid)
 
-                while room.connection_state == _ConnState.CONN_CONNECTED:
-                    await asyncio.sleep(5)
+                    while room.connection_state == _ConnState.CONN_CONNECTED:
+                        await asyncio.sleep(5)
 
-            else:
-                # ── livekit-ffi native backend (preferred) ─────────────────
-                try:
-                    from livekit import rtc as lk_rtc  # type: ignore
-                except ImportError:
-                    logger.warning(
-                        "livekit SDK not installed — falling back to aiortc backend"
-                    )
-                    use_aiortc = True
-                    continue
-
-                room = lk_rtc.Room()
-                _build_room_handlers(room, participant_state, audio_tasks)
-                logger.info("LiveKit agent connecting via livekit-ffi to %s room=%s",
-                            _LIVEKIT_INTERNAL_URL, _ROOM_NAME)
-                _health_update(status="connecting", backend="livekit-ffi", connected=False)
-                await room.connect(_LIVEKIT_INTERNAL_URL, token)
-                logger.info("LiveKit agent connected (livekit-ffi) as '%s'", _AGENT_IDENTITY)
-                _record_voice_connected()
-                backoff = 2.0
-
-                for p in room.remote_participants.values():
-                    if p.sid not in participant_state:
-                        participant_state[p.sid] = _make_participant_state(p.sid)
-
-                while room.connection_state == lk_rtc.ConnectionState.CONN_CONNECTED:
-                    await asyncio.sleep(5)
-                    if _force_aiortc:
-                        # _collect_audio_stream proved native audio is broken on this
-                        # host — drop the native room and reconnect via aiortc so the
-                        # agent actually receives audio instead of staying deaf.
-                        use_aiortc = True
+                else:
+                    # ── livekit-ffi native backend (preferred) ─────────────────
+                    try:
+                        from livekit import rtc as lk_rtc  # type: ignore
+                    except ImportError:
                         logger.warning(
-                            "LiveKit: native audio backend broken — reconnecting "
-                            "via the aiortc backend"
+                            "livekit SDK not installed — falling back to aiortc backend"
                         )
-                        break
+                        use_aiortc = True
+                        continue
 
-        except asyncio.CancelledError:
-            break
-        except Exception as exc:
-            err_str = str(exc)
-            if not use_aiortc and (
-                "internal webrtc failure" in err_str.lower()
-                or "failed to initialize pc" in err_str.lower()
-            ):
-                # Native livekit-ffi can't initialise WebRTC on this platform.
-                # Switch permanently to the aiortc backend — no more log spam.
-                use_aiortc = True
-                backoff = 2.0
-                logger.warning(
-                    "LiveKit: livekit-ffi WebRTC failed (%s). "
-                    "Switching to aiortc pure-Python backend permanently.",
-                    exc,
-                )
-            else:
-                _health_update(status="degraded", connected=False, last_error=err_str[:240])
-                logger.warning("LiveKit agent error: %s — reconnecting in %.0fs", exc, backoff)
-        finally:
-            if room is not None:
-                _health_update(
-                    connected=False,
-                    last_disconnected_at=_utc_now(),
-                )
-                # Room torn down → drop stale participant tracking so the idle
-                # reaper isn't held open by sids that can no longer disconnect.
-                _active_participant_sids.clear()
-            for task in list(audio_tasks.values()):
-                if not task.done():
-                    task.cancel()
-            audio_tasks.clear()
-            if room:
-                try:
-                    await room.disconnect()
-                except Exception:
-                    pass
+                    room = lk_rtc.Room()
+                    _build_room_handlers(room, participant_state, audio_tasks)
+                    logger.info("LiveKit agent connecting via livekit-ffi to %s room=%s",
+                                _LIVEKIT_INTERNAL_URL, _ROOM_NAME)
+                    _health_update(status="connecting", backend="livekit-ffi", connected=False)
+                    await room.connect(_LIVEKIT_INTERNAL_URL, token)
+                    logger.info("LiveKit agent connected (livekit-ffi) as '%s'", _AGENT_IDENTITY)
+                    _record_voice_connected()
+                    backoff = 2.0
 
-        await asyncio.sleep(backoff)
-        backoff = min(backoff * 2, 60)
+                    for p in room.remote_participants.values():
+                        if p.sid not in participant_state:
+                            participant_state[p.sid] = _make_participant_state(p.sid)
+
+                    while room.connection_state == lk_rtc.ConnectionState.CONN_CONNECTED:
+                        await asyncio.sleep(5)
+                        if _force_aiortc:
+                            # _collect_audio_stream proved native audio is broken on this
+                            # host — drop the native room and reconnect via aiortc so the
+                            # agent actually receives audio instead of staying deaf.
+                            use_aiortc = True
+                            logger.warning(
+                                "LiveKit: native audio backend broken — reconnecting "
+                                "via the aiortc backend"
+                            )
+                            break
+
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                err_str = str(exc)
+                if not use_aiortc and (
+                    "internal webrtc failure" in err_str.lower()
+                    or "failed to initialize pc" in err_str.lower()
+                ):
+                    # Native livekit-ffi can't initialise WebRTC on this platform.
+                    # Switch permanently to the aiortc backend — no more log spam.
+                    use_aiortc = True
+                    backoff = 2.0
+                    logger.warning(
+                        "LiveKit: livekit-ffi WebRTC failed (%s). "
+                        "Switching to aiortc pure-Python backend permanently.",
+                        exc,
+                    )
+                else:
+                    _health_update(status="degraded", connected=False, last_error=err_str[:240])
+                    logger.warning("LiveKit agent error: %s — reconnecting in %.0fs", exc, backoff)
+            finally:
+                if room is not None:
+                    _health_update(
+                        connected=False,
+                        last_disconnected_at=_utc_now(),
+                    )
+                    # Room torn down → drop stale participant tracking so the idle
+                    # reaper isn't held open by sids that can no longer disconnect.
+                    _active_participant_sids.clear()
+                for task in list(audio_tasks.values()):
+                    if not task.done():
+                        task.cancel()
+                audio_tasks.clear()
+                if room:
+                    try:
+                        await room.disconnect()
+                    except Exception:
+                        pass
+
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 60)
+    finally:
+        # Cancel the cooldown watchdog on ANY loop teardown (incl. self-exit
+        # outside stop_livekit_ondemand) so it can't leak as a forever
+        # `while True: sleep(1)` task. Clear the module ref if it's still ours.
+        if _cooldown_task is not None and not _cooldown_task.done():
+            _cooldown_task.cancel()
+        if _cooldown_task is cooldown_task:
+            _cooldown_task = None
 
 
 async def start_livekit_agent() -> None:

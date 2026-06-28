@@ -97,7 +97,7 @@ def test_native_audiostream_ctor_failure_switches_to_aiortc(monkeypatch):
     assert v._force_aiortc is True, "ctor crash must flip the agent to the aiortc backend"
 
 
-def test_native_audiostream_aclosed_and_error_warned(monkeypatch, caplog):
+def test_native_audiostream_aclosed_and_miduse_failure_switches(monkeypatch, caplog):
     monkeypatch.setattr(v, "_force_aiortc", False, raising=False)
     _install_fake_aiortc(monkeypatch)
 
@@ -127,13 +127,14 @@ def test_native_audiostream_aclosed_and_error_warned(monkeypatch, caplog):
         _run(v._collect_audio_stream(object(), sid, ps, object()))
 
     assert aclosed == [True], "native AudioStream must be aclose()'d in the finally"
-    assert any("audio stream error" in r.getMessage() for r in caplog.records), \
-        "a swallowed mid-stream error must be visible at WARNING"
-    # A mid-stream error is not a ctor failure, so the backend switch must NOT trip.
-    assert v._force_aiortc is False
+    assert any("failed mid-use" in r.getMessage() for r in caplog.records), \
+        "a native mid-use failure must be visible at WARNING"
+    # A NATIVE stream that fails after construction also leaves the room deaf, so it
+    # MUST force the one-way native→aiortc switch (not just log and stay connected).
+    assert v._force_aiortc is True
 
 
-def test_aiortc_path_no_aclose_no_switch(monkeypatch):
+def test_aiortc_miduse_failure_does_not_force_switch(monkeypatch, caplog):
     monkeypatch.setattr(v, "_force_aiortc", False, raising=False)
     mod = _install_fake_aiortc(monkeypatch)
 
@@ -147,16 +148,20 @@ def test_aiortc_path_no_aclose_no_switch(monkeypatch):
         async def __anext__(self):
             if self._frames:
                 return self._frames.pop(0)
-            raise StopAsyncIteration
+            # Even an aiortc-side error must NOT force another fallback (no flap/loop).
+            raise RuntimeError("aiortc hiccup")
 
     mod.make_audio_stream = lambda track, **_k: _AiortcStream()
 
     track = mod._RemoteAudioTrack()  # instance → aiortc branch (no native import)
     sid = "sid-aiortc1"
     ps = {sid: v._make_participant_state(sid)}
-    # Must not raise even though the stream has no aclose(), and must not switch.
-    _run(v._collect_audio_stream(track, sid, ps, object()))
+    with caplog.at_level(logging.WARNING, logger="routers.voice_livekit"):
+        # Must not raise even though the stream has no aclose().
+        _run(v._collect_audio_stream(track, sid, ps, object()))
+    # Already on aiortc → the switch must stay put (one-way, idempotent).
     assert v._force_aiortc is False
+    assert any("audio stream error" in r.getMessage() for r in caplog.records)
 
 
 def test_stop_livekit_ondemand_cancels_cooldown_watchdog(monkeypatch):
