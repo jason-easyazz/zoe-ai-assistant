@@ -137,6 +137,66 @@ async def test_web_search_uses_resolved_caller_identity(monkeypatch):
     assert captured["user_id"] == "caller"
 
 
+@pytest.mark.asyncio
+async def test_dashboard_get_layout_targets_explicit_user_not_caller():
+    # No stored layout -> "No layout saved yet"; we only need the bound query param.
+    db = _RoutingDb({"dashboard_layouts": []})
+
+    await mcp_server._execute_tool(
+        db=db,
+        name="dashboard_get_layout",
+        args={"_user_id": "caller", "user_id": "target"},
+    )
+
+    sql, params = db.calls[0]
+    assert "FROM dashboard_layouts" in sql
+    # The leftover explicit user_id target must drive the query, not the caller.
+    assert params == ("target",)
+
+
+@pytest.mark.asyncio
+async def test_dashboard_save_layout_targets_explicit_user_not_caller():
+    db = _RoutingDb({"dashboard_layouts": []})
+
+    result = await mcp_server._execute_tool(
+        db=db,
+        name="dashboard_save_layout",
+        args={"_user_id": "caller", "user_id": "target", "layout": [{"w": "tasks"}]},
+    )
+
+    assert result["status"] == "ok"
+    sql, params = db.calls[0]
+    assert "INSERT INTO dashboard_layouts" in sql
+    # uid is the first bound param of the upsert.
+    assert params[0] == "target"
+
+
+@pytest.mark.asyncio
+async def test_user_portrait_get_targets_explicit_user_not_caller(monkeypatch):
+    captured = {}
+
+    async def fake_load_portrait(user_id):
+        captured["user_id"] = user_id
+        return {"summary": "knows target"}
+
+    monkeypatch.setitem(
+        sys.modules,
+        "user_portrait",
+        types.SimpleNamespace(load_portrait=fake_load_portrait),
+    )
+
+    result = await mcp_server._execute_tool(
+        db=None,
+        name="user_portrait_get",
+        args={"_user_id": "caller", "user_id": "target"},
+    )
+
+    # The explicit target must win over the injected caller for both the load and the echo.
+    assert captured["user_id"] == "target"
+    assert result["user_id"] == "target"
+    assert result["has_portrait"] is True
+
+
 # --------------------------------------------------------------------------
 # #3 — journal_get_streak operates on date objects
 # --------------------------------------------------------------------------
