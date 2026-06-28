@@ -13,6 +13,7 @@ from datetime import date, datetime, timedelta
 import os
 
 from runtime_env import bootstrap_runtime_env
+from agent_safety import SSRFBlocked, assert_public_url
 
 bootstrap_runtime_env()
 
@@ -2406,6 +2407,11 @@ async def _execute_tool(db, name: str, args: dict):
         panel_id = args.get("panel_id") or None
         caption = args.get("caption") or ""
         navigate_to = args.get("navigate_to") or None
+        if navigate_to:
+            try:
+                assert_public_url(str(navigate_to))  # SSRF guard on browser nav target
+            except SSRFBlocked as exc:
+                return {"ok": False, "error": f"blocked: {exc}"}
         plan = _BROWSER_BROKER.plan_action(
             action="capture_screenshot",
             params={
@@ -2482,6 +2488,10 @@ async def _execute_tool(db, name: str, args: dict):
         url = str(args.get("url") or "").strip()
         if not url.startswith(("http://", "https://")):
             return {"ok": False, "error": "url must start with http:// or https://"}
+        try:
+            assert_public_url(url)  # SSRF guard: block private/loopback/metadata targets
+        except SSRFBlocked as exc:
+            return {"ok": False, "error": f"blocked: {exc}"}
         text_limit = int(args.get("text_limit") or 4000)
         wait_until = str(args.get("wait_until") or "domcontentloaded")
         try:
@@ -2492,6 +2502,10 @@ async def _execute_tool(db, name: str, args: dict):
         try:
             page = await context.new_page()
             await page.goto(url, wait_until=wait_until, timeout=30000)
+            try:
+                assert_public_url(page.url)  # re-check after any redirects
+            except SSRFBlocked as exc:
+                return {"ok": False, "error": f"blocked after redirect: {exc}"}
             title = await page.title()
             try:
                 text = await page.locator("body").inner_text(timeout=5000)
@@ -2516,6 +2530,10 @@ async def _execute_tool(db, name: str, args: dict):
         url = str(args.get("url") or "").strip()
         if not url.startswith(("http://", "https://")):
             return {"ok": False, "error": "url must start with http:// or https://"}
+        try:
+            assert_public_url(url)  # SSRF guard: block private/loopback/metadata targets
+        except SSRFBlocked as exc:
+            return {"ok": False, "error": f"blocked: {exc}"}
         wait_until = str(args.get("wait_until") or "domcontentloaded")
         full_page = bool(args.get("full_page", False))
         try:
@@ -2526,6 +2544,10 @@ async def _execute_tool(db, name: str, args: dict):
         try:
             page = await context.new_page()
             await page.goto(url, wait_until=wait_until, timeout=30000)
+            try:
+                assert_public_url(page.url)  # re-check after any redirects
+            except SSRFBlocked as exc:
+                return {"ok": False, "error": f"blocked after redirect: {exc}"}
             screenshot = await page.screenshot(type="png", full_page=full_page)
             import base64 as _base64
             return {

