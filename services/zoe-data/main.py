@@ -1371,6 +1371,13 @@ async def lifespan(app: FastAPI):
         stop_proactive_engine()
     except Exception:
         pass
+    try:
+        from zoe_core_client import shutdown_workers
+        await shutdown_workers(reset_timeout_s=2.0)
+    except asyncio.TimeoutError:
+        logger.warning("zoe-core worker shutdown timed out (non-fatal)")
+    except Exception:
+        logger.warning("zoe-core worker shutdown failed (non-fatal)", exc_info=True)
     for task in (_openclaw_bg_task, _digest_bg_task, _zoe_update_bg_task,
                  _consolidation_bg_task, _runtime_health_task):
         if task and not task.done():
@@ -1508,7 +1515,7 @@ async def prometheus_metrics(_: None = Depends(require_internal_token)):
     from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
     from memory_metrics import REGISTRY, snapshot_collection_sizes
 
-    snapshot_collection_sizes()
+    await snapshot_collection_sizes()
     return Response(
         content=generate_latest(REGISTRY),
         media_type=CONTENT_TYPE_LATEST,

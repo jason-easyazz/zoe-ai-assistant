@@ -35,6 +35,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -60,6 +61,8 @@ _MEMPALACE_DATA = os.environ.get(
 )
 
 _AUDIT_COLLECTION = os.environ.get("ZOE_MEMORY_AUDIT_COLLECTION", "mempalace_audit")
+_AUDIT_CLIENTS: dict[str, Any] = {}
+_AUDIT_CLIENTS_LOCK = threading.Lock()
 
 _MEMORY_SCOPE_TO_VISIBILITY = {
     "personal": "personal",
@@ -209,6 +212,7 @@ class MemoryService:
         self._data_dir = data_dir
         self._user_locks: dict[str, asyncio.Lock] = {}
         self._seen_keys: set[str] = set()
+        self._background_tasks: set[asyncio.Task[Any]] = set()
 
     async def ingest(
         self,
@@ -323,7 +327,10 @@ class MemoryService:
             return []
         ids = [r.id for r in rows]
         if ids:
-            asyncio.create_task(self._tick_access(user_id, ids))
+            self._track_background_task(
+                self._tick_access(user_id, ids),
+                name="memory_tick_access_prompt",
+            )
         return rows
 
     async def search(
@@ -360,7 +367,10 @@ class MemoryService:
         ids = [r.id for r in rows]
         if ids:
             # Pass query for unique_query_count tracking in dreaming memory
-            asyncio.create_task(self.tick_access(user_id, ids, query=query))
+            self._track_background_task(
+                self.tick_access(user_id, ids, query=query),
+                name="memory_tick_access_search",
+            )
         return rows
 
     async def delete_user(self, user_id: str, *, actor: str) -> int:
@@ -735,13 +745,43 @@ class MemoryService:
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, fn, *args)
 
+    def _track_background_task(self, coro, *, name: str) -> asyncio.Task[Any]:
+        task = asyncio.create_task(coro, name=name)
+        self._background_tasks.add(task)
+
+        def _done(done: asyncio.Task[Any]) -> None:
+            self._background_tasks.discard(done)
+            if done.cancelled():
+                return
+            try:
+                exc = done.exception()
+            except Exception:
+                logger.warning("memory_service: background task inspection failed", exc_info=True)
+                return
+            if exc is not None:
+                logger.warning(
+                    "memory_service: background task %s failed",
+                    name,
+                    exc_info=(type(exc), exc, exc.__traceback__),
+                )
+
+        task.add_done_callback(_done)
+        return task
+
     def _collection(self):
         from mempalace.palace import get_collection  # type: ignore[import]
         return get_collection(self._data_dir)
 
     def _audit_collection(self):
-        import chromadb
-        client = chromadb.PersistentClient(path=self._data_dir)
+        data_dir = os.path.realpath(os.path.abspath(os.path.expanduser(self._data_dir)))
+        client = _AUDIT_CLIENTS.get(data_dir)
+        if client is None:
+            with _AUDIT_CLIENTS_LOCK:
+                client = _AUDIT_CLIENTS.get(data_dir)
+                if client is None:
+                    import chromadb
+                    client = chromadb.PersistentClient(path=data_dir)
+                    _AUDIT_CLIENTS[data_dir] = client
         return client.get_or_create_collection(_AUDIT_COLLECTION)
 
     def _write_row(self, mem_id: str, text: str, metadata: dict[str, Any]) -> None:
