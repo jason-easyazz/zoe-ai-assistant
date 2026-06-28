@@ -2,6 +2,7 @@
 FastAPI router for calendar events.
 Mounted at prefix="/api/calendar" with tag "calendar".
 """
+import json
 import uuid
 from datetime import date
 from typing import Optional
