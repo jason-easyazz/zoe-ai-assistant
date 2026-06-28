@@ -19,11 +19,19 @@ from push import broadcaster
 router = APIRouter(prefix="/api/journal", tags=["journal"])
 
 SEARCH_MAX_LENGTH = 200
+CREATED_AT_VALID_TIMESTAMP_SQL = (
+    "created_at ~ '^("
+    "([0-9]{4}-(01|03|05|07|08|10|12)-(0[1-9]|[12][0-9]|3[01]))|"
+    "([0-9]{4}-(04|06|09|11)-(0[1-9]|[12][0-9]|30))|"
+    "(([0-9]{2}(0[48]|[2468][048]|[13579][26])|([02468][048]|[13579][26])00)-02-29)|"
+    "([0-9]{4}-02-(0[1-9]|1[0-9]|2[0-8]))"
+    ")([ T]([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9](\\.[0-9]+)?)?(Z|[+-][0-9]{2}(:?[0-9]{2})?)?)?$'"
+)
 CREATED_AT_TIMESTAMP_SQL = (
-    "(CASE WHEN pg_input_is_valid(created_at, 'timestamp') THEN created_at::timestamp END)"
+    f"(CASE WHEN {CREATED_AT_VALID_TIMESTAMP_SQL} THEN created_at::timestamp END)"
 )
 CREATED_AT_DATE_SQL = (
-    "CASE WHEN pg_input_is_valid(created_at, 'timestamp') THEN created_at::timestamp::date END"
+    f"CASE WHEN {CREATED_AT_VALID_TIMESTAMP_SQL} THEN created_at::timestamp::date END"
 )
 
 # Default journal prompts for GET /prompts
