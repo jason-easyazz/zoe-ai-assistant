@@ -574,7 +574,6 @@ async def brain_tool_card_events(sentinel, *, user_id, tool_names, emitted_domai
     spec = _BRAIN_UI_TOOL_CARDS.get(name)
     if spec is None or name in emitted_domains:
         return
-    emitted_domains.add(name)
     show_query, card_type, action_label = spec
     try:
         from skybridge_service import resolve_skybridge_request
@@ -585,7 +584,13 @@ async def brain_tool_card_events(sentinel, *, user_id, tool_names, emitted_domai
         return
     if not isinstance(result, dict) or not result.get("handled"):
         return
-    for card in (result.get("cards") or []):
+    cards = result.get("cards") or []
+    if not cards:
+        return
+    # Mark emitted only after a handled result with ≥1 card, so a failed/empty
+    # first result for a domain doesn't suppress a later successful one this turn.
+    emitted_domains.add(name)
+    for card in cards:
         yield CustomEvent(
             name="zoe.ui_component",
             value={"type": card_type, "data": {"action": action_label}, "card": card},

@@ -82,3 +82,19 @@ async def test_resolver_exception_is_swallowed(monkeypatch):
     monkeypatch.setattr(skybridge_service, "resolve_skybridge_request", _boom)
     evs = await _collect(_tool("result", "calendar"), user_id="u1", tool_names={}, emitted_domains=set())
     assert evs == []
+
+
+@pytest.mark.asyncio
+async def test_failed_first_does_not_suppress_later_success(monkeypatch):
+    # Greptile P1: a first failed/empty result for a domain must NOT mark it
+    # emitted and block a later successful result in the same turn.
+    import skybridge_service
+    calls = {"n": 0}
+    async def flaky(query, user_id, **kw):
+        calls["n"] += 1
+        return {"handled": False, "cards": []} if calls["n"] == 1 else {"handled": True, "cards": [{"x": 1}]}
+    monkeypatch.setattr(skybridge_service, "resolve_skybridge_request", flaky)
+    emitted = set()
+    first = await _collect(_tool("result", "calendar"), user_id="u1", tool_names={}, emitted_domains=emitted)
+    second = await _collect(_tool("result", "calendar"), user_id="u1", tool_names={}, emitted_domains=emitted)
+    assert first == [] and len(second) == 1
