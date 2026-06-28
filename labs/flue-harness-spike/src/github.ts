@@ -68,12 +68,18 @@ export async function commitAndPush(
   });
 }
 
-/** Capture the working-tree diff vs HEAD: a stat summary plus the full patch. */
+/**
+ * Capture the EXACT tree that will be committed: a stat summary plus the full
+ * patch. Stages everything first (`git add -A`) and diffs the index, so newly
+ * created/untracked files (snapshots, generated files) are in both the verifier
+ * input and the PR body — not silently committed by `commitAndPush`'s `git add -A`.
+ */
 export async function captureDiff(
   cfg: SpikeConfig,
 ): Promise<{ stat: string; patch: string }> {
-  const stat = await run('git', ['diff', '--stat', 'HEAD'], { cwd: cfg.zoeCheckout });
-  const patch = await run('git', ['diff', 'HEAD'], { cwd: cfg.zoeCheckout });
+  await run('git', ['add', '-A'], { cwd: cfg.zoeCheckout });
+  const stat = await run('git', ['diff', '--cached', '--stat', 'HEAD'], { cwd: cfg.zoeCheckout });
+  const patch = await run('git', ['diff', '--cached', 'HEAD'], { cwd: cfg.zoeCheckout });
   return { stat, patch };
 }
 
