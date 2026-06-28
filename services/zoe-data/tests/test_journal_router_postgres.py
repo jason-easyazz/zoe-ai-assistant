@@ -64,9 +64,9 @@ async def test_list_entries_uses_postgres_date_casts(monkeypatch):
 
     sql, params = db.calls[0]
     assert "date(created_at)" not in sql
-    assert "created_at::timestamp::date >= ?" in sql
-    assert "created_at::timestamp::date <= ?" in sql
-    assert "LIKE ?" in sql
+    assert "THEN created_at::timestamp::date END >= ?" in sql
+    assert "THEN created_at::timestamp::date END <= ?" in sql
+    assert "LIKE ? ESCAPE '\\'" in sql
     assert params == [
         "U1",
         "2026-06-01",
@@ -88,8 +88,9 @@ async def test_on_this_day_uses_postgres_to_char_and_current_date(monkeypatch):
     sql, params = db.calls[0]
     assert "strftime" not in sql
     assert "date('now')" not in sql
-    assert "to_char(created_at::timestamp, 'MM-DD')" in sql
-    assert "created_at::timestamp::date < CURRENT_DATE" in sql
+    assert "to_char((CASE WHEN created_at ~" in sql
+    assert "THEN created_at::timestamp END), 'MM-DD')" in sql
+    assert "THEN created_at::timestamp::date END < CURRENT_DATE" in sql
     assert params == ["U1", date.today().strftime("%m-%d")]
 
 
@@ -100,7 +101,7 @@ async def test_streak_uses_postgres_date_cast_and_date_objects(monkeypatch):
     db = _RecordingDb(
         {
             "COUNT(*)": [(3,)],
-            "DISTINCT created_at::timestamp::date": [
+            "created_at::timestamp::date": [
                 (today,),
                 (today - timedelta(days=1),),
                 (today - timedelta(days=3),),
@@ -113,7 +114,29 @@ async def test_streak_uses_postgres_date_cast_and_date_objects(monkeypatch):
     assert result == {"current_streak": 2, "longest_streak": 2, "total_entries": 3}
     sql, _params = db.calls[1]
     assert "date(created_at)" not in sql
-    assert "DISTINCT created_at::timestamp::date as d" in sql
+    assert "DISTINCT CASE WHEN created_at ~" in sql
+    assert "THEN created_at::timestamp::date END as d" in sql
+
+
+@pytest.mark.asyncio
+async def test_search_escapes_like_wildcards(monkeypatch):
+    monkeypatch.setattr(journal, "require_feature_access", _allow_feature)
+    db = _RecordingDb()
+
+    await journal.list_entries(
+        limit=10,
+        offset=0,
+        mood=None,
+        start_date=None,
+        end_date=None,
+        search=r"100%_done\ok",
+        user=_user(),
+        db=db,
+    )
+
+    sql, params = db.calls[0]
+    assert "LIKE ? ESCAPE '\\'" in sql
+    assert params[1:3] == [r"%100\%\_done\\ok%", r"%100\%\_done\\ok%"]
 
 
 def test_list_entries_rejects_malformed_date_and_overlong_search(monkeypatch):
@@ -193,6 +216,26 @@ async def test_journal_router_queries_run_against_text_created_at_on_postgres(mo
         await insert_entry("today", "U1", "today", today)
         await insert_entry("s0", "U2", "day zero", today)
         await insert_entry("s1", "U2", "day one", today - timedelta(days=1))
+        await conn.execute(
+            """INSERT INTO journal_entries VALUES (
+                   $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15
+               )""",
+            "bad",
+            "U1",
+            "bad timestamp",
+            "bad timestamp",
+            "ok",
+            5,
+            None,
+            None,
+            None,
+            None,
+            "private",
+            "personal",
+            "not-a-date",
+            "not-a-date",
+            0,
+        )
 
         db = db_pool.AsyncpgCompat(conn)
 

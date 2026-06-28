@@ -20,6 +20,14 @@ router = APIRouter(prefix="/api/journal", tags=["journal"])
 
 DATE_FILTER_PATTERN = r"^\d{4}-\d{2}-\d{2}$"
 SEARCH_MAX_LENGTH = 200
+CREATED_AT_TIMESTAMP_SQL = (
+    "(CASE WHEN created_at ~ '^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])' "
+    "THEN created_at::timestamp END)"
+)
+CREATED_AT_DATE_SQL = (
+    "CASE WHEN created_at ~ '^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])' "
+    "THEN created_at::timestamp::date END"
+)
 
 # Default journal prompts for GET /prompts
 DEFAULT_PROMPTS = [
@@ -56,6 +64,10 @@ def _row_to_dict(row) -> dict:
 def _visibility_filter_sql() -> str:
     """Journal visibility is always personal - user_id must match."""
     return "user_id = ? AND deleted = 0"
+
+
+def _escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _coerce_date(value):
@@ -122,14 +134,14 @@ async def list_entries(
         conditions.append("mood = ?")
         params.append(mood)
     if start_date:
-        conditions.append("created_at::timestamp::date >= ?")
+        conditions.append(f"{CREATED_AT_DATE_SQL} >= ?")
         params.append(start_date)
     if end_date:
-        conditions.append("created_at::timestamp::date <= ?")
+        conditions.append(f"{CREATED_AT_DATE_SQL} <= ?")
         params.append(end_date)
     if search:
-        conditions.append("(title LIKE ? OR content LIKE ?)")
-        pattern = f"%{search}%"
+        conditions.append("(title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\')")
+        pattern = f"%{_escape_like(search)}%"
         params.extend([pattern, pattern])
 
     where = " AND ".join(conditions)
@@ -217,11 +229,11 @@ async def list_on_this_day(
     await require_feature_access(db, user, feature="journal", action="read")
     user_id = user["user_id"]
     today_md = date.today().strftime("%m-%d")
-    sql = """
+    sql = f"""
         SELECT * FROM journal_entries
         WHERE user_id = ? AND deleted = 0
-          AND to_char(created_at::timestamp, 'MM-DD') = ?
-          AND created_at::timestamp::date < CURRENT_DATE
+          AND to_char({CREATED_AT_TIMESTAMP_SQL}, 'MM-DD') = ?
+          AND {CREATED_AT_DATE_SQL} < CURRENT_DATE
         ORDER BY created_at DESC
     """
     cursor = await db.execute(sql, [user_id, today_md])
@@ -249,7 +261,7 @@ async def get_streak_stats(
     total_entries = row[0] if row else 0
 
     cursor = await db.execute(
-        """SELECT DISTINCT created_at::timestamp::date as d
+        f"""SELECT DISTINCT {CREATED_AT_DATE_SQL} as d
          FROM journal_entries
          WHERE user_id = ? AND deleted = 0
          ORDER BY d DESC""",
