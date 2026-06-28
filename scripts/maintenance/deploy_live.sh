@@ -13,6 +13,19 @@ set -euo pipefail
 LIVE="${ZOE_LIVE_TREE:-/home/zoe/assistant}"
 SERVICE="${ZOE_SERVICE:-zoe-data}"
 
+require_clean_tree() {
+    local phase="$1"
+    git -C "$LIVE" update-index -q --refresh
+    if [[ -n "$(git -C "$LIVE" status --porcelain)" ]]; then
+        cat >&2 <<EOF
+✗ REFUSING TO DEPLOY: live tree $LIVE has uncommitted changes during $phase.
+  Commit, stash, or move those changes before running deploy_live.sh.
+EOF
+        git -C "$LIVE" status --short >&2
+        exit 1
+    fi
+}
+
 cur="$(git -C "$LIVE" branch --show-current || true)"
 if [[ "$cur" != "main" ]]; then
     cat >&2 <<EOF
@@ -23,6 +36,8 @@ if [[ "$cur" != "main" ]]; then
 EOF
     exit 1
 fi
+
+require_clean_tree "pre-pull"
 
 echo "▶ live tree on main — pulling latest…"
 # Capture the current tip BEFORE the pull for a reliable rollback. Don't rely on
@@ -48,6 +63,7 @@ if [[ "$code" != "200" ]]; then
     # The new commit is unhealthy — roll the live tree back to the pre-pull tip
     # captured above and restart, so a bad main can't leave the service down.
     echo "✗ health check failed — rolling back to $(git -C "$LIVE" rev-parse --short "$prev")" >&2
+    require_clean_tree "pre-rollback"
     git -C "$LIVE" reset --hard "$prev"
     systemctl --user restart "$SERVICE"
     exit 1
