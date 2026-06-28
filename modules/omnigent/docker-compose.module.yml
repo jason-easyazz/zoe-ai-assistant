@@ -65,6 +65,10 @@ services:
       # port) is unreachable from inside the container, so the host showed "offline". Loopback is
       # correct anyway — server + host share this container. (Default in entrypoint.sh is zoe.local.)
       - OMNIGENT_SELF_URL=http://127.0.0.1:6767
+      # OpenRouter key for the `pi` worker's gateway provider (seeded into ~/.omnigent/config.yaml
+      # by entrypoint.sh as kind:gateway, default scoped to pi → minimax/minimax-m3). Sourced from
+      # the repo .env; config.yaml stores only an `env:OPENROUTER_API_KEY` ref, never the value.
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       # To revert to LAN-only OIDC (only if the Cloudflare path is retired): flip provider
       # back to `oidc` and uncomment the block below. OIDC works only via http://zoe.local:6767.
       # - OMNIGENT_OIDC_ISSUER=http://zoe.local
