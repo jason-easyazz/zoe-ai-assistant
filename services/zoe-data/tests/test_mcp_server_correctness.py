@@ -6,9 +6,11 @@ Covers:
   proactive_schedule targeted the caller instead of the requested user).
 - #3 journal_get_streak: operate on native asyncpg date objects (streak used to
   be stuck at 0 and raised TypeError once two distinct days existed).
-- #2 journal_on_this_day: Postgres ``to_char`` instead of SQLite ``strftime``.
-- #4 flag_needs_human_review: report the real push-sent flag, not a hardcoded
-  success when the notification fire failed.
+- #2 journal_on_this_day: Postgres ``to_char`` + ``created_at::date <
+  CURRENT_DATE`` instead of SQLite ``strftime``/``date('now')``.
+- #4 flag_needs_human_review: report queued vs failed (``push_status``) and
+  never an unconfirmed "delivered", since fire_notification only confirms the
+  dispatch was accepted, not device delivery.
 """
 
 import os
@@ -272,12 +274,19 @@ async def test_journal_on_this_day_uses_postgres_to_char():
     sql, params = db.calls[0]
     assert "to_char(created_at, 'MM-DD')" in sql
     assert "strftime" not in sql
+    # The date predicate must be Postgres-correct, not SQLite date()/date('now').
+    assert "created_at::date < CURRENT_DATE" in sql
+    assert "date('now')" not in sql
+    assert "date(created_at)" not in sql
     # The bound parameter must be the MM-DD string matching to_char's format.
     assert params[1] == date.today().strftime("%m-%d")
 
 
 # --------------------------------------------------------------------------
-# #4 — flag_needs_human_review reports the real push-sent flag
+# #4 — flag_needs_human_review reports queued vs failed, never an unconfirmed
+#      "delivered". fire_notification returns None on a successful dispatch
+#      (queued/accepted) and raises on failure; it never confirms device
+#      delivery, so the tool must not claim one.
 # --------------------------------------------------------------------------
 class _UnconfiguredMulticaClient:
     def is_configured(self):
@@ -285,7 +294,7 @@ class _UnconfiguredMulticaClient:
 
 
 @pytest.mark.asyncio
-async def test_flag_needs_human_review_reports_push_failure(monkeypatch):
+async def test_flag_needs_human_review_reports_failed_on_exception(monkeypatch):
     monkeypatch.setitem(
         sys.modules,
         "multica_client",
@@ -308,12 +317,13 @@ async def test_flag_needs_human_review_reports_push_failure(monkeypatch):
     )
 
     assert result["ok"] is True
-    # The push genuinely failed — must not claim success.
-    assert result["push_sent"] is False
+    # The dispatch raised — report failure, and never a (now-removed) delivered claim.
+    assert result["push_status"] == "failed"
+    assert "push_sent" not in result
 
 
 @pytest.mark.asyncio
-async def test_flag_needs_human_review_reports_push_success(monkeypatch):
+async def test_flag_needs_human_review_reports_queued_not_delivered(monkeypatch):
     monkeypatch.setitem(
         sys.modules,
         "multica_client",
@@ -323,8 +333,9 @@ async def test_flag_needs_human_review_reports_push_success(monkeypatch):
     sent = {}
 
     async def ok_fire_notification(**kwargs):
+        # Mirrors the real contract: returns None on a successful (queued) dispatch.
         sent.update(kwargs)
-        return True
+        return None
 
     monkeypatch.setitem(
         sys.modules,
@@ -339,5 +350,7 @@ async def test_flag_needs_human_review_reports_push_success(monkeypatch):
     )
 
     assert result["ok"] is True
-    assert result["push_sent"] is True
+    # A clean return means queued/accepted — NOT confirmed delivered.
+    assert result["push_status"] == "queued"
+    assert "push_sent" not in result
     assert sent["user_id"] == "jason"

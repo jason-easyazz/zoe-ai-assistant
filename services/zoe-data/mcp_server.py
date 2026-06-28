@@ -2068,7 +2068,7 @@ async def _execute_tool(db, name: str, args: dict):
         cursor = await db.execute(
             """SELECT id, title, mood, created_at FROM journal_entries
              WHERE user_id=? AND deleted=0 AND to_char(created_at, 'MM-DD')=?
-             AND date(created_at) < date('now') ORDER BY created_at DESC""",
+             AND created_at::date < CURRENT_DATE ORDER BY created_at DESC""",
             (user_id, today_md),
         )
         rows = await cursor.fetchall()
@@ -3054,7 +3054,11 @@ async def _execute_tool(db, name: str, args: dict):
                 await mc.update_issue(issue_id, description=f"{current_desc}\n\n⚠️ Needs human review: {reason}")
             # Fire a push notification
             push_msg = f"{'🔴' if urgency == 'high' else '⚠️'} Zoe needs your input: {reason[:120]}"
-            push_sent = False
+            # fire_notification returns None on success and raises on failure; it
+            # does NOT report device delivery (it only queues a pending row and
+            # attempts a push). A clean return therefore means "queued/accepted",
+            # not "delivered" — don't claim a delivery we can't confirm.
+            push_status = "failed"
             try:
                 from proactive.engine import fire_notification  # type: ignore[import]
                 await fire_notification(
@@ -3064,10 +3068,10 @@ async def _execute_tool(db, name: str, args: dict):
                     item_id=issue_id or "board",
                     context={"force_send": urgency == "high", "reason": reason, "issue_id": issue_id},
                 )
-                push_sent = True
+                push_status = "queued"
             except Exception as push_exc:
                 _mcp_log.warning("flag_needs_human_review: push failed: %s", push_exc)
-            return {"ok": True, "issue_id": issue_id, "reason": reason, "push_sent": push_sent}
+            return {"ok": True, "issue_id": issue_id, "reason": reason, "push_status": push_status}
         except Exception as exc:
             return {"error": f"flag_needs_human_review failed: {exc}"}
 
