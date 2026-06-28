@@ -1540,13 +1540,15 @@ async def _resolve_subscribable_panel(panel_id: str, session_id: str | None) -> 
     deliver nothing when the two differ.
 
     Resolution, anchored on the *binding* (never on the connecting id alone):
-      * If the connecting id is itself a panel the user has bound (under this
-        ``session_id`` or with a NULL session), it IS the canonical id — subscribe
-        to its own channel. This keeps each of a session's several panels on its
-        own channel, so panel A's socket is never routed to panel B's.
-      * Otherwise (a freshly generated alias with no bound row), resolve to the
-        session's panel ONLY when the session is bound to exactly one panel, so a
-        multi-panel session can't be mis-routed.
+      * The push target is the user's FOREGROUND panel bound under this
+        ``session_id`` (``/api/ui/panel/bind`` keeps exactly one panel foreground
+        per user). Subscribing there makes the connecting id irrelevant: a stale
+        generated alias that still has a background row no longer wins, and a
+        session's several aliases converge on the one live channel.
+      * If there is no foreground row for this session (session_id absent, or only
+        background rows), fall back to the connecting id only when it is itself a
+        panel this user bound — under this session, or a NULL-session legacy/device
+        bind (which has no foreground bookkeeping, so its own id is the channel).
       * admin/agent roles may target any explicit panel_id.
       * an unresolved session defers to the registered-panel guest policy.
     A user can never reach a panel their session/account isn't bound to.
@@ -1569,12 +1571,35 @@ async def _resolve_subscribable_panel(panel_id: str, session_id: str | None) -> 
         from database import get_db
 
         async for db in get_db():
-            # (1) The connecting id is AUTHORITATIVE when it is itself a panel the
-            # user has bound — under this same browser session, or with no session
-            # (legacy/device bind). Delivery targets the bound id, and this is that
-            # id, so subscribe to its own channel. This is the common case and it
-            # never routes panel A's socket to panel B's channel: a session with
-            # several panels keeps each socket on its own bound id.
+            # The push target is the user's FOREGROUND panel. /api/ui/panel/bind
+            # clears is_foreground across the whole user and sets it for the panel
+            # the browser most recently bound under, so the foreground row is the
+            # single live panel pushes are addressed to. Resolving to it makes the
+            # connecting id irrelevant: a stale generated alias that still has its
+            # own (background) row no longer wins, and a session's several aliases
+            # all converge on the one live channel — fixing both "stale alias wins"
+            # and "session picks wrong panel".
+            #
+            # We require the connecting id to belong to the same session (or be a
+            # NULL-session legacy bind) so a caller can't ride someone else's
+            # session to a panel; but which channel we JOIN is the foreground one.
+            if session_id:
+                cursor = await db.execute(
+                    "SELECT panel_id FROM ui_panel_sessions "
+                    "WHERE chat_session_id = ? AND user_id = ? AND is_foreground = 1 "
+                    "ORDER BY last_seen_at DESC LIMIT 1",
+                    (session_id, user_id),
+                )
+                row = await cursor.fetchone()
+                if row and row["panel_id"]:
+                    return str(row["panel_id"])
+
+            # No foreground row for this session (e.g. session_id absent, or only
+            # background rows): fall back to the connecting id ONLY when it is
+            # itself a panel this user bound — under this session, or a NULL-session
+            # legacy/device bind. This authorizes the connection without trusting an
+            # arbitrary id, and a NULL-session (device) panel has no foreground
+            # bookkeeping so its own id is the correct channel.
             cursor = await db.execute(
                 "SELECT 1 FROM ui_panel_sessions "
                 "WHERE panel_id = ? AND user_id = ? "
@@ -1583,20 +1608,6 @@ async def _resolve_subscribable_panel(panel_id: str, session_id: str | None) -> 
             )
             if await cursor.fetchone():
                 return panel_id
-
-            # (2) The connecting id has NO bound row of its own (a freshly generated
-            # alias the client opened before/without binding). Resolve it to the
-            # session's canonical panel — but ONLY when the session is bound to
-            # exactly one panel, so we can't mis-route to the wrong one of several.
-            if session_id:
-                cursor = await db.execute(
-                    "SELECT panel_id FROM ui_panel_sessions "
-                    "WHERE chat_session_id = ? AND user_id = ? LIMIT 2",
-                    (session_id, user_id),
-                )
-                rows = await cursor.fetchall()
-                if len(rows) == 1 and rows[0]["panel_id"]:
-                    return str(rows[0]["panel_id"])
             return None
     except Exception as exc:
         logger.debug("push websocket panel session validation failed: %s", exc)
