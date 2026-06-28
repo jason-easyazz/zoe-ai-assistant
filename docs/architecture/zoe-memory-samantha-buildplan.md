@@ -180,8 +180,8 @@ independent:** the two adjacent startup bugs as one small hardening PR (no new f
   is retained only to document how the flag is wired and how to re-enable *if it is ever turned off*.
 - The flag is read **per-sweep** (`start_idle_consolidation_loop` re-checks `_enabled()` every
   iteration), so enabling needs no code change and no restart of the loop task itself — but the
-  process must have the env var. (To re-enable after a deliberate OFF: set
-  `ZOE_IDLE_CONSOLIDATION_ENABLED=1` in the live service env — the systemd unit / `.env` the
+  process must have the env var. (To re-enable after a deliberate OFF: **first repeat the §7
+  positive-control turn**, then set `ZOE_IDLE_CONSOLIDATION_ENABLED=1` in the live service env — the systemd unit / `.env` the
   zoe-data process reads — and restart via `scripts/maintenance/deploy_live.sh`, which rolls back on
   a failed health check. Leave `IDLE_S`/`LOOKBACK_S` at defaults 180s / 3600s for prod.)
 - **Watch (first hour):** `journalctl -u <zoe-data unit> | grep MEMORY_IDLE_CONSOLIDATE` for
