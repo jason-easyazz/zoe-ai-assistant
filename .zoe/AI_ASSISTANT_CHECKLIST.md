@@ -134,7 +134,7 @@
 - Guides: `docs/guides/`
 - Governance: `docs/governance/`
 - API: `docs/api/`
-- Archive: `docs/archive/`
+- Retired docs: remove from the working tree; git history keeps them
 
 ### Critical Commands:
 ```bash
@@ -178,6 +178,5 @@ ls -1 *.md | wc -l
 
 **Last Updated**: November 7, 2025  
 **Status**: ✅ Active
-
 
 

@@ -164,7 +164,7 @@ def main():
     print(f"\n{Colors.CYAN}💡 Recommendations{Colors.NC}")
     
     if root_md > 10:
-        print(f"  {Colors.YELLOW}⚠{Colors.NC}  Archive {root_md - 10} docs from root to docs/archive/")
+        print(f"  {Colors.YELLOW}⚠{Colors.NC}  Move {root_md - 10} docs from root to active docs/{{category}}/ folders or delete superseded files")
     
     if not compliant:
         print(f"  {Colors.RED}✗{Colors.NC}  Fix structure violations before committing")
@@ -181,6 +181,5 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 
 

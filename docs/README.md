@@ -14,25 +14,8 @@ For current, active documentation, see the project root:
 
 ## 📁 This Folder (`/docs/`)
 
-### `/docs/archive/`
-Historical documentation organized by category:
-
-**Reports** (`archive/reports/`)
-- System status reports
-- Phase completion docs
-- Integration reports  
-- Test results
-
-**Technical** (`archive/technical/`)
-- API fixes
-- Styling updates
-- Debug documentation
-- Technical specifications
-
-**Guides** (`archive/guides/`)
-- Old integration guides
-- Installation docs
-- Feature documentation
+Retired documents are removed from the working tree. Git history keeps the old
+bytes; do not recreate `docs/archive/`.
 
 ### `/docs/guides/`
 Current user, operator, and developer guides.
@@ -49,21 +32,18 @@ Repository rules, safety guidance, and design principles.
 **Understand Zoe**: Read `../README.md`
 **Start Using Zoe**: Read `../QUICK-START.md`
 **Operate Zoe**: Read `guides/OPERATOR_RUNBOOK.md`
-**Find Old Reports**: Check `archive/reports/`
-**Find Technical Docs**: Check `archive/technical/`
+**Find Old Reports**: Use `git log -- docs/`
+**Find Technical Docs**: Search active categories or git history
 **Troubleshoot**: Run `python3 ../tools/audit/validate_structure.py` and `python3 ../tools/audit/validate_critical_files.py`
 
 ---
 
 ## 🔍 Finding Documentation
 
-### By Date
-All archived docs are organized chronologically within their categories.
-
 ### By Type
-- **Status**: `archive/reports/`
-- **Technical**: `archive/technical/`  
-- **Guides**: `archive/guides/`
+- **Status/reviews**: `reviews/` or `post-mortems/`
+- **Technical**: `developer/` or `architecture/`
+- **Guides**: `guides/`
 
 ### By Topic
 Use ripgrep to search: `rg "your topic" docs/`
@@ -72,16 +52,16 @@ Use ripgrep to search: `rg "your topic" docs/`
 
 ## 📝 Documentation Guidelines
 
-### Current vs Archived
+### Current vs Retired
 - **Current**: Project root (active, maintained)
-- **Archived**: `/docs/archive/` (historical reference)
+- **Retired**: removed from the working tree; recover from git history
 
-### When to Archive
+### When to Retire
 - When a new status doc supersedes an old one
 - When features are deprecated
 - When guides are rewritten
 
-### Don't Archive
+### Don't Retire
 - Current active documentation
 - Frequently referenced guides
 - API documentation

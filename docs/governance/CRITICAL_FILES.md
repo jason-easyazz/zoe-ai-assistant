@@ -188,12 +188,11 @@ services/zoe-auth/
 - `node_modules/` (can be reinstalled)
 
 ### Backup Files (with date stamps)
-- `docs/archive/reports/STATUS_REPORT_YYYYMMDD.md`
 - `backups/local/*` (if backups confirmed elsewhere)
 
-### Old Documentation (after archiving)
-- Superseded guides in `docs/archive/`
-- Old technical docs moved to archive
+### Old Documentation
+- Superseded guides removed from the working tree after verification
+- Old technical docs removed from the working tree after verification
 
 ### Development/Test Files (if not in use)
 - `test_*.py` in wrong locations (move, don't delete)
@@ -342,7 +341,7 @@ Before approving ANY cleanup PR or operation:
 
 ## 🎯 GOLDEN RULES
 
-1. **If unsure, DON'T delete** - Move to `docs/archive/` instead
+1. **If unsure, DON'T delete yet** - Verify ownership and references first
 2. **Test BEFORE committing** - One broken deployment is worse than clutter
 3. **Small commits** - Easy to revert, easy to review
 4. **Document reasoning** - Future you will thank present you
@@ -362,4 +361,3 @@ Before approving ANY cleanup PR or operation:
 5. Test thoroughly before continuing
 
 **Prevention > Recovery**
-

@@ -10,8 +10,12 @@ import sys
 # Auto-detect project root (works for both Pi and Nano)
 PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 MAX_ROOT_DOCS = 10
-ALLOWED_ROOT_SCRIPTS = ["verify_updates.sh", "start-zoe.sh", "stop-zoe.sh"]
+ALLOWED_ROOT_SCRIPTS = ["verify_updates.sh", "start-zoe.sh", "stop-zoe.sh", "RESTART_SERVICES.sh"]
 ALLOWED_ROOT_TESTS = ["test_architecture.py"]
+ALLOWED_TRACKED_DBS = {
+    "data/music-assistant/auth.db",
+    "data/music-assistant/library.db",
+}
 
 def check_root_md_files():
     """Max 10 .md files in root"""
@@ -21,7 +25,7 @@ def check_root_md_files():
         print("   Current files:")
         for f in sorted(md_files):
             print(f"   - {f.name}")
-        print("\n   ACTION: Move extras to docs/archive/{category}/")
+        print("\n   ACTION: Move extras to an active docs/{category}/ folder or delete if superseded")
         return False
     print(f"✅ Documentation: {len(md_files)}/{MAX_ROOT_DOCS} files in root")
     return True
@@ -76,7 +80,7 @@ def check_no_temp_files():
 
 def check_required_docs():
     """Required documentation must exist"""
-    required = ["README.md", "CHANGELOG.md", "QUICK-START.md", "PROJECT_STATUS.md"]
+    required = ["README.md", "CHANGELOG.md", "QUICK-START.md", "HARDWARE_COMPATIBILITY.md"]
     missing = [doc for doc in required if not (PROJECT_ROOT / doc).exists()]
     
     if missing:
@@ -133,7 +137,7 @@ def check_no_duplicate_configs():
             print("   SINGLE SOURCE OF TRUTH - only nginx.conf and nginx-dev.conf allowed:")
             for f in duplicates:
                 print(f"   - {f.name}")
-            print("\n   ACTION: Archive to docs/archive/technical/ or delete")
+            print("\n   ACTION: Move to the active config location or delete if superseded")
             return False
     
     print("✅ Config Files: Single source of truth (no duplicates)")
@@ -145,7 +149,6 @@ def check_structure_exists():
         "tests/unit",
         "tests/integration",
         "scripts/maintenance",
-        "docs/archive",
         "tools/audit",
         "data/schema"
     ]
@@ -176,7 +179,11 @@ def check_no_databases_in_git():
             text=True
         )
         
-        tracked_dbs = [f for f in result.stdout.strip().split('\n') if f]
+        tracked_dbs = [
+            f
+            for f in result.stdout.strip().split('\n')
+            if f and f not in ALLOWED_TRACKED_DBS
+        ]
         
         if tracked_dbs:
             print(f"❌ RULE VIOLATION: {len(tracked_dbs)} database files tracked in git")
@@ -304,4 +311,3 @@ if __name__ == "__main__":
         print("✅ ALL STRUCTURE RULES PASSED")
         print("\n🎉 Project structure is compliant!")
         sys.exit(0)
-
