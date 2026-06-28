@@ -21,12 +21,10 @@ router = APIRouter(prefix="/api/journal", tags=["journal"])
 DATE_FILTER_PATTERN = r"^\d{4}-\d{2}-\d{2}$"
 SEARCH_MAX_LENGTH = 200
 CREATED_AT_TIMESTAMP_SQL = (
-    "(CASE WHEN created_at ~ '^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])' "
-    "THEN created_at::timestamp END)"
+    "(CASE WHEN pg_input_is_valid(created_at, 'timestamp') THEN created_at::timestamp END)"
 )
 CREATED_AT_DATE_SQL = (
-    "CASE WHEN created_at ~ '^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])' "
-    "THEN created_at::timestamp::date END"
+    "CASE WHEN pg_input_is_valid(created_at, 'timestamp') THEN created_at::timestamp::date END"
 )
 
 # Default journal prompts for GET /prompts

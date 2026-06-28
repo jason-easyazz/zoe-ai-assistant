@@ -88,7 +88,7 @@ async def test_on_this_day_uses_postgres_to_char_and_current_date(monkeypatch):
     sql, params = db.calls[0]
     assert "strftime" not in sql
     assert "date('now')" not in sql
-    assert "to_char((CASE WHEN created_at ~" in sql
+    assert "to_char((CASE WHEN pg_input_is_valid(created_at, 'timestamp')" in sql
     assert "THEN created_at::timestamp END), 'MM-DD')" in sql
     assert "THEN created_at::timestamp::date END < CURRENT_DATE" in sql
     assert params == ["U1", date.today().strftime("%m-%d")]
@@ -114,7 +114,7 @@ async def test_streak_uses_postgres_date_cast_and_date_objects(monkeypatch):
     assert result == {"current_streak": 2, "longest_streak": 2, "total_entries": 3}
     sql, _params = db.calls[1]
     assert "date(created_at)" not in sql
-    assert "DISTINCT CASE WHEN created_at ~" in sql
+    assert "DISTINCT CASE WHEN pg_input_is_valid(created_at, 'timestamp')" in sql
     assert "THEN created_at::timestamp::date END as d" in sql
 
 
@@ -234,6 +234,26 @@ async def test_journal_router_queries_run_against_text_created_at_on_postgres(mo
             "personal",
             "not-a-date",
             "not-a-date",
+            0,
+        )
+        await conn.execute(
+            """INSERT INTO journal_entries VALUES (
+                   $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15
+               )""",
+            "bad-prefix",
+            "U1",
+            "bad timestamp prefix",
+            "bad timestamp prefix",
+            "ok",
+            5,
+            None,
+            None,
+            None,
+            None,
+            "private",
+            "personal",
+            "2026-02-30 25:00:00",
+            "2026-02-30 25:00:00",
             0,
         )
 
