@@ -16,6 +16,8 @@ EnvironmentFile=-%h/assistant/services/zoe-data/.env
 EnvironmentFile=-%h/.hermes/.env
 Environment=HOME=%h
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# systemd does not create parent dirs for append: log targets — ensure it exists.
+ExecStartPre=/usr/bin/mkdir -p %h/.zoe-logs
 ExecStart=/usr/bin/python3 %h/assistant/scripts/maintenance/voice_regression_probe.py --samples 20
 StandardOutput=append:%h/.zoe-logs/voice-regression.log
 StandardError=append:%h/.zoe-logs/voice-regression.log

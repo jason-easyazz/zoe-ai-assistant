@@ -63,14 +63,19 @@ def run_measure(samples: int, service_dir: str, user: str, timeout: int) -> dict
     with tempfile.NamedTemporaryFile("r", suffix=".json", delete=False) as tf:
         out_json = tf.name
     try:
-        inner = (
-            f"ZOE_PERF=1 python3 {MEASURE} --last {samples} --user {user} "
-            f"--service-dir {service_dir} --json {out_json} --timeout {timeout}"
-        )
-        # flock so two Kokoro/replay loads (~2.3GB each) can never run at once.
+        # `flock <file> <cmd> [args...]` runs the command WITHOUT a shell, so a path
+        # with spaces or a shell metachar in --user/--service-dir can't be split or
+        # interpreted. ZOE_PERF is passed via env, not a shell prefix. flock still
+        # serializes runs so two Kokoro/replay loads (~2.3GB each) can't run at once.
+        cmd = [
+            "flock", LOCK,
+            "python3", str(MEASURE),
+            "--last", str(samples), "--user", user,
+            "--service-dir", service_dir, "--json", out_json, "--timeout", str(timeout),
+        ]
         proc = subprocess.run(
-            ["flock", LOCK, "-c", inner],
-            cwd=str(REPO), capture_output=True, text=True, timeout=timeout + 120,
+            cmd, cwd=str(REPO), capture_output=True, text=True,
+            timeout=timeout + 120, env={**os.environ, "ZOE_PERF": "1"},
         )
         if proc.returncode not in (0, 1):  # 1 = measure_voice's own "a turn broke function"
             raise RuntimeError(f"measure_voice failed (rc={proc.returncode}): {proc.stderr[-400:]}")
