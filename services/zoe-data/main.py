@@ -760,6 +760,16 @@ async def lifespan(app: FastAPI):
                 " EveningWindDownTrigger, OpenClawTrigger registered)"
             )
         start_proactive_engine()
+        # Reconcile after the scheduler is live: re-register any unfired reminder
+        # whose one-shot job was dropped while the service was down (>misfire
+        # grace) so a missed reminder still fires after restart.
+        try:
+            from proactive.engine import reconcile_scheduled_jobs
+            _recovered = await reconcile_scheduled_jobs()
+            if _recovered:
+                logger.info("Proactive reconcile recovered %d missed reminder(s)", _recovered)
+        except Exception as _rec_exc:
+            logger.warning("Proactive reconcile skipped (non-fatal): %s", _rec_exc)
     except Exception as _pe_exc:
         logger.warning("Proactive engine failed to start (non-fatal): %s", _pe_exc)
 

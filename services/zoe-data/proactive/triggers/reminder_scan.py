@@ -92,6 +92,59 @@ def build_run_at(
     return candidate.astimezone(timezone.utc)
 
 
+async def schedule_due_reminder(db, row, *, now_utc: datetime | None = None) -> str | None:
+    """Schedule ONE reminder row into APScheduler (Tier 1) if it has a parseable,
+    in-window, future due time and isn't already scheduled.
+
+    Single source of truth shared by the slow-loop scan and the reminders
+    router's reschedule path. Idempotent: it skips when an unfired
+    proactive_scheduled row already exists for this reminder, so it never
+    double-schedules. Returns the reminder id if scheduled, else None.
+    """
+    from proactive.triggers.reminders import schedule_reminder  # deferred
+
+    now_utc = now_utc or datetime.now(timezone.utc)
+    rid = row["id"]
+
+    # Skip if an unfired job already exists for this reminder.
+    async with db.execute(
+        "SELECT 1 FROM proactive_scheduled WHERE item_id = ? AND fired = 0",
+        (rid,),
+    ) as cur:
+        if await cur.fetchone() is not None:
+            return None
+
+    hm = _parse_due_time(row["due_time"])
+    if hm is None:
+        log.debug("reminder_scan: unparseable due_time %r for %s", row["due_time"], rid)
+        return None
+
+    run_at = build_run_at(row["due_date"], hm[0], hm[1], now_utc)
+    if run_at is None:
+        return None
+
+    # Only schedule reminders within the lookahead window.
+    if run_at > now_utc + timedelta(hours=_LOOKAHEAD_HOURS):
+        return None
+
+    # Don't (re)schedule reminders whose time has already passed.
+    if run_at <= now_utc:
+        log.debug("reminder_scan: reminder %s is past-due (%s), skipping", rid, run_at)
+        return None
+
+    await schedule_reminder(
+        user_id=row["user_id"],
+        message=row["title"],
+        send_at=run_at,
+        item_id=rid,
+    )
+    log.info(
+        "reminder_scan: scheduled reminder '%s' for user %s at %s",
+        row["title"], row["user_id"], run_at.isoformat(),
+    )
+    return rid
+
+
 class ReminderScanTrigger(ProactiveTrigger):
     """
     Tier 2 trigger that scans the reminders table and auto-schedules
@@ -104,10 +157,7 @@ class ReminderScanTrigger(ProactiveTrigger):
     trigger_type = "reminder_scan"
 
     async def check(self, db) -> list[TriggerResult]:
-        from proactive.triggers.reminders import schedule_reminder  # deferred
-
         now_utc = datetime.now(timezone.utc)
-        lookahead_cutoff = now_utc + timedelta(hours=_LOOKAHEAD_HOURS)
 
         # Fetch active, unacknowledged, non-deleted reminders that have a due_time
         # and are not currently snoozed.
@@ -125,9 +175,10 @@ class ReminderScanTrigger(ProactiveTrigger):
         ) as cur:
             reminders = await cur.fetchall()
 
-        # Fetch reminder IDs already scheduled but not yet fired — skip them.
+        # Fetch reminder IDs already scheduled but not yet fired — fast-path skip.
         # Using item_id so recurring reminders (no due_date) get rescheduled
-        # each day after the previous day's job fires.
+        # each day after the previous day's job fires. schedule_due_reminder
+        # re-checks this per row, so it stays correct even without this set.
         async with db.execute(
             "SELECT item_id FROM proactive_scheduled WHERE fired = 0 AND item_id != ''"
         ) as cur:
@@ -135,46 +186,13 @@ class ReminderScanTrigger(ProactiveTrigger):
 
         scheduled_count = 0
         for row in reminders:
-            rid = row["id"]
-
-            # Skip if an unfired job already exists for this reminder
-            if rid in already_scheduled_items:
+            if row["id"] in already_scheduled_items:
                 continue
-
-            hm = _parse_due_time(row["due_time"])
-            if hm is None:
-                log.debug("reminder_scan: unparseable due_time %r for %s", row["due_time"], rid)
-                continue
-
-            run_at = build_run_at(row["due_date"], hm[0], hm[1], now_utc)
-            if run_at is None:
-                continue
-
-            # Only schedule reminders within the lookahead window
-            if run_at > lookahead_cutoff:
-                continue
-
-            # Don't re-schedule reminders that have already passed
-            if run_at <= now_utc:
-                log.debug("reminder_scan: reminder %s is past-due (%s), skipping", rid, run_at)
-                continue
-
             try:
-                await schedule_reminder(
-                    user_id=row["user_id"],
-                    message=row["title"],
-                    send_at=run_at,
-                    item_id=rid,
-                )
-                scheduled_count += 1
-                log.info(
-                    "reminder_scan: scheduled reminder '%s' for user %s at %s",
-                    row["title"],
-                    row["user_id"],
-                    run_at.isoformat(),
-                )
+                if await schedule_due_reminder(db, row, now_utc=now_utc):
+                    scheduled_count += 1
             except Exception as exc:
-                log.warning("reminder_scan: failed to schedule %s: %s", rid, exc)
+                log.warning("reminder_scan: failed to schedule %s: %s", row["id"], exc)
 
         if scheduled_count:
             log.info("reminder_scan: scheduled %d reminder(s) this cycle", scheduled_count)

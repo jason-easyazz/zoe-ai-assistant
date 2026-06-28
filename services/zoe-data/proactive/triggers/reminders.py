@@ -23,6 +23,13 @@ async def _fire_reminder(pending_id: str, user_id: str, message: str) -> None:
     """
     Called by APScheduler at the scheduled time.
     Imports engine here to avoid circular imports at module load.
+
+    On failure we record retry/failure state on the proactive_scheduled row and
+    RE-RAISE. Swallowing here made APScheduler mark the one-shot date job
+    "successful" and remove it while the DB row stayed unfired — the reminder was
+    silently lost. Re-raising makes APScheduler emit EVENT_JOB_ERROR (handled by
+    the engine's error listener) and leaves the row unfired so startup
+    reconciliation retries it.
     """
     from proactive.engine import fire_notification  # deferred import
     try:
@@ -34,6 +41,22 @@ async def _fire_reminder(pending_id: str, user_id: str, message: str) -> None:
         )
     except Exception as exc:
         log.error("_fire_reminder failed for pending %s: %s", pending_id, exc)
+        await _record_fire_failure(pending_id, exc)
+        raise
+
+
+async def _record_fire_failure(pending_id: str, exc: Exception) -> None:
+    """Best-effort: bump attempts + store last_error on the scheduled row."""
+    try:
+        async with _get_compat_db() as db:
+            await db.execute(
+                "UPDATE proactive_scheduled "
+                "SET attempts = COALESCE(attempts, 0) + 1, last_error = ? WHERE id = ?",
+                (str(exc)[:500], pending_id),
+            )
+            await db.commit()
+    except Exception:
+        log.error("could not record fire failure for %s", pending_id)
 
 
 async def schedule_reminder(
@@ -151,3 +174,30 @@ async def reschedule_reminder(scheduled_id: str, new_send_at: datetime) -> bool:
         item_id=row["item_id"] or "",
     )
     return True
+
+
+async def cancel_reminder_jobs(reminder_id: str) -> int:
+    """Cancel EVERY unfired scheduled reminder + APScheduler job for a reminder.
+
+    Keyed on proactive_scheduled.item_id == reminder_id. Call this whenever a
+    reminder's due-time or state changes (update / snooze / acknowledge / delete)
+    so a job scheduled for the OLD due-time can never fire against the mutated
+    row. Best-effort per row: a single cancel failure is logged, not fatal — the
+    missed/error listeners and startup reconciliation are the backstop. Returns
+    the number of scheduled rows acted on.
+    """
+    async with _get_compat_db() as db:
+        async with db.execute(
+            "SELECT id FROM proactive_scheduled WHERE item_id = ? AND fired = 0",
+            (reminder_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+
+    count = 0
+    for r in rows:
+        try:
+            await cancel_reminder(r["id"])
+            count += 1
+        except Exception:
+            log.exception("cancel_reminder_jobs: failed to cancel scheduled %s", r["id"])
+    return count
