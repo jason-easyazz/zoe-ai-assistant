@@ -31,6 +31,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/memories", tags=["memories"])
 
+_MAX_SEARCH_QUERY_LENGTH = 500
+_MAX_LIKE_QUERY_LENGTH = 200
+_MAX_PROMPT_MESSAGE_LENGTH = 1000
+
 
 # ─── Helpers ─────────────────────────────────────────────────────────────
 
@@ -220,7 +224,7 @@ async def review_memory(
 
 @router.get("/search")
 async def search_memories(
-    q: str = Query(..., min_length=1),
+    q: str = Query(..., min_length=1, max_length=_MAX_SEARCH_QUERY_LENGTH),
     limit: int = Query(20, ge=1, le=100),
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
@@ -307,7 +311,11 @@ from memory_gate import message_needs_memory as _message_needs_memory  # noqa: E
 @router.get("/for-prompt")
 async def memory_for_prompt(
     user_id: str = Query(..., min_length=1),
-    message: str = Query("", description="Current user message, for relevance ranking"),
+    message: str = Query(
+        "",
+        max_length=_MAX_PROMPT_MESSAGE_LENGTH,
+        description="Current user message, for relevance ranking",
+    ),
     limit: int = Query(_PROMPT_PACKET_MAX_FACTS, ge=1, le=40),
     _: None = Depends(require_internal_token),
 ):
@@ -332,6 +340,7 @@ async def memory_for_prompt(
         try:
             hits = await svc.search(message, user_id=user_id, limit=6)
         except Exception:
+            logger.exception("memories: semantic prompt search failed")
             hits = []
     result = _build_memory_prompt_packet(facts, hits, max_facts=limit)
     result["user_scoped"] = True
@@ -341,7 +350,11 @@ async def memory_for_prompt(
 @router.get("/people")
 async def people_with_memories(
     limit: int = Query(100, ge=1, le=500),
-    q: Optional[str] = Query(None, description="Optional name filter"),
+    q: Optional[str] = Query(
+        None,
+        max_length=_MAX_LIKE_QUERY_LENGTH,
+        description="Optional name filter",
+    ),
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
@@ -437,6 +450,7 @@ async def link_preview(
     query = (payload or {}).get("query") or (payload or {}).get("url") or ""
     if not query:
         return {"preview": [], "count": 0}
+    query = str(query)[:_MAX_LIKE_QUERY_LENGTH]
     pattern = f"%{query}%"
     cur = await db.execute(
         """SELECT id, title, content, category, updated_at

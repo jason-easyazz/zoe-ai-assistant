@@ -3,6 +3,7 @@ FastAPI router for notes.
 Mounted at prefix="/api/notes" with tag "notes".
 """
 import json
+import logging
 import uuid
 from typing import Optional
 
@@ -14,7 +15,11 @@ from guest_policy import require_feature_access
 from models import NoteCreate, NoteUpdate
 from push import broadcaster
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/notes", tags=["notes"])
+
+_MAX_CATEGORY_LENGTH = 200
 
 
 def _row_to_dict(row) -> dict:
@@ -75,12 +80,12 @@ async def _store_note_memory(db, user_id: str, note: dict, action: str):
             import logging as _lg
             _lg.getLogger(__name__).info("notes: memory ingest skipped: %s", exc)
     except Exception:
-        pass
+        logger.exception("notes: unexpected memory ingest failure")
 
 
 @router.get("/", response_model=dict)
 async def list_notes(
-    category: Optional[str] = Query(None),
+    category: Optional[str] = Query(None, max_length=_MAX_CATEGORY_LENGTH),
     limit: int = Query(100, ge=1, le=500),
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
@@ -168,7 +173,7 @@ async def create_note(
                 session_id=None,
             ))
         except Exception:
-            pass
+            logger.exception("notes: failed to schedule person extraction")
 
     return note
 
