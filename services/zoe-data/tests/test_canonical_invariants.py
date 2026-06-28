@@ -70,6 +70,80 @@ def test_tts_rock_is_kokoro():
     assert "Kokoro" in _rocks()["tts"]["name"], "TTS rock drifted off Kokoro"
 
 
+# ── The rocks must match the LIVE DEFAULT config, not just the doc ────────────
+# The doc tests above guard CANONICAL.md's text. But a rock can be swapped without
+# touching the doc by editing the env-resolution DEFAULT in the live code:
+#   - brain  → ZOE_CORE_MODEL_ID default in zoe_core_client.py (~57)
+#   - STT    → ZOE_MOONSHINE_ARCH default in routers/voice_tts.py (~2604)
+# These guards parse the COMMITTED default (what ships when the env var is unset) and
+# fail if it drifts off the canonical rock — no models, no services, no network, so
+# they run on GitHub-hosted CI. They assert on the code's default-resolution literal,
+# which is exactly the surface a silent swap would edit.
+def _data_src(rel_path: str) -> str:
+    return open(os.path.join(DATA, rel_path), encoding="utf-8").read()
+
+
+def _env_default(rel_path: str, var: str) -> str | None:
+    """Extract the committed default for an env-resolved setting, supporting both
+    `os.environ.get("VAR", "default")` and `os.environ.get("VAR") or "default"`."""
+    src = _data_src(rel_path)
+    m = re.search(
+        rf'os\.environ\.get\(\s*["\']{re.escape(var)}["\']\s*,\s*["\']([^"\']+)["\']', src
+    )
+    if m:
+        return m.group(1)
+    m = re.search(
+        rf'os\.environ\.get\(\s*["\']{re.escape(var)}["\']\s*\)\s*or\s*["\']([^"\']+)["\']', src
+    )
+    return m.group(1) if m else None
+
+
+def test_brain_live_default_is_canonical_gemma4_e4b_qat():
+    """ZOE_CORE_MODEL_ID's committed default must resolve to the Gemma-4 E4B-QAT rock.
+    Guards against the exact regression #875 fixed (a stale E2B id sneaking back in)."""
+    default = _env_default("zoe_core_client.py", "ZOE_CORE_MODEL_ID")
+    assert default, "ZOE_CORE_MODEL_ID default not found in zoe_core_client.py — guard can't verify the brain rock"
+    low = default.lower()
+    rock = _rocks()["brain"]
+    assert "gemma-4" in low, f"brain default '{default}' is not Gemma 4 (rock family: {rock['family']})"
+    for tok in rock["variant"].lower().split("-"):  # E4B-QAT → must contain 'e4b' and 'qat'
+        assert tok in low, (
+            f"brain default '{default}' drifted off the {rock['variant']} rock "
+            f"(missing '{tok}'; e.g. a swap back to E2B). Edit CANONICAL.md + this test on purpose."
+        )
+
+
+def test_stt_live_default_arch_is_moonshine_medium():
+    """ZOE_MOONSHINE_ARCH's committed default (and the hard-coded fallback) must stay a
+    MEDIUM arch — the STT rock is 'Moonshine v2 Medium', so TINY/BASE/SMALL/LARGE is a swap."""
+    default = _env_default("routers/voice_tts.py", "ZOE_MOONSHINE_ARCH")
+    assert default, "ZOE_MOONSHINE_ARCH default not found in voice_tts.py — guard can't verify the STT rock"
+    assert "MEDIUM" in default.upper(), (
+        f"Moonshine arch default '{default}' is not a MEDIUM arch — STT rock is "
+        f"'{_rocks()['stt']['name']}'; a non-Medium default silently swaps it"
+    )
+    assert "ModelArch.MEDIUM_STREAMING" in _data_src("routers/voice_tts.py"), (
+        "Moonshine fallback arch (mv.ModelArch.MEDIUM_STREAMING) missing from voice_tts.py — "
+        "the rock's hard-coded fallback must also stay Medium"
+    )
+
+
+def test_tts_live_waterfall_keeps_kokoro_before_edge_before_espeak():
+    """In the live /synthesize waterfall the Kokoro rock must be attempted before the
+    Edge cloud fallback, which must precede the espeak-ng last resort."""
+    src = _data_src("routers/voice_tts.py")
+    start = src.index("async def synthesize(")
+    body = src[start:src.index("\nasync def ", start + 1)]  # just the synthesize() route body
+    i_kokoro = body.find("_synthesize_kokoro")  # first hit = the Kokoro sidecar attempt
+    i_edge = body.find("_synthesize_edge_tts")
+    i_espeak = body.find("_synthesize_espeak")
+    assert 0 <= i_kokoro < i_edge < i_espeak, (
+        f"TTS waterfall order drifted (kokoro@{i_kokoro}, edge@{i_edge}, espeak@{i_espeak}) — "
+        "Kokoro (the rock) must precede Edge TTS must precede espeak-ng in /synthesize"
+    )
+    assert "Kokoro" in _rocks()["tts"]["name"], "TTS rock drifted off Kokoro"
+
+
 # ── The rocks must match the LIVE wiring, not just the doc ────────────────────
 def test_moonshine_actually_loaded_in_live_startup():
     """The STT rock has to be wired, not merely declared — guard the loader marker."""
