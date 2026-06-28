@@ -82,6 +82,7 @@
     "zoe_config": ".zoe/**/*",
     "backups": "backups/**/*",
     "demos": "demos/**/*",
+    "labs": "labs/**/*",
     "skills": "skills/**/*",
     "github": ".github/**/*",
     "training": "training/**/*",
