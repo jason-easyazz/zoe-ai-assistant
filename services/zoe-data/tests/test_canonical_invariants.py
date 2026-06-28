@@ -20,6 +20,10 @@ REPO = os.path.dirname(os.path.dirname(DATA))  # repo root
 CANONICAL = os.path.join(REPO, "docs", "CANONICAL.md")
 
 
+def _read_repo(path: str) -> str:
+    return open(os.path.join(REPO, path), encoding="utf-8").read()
+
+
 def _rocks() -> dict:
     """Parse the machine-readable rocks block out of docs/CANONICAL.md."""
     text = open(CANONICAL, encoding="utf-8").read()
@@ -71,6 +75,70 @@ def test_moonshine_actually_loaded_in_live_startup():
         f"STT loader marker '{marker}' not found in main.py — Moonshine warmup "
         "may have been dropped (whisper is a fallback, never the primary rock)"
     )
+
+
+def test_brain_rock_wired_in_llama_server_unit():
+    """The brain rock has to be wired in the live llama-server unit template."""
+    brain = _rocks()["brain"]
+    unit = _read_repo("scripts/setup/systemd/llama-server.service")
+    exec_start = re.search(r"^ExecStart=(.*?)(?=\nExecStartPost=)", unit, re.DOTALL | re.MULTILINE)
+    assert exec_start, "llama-server.service is missing the llama-server ExecStart block"
+    command = exec_start.group(1)
+
+    model = re.search(r"(?:^|\s)--model\s+([^\\\s]+)", command)
+    draft = re.search(r"(?:^|\s)--model-draft\s+([^\\\s]+)", command)
+    assert model, "llama-server.service is missing --model for the canonical brain GGUF"
+    assert draft, "llama-server.service is missing --model-draft for the MTP drafter GGUF"
+
+    model_path = model.group(1)
+    draft_path = draft.group(1)
+    family_slug = brain["family"].lower().replace(" ", "-")
+    variant_parts = [part.lower() for part in re.split(r"[-_]+", brain["variant"]) if part]
+
+    assert model_path.endswith(".gguf"), f"brain model is not a GGUF path: {model_path}"
+    assert family_slug in model_path.lower(), (
+        f"brain model path does not reference canonical family {brain['family']}: {model_path}"
+    )
+    for part in variant_parts:
+        assert part in model_path.lower(), (
+            f"brain model path does not reference canonical variant {brain['variant']}: {model_path}"
+        )
+
+    assert brain["drafter"].lower() in draft_path.lower(), (
+        f"draft model path does not reference canonical drafter {brain['drafter']}: {draft_path}"
+    )
+    assert re.search(r"(?:^|\s)--spec-type\s+draft-mtp(?:\s|\\|$)", command), (
+        "llama-server.service is missing MTP speculative decoding wiring "
+        "(--spec-type draft-mtp)"
+    )
+
+
+def test_kokoro_tts_is_primary_live_voice_engine():
+    """The TTS rock has to be primary in the live /api/voice/synthesize waterfall."""
+    tts = _rocks()["tts"]
+    router = _read_repo("services/zoe-data/routers/voice_tts.py")
+    synthesize = re.search(
+        r"@router\.post\(\"/synthesize\"\).*?(?=\n\n@router\.post\(\"/speak\"\))",
+        router,
+        re.DOTALL,
+    )
+    assert synthesize, "voice_tts.py is missing the /api/voice/synthesize handler"
+    body = synthesize.group(0)
+
+    kokoro_sidecar = body.find("_synthesize_kokoro_sidecar")
+    kokoro_onnx = body.find("_synthesize_kokoro(")
+    edge_tts = body.find("_synthesize_edge_tts")
+    espeak = body.find("_synthesize_espeak")
+    assert kokoro_sidecar != -1 or kokoro_onnx != -1, (
+        f"{tts['name']} is not wired into the live TTS waterfall"
+    )
+    first_kokoro = min(pos for pos in (kokoro_sidecar, kokoro_onnx) if pos != -1)
+    assert edge_tts != -1, "Edge TTS fallback is missing from the live TTS waterfall"
+    assert espeak != -1, "espeak-ng fallback is missing from the live TTS waterfall"
+    assert first_kokoro < edge_tts < espeak, (
+        "live TTS waterfall must keep Kokoro primary, then Edge TTS, then espeak-ng"
+    )
+
 
 # ── The cleanup stays clean: no archive graveyard creeps back ─────────────────
 def test_no_docs_archive_graveyard():
