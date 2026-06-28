@@ -98,6 +98,7 @@ jobs:
             services/zoe-data/tests/test_chat_session_title.py \
             services/zoe-data/tests/test_ui_orchestrator_types.py \
             services/zoe-data/tests/test_greptile_client.py \
+            services/zoe-data/tests/test_db_pool_release_race.py \
             services/zoe-data/tests/test_greploop_guard.py \
             services/zoe-data/tests/test_pipeline_store.py \
             services/zoe-data/tests/test_pipeline_evidence.py \
