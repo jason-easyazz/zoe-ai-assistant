@@ -1539,16 +1539,19 @@ async def _resolve_subscribable_panel(panel_id: str, session_id: str | None) -> 
     panel is *bound* under, so subscribing the socket to the raw connecting id can
     deliver nothing when the two differ.
 
-    Resolution, anchored on the *binding* (never on the connecting id alone):
-      * The push target is the user's FOREGROUND panel bound under this
-        ``session_id`` (``/api/ui/panel/bind`` keeps exactly one panel foreground
-        per user). Subscribing there makes the connecting id irrelevant: a stale
-        generated alias that still has a background row no longer wins, and a
-        session's several aliases converge on the one live channel.
-      * If there is no foreground row for this session (session_id absent, or only
-        background rows), fall back to the connecting id only when it is itself a
-        panel this user bound — under this session, or a NULL-session legacy/device
-        bind (which has no foreground bookkeeping, so its own id is the channel).
+    The client re-binds on every load (``init`` -> ``bindPanel``), and
+    ``/api/ui/panel/bind`` keeps exactly one panel ``is_foreground`` per user, so a
+    genuinely-live panel reconnecting is foreground under its own id. Resolution
+    (anchored on the binding, never on the connecting id alone):
+      1. If the connecting ``panel_id`` is the foreground (live) panel for this
+         ``session_id``, return it — so a reconnecting panel A stays on ``panel_A``
+         even when its session also has a background row for panel B (never route
+         A's socket to B's channel).
+      2. Else if it is a NULL-session legacy/device bind the user owns, return it
+         (device binds have no foreground bookkeeping; their own id is the channel).
+      3. Else (a stale/background alias, or a fresh id with no row) follow the
+         session's FOREGROUND panel, so a stale alias and a fresh alias both land on
+         the one live channel pushes target.
       * admin/agent roles may target any explicit panel_id.
       * an unresolved session defers to the registered-panel guest policy.
     A user can never reach a panel their session/account isn't bound to.
@@ -1571,18 +1574,45 @@ async def _resolve_subscribable_panel(panel_id: str, session_id: str | None) -> 
         from database import get_db
 
         async for db in get_db():
-            # The push target is the user's FOREGROUND panel. /api/ui/panel/bind
-            # clears is_foreground across the whole user and sets it for the panel
-            # the browser most recently bound under, so the foreground row is the
-            # single live panel pushes are addressed to. Resolving to it makes the
-            # connecting id irrelevant: a stale generated alias that still has its
-            # own (background) row no longer wins, and a session's several aliases
-            # all converge on the one live channel — fixing both "stale alias wins"
-            # and "session picks wrong panel".
-            #
-            # We require the connecting id to belong to the same session (or be a
-            # NULL-session legacy bind) so a caller can't ride someone else's
-            # session to a panel; but which channel we JOIN is the foreground one.
+            # Look up the connecting id's OWN row under this session: is it bound,
+            # and is it the foreground (active) panel? The client re-binds on every
+            # load (init -> bindPanel), and bind makes the just-bound panel the sole
+            # foreground row per user, so a genuinely-live panel reconnecting is
+            # foreground under its own id.
+            own_is_foreground = False
+            if session_id:
+                cursor = await db.execute(
+                    "SELECT is_foreground FROM ui_panel_sessions "
+                    "WHERE panel_id = ? AND user_id = ? AND chat_session_id = ? LIMIT 1",
+                    (panel_id, user_id, session_id),
+                )
+                row = await cursor.fetchone()
+                if row is not None:
+                    own_is_foreground = bool(row["is_foreground"])
+
+            # (1) The connecting id IS the live (foreground) panel for its session →
+            # its own channel. This keeps a reconnecting panel A on panel_A even when
+            # the same session also has a (background) row for panel B, so we never
+            # route A's socket to B's channel.
+            if own_is_foreground:
+                return panel_id
+
+            # (2) A NULL-session legacy/device bind owned by the user: it has no
+            # foreground bookkeeping, so its own id is the correct channel. Also
+            # authorizes a device connection that supplies no session.
+            cursor = await db.execute(
+                "SELECT 1 FROM ui_panel_sessions "
+                "WHERE panel_id = ? AND user_id = ? AND chat_session_id IS NULL LIMIT 1",
+                (panel_id, user_id),
+            )
+            if await cursor.fetchone():
+                return panel_id
+
+            # (3) The connecting id is NOT the live panel (a stale/background alias,
+            # or a freshly generated id with no row). Follow the session's FOREGROUND
+            # panel so a stale alias and a fresh alias both land on the one live
+            # channel pushes target. Scoped to this session_id and user_id, so it
+            # only ever resolves to a panel this same browser/account owns.
             if session_id:
                 cursor = await db.execute(
                     "SELECT panel_id FROM ui_panel_sessions "
@@ -1593,21 +1623,6 @@ async def _resolve_subscribable_panel(panel_id: str, session_id: str | None) -> 
                 row = await cursor.fetchone()
                 if row and row["panel_id"]:
                     return str(row["panel_id"])
-
-            # No foreground row for this session (e.g. session_id absent, or only
-            # background rows): fall back to the connecting id ONLY when it is
-            # itself a panel this user bound — under this session, or a NULL-session
-            # legacy/device bind. This authorizes the connection without trusting an
-            # arbitrary id, and a NULL-session (device) panel has no foreground
-            # bookkeeping so its own id is the correct channel.
-            cursor = await db.execute(
-                "SELECT 1 FROM ui_panel_sessions "
-                "WHERE panel_id = ? AND user_id = ? "
-                "AND (chat_session_id = ? OR chat_session_id IS NULL) LIMIT 1",
-                (panel_id, user_id, session_id),
-            )
-            if await cursor.fetchone():
-                return panel_id
             return None
     except Exception as exc:
         logger.debug("push websocket panel session validation failed: %s", exc)
