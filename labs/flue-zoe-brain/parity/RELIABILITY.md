@@ -39,3 +39,34 @@ and build-clean (`flue build` + `tsc` pass).
 `parity/recall_reliability.py` in a quiet GPU window and confirm `recall_memory`
 ≥ ~90% before `ZOE_BRAIN_BACKEND=flue` in production. The voice-corpus parity gate
 (operator-authorized, drives live STT) also still stands.
+
+---
+
+## All-tools harness — `tool_reliability.py` (LAB-ONLY)
+
+A second, complementary harness measures **all three** brain tools
+(`get_time` / `recall_memory` / `shopping_list_add`), not just recall. Flue
+sidecar only — no zoe-data `/api/chat` comparison, no audio/voice path, nothing
+mutated (`ZOE_BRAIN_ALLOW_WRITES=false` → `shopping_list_add` is a dry-run).
+
+Ground truth is the **tool call itself, not the reply text**: after each POST it
+GETs the Flue session event stream (`GET /agents/zoe/<sid>`) and reads the actual
+`tool_start` events (each carries `toolName`) under the `prompt` operation. Reply
+text can claim a tool ran when it didn't; the event stream can't.
+
+Baseline run (10 prompts × 3 = n=30, sequential, shared GPU):
+
+| Tool                | Correct tool-call | Rate   |
+|---------------------|-------------------|--------|
+| `get_time`          | 12 / 12           | 100.0% |
+| `recall_memory`     | 6 / 9             | 66.7%  |
+| `shopping_list_add` | 9 / 9             | 100.0% |
+| **Overall**         | **27 / 30**       | **90.0%** |
+
+All three misses were the same silent failure mode (no tool called, hallucinated
+"I don't remember"), on `recall_memory` — the regression the recall fix above
+targets. Treat n=30 as directional, not an SLA: the binomial CI on 6/9 is wide
+(~35–88%). Re-run under the cutover gate above with ≥30 trials **per tool**.
+
+Run: `python3 parity/tool_reliability.py` (sidecar on :3578). Raw summary lands in
+`parity/tool_reliability_last.json` (gitignored runtime artifact).
