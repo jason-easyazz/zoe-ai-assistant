@@ -56,26 +56,41 @@ class SetupTokenManager:
         self._pending: Dict[str, Tuple[str, datetime]] = {}
         self._bootstrap_token = bootstrap_token
         self._bootstrap_generated = False
+        # The bootstrap token is ONE-TIME: once it successfully sets a password it
+        # is burned and a fresh one is rotated in (and logged), so a single leaked
+        # bootstrap token can claim at most one account.
+        self._bootstrap_used = False
         if self._bootstrap_token is None:
             self._init_bootstrap_from_env()
 
     # -- bootstrap token ------------------------------------------------
     def _init_bootstrap_from_env(self) -> None:
+        self._bootstrap_used = False
         env_token = os.getenv("ZOE_AUTH_SETUP_TOKEN", "").strip()
         if env_token:
             self._bootstrap_token = env_token
             self._bootstrap_generated = False
-            logger.info("Setup bootstrap token loaded from ZOE_AUTH_SETUP_TOKEN")
+            logger.info("Setup bootstrap token loaded from ZOE_AUTH_SETUP_TOKEN (one-time use)")
         else:
             self._bootstrap_token = secrets.token_urlsafe(24)
             self._bootstrap_generated = True
-            logger.warning(
-                "ZOE_AUTH_SETUP_TOKEN is not set. Generated a one-time bootstrap "
-                "setup token for first-run password setup: %s\n"
-                "Use it as the `setup_token` field of POST /api/auth/password/setup. "
-                "Set ZOE_AUTH_SETUP_TOKEN to pin a stable value across restarts.",
-                self._bootstrap_token,
-            )
+            self._log_bootstrap(self._bootstrap_token)
+
+    def _log_bootstrap(self, token: str) -> None:
+        logger.warning(
+            "One-time bootstrap setup token for first-run password setup: %s\n"
+            "Use it as the `setup_token` field of POST /api/auth/password/setup. "
+            "It is consumed after one successful setup; a fresh one is then logged. "
+            "Set ZOE_AUTH_SETUP_TOKEN to seed a known initial value.",
+            token,
+        )
+
+    def _rotate_bootstrap(self) -> None:
+        """Burn the current bootstrap token and mint+log a fresh one."""
+        self._bootstrap_token = secrets.token_urlsafe(24)
+        self._bootstrap_generated = True
+        self._bootstrap_used = False
+        self._log_bootstrap(self._bootstrap_token)
 
     @property
     def bootstrap_token(self) -> Optional[str]:
@@ -83,7 +98,7 @@ class SetupTokenManager:
         return self._bootstrap_token
 
     def _matches_bootstrap(self, token: str) -> bool:
-        if not self._bootstrap_token:
+        if not self._bootstrap_token or self._bootstrap_used:
             return False
         return hmac.compare_digest(token, self._bootstrap_token)
 
@@ -108,33 +123,48 @@ class SetupTokenManager:
                 return False
             return hmac.compare_digest(_hash(token), token_hash)
 
-    def consume(self, user_id: str) -> None:
-        """Invalidate any per-user token for ``user_id`` (after successful use)."""
-        with self._lock:
-            self._pending.pop(user_id, None)
-
     # -- verification ---------------------------------------------------
-    def verify(self, user_id: str, token: Optional[str]) -> bool:
-        """Return True if ``token`` authorizes first-password setup for ``user_id``.
+    def verify(self, user_id: str, token: Optional[str]) -> Optional[str]:
+        """Return which credential authorized setup for ``user_id``, else None.
 
-        Accepts either a valid (unexpired) per-user token minted for this user,
-        or the service-wide bootstrap token. Empty/absent tokens never pass.
+        Returns ``"pair"`` for a valid (unexpired) per-user token minted for this
+        user, ``"bootstrap"`` for the one-time bootstrap token, or ``None``.
+        Empty/absent tokens never pass. This does NOT consume the token — the
+        caller invokes :meth:`consume` only after the password is actually set.
         """
         if not token:
-            return False
-        # Per-user token is preferred; fall back to the bootstrap secret.
+            return None
+        # Per-user token is preferred; fall back to the one-time bootstrap secret.
         if self._matches_pending(user_id, token):
-            return True
-        return self._matches_bootstrap(token)
+            return "pair"
+        if self._matches_bootstrap(token):
+            return "bootstrap"
+        return None
+
+    def consume(self, user_id: str, kind: Optional[str] = None) -> None:
+        """Invalidate the credential used for ``user_id`` after a successful setup.
+
+        ``kind`` is the value returned by :meth:`verify`. A ``"pair"`` token is
+        dropped; a ``"bootstrap"`` token is burned and rotated (one-time). When
+        ``kind`` is None (e.g. the admin-session path) only any stale per-user
+        token is cleared.
+        """
+        with self._lock:
+            self._pending.pop(user_id, None)
+            if kind == "bootstrap":
+                self._bootstrap_used = True
+                self._rotate_bootstrap()
 
     def reset(self, bootstrap_token: Optional[str] = None) -> None:
         """Clear all state. Intended for tests.
 
-        If ``bootstrap_token`` is given it becomes the new bootstrap secret;
-        otherwise the bootstrap token is re-initialised from the environment.
+        If ``bootstrap_token`` is given it becomes the new (unused) bootstrap
+        secret; otherwise the bootstrap token is re-initialised from the
+        environment.
         """
         with self._lock:
             self._pending.clear()
+            self._bootstrap_used = False
             if bootstrap_token is not None:
                 self._bootstrap_token = bootstrap_token
                 self._bootstrap_generated = False

@@ -27,6 +27,33 @@ class RateLimitRule:
     block_duration_seconds: int
     scope: str = "ip"  # "ip", "user", "global"
 
+
+@dataclass
+class ThrottleRule:
+    """Configuration for the auth brute-force throttle (progressive backoff).
+
+    The throttle is deliberately designed so it can NEVER refuse a correct
+    credential coming from an IP that isn't itself hammering:
+
+    * ``free_attempts`` recent failures from an IP are free (no delay) — generous
+      so NAT/proxy households sharing one public IP are not punished for a few
+      fat-fingered passwords.
+    * Beyond that, each further failure from the SAME IP adds an exponentially
+      growing (but capped) delay. A valid login is only *slowed*, never denied,
+      and a clean IP is never delayed.
+    * ``hard_block`` is a volumetric backstop scoped to the (IP, username) PAIR,
+      not the username alone and not the whole IP. So a flood against one account
+      from one IP is eventually blocked without letting an attacker lock a victim
+      out from other IPs, and without locking every account behind a shared IP.
+    """
+    action: str
+    free_attempts: int
+    window_seconds: int
+    base_delay_seconds: float
+    max_delay_seconds: float
+    hard_block_attempts: int
+    hard_block_seconds: int
+
 @dataclass
 class SecurityEvent:
     """Security event for monitoring"""
@@ -44,107 +71,231 @@ class RateLimiter:
         self.memory_store: Dict[str, List[float]] = defaultdict(list)
         self.blocked_until: Dict[str, float] = {}
         self.lock = threading.RLock()
-        
-        # Default rate limit rules
+
+        # Default rate limit rules (legacy per-call gate; see check_rate_limit).
         self.rules = {
             "login": RateLimitRule("login", 5, 300, 900, "ip"),  # 5 attempts per 5min, block 15min
-            "passcode": RateLimitRule("passcode", 5, 180, 600, "ip"),  # 5 attempts per 3min, block 10min
+            "passcode": RateLimitRule("passcode", 3, 180, 600, "ip"),  # 3 attempts per 3min, block 10min
             "password_reset": RateLimitRule("password_reset", 3, 3600, 3600, "ip"),  # 3 per hour
-            "password_setup": RateLimitRule("password_setup", 5, 600, 1800, "ip"),  # 5 per 10min, block 30min
             "api_request": RateLimitRule("api_request", 100, 60, 300, "user"),  # 100 per minute
             "user_creation": RateLimitRule("user_creation", 10, 3600, 7200, "ip"),  # 10 per hour
         }
 
+        # Auth brute-force throttle (failure-only, progressive backoff). State is
+        # kept separate from the legacy gate above so the two never interfere.
+        self._throttle_events: Dict[str, List[float]] = defaultdict(list)
+        self._throttle_blocks: Dict[str, float] = {}
+        self._throttle_writes = 0
+        self.throttle_rules = {
+            # Generous free allowance + capped backoff so shared NAT/proxy IPs are
+            # never hard-denied; hard block is (IP,username)-pair scoped only.
+            "login": ThrottleRule("login", free_attempts=8, window_seconds=900,
+                                  base_delay_seconds=0.5, max_delay_seconds=8.0,
+                                  hard_block_attempts=50, hard_block_seconds=900),
+            "passcode": ThrottleRule("passcode", free_attempts=8, window_seconds=600,
+                                     base_delay_seconds=0.5, max_delay_seconds=8.0,
+                                     hard_block_attempts=50, hard_block_seconds=600),
+            "password_setup": ThrottleRule("password_setup", free_attempts=8, window_seconds=900,
+                                           base_delay_seconds=0.5, max_delay_seconds=8.0,
+                                           hard_block_attempts=30, hard_block_seconds=1800),
+        }
+
     # ------------------------------------------------------------------
-    # Failure-counting sliding window (IP + username)
+    # Auth brute-force throttle (IP-progressive-delay + pair hard-block)
     #
-    # check_rate_limit() above counts *every* call and is used by callers that
-    # want a per-call gate. The two helpers below implement the failure-only
-    # model used by the auth flows: a legitimate user's successful sign-in never
-    # counts against them, but repeated *failures* from an IP or against a
-    # username trip the window. Both the IP-scoped and the username-scoped
-    # buckets are tracked so neither a single IP hammering many usernames nor a
-    # botnet hammering one username can slip through.
+    # Design contract — these properties are load-bearing and tested:
+    #   * A correct credential from an IP that isn't itself hammering is NEVER
+    #     delayed and NEVER denied (no username-global or IP-global hard deny).
+    #   * Repeated failures from one IP add growing, capped delay (brute force is
+    #     slowed) but a valid login from that IP still eventually succeeds.
+    #   * Only a focused flood against a single (IP, username) PAIR is hard
+    #     blocked, so an attacker cannot lock a victim out from other IPs and a
+    #     shared IP is not globally locked.
+    # Failures are counted; successful sign-ins never call register_*.
     # ------------------------------------------------------------------
 
-    def _failure_keys(self, action: str, ip_address: Optional[str],
-                      user_id: Optional[str]) -> List[Tuple[str, str]]:
-        """Return (scope, key) pairs for the buckets that apply to this attempt."""
-        keys: List[Tuple[str, str]] = []
-        if ip_address:
-            keys.append(("ip", f"{action}:ip:{ip_address}"))
-        if user_id:
-            keys.append(("user", f"{action}:user:{user_id}"))
-        return keys
+    @staticmethod
+    def _ip_key(action: str, ip_address: Optional[str]) -> Optional[str]:
+        return f"{action}:ip:{ip_address}" if ip_address else None
+
+    @staticmethod
+    def _pair_key(action: str, ip_address: Optional[str], user_id: Optional[str]) -> Optional[str]:
+        if not user_id:
+            return None
+        return f"{action}:pair:{ip_address or '-'}|{user_id}"
+
+    def _recent(self, key: Optional[str], window_start: float) -> int:
+        """Count (and prune in place) failures still inside the window for ``key``."""
+        if not key:
+            return 0
+        events = self._throttle_events.get(key)
+        if not events:
+            return 0
+        events[:] = [t for t in events if t > window_start]
+        if not events:
+            self._throttle_events.pop(key, None)
+            return 0
+        return len(events)
+
+    def _sweep_locked(self, now: float) -> None:
+        """Drop fully-expired buckets/blocks so memory stays bounded."""
+        for action, rule in self.throttle_rules.items():
+            window_start = now - rule.window_seconds
+            prefix = f"{action}:"
+            for key in [k for k in self._throttle_events if k.startswith(prefix)]:
+                events = self._throttle_events[key]
+                events[:] = [t for t in events if t > window_start]
+                if not events:
+                    self._throttle_events.pop(key, None)
+        for key in [k for k, until in self._throttle_blocks.items() if until <= now]:
+            self._throttle_blocks.pop(key, None)
+
+    def delay_for(self, action: str, ip_address: Optional[str] = None,
+                  user_id: Optional[str] = None) -> float:
+        """Return the progressive-backoff delay (seconds) for this IP's next try.
+
+        0.0 means "not throttled" — a clean IP always gets 0. The delay grows
+        with the number of *recent failures from this IP* beyond the free
+        allowance, capped at ``max_delay_seconds``. It only slows; it never denies.
+        """
+        rule = self.throttle_rules.get(action)
+        if not rule or not ip_address:
+            return 0.0
+        with self.lock:
+            now = time.time()
+            window_start = now - rule.window_seconds
+            ip_recent = self._recent(self._ip_key(action, ip_address), window_start)
+            over = ip_recent - rule.free_attempts
+            if over <= 0:
+                return 0.0
+            return min(rule.max_delay_seconds, rule.base_delay_seconds * (2 ** (over - 1)))
+
+    def is_hard_blocked(self, action: str, ip_address: Optional[str] = None,
+                        user_id: Optional[str] = None) -> bool:
+        """True only if this (IP, username) pair is inside its volumetric block.
+
+        Scoped to the pair, never the username alone or the IP alone, so it can
+        neither lock a victim out from a different IP nor lock a whole NAT.
+        """
+        rule = self.throttle_rules.get(action)
+        if not rule:
+            return False
+        pair_key = self._pair_key(action, ip_address, user_id)
+        if not pair_key:
+            return False
+        with self.lock:
+            now = time.time()
+            until = self._throttle_blocks.get(pair_key)
+            if until is not None:
+                if now < until:
+                    return True
+                self._throttle_blocks.pop(pair_key, None)
+            # Re-derive from the live window in case the block was cleared.
+            window_start = now - rule.window_seconds
+            if self._recent(pair_key, window_start) >= rule.hard_block_attempts:
+                self._throttle_blocks[pair_key] = now + rule.hard_block_seconds
+                return True
+            return False
 
     def is_limited(self, action: str, ip_address: Optional[str] = None,
                    user_id: Optional[str] = None) -> bool:
-        """Read-only check: is this IP or username currently rate limited?
+        """Hard-deny gate for sync callers — pair-scoped volumetric block only.
 
-        Returns True when either the IP-scoped or username-scoped bucket is in a
-        block window, or already at/over the failure threshold for the window.
+        This intentionally does NOT reflect the progressive delay (that is applied
+        by the async callers via :meth:`delay_for`), and never denies based on
+        username-global or IP-global counts.
         """
-        rule = self.rules.get(action)
-        if not rule:
-            return False
-
-        with self.lock:
-            now = time.time()
-            window_start = now - rule.window_seconds
-            for _scope, key in self._failure_keys(action, ip_address, user_id):
-                blocked_until = self.blocked_until.get(key)
-                if blocked_until is not None:
-                    if now < blocked_until:
-                        return True
-                    del self.blocked_until[key]
-                recent = [t for t in self.memory_store.get(key, []) if t > window_start]
-                if len(recent) >= rule.max_attempts:
-                    return True
-            return False
+        return self.is_hard_blocked(action, ip_address, user_id)
 
     def register_failed_attempt(self, action: str, ip_address: Optional[str] = None,
                                 user_id: Optional[str] = None) -> None:
-        """Record one failed attempt against the IP and username windows.
+        """Record one failed attempt for the throttle (IP + pair buckets).
 
-        When a bucket reaches the rule's ``max_attempts`` within the window it is
-        placed in a block window of ``block_duration_seconds``. Call this only on
-        genuine credential/authorization failures, never on success.
+        Call only on genuine credential/authorization failures, never on success.
+        Trips the pair hard block when a single (IP, username) pair floods.
         """
-        rule = self.rules.get(action)
+        rule = self.throttle_rules.get(action)
         if not rule:
             return
-
         with self.lock:
             now = time.time()
             window_start = now - rule.window_seconds
-            for scope, key in self._failure_keys(action, ip_address, user_id):
-                attempts = self.memory_store[key]
-                attempts[:] = [t for t in attempts if t > window_start]
-                attempts.append(now)
-                if len(attempts) >= rule.max_attempts:
-                    self.blocked_until[key] = now + rule.block_duration_seconds
-                    SecurityMonitor.log_security_event(SecurityEvent(
-                        event_type="rate_limit_exceeded",
-                        severity="medium",
-                        user_id=user_id,
-                        ip_address=ip_address,
-                        details={
-                            "action": action,
-                            "scope": scope,
-                            "attempts": len(attempts),
-                            "limit": rule.max_attempts,
-                            "window_seconds": rule.window_seconds,
-                        },
-                        timestamp=datetime.now(),
-                    ))
+            for key in (self._ip_key(action, ip_address),
+                        self._pair_key(action, ip_address, user_id)):
+                if not key:
+                    continue
+                events = self._throttle_events[key]
+                events[:] = [t for t in events if t > window_start]
+                events.append(now)
+
+            pair_key = self._pair_key(action, ip_address, user_id)
+            if pair_key and len(self._throttle_events.get(pair_key, [])) >= rule.hard_block_attempts:
+                self._throttle_blocks[pair_key] = now + rule.hard_block_seconds
+                SecurityMonitor.log_security_event(SecurityEvent(
+                    event_type="rate_limit_exceeded",
+                    severity="medium",
+                    user_id=user_id,
+                    ip_address=ip_address,
+                    details={
+                        "action": action,
+                        "scope": "ip+username pair",
+                        "attempts": len(self._throttle_events[pair_key]),
+                        "limit": rule.hard_block_attempts,
+                        "window_seconds": rule.window_seconds,
+                    },
+                    timestamp=datetime.now(),
+                ))
+
+            # Opportunistic memory sweep so unbounded distinct IPs don't pile up.
+            self._throttle_writes += 1
+            if self._throttle_writes >= 256 or len(self._throttle_events) > 1024:
+                self._throttle_writes = 0
+                self._sweep_locked(now)
 
     def reset(self) -> None:
-        """Clear all rate-limit state. Intended for tests and admin recovery."""
+        """Clear all throttle state. Intended for tests and admin recovery."""
         with self.lock:
-            self.memory_store.clear()
-            self.blocked_until.clear()
+            self._throttle_events.clear()
+            self._throttle_blocks.clear()
+            self._throttle_writes = 0
 
-    def check_rate_limit(self, action: str, identifier: str, 
+    def reset_for(self, action: Optional[str] = None, ip_address: Optional[str] = None,
+                  user_id: Optional[str] = None) -> int:
+        """Clear throttle buckets/blocks matching the given filters (admin recovery).
+
+        Any combination of action / ip / user may be given; an entry is cleared
+        when it matches every filter that was provided. Returns how many buckets
+        and blocks were removed. With no filters this clears everything.
+        """
+        def _matches(key: str) -> bool:
+            # key forms: "{action}:ip:{ip}" or "{action}:pair:{ip}|{user}"
+            try:
+                k_action, kind, rest = key.split(":", 2)
+            except ValueError:
+                return False
+            if action is not None and k_action != action:
+                return False
+            if kind == "ip":
+                k_ip, k_user = rest, None
+            else:  # pair
+                k_ip, _, k_user = rest.partition("|")
+            if ip_address is not None and k_ip != ip_address:
+                return False
+            if user_id is not None and k_user != user_id:
+                return False
+            return True
+
+        with self.lock:
+            removed = 0
+            for key in [k for k in self._throttle_events if _matches(k)]:
+                self._throttle_events.pop(key, None)
+                removed += 1
+            for key in [k for k in self._throttle_blocks if _matches(k)]:
+                self._throttle_blocks.pop(key, None)
+                removed += 1
+            return removed
+
+    def check_rate_limit(self, action: str, identifier: str,
                         user_id: Optional[str] = None) -> Tuple[bool, Optional[datetime]]:
         """
         Check if action is rate limited

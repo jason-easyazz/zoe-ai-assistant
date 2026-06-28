@@ -14,6 +14,7 @@ from core.auth import auth_manager
 from core.passcode import passcode_manager
 from core.sessions import session_manager
 from core.rbac import rbac_manager
+from core.security import rate_limiter
 from core.account_setup import setup_token_manager, DEFAULT_TOKEN_TTL_MINUTES
 from models.database import auth_db
 from api.dependencies import require_permission, require_admin, get_current_session
@@ -389,6 +390,47 @@ async def unlock_user_account(
     except Exception as e:
         logger.error(f"Account unlock error: {e}")
         raise HTTPException(status_code=500, detail="Failed to unlock account")
+
+
+class RateLimitResetRequest(BaseModel):
+    """Admin throttle-reset request. Any subset of filters may be provided."""
+    action: Optional[str] = Field(None, description="login | passcode | password_setup")
+    user_id: Optional[str] = Field(None, description="Clear buckets for this username/user_id")
+    ip_address: Optional[str] = Field(None, description="Clear buckets for this IP")
+
+
+@router.post("/rate-limit/reset")
+async def reset_rate_limit(
+    request: RateLimitResetRequest,
+    current_session = Depends(require_permission("users.unlock"))
+):
+    """
+    Clear brute-force throttle buckets for a user and/or IP (admin recovery).
+
+    Use this to immediately un-throttle a legitimate user or shared IP that got
+    caught by progressive backoff or a pair hard-block. With no filters it clears
+    the entire throttle. Requires the same permission as account unlock.
+
+    Returns:
+        Number of throttle buckets/blocks cleared
+    """
+    try:
+        cleared = rate_limiter.reset_for(
+            action=request.action,
+            ip_address=request.ip_address,
+            user_id=request.user_id,
+        )
+        logger.info(
+            "Admin %s reset rate-limit buckets (action=%s ip=%s user=%s): %d cleared",
+            current_session.user_id, request.action, request.ip_address,
+            request.user_id, cleared,
+        )
+        return {"cleared": cleared}
+
+    except Exception as e:
+        logger.error(f"Rate-limit reset error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to reset rate limit")
+
 
 class PasscodeSetRequest(BaseModel):
     """Admin passcode set request"""

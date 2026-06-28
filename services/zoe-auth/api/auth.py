@@ -8,6 +8,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional, List, Dict, Any
 from datetime import datetime
+import asyncio
 import logging
 
 from core.auth import auth_manager
@@ -267,13 +268,18 @@ async def login(request: LoginRequest, http_request: Request):
         # Get client IP
         ip_address = http_request.client.host if http_request.client else None
 
-        # Rate-limit gate (IP + username sliding window). Successful logins are
-        # never counted, so this only bites brute-force / credential-stuffing.
-        if rate_limiter.is_limited("login", ip_address, request.username):
+        # Brute-force throttle. The hard block is scoped to this exact
+        # (IP, username) pair, so it can neither lock a victim out from other IPs
+        # nor lock a whole NAT/proxy; progressive backoff then slows a hammering
+        # IP without ever denying a valid credential from a clean IP.
+        if rate_limiter.is_hard_blocked("login", ip_address, request.username):
             return AuthResponse(
                 success=False,
                 error_message="Too many login attempts. Please try again later."
             )
+        delay = rate_limiter.delay_for("login", ip_address, request.username)
+        if delay:
+            await asyncio.sleep(delay)
 
         # Look up user by username first
         with auth_db.get_connection() as conn:
@@ -366,9 +372,21 @@ async def login_passcode(request: PasscodeLoginRequest, http_request: Request):
     """
     try:
         # Get client IP
-        ip_address = http_request.client.host
+        ip_address = http_request.client.host if http_request.client else None
         user_id: Optional[str] = None
-        
+
+        # Throttle: pair hard-block short-circuit, then per-IP progressive backoff
+        # (the pair block is also re-checked inside verify_passcode).
+        _pc_identity = request.user_id or request.username
+        if rate_limiter.is_hard_blocked("passcode", ip_address, _pc_identity):
+            return AuthResponse(
+                success=False,
+                error_message="Too many attempts. Please try again later."
+            )
+        delay = rate_limiter.delay_for("passcode", ip_address, _pc_identity)
+        if delay:
+            await asyncio.sleep(delay)
+
         # Resolve user_id: accept either username (web login) or user_id (panel/voice).
         with auth_db.get_connection() as conn:
             if request.user_id:
@@ -687,12 +705,17 @@ async def setup_initial_password(
     """
     ip_address = http_request.client.host if http_request.client else None
     try:
-        # Rate-limit gate (IP + username sliding window).
-        if rate_limiter.is_limited("password_setup", ip_address, request.username):
+        # Brute-force throttle for token guessing: a (IP, username)-pair hard
+        # block plus per-IP progressive backoff. A clean IP is never delayed or
+        # denied, so the real user's first-run setup is unaffected.
+        if rate_limiter.is_hard_blocked("password_setup", ip_address, request.username):
             raise HTTPException(
                 status_code=429,
                 detail="Too many setup attempts. Please try again later.",
             )
+        delay = rate_limiter.delay_for("password_setup", ip_address, request.username)
+        if delay:
+            await asyncio.sleep(delay)
 
         # Validate passwords match
         if request.new_password != request.confirm_password:
@@ -719,8 +742,8 @@ async def setup_initial_password(
 
             # AUTHORIZATION: require a valid setup token OR an admin session.
             admin_ok = _is_admin_session(current_session)
-            token_ok = setup_token_manager.verify(user_id, request.setup_token)
-            if not (admin_ok or token_ok):
+            token_kind = setup_token_manager.verify(user_id, request.setup_token)
+            if not (admin_ok or token_kind):
                 rate_limiter.register_failed_attempt("password_setup", ip_address, request.username)
                 logger.warning(
                     "Rejected unauthorized password setup for user '%s' from %s",
@@ -740,8 +763,9 @@ async def setup_initial_password(
                 (new_hash, datetime.utcnow().isoformat(), user_id)
             )
 
-        # Consume the one-time token (no-op for the bootstrap/admin paths).
-        setup_token_manager.consume(user_id)
+        # Consume the one-time credential (rotates the bootstrap token; no-op for
+        # the admin-session path).
+        setup_token_manager.consume(user_id, token_kind)
         logger.info(f"Initial password set for user: {request.username}")
 
         return {

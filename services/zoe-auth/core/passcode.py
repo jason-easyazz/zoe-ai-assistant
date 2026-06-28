@@ -419,17 +419,18 @@ class PasscodeManager:
         """, (user_id, user_id, self.policy.prevent_reuse_count))
 
     def _is_rate_limited(self, user_id: str, ip_address: Optional[str]) -> bool:
-        """Check if this user/IP is currently rate limited for passcode entry.
+        """Hard-deny gate for passcode entry — (IP, user) pair block only.
 
-        Delegates to the shared sliding-window limiter (IP + username buckets).
-        Failed verifications are recorded via ``_register_rate_limit_failure``;
-        this is the read-only gate consulted before each attempt.
+        Delegates to the shared throttle's pair-scoped volumetric block; it never
+        denies a valid passcode from a clean IP and never locks a whole NAT. The
+        progressive backoff is applied by the async ``/login/passcode`` endpoint.
+        Failed verifications are recorded via ``_register_rate_limit_failure``.
         """
         from core.security import rate_limiter
         return rate_limiter.is_limited("passcode", ip_address, user_id)
 
     def _register_rate_limit_failure(self, user_id: str, ip_address: Optional[str]) -> None:
-        """Record one failed passcode attempt in the shared sliding window."""
+        """Record one failed passcode attempt in the shared throttle."""
         from core.security import rate_limiter
         rate_limiter.register_failed_attempt("passcode", ip_address, user_id)
 

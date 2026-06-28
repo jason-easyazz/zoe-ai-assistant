@@ -566,12 +566,14 @@ class EnhancedSessionManager:
 
     def _is_rate_limited(self, user_id: str, ip_address: Optional[str],
                          action: str = "login") -> bool:
-        """Check if this user/IP is currently rate limited for ``action``.
+        """Hard-deny gate for ``action`` — only the (IP, username) pair block.
 
-        Delegates to the shared sliding-window limiter (IP + username buckets).
-        Failures are recorded at the credential-verification choke points
-        (``api.auth.login`` for passwords, ``PasscodeManager.verify_passcode``
-        for passcodes); this is the read-only gate consulted before each attempt.
+        Delegates to the shared throttle's pair-scoped volumetric block, so it
+        never denies a valid credential from a clean IP and never locks a whole
+        NAT. The progressive backoff that actually slows a hammering IP is applied
+        by the async API endpoints (``api.auth``); failures are recorded at the
+        credential-verification choke points (``api.auth.login`` for passwords,
+        ``PasscodeManager.verify_passcode`` for passcodes).
         """
         from core.security import rate_limiter
         return rate_limiter.is_limited(action, ip_address, user_id)
