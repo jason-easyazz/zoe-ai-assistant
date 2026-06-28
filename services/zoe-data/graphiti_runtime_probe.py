@@ -245,9 +245,42 @@ async def _probe_openai_compatible_llm(config: GraphitiRuntimeConfig) -> dict[st
         "base_url": config.llm_base_url,
         "models_url": url,
         "model": config.llm_model,
-        "model_available": config.llm_model in models,
+        "model_available": _model_is_advertised(config.llm_model, models),
         "advertised_models": models[:20],
     }
+
+
+def _normalize_model_id(value: Any) -> str:
+    """Canonicalize a model id/filename for tolerant presence checks.
+
+    Local llama.cpp / llama-server endpoints advertise the brain by its on-disk
+    path or filename (``gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf``), while other tools
+    refer to the bare id (``gemma-4-E4B-it-qat-UD-Q4_K_XL``). Reduce to basename,
+    drop a trailing ``.gguf`` extension, and lowercase so both forms compare equal
+    without changing the canonical model itself.
+    """
+    text = str(value or "").strip().replace("\\", "/")
+    text = text.rsplit("/", 1)[-1]
+    if text.lower().endswith(".gguf"):
+        text = text[: -len(".gguf")]
+    return text.lower()
+
+
+def _model_is_advertised(model: str, advertised: list[str]) -> bool:
+    """True when the configured model matches an advertised id in either form.
+
+    Recognizes the canonical id in both the bare-id and ``.gguf``-filename forms,
+    and tolerates sharded/suffixed advertised ids (e.g. ``…-00001-of-00002``)
+    without matching unrelated, shorter model names.
+    """
+    target = _normalize_model_id(model)
+    if not target:
+        return False
+    for candidate in advertised:
+        normalized = _normalize_model_id(candidate)
+        if normalized == target or normalized.startswith(target):
+            return True
+    return False
 
 
 def _models_url(base_url: str) -> str:
