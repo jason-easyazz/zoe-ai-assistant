@@ -111,6 +111,7 @@ def test_init_pool_is_idempotent_for_live_pool(monkeypatch):
 
     monkeypatch.setenv("POSTGRES_URL", "postgresql://zoe:pw@localhost:5432/zoe")
     monkeypatch.setattr(db_pool, "_pool", None)
+    monkeypatch.setattr(db_pool, "_pool_loop", None)
     monkeypatch.setattr(db_pool.asyncpg, "create_pool", create_pool)
 
     async def go():
@@ -123,6 +124,51 @@ def test_init_pool_is_idempotent_for_live_pool(monkeypatch):
     assert db_pool.get_pool() is first
     assert len(created) == 1
     assert created[0][2].closed == 0
+
+
+def test_init_pool_recreates_pool_for_new_event_loop(monkeypatch):
+    class _Pool:
+        def __init__(self):
+            self.loop = asyncio.get_running_loop()
+            self.closed = 0
+            self.terminated = 0
+
+        def is_closing(self):
+            return False
+
+        async def close(self):
+            self.closed += 1
+
+        def terminate(self):
+            self.terminated += 1
+
+    created = []
+
+    async def create_pool(*args, **kwargs):
+        pool = _Pool()
+        created.append((args, kwargs, pool))
+        return pool
+
+    monkeypatch.setenv("POSTGRES_URL", "postgresql://zoe:pw@localhost:5432/zoe")
+    monkeypatch.setattr(db_pool, "_pool", None)
+    monkeypatch.setattr(db_pool, "_pool_loop", None)
+    monkeypatch.setattr(db_pool.asyncpg, "create_pool", create_pool)
+
+    async def init_once():
+        return await db_pool.init_pool()
+
+    first = _run(init_once())
+    second = _run(init_once())
+
+    assert first is not second
+    assert first.loop is not second.loop
+    assert len(created) == 2
+    assert first.closed == 0
+    assert first.terminated == 1
+    assert second.closed == 0
+    assert second.terminated == 0
+    assert db_pool.get_pool() is second
+    assert db_pool._pool_loop is second.loop
 
 
 def test_adapt_params_ignores_question_marks_inside_quoted_literals():

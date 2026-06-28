@@ -11,6 +11,7 @@ Migration strategy:
 New code should use db.fetch(), db.fetchrow(), db.execute() directly.
 Old code using cursor = await db.execute() + cursor.fetchall() still works.
 """
+import asyncio
 import asyncpg
 import logging
 import os
@@ -20,6 +21,7 @@ from contextlib import asynccontextmanager
 logger = logging.getLogger(__name__)
 
 _pool: asyncpg.Pool | None = None
+_pool_loop: asyncio.AbstractEventLoop | None = None
 
 _SQLITE_DATETIME_OFFSET_RE = re.compile(
     r"datetime\s*\(\s*'now'\s*,\s*'([+-]?)(\d+)\s+(\w+)'\s*\)",
@@ -55,15 +57,51 @@ async def _release_safely(pool: "asyncpg.Pool", conn: "asyncpg.Connection") -> N
         logger.warning("db_pool: unexpected error releasing connection", exc_info=True)
 
 
+def _bound_loop(pool: "asyncpg.Pool") -> asyncio.AbstractEventLoop | None:
+    """Return the loop associated with a pool, preferring our explicit tracking."""
+    return _pool_loop or getattr(pool, "_loop", None)
+
+
+async def _discard_pool(
+    pool: "asyncpg.Pool",
+    pool_loop: asyncio.AbstractEventLoop | None,
+    current_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """Close a same-loop pool, or terminate a stale cross-loop pool."""
+    if pool.is_closing():
+        return
+    if pool_loop is current_loop:
+        await pool.close()
+        return
+
+    # asyncpg pools own loop-bound futures/timers. Closing a stale pool from a
+    # replacement loop can raise "Event loop is closed" or cross-loop Future
+    # errors, so terminate synchronously and replace it on the current loop.
+    terminate = getattr(pool, "terminate", None)
+    if callable(terminate):
+        terminate()
+    else:
+        logger.warning("db_pool: stale pool has no terminate() method; discarding without close")
+
+
 async def init_pool() -> asyncpg.Pool:
     """Initialize the asyncpg connection pool.
 
-    Safe to call repeatedly during tests/startup retries: if a live pool already
-    exists, return it instead of rebinding the module global to a second pool.
+    Safe to call repeatedly during tests/startup retries: if a live pool exists
+    on the current event loop, return it. If the cached pool belongs to a stale
+    loop, discard it and create a replacement on the running loop.
     """
-    global _pool
-    if _pool is not None and not _pool.is_closing():
-        return _pool
+    global _pool, _pool_loop
+    current_loop = asyncio.get_running_loop()
+    if _pool is not None:
+        pool_loop = _bound_loop(_pool)
+        if not _pool.is_closing() and pool_loop is current_loop:
+            return _pool
+
+        stale_pool = _pool
+        _pool = None
+        _pool_loop = None
+        await _discard_pool(stale_pool, pool_loop, current_loop)
 
     # Read at call time (not import time) so EnvironmentFile values are available
     postgres_url = os.environ.get("POSTGRES_URL", "")
@@ -78,15 +116,18 @@ async def init_pool() -> asyncpg.Pool:
         max_size=10,
         command_timeout=30,
     )
+    _pool_loop = current_loop
     return _pool
 
 
 async def close_pool() -> None:
     """Close the connection pool. Call on shutdown."""
-    global _pool
+    global _pool, _pool_loop
     if _pool is not None:
-        await _pool.close()
+        current_loop = asyncio.get_running_loop()
+        await _discard_pool(_pool, _bound_loop(_pool), current_loop)
         _pool = None
+        _pool_loop = None
 
 
 def get_pool() -> asyncpg.Pool:
