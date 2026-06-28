@@ -3052,26 +3052,41 @@ async def _execute_tool(db, name: str, args: dict):
                     )
                     current_desc = resp.json().get("description", "") if resp.status_code == 200 else ""
                 await mc.update_issue(issue_id, description=f"{current_desc}\n\n⚠️ Needs human review: {reason}")
-            # Fire a push notification
+            # Fire a push notification.
+            # fire_notification returns None in EVERY path (sent, deferred, or
+            # suppressed-by-quiet-hours alike) and raises only on error — it never
+            # reports device delivery. So the honest outcomes the caller can derive
+            # are: "failed" (raised), "suppressed_quiet_hours" (the engine's own
+            # predicate: quiet hours and not force_send → nothing is sent), or
+            # "submitted" (the engine attempted delivery, but it cannot be
+            # confirmed). We never claim "sent"/"delivered" — push_sent stays False
+            # because delivery is unconfirmable through this contract.
             push_msg = f"{'🔴' if urgency == 'high' else '⚠️'} Zoe needs your input: {reason[:120]}"
-            # fire_notification returns None on success and raises on failure; it
-            # does NOT report device delivery (it only queues a pending row and
-            # attempts a push). A clean return therefore means "queued/accepted",
-            # not "delivered" — don't claim a delivery we can't confirm.
+            force_send = urgency == "high"
             push_status = "failed"
             try:
-                from proactive.engine import fire_notification  # type: ignore[import]
+                from proactive.engine import fire_notification, _is_in_quiet_hours  # type: ignore[import]
+                # Mirror the engine's suppression gate so a quiet-hours skip is not
+                # mislabelled as submitted.
+                suppressed = (not force_send) and _is_in_quiet_hours()
                 await fire_notification(
                     user_id=user_id,
                     message=push_msg,
                     trigger_type="needs_human_review",
                     item_id=issue_id or "board",
-                    context={"force_send": urgency == "high", "reason": reason, "issue_id": issue_id},
+                    context={"force_send": force_send, "reason": reason, "issue_id": issue_id},
                 )
-                push_status = "queued"
+                push_status = "suppressed_quiet_hours" if suppressed else "submitted"
             except Exception as push_exc:
                 _mcp_log.warning("flag_needs_human_review: push failed: %s", push_exc)
-            return {"ok": True, "issue_id": issue_id, "reason": reason, "push_status": push_status}
+            return {
+                "ok": True,
+                "issue_id": issue_id,
+                "reason": reason,
+                "push_status": push_status,
+                # Delivery is not confirmable through fire_notification's contract.
+                "push_sent": False,
+            }
         except Exception as exc:
             return {"error": f"flag_needs_human_review failed: {exc}"}
 

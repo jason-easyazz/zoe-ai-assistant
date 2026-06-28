@@ -8,9 +8,10 @@ Covers:
   be stuck at 0 and raised TypeError once two distinct days existed).
 - #2 journal_on_this_day: Postgres ``to_char`` + ``created_at::date <
   CURRENT_DATE`` instead of SQLite ``strftime``/``date('now')``.
-- #4 flag_needs_human_review: report queued vs failed (``push_status``) and
-  never an unconfirmed "delivered", since fire_notification only confirms the
-  dispatch was accepted, not device delivery.
+- #4 flag_needs_human_review: report the true outcome via ``push_status``
+  (failed / suppressed_quiet_hours / submitted) with ``push_sent`` always False,
+  since fire_notification returns None in every path (including quiet-hours
+  suppression) and never confirms device delivery.
 """
 
 import os
@@ -283,32 +284,45 @@ async def test_journal_on_this_day_uses_postgres_to_char():
 
 
 # --------------------------------------------------------------------------
-# #4 — flag_needs_human_review reports queued vs failed, never an unconfirmed
-#      "delivered". fire_notification returns None on a successful dispatch
-#      (queued/accepted) and raises on failure; it never confirms device
-#      delivery, so the tool must not claim one.
+# #4 — flag_needs_human_review reports the TRUE outcome. fire_notification
+#      returns None in EVERY path (sent, deferred, or suppressed-by-quiet-hours)
+#      and raises only on error — it never confirms device delivery. The tool
+#      must therefore distinguish failed / suppressed_quiet_hours / submitted,
+#      never claim a delivery, and keep push_sent False (unconfirmable).
 # --------------------------------------------------------------------------
 class _UnconfiguredMulticaClient:
     def is_configured(self):
         return False
 
 
-@pytest.mark.asyncio
-async def test_flag_needs_human_review_reports_failed_on_exception(monkeypatch):
+def _fake_engine(monkeypatch, *, fire, quiet_hours, sink=None):
+    """Install a fake proactive.engine exposing fire_notification + _is_in_quiet_hours."""
+    async def fire_notification(**kwargs):
+        if sink is not None:
+            sink.update(kwargs)
+        return await fire(**kwargs)
+
     monkeypatch.setitem(
         sys.modules,
         "multica_client",
         types.SimpleNamespace(get_multica_client=lambda: _UnconfiguredMulticaClient()),
     )
-
-    async def failing_fire_notification(**_kwargs):
-        raise RuntimeError("push backend down")
-
     monkeypatch.setitem(
         sys.modules,
         "proactive.engine",
-        types.SimpleNamespace(fire_notification=failing_fire_notification),
+        types.SimpleNamespace(
+            fire_notification=fire_notification,
+            _is_in_quiet_hours=lambda: quiet_hours,
+        ),
     )
+
+
+@pytest.mark.asyncio
+async def test_flag_needs_human_review_reports_failed_on_exception(monkeypatch):
+    async def boom(**_kwargs):
+        raise RuntimeError("push backend down")
+
+    _fake_engine(monkeypatch, fire=boom, quiet_hours=False)
 
     result = await mcp_server._execute_tool(
         db=None,
@@ -317,40 +331,73 @@ async def test_flag_needs_human_review_reports_failed_on_exception(monkeypatch):
     )
 
     assert result["ok"] is True
-    # The dispatch raised — report failure, and never a (now-removed) delivered claim.
     assert result["push_status"] == "failed"
-    assert "push_sent" not in result
+    assert result["push_sent"] is False
 
 
 @pytest.mark.asyncio
-async def test_flag_needs_human_review_reports_queued_not_delivered(monkeypatch):
-    monkeypatch.setitem(
-        sys.modules,
-        "multica_client",
-        types.SimpleNamespace(get_multica_client=lambda: _UnconfiguredMulticaClient()),
-    )
-
+async def test_flag_needs_human_review_reports_submitted_not_delivered(monkeypatch):
     sent = {}
 
-    async def ok_fire_notification(**kwargs):
-        # Mirrors the real contract: returns None on a successful (queued) dispatch.
-        sent.update(kwargs)
+    async def ok(**_kwargs):
+        # Real contract: returns None for an attempted dispatch (no delivery info).
         return None
 
-    monkeypatch.setitem(
-        sys.modules,
-        "proactive.engine",
-        types.SimpleNamespace(fire_notification=ok_fire_notification),
-    )
+    # Not in quiet hours -> the engine attempts delivery, but we can't confirm it.
+    _fake_engine(monkeypatch, fire=ok, quiet_hours=False, sink=sent)
 
     result = await mcp_server._execute_tool(
         db=None,
         name="flag_needs_human_review",
-        args={"_user_id": "jason", "reason": "needs a look", "urgency": "high"},
+        args={"_user_id": "jason", "reason": "needs a look", "urgency": "normal"},
     )
 
     assert result["ok"] is True
-    # A clean return means queued/accepted — NOT confirmed delivered.
-    assert result["push_status"] == "queued"
-    assert "push_sent" not in result
+    # Attempted but unconfirmable — never claim sent/delivered.
+    assert result["push_status"] == "submitted"
+    assert result["push_sent"] is False
     assert sent["user_id"] == "jason"
+    assert sent["context"]["force_send"] is False
+
+
+@pytest.mark.asyncio
+async def test_flag_needs_human_review_reports_suppressed_during_quiet_hours(monkeypatch):
+    """Quiet hours + normal urgency: fire_notification still returns None but
+    suppresses the alert. The tool must NOT call that submitted/queued."""
+    async def ok(**_kwargs):
+        return None
+
+    _fake_engine(monkeypatch, fire=ok, quiet_hours=True)
+
+    result = await mcp_server._execute_tool(
+        db=None,
+        name="flag_needs_human_review",
+        args={"_user_id": "jason", "reason": "needs a look", "urgency": "normal"},
+    )
+
+    assert result["ok"] is True
+    assert result["push_status"] == "suppressed_quiet_hours"
+    assert result["push_sent"] is False
+
+
+@pytest.mark.asyncio
+async def test_flag_needs_human_review_high_urgency_bypasses_quiet_hours(monkeypatch):
+    """urgency=high forces force_send=True, so quiet hours do NOT suppress — the
+    alert is submitted (still delivery-unconfirmed)."""
+    sent = {}
+
+    async def ok(**_kwargs):
+        return None
+
+    _fake_engine(monkeypatch, fire=ok, quiet_hours=True, sink=sent)
+
+    result = await mcp_server._execute_tool(
+        db=None,
+        name="flag_needs_human_review",
+        args={"_user_id": "jason", "reason": "urgent", "urgency": "high"},
+    )
+
+    assert result["ok"] is True
+    assert result["push_status"] == "submitted"
+    assert result["push_sent"] is False
+    assert sent["context"]["force_send"] is True
