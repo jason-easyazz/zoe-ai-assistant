@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import sys
 import types
 
@@ -23,6 +24,16 @@ class _FakeCollection:
     def query(self, **kwargs):
         self.seen_query_where = kwargs.get("where")
         return self.query_result
+
+
+@pytest.fixture
+def audit_clients_cache():
+    previous = memory_service._AUDIT_CLIENTS
+    memory_service._AUDIT_CLIENTS = {}
+    try:
+        yield
+    finally:
+        memory_service._AUDIT_CLIENTS = previous
 
 
 def test_build_metadata_preserves_candidate_source_excerpt_and_structured_metadata():
@@ -338,7 +349,11 @@ async def test_background_task_tracking_holds_task_until_done_and_retrieves_exce
     assert "background task memory_tick_test failed" in caplog.text
 
 
-def test_audit_collection_reuses_cached_persistent_client_per_data_dir(monkeypatch):
+def test_audit_collection_reuses_cached_persistent_client_per_data_dir(
+    monkeypatch,
+    tmp_path,
+    audit_clients_cache,
+):
     created_paths = []
 
     class FakeClient:
@@ -354,22 +369,30 @@ def test_audit_collection_reuses_cached_persistent_client_per_data_dir(monkeypat
         created_paths.append(path)
         return FakeClient(path)
 
-    memory_service._AUDIT_CLIENTS.clear()
     monkeypatch.setitem(
         sys.modules,
         "chromadb",
         types.SimpleNamespace(PersistentClient=persistent_client),
     )
 
-    first = MemoryService(data_dir="/tmp/zoe-test-audit-cache")
-    second = MemoryService(data_dir="/tmp/zoe-test-audit-cache")
-    other = MemoryService(data_dir="/tmp/zoe-test-audit-cache-other")
+    data_dir = tmp_path / "audit-cache"
+    data_dir.mkdir()
+    other_dir = tmp_path / "audit-cache-other"
+    other_dir.mkdir()
+    monkeypatch.chdir(tmp_path)
 
-    assert first._audit_collection()["path"] == "/tmp/zoe-test-audit-cache"
-    assert first._audit_collection()["path"] == "/tmp/zoe-test-audit-cache"
-    assert second._audit_collection()["path"] == "/tmp/zoe-test-audit-cache"
-    assert other._audit_collection()["path"] == "/tmp/zoe-test-audit-cache-other"
+    first = MemoryService(data_dir=str(data_dir))
+    second = MemoryService(data_dir=f"{data_dir}{os.sep}")
+    relative = MemoryService(data_dir="audit-cache")
+    other = MemoryService(data_dir=str(other_dir))
+
+    normalized = os.path.realpath(str(data_dir))
+    assert first._audit_collection()["path"] == normalized
+    assert first._audit_collection()["path"] == normalized
+    assert second._audit_collection()["path"] == normalized
+    assert relative._audit_collection()["path"] == normalized
+    assert other._audit_collection()["path"] == os.path.realpath(str(other_dir))
     assert created_paths == [
-        "/tmp/zoe-test-audit-cache",
-        "/tmp/zoe-test-audit-cache-other",
+        normalized,
+        os.path.realpath(str(other_dir)),
     ]

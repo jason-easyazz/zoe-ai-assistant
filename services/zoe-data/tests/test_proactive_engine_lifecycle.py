@@ -5,8 +5,24 @@ import pytest
 import proactive.engine as engine
 
 
+@pytest.fixture
+def engine_task_globals():
+    previous_slow = engine._slow_loop_task
+    previous_cleanup = engine._cleanup_loop_task
+    engine._slow_loop_task = None
+    engine._cleanup_loop_task = None
+    try:
+        yield
+    finally:
+        for task in (engine._slow_loop_task, engine._cleanup_loop_task):
+            if task is not None and not task.done():
+                task.cancel()
+        engine._slow_loop_task = previous_slow
+        engine._cleanup_loop_task = previous_cleanup
+
+
 @pytest.mark.asyncio
-async def test_stop_proactive_engine_cancels_cleanup_task(monkeypatch):
+async def test_stop_proactive_engine_cancels_cleanup_task(monkeypatch, engine_task_globals):
     monkeypatch.setattr(engine, "start_scheduler", lambda: None)
     monkeypatch.setattr(engine, "stop_scheduler", lambda: None)
 
@@ -15,8 +31,6 @@ async def test_stop_proactive_engine_cancels_cleanup_task(monkeypatch):
 
     monkeypatch.setattr(engine, "_slow_loop", neverending)
     monkeypatch.setattr(engine, "_cleanup_expired_pending", neverending)
-    engine._slow_loop_task = None
-    engine._cleanup_loop_task = None
 
     engine.start_proactive_engine()
     slow_task = engine._slow_loop_task

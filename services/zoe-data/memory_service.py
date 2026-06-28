@@ -773,14 +773,15 @@ class MemoryService:
         return get_collection(self._data_dir)
 
     def _audit_collection(self):
-        client = _AUDIT_CLIENTS.get(self._data_dir)
+        data_dir = os.path.realpath(os.path.abspath(os.path.expanduser(self._data_dir)))
+        client = _AUDIT_CLIENTS.get(data_dir)
         if client is None:
             with _AUDIT_CLIENTS_LOCK:
-                client = _AUDIT_CLIENTS.get(self._data_dir)
+                client = _AUDIT_CLIENTS.get(data_dir)
                 if client is None:
                     import chromadb
-                    client = chromadb.PersistentClient(path=self._data_dir)
-                    _AUDIT_CLIENTS[self._data_dir] = client
+                    client = chromadb.PersistentClient(path=data_dir)
+                    _AUDIT_CLIENTS[data_dir] = client
         return client.get_or_create_collection(_AUDIT_COLLECTION)
 
     def _write_row(self, mem_id: str, text: str, metadata: dict[str, Any]) -> None:

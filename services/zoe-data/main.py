@@ -1373,7 +1373,9 @@ async def lifespan(app: FastAPI):
         pass
     try:
         from zoe_core_client import shutdown_workers
-        await shutdown_workers()
+        await asyncio.wait_for(shutdown_workers(), timeout=5.0)
+    except asyncio.TimeoutError:
+        logger.warning("zoe-core worker shutdown timed out (non-fatal)")
     except Exception:
         logger.warning("zoe-core worker shutdown failed (non-fatal)", exc_info=True)
     for task in (_openclaw_bg_task, _digest_bg_task, _zoe_update_bg_task,
