@@ -4919,6 +4919,41 @@ async def _prewarm_brain_for_panel(panel_id: str) -> None:
         logger.debug("voice/wake brain prewarm failed (non-fatal): %s", exc)
 
 
+def _stt_prewarm_on_wake_enabled() -> bool:
+    return (os.environ.get("ZOE_STT_PREWARM_ON_WAKE", "1").strip().lower()
+            in ("1", "true", "yes", "on"))
+
+
+async def _prewarm_stt_on_wake() -> None:
+    """On wake-word, warm Moonshine STT so the FIRST command after idle isn't decoded
+    on a cold/swapped-out inference path. Symmetric to _prewarm_brain_for_panel: the
+    brain is already prewarmed on wake, but Moonshine is warmed only ONCE at startup,
+    and its (un-mlock'd) pages get swapped out during idle on this memory-tight box —
+    so the first utterance after a gap hit a cold STT and mis-decoded ("first command
+    after a while" mishears), then was clean once warm. Run a tiny dummy inference in
+    the ~1-2s wake->command window (faults the model pages back in + primes the
+    onnxruntime path) so the real command runs warm. Best-effort + backgrounded;
+    never delays or breaks the wake acknowledgement.
+    """
+    try:
+        if not _stt_prewarm_on_wake_enabled():
+            return
+        if (os.environ.get("ZOE_STT_BACKEND") or "moonshine").strip().lower() != "moonshine":
+            return
+        loop = asyncio.get_running_loop()
+
+        def _warm() -> None:
+            import numpy as _np
+            tr = _ensure_moonshine()
+            # ~0.3s of silence @ 16kHz — cheap; the point is to fault the model pages
+            # back in and prime the inference path before the real command arrives.
+            tr.transcribe_without_streaming(_np.zeros(4800, dtype=_np.float32), 16000)
+
+        await loop.run_in_executor(None, _warm)
+    except Exception as exc:
+        logger.debug("voice/wake STT prewarm failed (non-fatal): %s", exc)
+
+
 @router.post("/wake")
 async def voice_wake(payload: dict, caller: dict = Depends(_require_voice_auth)):
     """
@@ -4953,6 +4988,9 @@ async def voice_wake(payload: dict, caller: dict = Depends(_require_voice_auth))
     # finishes speaking — hides the first-turn-of-session subprocess cold start.
     try:
         asyncio.ensure_future(_prewarm_brain_for_panel(panel_id))
+        # Warm Moonshine STT too — the brain was prewarmed but the (un-mlock'd) STT
+        # swaps out during idle, so the FIRST command after a gap was decoded cold.
+        asyncio.ensure_future(_prewarm_stt_on_wake())
     except Exception as exc:
         logger.debug("voice/wake prewarm dispatch failed (non-fatal): %s", exc)
 
