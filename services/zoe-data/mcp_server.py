@@ -1253,6 +1253,29 @@ def _coerce_date(value):
         return None
 
 
+async def _ensure_dashboard_layout_row(db, user_id: str):
+    await db.execute(
+        "INSERT INTO dashboard_layouts (user_id, layout, updated_at) "
+        "VALUES ($1, $2::jsonb, CURRENT_TIMESTAMP) "
+        "ON CONFLICT(user_id) DO NOTHING",
+        user_id,
+        json.dumps([]),
+    )
+
+
+async def _fetch_dashboard_layout_for_update(db, user_id: str):
+    return await db.fetchrow(
+        "SELECT layout FROM dashboard_layouts WHERE user_id = $1 FOR UPDATE",
+        user_id,
+    )
+
+
+def _decode_dashboard_layout(value):
+    if isinstance(value, str):
+        return json.loads(value)
+    return value or []
+
+
 class _MissingUserId(Exception):
     """Raised when strict mode rejects a tool call with no identity."""
 
@@ -1509,11 +1532,16 @@ async def _execute_tool(db, name: str, args: dict):
     elif name == "dashboard_save_layout":
         uid = args.get("user_id", user_id)
         layout_payload = json.dumps(args.get("layout", []))
-        await db.execute(
-            "INSERT INTO dashboard_layouts (user_id, layout, updated_at) VALUES (?, ?, NOW()) "
-            "ON CONFLICT(user_id) DO UPDATE SET layout = excluded.layout, updated_at = NOW()",
-            (uid, layout_payload),
-        )
+        async with db.transaction():
+            await _ensure_dashboard_layout_row(db, uid)
+            await _fetch_dashboard_layout_for_update(db, uid)
+            await db.execute(
+                "UPDATE dashboard_layouts "
+                "SET layout = $1::jsonb, updated_at = CURRENT_TIMESTAMP "
+                "WHERE user_id = $2",
+                layout_payload,
+                uid,
+            )
         return {"status": "ok"}
 
     elif name == "dashboard_add_widget":
@@ -1540,26 +1568,26 @@ async def _execute_tool(db, name: str, args: dict):
         to_add = [w for w in widget_ids if w in VALID_WIDGETS]
         if not to_add:
             return {"status": "error", "message": "No valid widget IDs"}
-        cursor = await db.execute(
-            "SELECT layout FROM dashboard_layouts WHERE user_id = ?",
-            (uid,),
-        )
-        row = await cursor.fetchone()
-        current = json.loads(row["layout"]) if row else []
-        existing = {w.get("id") for w in current if isinstance(w, dict)}
-        max_y = max((w.get("y", 0) + w.get("h", 2) for w in current), default=0)
-        added = []
-        for wid in to_add:
-            if wid in existing:
-                continue
-            current.append({"id": wid, "x": 0, "y": max_y, "w": 2, "h": 2})
-            max_y += 2
-            added.append(wid)
-        await db.execute(
-            "INSERT INTO dashboard_layouts (user_id, layout, updated_at) VALUES (?, ?, NOW()) "
-            "ON CONFLICT(user_id) DO UPDATE SET layout = excluded.layout, updated_at = NOW()",
-            (uid, json.dumps(current)),
-        )
+        async with db.transaction():
+            await _ensure_dashboard_layout_row(db, uid)
+            row = await _fetch_dashboard_layout_for_update(db, uid)
+            current = _decode_dashboard_layout(row["layout"]) if row else []
+            existing = {w.get("id") for w in current if isinstance(w, dict)}
+            max_y = max((w.get("y", 0) + w.get("h", 2) for w in current), default=0)
+            added = []
+            for wid in to_add:
+                if wid in existing:
+                    continue
+                current.append({"id": wid, "x": 0, "y": max_y, "w": 2, "h": 2})
+                max_y += 2
+                added.append(wid)
+            await db.execute(
+                "UPDATE dashboard_layouts "
+                "SET layout = $1::jsonb, updated_at = CURRENT_TIMESTAMP "
+                "WHERE user_id = $2",
+                json.dumps(current),
+                uid,
+            )
         return {"status": "ok", "added": added}
 
     elif name == "dashboard_available_widgets":
