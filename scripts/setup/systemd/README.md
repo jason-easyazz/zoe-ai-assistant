@@ -11,9 +11,9 @@ Secrets are never inlined — they are read from `.env` files.
 
 | Unit | Port | Purpose |
 |------|------|---------|
-| `llama-server.service`     | 11434 | Local LLM (Gemma 4 E2B via llama.cpp) — **platform-specific paths** |
+| `llama-server.service`     | 11434 | Local LLM (Gemma 4 E4B-QAT+MTP via llama.cpp) — **platform-specific paths** |
 | `hermes-agent.service`     | 8642  | Engineering/planning/review agent gateway |
-| `openclaw-gateway.service` | 18789 | Gemma 4 E2B + browser agent fallback (needs `openclaw` npm pkg) |
+| `openclaw-gateway.service` | 18789 | Browser/exec agent fallback (needs `openclaw` npm pkg) |
 | `kokoro-tts.service`       | 10201 | Local neural TTS sidecar (optional) |
 | `zoe-data.service`         | 8000  | Primary backend API |
 

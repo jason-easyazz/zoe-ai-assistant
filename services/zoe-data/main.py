@@ -5,7 +5,9 @@ import uuid as _uuid_mod
 from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+import httpx
 from database import init_db
 from push import broadcaster
 from auth import require_internal_token
@@ -72,6 +74,122 @@ _RUNTIME_HEALTH: dict[str, bool] = {
 }
 # Timestamp of the last probe (ISO string); exposed via GET /api/agent/runtimes
 _RUNTIME_LAST_PROBED: str = ""
+
+
+def _gemma_base_url() -> str:
+    raw = (os.environ.get("GEMMA_SERVER_URL") or os.environ.get("ZOE_LLAMA_URL") or "http://127.0.0.1:11434").strip()
+    return raw[:-3].rstrip("/") if raw.rstrip("/").endswith("/v1") else raw.rstrip("/")
+
+
+def _canonical_gemma_model(model_id: str) -> bool:
+    normalized = (model_id or "").lower()
+    return "gemma" in normalized and "e4b" in normalized
+
+
+async def _check_brain_ready(timeout_s: float = 2.0) -> dict:
+    base_url = _gemma_base_url()
+    detail: dict = {"ok": False, "url": base_url}
+    try:
+        async with httpx.AsyncClient(timeout=timeout_s) as client:
+            health = await client.get(f"{base_url}/health")
+            detail["health_status"] = health.status_code
+            if health.status_code != 200:
+                detail["error"] = f"health_http_{health.status_code}"
+                return detail
+
+            models = await client.get(f"{base_url}/v1/models")
+            detail["models_status"] = models.status_code
+            if models.status_code != 200:
+                detail["error"] = f"models_http_{models.status_code}"
+                return detail
+            payload = models.json()
+            model_ids = [
+                str(item.get("id") or item.get("model") or "")
+                for item in payload.get("data", [])
+                if isinstance(item, dict)
+            ]
+            detail["models"] = model_ids[:5]
+            if not any(_canonical_gemma_model(model_id) for model_id in model_ids):
+                detail["error"] = "canonical_gemma_e4b_model_missing"
+                return detail
+            detail["ok"] = True
+            return detail
+    except Exception as exc:
+        detail["error"] = exc.__class__.__name__
+        return detail
+
+
+async def _check_stt_ready() -> dict:
+    try:
+        from routers import voice_tts
+
+        return {
+            "ok": bool(voice_tts.moonshine_ready()),
+            "engine": "moonshine",
+            "arch": voice_tts.moonshine_arch(),
+        }
+    except Exception as exc:
+        return {"ok": False, "engine": "moonshine", "error": exc.__class__.__name__}
+
+
+async def _check_tts_ready(timeout_s: float = 2.0) -> dict:
+    sidecar_url = os.environ.get("ZOE_KOKORO_SIDECAR_URL", "http://127.0.0.1:10201").rstrip("/")
+    detail: dict = {"ok": False, "engine": "kokoro", "sidecar_url": sidecar_url}
+    try:
+        async with httpx.AsyncClient(timeout=timeout_s) as client:
+            response = await client.get(f"{sidecar_url}/health")
+        detail["status_code"] = response.status_code
+        if response.status_code == 200:
+            payload = response.json()
+            detail["pipeline_loaded"] = bool(payload.get("pipeline_loaded"))
+            detail["voice"] = payload.get("voice")
+            detail["device"] = payload.get("device")
+            detail["ok"] = bool(payload.get("pipeline_loaded"))
+            if not detail["ok"]:
+                detail["error"] = "pipeline_not_loaded"
+            return detail
+        detail["error"] = f"http_{response.status_code}"
+        return detail
+    except Exception as exc:
+        detail["error"] = exc.__class__.__name__
+        try:
+            from routers import voice_tts
+
+            detail["local_onnx_loaded"] = bool(voice_tts.kokoro_ready())
+            detail["ok"] = bool(voice_tts.kokoro_ready())
+        except Exception:
+            pass
+        return detail
+
+
+async def _build_readiness_report() -> dict:
+    brain, stt, tts = await asyncio.gather(
+        _check_brain_ready(),
+        _check_stt_ready(),
+        _check_tts_ready(),
+    )
+    dependencies = {"brain": brain, "stt": stt, "tts": tts}
+    ready = all(bool(dep.get("ok")) for dep in dependencies.values())
+    return {
+        "status": "ok" if ready else "degraded",
+        "service": "zoe-data",
+        "version": "1.0.0",
+        "memory_capture": _memory_capture_health,
+        "ready": ready,
+        "dependencies": dependencies,
+    }
+
+
+async def _wait_for_brain_startup() -> None:
+    deadline = time.monotonic() + float(os.environ.get("ZOE_BRAIN_STARTUP_WAIT_S", "30"))
+    last: dict = {}
+    while time.monotonic() < deadline:
+        last = await _check_brain_ready(timeout_s=2.0)
+        if last.get("ok"):
+            logger.info("Brain readiness gate passed")
+            return
+        await asyncio.sleep(1.0)
+    logger.warning("Brain readiness gate timed out; /health will report not ready: %s", last)
 
 
 # These legacy logging filters are no longer needed with the new JSON middleware
@@ -668,6 +786,7 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing zoe-data database...")
     await init_db()
     logger.info("Database initialized. zoe-data is ready.")
+    await _wait_for_brain_startup()
     # One-time MemPalace migration: re-tag legacy records from wing="zoe" to wing="family-admin".
     # Gated behind a DB flag so the expensive ChromaDB scan only runs on first startup.
     try:
@@ -1473,12 +1592,8 @@ async def a2a_well_known():
 
 @app.get("/health")
 async def root_health():
-    return {
-        "status": "ok",
-        "service": "zoe-data",
-        "version": "1.0.0",
-        "memory_capture": _memory_capture_health,
-    }
+    report = await _build_readiness_report()
+    return JSONResponse(report, status_code=200 if report["ready"] else 503)
 
 
 @app.get("/api/router/classify")
@@ -1880,7 +1995,7 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
     Accepts text and binary (audio) messages:
     - Text JSON {"type": "text", "message": "..."} → routed through zoe_agent
     - Text JSON {"type": "cancel"} → sets cancel flag for in-flight pipeline
-    - Binary → transcribed via faster-whisper then routed as text
+    - Binary → transcribed via Moonshine then routed as text
     Emits {"type": "state"}, {"type": "transcript"}, {"type": "audio"}, {"type": "done"}.
     """
     await websocket.accept()
@@ -1908,7 +2023,7 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
             if raw.get("bytes"):
                 # Binary audio chunk: detect format from magic bytes, write temp file, transcribe.
                 # Browser MediaRecorder always sends WebM/opus (magic: \x1a\x45\xdf\xa3).
-                # Saving as .wav when the content is WebM causes whisper.cpp to fail.
+                # Preserve the real container suffix; WebM/opus must not be mislabeled as WAV.
                 audio_bytes: bytes = raw["bytes"]
                 await websocket.send_json({"type": "state", "state": "thinking"})
                 try:
