@@ -17,6 +17,7 @@ Before any code task, you MUST — do not fall back to raw grep/guessing:
 - **Drive every PR to merge with the Greptile loop** — reply to + RESOLVE each Greptile thread, follow up until it actually merges; squash only, never `--admin`/`--force`.
 - **Follow the DOX `AGENTS.md` chain** — read the root plus every nested `AGENTS.md` on the path to files you touch, and do the closeout DOX pass after editing (see *DOX framework* below).
 - **Honour the rocks.** Gemma 4 E4B+MTP (brain) and Moonshine v2 Medium (STT) are fixed — optimise *around* them, never propose swapping (see `docs/VISION.md` principle 1). **Retire by removing** (git keeps history); don't hoard `_old`/`_v2`/archive copies.
+- **Replay-gate every voice change (MANDATORY).** Any change to the voice path (STT / brain / TTS — `services/zoe-data/routers/voice_tts.py`, `zoe_core_client.py`, `fast_tiers.py`, the brain/Kokoro config) MUST be replay-gated against Jason's real-voice corpus `~/.zoe-voice-samples` before merge/deploy: said-vs-did must not regress (a previously-working command that now fails = a bug) and per-stage speed must not regress. Use the voice regression + speed harness — `scripts/maintenance/voice_regression_probe.py` (baseline-compared) and the underlying `scripts/perf/measure_voice.py` / `measure_tts.py` — always under `flock /tmp/zoe-voice-harness.lock` (two Kokoro loads ~2.3 GB each will OOM the box). The harness is warm + stops before TTS, so its numbers are RELATIVE (drift vs baseline), not live performance. Full tool doc: `docs/knowledge/voice-pipeline.md`.
 
 ---
 
