@@ -98,23 +98,44 @@ The scaffold was rebuilt to the canonical Flue shape (verified against the bundl
 - Removed the old wrong-API files (`provider.ts`, `agents.ts`, `workflow.ts`,
   `index.ts`, `checkLlm.ts`); `config.ts` + `github.ts` helpers were reused.
 
-### Still not done (needs the live run — operator-gated)
+### LIVE RUN — 2026-06-27, on the Jetson. The loop closed end-to-end on Flue.
 
-- **No live agent run yet.** It needs `OPENROUTER_API_KEY` available to the CLI
-  (in the gitignored `.env` or exported) and accepts that a successful run opens a
-  **real PR**. The code is build-clean and ready; only the run remains.
+Run: `flue run harness --input '{"issue": 715}'`. Harness model =
+`openrouter/anthropic/claude-haiku-4.5` (via OpenRouter, the box's Hermes key;
+the `:11434` voice brain was never touched). `ZOE_CHECKOUT` = a disposable
+worktree (`~/.worktrees/flue-spike-target`), so the live tree was untouched.
+
+- **Scout** correctly diagnosed #715 (zoe-auth OIDC breaks behind the Cloudflare
+  tunnel — hardcoded `http://zoe.local` issuer + Host-derived redirect URIs +
+  host-locked state cookie) and named the right files. Genuinely good triage.
+- **Implement** produced a real, coherent **5-file diff** on its own branch
+  (`services/zoe-auth/oidc/{clients,router,startup}.py` + the postgres migration
+  SQL + `.env.example`; +75/-22).
+- **Verify** ran the command; **verifier subagent** returned **FAIL** — correctly,
+  because `VERIFY_CMD` was the placeholder `echo`, which it judged "inconclusive"
+  per its conservative instruction. The `verify.ok && /^PASS/` gate then **threw
+  before opening a PR**. The safety gate works exactly as intended.
+
+Net: Flue carried scout → implement → verify with per-agent models, subagent
+delegation, and a writable `local()` sandbox; the gate behaved correctly. The
+**only** reason no PR opened is the trivial placeholder verify. Substrate de-risked.
+
+### Still open
+
+- **openPR phase not yet exercised on a PASS** — re-run with a *real* scoped
+  `VERIFY_CMD` (operator picks the issue, since a PASS opens a real PR).
 - **#735 voice-latency probe** to be read while the harness runs (no-regression =
   Phase 0 acceptance, PR #736 §5).
 
 ## The Samantha tests — did the loop close?
 
-| Phase | Outcome (pass/fail) | Notes |
-|-------|---------------------|-------|
-| scout (read issue, produce plan) | | |
-| implement (real diff on a branch) | | |
-| verify (ran check, captured evidence) | | |
-| openPR (reviewable PR with evidence) | | |
-| harness on separate model (not the voice brain) | | |
+| Phase | Outcome | Notes |
+|-------|---------|-------|
+| scout (read issue, produce plan) | **PASS** | Correctly diagnosed #715's OIDC/tunnel root cause; named the right files |
+| implement (real diff on a branch) | **PASS** | Real 5-file diff (+75/-22) on its own branch in the disposable checkout |
+| verify (ran check, captured evidence) | **PASS** | Ran `VERIFY_CMD`, captured output, fed it to the verifier |
+| openPR (reviewable PR with evidence) | **GATED** | Correctly NOT opened — verifier FAILed the placeholder verify; needs a real check to reach a PASS |
+| harness on separate model (not the voice brain) | **PASS** | Ran on OpenRouter `claude-haiku-4.5`; `:11434` untouched |
 
 - [ ] **Measure voice latency with the #735 probe while the harness runs** —
   Phase 0 acceptance (PR #736 §5) is **no voice-latency regression** on the
@@ -123,25 +144,28 @@ The scaffold was rebuilt to the canonical Flue shape (verified against the bundl
   - with harness running: \_\_\_ ms
   - regression? (must be no):
 
-- **PR opened:** <url>
-- **Was the PR genuinely reviewable?**
-- **Did the harness model produce a usable plan/diff, or did quality block the loop?**
-- **Where did the loop stall, if anywhere? Did it fail loudly at the right phase boundary?**
+- **PR opened:** none — correctly gated (placeholder verify → verifier FAIL).
+- **Was the harness model's output usable?** Yes — scout's triage of #715 was
+  accurate and the implementer produced a real, scoped 5-file diff.
+- **Did it fail loudly at the right boundary?** Yes — it stopped at the verify
+  gate with a clear error, not silently.
 
 ## Verdict
 
-- [x] **Promising — proceed, but the scaffold needs a control-flow redesign first.**
-  Flue installs clean on the Jetson, shares the brain's Pi 0.79 runtime, and has
-  every primitive the harness needs. The only blocker found is that the spike's
-  `case`-style `step.run()` phase model isn't how Flue does durability — phases map
-  onto **subagents / chained workflows**, not inline steps.
+- [x] **Flue is a viable substrate — proceed.** Installs clean on the Jetson,
+  shares the brain's Pi 0.79 runtime, and the redesigned harness **closed the
+  scout → implement → verify loop end-to-end on a real issue** with per-agent
+  models and subagent delegation. The original `case`-style `step.run()` model was
+  the only real blocker, and it's resolved (phases = subagents).
 
 **Notes / next steps:**
-1. ~~Redesign the pipeline to Flue's real model.~~ **DONE (Increment 1, above)** —
-   workflow + bound orchestrator agent + scout/verifier subagents + OpenRouter
-   provider; `flue build` and `tsc` both clean.
-2. **Live run (only remaining step):** make `OPENROUTER_API_KEY` available to the
-   CLI and run `flue run harness --input '{"issue": 715}'`. A PASS verdict opens a
-   real PR — review it by hand (the harness never merges).
-3. Read the **#735 latency probe** under harness load to confirm no voice
+1. ~~Redesign the pipeline to Flue's real model.~~ **DONE (Increment 1).**
+2. ~~Live run.~~ **DONE 2026-06-27** — loop closed end-to-end; gate correctly
+   blocked the PR on a placeholder verify. See the live-run section + table above.
+3. **Exercise openPR on a PASS:** re-run with a *real* scoped `VERIFY_CMD` (operator
+   picks the issue, since a PASS opens a real PR).
+4. Read the **#735 latency probe** under harness load to confirm no voice
    regression (Phase 0 acceptance, PR #736 §5).
+5. Future hardening before any non-lab use: real sandbox isolation for the writable
+   checkout (vs `local()`), per-phase models (cheap scout / stronger implementer),
+   and the durable-resume / retrospective phases of the `case` pattern.

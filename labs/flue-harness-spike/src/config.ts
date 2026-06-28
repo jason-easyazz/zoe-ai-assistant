@@ -71,7 +71,7 @@ export function loadConfig(): SpikeConfig {
     // local endpoint later by changing only these vars — no code change.
     harnessLlmProvider: opt('HARNESS_LLM_PROVIDER', 'openrouter'),
     harnessLlmBaseUrl: opt('HARNESS_LLM_BASE_URL', 'https://openrouter.ai/api/v1'),
-    harnessLlmModel: opt('HARNESS_LLM_MODEL', 'openrouter/anthropic/claude-3.5-haiku'),
+    harnessLlmModel: opt('HARNESS_LLM_MODEL', 'openrouter/anthropic/claude-haiku-4.5'),
     // Key read from OPENROUTER_API_KEY (the box's existing key) or HARNESS_LLM_API_KEY.
     harnessLlmApiKey: opt('OPENROUTER_API_KEY', opt('HARNESS_LLM_API_KEY', '')),
     // Token may be empty if the box relies on an authenticated gh CLI.

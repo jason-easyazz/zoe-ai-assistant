@@ -17,9 +17,9 @@
 import { defineAgent, defineAgentProfile } from '@flue/runtime';
 import { local } from '@flue/runtime/node';
 
-/** The harness model string, e.g. `openrouter/anthropic/claude-3.5-haiku`. */
+/** The harness model string, e.g. `openrouter/anthropic/claude-haiku-4.5`. */
 export function harnessModel(): string {
-  return process.env.HARNESS_LLM_MODEL ?? 'openrouter/anthropic/claude-3.5-haiku';
+  return process.env.HARNESS_LLM_MODEL ?? 'openrouter/anthropic/claude-haiku-4.5';
 }
 
 /**
