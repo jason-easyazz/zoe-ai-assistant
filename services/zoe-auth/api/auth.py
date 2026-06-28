@@ -747,18 +747,23 @@ async def setup_initial_password(
                 raise HTTPException(status_code=400, detail="Password already set. Use password change instead.")
 
             # AUTHORIZATION: require a valid setup token OR an admin session.
+            # claim() atomically verifies AND consumes the token, so two
+            # concurrent setup requests cannot both pass with the same token.
             admin_ok = _is_admin_session(current_session)
-            token_kind = setup_token_manager.verify(user_id, request.setup_token)
-            if not (admin_ok or token_kind):
-                rate_limiter.register_failed_attempt("password_setup", ip_address, request.username)
-                logger.warning(
-                    "Rejected unauthorized password setup for user '%s' from %s",
-                    request.username, ip_address,
-                )
-                raise HTTPException(
-                    status_code=403,
-                    detail="Setup authorization required: provide a valid setup token or use an admin account.",
-                )
+            if admin_ok:
+                setup_token_manager.clear_pending(user_id)  # drop any stale token
+            else:
+                token_kind = setup_token_manager.claim(user_id, request.setup_token)
+                if not token_kind:
+                    rate_limiter.register_failed_attempt("password_setup", ip_address, request.username)
+                    logger.warning(
+                        "Rejected unauthorized password setup for user '%s' from %s",
+                        request.username, ip_address,
+                    )
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Setup authorization required: provide a valid setup token or use an admin account.",
+                    )
 
             # Set the new password using auth_manager
             import bcrypt
@@ -769,9 +774,6 @@ async def setup_initial_password(
                 (new_hash, datetime.utcnow().isoformat(), user_id)
             )
 
-        # Consume the one-time credential (rotates the bootstrap token; no-op for
-        # the admin-session path).
-        setup_token_manager.consume(user_id, token_kind)
         logger.info(f"Initial password set for user: {request.username}")
 
         return {

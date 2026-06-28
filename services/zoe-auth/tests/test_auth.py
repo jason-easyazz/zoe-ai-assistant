@@ -608,6 +608,32 @@ def test_admin_setup_token_endpoint_rejects_already_set_user(sqlite_auth_db, mon
     assert resp.status_code == 400
 
 
+def test_setup_token_claim_is_single_use(sqlite_auth_db):
+    """claim() atomically consumes — a token cannot pass twice (closes TOCTOU)."""
+    from core.account_setup import SetupTokenManager
+
+    mgr = SetupTokenManager(bootstrap_token=BOOTSTRAP)
+    token = mgr.issue_token("zoe")
+    assert mgr.claim("zoe", token) == "pair"
+    assert mgr.claim("zoe", token) is None  # already consumed
+
+    # Bootstrap token is likewise single-use within the process.
+    assert mgr.claim("andrew", BOOTSTRAP) == "bootstrap"
+    assert mgr.claim("teneeka", BOOTSTRAP) is None
+
+
+def test_setup_bootstrap_rejected_when_durably_consumed(sqlite_auth_db, monkeypatch):
+    """A pinned bootstrap token marked consumed in the audit log stays burned
+    even after the in-memory used-flag is reset (e.g. a restart)."""
+    from core.account_setup import SetupTokenManager
+
+    mgr = SetupTokenManager(bootstrap_token=BOOTSTRAP)
+    # Simulate "this token was already consumed before the restart".
+    monkeypatch.setattr(mgr, "_is_bootstrap_consumed_persisted", lambda token: True)
+    assert mgr._bootstrap_used is False  # fresh process state
+    assert mgr.claim("zoe", BOOTSTRAP) is None
+
+
 def test_admin_rate_limit_reset_endpoint(sqlite_auth_db, monkeypatch):
     """Admin can clear throttle buckets for a user via the recovery endpoint."""
     for _ in range(rate_limiter.throttle_rules["login"].hard_block_attempts):

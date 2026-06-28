@@ -364,27 +364,24 @@ async def authorize_complete(
 # Token endpoint
 # ---------------------------------------------------------------------------
 
-def _client_secret_from_basic(authorization: Optional[str], client_id: str) -> Optional[str]:
-    """Extract the client_secret from an HTTP Basic ``Authorization`` header.
+def _parse_basic_auth(authorization: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """Parse an HTTP Basic ``Authorization`` header into (client_id, secret).
 
-    Supports the ``client_secret_basic`` token-endpoint auth method: the header
-    is ``Basic base64(urlencode(client_id):urlencode(client_secret))``. Returns
-    the secret only when the basic-auth client_id matches the request's
-    ``client_id`` (defence against mixing identities), else None.
+    Supports the ``client_secret_basic`` token-endpoint auth method (RFC 6749
+    §2.3.1): ``Basic base64(urlencode(client_id):urlencode(client_secret))``.
+    Returns (None, None) when the header is absent or malformed.
     """
     if not authorization or not authorization.lower().startswith("basic "):
-        return None
+        return None, None
     try:
         decoded = base64.b64decode(authorization[6:].strip()).decode("utf-8")
     except Exception:
-        return None
+        return None, None
     basic_id, sep, basic_secret = decoded.partition(":")
     if not sep:
-        return None
+        return None, None
     from urllib.parse import unquote
-    if unquote(basic_id) != client_id:
-        return None
-    return unquote(basic_secret)
+    return unquote(basic_id), unquote(basic_secret)
 
 
 @router.post("/application/o/token/")
@@ -393,21 +390,28 @@ async def token(
     grant_type: str = Form(...),
     code: str = Form(...),
     redirect_uri: str = Form(...),
-    client_id: str = Form(...),
     code_verifier: str = Form(...),
+    client_id: Optional[str] = Form(None),
     client_secret: Optional[str] = Form(None),
     authorization: Optional[str] = Header(None),
 ):
     if grant_type != "authorization_code":
         raise HTTPException(400, "Only grant_type=authorization_code is supported")
 
+    # A client_secret_basic client may send its id + secret ONLY in the
+    # Authorization header, so client_id is optional in the form and resolved
+    # from whichever source provided it (rejecting a conflicting pair).
+    basic_id, basic_secret = _parse_basic_auth(authorization)
+    if client_id and basic_id and client_id != basic_id:
+        raise HTTPException(401, detail={"error": "invalid_client"})
+    client_id = client_id or basic_id
+    if not client_id:
+        raise HTTPException(401, detail={"error": "invalid_client"})
+    client_secret = client_secret or basic_secret
+
     client = get_client(client_id)
     if client is None or not client["is_active"]:
         raise HTTPException(401, detail={"error": "invalid_client"})
-
-    # Accept the secret from either client_secret_post (form body) or
-    # client_secret_basic (HTTP Basic Authorization header), per RFC 6749 §2.3.1.
-    client_secret = client_secret or _client_secret_from_basic(authorization, client_id)
 
     # Confidential clients (a client_secret_hash is registered) MUST present a
     # valid client_secret. Previously the secret was only checked when one was

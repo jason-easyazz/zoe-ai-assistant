@@ -204,6 +204,25 @@ def test_token_confidential_client_accepts_secret_via_http_basic(token_client):
     assert resp.json()["access_token"] == "access-token"
 
 
+def test_token_accepts_basic_only_without_form_client_id(token_client):
+    """A client_secret_basic client may send id+secret only in the Basic header."""
+    import base64
+
+    app, monkeypatch = token_client
+    _set_client(monkeypatch, client_id="confidential-app", secret_hash=CLIENT_SECRET)
+    client = TestClient(app)
+    form = _token_form()
+    form.pop("client_id")  # nothing in the body; identity comes from Basic
+    basic = base64.b64encode(f"confidential-app:{CLIENT_SECRET}".encode()).decode()
+    resp = client.post(
+        "/application/o/token/",
+        data=form,
+        headers={"Authorization": f"Basic {basic}"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["access_token"] == "access-token"
+
+
 def test_token_rejects_basic_secret_for_mismatched_client_id(token_client):
     """A Basic header whose client_id differs from the form client_id is ignored."""
     import base64

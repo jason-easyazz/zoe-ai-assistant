@@ -21,9 +21,11 @@ Two token kinds, both verified in constant time:
   with a short TTL, consumed on first successful use. This is how additional
   users are onboarded after the box has an admin.
 
-State is in-process (single long-lived uvicorn worker); setup is a rare action,
-and a restart simply re-issues the bootstrap token / asks the admin to re-mint.
-No database schema is touched (the auth schema is owned outside this service).
+Per-user token state is in-process (single long-lived uvicorn worker); a restart
+asks the admin to re-mint those. Bootstrap *consumption* is additionally recorded
+in the existing ``audit_logs`` table (best-effort) so a pinned
+``ZOE_AUTH_SETUP_TOKEN`` cannot be revalidated by restarting the service. No
+database schema is added (the auth schema is owned outside this service).
 """
 
 from __future__ import annotations
@@ -100,7 +102,46 @@ class SetupTokenManager:
     def _matches_bootstrap(self, token: str) -> bool:
         if not self._bootstrap_token or self._bootstrap_used:
             return False
-        return hmac.compare_digest(token, self._bootstrap_token)
+        if not hmac.compare_digest(token, self._bootstrap_token):
+            return False
+        # A pinned ZOE_AUTH_SETUP_TOKEN reloads with _bootstrap_used reset after a
+        # restart; consult the durable consumed-marker so an already-spent token
+        # cannot be revalidated by bouncing the service.
+        return not self._is_bootstrap_consumed_persisted(token)
+
+    # -- durable bootstrap-consumed marker (best-effort, survives restart) ----
+    def _is_bootstrap_consumed_persisted(self, token: str) -> bool:
+        try:
+            from models.database import auth_db
+            with auth_db.get_connection() as conn:
+                row = conn.execute(
+                    "SELECT 1 FROM audit_logs WHERE action = ? AND resource = ? LIMIT 1",
+                    ("setup_bootstrap_consumed", _hash(token)),
+                ).fetchone()
+                return row is not None
+        except Exception:
+            # No audit table / DB unavailable (e.g. unit tests) — fall back to the
+            # in-memory flag only.
+            return False
+
+    def _persist_bootstrap_consumed(self, token: str) -> None:
+        try:
+            from models.database import auth_db
+            with auth_db.get_connection() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO audit_logs
+                    (log_id, user_id, action, resource, result, timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        f"setupboot_{secrets.token_hex(8)}", None,
+                        "setup_bootstrap_consumed", _hash(token), "success",
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
+        except Exception as exc:  # pragma: no cover - best effort
+            logger.debug("Could not persist bootstrap-consumed marker: %s", exc)
 
     # -- per-user one-time tokens --------------------------------------
     def issue_token(self, user_id: str, ttl_minutes: int = DEFAULT_TOKEN_TTL_MINUTES) -> str:
@@ -123,37 +164,33 @@ class SetupTokenManager:
                 return False
             return hmac.compare_digest(_hash(token), token_hash)
 
-    # -- verification ---------------------------------------------------
-    def verify(self, user_id: str, token: Optional[str]) -> Optional[str]:
-        """Return which credential authorized setup for ``user_id``, else None.
+    # -- atomic claim ---------------------------------------------------
+    def claim(self, user_id: str, token: Optional[str]) -> Optional[str]:
+        """Atomically verify AND consume a setup credential for ``user_id``.
 
-        Returns ``"pair"`` for a valid (unexpired) per-user token minted for this
-        user, ``"bootstrap"`` for the one-time bootstrap token, or ``None``.
-        Empty/absent tokens never pass. This does NOT consume the token — the
-        caller invokes :meth:`consume` only after the password is actually set.
+        Returns ``"pair"`` for a valid per-user token (which is removed here),
+        ``"bootstrap"`` for the one-time bootstrap token (which is burned,
+        durably marked consumed, and rotated here), or ``None``. Verify and
+        consume happen under one lock so two concurrent setup requests cannot
+        both pass with the same token (TOCTOU) — only the first wins.
         """
         if not token:
             return None
-        # Per-user token is preferred; fall back to the one-time bootstrap secret.
-        if self._matches_pending(user_id, token):
-            return "pair"
-        if self._matches_bootstrap(token):
-            return "bootstrap"
-        return None
+        with self._lock:
+            if self._matches_pending(user_id, token):
+                self._pending.pop(user_id, None)
+                return "pair"
+            if self._matches_bootstrap(token):
+                self._bootstrap_used = True
+                self._persist_bootstrap_consumed(token)
+                self._rotate_bootstrap()
+                return "bootstrap"
+            return None
 
-    def consume(self, user_id: str, kind: Optional[str] = None) -> None:
-        """Invalidate the credential used for ``user_id`` after a successful setup.
-
-        ``kind`` is the value returned by :meth:`verify`. A ``"pair"`` token is
-        dropped; a ``"bootstrap"`` token is burned and rotated (one-time). When
-        ``kind`` is None (e.g. the admin-session path) only any stale per-user
-        token is cleared.
-        """
+    def clear_pending(self, user_id: str) -> None:
+        """Drop any stale per-user token for ``user_id`` (admin-session path)."""
         with self._lock:
             self._pending.pop(user_id, None)
-            if kind == "bootstrap":
-                self._bootstrap_used = True
-                self._rotate_bootstrap()
 
     def reset(self, bootstrap_token: Optional[str] = None) -> None:
         """Clear all state. Intended for tests.
