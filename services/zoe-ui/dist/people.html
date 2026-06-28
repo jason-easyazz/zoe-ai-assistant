@@ -2242,7 +2242,7 @@
                         const dt = a.created_at ? new Date(a.created_at).toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'}) : '';
                         return `<div style="padding:12px 0;border-bottom:1px solid rgba(255,255,255,0.1)">
                             <div style="font-size:14px;color:#fff">${escapeHtml(a.description||'')}</div>
-                            <div style="font-size:12px;opacity:0.5;margin-top:2px">${dt}${a.source?' · '+a.source:''}</div>
+                            <div style="font-size:12px;opacity:0.5;margin-top:2px">${dt}${a.source?' · '+escapeHtml(a.source):''}</div>
                         </div>`;
                     }).join('');
                 } catch { el.innerHTML = '<p style="color:#FC8181">Failed to load</p>'; }
