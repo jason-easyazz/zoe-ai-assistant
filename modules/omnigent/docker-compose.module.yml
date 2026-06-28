@@ -59,6 +59,12 @@ services:
       - OMNIGENT_AUTH_ENABLED=1
       - OMNIGENT_AUTH_PROVIDER=header
       - OMNIGENT_LOCAL_SINGLE_USER=1
+      # The in-container host runner (entrypoint: `omnigent host $OMNIGENT_SELF_URL`) attaches to
+      # the co-located server over LOOPBACK, NOT via zoe.local. With the published port bound to
+      # 127.0.0.1 (above), the old default http://zoe.local:6767 (= host-gateway → host's published
+      # port) is unreachable from inside the container, so the host showed "offline". Loopback is
+      # correct anyway — server + host share this container. (Default in entrypoint.sh is zoe.local.)
+      - OMNIGENT_SELF_URL=http://127.0.0.1:6767
       # To revert to LAN-only OIDC (only if the Cloudflare path is retired): flip provider
       # back to `oidc` and uncomment the block below. OIDC works only via http://zoe.local:6767.
       # - OMNIGENT_OIDC_ISSUER=http://zoe.local
