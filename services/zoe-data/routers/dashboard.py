@@ -44,6 +44,16 @@ async def _fetchone_layout_for_update(db, user_id: str):
     )
 
 
+async def _ensure_layout_row(db, user_id: str):
+    await db.execute(
+        "INSERT INTO dashboard_layouts (user_id, layout, updated_at) "
+        "VALUES ($1, $2::jsonb, CURRENT_TIMESTAMP) "
+        "ON CONFLICT(user_id) DO NOTHING",
+        user_id,
+        json.dumps([]),
+    )
+
+
 def _decode_layout(value):
     if isinstance(value, str):
         return json.loads(value)
@@ -86,12 +96,16 @@ async def save_layout(request: Request, user: dict = Depends(get_current_user)):
     user_id = user["user_id"]
     layout = json.dumps(body.get("layout", []))
     async for db in get_db():
-        await db.execute(
-            "INSERT INTO dashboard_layouts (user_id, layout, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) "
-            "ON CONFLICT(user_id) DO UPDATE SET layout = excluded.layout, updated_at = CURRENT_TIMESTAMP",
-            (user_id, layout),
-        )
-        await db.commit()
+        async with db.transaction():
+            await _ensure_layout_row(db, user_id)
+            await _fetchone_layout_for_update(db, user_id)
+            await db.execute(
+                "UPDATE dashboard_layouts "
+                "SET layout = $1::jsonb, updated_at = CURRENT_TIMESTAMP "
+                "WHERE user_id = $2",
+                layout,
+                user_id,
+            )
     return {"status": "ok"}
 
 
@@ -106,13 +120,7 @@ async def add_widgets(request: Request, user: dict = Depends(get_current_user)):
 
     async for db in get_db():
         async with db.transaction():
-            await db.execute(
-                "INSERT INTO dashboard_layouts (user_id, layout, updated_at) "
-                "VALUES ($1, $2::jsonb, CURRENT_TIMESTAMP) "
-                "ON CONFLICT(user_id) DO NOTHING",
-                user_id,
-                json.dumps([]),
-            )
+            await _ensure_layout_row(db, user_id)
             row = await _fetchone_layout_for_update(db, user_id)
             current = _decode_layout(row["layout"]) if row else []
             existing_ids = {w.get("id") for w in current if isinstance(w, dict)}

@@ -20,15 +20,21 @@ class _Request:
 
 
 class _Txn:
-    def __init__(self, lock):
-        self._lock = lock
+    def __init__(self, db):
+        self._db = db
 
     async def __aenter__(self):
-        await self._lock.acquire()
+        await self._db.lock.acquire()
+        self._db.active_transactions += 1
+        self._db.max_active_transactions = max(
+            self._db.max_active_transactions,
+            self._db.active_transactions,
+        )
         return self
 
     async def __aexit__(self, *_args):
-        self._lock.release()
+        self._db.active_transactions -= 1
+        self._db.lock.release()
 
 
 class _FakeDashboardDb:
@@ -36,9 +42,11 @@ class _FakeDashboardDb:
         self.layout = layout
         self.lock = asyncio.Lock()
         self.sql = []
+        self.active_transactions = 0
+        self.max_active_transactions = 0
 
     def transaction(self):
-        return _Txn(self.lock)
+        return _Txn(self)
 
     async def fetchrow(self, sql, user_id):
         self.sql.append(sql)
@@ -56,6 +64,25 @@ class _FakeDashboardDb:
             self.layout = json.loads(params[0])
             return "UPDATE 1"
         raise AssertionError(f"unexpected SQL: {sql}")
+
+
+class _SlowSaveDb(_FakeDashboardDb):
+    def __init__(self, layout=None):
+        super().__init__(layout=layout)
+        self.save_lock_acquired = asyncio.Event()
+        self.release_save = asyncio.Event()
+        self._held_save_once = False
+
+    async def execute(self, sql, *params):
+        if (
+            sql.startswith("UPDATE dashboard_layouts")
+            and not self._held_save_once
+            and params[0] == json.dumps([{"id": "tasks", "x": 0, "y": 0, "w": 2, "h": 3}])
+        ):
+            self._held_save_once = True
+            self.save_lock_acquired.set()
+            await self.release_save.wait()
+        return await super().execute(sql, *params)
 
 
 def _patch_db(monkeypatch, db):
@@ -109,3 +136,32 @@ async def test_concurrent_add_and_remove_do_not_lose_updates(monkeypatch):
     assert remove_result == {"status": "ok", "removed": "weather"}
     assert {widget["id"] for widget in db.layout} == {"tasks", "events"}
     assert "weather" not in {widget["id"] for widget in db.layout}
+
+
+@pytest.mark.asyncio
+async def test_concurrent_save_and_add_serialize_on_layout_lock(monkeypatch):
+    db = _SlowSaveDb(layout=[{"id": "weather", "x": 0, "y": 0, "w": 2, "h": 2}])
+    _patch_db(monkeypatch, db)
+
+    save_task = asyncio.create_task(
+        dashboard.save_layout(
+            _Request({"layout": [{"id": "tasks", "x": 0, "y": 0, "w": 2, "h": 3}]}),
+            {"user_id": "u1"},
+        )
+    )
+    await db.save_lock_acquired.wait()
+    add_task = asyncio.create_task(
+        dashboard.add_widgets(_Request({"widgets": ["events"]}), {"user_id": "u1"})
+    )
+
+    await asyncio.sleep(0)
+    assert not add_task.done()
+
+    db.release_save.set()
+    save_result, add_result = await asyncio.gather(save_task, add_task)
+
+    assert save_result == {"status": "ok"}
+    assert add_result == {"status": "ok", "added": ["events"]}
+    assert {widget["id"] for widget in db.layout} == {"tasks", "events"}
+    assert db.max_active_transactions == 1
+    assert sum("FOR UPDATE" in sql for sql in db.sql) >= 2
