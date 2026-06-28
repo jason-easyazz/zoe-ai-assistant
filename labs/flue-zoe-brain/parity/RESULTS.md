@@ -1,9 +1,80 @@
-# Flue brain — parity & latency results (2026-06-28, lab)
+# Flue brain — parity & latency results (lab)
 
 Ran `parity/parity_check.py` against the live **current prod brain** (zoe-data
 `/api/chat`, the Pi-CLI brain) and the **Flue brain sidecar** (this spike) on a
 representative prompt set. This is the cutover **gate**: it shows how close the
 Flue brain is, and what's left before any production cutover.
+
+---
+
+## Phase 3, increment 1 — REAL tools wired (2026-06-28, lab) — the headline finding
+
+The gap from the increment-1 (persona-only) run below was **no tools**. This
+increment wires three real Flue `defineTool` tools onto the Zoe agent, each
+calling **zoe-data's existing internal capability endpoints** over HTTP (the same
+seam the prod Pi brain uses):
+
+| Tool | Endpoint | Maps to prod |
+|---|---|---|
+| `get_time` | (local clock, no network) | `abilities/info.ts` time/date |
+| `recall_memory` | `GET /api/memories/for-prompt?user_id&message` | `extensions/memory.ts` |
+| `shopping_list_add` | `POST /api/system/intent-dispatch` `{intent:"list_add"}` | `abilities/_dispatch.ts` |
+
+Identity is bound in **trusted code** — the acting `user_id` comes from
+`ZOE_BRAIN_USER_ID` (env), never from the model's tool arguments (tool args are
+model-chosen, not an auth boundary). User-scoped tools **fail closed** when no
+user is configured. `shopping_list_add` is gated behind `ZOE_BRAIN_ALLOW_WRITES`
+(default **OFF → dry-run**), so a parity run never mutates the real list.
+
+### Does Gemma reliably call the tools? — **YES, in this run.**
+
+This was the open question for the cutover decision. On the parity prompt set and
+direct smoke tests, **Gemma E4B called every tool it should have**, first try:
+
+| Row | Flue reply | Tool actually fired? |
+|---|---|---|
+| `tool:time` "What's the time right now?" | "It's 10:33 pm on Sunday, June 28, 2026." | ✅ `get_time` (prod gave "10:33 PM" — **parity**) |
+| `tool:list` "Add milk to my shopping list." | "Okay, I've added milk to your shopping list." | ✅ `shopping_list_add` (dry-run) — **parity with prod's phrasing** |
+| smoke: "What do you remember about my family?" | Returned Neil / Janice / Karen / Julie / NCIS — **real stored facts** | ✅ `recall_memory` hit `/api/memories/for-prompt` for user `jason` |
+
+The increment-1 "expected gap" rows (time/list) are **now closed.** The Flue brain
+*does* what prod does, in Zoe's voice, and still **faster** (median **~3.0 s** vs
+prod **~8.3 s** this run).
+
+### Honest caveats (these matter for the cutover decision)
+
+- **Single run, n=1 per prompt.** Tool-calling reliability on a 4B local model is
+  the whole risk; one clean pass is encouraging but **not** a reliability proof.
+  Before cutover this needs a **repeated / fuzzed** tool-call harness (paraphrases,
+  ambiguous phrasings, negative cases) to measure call-rate and false-fire-rate.
+  Prod mitigates small-model tool drowning with **progressive disclosure**
+  (`abilities.ts` `setActiveTools`); the Flue agent here exposes **all 3 tools every
+  turn** — fine at 3, but won't scale to prod's ~56 abilities without the same
+  relevance gating. That gate is **not yet ported.**
+- **`shopping_list_add` dry-run masks a real-write unknown.** With writes OFF the
+  tool returns a dry-run string, but **Gemma paraphrased it as success** ("I've
+  added milk") rather than relaying the "(dry-run)" caveat. Verified against
+  zoe-data that the list was **NOT** mutated — the gate held — but it means the
+  model's *spoken* result can diverge from the *actual* effect. A live-write parity
+  run (writes ON, a throwaway item, then cleanup) is still owed before trusting the
+  write path end-to-end.
+- **`tool:memory` row ("What did I just ask you about?") is still harness-limited,
+  not a tool result.** That prompt is a *within-session context* question, not a
+  recall query, so neither brain hit memory; both answered conversationally. The
+  *recall* path is proven by the family-facts smoke test above, not by this row.
+  A proper memory parity row needs a single multi-turn session.
+- Only **time / list / memory** are wired — calendar, reminders, timers, notes,
+  people, etc. (all reachable via the same `intent-dispatch` allowlist) are **not**
+  yet ported.
+
+**Bottom line for cutover:** the architecture works — Gemma calls real tools that
+reuse prod's exact backend, and the time/list gap closes. The remaining risk is
+**reliability at scale** (more tools + progressive disclosure + a repeated tool-call
+benchmark) and the **write-path verification**, not feasibility.
+
+---
+
+## Increment 1 (persona-only) — original baseline run
 
 ## Verdict
 
@@ -35,7 +106,11 @@ architecture's core bet (collapse the process boundary onto in-process Pi).
 
 1. **Phase 3 — wire tools/memory** (time, lists, calendar, abilities, MemPalace)
    into the Flue brain via `defineTool`/MCP, then re-run this harness until the
-   tool/memory rows reach parity.
+   tool/memory rows reach parity. **(increment 1 of tools DONE — time/list/memory
+   via `defineTool` → zoe-data endpoints; time/list rows now at parity. Still owed:
+   the remaining abilities, progressive-disclosure relevance gating, a repeated
+   tool-call reliability benchmark, and a live-write parity run — see the Phase-3
+   section at the top.)**
 2. **Voice-corpus replay** (`tests/replay_samples.py` / `~/.zoe-voice-samples`)
    said-vs-did parity, end-to-end through the voice path.
 3. **#735 latency probe** no-regression under the Flue brain.
