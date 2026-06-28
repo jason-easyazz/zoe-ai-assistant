@@ -1531,25 +1531,26 @@ async def _resolve_subscribable_panel(panel_id: str, session_id: str | None) -> 
     Returns the panel_id whose ``panel_{id}`` channel the socket should join, or
     ``None`` to reject the connection.
 
-    A single physical panel answers to more than one ``panel_id`` over its life:
-    a generated ``panel_xxxx`` captured from localStorage on a load without a
-    ``?panel_id=`` URL param, plus the registered id (e.g. ``zoe-touch-pi``). The
-    client binds (``init`` -> ``bindPanel``) and opens the push socket under the
-    SAME ``state.panelId`` within one load, so the connecting id always has a fresh
-    bound row of its own; ``ui_actions`` are pushed (``broadcast_to_panel``) to that
-    bound id.
+    A single physical browser may hold several ``ui_panel_sessions`` rows for one
+    session over its life: a generated ``panel_xxxx`` alias captured from
+    localStorage, plus the REGISTERED id (e.g. ``zoe-touch-pi``). But server pushes
+    (``broadcast_to_panel``) are addressed to the registered panel, and the
+    registered ids are exactly the rows in the ``panels`` table — generated aliases
+    are written to ``ui_panel_sessions`` by bind but never to ``panels``.
 
-    Resolution (anchored on the binding, never on a global/cross-session flag):
-      1. If the connecting ``panel_id`` is itself a row the user bound under this
-         ``session_id`` (foreground OR background), return it — its own channel.
-         This authorises a reconnecting panel A on ``panel_A`` regardless of the
-         per-user ``is_foreground`` flag (which ``bind`` clears across the whole
-         user), so a second panel in another session can't deauthorise A; and it
-         never routes A's socket to another panel's channel.
-      2. Else a NULL-session legacy/device bind the user owns → its own id.
-      3. Else (a freshly generated id with no row of its own) resolve to the
-         session's panel ONLY when the session is bound to exactly one panel, so a
-         multi-panel session can't be mis-routed.
+    Resolution is UNCONDITIONALLY CANONICAL for a session-bound socket, so an alias
+    having its own row can never short-circuit it (this is what closes the whole
+    "stale alias wins / rebinds" class instead of fixing it per-permutation):
+      1. If the session has a bound row whose ``panel_id`` is a registered panel
+         (exists in ``panels``), subscribe to THAT channel — always, even when the
+         connecting id is a generated alias that has its own row. So a stale or
+         rebound ``panel_xxxx`` never joins ``panel_panel_xxx`` and misses pushes
+         sent to ``panel_zoe-touch-pi``. Distinct physical panels have distinct
+         ``session_id``s, so this only ever returns the registered panel for the
+         connecting browser's own session (never routes one panel to another's).
+      2. Else (the session has only generated aliases, or no session_id) fall back
+         to the connecting id when it is itself a bound row the user owns — under
+         this session, or a NULL-session legacy/device bind.
       * admin/agent roles may target any explicit panel_id.
       * an unresolved session defers to the registered-panel guest policy.
     A user can never reach a panel their session/account isn't bound to.
@@ -1572,11 +1573,29 @@ async def _resolve_subscribable_panel(panel_id: str, session_id: str | None) -> 
         from database import get_db
 
         async for db in get_db():
-            # (1) The connecting id is itself a panel the user bound — under this
-            # session, or with no session (legacy/device bind). It IS the channel
-            # pushes target, so subscribe to its own channel. Authorises A->A
-            # without relying on is_foreground (which bind clears per-user, so a
-            # second panel in another session would otherwise deauthorise A).
+            # (1) CANONICAL: the session's REGISTERED panel (a bound row whose
+            # panel_id exists in `panels`). This wins unconditionally over the
+            # connecting id, so a generated alias that has its own row can't make
+            # the socket join panel_<alias> and miss pushes addressed to the
+            # registered panel. Scoped to this session_id + user_id; distinct
+            # physical panels have distinct sessions, so at most one registered
+            # panel resolves here for the connecting browser.
+            if session_id:
+                cursor = await db.execute(
+                    "SELECT s.panel_id FROM ui_panel_sessions s "
+                    "JOIN panels p ON p.panel_id = s.panel_id "
+                    "WHERE s.chat_session_id = ? AND s.user_id = ? "
+                    "ORDER BY s.is_foreground DESC, s.last_seen_at DESC LIMIT 1",
+                    (session_id, user_id),
+                )
+                row = await cursor.fetchone()
+                if row and row["panel_id"]:
+                    return str(row["panel_id"])
+
+            # (2) No registered panel for this session (only generated aliases, or
+            # no session_id). Authorise the connecting id when it is itself a bound
+            # row the user owns — under this session, or a NULL-session legacy/device
+            # bind — and subscribe to its own channel.
             cursor = await db.execute(
                 "SELECT 1 FROM ui_panel_sessions "
                 "WHERE panel_id = ? AND user_id = ? "
@@ -1585,20 +1604,6 @@ async def _resolve_subscribable_panel(panel_id: str, session_id: str | None) -> 
             )
             if await cursor.fetchone():
                 return panel_id
-
-            # (2) The connecting id has NO bound row of its own (a freshly generated
-            # alias opened before/without binding). Resolve to the session's panel
-            # ONLY when the session is bound to exactly one panel, so we can't
-            # mis-route to the wrong one of several.
-            if session_id:
-                cursor = await db.execute(
-                    "SELECT panel_id FROM ui_panel_sessions "
-                    "WHERE chat_session_id = ? AND user_id = ? LIMIT 2",
-                    (session_id, user_id),
-                )
-                rows = await cursor.fetchall()
-                if len(rows) == 1 and rows[0]["panel_id"]:
-                    return str(rows[0]["panel_id"])
             return None
     except Exception as exc:
         logger.debug("push websocket panel session validation failed: %s", exc)
