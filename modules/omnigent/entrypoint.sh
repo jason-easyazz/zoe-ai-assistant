@@ -23,6 +23,16 @@ if [ -n "${cursor_bin}" ]; then
   ln -sf "${cursor_bin}" /usr/local/bin/cursor-agent
 fi
 
+# GitHub auth for the workers: with the host's gh login mounted read-only at
+# ~/.config/gh, `gh` is authenticated; wire git so the workers' `git push` (each opens its
+# own PR) uses gh as the https credential helper. No-op if gh or the mounted login is absent.
+if command -v gh >/dev/null 2>&1 && [ -f "${HOME}/.config/gh/hosts.yml" ]; then
+  gh auth setup-git 2>/dev/null && echo "[entrypoint] gh auth wired for git ($(gh api user --jq .login 2>/dev/null || echo '?'))" \
+    || echo "[entrypoint] gh auth setup-git failed (workers may not be able to push)"
+else
+  echo "[entrypoint] gh CLI or ~/.config/gh/hosts.yml missing — workers cannot push/open PRs"
+fi
+
 # Default-workspace patch: Omnigent defaults a session's workspace to the host's HOME
 # (/root) when the UI doesn't specify one, and the UI doesn't always let you change it.
 # Redirect home-defaulted sessions to OMNIGENT_RUNNER_WORKSPACE (/workspace = the repo).
