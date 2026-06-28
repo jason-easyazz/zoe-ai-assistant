@@ -2543,10 +2543,12 @@ _WAKE_LINE_RE = re.compile(
 # only). Requires a following word (?=\S) so a bare name that IS the command stays.
 _WAKE_PREFIX_RE = re.compile(
     r"^\s*(?:hey|hi|ok|okay)?[\s,]*"
-    # wake-distinctive variants only — deliberately NOT "so" (a real discourse
-    # word that legitimately starts commands, e.g. "so, add milk to the list");
-    # "so" stays line-only so an inline strip can't corrupt a real command.
-    r"(?:zoe|zoey|zoie|zoee|joey|josie|joe|sewey|zo)"
+    # Inline strip uses ONLY unambiguous non-word wake variants. Real names/words
+    # (joe, joey, josie, so) are deliberately EXCLUDED here — as an inline prefix
+    # they would corrupt a real command ("Joe wants the weather", "so, add milk").
+    # Those still get caught when they are a whole wake-only line (_WAKE_LINE_RE);
+    # only the risky inline strip is conservative.
+    r"(?:zoe|zoey|zoie|zoee|zo|sewey)"
     r"[\s,.!?-]+(?=\S)",
     re.IGNORECASE,
 )
