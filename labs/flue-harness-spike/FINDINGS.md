@@ -120,34 +120,46 @@ Net: Flue carried scout → implement → verify with per-agent models, subagent
 delegation, and a writable `local()` sandbox; the gate behaved correctly. The
 **only** reason no PR opened is the trivial placeholder verify. Substrate de-risked.
 
-### Still open
+### PASS-path run + openPR — 2026-06-27, issue #863 (PHASE 0 COMPLETE)
 
-- **openPR phase not yet exercised on a PASS** — re-run with a *real* scoped
-  `VERIFY_CMD` (operator picks the issue, since a PASS opens a real PR).
-- **#735 voice-latency probe** to be read while the harness runs (no-regression =
-  Phase 0 acceptance, PR #736 §5).
+To exercise the openPR phase on a real PASS, a small, safe, factually-correct docs
+issue was filed (#863: README architecture table says `Gemma 4 E2B` → should be the
+canonical `E4B`) with a real verify (`verify_readme_e4b.sh`: README shows E4B and no
+stale E2B; red-before/green-after). The harness scouted → implemented → verified →
+**opened PR #865**, a clean **single-line README fix** (the exact intended change).
+
+**Bug found + fixed (this is the spike doing its job):** the FIRST PASS run (PR
+#864) was *polluted* — it carried the README fix PLUS leftover auth edits from the
+earlier #715 run, because `createBranch` did `git checkout -B … origin/main` on a
+dirty tree (keeping prior uncommitted edits) and `git add -A` swept them in. Fixed
+`createBranch` to `git reset --hard origin/main && git clean -fd` (pristine tree per
+run). Closed #864; re-ran → PR #865 is clean (1 file, +1/-1). The verifier had even
+*noticed* the out-of-scope auth diff but PASSed because its check only covered the
+README invariant — a note that verify commands should also assert scope.
+
+**#735 voice-latency acceptance — PASS (no regression under harness load):**
+
+| metric | baseline (idle) | under harness load | delta |
+|--------|-----------------|--------------------|-------|
+| chat median | 12.0 ms | 13.5 ms | +1.5 ms (~1.1×) |
+| health | 5.4 ms | 5.4 ms | 0 |
+
+No WARN lines; far under the 1.5× / 500 ms thresholds. The harness runs on OpenRouter
+(cloud), so it never competes for the local `:11434` voice GPU — exactly as designed.
 
 ## The Samantha tests — did the loop close?
 
 | Phase | Outcome | Notes |
 |-------|---------|-------|
-| scout (read issue, produce plan) | **PASS** | Correctly diagnosed #715's OIDC/tunnel root cause; named the right files |
-| implement (real diff on a branch) | **PASS** | Real 5-file diff (+75/-22) on its own branch in the disposable checkout |
+| scout (read issue, produce plan) | **PASS** | Correctly diagnosed #715's OIDC/tunnel root cause AND scoped #863's docs fix |
+| implement (real diff on a branch) | **PASS** | Real diffs on its own branch in the disposable checkout |
 | verify (ran check, captured evidence) | **PASS** | Ran `VERIFY_CMD`, captured output, fed it to the verifier |
-| openPR (reviewable PR with evidence) | **GATED** | Correctly NOT opened — verifier FAILed the placeholder verify; needs a real check to reach a PASS |
-| harness on separate model (not the voice brain) | **PASS** | Ran on OpenRouter `claude-haiku-4.5`; `:11434` untouched |
+| openPR (reviewable PR with evidence) | **PASS** | Opened PR #865 — a clean, correct single-line fix — on a real PASS |
+| harness on separate model (not the voice brain) | **PASS** | Ran on OpenRouter `claude-haiku-4.5`; `:11434` untouched; no latency regression |
 
-- [ ] **Measure voice latency with the #735 probe while the harness runs** —
-  Phase 0 acceptance (PR #736 §5) is **no voice-latency regression** on the
-  Jetson with the harness on its dev model. Record the probe reading here:
-  - baseline (harness stopped): \_\_\_ ms
-  - with harness running: \_\_\_ ms
-  - regression? (must be no):
-
-- **PR opened:** none — correctly gated (placeholder verify → verifier FAIL).
+- **PR opened:** #865 (clean, 1 file +1/-1) on the PASS path; #864 (closed) was the
+  polluted run that surfaced the checkout-cleanliness bug, now fixed.
 - **Was the harness model's output usable?** Yes — scout's triage of #715 was
-  accurate and the implementer produced a real, scoped 5-file diff.
-- **Did it fail loudly at the right boundary?** Yes — it stopped at the verify
   gate with a clear error, not silently.
 
 ## Verdict

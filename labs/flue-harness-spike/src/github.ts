@@ -41,11 +41,18 @@ export async function fetchIssue(
   return JSON.parse(json);
 }
 
-/** Create a fresh branch off main in the local checkout. */
+/** Create a fresh branch off main in the local checkout, from a PRISTINE tree. */
 export async function createBranch(cfg: SpikeConfig, branch: string): Promise<void> {
   await run('git', ['fetch', 'origin', 'main'], { cwd: cfg.zoeCheckout });
   // Branch from origin/main so the spike doesn't depend on the checkout's HEAD.
   await run('git', ['checkout', '-B', branch, 'origin/main'], { cwd: cfg.zoeCheckout });
+  // Reset to a pristine origin/main tree so leftover edits from a previous run
+  // can't bleed into this run's diff (createBranch on a dirty tree keeps local
+  // modifications, which `git add -A` would then sweep into the PR). reset
+  // discards tracked changes; clean removes untracked files (but not ignored
+  // ones like .env / node_modules, so a configured checkout stays usable).
+  await run('git', ['reset', '--hard', 'origin/main'], { cwd: cfg.zoeCheckout });
+  await run('git', ['clean', '-fd'], { cwd: cfg.zoeCheckout });
 }
 
 /** Stage everything, commit, and push the branch. */
