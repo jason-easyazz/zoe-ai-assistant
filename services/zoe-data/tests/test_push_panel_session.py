@@ -92,19 +92,16 @@ def _member(monkeypatch, user_id="u1", role="member"):
     monkeypatch.setattr(main, "_resolve_ws_session", resolve)
 
 
-# SQL needles for the three resolver queries.
-_OWN = "SELECT is_foreground FROM"          # step 1: connecting id's own row (this session)
-_NULL_SESSION = "chat_session_id IS NULL"   # step 2: NULL-session legacy/device bind
-_FOREGROUND = "AND is_foreground = 1"        # step 3: session's foreground panel
+# SQL needles for the two resolver queries.
+_OWN = "AND (chat_session_id = ? OR chat_session_id IS NULL)"  # step 1: own bound row
+_SESSION_PANELS = "WHERE chat_session_id = ? AND user_id = ? LIMIT 2"  # step 2: session panels
 
 
 @pytest.mark.asyncio
-async def test_connecting_id_wins_when_it_is_foreground(monkeypatch):
-    """A live panel reconnecting (its own row is foreground) subscribes to its own
-    channel — and the later queries are not reached."""
-    db = _install_database(
-        monkeypatch, _Db(routes={_OWN: cur(row={"is_foreground": 1})})
-    )
+async def test_connecting_id_authoritative_when_bound(monkeypatch):
+    """The connecting id is itself a bound panel → subscribe to its own channel,
+    short-circuiting the session lookup."""
+    db = _install_database(monkeypatch, _Db(routes={_OWN: cur(row=(1,))}))
     _member(monkeypatch)
     assert (
         await main._resolve_subscribable_panel("zoe-touch-pi", "session-1")
@@ -115,32 +112,32 @@ async def test_connecting_id_wins_when_it_is_foreground(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_never_routes_panel_a_to_panel_b(monkeypatch):
-    """Regression for 'Foreground Panel Misroutes': panel A reconnecting is
-    foreground under its own id, so it stays on panel_A even though the session
-    also has a (background) row and a different foreground lookup exists."""
-    _install_database(
+async def test_a_reconnect_stays_on_own_channel_with_two_panels(monkeypatch):
+    """Regression for 'Foreground Clears Sessions' + 'Foreground Panel Misroutes':
+    panel A reconnecting under its own bound id stays on panel_A even though the
+    user's is_foreground may belong to panel B in another session. Step 1 matches
+    A's own row, so the (potentially-B) session lookup is never reached."""
+    db = _install_database(
         monkeypatch,
         _Db(routes={
-            _OWN: cur(row={"is_foreground": 1}),  # A is foreground under its own id
-            _FOREGROUND: cur(row={"panel_id": "panel-B"}),  # would mis-route if reached
+            _OWN: cur(row=(1,)),  # A has its own bound row under this session
+            _SESSION_PANELS: cur(rows=[{"panel_id": "panel-B"}]),  # would mis-route if reached
         }),
     )
     _member(monkeypatch)
     assert await main._resolve_subscribable_panel("panel-A", "session-1") == "panel-A"
+    assert len(db.calls) == 1
 
 
 @pytest.mark.asyncio
-async def test_stale_background_alias_yields_to_foreground_panel(monkeypatch):
-    """Regression for 'Stale Alias Still Wins': a stale alias whose own row is
-    BACKGROUND (is_foreground=0) does not win — it follows the session's foreground
-    panel, the channel pushes target."""
+async def test_unbound_alias_resolves_to_sole_session_panel(monkeypatch):
+    """A freshly generated alias with no row of its own resolves to the session's
+    panel when the session is bound to exactly ONE panel."""
     _install_database(
         monkeypatch,
         _Db(routes={
-            _OWN: cur(row={"is_foreground": 0}),  # stale alias, background
-            _NULL_SESSION: cur(row=None),
-            _FOREGROUND: cur(row={"panel_id": "zoe-touch-pi"}),
+            _OWN: cur(row=None),  # alias has no bound row
+            _SESSION_PANELS: cur(rows=[{"panel_id": "zoe-touch-pi"}]),
         }),
     )
     _member(monkeypatch)
@@ -151,31 +148,25 @@ async def test_stale_background_alias_yields_to_foreground_panel(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_fresh_alias_no_row_routes_to_foreground(monkeypatch):
-    """A freshly generated alias with no row of its own routes to the session's
-    foreground panel, so delivery works regardless of the connecting id."""
+async def test_unbound_alias_rejected_when_session_has_multiple_panels(monkeypatch):
+    """An unbound alias is NOT mapped when the session has more than one panel — we
+    can't tell which, so refuse rather than mis-route."""
     _install_database(
         monkeypatch,
         _Db(routes={
             _OWN: cur(row=None),
-            _NULL_SESSION: cur(row=None),
-            _FOREGROUND: cur(row={"panel_id": "zoe-touch-pi"}),
+            _SESSION_PANELS: cur(rows=[{"panel_id": "panel-A"}, {"panel_id": "panel-B"}]),
         }),
     )
     _member(monkeypatch)
-    assert (
-        await main._resolve_subscribable_panel("panel_new", "session-1")
-        == "zoe-touch-pi"
-    )
+    assert await main._resolve_subscribable_panel("panel_new", "session-1") is None
 
 
 @pytest.mark.asyncio
 async def test_null_session_device_bind_authoritative(monkeypatch):
-    """A NULL-session legacy/device bind owned by the user is honoured via step 2."""
-    _install_database(
-        monkeypatch,
-        _Db(routes={_OWN: cur(row=None), _NULL_SESSION: cur(row=(1,))}),
-    )
+    """A NULL-session legacy/device bind owned by the user is honoured via step 1
+    (the connecting id matches its own NULL-session row)."""
+    _install_database(monkeypatch, _Db(routes={_OWN: cur(row=(1,))}))
     _member(monkeypatch)
     assert (
         await main._resolve_subscribable_panel("zoe-touch-pi", None) == "zoe-touch-pi"
@@ -184,14 +175,10 @@ async def test_null_session_device_bind_authoritative(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_rejected_when_nothing_matches(monkeypatch):
-    """No own foreground row, no NULL-session bind, no session foreground → reject."""
+    """No own row and no (sole) session panel → reject."""
     _install_database(
         monkeypatch,
-        _Db(routes={
-            _OWN: cur(row=None),
-            _NULL_SESSION: cur(row=None),
-            _FOREGROUND: cur(row=None),
-        }),
+        _Db(routes={_OWN: cur(row=None), _SESSION_PANELS: cur(rows=[])}),
     )
     _member(monkeypatch)
     assert await main._resolve_subscribable_panel("panel_unrelated", "session-1") is None
@@ -200,14 +187,10 @@ async def test_rejected_when_nothing_matches(monkeypatch):
 @pytest.mark.asyncio
 async def test_other_users_panel_rejected(monkeypatch):
     """A member can't reach another user's panel: queries filter on user_id, so no
-    row matches in any step → None."""
+    row matches in either step → None."""
     _install_database(
         monkeypatch,
-        _Db(routes={
-            _OWN: cur(row=None),
-            _NULL_SESSION: cur(row=None),
-            _FOREGROUND: cur(row=None),
-        }),
+        _Db(routes={_OWN: cur(row=None), _SESSION_PANELS: cur(rows=[])}),
     )
     _member(monkeypatch)
     assert await main._resolve_subscribable_panel("zoe-touch-pi", "session-1") is None
