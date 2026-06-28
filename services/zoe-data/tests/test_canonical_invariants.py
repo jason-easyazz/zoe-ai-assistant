@@ -24,6 +24,10 @@ def _read_repo(path: str) -> str:
     return open(os.path.join(REPO, path), encoding="utf-8").read()
 
 
+def _compact_token(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+
 def _rocks() -> dict:
     """Parse the machine-readable rocks block out of docs/CANONICAL.md."""
     text = open(CANONICAL, encoding="utf-8").read()
@@ -81,7 +85,11 @@ def test_brain_rock_wired_in_llama_server_unit():
     """The brain rock has to be wired in the live llama-server unit template."""
     brain = _rocks()["brain"]
     unit = _read_repo("scripts/setup/systemd/llama-server.service")
-    exec_start = re.search(r"^ExecStart=(.*?)(?=\nExecStartPost=)", unit, re.DOTALL | re.MULTILINE)
+    exec_start = re.search(
+        r"^ExecStart=(.*?)(?=\n[A-Z][A-Za-z]*=|\n\[|\Z)",
+        unit,
+        re.DOTALL | re.MULTILINE,
+    )
     assert exec_start, "llama-server.service is missing the llama-server ExecStart block"
     command = exec_start.group(1)
 
@@ -92,17 +100,17 @@ def test_brain_rock_wired_in_llama_server_unit():
 
     model_path = model.group(1)
     draft_path = draft.group(1)
-    family_slug = brain["family"].lower().replace(" ", "-")
-    variant_parts = [part.lower() for part in re.split(r"[-_]+", brain["variant"]) if part]
+    model_token = _compact_token(model_path)
+    family_token = _compact_token(brain["family"])
+    variant_token = _compact_token(brain["variant"])
 
     assert model_path.endswith(".gguf"), f"brain model is not a GGUF path: {model_path}"
-    assert family_slug in model_path.lower(), (
+    assert family_token in model_token, (
         f"brain model path does not reference canonical family {brain['family']}: {model_path}"
     )
-    for part in variant_parts:
-        assert part in model_path.lower(), (
-            f"brain model path does not reference canonical variant {brain['variant']}: {model_path}"
-        )
+    assert variant_token in model_token, (
+        f"brain model path does not reference canonical variant {brain['variant']}: {model_path}"
+    )
 
     assert brain["drafter"].lower() in draft_path.lower(), (
         f"draft model path does not reference canonical drafter {brain['drafter']}: {draft_path}"
@@ -118,25 +126,31 @@ def test_kokoro_tts_is_primary_live_voice_engine():
     tts = _rocks()["tts"]
     router = _read_repo("services/zoe-data/routers/voice_tts.py")
     synthesize = re.search(
-        r"@router\.post\(\"/synthesize\"\).*?(?=\n\n@router\.post\(\"/speak\"\))",
+        r"@router\.post\(\"/synthesize\"\).*?(?=\n\s*@router\.post\()",
         router,
         re.DOTALL,
     )
     assert synthesize, "voice_tts.py is missing the /api/voice/synthesize handler"
     body = synthesize.group(0)
+    primary_engine = _compact_token(tts["name"])
+    primary_calls = [
+        match.start()
+        for match in re.finditer(
+            rf"_synthesize_{re.escape(primary_engine)}(?:_|\()",
+            body.lower(),
+        )
+    ]
 
-    kokoro_sidecar = body.find("_synthesize_kokoro_sidecar")
-    kokoro_onnx = body.find("_synthesize_kokoro(")
     edge_tts = body.find("_synthesize_edge_tts")
     espeak = body.find("_synthesize_espeak")
-    assert kokoro_sidecar != -1 or kokoro_onnx != -1, (
+    assert primary_calls, (
         f"{tts['name']} is not wired into the live TTS waterfall"
     )
-    first_kokoro = min(pos for pos in (kokoro_sidecar, kokoro_onnx) if pos != -1)
+    first_primary = min(primary_calls)
     assert edge_tts != -1, "Edge TTS fallback is missing from the live TTS waterfall"
     assert espeak != -1, "espeak-ng fallback is missing from the live TTS waterfall"
-    assert first_kokoro < edge_tts < espeak, (
-        "live TTS waterfall must keep Kokoro primary, then Edge TTS, then espeak-ng"
+    assert first_primary < edge_tts < espeak, (
+        f"live TTS waterfall must keep {tts['name']} primary, then Edge TTS, then espeak-ng"
     )
 
 
