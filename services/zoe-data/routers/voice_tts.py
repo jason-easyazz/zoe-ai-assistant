@@ -2520,6 +2520,10 @@ def _log_voice_stt_sample(
 # it never competes with the brain's GPU). Model + tokenizer are cached once. ---
 _moonshine_model = None  # moonshine_voice v2 Transcriber
 _moonshine_lock = threading.Lock()
+# Serializes Moonshine INFERENCE across executor threads: the wake-time warmup dummy
+# inference and a real command transcription share one singleton transcriber, so they
+# must not run concurrently (the model isn't guaranteed thread-safe per-inference).
+_moonshine_infer_lock = threading.Lock()
 
 
 # ── Wake-word bleed fix ──────────────────────────────────────────────────────
@@ -2614,7 +2618,8 @@ async def _run_moonshine(wav_path: str) -> str:
     def _work() -> str:
         tr = _ensure_moonshine()
         audio, sr = load_wav_file(wav_path)
-        out = tr.transcribe_without_streaming(audio, sr)
+        with _moonshine_infer_lock:
+            out = tr.transcribe_without_streaming(audio, sr)
         # Moonshine segments speech into lines and emits the wake phrase ("Hey Zoe.")
         # as its own leading line. Strip the wake word from those lines so the
         # leading "Hey Zoe" can't corrupt the command transcript (wake-word bleed).
@@ -4919,6 +4924,45 @@ async def _prewarm_brain_for_panel(panel_id: str) -> None:
         logger.debug("voice/wake brain prewarm failed (non-fatal): %s", exc)
 
 
+def _stt_prewarm_on_wake_enabled() -> bool:
+    return (os.environ.get("ZOE_STT_PREWARM_ON_WAKE", "1").strip().lower()
+            in ("1", "true", "yes", "on"))
+
+
+async def _prewarm_stt_on_wake() -> None:
+    """On wake-word, warm Moonshine STT so the FIRST command after idle isn't decoded
+    on a cold/swapped-out inference path. Symmetric to _prewarm_brain_for_panel: the
+    brain is already prewarmed on wake, but Moonshine is warmed only ONCE at startup,
+    and its (un-mlock'd) pages get swapped out during idle on this memory-tight box —
+    so the first utterance after a gap hit a cold STT and mis-decoded ("first command
+    after a while" mishears), then was clean once warm. Run a tiny dummy inference in
+    the ~1-2s wake->command window (faults the model pages back in + primes the
+    onnxruntime path) so the real command runs warm. Best-effort + backgrounded;
+    never delays or breaks the wake acknowledgement.
+    """
+    try:
+        if not _stt_prewarm_on_wake_enabled():
+            return
+        if (os.environ.get("ZOE_STT_BACKEND") or "moonshine").strip().lower() != "moonshine":
+            return
+        loop = asyncio.get_running_loop()
+
+        def _warm() -> None:
+            import numpy as _np
+            tr = _ensure_moonshine()
+            # ~1s of very-low-amplitude noise @ 16kHz — NOT pure silence (which Moonshine
+            # may VAD-short-circuit without running the encoder, leaving the pages cold);
+            # real low-level input forces the inference path so the model faults back in.
+            # Serialized against real transcriptions so the warmup can't race a command.
+            buf = _np.random.default_rng(0).standard_normal(16000).astype(_np.float32) * 0.003
+            with _moonshine_infer_lock:
+                tr.transcribe_without_streaming(buf, 16000)
+
+        await loop.run_in_executor(None, _warm)
+    except Exception as exc:
+        logger.debug("voice/wake STT prewarm failed (non-fatal): %s", exc)
+
+
 @router.post("/wake")
 async def voice_wake(payload: dict, caller: dict = Depends(_require_voice_auth)):
     """
@@ -4953,6 +4997,9 @@ async def voice_wake(payload: dict, caller: dict = Depends(_require_voice_auth))
     # finishes speaking — hides the first-turn-of-session subprocess cold start.
     try:
         asyncio.ensure_future(_prewarm_brain_for_panel(panel_id))
+        # Warm Moonshine STT too — the brain was prewarmed but the (un-mlock'd) STT
+        # swaps out during idle, so the FIRST command after a gap was decoded cold.
+        asyncio.ensure_future(_prewarm_stt_on_wake())
     except Exception as exc:
         logger.debug("voice/wake prewarm dispatch failed (non-fatal): %s", exc)
 
