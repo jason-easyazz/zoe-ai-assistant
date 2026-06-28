@@ -94,9 +94,14 @@ _agent_running = False
 _CONTAINER_NAME = os.environ.get("ZOE_LIVEKIT_CONTAINER", "livekit").strip() or "livekit"
 _agent_task: Optional["asyncio.Task"] = None
 _idle_task: Optional["asyncio.Task"] = None
+_cooldown_task: Optional["asyncio.Task"] = None
 _lifecycle_lock: Optional["asyncio.Lock"] = None
 _last_activity: float = 0.0
 _active_participant_sids: set = set()
+# Flipped True once the native livekit-ffi AudioStream is proven broken on this
+# host (e.g. the Jetson Tegra FFI backend), so the agent loop switches permanently
+# to the aiortc backend — sticky even across agent-loop restarts in this process.
+_force_aiortc: bool = False
 
 
 def _ondemand_enabled() -> bool:
@@ -204,7 +209,7 @@ async def ensure_livekit_started(wait_ready: float = 8.0) -> bool:
 
 async def stop_livekit_ondemand(reason: str = "idle") -> None:
     """Cancel the agent loop and stop the LiveKit container."""
-    global _agent_task, _idle_task
+    global _agent_task, _idle_task, _cooldown_task
     async with _get_lifecycle_lock():
         task = _agent_task
         _agent_task = None
@@ -216,6 +221,12 @@ async def stop_livekit_ondemand(reason: str = "idle") -> None:
                 pass
             except Exception:
                 pass
+        # Cancel the cooldown watchdog too — it's a forever `while True: sleep(1)`
+        # loop that the agent-task cancel above does NOT reach (separate task).
+        cooldown = _cooldown_task
+        _cooldown_task = None
+        if cooldown is not None and not cooldown.done():
+            cooldown.cancel()
         # Tear the idle monitor down too, so a later ensure_livekit_started()
         # recreates it. Skip when we're being called *from* the monitor itself
         # (the normal _reap_if_idle path) — that task returns naturally and must
@@ -303,6 +314,8 @@ def get_voice_health() -> dict:
         "active_participants": sorted(_active_participant_sids),
         "agent_task_running": _agent_task is not None and not _agent_task.done(),
         "idle_monitor_running": _idle_task is not None and not _idle_task.done(),
+        "cooldown_watchdog_running": _cooldown_task is not None and not _cooldown_task.done(),
+        "force_aiortc": _force_aiortc,
     }
     return health
 
@@ -618,14 +631,30 @@ async def _collect_audio_stream(
       ptt_active   — True while a ptt_start has been received but not ptt_stop
       pipeline_task— the currently running asyncio.Task for the pipeline
     """
+    global _force_aiortc
+    audio_stream = None
     try:
         # Support both livekit.rtc tracks (livekit-ffi) and aiortc tracks
         from livekit_aiortc import _RemoteAudioTrack as _AiortcTrack, make_audio_stream
         if isinstance(track, _AiortcTrack):
             audio_stream = make_audio_stream(track, sample_rate=16000, num_channels=1)
         else:
+            # Native livekit-ffi AudioStream. On a half-broken FFI backend (e.g. the
+            # Jetson Tegra kernel) this constructor itself can crash deep in the SDK
+            # ("'NoneType' object has no attribute 'add_done_callback'"). Treat ANY
+            # construction failure as "native audio is broken on this host": flip the
+            # agent loop to the aiortc backend (instead of silently dying with the
+            # room connected but no audio) and stop here.
             from livekit import rtc as lk_rtc  # type: ignore
-            audio_stream = lk_rtc.AudioStream(track, sample_rate=16000, num_channels=1)
+            try:
+                audio_stream = lk_rtc.AudioStream(track, sample_rate=16000, num_channels=1)
+            except Exception as exc:
+                _force_aiortc = True
+                logger.warning(
+                    "LiveKit native AudioStream construction failed for %s (%s) — "
+                    "switching to the aiortc backend", sid, exc,
+                )
+                return
         async for frame_event in audio_stream:
             ps = participant_state.get(sid)
             if ps is None:
@@ -692,7 +721,19 @@ async def _collect_audio_stream(
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        logger.debug("LiveKit audio stream ended for %s: %s", sid, exc)
+        # Raised from debug → warning: a swallowed AudioStream/backend failure here
+        # is exactly how the agent ends up connected but deaf, so make it visible.
+        logger.warning("LiveKit audio stream error for %s: %s", sid, exc)
+    finally:
+        # The native AudioStream owns an FFI queue subscription + an internal asyncio
+        # task; without aclose() each participant disconnect / track re-subscribe /
+        # teardown leaks them. The aiortc stand-in has no aclose() — guard via getattr.
+        aclose = getattr(audio_stream, "aclose", None)
+        if aclose is not None:
+            try:
+                await aclose()
+            except Exception as exc:
+                logger.debug("LiveKit AudioStream aclose failed for %s: %s", sid, exc)
 
 
 def _on_pipeline_done(sid: str, ps: dict) -> None:
@@ -870,13 +911,22 @@ async def _agent_loop() -> None:
     cannot initialise a PeerConnection (e.g. Jetson ARM64 Tegra kernel), falls
     back automatically to the pure-Python aiortc backend.
     """
+    global _cooldown_task
     participant_state: dict[str, dict] = {}
     audio_tasks: dict[str, asyncio.Task] = {}
     backoff = 2.0
-    # ZOE_LK_USE_AIORTC=1 skips livekit-ffi entirely (set in .env on Jetson)
-    use_aiortc = os.environ.get("ZOE_LK_USE_AIORTC", "0") == "1"
+    # ZOE_LK_USE_AIORTC=1 skips livekit-ffi entirely (set in .env on Jetson).
+    # _force_aiortc is sticky: once the native backend is proven broken (here or in
+    # _collect_audio_stream) even a fresh agent loop goes straight to aiortc.
+    use_aiortc = os.environ.get("ZOE_LK_USE_AIORTC", "0") == "1" or _force_aiortc
 
-    asyncio.ensure_future(_cooldown_watchdog(participant_state))
+    # Track the cooldown watchdog so it doesn't leak as a forever `while True:
+    # sleep(1)` task per start→idle cycle. Cancel any stale one first (a prior
+    # cycle whose agent task was cancelled out from under it) before replacing it;
+    # stop_livekit_ondemand cancels it on teardown.
+    if _cooldown_task is not None and not _cooldown_task.done():
+        _cooldown_task.cancel()
+    _cooldown_task = asyncio.ensure_future(_cooldown_watchdog(participant_state))
 
     while True:
         room = None
@@ -930,6 +980,16 @@ async def _agent_loop() -> None:
 
                 while room.connection_state == lk_rtc.ConnectionState.CONN_CONNECTED:
                     await asyncio.sleep(5)
+                    if _force_aiortc:
+                        # _collect_audio_stream proved native audio is broken on this
+                        # host — drop the native room and reconnect via aiortc so the
+                        # agent actually receives audio instead of staying deaf.
+                        use_aiortc = True
+                        logger.warning(
+                            "LiveKit: native audio backend broken — reconnecting "
+                            "via the aiortc backend"
+                        )
+                        break
 
         except asyncio.CancelledError:
             break
