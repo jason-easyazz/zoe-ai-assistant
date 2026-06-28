@@ -135,11 +135,27 @@
     }
 
     function getPanelId() {
+        // Mirror touch/index.html's precedence so bind + push always agree on the
+        // SAME id. The registered id (`zoe_panel_id`, e.g. "zoe-touch-pi") is
+        // canonical; the generated `panel_xxxx` (`zoe_touch_panel_id`) is only a
+        // fallback for an unprovisioned panel. Diverging here (preferring the
+        // generated id) made the executor bind + open the push socket under
+        // `panel_xxxx` while the panel was registered as `zoe-touch-pi`, so the
+        // /ws/push session guard rejected it (1008 "Invalid device token").
         const params = new URLSearchParams(window.location.search);
         const forced = params.get('panel_id');
         if (forced && forced.trim()) {
-            localStorage.setItem('zoe_touch_panel_id', forced.trim());
-            return forced.trim();
+            const id = forced.trim();
+            localStorage.setItem('zoe_panel_id', id);
+            localStorage.setItem('zoe_touch_panel_id', id);
+            return id;
+        }
+        const registered = localStorage.getItem('zoe_panel_id');
+        if (registered && registered.trim()) {
+            // Keep the legacy key in sync so panelMatches() and any older readers
+            // still resolve to the registered identity.
+            localStorage.setItem('zoe_touch_panel_id', registered.trim());
+            return registered.trim();
         }
         let panelId = localStorage.getItem('zoe_touch_panel_id');
         if (!panelId) {
