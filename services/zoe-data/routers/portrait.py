@@ -9,7 +9,7 @@ GET  /api/portrait/me/emotional-moments — recent emotional memories for curren
 """
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from auth import get_current_user
 from database import get_db
@@ -89,14 +89,14 @@ async def _regenerate_for(user_id: str, db) -> dict:
         from user_portrait import run_portrait_synthesis  # type: ignore[import]
         result = await run_portrait_synthesis(user_id, db=db)
         return result
-    except Exception as exc:
-        logger.error("portrait regenerate failed user=%s: %s", user_id, exc)
-        raise HTTPException(status_code=500, detail=f"Portrait generation failed: {exc}")
+    except Exception:
+        logger.exception("portrait regenerate failed user=%s", user_id)
+        raise HTTPException(status_code=500, detail="Portrait generation failed")
 
 
 @router.get("/me/emotional-moments")
 async def get_my_emotional_moments(
-    limit: int = 10,
+    limit: int = Query(10, ge=1, le=200),
     user: dict = Depends(get_current_user),
 ):
     """Return recent emotional memories for the current user."""
@@ -106,7 +106,7 @@ async def get_my_emotional_moments(
 @router.get("/{user_id}/emotional-moments")
 async def get_emotional_moments(
     user_id: str,
-    limit: int = 10,
+    limit: int = Query(10, ge=1, le=200),
     user: dict = Depends(get_current_user),
 ):
     """Return recent emotional memories (admin or self only)."""
@@ -136,6 +136,6 @@ async def _get_emotional_moments(user_id: str, limit: int) -> dict:
             for r in emotional[:limit]
         ]
         return {"user_id": user_id, "emotional_moments": moments, "count": len(moments)}
-    except Exception as exc:
-        logger.error("emotional moments load failed user=%s: %s", user_id, exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+    except Exception:
+        logger.exception("emotional moments load failed user=%s", user_id)
+        raise HTTPException(status_code=500, detail="Could not load emotional moments")
