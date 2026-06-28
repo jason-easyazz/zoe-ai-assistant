@@ -1513,7 +1513,7 @@ async def prometheus_metrics(_: None = Depends(require_internal_token)):
     from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
     from memory_metrics import REGISTRY, snapshot_collection_sizes
 
-    snapshot_collection_sizes()
+    await snapshot_collection_sizes()
     return Response(
         content=generate_latest(REGISTRY),
         media_type=CONTENT_TYPE_LATEST,

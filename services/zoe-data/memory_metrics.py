@@ -125,27 +125,30 @@ digest_facts_extracted = Counter(
 )
 
 
-def snapshot_collection_sizes() -> None:
+async def snapshot_collection_sizes(timeout_s: float = 2.0) -> None:
     """Best-effort refresh of per-user MemPalace size gauge.
 
     Called by the `/metrics` endpoint handler before generating the scrape
     output so dashboards don't show stale values. Routed through the
     MemoryService facade (no direct ChromaDB client) so we reuse the
     singleton and respect the same backend abstraction as all other
-    memory access. Any failure is swallowed - metrics must never break
-    the request path.
+    memory access. The collection scan stays off the event loop via the
+    service's executor-backed async wrapper, and is time-bounded so metrics
+    scrapes cannot stall chat/voice. Any failure is swallowed - metrics must
+    never break the request path.
     """
     try:
+        import asyncio
         from memory_service import get_memory_service
 
         svc = get_memory_service()
-        counts = svc._collection_sizes_sync()
+        counts = await asyncio.wait_for(svc.collection_sizes_by_user(), timeout=timeout_s)
 
         mempalace_collection_size.clear()
         for uid, n in counts.items():
             mempalace_collection_size.labels(user_id=uid).set(n)
     except Exception:
-        pass
+        mempalace_collection_size.clear()
 
 
 __all__ = [
