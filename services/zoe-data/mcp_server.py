@@ -1291,7 +1291,11 @@ def _normalize_user_id(value) -> str | None:
 
 
 def _trusted_actor_context_from_message(msg: dict) -> dict:
-    """Extract trusted MCP actor data from transport/session metadata, not tool args."""
+    """Extract MCP actor data from transport/session metadata, not tool args.
+
+    Per-message metadata may identify the session actor, but privilege is
+    server-authoritative: roles come only from the DB or server env.
+    """
     params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
     meta = params.get("_meta") or msg.get("_meta") or {}
     if not isinstance(meta, dict):
@@ -1317,16 +1321,15 @@ def _trusted_actor_context_from_message(msg: dict) -> dict:
         os.environ.get("ZOE_MCP_USER_ID"),
     )
     role = _first(
-        zoe_meta.get("actor_role"),
-        zoe_meta.get("role"),
-        session_meta.get("actor_role"),
-        session_meta.get("role"),
-        meta.get("actor_role"),
-        meta.get("role"),
         os.environ.get("ZOE_MCP_ACTOR_ROLE"),
         os.environ.get("ZOE_MCP_USER_ROLE"),
     )
-    return {"user_id": user_id, "role": role, "source": "transport"}
+    return {
+        "user_id": user_id,
+        "role": role,
+        "role_source": "env" if role else None,
+        "source": "transport",
+    }
 
 
 async def _lookup_actor_role(db, user_id: str, role_hint: str | None) -> str:
@@ -1367,7 +1370,7 @@ async def _resolve_mcp_actor(db, name: str, args: dict, actor_context: dict | No
         args.pop("_user_id", None)
         _uid_raw = actor_context.get("user_id")
         explicit = _uid_raw is not None
-        role_hint = actor_context.get("role")
+        role_hint = actor_context.get("role") if actor_context.get("role_source") == "env" else None
         source = actor_context.get("source") or "transport"
 
     user_id = _normalize_user_id(_uid_raw)
@@ -1383,6 +1386,10 @@ async def _resolve_mcp_actor(db, name: str, args: dict, actor_context: dict | No
         )
         user_id = "family-admin"
         source = "legacy_fallback"
+        _mcp_log.warning(
+            "mcp tool '%s' using legacy unauthenticated family-admin fallback",
+            name,
+        )
 
     role = await _lookup_actor_role(db, user_id, role_hint)
     return {"user_id": user_id, "role": role, "explicit": explicit, "source": source}

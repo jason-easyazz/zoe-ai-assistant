@@ -165,8 +165,46 @@ async def test_non_admin_transport_actor_cannot_override_dashboard_target():
         actor_context={"user_id": "jason", "role": "member", "source": "test-session"},
     )
 
-    sql, params = db.calls[0]
+    sql, params = next(call for call in db.calls if "FROM dashboard_layouts" in call[0])
     assert "FROM dashboard_layouts" in sql
+    assert params == ("jason",)
+
+
+@pytest.mark.asyncio
+async def test_meta_actor_role_admin_is_ignored_when_db_role_is_member():
+    db = _RoutingDb(
+        {
+            "SELECT role FROM users": [{"role": "member"}],
+            "dashboard_layouts": [],
+        }
+    )
+    actor_context = mcp_server._trusted_actor_context_from_message(
+        {
+            "params": {
+                "_meta": {
+                    "zoe": {
+                        "actor_user_id": "jason",
+                        "actor_role": "admin",
+                    }
+                }
+            }
+        }
+    )
+
+    await mcp_server._execute_tool(
+        db=db,
+        name="dashboard_get_layout",
+        args={"user_id": "victim"},
+        actor_context=actor_context,
+    )
+
+    assert actor_context == {
+        "user_id": "jason",
+        "role": None,
+        "role_source": None,
+        "source": "transport",
+    }
+    sql, params = next(call for call in db.calls if "FROM dashboard_layouts" in call[0])
     assert params == ("jason",)
 
 
