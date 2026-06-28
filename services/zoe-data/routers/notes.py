@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/notes", tags=["notes"])
 
-_MAX_CATEGORY_LENGTH = 200
+_MAX_CATEGORY_LENGTH = 512
 
 
 def _row_to_dict(row) -> dict:
@@ -85,7 +85,7 @@ async def _store_note_memory(db, user_id: str, note: dict, action: str):
 
 @router.get("/", response_model=dict)
 async def list_notes(
-    category: Optional[str] = Query(None, max_length=_MAX_CATEGORY_LENGTH),
+    category: Optional[str] = Query(None),
     limit: int = Query(100, ge=1, le=500),
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
@@ -93,6 +93,8 @@ async def list_notes(
     """List notes with optional category filter. Returns {notes: [...], count}."""
     await require_feature_access(db, user, feature="notes", action="read")
     user_id = user["user_id"]
+    if category and len(category) > _MAX_CATEGORY_LENGTH:
+        return {"notes": [], "count": 0}
     conditions = [_visibility_filter_sql()]
     params: list = [user_id]
 

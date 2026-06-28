@@ -132,13 +132,21 @@ async def test_memory_prompt_search_failure_is_logged_and_nonfatal(monkeypatch, 
     assert "semantic prompt search failed" in caplog.text
 
 
-def test_notes_category_rejects_overlong_and_normal_category_still_queries(monkeypatch):
+def test_notes_category_bounds_without_rejecting_plausible_stored_values(monkeypatch):
     monkeypatch.setattr(notes, "require_feature_access", _allow_feature)
     db = _RecordingDb()
     client = TestClient(_notes_app(db))
 
-    too_long = client.get("/api/notes/", params={"category": "x" * 201})
-    assert too_long.status_code == 422
+    stored_length_category = "c" * notes._MAX_CATEGORY_LENGTH
+    plausible = client.get("/api/notes/", params={"category": stored_length_category})
+    assert plausible.status_code == 200
+    assert db.calls[0][1] == ["U1", stored_length_category, 100]
+    assert db.calls[1][1] == ["U1", stored_length_category]
+
+    db.calls.clear()
+    over_bound = client.get("/api/notes/", params={"category": "x" * (notes._MAX_CATEGORY_LENGTH + 1)})
+    assert over_bound.status_code == 200
+    assert over_bound.json() == {"notes": [], "count": 0}
     assert db.calls == []
 
     normal = client.get("/api/notes/", params={"category": "work", "limit": 5})
@@ -157,9 +165,8 @@ def test_memories_like_search_rejects_or_caps_overlong_inputs(monkeypatch):
     assert db.calls == []
 
     preview = client.post("/api/memories/link-preview", json={"query": "y" * 250})
-    assert preview.status_code == 200
-    assert db.calls[-1][1][1] == f"%{'y' * memories._MAX_LIKE_QUERY_LENGTH}%"
-    assert db.calls[-1][1][2] == f"%{'y' * memories._MAX_LIKE_QUERY_LENGTH}%"
+    assert preview.status_code == 422
+    assert db.calls == []
 
 
 def test_memories_normal_like_search_inputs_are_unchanged(monkeypatch):

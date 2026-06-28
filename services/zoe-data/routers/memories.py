@@ -450,7 +450,9 @@ async def link_preview(
     query = (payload or {}).get("query") or (payload or {}).get("url") or ""
     if not query:
         return {"preview": [], "count": 0}
-    query = str(query)[:_MAX_LIKE_QUERY_LENGTH]
+    query = str(query)
+    if len(query) > _MAX_LIKE_QUERY_LENGTH:
+        raise HTTPException(status_code=422, detail="query is too long")
     pattern = f"%{query}%"
     cur = await db.execute(
         """SELECT id, title, content, category, updated_at
