@@ -74,14 +74,16 @@ async def claim_pending(pending_id: str) -> dict | None:
             # Not found, expired-and-removed, or already claimed by a racer.
             return None
 
-        # Expiry check AFTER winning the claim. If expired, release the claim so
-        # the row stays consistent (claimed = 0) for the cleanup loop and the
-        # caller sees "not claimable".
+        # Expiry check AFTER winning the claim. An expired row is garbage, so
+        # DELETE it outright rather than releasing the claim: the cleanup loop
+        # only prunes rows with `claimed = 0`, so a claimed-then-released row
+        # whose release UPDATE failed would be stuck `claimed = 1` and never
+        # reaped. Deleting here removes that dependency entirely.
         try:
             expires = datetime.fromisoformat(row["expires_at"].replace("Z", "+00:00"))
             if datetime.now(timezone.utc) > expires:
                 log.warning("Pending %s expired; ignoring claim", pending_id)
-                await _release_claim(db, pending_id)
+                await _delete_pending(db, pending_id)
                 return None
         except Exception:
             pass
@@ -92,8 +94,9 @@ async def claim_pending(pending_id: str) -> dict | None:
         # Seed the session + first message inside ONE explicit transaction, so a
         # partial failure can never leave an orphan session without its message
         # (or vice versa). On any failure we roll back and compensate by
-        # releasing the claim, so the notification can be retried rather than
-        # being silently lost behind claimed = 1.
+        # releasing the claim back to `claimed = 0` so the notification can be
+        # retried AND the (still-unexpired) row stays reapable by the cleanup
+        # loop once it expires, rather than being lost behind `claimed = 1`.
         try:
             async with db.transaction():
                 await db.execute(
@@ -127,3 +130,18 @@ async def _release_claim(db, pending_id: str) -> None:
         )
     except Exception:
         log.error("claim_pending: failed to release claim for %s", pending_id)
+
+
+async def _delete_pending(db, pending_id: str) -> None:
+    """Best-effort delete of an expired/garbage pending row.
+
+    Preferred over releasing the claim for expired rows: it does not depend on
+    the cleanup loop's `claimed = 0` filter, so the row can't get stuck.
+    """
+    try:
+        await db.execute(
+            "DELETE FROM proactive_pending WHERE id = ?",
+            (pending_id,),
+        )
+    except Exception:
+        log.error("claim_pending: failed to delete expired pending %s", pending_id)

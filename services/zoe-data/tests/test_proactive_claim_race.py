@@ -101,6 +101,9 @@ class FakeDB:
             if row is not None:
                 row["claimed"] = 0
             return _Cursor([])
+        if u.startswith("DELETE FROM PROACTIVE_PENDING"):
+            self.store["pending"].pop(params[0], None)
+            return _Cursor([])
         if u.startswith("INSERT INTO CHAT_SESSIONS"):
             if self.fail_session_insert:
                 raise RuntimeError("simulated session insert failure")
@@ -181,7 +184,9 @@ async def test_expired_pending_is_not_claimed(monkeypatch):
 
     assert result is None
     assert store["sessions"] == []
-    assert store["pending"]["p1"]["claimed"] == 0
+    # Expired rows are DELETED (not released), so they can't get stuck at
+    # claimed=1 outside the cleanup loop's `claimed = 0` reaping filter.
+    assert "p1" not in store["pending"]
 
 
 @pytest.mark.asyncio
