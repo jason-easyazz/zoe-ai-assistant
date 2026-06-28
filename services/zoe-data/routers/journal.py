@@ -5,7 +5,7 @@ Mounted at prefix="/api/journal" with tag "journal".
 import json
 import random
 import uuid
-from datetime import date
+from datetime import date, datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -17,6 +17,9 @@ from models import JournalEntryCreate, JournalEntryUpdate
 from push import broadcaster
 
 router = APIRouter(prefix="/api/journal", tags=["journal"])
+
+DATE_FILTER_PATTERN = r"^\d{4}-\d{2}-\d{2}$"
+SEARCH_MAX_LENGTH = 200
 
 # Default journal prompts for GET /prompts
 DEFAULT_PROMPTS = [
@@ -55,6 +58,20 @@ def _visibility_filter_sql() -> str:
     return "user_id = ? AND deleted = 0"
 
 
+def _coerce_date(value):
+    """Normalize DB date values from Postgres or legacy SQLite rows."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    try:
+        return datetime.strptime(str(value)[:10], "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return None
+
+
 async def _store_journal_memory(db, user_id: str, entry: dict, action: str):
     """Write a journal-derived fact to MemPalace through MemoryService."""
     content = (entry.get("content") or "")[:800]
@@ -89,9 +106,9 @@ async def list_entries(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     mood: Optional[str] = Query(None),
-    start_date: Optional[str] = Query(None),
-    end_date: Optional[str] = Query(None),
-    search: Optional[str] = Query(None),
+    start_date: Optional[str] = Query(None, pattern=DATE_FILTER_PATTERN),
+    end_date: Optional[str] = Query(None, pattern=DATE_FILTER_PATTERN),
+    search: Optional[str] = Query(None, max_length=SEARCH_MAX_LENGTH),
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
@@ -105,10 +122,10 @@ async def list_entries(
         conditions.append("mood = ?")
         params.append(mood)
     if start_date:
-        conditions.append("date(created_at) >= ?")
+        conditions.append("created_at::timestamp::date >= ?")
         params.append(start_date)
     if end_date:
-        conditions.append("date(created_at) <= ?")
+        conditions.append("created_at::timestamp::date <= ?")
         params.append(end_date)
     if search:
         conditions.append("(title LIKE ? OR content LIKE ?)")
@@ -203,8 +220,8 @@ async def list_on_this_day(
     sql = """
         SELECT * FROM journal_entries
         WHERE user_id = ? AND deleted = 0
-          AND strftime('%m-%d', created_at) = ?
-          AND date(created_at) < date('now')
+          AND to_char(created_at::timestamp, 'MM-DD') = ?
+          AND created_at::timestamp::date < CURRENT_DATE
         ORDER BY created_at DESC
     """
     cursor = await db.execute(sql, [user_id, today_md])
@@ -220,7 +237,7 @@ async def get_streak_stats(
 ):
     """Return {current_streak, longest_streak, total_entries}."""
     await require_feature_access(db, user, feature="journal", action="read")
-    from datetime import datetime, timedelta
+    from datetime import timedelta
 
     user_id = user["user_id"]
 
@@ -232,22 +249,24 @@ async def get_streak_stats(
     total_entries = row[0] if row else 0
 
     cursor = await db.execute(
-        """SELECT DISTINCT date(created_at) as d
+        """SELECT DISTINCT created_at::timestamp::date as d
          FROM journal_entries
          WHERE user_id = ? AND deleted = 0
          ORDER BY d DESC""",
         [user_id],
     )
     rows = await cursor.fetchall()
-    dates_sorted = sorted([r[0] for r in rows if r[0]], reverse=True)
+    dates_sorted = sorted(
+        {d for d in (_coerce_date(r[0]) for r in rows) if d is not None},
+        reverse=True,
+    )
 
     current_streak = 0
     longest_streak = 0
     if dates_sorted:
-        today = date.today().isoformat()
         # Current streak: consecutive days ending today
         for i, d in enumerate(dates_sorted):
-            expected = (date.today() - timedelta(days=i)).isoformat()
+            expected = date.today() - timedelta(days=i)
             if d == expected:
                 current_streak += 1
             else:
@@ -255,8 +274,8 @@ async def get_streak_stats(
         # Longest streak
         run = 1
         for i in range(1, len(dates_sorted)):
-            curr_d = datetime.strptime(dates_sorted[i], "%Y-%m-%d").date()
-            prev_d = datetime.strptime(dates_sorted[i - 1], "%Y-%m-%d").date()
+            curr_d = dates_sorted[i]
+            prev_d = dates_sorted[i - 1]
             if (prev_d - curr_d).days == 1:
                 run += 1
             else:
