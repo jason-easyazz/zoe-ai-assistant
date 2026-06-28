@@ -1,0 +1,44 @@
+/**
+ * Application entrypoint for the lab-only Zoe-brain sidecar.
+ *
+ * This is Phase 2 of docs/architecture/zoe-flue-integration.md: stand up a
+ * Flue-hosted Pi `Agent` on Zoe's local Gemma brain as a THIRD implementation
+ * behind the `run_zoe_core(message, session_id, user_id)` seam — without cutting
+ * anything over to production. zoe-data is untouched; the live brain lane is
+ * untouched; this just proves the sidecar can speak as Zoe via Gemma.
+ *
+ * Seam M (the model) — the blessed first-party way, mirroring Flue's own
+ * `hello-world` example which registers local OpenAI-compatible servers
+ * (ollama/lmstudio). We register `zoe` against the live llama-server on :11434
+ * (OpenAI-compatible). Agents reference it as `zoe/<model>`.
+ *
+ * LAB ONLY.
+ */
+import { registerProvider } from '@flue/runtime';
+import { flue } from '@flue/runtime/routing';
+import { Hono } from 'hono';
+
+// Seam M: the Gemma rock. Same OpenAI-compatible llama-server that the live Pi
+// `local-gemma` extension already points at — registered here so the Flue Agent
+// reaches it the first-party way. The base URL is overridable via env for the
+// lab; defaults to the live local endpoint.
+registerProvider('zoe', {
+  api: 'openai-completions',
+  baseUrl: process.env.ZOE_BRAIN_BASE_URL ?? 'http://127.0.0.1:11434/v1',
+  // llama-server ignores the key, but the OpenAI-completions client requires a
+  // non-empty one. Use a harmless placeholder (overridable via env).
+  apiKey: process.env.ZOE_BRAIN_API_KEY ?? 'local-no-key',
+});
+
+const app = new Hono();
+
+// Liveness probe for the lab sidecar (not part of Flue's agent API).
+app.get('/health', (c) =>
+  c.json({ ok: true, service: 'flue-zoe-brain', at: new Date().toISOString() }),
+);
+
+// Mount Flue's built-in agent API. Exposes POST /agents/zoe/:id etc. because
+// src/agents/zoe.ts exports `route`.
+app.route('/', flue());
+
+export default app;

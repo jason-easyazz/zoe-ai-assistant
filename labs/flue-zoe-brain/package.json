@@ -1,0 +1,25 @@
+{
+  "name": "flue-zoe-brain",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Lab-only spike: a Flue-hosted Pi Agent on Zoe's local Gemma brain — first increment toward replacing the per-turn `pi --mode rpc` subprocess brain behind the run_zoe_core seam (docs/architecture/zoe-flue-integration.md Phase 2). NOT wired into production.",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "flue build --target node",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@flue/runtime": "1.0.0-beta.6",
+    "hono": "^4.8.3",
+    "valibot": "^1.1.0"
+  },
+  "devDependencies": {
+    "@flue/cli": "1.0.0-beta.6",
+    "@types/node": "22.10.2",
+    "typescript": "5.7.2"
+  }
+}
