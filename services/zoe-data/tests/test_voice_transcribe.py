@@ -555,6 +555,66 @@ def test_transcribe_audio_impl_moonshine_error_raises(monkeypatch):
     assert raised, "Moonshine backend error must surface (raise), not be masked as silence"
 
 
+# ── Moonshine audio prep (mono / 16 kHz guarantee, no per-sample edits) ──────
+
+
+def test_prepare_audio_passes_16k_through_unchanged():
+    """Already-16 kHz audio must reach Moonshine byte-for-byte unchanged.
+
+    This is the zero-regression guarantee: replaying the operator's corpus showed
+    Moonshine is so input-sensitive that even DC-offset removal flips transcripts,
+    so the prep MUST be an identity for the live 16 kHz path."""
+    from routers import voice_tts
+
+    audio = [0.0, 0.5, -0.5, 0.25, -0.25, 0.0]
+    out_audio, out_sr = voice_tts._prepare_audio_for_moonshine(audio, 16000)
+
+    assert out_sr == 16000
+    # Same object, not just equal values — no copy, no edit.
+    assert out_audio is audio
+
+
+def test_prepare_audio_resamples_off_rate_to_16k():
+    """A non-16 kHz capture is resampled to 16 kHz (Moonshine's expected rate)."""
+    import numpy as np
+    from routers import voice_tts
+
+    sr = 48000
+    # 1.0s of a 440 Hz tone at 48 kHz -> expect ~16000 samples at 16 kHz.
+    t = np.arange(sr, dtype=np.float32) / sr
+    tone = (0.3 * np.sin(2 * np.pi * 440.0 * t)).astype(np.float32)
+
+    out_audio, out_sr = voice_tts._prepare_audio_for_moonshine(tone.tolist(), sr)
+
+    assert out_sr == 16000
+    # 48k -> 16k is a clean 3:1 decimation; length scales with the ratio.
+    assert abs(len(out_audio) - sr // 3) <= 2
+    # Still bounded audio, not garbage.
+    assert max(abs(x) for x in out_audio) < 1.0
+
+
+def test_prepare_audio_downmixes_stereo_to_mono():
+    """A 2-D (stereo) array is averaged to mono so the C transcribe call is safe."""
+    import numpy as np
+    from routers import voice_tts
+
+    stereo = np.array([[0.4, 0.0], [0.0, 0.4], [0.2, 0.2]], dtype=np.float32)
+    out_audio, out_sr = voice_tts._prepare_audio_for_moonshine(stereo, 16000)
+
+    assert out_sr == 16000
+    mono = np.asarray(out_audio, dtype=np.float32)
+    assert mono.ndim == 1
+    assert mono.tolist() == pytest.approx([0.2, 0.2, 0.2])
+
+
+def test_prepare_audio_empty_is_noop():
+    from routers import voice_tts
+
+    out_audio, out_sr = voice_tts._prepare_audio_for_moonshine([], 44100)
+    assert out_sr == 16000
+    assert list(out_audio) == []
+
+
 def test_maybe_capture_stt_saves_corpus_without_whisper_ab(monkeypatch, tmp_path):
     """Corpus capture still saves the WAV, but fires NO whisper A/B."""
     from routers import voice_tts
