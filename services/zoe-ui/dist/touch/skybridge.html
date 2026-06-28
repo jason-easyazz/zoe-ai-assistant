@@ -212,6 +212,42 @@
             overflow: hidden;
         }
 
+        /* Home nav — a clear, always-reachable way back to the dashboard hub while a
+           card is showing. Hidden at rest (the ambient clock is the home). */
+        .sky-nav-home {
+            position: fixed;
+            top: 22px;
+            left: 22px;
+            z-index: 60;
+            display: none;
+            align-items: center;
+            gap: 8px;
+            height: 50px;
+            padding: 0 20px 0 15px;
+            border-radius: 999px;
+            border: 1px solid rgba(255, 255, 255, 0.16);
+            background: rgba(18, 22, 36, 0.66);
+            -webkit-backdrop-filter: blur(20px);
+            backdrop-filter: blur(20px);
+            color: #fff;
+            font-family: inherit;
+            font-size: 16px;
+            font-weight: 500;
+            cursor: pointer;
+            box-shadow: 0 12px 30px -12px rgba(0, 0, 0, 0.5);
+            transition: transform 160ms ease, background 160ms ease;
+        }
+        .sky-nav-home svg { width: 22px; height: 22px; fill: currentColor; }
+        .sky-nav-home:hover { background: rgba(28, 34, 52, 0.78); }
+        .sky-nav-home:active { transform: scale(0.96); }
+        body:not(.sky-empty) .sky-nav-home { display: inline-flex; }
+        html.light-mode .sky-nav-home,
+        :root[data-theme="light"] .sky-nav-home {
+            background: rgba(255, 255, 255, 0.82);
+            color: #16324d;
+            border-color: rgba(20, 50, 80, 0.14);
+        }
+
         .sky-stage-header {
             display: grid;
             grid-template-columns: minmax(0, 1fr) auto;
@@ -316,6 +352,173 @@
             color: var(--sky-muted);
             font-size: 12px;
             background: rgba(255,255,255,0.05);
+        }
+
+        /* ── Clock card ──
+           Every clock-card sizing rule lived inside other @media blocks that
+           weren't winning, so the "what time is it" card collapsed to a bare
+           ~38px bar (scene height 0) — verified on the 1280x720 panel. These base
+           rules give the card real height and center the live time; they override
+           the stale rules (hence !important) and de-overlap the date. */
+        body:not(.sky-empty) .clock-card.sky-premium-card {
+            min-height: 320px !important;
+            height: auto !important;
+            max-height: none !important;
+            overflow: visible !important;
+        }
+        body:not(.sky-empty) .clock-card .sky-clock-scene {
+            min-height: 280px !important;
+            height: auto !important;
+            position: static !important;
+            display: flex !important;
+            flex-direction: column !important;
+            align-items: center !important;
+            justify-content: center !important;
+            gap: 6px !important;
+        }
+        body:not(.sky-empty) .clock-card .sky-clock-main {
+            position: static !important;
+            display: flex !important;
+            flex-direction: column !important;
+            align-items: center !important;
+            gap: 8px !important;
+        }
+        body:not(.sky-empty) .clock-card .sky-clock-time {
+            position: static !important;
+            display: flex !important;
+            align-items: baseline !important;
+            justify-content: center !important;
+            gap: 4px !important;
+        }
+        body:not(.sky-empty) .clock-card .sky-clock-time span {
+            position: static !important;
+            font-size: 110px !important;
+            line-height: 1 !important;
+            font-weight: 700 !important;
+            color: #fff !important;
+        }
+        body:not(.sky-empty) .clock-card .sky-clock-time i {
+            position: static !important;
+            font-size: 96px !important;
+            font-style: normal !important;
+            color: rgba(255,255,255,0.4) !important;
+            transform: translateY(-8px) !important;
+        }
+        body:not(.sky-empty) .clock-card .sky-clock-time b {
+            position: static !important;
+            font-size: 34px !important;
+            font-weight: 600 !important;
+            color: rgba(255,255,255,0.72) !important;
+            align-self: flex-end !important;
+            margin-bottom: 16px !important;
+        }
+        body:not(.sky-empty) .clock-card .sky-clock-date {
+            position: static !important;
+            font-size: 24px !important;
+            color: rgba(255,255,255,0.66) !important;
+            text-align: center !important;
+        }
+
+        /* ── Timer card ──
+           Square-ish tile: time centered, label as a small note beneath, and the
+           progress is the card's BORDER — a rounded-rect SVG stroke that depletes
+           as the time runs out. Several tile side by side (eggs + pasta + oven). */
+        body:not(.sky-empty) .sky-card.timer {
+            grid-column: span 6 !important;
+            justify-self: center !important;
+            align-self: start !important;
+            width: min(340px, 100%) !important;
+            aspect-ratio: 1.12 / 1;
+            height: auto !important;
+            min-height: 0 !important;
+            max-height: none !important;
+            position: relative !important;
+            overflow: visible !important;
+            padding: 0 !important;
+            border-color: transparent !important;   /* the SVG ring is the border */
+        }
+        .sky-timer {
+            position: absolute;
+            inset: 0;
+        }
+        .sky-timer-ring {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+        .sky-timer-ring-track,
+        .sky-timer-ring-fill {
+            fill: none;
+            stroke-width: 4px;
+            vector-effect: non-scaling-stroke;
+        }
+        .sky-timer-ring-track { stroke: rgba(255,255,255,0.12); }
+        .sky-timer-ring-fill {
+            stroke: #34d399;
+            stroke-linecap: round;
+            transition: stroke-dashoffset 0.95s linear, stroke 0.4s ease;
+        }
+        .sky-timer.is-low .sky-timer-ring-fill { stroke: #f59e0b; }
+        .sky-timer.is-expired .sky-timer-ring-fill { stroke: #f87171; stroke-dashoffset: 0 !important; }
+        .sky-timer-center {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            text-align: center;
+            width: 100%;
+        }
+        .sky-timer-digits {
+            font-size: 66px;
+            line-height: 1;
+            font-weight: 700;
+            letter-spacing: 2px;
+            font-variant-numeric: tabular-nums;
+            color: #fff;
+        }
+        .sky-timer.is-expired .sky-timer-digits {
+            font-size: 38px;
+            letter-spacing: 1px;
+            color: #f87171;
+        }
+        .sky-timer-label {
+            font-size: 13px;
+            color: rgba(255,255,255,0.58);
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            max-width: 80%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .sky-timer-x {
+            position: absolute;
+            top: 12px;
+            right: 14px;
+            width: 30px;
+            height: 30px;
+            border-radius: 999px;
+            border: 1px solid var(--sky-border);
+            background: rgba(255,255,255,0.06);
+            color: rgba(255,255,255,0.55);
+            font-size: 13px;
+            line-height: 1;
+            cursor: pointer;
+            z-index: 2;
+        }
+        .sky-timer-x:active { background: rgba(255,255,255,0.16); }
+        .sky-card.timer.sky-timer-ringing {
+            animation: skyTimerPulse 0.85s ease-in-out infinite;
+        }
+        @keyframes skyTimerPulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(248,113,113,0.0); }
+            50% { box-shadow: 0 0 48px 8px rgba(248,113,113,0.5); }
         }
 
         .sky-card-body {
@@ -1037,6 +1240,17 @@
                 height 620ms cubic-bezier(0.2, 0.9, 0.2, 1),
                 border-radius 620ms cubic-bezier(0.2, 0.9, 0.2, 1);
             z-index: 3;
+        }
+
+        /* Standby = ambient clock, not summoned: the CLOCK owns the screen.
+           The orb body + halo appear only when Zoe is summoned (a sky-state-* is
+           set), then shrink to the base when showing results. The canvas orb is
+           already hidden in this mode; hide the orb glow + halo too so they don't
+           sit on top of the clock (they were left visible — the panel was always
+           faded to opacity:0 before, so this overlap was never seen). */
+        body.sky-empty.sky-ambient-clock:not(.sky-state-listening):not(.sky-state-thinking):not(.sky-state-responding) .sky-orb-panel::before,
+        body.sky-empty.sky-ambient-clock:not(.sky-state-listening):not(.sky-state-thinking):not(.sky-state-responding) .sky-orb-panel::after {
+            opacity: 0;
         }
 
         .sky-listening-copy {
@@ -4677,64 +4891,117 @@
 
         }
 
-        .sky-ambient-clock {
+        /* Scope the clock-element styles to its ID. `sky-ambient-clock` is ALSO
+           a <body> state-flag (skybridge.js adds it to body), so a bare
+           `.sky-ambient-clock` rule with position:fixed/opacity:0 wrongly matched
+           the body and faded the whole UI invisible. Targeting #skyAmbientClock
+           keeps these on the element only. */
+        /* Resting clock — the idle/standby screen. Deliberately SIMPLE + DARK so
+           it never lights up the room (esp. at night). The rich ambient clock
+           CARD is a separate on-demand surface. Vertically centred, elegant Inter,
+           and dimmed by time of day via a brightness filter (see #skyAmbientClock
+           dim rules + skybridge-theme.js data-rest-dim). */
+        #skyAmbientClock {
             position: fixed;
-            top: clamp(54px, 7.5vh, 84px);
+            top: 50%;
             left: 50%;
-            transform: translateX(-50%);
+            transform: translate(-50%, -50%);
             z-index: 2;
             display: grid;
             justify-items: center;
-            gap: 8px;
+            gap: clamp(8px, 1.4vh, 18px);
             opacity: 0;
             pointer-events: none;
-            transition: opacity 420ms ease, transform 420ms ease;
-            color: rgba(255,255,255,0.76);
+            transition: opacity 600ms ease, transform 600ms ease, filter 1200ms ease;
+            color: rgba(255,255,255,0.8);
             text-shadow: 0 18px 70px rgba(0,0,0,0.55);
+            filter: brightness(0.82);   /* default (day) — overridden by data-rest-dim */
         }
 
-        body.sky-empty.sky-ambient-clock .sky-ambient-clock {
+        body.sky-empty.sky-ambient-clock #skyAmbientClock {
             opacity: 1;
-            transform: translateX(-50%) translateY(0);
+            transform: translate(-50%, -50%);
+        }
+        body:not(.sky-empty) #skyAmbientClock {
+            opacity: 0;
+            transform: translate(-50%, calc(-50% - 10px));
         }
 
-        body:not(.sky-empty) .sky-ambient-clock {
-            opacity: 0;
-            transform: translateX(-50%) translateY(-10px);
+        /* Time-of-day dimming — room-safe. day: bright-ish; evening/night: softer;
+           deep night (sleep hours): barely a night-light. */
+        :root[data-rest-dim="day"]   #skyAmbientClock { filter: brightness(0.9); }
+        :root[data-rest-dim="night"] #skyAmbientClock { filter: brightness(0.6); }
+        :root[data-rest-dim="deep"]  #skyAmbientClock { filter: brightness(0.34); }
+
+        /* Resting screen background — flatten the body glow toward pure dark so the
+           idle screen stays room-safe (returns when a card shows). Deep darker. */
+        body.sky-empty.sky-ambient-clock {
+            background-color: #05070e !important;
+            background-image: none !important;
+        }
+        :root[data-rest-dim="deep"] body.sky-empty.sky-ambient-clock {
+            background-color: #03040a !important;
+            background-image: none !important;
+        }
+
+        /* Room-safe at night: the soft glow on the resting screen comes from several
+           layers — the html backdrop gradient, the body ::before/::after glows, and
+           the orb panel's glow. During the dark hours (after sunset / deep sleep)
+           suppress ALL of them so the standby screen is genuinely black, not just
+           the body bg. (Daytime keeps a faint ambient; active states keep the orb.) */
+        :root[data-rest-dim="night"]:has(body.sky-empty.sky-ambient-clock),
+        :root[data-rest-dim="deep"]:has(body.sky-empty.sky-ambient-clock) {
+            background-image: none !important;
+            background-color: #05070e !important;
+        }
+        :root[data-rest-dim="deep"]:has(body.sky-empty.sky-ambient-clock) { background-color: #03040a !important; }
+        :root[data-rest-dim="night"] body.sky-empty.sky-ambient-clock::before,
+        :root[data-rest-dim="deep"]  body.sky-empty.sky-ambient-clock::before,
+        :root[data-rest-dim="night"] body.sky-empty.sky-ambient-clock::after,
+        :root[data-rest-dim="deep"]  body.sky-empty.sky-ambient-clock::after {
+            background: none !important;
+            opacity: 0 !important;
+        }
+        :root[data-rest-dim="night"] body.sky-empty.sky-ambient-clock .sky-orb-panel::before,
+        :root[data-rest-dim="deep"]  body.sky-empty.sky-ambient-clock .sky-orb-panel::before,
+        :root[data-rest-dim="night"] body.sky-empty.sky-ambient-clock .sky-orb-panel::after,
+        :root[data-rest-dim="deep"]  body.sky-empty.sky-ambient-clock .sky-orb-panel::after,
+        :root[data-rest-dim="night"] body.sky-empty.sky-ambient-clock #skyOrb,
+        :root[data-rest-dim="deep"]  body.sky-empty.sky-ambient-clock #skyOrb {
+            opacity: 0 !important;
         }
 
         .sky-ambient-time {
             display: flex;
             align-items: baseline;
-            gap: clamp(8px, 1.2vw, 16px);
+            gap: clamp(6px, 1vw, 12px);
+            font-family: "Inter", -apple-system, system-ui, sans-serif;
             font-variant-numeric: tabular-nums;
-            font-weight: 850;
-            letter-spacing: 0;
-            line-height: 0.86;
-            color: rgba(255,255,255,0.82);
+            font-weight: 500;
+            letter-spacing: -2px;
+            line-height: 0.84;
+            color: rgba(255,255,255,0.92);
         }
-
-        .sky-ambient-time span {
-            font-size: clamp(124px, 18vw, 214px);
-        }
-
+        .sky-ambient-time span { font-size: clamp(120px, 17vw, 208px); }
         .sky-ambient-time i {
             font-style: normal;
-            font-size: clamp(100px, 14vw, 170px);
-            opacity: 0.5;
+            font-size: clamp(96px, 13vw, 162px);
+            opacity: 0.32;
+            transform: translateY(-0.06em);
         }
-
         .sky-ambient-time b {
-            margin-left: 6px;
-            font-size: clamp(30px, 3.7vw, 44px);
-            opacity: 0.56;
-            text-transform: uppercase;
-        }
-
-        .sky-ambient-date {
-            color: rgba(255,255,255,0.5);
+            margin-left: clamp(8px, 1vw, 14px);
             font-size: clamp(28px, 3.4vw, 42px);
-            font-weight: 800;
+            font-weight: 500;
+            opacity: 0.6;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .sky-ambient-date {
+            color: rgba(255,255,255,0.52);
+            font-size: clamp(24px, 2.9vw, 36px);
+            font-weight: 400;
+            letter-spacing: 0.4px;
         }
     </style>
 
@@ -5004,9 +5271,35 @@
             }
         }
     </style>
-
+    <!-- Design system loaded LAST so tokens + per-card re-skins win over the
+         legacy inline card CSS above. See docs/architecture/skybridge-design-system.md -->
+    <link rel="stylesheet" href="/touch/css/skybridge-ds.css?v=ds1">
+    <link rel="stylesheet" href="/touch/css/skybridge-type.css?v=ds1">
+    <link rel="stylesheet" href="/touch/css/cards/weather.css?v=ds1">
+    <link rel="stylesheet" href="/touch/css/cards/timer.css?v=ds1">
+    <link rel="stylesheet" href="/touch/css/cards/clock.css?v=ds1">
+    <link rel="stylesheet" href="/touch/css/cards/calendar.css?v=ds1">
+    <link rel="stylesheet" href="/touch/css/cards/lists.css?v=ds1">
+    <link rel="stylesheet" href="/touch/css/cards/people.css?v=ds1">
+    <link rel="stylesheet" href="/touch/css/cards/auth-challenge.css?v=ds1">
+    <link rel="stylesheet" href="/touch/css/cards/dashboard.css?v=ds1">
 </head>
 <body>
+<!-- Skybridge glyph sprite (design system §5). Cards: <svg><use href="#i-*"/></svg> -->
+<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <radialGradient id="moonG" cx="38%" cy="32%"><stop offset="0" stop-color="#fff7e0"/><stop offset="1" stop-color="#ffce70"/></radialGradient>
+  <mask id="moonM"><rect width="32" height="32" fill="#fff"/><circle cx="23.5" cy="10.5" r="10.5" fill="#000"/></mask>
+  <radialGradient id="sunG" cx="42%" cy="38%"><stop offset="0" stop-color="#fff1a6"/><stop offset=".6" stop-color="#ffc23d"/><stop offset="1" stop-color="#ff9b2f"/></radialGradient>
+  <linearGradient id="cloudG" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#cdd8ec"/></linearGradient>
+  <linearGradient id="stormG" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#dbe1f0"/><stop offset="1" stop-color="#9aa6c4"/></linearGradient>
+  <linearGradient id="rainG" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#e9effb"/><stop offset="1" stop-color="#b0c1e6"/></linearGradient>
+</defs>
+<symbol id="i-moon" viewBox="0 0 32 32"><circle cx="15" cy="16" r="11" fill="url(#moonG)" mask="url(#moonM)"/></symbol>
+<symbol id="i-sun" viewBox="0 0 32 32"><g stroke="#ffb22e" stroke-width="2.4" stroke-linecap="round"><line x1="16" y1="1.5" x2="16" y2="5"/><line x1="16" y1="27" x2="16" y2="30.5"/><line x1="1.5" y1="16" x2="5" y2="16"/><line x1="27" y1="16" x2="30.5" y2="16"/><line x1="5.8" y1="5.8" x2="8.3" y2="8.3"/><line x1="23.7" y1="23.7" x2="26.2" y2="26.2"/><line x1="5.8" y1="26.2" x2="8.3" y2="23.7"/><line x1="23.7" y1="8.3" x2="26.2" y2="5.8"/></g><circle cx="16" cy="16" r="7.4" fill="url(#sunG)"/></symbol>
+<symbol id="i-cloud" viewBox="0 0 24 22"><path d="M6.5 18.5h11a4 4 0 0 0 .6-7.94A5.6 5.6 0 0 0 6.3 8.1 4.2 4.2 0 0 0 6.5 18.5Z" fill="url(#cloudG)" stroke="rgba(80,110,150,.18)" stroke-width=".5"/></symbol>
+<symbol id="i-rain" viewBox="0 0 24 26"><path d="M6.5 14h11a4 4 0 0 0 .6-7.94A5.6 5.6 0 0 0 6.3 3.6 4.2 4.2 0 0 0 6.5 14Z" fill="url(#rainG)"/><g fill="#6fa8ff"><path d="M9 17.5l-1 2.6a.85.85 0 0 0 1.6.5l.8-2.5z"/><path d="M13.5 17.5l-1 2.6a.85.85 0 0 0 1.6.5l.8-2.5z"/></g></symbol>
+<symbol id="i-storm" viewBox="0 0 24 26"><path d="M6.5 14h11a4 4 0 0 0 .6-7.94A5.6 5.6 0 0 0 6.3 3.6 4.2 4.2 0 0 0 6.5 14Z" fill="url(#stormG)"/><path d="M13 13l-4.2 6.4h3l-1 5 5-7.4h-3l1.2-4z" fill="#ffd23d"/></symbol>
+</svg>
     <header class="sky-topbar">
         <div class="sky-title">
             <div class="sky-mark" aria-hidden="true"></div>
@@ -5048,6 +5341,10 @@
 	        </section>
 
         <section class="sky-stage" aria-label="Skybridge cards">
+            <button type="button" id="skyNavHome" class="sky-nav-home" aria-label="Back to home dashboard">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 3 10v10h6v-6h6v6h6V10z"/></svg>
+                <span>Home</span>
+            </button>
             <div class="sky-stage-header">
                 <div class="sky-context">
                     <h2 id="skyContextTitle">Home surface</h2>
@@ -5076,6 +5373,7 @@
     <script src="/touch/js/touch-menu.js?v=skybridge-panel-session-2"></script>
     <script src="/js/touch-ui-executor.js?v=skybridge-panel-session-2"></script>
     <script src="/touch/js/skybridge-capabilities.js?v=skybridge-push-ack-1"></script>
+    <script src="/touch/js/skybridge-theme.js?v=ds1"></script>
     <script src="/touch/js/skybridge-renderer.js?v=skybridge-panel-session-2"></script>
     <script src="/touch/js/skybridge-voice.js?v=skybridge-push-ack-1"></script>
     <script src="/touch/js/skybridge.js?v=skybridge-panel-session-2"></script>

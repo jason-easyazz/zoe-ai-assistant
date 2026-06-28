@@ -1,0 +1,127 @@
+/* Clock card — an ambient time scene to the weather card's standard
+   (docs/architecture/skybridge-design-system.md): time-of-day gradient, a
+   greeting, large time + date, and a divider with the moon/sun + sunrise/sunset.
+   Uses new clock-* class names (no legacy clock CSS conflict — only the
+   .sky-live-clock hook + data-clock-* attributes are kept). The card itself still
+   carries legacy `.clock-card.sky-premium-card` rules, so the card-level gradient/
+   size is overridden with a higher-specificity body:not(.sky-empty) selector. */
+
+/* ── Card: time-of-day gradient, fills the stage ── */
+body:not(.sky-empty) .sky-card.clock-card.sky-premium-card {
+  grid-column: 1 / -1 !important;
+  display: flex !important;
+  min-height: 460px !important;
+  height: auto !important;
+  max-height: none !important;
+  overflow: hidden !important;
+  padding: 0 !important;
+  border: none !important;
+  border-radius: var(--sky-radius-xl, 38px) !important;
+  color: #fff;
+  background: linear-gradient(152deg, #161e44 0%, #3a2a6e 52%, #7a3a72 100%) !important;
+  box-shadow: 0 44px 96px -32px rgba(40,16,70,0.6), inset 0 1px 0 rgba(255,255,255,0.2) !important;
+}
+:root[data-theme="light"] body:not(.sky-empty) .sky-card.clock-card.sky-premium-card {
+  background: linear-gradient(152deg, #5aa9ec 0%, #8fcdf2 50%, #dcefff 100%) !important;
+  color: #16324d;
+  box-shadow: 0 36px 84px -28px rgba(40,70,110,0.4), inset 0 1px 0 rgba(255,255,255,0.5) !important;
+}
+
+/* ── Scene: a flex row (main | divider | side) ── */
+.clock-card .clock-scene {
+  position: relative;
+  width: 100%;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+}
+.clock-card .clock-main {
+  flex: 1.7;
+  padding: 40px 48px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+}
+.clock-card .clock-greet {
+  font-size: 22px;
+  font-weight: 500;
+  color: #ffd9a8;
+  letter-spacing: 0.2px;
+  margin-bottom: 8px;
+}
+:root[data-theme="light"] .clock-card .clock-greet { color: #b9601f; }
+
+.clock-card .clock-time {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.clock-card .clock-h, .clock-card .clock-m {
+  font-size: 134px;
+  font-weight: 600;
+  line-height: 0.84;
+  letter-spacing: -3px;
+  color: inherit;
+}
+.clock-card .clock-colon {
+  font-size: 112px;
+  font-style: normal;
+  color: rgba(255,255,255,0.45);
+  transform: translateY(-10px);
+}
+:root[data-theme="light"] .clock-card .clock-colon { color: rgba(20,50,80,0.4); }
+.clock-card .clock-mer {
+  font-size: 40px;
+  font-weight: 500;
+  color: rgba(255,255,255,0.72);
+  margin-left: 8px;
+}
+:root[data-theme="light"] .clock-card .clock-mer { color: rgba(20,50,80,0.62); }
+.clock-card .clock-date {
+  font-size: 22px;
+  font-weight: 400;
+  color: rgba(255,255,255,0.7);
+  margin-top: 12px;
+  letter-spacing: 0.2px;
+}
+:root[data-theme="light"] .clock-card .clock-date { color: rgba(20,50,80,0.6); }
+
+/* ── Divider + side panel (moon/sun + sunrise/sunset) ── */
+.clock-card .clock-div { width: 1px; margin: 44px 0; background: rgba(255,255,255,0.16); }
+:root[data-theme="light"] .clock-card .clock-div { background: rgba(20,50,80,0.16); }
+.clock-card .clock-side {
+  flex: 0 0 250px;
+  padding: 40px 30px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+}
+.clock-card .clock-glyph { display: block; line-height: 0; }
+.clock-card .clock-glyph svg { filter: drop-shadow(0 0 16px rgba(255,206,112,0.4)); }
+/* Show moon by night / sun by day via CSS, so a live theme flip (sunrise/sunset)
+   swaps them with no re-render. */
+.clock-card .clock-glyph-day { display: none; }
+:root[data-theme="light"] .clock-card .clock-glyph-night { display: none; }
+:root[data-theme="light"] .clock-card .clock-glyph-day { display: block; }
+:root[data-theme="light"] .clock-card .clock-glyph svg { filter: drop-shadow(0 0 18px rgba(255,180,60,0.5)); }
+:root[data-theme="light"] .clock-card .clock-star { display: none; }
+.clock-card .clock-sun { width: 100%; display: flex; flex-direction: column; gap: 14px; }
+.clock-card .clock-sun-row { display: flex; align-items: center; justify-content: space-between; font-size: 16px; }
+.clock-card .clock-sun-lbl { display: flex; align-items: center; gap: 9px; color: rgba(255,255,255,0.72); }
+:root[data-theme="light"] .clock-card .clock-sun-lbl { color: rgba(20,50,80,0.66); }
+.clock-card .clock-sun-t { font-weight: 600; }
+
+/* ── Stars (night) ── */
+.clock-card .clock-star {
+  position: absolute;
+  width: 3px; height: 3px;
+  border-radius: 50%;
+  background: #fff;
+  animation: skyTwinkle 3s ease-in-out infinite;
+}
+@keyframes skyTwinkle { 0%,100% { opacity: 0.25; } 50% { opacity: 0.85; } }
+@media (prefers-reduced-motion: reduce) { .clock-card .clock-star { animation: none; } }

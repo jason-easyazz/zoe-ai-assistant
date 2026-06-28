@@ -9,18 +9,37 @@
     let phase = 0;
     let animationFrame = null;
     let cardSequence = 0;
+    // Bumped on every deck clear so a pending async append (e.g. the dashboard's
+    // weather fetch) can detect the view changed under it and bail.
+    let deckToken = 0;
     let currentUtterance = '';
     let voiceStartedByUser = false;
     let commandFallbackOpen = false;
+    let voiceErrorFallback = false;
     let skybridgeContext = {};
     let authProfiles = [];
     let authHydrationSequence = 0;
     let idleTimer = null;
     let clockTicker = null;
+    const activeTimers = new Map();   // id -> {id,label,expires,duration,ringing}
+    let timerTickHandle = null;
+    let audioCtx = null;
+    let alarmTimer = null;
+    let stallWatchdog = null;
+    let stallDeferrals = 0;
+    // Force-recover the panel if a turn goes silent for this long (re-armed on
+    // every inbound event, so it only fires on a genuine stall, not a slow turn).
+    const STALL_WATCHDOG_MS = 25000;
+    // Cap consecutive recovery deferrals (active mic/TTS) so a stuck voice flag
+    // can't permanently block the watchdog.
+    const MAX_STALL_DEFERRALS = 3;
 
     const queryParams = new URLSearchParams(location.search);
-    const configuredIdleMs = Number(queryParams.get('idle_ms') || localStorage.getItem('skybridge_idle_return_ms') || 75000);
-    const CARD_IDLE_MS = Number.isFinite(configuredIdleMs) ? Math.max(15000, configuredIdleMs) : 75000;
+    // How long a card stays up with no interaction before returning to the ambient
+    // clock. Touch/voice resets this, so it's the quiet-time fade. 75s was too quick
+    // to read a result you just asked for; 3 min is comfortable on a kiosk.
+    const configuredIdleMs = Number(queryParams.get('idle_ms') || localStorage.getItem('skybridge_idle_return_ms') || 180000);
+    const CARD_IDLE_MS = Number.isFinite(configuredIdleMs) ? Math.max(15000, configuredIdleMs) : 180000;
 
     const colors = {
         ambient: ['#5fc6ff', '#66d19e'],
@@ -35,12 +54,21 @@
         startOrb();
         startClockTicker();
         renderHome();
+        restoreTimers();   // a reload resumes any still-running countdown
         loadBackendStatus();
         setMode(mode);
         syncVoiceFallbackState();
         if (typeof TouchMenu !== 'undefined') TouchMenu.init({ page: 'skybridge' });
         const initialQuery = new URLSearchParams(location.search).get('q');
         if (initialQuery) {
+            // Strip ?q from the URL before running it, so a reload doesn't re-submit
+            // the command — it can be side-effectful (e.g. "set a timer"), which
+            // otherwise regenerates on every refresh. One-shot only.
+            try {
+                const u = new URL(location.href);
+                u.searchParams.delete('q');
+                history.replaceState(null, '', u.pathname + u.search + u.hash);
+            } catch (_) {}
             setTimeout(() => submitCommand(initialQuery), 120);
         }
     }
@@ -69,6 +97,7 @@
         els.input = document.getElementById('skyCommandInput');
         els.mic = document.getElementById('skyMicBtn');
         els.home = document.getElementById('skyHomeBtn');
+        els.navHome = document.getElementById('skyNavHome');
         els.orbButton = document.getElementById('skyOrbButton');
         els.orbButtonText = document.getElementById('skyOrbButtonText');
         els.voiceHint = document.getElementById('skyVoiceHint');
@@ -92,6 +121,11 @@
             event.preventDefault();
             submitCommand(els.input.value);
             els.input.value = '';
+            // The user has committed their message and the input is empty again,
+            // so if we deferred a voice recovery while they were typing (a 'ready'
+            // arrived mid-message), do it now — otherwise no further 'ready' fires
+            // and the panel stays stuck in the typing fallback.
+            recoverFromVoiceError();
         });
         els.input.addEventListener('focus', () => {
             if (!commandFallbackOpen) {
@@ -106,12 +140,39 @@
         els.orbButton.addEventListener('click', toggleVoiceCapture);
         els.voiceAction.addEventListener('click', toggleVoiceCapture);
         els.home.addEventListener('click', () => renderHome({ showCards: true }));
+        if (els.navHome) {
+            // Always-visible Home while a card is up → back to the dashboard hub.
+            els.navHome.addEventListener('click', () => wakeToDashboard());
+        }
+        // Touch the resting panel anywhere (not a control) to wake it to the
+        // dashboard — the ambient clock should be a door, not a dead end.
+        document.addEventListener('click', event => {
+            if (!document.body.classList.contains('sky-empty')) return;
+            if (event.target.closest('button, a, input, textarea, label, [data-sky-action], .sky-command, .sky-orb-button')) return;
+            wakeToDashboard();
+        });
         ['pointerdown', 'keydown', 'touchstart'].forEach(type => {
             document.addEventListener(type, noteUserActivity, { passive: true });
         });
         els.cards.addEventListener('click', event => {
+            // Tapping anywhere on a ringing timer silences + dismisses it.
+            if (event.target.closest('.sky-card.sky-timer-ringing') && acknowledgeRingingTimers()) {
+                return;
+            }
+            // Per-timer Cancel button → cancel just that one (others keep running).
+            const cancelBtn = event.target.closest('[data-timer-cancel]');
+            if (cancelBtn) {
+                cancelTimerLocal(cancelBtn.dataset.timerCancel);
+                return;
+            }
             const btn = event.target.closest('button[data-sky-action]');
             if (!btn) return;
+            // "+ Add item" and friends: open the composer prefilled so you can type
+            // or speak the rest (e.g. "add ⟂ to the shopping list").
+            if (btn.dataset.skyAction === 'compose') {
+                composeInInput(btn.dataset.compose || '', parseInt(btn.dataset.composeCaret, 10) || 0);
+                return;
+            }
             let route = btn.dataset.route;
             const query = btn.dataset.query;
             if (btn.dataset.skyAction === 'auth') {
@@ -186,8 +247,16 @@
     }
 
     function handleVoiceEvent(event) {
+        // Any inbound activity during an active turn proves the pipeline is alive
+        // — re-arm the stall watchdog so it only fires on real silence.
+        if (event && event.type !== 'ready' && orbState !== 'ambient') armStallWatchdog();
         if (event.type === 'ready') {
             setStatus('Ready on ' + event.mode);
+            // Voice transport just (re)connected. If we'd dropped into the typing
+            // fallback purely because voice errored/disconnected, recover to voice
+            // instead of leaving the panel stuck on "Type here while voice
+            // reconnects..." after the socket is already back.
+            recoverFromVoiceError();
         } else if (event.type === 'state') {
             setState(event.state || 'ambient');
         } else if (event.type === 'transcript') {
@@ -203,6 +272,7 @@
         } else if (event.type === 'error') {
             showError(event.message);
             if (/voice disconnected|transport unavailable|livekit unavailable|websocket|microphone|permission/i.test(event.message || '')) {
+                voiceErrorFallback = true;
                 openCommandFallback('Type here while voice reconnects...');
             }
         } else if (event.type === 'done') {
@@ -278,6 +348,7 @@
 
     function renderSkybridgeResult(data) {
         if (!data) return;
+        if (data.timer_cancelled_id) removeTimer(data.timer_cancelled_id);
         clearCards();
         const intent = data.intent || {};
         const cards = Array.isArray(data.cards) ? data.cards : [];
@@ -377,6 +448,7 @@
         document.body.classList.add('sky-empty');
         document.body.classList.add('sky-ambient-clock');
         commandFallbackOpen = false;
+        voiceErrorFallback = false;
         document.body.classList.remove('sky-command-open');
         document.body.classList.remove('sky-typing-fallback');
         syncVoiceFallbackState();
@@ -396,8 +468,52 @@
         requestAnimationFrame(resizeOrb);
     }
 
+    // Wake from rest into the guest dashboard: the orb stays present (tap/talk),
+    // and the stage fills with glance cards anyone can see — time, weather, room
+    // controls. Personal cards still ask for sign-in when tapped. Live weather is
+    // fetched after the instant cards so the wake feels immediate.
+    // Render the condensed guest dashboard (Layout B) as a single surface — clock +
+    // weather tile + room/music/sign-in. Sets the stage directly (no clearCards,
+    // which would flash the ambient clock back) and bumps the deck token so a
+    // pending weather fetch can tell the view changed under it.
+    function renderDashboardSurface(weather) {
+        deckToken++;
+        cardSequence = 0;
+        document.body.classList.remove('sky-empty');
+        document.body.classList.remove('sky-ambient-clock');
+        document.body.classList.add('sky-has-cards');
+        els.cards.innerHTML = window.SkybridgeRenderer.render({
+            component: 'dashboard',
+            props: { guest: true, weather: weather || null }
+        });
+        requestAnimationFrame(resizeOrb);
+    }
+
+    function wakeToDashboard() {
+        renderDashboardSurface(null);
+        const token = deckToken;
+        scheduleIdleReturn();
+        // Enrich with live weather (guest-readable); re-render the surface with it,
+        // but only if the user hasn't moved on (token still current).
+        fetch('/api/skybridge/resolve', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            body: JSON.stringify({ message: 'weather' })
+        }).then(res => (res.ok ? res.json() : null)).then(data => {
+            if (!data || token !== deckToken || document.body.classList.contains('sky-empty')) return;
+            // The resolve card carries its data under `content` (props is created
+            // later by the renderer's normalization), so read either.
+            const wxCard = (Array.isArray(data.cards) ? data.cards : []).find(c => {
+                const src = (c && c.content && c.content.source) || (c && c.props && c.props.source) || '';
+                return /weather/.test(String(src));
+            });
+            if (wxCard) renderDashboardSurface(wxCard.content || wxCard.props);
+        }).catch(() => { /* weather is best-effort on the dashboard */ });
+    }
+
     function clearCards() {
         cardSequence = 0;
+        deckToken++;
         els.cards.innerHTML = '';
         document.body.classList.add('sky-empty');
         document.body.classList.add('sky-ambient-clock');
@@ -405,6 +521,9 @@
     }
 
     function addCard(card, prepend, delayMs) {
+        // A new card changes the deck, so invalidate any pending async render
+        // (e.g. the dashboard's weather fetch) that would otherwise overwrite it.
+        deckToken++;
         document.body.classList.remove('sky-empty');
         document.body.classList.remove('sky-ambient-clock');
         requestAnimationFrame(resizeOrb);
@@ -420,6 +539,7 @@
             els.cards.appendChild(node);
         }
         hydrateAuthCard(node, card);
+        registerTimerCard(node, card);
         updateAllClocks();
         scheduleIdleReturn();
         while (els.cards.children.length > 8) {
@@ -434,6 +554,159 @@
         }
     }
 
+    // ── Timers ──────────────────────────────────────────────────────────────
+    // A real countdown engine: timers live in this JS map (authoritative for
+    // firing), tick the on-screen card, persist to localStorage so a reload
+    // resumes, and ring an audible alarm at zero — even if another card is up.
+    const TIMERS_KEY = 'sky_active_timers';
+
+    function _timerSel(id) {
+        const safe = (window.CSS && CSS.escape) ? CSS.escape(id) : id;
+        return '.sky-timer[data-timer-id="' + safe + '"]';
+    }
+    function _fmtClock(secs) {
+        secs = Math.max(0, secs);
+        return String(Math.floor(secs / 60)).padStart(2, '0') + ':' + String(secs % 60).padStart(2, '0');
+    }
+    function persistTimers() {
+        try {
+            localStorage.setItem(TIMERS_KEY, JSON.stringify([...activeTimers.values()]
+                .map(t => ({ id: t.id, label: t.label, expires: t.expires, duration: t.duration }))));
+        } catch (_) {}
+    }
+    function ensureTimerTicking() {
+        if (timerTickHandle == null && activeTimers.size) timerTickHandle = setInterval(timerTick, 250);
+    }
+    function registerTimer(id, label, expires, duration) {
+        if (!id || !(+expires)) return;
+        const existing = activeTimers.get(id);
+        activeTimers.set(id, {
+            id, label: label || 'Timer', expires: +expires, duration: +duration || 0,
+            ringing: existing ? existing.ringing : false
+        });
+        persistTimers();
+        ensureTimerTicking();
+    }
+    function registerTimerCard(node, card) {
+        const type = card && (card.component || card.card_type);
+        const props = (card && (card.props || card.content)) || {};
+        if (type !== 'timer' && props.source !== 'timer') return;
+        const el = node.querySelector('.sky-timer');
+        const id = (el && el.dataset.timerId) || props.timer_id || props.id;
+        const expires = (el && +el.dataset.timerExpires) || +props.expires_at_ms;
+        if (id && expires) registerTimer(id, props.label || props.title, expires, props.duration_seconds);
+    }
+    function removeTimer(id) {
+        if (!id || !activeTimers.has(id)) return;
+        const t = activeTimers.get(id);
+        activeTimers.delete(id);
+        persistTimers();
+        if (t && t.ringing) stopAlarm();
+        const el = els.cards.querySelector(_timerSel(id));
+        const card = el && el.closest('.sky-card');
+        if (card) card.remove();
+        if (!activeTimers.size && timerTickHandle != null) { clearInterval(timerTickHandle); timerTickHandle = null; }
+        if (!els.cards.children.length) clearCards();
+    }
+    function timerTick() {
+        const now = Date.now();
+        activeTimers.forEach(t => {
+            const remaining = Math.max(0, Math.ceil((t.expires - now) / 1000));
+            const el = els.cards.querySelector(_timerSel(t.id));
+            if (el) {
+                const digits = el.querySelector('.sky-timer-digits');
+                const fill = el.querySelector('.sky-timer-ring-fill');
+                if (digits && !t.ringing) digits.textContent = _fmtClock(remaining);
+                if (fill && t.duration && !t.ringing) {
+                    const frac = Math.max(0, Math.min(1, remaining / t.duration));
+                    fill.setAttribute('stroke-dashoffset', (100 * (1 - frac)).toFixed(2));
+                    el.classList.toggle('is-low', frac <= 0.15);
+                }
+            }
+            if (remaining <= 0 && !t.ringing) fireTimer(t, el);
+        });
+        if (!activeTimers.size && timerTickHandle != null) { clearInterval(timerTickHandle); timerTickHandle = null; }
+    }
+    function fireTimer(t, el) {
+        t.ringing = true;
+        persistTimers();
+        let card = el && el.closest('.sky-card');
+        if (!card) {   // rang while its card wasn't on screen — surface a ringing one
+            addCard({ component: 'timer', props: { timer_id: t.id, label: t.label, title: t.label,
+                duration_seconds: t.duration, expires_at_ms: t.expires, status: 'expired' } }, true);
+            const found = els.cards.querySelector(_timerSel(t.id));
+            card = found && found.closest('.sky-card');
+        }
+        if (card) {
+            card.classList.add('sky-timer-ringing');
+            const inner = card.querySelector('.sky-timer');
+            if (inner) inner.dataset.timerStatus = 'expired';
+            const digits = card.querySelector('.sky-timer-digits');
+            if (digits) digits.textContent = "Time's up";
+        }
+        const named = (t.label && t.label.toLowerCase() !== 'timer') ? t.label + ' timer' : 'Timer';
+        setVoiceLayerText(named + " — time's up!");
+        startAlarm();
+        clearIdleTimer();   // keep the ringing card up
+    }
+    function startAlarm() {
+        stopAlarm();
+        let count = 0;
+        const beep = () => {
+            try {
+                audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+                if (audioCtx.state === 'suspended') audioCtx.resume();
+                const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+                o.type = 'sine'; o.frequency.value = 880;
+                g.gain.setValueAtTime(0.0001, audioCtx.currentTime);
+                g.gain.exponentialRampToValueAtTime(0.4, audioCtx.currentTime + 0.02);
+                g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.35);
+                o.connect(g); g.connect(audioCtx.destination);
+                o.start(); o.stop(audioCtx.currentTime + 0.36);
+            } catch (_) {}
+            if (++count >= 40) stopAlarm();   // ~30s safety cap
+        };
+        beep();
+        alarmTimer = setInterval(beep, 750);
+    }
+    function stopAlarm() {
+        if (alarmTimer != null) { clearInterval(alarmTimer); alarmTimer = null; }
+    }
+    function acknowledgeRingingTimers() {
+        const ringing = [...activeTimers.values()].filter(t => t.ringing);
+        if (!ringing.length) return false;
+        stopAlarm();
+        ringing.forEach(t => removeTimer(t.id));
+        return true;
+    }
+    function cancelTimerLocal(id) {
+        if (!id) return;
+        removeTimer(id);   // immediate on the panel (the firing authority)
+        try {
+            fetch('/api/skybridge/timers/cancel', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ timer_id: id })
+            });   // best-effort server sync so spoken "how long left" stays accurate
+        } catch (_) {}
+    }
+
+    function renderActiveTimers() {
+        clearCards();
+        [...activeTimers.values()].sort((a, b) => a.expires - b.expires).forEach(t => {
+            addCard({ component: 'timer', props: { timer_id: t.id, label: t.label, title: t.label,
+                duration_seconds: t.duration, expires_at_ms: t.expires, status: t.ringing ? 'expired' : 'running' } }, false);
+        });
+    }
+
+    function restoreTimers() {
+        let arr = [];
+        try { arr = JSON.parse(localStorage.getItem(TIMERS_KEY) || '[]') || []; } catch (_) {}
+        const now = Date.now();
+        // resume every still-running timer, not just the soonest
+        arr.filter(t => t && t.id && +t.expires > now).forEach(t => registerTimer(t.id, t.label, t.expires, t.duration));
+        if (activeTimers.size) renderActiveTimers();
+    }
+
     function noteUserActivity() {
         if (!document.body.classList.contains('sky-empty')) {
             scheduleIdleReturn();
@@ -443,6 +716,12 @@
     function scheduleIdleReturn() {
         clearIdleTimer();
         if (document.body.classList.contains('sky-empty')) return;
+        // Keep the screen up only when the *only* thing showing is running timers —
+        // a countdown shouldn't auto-dismiss. Any other card (weather, calendar…)
+        // still idles back normally even while a timer runs in the background.
+        const cards = [].slice.call(els.cards.children);
+        const hasNonTimer = cards.some(function (c) { return !c.querySelector('.sky-timer'); });
+        if (cards.length && !hasNonTimer) return;
         idleTimer = setTimeout(returnToAmbientClock, CARD_IDLE_MS);
     }
 
@@ -453,8 +732,50 @@
             scheduleIdleReturn();
             return;
         }
+        // If timers are still running, fall back to showing them rather than a bare
+        // ambient clock, so the countdown returns to view once the other card idles.
+        if (activeTimers.size) {
+            renderActiveTimers();
+            setStatus('Ambient');
+            return;
+        }
         renderHome({ idle: true });
         setStatus('Ambient');
+    }
+
+    // ── Turn resilience ─────────────────────────────────────────────────────
+    // A hung brain / dropped-but-open socket / interrupted page-fade could leave
+    // the panel stuck — spinning in "thinking" forever, or invisible (body left
+    // at opacity 0 by an aborted nav). These guarantee the panel always returns
+    // to a usable ambient state and is never left invisible.
+    function clearStallWatchdog() {
+        if (stallWatchdog) { clearTimeout(stallWatchdog); stallWatchdog = null; }
+    }
+
+    function armStallWatchdog() {
+        clearStallWatchdog();
+        stallWatchdog = setTimeout(function () {
+            stallWatchdog = null;
+            recoverToAmbient('stall-watchdog');
+        }, STALL_WATCHDOG_MS);
+    }
+
+    function recoverToAmbient(reason) {
+        // Genuine mic/TTS activity isn't a hang — defer. But a stale voice flag
+        // (socket crash leaving isRecording/speaking stuck true) must not suppress
+        // the last-resort recovery forever: allow a few deferrals, then recover.
+        if (stallDeferrals < MAX_STALL_DEFERRALS && voice && (voice.isRecording || voice.speaking)) {
+            stallDeferrals++;
+            armStallWatchdog();
+            return;
+        }
+        stallDeferrals = 0;
+        clearStallWatchdog();
+        try { console.warn('[skybridge] recovering to ambient:', reason); } catch (_) {}
+        // Never leave the UI invisible from an interrupted page-fade (touch-menu _nav).
+        if (document.body.style.opacity !== '') document.body.style.opacity = '';
+        if (voice) { try { voice.serverBusy = false; } catch (_) {} }
+        if (orbState !== 'ambient') setState('ambient');
     }
 
     function startClockTicker() {
@@ -560,6 +881,7 @@
             const challengeId = window.SkybridgeRenderer.escapeHtml(baseAction.challenge_id || '');
             const actionContext = window.SkybridgeRenderer.escapeHtml(baseAction.action_context || 'Enter PIN');
             return '<button type="button" class="sky-auth-profile' + selected + '" aria-label="Sign in as ' + name + '" data-sky-action="auth" data-route="' + route + '" data-challenge-id="' + challengeId + '" data-action-context="' + actionContext + '" data-user-id="' + userId + '" data-user-name="' + name + '" data-user-avatar="' + avatar + '">' +
+                '<span class="sky-auth-avatar" aria-hidden="true">' + avatar + '</span>' +
                 '<span class="sky-auth-person"><strong>' + name + '</strong></span>' +
                 '</button>';
         }).join('');
@@ -653,6 +975,10 @@
         }
         setStatus(state.charAt(0).toUpperCase() + state.slice(1));
         updateVoiceControl(state);
+        // Arm the watchdog while a server-dependent turn is in flight; clear it
+        // once we're back at rest.
+        if (state === 'ambient') { stallDeferrals = 0; clearStallWatchdog(); }
+        else armStallWatchdog();
     }
 
     function canUseMicrophone() {
@@ -662,6 +988,37 @@
 
     function syncVoiceFallbackState() {
         document.body.classList.toggle('sky-voice-fallback', !canUseMicrophone());
+    }
+
+    // Voice came back after an error-driven typing fallback. Quietly return the
+    // panel to voice mode — but only when it's safe: the mic must actually be
+    // usable, and we must not be yanking the keyboard away from a user who has
+    // started typing a message. Cards/context on screen are left untouched.
+    function recoverFromVoiceError() {
+        if (!voiceErrorFallback) return;
+        if (!canUseMicrophone()) return;
+        if (els.input && els.input.value.trim()) return;
+        voiceErrorFallback = false;
+        commandFallbackOpen = false;
+        if (els.input) els.input.placeholder = '';
+        document.body.classList.remove('sky-command-open');
+        document.body.classList.remove('sky-typing-fallback');
+        syncVoiceFallbackState();
+        // Leave the status line as the caller set it (e.g. "Ready on local") — it
+        // carries the transport mode; don't clobber it with a generic message.
+    }
+
+    // Open the typed composer prefilled with `text`, caret at `caret` — the rest of
+    // the phrase (the item) goes through the same resolver as voice. Voice users can
+    // still just speak; this is the touch path to add without a keyboard hunt.
+    function composeInInput(text, caret) {
+        if (!els.input) return;
+        openCommandFallback('Type the rest, or just speak it.');
+        els.input.value = text || '';
+        requestAnimationFrame(() => {
+            els.input.focus({ preventScroll: true });
+            try { els.input.setSelectionRange(caret, caret); } catch (_) {}
+        });
     }
 
     function openCommandFallback(message) {
@@ -758,6 +1115,17 @@
             ctx.clearRect(0, 0, w, h);
             const cx = w / 2;
             const cy = h / 2;
+            // Room-safe resting screen: while idle during the dark hours (after
+            // sunset / deep sleep), draw NO orb so the standby screen is genuinely
+            // black and doesn't light the room. The canvas is already cleared, so
+            // returning here leaves it transparent. The orb returns by day and
+            // whenever the panel is active (listening/thinking/responding).
+            const resting = document.body.classList.contains('sky-empty') &&
+                document.body.classList.contains('sky-ambient-clock');
+            if (resting && orbState === 'ambient') {
+                const restDim = document.documentElement.getAttribute('data-rest-dim');
+                if (restDim === 'deep' || restDim === 'night') return;
+            }
             const empty = document.body.classList.contains('sky-empty');
             const base = Math.min(w, h) * (empty ? 0.26 : 0.24);
             const pulse = 1 + (orbState === 'listening' ? 0.06 : orbState === 'responding' ? 0.08 : 0.025) * Math.sin(phase * 2);

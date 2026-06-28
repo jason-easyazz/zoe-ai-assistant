@@ -1,4 +1,28 @@
+# Command Center — READ THESE FIRST (every agent: Claude Code, Codex, Omnigent, Hermes)
+
+- **[docs/VISION.md](docs/VISION.md)** — Zoe's north star, direction & core principles (the *why*). Read this first; every decision aligns to it (the rocks; local/private/fast; lab-prove-before-prod; build-to-stick; capture-don't-lose).
+- **[docs/CANONICAL.md](docs/CANONICAL.md)** — the **locked-in truth**: what's actually live, and what's settled (the rocks: Gemma 4 E4B-QAT+MTP brain, Moonshine STT, Kokoro TTS). If a system isn't listed canonical there, it's **not load-bearing** — don't extend or resurrect it. Swapping a rock fails CI (`test_canonical_invariants.py`) by design.
+- **[docs/PLANS.md](docs/PLANS.md)** — what we're building + status. Before starting work, check it; after finishing a step, update it.
+- **[docs/IDEAS.md](docs/IDEAS.md)** — the pin-it-so-we-don't-lose-it board. When Jason says *"pin this / put a pin in it / remember this idea"*, add a one-line entry there. Never drop an idea on the floor.
+
+**Tool discipline (these get skipped — don't skip them):** use **Serena** + **codebase-memory** (MCP, see `.mcp.json`) for code navigation/edits over raw grep; **opensrc** (`opensrc path …`) for third-party source before guessing; the **Greptile loop** to drive PRs to merge; follow the **DOX** doc conventions below. Detail for each is in the sections that follow.
+
+<!-- start-of-task-checklist -->
+## Start-of-task checklist (non-optional)
+
+Before any code task, you MUST — do not fall back to raw grep/guessing:
+
+- **Navigate + edit code via the MCP bus, not raw grep/Read/Edit.** Use **codebase-memory** for who-calls-what / architecture / seams and **Serena** for symbol read + symbolic edits. Reach for `grep`/`Read` only when the bus genuinely can't answer.
+- **Use `opensrc` for any third-party API before guessing** — `opensrc path pypi:<pkg>@<version>` (pin the installed version). Never invent library behaviour from memory.
+- **Drive every PR to merge with the Greptile loop** — reply to + RESOLVE each Greptile thread, follow up until it actually merges; squash only, never `--admin`/`--force`.
+- **Follow the DOX `AGENTS.md` chain** — read the root plus every nested `AGENTS.md` on the path to files you touch, and do the closeout DOX pass after editing (see *DOX framework* below).
+- **Honour the rocks.** Gemma 4 E4B+MTP (brain) and Moonshine v2 Medium (STT) are fixed — optimise *around* them, never propose swapping (see `docs/VISION.md` principle 1). **Retire by removing** (git keeps history); don't hoard `_old`/`_v2`/archive copies.
+
+---
+
 ## graphify
+
+> **Superseded — graphify is retired.** Per the Start-of-task checklist above, use the **codebase-memory** MCP for who-calls-what / architecture and **Serena** for symbol read + edits. The notes below are kept only for the still-committed `graphify-out/` artifacts; do not reach for graphify over the MCP bus. (Full reconciliation tracked as audit fix #7.)
 
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
 
@@ -189,5 +213,6 @@ When the user requests a durable behavior change, record it here or in the relev
 - [docs/AGENTS.md](docs/AGENTS.md) — categorized documentation; governance charter is normative
 - [modules/AGENTS.md](modules/AGENTS.md) — optional add-on modules served under /modules/
 - [config/AGENTS.md](config/AGENTS.md) — deployment configuration and key material locations (values never documented)
+- [labs/AGENTS.md](labs/AGENTS.md) — lab-only experiments & spikes, isolated from the runtime (e.g. the Flue harness substrate spike)
 
 Not indexed (runtime/data/generated, no durable editing contracts): `backups/`, `checkpoints/`, `data/`, `models/`, `ssl/`, `graphify-out/`, `homeassistant/` (live Home Assistant runtime), `demos/`.

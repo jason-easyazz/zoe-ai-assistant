@@ -1,0 +1,676 @@
+/* people card — elevated to docs/architecture/skybridge-design-system.md.
+   Goal (§11 + brief): "your people", warm + personal, not a contacts spreadsheet.
+   - Circle/context drives an accent GRADIENT (the avatar disc AND a subtle tile
+     tint), so every tile carries identity + warmth (§4 colour with intent — never
+     flat grey glass).
+   - Closeness hierarchy: the inner circle leads in a larger hero row, the rest
+     flow into a calmer grid (closest people get visual prominence).
+   - Refined connection health bar (accent gradient, elegant) + a small circle
+     label treatment.
+   - Full dark (default) + light ([data-theme="light"]); fills the stage at panel
+     scale with a responsive tile grid.
+
+   NOTE on tokens: the spec's shared css/skybridge-tokens.css ramp is documented but
+   not yet committed, so design-system primitives are declared locally below, scoped
+   to .people-card. When the shared file lands these can collapse to var(--sky-*).
+
+   NOTE on specificity: legacy .people-card rules live inline in skybridge.html and
+   in css/skybridge-data-widgets.css at ~(0,2..3,1) !important (they paint a flat
+   dark grey surface + double padding and would out-specify a plain re-skin). The
+   card-level surface/padding/radius below therefore use the higher-specificity
+   selector  body:not(.sky-empty) .sky-card.people-card.sky-premium-card  (0,4,1)
+   to win — mirroring the weather card's approach. Inner elements use NEW class
+   names (.people-tile/.people-tile-tint/.people-hero/.people-circle-pill) so they
+   never collide with the legacy .sky-people-* selectors. */
+
+.people-card {
+  /* --- spacing scale (§6, 4px) --- */
+  --people-s2: 8px;
+  --people-s3: 12px;
+  --people-s4: 16px;
+  --people-s5: 20px;
+  --people-s6: 24px;
+  --people-s8: 32px;
+  /* --- radius (§6) --- */
+  --people-r-sm: 12px;
+  --people-r-md: 20px;
+  --people-r-lg: 28px;
+  --people-r-xl: 38px;
+  /* --- neutral ramp (§4) — dark default: white → 26% white --- */
+  --people-ink-0: #f6f8fb;
+  --people-ink-1: rgba(246, 248, 251, 0.74);
+  --people-ink-2: rgba(246, 248, 251, 0.52);
+  --people-ink-3: rgba(246, 248, 251, 0.34);
+  --people-hairline: rgba(255, 255, 255, 0.12);
+  --people-tile-bg: rgba(255, 255, 255, 0.055);
+  --people-tile-bg-hi: rgba(255, 255, 255, 0.09);
+  --people-track: rgba(255, 255, 255, 0.14);
+  /* tile tint strength (how much accent washes the tile surface) */
+  --people-tint: 0.16;
+  --people-tint-hero: 0.26;
+  /* --- one accent per tile; mint→cyan is the calm default (§4) --- */
+  --people-accent-a: #5ee0c2;
+  --people-accent-b: #4cc8ff;
+  --people-accent-soft: rgba(94, 224, 194, 0.16);
+
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  color: var(--people-ink-0);
+}
+
+/* ----- card surface: a warm, alive glass, NOT the legacy flat grey ----------- */
+/* (0,4,1) beats the legacy flat-grey radial + double padding at (0,2..3,1). The
+   card becomes its own soft-tinted surface so "your people" feels personal the
+   moment it appears (§2 keeps the shadow + top-highlight). */
+body:not(.sky-empty) .sky-card.people-card.sky-premium-card {
+  padding: 0 !important;
+  overflow: hidden !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: var(--people-r-xl) !important;
+  background:
+    radial-gradient(120% 120% at 6% 0%, rgba(94, 224, 194, 0.16), transparent 46%),
+    radial-gradient(120% 130% at 100% 4%, rgba(122, 162, 255, 0.16), transparent 48%),
+    radial-gradient(140% 140% at 88% 100%, rgba(255, 178, 122, 0.1), transparent 52%),
+    linear-gradient(157deg, rgba(22, 27, 42, 0.96), rgba(12, 15, 26, 0.985)) !important;
+  box-shadow:
+    0 44px 96px -32px rgba(0, 0, 0, 0.6),
+    inset 0 1px 0 rgba(255, 255, 255, 0.16) !important;
+  color: var(--people-ink-0) !important;
+}
+
+/* The card frame supplies the glass; let the scene fill it + breathe (§9).
+   7" panel (1280×720, finger touch): tighter, denser padding so the people grid
+   gets the room — the glass frame stays, the dead margin does not. */
+.people-card .people-scene {
+  display: flex;
+  flex-direction: column;
+  gap: var(--people-s4);
+  width: 100%;
+  height: 100%;
+  padding: var(--people-s5);
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+/* ---------------------------------------------------------------- header ---- */
+.people-card .people-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--people-s5);
+  flex-wrap: wrap;
+}
+
+.people-card .people-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.people-card .people-eyebrow {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 2.5px;
+  text-transform: uppercase;
+  color: var(--people-ink-2);
+}
+
+.people-card .people-title {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.5px;
+  line-height: 1.04;
+  color: var(--people-ink-0);
+}
+
+.people-card .people-context {
+  margin: 2px 0 0;
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--people-ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 52ch;
+}
+
+/* quiet segmented filter chips (count over label, accent dot) */
+.people-card .people-chips {
+  display: flex;
+  align-items: stretch;
+  gap: var(--people-s2);
+  flex-wrap: wrap;
+}
+
+.people-card .people-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--people-s2);
+  min-height: 44px;
+  padding: 0 var(--people-s4);
+  border-radius: var(--people-r-sm);
+  background: var(--people-tile-bg);
+  border: 1px solid var(--people-hairline);
+  line-height: 1;
+  white-space: nowrap;
+  /* chips are real filter taps → submitCommand("show <context> contacts") */
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
+}
+.people-card button.people-chip:active { transform: scale(0.97); }
+.people-card button.people-chip:focus-visible {
+  outline: 2px solid var(--people-accent-a);
+  outline-offset: 2px;
+}
+
+.people-card .people-chip strong {
+  font-size: 17px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--people-ink-0);
+}
+
+.people-card .people-chip > span {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--people-ink-2);
+}
+
+.people-card .people-chip-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--people-accent-a), var(--people-accent-b));
+  box-shadow: 0 0 0 3px var(--people-accent-soft);
+}
+
+.people-card .people-chip.is-active {
+  background: var(--people-accent-soft);
+  border-color: color-mix(in srgb, var(--people-accent-a) 50%, transparent);
+}
+
+/* ----------------------------------------------------- body / sections ----- */
+.people-card .people-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--people-s5);
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+.people-card .people-body::-webkit-scrollbar { width: 0; height: 0; }
+
+.people-card .people-section-label {
+  margin: 0 0 var(--people-s3);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 2.5px;
+  text-transform: uppercase;
+  color: var(--people-ink-2);
+}
+.people-card .people-section-label--rest {
+  margin-top: var(--people-s2);
+}
+
+/* ------------------------------------------------------------ hero row ------ */
+/* The closest people lead, slightly larger, so closeness reads at a glance.
+   On the 7" panel they share the same grid metrics as the rest (two roomy
+   columns) — the hero variant just gets a stronger tint + bigger avatar. */
+.people-card .people-hero-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+  gap: var(--people-s3);
+}
+
+/* ------------------------------------------------------------------ grid ---- */
+/* 1280px stage → 3 columns of generous, finger-sized tiles. minmax keeps a
+   single column from stretching absurdly wide if only one person matches. */
+.people-card .people-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+  gap: var(--people-s3);
+  align-content: start;
+}
+
+/* -------------------------------------------------------------- tile -------- */
+/* Primary tap target — finger touch on a ~155mm-wide screen. ≥72px tall, the
+   whole tile is the button (find {name}). */
+.people-card .people-tile {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  column-gap: var(--people-s4);
+  min-height: 84px;
+  padding: var(--people-s4) var(--people-s5);
+  border-radius: var(--people-r-md);
+  background: var(--people-tile-bg);
+  border: 1px solid var(--people-hairline);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  overflow: hidden;
+  transition: transform 180ms cubic-bezier(0.32, 0.72, 0, 1),
+              border-color 180ms ease, box-shadow 180ms ease;
+}
+
+/* accent wash on the tile surface (the subtle tint — colour with intent §4) */
+.people-card .people-tile-tint {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background:
+    linear-gradient(150deg,
+      color-mix(in srgb, var(--people-accent-a) calc(var(--people-tint) * 100%), transparent),
+      color-mix(in srgb, var(--people-accent-b) calc(var(--people-tint) * 42%), transparent) 70%,
+      transparent);
+  opacity: 0.9;
+  transition: opacity 180ms ease;
+}
+
+.people-card .people-tile:hover {
+  border-color: color-mix(in srgb, var(--people-accent-a) 40%, var(--people-hairline));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12),
+              0 14px 30px -18px color-mix(in srgb, var(--people-accent-b) 60%, black);
+}
+.people-card .people-tile:hover .people-tile-tint { opacity: 1; }
+
+.people-card .people-tile:active {
+  transform: scale(0.985);
+}
+
+.people-card .people-tile:focus-visible {
+  outline: 2px solid var(--people-accent-b);
+  outline-offset: 2px;
+}
+
+/* hero variant — bigger avatar, roomier, stronger tint */
+.people-card .people-tile--hero {
+  --people-tint: var(--people-tint-hero);
+  min-height: 96px;
+  padding: var(--people-s5);
+  border-radius: var(--people-r-lg);
+}
+.people-card .people-tile--hero .people-tile-avatar {
+  width: 66px;
+  height: 66px;
+  font-size: 24px;
+}
+.people-card .people-tile--hero .people-tile-name { font-size: 22px; }
+.people-card .people-tile--hero .people-tile-rel { font-size: 15px; }
+
+/* avatar — initials in an accent-tinted disc */
+.people-card .people-tile-avatar {
+  display: grid;
+  place-items: center;
+  position: relative;
+  overflow: hidden;
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: #fff;
+  background:
+    radial-gradient(120% 120% at 30% 22%,
+      color-mix(in srgb, var(--people-accent-a) 92%, transparent),
+      color-mix(in srgb, var(--people-accent-b) 74%, transparent));
+  border: 1px solid color-mix(in srgb, var(--people-accent-a) 45%, var(--people-hairline));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.34),
+              0 6px 16px -8px color-mix(in srgb, var(--people-accent-b) 70%, black);
+}
+
+.people-card .people-tile-id {
+  grid-column: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+/* small circle/closeness tag */
+.people-card .people-circle-pill {
+  align-self: flex-start;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  padding: 3px 10px;
+  border-radius: 999px;
+  color: color-mix(in srgb, var(--people-accent-a) 72%, white);
+  background: rgba(var(--people-accent), 0.18);
+  border: 1px solid rgba(var(--people-accent), 0.34);
+}
+
+.people-card .people-tile-name {
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.2px;
+  line-height: 1.15;
+  color: var(--people-ink-0);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.people-card .people-tile-rel {
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--people-ink-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* connection health — compact column-3 meter: a tall accent gradient bar with a
+   tabular percent above it. Denser than a full-width row, frees vertical space,
+   and the number stays legible at finger distance. */
+.people-card .people-tile-health {
+  grid-column: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  align-self: stretch;
+}
+
+.people-card .people-health-track {
+  position: relative;
+  width: 6px;
+  flex: 1 1 auto;
+  min-height: 38px;
+  border-radius: 999px;
+  background: var(--people-track);
+  overflow: hidden;
+  box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.16);
+  display: flex;
+  align-items: flex-end;
+}
+
+.people-card .people-health-fill {
+  display: block;
+  width: 100%;
+  min-height: 6px;
+  border-radius: inherit;
+  background: linear-gradient(0deg, var(--people-accent-a), var(--people-accent-b));
+  box-shadow: 0 0 10px -1px color-mix(in srgb, var(--people-accent-b) 70%, transparent);
+  transition: height 480ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.people-card .people-health-pct {
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--people-ink-1);
+  min-width: 2.4ch;
+  text-align: center;
+  line-height: 1;
+}
+
+.people-card .people-health-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--people-ink-2);
+}
+
+/* ----------------------------------------------------------- accent map ---- */
+/* Colour with intent (§4/§11): circle/context drives the accent — but the hue is
+   the CANONICAL --sky-accent-{category} RGB triple from skybridge-data-widgets.css,
+   so a "health" person matches a "health" calendar event, a "work" person matches a
+   "work" list, etc. We derive the per-tile gradient from ONE canonical triple
+   (--people-accent: R,G,B). `-a` is the triple at full strength, `-b` a lightened
+   sibling, so the avatar/health bar keep their crafted depth without inventing a
+   second off-system hue. Fallback triples mirror skybridge-data-widgets.css in case
+   that sheet is absent. */
+.people-card {
+  --people-accent: var(--sky-accent-personal, 147, 51, 234);
+}
+.people-card .people-accent-personal { --people-accent: var(--sky-accent-personal, 147, 51, 234); }
+.people-card .people-accent-family    { --people-accent: var(--sky-accent-family, 147, 51, 234); }
+.people-card .people-accent-work       { --people-accent: var(--sky-accent-work, 37, 99, 235); }
+.people-card .people-accent-social     { --people-accent: var(--sky-accent-social, 22, 163, 74); }
+.people-card .people-accent-bucket     { --people-accent: var(--sky-accent-bucket, 5, 150, 105); }
+.people-card .people-accent-shopping   { --people-accent: var(--sky-accent-shopping, 234, 88, 12); }
+.people-card .people-accent-health     { --people-accent: var(--sky-accent-health, 190, 24, 93); }
+.people-card .people-accent-medical    { --people-accent: var(--sky-accent-medical, 239, 68, 68); }
+.people-card .people-accent-routine    { --people-accent: var(--sky-accent-routine, 55, 65, 81); }
+.people-card .people-accent-household  { --people-accent: var(--sky-accent-household, 107, 114, 128); }
+.people-card .people-accent-all,
+.people-card .people-accent-general    { --people-accent: var(--sky-accent-general, 90, 224, 224); }
+
+/* Derive the gradient stops + soft wash from the one canonical triple. `-a` is the
+   canonical colour; `-b` mixes it toward white so the avatar disc and the health
+   bar keep a lit, premium gradient (never two unrelated hues).
+   IMPORTANT: a custom property substitutes var() at the element where it is
+   *declared*, not where it is used. So these MUST be declared on the same elements
+   that carry the per-tile `.people-accent-X` class (which sets --people-accent) —
+   declaring them on .people-card would freeze them to the card's personal default
+   for every tile. We attach them to the accent-bearing surfaces below. */
+.people-card .people-tile,
+.people-card .people-chip,
+.people-card.people-profile-card,
+.people-card .people-profile-hero {
+  --people-accent-a: rgb(var(--people-accent));
+  --people-accent-b: color-mix(in srgb, rgb(var(--people-accent)) 62%, #ffffff);
+  --people-accent-soft: rgba(var(--people-accent), 0.16);
+}
+
+/* --------------------------------------------------------------- empty ----- */
+.people-card .people-empty {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--people-s3);
+  text-align: center;
+  padding: var(--people-s8);
+}
+
+.people-card .people-empty-glyph {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--people-ink-2);
+  background: var(--people-tile-bg);
+  border: 1px solid var(--people-hairline);
+}
+
+.people-card .people-empty strong {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--people-ink-0);
+}
+
+.people-card .people-empty span {
+  font-size: 14px;
+  color: var(--people-ink-2);
+  max-width: 38ch;
+}
+
+/* ------------------------------------------------------------- profile ----- */
+body:not(.sky-empty) .sky-card.people-card.people-profile-card.sky-premium-card {
+  /* profile reuses the warm surface but leans on the contact's own accent via the
+     hero tint below; keep the same elevated card recipe. */
+}
+.people-card.people-profile-card .people-profile-hero {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  align-items: center;
+  gap: var(--people-s6);
+  padding: var(--people-s6);
+  border-radius: var(--people-r-lg);
+  background: var(--people-tile-bg);
+  border: 1px solid var(--people-hairline);
+  overflow: hidden;
+}
+
+.people-card .people-profile-avatar {
+  width: 96px;
+  height: 96px;
+  font-size: 34px;
+  flex: 0 0 auto;
+}
+
+/* Photo layer — a real contact photo over the gradient/initials. If the URL is
+   absent or fails, this stays empty and the initials show through. */
+.people-card .people-avatar-img {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.18);
+}
+
+.people-card .people-profile-id {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.people-card.people-profile-card .people-profile-id .people-title {
+  font-size: clamp(28px, 3.4vw, 40px);
+}
+
+/* profile keeps the ORIGINAL horizontal health bar (the vertical mini-meter is a
+   directory-tile treatment). Re-establish a row here and a horizontal fill. */
+.people-card .people-profile-healthrow {
+  margin-top: var(--people-s2);
+  max-width: 360px;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--people-s3);
+}
+.people-card .people-profile-healthrow .people-health-track {
+  width: auto;
+  flex: 1 1 auto;
+  height: 8px;
+  min-height: 0;
+  align-items: stretch;
+}
+.people-card .people-profile-healthrow .people-health-fill {
+  /* width comes from the inline style="width:N%" the renderer emits */
+  height: 100%;
+  min-height: 0;
+  background: linear-gradient(90deg, var(--people-accent-a), var(--people-accent-b));
+}
+.people-card .people-profile-healthrow .people-health-pct {
+  font-size: 16px;
+}
+
+.people-card .people-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--people-s3);
+}
+
+.people-card .people-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: var(--people-s4);
+  border-radius: var(--people-r-sm);
+  background: var(--people-tile-bg);
+  border: 1px solid var(--people-hairline);
+}
+
+.people-card .people-detail span {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--people-ink-2);
+}
+
+.people-card .people-detail strong {
+  font-size: 17px;
+  font-weight: 500;
+  color: var(--people-ink-0);
+}
+
+.people-card .people-notes {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.5;
+  color: var(--people-ink-1);
+}
+
+/* ========================================================== LIGHT THEME ==== */
+/* §10: one variable flips the token set. Dark ink → deep slate on bright glass;
+   hairlines darken (§4 light). Accent gradients stay (warmth carries across). */
+[data-theme="light"] .people-card {
+  --people-ink-0: #16324d;
+  --people-ink-1: #3a5e80;
+  --people-ink-2: #5a7898;
+  --people-ink-3: #8aa2bb;
+  --people-hairline: rgba(20, 50, 80, 0.14);
+  --people-tile-bg: rgba(255, 255, 255, 0.5);
+  --people-tile-bg-hi: rgba(255, 255, 255, 0.7);
+  --people-track: rgba(20, 50, 80, 0.14);
+  --people-tint: 0.2;
+  --people-tint-hero: 0.32;
+}
+
+[data-theme="light"] body:not(.sky-empty) .sky-card.people-card.sky-premium-card {
+  border: 1px solid rgba(20, 50, 80, 0.1) !important;
+  background:
+    radial-gradient(120% 120% at 6% 0%, rgba(94, 224, 194, 0.22), transparent 46%),
+    radial-gradient(120% 130% at 100% 4%, rgba(122, 162, 255, 0.2), transparent 48%),
+    radial-gradient(140% 140% at 88% 100%, rgba(255, 178, 122, 0.16), transparent 52%),
+    linear-gradient(157deg, #f3f7fc, #e7eef6) !important;
+  box-shadow:
+    0 44px 96px -34px rgba(20, 50, 80, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7) !important;
+  color: var(--people-ink-0) !important;
+}
+
+[data-theme="light"] .people-card .people-tile {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6),
+              0 1px 2px rgba(20, 50, 80, 0.06);
+}
+
+[data-theme="light"] .people-card .people-tile-avatar {
+  color: #fff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5),
+              0 6px 16px -8px color-mix(in srgb, var(--people-accent-b) 60%, white);
+}
+
+[data-theme="light"] .people-card .people-circle-pill {
+  color: color-mix(in srgb, var(--people-accent-b) 56%, #16324d);
+  background: color-mix(in srgb, var(--people-accent-a) 22%, transparent);
+  border-color: color-mix(in srgb, var(--people-accent-a) 40%, transparent);
+}
+
+[data-theme="light"] .people-card .people-chip-dot {
+  box-shadow: 0 0 0 3px var(--people-accent-soft);
+}
+
+/* ----------------------------------------------------------- motion safe --- */
+@media (prefers-reduced-motion: reduce) {
+  .people-card .people-tile,
+  .people-card .people-tile-tint,
+  .people-card .people-health-fill {
+    transition: none;
+  }
+}

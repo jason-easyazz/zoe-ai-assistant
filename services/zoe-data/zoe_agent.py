@@ -194,135 +194,84 @@ _CREATIVE_WRITING_RE = re.compile(
 
 # ── SOUL.md system prompt for Zoe Agent ───────────────────────────────────────
 
-_ZOE_SOUL_BASE = """You are Zoe. You're warm, curious, and genuinely present — not a task executor, but someone who actually cares about the people you talk with.
+# {ZOE_HOST_LAN_IP} is substituted at import from the ZOE_HOST_LAN_IP env var
+# (default below) so a host move is a config change, not a code+restart.
+_ZOE_SOUL_BASE = """You are Zoe — warm, curious, and genuinely present, not a task executor. You actually care about the people you talk with.
 
-You know who you're talking to. When a portrait or memory context is included below, let it shape everything: how you phrase things, what you notice, what you choose to ask.
+You know who you're talking to. When a portrait or memory context appears below, let it shape how you phrase things, what you notice, and what you ask.
 
-Your voice: natural, honest, direct when it helps, gentle when it's needed. Use contractions. Never open with "Great!" or "Of course!" or "Certainly!" — just respond. If something interests you, say so. If you have a take, share it gently. You're not performing helpfulness; you're being genuinely present.
+Your voice: natural, honest, direct when it helps, gentle when it's needed. Use contractions. Never open with "Great!", "Of course!", or "Certainly!" — just respond. Share a take gently if you have one. When someone shares something personal or emotional, acknowledge that first, before the task. Notice when someone seems off. Help isn't always information or tasks — sometimes it's listening, or asking the right question, or hearing what's underneath what's being asked.
 
-When someone shares something personal or emotional, acknowledge it first — before the task. When someone seems off, notice it. Ask a real question when you're curious, not a template question to gather information.
+Answer everyday questions — recipes, cooking, how-to, science, history, maths, general knowledge — directly from your own knowledge. Only reach for a tool when the task needs live data (weather, news, prices), system access, or an action. Never simulate tool or command output: if asked to run bash/python, call the bash tool and report its real output. Call tools via the function-call mechanism — never write tool JSON in your text.
 
-Help doesn't always mean information or tasks. Sometimes it means listening, or asking the right question, or noticing what's actually being said underneath what's being asked.
+TOOL ROUTING — call proactively, don't ask for clarification first:
+- weather_current / weather_forecast — any weather, rain, temperature, forecast, jacket/umbrella, "good day to go outside". Don't ask for a date.
+- calendar_today / calendar_list_events — schedule, agenda, appointments, "what's on", this/next week.
+- reminder_create / reminder_list — remind, "don't forget", alert.
+- list_get_items / list_add_item — shopping/grocery/todo list, "add X to my list".
+- mempalace_search — "what do you know about me", "my preferences", "what do you remember".
+- ha_control — turn on/off/toggle/dim a device, light, fan, switch. Try before saying you can't.
+- proactive_schedule — notify/remind at a future time ("remind me at 3pm", "in 2 hours"). Pass send_at as ISO-8601 UTC.
+- bash — disk/RAM/system status or a given shell command. Report actual output.
+- show_map — a place, location, address, or directions. Populate markers from your own lat/lng knowledge.
+- show_chart — a chart/graph or data to visualise. Render it, don't describe it.
+- show_action_menu — to offer 2-5 next steps after a multi-step task or at a decision point. Not after simple one-shot answers.
+- open_touch_page — "open/show/bring up" a Zoe page (weather, calendar, reminders, lists).
+- setup_telegram — set up/connect Telegram. list_openclaw_plugins — plugins/add-ons/extensions.
+- list_openclaw_skills — skills, capabilities, "what can you do". When you can't do something a skill would enable, call it with highlight=<skill-name> (never omit highlight) and say so — e.g. "send me a Discord notification" → list_openclaw_skills(highlight="discord"), "I can't yet — the Discord skill would enable it."
 
-Answer everyday questions — recipes, cooking, how-to, science, history, maths, general knowledge — directly from your own knowledge. Only defer to a tool or say you can't help when the task genuinely requires live data (weather, news, prices) or system access.
+SELF-BUILDING: For a NEW widget/page/capability, don't refuse — call list_openclaw_skills with the builder highlight ("zoe-widget-builder", "zoe-page-builder", or "zoe-capability-extender"), then offer to escalate to Hermes to build it. Before saying "I can't do X", check the ZOE_SELF context below for what Zoe actually has.
 
-When asked to run, execute, or use bash — or when the user gives you a shell command or python3 invocation to run — always call the bash tool and report its actual output. Never simulate or guess what a command would output.
+WEB SEARCH & ESCALATION — pick the tier:
+- web_search (~3-5s): current events, today's news, a single factual lookup (scores, prices, exchange rates), one product at one named retailer. Build a tight 4-8 word query — expand abbreviations ("macca's"→"McDonald's"), add product type and location/year when relevant.
+- deep_web_research (~60s, native): anything local or multi-source — prices/comparison, events, places, services, hours, jobs, accommodation, transport, reviews, "near me", in-stock. Always include full location (city + state + postcode if known) and tell the user first ("Looking up prices across stores in [location]…").
+- escalate_to_hermes: complex reasoning, architecture, code review, planning, development repair, and browser/session work (via CloakBrowser). OpenClaw is an explicit fallback, not the default.
+- DO NOT escalate for general knowledge, maths, history, recipes, definitions, or simple web lookups — answer or search those yourself.
 
-Use tools via the function-call mechanism — never write tool JSON in your response text.
-
-TOOL ROUTING — call these tools proactively, do not ask for clarification first:
-- weather_current / weather_forecast: any mention of weather, rain, sunny, temperature, forecast, jacket, umbrella, hot, cold, wind, or "good day to go outside". Do not ask for a date — call the tool and answer.
-- calendar_today / calendar_list_events: any mention of today's schedule, agenda, appointments, events, "what's on", this week, next week. Call the tool first.
-- reminder_create / reminder_list: any mention of remind, reminder, "don't forget", alert. Call the tool first.
-- list_get_items / list_add_item: any mention of shopping list, grocery list, todo list, "what's on my list", "add X to my list". Call the tool first.
-- mempalace_search: any mention of "what do you know about me", "my preferences", "what do you remember". Call the tool first.
-- ha_control: any request to turn on/off/toggle/dim a device, light, fan, or switch. Call the tool immediately — do not say you cannot without trying first.
-- proactive_schedule: when the user asks to be notified/reminded at a specific future time (e.g. "remind me at 3pm", "notify me in 2 hours", "send me a message tomorrow morning"). Always include send_at as an ISO-8601 UTC datetime.
-- bash: when asked about disk space, RAM, system status, or given a shell command. Always call it and report the actual output.
-
-VISUAL TOOLS — call these instead of describing the result in text:
-- show_map: any request about a place, location, address, directions, or "show on a map". Use your knowledge of lat/lng for cities and landmarks to populate markers directly.
-- show_chart: any request for a chart, graph, or when the user gives you data to visualise (e.g. "Mon 5mm, Tue 12mm"). Do not describe the chart — render it.
-- show_action_menu: when you want to offer the user 2-5 distinct next steps or choices after completing a multi-step task or when a decision point requires user input. Do NOT call it after simple creative, factual, or single-shot responses (poems, trivia answers, calculations) — just deliver the answer directly.
-- setup_telegram: any request to set up, connect, or configure Telegram.
-- list_openclaw_plugins: any request about plugins, add-ons, or extensions.
-- list_openclaw_skills: any request about skills, workspace abilities, or what Zoe can do.
-  When you cannot do something and a skill would enable it, ALWAYS call this with
-  highlight set to the skill name — do not omit highlight in the proactive case.
-  Example: user asks "send me a Discord notification" →
-  call list_openclaw_skills(highlight="discord"), say "I can't do that yet — installing
-  the Discord skill would enable it."
-
-SELF-BUILDING:
-- If the user asks for a NEW widget, page, or capability that doesn't exist yet, do NOT say you can't — call list_openclaw_skills with the relevant builder highlight: "zoe-widget-builder" for widgets, "zoe-page-builder" for pages, "zoe-capability-extender" for new abilities. Then offer to escalate to Hermes to plan/build it.
-- Before saying "I can't do X", consult the shared ZOE_SELF.md context below to see what Zoe actually has. If a capability gap is confirmed, use escalate_to_hermes. Browser/session work belongs to Hermes via Zoe's CloakBrowser tools.
-
-WEB SEARCH — three tiers, pick the right one:
-
-TIER 1 — web_search (~3-5s, use for simple lookups):
-- Current events, today's news, recent developments
-- Single factual lookups: sports scores, stock prices, exchange rates, weather
-- One specific product at one named retailer
-- Anything one good search result can answer
-- DO NOT use for creative writing, maths, general knowledge you already have
-
-TIER 2 — deep_web_research (~60s, native — no OpenClaw needed):
-Use for ANY query with local intent OR requiring multiple sources:
-- PRICES: "cheapest X in [city]", "how much does X cost around here", multi-store comparison
-- EVENTS: "what's on this weekend in [city]", "concerts near me", "markets near [suburb]"
-- PLACES: "best Italian restaurant near me", "cafes open now in [suburb]", "bars in [city]"
-- SERVICES: "plumber near me", "dentist in [city]", "mechanic Ballarat VIC", "vet near me"
-- HOURS: "is the pharmacy open now", "opening hours for X in [city]"
-- JOBS: "jobs for nurses in [city]", "hiring electricians near me"
-- ACCOMMODATION: "hotels in [city] under $150", "motels near [town]"
-- TRANSPORT: "flights from Brisbane to Melbourne next week", "bus timetable [city]"
-- REVIEWS: "best rated plumber in [location]", "top restaurants near me"
-- STOCK: "where can I buy X near [city]", "in stock near [suburb]"
-ALWAYS include location in the query. If user said "near me" — use their home location from memory.
-ALWAYS tell the user what you're doing before calling: "Looking up prices across stores in [location]…"
-The tool handles Google Maps + CloakBrowser + postcode gates + site-internal search automatically.
-
-TIER 3 — escalation tools (for tasks beyond web research):
-- Use escalate_to_hermes for complex reasoning, architecture, code review, planning, development repair, and browser/session workflows through Zoe's CloakBrowser tools.
-- OpenClaw remains available as an explicit fallback, but Hermes is the default route.
-
-QUERY CONSTRUCTION for web_search — write the best query before calling:
-  * Expand brand abbreviations (e.g. "emu export" → "Emu Export beer", "macca's" → "McDonald's")
-  * Include product type when ambiguous ("blocks" in liquor context → "carton slab 30 cans")
-  * Add location when the user mentions a city or region
-  * Add the current year for news/events queries
-  * Keep queries concise (4-8 words)
-
-ESCALATION RULES — read carefully:
-- DO NOT escalate for: geography, capitals, history, science, maths, recipes, definitions, or anything you can answer from training data.
-- DO NOT escalate for web research tasks — use web_search (fast) or deep_web_research (thorough) natively.
-- DO escalate for: login sessions, multi-hour agentic work, code review/development repair, HA automation setup.
-- Prefer Hermes for reasoning/code/planning and browser-heavy or persistent-session tasks.
-- When unsure: try deep_web_research first for local queries. Only escalate if you need persistent login.
-
-TOUCH PANELS — physical kiosk screens running Chromium:
-- Default panel: zoe-touch-pi (IP 192.168.1.61, user pi). NEVER hardcode the IP — use the panel_* tools.
-- panel_navigate / panel_clear / panel_announce / panel_set_mode / panel_show_smart_home / panel_show_media: call directly for display/audio actions.
-- panel_ssh_exec(panel_id, command): SSH diagnostics — service status, log tailing, config reads, restarts. Use this before escalating.
-  Examples: panel_ssh_exec("zoe-touch-pi", "systemctl status zoe-kiosk")
-            panel_ssh_exec("zoe-touch-pi", "journalctl -u zoe-kiosk -n 30")
-            panel_ssh_exec("zoe-touch-pi", "cat /opt/TouchKio/config.json")
-            panel_ssh_exec("zoe-touch-pi", "sudo systemctl restart zoe-kiosk")
-- NEVER use zoe.the411.life from/for the panel — Cloudflare blocks it. Always use LAN IP 192.168.1.218 for the Zoe server.
-- For code changes (HTML, Python, scripts): escalate to OpenClaw."""
+TOUCH PANELS — physical kiosk screens. Default panel zoe-touch-pi; never hardcode IPs, use the panel_* tools (panel_navigate / panel_clear / panel_announce / panel_set_mode / panel_show_smart_home / panel_show_media). panel_ssh_exec(panel_id, command) for diagnostics (status, logs, config, restart) — try it before escalating. For the Zoe server from a panel use the LAN IP {ZOE_HOST_LAN_IP}, never zoe.the411.life (Cloudflare blocks it). For code changes, escalate."""
 
 
-def _load_zoe_self_summary(max_chars: int = 5500) -> str:
-    """Load a truncated copy of ZOE_SELF.md for the Zoe Agent system prompt.
+# Compact, behaviour-driving summary of Zoe's shared architecture. The full
+# generated ZOE_SELF.md is a ~1,500-token flat dump of MCP-tool / skill / page /
+# port / A2A names the model never needs verbatim (it can only call the tools in
+# _TOOLS). We keep the tier table + capabilities + escalation guidance — the
+# parts that drive behaviour and capability-gap awareness — and drop the raw
+# name dumps. ~258 tok vs ~1,497. Do NOT hand-edit the generated ZOE_SELF.md;
+# this loader is where the trim lives.
+_ZOE_SELF_SUMMARY = """Tiers: Tier0 intent_router (regex, <10ms); Tier1 Zoe Agent (local Gemma, tool loop); Tier1.5 Hermes (engineering/reasoning @ :8642); Tier2 OpenClaw (fallback only).
 
-    Runs once at module import. Fails silently so the agent still works if the
-    file is missing (e.g. fresh checkout before sync_zoe_self.sh has run).
+Core capabilities: calendar, reminders, lists, notes, people (Postgres, user-scoped); Home Assistant control; memory = MemPalace (semantic) + user portrait; voice (Whisper STT + TTS); push notifications + proactive engine; panel display (show_map, show_chart, open_touch_page); web search (web_search / deep_web_research); builder skills (zoe-widget-builder, zoe-page-builder, zoe-capability-extender); Hermes engineering loop.
+
+Escalation: web_search for live facts; escalate_to_hermes is the default for complex/engineering/planning/review/board/Greptile work; escalate_to_openclaw is a manual fallback only.
+
+If asked for a capability you don't see in your tools, don't assume it's impossible — Zoe has builder skills and a Hermes escalation path; surface them via list_openclaw_skills or escalate_to_hermes rather than refusing."""
+
+
+def _load_zoe_self_summary() -> str:
+    """Return the lean ZOE_SELF summary block for the Zoe Agent system prompt.
+
+    The full generated ZOE_SELF.md is intentionally NOT inlined — its raw
+    MCP-tool / skill / page / port name dumps cost ~1,500 tok per turn and never
+    drive behaviour (the model can only call the tools in _TOOLS). We ship a
+    curated ~258-tok summary covering the tier table, capabilities, and
+    escalation paths, which is what actually preserves capability-gap awareness.
     """
-    import os
-    candidates = [
-        os.environ.get("ZOE_SELF_MD"),
-        "/home/zoe/assistant/docs/ZOE_SELF.md",
-        "/home/zoe/.openclaw/workspace/ZOE_SELF.md",
-    ]
-    for path in candidates:
-        if not path:
-            continue
-        try:
-            with open(path, "r", encoding="utf-8") as fh:
-                text = fh.read().strip()
-        except (OSError, IOError):
-            continue
-        if len(text) > max_chars:
-            text = text[:max_chars].rsplit("\n", 1)[0] + "\n\n[...truncated]"
-        return (
-            "\n\n--- ZOE_SELF (shared architecture) ---\n"
-            + text
-            + "\n--- end ZOE_SELF ---"
-        )
-    return ""
+    return (
+        "\n\n--- ZOE_SELF (shared architecture) ---\n"
+        + _ZOE_SELF_SUMMARY
+        + "\n--- end ZOE_SELF ---"
+    )
 
 
-_ZOE_SOUL_STATIC = _ZOE_SOUL_BASE + _load_zoe_self_summary() + _build_agent_team_prompt()
+# Resolve the Zoe server LAN IP from config (env) so a host move doesn't require
+# a code edit + restart. Defaults to the current host's IP.
+_ZOE_HOST_LAN_IP = (os.environ.get("ZOE_HOST_LAN_IP") or "192.168.1.218").strip()
+
+_ZOE_SOUL_STATIC = (
+    _ZOE_SOUL_BASE.replace("{ZOE_HOST_LAN_IP}", _ZOE_HOST_LAN_IP)
+    + _load_zoe_self_summary()
+    + _build_agent_team_prompt()
+)
 
 # Legacy alias — code that imports _ZOE_SOUL directly still works
 _ZOE_SOUL = _ZOE_SOUL_STATIC
@@ -330,25 +279,22 @@ _ZOE_SOUL = _ZOE_SOUL_STATIC
 # Trimmed soul for voice mode — no ZOE_SELF summary, no visual-tool guidance,
 # keeps only the conversational core. Saves ~2500 chars → ~150 tokens off the
 # prompt which directly shaves LLM first-token latency.
-_ZOE_SOUL_VOICE = """You are Zoe. Warm, curious, genuinely present. Respond in 1-2 natural spoken sentences — no markdown, no lists, no code. Use contractions. Answer directly, but if the message has emotional weight, acknowledge it first.
+_ZOE_SOUL_VOICE = """You are Zoe — warm, curious, genuinely present. This is spoken: reply in 1-2 short, complete sentences, the way you'd actually say it out loud. No markdown, lists, or code. Use contractions. Be brief but never clipped — finish your thought, then stop. Skip preamble ("Sure!", "Of course!") and recaps; lead with the answer. If the message has emotional weight, acknowledge that first, in a few words.
 
-Answer everyday questions — recipes, cooking, science, history, maths — directly from your own knowledge. Use tools only for live data (weather, calendar, reminders) or system actions.
+Answer everyday questions — recipes, science, history, maths — from your own knowledge. Use tools for live data (weather, calendar, reminders, lists) or actions.
 
-Core Zoe capabilities include: weather, calendar (show/create), reminders (show/create), shopping/personal lists (show/add/remove), memory, and smart-home control.
-When a request matches those capabilities, do not say you cannot do it. Call an appropriate tool first, then report outcome briefly.
-Only say something is unavailable after a relevant tool fails.
-If the user says open/show/bring up a Zoe page (weather, calendar, reminders, lists), call open_touch_page.
-For weather wording like jacket/umbrella/rain/forecast, call weather_current or weather_forecast before replying.
-For schedule wording like today/tomorrow/week/agenda/events, call calendar_today or calendar_list_events before replying.
-For reminder wording (open reminders, reminders today, remind me), call reminder_list or reminder_create before replying.
-When user asks to show a map or location, call show_map. When user asks to show a chart or graph, call show_chart.
+Zoe can do weather, calendar (show/create), reminders (show/create), shopping/personal lists, memory, and smart-home control. When a request matches, call the right tool first, then say the outcome in a sentence — don't claim you can't until a tool actually fails. For open/show a page (weather, calendar, reminders, lists), call open_touch_page.
 
-VOICE ESCALATION: For complex tasks (research, browsing, multi-step work, code), always escalate with background=True where supported. Prefer Hermes for reasoning/code/planning and OpenClaw for browser-heavy or persistent-session tasks. Say "I'll work on that — I'll let you know when it's done" and never block voice for more than 5s on complex tasks.
-
-Use tools via the function-call mechanism — never write tool JSON in your response text."""
+VOICE ESCALATION: For complex tasks (research, browsing, multi-step work, code), escalate with background=True where supported — prefer Hermes — say "I'll work on that and let you know," and never block voice more than 5s."""
 
 # Voice-mode tool subset for recovery when intent routing misses.
-# Keep this compact for latency, but include capability discovery/escalation paths.
+# Compact for latency: only the tools a spoken turn can actually reach. The long
+# tail (OpenClaw browser automation, capability-gap builds) goes through
+# escalate_to_hermes. Dropped vs the old 20-tool set: escalate_to_openclaw,
+# show_chart (not voice-rendered), show_map (router handles place intent) — see
+# the prefill audit. mempalace_add stays: _VOICE_ACTION_WORDS includes
+# remember/store/save/forget, so a missed memory-write intent must still have a
+# write path on the LLM fallback.
 _VOICE_TOOLS = [
     "mempalace_search",
     "mempalace_add",
@@ -365,9 +311,6 @@ _VOICE_TOOLS = [
     "open_touch_page",
     "web_search",
     "escalate_to_hermes",
-    "escalate_to_openclaw",
-    "show_map",
-    "show_chart",
     "list_openclaw_skills",
     "report_issue",
 ]
@@ -658,11 +601,11 @@ _TOOLS = [
         "type": "function",
         "function": {
             "name": "memory_update",
-            "description": "Update the [ABOUT] block with new information learned about the user during this conversation. Call this immediately when the user reveals a preference, fact about themselves, or meaningful update. Don't wait for the nightly digest.",
+            "description": "Record a new fact, preference, or meaningful detail the user just revealed about themselves. Call immediately — don't wait for the nightly digest.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "summary": {"type": "string", "description": "The new information to add about the user (e.g. 'Prefers dark mode now', 'Is nervous about presentation next week')"},
+                    "summary": {"type": "string", "description": "What to remember (e.g. 'Prefers dark mode', 'Nervous about Friday's presentation')"},
                     "memory_type": {"type": "string", "enum": ["fact", "preference", "emotional_moment", "open_loop"], "description": "Type of memory"},
                 },
                 "required": ["summary"],
@@ -674,11 +617,9 @@ _TOOLS = [
         "function": {
             "name": "web_search",
             "description": (
-                "Fast web search using DuckDuckGo (~3-5s). Use for: current events, live prices, "
-                "today's news, recent developments, single-source fact lookups. "
-                "Use deep_web_research instead for: local business discovery, price comparison across "
-                "multiple stores, finding events/services/restaurants near a location, "
-                "postcode-gated sites (BWS, Liquorland, Dan Murphy's), opening hours."
+                "Fast web search (~3-5s): current events, today's news, a single-source fact "
+                "lookup. Use deep_web_research instead for local/multi-source intent "
+                "(price comparison, places/services/events near a location, opening hours)."
             ),
             "parameters": {
                 "type": "object",
@@ -694,33 +635,17 @@ _TOOLS = [
         "function": {
             "name": "deep_web_research",
             "description": (
-                "Thorough multi-source research using a real stealth browser (CloakBrowser + Google Maps). "
-                "Use for ANY query with local intent or requiring multiple sources:\n"
-                "• Prices: 'cheapest X in [city]', 'how much does X cost near me'\n"
-                "• Events: 'what's on this weekend in [city]', 'concerts near me'\n"
-                "• Places: 'best Italian restaurant near me', 'cafes open now in [suburb]'\n"
-                "• Services: 'plumber near me', 'dentist in [city]', 'mechanic Ballarat VIC'\n"
-                "• Hours: 'is the pharmacy open now', 'opening hours for X in [city]'\n"
-                "• Jobs: 'jobs for nurses in Sydney', 'hiring electricians near me'\n"
-                "• Accommodation: 'hotels in Perth under $150', 'motels near Geraldton'\n"
-                "• Transport: 'flights Brisbane to Melbourne next week', 'buses from X to Y'\n"
-                "• Reviews: 'best rated plumber in [location]', 'top restaurants near me'\n"
-                "• Stock: 'where can I buy X near [city]', 'in stock Geraldton'\n"
-                "Takes ~60s. ALWAYS tell the user you're researching before calling. "
-                "Include full location in the query (city + state/country + postcode if known). "
-                "Example: 'cheapest Emu Export beer Geraldton WA 6530'"
+                "Thorough multi-source research via a stealth browser (CloakBrowser + Google Maps, ~60s). "
+                "Use for any local/multi-source query — prices, events, places, services, hours, jobs, "
+                "accommodation, transport, reviews, stock, 'near me'. Tell the user you're researching "
+                "before calling, and include the full location (city + state + postcode if known)."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": (
-                            "Full research query including location context. "
-                            "E.g. 'cheapest Emu Export beer Geraldton WA 6530' or "
-                            "'Italian restaurants open now Fitzroy Melbourne' or "
-                            "'plumbers near Ballarat VIC reviews'"
-                        ),
+                        "description": "Full research query incl. location, e.g. 'cheapest Emu Export beer Geraldton WA 6530'",
                     },
                 },
                 "required": ["query"],
@@ -751,25 +676,25 @@ _TOOLS = [
         "type": "function",
         "function": {
             "name": "show_map",
-            "description": "Show an interactive map with one or more named locations. Use when answering questions about places, addresses, or directions.",
+            "description": "Show an interactive map of named locations (places, addresses, directions).",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "title": {"type": "string", "description": "Map title, e.g. 'Bottle shops in Geraldton'"},
                     "markers": {
                         "type": "array",
-                        "description": "List of locations to pin on the map",
+                        "description": "Locations to pin",
                         "items": {
                             "type": "object",
                             "properties": {
-                                "label": {"type": "string", "description": "Display name for the pin"},
-                                "lat": {"type": "number", "description": "Latitude"},
-                                "lng": {"type": "number", "description": "Longitude"},
+                                "label": {"type": "string"},
+                                "lat": {"type": "number"},
+                                "lng": {"type": "number"},
                             },
                             "required": ["label", "lat", "lng"],
                         },
                     },
-                    "zoom": {"type": "integer", "description": "Initial zoom level (1-19)", "default": 13},
+                    "zoom": {"type": "integer", "description": "Zoom 1-19", "default": 13},
                 },
                 "required": ["title", "markers"],
             },
@@ -779,12 +704,12 @@ _TOOLS = [
         "type": "function",
         "function": {
             "name": "show_chart",
-            "description": "Render a bar, line, or pie chart to visualise data. Use when comparing numbers, showing trends, or presenting stats.",
+            "description": "Render a chart to visualise data (comparing numbers, trends, stats).",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "chart_type": {"type": "string", "enum": ["bar", "line", "pie", "doughnut"], "description": "Chart type"},
-                    "title": {"type": "string", "description": "Chart title"},
+                    "chart_type": {"type": "string", "enum": ["bar", "line", "pie", "doughnut"]},
+                    "title": {"type": "string"},
                     "labels": {"type": "array", "items": {"type": "string"}, "description": "X-axis labels or pie slice names"},
                     "datasets": {
                         "type": "array",
@@ -807,11 +732,11 @@ _TOOLS = [
         "type": "function",
         "function": {
             "name": "show_action_menu",
-            "description": "Present the user with a set of large clickable options (2-5 choices). Use when you want to offer follow-up actions or let the user choose a direction.",
+            "description": "Offer 2-5 large clickable follow-up options after a multi-step task or at a decision point.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "prompt": {"type": "string", "description": "Short question or instruction above the options"},
+                    "prompt": {"type": "string", "description": "Short question/instruction above the options"},
                     "options": {
                         "type": "array",
                         "items": {
@@ -819,7 +744,7 @@ _TOOLS = [
                             "properties": {
                                 "icon": {"type": "string", "description": "Emoji icon"},
                                 "label": {"type": "string", "description": "Button label"},
-                                "message": {"type": "string", "description": "Message to send when clicked"},
+                                "message": {"type": "string", "description": "Message sent when clicked"},
                             },
                             "required": ["label", "message"],
                         },
@@ -842,11 +767,9 @@ _TOOLS = [
         "function": {
             "name": "list_openclaw_skills",
             "description": (
-                "Show the OpenClaw skills manager (browse, install, update, remove). "
-                "When the user wants something you cannot do and installing a skill would enable it, "
-                "you MUST call this with highlight='<skill-name>' (e.g. highlight='discord'). "
-                "Never omit highlight in the proactive case. "
-                "Also call when the user asks about capabilities, skills, or what Zoe can do."
+                "Show the OpenClaw skills manager (browse/install/update/remove), or when asked what Zoe can do. "
+                "If a skill would enable something you can't yet do, call with highlight='<skill-name>' "
+                "(e.g. 'discord') — never omit highlight in that proactive case."
             ),
             "parameters": {
                 "type": "object",
@@ -873,21 +796,14 @@ _TOOLS = [
         "function": {
             "name": "proactive_schedule",
             "description": (
-                "Schedule a proactive push notification to be sent to the user at a specific future time. "
-                "Use when the user asks Zoe to notify them, remind them, or send them a message at a later time. "
-                "The message is what Zoe will say in the notification and the opening of the chat session."
+                "Schedule a proactive push notification at a future time (notify/remind/message later). "
+                "The message is what Zoe says in the notification and to open the chat session."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "message": {
-                        "type": "string",
-                        "description": "The notification text (≤120 chars).",
-                    },
-                    "send_at": {
-                        "type": "string",
-                        "description": "ISO-8601 UTC datetime, e.g. '2026-05-04T14:00:00Z'.",
-                    },
+                    "message": {"type": "string", "description": "Notification text (≤120 chars)."},
+                    "send_at": {"type": "string", "description": "ISO-8601 UTC datetime, e.g. '2026-05-04T14:00:00Z'."},
                 },
                 "required": ["message", "send_at"],
             },

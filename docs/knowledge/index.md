@@ -13,6 +13,9 @@ This is **knowledge / records** (descriptive facts), not a DOX contract. See the
 ## Concepts
 
 - [Zoe tool stack](zoe-tool-stack.md) — the installed agent tooling (graphify, opensrc, Multica, Pi, Hermes, OpenClaw, MemPalace, SkillSpector) and how the pieces relate.
+- [Runtime topology](runtime-topology.md) — the live runtime: host, services, ports, where each is served from and logs to, the touch panel, and the no-pipeline deploy. Orientation before touching the running system.
+- [Voice pipeline](voice-pipeline.md) — the STT → brain → TTS path, the replay-sample regression corpus, and the caveat that the warm harness understates real live latency.
+- [Merge & deploy discipline](merge-and-deploy.md) — merged ≠ live, the protected-`main` gates, and the Greptile/greploop gotchas (large-PR skip, thread resolution, REST-not-GraphQL).
 
 ## Bundles
 

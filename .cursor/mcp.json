@@ -1,8 +1,11 @@
 {
   "mcpServers": {
-    "graphify": {
-      "command": "/home/zoe/.local/share/uv/tools/graphifyy/bin/python",
-      "args": ["-m", "graphify.serve", "/home/zoe/assistant/graphify-out/graph.json"]
+    "serena": {
+      "command": "/home/zoe/.local/bin/serena",
+      "args": ["start-mcp-server", "--context", "ide-assistant", "--project", "/home/zoe/assistant", "--transport", "stdio", "--enable-web-dashboard", "false"]
+    },
+    "codebase-memory": {
+      "command": "/home/zoe/.local/bin/codebase-memory-mcp"
     },
     "zoe-tools": {
       "command": "/home/zoe/.local/bin/uv",

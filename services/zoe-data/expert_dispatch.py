@@ -345,19 +345,37 @@ async def _ingest_or_supersede(svc, text: str, *, user_id: str, source: str,
                                session_id: Optional[str], user_turn_id: Optional[str],
                                memory_type: str, confidence: float,
                                tags: list[str]) -> None:
-    """Ingest a conversational fact, superseding a same-attribute existing row.
+    """Ingest a conversational fact, merging it with an equivalent existing row.
 
     Best-effort and OFF the voice hot path (callers already run this in the
     background). Uses MemoryService.search to find a near-duplicate / same-
-    attribute fact; if found, archives the old row and ingests the new value
-    with a `supersedes` link rather than adding a duplicate. Any failure in the
-    dedup step degrades to a plain ingest so we never lose a real fact."""
+    attribute fact, then asks ``classify_against_existing`` what to do:
+
+      * "add"    — no equivalent fact; store as new.
+      * "update" — same fact, the candidate is richer/more current; archive the
+                   old row and ingest the candidate with a `supersedes` link.
+      * "skip"   — same fact, the existing row is at least as informative (e.g.
+                   it already spells the name); keep it and store NOTHING, so
+                   consolidation stops accumulating sparser near-duplicates.
+
+    Any failure in the dedup step degrades to a plain ingest so we never lose a
+    real fact."""
     old_id: Optional[str] = None
     try:
         from memory_quality import classify_against_existing
         rows = await svc.search(text, user_id=user_id, limit=3)
         existing = [(getattr(r, "id", ""), getattr(r, "text", "") or "") for r in (rows or [])]
         action, match_id = classify_against_existing(text, existing)
+        if action == "skip" and match_id:
+            # The existing row is at least as good — don't write a duplicate.
+            try:
+                from memory_metrics import memory_dedup_skip_count
+                memory_dedup_skip_count.inc()
+            except Exception:
+                pass
+            logger.info("MEMORY_DEDUP_SKIP source=%s kept=%s cand=%r",
+                        source, match_id, text[:80])
+            return
         if action == "update" and match_id:
             old_id = match_id
     except Exception as exc:

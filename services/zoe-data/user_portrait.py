@@ -20,9 +20,9 @@ import time
 
 import httpx
 
-logger = logging.getLogger(__name__)
+from gemma_endpoint import gemma_base
 
-_GEMMA_URL = os.environ.get("GEMMA_SERVER_URL", "http://127.0.0.1:11434")
+logger = logging.getLogger(__name__)
 _PORTRAIT_MODEL = os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E2B-it-Q4_K_M.gguf")
 
 # Maximum chars of portrait text injected into the context window each turn.
@@ -107,18 +107,19 @@ async def run_portrait_synthesis(user_id: str, db=None) -> dict:
         # Load recent journal entries
         journal_text = "(none)"
         try:
-            from database import get_db  # type: ignore[import]
-            if db is None:
-                async for db in get_db():
-                    break
-            rows = await db.execute(
-                """SELECT title, content, mood, created_at
+            from db_pool import get_db_ctx  # type: ignore[import]
+            jsql = """SELECT title, content, mood, created_at
                    FROM journal_entries
                    WHERE user_id = ? AND deleted = 0
-                   ORDER BY created_at DESC LIMIT 10""",
-                (user_id,),
-            )
-            rows = await rows.fetchall()
+                   ORDER BY created_at DESC LIMIT 10"""
+            if db is not None:
+                rows = await (await db.execute(jsql, (user_id,))).fetchall()
+            else:
+                # Short-lived pooled acquire — the bare `async for db in
+                # get_db(): break` form leaves the generator suspended at the
+                # yield, closing the connection mid-query.
+                async with get_db_ctx() as _db:
+                    rows = await (await _db.execute(jsql, (user_id,))).fetchall()
             if rows:
                 entries = []
                 for row in rows:
@@ -158,7 +159,7 @@ async def run_portrait_synthesis(user_id: str, db=None) -> dict:
 
 async def _call_llm_for_portrait(prompt: str) -> str:
     """Call the local LLM to generate a portrait. Returns the portrait text or ''."""
-    url = f"{_GEMMA_URL}/v1/chat/completions"
+    url = f"{gemma_base()}/v1/chat/completions"
     payload = {
         "model": _PORTRAIT_MODEL,
         "messages": [
@@ -193,23 +194,27 @@ async def _call_llm_for_portrait(prompt: str) -> str:
 
 async def _save_portrait(user_id: str, portrait_text: str, memory_count: int, db=None) -> None:
     """Upsert the portrait into the user_portraits table."""
-    try:
-        from database import get_db  # type: ignore[import]
-        if db is None:
-            async for db in get_db():
-                break
-        await db.execute(
-            """INSERT INTO user_portraits (user_id, portrait_text, portrait_version,
+    sql = """INSERT INTO user_portraits (user_id, portrait_text, portrait_version,
                    generated_from_memory_count, last_generated)
                VALUES (?, ?, 1, ?, CURRENT_TIMESTAMP)
                ON CONFLICT(user_id) DO UPDATE SET
                    portrait_text = excluded.portrait_text,
                    portrait_version = user_portraits.portrait_version + 1,
                    generated_from_memory_count = excluded.generated_from_memory_count,
-                   last_generated = CURRENT_TIMESTAMP""",
-            (user_id, portrait_text, memory_count),
-        )
-        await db.commit()
+                   last_generated = CURRENT_TIMESTAMP"""
+    params = (user_id, portrait_text, memory_count)
+    try:
+        from db_pool import get_db_ctx  # type: ignore[import]
+        if db is not None:
+            await db.execute(sql, params)
+            await db.commit()
+        else:
+            # Short-lived pooled acquire for the write — the bare
+            # `async for db in get_db(): break` form leaves the generator
+            # suspended at the yield, closing the connection mid-write.
+            async with get_db_ctx() as _db:
+                await _db.execute(sql, params)
+                await _db.commit()
     except Exception as exc:
         logger.error("portrait: save failed user=%s: %s", user_id, exc)
 
@@ -220,16 +225,17 @@ async def load_portrait(user_id: str, db=None) -> str:
     Fast direct SQLite lookup — no vector search, no embedding overhead.
     Called on every chat turn.
     """
+    sql = "SELECT portrait_text FROM user_portraits WHERE user_id = ?"
     try:
-        from database import get_db  # type: ignore[import]
-        if db is None:
-            async for db in get_db():
-                break
-        row = await db.execute(
-            "SELECT portrait_text FROM user_portraits WHERE user_id = ?",
-            (user_id,),
-        )
-        row = await row.fetchone()
+        from db_pool import get_db_ctx  # type: ignore[import]
+        if db is not None:
+            row = await (await db.execute(sql, (user_id,))).fetchone()
+        else:
+            # Short-lived pooled acquire — the bare `async for db in get_db():
+            # break` form leaves the generator suspended at the yield, closing
+            # the connection mid-query.
+            async with get_db_ctx() as _db:
+                row = await (await _db.execute(sql, (user_id,))).fetchone()
         if row and row[0]:
             text = row[0].strip()
             # Truncate at PORTRAIT_MAX_INJECT_CHARS to stay within token budget
@@ -253,12 +259,16 @@ async def run_portrait_synthesis_for_all(db=None) -> list[dict]:
         user_ids = await svc.list_users()
     except AttributeError:
         try:
-            from database import get_db  # type: ignore[import]
-            if db is None:
-                async for db in get_db():
-                    break
-            rows = await db.execute("SELECT DISTINCT user_id FROM chat_sessions")
-            rows = await rows.fetchall()
+            from db_pool import get_db_ctx  # type: ignore[import]
+            sql = "SELECT DISTINCT user_id FROM chat_sessions"
+            if db is not None:
+                rows = await (await db.execute(sql)).fetchall()
+            else:
+                # Short-lived pooled acquire for the listing only — the bare
+                # `async for db in get_db(): break` form leaves the generator
+                # suspended at the yield, closing the connection mid-query.
+                async with get_db_ctx() as _db:
+                    rows = await (await _db.execute(sql)).fetchall()
             user_ids = [r[0] for r in rows if r[0]]
         except Exception as exc:
             logger.error("portrait: could not list users: %s", exc)

@@ -6,10 +6,10 @@ Self-contained optional modules that extend Zoe beyond the core assistant, serve
 
 ## Ownership
 
-- `agent-zero/` — Agent Zero integration module.
-- `orbit/` — Orbit module (nginx route `^~ /modules/orbit`).
-- `zoe-music/` — music module.
-- `jag-board/` and `questionable-decisions/` content is per-deployment game data: excluded from git and from the knowledge graph; routes exist in nginx.
+- `zoe-music/` — music module. **Being replaced** by Music Assistant (see `docs/CANONICAL.md`); keep until the replacement is proven.
+- `omnigent/` — remote-coding agent module.
+
+> Retired 2026-06-24 (see `docs/CANONICAL.md`): `orbit/`, `agent-zero/`, `jag-board/`, `questionable-decisions/`. Do not re-add them.
 
 ## Local Contracts
 

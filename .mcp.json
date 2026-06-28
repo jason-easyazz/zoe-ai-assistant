@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "serena": {
+      "command": "/home/zoe/.local/bin/serena",
+      "args": [
+        "start-mcp-server",
+        "--context", "claude-code",
+        "--project", "/home/zoe/assistant",
+        "--transport", "stdio",
+        "--enable-web-dashboard", "false"
+      ]
+    },
+    "codebase-memory": {
+      "command": "/home/zoe/.local/bin/codebase-memory-mcp"
+    }
+  }
+}
