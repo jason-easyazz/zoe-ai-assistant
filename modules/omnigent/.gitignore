@@ -1,2 +1,6 @@
 # Platform binary wheels are built locally on the aarch64 host, never committed.
 wheels/*.whl
+
+# The root .gitignore's broad `*.sh` rule swallows this — but entrypoint.sh is the image's
+# CMD (Dockerfile COPYs it); it MUST be tracked or a clean checkout can't build. Re-include it.
+!entrypoint.sh

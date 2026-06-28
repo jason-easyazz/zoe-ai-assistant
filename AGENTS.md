@@ -17,24 +17,18 @@ Before any code task, you MUST — do not fall back to raw grep/guessing:
 - **Drive every PR to merge with the Greptile loop** — reply to + RESOLVE each Greptile thread, follow up until it actually merges; squash only, never `--admin`/`--force`.
 - **Follow the DOX `AGENTS.md` chain** — read the root plus every nested `AGENTS.md` on the path to files you touch, and do the closeout DOX pass after editing (see *DOX framework* below).
 - **Honour the rocks.** Gemma 4 E4B+MTP (brain) and Moonshine v2 Medium (STT) are fixed — optimise *around* them, never propose swapping (see `docs/VISION.md` principle 1). **Retire by removing** (git keeps history); don't hoard `_old`/`_v2`/archive copies.
+- **Replay-gate every voice change (MANDATORY).** Any change to the voice path (STT / brain / TTS — `services/zoe-data/routers/voice_tts.py`, `zoe_core_client.py`, `fast_tiers.py`, the brain/Kokoro config) MUST be replay-gated against Jason's real-voice corpus `~/.zoe-voice-samples` before merge/deploy: said-vs-did must not regress (a previously-working command that now fails = a bug) and per-stage speed must not regress. Use the voice regression + speed harness — `scripts/maintenance/voice_regression_probe.py` (baseline-compared) and the underlying `scripts/perf/measure_voice.py` / `measure_tts.py` — always under `flock /tmp/zoe-voice-harness.lock` (two Kokoro loads ~2.3 GB each will OOM the box). The harness is warm + stops before TTS, so its numbers are RELATIVE (drift vs baseline), not live performance. Full tool doc: `docs/knowledge/voice-pipeline.md`.
 
 ---
 
-## graphify
+## Codebase navigation — codebase-memory + Serena (graphify retired)
 
-> **Superseded — graphify is retired.** Per the Start-of-task checklist above, use the **codebase-memory** MCP for who-calls-what / architecture and **Serena** for symbol read + edits. The notes below are kept only for the still-committed `graphify-out/` artifacts; do not reach for graphify over the MCP bus. (Full reconciliation tracked as audit fix #7.)
+graphify is **retired**: there is no committed `graphify-out/` graph and no `graphify query`/`path`/`explain` workflow. Do not resurrect it.
 
-This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+- **codebase-memory** (MCP) — who-calls-what, architecture, seams, cross-module "how does X relate to Y".
+- **Serena** (MCP) — symbol read + symbolic edits.
 
-Rules:
-- Read graphify-out/GRAPH_REPORT.md before broad source searches when it is fresh. If its "Built from commit" does not match `git rev-parse HEAD`, treat it as a rough map only and prefer `graphify query`, `graphify path`, or `graphify explain` against `graphify-out/graph.json`.
-- IF graphify-out/wiki/index.md EXISTS, navigate it instead of reading raw files
-- For cross-module "how does X relate to Y" questions, prefer `graphify query "<question>"`, `graphify path "<A>" "<B>"`, or `graphify explain "<concept>"` over grep — these traverse the graph's EXTRACTED + INFERRED edges instead of scanning files
-- To rebuild the graph after significant code or doc changes, run from /home/zoe/assistant:
-  `OPENAI_API_KEY=$(grep "^OPENAI_API_KEY=" .env | cut -d= -f2-) /home/zoe/.local/share/uv/tools/graphifyy/bin/graphify extract . --backend openai`
-- To refresh only GRAPH_REPORT.md from the committed graph, run:
-  `/home/zoe/.local/share/uv/tools/graphifyy/bin/graphify cluster-only . --no-viz`
-  Do NOT use `graphify update .` or `graphify hook install` — both have inflated the graph in this repo.
+Reach for raw `grep`/`Read` only when the MCP bus genuinely can't answer.
 
 ## opensrc
 
@@ -81,11 +75,11 @@ The tracked Cursor MCP config intentionally includes only non-secret local serve
 
 ## Hermes-First Delegation
 
-Hermes is Zoe's default engineering and browser agent. Use it for planning, code review, implementation repair, architecture analysis, Greptile loops, Graphify-guided codebase work, Multica board repair, generated knowledge refresh, and browser work through Zoe's CloakBrowser tools.
+Hermes is Zoe's default engineering and browser agent. Use it for planning, code review, implementation repair, architecture analysis, Greptile loops, codebase-memory/Serena-guided codebase work, Multica board repair, generated knowledge refresh, and browser work through Zoe's CloakBrowser tools.
 
-Local Zoe Hermes engineering skills live under `~/.hermes/skills`, including `zoe-engineering`, `agentic-engineering-workflow`, `source-code-context`, `code-structure-cleanup`, `github-greptile-loop`, `grep-loop-review-workflow`, `zoe-graphify`, and `zoe-status-refresh`. They are operator-level Hermes skills, not user-facing Zoe runtime skills under `skills/`.
+Local Zoe Hermes engineering skills live under `~/.hermes/skills`, including `zoe-engineering`, `agentic-engineering-workflow`, `source-code-context`, `code-structure-cleanup`, `github-greptile-loop`, `grep-loop-review-workflow`, and `zoe-status-refresh`. They are operator-level Hermes skills, not user-facing Zoe runtime skills under `skills/`.
 
-The `agentic-engineering-workflow` and `grep-loop-review-workflow` names are kept as compatibility entrypoints for the Micky-style workflow pack, but they map onto Zoe's Hermes-first Graphify/opensrc/Greptile process rather than introducing a second parallel system.
+The `agentic-engineering-workflow` and `grep-loop-review-workflow` names are kept as compatibility entrypoints for the Micky-style workflow pack, but they map onto Zoe's Hermes-first codebase-memory/opensrc/Greptile process rather than introducing a second parallel system.
 
 OpenClaw remains installed and available as a future/manual fallback. Do not route ordinary coding, planning, review, board work, browser work, or background work to OpenClaw by default. Zoe's Multica-first engineering driver owns workflow state and phase advancement; Hermes executes the one ready phase unless the user explicitly asks to use OpenClaw.
 
@@ -127,7 +121,7 @@ Third-party skills and extensions run with the agent's privileges. Treat them as
 DOX governs two kinds of document; do not conflate them.
 
 - **Contracts** — `AGENTS.md` files. Prescriptive, binding, prose. They change only through the deliberate DOX pass below — never by an autonomous loop.
-- **Records / knowledge** — curated facts, schemas, learned insights, and durable reference (e.g. the graphify wiki, memory exports, tool/topology notes). Write these as **Open Knowledge Format (OKF)** bundles: a directory of markdown files with YAML frontmatter (required `type`), an `index.md` per directory, and cross-links via relative markdown links.
+- **Records / knowledge** — curated facts, schemas, learned insights, and durable reference (e.g. memory exports, tool/topology notes). Write these as **Open Knowledge Format (OKF)** bundles: a directory of markdown files with YAML frontmatter (required `type`), an `index.md` per directory, and cross-links via relative markdown links.
 - Register every OKF bundle in the nearest owning AGENTS.md's Child DOX Index so the DOX walk discovers it. An OKF bundle stays inside DOX governance; it is not a parallel system.
 - The autonomous memory/knowledge loop may freely create, update, and lint OKF records. It must never edit an AGENTS.md contract — contract changes go through the DOX pass and human review.
 
@@ -215,4 +209,4 @@ When the user requests a durable behavior change, record it here or in the relev
 - [config/AGENTS.md](config/AGENTS.md) — deployment configuration and key material locations (values never documented)
 - [labs/AGENTS.md](labs/AGENTS.md) — lab-only experiments & spikes, isolated from the runtime (e.g. the Flue harness substrate spike)
 
-Not indexed (runtime/data/generated, no durable editing contracts): `backups/`, `checkpoints/`, `data/`, `models/`, `ssl/`, `graphify-out/`, `homeassistant/` (live Home Assistant runtime), `demos/`.
+Not indexed (runtime/data/generated, no durable editing contracts): `backups/`, `checkpoints/`, `data/`, `models/`, `ssl/`, `homeassistant/` (live Home Assistant runtime), `demos/`.

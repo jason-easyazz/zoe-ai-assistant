@@ -11,7 +11,6 @@ Host deployment configuration: tunnel config, nginx fragments, module registry, 
 - `modules.yaml` — module registry consumed by the module compose generator.
 - `vapid_public.pem` / `vapid_private.pem`, `cert.pem` — web-push VAPID keys and certificate material.
 - `DEPLOYMENT_MANIFEST.json` — deployment manifest.
-- `_archive/` — retired config.
 
 ## Local Contracts
 

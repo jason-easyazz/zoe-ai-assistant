@@ -140,7 +140,7 @@ _LOW_RISK_TASK_PHRASE_RE = re.compile(
 class PiIntentClassifierConfig:
     enabled: bool = False
     provider: str = "ollama"
-    model: str = "gemma-4-E2B-it-Q4_K_M.gguf"
+    model: str = "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"
     command: str = "pi"
     timeout_seconds: float = PI_INTENT_DEFAULT_TIMEOUT_S
     cwd: str = "/home/zoe/assistant"
@@ -157,8 +157,8 @@ class PiIntentClassifierConfig:
         return cls(
             enabled=_env_bool(values.get("ZOE_PI_INTENT_ENABLED"), default=False),
             provider=(values.get("ZOE_PI_INTENT_PROVIDER") or "ollama").strip() or "ollama",
-            model=(values.get("ZOE_PI_INTENT_MODEL") or values.get("ZOE_PI_MODEL") or "gemma-4-E2B-it-Q4_K_M.gguf").strip()
-            or "gemma-4-E2B-it-Q4_K_M.gguf",
+            model=(values.get("ZOE_PI_INTENT_MODEL") or values.get("ZOE_PI_MODEL") or "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf").strip()
+            or "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
             command=(values.get("ZOE_PI_COMMAND") or "pi").strip() or "pi",
             timeout_seconds=float(values.get("ZOE_PI_INTENT_TIMEOUT_SECONDS") or PI_INTENT_DEFAULT_TIMEOUT_S),
             cwd=(values.get("ZOE_PI_CWD") or "/home/zoe/assistant").strip() or "/home/zoe/assistant",

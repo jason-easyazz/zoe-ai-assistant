@@ -25,7 +25,7 @@ class GraphitiLocalModelProbeError(ValueError):
 class GraphitiLocalModelProbeConfig:
     run: bool = False
     llm_base_url: str = "http://127.0.0.1:11434/v1"
-    llm_model: str = "gemma-4-E2B-it-Q4_K_M.gguf"
+    llm_model: str = "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"
     offline_only: bool = True
     timeout_seconds: float = 8.0
     max_tokens: int = 400

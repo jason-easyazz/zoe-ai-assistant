@@ -42,7 +42,7 @@ def find_doc_references():
             # Skip certain directories
             if any(skip in str(file_path) for skip in [
                 'node_modules', '.git', '__pycache__', 'venv', 
-                'tools/aider', 'backups', 'docs/archive'
+                'tools/aider', 'backups'
             ]):
                 continue
             
@@ -184,4 +184,3 @@ if __name__ == "__main__":
     generate_report(references, paths, readme_issues)
     
     print("\n✅ Audit complete!\n")
-

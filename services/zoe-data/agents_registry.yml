@@ -50,7 +50,7 @@ agents:
     base_url: "http://localhost:18789"
     a2a_token: ""          # OpenClaw uses ACP; A2A is a secondary path
     description: "OpenClaw — available fallback, not the default route"
-    model: "Gemma 4 E2B"
+    model: "Gemma 4 E4B-QAT"
     skills:
       - browser_automation
       - persistent_login_sessions

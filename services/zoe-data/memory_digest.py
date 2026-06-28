@@ -146,7 +146,7 @@ async def run_turn_digest(
 
         prompt = _TURN_EXTRACTION_PROMPT.format(user_message=user_message[:600])
         payload = {
-            "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E2B-it-Q4_K_M.gguf"),
+            "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"),
             "messages": [
                 {"role": "system", "content": "You are a precise fact extractor. Return ONLY valid JSON."},
                 {"role": "user", "content": prompt},
@@ -365,7 +365,7 @@ async def _emotional_memory_pass(user_id: str, chat_text: str, svc) -> int:
 
     prompt = _EMOTIONAL_EXTRACTION_PROMPT.format(chat_text=chat_text[:3000])
     payload = {
-        "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E2B-it-Q4_K_M.gguf"),
+        "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"),
         "messages": [
             {"role": "system", "content": "You are an empathetic listener. Return ONLY valid JSON."},
             {"role": "user", "content": prompt},
@@ -458,7 +458,7 @@ async def _extract_facts_with_gemma(chat_text: str) -> list[dict]:
     """Send chat transcript to the LLM and parse the JSON fact list."""
     prompt = _EXTRACTION_PROMPT.format(chat_text=chat_text[:3000])
     payload = {
-        "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E2B-it-Q4_K_M.gguf"),
+        "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"),
         "messages": [
             {"role": "system", "content": "You are a precise fact extractor. Return ONLY valid JSON."},
             {"role": "user", "content": prompt},
@@ -501,7 +501,7 @@ async def _is_contradiction(new_fact: str, existing_fact: str) -> bool:
         existing_fact=existing_fact.strip(),
     )
     payload = {
-        "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E2B-it-Q4_K_M.gguf"),
+        "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"),
         "messages": [
             {"role": "system", "content": "You are a strict fact-contradiction judge. Return ONLY the JSON object."},
             {"role": "user", "content": prompt},
@@ -1254,12 +1254,18 @@ async def run_dreaming_for_all(db=None) -> list[dict]:
         user_ids = await svc.list_users()
     except AttributeError:
         try:
-            from database import get_db
-            if db is None:
-                async for db in get_db():
-                    break
-            rows = await db.execute("SELECT DISTINCT user_id FROM chat_sessions")
-            rows = await rows.fetchall()
+            from db_pool import get_db_ctx  # type: ignore[import]
+            sql = "SELECT DISTINCT user_id FROM chat_sessions"
+            if db is not None:
+                rows = await (await db.execute(sql)).fetchall()
+            else:
+                # Short-lived pooled acquire for the listing only — the bare
+                # `async for db in get_db(): break` form leaves the generator
+                # suspended at the yield, so the connection is closed out from
+                # under the query ("connection was closed in the middle of
+                # operation"). Materialize the rows before release.
+                async with get_db_ctx() as _db:
+                    rows = await (await _db.execute(sql)).fetchall()
             user_ids = [r[0] for r in rows if r[0]]
         except Exception as exc:
             logger.error("dreaming: could not list users: %s", exc)
@@ -1429,14 +1435,17 @@ async def run_music_taste_digest_for_all(db=None) -> list[dict]:
     """Run music taste digest for all users who have any music events."""
     results = []
     try:
-        from database import get_db  # type: ignore[import]
-        if db is None:
-            async for db in get_db():
-                break
-        rows = await db.execute(
-            "SELECT DISTINCT user_id FROM music_listening_events"
-        )
-        rows = await rows.fetchall()
+        from db_pool import get_db_ctx  # type: ignore[import]
+        sql = "SELECT DISTINCT user_id FROM music_listening_events"
+        if db is not None:
+            rows = await (await db.execute(sql)).fetchall()
+        else:
+            # Short-lived pooled acquire for the listing only — the bare
+            # `async for db in get_db(): break` form leaves the generator
+            # suspended at the yield, closing the connection mid-query
+            # ("connection was closed in the middle of operation").
+            async with get_db_ctx() as _db:
+                rows = await (await _db.execute(sql)).fetchall()
         user_ids = [r[0] for r in rows if r[0]]
     except Exception as exc:
         logger.error("music_taste_digest: could not list users: %s", exc)

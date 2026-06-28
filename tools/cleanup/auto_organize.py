@@ -109,14 +109,14 @@ class SmartOrganizer:
             
             # Categorize and move
             category = self.categorize_doc(md_file.name)
-            dest_dir = PROJECT_ROOT / "docs/archive" / category
+            dest_dir = PROJECT_ROOT / "docs" / category
             dest_dir.mkdir(parents=True, exist_ok=True)
             
             try:
                 dest = dest_dir / md_file.name
                 shutil.move(str(md_file), str(dest))
-                self.moves.append((md_file.name, f"docs/archive/{category}/"))
-                print(f"→ Moved: {md_file.name} to docs/archive/{category}/")
+                self.moves.append((md_file.name, f"docs/{category}/"))
+                print(f"→ Moved: {md_file.name} to docs/{category}/")
             except Exception as e:
                 self.errors.append((md_file.name, str(e)))
                 print(f"✗ Error: {md_file.name} - {e}")
@@ -231,4 +231,3 @@ if __name__ == "__main__":
         print("\nTo execute, run:")
         print("  python3 tools/cleanup/auto_organize.py --execute")
         print()
-

@@ -180,13 +180,13 @@ def test_run_command_timeout_handles_killpg_oserror(monkeypatch, tmp_path):
 
 def test_local_model_fit_evidence_finds_local_model_file(tmp_path):
     module = _load_module()
-    model_dir = tmp_path / "models" / "gemma4-e2b"
+    model_dir = tmp_path / "models" / "gemma4-e4b-qat"
     model_dir.mkdir(parents=True)
-    model_file = model_dir / "gemma-4-E2B-it-Q4_K_M.gguf"
+    model_file = model_dir / "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"
     model_file.write_bytes(b"local model")
 
     evidence = module.local_model_fit_evidence(
-        "gemma-4-E2B-it-Q4_K_M.gguf",
+        "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
         "http://127.0.0.1:11434/v1",
         roots=(tmp_path / "models",),
     )

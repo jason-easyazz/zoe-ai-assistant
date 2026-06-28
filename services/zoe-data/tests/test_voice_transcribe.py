@@ -67,7 +67,6 @@ def test_transcribe_writes_stt_audit_log(client, monkeypatch, tmp_path):
 
     log_path = tmp_path / "voice_stt.jsonl"
     monkeypatch.setenv("ZOE_VOICE_STT_LOG", str(log_path))
-    monkeypatch.setenv("ZOE_WHISPER_MODEL", "small.en")
     monkeypatch.setattr(voice_tts, "_transcribe_audio", _fake_run)
     wav = b"RIFF" + b"\x00" * 12
 
@@ -81,7 +80,8 @@ def test_transcribe_writes_stt_audit_log(client, monkeypatch, tmp_path):
     assert record["route"] == "transcribe"
     assert record["panel_id"] == "p-audit"
     assert record["transcript"] == "hello audit"
-    assert record["model"] == "small.en"
+    # Moonshine is the only STT engine — the audit log reflects that, not whisper.
+    assert record["model"] == "moonshine"
     assert record["audio_bytes"] == len(wav)
     assert isinstance(record["vad_threshold"], float)
     assert isinstance(record["min_speech_ms"], int)
@@ -449,3 +449,131 @@ def test_panel_session_trust_window_parsing(monkeypatch):
 
     monkeypatch.setenv("ZOE_PANEL_SESSION_TRUST_WINDOW_S", "99999999")
     assert voice_tts._panel_session_trust_window_s() == 24 * 60 * 60
+
+
+# ── Moonshine-only STT + wake-word bleed fix ─────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("lines", "expected"),
+    [
+        # Wake word on its own leading line -> dropped, command intact.
+        (["Hey Zoe.", "What time is it?"], "What time is it?"),
+        (["Hey, Zoe.", "Show me the weather."], "Show me the weather."),
+        (["Hey zoe", "Add bread to the shopping list"], "Add bread to the shopping list"),
+        # Bare name line (no "hey") -> dropped.
+        (["Zoe.", "Where is Egypt?"], "Where is Egypt?"),
+        # Inline wake prefix on the same line as the command -> prefix stripped.
+        (["Hey Zoe, what's on my calendar?"], "What's on my calendar?"),
+        (["Hey Zoe, set a timer for five minutes."], "Set a timer for five minutes."),
+        # Wake-word homophones the mishearing produces.
+        (["Hey joey", "Show me my lists."], "Show me my lists."),
+        # No wake word at all -> untouched.
+        (["What time is it?"], "What time is it?"),
+        (["Add soup to the chopping list."], "Add soup to the chopping list."),
+    ],
+)
+def test_strip_wake_word_removes_wake_keeps_command(lines, expected):
+    from routers import voice_tts
+
+    assert voice_tts._strip_wake_word(lines) == expected
+
+
+def test_strip_wake_word_never_clips_command_words():
+    """The fix must never eat a real command word — only the wake token."""
+    from routers import voice_tts
+
+    # "What" must survive (the bug was trimming it to "time is it?").
+    assert voice_tts._strip_wake_word(["Hey Zoe.", "What time is it?"]) == "What time is it?"
+    # A command that *is* just a single word after the wake line stays.
+    assert voice_tts._strip_wake_word(["Hey Zoe", "Stop."]) == "Stop."
+
+
+def test_strip_wake_word_wake_only_clip_not_emptied():
+    """A clip that is ONLY the wake word returns it as-is (caller handles empty),
+    never an empty string from over-trimming."""
+    from routers import voice_tts
+
+    assert voice_tts._strip_wake_word(["Hey Zoe."]) == "Hey Zoe."
+    assert voice_tts._strip_wake_word([]) == ""
+    assert voice_tts._strip_wake_word(["", "  "]) == ""
+
+
+def test_transcribe_audio_impl_is_moonshine_only(monkeypatch):
+    """The live path uses ONLY Moonshine; whisper must never be called."""
+    from routers import voice_tts
+
+    async def _moon(path: str) -> str:
+        return "moonshine result"
+
+    def _explode(*a, **k):  # any whisper call here is a regression
+        raise AssertionError("whisper must not run on the live STT path")
+
+    monkeypatch.setattr(voice_tts, "_run_moonshine", _moon)
+    monkeypatch.setattr(voice_tts, "_run_faster_whisper", _explode)
+    monkeypatch.setattr(voice_tts, "_run_whisper_cpp", _explode)
+
+    assert asyncio.run(voice_tts._transcribe_audio_impl("/tmp/x.wav")) == "moonshine result"
+
+
+def test_transcribe_audio_impl_empty_returns_empty_no_whisper(monkeypatch):
+    """On Moonshine-empty, return '' (caller re-prompts) — do NOT fall to whisper."""
+    from routers import voice_tts
+
+    async def _moon_empty(path: str) -> str:
+        return ""
+
+    def _explode(*a, **k):
+        raise AssertionError("whisper must not run when Moonshine returns empty")
+
+    monkeypatch.setattr(voice_tts, "_run_moonshine", _moon_empty)
+    monkeypatch.setattr(voice_tts, "_run_faster_whisper", _explode)
+    monkeypatch.setattr(voice_tts, "_run_whisper_cpp", _explode)
+
+    assert asyncio.run(voice_tts._transcribe_audio_impl("/tmp/x.wav")) == ""
+
+
+def test_transcribe_audio_impl_moonshine_error_raises(monkeypatch):
+    """A Moonshine BACKEND error RAISES so callers can tell a real failure apart
+    from silence (Greptile #854) — and whisper is never reached as a rescue."""
+    from routers import voice_tts
+
+    async def _moon_boom(path: str) -> str:
+        raise RuntimeError("moonshine boom")
+
+    def _explode(*a, **k):
+        raise AssertionError("whisper must not run on Moonshine error")
+
+    monkeypatch.setattr(voice_tts, "_run_moonshine", _moon_boom)
+    monkeypatch.setattr(voice_tts, "_run_faster_whisper", _explode)
+
+    raised = False
+    try:
+        asyncio.run(voice_tts._transcribe_audio_impl("/tmp/x.wav"))
+    except RuntimeError as exc:
+        raised = "moonshine boom" in str(exc)
+    assert raised, "Moonshine backend error must surface (raise), not be masked as silence"
+
+
+def test_maybe_capture_stt_saves_corpus_without_whisper_ab(monkeypatch, tmp_path):
+    """Corpus capture still saves the WAV, but fires NO whisper A/B."""
+    from routers import voice_tts
+
+    src = tmp_path / "utt.wav"
+    src.write_bytes(b"RIFF" + b"\x00" * 64)
+    sample_dir = tmp_path / "samples"
+    monkeypatch.setenv("ZOE_VOICE_SAVE_AUDIO", "1")
+    monkeypatch.setenv("ZOE_VOICE_SAMPLE_DIR", str(sample_dir))
+
+    def _explode(*a, **k):
+        raise AssertionError("no whisper A/B on a live capture")
+
+    monkeypatch.setattr(voice_tts, "_run_faster_whisper", _explode)
+    spawned = []
+    monkeypatch.setattr(voice_tts, "_spawn_bg", lambda coro: spawned.append(coro))
+
+    asyncio.run(voice_tts._maybe_capture_stt(str(src), "moonshine text"))
+
+    saved = list(sample_dir.glob("*.wav"))
+    assert len(saved) == 1  # corpus capture kept
+    assert spawned == []  # no background whisper A/B scheduled

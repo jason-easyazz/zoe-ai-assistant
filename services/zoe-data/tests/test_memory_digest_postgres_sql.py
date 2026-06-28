@@ -128,3 +128,62 @@ async def test_run_weekly_consolidation_for_all_fallback_uses_get_db_ctx(monkeyp
     assert consolidated == ["alice", "bob"]
     assert [r["user_id"] for r in results] == ["alice", "bob"]
     assert "SELECT DISTINCT user_id FROM chat_sessions" in db.sql[0]
+
+
+@pytest.mark.asyncio
+async def test_run_dreaming_for_all_fallback_db_none_uses_get_db_ctx(monkeypatch):
+    """The chat_sessions fallback (MemoryService has no list_users) must acquire
+    via get_db_ctx, not the suspended-generator `async for db in get_db(): break`
+    form that logged 'dreaming: could not list users'."""
+    import memory_service
+
+    class _SvcNoListUsers:
+        pass  # no list_users attr → AttributeError → fallback path
+
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: _SvcNoListUsers())
+
+    db = _FakeDb([("alice",), ("bob",), (None,)])  # None filtered out
+    ctx = _FakeCtx(db)
+    monkeypatch.setattr(db_pool, "get_db_ctx", lambda: ctx)
+
+    seen = []
+
+    async def fake_run_dreaming_cycle(user_id, db=None, run_agent_sync_phase=True):
+        seen.append((user_id, db))
+        return {"user_id": user_id}
+
+    monkeypatch.setattr(memory_digest, "run_dreaming_cycle", fake_run_dreaming_cycle)
+
+    results = await memory_digest.run_dreaming_for_all()  # db=None
+
+    assert ctx.entered == 1 and ctx.exited == 1  # pooled connection acquired + released
+    assert [r["user_id"] for r in results] == ["alice", "bob"]
+    # per-user cycles self-acquire (db=None passed through) — the listing
+    # connection isn't held across per-user work.
+    assert seen == [("alice", None), ("bob", None)]
+    assert "SELECT DISTINCT user_id FROM chat_sessions" in db.sql[0]
+
+
+@pytest.mark.asyncio
+async def test_run_music_taste_digest_for_all_db_none_uses_get_db_ctx(monkeypatch):
+    """The music-events listing must acquire via get_db_ctx, not the
+    suspended-generator form that logged 'music_taste_digest: could not list
+    users: connection was closed in the middle of operation'."""
+    db = _FakeDb([("alice",), ("bob",), (None,)])  # None filtered out
+    ctx = _FakeCtx(db)
+    monkeypatch.setattr(db_pool, "get_db_ctx", lambda: ctx)
+
+    seen = []
+
+    async def fake_run_music_taste_digest(user_id):
+        seen.append(user_id)
+        return {"user_id": user_id}
+
+    monkeypatch.setattr(memory_digest, "run_music_taste_digest", fake_run_music_taste_digest)
+
+    results = await memory_digest.run_music_taste_digest_for_all()  # db=None
+
+    assert ctx.entered == 1 and ctx.exited == 1
+    assert [r["user_id"] for r in results] == ["alice", "bob"]
+    assert seen == ["alice", "bob"]
+    assert "SELECT DISTINCT user_id FROM music_listening_events" in db.sql[0]
