@@ -1525,66 +1525,75 @@ async def internal_broadcast(payload: dict, _: None = Depends(require_internal_t
     return {"ok": True}
 
 
-async def _session_can_subscribe_panel(panel_id: str, session_id: str | None) -> bool:
-    """Allow browser panel sockets only for the panel(s) bound to that session.
+async def _resolve_subscribable_panel(panel_id: str, session_id: str | None) -> str | None:
+    """Resolve the *canonical* panel channel a browser push socket may subscribe to.
+
+    Returns the panel_id whose ``panel_{id}`` channel the socket should join, or
+    ``None`` to reject the connection.
 
     A single physical panel answers to more than one ``panel_id`` over its life:
     a generated ``panel_xxxx`` captured from localStorage on a load without a
     ``?panel_id=`` URL param, plus the registered id (e.g. ``zoe-touch-pi``). The
-    panel binds (``/api/ui/panel/bind``) and connects the push socket under
-    whichever id ``getPanelId()`` returns at that moment, so the connecting id can
-    legitimately differ from the alias the bound session row was written under.
+    client connects the push socket under whichever id ``getPanelId()`` happens to
+    return, but ``ui_actions`` are pushed (``broadcast_to_panel``) to the id the
+    panel is *bound* under. So we must NOT subscribe the socket to the raw
+    connecting id — that would accept the connection yet deliver nothing when the
+    two differ. Instead we resolve the canonical bound id from the session and
+    subscribe there, making the connecting id irrelevant to delivery.
 
-    Authorization is scoped to the *binding*, not merely the user. We accept the
-    subscription when the connecting ``panel_id`` is:
-      (a) bound under this same browser ``session_id`` (the legitimate alias case —
-          the generated ``panel_xxxx`` and the registered ``zoe-touch-pi`` of the
-          same browser share one ``chat_session_id``); or
-      (b) bound to this user with no recorded session (legacy/device binds where
-          ``chat_session_id`` is NULL).
-    A signed-in user can therefore NOT subscribe to an arbitrary panel their
-    session isn't bound to. Guest/device-token paths stay strict.
+    Security is anchored on the *binding*, not the connecting id:
+      * a signed-in user is mapped to the panel bound under THIS browser
+        ``session_id`` (so connecting ids are never trusted on their own); falling
+        back to a panel they own that was bound with a NULL session (legacy/device
+        bind). A user cannot reach a panel their session/account isn't bound to.
+      * admin/agent roles may target any explicit panel_id.
+      * an unresolved session defers to the registered-panel guest policy.
     """
     user = await _resolve_ws_session(session_id)
     if user is None:
-        return await _panel_allows_guest_push(panel_id)
+        if panel_id and await _panel_allows_guest_push(panel_id):
+            return panel_id
+        return None
     user_id = str(user.get("user_id") or "")
     role = str(user.get("role") or "").lower()
     if not user_id:
-        return False
+        return None
     if role in {"admin", "agent"}:
-        return True
-    if not panel_id:
-        return False
+        # Trusted roles may subscribe to an explicit panel channel as-is.
+        return panel_id or None
     try:
         from database import get_db
 
         async for db in get_db():
-            # The connecting panel_id must have a bound row owned by this user that
-            # is reachable from THIS session: either bound under the same session_id
-            # (the legitimate alias case — the generated panel_xxxx and the
-            # registered zoe-touch-pi of the same browser share one chat_session_id),
-            # or bound under no session at all (legacy/device bind with a NULL
-            # chat_session_id, where ownership by user_id is the only signal).
-            # A signed-in user therefore cannot subscribe to a panel_id their
-            # session was never bound to, even when they own other panels.
+            # Canonical id = the panel bound under THIS browser session (most recent
+            # foreground first). The connecting panel_id is intentionally ignored:
+            # delivery targets the bound id, so we subscribe there regardless of
+            # which alias the client used.
             if session_id:
                 cursor = await db.execute(
+                    "SELECT panel_id FROM ui_panel_sessions "
+                    "WHERE chat_session_id = ? AND user_id = ? "
+                    "ORDER BY is_foreground DESC, last_seen_at DESC LIMIT 1",
+                    (session_id, user_id),
+                )
+                row = await cursor.fetchone()
+                if row and row["panel_id"]:
+                    return str(row["panel_id"])
+            # Fallback: a panel the user owns that was bound with no session
+            # (legacy/device bind). Require the connecting id to match such a row so
+            # this branch can't be used to reach an arbitrary panel.
+            if panel_id:
+                cursor = await db.execute(
                     "SELECT 1 FROM ui_panel_sessions "
-                    "WHERE panel_id = ? AND user_id = ? AND chat_session_id = ? LIMIT 1",
-                    (panel_id, user_id, session_id),
+                    "WHERE panel_id = ? AND user_id = ? AND chat_session_id IS NULL LIMIT 1",
+                    (panel_id, user_id),
                 )
                 if await cursor.fetchone():
-                    return True
-            cursor = await db.execute(
-                "SELECT 1 FROM ui_panel_sessions "
-                "WHERE panel_id = ? AND user_id = ? AND chat_session_id IS NULL LIMIT 1",
-                (panel_id, user_id),
-            )
-            return bool(await cursor.fetchone())
+                    return panel_id
+            return None
     except Exception as exc:
         logger.debug("push websocket panel session validation failed: %s", exc)
-        return False
+        return None
 
 
 async def _panel_allows_guest_push(panel_id: str) -> bool:
@@ -1630,13 +1639,19 @@ async def websocket_push(
             from routers.panel_auth import lookup_device_token
             device_info = lookup_device_token(token_header)
         session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")
-        # Browser WebSockets cannot send X-Device-Token. Accept a panel channel
-        # subscription when the browser session is already bound to this panel.
-        if not device_info and not await _session_can_subscribe_panel(panel_id, session_id):
-            await websocket.close(1008, "Invalid device token")
-            return
+        # A valid device token (the Pi kiosk) subscribes under its own connecting
+        # id. Browser WebSockets cannot send X-Device-Token; for them resolve the
+        # CANONICAL bound panel id from the session and subscribe there, so the
+        # socket joins the channel pushes are actually sent to even when the client
+        # connected under a different alias id.
+        subscribe_panel_id = panel_id
+        if not device_info:
+            subscribe_panel_id = await _resolve_subscribable_panel(panel_id, session_id)
+            if not subscribe_panel_id:
+                await websocket.close(1008, "Invalid device token")
+                return
         # Panel token or bound browser session verified; subscribe to panel push.
-        await broadcaster.connect_panel(websocket, panel_id)
+        await broadcaster.connect_panel(websocket, subscribe_panel_id)
     else:
         # Non-panel: perform lightweight session validation via zoe-auth HTTP.
         session_id = websocket.query_params.get("session_id") or websocket.headers.get("X-Session-ID")

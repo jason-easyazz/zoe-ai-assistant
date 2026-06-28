@@ -135,42 +135,26 @@
     }
 
     function getPanelId() {
-        // Mirror touch/index.html's precedence so bind + push always agree on the
-        // SAME id. The registered id (`zoe_panel_id`, e.g. "zoe-touch-pi") is
-        // canonical; the generated `panel_xxxx` (`zoe_touch_panel_id`) is only a
-        // fallback for an unprovisioned panel. Diverging here (preferring the
-        // generated id) made the executor bind + open the push socket under
-        // `panel_xxxx` while the panel was registered as `zoe-touch-pi`, so the
-        // /ws/push session guard rejected it (1008 "Invalid device token").
-        // A `?panel_id=` URL param is the authoritative current identity: it is set
-        // by provisioning / settings reassignment, so it (re)writes BOTH keys and
-        // wins. This is the path that updates a stale registered id.
+        // The connecting id need not be the panel's canonical id: the server's
+        // /ws/push guard resolves the canonical bound panel from the session and
+        // subscribes the socket to THAT channel (see _resolve_subscribable_panel in
+        // services/zoe-data/main.py), so pushes reach the panel regardless of which
+        // of its aliases this returns. We therefore keep the original behaviour and
+        // do not juggle the registered/generated key precedence here (the two keys
+        // can always diverge, so any precedence rule just trades one stale-id case
+        // for the opposite one).
         const params = new URLSearchParams(window.location.search);
         const forced = params.get('panel_id');
         if (forced && forced.trim()) {
-            const id = forced.trim();
-            localStorage.setItem('zoe_panel_id', id);
-            localStorage.setItem('zoe_touch_panel_id', id);
-            return id;
+            localStorage.setItem('zoe_touch_panel_id', forced.trim());
+            return forced.trim();
         }
-        // No URL param: prefer the registered id ONLY when it is still consistent
-        // with the current panel identity. After a reprovision/reassign,
-        // `zoe_touch_panel_id` is refreshed but a stale `zoe_panel_id` can linger;
-        // preferring it unconditionally (and writing it back) would resurrect the
-        // dead id. So only trust the registered id when no current generated id
-        // exists, or when the two already agree. We never write the registered id
-        // back into the legacy key here.
-        const registered = (localStorage.getItem('zoe_panel_id') || '').trim();
-        const generated = (localStorage.getItem('zoe_touch_panel_id') || '').trim();
-        if (registered && (!generated || registered === generated)) {
-            return registered;
+        let panelId = localStorage.getItem('zoe_touch_panel_id');
+        if (!panelId) {
+            panelId = 'panel_' + Math.random().toString(36).slice(2, 10);
+            localStorage.setItem('zoe_touch_panel_id', panelId);
         }
-        if (generated) {
-            return generated;
-        }
-        const fresh = 'panel_' + Math.random().toString(36).slice(2, 10);
-        localStorage.setItem('zoe_touch_panel_id', fresh);
-        return fresh;
+        return panelId;
     }
 
     // Does a server-addressed action belong to THIS panel? A panel can answer to
