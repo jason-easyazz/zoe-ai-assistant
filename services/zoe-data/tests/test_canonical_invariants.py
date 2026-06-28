@@ -122,39 +122,43 @@ def test_brain_rock_wired_in_llama_server_unit():
 
 
 def test_kokoro_tts_is_primary_live_voice_engine():
-    """The TTS rock has to be primary in the live /api/voice/synthesize waterfall."""
+    """The TTS rock has to be primary in every live voice synthesis waterfall."""
     tts = _rocks()["tts"]
     router = _read_repo("services/zoe-data/routers/voice_tts.py")
-    synthesize = re.search(
-        r"@router\.post\(\"/synthesize\"\).*?(?=\n\s*@router\.post\()",
-        router,
-        re.DOTALL,
-    )
-    assert synthesize, "voice_tts.py is missing the /api/voice/synthesize handler"
-    body = synthesize.group(0)
     primary_engine = _compact_token(tts["name"])
-    primary_calls = [
-        match.start()
-        for match in re.finditer(
-            rf"_synthesize_{re.escape(primary_engine)}(?:_|\()",
-            body.lower(),
-        )
-    ]
 
-    edge_tts = body.find("_synthesize_edge_tts")
-    espeak = body.find("_synthesize_espeak")
-    local_service = body.find("_synthesize_local_service")
-    assert primary_calls, (
-        f"{tts['name']} is not wired into the live TTS waterfall"
-    )
-    first_primary = min(primary_calls)
-    assert local_service != -1, "local TTS sidecar fallback is missing from the live TTS waterfall"
-    assert edge_tts != -1, "Edge TTS fallback is missing from the live TTS waterfall"
-    assert espeak != -1, "espeak-ng fallback is missing from the live TTS waterfall"
-    assert first_primary < local_service < edge_tts < espeak, (
-        f"live TTS waterfall must keep {tts['name']} primary before local sidecar, "
-        "then Edge TTS, then espeak-ng"
-    )
+    for route in ("/synthesize", "/stream"):
+        handler = re.search(
+            rf"@router\.post\(\"{re.escape(route)}\"\).*?(?=\n\s*@router\.post\()",
+            router,
+            re.DOTALL,
+        )
+        assert handler, f"voice_tts.py is missing the /api/voice{route} handler"
+        body = handler.group(0)
+        primary_calls = [
+            match.start()
+            for match in re.finditer(
+                rf"_synthesize_{re.escape(primary_engine)}(?:_|\()",
+                body.lower(),
+            )
+        ]
+
+        edge_tts = body.find("_synthesize_edge_tts")
+        espeak = body.find("_synthesize_espeak")
+        local_service = body.find("_synthesize_local_service")
+        assert primary_calls, (
+            f"{tts['name']} is not wired into the live TTS waterfall for /api/voice{route}"
+        )
+        first_primary = min(primary_calls)
+        assert local_service != -1, (
+            f"local TTS sidecar fallback is missing from the live TTS waterfall for /api/voice{route}"
+        )
+        assert edge_tts != -1, f"Edge TTS fallback is missing from /api/voice{route}"
+        assert espeak != -1, f"espeak-ng fallback is missing from /api/voice{route}"
+        assert first_primary < local_service < edge_tts < espeak, (
+            f"/api/voice{route} waterfall must keep {tts['name']} primary before "
+            "local sidecar, then Edge TTS, then espeak-ng"
+        )
 
 
 # ── The cleanup stays clean: no archive graveyard creeps back ─────────────────
