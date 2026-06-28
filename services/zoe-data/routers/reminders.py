@@ -2,6 +2,7 @@
 FastAPI router for reminders.
 Mounted at prefix="/api/reminders" with tag "reminders".
 """
+import json
 from datetime import date, datetime, timedelta
 from typing import Optional
 
