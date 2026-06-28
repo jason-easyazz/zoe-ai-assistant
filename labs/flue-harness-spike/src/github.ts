@@ -41,16 +41,34 @@ export async function fetchIssue(
   return JSON.parse(json);
 }
 
-/** Create a fresh branch off main in the local checkout, from a PRISTINE tree. */
+/**
+ * Create a fresh branch off main in the local checkout, from a PRISTINE tree.
+ *
+ * SAFETY: this resets the checkout hard and removes untracked files, so it MUST
+ * only run against a disposable worktree — never an operator's normal checkout
+ * with uncommitted work. We fail fast if the tree is dirty unless the caller has
+ * explicitly confirmed it's disposable via `ZOE_HARNESS_DISPOSABLE_CHECKOUT=1`.
+ * (The harness should be pointed at a dedicated `git worktree`, not a live tree.)
+ */
 export async function createBranch(cfg: SpikeConfig, branch: string): Promise<void> {
   await run('git', ['fetch', 'origin', 'main'], { cwd: cfg.zoeCheckout });
+
+  const dirty = (
+    await run('git', ['status', '--porcelain'], { cwd: cfg.zoeCheckout })
+  ).trim();
+  if (dirty && process.env.ZOE_HARNESS_DISPOSABLE_CHECKOUT !== '1') {
+    throw new Error(
+      `ZOE_CHECKOUT (${cfg.zoeCheckout}) has uncommitted changes; refusing to ` +
+        `reset --hard / clean it (that would discard work). Point the harness at a ` +
+        `disposable 'git worktree', or set ZOE_HARNESS_DISPOSABLE_CHECKOUT=1 to confirm ` +
+        `this checkout is disposable.\n${dirty}`,
+    );
+  }
+
   // Branch from origin/main so the spike doesn't depend on the checkout's HEAD.
   await run('git', ['checkout', '-B', branch, 'origin/main'], { cwd: cfg.zoeCheckout });
-  // Reset to a pristine origin/main tree so leftover edits from a previous run
-  // can't bleed into this run's diff (createBranch on a dirty tree keeps local
-  // modifications, which `git add -A` would then sweep into the PR). reset
-  // discards tracked changes; clean removes untracked files (but not ignored
-  // ones like .env / node_modules, so a configured checkout stays usable).
+  // Pristine origin/main tree so leftover edits from a previous run can't bleed
+  // into this run's diff. Guarded by the dirty-check above.
   await run('git', ['reset', '--hard', 'origin/main'], { cwd: cfg.zoeCheckout });
   await run('git', ['clean', '-fd'], { cwd: cfg.zoeCheckout });
 }
