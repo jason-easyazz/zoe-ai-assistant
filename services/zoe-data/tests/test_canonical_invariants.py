@@ -20,6 +20,14 @@ REPO = os.path.dirname(os.path.dirname(DATA))  # repo root
 CANONICAL = os.path.join(REPO, "docs", "CANONICAL.md")
 
 
+def _read_repo(path: str) -> str:
+    return open(os.path.join(REPO, path), encoding="utf-8").read()
+
+
+def _compact_token(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+
 def _rocks() -> dict:
     """Parse the machine-readable rocks block out of docs/CANONICAL.md."""
     text = open(CANONICAL, encoding="utf-8").read()
@@ -71,6 +79,87 @@ def test_moonshine_actually_loaded_in_live_startup():
         f"STT loader marker '{marker}' not found in main.py — Moonshine warmup "
         "may have been dropped (whisper is a fallback, never the primary rock)"
     )
+
+
+def test_brain_rock_wired_in_llama_server_unit():
+    """The brain rock has to be wired in the live llama-server unit template."""
+    brain = _rocks()["brain"]
+    unit = _read_repo("scripts/setup/systemd/llama-server.service")
+    exec_start = re.search(
+        r"^ExecStart=(.*?)(?=\n[A-Z][A-Za-z]*=|\n\[|\Z)",
+        unit,
+        re.DOTALL | re.MULTILINE,
+    )
+    assert exec_start, "llama-server.service is missing the llama-server ExecStart block"
+    command = exec_start.group(1)
+
+    model = re.search(r"(?:^|\s)--model\s+([^\\\s]+)", command)
+    draft = re.search(r"(?:^|\s)--model-draft\s+([^\\\s]+)", command)
+    assert model, "llama-server.service is missing --model for the canonical brain GGUF"
+    assert draft, "llama-server.service is missing --model-draft for the MTP drafter GGUF"
+
+    model_path = model.group(1)
+    draft_path = draft.group(1)
+    model_token = _compact_token(model_path)
+    family_token = _compact_token(brain["family"])
+    variant_token = _compact_token(brain["variant"])
+
+    assert model_path.endswith(".gguf"), f"brain model is not a GGUF path: {model_path}"
+    assert family_token in model_token, (
+        f"brain model path does not reference canonical family {brain['family']}: {model_path}"
+    )
+    assert variant_token in model_token, (
+        f"brain model path does not reference canonical variant {brain['variant']}: {model_path}"
+    )
+
+    assert brain["drafter"].lower() in draft_path.lower(), (
+        f"draft model path does not reference canonical drafter {brain['drafter']}: {draft_path}"
+    )
+    assert re.search(r"(?:^|\s)--spec-type\s+draft-mtp(?:\s|\\|$)", command), (
+        "llama-server.service is missing MTP speculative decoding wiring "
+        "(--spec-type draft-mtp)"
+    )
+
+
+def test_kokoro_tts_is_primary_live_voice_engine():
+    """The TTS rock has to be primary in every live voice synthesis waterfall."""
+    tts = _rocks()["tts"]
+    router = _read_repo("services/zoe-data/routers/voice_tts.py")
+    primary_engine = _compact_token(tts["name"])
+
+    for route in ("/synthesize", "/stream"):
+        handler = re.search(
+            rf"@router\.post\(\"{re.escape(route)}\"\).*?(?=\n\s*@router\.post\()",
+            router,
+            re.DOTALL,
+        )
+        assert handler, f"voice_tts.py is missing the /api/voice{route} handler"
+        body = handler.group(0)
+        primary_calls = [
+            match.start()
+            for match in re.finditer(
+                rf"_synthesize_{re.escape(primary_engine)}(?:_|\()",
+                body.lower(),
+            )
+        ]
+
+        edge_tts = body.find("_synthesize_edge_tts")
+        espeak = body.find("_synthesize_espeak")
+        local_service = body.find("_synthesize_local_service")
+        assert primary_calls, (
+            f"{tts['name']} is not wired into the live TTS waterfall for /api/voice{route}"
+        )
+        first_primary = min(primary_calls)
+        assert local_service != -1, (
+            f"local TTS sidecar fallback is missing from the live TTS waterfall for /api/voice{route}"
+        )
+        assert edge_tts != -1, f"Edge TTS fallback is missing from /api/voice{route}"
+        assert espeak != -1, f"espeak-ng fallback is missing from /api/voice{route}"
+        assert first_primary < local_service < edge_tts < espeak, (
+            f"/api/voice{route} waterfall must keep {tts['name']} primary before "
+            "local sidecar, then Edge TTS, then espeak-ng"
+        )
+
 
 # ── The cleanup stays clean: no archive graveyard creeps back ─────────────────
 def test_no_docs_archive_graveyard():

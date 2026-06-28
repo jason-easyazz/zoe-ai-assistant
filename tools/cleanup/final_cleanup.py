@@ -133,7 +133,7 @@ def create_cleanup_plan():
         
         plan["archive_docs"].append({
             'file': doc,
-            'dest': PROJECT_ROOT / f"docs/archive/{category}",
+            'dest': PROJECT_ROOT / f"docs/{category}",
             'name': doc.name
         })
     
@@ -183,7 +183,7 @@ def display_plan(plan):
         cat = item['dest'].name
         by_category[cat] = by_category.get(cat, 0) + 1
     for cat, count in by_category.items():
-        print(f"    → docs/archive/{cat}/: {count} files")
+        print(f"    → docs/{cat}/: {count} files")
     
     print(f"\n🔧 Scripts to Organize:")
     print(f"  Total: {len(plan['organize_scripts'])} files")
@@ -284,4 +284,3 @@ if __name__ == "__main__":
     print("\n" + "="*60)
     print("✓ Analysis Complete!")
     print("="*60 + "\n")
-

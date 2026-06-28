@@ -13,7 +13,8 @@
 > Naming note (June 2026): `services/zoe-core/` has been REVIVED as Zoe's Pi-agent
 > core — the reasoning/orchestration brain on Gemma 4 that binds the services and
 > calls abilities. It is the center of Zoe, not a monolith. The retired Docker
-> monolith of the same name is archived at `docs/archive/retired-services/zoe-core/`.
+> monolith of the same name was removed from the working tree and remains in git
+> history only (`git log -- docs/archive/retired-services/zoe-core/`).
 
 This document defines the **mandatory** structure and rules for the Zoe project. All files must follow these rules. Automated checks enforce compliance.
 
@@ -56,7 +57,7 @@ sqlite3.connect("/app/data/zoe.db")
 
 ### 📋 Affected Files:
 - Production: `services/zoe-data/` (routers, DB access)
-- Legacy reference: `docs/archive/retired-services/zoe-core/` (retired Docker tree)
+- Legacy reference: git history for `docs/archive/retired-services/zoe-core/` (retired Docker tree)
 - Any new code that accesses databases
 
 ---
@@ -82,7 +83,7 @@ await client.post("http://zoe-litellm:8001/v1/chat/completions", ...)
 await client.post("http://zoe-llamacpp:11434/v1/chat/completions", ...)
 ```
 
-Retired LiteLLM/llama.cpp Docker files remain only in `docs/archive/`.
+Retired LiteLLM/llama.cpp Docker files remain only in git history.
 
 ---
 
@@ -186,10 +187,9 @@ async def get_user_data(
 │   ├── guides/                      User & developer guides
 │   ├── api/                         API documentation
 │   ├── architecture/                Architecture docs
-│   └── archive/                     Historical documentation
-│       ├── reports/                 Old status reports
-│       ├── technical/               Old technical docs
-│       └── guides/                  Superseded guides
+│   ├── research/                    Research notes
+│   ├── reviews/                     Review records
+│   └── post-mortems/                Incident and cleanup writeups
 │
 ├── 🔧 tools/                        [ALLOWED IN ROOT]
 │   ├── audit/                       Audit & validation tools
@@ -221,10 +221,10 @@ async def get_user_data(
   - Up to 6 more ESSENTIAL docs
 
 ❌ FORBIDDEN in root:
-  - Status reports (→ docs/archive/reports/)
-  - Technical docs (→ docs/archive/technical/)
+  - Status reports (→ docs/reviews/ or docs/post-mortems/)
+  - Technical docs (→ docs/developer/ or docs/architecture/)
   - Integration guides (→ docs/guides/)
-  - Completed/done docs (→ docs/archive/reports/)
+  - Completed/done docs (→ delete if superseded; git keeps history)
   - Backup docs (DELETE - use git)
 ```
 
@@ -352,7 +352,7 @@ async def get_user_data(
 │     ├─ User guide? → docs/guides/
 │     ├─ API docs? → docs/api/
 │     ├─ Architecture? → docs/architecture/
-│     └─ Old/superseded? → docs/archive/{category}/
+│     └─ Old/superseded? → delete from the working tree (git keeps history)
 ```
 
 ### Is it a test file?
@@ -416,7 +416,7 @@ def check_root_md_files():
     md_files = list(PROJECT_ROOT.glob("*.md"))
     if len(md_files) > MAX_ROOT_DOCS:
         print(f"❌ RULE VIOLATION: {len(md_files)} .md files in root (max {MAX_ROOT_DOCS})")
-        print("   Move extras to docs/archive/")
+        print("   Move extras to an active docs/{category}/ folder or delete if superseded")
         return False
     return True
 
@@ -536,7 +536,7 @@ python3 comprehensive_audit.py
 **Process**:
 - When adding: Ask "Is this essential AND accessed frequently?"
 - If NO → Put in `docs/{category}/`
-- When count > 10 → Archive oldest to `docs/archive/`
+- When count > 10 → move extras to active `docs/{category}/` folders or delete superseded files
 - Update references using `tools/cleanup/fix_references.py`
 
 #### docs/ Folder
@@ -548,10 +548,9 @@ docs/
 ├── guides/          # User & developer guides
 ├── api/             # API documentation
 ├── architecture/    # System architecture
-└── archive/         # Historical docs
-    ├── reports/     # Old status reports
-    ├── technical/   # Old technical docs
-    └── guides/      # Superseded guides
+├── research/        # Research notes
+├── reviews/         # Review records
+└── post-mortems/    # Incident and cleanup writeups
 ```
 
 **Rules**:
@@ -762,7 +761,7 @@ chmod +x scripts/maintenance/backup_database.sh
 python3 tools/audit/enforce_structure.py
 ```
 
-### Archiving Old Documentation
+### Retiring Old Documentation
 
 ```bash
 # 1. Determine category
@@ -771,8 +770,8 @@ Status report? Technical doc? Guide?
 # 2. Add date suffix
 mv OLD_DOC.md "OLD_DOC_$(date +%Y%m%d).md"
 
-# 3. Move to archive
-mv OLD_DOC_20251008.md docs/archive/{category}/
+# 3. Remove if superseded; git history keeps the old bytes
+git rm OLD_DOC_20251008.md
 
 # 4. Update references
 python3 tools/cleanup/fix_references.py
@@ -869,7 +868,7 @@ cat tools/audit/compliance_status.sh
 📜 Scripts       → scripts/{setup|maintenance|deployment|security}/
 🛠️ Tools         → tools/{audit|cleanup|validation}/
 🗑️ Temporary     → DELETE (add to .gitignore)
-📦 Archive       → docs/archive/{category}/ (when superseded)
+📦 Superseded    → DELETE from the working tree (git keeps history)
 ```
 
 ---
@@ -954,7 +953,7 @@ Structure is compliant when:
 - ✅ All scripts in scripts/{category}/
 - ✅ All tools in tools/{category}/
 - ✅ No temp files anywhere
-- ✅ No archive folders (use docs/archive/)
+- ✅ No `docs/archive/` graveyard (use git history)
 - ✅ Enforcement script passes
 
 ---
@@ -987,7 +986,7 @@ Structure is compliant when:
 **A**: Use decision tree above → `tests/{unit|integration|performance|e2e}/`
 
 **Q**: Root has 10 docs, need to add another?  
-**A**: Archive least important to `docs/archive/`, then add new one
+**A**: Move a non-essential doc into an active `docs/{category}/` folder or delete it if superseded, then add the new essential root doc
 
 **Q**: Created a utility script, where does it go?  
 **A**: `scripts/utilities/` initially, archive after one-time use
@@ -1103,4 +1102,3 @@ Shows: repo size, file counts, structure compliance, recent activity.
 **This is the law of the land. Follow these rules to keep Zoe clean!** 🏛️
 
 *Effective immediately. Enforced automatically. No exceptions without approval.*
-

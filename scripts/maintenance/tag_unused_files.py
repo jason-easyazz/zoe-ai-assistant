@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 File Tagging System for Unused Files
-Tags files that haven't been accessed in the last week for potential archival
+Tags files that haven't been accessed in the last week for potential retirement.
 """
 
 import os
@@ -166,14 +166,14 @@ def main():
     # Generate report
     tagger.generate_report(tagged_files)
     
-    print(f"\n📊 Summary: {total_tagged} files tagged for potential archival")
+    print(f"\n📊 Summary: {total_tagged} files tagged for potential retirement")
     print(f"📁 Tags saved to: {tagger.tags_file}")
     
     if total_tagged > 0:
         print("\n💡 Next steps:")
         print("   - Review tagged files manually")
-        print("   - Run archive script after confirmation")
-        print("   - Files will be moved to docs/archive/ if approved")
+        print("   - Run retirement script after confirmation")
+        print("   - Approved files will be deleted from the working tree; git history keeps committed content")
 
 if __name__ == "__main__":
     main()
