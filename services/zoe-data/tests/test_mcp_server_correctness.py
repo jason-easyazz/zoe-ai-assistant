@@ -231,6 +231,61 @@ async def test_meta_actor_role_admin_is_ignored_when_db_role_is_member():
     assert params == ("jason",)
 
 
+@pytest.mark.asyncio
+async def test_env_actor_role_is_ignored_when_actor_user_comes_from_meta(monkeypatch):
+    monkeypatch.setenv("ZOE_MCP_ACTOR_USER_ID", "env-admin")
+    monkeypatch.setenv("ZOE_MCP_ACTOR_ROLE", "admin")
+    db = _RoutingDb(
+        {
+            "SELECT role FROM users": [{"role": "member"}],
+            "dashboard_layouts": [],
+        }
+    )
+    actor_context = mcp_server._trusted_actor_context_from_message(
+        {"params": {"_meta": {"zoe": {"actor_user_id": "jason"}}}}
+    )
+
+    await mcp_server._execute_tool(
+        db=db,
+        name="dashboard_get_layout",
+        args={"user_id": "victim"},
+        actor_context=actor_context,
+    )
+
+    assert actor_context == {
+        "user_id": "jason",
+        "role": None,
+        "role_source": None,
+        "source": "transport",
+    }
+    sql, params = next(call for call in db.calls if "FROM dashboard_layouts" in call[0])
+    assert params == ("jason",)
+
+
+@pytest.mark.asyncio
+async def test_env_actor_role_is_trusted_when_actor_user_also_comes_from_env(monkeypatch):
+    monkeypatch.setenv("ZOE_MCP_ACTOR_USER_ID", "ops-admin")
+    monkeypatch.setenv("ZOE_MCP_ACTOR_ROLE", "admin")
+    db = _RoutingDb({"dashboard_layouts": []})
+    actor_context = mcp_server._trusted_actor_context_from_message({"params": {}})
+
+    await mcp_server._execute_tool(
+        db=db,
+        name="dashboard_get_layout",
+        args={"user_id": "target"},
+        actor_context=actor_context,
+    )
+
+    assert actor_context == {
+        "user_id": "ops-admin",
+        "role": "admin",
+        "role_source": "env",
+        "source": "transport",
+    }
+    sql, params = next(call for call in db.calls if "FROM dashboard_layouts" in call[0])
+    assert params == ("target",)
+
+
 def test_dashboard_add_widget_schema_allows_admin_user_target():
     tool = next(t for t in mcp_server.TOOLS if t["name"] == "dashboard_add_widget")
 

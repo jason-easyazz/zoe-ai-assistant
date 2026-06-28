@@ -1311,20 +1311,24 @@ def _trusted_actor_context_from_message(msg: dict) -> dict:
                 return normalized
         return None
 
-    user_id = _first(
+    message_user_id = _first(
         zoe_meta.get("actor_user_id"),
         zoe_meta.get("user_id"),
         session_meta.get("actor_user_id"),
         session_meta.get("user_id"),
         meta.get("actor_user_id"),
         meta.get("user_id"),
+    )
+    env_user_id = _first(
         os.environ.get("ZOE_MCP_ACTOR_USER_ID"),
         os.environ.get("ZOE_MCP_USER_ID"),
     )
-    role = _first(
+    user_id = message_user_id or env_user_id
+    env_role = _first(
         os.environ.get("ZOE_MCP_ACTOR_ROLE"),
         os.environ.get("ZOE_MCP_USER_ROLE"),
     )
+    role = env_role if env_user_id and not message_user_id else None
     return {
         "user_id": user_id,
         "role": role,
