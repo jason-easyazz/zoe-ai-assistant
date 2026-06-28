@@ -56,6 +56,19 @@ def test_resolve_channel_normalizes_case_and_whitespace():
     assert chat_router._resolve_channel({"channel": "  Telegram  "}) == "telegram"
 
 
+def test_resolve_channel_non_string_defaults_to_chat():
+    # Raw JSON can carry a non-string `channel`; must not 500 — falls to "chat".
+    for value in (123, True, 1.5, {"x": 1}, ["telegram"]):
+        assert chat_router._resolve_channel({"channel": value}) == "chat"
+
+
+def test_resolve_channel_unknown_defaults_to_chat():
+    # Unknown / typo'd channels are NOT honored — they fall back to the safe
+    # "chat" profile (deferred writes), never an empty (writes-allowed) profile.
+    for value in ("web", "totally-made-up", "telegramm"):
+        assert chat_router._resolve_channel({"channel": value}) == "chat"
+
+
 # --------------------------------------------------------------------------- #
 # 2: the telegram tag selects the telegram profile in fast_tiers.             #
 # --------------------------------------------------------------------------- #

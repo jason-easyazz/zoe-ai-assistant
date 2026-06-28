@@ -3234,11 +3234,27 @@ def _resolve_channel(body: dict) -> str:
 
     Phase 1 (additive): a channel may identify itself via an optional `channel`
     field (e.g. "telegram") so `fast_tiers.resolve()` can select its
-    CHANNEL_PROFILES entry. When the field is absent/blank the result is "chat" —
-    the historical hardcoded default — so web / voice / touch behaviour is
-    byte-identical to before this field existed.
+    CHANNEL_PROFILES entry. Only a KNOWN channel is honored — a missing, blank,
+    non-string (the body is raw JSON, so `channel` could be `123`/`true`/an
+    object), or unknown/typo'd value resolves to "chat", the historical hardcoded
+    default. This keeps web/voice/touch byte-identical to before the field
+    existed, never 500s on a malformed field, and ensures an unrecognized channel
+    can't silently widen behaviour (an unknown tag yields an empty profile whose
+    writes default to allowed — falling back to "chat" keeps writes deferred).
     """
-    return (body.get("channel") or "chat").strip().lower() or "chat"
+    raw = body.get("channel")
+    if not isinstance(raw, str):
+        return "chat"
+    channel = raw.strip().lower()
+    if not channel:
+        return "chat"
+    try:
+        import fast_tiers as _ft
+
+        known = channel in _ft.CHANNEL_PROFILES
+    except Exception:
+        known = channel == "chat"
+    return channel if known else "chat"
 
 
 @router.post("/")
