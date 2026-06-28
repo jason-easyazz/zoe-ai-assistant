@@ -422,14 +422,7 @@ async def _emotional_memory_pass(user_id: str, chat_text: str, svc) -> int:
 
 async def _load_todays_messages(user_id: str, db=None) -> str:
     """Load today's user-turn messages from chat_messages, joined to chat_sessions."""
-    try:
-        from database import get_db  # type: ignore[import]
-        if db is None:
-            async for db in get_db():
-                break
-
-        rows = await db.execute(
-            """
+    sql = """
             SELECT cm.content
             FROM chat_messages cm
             JOIN chat_sessions cs ON cm.session_id = cs.id
@@ -439,10 +432,19 @@ async def _load_todays_messages(user_id: str, db=None) -> str:
                   (now() AT TIME ZONE ?)::date
             ORDER BY cm.created_at ASC
             LIMIT 200
-            """,
-            (user_id, _ZOE_TIMEZONE, _ZOE_TIMEZONE),
-        )
-        rows = await rows.fetchall()
+            """
+    params = (user_id, _ZOE_TIMEZONE, _ZOE_TIMEZONE)
+    try:
+        from db_pool import get_db_ctx  # type: ignore[import]
+        if db is not None:
+            rows = await (await db.execute(sql, params)).fetchall()
+        else:
+            # Self-acquire via the context manager when no connection is passed.
+            # The bare `async for db in get_db(): break` form leaves the generator
+            # suspended, so the connection is closed mid-query — which would make
+            # every per-user digest skip after listing (Greptile P1 on #860).
+            async with get_db_ctx() as _db:
+                rows = await (await _db.execute(sql, params)).fetchall()
         if not rows:
             return ""
         lines = [row[0] for row in rows if row[0]]
