@@ -666,6 +666,24 @@ async def add_important_date(
     reminder_days_before = body.get("reminder_days_before", 7)
     if not label:
         raise HTTPException(status_code=400, detail="label is required")
+
+    # Bound the date fields so out-of-range values never reach the DB.
+    # month/day/year stay optional (None passes through); validate only when present.
+    def _bounded_int(value, field, lo, hi):
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise HTTPException(status_code=422, detail=f"{field} must be an integer between {lo} and {hi}")
+        if value < lo or value > hi:
+            raise HTTPException(status_code=422, detail=f"{field} must be between {lo} and {hi}")
+        return value
+
+    month = _bounded_int(month, "month", 1, 12)
+    day = _bounded_int(day, "day", 1, 31)
+    year = _bounded_int(year, "year", 1, 9999)
+    if reminder_days_before is None:
+        reminder_days_before = 7
+    reminder_days_before = _bounded_int(reminder_days_before, "reminder_days_before", 0, 366)
     await db.execute(
         "INSERT INTO person_important_dates (id, person_id, user_id, label, date_type, month, day, year, reminder_days_before) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -924,10 +942,14 @@ async def add_relationship(
              body.get("notes"), now, now),
         )
         await db.commit()
+    except HTTPException:
+        raise
     except Exception as exc:
         if "unique" in str(exc).lower() or "duplicate" in str(exc).lower():
             raise HTTPException(status_code=409, detail="Relationship already exists")
-        raise
+        import logging as _lg
+        _lg.getLogger(__name__).exception("failed to create relationship for person %s", person_id)
+        raise HTTPException(status_code=500, detail="Failed to create relationship") from exc
 
     # Auto-update context of the other person based on rel_group
     inferred_ctx = "work" if group in _WORK_GROUPS else "personal"
