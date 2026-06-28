@@ -191,7 +191,7 @@ def test_runtime_config_defaults_to_local_gemma_endpoint():
     config = GraphitiRuntimeConfig.from_env({})
 
     assert config.llm_base_url == "http://127.0.0.1:11434/v1"
-    assert config.llm_model == "gemma-4-E2B-it-Q4_K_M.gguf"
+    assert config.llm_model == "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"
     assert config.offline_only is True
 
 

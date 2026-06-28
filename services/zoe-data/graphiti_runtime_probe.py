@@ -31,7 +31,7 @@ class GraphitiRuntimeConfigError(ValueError):
 class GraphitiRuntimeConfig:
     enabled: bool = False
     llm_base_url: str = "http://127.0.0.1:11434/v1"
-    llm_model: str = "gemma-4-E2B-it-Q4_K_M.gguf"
+    llm_model: str = "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"
     offline_only: bool = True
     timeout_seconds: float = 2.0
 
@@ -41,7 +41,7 @@ class GraphitiRuntimeConfig:
         config = cls(
             enabled=_env_bool(values.get("GRAPHITI_ENABLED"), default=False),
             llm_base_url=(values.get("GRAPHITI_LLM_BASE_URL") or "http://127.0.0.1:11434/v1").rstrip("/"),
-            llm_model=values.get("GRAPHITI_LLM_MODEL") or "gemma-4-E2B-it-Q4_K_M.gguf",
+            llm_model=values.get("GRAPHITI_LLM_MODEL") or "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
             offline_only=_env_bool(values.get("GRAPHITI_OFFLINE_ONLY"), default=True),
             timeout_seconds=_env_float(values.get("GRAPHITI_RUNTIME_PROBE_TIMEOUT_SECONDS"), default=2.0),
         )
@@ -54,7 +54,7 @@ class GraphitiRuntimeConfig:
         return {
             "enabled": _env_bool_snapshot(values.get("GRAPHITI_ENABLED"), default=False),
             "llm_base_url": (values.get("GRAPHITI_LLM_BASE_URL") or "http://127.0.0.1:11434/v1").rstrip("/"),
-            "llm_model": values.get("GRAPHITI_LLM_MODEL") or "gemma-4-E2B-it-Q4_K_M.gguf",
+            "llm_model": values.get("GRAPHITI_LLM_MODEL") or "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
             "offline_only": _env_bool_snapshot(values.get("GRAPHITI_OFFLINE_ONLY"), default=True),
             "timeout_seconds": _env_float_snapshot(values.get("GRAPHITI_RUNTIME_PROBE_TIMEOUT_SECONDS"), default=2.0),
         }
