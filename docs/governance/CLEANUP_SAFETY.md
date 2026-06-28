@@ -88,7 +88,7 @@ curl http://localhost/api/health
 - `*.pyc`, `__pycache__/`, `.pytest_cache/`
 - `*.tmp`, `*.cache`, `*.log` in `/tmp` or temp dirs
 - Files explicitly marked as `*_backup`, `*_old` **AFTER VERIFICATION**
-- Documentation in `docs/archive/` dated > 6 months old
+- Retired documentation already removed from the working tree and recoverable from git history
 - `node_modules/` (can reinstall)
 
 ### Requires Verification:
@@ -185,15 +185,15 @@ Should I delete this file?
 │     └─ NO → ✅ Probably safe, but verify no references.
 │
 └─ When in doubt?
-   └─ ❌ DON'T DELETE. Move to docs/archive/ instead.
+   └─ ❌ DON'T DELETE YET. Verify ownership and references first.
 ```
 
 ---
 
 ## 💡 BEST PRACTICES
 
-### Instead of Deleting:
-1. **Archive** - Move to `docs/archive/category/filename_YYYYMMDD.ext`
+### Instead of Immediate Deletion:
+1. **Defer** - Leave the file in place until ownership and references are verified
 2. **Comment** - Add `# DEPRECATED: reason` at top of file
 3. **Rename** - Add `.deprecated` suffix instead of deleting
 4. **Document** - Note in CHANGELOG.md why it's no longer needed
@@ -287,4 +287,3 @@ If you can't check all 5, **DON'T DELETE**.
 **Last Updated:** October 19, 2025
 **Mandatory for:** All AI assistants (Claude, Cursor, etc.)
 **Enforced by:** Pre-cleanup validation scripts
-

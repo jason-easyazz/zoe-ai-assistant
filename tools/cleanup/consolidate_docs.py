@@ -368,7 +368,7 @@ Located in project root:
 
 ## 📁 This Folder
 
-- **archive/** - Historical documentation
+- **reviews/** / **post-mortems/** - Review records and cleanup writeups
 - **guides/** - User and developer guides
 - **api/** - API documentation
 
@@ -398,12 +398,12 @@ def generate_report():
     print("  - PROJECT_STATUS.md (consolidated status doc)")
     print("  - docs/ folder structure")
     print("  - docs/README.md (documentation index)")
-    print("  - docs/archive/ (historical docs)")
+    print("  - retired docs removed from the working tree (git keeps history)")
     
     print("\n📊 Summary:")
     print(f"  - Documents consolidated: ~30")
     print(f"  - New structure: Organized and clear")
-    print(f"  - Old docs: Safely archived")
+    print(f"  - Old docs: Retired from the working tree")
     
     print("\n📁 New Documentation Structure:")
     print("  PROJECT_ROOT/")
@@ -415,7 +415,8 @@ def generate_report():
     print("  ├── CLEANUP_PLAN.md")
     print("  └── docs/")
     print("      ├── README.md (index)")
-    print("      ├── archive/ (old docs)")
+    print("      ├── reviews/ (review records)")
+    print("      ├── post-mortems/ (cleanup writeups)")
     print("      ├── guides/ (for future)")
     print("      └── api/ (for future)")
 
@@ -433,4 +434,3 @@ if __name__ == "__main__":
     print(f"\n{'='*60}")
     print("✅ CONSOLIDATION COMPLETE!")
     print(f"{'='*60}\n")
-

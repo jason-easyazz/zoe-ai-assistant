@@ -143,14 +143,17 @@ def test_kokoro_tts_is_primary_live_voice_engine():
 
     edge_tts = body.find("_synthesize_edge_tts")
     espeak = body.find("_synthesize_espeak")
+    local_service = body.find("_synthesize_local_service")
     assert primary_calls, (
         f"{tts['name']} is not wired into the live TTS waterfall"
     )
     first_primary = min(primary_calls)
+    assert local_service != -1, "local TTS sidecar fallback is missing from the live TTS waterfall"
     assert edge_tts != -1, "Edge TTS fallback is missing from the live TTS waterfall"
     assert espeak != -1, "espeak-ng fallback is missing from the live TTS waterfall"
-    assert first_primary < edge_tts < espeak, (
-        f"live TTS waterfall must keep {tts['name']} primary, then Edge TTS, then espeak-ng"
+    assert first_primary < local_service < edge_tts < espeak, (
+        f"live TTS waterfall must keep {tts['name']} primary before local sidecar, "
+        "then Edge TTS, then espeak-ng"
     )
 
 
