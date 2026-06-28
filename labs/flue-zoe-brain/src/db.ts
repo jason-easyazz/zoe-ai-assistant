@@ -8,6 +8,15 @@
  *
  * LAB ONLY.
  */
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { sqlite } from '@flue/runtime/node';
 
-export default sqlite('./data/zoe-brain.db');
+// Anchor the DB beside this package, independent of the process working
+// directory — so starting `dist/server.mjs` from the repo root can't drop a
+// `data/` db next to Zoe's live data, and starting from a dir without `./data`
+// can't fail before /health. Override with ZOE_BRAIN_DB.
+const here = dirname(fileURLToPath(import.meta.url));
+const dbPath = process.env.ZOE_BRAIN_DB ?? join(here, 'data', 'zoe-brain.db');
+
+export default sqlite(dbPath);

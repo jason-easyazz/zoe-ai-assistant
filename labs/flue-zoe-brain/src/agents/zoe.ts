@@ -36,10 +36,19 @@ const ZOE_SOUL = [
   'You answer everyday questions — recipes, cooking, how-to, science, history, maths, general knowledge — directly from your own knowledge, in your own voice.',
 ].join('\n');
 
-// Exporting `route` is what publishes the HTTP agent endpoints for this agent
-// (POST/GET /agents/zoe/:id). A no-op middleware exposes it without auth — fine
-// for the lab; production cutover would add operator middleware here.
-export const route: AgentRouteHandler = async (_c, next) => next();
+// Exporting `route` publishes the HTTP agent endpoints (POST/GET /agents/zoe/:id).
+// The dev/built server binds localhost by default (not LAN-reachable). For
+// defense-in-depth — so a sidecar bound to a reachable interface can't let any
+// local/LAN caller drive Zoe completions and contend with the voice brain — set
+// ZOE_BRAIN_TOKEN and callers must send `Authorization: Bearer <token>`. Unset =
+// open (lab/localhost only).
+export const route: AgentRouteHandler = async (c, next) => {
+  const token = process.env.ZOE_BRAIN_TOKEN;
+  if (token && c.req.header('authorization') !== `Bearer ${token}`) {
+    return c.json({ error: 'unauthorized' }, 401);
+  }
+  return next();
+};
 
 export default defineAgent(() => ({
   model: 'zoe/local',
