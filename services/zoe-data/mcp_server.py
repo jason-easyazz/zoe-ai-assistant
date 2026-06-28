@@ -1369,7 +1369,7 @@ async def _resolve_mcp_actor(db, name: str, args: dict, actor_context: dict | No
         if _uid_raw is None:
             _uid_raw = args.pop("user_id", None)
         explicit = _uid_raw is not None
-        role_hint = "admin"
+        role_hint = None
         source = "legacy_args"
     else:
         args.pop("_user_id", None)

@@ -175,6 +175,25 @@ async def test_handle_tool_without_actor_context_preserves_internal_user_id(monk
 
 
 @pytest.mark.asyncio
+async def test_legacy_explicit_user_uses_db_role_for_cross_user_target():
+    db = _RoutingDb(
+        {
+            "SELECT role FROM users": [{"role": "member"}],
+            "dashboard_layouts": [],
+        }
+    )
+
+    await mcp_server._execute_tool(
+        db=db,
+        name="dashboard_get_layout",
+        args={"_user_id": "jason", "user_id": "victim"},
+    )
+
+    sql, params = next(call for call in db.calls if "FROM dashboard_layouts" in call[0])
+    assert params == ("jason",)
+
+
+@pytest.mark.asyncio
 async def test_non_admin_transport_actor_cannot_override_dashboard_target():
     db = _RoutingDb({"dashboard_layouts": []})
 
@@ -339,7 +358,7 @@ async def test_non_admin_transport_actor_cannot_override_portrait_target(monkeyp
 # #1 — explicit user_id target survives the injected _user_id (proactive_schedule)
 # --------------------------------------------------------------------------
 @pytest.mark.asyncio
-async def test_proactive_schedule_targets_explicit_user_not_caller(monkeypatch):
+async def test_proactive_schedule_admin_can_target_explicit_user(monkeypatch):
     captured = {}
 
     async def fake_schedule_reminder(*, user_id, message, send_at):
@@ -358,15 +377,14 @@ async def test_proactive_schedule_targets_explicit_user_not_caller(monkeypatch):
         db=None,
         name="proactive_schedule",
         args={
-            "_user_id": "caller",          # framework-injected caller identity
-            "user_id": "target",           # explicit target the tool asked for
+            "_user_id": "family-admin",
+            "user_id": "target",
             "message": "drink water",
             "send_at": send_at,
         },
     )
 
     assert result["status"] == "scheduled"
-    # The explicit target must win — not the caller that was injected by the framework.
     assert captured["user_id"] == "target"
 
 
@@ -428,12 +446,11 @@ async def test_dashboard_get_layout_targets_explicit_user_not_caller():
     await mcp_server._execute_tool(
         db=db,
         name="dashboard_get_layout",
-        args={"_user_id": "caller", "user_id": "target"},
+        args={"_user_id": "family-admin", "user_id": "target"},
     )
 
     sql, params = db.calls[0]
     assert "FROM dashboard_layouts" in sql
-    # The leftover explicit user_id target must drive the query, not the caller.
     assert params == ("target",)
 
 
@@ -444,7 +461,7 @@ async def test_dashboard_save_layout_targets_explicit_user_not_caller():
     result = await mcp_server._execute_tool(
         db=db,
         name="dashboard_save_layout",
-        args={"_user_id": "caller", "user_id": "target", "layout": [{"w": "tasks"}]},
+        args={"_user_id": "family-admin", "user_id": "target", "layout": [{"w": "tasks"}]},
     )
 
     assert result["status"] == "ok"
@@ -511,10 +528,9 @@ async def test_user_portrait_get_targets_explicit_user_not_caller(monkeypatch):
     result = await mcp_server._execute_tool(
         db=None,
         name="user_portrait_get",
-        args={"_user_id": "caller", "user_id": "target"},
+        args={"_user_id": "family-admin", "user_id": "target"},
     )
 
-    # The explicit target must win over the injected caller for both the load and the echo.
     assert captured["user_id"] == "target"
     assert result["user_id"] == "target"
     assert result["has_portrait"] is True
@@ -592,7 +608,7 @@ async def test_journal_on_this_day_uses_postgres_to_char():
         args={"_user_id": "jason"},
     )
 
-    sql, params = db.calls[0]
+    sql, params = next(call for call in db.calls if "journal_entries" in call[0])
     assert "strftime" not in sql
     assert "date('now')" not in sql
     # created_at is TEXT in the live schema, so to_char and the date comparison

@@ -109,10 +109,11 @@ async def test_create_evolution_proposal_stores_runtime_intake_contract_snapshot
     assert result["ok"] is True
     assert result["multica_issue_id"] == "multica-issue-123"
     assert result["contract_schema"] == "zoe_evolution_proposal"
-    assert len(db.calls) == 2
+    proposal_calls = [call for call in db.calls if "evolution_proposals" in call[0]]
+    assert len(proposal_calls) == 2
     assert len(sync_calls) == 1
-    insert_sql, insert_args = db.calls[0]
-    update_sql, update_args = db.calls[1]
+    insert_sql, insert_args = proposal_calls[0]
+    update_sql, update_args = proposal_calls[1]
     assert "target_patterns" in insert_sql
     assert "target_patterns" not in update_sql
 
