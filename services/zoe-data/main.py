@@ -1536,18 +1536,20 @@ async def _resolve_subscribable_panel(panel_id: str, session_id: str | None) -> 
     ``?panel_id=`` URL param, plus the registered id (e.g. ``zoe-touch-pi``). The
     client connects the push socket under whichever id ``getPanelId()`` happens to
     return, but ``ui_actions`` are pushed (``broadcast_to_panel``) to the id the
-    panel is *bound* under. So we must NOT subscribe the socket to the raw
-    connecting id — that would accept the connection yet deliver nothing when the
-    two differ. Instead we resolve the canonical bound id from the session and
-    subscribe there, making the connecting id irrelevant to delivery.
+    panel is *bound* under, so subscribing the socket to the raw connecting id can
+    deliver nothing when the two differ.
 
-    Security is anchored on the *binding*, not the connecting id:
-      * a signed-in user is mapped to the panel bound under THIS browser
-        ``session_id`` (so connecting ids are never trusted on their own); falling
-        back to a panel they own that was bound with a NULL session (legacy/device
-        bind). A user cannot reach a panel their session/account isn't bound to.
+    Resolution, anchored on the *binding* (never on the connecting id alone):
+      * If the connecting id is itself a panel the user has bound (under this
+        ``session_id`` or with a NULL session), it IS the canonical id — subscribe
+        to its own channel. This keeps each of a session's several panels on its
+        own channel, so panel A's socket is never routed to panel B's.
+      * Otherwise (a freshly generated alias with no bound row), resolve to the
+        session's panel ONLY when the session is bound to exactly one panel, so a
+        multi-panel session can't be mis-routed.
       * admin/agent roles may target any explicit panel_id.
       * an unresolved session defers to the registered-panel guest policy.
+    A user can never reach a panel their session/account isn't bound to.
     """
     user = await _resolve_ws_session(session_id)
     if user is None:
@@ -1561,35 +1563,40 @@ async def _resolve_subscribable_panel(panel_id: str, session_id: str | None) -> 
     if role in {"admin", "agent"}:
         # Trusted roles may subscribe to an explicit panel channel as-is.
         return panel_id or None
+    if not panel_id:
+        return None
     try:
         from database import get_db
 
         async for db in get_db():
-            # Canonical id = the panel bound under THIS browser session (most recent
-            # foreground first). The connecting panel_id is intentionally ignored:
-            # delivery targets the bound id, so we subscribe there regardless of
-            # which alias the client used.
+            # (1) The connecting id is AUTHORITATIVE when it is itself a panel the
+            # user has bound — under this same browser session, or with no session
+            # (legacy/device bind). Delivery targets the bound id, and this is that
+            # id, so subscribe to its own channel. This is the common case and it
+            # never routes panel A's socket to panel B's channel: a session with
+            # several panels keeps each socket on its own bound id.
+            cursor = await db.execute(
+                "SELECT 1 FROM ui_panel_sessions "
+                "WHERE panel_id = ? AND user_id = ? "
+                "AND (chat_session_id = ? OR chat_session_id IS NULL) LIMIT 1",
+                (panel_id, user_id, session_id),
+            )
+            if await cursor.fetchone():
+                return panel_id
+
+            # (2) The connecting id has NO bound row of its own (a freshly generated
+            # alias the client opened before/without binding). Resolve it to the
+            # session's canonical panel — but ONLY when the session is bound to
+            # exactly one panel, so we can't mis-route to the wrong one of several.
             if session_id:
                 cursor = await db.execute(
                     "SELECT panel_id FROM ui_panel_sessions "
-                    "WHERE chat_session_id = ? AND user_id = ? "
-                    "ORDER BY is_foreground DESC, last_seen_at DESC LIMIT 1",
+                    "WHERE chat_session_id = ? AND user_id = ? LIMIT 2",
                     (session_id, user_id),
                 )
-                row = await cursor.fetchone()
-                if row and row["panel_id"]:
-                    return str(row["panel_id"])
-            # Fallback: a panel the user owns that was bound with no session
-            # (legacy/device bind). Require the connecting id to match such a row so
-            # this branch can't be used to reach an arbitrary panel.
-            if panel_id:
-                cursor = await db.execute(
-                    "SELECT 1 FROM ui_panel_sessions "
-                    "WHERE panel_id = ? AND user_id = ? AND chat_session_id IS NULL LIMIT 1",
-                    (panel_id, user_id),
-                )
-                if await cursor.fetchone():
-                    return panel_id
+                rows = await cursor.fetchall()
+                if len(rows) == 1 and rows[0]["panel_id"]:
+                    return str(rows[0]["panel_id"])
             return None
     except Exception as exc:
         logger.debug("push websocket panel session validation failed: %s", exc)
